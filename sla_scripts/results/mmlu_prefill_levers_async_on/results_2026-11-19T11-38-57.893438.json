@@ -1,0 +1,5052 @@
+{
+  "results": {
+    "mmlu_llama": {
+      "exact_match,strict_match": 0.739068508759436,
+      "exact_match_stderr,strict_match": 0.0035254496083541773,
+      "alias": "mmlu_llama"
+    },
+    "mmlu_llama_humanities": {
+      "exact_match,strict_match": 0.7602550478214666,
+      "exact_match_stderr,strict_match": 0.0059660613206866196,
+      "alias": " - humanities"
+    },
+    "mmlu_llama_formal_logic": {
+      "alias": "  - formal logic",
+      "exact_match,strict_match": 0.6349206349206349,
+      "exact_match_stderr,strict_match": 0.04306241259127153
+    },
+    "mmlu_llama_high_school_european_history": {
+      "alias": "  - high school european history",
+      "exact_match,strict_match": 0.8848484848484849,
+      "exact_match_stderr,strict_match": 0.024925699798115347
+    },
+    "mmlu_llama_high_school_us_history": {
+      "alias": "  - high school us history",
+      "exact_match,strict_match": 0.9362745098039216,
+      "exact_match_stderr,strict_match": 0.017143921655524957
+    },
+    "mmlu_llama_high_school_world_history": {
+      "alias": "  - high school world history",
+      "exact_match,strict_match": 0.9451476793248945,
+      "exact_match_stderr,strict_match": 0.014821471997344045
+    },
+    "mmlu_llama_international_law": {
+      "alias": "  - international law",
+      "exact_match,strict_match": 0.9090909090909091,
+      "exact_match_stderr,strict_match": 0.02624319405407388
+    },
+    "mmlu_llama_jurisprudence": {
+      "alias": "  - jurisprudence",
+      "exact_match,strict_match": 0.6574074074074074,
+      "exact_match_stderr,strict_match": 0.045879047413018105
+    },
+    "mmlu_llama_logical_fallacies": {
+      "alias": "  - logical fallacies",
+      "exact_match,strict_match": 0.7116564417177914,
+      "exact_match_stderr,strict_match": 0.035590395316173425
+    },
+    "mmlu_llama_moral_disputes": {
+      "alias": "  - moral disputes",
+      "exact_match,strict_match": 0.8554913294797688,
+      "exact_match_stderr,strict_match": 0.01892976451346872
+    },
+    "mmlu_llama_moral_scenarios": {
+      "alias": "  - moral scenarios",
+      "exact_match,strict_match": 0.8536312849162011,
+      "exact_match_stderr,strict_match": 0.011821988496043248
+    },
+    "mmlu_llama_philosophy": {
+      "alias": "  - philosophy",
+      "exact_match,strict_match": 0.6591639871382636,
+      "exact_match_stderr,strict_match": 0.02692084126077616
+    },
+    "mmlu_llama_prehistory": {
+      "alias": "  - prehistory",
+      "exact_match,strict_match": 0.9074074074074074,
+      "exact_match_stderr,strict_match": 0.016128278761824454
+    },
+    "mmlu_llama_professional_law": {
+      "alias": "  - professional law",
+      "exact_match,strict_match": 0.635593220338983,
+      "exact_match_stderr,strict_match": 0.012291694983056477
+    },
+    "mmlu_llama_world_religions": {
+      "alias": "  - world religions",
+      "exact_match,strict_match": 0.6140350877192983,
+      "exact_match_stderr,strict_match": 0.03733756969066165
+    },
+    "mmlu_llama_other": {
+      "exact_match,strict_match": 0.7248149340199549,
+      "exact_match_stderr,strict_match": 0.007767084388496841,
+      "alias": " - other"
+    },
+    "mmlu_llama_business_ethics": {
+      "alias": "  - business ethics",
+      "exact_match,strict_match": 0.83,
+      "exact_match_stderr,strict_match": 0.0377525168068637
+    },
+    "mmlu_llama_clinical_knowledge": {
+      "alias": "  - clinical knowledge",
+      "exact_match,strict_match": 0.7396226415094339,
+      "exact_match_stderr,strict_match": 0.02700876609070804
+    },
+    "mmlu_llama_college_medicine": {
+      "alias": "  - college medicine",
+      "exact_match,strict_match": 0.7225433526011561,
+      "exact_match_stderr,strict_match": 0.03414014007044036
+    },
+    "mmlu_llama_global_facts": {
+      "alias": "  - global facts",
+      "exact_match,strict_match": 0.58,
+      "exact_match_stderr,strict_match": 0.049604496374885836
+    },
+    "mmlu_llama_human_aging": {
+      "alias": "  - human aging",
+      "exact_match,strict_match": 0.6860986547085202,
+      "exact_match_stderr,strict_match": 0.031146796482972465
+    },
+    "mmlu_llama_management": {
+      "alias": "  - management",
+      "exact_match,strict_match": 0.6019417475728155,
+      "exact_match_stderr,strict_match": 0.0484674825397724
+    },
+    "mmlu_llama_marketing": {
+      "alias": "  - marketing",
+      "exact_match,strict_match": 0.6452991452991453,
+      "exact_match_stderr,strict_match": 0.03134250486245402
+    },
+    "mmlu_llama_medical_genetics": {
+      "alias": "  - medical genetics",
+      "exact_match,strict_match": 0.88,
+      "exact_match_stderr,strict_match": 0.03265986323710906
+    },
+    "mmlu_llama_miscellaneous": {
+      "alias": "  - miscellaneous",
+      "exact_match,strict_match": 0.6679438058748404,
+      "exact_match_stderr,strict_match": 0.016841174655295724
+    },
+    "mmlu_llama_nutrition": {
+      "alias": "  - nutrition",
+      "exact_match,strict_match": 0.9052287581699346,
+      "exact_match_stderr,strict_match": 0.016771331271836467
+    },
+    "mmlu_llama_professional_accounting": {
+      "alias": "  - professional accounting",
+      "exact_match,strict_match": 0.6843971631205674,
+      "exact_match_stderr,strict_match": 0.027724989449509317
+    },
+    "mmlu_llama_professional_medicine": {
+      "alias": "  - professional medicine",
+      "exact_match,strict_match": 0.9338235294117647,
+      "exact_match_stderr,strict_match": 0.015100786290800944
+    },
+    "mmlu_llama_virology": {
+      "alias": "  - virology",
+      "exact_match,strict_match": 0.536144578313253,
+      "exact_match_stderr,strict_match": 0.03882310850890594
+    },
+    "mmlu_llama_social_sciences": {
+      "exact_match,strict_match": 0.8072798180045498,
+      "exact_match_stderr,strict_match": 0.006764716757608716,
+      "alias": " - social sciences"
+    },
+    "mmlu_llama_econometrics": {
+      "alias": "  - econometrics",
+      "exact_match,strict_match": 0.7543859649122807,
+      "exact_match_stderr,strict_match": 0.04049339297748141
+    },
+    "mmlu_llama_high_school_geography": {
+      "alias": "  - high school geography",
+      "exact_match,strict_match": 0.6767676767676768,
+      "exact_match_stderr,strict_match": 0.03332299921070644
+    },
+    "mmlu_llama_high_school_government_and_politics": {
+      "alias": "  - high school government and politics",
+      "exact_match,strict_match": 0.9844559585492227,
+      "exact_match_stderr,strict_match": 0.008927492715084332
+    },
+    "mmlu_llama_high_school_macroeconomics": {
+      "alias": "  - high school macroeconomics",
+      "exact_match,strict_match": 0.6256410256410256,
+      "exact_match_stderr,strict_match": 0.024537591572830506
+    },
+    "mmlu_llama_high_school_microeconomics": {
+      "alias": "  - high school microeconomics",
+      "exact_match,strict_match": 0.7100840336134454,
+      "exact_match_stderr,strict_match": 0.0294724858331361
+    },
+    "mmlu_llama_high_school_psychology": {
+      "alias": "  - high school psychology",
+      "exact_match,strict_match": 0.9431192660550459,
+      "exact_match_stderr,strict_match": 0.009930393412586721
+    },
+    "mmlu_llama_human_sexuality": {
+      "alias": "  - human sexuality",
+      "exact_match,strict_match": 0.7862595419847328,
+      "exact_match_stderr,strict_match": 0.0359546161177469
+    },
+    "mmlu_llama_professional_psychology": {
+      "alias": "  - professional psychology",
+      "exact_match,strict_match": 0.8643790849673203,
+      "exact_match_stderr,strict_match": 0.013851437761103386
+    },
+    "mmlu_llama_public_relations": {
+      "alias": "  - public relations",
+      "exact_match,strict_match": 0.5181818181818182,
+      "exact_match_stderr,strict_match": 0.04785964010794916
+    },
+    "mmlu_llama_security_studies": {
+      "alias": "  - security studies",
+      "exact_match,strict_match": 0.8489795918367347,
+      "exact_match_stderr,strict_match": 0.022923004094736858
+    },
+    "mmlu_llama_sociology": {
+      "alias": "  - sociology",
+      "exact_match,strict_match": 0.8557213930348259,
+      "exact_match_stderr,strict_match": 0.02484575321230604
+    },
+    "mmlu_llama_us_foreign_policy": {
+      "alias": "  - us foreign policy",
+      "exact_match,strict_match": 0.78,
+      "exact_match_stderr,strict_match": 0.041633319989322605
+    },
+    "mmlu_llama_stem": {
+      "exact_match,strict_match": 0.6549318109736758,
+      "exact_match_stderr,strict_match": 0.008069547980838348,
+      "alias": " - stem"
+    },
+    "mmlu_llama_abstract_algebra": {
+      "alias": "  - abstract algebra",
+      "exact_match,strict_match": 0.5,
+      "exact_match_stderr,strict_match": 0.050251890762960605
+    },
+    "mmlu_llama_anatomy": {
+      "alias": "  - anatomy",
+      "exact_match,strict_match": 0.6814814814814815,
+      "exact_match_stderr,strict_match": 0.040247784019771096
+    },
+    "mmlu_llama_astronomy": {
+      "alias": "  - astronomy",
+      "exact_match,strict_match": 0.9342105263157895,
+      "exact_match_stderr,strict_match": 0.02017493344016286
+    },
+    "mmlu_llama_college_biology": {
+      "alias": "  - college biology",
+      "exact_match,strict_match": 0.7638888888888888,
+      "exact_match_stderr,strict_match": 0.03551446610810826
+    },
+    "mmlu_llama_college_chemistry": {
+      "alias": "  - college chemistry",
+      "exact_match,strict_match": 0.46,
+      "exact_match_stderr,strict_match": 0.05009082659620332
+    },
+    "mmlu_llama_college_computer_science": {
+      "alias": "  - college computer science",
+      "exact_match,strict_match": 0.67,
+      "exact_match_stderr,strict_match": 0.04725815626252607
+    },
+    "mmlu_llama_college_mathematics": {
+      "alias": "  - college mathematics",
+      "exact_match,strict_match": 0.4,
+      "exact_match_stderr,strict_match": 0.049236596391733084
+    },
+    "mmlu_llama_college_physics": {
+      "alias": "  - college physics",
+      "exact_match,strict_match": 0.5,
+      "exact_match_stderr,strict_match": 0.04975185951049946
+    },
+    "mmlu_llama_computer_security": {
+      "alias": "  - computer security",
+      "exact_match,strict_match": 0.79,
+      "exact_match_stderr,strict_match": 0.040936018074033256
+    },
+    "mmlu_llama_conceptual_physics": {
+      "alias": "  - conceptual physics",
+      "exact_match,strict_match": 0.6212765957446809,
+      "exact_match_stderr,strict_match": 0.03170995606040655
+    },
+    "mmlu_llama_electrical_engineering": {
+      "alias": "  - electrical engineering",
+      "exact_match,strict_match": 0.5655172413793104,
+      "exact_match_stderr,strict_match": 0.04130740879555497
+    },
+    "mmlu_llama_elementary_mathematics": {
+      "alias": "  - elementary mathematics",
+      "exact_match,strict_match": 0.5952380952380952,
+      "exact_match_stderr,strict_match": 0.025279850397404904
+    },
+    "mmlu_llama_high_school_biology": {
+      "alias": "  - high school biology",
+      "exact_match,strict_match": 0.8580645161290322,
+      "exact_match_stderr,strict_match": 0.019853003676559764
+    },
+    "mmlu_llama_high_school_chemistry": {
+      "alias": "  - high school chemistry",
+      "exact_match,strict_match": 0.6551724137931034,
+      "exact_match_stderr,strict_match": 0.03344283744280457
+    },
+    "mmlu_llama_high_school_computer_science": {
+      "alias": "  - high school computer science",
+      "exact_match,strict_match": 0.88,
+      "exact_match_stderr,strict_match": 0.03265986323710906
+    },
+    "mmlu_llama_high_school_mathematics": {
+      "alias": "  - high school mathematics",
+      "exact_match,strict_match": 0.44074074074074077,
+      "exact_match_stderr,strict_match": 0.030270671157284063
+    },
+    "mmlu_llama_high_school_physics": {
+      "alias": "  - high school physics",
+      "exact_match,strict_match": 0.543046357615894,
+      "exact_match_stderr,strict_match": 0.04067325174247442
+    },
+    "mmlu_llama_high_school_statistics": {
+      "alias": "  - high school statistics",
+      "exact_match,strict_match": 0.7777777777777778,
+      "exact_match_stderr,strict_match": 0.028353212866863448
+    },
+    "mmlu_llama_machine_learning": {
+      "alias": "  - machine learning",
+      "exact_match,strict_match": 0.7053571428571429,
+      "exact_match_stderr,strict_match": 0.04327040932578729
+    }
+  },
+  "groups": {
+    "mmlu_llama": {
+      "exact_match,strict_match": 0.739068508759436,
+      "exact_match_stderr,strict_match": 0.0035254496083541773,
+      "alias": "mmlu_llama"
+    },
+    "mmlu_llama_humanities": {
+      "exact_match,strict_match": 0.7602550478214666,
+      "exact_match_stderr,strict_match": 0.0059660613206866196,
+      "alias": " - humanities"
+    },
+    "mmlu_llama_other": {
+      "exact_match,strict_match": 0.7248149340199549,
+      "exact_match_stderr,strict_match": 0.007767084388496841,
+      "alias": " - other"
+    },
+    "mmlu_llama_social_sciences": {
+      "exact_match,strict_match": 0.8072798180045498,
+      "exact_match_stderr,strict_match": 0.006764716757608716,
+      "alias": " - social sciences"
+    },
+    "mmlu_llama_stem": {
+      "exact_match,strict_match": 0.6549318109736758,
+      "exact_match_stderr,strict_match": 0.008069547980838348,
+      "alias": " - stem"
+    }
+  },
+  "group_subtasks": {
+    "mmlu_llama_humanities": [
+      "mmlu_llama_philosophy",
+      "mmlu_llama_moral_disputes",
+      "mmlu_llama_high_school_european_history",
+      "mmlu_llama_jurisprudence",
+      "mmlu_llama_international_law",
+      "mmlu_llama_professional_law",
+      "mmlu_llama_moral_scenarios",
+      "mmlu_llama_prehistory",
+      "mmlu_llama_formal_logic",
+      "mmlu_llama_high_school_us_history",
+      "mmlu_llama_high_school_world_history",
+      "mmlu_llama_world_religions",
+      "mmlu_llama_logical_fallacies"
+    ],
+    "mmlu_llama_social_sciences": [
+      "mmlu_llama_high_school_psychology",
+      "mmlu_llama_high_school_macroeconomics",
+      "mmlu_llama_human_sexuality",
+      "mmlu_llama_professional_psychology",
+      "mmlu_llama_econometrics",
+      "mmlu_llama_us_foreign_policy",
+      "mmlu_llama_public_relations",
+      "mmlu_llama_high_school_government_and_politics",
+      "mmlu_llama_high_school_geography",
+      "mmlu_llama_high_school_microeconomics",
+      "mmlu_llama_sociology",
+      "mmlu_llama_security_studies"
+    ],
+    "mmlu_llama_other": [
+      "mmlu_llama_clinical_knowledge",
+      "mmlu_llama_college_medicine",
+      "mmlu_llama_marketing",
+      "mmlu_llama_business_ethics",
+      "mmlu_llama_medical_genetics",
+      "mmlu_llama_global_facts",
+      "mmlu_llama_virology",
+      "mmlu_llama_nutrition",
+      "mmlu_llama_human_aging",
+      "mmlu_llama_professional_medicine",
+      "mmlu_llama_professional_accounting",
+      "mmlu_llama_management",
+      "mmlu_llama_miscellaneous"
+    ],
+    "mmlu_llama_stem": [
+      "mmlu_llama_high_school_statistics",
+      "mmlu_llama_anatomy",
+      "mmlu_llama_computer_security",
+      "mmlu_llama_high_school_computer_science",
+      "mmlu_llama_conceptual_physics",
+      "mmlu_llama_high_school_physics",
+      "mmlu_llama_high_school_mathematics",
+      "mmlu_llama_machine_learning",
+      "mmlu_llama_college_physics",
+      "mmlu_llama_electrical_engineering",
+      "mmlu_llama_astronomy",
+      "mmlu_llama_college_computer_science",
+      "mmlu_llama_college_biology",
+      "mmlu_llama_abstract_algebra",
+      "mmlu_llama_college_mathematics",
+      "mmlu_llama_high_school_biology",
+      "mmlu_llama_high_school_chemistry",
+      "mmlu_llama_elementary_mathematics",
+      "mmlu_llama_college_chemistry"
+    ],
+    "mmlu_llama": [
+      "mmlu_llama_stem",
+      "mmlu_llama_other",
+      "mmlu_llama_social_sciences",
+      "mmlu_llama_humanities"
+    ]
+  },
+  "configs": {
+    "mmlu_llama_abstract_algebra": {
+      "task": "mmlu_llama_abstract_algebra",
+      "task_alias": "abstract algebra",
+      "tag": "mmlu_llama_stem_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "abstract_algebra",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_anatomy": {
+      "task": "mmlu_llama_anatomy",
+      "task_alias": "anatomy",
+      "tag": "mmlu_llama_stem_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "anatomy",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_astronomy": {
+      "task": "mmlu_llama_astronomy",
+      "task_alias": "astronomy",
+      "tag": "mmlu_llama_stem_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "astronomy",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_business_ethics": {
+      "task": "mmlu_llama_business_ethics",
+      "task_alias": "business ethics",
+      "tag": "mmlu_llama_other_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "business_ethics",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_clinical_knowledge": {
+      "task": "mmlu_llama_clinical_knowledge",
+      "task_alias": "clinical knowledge",
+      "tag": "mmlu_llama_other_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "clinical_knowledge",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_college_biology": {
+      "task": "mmlu_llama_college_biology",
+      "task_alias": "college biology",
+      "tag": "mmlu_llama_stem_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "college_biology",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_college_chemistry": {
+      "task": "mmlu_llama_college_chemistry",
+      "task_alias": "college chemistry",
+      "tag": "mmlu_llama_stem_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "college_chemistry",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_college_computer_science": {
+      "task": "mmlu_llama_college_computer_science",
+      "task_alias": "college computer science",
+      "tag": "mmlu_llama_stem_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "college_computer_science",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_college_mathematics": {
+      "task": "mmlu_llama_college_mathematics",
+      "task_alias": "college mathematics",
+      "tag": "mmlu_llama_stem_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "college_mathematics",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_college_medicine": {
+      "task": "mmlu_llama_college_medicine",
+      "task_alias": "college medicine",
+      "tag": "mmlu_llama_other_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "college_medicine",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_college_physics": {
+      "task": "mmlu_llama_college_physics",
+      "task_alias": "college physics",
+      "tag": "mmlu_llama_stem_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "college_physics",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_computer_security": {
+      "task": "mmlu_llama_computer_security",
+      "task_alias": "computer security",
+      "tag": "mmlu_llama_stem_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "computer_security",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_conceptual_physics": {
+      "task": "mmlu_llama_conceptual_physics",
+      "task_alias": "conceptual physics",
+      "tag": "mmlu_llama_stem_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "conceptual_physics",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_econometrics": {
+      "task": "mmlu_llama_econometrics",
+      "task_alias": "econometrics",
+      "tag": "mmlu_llama_social_sciences_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "econometrics",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_electrical_engineering": {
+      "task": "mmlu_llama_electrical_engineering",
+      "task_alias": "electrical engineering",
+      "tag": "mmlu_llama_stem_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "electrical_engineering",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_elementary_mathematics": {
+      "task": "mmlu_llama_elementary_mathematics",
+      "task_alias": "elementary mathematics",
+      "tag": "mmlu_llama_stem_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "elementary_mathematics",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_formal_logic": {
+      "task": "mmlu_llama_formal_logic",
+      "task_alias": "formal logic",
+      "tag": "mmlu_llama_humanities_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "formal_logic",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_global_facts": {
+      "task": "mmlu_llama_global_facts",
+      "task_alias": "global facts",
+      "tag": "mmlu_llama_other_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "global_facts",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_high_school_biology": {
+      "task": "mmlu_llama_high_school_biology",
+      "task_alias": "high school biology",
+      "tag": "mmlu_llama_stem_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "high_school_biology",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_high_school_chemistry": {
+      "task": "mmlu_llama_high_school_chemistry",
+      "task_alias": "high school chemistry",
+      "tag": "mmlu_llama_stem_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "high_school_chemistry",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_high_school_computer_science": {
+      "task": "mmlu_llama_high_school_computer_science",
+      "task_alias": "high school computer science",
+      "tag": "mmlu_llama_stem_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "high_school_computer_science",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_high_school_european_history": {
+      "task": "mmlu_llama_high_school_european_history",
+      "task_alias": "high school european history",
+      "tag": "mmlu_llama_humanities_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "high_school_european_history",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_high_school_geography": {
+      "task": "mmlu_llama_high_school_geography",
+      "task_alias": "high school geography",
+      "tag": "mmlu_llama_social_sciences_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "high_school_geography",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_high_school_government_and_politics": {
+      "task": "mmlu_llama_high_school_government_and_politics",
+      "task_alias": "high school government and politics",
+      "tag": "mmlu_llama_social_sciences_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "high_school_government_and_politics",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_high_school_macroeconomics": {
+      "task": "mmlu_llama_high_school_macroeconomics",
+      "task_alias": "high school macroeconomics",
+      "tag": "mmlu_llama_social_sciences_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "high_school_macroeconomics",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_high_school_mathematics": {
+      "task": "mmlu_llama_high_school_mathematics",
+      "task_alias": "high school mathematics",
+      "tag": "mmlu_llama_stem_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "high_school_mathematics",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_high_school_microeconomics": {
+      "task": "mmlu_llama_high_school_microeconomics",
+      "task_alias": "high school microeconomics",
+      "tag": "mmlu_llama_social_sciences_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "high_school_microeconomics",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_high_school_physics": {
+      "task": "mmlu_llama_high_school_physics",
+      "task_alias": "high school physics",
+      "tag": "mmlu_llama_stem_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "high_school_physics",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_high_school_psychology": {
+      "task": "mmlu_llama_high_school_psychology",
+      "task_alias": "high school psychology",
+      "tag": "mmlu_llama_social_sciences_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "high_school_psychology",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_high_school_statistics": {
+      "task": "mmlu_llama_high_school_statistics",
+      "task_alias": "high school statistics",
+      "tag": "mmlu_llama_stem_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "high_school_statistics",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_high_school_us_history": {
+      "task": "mmlu_llama_high_school_us_history",
+      "task_alias": "high school us history",
+      "tag": "mmlu_llama_humanities_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "high_school_us_history",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_high_school_world_history": {
+      "task": "mmlu_llama_high_school_world_history",
+      "task_alias": "high school world history",
+      "tag": "mmlu_llama_humanities_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "high_school_world_history",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_human_aging": {
+      "task": "mmlu_llama_human_aging",
+      "task_alias": "human aging",
+      "tag": "mmlu_llama_other_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "human_aging",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_human_sexuality": {
+      "task": "mmlu_llama_human_sexuality",
+      "task_alias": "human sexuality",
+      "tag": "mmlu_llama_social_sciences_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "human_sexuality",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_international_law": {
+      "task": "mmlu_llama_international_law",
+      "task_alias": "international law",
+      "tag": "mmlu_llama_humanities_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "international_law",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_jurisprudence": {
+      "task": "mmlu_llama_jurisprudence",
+      "task_alias": "jurisprudence",
+      "tag": "mmlu_llama_humanities_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "jurisprudence",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_logical_fallacies": {
+      "task": "mmlu_llama_logical_fallacies",
+      "task_alias": "logical fallacies",
+      "tag": "mmlu_llama_humanities_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "logical_fallacies",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_machine_learning": {
+      "task": "mmlu_llama_machine_learning",
+      "task_alias": "machine learning",
+      "tag": "mmlu_llama_stem_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "machine_learning",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_management": {
+      "task": "mmlu_llama_management",
+      "task_alias": "management",
+      "tag": "mmlu_llama_other_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "management",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_marketing": {
+      "task": "mmlu_llama_marketing",
+      "task_alias": "marketing",
+      "tag": "mmlu_llama_other_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "marketing",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_medical_genetics": {
+      "task": "mmlu_llama_medical_genetics",
+      "task_alias": "medical genetics",
+      "tag": "mmlu_llama_other_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "medical_genetics",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_miscellaneous": {
+      "task": "mmlu_llama_miscellaneous",
+      "task_alias": "miscellaneous",
+      "tag": "mmlu_llama_other_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "miscellaneous",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_moral_disputes": {
+      "task": "mmlu_llama_moral_disputes",
+      "task_alias": "moral disputes",
+      "tag": "mmlu_llama_humanities_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "moral_disputes",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_moral_scenarios": {
+      "task": "mmlu_llama_moral_scenarios",
+      "task_alias": "moral scenarios",
+      "tag": "mmlu_llama_humanities_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "moral_scenarios",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_nutrition": {
+      "task": "mmlu_llama_nutrition",
+      "task_alias": "nutrition",
+      "tag": "mmlu_llama_other_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "nutrition",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_philosophy": {
+      "task": "mmlu_llama_philosophy",
+      "task_alias": "philosophy",
+      "tag": "mmlu_llama_humanities_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "philosophy",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_prehistory": {
+      "task": "mmlu_llama_prehistory",
+      "task_alias": "prehistory",
+      "tag": "mmlu_llama_humanities_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "prehistory",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_professional_accounting": {
+      "task": "mmlu_llama_professional_accounting",
+      "task_alias": "professional accounting",
+      "tag": "mmlu_llama_other_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "professional_accounting",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_professional_law": {
+      "task": "mmlu_llama_professional_law",
+      "task_alias": "professional law",
+      "tag": "mmlu_llama_humanities_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "professional_law",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_professional_medicine": {
+      "task": "mmlu_llama_professional_medicine",
+      "task_alias": "professional medicine",
+      "tag": "mmlu_llama_other_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "professional_medicine",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_professional_psychology": {
+      "task": "mmlu_llama_professional_psychology",
+      "task_alias": "professional psychology",
+      "tag": "mmlu_llama_social_sciences_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "professional_psychology",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_public_relations": {
+      "task": "mmlu_llama_public_relations",
+      "task_alias": "public relations",
+      "tag": "mmlu_llama_social_sciences_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "public_relations",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_security_studies": {
+      "task": "mmlu_llama_security_studies",
+      "task_alias": "security studies",
+      "tag": "mmlu_llama_social_sciences_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "security_studies",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_sociology": {
+      "task": "mmlu_llama_sociology",
+      "task_alias": "sociology",
+      "tag": "mmlu_llama_social_sciences_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "sociology",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_us_foreign_policy": {
+      "task": "mmlu_llama_us_foreign_policy",
+      "task_alias": "us foreign policy",
+      "tag": "mmlu_llama_social_sciences_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "us_foreign_policy",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_virology": {
+      "task": "mmlu_llama_virology",
+      "task_alias": "virology",
+      "tag": "mmlu_llama_other_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "virology",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    },
+    "mmlu_llama_world_religions": {
+      "task": "mmlu_llama_world_religions",
+      "task_alias": "world religions",
+      "tag": "mmlu_llama_humanities_tasks",
+      "dataset_path": "hails/mmlu_no_train",
+      "dataset_name": "world_religions",
+      "dataset_kwargs": {
+        "trust_remote_code": true
+      },
+      "test_split": "test",
+      "fewshot_split": "dev",
+      "doc_to_text": "Given the following question and four candidate answers (A, B, C and D), choose the best answer.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nYour response should end with \"The best answer is [the_answer_letter]\" where the [the_answer_letter] is one of A, B, C or D.",
+      "doc_to_target": "{{['A.','B.','C.','D.'][answer]}}",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n"
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true,
+          "regexes_to_ignore": [
+            "\\$",
+            "\\.$"
+          ]
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "do_sample": false,
+        "until": [
+          "."
+        ],
+        "max_gen_toks": 10
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict_match",
+          "filter": [
+            {
+              "function": "remove_whitespace"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "gen_prefix": "The best answer is",
+      "metadata": {
+        "version": 1.0,
+        "model": "llama70b",
+        "base_url": "http://127.0.0.1:8099/v1/completions",
+        "tokenizer": "/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct",
+        "tokenized_requests": true,
+        "max_length": 8000,
+        "num_concurrent": 8,
+        "max_retries": 1,
+        "timeout": 30
+      }
+    }
+  },
+  "versions": {
+    "mmlu_llama": 1,
+    "mmlu_llama_abstract_algebra": 1.0,
+    "mmlu_llama_anatomy": 1.0,
+    "mmlu_llama_astronomy": 1.0,
+    "mmlu_llama_business_ethics": 1.0,
+    "mmlu_llama_clinical_knowledge": 1.0,
+    "mmlu_llama_college_biology": 1.0,
+    "mmlu_llama_college_chemistry": 1.0,
+    "mmlu_llama_college_computer_science": 1.0,
+    "mmlu_llama_college_mathematics": 1.0,
+    "mmlu_llama_college_medicine": 1.0,
+    "mmlu_llama_college_physics": 1.0,
+    "mmlu_llama_computer_security": 1.0,
+    "mmlu_llama_conceptual_physics": 1.0,
+    "mmlu_llama_econometrics": 1.0,
+    "mmlu_llama_electrical_engineering": 1.0,
+    "mmlu_llama_elementary_mathematics": 1.0,
+    "mmlu_llama_formal_logic": 1.0,
+    "mmlu_llama_global_facts": 1.0,
+    "mmlu_llama_high_school_biology": 1.0,
+    "mmlu_llama_high_school_chemistry": 1.0,
+    "mmlu_llama_high_school_computer_science": 1.0,
+    "mmlu_llama_high_school_european_history": 1.0,
+    "mmlu_llama_high_school_geography": 1.0,
+    "mmlu_llama_high_school_government_and_politics": 1.0,
+    "mmlu_llama_high_school_macroeconomics": 1.0,
+    "mmlu_llama_high_school_mathematics": 1.0,
+    "mmlu_llama_high_school_microeconomics": 1.0,
+    "mmlu_llama_high_school_physics": 1.0,
+    "mmlu_llama_high_school_psychology": 1.0,
+    "mmlu_llama_high_school_statistics": 1.0,
+    "mmlu_llama_high_school_us_history": 1.0,
+    "mmlu_llama_high_school_world_history": 1.0,
+    "mmlu_llama_human_aging": 1.0,
+    "mmlu_llama_human_sexuality": 1.0,
+    "mmlu_llama_humanities": 1,
+    "mmlu_llama_international_law": 1.0,
+    "mmlu_llama_jurisprudence": 1.0,
+    "mmlu_llama_logical_fallacies": 1.0,
+    "mmlu_llama_machine_learning": 1.0,
+    "mmlu_llama_management": 1.0,
+    "mmlu_llama_marketing": 1.0,
+    "mmlu_llama_medical_genetics": 1.0,
+    "mmlu_llama_miscellaneous": 1.0,
+    "mmlu_llama_moral_disputes": 1.0,
+    "mmlu_llama_moral_scenarios": 1.0,
+    "mmlu_llama_nutrition": 1.0,
+    "mmlu_llama_other": 1,
+    "mmlu_llama_philosophy": 1.0,
+    "mmlu_llama_prehistory": 1.0,
+    "mmlu_llama_professional_accounting": 1.0,
+    "mmlu_llama_professional_law": 1.0,
+    "mmlu_llama_professional_medicine": 1.0,
+    "mmlu_llama_professional_psychology": 1.0,
+    "mmlu_llama_public_relations": 1.0,
+    "mmlu_llama_security_studies": 1.0,
+    "mmlu_llama_social_sciences": 1,
+    "mmlu_llama_sociology": 1.0,
+    "mmlu_llama_stem": 0,
+    "mmlu_llama_us_foreign_policy": 1.0,
+    "mmlu_llama_virology": 1.0,
+    "mmlu_llama_world_religions": 1.0
+  },
+  "n-shot": {
+    "mmlu_llama_abstract_algebra": 5,
+    "mmlu_llama_anatomy": 5,
+    "mmlu_llama_astronomy": 5,
+    "mmlu_llama_business_ethics": 5,
+    "mmlu_llama_clinical_knowledge": 5,
+    "mmlu_llama_college_biology": 5,
+    "mmlu_llama_college_chemistry": 5,
+    "mmlu_llama_college_computer_science": 5,
+    "mmlu_llama_college_mathematics": 5,
+    "mmlu_llama_college_medicine": 5,
+    "mmlu_llama_college_physics": 5,
+    "mmlu_llama_computer_security": 5,
+    "mmlu_llama_conceptual_physics": 5,
+    "mmlu_llama_econometrics": 5,
+    "mmlu_llama_electrical_engineering": 5,
+    "mmlu_llama_elementary_mathematics": 5,
+    "mmlu_llama_formal_logic": 5,
+    "mmlu_llama_global_facts": 5,
+    "mmlu_llama_high_school_biology": 5,
+    "mmlu_llama_high_school_chemistry": 5,
+    "mmlu_llama_high_school_computer_science": 5,
+    "mmlu_llama_high_school_european_history": 5,
+    "mmlu_llama_high_school_geography": 5,
+    "mmlu_llama_high_school_government_and_politics": 5,
+    "mmlu_llama_high_school_macroeconomics": 5,
+    "mmlu_llama_high_school_mathematics": 5,
+    "mmlu_llama_high_school_microeconomics": 5,
+    "mmlu_llama_high_school_physics": 5,
+    "mmlu_llama_high_school_psychology": 5,
+    "mmlu_llama_high_school_statistics": 5,
+    "mmlu_llama_high_school_us_history": 5,
+    "mmlu_llama_high_school_world_history": 5,
+    "mmlu_llama_human_aging": 5,
+    "mmlu_llama_human_sexuality": 5,
+    "mmlu_llama_international_law": 5,
+    "mmlu_llama_jurisprudence": 5,
+    "mmlu_llama_logical_fallacies": 5,
+    "mmlu_llama_machine_learning": 5,
+    "mmlu_llama_management": 5,
+    "mmlu_llama_marketing": 5,
+    "mmlu_llama_medical_genetics": 5,
+    "mmlu_llama_miscellaneous": 5,
+    "mmlu_llama_moral_disputes": 5,
+    "mmlu_llama_moral_scenarios": 5,
+    "mmlu_llama_nutrition": 5,
+    "mmlu_llama_philosophy": 5,
+    "mmlu_llama_prehistory": 5,
+    "mmlu_llama_professional_accounting": 5,
+    "mmlu_llama_professional_law": 5,
+    "mmlu_llama_professional_medicine": 5,
+    "mmlu_llama_professional_psychology": 5,
+    "mmlu_llama_public_relations": 5,
+    "mmlu_llama_security_studies": 5,
+    "mmlu_llama_sociology": 5,
+    "mmlu_llama_us_foreign_policy": 5,
+    "mmlu_llama_virology": 5,
+    "mmlu_llama_world_religions": 5
+  },
+  "higher_is_better": {
+    "mmlu_llama": {
+      "exact_match": true
+    },
+    "mmlu_llama_abstract_algebra": {
+      "exact_match": true
+    },
+    "mmlu_llama_anatomy": {
+      "exact_match": true
+    },
+    "mmlu_llama_astronomy": {
+      "exact_match": true
+    },
+    "mmlu_llama_business_ethics": {
+      "exact_match": true
+    },
+    "mmlu_llama_clinical_knowledge": {
+      "exact_match": true
+    },
+    "mmlu_llama_college_biology": {
+      "exact_match": true
+    },
+    "mmlu_llama_college_chemistry": {
+      "exact_match": true
+    },
+    "mmlu_llama_college_computer_science": {
+      "exact_match": true
+    },
+    "mmlu_llama_college_mathematics": {
+      "exact_match": true
+    },
+    "mmlu_llama_college_medicine": {
+      "exact_match": true
+    },
+    "mmlu_llama_college_physics": {
+      "exact_match": true
+    },
+    "mmlu_llama_computer_security": {
+      "exact_match": true
+    },
+    "mmlu_llama_conceptual_physics": {
+      "exact_match": true
+    },
+    "mmlu_llama_econometrics": {
+      "exact_match": true
+    },
+    "mmlu_llama_electrical_engineering": {
+      "exact_match": true
+    },
+    "mmlu_llama_elementary_mathematics": {
+      "exact_match": true
+    },
+    "mmlu_llama_formal_logic": {
+      "exact_match": true
+    },
+    "mmlu_llama_global_facts": {
+      "exact_match": true
+    },
+    "mmlu_llama_high_school_biology": {
+      "exact_match": true
+    },
+    "mmlu_llama_high_school_chemistry": {
+      "exact_match": true
+    },
+    "mmlu_llama_high_school_computer_science": {
+      "exact_match": true
+    },
+    "mmlu_llama_high_school_european_history": {
+      "exact_match": true
+    },
+    "mmlu_llama_high_school_geography": {
+      "exact_match": true
+    },
+    "mmlu_llama_high_school_government_and_politics": {
+      "exact_match": true
+    },
+    "mmlu_llama_high_school_macroeconomics": {
+      "exact_match": true
+    },
+    "mmlu_llama_high_school_mathematics": {
+      "exact_match": true
+    },
+    "mmlu_llama_high_school_microeconomics": {
+      "exact_match": true
+    },
+    "mmlu_llama_high_school_physics": {
+      "exact_match": true
+    },
+    "mmlu_llama_high_school_psychology": {
+      "exact_match": true
+    },
+    "mmlu_llama_high_school_statistics": {
+      "exact_match": true
+    },
+    "mmlu_llama_high_school_us_history": {
+      "exact_match": true
+    },
+    "mmlu_llama_high_school_world_history": {
+      "exact_match": true
+    },
+    "mmlu_llama_human_aging": {
+      "exact_match": true
+    },
+    "mmlu_llama_human_sexuality": {
+      "exact_match": true
+    },
+    "mmlu_llama_humanities": {
+      "exact_match": true
+    },
+    "mmlu_llama_international_law": {
+      "exact_match": true
+    },
+    "mmlu_llama_jurisprudence": {
+      "exact_match": true
+    },
+    "mmlu_llama_logical_fallacies": {
+      "exact_match": true
+    },
+    "mmlu_llama_machine_learning": {
+      "exact_match": true
+    },
+    "mmlu_llama_management": {
+      "exact_match": true
+    },
+    "mmlu_llama_marketing": {
+      "exact_match": true
+    },
+    "mmlu_llama_medical_genetics": {
+      "exact_match": true
+    },
+    "mmlu_llama_miscellaneous": {
+      "exact_match": true
+    },
+    "mmlu_llama_moral_disputes": {
+      "exact_match": true
+    },
+    "mmlu_llama_moral_scenarios": {
+      "exact_match": true
+    },
+    "mmlu_llama_nutrition": {
+      "exact_match": true
+    },
+    "mmlu_llama_other": {
+      "exact_match": true
+    },
+    "mmlu_llama_philosophy": {
+      "exact_match": true
+    },
+    "mmlu_llama_prehistory": {
+      "exact_match": true
+    },
+    "mmlu_llama_professional_accounting": {
+      "exact_match": true
+    },
+    "mmlu_llama_professional_law": {
+      "exact_match": true
+    },
+    "mmlu_llama_professional_medicine": {
+      "exact_match": true
+    },
+    "mmlu_llama_professional_psychology": {
+      "exact_match": true
+    },
+    "mmlu_llama_public_relations": {
+      "exact_match": true
+    },
+    "mmlu_llama_security_studies": {
+      "exact_match": true
+    },
+    "mmlu_llama_social_sciences": {
+      "exact_match": true
+    },
+    "mmlu_llama_sociology": {
+      "exact_match": true
+    },
+    "mmlu_llama_stem": {
+      "exact_match": true
+    },
+    "mmlu_llama_us_foreign_policy": {
+      "exact_match": true
+    },
+    "mmlu_llama_virology": {
+      "exact_match": true
+    },
+    "mmlu_llama_world_religions": {
+      "exact_match": true
+    }
+  },
+  "n-samples": {
+    "mmlu_llama_high_school_statistics": {
+      "original": 216,
+      "effective": 216
+    },
+    "mmlu_llama_anatomy": {
+      "original": 135,
+      "effective": 135
+    },
+    "mmlu_llama_computer_security": {
+      "original": 100,
+      "effective": 100
+    },
+    "mmlu_llama_high_school_computer_science": {
+      "original": 100,
+      "effective": 100
+    },
+    "mmlu_llama_conceptual_physics": {
+      "original": 235,
+      "effective": 235
+    },
+    "mmlu_llama_high_school_physics": {
+      "original": 151,
+      "effective": 151
+    },
+    "mmlu_llama_high_school_mathematics": {
+      "original": 270,
+      "effective": 270
+    },
+    "mmlu_llama_machine_learning": {
+      "original": 112,
+      "effective": 112
+    },
+    "mmlu_llama_college_physics": {
+      "original": 102,
+      "effective": 102
+    },
+    "mmlu_llama_electrical_engineering": {
+      "original": 145,
+      "effective": 145
+    },
+    "mmlu_llama_astronomy": {
+      "original": 152,
+      "effective": 152
+    },
+    "mmlu_llama_college_computer_science": {
+      "original": 100,
+      "effective": 100
+    },
+    "mmlu_llama_college_biology": {
+      "original": 144,
+      "effective": 144
+    },
+    "mmlu_llama_abstract_algebra": {
+      "original": 100,
+      "effective": 100
+    },
+    "mmlu_llama_college_mathematics": {
+      "original": 100,
+      "effective": 100
+    },
+    "mmlu_llama_high_school_biology": {
+      "original": 310,
+      "effective": 310
+    },
+    "mmlu_llama_high_school_chemistry": {
+      "original": 203,
+      "effective": 203
+    },
+    "mmlu_llama_elementary_mathematics": {
+      "original": 378,
+      "effective": 378
+    },
+    "mmlu_llama_college_chemistry": {
+      "original": 100,
+      "effective": 100
+    },
+    "mmlu_llama_clinical_knowledge": {
+      "original": 265,
+      "effective": 265
+    },
+    "mmlu_llama_college_medicine": {
+      "original": 173,
+      "effective": 173
+    },
+    "mmlu_llama_marketing": {
+      "original": 234,
+      "effective": 234
+    },
+    "mmlu_llama_business_ethics": {
+      "original": 100,
+      "effective": 100
+    },
+    "mmlu_llama_medical_genetics": {
+      "original": 100,
+      "effective": 100
+    },
+    "mmlu_llama_global_facts": {
+      "original": 100,
+      "effective": 100
+    },
+    "mmlu_llama_virology": {
+      "original": 166,
+      "effective": 166
+    },
+    "mmlu_llama_nutrition": {
+      "original": 306,
+      "effective": 306
+    },
+    "mmlu_llama_human_aging": {
+      "original": 223,
+      "effective": 223
+    },
+    "mmlu_llama_professional_medicine": {
+      "original": 272,
+      "effective": 272
+    },
+    "mmlu_llama_professional_accounting": {
+      "original": 282,
+      "effective": 282
+    },
+    "mmlu_llama_management": {
+      "original": 103,
+      "effective": 103
+    },
+    "mmlu_llama_miscellaneous": {
+      "original": 783,
+      "effective": 783
+    },
+    "mmlu_llama_high_school_psychology": {
+      "original": 545,
+      "effective": 545
+    },
+    "mmlu_llama_high_school_macroeconomics": {
+      "original": 390,
+      "effective": 390
+    },
+    "mmlu_llama_human_sexuality": {
+      "original": 131,
+      "effective": 131
+    },
+    "mmlu_llama_professional_psychology": {
+      "original": 612,
+      "effective": 612
+    },
+    "mmlu_llama_econometrics": {
+      "original": 114,
+      "effective": 114
+    },
+    "mmlu_llama_us_foreign_policy": {
+      "original": 100,
+      "effective": 100
+    },
+    "mmlu_llama_public_relations": {
+      "original": 110,
+      "effective": 110
+    },
+    "mmlu_llama_high_school_government_and_politics": {
+      "original": 193,
+      "effective": 193
+    },
+    "mmlu_llama_high_school_geography": {
+      "original": 198,
+      "effective": 198
+    },
+    "mmlu_llama_high_school_microeconomics": {
+      "original": 238,
+      "effective": 238
+    },
+    "mmlu_llama_sociology": {
+      "original": 201,
+      "effective": 201
+    },
+    "mmlu_llama_security_studies": {
+      "original": 245,
+      "effective": 245
+    },
+    "mmlu_llama_philosophy": {
+      "original": 311,
+      "effective": 311
+    },
+    "mmlu_llama_moral_disputes": {
+      "original": 346,
+      "effective": 346
+    },
+    "mmlu_llama_high_school_european_history": {
+      "original": 165,
+      "effective": 165
+    },
+    "mmlu_llama_jurisprudence": {
+      "original": 108,
+      "effective": 108
+    },
+    "mmlu_llama_international_law": {
+      "original": 121,
+      "effective": 121
+    },
+    "mmlu_llama_professional_law": {
+      "original": 1534,
+      "effective": 1534
+    },
+    "mmlu_llama_moral_scenarios": {
+      "original": 895,
+      "effective": 895
+    },
+    "mmlu_llama_prehistory": {
+      "original": 324,
+      "effective": 324
+    },
+    "mmlu_llama_formal_logic": {
+      "original": 126,
+      "effective": 126
+    },
+    "mmlu_llama_high_school_us_history": {
+      "original": 204,
+      "effective": 204
+    },
+    "mmlu_llama_high_school_world_history": {
+      "original": 237,
+      "effective": 237
+    },
+    "mmlu_llama_world_religions": {
+      "original": 171,
+      "effective": 171
+    },
+    "mmlu_llama_logical_fallacies": {
+      "original": 163,
+      "effective": 163
+    }
+  },
+  "config": {
+    "model": "local-completions",
+    "model_args": "model=llama70b,base_url=http://127.0.0.1:8099/v1/completions,tokenizer=/home/ubuntu/teja/weights/Llama-3.3-70B-Instruct,tokenized_requests=True,max_length=8000,num_concurrent=8,max_retries=1,timeout=30",
+    "batch_size": "1",
+    "batch_sizes": [],
+    "device": null,
+    "use_cache": "/home/ubuntu/teja/runs/mmlu_cache_gtC_score",
+    "limit": null,
+    "bootstrap_iters": 100000,
+    "gen_kwargs": null,
+    "random_seed": 0,
+    "numpy_seed": 1234,
+    "torch_seed": 1234,
+    "fewshot_seed": 1234
+  },
+  "git_hash": null,
+  "date": 1795088135.002878,
+  "pretty_env_info": "PyTorch version: 2.14.1+cu130\nIs debug build: False\nCUDA used to build PyTorch: 13.0\nROCM used to build PyTorch: N/A\n\nOS: Ubuntu 22.04.5 LTS (x86_64)\nGCC version: (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0\nClang version: Could not collect\nCMake version: version 4.0.2\nLibc version: glibc-2.35\n\nPython version: 3.10.19 (main, Jan 14 2026, 19:36:24) [Clang 21.1.4 ] (64-bit runtime)\nPython platform: Linux-5.15.0-198-generic-x86_64-with-glibc2.35\nIs CUDA available: False\nCUDA runtime version: No CUDA\nCUDA_MODULE_LOADING set to: N/A\nGPU models and configuration: No CUDA\nNvidia driver version: No CUDA\ncuDNN version: No CUDA\nIs XPU available: False\nHIP runtime version: N/A\nMIOpen runtime version: N/A\nIs XNNPACK available: False\nCaching allocator config: N/A\n\nCPU:\nArchitecture:                            x86_64\nCPU op-mode(s):                          32-bit, 64-bit\nAddress sizes:                           46 bits physical, 57 bits virtual\nByte Order:                              Little Endian\nCPU(s):                                  64\nOn-line CPU(s) list:                     0-63\nVendor ID:                               AuthenticAMD\nModel name:                              AMD EPYC 9354P 32-Core Processor\nCPU family:                              25\nModel:                                   17\nThread(s) per core:                      2\nCore(s) per socket:                      32\nSocket(s):                               1\nStepping:                                1\nFrequency boost:                         enabled\nCPU max MHz:                             3800.2410\nCPU min MHz:                             1500.0000\nBogoMIPS:                                6490.88\nFlags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl nonstop_tsc cpuid extd_apicid aperfmperf rapl pni pclmulqdq monitor ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand lahf_lm cmp_legacy svm extapic cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw ibs skinit wdt tce topoext perfctr_core perfctr_nb bpext perfctr_llc mwaitx cpb cat_l3 cdp_l3 invpcid_single hw_pstate ssbd mba ibrs ibpb stibp ibrs_enhanced vmmcall fsgsbase bmi1 avx2 smep bmi2 erms invpcid cqm rdt_a avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local avx512_bf16 clzero irperf xsaveerptr rdpru wbnoinvd amd_ppin cppc arat npt lbrv svm_lock nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pfthreshold avic v_vmsave_vmload vgif v_spec_ctrl avx512vbmi umip pku ospke avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq la57 rdpid overflow_recov succor smca fsrm flush_l1d sme sev sev_es ibpb_exit_to_user\nVirtualization:                          AMD-V\nL1d cache:                               1 MiB (32 instances)\nL1i cache:                               1 MiB (32 instances)\nL2 cache:                                32 MiB (32 instances)\nL3 cache:                                256 MiB (8 instances)\nNUMA node(s):                            1\nNUMA node0 CPU(s):                       0-63\nVulnerability Gather data sampling:      Not affected\nVulnerability Indirect target selection: Not affected\nVulnerability Itlb multihit:             Not affected\nVulnerability L1tf:                      Not affected\nVulnerability Mds:                       Not affected\nVulnerability Meltdown:                  Not affected\nVulnerability Mmio stale data:           Not affected\nVulnerability Reg file data sampling:    Not affected\nVulnerability Retbleed:                  Not affected\nVulnerability Spec rstack overflow:      Mitigation; safe RET\nVulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl and seccomp\nVulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization\nVulnerability Spectre v2:                Mitigation; Enhanced / Automatic IBRS; IBPB conditional; STIBP always-on; PBRSB-eIBRS Not affected; BHI Not affected\nVulnerability Srbds:                     Not affected\nVulnerability Tsa:                       Vulnerable: Clear CPU buffers attempted, no microcode\nVulnerability Tsx async abort:           Not affected\nVulnerability Vmscape:                   Mitigation; IBPB before exit to userspace\n\nVersions of relevant libraries:\n[pip3] numpy==2.2.6\n[pip3] nvidia-cublas==13.1.1.3\n[pip3] nvidia-cuda-cupti==13.0.85\n[pip3] nvidia-cuda-nvrtc==13.0.88\n[pip3] nvidia-cuda-runtime==13.0.96\n[pip3] nvidia-cudnn-cu13==9.24.0.43\n[pip3] nvidia-cufft==12.0.0.61\n[pip3] nvidia-curand==10.4.0.35\n[pip3] nvidia-cusolver==12.0.4.66\n[pip3] nvidia-cusparse==12.6.3.3\n[pip3] nvidia-cusparselt-cu13==0.8.1\n[pip3] nvidia-nccl-cu13==2.30.7\n[pip3] nvidia-nvjitlink==13.5.37\n[pip3] nvidia-nvtx==13.0.85\n[pip3] torch==2.14.1\n[pip3] triton==3.8.0\n[conda] Could not collect",
+  "transformers_version": "4.55.4",
+  "lm_eval_version": "0.4.9",
+  "upper_git_hash": null,
+  "tokenizer_pad_token": [
+    "<|finetune_right_pad_id|>",
+    "128004"
+  ],
+  "tokenizer_eos_token": [
+    "<|eot_id|>",
+    "128009"
+  ],
+  "tokenizer_bos_token": [
+    "<|begin_of_text|>",
+    "128000"
+  ],
+  "eot_token_id": 128009,
+  "max_length": 7999,
+  "task_hashes": {
+    "mmlu_llama_high_school_statistics": "7ab6e929f25d19c1d68198ec8d856e3ee2333fd7ec7d09e451ff8d7b5a193120",
+    "mmlu_llama_anatomy": "a5f85aaa0334392e4742a7e4089d7a7f5ca70094724edb1ed6456b0e60f54fcb",
+    "mmlu_llama_computer_security": "a255ef4164b1d55ece26a88927ee408c1908bc814c91c56385596c211bbdfd73",
+    "mmlu_llama_high_school_computer_science": "c5a480c5a0753c7456986860792c176936f53828c5e60db4acc8e3abb590b4c1",
+    "mmlu_llama_conceptual_physics": "acc3388743a5f477dfcea303c368b8bbae2171a309a86abe881d5b25a3b8069f",
+    "mmlu_llama_high_school_physics": "9738d81190baa3c0a32cebb0bcb10b6dc5facfa681362d547b31a47a76d4a7b2",
+    "mmlu_llama_high_school_mathematics": "889accf91de7eab789b02dd82da07105413ca33b93f618be34e1c3ccccc962f8",
+    "mmlu_llama_machine_learning": "0aeab9abfe21a9214ce0dd6bac70df65432947965e83e5f2f8d788ce7a16c8ab",
+    "mmlu_llama_college_physics": "f64b7b06362d9952e890f83f0aab7ecc1b097b741cd7995004bbd763b713b49b",
+    "mmlu_llama_electrical_engineering": "9d036062a68745869fb951e6f2f40c617642f02dd3aa6a18b942bff32b2e8d2e",
+    "mmlu_llama_astronomy": "b947f564f41278492e185776d9171422b517ccda61cc67d25ceb65e0b0392603",
+    "mmlu_llama_college_computer_science": "81455610046e7c8309a7ebb6a56ac5c7040f5c0b0d98f57063cf053adea7fef6",
+    "mmlu_llama_college_biology": "03407a602c4b29ecab33847764776e92aeb17c9374ba347e802871d7563c00f6",
+    "mmlu_llama_abstract_algebra": "fb59090b58fdf11b55022956ea4856153ac1dfa35abca1ee9a0e4720fa3e53d3",
+    "mmlu_llama_college_mathematics": "daefd6cb020f18911cf7524d5291bab2ef18b5109f3653ddcef0d70b31673c18",
+    "mmlu_llama_high_school_biology": "3d26a464fdd9396ea137cf7e1f518d5f10cb76012a4d49974f81c4d8be3fec34",
+    "mmlu_llama_high_school_chemistry": "6a9b5cc1c3706c89d55bb183002745c79123a49ab723fe723f9c9be964053326",
+    "mmlu_llama_elementary_mathematics": "3f150f432af3b6932abcbeaf26a756de47a280d3f547023ab7fa5060b5d44803",
+    "mmlu_llama_college_chemistry": "f5a40a87dc19cd02e04987aa02e8e5140a2585650512b4352e9e2f39d0d82a5c",
+    "mmlu_llama_clinical_knowledge": "6c4a190144cbf88ff69d34e36dde3732e9ed5a7ed8f0357a2589e3052a4c5832",
+    "mmlu_llama_college_medicine": "f5316f75fe5f9748143826bc43d396d23a378be8edc333924268bc4f2171ff26",
+    "mmlu_llama_marketing": "178d2ee9d75832ca96626b2b81f21001507f9ad2705586b0e55a8abdacfd2c90",
+    "mmlu_llama_business_ethics": "b45ab313e9a4c747f28317c28f7edf26bdfaea4e24fb323809df1314a59df3ff",
+    "mmlu_llama_medical_genetics": "6c53c1c0e3ecd1429605d9b06004035af1f0edc4af451a89bfb3d6c5cad5ee7f",
+    "mmlu_llama_global_facts": "ee7a8109e9e510f2862a8d14d1d22f3019553b8fa8a8e447fb0852244fbfb37d",
+    "mmlu_llama_virology": "3d839989211c57086336e830082a386f75d3a5060d49b272b2552c2fe8954b98",
+    "mmlu_llama_nutrition": "068f20f7a632090a753d6eed9b1fad84168d2294dae0e4bdb08e47b011d8f572",
+    "mmlu_llama_human_aging": "82c9b71ac18172d12967e70f4c55e2f81cd7131babe05ab0b5f509b544c9d923",
+    "mmlu_llama_professional_medicine": "2f381d0b7a4cbf7c8f188be4ec7968c201a4d2f19729e198fea1879a1612ebc2",
+    "mmlu_llama_professional_accounting": "bb56c50b47e695a42d2650ae9252aa0d355ee7f23f6024c756afa47c8b71b5c8",
+    "mmlu_llama_management": "d9a559aaf18f10f6c27f09d1de83ae67a6a7bc0a4f5490ad59cf64e9013995ce",
+    "mmlu_llama_miscellaneous": "082ba91cae2338ed4cb84a3649bfc952bb51fcc6fa3111f826d5070101b40382",
+    "mmlu_llama_high_school_psychology": "89d837bebe27c364ab37bb5f8de35824d94a3f2e61b4f44a2fd2164275a2e1e1",
+    "mmlu_llama_high_school_macroeconomics": "51b143bdb71461d4d5bffd2c03919db098bde2ced44afb0e958ee932a3fcce04",
+    "mmlu_llama_human_sexuality": "d9b4c680c70f8362dd6b519fced7c6fb9898673322f54fbe298811b357dd2971",
+    "mmlu_llama_professional_psychology": "52b0db38c3303a45d1516ec80108431ff68b0ac183b0d538da0e07565ef98c20",
+    "mmlu_llama_econometrics": "d23db24e210afc37f1de5ff24d28648993669ae330ae53e34494a3418d653c20",
+    "mmlu_llama_us_foreign_policy": "2c2912a5657ff8da1aca84017e690d4c05e066fc7c16fe0eef638a636f1d20c8",
+    "mmlu_llama_public_relations": "2aaed7051e36a7f08071e4746de0e38df298edea2c8edd2c41f217f4a836f6e5",
+    "mmlu_llama_high_school_government_and_politics": "89aa4e66fc5f82078f040a3cb320d613946a289a9af248c05c68d1766d73cc96",
+    "mmlu_llama_high_school_geography": "48d56b87589a43cd13ebbf5ab1e4f28b6a95575569f089f8b67a200e4c829d10",
+    "mmlu_llama_high_school_microeconomics": "06ad7d0420f5024011cc76ceb90d05278dfc2ebe3183243e5407e0929655a738",
+    "mmlu_llama_sociology": "c1b66ef94b57822670d2a4eb307a3ec6951b9a78895fae4b6bc0dcbaef9458a3",
+    "mmlu_llama_security_studies": "b3762c77e5373dd8b353f80b7d1c445a53d630d5eca4bf9dc9f531e61631c8f1",
+    "mmlu_llama_philosophy": "7beb3724b3843f54a1673a895c3f1ab4fa139f2949b6104dbcd0d97d394d6b06",
+    "mmlu_llama_moral_disputes": "f3c2148bc82cbd539f36c143fec52a631a9366d78b3856d4d51826aac142a785",
+    "mmlu_llama_high_school_european_history": "333142ddc72a15c20b4c6abd5e04d3021aeb3f1cd74469959b97c3f9d1e3de6c",
+    "mmlu_llama_jurisprudence": "7b7598709e664993051d594a21d88a47b6e7cd5c55464396f3ab35a6dfee8460",
+    "mmlu_llama_international_law": "b0114f0a720ec0f8d0a9591c6faef5ce452421bf3461fa4678221321acdf45d0",
+    "mmlu_llama_professional_law": "e1188cc5581c8484b7e6a7c631f8f7998103cd97532f77dd90a53310b2789548",
+    "mmlu_llama_moral_scenarios": "d051e1cfc0bff7a8aea95e7e97f223cbfcbfcf16b407b711a76aea0c5bfb09c9",
+    "mmlu_llama_prehistory": "98323c7310593a0bb93ef73f8d39724ee1bd95eac4c6be65454d647cda6e11ee",
+    "mmlu_llama_formal_logic": "6ceda3d88aee5c0b2cd3193f11c32fb91c53e60fb6d2e5c406c926ab70706ce5",
+    "mmlu_llama_high_school_us_history": "9e47e07358f3c5ee830a0c3e00bb3ad0394391bf346d12b929ace1b16606e7e5",
+    "mmlu_llama_high_school_world_history": "06ad9d40522a9bdd9b734d2ba1effe5aeb06006952d99a0cb938cae5136454bb",
+    "mmlu_llama_world_religions": "1d91653bb6245ec8878044235815b6ee8f08e2d952198d3d9542b7ac63260bd4",
+    "mmlu_llama_logical_fallacies": "0a4f00ceb497c55c2caaf98252fb7312691fe82c0848bc200174e43b5aed86e3"
+  },
+  "model_source": "local-completions",
+  "model_name": "llama70b",
+  "model_name_sanitized": "llama70b",
+  "system_instruction": null,
+  "system_instruction_sha": null,
+  "fewshot_as_multiturn": true,
+  "chat_template": "{{- bos_token }}\n{%- if custom_tools is defined %}\n    {%- set tools = custom_tools %}\n{%- endif %}\n{%- if not tools_in_user_message is defined %}\n    {%- set tools_in_user_message = true %}\n{%- endif %}\n{%- if not date_string is defined %}\n    {%- set date_string = \"26 Jul 2024\" %}\n{%- endif %}\n{%- if not tools is defined %}\n    {%- set tools = none %}\n{%- endif %}\n\n{#- This block extracts the system message, so we can slot it into the right place. #}\n{%- if messages[0]['role'] == 'system' %}\n    {%- set system_message = messages[0]['content']|trim %}\n    {%- set messages = messages[1:] %}\n{%- else %}\n    {%- set system_message = \"\" %}\n{%- endif %}\n\n{#- System message + builtin tools #}\n{{- \"<|start_header_id|>system<|end_header_id|>\\n\\n\" }}\n{%- if builtin_tools is defined or tools is not none %}\n    {{- \"Environment: ipython\\n\" }}\n{%- endif %}\n{%- if builtin_tools is defined %}\n    {{- \"Tools: \" + builtin_tools | reject('equalto', 'code_interpreter') | join(\", \") + \"\\n\\n\"}}\n{%- endif %}\n{{- \"Cutting Knowledge Date: December 2023\\n\" }}\n{{- \"Today Date: \" + date_string + \"\\n\\n\" }}\n{%- if tools is not none and not tools_in_user_message %}\n    {{- \"You have access to the following functions. To call a function, please respond with JSON for a function call.\" }}\n    {{- 'Respond in the format {\"name\": function name, \"parameters\": dictionary of argument name and its value}.' }}\n    {{- \"Do not use variables.\\n\\n\" }}\n    {%- for t in tools %}\n        {{- t | tojson(indent=4) }}\n        {{- \"\\n\\n\" }}\n    {%- endfor %}\n{%- endif %}\n{{- system_message }}\n{{- \"<|eot_id|>\" }}\n\n{#- Custom tools are passed in a user message with some extra guidance #}\n{%- if tools_in_user_message and not tools is none %}\n    {#- Extract the first user message so we can plug it in here #}\n    {%- if messages | length != 0 %}\n        {%- set first_user_message = messages[0]['content']|trim %}\n        {%- set messages = messages[1:] %}\n    {%- else %}\n        {{- raise_exception(\"Cannot put tools in the first user message when there's no first user message!\") }}\n{%- endif %}\n    {{- '<|start_header_id|>user<|end_header_id|>\\n\\n' -}}\n    {{- \"Given the following functions, please respond with a JSON for a function call \" }}\n    {{- \"with its proper arguments that best answers the given prompt.\\n\\n\" }}\n    {{- 'Respond in the format {\"name\": function name, \"parameters\": dictionary of argument name and its value}.' }}\n    {{- \"Do not use variables.\\n\\n\" }}\n    {%- for t in tools %}\n        {{- t | tojson(indent=4) }}\n        {{- \"\\n\\n\" }}\n    {%- endfor %}\n    {{- first_user_message + \"<|eot_id|>\"}}\n{%- endif %}\n\n{%- for message in messages %}\n    {%- if not (message.role == 'ipython' or message.role == 'tool' or 'tool_calls' in message) %}\n        {{- '<|start_header_id|>' + message['role'] + '<|end_header_id|>\\n\\n'+ message['content'] | trim + '<|eot_id|>' }}\n    {%- elif 'tool_calls' in message %}\n        {%- if not message.tool_calls|length == 1 %}\n            {{- raise_exception(\"This model only supports single tool-calls at once!\") }}\n        {%- endif %}\n        {%- set tool_call = message.tool_calls[0].function %}\n        {%- if builtin_tools is defined and tool_call.name in builtin_tools %}\n            {{- '<|start_header_id|>assistant<|end_header_id|>\\n\\n' -}}\n            {{- \"<|python_tag|>\" + tool_call.name + \".call(\" }}\n            {%- for arg_name, arg_val in tool_call.arguments | items %}\n                {{- arg_name + '=\"' + arg_val + '\"' }}\n                {%- if not loop.last %}\n                    {{- \", \" }}\n                {%- endif %}\n                {%- endfor %}\n            {{- \")\" }}\n        {%- else  %}\n            {{- '<|start_header_id|>assistant<|end_header_id|>\\n\\n' -}}\n            {{- '{\"name\": \"' + tool_call.name + '\", ' }}\n            {{- '\"parameters\": ' }}\n            {{- tool_call.arguments | tojson }}\n            {{- \"}\" }}\n        {%- endif %}\n        {%- if builtin_tools is defined %}\n            {#- This means we're in ipython mode #}\n            {{- \"<|eom_id|>\" }}\n        {%- else %}\n            {{- \"<|eot_id|>\" }}\n        {%- endif %}\n    {%- elif message.role == \"tool\" or message.role == \"ipython\" %}\n        {{- \"<|start_header_id|>ipython<|end_header_id|>\\n\\n\" }}\n        {%- if message.content is mapping or message.content is iterable %}\n            {{- message.content | tojson }}\n        {%- else %}\n            {{- message.content }}\n        {%- endif %}\n        {{- \"<|eot_id|>\" }}\n    {%- endif %}\n{%- endfor %}\n{%- if add_generation_prompt %}\n    {{- '<|start_header_id|>assistant<|end_header_id|>\\n\\n' }}\n{%- endif %}\n",
+  "chat_template_sha": "e10ca381b1ccc5cf9db52e371f3b6651576caee0a630b452e2816b2d404d4b65",
+  "start_time": 1991458.941446887,
+  "end_time": 1991663.81551563,
+  "total_evaluation_time_seconds": "204.8740687428508"
+}

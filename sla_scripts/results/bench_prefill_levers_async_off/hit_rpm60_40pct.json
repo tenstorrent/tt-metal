@@ -1,0 +1,24 @@
+{
+ "tag": "gtA_rpm60_40pct",
+ "n": 120,
+ "rps": 1.0,
+ "prefix_len": 2048,
+ "unique_len": 3072,
+ "prompt_tokens": 614400,
+ "cached_tokens": 239616,
+ "hit_rate": 0.39,
+ "designed_hit_rate": 0.4,
+ "requests_with_hit": 117,
+ "first_10_cached": [
+  0,
+  2048,
+  2048,
+  2048,
+  2048,
+  2048,
+  2048,
+  2048,
+  2048,
+  2048
+ ]
+}

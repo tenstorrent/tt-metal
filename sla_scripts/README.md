@@ -33,6 +33,7 @@ Key commands:
 | Task | Command |
 |---|---|
 | Chunked prefill test (WH Galaxy) | `vllm/test_chunked_prefill.sh 2048` |
+| Prefill levers SLA suite (WH Galaxy, best: `C`) | `vllm/run_prefill_levers_suite.sh C`; report `results/WH_TP32_PREFILL_LEVERS_REPORT.md` |
 | Own TIS image, full suite | `tis/tis_new_suite.sh` |
 | SLA bench against a running server | `OUT=<dir> tis/bench_tis.sh` |
 | MMLU against a running server | `MODEL=<id> NC=8 TMO=600 eval/run_mmlu.sh <tag>` |
