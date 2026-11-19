@@ -142,6 +142,17 @@ def run5(mesh, cfg, lc, l5, Ms, tag, warm=WARM, meas=MEAS):
                     f"partials up / h ring / y {(s[:, 470:476].mean(0) / 1e3).round().tolist()}; packets forwarded "
                     f"{s[:, 58].mean():.0f}, own slices {s[:, 56].mean():.1f} a core"
                 )
+            if l5.why and i == warm + meas - 1:
+                for ci in chips:
+                    s = (ttnn.to_torch(sts[ci]).to(torch.int64) & 0xFFFFFFFF).reshape(cfg.G * cfg.GC, -1).double()
+                    for g in range(cfg.G):
+                        q = s[g * cfg.GC : (g + 1) * cfg.GC]
+                        logger.info(
+                            f"WL5 why chip {ci} group {g}: idle us none / arrival / credit / mux / refill "
+                            f"{(q[:, 477:482].mean(0) / clk).round().tolist()}, busy us {(q[:, 470].mean() / clk):.0f}, "
+                            f"loop us {(q[:, 484].mean() / clk):.0f}, first / last forward us "
+                            f"{(q[:, 482].mean() / clk):.0f} / {(q[:, 483].mean() / clk):.0f}"
+                        )
             del sts
         if i == warm + meas - 1:
             outs = ttnn.get_device_tensors(dev["out_t"])
@@ -204,3 +215,69 @@ def test_ws_lane5_tray_e640(mesh_device):
     Ms = [586] * cfg.nexp
     rows, pcs = run5(mesh_device, cfg, lc, l5, Ms, "tray 640 experts M 586", warm=2, meas=3)
     assert min(pcs.values()) > 0.999
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [FAB], indirect=True)
+@pytest.mark.parametrize("M", [586, 0], ids=["m586", "mzero"])
+def test_ws_lane5_tray_oneway(mesh_device, M):
+    """One-way lanes (LCfg.oneway) on the 8-chip snake cycle as a Galaxy column's ring: 2 links x 2 directions = 4
+    lanes, G 4 (the 12 x 10 grid), 160 experts (40 a lane, 5 a chip a lane: a Galaxy EP-4 column's load), credits on
+    header-only channels of the partner lane's mux; hub h multicast (hmc 2), muxes on NOC1. WS_ONEWAY_SLOTS: the slot
+    types (default d0,d0,any,any); WS_NEXP overrides 160. M 0: weights only."""
+    cfg, lc, l5 = configs(int(os.environ.get("WS_NEXP", "160")), 4, 8192)
+    lc.oneway = True
+    lc.slots = os.environ.get("WS_ONEWAY_SLOTS", "d0,d0,any,any")
+    if not os.environ.get("WS_L5"):
+        l5 = L5Cfg(hmc=2)
+    Ms = [M] * cfg.nexp
+    rows, pcs = run5(mesh_device, cfg, lc, l5, Ms, f"tray one-way G 4 M {M}", warm=3, meas=3)
+    assert M == 0 or min(pcs.values()) > 0.999
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [FAB], indirect=True)
+@pytest.mark.parametrize("place", [0, 1], ids=["fixed", "placed"])
+@pytest.mark.parametrize("M", [586, 0], ids=["m586", "mzero"])
+def test_ws_lane5_tray_oneway_rings(mesh_device, M, place):
+    """One-way lanes on two 4-chip rings (the tray's 2 x 2 squares, LCfg.subcycles: chips (0,0) (0,1) (1,1) (1,0) and
+    (0,2) (0,3) (1,3) (1,2)), 2 links x 2 directions = G 4, 160 experts a ring (40 a lane); lanes on rectangles fixed
+    (lane g on group g) or placed by each chip's ethernet cores (L5Cfg.place). M 0: weights only."""
+    cfg, lc, l5 = configs(int(os.environ.get("WS_NEXP", "160")), 4, 8192)
+    lc.oneway = True
+    lc.subcycles = True
+    lc.cycles = [[(0, 0), (0, 1), (1, 1), (1, 0)], [(0, 2), (0, 3), (1, 3), (1, 2)]]
+    lc.slots = os.environ.get("WS_ONEWAY_SLOTS", "d0,d0,any,any")
+    l5 = L5Cfg(hmc=2, place=place, **{k: int(v) for k, v in env_kv("WS_L5").items()})
+    Ms = [M] * cfg.nexp
+    rows, pcs = run5(mesh_device, cfg, lc, l5, Ms, f"tray one-way rings G 4 place {place} M {M}", warm=3, meas=3)
+    assert M == 0 or min(pcs.values()) > 0.999
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [FAB], indirect=True)
+def test_ws_lane5_tray_oneway_link0(mesh_device):
+    """test_ws_lane5_tray_oneway's per-lane load (40 experts a lane) on link 0 only: 2 one-way lanes, G 2, both muxes
+    in column 0 - half the muxes a chip, so at most 2 mux flows share a NoC link of the ethernet row. M 0."""
+    cfg, lc, l5 = configs(int(os.environ.get("WS_NEXP", "80")), 2, 8192)
+    lc.oneway = True
+    lc.NL = 1
+    lc.slots = os.environ.get("WS_ONEWAY_SLOTS", "d0,d0,any,any")
+    if not os.environ.get("WS_L5"):
+        l5 = L5Cfg(hmc=2)
+    Ms = [0] * cfg.nexp
+    run5(mesh_device, cfg, lc, l5, Ms, "tray one-way link 0 G 2 M 0", warm=3, meas=3)
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [FAB], indirect=True)
+@pytest.mark.parametrize("M", [586, 0], ids=["m586", "mzero"])
+def test_ws_lane5_tray_bidir160(mesh_device, M):
+    """The bidirectional lanes' twin of test_ws_lane5_tray_oneway: the same 8-chip snake, hmc 2 with muxes on NOC1,
+    160 experts on G 2 (80 a lane: the same 35 experts a link direction a mux)."""
+    cfg, lc, l5 = configs(int(os.environ.get("WS_NEXP", "160")), 2, 8192)
+    if not os.environ.get("WS_L5"):
+        l5 = L5Cfg(hmc=2)
+    Ms = [M] * cfg.nexp
+    rows, pcs = run5(mesh_device, cfg, lc, l5, Ms, f"tray bidirectional G 2 M {M}", warm=3, meas=3)
+    assert M == 0 or min(pcs.values()) > 0.999

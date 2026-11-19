@@ -102,9 +102,11 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* st = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(3));
     const uint32_t DS = get_arg_val<uint32_t>(5);
     const uint16_t my_mesh = get_arg_val<uint32_t>(6);
+    // (RT 7 / 8: the direction-d neighbour's chip id | (this lane's core j there: x | y << 8) << 8 - a chip may hold
+    // a lane on another rectangle than its neighbours, L5Cfg.place)
     const uint8_t nchip[2] = {(uint8_t)get_arg_val<uint32_t>(7), (uint8_t)get_arg_val<uint32_t>(8)};
-    const uint32_t myxy = get_arg_val<uint32_t>(9);
-    const uint32_t mex = myxy & 0xFF, mey = myxy >> 8;
+    const uint32_t nbx[2] = {(get_arg_val<uint32_t>(7) >> 8) & 0xFF, (get_arg_val<uint32_t>(8) >> 8) & 0xFF};
+    const uint32_t nby[2] = {get_arg_val<uint32_t>(7) >> 16, get_arg_val<uint32_t>(8) >> 16};
     uint32_t cx[NCOL], ry[NR];
     for (uint32_t i = 0; i < NCOL; ++i) {
         cx[i] = get_arg_val<uint32_t>(10 + i);
@@ -170,12 +172,18 @@ void kernel_main() {
         const uint32_t l_bufidx = get_semaphore(get_arg_val<uint32_t>(a_++));
         tmx[d] = get_arg_val<uint32_t>(a_++);
         tmy[d] = get_arg_val<uint32_t>(a_++);
+#ifdef WL5_HO_BUFSZ
+        // (one-way lanes: direction 1 is a header-only channel of the partner lane's mux, for the credits)
+        const size_t bufsz = d == 1 ? WL5_HO_BUFSZ : mux_bufsz;
+#else
+        const size_t bufsz = mux_bufsz;
+#endif
         mux[d] = tt::tt_fabric::build_connection_to_fabric_endpoint<mux_nbuf>(
             muxx[d],
             muxy[d],
             chan,
             mux_nbuf,
-            mux_bufsz,
+            bufsz,
             ch_base,
             conn_info,
             handshake,
@@ -264,7 +272,9 @@ void kernel_main() {
     };
     // ---- QF / QR
     uint32_t rr = 0, n_fwd = 0, n_credit = 0;
+    uint32_t why = 0;  // (WL5_WHY: what blocked the forwards when none went: 1 arrival, 2 credit, 4 mux space)
     auto qf = [&]() -> bool {
+        why = 0;
         for (uint32_t t = 0; t < 2 * K; ++t) {
             const uint32_t s = (rr + t) % K, d = ((rr + t) / K) % 2;
             if (!((cur_fwd[s] >> d) & 1) || sent[s][d] >= PK) {
@@ -272,13 +282,16 @@ void kernel_main() {
             }
             const uint32_t u = sent[s][d];
             if (warr[s * 4] < base[s] + u + 1) {
+                why |= 1;
                 continue;
             }
             const uint32_t s2 = cur_dst[s][d] & 7, k2 = cur_dst[s][d] >> 3;
             if (u == 0 && cred[(d * K + s2) * 4] < k2) {
+                why |= 2;
                 continue;
             }
             if (!MUXD(d).edm_has_space_for_packet()) {
+                why |= 4;
                 continue;
             }
             noc_async_writes_flushed();  // (the previous send's header and payload out of L1)
@@ -290,7 +303,10 @@ void kernel_main() {
                 slot_addr(s, u),
                 CHT * wtile,
                 tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                    get_noc_addr(mex, mey, slot_addr(s2, u)), get_noc_addr(mex, mey, warr_addr + s2 * 16), 1, false});
+                    get_noc_addr(nbx[d], nby[d], slot_addr(s2, u)),
+                    get_noc_addr(nbx[d], nby[d], warr_addr + s2 * 16),
+                    1,
+                    false});
             ++sent[s][d];
             ++n_fwd;
             rr = rr + t + 1;
@@ -323,7 +339,7 @@ void kernel_main() {
                     nchip[1 - d],
                     my_mesh,
                     tt::tt_fabric::NocUnicastInlineWriteCommandHeader{
-                        get_noc_addr(mex, mey, cred_addr + (d * K + s) * 16), next});
+                        get_noc_addr(nbx[1 - d], nby[1 - d], cred_addr + (d * K + s) * 16), next});
                 ++n_credit;
             }
             occ[s] = next;
@@ -905,6 +921,9 @@ void kernel_main() {
     auto wall = []() { return *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L); };
     const uint32_t t_start = wall();
     uint32_t tq[7] = {0, 0, 0, 0, 0, 0, 0}, tb[6] = {0, 0, 0, 0, 0, 0};
+#if defined(WL5_WHY)
+    uint32_t twhy[5] = {0, 0, 0, 0, 0}, t_first = 0, t_last = 0;
+#endif
     while (true) {
         bool did[7], dib[6];
         uint32_t t[8], u[7];
@@ -942,6 +961,23 @@ void kernel_main() {
         dib[5] = qo();
         u[6] = wall();
         bool any = false;
+#if defined(WL5_WHY)
+        if (!did[0] && !dib[5]) {  // (no forward, no own read: charge the iteration to what blocked the forwards)
+            const uint32_t dt = u[6] - t[0];
+            bool rpend = false;  // (a slot sent all, waiting to be refilled: compute or its mux)
+            for (uint32_t s = 0; s < K; ++s) {
+                rpend |= live[s] && !(((cur_fwd[s] & 1) && sent[s][0] < PK) || ((cur_fwd[s] & 2) && sent[s][1] < PK));
+            }
+            const uint32_t k = (why & 4) ? 3 : (why & 2) ? 2 : (why & 1) ? 1 : rpend ? 4 : 0;
+            twhy[k] += dt;
+        }
+        if (did[0]) {
+            if (n_fwd && !t_first) {
+                t_first = t[1] - t_start;
+            }
+            t_last = t[1] - t_start;
+        }
+#endif
         for (uint32_t i = 0; i < 7; ++i) {
             if (did[i]) {
                 tq[i] += t[i + 1] - t[i];
@@ -980,14 +1016,19 @@ void kernel_main() {
     noc_async_write_barrier();
 #endif
 #endif
+    // (every connection's done signal before any master's wait: with one-way lanes two groups' masters each count the
+    // other group's clients)
     for (uint32_t d = 0; d < NMUX; ++d) {
         tt::tt_fabric::fabric_client_disconnect(mux[d]);
+        if (!master[d]) {
+            noc_semaphore_inc(get_noc_addr(tmx[d], tmy[d], term_sync[d]), 1);
+            noc_async_atomic_barrier();
+        }
+    }
+    for (uint32_t d = 0; d < NMUX; ++d) {
         if (master[d]) {
             noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(term_sync[d]), mux_clients - 1);
             tt::tt_fabric::fabric_endpoint_terminate(muxx[d], muxy[d], mux_term);
-        } else {
-            noc_semaphore_inc(get_noc_addr(tmx[d], tmy[d], term_sync[d]), 1);
-            noc_async_atomic_barrier();
         }
     }
     st[58] = n_fwd;
@@ -1005,6 +1046,13 @@ void kernel_main() {
     }
 #endif
     st[56] = n_own;
+#if defined(WL5_WHY)
+    for (uint32_t i = 0; i < 5; ++i) {  // (idle iterations by blocker: nothing / arrival / credit / mux / refill)
+        st[477 + i] = twhy[i];
+    }
+    st[482] = t_first;
+    st[483] = t_last;
+#endif
     st[484] = wall() - t_start;
     st[485] = t_start;
 #if !defined(WL5_HMC2)

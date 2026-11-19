@@ -142,6 +142,10 @@ class LCfg:
     # cycles are disjoint sub-cycles that together cover every chip once (EP-4: one a mesh column, of any length >= 2),
     # instead of Hamiltonian cycles: each lane is the set of them on its link, every chip in the one sub-cycle it is in
     subcycles: bool = False
+    # one-way lanes: each (cycle, link) gives two lanes, one a direction (the second on the reversed cycle), every expert
+    # all the way round its lane's direction; a lane's credits go back on the other direction's connection, which is its
+    # partner lane's (g ^ 1): header-only channels on the partner's mux (ws_lane5)
+    oneway: bool = False
 
 
 # G <= 2 (the tray): columns (4, 5) and (9, 10), muxes in 3 and 8. Measured on the tray (K split, M 586): 62.5% against
@@ -173,17 +177,21 @@ def lanes(shape, lc: LCfg):
     subcycles: (the list of sub-cycles, link index) - lane_cycle() picks a chip's."""
     R, Cn = shape
     every = sorted((r, c) for r in range(R) for c in range(Cn))
+    rev = lambda c: [c[0]] + c[1:][::-1]  # (the same cycle the other way round)
+    links = list(range(lc.NL))
     if lc.subcycles:
         subs = [list(c) for c in lc.cycles]
         assert sorted(x for c in subs for x in c) == every, "the sub-cycles cover every chip once"
         assert len({len(c) for c in subs}) == 1, "sub-cycles of one length"
-        return [(subs, link) for link in range(lc.NL)]
+        if lc.oneway:
+            return [(s, link) for link in links for s in (subs, [rev(c) for c in subs])]
+        return [(subs, link) for link in links]
     cycles = [list(c) for c in (lc.cycles or [snake(shape)])]
     out = []
     for cyc in cycles:
         assert lc.nofab or sorted(cyc) == every, "a cycle visits every chip once"
-        for link in range(lc.NL):
-            out.append((cyc, link))
+        for link in links:
+            out += [(cyc, link), (rev(cyc), link)] if lc.oneway else [(cyc, link)]
     return out
 
 
@@ -209,7 +217,7 @@ def slot_packets(cfg: GCfg, lc: LCfg):
 
 def schedule(N, E, cfg: GCfg, lc: LCfg):
     GU, P = slot_packets(cfg, lc)
-    return lane_sched(N, E, P=P, GU=GU, C=lc.sched_c, keep=lc.keep, types=slot_types(lc.slots))
+    return lane_sched(N, E, P=P, GU=GU, C=lc.sched_c, keep=lc.keep, types=slot_types(lc.slots), oneway=lc.oneway)
 
 
 def make_tables(shape, cfg: GCfg, lc: LCfg):

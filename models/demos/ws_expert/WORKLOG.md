@@ -1647,3 +1647,78 @@ speed-of-light ep4_targets.py.
   the injection over all four connections are the levers, not the routes.
 - Next on the critical path: G 4 (experts 12.3 -> about 6 ms; the Y lane's own experts forwarded without being
   computed, or lanes split by direction), then the combine's per-connection rate (5.0 -> about 3.5 ms), then dispatch.
+
+### Galaxy prep: one-way lanes (LCfg.oneway; ws_lane5, l5h_reader WL5_HO_BUFSZ)
+- Why: in EP-4 the weights get only the Y ring (8 chips, 2 links). Bidirectional lanes give 1 cycle x 2 links = 2
+  lanes, so G 2: 50 cores, compute-bound at ~11 ms (as on the LoudBox), against the 5.8 ms stream. One-way lanes give 4:
+  each (cycle, link) is two lanes, one a direction (the second on the reversed cycle), every expert 7 hops one way. A
+  lane's credits go back on the other direction's connection, its partner lane's (g ^ 1): header-only channels on the
+  partner's mux (25 full-size + 25 header-only channels a mux, one mux a group). Every connection signals its done
+  before any termination master waits (two groups' masters count each other's clients).
+- Schedule model (lock-step, N 8, 40 experts a lane, P 14): one-way 98-100% of the link floor, bidirectional (80 a
+  lane, same per-link load) 86%.
+- LoudBox proxy (the 8-chip snake as the ring, 2 links x 2 directions, G 4 on the 12 x 10 grid, 160 experts = 40 a
+  lane = a Galaxy column's load, hmc 2, muxes on NOC1: muxes on NOC0 would send the partner group's credits across a
+  rectangle on NOC0), T 8192, 3 + 3 launches:
+  - M 586: PCC 0.99988 every expert, 23.5% util, 11.4 ms a launch (lanes on link 0 end at 7.9 ms, link 1 at 11.4).
+  - M 0 (weights only): 8.39 / 8.25 ms a lane = 17.3 / 17.6 GB/s a link direction (35 experts, 145 MB, each link
+    direction). nbuf 3: 8.37 / 8.18; 5 slots (smaller rings): 8.43 / 8.26 - no change.
+  - Bidirectional twin (same snake and config, G 2, 80 experts a lane: the same 35 experts a mux): 6.93 / 7.90 ms =
+    21.0 / 18.4 GB/s. One-way costs ~10%; the larger gap is this lane configuration's delivery (~17-21 GB/s a link
+    direction) against the Galaxy's 25 GB/s links: 145 MB at 17.5 GB/s is 8.3 ms, not the 5.8 ms stream floor.
+
+### Galaxy prep: where the lane's weight delivery goes (2026-11-18, bh-lb-19 12 x 10, 400G, aiclk 1350 on all 8 chips)
+- L5Cfg.why (WL5_WHY): the group NCRISCs charge every idle loop iteration to what blocked the weight forwards (packet
+  not arrived / downstream slot credit / mux space / slot refill), stamps 477-483. One-way G 4, M 0 (8.39 ms):
+  each core's NCRISC sends for only ~0.37 ms; chips 4 and 7 wait ~5.5 ms of 8 on mux space (all four groups),
+  every other chip waits 2.3-4.5 ms on downstream credits (the ring backed up behind 4 / 7). Bidirectional twin:
+  mux-space waits 2.3-4.2 ms on every chip. The lane protocol (arrival, credits, slots) is not the limit; the
+  mux -> router path is. Links all trained 400G (eth_speed.py), no chip throttled (aiclk 1350, ~60 W).
+- Ethernet cores used (mux runtime args' eth channel -> NoC x, BH order 1,16,2,15,3,14,4,13,5,12,6,11,7,10), lanes
+  0 / 1 = link 0 fwd / rev, 2 / 3 = link 1 fwd / rev, chips 0-7:
+  lane 0: 14 14 14 6 11 4 3 3; lane 1: 5 4 4 4 14 13 13 12; lane 2: 13 13 13 5 12 3 4 4; lane 3: 6 3 3 3 13 14 14 11.
+  Muxes at NoC (1,3) (1,8) (7,3) (7,8) on NOC1 (north, then west): most paths to the ethernet row wrap at x 0 / 16,
+  and the four muxes' writes share the ethernet row's links with each other (and with the clients' writes into the
+  muxes and the routers' landing writes, all on NOC1).
+- Single-variable runs, one-way, M 0, same per-lane load (40 experts, 145 MB a link direction):
+| variant | NCRISC end | GB/s a link direction | modelled max NoC link load (lane rates) |
+|---|---|---|---|
+| 4 lanes, muxes NOC1 (baseline) | 8.39 ms | 17.3 | 3-4 |
+| 4 lanes, links reversed (LCfg.links_rev) | 9.16 ms | 15.8 (chip 5 now the mux-bound one) | 3-4 |
+| 4 lanes, muxes NOC0 (diagnostic: enters the rectangles on NOC0) | 6.01 ms | 24.2 | 2 |
+| link 0 only: 2 lanes, G 2, both muxes column 0 (test_ws_lane5_tray_oneway_link0) | 4.94 ms | 29.4 (every chip mux-bound) | 2 |
+  Model: clients -> mux, mux -> ethernet core, ethernet core -> group cores, each flow routed on the 17 x 12 torus,
+  max over links. 4 x 17.5 = 70 GB/s on one NoC link (~86 GB/s raw) at the bottleneck chips.
+- The LoudBox snake cannot be fixed by placement: chip 3's four ethernet cores are all at x 3-6 and chip 4's all at
+  x 11-14, so every lane -> rectangle assignment leaves a NoC link with 4 flows there (the other six chips reach 2
+  with a per-chip assignment). The 4-lane proxy stays at ~17.5 GB/s.
+- Galaxy (blackhole_galaxy.yaml): every neighbour pair's two links are channels (2k, 2k + 1), i.e. link 0 at x 1-5
+  (west) and link 1 at x 12-16 (east), the same on every chip. With the default order (groups 0 / 1, muxes at x 1,
+  on link 0) every chip is the bad case (model 3-4 for all 20 N / S channel-pair combinations); with links_rev
+  (muxes at x 1 serve the east link over the short wrap, muxes at x 7 the west link directly) the model gives 2 for
+  all of them - the link-0-only case above, which ran at 29.4 GB/s, above the Galaxy's 25 GB/s links. Galaxy EP-4
+  lanes: LCfg.links_rev.
+- Correction: links_rev (e4a4ed363b3) leaned on blackhole_galaxy.yaml, a generic descriptor, not a real Galaxy's
+  wiring; removed. Instead L5Cfg.place (default 1, hmc builds): every chip reads the ethernet cores its lanes send on
+  (the fabric's channel for (neighbour, link), BH channel -> NoC x) and assigns lanes to its group rectangles with the
+  fewest mux flows on the busiest westward ethernet-row link (then fewest link crossings, then identity). A lane's core
+  j writes its packets / credits to the same lane's core j on the neighbour, wherever that chip placed it (l5h_reader
+  RT 7 / 8: chip id | (x | y << 8) << 8). Physical columns checked (ttexalens): bh-lb-19 has NoC column 10 harvested,
+  translated 10-15 = physical 11-16; the mux columns (x 1 / 7) are unaffected.
+- One-way G 4 on two 4-chip rings (test_ws_lane5_tray_oneway_rings: (0,0) (0,1) (1,1) (1,0) and (0,2) (0,3) (1,3)
+  (1,2); 40 experts a lane, 124 MB a link direction), M 0:
+| placement | ring 0-1-5-4 lanes end | ring 2-3-7-6 lanes end |
+|---|---|---|
+| fixed (lane g on rectangle g) | 6.7-6.9 ms (18 GB/s) | 6.7-6.9 ms (18 GB/s) |
+| placed | 6.8 ms (chip 4: all four ethernet cores at x 11-14, every mux ~4.8 ms on mux space) | 4.7-5.1 ms (~25 GB/s, +37%) |
+  M 586 placed: PCC 0.99988 every expert (10.39 ms; fixed 10.34 - compute-bound there). Snake one-way M 0 placed:
+  8.37 ms (chips 3 / 4 bind, as before). EP-4 experts (2-chip columns, G 2) with placement: weights 31.6 GB/s, phase
+  11.05 ms, PCC 0.99988 - unchanged.
+- Limit that placement cannot lift: a chip whose four ethernet cores lie on one side of both mux columns (LoudBox
+  chips 3 and 4 on the tray's cycles) sends every flow through one westward ethernet-row link on NOC1, ~70 GB/s
+  for its four lanes. Going below it needs either mux cores east of / between those ethernet cores (inside the group
+  columns) or the mux writes on NOC0, which would enter the rectangles on their multicast NoC (the rule from the
+  multicast wedge repro). Whether a Galaxy has such chips depends on its real wiring: read it with eth_x on the
+  machine.
+- Open: at M 586 the rectangles at x 11-15 (groups 2 / 3) finish later than x 1-7 (snake 11.4 vs 7.9 ms, rings
+  10.3 vs 7.5 fixed) - not the weights; not looked at yet.

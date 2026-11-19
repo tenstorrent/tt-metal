@@ -15,7 +15,8 @@ nothing enters a group's rectangle on NOC0 from outside.
 
 Layout (L5Cfg): groups in logical columns 1-5 (and 7-11 on a 12 x 10 Galaxy chip; each block NoC contiguous), rows
 0-4 / 5-9; each group's two mux cores in the column just west of it (0 / 6: the cores reach them on NOC1). The 11 x 10
-tray grid holds G 2."""
+tray grid holds G 2. With hmc, L5Cfg.place puts each chip's lanes on the rectangles by the ethernet cores they send on
+(place_lanes): a lane's cores reach the same lane's cores on the neighbouring chips wherever those chips put it."""
 
 from dataclasses import dataclass
 
@@ -72,6 +73,13 @@ class L5Cfg:
     # yc: the east half's collectors (DRAM column x 9 east of them) write on NOC0 from the BRISC instead of NOC1 the
     # long way round; outside the NoC rule (the fence's acks return through the rectangles on NOC0), diagnostics
     yc_n0: int = 0
+    # the group NCRISCs record what held up the weight forwards (idle loop time by blocker: arrival, downstream slot
+    # credit, mux space, slot refill; first / last forward), stamp words 477-483; diagnostics
+    why: int = 0
+    # lanes onto the group rectangles a chip (place_lanes; hmc only): 0 lane g on rectangle g on every chip; 1 by the
+    # chip's ethernet cores, so that the muxes' NOC1 paths to their routers (north, then west along the ethernet row)
+    # share as few of the row's links as the chip's ethernet cores allow
+    place: int = 1
     # group g: top-left logical core, its muxes' column (west of the group) and rows (direction 0, direction 1). The tray
     # (11 x 10, G 2) uses the first two; a Galaxy chip (12 x 10, logical columns 0-6 and 7-11 NoC contiguous) all four
     origins: tuple = ((1, 0), (1, 5), (7, 0), (7, 5))
@@ -82,6 +90,56 @@ class L5Cfg:
 def g5_lane_cores(l5: L5Cfg, g):
     x0, y0 = l5.origins[g]
     return [(x0 + c, y0 + r) for c in range(NCOL) for r in range(NR)]
+
+
+# Blackhole ethernet channel -> NoC x (the ethernet row, y 1)
+BH_ETH_X = (1, 16, 2, 15, 3, 14, 4, 13, 5, 12, 6, 11, 7, 10)
+NOC_W = 17  # (Blackhole NoC columns: the row wraps)
+
+
+def eth_x(mesh, mcfg, src_rc, dst_rc, link):
+    """NoC x of the ethernet core the fabric uses from chip src_rc towards dst_rc on link (the routing plane the mux
+    kernel's runtime args name: after the regions to clear, the connection's ethernet channel)."""
+    a = list(
+        mcfg.kernel_runtime_args(
+            source_node_id=node(mesh, src_rc),
+            destination_node_id=node(mesh, dst_rc),
+            link_index=link,
+            program_descriptor=ttnn.ProgramDescriptor(),
+            mux_logical_core=ttnn.CoreCoord(0, 0),
+        )
+    )
+    chan = a[1 + 2 * a[0]]
+    assert chan < len(BH_ETH_X), chan
+    return BH_ETH_X[chan]
+
+
+def row_load(flows):
+    """(max, total) of the westward NOC1 ethernet-row links the flows (mux x, ethernet x) cross."""
+    use = [0] * NOC_W
+    for xm, xe in flows:
+        x = xm
+        while x != xe:
+            use[x] += 1
+            x = (x - 1) % NOC_W
+    return max(use), sum(use)
+
+
+def place_lanes(mx, ex):
+    """A chip's lane -> rectangle assignment: mx[r][d] the NoC x of rectangle r's direction-d mux, ex[g][d] the NoC x
+    of the ethernet core lane g's direction d sends on (None: no mux). Every mux writes its packets on NOC1, north to
+    the ethernet row, then west along it (wrapping at x 0): the assignment with the fewest flows on the row's busiest
+    link, then the fewest link crossings, then the identity."""
+    import itertools
+
+    G = len(ex)
+    best = None
+    for perm in itertools.permutations(range(G)):
+        flows = [(mx[perm[g]][d], ex[g][d]) for g in range(G) for d in range(len(ex[g])) if ex[g][d] is not None]
+        key = (*row_load(flows), perm != tuple(range(G)))
+        if best is None or key < best[0]:
+            best = (key, perm)
+    return best[1]
 
 
 def pk_of(cfg, CHT, j):
@@ -156,7 +214,11 @@ def build_lane5(
     ln = lanes((R, Cn), lc)
     # (a 2-chip cycle: both directions lead to the same chip over the group's link - one mux a group, WL5_ONEMUX)
     onemux = len(lane_cycles(ln[0])[0]) == 2
-    nmux = 1 if onemux else 2
+    # (one-way lanes: group g's packets on its own mux (direction 0), its credits on header-only channels of its
+    # partner g ^ 1's mux - the partner's direction 0 is g's direction 1; one mux a group)
+    oneway = lc.oneway
+    assert not (oneway and onemux), "one-way lanes need cycles of 3+ chips"
+    nmux = 1 if (onemux or oneway) else 2
     groups = [g5_lane_cores(l5, g) for g in range(G)]
     C = [c for gr in groups for c in gr]
     muxes = [(l5.mux_cols[g], l5.mux_rows[g][d]) for g in range(G) for d in range(nmux)]
@@ -220,14 +282,21 @@ def build_lane5(
     st = stamps_tensor(mesh, C, words=max(64, -(-(512 + T["E"]) // 128) * 16))
     mcfg = fabric_mux.Config(
         num_full_size_channels=GC5,
-        num_header_only_channels=0,
+        num_header_only_channels=GC5 if oneway else 0,
         num_buffers_per_full_size_channel=lc.nbuf,
-        num_buffers_per_header_only_channel=0,
+        num_buffers_per_header_only_channel=lc.nbuf if oneway else 0,
         full_size_channel_buffer_size_bytes=fabric_mux.channel_buffer_size_bytes(mesh),
         base_l1_address=ttnn.get_allocator_base_address(mesh, ttnn.BufferType.L1),
     )
     ctype = fabric_mux.ChannelType.FULL_SIZE
-    client_ct = list(fabric_mux.client_compile_time_args(num_clients=GC5, channel_type=ctype, config=mcfg))
+    hotype = fabric_mux.ChannelType.HEADER_ONLY
+    nclients = 2 * GC5 if oneway else GC5  # (a mux's clients: its termination master waits for the rest)
+    client_ct = list(fabric_mux.client_compile_time_args(num_clients=nclients, channel_type=ctype, config=mcfg))
+    ho_defs = []
+    if oneway:
+        ho_ct = list(fabric_mux.client_compile_time_args(num_clients=nclients, channel_type=hotype, config=mcfg))
+        assert ho_ct[0] == client_ct[0] and ho_ct[2:] == client_ct[2:], (ho_ct, client_ct)
+        ho_defs = [("WL5_HO_BUFSZ", str(ho_ct[1]))]
     mesh_id = int(node(mesh, (0, 0)).mesh_id)
     dm = lambda risc: ttnn.DataMovementConfigDescriptor(
         processor=ttnn.DataMovementProcessor.RISCV_0 if risc == 0 else ttnn.DataMovementProcessor.RISCV_1,
@@ -244,19 +313,45 @@ def build_lane5(
     ch0, PKE = chunk_base(cfg, lc.CHT)
     TB = TLW * 4
     own_sets = {own: [xy for gr in groups for j, xy in enumerate(gr) if core_geom(cfg, j)[6] == own] for own in (1, 0)}
+
+    # (lane g's neighbours of chip rc: direction 0's next chip, direction 1's)
+    def nbrs(g, rc):
+        cyc = [tuple(v) for v in lane_cycle(ln[g], rc)]
+        i = cyc.index(rc)
+        return cyc[(i + 1) % len(cyc)], cyc[(i - 1) % len(cyc)]
+
+    # lane g's cores on chip rc: rectangle perm[rc][g] (L5Cfg.place); a lane's core j sends to / credits the core j of
+    # the same lane on the next / previous chip, wherever that chip put the lane
+    chips = [(r, c) for r in range(R) for c in range(Cn)]
+    perm = {rc: tuple(range(G)) for rc in chips}
+    if l5.place and l5.hmc:  # (l5h_reader.cpp takes the remote cores' coordinates; l5_reader.cpp its own)
+        mx = [[noc(mesh, l5.mux_cols[q], l5.mux_rows[q][d])[0] for d in range(nmux)] for q in range(G)]
+        for rc in chips:
+            ex = [[eth_x(mesh, mcfg, rc, nbrs(g, rc)[d], ln[g][1]) for d in range(nmux)] for g in range(G)]
+            perm[rc] = place_lanes(mx, ex)
     mpd = ttnn.MeshProgramDescriptor()
     for r in range(R):
         for c in range(Cn):
             me_rc = (r, c)
+            pm = perm[me_rc]
+            gl = [groups[pm[g]] for g in range(G)]  # (lane g's cores on this chip)
+            mux_at = lambda g, d: (l5.mux_cols[pm[g]], l5.mux_rows[pm[g]][d])
+            cll = [colls[pm[g]] for g in range(G)] if l5.yc else []
             kernels, rd_idx = [], {}
             nxt = {}
             hmc_rt = {}
-            for g, gr in enumerate(groups):
+            for g, gr in enumerate(gl):
                 link = ln[g][1]
                 cyc = [tuple(v) for v in lane_cycle(ln[g], me_rc)]
                 i = cyc.index(me_rc)
                 nxt[g] = (cyc[(i + 1) % len(cyc)], cyc[(i - 1) % len(cyc)])
                 nid = [int(node(mesh, nxt[g][d]).chip_id) for d in range(2)]
+                assert max(nid) < 256
+
+                def rxy(d, j, g=g):  # (lane g's core j on the direction-d neighbour, x | y << 8, above the chip id)
+                    q = noc(mesh, *groups[perm[nxt[g][d]][g]][j])
+                    return (q[0] | q[1] << 8) << 8
+
                 cx = [noc(mesh, *gr[NR * k])[0] for k in range(NCOL)]
                 ry = [noc(mesh, *gr[k])[1] for k in range(NR)]
                 for own in (1, 0):
@@ -282,8 +377,8 @@ def build_lane5(
                         rd_rt[x][y] = (
                             [j, g, E, st.buffer_address(), out_t.buffer_address(), ds, mesh_id]
                             + [
-                                nid[0],
-                                nid[1],
+                                nid[0] | rxy(0, j),
+                                nid[1] | rxy(1, j),
                                 xy[0] | xy[1] << 8,
                             ]
                             + cx
@@ -298,7 +393,7 @@ def build_lane5(
                             hmc_rt[(x, y)] += [ws_t.buffer_address(), ch0[j]]
                             hmc_rt[(x, y)] += [dest_t.buffer_address()] if l5.yrm else []
                             hmc_rt[(x, y)] += (
-                                [(lambda q: q[0] | q[1] << 8)(noc(mesh, *xy)) for xy in colls[g]] if l5.yc else []
+                                [(lambda q: q[0] | q[1] << 8)(noc(mesh, *xy)) for xy in cll[g]] if l5.yc else []
                             )
                     if l5.hmc == 2:
                         for j, (x, y) in sub:
@@ -380,20 +475,22 @@ def build_lane5(
                             )
                             + ([("WL5_HMC2", "1")] if l5.hmc == 2 else [])
                             + ([("WL5_ONEMUX", "1")] if onemux else [])
+                            + ([("WL5_WHY", "1")] if l5.why else [])
+                            + ho_defs
                             + ([("WL5_GATHER0", "1")] if l5.hmc == 2 and l5.gather0 else []),
                             config=dm(1),
                         )
                     )
             if l5.hmc == 1:  # the hubs' multicasters (core 0 of each group)
                 hub_rt = ttnn.RuntimeArgs()
-                for g, gr in enumerate(groups):
+                for g, gr in enumerate(gl):
                     (hx0, hy0), (hx1, hy1) = noc(mesh, *gr[0]), noc(mesh, *gr[-1])
                     assert (hx1 - hx0, hy1 - hy0) == (NCOL - 1, NR - 1), "a group rectangle NoC contiguous"
                     hub_rt[gr[0][0]][gr[0][1]] = [st.buffer_address(), E, hx0, hy0, hx1, hy1, GC5]
                 kernels.append(
                     ttnn.KernelDescriptor(
                         kernel_source=kpath("l5h_hub.cpp"),
-                        core_ranges=crs([gr[0] for gr in groups]),
+                        core_ranges=crs([gr[0] for gr in gl]),
                         compile_time_args=[NS, KTD, hring.buffer_address(), hflags.buffer_address()]
                         + [hcons.buffer_address(), hcolf.buffer_address(), htile, scr.buffer_address(), cnt_base]
                         + [tab_base],
@@ -407,8 +504,8 @@ def build_lane5(
                 for t in (counts_t, tab_t, dest_t, out_t):
                     y_ct += list(ttnn.TensorAccessorArgs(t).get_compile_time_args())
                 y_rt, w_rt, split_cores = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), []
-                for g, cl in enumerate(colls):
-                    split = 1 if l5.yc_n0 and l5.mux_cols[g] != 0 else 0
+                for g, cl in enumerate(cll):
+                    split = 1 if l5.yc_n0 and mux_at(g, 0)[0] != 0 else 0
                     for ci, (x, y) in enumerate(cl):
                         args = [g, ci, l5.yc, E, counts_t.buffer_address(), tab_t.buffer_address()]
                         args += [
@@ -418,7 +515,7 @@ def build_lane5(
                             yst.buffer_address(),
                             split,
                         ]
-                        args += [(lambda q: q[0] | q[1] << 8)(noc(mesh, *xy)) for xy in groups[g]]
+                        args += [(lambda q: q[0] | q[1] << 8)(noc(mesh, *xy)) for xy in gl[g]]
                         y_rt[x][y] = args
                         if split:
                             w_rt[x][y] = list(args)
@@ -444,7 +541,7 @@ def build_lane5(
                         )
                     )
             cp_rt = {own: ttnn.RuntimeArgs() for own in (1, 0)}
-            for g, gr in enumerate(groups):
+            for g, gr in enumerate(gl):
                 for j, (x, y) in enumerate(gr):
                     cp_rt[core_geom(cfg, j)[6] and 1 or 0][x][y] = [st.buffer_address(), j, g, E]
             cbs = []
@@ -490,12 +587,7 @@ def build_lane5(
             )
             mux_idx = {}
             for n1 in (0, 1):
-                ms = [
-                    (l5.mux_cols[g], l5.mux_rows[g][d])
-                    for g in range(G)
-                    for d in range(nmux)
-                    if bool(mux_n1(g)) == bool(n1)
-                ]
+                ms = [mux_at(g, d) for g in range(G) for d in range(nmux) if bool(mux_n1(g)) == bool(n1)]
                 if not ms:
                     continue
                 mrt = ttnn.RuntimeArgs()
@@ -518,10 +610,10 @@ def build_lane5(
                 )
             sems = [ttnn.SemaphoreDescriptor(id=s, core_ranges=cset, initial_value=0) for s in range(2)]
             p = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
-            for g, gr in enumerate(groups):
+            for g, gr in enumerate(gl):
                 link = ln[g][1]
                 for d in range(nmux):
-                    m = (l5.mux_cols[g], l5.mux_rows[g][d])
+                    m = mux_at(g, d)
                     p.kernels[mux_idx[m]].runtime_args[m[0]][m[1]].extend(
                         mcfg.kernel_runtime_args(
                             source_node_id=node(mesh, me_rc),
@@ -531,14 +623,68 @@ def build_lane5(
                             mux_logical_core=ttnn.CoreCoord(*m),
                         )
                     )
+            # (the full-size clients of every group's direction-0 mux first: one-way lanes' header-only clients on the
+            # partner's mux take its termination master and semaphore)
+            fs_args, fs_sem = {}, {}
+            for g, gr in enumerate(gl):
+                m = mux_at(g, 0)
+                mux_vc = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*m))
+                master_vc = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*gr[0]))
+                term_sem = None
+                for j, (x, y) in enumerate(gr):
+                    args = fabric_mux.client_runtime_args(
+                        connection_valid=True,
+                        is_termination_master=j == 0,
+                        channel_type=ctype,
+                        mux_virtual_core=mux_vc,
+                        client_index=j,
+                        client_logical_core=ttnn.CoreCoord(x, y),
+                        config=mcfg,
+                        program_descriptor=p,
+                        termination_master_virtual_core=master_vc,
+                        termination_master_semaphore_id=term_sem,
+                    )
+                    if j == 0:
+                        term_sem = args[10]
+                    fs_args[(g, j)] = list(args)
+                fs_sem[g] = term_sem
+            for g, gr in enumerate(gl):
                 d0_args = {}
                 for d in range(2):
+                    if d == 0:
+                        for j, (x, y) in enumerate(gr):
+                            own = 1 if core_geom(cfg, j)[6] else 0
+                            p.kernels[rd_idx[(g, own)]].runtime_args[x][y].extend(fs_args[(g, j)])
+                            d0_args[j] = fs_args[(g, j)]
+                        continue
+                    if oneway:  # (credits: header-only channel j of the partner's mux)
+                        pg = g ^ 1
+                        assert ln[pg][1] == ln[g][1], "partner lanes on one link"
+                        m = mux_at(pg, 0)
+                        mux_vc = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*m))
+                        master_vc = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*gl[pg][0]))
+                        for j, (x, y) in enumerate(gr):
+                            args = fabric_mux.client_runtime_args(
+                                connection_valid=True,
+                                is_termination_master=False,
+                                channel_type=hotype,
+                                mux_virtual_core=mux_vc,
+                                client_index=j,
+                                client_logical_core=ttnn.CoreCoord(x, y),
+                                config=mcfg,
+                                program_descriptor=p,
+                                termination_master_virtual_core=master_vc,
+                                termination_master_semaphore_id=fs_sem[pg],
+                            )
+                            own = 1 if core_geom(cfg, j)[6] else 0
+                            p.kernels[rd_idx[(g, own)]].runtime_args[x][y].extend(args)
+                        continue
                     if d >= nmux:  # (onemux: direction 1's RT args are direction 0's, unused)
                         for j, (x, y) in enumerate(gr):
                             own = 1 if core_geom(cfg, j)[6] else 0
                             p.kernels[rd_idx[(g, own)]].runtime_args[x][y].extend(d0_args[j])
                         continue
-                    m = (l5.mux_cols[g], l5.mux_rows[g][d])
+                    m = mux_at(g, d)
                     mux_vc = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*m))
                     master_vc = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*gr[0]))
                     term_sem = None
@@ -561,7 +707,7 @@ def build_lane5(
                         own = 1 if core_geom(cfg, j)[6] else 0
                         p.kernels[rd_idx[(g, own)]].runtime_args[x][y].extend(args)
             if l5.hmc:  # (l5h_reader.cpp's extra RT args, after both directions' mux client args)
-                for g, gr in enumerate(groups):
+                for g, gr in enumerate(gl):
                     for j, (x, y) in enumerate(gr):
                         own = 1 if core_geom(cfg, j)[6] else 0
                         p.kernels[rd_idx[(g, own)]].runtime_args[x][y].extend(hmc_rt[(x, y)])
