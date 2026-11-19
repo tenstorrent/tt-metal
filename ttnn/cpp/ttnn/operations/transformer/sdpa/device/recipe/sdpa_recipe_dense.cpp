@@ -100,9 +100,27 @@ void validate_dense_recipe(const SDPAParams& attrs, const SDPAInputs& tensors, c
 }
 }  // namespace
 
+void validate_dense_recipe_mask(
+    const Tensor& q,
+    const Tensor& k,
+    const Tensor& mask,
+    std::optional<SDPAPrecision> precision,
+    bool is_causal,
+    std::optional<uint32_t> sliding_window_size,
+    bool windowed) {
+    TT_FATAL(
+        !is_causal && sliding_window_size.value_or(0) == 0 && !windowed,
+        "SDPA recipes take either attn_mask or is_causal / sliding_window_size / cu_window_seqlens / chunked prefill");
+    validate_recipe_mask(
+        q, k, mask, resolve_precision_policy(select_recipe(precision.value_or(SDPAPrecision::STANDARD), k.dtype())));
+}
+
 void resolve_dense_recipe(SDPAParams& attrs, const SDPAInputs& tensors) {
     const auto call = dense_recipe_call(attrs, tensors);
     validate_dense_recipe(attrs, tensors, call);
+    TT_FATAL(
+        attrs.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "SDPA recipes require an interleaved (DRAM or L1) output memory config");
     const auto policy = dense_recipe_policy(attrs, tensors);
     if (tensors.attn_mask) {
         validate_recipe_mask(tensors.q, tensors.k, *tensors.attn_mask, policy);

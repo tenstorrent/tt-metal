@@ -12,6 +12,7 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
+#include "ttnn/operations/transformer/sdpa/device/recipe/sdpa_recipe_dense.hpp"
 #include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_device_operation.hpp"
@@ -99,6 +100,15 @@ ttnn::Tensor scaled_dot_product_attention(
     // pre-scaling is unnecessary (0/-inf are scale-invariant), so attn_mask is left empty.
     std::optional<ttnn::Tensor> effective_mask = attn_mask;
     if (attn_mask.has_value()) {
+        // Reject an unsupported mask before the pre-scale dispatches anything.
+        ttnn::operations::transformer::sdpa::detail::validate_dense_recipe_mask(
+            input_tensor_q,
+            input_tensor_k,
+            *attn_mask,
+            precision,
+            is_causal,
+            sliding_window_size,
+            cu_window_seqlens.has_value());
         const float effective_scale =
             scale.value_or(1.0f / std::sqrt(static_cast<float>(input_tensor_q.padded_shape()[-1])));
         if (effective_scale != 1.0f) {
