@@ -343,6 +343,8 @@ constexpr std::uint8_t LLK_PACK_STATE_W       = 0x80;
 // inside the packer drain and sets LLK_PACK_PRE_WRITTEN, and a pack to it then writes none. 0: none. Every pack, per tile or
 // block, replaces or clears it.
 [[maybe_unused]] static std::uint32_t pack_pre_next = 0;
+// The last release drained the packer and no pack has run since the next section's wait: the push needs no stall of its own.
+[[maybe_unused]] static bool pack_push_drained = false;
 constexpr std::uint32_t LLK_PACK_PRE_WRITTEN        = 0x80000000u;
 inline void llk_pack_live_forget()
 {
@@ -710,6 +712,20 @@ constexpr bool llk_pack_out32(const unsigned char f)
 {
     return f == to_underlying(DataFormat::Float32) || f == to_underlying(DataFormat::Tf32) || f == to_underlying(DataFormat::Int32) ||
            f == to_underlying(DataFormat::UInt32);
+}
+
+// Some CB of the kernel has a block-float format.
+template <std::size_t n>
+constexpr bool llk_pack_any_bfp(const unsigned char (&pack_dst_format)[n])
+{
+    for (const unsigned char f : pack_dst_format)
+    {
+        if (f != to_underlying(DataFormat::Invalid) && IS_BFP_FORMAT(f))
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 // 0 no pack CB is 32 bit, 1 every one is, 2 both kinds.

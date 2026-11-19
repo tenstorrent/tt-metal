@@ -8,6 +8,7 @@
 #include "ckernel_gpr_map.h"
 #include "ckernel_include.h"
 #include "llk_pack_common.h"
+#include "llk_size_mode.h"
 #include "stream_interface.h"
 #include "stream_io_map.h"
 #include "llk_assert.h"
@@ -67,7 +68,14 @@ inline void llk_push_to_brisc(const std::int32_t operand, const std::int32_t num
     // version of the value at tiles_received_ptr This is because consumer is polling the value at tiles_received_ptr,
     // and it will eventually see the updated value
     TT_SETDMAREG(0, tiles_received_new, 0, LO_16(p_gpr_pack::NUM_MSGS_RECEIVED));
-    TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK);  // wait for pack to finish
+    // Full sync stays as main: there the pack runs in series with the producer and the early push timing read slower (L3 tp screen).
+    // So does a block-float push of 8+ tiles: its pack runs near the unpacker's rate, and the early hand-off costs unpack issue (counters).
+    // Kernels bound by the kernel config buffer (LLK_SIZE_MODE) keep main's push and its code size.
+    constexpr bool any_bfp = ckernel::packer::llk_pack_any_bfp(pack_dst_format);
+    if (DST_SYNC_MODE != DstSync::SyncHalf || LLK_SIZE_MODE || !ckernel::packer::pack_push_drained ||
+        (any_bfp && num_tiles >= 8 && IS_BFP_FORMAT(pack_dst_format[operand]))) {
+        TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK);  // wait for pack to finish
+    }
     TT_STOREREG(p_gpr_pack::NUM_MSGS_RECEIVED, tiles_received_addr_tensix);
 }
 
