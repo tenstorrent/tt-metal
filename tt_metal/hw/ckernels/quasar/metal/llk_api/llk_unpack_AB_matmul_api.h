@@ -189,8 +189,8 @@ inline void llk_unpack_AB_matmul(
 
     const LocalDFBInterface& local_dfb_interface_a = get_local_dfb_interface(operandA_id);
     const LocalDFBInterface& local_dfb_interface_b = get_local_dfb_interface(operandB_id);
-    ASSERT((rt_dim == 1 || ct_dim == 1) || !dfb_block_is_permuted(local_dfb_interface_a));
-    ASSERT((rt_dim == 1 || ct_dim == 1) || !dfb_block_is_permuted(local_dfb_interface_b));
+    ASSERT(rt_dim == 1 || !dfb_block_is_permuted(local_dfb_interface_a));
+    ASSERT(ct_dim == 1 || !dfb_block_is_permuted(local_dfb_interface_b));
 
     const std::uint32_t l1_tile_idx_0 = dfb_ring_entry(
         local_dfb_interface_a,

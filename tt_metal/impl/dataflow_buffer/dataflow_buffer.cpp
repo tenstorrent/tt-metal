@@ -587,6 +587,10 @@ static DfbSideTensors dfb_dm_side_tensors(
             if (dm_kernel == nullptr) {
                 continue;
             }
+            // Device slots repeat across DFBs on disjoint nodes, so only a kernel on this DFB's nodes can bind it.
+            if (!kernel->core_range_set().intersects(dfb.core_ranges)) {
+                continue;
+            }
             uint16_t kernel_mask = 0;
             for (const auto proc : dm_kernel->get_dm_processors()) {
                 kernel_mask |= static_cast<uint16_t>(1u << static_cast<uint32_t>(proc));
@@ -730,7 +734,8 @@ static void validate_implicit_burst_fits_one_packet(const DataflowBufferImpl& df
             return;
         }
         const uint32_t block = dfb_effective_block_entries(dfb, is_producer);
-        const uint32_t burst = ::dfb::bank_major_run_length(block, num_dram_banks, 0);
+        const uint32_t runs = is_producer ? dfb.producer_runs_per_block : dfb.consumer_runs_per_block;
+        const uint32_t burst = ::dfb::bank_major_run_length(block, runs != 0u ? runs : num_dram_banks, 0);
         TT_FATAL(
             burst * config.entry_size <= noc_max_burst_bytes,
             "DFB {}: implicit-sync BLOCKED {} moves {} entries ({} B) in one NoC transaction, more than one NoC "
@@ -740,6 +745,16 @@ static void validate_implicit_burst_fits_one_packet(const DataflowBufferImpl& df
             burst,
             burst * config.entry_size,
             noc_max_burst_bytes);
+        const bool bank_runs =
+            runs != 0u && dfb.block_banks > 1u && runs == ::dfb::bank_major_num_runs(block, dfb.block_banks);
+        TT_FATAL(
+            !(bank_runs && burst > 1u) || config.entry_size % hal.get_alignment(HalMemType::DRAM) == 0u,
+            "DFB {}: entry_size {} is not a multiple of the DRAM alignment ({} B), so the pages of one DRAM bank are "
+            "not entry_size apart and the implicit-sync BLOCKED {} cannot move a block one bank at a time",
+            dfb.id,
+            config.entry_size,
+            hal.get_alignment(HalMemType::DRAM),
+            is_producer ? "producer" : "consumer");
     };
     check_side(/*is_producer=*/true);
     check_side(/*is_producer=*/false);

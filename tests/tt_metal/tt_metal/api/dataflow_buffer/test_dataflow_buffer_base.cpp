@@ -259,7 +259,6 @@ DFB_LAYOUT_TEST(DMTest1xDFB1Bx1B_blk4_impl_sharded, DM, true, CoreCoord(0, 0), 4
 DFB_LAYOUT_TEST(DMTest1xDFB1Bx1B_blk8_impl_sharded, DM, true, CoreCoord(0, 0), 8, 16, 1)
 DFB_LAYOUT_TEST(DMTensixTest1xDFB1Bx1B_blk2_impl_sharded, TENSIX, true, CoreCoord(1, 0), 2, 16, 1)
 DFB_LAYOUT_TEST(DMTensixTest1xDFB1Bx1B_blk4_impl_sharded, TENSIX, true, CoreCoord(1, 0), 4, 16, 1)
-DFB_LAYOUT_TEST(DISABLED_DMTensixTest1xDFB1Bx1B_blk2_impl_sharded_local, TENSIX, true, CoreCoord(0, 0), 2, 16, 1)
 DFB_LAYOUT_TEST(DMTest1xDFB1Bx1B_blk2_impl_l1, DM, false, CoreCoord(0, 0), 2, 16, 2)
 DFB_LAYOUT_TEST(DMTest1xDFB1Bx1B_blk4_impl_l1, DM, false, CoreCoord(0, 0), 4, 16, 4)
 #undef DFB_LAYOUT_TEST
