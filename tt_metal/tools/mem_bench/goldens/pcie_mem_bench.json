@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "suite": "pcie_mem_bench",
+  "environments": {
+    "bh_p150b_civ2_viommu": {
+      "metrics": {"dev_bw": {"aggregate": "max", "better": "higher", "unit": "B/s"}},
+      "repetitions": 1,
+      "provenance": {"commit": "2060de2dd19b98bca21c7794650313b08ec5ef75", "date": "2026-10-28", "source": "CI run 40787186036"},
+      "context": {"aiclk_mhz": "1350"},
+      "cases": {
+        "Device Reading Host/size:1073741824/page_size:32768/readers:1/writers:0/host_copy:0/iterations:5/manual_time": {"dev_bw": 43230000000.0},
+        "Device Reading Host/size:1073741824/page_size:32768/readers:2/writers:0/host_copy:0/iterations:5/manual_time": {"dev_bw": 19820000000.0},
+        "Device Reading Host/size:1073741824/page_size:32768/readers:3/writers:0/host_copy:0/iterations:5/manual_time": {"dev_bw": 14910000000.0},
+        "Device Reading Host/size:1073741824/page_size:32768/readers:4/writers:0/host_copy:0/iterations:5/manual_time": {"dev_bw": 12870000000.0},
+        "Device Writing Host/size:1073741824/page_size:32768/readers:0/writers:1/host_copy:0/iterations:5/manual_time": {"dev_bw": 57820000000.0},
+        "Device Writing Host/size:1073741824/page_size:32768/readers:0/writers:2/host_copy:0/iterations:5/manual_time": {"dev_bw": 28920000000.0},
+        "Device Writing Host/size:1073741824/page_size:32768/readers:0/writers:3/host_copy:0/iterations:5/manual_time": {"dev_bw": 19280000000.0},
+        "Device Writing Host/size:1073741824/page_size:32768/readers:0/writers:4/host_copy:0/iterations:5/manual_time": {"dev_bw": 16530000000.0}
+      }
+    }
+  }
+}
