@@ -50,6 +50,11 @@ class KimiK31Adapter(KimiK3Adapter):
 
     # Kimi-K3-DSpark was trained against K3, not K3.1.
     supports_dflash = False
+    # Packed forwards: K3's flags, inherited. Each DSA layer runs its own indexer per chunk (index-key write and top-k
+    # against that chunk's slot and prefix) inside TtKimiK3Block.forward_packed. No top-k crosses a layer or a
+    # pipeline boundary (passes_indexer_indices is False), so PP4 needs no supports_packed_forward_indexer_indices.
+    # Trace and D2H acks follow K3: the runtime runs them (test_k31_prefill_packed.py), and the runner refuses them
+    # until a runner-level run has driven them.
     # The DSA layers' sparse-MLA CCLs need more than K3's L1_SMALL (see KimiK31Config.L1_SMALL_SIZE).
     l1_small_size = KimiK31Config.L1_SMALL_SIZE
     dflash_model_default = ""

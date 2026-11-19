@@ -496,7 +496,7 @@
   sp_config: sc1
 
 
-- name: "(Kimi-K3-2.8T) prefill transformer L24, chunked L24 and traced L24 vs golden trace"
+- name: "(Kimi-K3-2.8T) prefill transformer L24, chunked L24 and traced L24 vs golden trace; multi-user packed"
   # Three legs folded into one. None is short, but each paid its own ~5.5 min "Setup multihost job"
   # and all three carry identical environments -- same checkpoint, same TTNN cache, same mesh
   # descriptor -- so three allocations bought nothing. Measured test-step times on run 36717057668:
@@ -591,23 +591,42 @@
       '
     )
 
-    echo "===== [1/4] (Kimi-K3-2.8T) prefill transformer accuracy L24 vs golden trace ====="
+    k3_multiuser() (
+      export LOGURU_LEVEL=INFO
+      export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+      export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+      export KIMI_K3_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-mxfp4-2496450e
+      export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
+      export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill
+      export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+      # Several users' chunks on a 4-layer Kimi-K3 (every layer kind; TTNN cache weights): interleaved users vs
+      # each user alone, packed forwards (two chunks per forward, one MoE call) vs one chunk per forward, and
+      # traced vs eager packed forwards. Measured 10m39s as CI runs it.
+      timeout -k 2m 15m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_k3_prefill_multiuser.py -k "not pipeline and not perf" -vvv --tb=short
+      '
+    )
+
+    echo "===== [1/5] (Kimi-K3-2.8T) prefill transformer accuracy L24 vs golden trace ====="
     k3_transformer_depth || exit $?
-    echo "===== [2/4] (Kimi-K3-2.8T) chunked prefill accuracy L24 55k@5k vs golden trace ====="
+    echo "===== [2/5] (Kimi-K3-2.8T) chunked prefill accuracy L24 55k@5k vs golden trace ====="
     k3_chunked_prefill || exit $?
-    echo "===== [3/4] (Kimi-K3-2.8T) traced chunked prefill accuracy L24 55k@5k vs golden trace ====="
+    echo "===== [3/5] (Kimi-K3-2.8T) traced chunked prefill accuracy L24 55k@5k vs golden trace ====="
     k3_transformer_traced || exit $?
-    echo "===== [4/4] (Kimi-K3.1) prefill accuracy L24 10k@5k and chunked L24 128k@5k vs vLLM traces ====="
+    echo "===== [4/5] (Kimi-K3.1) prefill accuracy L24 10k@5k and chunked L24 128k@5k vs vLLM traces ====="
     k31_depth_ladder || exit $?
-    echo "===== all 4 sections passed ====="
+    echo "===== [5/5] (Kimi-K3-2.8T) multi-user: interleaved, packed and traced packed forwards 5k ====="
+    k3_multiuser || exit $?
+    echo "===== all 5 sections passed ====="
   test_type: k3_transformer_suite
   # Per-section tokens retained: `-f test-type=<old token>` still selects this job.
-  test_tags: [kimi_k3, transformer, k3_transformer_depth, k3_chunked_prefill, k3_transformer_traced, kimi_k3_1, k31_depth_ladder]
+  test_tags: [kimi_k3, transformer, k3_transformer_depth, k3_chunked_prefill, k3_transformer_traced, kimi_k3_1, k31_depth_ladder, k3_multiuser]
   test_group: module
   skus:
     bh_sc1:
-      # Exactly the sum of the per-section bounds (70 + 90 + 50 + 45).
-      timeout: 255
+      # Exactly the sum of the per-section bounds (70 + 90 + 50 + 45 + 15).
+      timeout: 270
       tier: 2
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
@@ -835,23 +854,39 @@
       '
     )
 
-    echo "===== [1/5] (GLM-5.3-744B) sparse MLA accuracy, incl. chunked 5k@1k, and production-shape determinism ====="
+    glm_multiuser() (
+      export MESH_DEVICE=TG
+      export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4/
+      # Several users' chunks on one 4-layer GLM-5.3 (dense, MoE + full indexer, MoE + shared indexer; random
+      # weights): interleaved users vs each user alone, packed forwards (several chunks per forward, one MoE
+      # call) vs one chunk per forward, traced vs eager packed forwards, and two pipeline ranks vs one (eager
+      # and traced), the sparse-KV push's per-step pre-sends vs pushing in line, and packed pad rows kept out of the
+      # MoE. ~26 min on galaxy 8x4 before the pad-row test.
+      timeout -k 2m 40m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_glm_prefill_multiuser.py -k "torus-xy-8x4" -vvv --tb=short
+      '
+    )
+
+    echo "===== [1/6] (GLM-5.3-744B) sparse MLA accuracy, incl. chunked 5k@1k, and production-shape determinism ====="
     glm_dsa_mla || exit $?
-    echo "===== [2/5] (GLM-5.3-744B) sparse KV push plan + push, incl. real 1M top-k ====="
+    echo "===== [2/6] (GLM-5.3-744B) sparse KV push plan + push, incl. real 1M top-k ====="
     glm_sparse_kv_push || exit $?
-    echo "===== [3/5] (GLM-5.3-744B) prefill block accuracy 5k ====="
+    echo "===== [3/6] (GLM-5.3-744B) prefill block accuracy 5k ====="
     glm_prefill_block || exit $?
-    echo "===== [4/5] (GLM-5.3-744B) MTP module + predictor accuracy 5k ====="
+    echo "===== [4/6] (GLM-5.3-744B) MTP module + predictor accuracy 5k ====="
     glm_mtp || exit $?
-    echo "===== [5/5] (GLM-5.3-744B) MoE accuracy + perf 5k ====="
+    echo "===== [5/6] (GLM-5.3-744B) MoE accuracy + perf 5k ====="
     glm_moe || exit $?
-    echo "===== all 5 sections passed ====="
+    echo "===== [6/6] (GLM-5.3-744B) multi-user: interleaved, packed and traced packed forwards 5k ====="
+    glm_multiuser || exit $?
+    echo "===== all 6 sections passed ====="
   test_type: glm_components_suite
-  test_tags: [glm_5_3, mla, determinism, block, mtp, moe, dsa_mla_glm, glm_prefill_block, glm_mtp, glm_moe, sparse_kv_push]
+  test_tags: [glm_5_3, mla, determinism, block, mtp, moe, dsa_mla_glm, glm_prefill_block, glm_mtp, glm_moe, sparse_kv_push, glm_multiuser]
   test_group: module
   skus:
     bh_sc1:
-      timeout: 177
+      timeout: 217
       tier: 2
       release_ready: false
   owner_id: U09LK84G4TF  # Nikola Milicevic
@@ -2341,6 +2376,32 @@
       timeout: 40
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
+  budget_type: demo
+  sp_config: sc1
+
+
+# Single-galaxy (SC1) GLM-5.3 packed prefill through the runner: the same 1M request as the 8x4 SC1 job, two 5,120-token
+# chunks per forward (glm53_packed.json), traced with D2H acks. Checks the KV against the same golden tail, reports
+# throughput at the probe lengths, and publishes the KV table the mock migration reads. SC4 follows once SC1 is stable.
+- name: "(GLM-5.3-744B) packed prefill KV accuracy 1M tail@5k + perf 1M@5k, SC1"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1 --variant packed
+  test_type: prefill_runner_kv_pcc
+  test_tags: [glm_5_3, runner, kv_cache, glm53_trace, glm_packed]
+  test_group: disagg_prefill
+  skus:
+    bh_sc1_high_power:
+      timeout: 80
+      tier: 2
+      release_ready: false
+  owner_id: U08TJCA5NJY # Ryan Miller
+  team: models
   budget_type: demo
   sp_config: sc1
 
