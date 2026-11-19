@@ -21,7 +21,7 @@
 #include "api/compute/transpose_dest.h"
 #ifdef TOPK_TWO_LEVEL
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "api/compute/reduce.h"
 #include "topk_large_indices_two_level.hpp"
 #endif
 #include "api/dataflow/circular_buffer.h"
@@ -571,10 +571,35 @@ FORCE_INLINE void two_level_stage1(uint32_t search_len) {
         constexpr uint32_t stage1_batch = get_named_compile_time_arg_val("tl_stage1_batch");
         // Whole batches, as the reader sends them.
         const uint32_t stage1_tiles = div_up(div_up(search_len, tile_keys), stage1_batch) * stage1_batch;
+        // The max reduce is batched by hand: kernel_lib's REDUCE_ROW takes one DEST acquire per output tile, which
+        // under this kernel's full-sync DEST serializes math and pack.
+        constexpr uint32_t dest_tiles = 8;
+        static_assert(stage1_batch % dest_tiles == 0);
+        CircularBuffer tiled(cb_tiled);
+        CircularBuffer reduced(cb_red);
+        CircularBuffer(cb_scaler).wait_front(1);
         for (uint32_t tile = 0; tile < stage1_tiles; tile += stage1_batch) {
-            compute_kernel_lib::tilize<1, cb_stage1, cb_tiled>(stage1_batch);
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_tiled, cb_scaler, cb_red>(
-                compute_kernel_lib::ReduceInputBlockShape::of(stage1_batch, 1));
+            compute_kernel_lib::tilize<stage1_batch, cb_stage1, cb_tiled>(1);
+            reconfig_data_format(cb_tiled, cb_scaler);
+            pack_reconfig_data_format(cb_red);
+            reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_tiled, cb_scaler, cb_red);
+            tiled.wait_front(stage1_batch);
+            for (uint32_t group = 0; group < stage1_batch; group += dest_tiles) {
+                reduced.reserve_back(dest_tiles);
+                tile_regs_acquire();
+                for (uint32_t i = 0; i < dest_tiles; ++i) {
+                    reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_tiled, cb_scaler, group + i, 0, i);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t i = 0; i < dest_tiles; ++i) {
+                    pack_tile(i, cb_red);
+                }
+                tile_regs_release();
+                reduced.push_back(dest_tiles);
+            }
+            tiled.pop_front(stage1_batch);
+            reduce_uninit();
         }
     }
 }

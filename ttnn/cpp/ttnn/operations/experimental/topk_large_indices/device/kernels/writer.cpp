@@ -155,23 +155,44 @@ FORCE_INLINE void two_level_rows(
         if constexpr (!has_block_max) {
             // Stage 1: the max reduce leaves each tile's 32 row maxima in column 0 (rows 0-15 in face 0, 16-31 in
             // face 2). They go to the maxima scratch in block order; the reader streams them to the compute.
-            auto* dense = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(max_scratch);
+            auto* dense = reinterpret_cast<uint16_t*>(max_scratch);
             for (uint32_t tile = 0; tile < stage1_tiles; ++tile) {
                 red_cb.wait_front(1);
-                const auto* reduced = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(red_cb.get_read_ptr());
-                const uint32_t first = tile * (tile_keys / block_keys);
-                if (first < num_blocks) {
-                    const uint32_t count = num_blocks - first < 32 ? num_blocks - first : 32;
-                    for (uint32_t r = 0; r < count; ++r) {
-                        dense[first + r] = reduced[r < 16 ? r * 16 : 512 + (r - 16) * 16];
+                // Plain loads: the wait above orders them after the compute's pack.
+                asm volatile("" ::: "memory");
+                const auto* reduced = reinterpret_cast<const uint16_t*>(red_cb.get_read_ptr());
+                // A batch is tilized as one 32-row block, stage1_batch tiles wide: row r of tile t holds the
+                // 32 keys of block (batch start) + r * stage1_batch + t.
+                const uint32_t first =
+                    (tile / stage1_batch) * stage1_batch * (tile_keys / block_keys) + tile % stage1_batch;
+                if (first + 31 * stage1_batch < num_blocks) {
+#pragma GCC unroll 16
+                    for (uint32_t r = 0; r < 16; ++r) {
+                        dense[first + r * stage1_batch] = reduced[r * 16];
+                        dense[first + (r + 16) * stage1_batch] = reduced[512 + r * 16];
+                    }
+                } else {
+                    for (uint32_t r = 0; r < 32; ++r) {
+                        const uint32_t block = first + r * stage1_batch;
+                        if (block < num_blocks) {
+                            dense[block] = reduced[r < 16 ? r * 16 : 512 + (r - 16) * 16];
+                        }
                     }
                 }
                 red_cb.pop_front(1);
             }
+            // The maxima are read over the NoC next (test output, reader): keep the stores ahead of it.
+            asm volatile("" ::: "memory");
             if constexpr (has_max_out) {
-                noc.async_write(
-                    CoreLocalMem<uint16_t>(max_scratch), max_out, num_blocks * sizeof(uint16_t), {}, {.page_id = row});
-                noc.async_write_barrier();
+                if (num_blocks > 0) {
+                    noc.async_write(
+                        CoreLocalMem<uint16_t>(max_scratch),
+                        max_out,
+                        num_blocks * sizeof(uint16_t),
+                        {},
+                        {.page_id = row});
+                    noc.async_write_barrier();
+                }
             }
             // The reader copies the maxima out of the scratch before this row's stage 3, so the next row cannot
             // overwrite them early.
@@ -289,7 +310,8 @@ void kernel_main() {
         const bool two_level_mode = words[writer_mailbox_mode_word] != 0;
         const uint32_t search_len = words[writer_mailbox_search_length_word];
         mailbox_cb.pop_front(1);
-        // Test output: the mode this program ran in, written by the core that owns row 0.
+        // Test output: the mode this program ran in. Every core whose rows start at 0 writes it (with split pairs and
+        // fewer rows than cores that is several cores); they all write the same value.
         if constexpr (get_named_compile_time_arg_val("tl_mode_output") != 0) {
             const uint32_t mode_addr = get_common_arg_val<uint32_t>(topk_common_args::mode_output_address);
             if (start_row == 0 && num_rows > 0) {

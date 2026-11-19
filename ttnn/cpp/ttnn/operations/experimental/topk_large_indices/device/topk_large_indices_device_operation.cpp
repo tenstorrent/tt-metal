@@ -33,28 +33,11 @@ void validate_static_args(const operation_attributes_t& attrs, const tensor_args
     TT_FATAL(input.dtype() == DataType::BFLOAT16, "topk_large_indices input must be BFLOAT16");
     TT_FATAL(!input.is_sharded(), "topk_large_indices input must use interleaved memory");
     if (attrs.block_select.has_value()) {
-        const uint32_t n = input.logical_shape()[-1];
         TT_FATAL(
             *attrs.block_select == program::two_level_block_keys,
             "topk_large_indices block_select supports {} only, got {}",
             program::two_level_block_keys,
             *attrs.block_select);
-        TT_FATAL(attrs.k == max_supported_k, "topk_large_indices block_select requires k = {}", max_supported_k);
-        TT_FATAL(
-            n % program::two_level_block_keys == 0 && n >= program::two_level_min_width &&
-                n <= program::two_level_max_width,
-            "topk_large_indices block_select requires a last dimension in [{}, {}] that is a multiple of {}, got {}",
-            program::two_level_min_width,
-            program::two_level_max_width,
-            program::two_level_block_keys,
-            n);
-        TT_FATAL(input.buffer()->is_dram(), "topk_large_indices block_select requires the input in DRAM");
-    } else {
-        TT_FATAL(
-            !tensor_args.block_max_tensor.has_value() && !tensor_args.block_max_output.has_value() &&
-                !tensor_args.mode_output.has_value() && !attrs.two_level_cutover.has_value(),
-            "topk_large_indices block_max_tensor, block_max_output, mode_output and two_level_cutover require "
-            "block_select");
     }
 }
 
@@ -85,6 +68,13 @@ void validate_two_level_tensor(
         name,
         shape,
         width);
+    // The kernels address rows by a packed pitch of `width` elements.
+    TT_FATAL(
+        t.buffer()->page_size() == width * t.element_size(),
+        "topk_large_indices {} must have one packed row per page ({} B), got pages of {} B",
+        name,
+        width * t.element_size(),
+        t.buffer()->page_size());
 }
 
 void validate_runtime_args(const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
@@ -198,12 +188,39 @@ void validate_runtime_args(const operation_attributes_t& attrs, const tensor_arg
         TT_FATAL(
             m.memory_config().buffer_type() == BufferType::DRAM, "topk_large_indices valid_end_tensor must be in DRAM");
     }
-    if (attrs.block_select.has_value()) {
+    // Width-dependent, so checked on every call: a block_select program runs two-level only for these widths and
+    // is today's program otherwise.
+    const bool two_level = program::two_level_enabled(attrs, n);
+    if (!two_level) {
+        TT_FATAL(
+            !tensor_args.block_max_tensor.has_value() && !tensor_args.block_max_output.has_value() &&
+                !tensor_args.mode_output.has_value() && !attrs.two_level_cutover.has_value(),
+            "topk_large_indices block_max_tensor, block_max_output, mode_output and two_level_cutover need a "
+            "two-level program: block_select=32, k = {}, and a last dimension in [{}, {}] that is a multiple of {} "
+            "(got k = {}, last dimension {})",
+            max_supported_k,
+            program::two_level_min_width,
+            program::two_level_max_width,
+            program::two_level_block_keys,
+            attrs.k,
+            n);
+    } else {
+        TT_FATAL(input.buffer()->is_dram(), "topk_large_indices two-level selection requires the input in DRAM");
         // One page per row: the reader and writer address these by row.
         const uint32_t blocks = tt::div_up(n, program::two_level_block_keys);
         validate_two_level_tensor(input, tensor_args.block_max_tensor, DataType::BFLOAT16, blocks, "block_max_tensor");
         validate_two_level_tensor(input, tensor_args.block_max_output, DataType::BFLOAT16, blocks, "block_max_output");
         validate_two_level_tensor(input, tensor_args.mode_output, DataType::UINT32, 1, "mode_output");
+        // The mode is written while other cores still read their inputs, so it must not share a buffer with them.
+        if (tensor_args.mode_output.has_value()) {
+            const auto mode_address = tensor_args.mode_output->buffer()->address();
+            for (const auto* other :
+                 {&tensor_args.valid_length_tensor, &tensor_args.valid_end_tensor, &tensor_args.block_max_tensor}) {
+                TT_FATAL(
+                    !other->has_value() || (*other)->buffer()->address() != mode_address,
+                    "topk_large_indices mode_output must not share a buffer with an input");
+            }
+        }
     }
     if (attrs.valid_length.has_value()) {
         const uint32_t valid_length = attrs.valid_length.value();
@@ -267,7 +284,8 @@ ttsl::hash::hash_t TopkLargeIndicesDeviceOperation::compute_program_hash(
     return tt::tt_metal::operation::hash_operation<TopkLargeIndicesDeviceOperation>(
         base,
         *attrs.block_select,
-        program::two_level_max_chunks(input_last_dim),
+        // The bitmap, the maxima scratch and the maxima row pitch are sized from the width.
+        input_last_dim,
         tensor_args.block_max_tensor.has_value(),
         tensor_args.block_max_output.has_value(),
         tensor_args.mode_output.has_value());

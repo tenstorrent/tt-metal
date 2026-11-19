@@ -7,6 +7,7 @@
 
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -172,7 +173,8 @@ void set_two_level_common_args(
 }  // namespace
 
 bool two_level_enabled(const operation_attributes_t& attrs, uint32_t input_last_dim) {
-    return attrs.block_select.has_value() && input_last_dim >= two_level_min_width &&
+    return attrs.block_select.has_value() && attrs.k == to_uint32(LlkTargetK::K2048) &&
+           input_last_dim % two_level_block_keys == 0 && input_last_dim >= two_level_min_width &&
            input_last_dim <= two_level_max_width;
 }
 
@@ -413,9 +415,16 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     constexpr uint32_t cb_bitmap = tt::CBIndex::c_13;
     constexpr uint32_t cb_own_table = tt::CBIndex::c_14;
     constexpr uint32_t cb_writer_mailbox = tt::CBIndex::c_15;
-    constexpr uint32_t stage1_batch = 8;
+    constexpr uint32_t stage1_batch = 32;
     const uint32_t block_max_row_bytes = tt::div_up(input_width, two_level_block_keys) * input.element_size();
     if (two_level) {
+        // Stage 3 reads 64 B blocks straight into candidate slots: the DRAM read rule needs the source and the L1
+        // destination congruent modulo 64. Slots are multiples of 64 B from a CB base that the allocator aligns to
+        // the DRAM alignment.
+        TT_FATAL(
+            tt::tt_metal::hal::get_dram_alignment() % 64 == 0,
+            "topk_large_indices two-level selection needs CB bases aligned to 64 B (DRAM alignment {})",
+            tt::tt_metal::hal::get_dram_alignment());
         const auto create_cb = [&](uint32_t cb, uint32_t pages, uint32_t page_bytes, tt::DataFormat format) {
             const auto config =
                 tt::tt_metal::CircularBufferConfig(pages * page_bytes, {{cb, format}}).set_page_size(cb, page_bytes);

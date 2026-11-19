@@ -118,7 +118,7 @@ def generate(kind: str, rows: int, width: int, seed: int, n: int | None = None) 
         x[:, torch.randint(0, n, (5,), generator=g)] = float("inf")
         return x.to(torch.bfloat16)
     if kind == "zeros_subnormal":
-        # Mostly -1.0 with a sea of +-0 and subnormals; exactly 2048 positive normals scattered so the threshold
+        # Mostly -1.0 with a sea of +-0 and subnormals and 1000 positive normals scattered, so the 2048th value
         # sits inside the zero class (the v3 counterexample shape).
         words = np.full((rows, width), 0xBF80, dtype=np.uint32)
         rng = np.random.default_rng(seed)
