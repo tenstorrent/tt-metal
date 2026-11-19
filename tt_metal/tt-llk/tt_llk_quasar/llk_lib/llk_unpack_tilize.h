@@ -318,3 +318,37 @@ inline void _llk_unpack_tilize_(const std::uint32_t l1_tile_idx, const std::uint
         ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
     }
 }
+
+/**
+ * @brief Restores the unpacker state that unpack tilize leaves behind, before the next unpack op's init.
+ *
+ * Waits for the selected unpacker to finish the last UNPACR_TILIZE/UNPACR_STRIDE, then clears the L1 source offset
+ * that @ref _llk_unpack_tilize_ (or @ref _llk_unpack_tilize_to_dest_set_src_offset_) programmed, and zeroes the
+ * unpacker's source and destination tile, face and row counters, which the strided path leaves pointing past the
+ * last tile it read.
+ *
+ * @tparam UNP_SEL: Selects which unpacker resource to restore, values = <p_unpacr::UNP_A/UNP_B>. After unpack tilize
+ *         to DEST, which runs on Unpacker 0, pass p_unpacr::UNP_A.
+ * @note Call after the last @ref _llk_unpack_tilize_ (or @ref _llk_unpack_tilize_to_dest_), with the UNP_SEL that
+ *       @ref _llk_unpack_tilize_init_ used, then call the next unpack op's init.
+ */
+template <std::uint32_t UNP_SEL>
+inline void _llk_unpack_tilize_uninit_()
+{
+    static_assert((UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B), "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B");
+
+    if constexpr (UNP_SEL == p_unpacr::UNP_A)
+    {
+        // The last UNPACR_TILIZE may still be reading the offset register.
+        TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, p_stall::UNPACK0);
+        cfg_rmw(THCON_UNPACKER0_REG0_TILIZE_SRC_ADDR_OFFSET_RMW, 0);
+    }
+    else
+    {
+        TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, p_stall::UNPACK1);
+        cfg_rmw(THCON_UNPACKER1_REG0_TILIZE_SRC_ADDR_OFFSET_RMW, 0);
+    }
+
+    TTI_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_FACE_ROW_SEL, UNP_SEL, 0 /*Value*/);
+    TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_FACE_ROW_SEL, UNP_SEL, 0 /*Value*/);
+}

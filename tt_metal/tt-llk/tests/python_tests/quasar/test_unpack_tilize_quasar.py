@@ -331,3 +331,43 @@ def test_unpack_tilize_quasar(
         formats.output_format,
         tile_shape=tile_shape,
     ), "Assert against golden failed"
+
+
+def _first_per_engine_and_tile(combinations):
+    """One combination per (unpacker engine, tile shape): the SrcA, SrcB, strided and to-dest paths."""
+    picked = {}
+    for combo in combinations:
+        picked.setdefault((combo[3], combo[5]), combo)
+    return list(picked.values())
+
+
+UNPACK_TILIZE_UNINIT_COMBINATIONS = _first_per_engine_and_tile(
+    ALL_UNPACK_TILIZE_COMBINATIONS
+)
+
+
+@pytest.mark.quasar
+@parametrize(
+    **flat_axes(UNPACK_TILIZE_FLAT_NAMES, UNPACK_TILIZE_UNINIT_COMBINATIONS),
+)
+def test_unpack_tilize_uninit_quasar(
+    formats,
+    dest_acc,
+    dest_sync,
+    unpacker_sel,
+    input_dimensions,
+    tile_dimensions,
+    block_ct_dim,
+):
+    """Unpack tilize followed by _llk_unpack_tilize_uninit_, the teardown tilize_uninit() calls on Quasar."""
+    test_unpack_tilize_quasar(
+        formats,
+        dest_acc,
+        dest_sync,
+        unpacker_sel,
+        input_dimensions,
+        tile_dimensions,
+        block_ct_dim,
+        run_types=[PerfRunType.L1_TO_L1],
+        loop_factor=1,
+    )

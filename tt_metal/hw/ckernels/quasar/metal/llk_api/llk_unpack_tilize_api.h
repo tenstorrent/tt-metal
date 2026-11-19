@@ -106,9 +106,15 @@ inline void llk_unpack_tilize_block(
 }
 
 /**
- * @brief No-op on Quasar — tilize teardown is not required.
+ * @brief Restores the unpacker state that tilize leaves behind (L1 source offset and Unpacker 0 counters) on Quasar.
+ *
+ * Both the SrcA and the unpack-to-dest tilize run on Unpacker 0, so the UNP_A state is restored in either case.
+ *
+ * @param operand The input dataflow buffer identifier; unused on Quasar, kept for API parity with WH/BH.
  */
-inline void llk_unpack_tilize_uninit([[maybe_unused]] const std::uint32_t operand) {}
+inline void llk_unpack_tilize_uninit([[maybe_unused]] const std::uint32_t operand) {
+    _llk_unpack_tilize_uninit_<p_unpacr::UNP_A>();
+}
 
 /*************************************************************************
  * LLK UNPACK TILIZE SRC A, UNPACK SRC B

@@ -72,7 +72,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         // Record the descriptor under the engine UNPACKER_ENGINE_SEL actually drives (UNP_B -> UNPACR1/Unp1).
-        constexpr auto unp_res = (UNPACKER_ENGINE_SEL == p_unpacr::UNP_B) ? ckernel::trisc::BFD_ID_UNP1 : ckernel::trisc::BFD_ID_UNP0;
+        constexpr auto unp_res            = (UNPACKER_ENGINE_SEL == p_unpacr::UNP_B) ? ckernel::trisc::BFD_ID_UNP1 : ckernel::trisc::BFD_ID_UNP0;
         constexpr std::uint8_t bfd_unpack = unp_res;
         if (_llk_unpack_tilize_is_strided_(tensor_shape))
         {
@@ -170,6 +170,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
+    // Teardown, outside the measured zones. Unpack tilize to DEST runs on Unpacker 0, so it restores UNP_A.
+    _llk_unpack_tilize_uninit_<SRC_SEL>();
 }
 
 #endif
