@@ -11,6 +11,7 @@ import ttnn
 from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
     UnreadableDocstring,
     check_readable,
+    docstring_blackhole_dtype_layout_params,
     docstring_dtype_layout_params,
     docstring_interleaved_buffer_type_params,
     interleaved_memory_config,
@@ -129,12 +130,14 @@ def test_move_docstring_sharded_inputs(dtype, layout, shard_layout, device):
 
 
 @pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.move))
-def test_move_fp8_e4m3_row_major(buffer_type, device):
-    """On Blackhole, moves a FP8_E4M3 ROW_MAJOR input, as the ttnn.move docstring allows, from each interleaved buffer
-    type the docstring lists into the other, and an L1 HEIGHT_SHARDED one in its own memory configuration."""
-    check_readable(buffer_type)
+@pytest.mark.parametrize("dtype, layout", docstring_blackhole_dtype_layout_params(ttnn.move))
+def test_move_docstring_blackhole_inputs(dtype, layout, buffer_type, device):
+    """Moves an input of each dtype the ttnn.move docstring lists for Blackhole from each interleaved buffer type the
+    docstring lists into the other, and an L1 HEIGHT_SHARDED one in its own memory configuration. Values are compared
+    after a conversion to FLOAT32 on host, which holds every FP8_E4M3 value."""
+    check_readable(dtype, layout, buffer_type)
     if not ttnn.device.is_blackhole(device):
-        pytest.skip("FP8_E4M3 tensors need Blackhole")
+        pytest.skip("the docstring lists these dtypes for Blackhole")
 
     def read(tensor):
         return ttnn.to_torch(ttnn.to_dtype(tensor.cpu(), ttnn.float32))
@@ -146,8 +149,8 @@ def test_move_fp8_e4m3_row_major(buffer_type, device):
         for move_memory_config in (interleaved_memory_config(other_buffer_type), None):
             _move_and_check(
                 x,
-                ttnn.fp8_e4m3,
-                ttnn.ROW_MAJOR_LAYOUT,
+                dtype,
+                layout,
                 interleaved_memory_config(buffer_type),
                 free,
                 move_memory_config,
@@ -157,4 +160,4 @@ def test_move_fp8_e4m3_row_major(buffer_type, device):
     if buffer_type == ttnn.BufferType.L1:
         sharded = _sharded_memory_config("HEIGHT_SHARDED")
         for free in (None, "part", "all"):
-            _move_and_check(x, ttnn.fp8_e4m3, ttnn.ROW_MAJOR_LAYOUT, sharded, free, sharded, device, read)
+            _move_and_check(x, dtype, layout, sharded, free, sharded, device, read)
