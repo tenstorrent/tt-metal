@@ -90,17 +90,34 @@ void FusedRecurrentGatedDeltaRuleDeviceOperation::validate_on_program_cache_miss
     check(in.v, "v", {BHT, 1u, V});
     check(in.decay, "decay", {BHT, 1u, 1u});
     check(in.beta, "beta", {BHT, 1u, 1u});
-    // Ring mode: initial_state is the [BH*T,K,V] ring (also the in-place state output); otherwise [BH,K,V].
-    const bool ring = in.initial_state_block_idx.has_value();
-    if (in.initial_state.has_value()) {
+    // Ring mode: initial_state is the [BH*T,K,V] ring (also the in-place state output); paged mode: a [P,K,V]
+    // pool of any depth P (also the in-place state output); otherwise [BH,K,V].
+    const bool paged = attrs.paged_state;
+    const bool ring = in.initial_state_block_idx.has_value() && !paged;
+    if (paged) {
+        TT_FATAL(
+            in.initial_state.has_value() && in.initial_state_block_idx.has_value(),
+            "fused_recurrent_gated_delta_rule: paged_state requires initial_state (the pool) and "
+            "initial_state_block_idx (one pool page per head)");
+        TT_FATAL(
+            !attrs.output_per_token_state,
+            "fused_recurrent_gated_delta_rule: paged_state writes only the final state; output_per_token_state "
+            "must be False");
+        const auto& pool_shape = in.initial_state->logical_shape();
+        TT_FATAL(
+            pool_shape.rank() == 3,
+            "fused_recurrent_gated_delta_rule: paged_state pool must be rank 3 [P, K, V], got {}",
+            pool_shape);
+        check(*in.initial_state, "initial_state", {static_cast<uint32_t>(pool_shape[0]), K, V});
+    } else if (in.initial_state.has_value()) {
         check(
             *in.initial_state,
             "initial_state",
             ring ? std::initializer_list<uint32_t>{BHT, K, V} : std::initializer_list<uint32_t>{attrs.BH, K, V});
     }
-    if (ring) {
+    if (ring || paged) {
         TT_FATAL(
-            attrs.output_per_token_state,
+            paged || attrs.output_per_token_state,
             "fused_recurrent_gated_delta_rule: initial_state_block_idx requires output_per_token_state");
         const Tensor& idx = *in.initial_state_block_idx;
         TT_FATAL(
@@ -177,7 +194,8 @@ std::vector<Tensor> fused_recurrent_gated_delta_rule(
     bool output_final_state,
     bool output_per_token_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config) {
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool paged_state) {
     using OperationType = FusedRecurrentGatedDeltaRuleDeviceOperation;
 
     const auto& q_shape = q.logical_shape();  // [BH*T, 1, K]
@@ -198,6 +216,7 @@ std::vector<Tensor> fused_recurrent_gated_delta_rule(
         .val_dim = v_shape[2],
         .output_final_state = output_final_state,
         .output_per_token_state = output_per_token_state,
+        .paged_state = paged_state,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
     };

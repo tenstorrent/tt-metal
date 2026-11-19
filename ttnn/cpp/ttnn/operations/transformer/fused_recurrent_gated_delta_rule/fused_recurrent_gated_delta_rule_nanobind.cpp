@@ -16,8 +16,9 @@ void bind_fused_recurrent_gated_delta_rule(nb::module_& mod) {
         R"doc(
         Fused recurrent Gated Delta Rule forward (flash-linear-attention algorithm).
 
-        Single-token decode (T=1) and K+1-token speculative verify are the same op: one Tensix core
-        per head walks the T token axis sequentially, holding the recurrent state on-core. Matches
+        Single-token decode (T=1) and K+1-token speculative verify are the same op: each Tensix core
+        takes a contiguous run of the B*HV heads and, head by head, walks the T token axis sequentially,
+        holding the recurrent state on-core. B*HV may exceed the core count. Matches
         FLA `naive_recurrent_gated_delta_rule` (fp32/HiFi4). q/k must be L2-normalized over K on host.
 
         Args:
@@ -40,6 +41,11 @@ void bind_fused_recurrent_gated_delta_rule(nb::module_& mod) {
                 Caller contract: idx[h] % BH == h for every h. Each core then reads only blocks it wrote itself,
                 and reads its whole initial state before its first per-token write, so no cross-core
                 ordering is needed.
+            paged_state (bool): default False. Enables "paged" mode with initial_state_block_idx: initial_state
+                is a [P, K, V] fp32 TILE interleaved pool of per-head states (any depth P, for example a view of
+                a paged cache). Head h reads its initial state from pool page idx[h] and writes its final state
+                back to that page; the returned state is the pool itself. Requires output_per_token_state=False.
+                Caller contract: idx[h] values are distinct, so no two heads read or write one page.
             output_final_state (bool): default False.
             output_per_token_state (bool): default False. When True, returns the state AFTER every
                 token as [B, T, HV, K, V] (speculative-verify slots); overrides output_final_state.
@@ -70,7 +76,8 @@ void bind_fused_recurrent_gated_delta_rule(nb::module_& mod) {
         nb::arg("output_per_token_state") = false,
         nb::arg("use_qk_l2norm") = false,
         nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("paged_state") = false);
 }
 
 }  // namespace ttnn::operations::transformer
