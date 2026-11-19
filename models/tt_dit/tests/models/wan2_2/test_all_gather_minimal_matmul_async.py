@@ -119,6 +119,8 @@ def run_test_linear_impl(
     persistent_output_buffers=None,
     ag_buffer_rows=None,
     host_tilize=False,
+    head_split_chunks_mask=0,
+    head_dim=0,
 ):
     ccl_cores = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
@@ -313,6 +315,8 @@ def run_test_linear_impl(
                 chunk_sizes=list(chunk_sizes) if chunk_sizes else [],
                 fuse_swiglu=fuse_swiglu,
                 transpose_core_grid=transpose_core_grid,
+                head_split_chunks_mask=head_split_chunks_mask,
+                head_dim=head_dim,
             )
 
         return tt_output
@@ -367,7 +371,10 @@ def run_test_linear_impl(
 
         check_result = []
         for c in range(chunks):
-            tt_output_chunk = ttnn.from_device(tt_output[c])
+            tt_output_chunk = tt_output[c]
+            if (head_split_chunks_mask >> c) & 1:
+                tt_output_chunk = ttnn.experimental.nlp_concat_heads(tt_output_chunk)
+            tt_output_chunk = ttnn.from_device(tt_output_chunk)
             tt_output_chunk = ttnn.to_torch(
                 tt_output_chunk,
                 mesh_composer=ttnn.ConcatMesh2dToTensor(device, mesh_shape=tuple(device.shape), dims=concat_dims),
@@ -454,6 +461,8 @@ def run_test_linear(
     host_tilize=False,
     batch=None,
     per_batch_gate=False,
+    head_split_chunks_mask=0,
+    head_dim=0,
 ):
     logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
     torch_dtype = torch.float32
@@ -574,6 +583,8 @@ def run_test_linear(
         persistent_output_buffers=persistent_output_buffers,
         ag_buffer_rows=ag_buffer_rows,
         host_tilize=host_tilize,
+        head_split_chunks_mask=head_split_chunks_mask,
+        head_dim=head_dim,
     )
 
 
@@ -1618,6 +1629,96 @@ def test_linear_k_tail(
         for i in range(submesh.get_num_devices()):
             assert check_result[0][c][i]["pcc"] > 0.999_500
             assert check_result[0][c][i]["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, topology, num_links, num_workers_per_link, sp_axis, tp_axis, core_grid_x, core_grid_y, cluster_axis",
+    [
+        [
+            (4, 8),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(4096),
+                "trace_region_size": 90112,
+            },
+            ttnn.Topology.Ring,
+            2,
+            4,
+            1,
+            0,
+            8,
+            8,
+            0,
+        ],
+        [
+            (4, 8),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(4096),
+                "trace_region_size": 90112,
+            },
+            ttnn.Topology.Ring,
+            2,
+            6,
+            1,
+            0,
+            12,
+            9,
+            0,
+        ],
+    ],
+    ids=["wh4x8links2", "bh4x8links2"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("head_split_chunks_mask", [0b100, 0b111], ids=["v_only", "qkv"])
+def test_linear_head_split(
+    mesh_device,
+    topology,
+    core_grid_x,
+    core_grid_y,
+    num_workers_per_link,
+    num_links,
+    sp_axis,
+    tp_axis,
+    cluster_axis,
+    head_split_chunks_mask,
+):
+    """Head-split output chunks equal the row-layout chunks after nlp_concat_heads, at two row counts on one program."""
+    submesh = _create_cluster_submesh(mesh_device, cluster_axis)
+    results = []
+
+    def run(rows):
+        results.append(
+            run_test_linear(
+                submesh,
+                rows,
+                5120,
+                6144,
+                8,
+                8,
+                8,
+                2,
+                2,
+                topology,
+                core_grid=ttnn.CoreCoord(core_grid_x, core_grid_y),
+                num_workers_per_link=num_workers_per_link,
+                num_links=num_links,
+                sp_axis=sp_axis,
+                tp_axis=tp_axis,
+                cluster_axis=cluster_axis,
+                batch=1,
+                chunks=3,
+                head_split_chunks_mask=head_split_chunks_mask,
+                head_dim=128,
+            )
+        )
+
+    assert_program_cache_flat(submesh, run, [3072, 3104])
+    for check_result in results:
+        for chunk_result in check_result[0]:
+            for device_result in chunk_result:
+                assert device_result["pcc"] > 0.999_500, device_result
+                assert device_result["relative_rmse"] < 0.02, device_result
 
 
 @pytest.mark.parametrize(

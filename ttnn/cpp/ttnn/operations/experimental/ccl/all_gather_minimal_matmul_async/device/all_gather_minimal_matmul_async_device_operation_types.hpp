@@ -59,6 +59,9 @@ struct AllGatherMinimalMatmulAsyncParams {
     // attribute_values(): the program hash keys on the resolved orientation (resolve_transpose_core_grid),
     // so a pinned and an unpinned call that resolve alike share one program.
     std::optional<bool> transpose_core_grid;
+    // Bit c set: output chunk c is written head-split, [1, width / head_dim, M, head_dim].
+    uint32_t head_split_chunks_mask = 0;
+    uint32_t head_dim = 0;
 
     // Input blocks reach their whole row or column of the matmul grid in one NoC multicast instead of a core-to-core
     // relay. Independent of the fabric config.
@@ -140,6 +143,8 @@ struct AllGatherMinimalMatmulAsyncParams {
         "use_mcast",
         "fused_activation",
         "output_dtype",
+        "head_split_chunks_mask",
+        "head_dim",
         // Selects DST_SYNC_MODE and the other compile-time compute settings.
         "compute_kernel_config");
 
@@ -163,6 +168,8 @@ struct AllGatherMinimalMatmulAsyncParams {
             this->use_mcast,
             this->fused_activation,
             this->output_dtype,
+            this->head_split_chunks_mask,
+            this->head_dim,
             this->compute_kernel_config);
     }
 };

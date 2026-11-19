@@ -300,7 +300,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     const std::vector<ttnn::GlobalSemaphore>& fsdp_semaphore,
     ttnn::ccl::Topology fsdp_topology,
     bool fuse_swiglu = false,
-    const std::optional<ttnn::MeshCoordinate>& linear_far_end_coord = std::nullopt) {
+    const std::optional<ttnn::MeshCoordinate>& linear_far_end_coord = std::nullopt,
+    uint32_t head_split_chunks_mask = 0) {
     tt::tt_metal::ProgramDescriptor desc;
     auto* device = input_tensor.device();
 
@@ -840,6 +841,30 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         }
         defines["CHUNK_TILE_WIDTHS"] = widths_csv;
         defines["CHUNK_TILE_OFFSETS"] = offsets_csv;
+
+        // Chunks in head_split_chunks_mask are written per head (chunk_out_tile_id in matmul_dataflow_common.hpp).
+        uint32_t head_split_mask = 0;
+        uint32_t head_dt = 0;
+        for (size_t c = 0; c < mm_output_tensors.size() && c < 32; ++c) {
+            const auto& shape = mm_output_tensors[c].padded_shape();
+            if (((head_split_chunks_mask >> c) & 1u) != 0 && shape.rank() >= 3 && shape[-3] > 1) {
+                const uint32_t dt = shape[-1] / tt::constants::TILE_WIDTH;
+                TT_FATAL(head_dt == 0 || head_dt == dt, "head-split chunks must share one head_dim");
+                TT_FATAL(
+                    shape[-2] / tt::constants::TILE_HEIGHT == M_tiles,
+                    "head-split chunk {} has {} tile rows, the matmul {}",
+                    c,
+                    shape[-2] / tt::constants::TILE_HEIGHT,
+                    M_tiles);
+                TT_FATAL(dt * shape[-3] == chunk_tile_widths[c], "head-split chunk {} width mismatch", c);
+                head_dt = dt;
+                head_split_mask |= 1u << c;
+            }
+        }
+        if (head_split_mask != 0) {
+            defines["CHUNK_HEAD_SPLIT_MASK"] = std::to_string(head_split_mask) + "u";
+            defines["CHUNK_HEAD_DT"] = std::to_string(head_dt);
+        }
     }
 
     // in1 in 2-3 column chunks per K block, so compute starts on the first chunk while the rest is in flight. Needs one
@@ -1942,7 +1967,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory(
     const std::vector<ttnn::GlobalSemaphore>& fsdp_semaphore,
     ttnn::ccl::Topology fsdp_topology,
     bool fuse_swiglu,
-    const std::optional<MeshCoordinate>& linear_far_end_coord) {
+    const std::optional<MeshCoordinate>& linear_far_end_coord,
+    uint32_t head_split_chunks_mask) {
     return ::detail::all_gather_minimal_matmul_async_factory_helper(
         input_tensor,
         weight_tensor,
@@ -1979,7 +2005,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory(
         fsdp_semaphore,
         fsdp_topology,
         fuse_swiglu,
-        linear_far_end_coord);
+        linear_far_end_coord,
+        head_split_chunks_mask);
 }
 
 tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
@@ -2074,7 +2101,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         attributes.fsdp_semaphore,
         attributes.fsdp_topology,
         attributes.fuse_swiglu,
-        linear_far_end_coord);
+        linear_far_end_coord,
+        attributes.head_split_chunks_mask);
 }
 
 AllGatherMinimalMatmulAsyncProgramFactory::cached_mesh_workload_t
