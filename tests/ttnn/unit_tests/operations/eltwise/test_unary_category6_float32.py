@@ -284,17 +284,17 @@ def test_threshold(device, threshold_val, value):
 @pytest.mark.parametrize("ttnn_op", [ttnn.threshold, ttnn.clamp, ttnn.clip, ttnn.hardtanh])
 @pytest.mark.parametrize("scalars", [(0.0, -0.0, 0.0), (-0.0, 0.0, -0.0)], ids=["pos_first", "neg_first"])
 def test_signed_zero_scalar_program_cache(device, ttnn_op, scalars):
-    """+0.0 and -0.0 scalars must not share a cached program (#62557).
+    """+0.0 and -0.0 scalars keep their sign through the program cache (#62557).
 
     | Input | Check               | Reason                                         |
     |-------|---------------------|------------------------------------------------|
-    | -1.0  | exact (bit pattern) | every output is the scalar, whose bits are     |
-    |       |                     | embedded in the kernel defines                 |
+    | -1.0  | exact (bit pattern) | every output is the scalar, sign included      |
 
     The scalar is threshold's value (threshold 0.0) or the min bound of
     clamp/clip/hardtanh (max 1.0).
-    Each sign compiles its own program on first use and hits it on reuse, so the
-    output does not depend on which sign ran first.
+    The scalar reaches the kernel as a runtime argument, so both signs may share
+    one program; a repeated scalar must hit the cache, and the output must not
+    depend on which sign ran first.
     """
     tt_in = to_float32_tt_tensor(torch.full((64, 64), -1.0, dtype=torch.float32), device)
     device.clear_program_cache()
@@ -313,9 +313,7 @@ def test_signed_zero_scalar_program_cache(device, ttnn_op, scalars):
         sign = math.copysign(1.0, scalar)
         if sign in seen_signs:
             assert entries == prev_entries, f"scalar {scalar} should hit its cached program"
-        else:
-            assert entries > prev_entries, f"scalar {scalar} should compile a new program"
-            seen_signs.add(sign)
+        seen_signs.add(sign)
         prev_entries = entries
         _assert_bitwise_equal(ttnn.to_torch(tt_out), expected, f"scalar {scalar}")
 
