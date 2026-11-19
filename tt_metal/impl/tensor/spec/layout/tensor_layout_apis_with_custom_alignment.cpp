@@ -39,6 +39,9 @@ void pad_row_major_width_to_shard(
     if (page_config.get_layout() != Layout::ROW_MAJOR || !memory_config.is_sharded() || values.empty()) {
         return;
     }
+    TT_FATAL(
+        memory_config.shard_spec().has_value() || memory_config.nd_shard_spec().has_value(),
+        "MemoryConfig must have Shard Spec specified for sharded memory layout");
     if (memory_config.shard_spec().has_value()) {
         values.back() = memory_config.shard_spec()->shape[1];
     } else {

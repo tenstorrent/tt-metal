@@ -11,6 +11,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include "common_tensor_test_utils.hpp"
 #include "gtest/gtest.h"
+#include <gmock/gmock.h>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/tensor/spec/layout/alignment.hpp>
 #include <tt-metalium/tensor/spec/layout/page_config.hpp>
@@ -520,6 +521,17 @@ TEST(TensorLayoutTests, FromPaddedShapePadsShardedRowMajorWidthToShard) {
     const TensorLayout wide_layout = tt::tt_metal::experimental::tensor_layout_from_padded_shape(
         DataType::UINT32, PageConfig(Layout::ROW_MAJOR), memory_config, Shape{2, 30}, Shape{2, 96});
     EXPECT_EQ(wide_layout.impl().compute_padded_shape(Shape{2, 30}), Shape({2, 96}));
+}
+
+// A sharded memory config without a shard spec is rejected, not dereferenced.
+TEST(TensorLayoutTests, FromPaddedShapeRejectsShardedRowMajorWithoutShardSpec) {
+    const MemoryConfig memory_config{TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1, std::nullopt};
+    EXPECT_THAT(
+        [&] {
+            tt::tt_metal::experimental::tensor_layout_from_padded_shape(
+                DataType::UINT32, PageConfig(Layout::ROW_MAJOR), memory_config, Shape{2, 30}, Shape{2, 32});
+        },
+        ::testing::ThrowsMessage<std::exception>(::testing::HasSubstr("must have Shard Spec specified")));
 }
 
 struct ConsumedMemoryBytesPerBankTestParams {
