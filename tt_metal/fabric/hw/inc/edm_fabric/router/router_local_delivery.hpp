@@ -25,7 +25,11 @@
 namespace fabric_router {
 
 constexpr uint8_t LOCAL_NOC = tt::tt_fabric::edm_to_local_chip_noc;
-constexpr uint8_t LOCAL_NOC_VC = tt::tt_fabric::forward_and_local_write_noc_vc;
+// Local delivery uses the other VC of the router's pair (forward_and_local_write_noc_vc is 2 or 3 by link index), so
+// that a packet's local writes do not queue behind its forward to the next router. Every local write, inline write and
+// atomic increment below goes out on this one VC, and the NoC keeps order within a VC, so a packet's data still lands
+// before the increment that announces it.
+constexpr uint8_t LOCAL_NOC_VC = (tt::tt_fabric::forward_and_local_write_noc_vc ^ 1);
 
 // Whether local writes go into the NoC's software write counters (noc_nonposted_writes_num_issued/acked). Blackhole:
 // yes, as its write API always counts (issue 28758), and a flushed atomic then checks the counters once
