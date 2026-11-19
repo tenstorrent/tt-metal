@@ -404,7 +404,9 @@ def test_simple_conv_t2d_weights_bias_match(
     "input_channels, output_channels, input_height, input_width",
     [(32, 288, 3, 3), (32, 352, 3, 3), (64, 288, 16, 16)],
 )
-def test_conv_t2d_prepared_bias_output_padding(device, input_channels, output_channels, input_height, input_width):
+def test_conv_t2d_prepared_bias_output_padding(
+    device, expect_error, input_channels, output_channels, input_height, input_width
+):
     """
     Bias pre-prepared with output_padding != 0 must be laid out for the same auto-shard decision as
     conv_transpose2d itself; for the 3x3 inputs output_padding changes the padded bias width.
@@ -524,6 +526,14 @@ def test_conv_t2d_prepared_bias_output_padding(device, input_channels, output_ch
     passing, pcc_msg = check_with_pcc_without_tensor_printout(out, torch_out_golden_tensor, pcc=0.99)
     logger.info(f"PCC = {pcc_msg}")
     assert passing, pcc_msg
+
+    # A bias prepared without the output_padding the weights were prepared with is too narrow for the 3x3 inputs.
+    if input_height == 3:
+        stale_bias = ttnn.prepare_conv_transpose2d_bias(
+            bias_tensor=ttnn.from_torch(torch_bias_tensor, dtype), **{**common_args, "output_padding": (0, 0)}
+        )
+        with expect_error(RuntimeError, "Prepare the bias with the same arguments as the weights"):
+            ttnn.conv_transpose2d(weight_tensor=tt_weight_tensor, bias_tensor=stale_bias, **conv_args)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)

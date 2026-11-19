@@ -177,14 +177,21 @@ def test_conv_dram_config(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "input_channels, output_channels, input_height, input_width, kernel, padding",
-    # filter_w * input_channels * 2 bytes exceeds the 8192 B Wormhole NoC burst, so the activation reader
+    # filter_w * input_channels * 2 bytes exceeds the 8192 B Wormhole NoC burst, so the activation readers
     # must fall back to per-stick reads instead of coalescing the kernel row.
     (
         (1024, 32, 1, 32, (1, 5), (0, 2)),
         (1536, 32, 8, 8, (3, 3), (1, 1)),
     ),
 )
-def test_conv_height_sharded_kernel_w_exceeds_noc_burst(
+# Height sharding runs the halo reader, or with the split reader the 1D multicast readers as well; block sharding
+# runs the 2D multicast readers.
+@pytest.mark.parametrize(
+    "shard_layout, force_split_reader",
+    [(HS, None), (HS, True), (BS, None), (WS, None)],
+    ids=["height", "height_split_reader", "block", "width"],
+)
+def test_conv_kernel_w_exceeds_noc_burst(
     device,
     torch_tensor_map,
     input_channels,
@@ -193,6 +200,8 @@ def test_conv_height_sharded_kernel_w_exceeds_noc_burst(
     input_width,
     kernel,
     padding,
+    shard_layout,
+    force_split_reader,
 ):
     run_conv(
         device,
@@ -211,9 +220,10 @@ def test_conv_height_sharded_kernel_w_exceeds_noc_burst(
         1,
         padding,
         None,
-        shard_layout=HS,
+        shard_layout=shard_layout,
         input_dtype=ttnn.bfloat16,
         has_bias=True,
+        force_split_reader=force_split_reader,
     )
 
 

@@ -263,6 +263,14 @@ ConvTranspose2dResult conv_transpose2d_L1(
         tie(weight_tensor_on_device, bias_tensor_on_device) =
             prepare_conv_weights_biases_and_move_to_device(transformed_weight_tensor, bias_tensor, params, device);
     }
+    if (bias_tensor_on_device.has_value() && ttnn::is_device_tensor(bias_tensor_on_device.value())) {
+        TT_FATAL(
+            bias_tensor_on_device->padded_shape()[-1] >= weight_tensor_on_device.padded_shape()[-1],
+            "conv_transpose2d: the prepared bias is {} wide but the weights cover {} output channels. Prepare the "
+            "bias with the same arguments as the weights, including output_padding.",
+            bias_tensor_on_device->padded_shape()[-1],
+            weight_tensor_on_device.padded_shape()[-1]);
+    }
     Tensor output;
     if (mm_conv) {
         // Matmul expects inputs to be in Tile Layout

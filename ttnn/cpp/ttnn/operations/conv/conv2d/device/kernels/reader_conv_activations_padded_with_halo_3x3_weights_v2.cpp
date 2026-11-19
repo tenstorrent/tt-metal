@@ -71,6 +71,9 @@ void kernel_main() {
     constexpr uint32_t coalesced_read_bytes = num_coalesced_reads * conv_act_c_read_bytes;
     // Activation reuse lays out full kernel rows; split them into per-stick reads when they cannot be coalesced.
     constexpr uint32_t kernel_w_num_reads = (dilation_w == 1) ? weight_size_w / num_coalesced_reads : 1;
+    static_assert(
+        !activation_reuse_enabled || dilation_w == 1,
+        "Activation reuse reads each kernel row as contiguous sticks, which needs dilation_w == 1");
 
     uint32_t act_l1_read_addr = dfb_sharded_act.get_read_ptr();
 
