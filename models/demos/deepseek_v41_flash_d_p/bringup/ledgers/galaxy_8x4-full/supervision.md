@@ -537,3 +537,4 @@
   RAM unaccounted 175.5 GiB (163.3 at the first open). Hint only: agentic 145408 on 80.3 vs off 81.1-81.9 measured
   earlier (runner demo / X.9): ~1 ms, not the fit's 4.5. Decision waits for a correct A/B.
 - 10:53 UTC overseer decision (iteration time): P.84 attempt 3: MOE_REPLICAS call-time, slot always filled when a table is set, both A/B sides in one load; off bit-identical to pre-P.84. Starts when the runner agent's A/B-per-unit fix lands.
+- 10:55 UTC DEVICE (justified, owner worried about time; device idle while P.84 attempt 3 is coded): P.85 session census now on the runner (one request, DS41_MOE_REPLICAS=off: counts per home chip; at most 1 runner restart if it holds the on model). RAM unaccounted 175.7 GiB (163.3 before P.84's 8 opens).
