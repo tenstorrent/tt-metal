@@ -44,7 +44,12 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     kimi_k3_program_config,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
-from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaContractGeometry, KdaStates
+from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
+    KdaContractGeometry,
+    KdaStates,
+    allocate_native_state,
+    device_scalar,
+)
 from models.demos.deepseek_v3_d_p.tt.kda.state_contract import KDA_CONVOLUTION_PAGE_CHANNELS
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
@@ -768,20 +773,13 @@ def assert_matches_reference(
 
 
 def read_slab_layer(mesh_device, slabs: KdaStates, slot: int, layer_idx: int) -> KdaState:
-    """A native copy of layer ``layer_idx``'s carry at host ``slot``. OWNED: free it with ``deallocate_state``."""
-    batch = slabs.batch_index(slot, layer_idx)
-
-    def entry(slab: ttnn.Tensor) -> ttnn.Tensor:
-        # Both may hand back their input: clone the entry, and free only an interleaved copy of the ND slab.
-        interleaved = ttnn.to_memory_config(slab, ttnn.DRAM_MEMORY_CONFIG)
-        ends = [batch + 1, *tuple(slab.shape)[1:]]
-        sliced = ttnn.slice(interleaved, [batch] + [0] * (len(ends) - 1), ends, [1] * len(ends))
-        copy = ttnn.clone(sliced, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if interleaved.buffer_address() != slab.buffer_address():
-            ttnn.deallocate(interleaved)
-        return copy
-
-    return KdaState(recurrent=entry(slabs.recurrent), convolution=entry(slabs.convolution))
+    """A native copy of layer ``layer_idx``'s carry at host ``slot``, read through the device-slot import the
+    K3 layers use (each chip's stored heads, all-gathered over SP). OWNED: free it with ``deallocate_state``."""
+    state = allocate_native_state(mesh_device, slabs.geometry)
+    index = device_scalar(mesh_device, slot)
+    slabs.import_layer(state, index, layer_idx)
+    ttnn.deallocate(index)
+    return state
 
 
 def upload_slab(slab: ttnn.Tensor, shards: list[torch.Tensor]) -> None:

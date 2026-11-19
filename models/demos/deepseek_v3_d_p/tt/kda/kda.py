@@ -643,8 +643,8 @@ class ttKDA:
 
         ``hidden_states`` is either TP-sharded, ``[B, T, H/TP]`` (the model's residual layout: the layer all-gathers
         it over TP for the column-parallel input projection, the counterpart of the output's reduce-scatter), or
-        already full width, ``[B, T, H]`` (no gather). ``state`` may also be a model's slab entry
-        (``KdaStates.entry``), read and replaced in place.
+        already full width, ``[B, T, H]`` (no gather). ``state`` may also be a slab entry
+        (``SlabEntry``, as ``forward_slot`` passes the scratch), read and replaced in place.
 
         ``actual_start`` is the absolute global position of this chunk's first
         token. It selects the chronological SP segment order for MLA's
@@ -719,3 +719,27 @@ class ttKDA:
         ttnn.deallocate(inputs.projected)
         output = self._project_output(output)
         return output, KdaState(recurrent=result.final_state, convolution=new_convolution)
+
+    def forward_slot(
+        self,
+        hidden_states: ttnn.Tensor,
+        states,
+        slot: ttnn.Tensor,
+        layer_idx: int,
+        actual_start: ttnn.Tensor,
+        actual_end: ttnn.Tensor | None = None,
+    ) -> ttnn.Tensor:
+        """One model layer per chunk, its carry kept in the model's state slabs: import -> forward -> export.
+
+        ``states`` is the model's ``KdaStates`` (``tt/kda/state_adapter.py``, typed loosely because that module
+        imports this one), which stores each head once on the mesh: the import copies this chip's heads out of the
+        slab and all-gathers them over SP into ``states.scratch``; the layer's ops read the scratch and replace it in
+        place with the new (SP-replicated) carry; the export stores each chip's heads of it. ``slot`` is a replicated
+        one-element UINT32 device scalar, read on device by the copies, so a captured trace follows the slot of the
+        replay. ``actual_start`` also marks a request head: where it reads 0 the layer starts from zeros instead of
+        the slot. Returns the layer output.
+        """
+        states.import_layer(states.scratch, slot, layer_idx, zero_fill_at_zero=actual_start)
+        output, _ = self.forward(hidden_states, states.scratch_entry(), actual_start, actual_end)
+        states.export_layer(states.scratch, slot, layer_idx)
+        return output

@@ -22,6 +22,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_plain_d
 from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import all_zero_bits, assert_bit_identical, make_actual_start
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     build_layer,
+    kda_device_params,
     mla_row_permutation,
     random_weights,
     read_slab_layer,
@@ -66,6 +67,16 @@ def _host(tensor: ttnn.Tensor) -> list[torch.Tensor]:
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="sp8tp4-torus-xy",
         ),
+        # One 4x4 prefill stage (a Galaxy tray half, run_4x4_stage_tests.sh): SP=4 on the axis-1 ring, TP=4 on
+        # the axis-0 line.
+        pytest.param(
+            (4, 4),
+            1,
+            0,
+            kda_device_params((4, 4)),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="4x4-sp1",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -74,8 +85,12 @@ def test_one_capture_serves_every_slot(mesh_device, sp_axis, tp_axis, device_par
     sp = mesh_shape[sp_axis]
     local_rows = 256
     capacity = sp * local_rows
-    # head_dim 128, as Kimi-K3's, so the migration slabs' segment geometry applies and every commit exports.
-    config = KDAConfig(hidden_size=256, num_heads=8, head_k_dim=128, head_v_dim=128, conv_kernel_size=4, norm_eps=1e-5)
+    # head_dim 128, as Kimi-K3's, so the migration slabs' segment geometry applies and every commit exports. One head
+    # per chip: the slabs store each head once on the mesh, so the head count must divide over SP x TP.
+    num_heads = mesh_shape[sp_axis] * mesh_shape[tp_axis]
+    config = KDAConfig(
+        hidden_size=256, num_heads=num_heads, head_k_dim=128, head_v_dim=128, conv_kernel_size=4, norm_eps=1e-5
+    )
     weights = random_weights(config)
     layer = build_layer(
         mesh_device,
@@ -88,7 +103,9 @@ def test_one_capture_serves_every_slot(mesh_device, sp_axis, tp_axis, device_par
         convolution_page_channels=KDA_CONVOLUTION_PAGE_CHANNELS,
     )
     geometry = KdaContractGeometry.from_kda_config(config, mesh_shape=mesh_shape, sp_axis=sp_axis, tp_axis=tp_axis)
-    slabs = KdaStates.allocate(mesh_device, geometry, layer_ids=(OTHER_LAYER, LAYER), num_slots=NUM_SLOTS)
+    slabs = KdaStates.allocate(
+        mesh_device, geometry, sp_axis=sp_axis, layer_ids=(OTHER_LAYER, LAYER), num_slots=NUM_SLOTS
+    )
     attention = TtK3KdaAttention(layer, LAYER, tp_axis, 1, ttnn.Topology.Linear)
     dims = [None, None]
     dims[sp_axis], dims[tp_axis] = 2, 3
