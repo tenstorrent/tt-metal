@@ -666,12 +666,11 @@ ALWI void topk_xl_split_wait_start() { PACK((topk_xl_split::wait_start())); }
 
 ALWI void topk_xl_split_end() { MATH((topk_xl_split::finish())); }
 
+#ifdef TOPK_XL_SPLIT_STAMP_OFFSET
 // Chunk ids of the split rows that follow start at `offset` instead of 0 (see topk_xl_split::stamp_offset). Set it
-// back to 0 after such a row.
-ALWI void topk_xl_split_set_stamp_offset(std::uint32_t offset) {
-    MATH((topk_xl_split::set_stamp_offset(offset)));
-    PACK((topk_xl_split::set_stamp_offset(offset)));
-}
+// back to 0 after such a row. Only PACK stamps.
+ALWI void topk_xl_split_set_stamp_offset(std::uint32_t offset) { PACK((topk_xl_split::set_stamp_offset(offset))); }
+#endif
 
 template <bool fp32_dest_acc>
 ALWI void topk_xl_split_release_dest_bank0() {

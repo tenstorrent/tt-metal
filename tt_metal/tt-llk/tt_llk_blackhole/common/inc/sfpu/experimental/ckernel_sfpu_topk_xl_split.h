@@ -36,13 +36,18 @@ constexpr std::uint32_t STAGES_MERGING_CHUNK = 9;
 
 // Added to every chunk's stamp (its chunk id within its 32-chunk block) of the rows that follow, so a row that is the
 // second part of a longer one keeps that row's chunk ids: their fused values order ties as one row would, and the
-// separated indices are the longer row's. Stamps stay 5 bits: offset + chunks <= 32.
+// separated indices are the longer row's. Stamps stay 5 bits: offset + chunks <= 32. Only builds that define
+// TOPK_XL_SPLIT_STAMP_OFFSET can set it; elsewhere it is the constant 0.
+#ifdef TOPK_XL_SPLIT_STAMP_OFFSET
 inline std::uint32_t stamp_offset = 0;
 
 inline void set_stamp_offset(const std::uint32_t offset)
 {
     stamp_offset = offset;
 }
+#else
+constexpr std::uint32_t stamp_offset = 0;
+#endif
 
 inline bool decode_step(const std::uint32_t c1, const std::uint32_t r, const std::uint32_t num_chunks, std::uint32_t& chunk, std::uint32_t& stage)
 {
@@ -585,6 +590,9 @@ inline void pack_row(const std::uint32_t num_chunks, const bool mirror_last, Epi
     // Only stages 7 and 8 read the rebuild direction, and a single-chunk row never reaches them, so it would
     // end descending whatever mirror_last says.
     LLK_ASSERT(num_chunks >= 2 || !mirror_last, "a single-chunk row cannot honour mirror_last");
+#ifdef TOPK_XL_SPLIT_STAMP_OFFSET
+    LLK_ASSERT(stamp_offset + num_chunks <= 32, "chunk stamps are 5 bits: stamp_offset + num_chunks must fit in 32");
+#endif
     take_math_token();
     ckernel::sfpu::_topk_xl_split_sfpu_init_<K, true /*macros*/>();
     TTI_STALLWAIT(ckernel::p_stall::STALL_SFPU, ckernel::p_stall::MATH);

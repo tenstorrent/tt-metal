@@ -518,6 +518,11 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     // The kernels compile their two-level code only under this define, so single-level binaries are unchanged.
     const std::map<std::string, std::string> two_level_defines =
         two_level ? std::map<std::string, std::string>{{"TOPK_TWO_LEVEL", "1"}} : std::map<std::string, std::string>{};
+    // The split LLK's stamp offset (split-row halves stamped as their row) exists only in two-level compute builds.
+    std::map<std::string, std::string> compute_defines = two_level_defines;
+    if (two_level) {
+        compute_defines["TOPK_XL_SPLIT_STAMP_OFFSET"] = "1";
+    }
     const auto with_two_level = [&](std::unordered_map<std::string, uint32_t> named) {
         if (two_level) {
             for (const auto& [name, value] : two_level_named_args) {
@@ -600,7 +605,7 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
             // K=2048 multi-chunk merge uses DEST slots 0..7; FP32 half-sync mode exposes only 4 tiles.
             .dst_full_sync_en = true,
             .compile_args = compute_compile_args,
-            .defines = two_level_defines,
+            .defines = compute_defines,
             .named_compile_args = with_two_level(
                 {{"row_split", row_split},
                  {"split_whole_rows", whole_rows_split ? 1u : 0u},

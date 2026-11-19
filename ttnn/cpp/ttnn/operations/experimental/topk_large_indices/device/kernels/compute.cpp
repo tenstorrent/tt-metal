@@ -745,8 +745,9 @@ void kernel_main() {
 
     const uint32_t num_whole_rows = has_split ? num_rows - 1 : num_rows;
     uint32_t first_row = 0;
-    // A split-row half that starts on a 32-chunk block runs on the split body like a whole row, as the last item of
-    // the loop below, so the body has one call site. Its survivor stays in DEST for the split-row path.
+    // A split-row half runs on the split body like a whole row, as the last item of the loop below, when it starts on
+    // a 32-chunk block or (two-level) its stamps are offset to the row's; the body keeps one call site. Its survivor
+    // stays in DEST for the split-row path.
     bool half_done = false;
     // A two-level split row's halves run on the split body as 16-chunk rows from chunk 0, stamped with the row's chunk
     // ids (the split body decodes stamps per 32-chunk block and needs a row to start on one).
@@ -843,9 +844,11 @@ void kernel_main() {
 #endif
                 tile_regs_acquire();
                 if constexpr (segmented_split) {
+#ifdef TOPK_TWO_LEVEL
                     if (shifted_half) {
                         topk_xl_split_set_stamp_offset(split_first_chunk);
                     }
+#endif
                     // A half ends ascending when its survivor leaves this core, and stays fused for a fused join.
                     reduce_split_segmented_row<K>(
                         input,
@@ -857,9 +860,11 @@ void kernel_main() {
                         half_item && sends_survivor,
                         !half_item,
                         half_item && fused_join);
+#ifdef TOPK_TWO_LEVEL
                     if (shifted_half) {
                         topk_xl_split_set_stamp_offset(0);
                     }
+#endif
                     if (half_item) {
                         half_done = true;
                         break;
@@ -943,8 +948,8 @@ void kernel_main() {
         // chunks; both partners derive this from the same whole-row chunk count, so they agree on the format.
         const bool fused_join = split_row && num_chunks <= max_fused_chunks;
 
-        // A half long enough, and starting on a 32-chunk block so the split body's segment-local stamps decode, ran
-        // across MATH and PACK as the split-body loop's last item, which left its survivor in tile 0 with DEST held.
+        // A half that ran as the split-body loop's last item (see half_done) left its survivor in tile 0 with DEST
+        // held, across MATH and PACK.
         const bool half_on_both_threads = split_row && half_done;
         if (!half_on_both_threads) {
             tile_regs_acquire();

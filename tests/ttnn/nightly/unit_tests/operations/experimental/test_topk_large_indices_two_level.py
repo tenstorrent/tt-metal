@@ -172,10 +172,20 @@ def test_two_level_staged_gather_patterns(device, n, members, first_span):
     _check_rows(torch_input, _indices(out, rows), n, range(rows))
 
 
-def test_two_level_split_row_ties_order_as_a_whole_row(device):
-    """A row halved across a core pair returns the same ordered indices, ties included, as on one core."""
+@pytest.mark.parametrize("pattern", ["ties8", "exact_ties"])
+def test_two_level_split_row_ties_order_as_a_whole_row(device, pattern):
+    """A row halved across a core pair returns the same ordered indices, ties included, as on one core. In
+    exact_ties, exactly 2048 keys, one per block, tie for the top, so each candidate half holds 1024 of the winners
+    and a join that kept one half would miss the other's."""
     width, n = 262_144, 262_144
-    row = generate("ties8", 1, width, 22, n=n)
+    if pattern == "ties8":
+        row = generate("ties8", 1, width, 22, n=n)
+    else:
+        g = torch.Generator().manual_seed(22)
+        x = torch.rand(1, width, generator=g) - 2.0
+        blocks = torch.randperm(n // BLOCK, generator=g)[:K]
+        x[0, blocks * BLOCK + torch.randint(0, BLOCK, (K,), generator=g)] = 2.0
+        row = x.to(torch.bfloat16)
     grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(1, 1))])
     results = []
     for rows in (1, 2):  # one row on two cores is a split row; two rows on two cores are whole rows
