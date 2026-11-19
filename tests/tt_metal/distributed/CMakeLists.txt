@@ -163,7 +163,13 @@ add_subdirectory(multiprocess)
 if(TARGET OpenMPI::MPI)
     add_executable(layer_completion_router_mpi_test test_layer_completion_router_mpi.cpp)
     target_precompile_headers(layer_completion_router_mpi_test REUSE_FROM metal_test_pch)
-    target_link_libraries(layer_completion_router_mpi_test PRIVATE tt_metal test_common_libs OpenMPI::MPI)
+    target_link_libraries(
+        layer_completion_router_mpi_test
+        PRIVATE
+            tt_metal
+            test_common_libs
+            OpenMPI::MPI
+    )
     target_include_directories(
         layer_completion_router_mpi_test
         PRIVATE
