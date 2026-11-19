@@ -402,12 +402,12 @@ def _within_shard_height_rule(shape, dims, shard_height):
     )
 
 
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["TILE", "ROW_MAJOR"])
 @pytest.mark.parametrize("memory_layout, buffer_type", _docstring_sharded_params())
-def test_roll_docstring_sharded_inputs(memory_layout, buffer_type, layout, device):
-    """A BFLOAT16 input of each sharding the ttnn.roll docstring names keeps its memory configuration, for each roll
-    that meets the docstring's shard height rule."""
-    check_readable(memory_layout, buffer_type)
+@pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.roll))
+def test_roll_docstring_sharded_inputs(dtype, layout, memory_layout, buffer_type, device):
+    """An input of each dtype, layout and sharding the ttnn.roll docstring lists keeps its memory configuration, for
+    each roll that meets the docstring's shard height rule and, for BFLOAT8_B, its BFLOAT8_B rule."""
+    check_readable(dtype, layout, memory_layout, buffer_type)
     if (memory_layout, buffer_type) not in _SHARD_SPECS:
         pytest.fail(f"the docstring names {memory_layout} in {buffer_type}, which this test has no shard spec for")
     (end_x, end_y), shard_shape = _SHARD_SPECS[(memory_layout, buffer_type)]
@@ -417,11 +417,23 @@ def test_roll_docstring_sharded_inputs(memory_layout, buffer_type, layout, devic
     )
     rolls = [(s, d) for s, d in _SHARDED_ROLLS if _within_shard_height_rule(_SHARDED_SHAPE, d, shard_shape[0])]
     for shifts, dims in rolls:
-        # As in test_roll_docstring_supported_inputs: no NaN, and zeros by value, once one of the last two dims rolls.
+        if dtype == ttnn.bfloat8_b and not _bfloat8_b_roll(_SHARDED_SHAPE, shifts, dims):
+            continue
+        # As in test_roll_docstring_supported_inputs: once one of the last two dims rolls, a BFLOAT16 input leaves out
+        # NaN and its zeros are compared by value, and block floats get values with one exponent.
         last_two = _rolls_last_two_dims(len(_SHARDED_SHAPE), dims)
-        x = full_range_input(_SHARDED_SHAPE, ttnn.bfloat16, nan=not last_two)
-        input_tensor = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=sharded)
+        bfloat16_last_two = dtype == ttnn.bfloat16 and last_two
+        if dtype in _BLOCK_FLOATS and last_two:
+            x = _one_exponent_input(_SHARDED_SHAPE)
+        else:
+            x = full_range_input(_SHARDED_SHAPE, dtype, nan=not bfloat16_last_two)
+        input_tensor = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=sharded)
+        expected = _torch_roll(ttnn.to_torch(input_tensor), shifts, dims)
+
         output = ttnn.roll(input_tensor, shifts, dims)
 
-        assert output.memory_config() == input_tensor.memory_config()
-        assert_exact(torch.roll(x, shifts, dims), ttnn.to_torch(output), signed_zeros=not last_two)
+        case = f"shifts {shifts}, dims {dims}"
+        assert output.dtype == dtype, case
+        assert output.layout == layout, case
+        assert output.memory_config() == input_tensor.memory_config(), case
+        assert_exact(expected, ttnn.to_torch(output), signed_zeros=not bfloat16_last_two)
