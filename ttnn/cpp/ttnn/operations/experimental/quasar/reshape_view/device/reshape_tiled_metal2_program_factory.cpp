@@ -18,8 +18,8 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/experimental/quasar/reshape_view/device/reshape_tiled_program_factory.hpp"
@@ -28,7 +28,6 @@
 namespace ttnn::prim::qsr {
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace {
 const TensorParamName RT_INPUT{"reshape_tiled_input"};

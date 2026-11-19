@@ -17,8 +17,8 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 
 #include "ttnn/prefetcher_pipe.hpp"
@@ -37,29 +37,29 @@ using ttnn::operations::unary::UnaryWithParam;
 
 using tt::tt_metal::MeshTensor;
 
+using tt::tt_metal::AddRuntimeArgsForNode;
+using tt::tt_metal::DataflowBufferSpec;
+using tt::tt_metal::DataMovementHardwareConfig;
+using tt::tt_metal::DFBBinding;
+using tt::tt_metal::DFBEndpointType;
+using tt::tt_metal::DFBSpecName;
+using tt::tt_metal::Group;
 using tt::tt_metal::KernelBuildOptLevel;
-using tt::tt_metal::experimental::AddRuntimeArgsForNode;
-using tt::tt_metal::experimental::DataflowBufferSpec;
-using tt::tt_metal::experimental::DataMovementHardwareConfig;
-using tt::tt_metal::experimental::DFBBinding;
-using tt::tt_metal::experimental::DFBEndpointType;
-using tt::tt_metal::experimental::DFBSpecName;
-using tt::tt_metal::experimental::Group;
-using tt::tt_metal::experimental::KernelRunArgs;
-using tt::tt_metal::experimental::KernelSpec;
-using tt::tt_metal::experimental::KernelSpecName;
+using tt::tt_metal::KernelRunArgs;
+using tt::tt_metal::KernelSpec;
+using tt::tt_metal::KernelSpecName;
+using tt::tt_metal::ProgramRunArgs;
+using tt::tt_metal::ProgramSpec;
+using tt::tt_metal::SemaphoreBinding;
+using tt::tt_metal::SemaphoreSpec;
+using tt::tt_metal::SemaphoreSpecName;
+using tt::tt_metal::TensorBinding;
+using tt::tt_metal::TensorParameter;
+using tt::tt_metal::TensorParamName;
+using tt::tt_metal::WorkUnitSpec;
 using tt::tt_metal::experimental::PrefetcherPipeArgument;
 using tt::tt_metal::experimental::PrefetcherPipeParameter;
 using tt::tt_metal::experimental::PrefetcherPipeParamName;
-using tt::tt_metal::experimental::ProgramRunArgs;
-using tt::tt_metal::experimental::ProgramSpec;
-using tt::tt_metal::experimental::SemaphoreBinding;
-using tt::tt_metal::experimental::SemaphoreSpec;
-using tt::tt_metal::experimental::SemaphoreSpecName;
-using tt::tt_metal::experimental::TensorBinding;
-using tt::tt_metal::experimental::TensorParameter;
-using tt::tt_metal::experimental::TensorParamName;
-using tt::tt_metal::experimental::WorkUnitSpec;
 
 namespace ttnn::prim {
 
@@ -91,7 +91,7 @@ static void reserve_multicast_tail(
         .source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/mcast_tail_reservation.cpp",
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = dfb, .accessor_name = "reserved", .endpoint_type = DFBEndpointType::CONSUMER}},
-        .hw_config = tt::tt_metal::experimental::ComputeHardwareConfig{},
+        .hw_config = tt_metal::ComputeHardwareConfig{},
     });
     work_units.push_back(WorkUnitSpec{
         .name = "multicast_tail_storage", .kernels = {producer, consumer}, .target_nodes = idle_cores});
@@ -4850,7 +4850,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
     // DEST. fp32 K-partials are reloaded into DEST between blocks; marking them UnpackToDest sends the
     // reload straight to DEST instead of through SrcA, which would truncate them to TF32. The rest get
     // UnpackToSrc.
-    const auto add_float32_unpack_mode = [&](tt::tt_metal::experimental::ComputeHardwareConfig& hw,
+    const auto add_float32_unpack_mode = [&](tt_metal::ComputeHardwareConfig& hw,
                                              const DFBSpecName& name,
                                              tt::DataFormat fmt) {
         if (!fp32_dest_acc_en || fmt != tt::DataFormat::Float32) {

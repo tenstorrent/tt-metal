@@ -27,8 +27,8 @@ struct EntryCorrectionInputs {
     // Per chunk, the output for a zero seed F(0) and an identity seed F(I): [cores, 2, chunk rows, K], height-sharded
     // so each core's F(0) rows, then its F(I) rows, are in its own L1.
     Tensor terms;
-    // final = A @ entry + B.
-    Tensor final_a;
+    // final = entry + (E @ entry + B), E = A - I.
+    Tensor final_e;
     Tensor final_b;
     // The group's entry states, and the split tail's.
     Tensor entry;

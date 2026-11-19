@@ -162,7 +162,7 @@ static inline tt::tt_metal::TensorSpec make_flat_dram_tensor_spec(
 }
 
 void run_single_core_transpose(distributed::MeshDevice& mesh_device, const TransposeConfig& test_config) {
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
 
     const TransposeDims dims = compute_and_validate_transpose_dims(test_config.shape);
     const std::uint32_t NC = dims.NC, Wt = dims.Wt, Ht = dims.Ht, num_tensor_tiles = dims.num_tensor_tiles;
@@ -177,86 +177,86 @@ void run_single_core_transpose(distributed::MeshDevice& mesh_device, const Trans
     constexpr std::uint32_t num_buffer_tiles = 32;
     constexpr std::uint32_t num_output_buffer_tiles = 32;
 
-    const experimental::DFBSpecName INPUT_DFB{"input_dfb"};
-    const experimental::DFBSpecName OUTPUT_DFB{"output_dfb"};
-    const experimental::KernelSpecName READER{"reader"};
-    const experimental::KernelSpecName WRITER{"writer"};
-    const experimental::KernelSpecName COMPUTE{"compute"};
-    const experimental::TensorParamName IN_TENSOR{"in_tensor"};
-    const experimental::TensorParamName OUT_TENSOR{"out_tensor"};
+    const DFBSpecName INPUT_DFB{"input_dfb"};
+    const DFBSpecName OUTPUT_DFB{"output_dfb"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
+    const TensorParamName IN_TENSOR{"in_tensor"};
+    const TensorParamName OUT_TENSOR{"out_tensor"};
 
-    experimental::DataflowBufferSpec input_dfb_spec{
+    DataflowBufferSpec input_dfb_spec{
         .unique_id = INPUT_DFB,
         .entry_size = test_config.single_tile_size,
         .num_entries = num_buffer_tiles,
         .data_format_metadata = test_config.data_format,
     };
-    experimental::DataflowBufferSpec output_dfb_spec{
+    DataflowBufferSpec output_dfb_spec{
         .unique_id = OUTPUT_DFB,
         .entry_size = test_config.single_tile_size,
         .num_entries = num_output_buffer_tiles,
         .data_format_metadata = test_config.data_format,
     };
 
-    experimental::DataMovementHardwareConfig reader_hw_config;
+    DataMovementHardwareConfig reader_hw_config;
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        reader_hw_config = experimental::DataMovementHardwareConfig{
+        reader_hw_config = DataMovementHardwareConfig{
             .config_2xx =
-                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                DataMovementHardwareConfig::DataMovement2XXConfig{
                     .disable_dfb_implicit_sync_for_all = true,
                 },
         };
     } else {
-        reader_hw_config = experimental::DataMovementHardwareConfig{
+        reader_hw_config = DataMovementHardwareConfig{
             .config_1xx =
-                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                DataMovementHardwareConfig::DataMovement1XXConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                     .noc = tt_metal::NOC::RISCV_1_default,
                 },
         };
     }
-    experimental::KernelSpec reader_spec{
+    KernelSpec reader_spec{
         .unique_id = READER,
         .source =
 
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh_8bank.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ProducerOf(INPUT_DFB, "out")},
+        .dfb_bindings = {ProducerOf(INPUT_DFB, "out")},
         .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"N", "Ht", "Wt", "HtWt"}},
         .hw_config = reader_hw_config,
     };
 
-    experimental::DataMovementHardwareConfig writer_hw_config;
+    DataMovementHardwareConfig writer_hw_config;
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        writer_hw_config = experimental::DataMovementHardwareConfig{
+        writer_hw_config = DataMovementHardwareConfig{
             .config_2xx =
-                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                DataMovementHardwareConfig::DataMovement2XXConfig{
                     .disable_dfb_implicit_sync_for_all = true,
                 },
         };
     } else {
-        writer_hw_config = experimental::DataMovementHardwareConfig{
+        writer_hw_config = DataMovementHardwareConfig{
             .config_1xx =
-                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                DataMovementHardwareConfig::DataMovement1XXConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                     .noc = tt_metal::NOC::RISCV_0_default,
                 },
         };
     }
-    experimental::KernelSpec writer_spec{
+    KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
 
             "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ConsumerOf(OUTPUT_DFB, "in")},
+        .dfb_bindings = {ConsumerOf(OUTPUT_DFB, "in")},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
         .hw_config = writer_hw_config,
     };
 
-    experimental::KernelSpec::CompilerOptions::Defines compute_defines;
+    KernelSpec::CompilerOptions::Defines compute_defines;
     if (test_config.short_init) {
         compute_defines.emplace("SHORT_INIT", "1");
     }
@@ -269,17 +269,17 @@ void run_single_core_transpose(distributed::MeshDevice& mesh_device, const Trans
     // DST_ACCUM_MODE as the transpose-dest EN_32BIT_DEST template arg, so the two must agree.
     const bool fp32_dest_acc_en =
         (test_config.data_format == tt::DataFormat::Float32 || test_config.data_format == tt::DataFormat::Int32);
-    experimental::ComputeHardwareConfig compute_hw_config;
-    experimental::ComputeHardwareConfig::ComputeUnpackModes unpack_modes{};
+    ComputeHardwareConfig compute_hw_config;
+    ComputeHardwareConfig::ComputeUnpackModes unpack_modes{};
     if (test_config.unpack_to_dest) {
         unpack_modes = {{INPUT_DFB, tt::tt_metal::UnpackMode::UnpackToDest}};
     }
-    compute_hw_config = experimental::ComputeHardwareConfig{
+    compute_hw_config = ComputeHardwareConfig{
         .enable_32_bit_dest = fp32_dest_acc_en,
         .double_buffer_dest = !test_config.dst_full_sync_en,
         .unpack_modes = unpack_modes,
     };
-    experimental::KernelSpec compute_spec{
+    KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = compute_kernel_path,
         .num_threads = 1,
@@ -288,26 +288,26 @@ void run_single_core_transpose(distributed::MeshDevice& mesh_device, const Trans
             {{
                  .dfb_spec_name = INPUT_DFB,
                  .accessor_name = "in",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = OUTPUT_DFB,
                  .accessor_name = "out",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"NHtWt", Ht * Wt * NC}},
         .hw_config = compute_hw_config,
     };
 
-    experimental::WorkUnitSpec wu{
+    WorkUnitSpec wu{
         .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "transpose_wh",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {input_dfb_spec, output_dfb_spec},
@@ -321,22 +321,22 @@ void run_single_core_transpose(distributed::MeshDevice& mesh_device, const Trans
 
     Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
-                node, {{"N", NC}, {"Ht", Ht}, {"Wt", Wt}, {"HtWt", Ht * Wt}}),
+            .runtime_arg_values =
+                MakeRuntimeArgsForSingleNode(node, {{"N", NC}, {"Ht", Ht}, {"Wt", Wt}, {"HtWt", Ht * Wt}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"num_tiles", num_tensor_tiles}}),
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"num_tiles", num_tensor_tiles}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+        ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     params.tensor_args = {
-        {IN_TENSOR, experimental::ProgramRunArgs::TensorArgument{in_tensor}},
-        {OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{out_tensor}},
+        {IN_TENSOR, ProgramRunArgs::TensorArgument{in_tensor}},
+        {OUT_TENSOR, ProgramRunArgs::TensorArgument{out_tensor}},
     };
     experimental::SetProgramRunArgs(program, params);
 

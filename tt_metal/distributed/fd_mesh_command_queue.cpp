@@ -12,8 +12,6 @@
 #include <mesh_event.hpp>
 #include "mesh_event_impl.hpp"
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <array>
 #include <functional>
@@ -41,7 +39,6 @@
 #include "mesh_workload_impl.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
 #include "tt-metalium/program.hpp"
-#include <tt_stl/strong_type.hpp>
 #include "dispatch/system_memory_manager.hpp"
 #include "trace/trace_buffer.hpp"
 #include "tt_metal/impl/threading/thread_pool.hpp"
@@ -199,14 +196,10 @@ FDMeshCommandQueue::FDMeshCommandQueue(
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context) :
     MeshCommandQueueBase(mesh_device, id, dispatch_thread_pool, std::move(lock_api_function)),
     cq_shared_state_(cq_shared_state),
-    dispatch_core_type_(MetalContext::instance(mesh_device->impl().get_context_id())
-                            .get_dispatch_core_manager()
-                            .get_dispatch_core_type()),
+    dispatch_core_type_(mesh_device->impl().metal_context().get_dispatch_core_manager().get_dispatch_core_type()),
     reader_thread_pool_(reader_thread_pool),
-    prefetcher_dram_aligned_block_size_(
-        MetalContext::instance(mesh_device->impl().get_context_id()).hal().get_alignment(HalMemType::DRAM)),
-    prefetcher_cache_sizeB_(
-        MetalContext::instance(mesh_device->impl().get_context_id()).dispatch_mem_map().ringbuffer_size()),
+    prefetcher_dram_aligned_block_size_(mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::DRAM)),
+    prefetcher_cache_sizeB_(mesh_device->impl().metal_context().dispatch_mem_map().ringbuffer_size()),
     prefetcher_dram_aligned_num_blocks_(prefetcher_cache_sizeB_ / prefetcher_dram_aligned_block_size_),
     prefetcher_cache_manager_size_(
         1 << (std::bit_width(std::min(1024u, std::max(2u, prefetcher_dram_aligned_num_blocks_ >> 4))) - 1)),
@@ -216,7 +209,7 @@ FDMeshCommandQueue::FDMeshCommandQueue(
         prefetcher_dram_aligned_block_size_, prefetcher_dram_aligned_num_blocks_, prefetcher_cache_manager_size_)),
     active_distributed_context_(std::move(distributed_context)) {
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
-        MetalContext::instance(mesh_device_->impl().get_context_id()).hal(),
+        mesh_device_->impl().metal_env().get_hal(),
         config_buffer_mgr_,
         expected_num_workers_completed_,
         DispatchSettings::DISPATCH_MESSAGE_ENTRIES,
@@ -327,7 +320,7 @@ CoreCoord FDMeshCommandQueue::virtual_program_dispatch_core() const { return thi
 CoreType FDMeshCommandQueue::dispatch_core_type() const { return this->dispatch_core_type_; }
 
 bool FDMeshCommandQueue::record_watcher_error_in_test_mode(ChipId device_id) {
-    auto& context = MetalContext::instance(mesh_device_->impl().get_context_id());
+    auto& context = mesh_device_->impl().metal_context();
     const auto error_message = tt::llrt::internal_::get_watcher_error_message_in_test_mode(context, device_id);
     if (!error_message.has_value()) {
         return false;
@@ -353,7 +346,7 @@ bool FDMeshCommandQueue::record_watcher_error_in_test_mode(ChipId device_id) {
 void FDMeshCommandQueue::wait_for_outstanding_reads(std::unique_lock<std::mutex>& reads_processed_lock) {
     const auto predicate = [this] { return num_outstanding_reads_.load() == 0 || thread_exception_state_.load(); };
 
-    const auto& rtoptions = MetalContext::instance(mesh_device_->impl().get_context_id()).rtoptions();
+    const auto& rtoptions = mesh_device_->impl().metal_env().get_rtoptions();
     if (rtoptions.get_watcher_enabled() && rtoptions.get_test_mode_enabled()) {
         const auto device_id = mesh_device_->get_device_ids().at(0);
         constexpr auto poll_interval = std::chrono::milliseconds(100);
@@ -886,7 +879,7 @@ bool FDMeshCommandQueue::write_shard_to_device(
     const tt_sim::DirectWriteGuard tt_sim_direct_write_guard{
         .target = this->get_target_device_type(),
         .cq_idle = !in_use_.load(std::memory_order_acquire),
-        .rtoptions = &MetalContext::instance(mesh_device_->impl().get_context_id()).rtoptions(),
+        .rtoptions = &mesh_device_->impl().metal_env().get_rtoptions(),
     };
     if (tt_sim::try_direct_write(tt_sim_direct_write_guard, *shard_view, src, region_value, logical_core_filter)) {
         return false;
@@ -1229,12 +1222,9 @@ void FDMeshCommandQueue::read_completion_queue_event(MeshReadEventDescriptor& re
     auto& device_range = read_event_descriptor.device_range;
     for_each_local(mesh_device_, device_range, [&](const auto& coord) {
         auto device = mesh_device_->impl().get_device(coord);
-        ChipId mmio_device_id = tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
-                                    .get_cluster()
-                                    .get_associated_mmio_device(device->id());
-        uint16_t channel = tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
-                               .get_cluster()
-                               .get_assigned_channel_for_device(device->id());
+        auto& cluster = mesh_device_->impl().metal_env().get_cluster();
+        ChipId mmio_device_id = cluster.get_associated_mmio_device(device->id());
+        uint16_t channel = cluster.get_assigned_channel_for_device(device->id());
         device->sysmem_manager().completion_queue_wait_front(id_, exit_condition_);
 
         if (exit_condition_.load()) {
@@ -1335,7 +1325,7 @@ void FDMeshCommandQueue::reset_worker_state(
             cached->device_batches[i]);
     }
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
-        MetalContext::instance(mesh_device_->impl().get_context_id()).hal(),
+        mesh_device_->impl().metal_env().get_hal(),
         config_buffer_mgr_,
         expected_num_workers_completed_,
         mesh_device_->num_sub_devices(),
@@ -1644,8 +1634,8 @@ void FDMeshCommandQueue::record_begin(const MeshTraceId& trace_id, const std::sh
 }
 
 void FDMeshCommandQueue::record_end() {
-    MetalContext& metal_ctx = MetalContext::instance(mesh_device_->impl().get_context_id());
-    const auto& hal = metal_ctx.hal();
+    MetalContext& metal_ctx = mesh_device_->impl().metal_context();
+    const auto& hal = mesh_device_->impl().metal_env().get_hal();
 
     // At the beginning of the trace, expected_num_workers_completed is 0 on all devices on for each sub-device in the
     // trace. launch_msg_rd_ptr will also be 0 for all core-types used on each subdevice in the trace. At the end of the
@@ -1668,7 +1658,7 @@ void FDMeshCommandQueue::record_end() {
     }
     std::vector<uint32_t> exec_buf_end = {};
 
-    DeviceCommand command_sequence(metal_ctx, metal_ctx.hal().get_alignment(HalMemType::HOST));
+    DeviceCommand command_sequence(metal_ctx, hal.get_alignment(HalMemType::HOST));
     command_sequence.add_prefetch_exec_buf_end();
 
     exec_buf_end.reserve(command_sequence.size_bytes() / sizeof(uint32_t));
@@ -1949,7 +1939,7 @@ void FDMeshCommandQueue::wait_for_completion(bool reset_launch_msg_state) {
                 /*setup_commands=*/{});
         }
         program_dispatch::reset_config_buf_mgrs_and_expected_workers(
-            MetalContext::instance(mesh_device_->impl().get_context_id()).hal(),
+            mesh_device_->impl().metal_env().get_hal(),
             config_buffer_mgr_,
             expected_num_workers_completed_,
             mesh_device_->num_sub_devices(),

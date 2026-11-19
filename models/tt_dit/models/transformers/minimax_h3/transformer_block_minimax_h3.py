@@ -89,6 +89,13 @@ class MiniMaxH3TransformerBlock(Module):
 
         self.use_persistent_ccl_buffers = use_persistent_ccl_buffers
         self.dynamic_length = dynamic_length
+        # ff1's persistent all-gather pair is sized at the norms' row capacity on the dynamic-length path, so every
+        # length shares one pair instead of pinning one per length. ff2's fused reduce-scatter output pair is the
+        # activation it returns, so it cannot be oversized: on that path ff2 allocates its exact output per call
+        # (the op's barrier-semaphore mode, which the 4x8 runs for every collective) instead of pinning a pair per
+        # length.
+        self.ag_row_capacity = norm_row_capacity if dynamic_length else None
+        self.ff2_use_persistent_buffer = use_persistent_ccl_buffers and not dynamic_length
         norm_kwargs = {"row_capacity": norm_row_capacity} if dynamic_length else {}
         self.hidden_size = hidden_size
         self.ffn_dim = ffn_dim
@@ -402,7 +409,12 @@ class MiniMaxH3TransformerBlock(Module):
         # ff1 gathers the TP-fractured input inside its matmul (all_gather_minimal_matmul_async) when
         # parallel_config is passed; ff2 is row-parallel and reduce-scatters back to TP-fractured.
         if not self.use_fused_agmm and self.tp_factor > 1:
-            normed = self.ccl_manager.all_gather(normed, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False)
+            normed = self.ccl_manager.all_gather(
+                normed,
+                dim=3,
+                mesh_axis=self.tp_mesh_axis,
+                use_hyperparams=False,
+            )
         # ff2's reduce-scatter and the gated residual after it fuse into a single
         # minimal_matmul_strided_reduce_scatter_async, computing residual + ff2(...) * gate in one op.
         #
@@ -438,7 +450,9 @@ class MiniMaxH3TransformerBlock(Module):
                 parallel_config=self.parallel_config if self.use_fused_agmm else None,
                 force_transpose=False,
                 use_persistent_buffer=self.use_persistent_ccl_buffers,
+                persistent_buffer_rows=self.ag_row_capacity,
                 mmrs_config=self._mmrs_pin,
+                ff2_use_persistent_buffer=self.ff2_use_persistent_buffer,
                 **self._ff1_kwargs(normed),
             )
         ff_out = self.ff(
@@ -447,6 +461,7 @@ class MiniMaxH3TransformerBlock(Module):
             parallel_config=self.parallel_config if self.use_fused_agmm else None,
             force_transpose=False,
             use_persistent_buffer=self.use_persistent_ccl_buffers,
+            persistent_buffer_rows=self.ag_row_capacity,
             **self._ff1_kwargs(normed),
         )
         return ttnn.addcmul(residual, ff_out, modulation(_GATE_MLP))

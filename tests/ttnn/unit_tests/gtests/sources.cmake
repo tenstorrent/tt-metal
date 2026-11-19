@@ -45,6 +45,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_program_cache_l1.cpp
     test_reduction.cpp
     test_relational_int.cpp
+    test_relational_uint.cpp
     test_rsub_int.cpp
     test_sort_prim_validation.cpp
     test_codegen_gates_unallocated.cpp
@@ -52,6 +53,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_gelu_fw_ulp.cpp
     test_tanh_bw_ulp.cpp
     test_tanh_fw_ulp.cpp
+    test_pack_scalar_into_uint32.cpp
     test_work_split_tilize.cpp
     test_runtime_length.cpp
     test_hash_without_rows.cpp
