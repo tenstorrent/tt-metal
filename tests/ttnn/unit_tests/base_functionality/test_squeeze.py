@@ -204,19 +204,19 @@ def _docstring_shard_layouts(op):
         return [pytest.param(reason, id="docstring-unreadable")]
 
 
-def _assert_squeeze_like_torch(input_tensor, dim):
-    """Squeezes ``input_tensor`` and checks the output against ``torch.squeeze`` and the input's dtype, layout and
-    memory configuration."""
-    output = ttnn.squeeze(input_tensor, dim)
-    expected = ttnn.to_torch(input_tensor)
+def _assert_squeeze_like_torch(input_tensor, dim, read=ttnn.to_torch):
+    """Squeezes ``input_tensor`` and checks the output against ``torch.squeeze`` of the input's values, read before the
+    squeeze, and the input's dtype, layout and memory configuration. ``read`` brings a tensor's values to host."""
+    expected = read(input_tensor)
     expected = torch.squeeze(expected) if dim is None else torch.squeeze(expected, dim)
+    output = ttnn.squeeze(input_tensor, dim)
 
     assert output.dtype == input_tensor.dtype
     assert output.layout == input_tensor.layout
     assert output.memory_config().memory_layout == input_tensor.memory_config().memory_layout
     assert output.memory_config().buffer_type == input_tensor.memory_config().buffer_type
     assert output.memory_config().shard_spec == input_tensor.memory_config().shard_spec
-    assert_exact(expected, ttnn.to_torch(output))
+    assert_exact(expected, read(output))
     return output
 
 
@@ -232,6 +232,14 @@ def test_squeeze_docstring_supported_inputs(dtype, layout, buffer_type, device):
     for dim in _VIEW_DIMS:
         output = _assert_squeeze_like_torch(input_tensor, dim)
         assert output.buffer_address() == input_tensor.buffer_address()
+
+    # A rank-0 input has no dims to remove: dim 0 and -1, and no dim, return it unchanged.
+    x = full_range_input((64,), dtype)[:1].reshape(())
+    scalar = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
+    for dim in (None, 0, -1):
+        output = _assert_squeeze_like_torch(scalar, dim)
+        assert list(output.shape) == []
+        assert output.buffer_address() == scalar.buffer_address()
 
     # Removing the last dim, or the second-to-last dim of a TILE input, moves data. Removing the last dim regroups
     # block-float values, so block floats get values with one exponent.
