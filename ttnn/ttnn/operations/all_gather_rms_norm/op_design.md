@@ -465,3 +465,13 @@ Zone breakdown of the focus case (profiler on; one call): kernel start ≈ 2.8 �
 5.0 µs, fabric send ≈ 12.3 µs per port (≈ 30 GB/s = 62 % of a link: TRANSPORT), last wave lands ≈ 18.7 µs, tail
 after the last landing ≈ 5.8 µs (moments 1 µs, exchange + combine ≈ 1.1 µs, normalize ≈ 3 µs, last store
 ≈ 0.5 µs: OVERLAP).
+
+## Verification notes (Phase 0 verifier)
+
+| Item | Finding | Disposition |
+|---|---|---|
+| FPU normalize chain (`DestReuseBcast`, rms gamma and the LN FPU path) | DEST → srcA moved the fp32 intermediate in the chain head's srcA format (cb_x: bf16 / bf8b), truncating it at every dest-reuse step: per-row scale bias −0.6 % (LN, 4 steps), −0.3 % (rms bf16); the SFPU LN path was unbiased | fixed: the first dest-reuse step of a chain switches srcA (unpack + math) to the DEST width, the last restores cb_x's (a math-only switch was measured ineffective). LN bf16 rel RMS 0.0072 → 0.0019, rms bf16 0.0042 → 0.0019; cost +0.17 µs on the indexer LN case (16.16 → 16.33), +0.05 µs on the focus case |
+| EXCLUSIONS carried from the base op | `{bfloat8_b, h_non_aligned}` measured unnecessary (row-local norm, the H tail is never zero-filled: 241 / 241 sampled cells pass); `{bfloat8_b, w_non_aligned}` measured necessary (238 / 238 inf) | the first dropped, the second kept |
+| k > 8 owner combine (base op R3) | deferred by the implementer (candidates capped at 8) | the decode / wide-hidden shapes with L1-sharded I/O (and 128×8192 interleaved LN) OOM in `select_split`: op_requirements.md Refinement 1 |
+| LN with `fp32_dest_acc_en=False` | per-row offset rms 0.012–0.020 (μ rounded to bf16 before x − μ) + per-row scale +1 % (16-bit variance accumulation); residual after both 0.003 | op_requirements.md Refinement 2 (two-word mean through the Chan combine; variance accumulation order) |
+| Zone breakdown, indexer LN case (single un-traced call, least-skewed chip) | last landing ≈ 14.8 µs after the first zone; local LN tail after it ≈ 8.5 µs (moments 1.5–3, k = 1 Chan combine ≈ 3.4 µs of full-tile SFPU on column-0 data, normalize ≈ 1.7, store) | op_requirements.md perf refinements |

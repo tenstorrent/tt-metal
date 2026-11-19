@@ -56,6 +56,17 @@
 using namespace compute_kernel_lib;
 using namespace agrms_cb;
 
+#ifdef AGRMS_HAS_GAMMA
+constexpr bool kHasGamma = true;
+#else
+constexpr bool kHasGamma = false;
+#endif
+#ifdef AGRMS_HAS_BETA
+constexpr bool kHasBeta = true;
+#else
+constexpr bool kHasBeta = false;
+#endif
+
 constexpr uint32_t w_split_cores = get_compile_time_arg_val(0);
 constexpr uint32_t pitch = get_compile_time_arg_val(1);
 constexpr uint32_t n_stat = get_compile_time_arg_val(2);
@@ -208,7 +219,13 @@ ALWI void sum_squares_block(uint32_t rows, uint32_t core_w, uint32_t stride) {
 // Generalizes the base op's MulGammaRowBcast (compute_kernel_lib::DestReuseBinary has no BroadcastDim): ROW reads
 // row 0 of faces 0/1 (gamma / beta pages), COL reads column 0 (per-row statistics). Inherits every chain trait
 // (waits, srcB reconfig fold, tile addressing) from DestReuseBinary; init/exec replaced.
-template <EltwiseBinaryType Op, BroadcastType BT, InputSpec In>
+// SrcaIn / SrcaOut: DEST -> srcA moves the intermediate in the CURRENT math-side srcA format, i.e. the chain head's
+// (cb_x: bf16 / bfloat8_b). Left alone, every dest-reuse step truncates the fp32 DEST value to that 16-bit format
+// (measured: -0.15 % per step, a -0.6 % per-row scale bias on the 4-step LN normalize chain, -0.3 % on rms). The first
+// dest-reuse step of a chain (SrcaIn) switches the math-side srcA format to the DEST width (cb_rowstat = T_acc) and the
+// last one (SrcaOut) restores the chain head's (cb_x) for the next tile (unpack + math: a math-only switch leaves
+// the bias in place, measured); a no-op when the formats agree (fp32 input, or 16-bit DEST).
+template <EltwiseBinaryType Op, BroadcastType BT, InputSpec In, bool SrcaIn = true, bool SrcaOut = true>
 struct DestReuseBcast : DestReuseBinary<
                             (Op == EltwiseBinaryType::ELWMUL ? BinaryFpuOp::Mul : BinaryFpuOp::Add),
                             In,
@@ -234,9 +251,15 @@ struct DestReuseBcast : DestReuseBinary<
             compute_kernel_lib::detail::input_idx<Base::Mapping, Base::Wait, Base::Pop, Base::Addressing>(
                 i_flat, ht, wt, this->row_stride);
         const uint32_t dst = to_u32(Base::DstSlot) + slot_offset;
+        if constexpr (SrcaIn) {
+            reconfig_data_format_srca(cb_x, cb_rowstat);
+        }
         UNPACK((llk_unpack_A<BT, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(GCb, in_idx)));
         MATH((llk_math_eltwise_binary<Op, BT, DST_ACCUM_MODE, MATH_FIDELITY, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
             GCb, GCb, dst, true)));
+        if constexpr (SrcaOut) {
+            reconfig_data_format_srca(cb_rowstat, cb_x);
+        }
     }
 };
 template <InputSpec In>
@@ -407,6 +430,15 @@ ALWI void copy_d(uint32_t from, uint32_t to) {
     copy_dest_values_init();
     copy_dest_values<DST_ACCUM_MODE ? DataFormat::Float32 : DataFormat::Float16_b>(from, to);
 }
+
+// reduce() post-op: DEST tile *= scalar (fp32 bits), e.g. sum x -> mean with 1/n_m
+struct MulScalar {
+    uint32_t bits;
+    ALWI void operator()(uint32_t dst) const {
+        binop_with_scalar_tile_init();
+        mul_unary_tile(dst, bits);
+    }
+};
 
 // pass A: per tile-row sum of the member's x tiles (fp32 DEST) -> cb_moment_a
 ALWI void sum_x_block(uint32_t rows, uint32_t core_w) {
@@ -602,14 +634,6 @@ ALWI void combine_block(uint32_t rows, uint32_t inv_w_bits, uint32_t eps_bits, u
 #ifdef AGRMS_LN_FPU
 // ---- FPU fast path (tile-aligned bf16 / bfloat8_b input: x and the bf16 pivots are exact FPU operands, so
 // x - K is exact in DEST; no slice tail to mask). Same statistics as the SFPU path, a fraction of the inits. ----
-struct MulScalarPost {
-    uint32_t bits;
-    ALWI void operator()(uint32_t dst) const {
-        binop_with_scalar_tile_init();
-        mul_unary_tile(dst, bits);
-    }
-};
-
 // pass A: K_m = bf16(sum x / n_m) — one reduce over the resident block (row stride = pitch, x stays resident)
 ALWI void pivot_block_fpu(uint32_t rows, uint32_t core_w, uint32_t inv_n_bits) {
     reduce<
@@ -625,7 +649,7 @@ ALWI void pivot_block_fpu(uint32_t rows, uint32_t core_w, uint32_t inv_n_bits) {
         ReduceInputBlockShape::of(rows, core_w),
         ReduceInputMemoryLayout::with_row_stride(pitch),
         NoAccumulation{},
-        MulScalarPost{inv_n_bits});
+        MulScalar{inv_n_bits});
 }
 
 // pass B: c' = x - K_m (FPU, bcast col) -> cb_cent (accumulator format); D1 = row-reduce(c') (block reduce),
@@ -688,13 +712,18 @@ ALWI void normalize_block(uint32_t rows, uint32_t core_w) {
     eltwise_chain(
         IterationShape::grid(rows, core_w),
         BinaryFpu<BinaryFpuOp::Sub, x_in, kg_in>{StridedTileRange{0, pitch}},
-        DestReuseBcast<EltwiseBinaryType::ELWMUL, BroadcastType::COL, inv_in>{},
-        DestReuseBcast<EltwiseBinaryType::ELWADD, BroadcastType::COL, shift_in>{},
+        // srcA switched to the DEST width once (first step) and restored once (last step), see DestReuseBcast
+        DestReuseBcast<EltwiseBinaryType::ELWMUL, BroadcastType::COL, inv_in, true, false>{},
+        DestReuseBcast < EltwiseBinaryType::ELWADD,
+        BroadcastType::COL,
+        shift_in,
+        false,
+        !kHasGamma && !kHasBeta > {},
 #ifdef AGRMS_HAS_GAMMA
-        DestReuseBcast<EltwiseBinaryType::ELWMUL, BroadcastType::ROW, gamma_in>{},
+        DestReuseBcast<EltwiseBinaryType::ELWMUL, BroadcastType::ROW, gamma_in, false, !kHasBeta>{},
 #endif
 #ifdef AGRMS_HAS_BETA
-        DestReuseBcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW, beta_in>{},
+        DestReuseBcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW, beta_in, false, true>{},
 #endif
         PackTile<output(norm_out_cb)>{});
 }
@@ -736,14 +765,6 @@ ALWI void normalize_block(uint32_t rows, uint32_t core_w) {
         PackTile<output(norm_out_cb), Dst::D0>{});
 }
 #endif  // AGRMS_LN_FPU
-
-struct MulScalar {
-    uint32_t bits;
-    ALWI void operator()(uint32_t dst) const {
-        binop_with_scalar_tile_init();
-        mul_unary_tile(dst, bits);
-    }
-};
 
 void kernel_main() {
     const uint32_t rows = arg(0);

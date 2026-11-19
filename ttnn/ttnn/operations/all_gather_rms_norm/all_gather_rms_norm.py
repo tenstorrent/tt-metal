@@ -86,9 +86,11 @@ SUPPORTED = {
 EXCLUSIONS = [
     # Precision convention: float32 input requires fp32 DEST accumulation.
     {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
-    # bfloat8_b is block-quantized: the slice-tail zero fill is element-addressed (base op exclusion).
+    # bfloat8_b is block-quantized: the slice-tail zero fill (reader) and the dense assembly are element-addressed,
+    # so a non-aligned W_local corrupts the shared-exponent blocks (measured: 238/238 sampled cells inf). Base op
+    # exclusion, re-measured necessary here. The base op's {bfloat8_b, h_non_aligned} exclusion is NOT carried: the
+    # norm is row-local and the H tail is never zero-filled (measured: 241/241 sampled cells pass).
     {"dtype": ttnn.bfloat8_b, "alignment": "w_non_aligned"},
-    {"dtype": ttnn.bfloat8_b, "alignment": "h_non_aligned"},
 ]
 
 

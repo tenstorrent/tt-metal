@@ -5,7 +5,12 @@ Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes (
 **wave** (transport order of row-groups), **link / direction** (port identity). Group is per chip and never
 appears in a buffer. `rows = core_row_tiles_max`, `mw = member_w_tiles_max`, `n_stat` = 1 (rms) / 2 (ln).
 
-## Compute cores
+## Compute cores (planned inventory)
+
+> Verifier note: this table is the PLANNED inventory. The authoritative as-built rows (sizes, formats, CB indices)
+> are in "As built" at the end, which the code's `cb_plan()` matches; rows below that the as-built table changes
+> (`cb_out` sizing, `cb_pivot` split, `cb_tail_mask` format, `cb_out_dense`) are superseded there.
+
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
@@ -64,9 +69,13 @@ Terms scaling with the knobs: `rows · mw` (cb_x, and cb_out in the dense regime
 grows with the W split; everything else is ≤ a few tiles per tile-row. `resident_fits(k) := footprint(k, rows(k)) ≤
 cb_l1_budget(device)`; for port cores the footprint is `rows·mw·T_in + 2·port_batch_chunks·chunk_pages·T_in`.
 
-Focus case (640×384 bf16, k = 4, rows = 1, mw = 12, fp32 DEST, gamma RM bf16): cb_x 24 KB + gamma ≈ 2 KB +
-constants 2 KB + moments 4 KB + partial 4 KB + gathered 16 KB + rowstat 4 KB + out 2·12·2 KB = 48 KB → ≈ 104 KB per
-compute core. Port: 24 KB + 2·4·7·2 KB = 136 KB.
+Focus case (640×384 bf16, k = 4, rows = 1, mw = 12, fp32 DEST, gamma RM bf16), as built (`cb_plan()`, verifier):
+cb_x 24,576 + cb_gamma 24,576 (12 FULL-tile pages, only row 0 used) + cb_ones 2,048 + cb_moment_a 4,096 + cb_partial
+4,096 + cb_gathered 16,384 + cb_rowstat 4,096 + cb_out 2·4·2,048 = 16,384 + cb_affine_stage 1,792 = **98,048 B** per
+compute core. Port: cb_x 24,576 + cb_port_stage 2·4·7·2,048 = 114,688 → 139,264 B.
+Indexer LN case (640×32 bf16, k = 1, pitch 4, gamma + beta RM bf16, LN FPU path), per compute core after the
+verifier fixes below: 89,216 B (was 105,600 B: cb_out capped at the 4-tile block, cb_moment_a dropped,
+cb_moment_b = rows).
 
 ## Data-movement budget (focus case: G = 4 ring, 2 links, S = 640·384·2 B = 491,520 B per slice)
 
@@ -120,3 +129,16 @@ Single source of truth: `cb_plan()` in `all_gather_rms_norm_program_descriptor.p
 Data-movement budget: unchanged from the plan (DRAM: x read once by the own members, output written once; fabric:
 raw slices, balanced ring schedule; cross-core: port L1 reads of outgoing runs, k-member partial exchange, dense
 foreign contributions).
+
+## Verifier deltas (Phase 0 verification)
+
+| CB | Change | Why |
+|---|---|---|
+| `cb_moment_a` (6) | not allocated on the LN FPU path (`AGRMS_LN_FPU`) | dead on that path: the pivot reduce goes `cb_x` → `cb_km` directly (rms and the LN SFPU path keep it) |
+| `cb_moment_b` (7) | `rows` pages on the LN FPU path (was `2·rows`) | the FPU path pushes only D2 tiles (D1 goes `cb_cent` → `cb_mstat`); the SFPU path keeps `(D1, D2)` pairs |
+| `cb_out` (12, aligned) | `min(OUT_DEPTH·out_unit, rows·pitch)` | capacity never exceeds the member block (indexer: 4 pages instead of 8); compute reserves per tile, the writer ring clamps at the CB end. The writer's ring size CT arg now reads `cb_plan()[CB_OUT]` (it restated `OUT_DEPTH·unit`: DRY) |
+
+Open (folded into op_requirements.md Refinement 1, the L1-fit refinement): `cb_gamma` / `cb_beta` FULL-tile pages
+for row-0 data (24 KB on the focus case vs ~2.3 KB with the base op's compact 192 B stride); `cb_moment_a` /
+`cb_moment_b` on the LN SFPU path are live-disjoint (pass A is popped before pass B packs) and could alias — the
+"kept separate for clarity" justification above is not a mechanism reason.

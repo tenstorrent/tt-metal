@@ -1,0 +1,891 @@
+{
+ "note": "Compact copy of eval.verify_supported output (full report: generated/agv/merged/verifier_report.json, not committed: 14.7 MB). Golden coverage = 6 CRC32 hash slices of the matrix + all ring-mock / regression / loose tests + targeted re-runs (see verification_report.md).",
+ "summary": {
+  "total": 17389,
+  "supported_pass": 2357,
+  "supported_fail": 174,
+  "supported_marked_xfail": 0,
+  "supported_skipped": 0,
+  "supported_other": 0,
+  "xfail_expected": 644,
+  "xpass_drift": 0,
+  "xfail_wrong_mode": 0,
+  "xfail_other": 0,
+  "invalid_skipped": 13999,
+  "invalid_unexpected": 0,
+  "infeasible_skipped": 55,
+  "no_axes_found": 160
+ },
+ "supported_fail": [
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x640x384-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999924 (target 0.999) rel_rms=0.015155 (target 0.015) inf=False nan=False worst_device=(0,1) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x384-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999891 (target 0.999) rel_rms=0.018147 (target 0.015) inf=False nan=False worst_device=(1,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x640x1792-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999901 (target 0.999) rel_rms=0.016191 (target 0.015) inf=False nan=False worst_device=(0,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x640x1536-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999916 (target 0.999) rel_rms=0.016364 (target 0.015) inf=False nan=False worst_device=(0,1) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x1792-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999768 (target 0.999) rel_rms=0.024386 (target 0.015) inf=False nan=False worst_device=(1,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x1280-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999840 (target 0.999) rel_rms=0.020952 (target 0.015) inf=False nan=False worst_device=(0,1)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x2048x1280-alignment=tile_aligned-beta_mode=beta-cluster_axis=1-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "OOM",
+   "message": "RuntimeError: all_gather_rms_norm: no member split fits L1 (credited streaming regime is deferred): candidates [1, 2, 4, 6, 8], budget 641920 B, (k, rows, compute B, port B): [(1, 1, 1048960, 425984),"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x8x1792-alignment=h_non_aligned-beta_mode=beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999904 (target 0.999) rel_rms=0.015992 (target 0.015) inf=False nan=False worst_device=(0,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x17x1280-alignment=h_non_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999777 (target 0.999) rel_rms=0.023599 (target 0.015) inf=False nan=False worst_device=(0,1)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x17x1280-alignment=h_non_aligned-beta_mode=beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999850 (target 0.999) rel_rms=0.018449 (target 0.015) inf=False nan=False worst_device=(0,1) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x100x512-alignment=h_non_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999889 (target 0.999) rel_rms=0.020097 (target 0.015) inf=False nan=False worst_device=(0,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999885 (target 0.999) rel_rms=0.019021 (target 0.015) inf=False nan=False worst_device=(0,1) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-beta_mode=beta-cluster_axis=0-dtype=BFLOAT8_B-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "OOM",
+   "message": "RuntimeError: all_gather_rms_norm: no member split fits L1 (credited streaming regime is deferred): candidates [1, 2, 4, 6, 8], budget 461696 B, (k, rows, compute B, port B): [(1, 1, 4866560, 670208),"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[2x4x128x512-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999906 (target 0.999) rel_rms=0.017515 (target 0.015) inf=False nan=False worst_device=(0,1)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[2x4x128x512-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999905 (target 0.999) rel_rms=0.017529 (target 0.015) inf=False nan=False worst_device=(0,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x32x384-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=1-rank=3-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999890 (target 0.999) rel_rms=0.016737 (target 0.015) inf=False nan=False worst_device=(1,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x640x1792-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=1-rank=3-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999903 (target 0.999) rel_rms=0.017664 (target 0.015) inf=False nan=False worst_device=(0,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x640x1792-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=2-rank=3-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999907 (target 0.999) rel_rms=0.017863 (target 0.015) inf=False nan=False worst_device=(0,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x32x4096-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=rms_norm-num_links=2-rank=3-topology=Linear]",
+   "failure_category": "OOM",
+   "message": "RuntimeError: all_gather_rms_norm: no member split fits L1 (credited streaming regime is deferred): candidates [1, 2, 4, 6, 8], budget 248704 B, (k, rows, compute B, port B): [(1, 1, 1624448, 638976),"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x32x4096-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=1-rank=3-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999924 (target 0.999) rel_rms=0.016967 (target 0.015) inf=False nan=False worst_device=(0,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x32x4096-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=2-rank=3-topology=Linear]",
+   "failure_category": "OOM",
+   "message": "RuntimeError: all_gather_rms_norm: no member split fits L1 (credited streaming regime is deferred): candidates [1, 2, 4, 6, 8], budget 248704 B, (k, rows, compute B, port B): [(1, 1, 1636736, 638976),"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[32x2048-alignment=tile_aligned-beta_mode=beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=2-rank=2-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999895 (target 0.999) rel_rms=0.015953 (target 0.015) inf=False nan=False worst_device=(1,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=1-rank=2-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999883 (target 0.999) rel_rms=0.019098 (target 0.015) inf=False nan=False worst_device=(0,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x384-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=none-gamma_layout=none-gamma_mode=no_gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999910 (target 0.999) rel_rms=0.017411 (target 0.015) inf=False nan=False worst_device=(1,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x512-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999851 (target 0.999) rel_rms=0.019539 (target 0.015) inf=False nan=False worst_device=(0,1)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x512-alignment=tile_aligned-beta_mode=beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999895 (target 0.999) rel_rms=0.017103 (target 0.015) inf=False nan=False worst_device=(0,1) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x640x1792-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999906 (target 0.999) rel_rms=0.016350 (target 0.015) inf=False nan=False worst_device=(0,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x640x1792-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=none-gamma_layout=none-gamma_mode=no_gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999910 (target 0.999) rel_rms=0.017078 (target 0.015) inf=False nan=False worst_device=(0,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x640x896-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999895 (target 0.999) rel_rms=0.016541 (target 0.015) inf=False nan=False worst_device=(0,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x640x896-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999907 (target 0.999) rel_rms=0.017731 (target 0.015) inf=False nan=False worst_device=(1,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x1792-alignment=tile_aligned-beta_mode=beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999855 (target 0.999) rel_rms=0.018867 (target 0.015) inf=False nan=False worst_device=(1,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x2048-alignment=tile_aligned-beta_mode=beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999897 (target 0.999) rel_rms=0.017194 (target 0.015) inf=False nan=False worst_device=(1,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x1280-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999765 (target 0.999) rel_rms=0.024560 (target 0.015) inf=False nan=False worst_device=(0,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x1280-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=none-gamma_layout=none-gamma_mode=no_gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999769 (target 0.999) rel_rms=0.025345 (target 0.015) inf=False nan=False worst_device=(0,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x2048x1280-alignment=tile_aligned-beta_mode=beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999869 (target 0.999) rel_rms=0.017462 (target 0.015) inf=False nan=False worst_device=(1,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x2048x1280-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999815 (target 0.999) rel_rms=0.022311 (target 0.015) inf=False nan=False worst_device=(1,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x1x384-alignment=h_non_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999715 (target 0.999) rel_rms=0.024010 (target 0.015) inf=False nan=False worst_device=(0,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x8x1792-alignment=h_non_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999862 (target 0.999) rel_rms=0.019996 (target 0.015) inf=False nan=False worst_device=(0,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x17x1280-alignment=h_non_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=none-gamma_layout=none-gamma_mode=no_gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999782 (target 0.999) rel_rms=0.025669 (target 0.015) inf=False nan=False worst_device=(0,1) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x4096-alignment=tile_aligned-beta_mode=beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999899 (target 0.999) rel_rms=0.016585 (target 0.015) inf=False nan=False worst_device=(1,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-beta_mode=beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "OOM",
+   "message": "RuntimeError: all_gather_rms_norm: OOM: no member split fits L1 (k > 8 owner combine and the credited streaming regime are deferred): candidates [1, 2, 4, 6, 8], budget 854912 B, (k, rows, compute B, "
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=none-gamma_layout=none-gamma_mode=no_gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999897 (target 0.999) rel_rms=0.019929 (target 0.015) inf=False nan=False worst_device=(0,1) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT8_B-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "OOM",
+   "message": "RuntimeError: all_gather_rms_norm: OOM: no member split fits L1 (k > 8 owner combine and the credited streaming regime are deferred): candidates [1, 2, 4, 6, 8], budget 19328 B, (k, rows, compute B, p"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x32x384-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=1-rank=3-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999868 (target 0.999) rel_rms=0.019488 (target 0.015) inf=False nan=False worst_device=(0,1)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x32x384-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=1-rank=3-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999868 (target 0.999) rel_rms=0.019488 (target 0.015) inf=False nan=False worst_device=(0,1)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x640x1792-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=2-rank=3-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999903 (target 0.999) rel_rms=0.017664 (target 0.015) inf=False nan=False worst_device=(0,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x32x4096-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=1-rank=3-topology=Linear]",
+   "failure_category": "OOM",
+   "message": "RuntimeError: all_gather_rms_norm: OOM: no member split fits L1 (k > 8 owner combine and the credited streaming regime are deferred): candidates [1, 2, 4, 6, 8], budget 68480 B, (k, rows, compute B, p"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x32x4096-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=rms_norm-num_links=2-rank=3-topology=Linear]",
+   "failure_category": "OOM",
+   "message": "RuntimeError: all_gather_rms_norm: OOM: no member split fits L1 (k > 8 owner combine and the credited streaming regime are deferred): candidates [1, 2, 4, 6, 8], budget 68480 B, (k, rows, compute B, p"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x32x4096-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=none-gamma_layout=none-gamma_mode=no_gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=1-rank=3-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999926 (target 0.999) rel_rms=0.016116 (target 0.015) inf=False nan=False worst_device=(0,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[640x384-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=2-rank=2-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999910 (target 0.999) rel_rms=0.015809 (target 0.015) inf=False nan=False worst_device=(0,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[32x2048-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=rms_norm-num_links=1-rank=2-topology=Linear]",
+   "failure_category": "OOM",
+   "message": "RuntimeError: all_gather_rms_norm: OOM: no member split fits L1 (k > 8 owner combine and the credited streaming regime are deferred): candidates [1, 2, 4, 6, 8], budget 68480 B, (k, rows, compute B, p"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[32x2048-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=1-rank=2-topology=Linear]",
+   "failure_category": "OOM",
+   "message": "RuntimeError: all_gather_rms_norm: OOM: no member split fits L1 (k > 8 owner combine and the credited streaming regime are deferred): candidates [1, 2, 4, 6, 8], budget 68480 B, (k, rows, compute B, p"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-beta_mode=beta-cluster_axis=1-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=2-rank=2-topology=Linear]",
+   "failure_category": "OOM",
+   "message": "RuntimeError: all_gather_rms_norm: OOM: no member split fits L1 (k > 8 owner combine and the credited streaming regime are deferred): candidates [1, 2, 4, 6, 8], budget 854912 B, (k, rows, compute B, "
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-beta_mode=beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=1-rank=2-topology=Linear]",
+   "failure_category": "OOM",
+   "message": "RuntimeError: all_gather_rms_norm: OOM: no member split fits L1 (k > 8 owner combine and the credited streaming regime are deferred): candidates [1, 2, 4, 6, 8], budget 854912 B, (k, rows, compute B, "
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=1-rank=2-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999901 (target 0.999) rel_rms=0.017260 (target 0.015) inf=False nan=False worst_device=(0,1)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT8_B-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=rms_norm-num_links=2-rank=2-topology=Linear]",
+   "failure_category": "OOM",
+   "message": "RuntimeError: all_gather_rms_norm: OOM: no member split fits L1 (k > 8 owner combine and the credited streaming regime are deferred): candidates [1, 2, 4, 6, 8], budget 19328 B, (k, rows, compute B, p"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT8_B-fp32_dest_acc_en=False-gamma_dtype=none-gamma_layout=none-gamma_mode=no_gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=2-rank=2-topology=Linear]",
+   "failure_category": "OOM",
+   "message": "RuntimeError: all_gather_rms_norm: OOM: no member split fits L1 (k > 8 owner combine and the credited streaming regime are deferred): candidates [1, 2, 4, 6, 8], budget 19328 B, (k, rows, compute B, p"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x640x384-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999910 (target 0.999) rel_rms=0.015809 (target 0.015) inf=False nan=False worst_device=(0,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x640x384-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999924 (target 0.999) rel_rms=0.015155 (target 0.015) inf=False nan=False worst_device=(0,1) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x384-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999868 (target 0.999) rel_rms=0.019488 (target 0.015) inf=False nan=False worst_device=(0,1)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x512-alignment=tile_aligned-beta_mode=beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999895 (target 0.999) rel_rms=0.017103 (target 0.015) inf=False nan=False worst_device=(0,1) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x640x1792-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999901 (target 0.999) rel_rms=0.016191 (target 0.015) inf=False nan=False worst_device=(0,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x640x1536-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999919 (target 0.999) rel_rms=0.015067 (target 0.015) inf=False nan=False worst_device=(1,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x640x896-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=none-gamma_layout=none-gamma_mode=no_gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999909 (target 0.999) rel_rms=0.016975 (target 0.015) inf=False nan=False worst_device=(1,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x1792-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999768 (target 0.999) rel_rms=0.024386 (target 0.015) inf=False nan=False worst_device=(1,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x1792-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999830 (target 0.999) rel_rms=0.023185 (target 0.015) inf=False nan=False worst_device=(0,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x2048x1280-alignment=tile_aligned-beta_mode=beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999869 (target 0.999) rel_rms=0.017462 (target 0.015) inf=False nan=False worst_device=(1,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x1x384-alignment=h_non_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999715 (target 0.999) rel_rms=0.024010 (target 0.015) inf=False nan=False worst_device=(0,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x8x1792-alignment=h_non_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999843 (target 0.999) rel_rms=0.023261 (target 0.015) inf=False nan=False worst_device=(1,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x17x1280-alignment=h_non_aligned-beta_mode=beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999850 (target 0.999) rel_rms=0.018449 (target 0.015) inf=False nan=False worst_device=(0,1) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x17x1280-alignment=h_non_aligned-beta_mode=beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999852 (target 0.999) rel_rms=0.019447 (target 0.015) inf=False nan=False worst_device=(0,1) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x17x1280-alignment=h_non_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=none-gamma_layout=none-gamma_mode=no_gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999782 (target 0.999) rel_rms=0.025669 (target 0.015) inf=False nan=False worst_device=(0,1) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x100x512-alignment=h_non_aligned-beta_mode=beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999903 (target 0.999) rel_rms=0.015087 (target 0.015) inf=False nan=False worst_device=(0,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x4096-alignment=tile_aligned-beta_mode=beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "OOM",
+   "message": "RuntimeError: all_gather_rms_norm: OOM: no member split fits L1 (k > 8 owner combine and the credited streaming regime are deferred): candidates [1, 2, 4, 6, 8], budget 215552 B, (k, rows, compute B, "
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x4096-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999857 (target 0.999) rel_rms=0.019081 (target 0.015) inf=False nan=False worst_device=(1,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-beta_mode=beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999916 (target 0.999) rel_rms=0.015262 (target 0.015) inf=False nan=False worst_device=(0,1) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=none-gamma_layout=none-gamma_mode=no_gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999897 (target 0.999) rel_rms=0.019929 (target 0.015) inf=False nan=False worst_device=(0,1) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x64x1000-alignment=w_non_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999816 (target 0.999) rel_rms=0.023487 (target 0.015) inf=False nan=False worst_device=(0,1) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x64x1000-alignment=w_non_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999786 (target 0.999) rel_rms=0.024233 (target 0.015) inf=False nan=False worst_device=(1,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x32x384-alignment=tile_aligned-beta_mode=beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=1-rank=3-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999910 (target 0.999) rel_rms=0.015641 (target 0.015) inf=False nan=False worst_device=(0,1) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x32x384-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=none-gamma_layout=none-gamma_mode=no_gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=1-rank=3-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999881 (target 0.999) rel_rms=0.018806 (target 0.015) inf=False nan=False worst_device=(0,1)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x640x1792-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=1-rank=3-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999901 (target 0.999) rel_rms=0.016191 (target 0.015) inf=False nan=False worst_device=(0,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x32x4096-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=rms_norm-num_links=1-rank=3-topology=Linear]",
+   "failure_category": "OOM",
+   "message": "RuntimeError: all_gather_rms_norm: OOM: no member split fits L1 (k > 8 owner combine and the credited streaming regime are deferred): candidates [1, 2, 4, 6, 8], budget 150016 B, (k, rows, compute B, "
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x32x4096-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=2-rank=3-topology=Linear]",
+   "failure_category": "OOM",
+   "message": "RuntimeError: all_gather_rms_norm: OOM: no member split fits L1 (k > 8 owner combine and the credited streaming regime are deferred): candidates [1, 2, 4, 6, 8], budget 150016 B, (k, rows, compute B, "
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x32x4096-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=none-gamma_layout=none-gamma_mode=no_gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=3-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999926 (target 0.999) rel_rms=0.016116 (target 0.015) inf=False nan=False worst_device=(0,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x32x4096-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=none-gamma_layout=none-gamma_mode=no_gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=1-rank=3-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999863 (target 0.999) rel_rms=0.019780 (target 0.015) inf=False nan=False worst_device=(1,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[640x384-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=1-rank=2-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999924 (target 0.999) rel_rms=0.015155 (target 0.015) inf=False nan=False worst_device=(0,1) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[640x384-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=1-rank=2-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999912 (target 0.999) rel_rms=0.017176 (target 0.015) inf=False nan=False worst_device=(0,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[640x384-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=none-gamma_layout=none-gamma_mode=no_gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=2-rank=2-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999928 (target 0.999) rel_rms=0.015246 (target 0.015) inf=False nan=False worst_device=(0,1)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[32x2048-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=2-rank=2-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999856 (target 0.999) rel_rms=0.019496 (target 0.015) inf=False nan=False worst_device=(1,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x640x384-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999912 (target 0.999) rel_rms=0.017176 (target 0.015) inf=False nan=False worst_device=(0,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x512-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999888 (target 0.999) rel_rms=0.018111 (target 0.015) inf=False nan=False worst_device=(0,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x512-alignment=tile_aligned-beta_mode=beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999892 (target 0.999) rel_rms=0.016068 (target 0.015) inf=False nan=False worst_device=(0,1) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x640x1792-alignment=tile_aligned-beta_mode=beta-cluster_axis=0-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "OOM",
+   "message": "RuntimeError: all_gather_rms_norm: OOM: no member split fits L1 (k > 8 owner combine and the credited streaming regime are deferred): candidates [1, 2, 4, 6, 8], budget 379648 B, (k, rows, compute B, "
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x640x1536-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999916 (target 0.999) rel_rms=0.016364 (target 0.015) inf=False nan=False worst_device=(0,1) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x640x896-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=none-gamma_layout=none-gamma_mode=no_gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999909 (target 0.999) rel_rms=0.016975 (target 0.015) inf=False nan=False worst_device=(1,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x1792-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999828 (target 0.999) rel_rms=0.021680 (target 0.015) inf=False nan=False worst_device=(0,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x1792-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999768 (target 0.999) rel_rms=0.024386 (target 0.015) inf=False nan=False worst_device=(1,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x1792-alignment=tile_aligned-beta_mode=beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999855 (target 0.999) rel_rms=0.018867 (target 0.015) inf=False nan=False worst_device=(1,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x2048-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999904 (target 0.999) rel_rms=0.019237 (target 0.015) inf=False nan=False worst_device=(0,1)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x2048-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999904 (target 0.999) rel_rms=0.019237 (target 0.015) inf=False nan=False worst_device=(0,1)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x1280-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=none-gamma_layout=none-gamma_mode=no_gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999846 (target 0.999) rel_rms=0.021619 (target 0.015) inf=False nan=False worst_device=(0,1)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x2048x1280-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999815 (target 0.999) rel_rms=0.022311 (target 0.015) inf=False nan=False worst_device=(1,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x1x384-alignment=h_non_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999704 (target 0.999) rel_rms=0.024866 (target 0.015) inf=False nan=False worst_device=(0,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x17x1280-alignment=h_non_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999819 (target 0.999) rel_rms=0.022066 (target 0.015) inf=False nan=False worst_device=(0,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x17x1280-alignment=h_non_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=none-gamma_layout=none-gamma_mode=no_gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999782 (target 0.999) rel_rms=0.025669 (target 0.015) inf=False nan=False worst_device=(0,1) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x100x512-alignment=h_non_aligned-beta_mode=beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999915 (target 0.999) rel_rms=0.015507 (target 0.015) inf=False nan=False worst_device=(0,1) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT8_B-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=rms_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "OOM",
+   "message": "RuntimeError: all_gather_rms_norm: OOM: no member split fits L1 (k > 8 owner combine and the credited streaming regime are deferred): candidates [1, 2, 4, 6, 8], budget 117504 B, (k, rows, compute B, "
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT8_B-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=rms_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "OOM",
+   "message": "RuntimeError: all_gather_rms_norm: OOM: no member split fits L1 (k > 8 owner combine and the credited streaming regime are deferred): candidates [1, 2, 4, 6, 8], budget 117504 B, (k, rows, compute B, "
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[2x4x128x512-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=none-gamma_layout=none-gamma_mode=no_gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999908 (target 0.999) rel_rms=0.017678 (target 0.015) inf=False nan=False worst_device=(0,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x64x1000-alignment=w_non_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999815 (target 0.999) rel_rms=0.022136 (target 0.015) inf=False nan=False worst_device=(0,1) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x64x1000-alignment=w_non_aligned-beta_mode=beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999857 (target 0.999) rel_rms=0.018130 (target 0.015) inf=False nan=False worst_device=(1,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x32x384-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=2-rank=3-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999890 (target 0.999) rel_rms=0.016737 (target 0.015) inf=False nan=False worst_device=(1,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x32x384-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=2-rank=3-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999891 (target 0.999) rel_rms=0.018147 (target 0.015) inf=False nan=False worst_device=(1,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x32x384-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=2-rank=3-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999868 (target 0.999) rel_rms=0.019488 (target 0.015) inf=False nan=False worst_device=(0,1)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x32x384-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=none-gamma_layout=none-gamma_mode=no_gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=1-rank=3-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999881 (target 0.999) rel_rms=0.018806 (target 0.015) inf=False nan=False worst_device=(0,1)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x32x4096-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=2-rank=3-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999857 (target 0.999) rel_rms=0.019081 (target 0.015) inf=False nan=False worst_device=(1,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x32x4096-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=3-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999859 (target 0.999) rel_rms=0.020433 (target 0.015) inf=False nan=False worst_device=(1,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[32x2048-alignment=tile_aligned-beta_mode=beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=1-rank=2-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999895 (target 0.999) rel_rms=0.015953 (target 0.015) inf=False nan=False worst_device=(1,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-beta_mode=beta-cluster_axis=1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=2-rank=2-topology=Linear]",
+   "failure_category": "OOM",
+   "message": "RuntimeError: all_gather_rms_norm: OOM: no member split fits L1 (k > 8 owner combine and the credited streaming regime are deferred): candidates [1, 2, 4, 6, 8], budget 117504 B, (k, rows, compute B, "
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x384-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999866 (target 0.999) rel_rms=0.018291 (target 0.015) inf=False nan=False worst_device=(0,1)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x384-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999890 (target 0.999) rel_rms=0.016737 (target 0.015) inf=False nan=False worst_device=(1,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x640x1792-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999907 (target 0.999) rel_rms=0.017863 (target 0.015) inf=False nan=False worst_device=(0,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x640x1792-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=none-gamma_layout=none-gamma_mode=no_gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999906 (target 0.999) rel_rms=0.016908 (target 0.015) inf=False nan=False worst_device=(0,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x640x896-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=none-gamma_layout=none-gamma_mode=no_gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999900 (target 0.999) rel_rms=0.017557 (target 0.015) inf=False nan=False worst_device=(0,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x1792-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999830 (target 0.999) rel_rms=0.023185 (target 0.015) inf=False nan=False worst_device=(0,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x2048-alignment=tile_aligned-beta_mode=beta-cluster_axis=1-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "OOM",
+   "message": "RuntimeError: all_gather_rms_norm: OOM: no member split fits L1 (k > 8 owner combine and the credited streaming regime are deferred): candidates [1, 2, 4, 6, 8], budget 19328 B, (k, rows, compute B, p"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x2048-alignment=tile_aligned-beta_mode=beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999897 (target 0.999) rel_rms=0.017194 (target 0.015) inf=False nan=False worst_device=(1,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x1280-alignment=tile_aligned-beta_mode=beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999845 (target 0.999) rel_rms=0.019891 (target 0.015) inf=False nan=False worst_device=(0,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x2048x1280-alignment=tile_aligned-beta_mode=beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999871 (target 0.999) rel_rms=0.018550 (target 0.015) inf=False nan=False worst_device=(1,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x1x384-alignment=h_non_aligned-beta_mode=beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999848 (target 0.999) rel_rms=0.017465 (target 0.015) inf=False nan=False worst_device=(0,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x1x384-alignment=h_non_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999715 (target 0.999) rel_rms=0.024010 (target 0.015) inf=False nan=False worst_device=(0,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x1x384-alignment=h_non_aligned-beta_mode=beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999627 (target 0.999) rel_rms=0.027307 (target 0.015) inf=False nan=False worst_device=(0,1) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x1x384-alignment=h_non_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999704 (target 0.999) rel_rms=0.024866 (target 0.015) inf=False nan=False worst_device=(0,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x1x384-alignment=h_non_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999320 (target 0.999) rel_rms=0.036900 (target 0.015) inf=False nan=False worst_device=(0,1) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x8x1792-alignment=h_non_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999841 (target 0.999) rel_rms=0.021662 (target 0.015) inf=False nan=False worst_device=(1,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x100x512-alignment=h_non_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999887 (target 0.999) rel_rms=0.017547 (target 0.015) inf=False nan=False worst_device=(0,1)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x100x512-alignment=h_non_aligned-beta_mode=beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999906 (target 0.999) rel_rms=0.016109 (target 0.015) inf=False nan=False worst_device=(0,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x100x512-alignment=h_non_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=none-gamma_layout=none-gamma_mode=no_gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999891 (target 0.999) rel_rms=0.019289 (target 0.015) inf=False nan=False worst_device=(0,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x128x4096-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "OOM",
+   "message": "RuntimeError: all_gather_rms_norm: OOM: no member split fits L1 (k > 8 owner combine and the credited streaming regime are deferred): candidates [1, 2, 4, 6, 8], budget 248704 B, (k, rows, compute B, "
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x128x4096-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999889 (target 0.999) rel_rms=0.017769 (target 0.015) inf=False nan=False worst_device=(1,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x128x4096-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999889 (target 0.999) rel_rms=0.017769 (target 0.015) inf=False nan=False worst_device=(1,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[2x4x128x512-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999906 (target 0.999) rel_rms=0.017515 (target 0.015) inf=False nan=False worst_device=(0,1)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x32x4096-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=1-rank=3-topology=Linear]",
+   "failure_category": "OOM",
+   "message": "RuntimeError: all_gather_rms_norm: OOM: no member split fits L1 (k > 8 owner combine and the credited streaming regime are deferred): candidates [1, 2, 4, 6, 8], budget 248704 B, (k, rows, compute B, "
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[32x2048-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=1-rank=2-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999904 (target 0.999) rel_rms=0.019237 (target 0.015) inf=False nan=False worst_device=(0,1)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-beta_mode=beta-cluster_axis=0-dtype=BFLOAT8_B-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=1-rank=2-topology=Linear]",
+   "failure_category": "OOM",
+   "message": "RuntimeError: all_gather_rms_norm: OOM: no member split fits L1 (k > 8 owner combine and the credited streaming regime are deferred): candidates [1, 2, 4, 6, 8], budget 461696 B, (k, rows, compute B, "
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x640x384-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999926 (target 0.999) rel_rms=0.016054 (target 0.015) inf=False nan=False worst_device=(0,1)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x384-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999890 (target 0.999) rel_rms=0.016737 (target 0.015) inf=False nan=False worst_device=(1,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x512-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999888 (target 0.999) rel_rms=0.018111 (target 0.015) inf=False nan=False worst_device=(0,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x640x1792-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999901 (target 0.999) rel_rms=0.016191 (target 0.015) inf=False nan=False worst_device=(0,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x640x1536-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999915 (target 0.999) rel_rms=0.015309 (target 0.015) inf=False nan=False worst_device=(0,1)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x640x1536-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999915 (target 0.999) rel_rms=0.015309 (target 0.015) inf=False nan=False worst_device=(0,1)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x640x1536-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999920 (target 0.999) rel_rms=0.016631 (target 0.015) inf=False nan=False worst_device=(1,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x640x896-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999907 (target 0.999) rel_rms=0.017731 (target 0.015) inf=False nan=False worst_device=(1,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x1792-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=none-gamma_layout=none-gamma_mode=no_gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999833 (target 0.999) rel_rms=0.022415 (target 0.015) inf=False nan=False worst_device=(0,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x2048-alignment=tile_aligned-beta_mode=beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999895 (target 0.999) rel_rms=0.015953 (target 0.015) inf=False nan=False worst_device=(1,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x1280-alignment=tile_aligned-beta_mode=beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999877 (target 0.999) rel_rms=0.017432 (target 0.015) inf=False nan=False worst_device=(0,1) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x1280-alignment=tile_aligned-beta_mode=beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999842 (target 0.999) rel_rms=0.018909 (target 0.015) inf=False nan=False worst_device=(0,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x1x384-alignment=h_non_aligned-beta_mode=beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999842 (target 0.999) rel_rms=0.018230 (target 0.015) inf=False nan=False worst_device=(0,0)\nE"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x8x1792-alignment=h_non_aligned-beta_mode=beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999904 (target 0.999) rel_rms=0.015992 (target 0.015) inf=False nan=False worst_device=(0,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x17x1280-alignment=h_non_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999820 (target 0.999) rel_rms=0.023647 (target 0.015) inf=False nan=False worst_device=(0,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x17x1280-alignment=h_non_aligned-beta_mode=beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999880 (target 0.999) rel_rms=0.017657 (target 0.015) inf=False nan=False worst_device=(0,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x100x512-alignment=h_non_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=1-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999889 (target 0.999) rel_rms=0.020097 (target 0.015) inf=False nan=False worst_device=(0,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999887 (target 0.999) rel_rms=0.020776 (target 0.015) inf=False nan=False worst_device=(0,1) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "OOM",
+   "message": "RuntimeError: all_gather_rms_norm: OOM: no member split fits L1 (k > 8 owner combine and the credited streaming regime are deferred): candidates [1, 2, 4, 6, 8], budget 92928 B, (k, rows, compute B, p"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT8_B-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=rms_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "OOM",
+   "message": "RuntimeError: all_gather_rms_norm: OOM: no member split fits L1 (k > 8 owner combine and the credited streaming regime are deferred): candidates [1, 2, 4, 6, 8], budget 92928 B, (k, rows, compute B, p"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x1x64x1000-alignment=w_non_aligned-beta_mode=beta-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=2-rank=4-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999879 (target 0.999) rel_rms=0.016349 (target 0.015) inf=False nan=False worst_device=(0,1) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x640x1792-alignment=tile_aligned-beta_mode=beta-cluster_axis=0-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=2-rank=3-topology=Linear]",
+   "failure_category": "OOM",
+   "message": "RuntimeError: all_gather_rms_norm: OOM: no member split fits L1 (k > 8 owner combine and the credited streaming regime are deferred): candidates [1, 2, 4, 6, 8], budget 240384 B, (k, rows, compute B, "
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x640x1792-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=1-rank=3-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999906 (target 0.999) rel_rms=0.016350 (target 0.015) inf=False nan=False worst_device=(0,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x640x1792-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=2-rank=3-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999906 (target 0.999) rel_rms=0.016350 (target 0.015) inf=False nan=False worst_device=(0,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[1x32x4096-alignment=tile_aligned-beta_mode=beta-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-norm_type=layer_norm-num_links=1-rank=3-topology=Linear]",
+   "failure_category": "numerical-precision",
+   "message": "eval.golden_tests.all_gather_rms_norm.helpers.CheckOutputError: CheckOutputError severity=precision pcc=0.999897 (target 0.999) rel_rms=0.015475 (target 0.015) inf=False nan=False worst_device=(1,0) s"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-beta_mode=beta-cluster_axis=0-dtype=BFLOAT8_B-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=layer_norm-num_links=1-rank=2-topology=Linear]",
+   "failure_category": "OOM",
+   "message": "RuntimeError: all_gather_rms_norm: OOM: no member split fits L1 (k > 8 owner combine and the credited streaming regime are deferred): candidates [1, 2, 4, 6, 8], budget 92928 B, (k, rows, compute B, p"
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-beta_mode=beta-cluster_axis=1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-norm_type=layer_norm-num_links=1-rank=2-topology=Linear]",
+   "failure_category": "OOM",
+   "message": "RuntimeError: all_gather_rms_norm: OOM: no member split fits L1 (k > 8 owner combine and the credited streaming regime are deferred): candidates [1, 2, 4, 6, 8], budget 928512 B, (k, rows, compute B, "
+  },
+  {
+   "nodeid": "eval/golden_tests/all_gather_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-beta_mode=no_beta-cluster_axis=1-dtype=BFLOAT8_B-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-norm_type=rms_norm-num_links=2-rank=2-topology=Linear]",
+   "failure_category": "OOM",
+   "message": "RuntimeError: all_gather_rms_norm: OOM: no member split fits L1 (k > 8 owner combine and the credited streaming regime are deferred): candidates [1, 2, 4, 6, 8], budget 92928 B, (k, rows, compute B, p"
+  }
+ ]
+}

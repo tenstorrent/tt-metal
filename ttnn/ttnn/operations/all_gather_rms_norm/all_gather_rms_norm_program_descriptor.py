@@ -237,14 +237,19 @@ def out_unit_candidates(pitch: int):
 def cb_plan(sz: Sizes, k: int, pitch: int, rows: int, n_affine_slots: int, dense=None, unit=None) -> dict:
     """{cb: (pages, page_bytes)} of the compute cores (cb_x included)."""
     n_stat = 2 if sz.is_ln else 1
+    out_pages = OUT_DEPTH * (unit or out_unit(pitch))
+    if dense is None:
+        # the aligned stream never holds more than the member block (per-tile reserve in compute)
+        out_pages = min(out_pages, rows * pitch)
     plan = {
         CB_X: (rows * pitch, sz.T_in),
         CB_ONES: (1, sz.T_bf16),
-        CB_MOMENT_A: (rows, sz.T_acc),
         CB_PARTIAL: (n_stat * rows, sz.T_acc),
         CB_ROWSTAT: (rows, sz.T_acc),
-        CB_OUT: (OUT_DEPTH * (unit or out_unit(pitch)), sz.T_out),
+        CB_OUT: (out_pages, sz.T_out),
     }
+    if not sz.ln_fpu:  # rms: sum x^2 tiles; ln SFPU path: sum x tiles (the LN FPU path reduces cb_x straight to cb_km)
+        plan[CB_MOMENT_A] = (rows, sz.T_acc)
     if k > 1:
         plan[CB_GATHERED] = (n_stat * k * rows, sz.T_acc)
     if sz.has_gamma:
@@ -253,7 +258,7 @@ def cb_plan(sz: Sizes, k: int, pitch: int, rows: int, n_affine_slots: int, dense
     if sz.has_beta:
         plan[CB_BETA] = (pitch, sz.T_g)
     if sz.is_ln:
-        plan[CB_MOMENT_B] = (2 * rows, sz.T_acc)
+        plan[CB_MOMENT_B] = ((1 if sz.ln_fpu else 2) * rows, sz.T_acc)  # FPU: D2 tiles; SFPU: (D1, D2) pairs
         plan[CB_KM] = (rows, sz.T_bf16)
         plan[CB_MSTAT] = (2 * rows, sz.T_acc)
         plan[CB_SHIFT] = (rows, sz.T_acc)
@@ -324,7 +329,8 @@ def select_split(geo: Geometry, N: int, fits_fn) -> Split:
     fitting = [k for k in cands if groups(k) >= 1 and fits_fn(k, rows(k))]
     if not fitting:
         raise RuntimeError(
-            f"all_gather_rms_norm: no member split fits L1 (credited streaming regime is deferred): candidates "
+            f"all_gather_rms_norm: OOM: no member split fits L1 (k > {K_SYM_MAX} owner combine and the credited "
+            f"streaming regime are deferred): candidates "
             f"{cands}, {getattr(fits_fn, 'report', lambda: '')()}"
         )
     if geo.G * geo.sw < 2 * OCC_TILES_PER_MEMBER:
@@ -694,7 +700,7 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
         geo.out_w_tiles,
         k,
         unit,
-        OUT_DEPTH * unit,
+        cplan[CB_OUT][0],  # cb_out ring size: single source = cb_plan()
         n_stat,
         SEM_PARTIALS,
         sz.T_acc,
