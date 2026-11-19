@@ -219,18 +219,59 @@ inline void _relu_min_(T threshold) {
 // lra-constraints internal error for `max(x, vSMag(vConstIntPrgm0))`, an SFPMOV copy per row for
 // `max(vSMag(vConstIntPrgm0), x)`). The min direction compiles to exactly this stream; one raw
 // helper keeps both directions the same shape.
-template <InstrModLoadStore LOAD_STORE_MOD, bool WANT_MAX, bool INVERT>
+//
+// A throttled matmul (MM_THROTTLE > 0) programs ADDR_MOD_6 for its own MOP, and the fused-activation
+// matmul / conv kernels run matmul_block_init between the activation's init and its body, so in a
+// kernel built with MM_THROTTLE the init leaves ADDR_MOD_6 alone and the body advances Dest with a
+// TTINCRWC per row instead. That increment sits in the cycle after the row's last SFPSWAP, which
+// accepts only non-SFPU instructions, so it costs no issue slot: every row after the first loads
+// the next row (offset +2), advances Dest in the SFPSWAP shadow and stores at +0, and one
+// TTINCRWC after the loop completes the face.
+#if defined(MM_THROTTLE) && MM_THROTTLE > 0
+constexpr bool RELU_CLAMP_STORE_INCR = false;
+#else
+constexpr bool RELU_CLAMP_STORE_INCR = true;
+#endif
+
+// CLAMP_AT_ZERO adds max(., 0) against the constant zero in LREG9 after the threshold swap
+// (relu_max). SHIFTED (MM_THROTTLE only) is the load-next-row / increment-in-shadow form above.
+template <InstrModLoadStore LOAD_STORE_MOD, bool WANT_MAX, bool INVERT, bool CLAMP_AT_ZERO, bool SHIFTED>
 sfpi_inline void _clamp_row_against_lreg12_() {
-    TTI_SFPLOAD(p_sfpu::LREG0, LOAD_STORE_MOD, ADDR_MOD_3, 0);
+    static_assert(!(SHIFTED && RELU_CLAMP_STORE_INCR), "the shifted row form is the MM_THROTTLE fallback");
+    TTI_SFPLOAD(p_sfpu::LREG0, LOAD_STORE_MOD, ADDR_MOD_3, SHIFTED ? 2 : 0);
     if constexpr (INVERT) {
         TTI_SFPNOT(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
     }
     // mod1 = 9: VD = max, VC = min; mod1 = 1: VD = min, VC = max. VC = LREG12 is never written.
     TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, WANT_MAX ? 9 : sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+    if constexpr (CLAMP_AT_ZERO) {
+        TTI_SFPSWAP(0, sfpi::CREG_IDX_0, p_sfpu::LREG0, 9);
+    }
+    if constexpr (SHIFTED) {
+        TTI_INCRWC(0, 2, 0, 0);
+    }
     if constexpr (INVERT) {
         TTI_SFPNOT(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
     }
-    TTI_SFPSTORE(p_sfpu::LREG0, LOAD_STORE_MOD, ADDR_MOD_2, 0);
+    TTI_SFPSTORE(p_sfpu::LREG0, LOAD_STORE_MOD, RELU_CLAMP_STORE_INCR ? ADDR_MOD_2 : ADDR_MOD_3, 0);
+}
+
+// ITERATIONS rows of _clamp_row_against_lreg12_, leaving Dest advanced by ITERATIONS sfpi rows.
+template <InstrModLoadStore LOAD_STORE_MOD, bool WANT_MAX, bool INVERT, bool CLAMP_AT_ZERO, int ITERATIONS>
+sfpi_inline void _clamp_rows_against_lreg12_() {
+    if constexpr (RELU_CLAMP_STORE_INCR) {
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d++) {
+            _clamp_row_against_lreg12_<LOAD_STORE_MOD, WANT_MAX, INVERT, CLAMP_AT_ZERO, false>();
+        }
+    } else {
+        _clamp_row_against_lreg12_<LOAD_STORE_MOD, WANT_MAX, INVERT, CLAMP_AT_ZERO, false>();
+#pragma GCC unroll 8
+        for (int d = 1; d < ITERATIONS; d++) {
+            _clamp_row_against_lreg12_<LOAD_STORE_MOD, WANT_MAX, INVERT, CLAMP_AT_ZERO, true>();
+        }
+        TTI_INCRWC(0, 2, 0, 0);
+    }
 }
 
 // Full-range unsigned clamp against a threshold, shared by relu_min and relu_max/relu6.
@@ -258,17 +299,11 @@ inline void relu_clamp_uint(uint threshold) {
         if (static_cast<int>(threshold) >= 0) {
             // threshold MSB = 0: invert operands
             sfpi::vConstIntPrgm0 = ~threshold;
-#pragma GCC unroll 8
-            for (int d = 0; d < ITERATIONS; d++) {
-                _clamp_row_against_lreg12_<InstrModLoadStore::INT32, WANT_MAX, true /* INVERT */>();
-            }
+            _clamp_rows_against_lreg12_<InstrModLoadStore::INT32, WANT_MAX, true /* INVERT */, false, ITERATIONS>();
         } else {
             // threshold MSB = 1: SM min/max applies directly, with the roles swapped
             sfpi::vConstIntPrgm0 = threshold;
-#pragma GCC unroll 8
-            for (int d = 0; d < ITERATIONS; d++) {
-                _clamp_row_against_lreg12_<InstrModLoadStore::INT32, !WANT_MAX, false /* INVERT */>();
-            }
+            _clamp_rows_against_lreg12_<InstrModLoadStore::INT32, !WANT_MAX, false /* INVERT */, false, ITERATIONS>();
         }
     } else {
         // U16: operands are < 2^16, so the direct vUInt compare cannot overflow.
@@ -317,10 +352,12 @@ inline void relu_clamp_int(uint threshold) {
         if (is_pos_threshold) {
             sfpi::l_reg[sfpi::LRegs::LReg0].in_use();
             sfpi::vConstIntPrgm0 = static_cast<int>(threshold);
-#pragma GCC unroll 8
-            for (int d = 0; d < ITERATIONS; d++) {
-                _clamp_row_against_lreg12_<InstrModLoadStore::INT32_2S_COMP, true /* WANT_MAX */, false>();
-            }
+            _clamp_rows_against_lreg12_<
+                InstrModLoadStore::INT32_2S_COMP,
+                true /* WANT_MAX */,
+                false,
+                false,
+                ITERATIONS>();
         } else {
 #pragma GCC unroll 8
             for (int d = 0; d < ITERATIONS; d++) {
@@ -339,15 +376,14 @@ inline void relu_clamp_int(uint threshold) {
         if (is_pos_threshold) {
             sfpi::l_reg[sfpi::LRegs::LReg0].in_use();
             sfpi::vConstIntPrgm0 = static_cast<int>(threshold);
-#pragma GCC unroll 8
-            for (int d = 0; d < ITERATIONS; d++) {
-                TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_3, 0);
-                // LREG0 = min(x, threshold), then LREG0 = max(LREG0, 0) against the constant zero
-                // in LREG9 (mod1 = 9: VD = max; the constant VC is never written).
-                TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
-                TTI_SFPSWAP(0, sfpi::CREG_IDX_0, p_sfpu::LREG0, 9);
-                TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_2, 0);
-            }
+            // LREG0 = min(x, threshold), then LREG0 = max(LREG0, 0) against the constant zero
+            // in LREG9 (mod1 = 9: VD = max; the constant VC is never written).
+            _clamp_rows_against_lreg12_<
+                InstrModLoadStore::INT32_2S_COMP,
+                false /* WANT_MAX */,
+                false,
+                true /* CLAMP_AT_ZERO */,
+                ITERATIONS>();
         } else {
             // threshold < 0: max(0, min(x, threshold)) == 0 for every lane
             const vInt zero = 0;
@@ -362,9 +398,12 @@ inline void relu_clamp_int(uint threshold) {
 
 // The integer clamps above store through ADDR_MOD_2, which the unary SFPU addr-mod base maps to
 // physical slot 6: program it to advance the dest counter by one sfpi row (two counter steps).
-// The float paths load and store with ADDR_MOD_3 and dst_reg++, so this is inert for them.
+// The float paths load and store with ADDR_MOD_3 and dst_reg++, so this is inert for them. A kernel
+// built with MM_THROTTLE leaves ADDR_MOD_6 alone (see RELU_CLAMP_STORE_INCR).
 inline void _relu_clamp_addr_mod_init_() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    if constexpr (RELU_CLAMP_STORE_INCR) {
+        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    }
 }
 
 inline void relu_min_init() {
