@@ -15,7 +15,10 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <internal/mesh_device.hpp>
+#include <fmt/format.h>
 #include <tt_stl/assert.hpp>
+
+#include "ttnn/operations/ccl/common/host/mesh_chip_exchange.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 
@@ -228,6 +231,66 @@ DevicePlacement decide_device_placement(
     return placement;
 }
 
+namespace ccl_common = ttnn::operations::ccl::common;
+
+// Per stream: id, logical core (2), virtual core (2), downstream coordinate (mesh rank). Per untilizer group: a
+// count and MAX_UNTILIZERS_PER_GROUP cells of logical (2) and virtual (2) cores. Then the collector: a flag and a core.
+uint32_t placement_words(uint32_t num_links, std::size_t mesh_rank) {
+    return stream_count(num_links) * (5 + static_cast<uint32_t>(mesh_rank)) +
+           UNTILIZER_GROUPS * (1 + 4 * MAX_UNTILIZERS_PER_GROUP) + 3;
+}
+
+std::vector<uint32_t> encode_placement(const DevicePlacement& placement, uint32_t num_links, std::size_t mesh_rank) {
+    ccl_common::RecordWriter writer(placement_words(num_links, mesh_rank));
+    for (const auto& [stream, stream_placement] : placement.streams) {
+        writer.put(stream);
+        writer.put_core(stream_placement.worker_logical);
+        writer.put_core(stream_placement.worker_virtual);
+        writer.put_coord(stream_placement.downstream_coord);
+    }
+    for (const auto& group : placement.untilizers) {
+        writer.put(static_cast<uint32_t>(group.size()));
+        for (std::size_t i = 0; i < MAX_UNTILIZERS_PER_GROUP; i++) {
+            const UntilizerPlacement cell = i < group.size() ? group[i] : UntilizerPlacement{};
+            writer.put_core(cell.logical);
+            writer.put_core(cell.worker_virtual);
+        }
+    }
+    writer.put(placement.collector.has_value() ? 1u : 0u);
+    writer.put_core(placement.collector.value_or(tt::tt_metal::CoreCoord{0, 0}));
+    return writer.finish();
+}
+
+DevicePlacement decode_placement(
+    ttnn::MeshDevice* mesh, const std::vector<uint32_t>& words, uint32_t num_links) {
+    ccl_common::RecordReader reader(words);
+    DevicePlacement placement;
+    for (uint32_t i = 0; i < stream_count(num_links); i++) {
+        const StreamId stream = reader.get();
+        const auto worker_logical = reader.get_core();
+        const auto worker_virtual = reader.get_core();
+        const auto downstream = reader.get_coord(mesh->shape().dims());
+        placement.streams.emplace(
+            stream, StreamPlacement{worker_logical, worker_virtual, downstream, mesh->get_fabric_node_id(downstream)});
+    }
+    for (auto& group : placement.untilizers) {
+        const uint32_t count = reader.get();
+        for (std::size_t i = 0; i < MAX_UNTILIZERS_PER_GROUP; i++) {
+            const auto logical = reader.get_core();
+            const auto worker_virtual = reader.get_core();
+            if (i < count) {
+                group.push_back(UntilizerPlacement{logical, worker_virtual});
+            }
+        }
+    }
+    const bool has_collector = reader.get() != 0;
+    const auto collector = reader.get_core();
+    if (has_collector) {
+        placement.collector = collector;
+    }
+    return placement;
+}
+
 }  // namespace
 
 uint32_t untilizers_per_group() {
@@ -247,11 +310,33 @@ uint32_t untilizers_per_group() {
 MeshPlacement decide_placement(
     ttnn::MeshDevice* mesh, uint32_t axis, uint32_t num_links, uint32_t untilizers_per_group, bool with_collector) {
     TT_FATAL(mesh != nullptr, "combine_fabric2d: mesh device is null");
+    TT_FATAL(
+        untilizers_per_group <= MAX_UNTILIZERS_PER_GROUP,
+        "combine_fabric2d: {} untilizers per group, at most {} are supported",
+        untilizers_per_group,
+        MAX_UNTILIZERS_PER_GROUP);
 
+    // A rank can only read the layout of its own chips, so each decides its own and the ranks swap results.
+    const std::size_t mesh_rank = mesh->shape().dims();
+    const auto records = ccl_common::exchange_chip_records(
+        *mesh,
+        ccl_common::mesh_distributed_context(*mesh),
+        placement_words(num_links, mesh_rank),
+        [mesh, axis, num_links, untilizers_per_group, with_collector, mesh_rank](const ttnn::MeshCoordinate& coord) {
+            return encode_placement(
+                decide_device_placement(mesh, coord, axis, num_links, untilizers_per_group, with_collector),
+                num_links,
+                mesh_rank);
+        },
+        fmt::format(
+            "combine_fabric2d axis={} links={} untilizers={} collector={}",
+            axis,
+            num_links,
+            untilizers_per_group,
+            with_collector));
     MeshPlacement placement;
     for (const auto& coord : ttnn::MeshCoordinateRange(mesh->shape())) {
-        placement.emplace(
-            coord, decide_device_placement(mesh, coord, axis, num_links, untilizers_per_group, with_collector));
+        placement.emplace(coord, decode_placement(mesh, records.at(coord.to_linear_index(mesh->shape())), num_links));
     }
     return placement;
 }
