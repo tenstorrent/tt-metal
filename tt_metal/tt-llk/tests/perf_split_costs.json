@@ -1,8 +1,9 @@
 {
  "wormhole": {
   "perf_eltwise_bcast_col_custom": 0.8,
-  "perf_eltwise_binary": 29.8,
+  "perf_eltwise_binary": 22.0,
   "perf_eltwise_binary_broadcast": 50.0,
+  "perf_eltwise_binary_reuse_dest": 7.8,
   "perf_eltwise_binary_sfpu": 352.5,
   "perf_eltwise_unary_datacopy": 10.5,
   "perf_eltwise_unary_sfpu": 206.0,
@@ -41,8 +42,9 @@
   "perf_dense_pack_untilize": 66.6,
   "perf_eltwise_add_scalar": 7.8,
   "perf_eltwise_bcast_col_custom": 96.3,
-  "perf_eltwise_binary": 55.1,
+  "perf_eltwise_binary": 40.7,
   "perf_eltwise_binary_broadcast": 93.5,
+  "perf_eltwise_binary_reuse_dest": 14.4,
   "perf_eltwise_binary_sfpu": 539.7,
   "perf_eltwise_mul_scalar_block": 11.0,
   "perf_eltwise_unary_datacopy": 27.3,

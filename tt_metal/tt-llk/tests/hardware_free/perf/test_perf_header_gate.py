@@ -269,7 +269,7 @@ def _assert_one_column_set_per_file(column_sets, arch):
 def test_one_column_set_per_perf_test_file():
     column_sets = derive_perf_test_column_sets(quasar=False)
     assert sum(map(len, column_sets["perf_eltwise_binary_sfpu"].values())) >= 4
-    assert sum(map(len, column_sets["perf_eltwise_binary"].values())) >= 2
+    assert {"perf_eltwise_binary", "perf_eltwise_binary_reuse_dest"} <= set(column_sets)
     _assert_one_column_set_per_file(column_sets, "WH/BH")
 
 
