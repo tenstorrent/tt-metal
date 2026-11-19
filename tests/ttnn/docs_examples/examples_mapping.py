@@ -398,6 +398,7 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.gather": data_movement.test_gather,
     "ttnn.sort": data_movement.test_sort,
     "ttnn.narrow": data_movement.test_narrow,
+    "ttnn.squeeze": data_movement.test_squeeze,
     # Normalization
     "ttnn.group_norm": normalization.test_group_norm,
     "ttnn.layer_norm": normalization.test_layer_norm,
