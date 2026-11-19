@@ -237,7 +237,11 @@ class MiniMaxH3Attention(Module):
             grid = compute_grid_key(full_grid)
             if grid not in DYNAMIC_RING_SDPA_CHUNKS:
                 raise ValueError(f"dynamic_length has no ring SDPA chunk sizes for the {grid} compute grid")
-            chunks = DYNAMIC_RING_SDPA_CHUNKS[grid]
+            chunks = dict(DYNAMIC_RING_SDPA_CHUNKS[grid])
+            # For sweeping: MINIMAX_H3_RING_SDPA_CHUNKS="short=320,384;long=256,512" overrides a class's (q, k) chunks.
+            for item in filter(None, os.environ.get("MINIMAX_H3_RING_SDPA_CHUNKS", "").split(";")):
+                name, pair = item.split("=")
+                chunks[name.strip()] = tuple(int(v) for v in pair.split(","))
             self._ring_sdpa_configs = {
                 cls.name: ttnn.SDPAProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(*self.sdpa_worker_grid),
