@@ -259,8 +259,11 @@ def test_eltwise_binary_broadcast_quasar(
             TILE_COUNT(tile_cnt_A),
             OUTPUT_TILE_CNT(tile_cnt_res),
             NUM_BLOCKS(num_blocks),
+            # The unsuffixed value is output-based, as on WH/BH; the kernel reads the
+            # input_/output_ pair.
             NUM_TILES_IN_BLOCK(
-                input_tiles_in_block,
+                output_tiles_in_block,
+                input_num_tiles_in_block=input_tiles_in_block,
                 output_num_tiles_in_block=output_tiles_in_block,
             ),
             NUM_FACES(num_faces),
