@@ -23,7 +23,9 @@
 #include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
 
+#include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/global_semaphore_parameter.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt_stl/reflection.hpp>
@@ -149,10 +151,10 @@ auto setter_accepts_none() { return nb::for_setter(nb::arg("value").none()); }
 // Tripwires: adding a field to one of these Metal 2.0 types must be a deliberate choice. Bind it below,
 // or note why Python leaves it out, then update the count. DFBAdvancedOptions has none: Python binds only
 // alias_with, which Blaze uses, and the other advanced options stay C++ only until a caller needs them. Python
-// binds no varargs: Metal 2.0 keeps them only to ease migration, and array arguments replace them. GlobalSemaphore
-// parameters, bindings and args stay C++ only until Python can pass a GlobalSemaphore in run args.
+// binds no varargs: Metal 2.0 keeps them only to ease migration, and array arguments replace them.
 static_assert(reflect::size<m2::TensorSpecRelaxations>() == 5);
 static_assert(reflect::size<m2::TensorParameter>() == 3);
+static_assert(reflect::size<m2::GlobalSemaphoreParameter>() == 1);
 static_assert(reflect::size<m2::DataflowBufferSpec>() == 7);
 static_assert(reflect::size<m2::SemaphoreSpec>() == 3, "advanced_options is C++ only");
 static_assert(reflect::size<m2::ScratchpadSpec>() == 5, "advanced_options is C++ only");
@@ -171,12 +173,13 @@ static_assert(reflect::size<m2::DFBBinding>() == 5);
 static_assert(reflect::size<m2::SemaphoreBinding>() == 2);
 static_assert(reflect::size<m2::ScratchpadBinding>() == 2);
 static_assert(reflect::size<m2::TensorBinding>() == 2);
-static_assert(reflect::size<m2::KernelSpec>() == 14, "advanced_options and global_semaphore_bindings are C++ only");
+static_assert(reflect::size<m2::GlobalSemaphoreBinding>() == 2);
+static_assert(reflect::size<m2::KernelSpec>() == 14, "advanced_options is C++ only");
 static_assert(reflect::size<m2::WorkUnitSpec>() == 3);
-static_assert(reflect::size<m2::ProgramSpec>() == 9, "advanced_options and global_semaphore_parameters are C++ only");
+static_assert(reflect::size<m2::ProgramSpec>() == 9, "advanced_options is C++ only");
 static_assert(reflect::size<m2::KernelRunArgs>() == 6, "advanced_options is C++ only");
 static_assert(reflect::size<m2::DFBRunOverrides>() == 3);
-static_assert(reflect::size<m2::ProgramRunArgs>() == 5, "advanced_options and global_semaphore_args are C++ only");
+static_assert(reflect::size<m2::ProgramRunArgs>() == 5, "advanced_options is C++ only");
 // The same tripwires for generic_op's mesh form, which TT-NN defines rather than Metal.
 static_assert(reflect::size<ttnn::experimental::MeshProgramSpec>() == 1);
 static_assert(reflect::size<ttnn::experimental::MeshProgramRunArgs>() == 1);
@@ -220,22 +223,47 @@ m2::Table<m2::TensorParamName, m2::TensorArgument> make_tensor_args(const nb::di
     return tensor_args;
 }
 
-// A plain dict with the entries of tensor_args, made without calling a dict subclass's copy(). ProgramRunArgs builds
-// its C++ table from this copy and keeps the copy as the owner of the tensors, so the two always name the same tensors.
-nb::dict copy_tensor_args(const nb::dict& tensor_args) {
+// Points each GlobalSemaphore argument at the GlobalSemaphore of an object that ttnn.create_global_semaphore made.
+m2::Table<m2::GlobalSemaphoreParamName, m2::GlobalSemaphoreArgument> make_global_semaphore_args(
+    const nb::dict& semaphores) {
+    m2::Table<m2::GlobalSemaphoreParamName, m2::GlobalSemaphoreArgument> global_semaphore_args;
+    for (const auto& [key, value] : semaphores) {
+        if (!nb::isinstance<nb::str>(key)) {
+            throw nb::type_error("global_semaphore_args keys must be GlobalSemaphore parameter names (str)");
+        }
+        auto name = nb::cast<std::string>(key);
+        if (!nb::isinstance<m2::GlobalSemaphore>(value)) {
+            throw nb::type_error(
+                fmt::format(
+                    "global_semaphore_args['{}'] must be a global semaphore from ttnn.create_global_semaphore", name)
+                    .c_str());
+        }
+        global_semaphore_args.emplace(
+            m2::GlobalSemaphoreParamName(std::move(name)), std::cref(nb::cast<const m2::GlobalSemaphore&>(value)));
+    }
+    return global_semaphore_args;
+}
+
+// A plain dict with the entries of a run args dict, made without calling a dict subclass's copy(). ProgramRunArgs
+// builds its C++ table from this copy and keeps the copy as the owner of the objects, so the two always name the same
+// objects.
+nb::dict copy_entries(const nb::dict& entries) {
     nb::dict copy;
-    copy.update(tensor_args);
+    copy.update(entries);
     return copy;
 }
 
-// The attribute in which a Python ProgramRunArgs holds its tensor_args dict, and a MeshProgramRunArgs a list of those
-// dicts, one per program. The C++ objects refer to the tensors' MeshTensors, so the dicts keep them alive.
+// The attributes in which a Python ProgramRunArgs holds its tensor_args and global_semaphore_args dicts, and a
+// MeshProgramRunArgs lists of those dicts, one per program. The C++ objects refer to the tensors' MeshTensors and to
+// the GlobalSemaphores, so the dicts keep them alive.
 constexpr const char* TENSOR_ARGS_ATTRIBUTE = "_tensor_args";
+constexpr const char* GLOBAL_SEMAPHORE_ARGS_ATTRIBUTE = "_global_semaphore_args";
 
-// Another value, or none, in the attribute that holds the tensors, or in the instance dict that holds it, would leave
-// the C++ object referring to tensors that nothing keeps alive.
-void check_not_tensor_owners(nb::handle self, const nb::str& name) {
-    if (name.equal(nb::str(TENSOR_ARGS_ATTRIBUTE)) || name.equal(nb::str("__dict__"))) {
+// Another value, or none, in an attribute that holds owners, or in the instance dict that holds them, would leave the
+// C++ object referring to objects that nothing keeps alive.
+void check_not_owners(nb::handle self, const nb::str& name) {
+    if (name.equal(nb::str(TENSOR_ARGS_ATTRIBUTE)) || name.equal(nb::str(GLOBAL_SEMAPHORE_ARGS_ATTRIBUTE)) ||
+        name.equal(nb::str("__dict__"))) {
         throw nb::attribute_error(fmt::format(
                                       "'{}' object attribute '{}' is read-only",
                                       nb::cast<std::string>(self.type().attr("__name__")),
@@ -244,14 +272,14 @@ void check_not_tensor_owners(nb::handle self, const nb::str& name) {
     }
 }
 
-// __setattr__ for the classes that keep their tensors alive in a Python attribute (and so need nb::dynamic_attr()).
-// On an instance of bound_type itself it sets the class's own attributes and rejects any other name with
-// AttributeError, as the classes without dynamic_attr do; a Python subclass may set attributes of its own. The
-// attribute that holds the tensors (_tensor_args) and the instance __dict__ that holds it cannot be assigned or
-// deleted, for both: only set_tensor_owners writes them. Code that edits either dict in place can still drop the
-// tensors, as with any private Python state.
+// __setattr__ for the classes that keep their tensors and GlobalSemaphores alive in Python attributes (and so need
+// nb::dynamic_attr()). On an instance of bound_type itself it sets the class's own attributes and rejects any other
+// name with AttributeError, as the classes without dynamic_attr do; a Python subclass may set attributes of its own.
+// The attributes that hold the owners (_tensor_args and _global_semaphore_args) and the instance __dict__ that holds
+// them cannot be assigned or deleted, for both: only set_tensor_owners and set_global_semaphore_owners write them. Code
+// that edits these dicts in place can still drop the objects, as with any private Python state.
 void set_known_attribute(nb::handle self, const nb::str& name, nb::handle value, nb::handle bound_type) {
-    check_not_tensor_owners(self, name);
+    check_not_owners(self, name);
     if (self.type().is(bound_type) && !nb::hasattr(bound_type, name)) {
         throw nb::attribute_error(fmt::format(
                                       "'{}' object has no attribute '{}'",
@@ -264,9 +292,10 @@ void set_known_attribute(nb::handle self, const nb::str& name, nb::handle value,
     }
 }
 
-// __delattr__ for the same classes: deleting _tensor_args or __dict__ raises AttributeError, as assigning them does.
+// __delattr__ for the same classes: deleting _tensor_args, _global_semaphore_args or __dict__ raises AttributeError, as
+// assigning them does.
 void delete_known_attribute(nb::handle self, const nb::str& name) {
-    check_not_tensor_owners(self, name);
+    check_not_owners(self, name);
     if (PyObject_GenericSetAttr(self.ptr(), name.ptr(), nullptr) != 0) {
         throw nb::python_error();
     }
@@ -277,6 +306,13 @@ void delete_known_attribute(nb::handle self, const nb::str& name) {
 // before the C++ object refers to the new tensors: if it fails, the object is unchanged.
 void set_tensor_owners(nb::handle self, nb::handle owners) {
     if (PyObject_GenericSetAttr(self.ptr(), nb::str(TENSOR_ARGS_ATTRIBUTE).ptr(), owners.ptr()) != 0) {
+        throw nb::python_error();
+    }
+}
+
+// The same for the GlobalSemaphores of a run args object, in its _global_semaphore_args attribute.
+void set_global_semaphore_owners(nb::handle self, nb::handle owners) {
+    if (PyObject_GenericSetAttr(self.ptr(), nb::str(GLOBAL_SEMAPHORE_ARGS_ATTRIBUTE).ptr(), owners.ptr()) != 0) {
         throw nb::python_error();
     }
 }
@@ -631,8 +667,9 @@ void bind_kernel_spec(nb::module_& mod) {
     auto kernel_spec = nb::class_<m2::KernelSpec>(
         mod,
         "KernelSpec",
-        "One compiled kernel: its source, compiler options, the buffers, semaphores, scratchpads and tensors it "
-        "binds by name, its compile-time arguments and arrays, and the names of its runtime arguments and arrays. "
+        "One compiled kernel: its source, compiler options, the buffers, semaphores, scratchpads, tensors and "
+        "GlobalSemaphores it binds by name, its compile-time arguments and arrays, and the names of its runtime "
+        "arguments and arrays. "
         "compiler_options and runtime_arg_schema refer into this object, so setting one of their fields changes the "
         "kernel. Lists and dicts, there and on the kernel, are copied in and out: to change one, assign the whole "
         "field (k.compile_time_args = {...}, not k.compile_time_args[\"n\"] = 4). source and hw_config are copies. "
@@ -800,6 +837,26 @@ void bind_kernel_spec(nb::module_& mod) {
         .def_rw("tensor_parameter_name", &m2::TensorBinding::tensor_parameter_name)
         .def_rw("accessor_name", &m2::TensorBinding::accessor_name);
 
+    nb::class_<m2::GlobalSemaphoreBinding>(
+        kernel_spec,
+        "GlobalSemaphoreBinding",
+        "Binds a data-movement kernel to a GlobalSemaphore parameter. Kernel code reaches it as "
+        "GlobalSemaphore(global_sem::<accessor_name>).")
+        .def(
+            "__init__",
+            [](m2::GlobalSemaphoreBinding* self,
+               m2::GlobalSemaphoreParamName global_semaphore_parameter_name,
+               std::string accessor_name) {
+                new (self) m2::GlobalSemaphoreBinding{
+                    .global_semaphore_parameter_name = std::move(global_semaphore_parameter_name),
+                    .accessor_name = std::move(accessor_name)};
+            },
+            nb::kw_only(),
+            nb::arg("global_semaphore_parameter_name"),
+            nb::arg("accessor_name"))
+        .def_rw("global_semaphore_parameter_name", &m2::GlobalSemaphoreBinding::global_semaphore_parameter_name)
+        .def_rw("accessor_name", &m2::GlobalSemaphoreBinding::accessor_name);
+
     const m2::KernelSpec kernel_defaults{};
     kernel_spec
         .def(
@@ -814,6 +871,7 @@ void bind_kernel_spec(nb::module_& mod) {
                std::vector<m2::SemaphoreBinding> semaphore_bindings,
                std::vector<m2::ScratchpadBinding> scratchpad_bindings,
                std::vector<m2::TensorBinding> tensor_bindings,
+               std::vector<m2::GlobalSemaphoreBinding> global_semaphore_bindings,
                m2::KernelSpec::CompileTimeArgs compile_time_args,
                m2::KernelSpec::CompileTimeArrayArgs compile_time_array_args,
                m2::KernelSpec::RuntimeArgSchema runtime_arg_schema) {
@@ -826,6 +884,7 @@ void bind_kernel_spec(nb::module_& mod) {
                     .semaphore_bindings = std::move(semaphore_bindings),
                     .scratchpad_bindings = std::move(scratchpad_bindings),
                     .tensor_bindings = std::move(tensor_bindings),
+                    .global_semaphore_bindings = std::move(global_semaphore_bindings),
                     .compile_time_args = std::move(compile_time_args),
                     .compile_time_array_args = std::move(compile_time_array_args),
                     .runtime_arg_schema = std::move(runtime_arg_schema),
@@ -841,6 +900,7 @@ void bind_kernel_spec(nb::module_& mod) {
             nb::arg("semaphore_bindings") = kernel_defaults.semaphore_bindings,
             nb::arg("scratchpad_bindings") = kernel_defaults.scratchpad_bindings,
             nb::arg("tensor_bindings") = kernel_defaults.tensor_bindings,
+            nb::arg("global_semaphore_bindings") = kernel_defaults.global_semaphore_bindings,
             nb::arg("compile_time_args") = kernel_defaults.compile_time_args,
             nb::arg("compile_time_array_args") = kernel_defaults.compile_time_array_args,
             nb::arg("runtime_arg_schema") = kernel_defaults.runtime_arg_schema)
@@ -852,6 +912,7 @@ void bind_kernel_spec(nb::module_& mod) {
         .def_rw("semaphore_bindings", &m2::KernelSpec::semaphore_bindings, COPY)
         .def_rw("scratchpad_bindings", &m2::KernelSpec::scratchpad_bindings, COPY)
         .def_rw("tensor_bindings", &m2::KernelSpec::tensor_bindings, COPY)
+        .def_rw("global_semaphore_bindings", &m2::KernelSpec::global_semaphore_bindings, COPY)
         .def_rw("compile_time_args", &m2::KernelSpec::compile_time_args, COPY)
         .def_rw("compile_time_array_args", &m2::KernelSpec::compile_time_array_args, COPY)
         .def_rw("runtime_arg_schema", &m2::KernelSpec::runtime_arg_schema)
@@ -901,6 +962,21 @@ void bind_kernel_spec(nb::module_& mod) {
 }
 
 void bind_program_spec(nb::module_& mod) {
+    nb::class_<m2::GlobalSemaphoreParameter>(
+        mod,
+        "GlobalSemaphoreParameter",
+        "Declares a GlobalSemaphore that the program's kernels use. Each call's run args give the GlobalSemaphore, "
+        "made by ttnn.create_global_semaphore, in global_semaphore_args under this unique_id. See "
+        "global_semaphore_parameter.hpp.")
+        .def(
+            "__init__",
+            [](m2::GlobalSemaphoreParameter* self, m2::GlobalSemaphoreParamName unique_id) {
+                new (self) m2::GlobalSemaphoreParameter{.unique_id = std::move(unique_id)};
+            },
+            nb::kw_only(),
+            nb::arg("unique_id"))
+        .def_rw("unique_id", &m2::GlobalSemaphoreParameter::unique_id);
+
     const m2::WorkUnitSpec work_unit_defaults{};
     nb::class_<m2::WorkUnitSpec>(
         mod,
@@ -928,9 +1004,9 @@ void bind_program_spec(nb::module_& mod) {
     nb::class_<m2::ProgramSpec>(
         mod,
         "ProgramSpec",
-        "Everything fixed about a program: its kernels, buffers, semaphores, scratchpads, tensor parameters and "
-        "the nodes they run on. name is for messages only. Lists are copied in and out, so assign a whole list "
-        "to change one. See program_spec.hpp.")
+        "Everything fixed about a program: its kernels, buffers, semaphores, scratchpads, tensor parameters, "
+        "GlobalSemaphore parameters and the nodes they run on. name is for messages only. Lists are copied in and "
+        "out, so assign a whole list to change one. See program_spec.hpp.")
         .def(
             "__init__",
             [](m2::ProgramSpec* self,
@@ -940,6 +1016,7 @@ void bind_program_spec(nb::module_& mod) {
                std::vector<m2::SemaphoreSpec> semaphores,
                std::vector<m2::ScratchpadSpec> scratchpads,
                std::vector<m2::TensorParameter> tensor_parameters,
+               std::vector<m2::GlobalSemaphoreParameter> global_semaphore_parameters,
                std::vector<m2::WorkUnitSpec> work_units) {
                 new (self) m2::ProgramSpec{
                     .name = std::move(name),
@@ -948,6 +1025,7 @@ void bind_program_spec(nb::module_& mod) {
                     .semaphores = std::move(semaphores),
                     .scratchpads = std::move(scratchpads),
                     .tensor_parameters = std::move(tensor_parameters),
+                    .global_semaphore_parameters = std::move(global_semaphore_parameters),
                     .work_units = std::move(work_units)};
             },
             nb::kw_only(),
@@ -957,6 +1035,7 @@ void bind_program_spec(nb::module_& mod) {
             nb::arg("semaphores") = program_defaults.semaphores,
             nb::arg("scratchpads") = program_defaults.scratchpads,
             nb::arg("tensor_parameters") = program_defaults.tensor_parameters,
+            nb::arg("global_semaphore_parameters") = program_defaults.global_semaphore_parameters,
             nb::arg("work_units") = program_defaults.work_units)
         .def_rw("name", &m2::ProgramSpec::name)
         .def_rw("kernels", &m2::ProgramSpec::kernels, COPY)
@@ -964,20 +1043,23 @@ void bind_program_spec(nb::module_& mod) {
         .def_rw("semaphores", &m2::ProgramSpec::semaphores, COPY)
         .def_rw("scratchpads", &m2::ProgramSpec::scratchpads, COPY)
         .def_rw("tensor_parameters", &m2::ProgramSpec::tensor_parameters, COPY)
+        .def_rw("global_semaphore_parameters", &m2::ProgramSpec::global_semaphore_parameters, COPY)
         .def_rw("work_units", &m2::ProgramSpec::work_units, COPY);
 }
 
 void bind_program_run_args(nb::module_& mod) {
-    // dynamic_attr: the Python object keeps its tensor arguments alive (see set_tensor_owners). __setattr__ below
-    // still rejects names that are not attributes of the class, as for the other classes; Python subclasses may add
-    // attributes of their own.
+    // dynamic_attr: the Python object keeps its tensor and GlobalSemaphore arguments alive (see set_tensor_owners).
+    // __setattr__ below still rejects names that are not attributes of the class, as for the other classes; Python
+    // subclasses may add attributes of their own.
     auto run_args = nb::class_<m2::ProgramRunArgs>(
         mod,
         "ProgramRunArgs",
         nb::dynamic_attr(),
         "The values of one program run: each kernel's runtime arguments, the tensor for each tensor "
-        "parameter, and DFB size overrides. tensor_args maps each tensor parameter name to a ttnn.Tensor, which "
-        "these run args keep alive. Lists and dicts are copied in and out. See program_run_args.hpp.");
+        "parameter, the GlobalSemaphore for each GlobalSemaphore parameter, and DFB size overrides. tensor_args maps "
+        "each tensor parameter name to a ttnn.Tensor, and global_semaphore_args each GlobalSemaphore parameter name "
+        "to a global semaphore from ttnn.create_global_semaphore; these run args keep both alive. Lists and dicts are "
+        "copied in and out. See program_run_args.hpp.");
 
     const m2::KernelRunArgs kernel_run_args_defaults{};
     nb::class_<m2::KernelRunArgs>(
@@ -1044,18 +1126,24 @@ void bind_program_run_args(nb::module_& mod) {
             [](nb::pointer_and_handle<m2::ProgramRunArgs> self,
                std::vector<m2::KernelRunArgs> kernel_run_args,
                const nb::dict& tensor_args,
+               const nb::dict& global_semaphore_args,
                std::vector<m2::DFBRunOverrides> dfb_run_overrides) {
-                nb::dict owners = copy_tensor_args(tensor_args);
-                auto tensor_arg_table = make_tensor_args(owners);
-                set_tensor_owners(self.h, owners);
+                nb::dict tensor_owners = copy_entries(tensor_args);
+                auto tensor_arg_table = make_tensor_args(tensor_owners);
+                nb::dict semaphore_owners = copy_entries(global_semaphore_args);
+                auto semaphore_arg_table = make_global_semaphore_args(semaphore_owners);
+                set_tensor_owners(self.h, tensor_owners);
+                set_global_semaphore_owners(self.h, semaphore_owners);
                 new (self.p) m2::ProgramRunArgs{
                     .kernel_run_args = std::move(kernel_run_args),
                     .tensor_args = std::move(tensor_arg_table),
+                    .global_semaphore_args = std::move(semaphore_arg_table),
                     .dfb_run_overrides = std::move(dfb_run_overrides)};
             },
             nb::kw_only(),
             nb::arg("kernel_run_args") = run_args_defaults.kernel_run_args,
             nb::arg("tensor_args") = nb::dict(),
+            nb::arg("global_semaphore_args") = nb::dict(),
             nb::arg("dfb_run_overrides") = run_args_defaults.dfb_run_overrides)
         .def(
             "__setattr__",
@@ -1075,16 +1163,27 @@ void bind_program_run_args(nb::module_& mod) {
                 return nb::getattr(self.h, TENSOR_ARGS_ATTRIBUTE, nb::dict()).attr("copy")();
             },
             [](nb::pointer_and_handle<m2::ProgramRunArgs> self, const nb::dict& tensor_args) {
-                nb::dict owners = copy_tensor_args(tensor_args);
+                nb::dict owners = copy_entries(tensor_args);
                 auto tensor_arg_table = make_tensor_args(owners);
                 set_tensor_owners(self.h, owners);
                 self.p->tensor_args = std::move(tensor_arg_table);
             })
+        .def_prop_rw(
+            "global_semaphore_args",
+            [](nb::pointer_and_handle<m2::ProgramRunArgs> self) {
+                return nb::getattr(self.h, GLOBAL_SEMAPHORE_ARGS_ATTRIBUTE, nb::dict()).attr("copy")();
+            },
+            [](nb::pointer_and_handle<m2::ProgramRunArgs> self, const nb::dict& global_semaphore_args) {
+                nb::dict owners = copy_entries(global_semaphore_args);
+                auto semaphore_arg_table = make_global_semaphore_args(owners);
+                set_global_semaphore_owners(self.h, owners);
+                self.p->global_semaphore_args = std::move(semaphore_arg_table);
+            })
         .def_rw("dfb_run_overrides", &m2::ProgramRunArgs::dfb_run_overrides, COPY);
 }
 
-// generic_op's mesh form. A MeshProgramRunArgs keeps the tensors of its run args alive the way ProgramRunArgs does,
-// so it shares the private attribute and helpers above.
+// generic_op's mesh form. A MeshProgramRunArgs keeps the tensors and GlobalSemaphores of its run args alive the way
+// ProgramRunArgs does, so it shares the private attributes and helpers above.
 void bind_mesh_programs(nb::module_& mod) {
     using m2::ProgramRunArgs;
     using m2::ProgramSpec;
@@ -1109,12 +1208,13 @@ void bind_mesh_programs(nb::module_& mod) {
             nb::arg("programs") = std::vector<std::pair<MeshCoordinateRange, ProgramSpec>>{})
         .def_rw("programs", &MeshProgramSpec::programs, nb::rv_policy::copy);
 
-    // A Python ProgramRunArgs keeps its tensors alive in an attribute. A MeshProgramRunArgs holds C++ copies of its
-    // run args, so it keeps a copy of each of those attributes, in the order of its programs.
+    // A Python ProgramRunArgs keeps its tensors and GlobalSemaphores alive in attributes. A MeshProgramRunArgs holds
+    // C++ copies of its run args, so it keeps a copy of each of those attributes, in the order of its programs.
     const auto set_programs = [](nb::pointer_and_handle<MeshProgramRunArgs> self,
                                  const std::vector<std::pair<MeshCoordinateRange, nb::object>>& programs) {
         std::vector<std::pair<MeshCoordinateRange, ProgramRunArgs>> run_args;
         nb::list tensors;
+        nb::list semaphores;
         run_args.reserve(programs.size());
         for (std::size_t i = 0; i < programs.size(); ++i) {
             const auto& [range, program_run_args] = programs[i];
@@ -1127,8 +1227,19 @@ void bind_mesh_programs(nb::module_& mod) {
             }
             run_args.emplace_back(range, nb::cast<const ProgramRunArgs&>(program_run_args));
             tensors.append(nb::getattr(program_run_args, TENSOR_ARGS_ATTRIBUTE, nb::dict()).attr("copy")());
+            semaphores.append(
+                nb::getattr(program_run_args, GLOBAL_SEMAPHORE_ARGS_ATTRIBUTE, nb::dict()).attr("copy")());
         }
+        // The two owner lists change together: if storing the second fails, the first goes back, so the owners always
+        // match the programs.
+        nb::object old_tensors = nb::getattr(self.h, TENSOR_ARGS_ATTRIBUTE, nb::list());
         set_tensor_owners(self.h, tensors);
+        try {
+            set_global_semaphore_owners(self.h, semaphores);
+        } catch (...) {
+            set_tensor_owners(self.h, old_tensors);
+            throw;
+        }
         self.p->programs = std::move(run_args);
     };
     nb::class_<MeshProgramRunArgs>(
@@ -1137,7 +1248,7 @@ void bind_mesh_programs(nb::module_& mod) {
         nb::dynamic_attr(),
         R"doc(
         The values of one mesh program run: a ttnn.experimental.ProgramRunArgs for each range of the
-        MeshProgramSpec. It keeps the tensors of its run args alive. Lists are copied in and out.
+        MeshProgramSpec. It keeps the tensors and GlobalSemaphores of its run args alive. Lists are copied in and out.
         )doc")
         .def(
             "__init__",
@@ -1164,11 +1275,13 @@ void bind_mesh_programs(nb::module_& mod) {
             "programs",
             [](nb::pointer_and_handle<MeshProgramRunArgs> self) {
                 nb::object tensors = nb::getattr(self.h, TENSOR_ARGS_ATTRIBUTE);
+                nb::object semaphores = nb::getattr(self.h, GLOBAL_SEMAPHORE_ARGS_ATTRIBUTE);
                 nb::list programs;
                 for (std::size_t i = 0; i < self.p->programs.size(); ++i) {
                     const auto& [range, run_args] = self.p->programs[i];
                     nb::object run_args_copy = nb::cast(run_args, nb::rv_policy::copy);
                     set_tensor_owners(run_args_copy, tensors[i].attr("copy")());
+                    set_global_semaphore_owners(run_args_copy, semaphores[i].attr("copy")());
                     programs.append(nb::make_tuple(range, run_args_copy));
                 }
                 return programs;
@@ -1194,6 +1307,7 @@ void py_module_types(nb::module_& mod) {
     mod.attr("SemaphoreBinding") = kernel_spec.attr("SemaphoreBinding");
     mod.attr("ScratchpadBinding") = kernel_spec.attr("ScratchpadBinding");
     mod.attr("TensorBinding") = kernel_spec.attr("TensorBinding");
+    mod.attr("GlobalSemaphoreBinding") = kernel_spec.attr("GlobalSemaphoreBinding");
     mod.attr("ArrayArgDecl") = kernel_spec.attr("RuntimeArgSchema").attr("ArrayArgDecl");
     mod.attr("DFBEndpointType") = kernel_spec.attr("DFBBinding").attr("EndpointType");
     mod.attr("DFBAccessPattern") = kernel_spec.attr("DFBBinding").attr("AccessPattern");

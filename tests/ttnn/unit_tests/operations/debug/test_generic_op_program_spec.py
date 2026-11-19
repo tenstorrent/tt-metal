@@ -12,6 +12,7 @@ the mesh form, preparation without dispatch, and the hash the program cache keys
 
 import os
 import pathlib
+import sys
 
 import pytest
 import torch
@@ -572,6 +573,124 @@ def test_semaphores_start_at_zero_on_every_call(device):
     # The calls only enqueue the program: wait for them, so that one that never finishes fails this test.
     ttnn.synchronize_device(device)
     assert device.num_program_cache_entries() == entries + 1
+
+
+# ------------------------------------------------------------------------------------------------- global semaphores
+
+# Writes the value of global_sem::counter to the first value of tensor::out's one page, then raises the counter by 1.
+COUNTER_KERNEL = """
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/global_semaphore.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
+
+void kernel_main() {
+    GlobalSemaphore counter(global_sem::counter);
+    Scratchpad<uint32_t> page(scratch::page);
+    {
+        // On Quasar the store stays in the data-movement core's cache, where the NoC cannot see it, until the lock's
+        // release flushes it.
+        auto lock = page.scoped_lock(0, 1);
+        page[0] = counter.value();
+    }
+    const auto out = TensorAccessor(tensor::out);
+    Noc noc;
+    noc.async_write(page, out, page.size_in_bytes(), {}, {.page_id = 0});
+    noc.async_write_barrier();
+    counter.up(1);
+}
+"""
+COUNTER_PAGE_BYTES = 32 * 4  # the output's one page: 32 uint32 values
+
+
+def counter_output(device):
+    return ttnn.allocate_tensor_on_device(ttnn.TensorSpec((1, 32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT), device)
+
+
+def global_semaphore(device, initial_value):
+    node = ttnn.CoreCoord(0, 0)
+    return ttnn.create_global_semaphore(device, ttnn.CoreRangeSet([ttnn.CoreRange(node, node)]), initial_value)
+
+
+def counter_program(output, semaphore):
+    node = ttnn.CoreCoord(0, 0)
+    spec = E.ProgramSpec(
+        name="global_semaphore_counter",
+        kernels=[
+            E.KernelSpec(
+                unique_id="counter",
+                source=E.KernelSpec.SourceCode(code=COUNTER_KERNEL),
+                scratchpad_bindings=[E.ScratchpadBinding(scratchpad_spec_name="page", accessor_name="page")],
+                tensor_bindings=[E.TensorBinding(tensor_parameter_name="out", accessor_name="out")],
+                global_semaphore_bindings=[
+                    E.GlobalSemaphoreBinding(global_semaphore_parameter_name="counter", accessor_name="counter")
+                ],
+                hw_config=E.create_writer_datamovement_config(),
+            )
+        ],
+        scratchpads=[E.ScratchpadSpec(unique_id="page", size_per_node=COUNTER_PAGE_BYTES)],
+        tensor_parameters=[E.TensorParameter(unique_id="out", spec=output.spec)],
+        global_semaphore_parameters=[E.GlobalSemaphoreParameter(unique_id="counter")],
+        work_units=[E.WorkUnitSpec(name="counter", kernels=["counter"], target_nodes=node)],
+    )
+    run_args = E.ProgramRunArgs(tensor_args={"out": output}, global_semaphore_args={"counter": semaphore})
+    return spec, run_args
+
+
+def test_a_global_semaphore_keeps_its_value_and_another_one_needs_no_new_program(device):
+    output = counter_output(device)
+    first, second = global_semaphore(device, 5), global_semaphore(device, 100)
+
+    def counter_value(semaphore):
+        spec, run_args = counter_program(output, semaphore)
+        return int(ttnn.to_torch(E.generic_op([output], spec, run_args))[0, 0])
+
+    assert counter_value(first) == 5
+    entries = device.num_program_cache_entries()
+    # The counter keeps its value from one call to the next, and a later call can pass another GlobalSemaphore.
+    assert counter_value(first) == 6
+    assert counter_value(second) == 100
+    assert counter_value(first) == 7
+    assert device.num_program_cache_entries() == entries
+
+
+@pytest.mark.parametrize("cache_hit", [False, True], ids=["first_call", "later_call"])
+def test_global_semaphores_are_checked_on_every_call(device, cache_hit, expect_error):
+    output = counter_output(device)
+    semaphore = global_semaphore(device, 0)
+    spec, run_args = counter_program(output, semaphore)
+    if cache_hit:
+        E.generic_op([output], spec, run_args)
+        # A later call that leaves one out would keep the previous call's, so these checks run on every call, with
+        # validate_program_args off too.
+        ttnn.CONFIG.validate_program_args = False
+    entries = device.num_program_cache_entries()
+    with expect_error(
+        RuntimeError, "GlobalSemaphoreParameter 'counter' has no GlobalSemaphore in run_args.global_semaphore_args"
+    ):
+        E.generic_op([output], spec, E.ProgramRunArgs(tensor_args={"out": output}))
+    extra_semaphore = E.ProgramRunArgs(
+        tensor_args={"out": output}, global_semaphore_args={"counter": semaphore, "other": semaphore}
+    )
+    with expect_error(RuntimeError, "has a GlobalSemaphore for 'other', which the ProgramSpec does not declare"):
+        E.generic_op([output], spec, extra_semaphore)
+    assert device.num_program_cache_entries() == entries
+
+
+def test_the_mesh_form_keeps_and_uses_its_global_semaphores(device):
+    output = counter_output(device)
+    semaphore = global_semaphore(device, 3)
+    spec, run_args = counter_program(output, semaphore)
+    references = sys.getrefcount(semaphore)
+    mesh_run_args = E.MeshProgramRunArgs(programs=[(mesh_range(device), run_args)])
+    del run_args
+    # The MeshProgramRunArgs holds the semaphore itself, as it holds the tensors, so dropping the run args it was made
+    # from leaves the count unchanged.
+    assert sys.getrefcount(semaphore) == references
+    assert mesh_run_args.programs[0][1].global_semaphore_args["counter"] is semaphore
+    mesh_spec = E.MeshProgramSpec(programs=[(mesh_range(device), spec)])
+    assert int(ttnn.to_torch(E.generic_op([output], mesh_spec, mesh_run_args))[0, 0]) == 3
 
 
 # ----------------------------------------------------------------------------------------------------- program cache
@@ -1456,6 +1575,12 @@ STRUCTURAL_EDITS = {
     "scratchpad": lambda: setattr_and_return(
         hash_spec(), "scratchpads", [E.ScratchpadSpec(unique_id="scratch", size_per_node=64)]
     ),
+    "global_semaphore_parameter": lambda: setattr_and_return(
+        hash_spec(), "global_semaphore_parameters", [E.GlobalSemaphoreParameter(unique_id="sem")]
+    ),
+    "global_semaphore_binding": lambda: hash_spec(
+        global_semaphore_bindings=[E.GlobalSemaphoreBinding(global_semaphore_parameter_name="sem", accessor_name="sem")]
+    ),
 }
 
 NON_STRUCTURAL_EDITS = {
@@ -1480,6 +1605,21 @@ def test_hash_changes_with_every_structural_field(edit):
 @pytest.mark.parametrize("edit", NON_STRUCTURAL_EDITS.values(), ids=NON_STRUCTURAL_EDITS.keys())
 def test_hash_ignores_names_and_dict_order(edit):
     assert E.compute_program_spec_hash(edit()) == E.compute_program_spec_hash(hash_spec())
+
+
+def test_hash_changes_with_the_global_semaphore_a_kernel_binds():
+    # A later call writes each GlobalSemaphore's address into the slot of the binding that names its parameter, so a
+    # kernel bound to another parameter needs another cache entry.
+    def spec(bound_parameter):
+        binding = E.GlobalSemaphoreBinding(global_semaphore_parameter_name=bound_parameter, accessor_name="sem")
+        program_spec = hash_spec(global_semaphore_bindings=[binding])
+        program_spec.global_semaphore_parameters = [
+            E.GlobalSemaphoreParameter(unique_id="a"),
+            E.GlobalSemaphoreParameter(unique_id="b"),
+        ]
+        return program_spec
+
+    assert E.compute_program_spec_hash(spec("a")) != E.compute_program_spec_hash(spec("b"))
 
 
 def test_hash_ignores_relaxed_tensor_fields():

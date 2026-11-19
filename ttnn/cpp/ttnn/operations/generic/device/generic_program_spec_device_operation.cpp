@@ -16,6 +16,10 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/workload/specification/global_semaphore_parameter.hpp>
 #include <tt-metalium/workload/specification/tensor_spec_relaxations.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt_stl/assert.hpp>
@@ -277,6 +281,31 @@ void check_tensor_args(
     }
 }
 
+// A later call keeps the GlobalSemaphore of a parameter that it leaves out, which may since have been freed, and Metal
+// checks the names and the MeshDevice only on the first call and, on later calls, with validate_program_args on.
+void check_global_semaphore_args(
+    const m2::ProgramSpec& spec, const m2::ProgramRunArgs& run_args, const m2::IDevice* program_device) {
+    const auto& parameters = spec.global_semaphore_parameters;
+    const auto& semaphores = run_args.global_semaphore_args;
+    for (const auto& parameter : parameters) {
+        TT_FATAL(
+            semaphores.contains(parameter.unique_id),
+            "generic_op: GlobalSemaphoreParameter '{}' has no GlobalSemaphore in run_args.global_semaphore_args",
+            parameter.unique_id);
+    }
+    for (const auto& [name, semaphore] : semaphores) {
+        TT_FATAL(
+            std::ranges::find(parameters, name, &m2::GlobalSemaphoreParameter::unique_id) != parameters.end(),
+            "generic_op: run_args.global_semaphore_args has a GlobalSemaphore for '{}', which the ProgramSpec does not "
+            "declare",
+            name);
+        TT_FATAL(
+            semaphore.get().device() == program_device,
+            "generic_op: the GlobalSemaphore for '{}' is on another MeshDevice than the one the program runs on",
+            name);
+    }
+}
+
 void check_prefetcher_pipe_args(const m2::ProgramSpec& spec, const m2::ProgramRunArgs& run_args) {
     const auto& parameters = spec.advanced_options.prefetcher_pipe_parameters;
     const auto& pipes = run_args.advanced_options.prefetcher_pipe_args;
@@ -358,6 +387,8 @@ void check_program(
             kernel.unique_id);
     }
     check_tensor_args(spec, run_args, io_tensors);
+    // The program runs on the output's MeshDevice, the last tensor in io_tensors.
+    check_global_semaphore_args(spec, run_args, io_tensors.back().device());
     check_prefetcher_pipe_args(spec, run_args);
     check_dfb_run_overrides(spec, run_args);
 }

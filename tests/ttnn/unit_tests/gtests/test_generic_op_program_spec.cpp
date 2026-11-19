@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
+#include <functional>
 #include <optional>
 #include <string>
 #include <tuple>
@@ -20,6 +21,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/global_semaphore_parameter.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
@@ -32,6 +34,7 @@
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "ttnn/config.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
+#include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -432,6 +435,36 @@ Tensor make_unused_output(tt::tt_metal::distributed::MeshDevice* device) {
         device);
 }
 
+CoreCoord global_semaphore_node() { return CoreCoord{0, 0}; }
+
+// A GlobalSemaphore on the global_semaphore_node() of every device of mesh_device, starting at 0.
+m2::GlobalSemaphore make_global_semaphore(tt::tt_metal::distributed::MeshDevice* mesh_device) {
+    return ttnn::global_semaphore::create_global_semaphore(
+        mesh_device, CoreRangeSet(CoreRange(global_semaphore_node())), /*initial_value=*/0);
+}
+
+// A program whose one kernel binds GlobalSemaphore parameter "sem" and does nothing, with run args that give the
+// parameter this semaphore.
+Program make_global_semaphore_program(const m2::GlobalSemaphore& semaphore) {
+    const m2::GlobalSemaphoreParamName semaphore_name{"sem"};
+    const m2::KernelSpec kernel{
+        .unique_id = m2::KernelSpecName{"kernel"},
+        .source = m2::KernelSpec::SourceCode{.code = "void kernel_main() {}"},
+        .global_semaphore_bindings = {{.global_semaphore_parameter_name = semaphore_name, .accessor_name = "sem"}},
+        .hw_config = ttnn::create_writer_datamovement_config(),
+    };
+    Program program{
+        .spec =
+            {.name = "global_semaphore",
+             .kernels = {kernel},
+             .global_semaphore_parameters = {{.unique_id = semaphore_name}},
+             .work_units =
+                 {{.name = "kernel", .kernels = {kernel.unique_id}, .target_nodes = global_semaphore_node()}}},
+    };
+    program.run_args.global_semaphore_args.emplace(semaphore_name, std::cref(semaphore));
+    return program;
+}
+
 }  // namespace
 
 // Per-core allocation needs the HYBRID allocator, which Metal reads from the environment once per process, before the
@@ -502,8 +535,7 @@ TEST(GenericOpProgramSpecHash, PrefetcherPipeParameterNamesChangeHash) {
     EXPECT_NE(ttnn::experimental::compute_program_spec_hash(spec), base);
 }
 
-// GlobalSemaphore parameters are C++ only too. Run args name each GlobalSemaphore by its parameter, so another
-// parameter name must give another cache entry.
+// Run args name each GlobalSemaphore by its parameter, so another parameter name must give another cache entry.
 TEST(GenericOpProgramSpecHash, GlobalSemaphoreParameterNamesChangeHash) {
     auto spec = make_hash_spec();
     spec.global_semaphore_parameters = {{.unique_id = m2::GlobalSemaphoreParamName{"sem"}}};
@@ -1133,6 +1165,45 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecChecksThePipesOfEveryCall)
     }
 }
 
+// A later call that leaves out a GlobalSemaphore would keep the previous call's, which may since have been freed, so
+// every call checks that the run args give one for each GlobalSemaphore parameter the spec declares, and for no other
+// name: a first call, and a later call with validate_program_args on or off. Another GlobalSemaphore is fine.
+TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecChecksTheGlobalSemaphoresOfEveryCall) {
+    const auto semaphore = make_global_semaphore(this->device_);
+    const auto other_semaphore = make_global_semaphore(this->device_);
+    const auto clear_program_cache = ttsl::make_cleanup([this] { this->device_->clear_program_cache(); });
+    const Tensor output = make_unused_output(this->device_);
+    const auto program = make_global_semaphore_program(semaphore);
+
+    auto no_semaphore = program.run_args;
+    no_semaphore.global_semaphore_args.clear();
+    auto extra_semaphore = program.run_args;
+    extra_semaphore.global_semaphore_args.emplace(m2::GlobalSemaphoreParamName{"other"}, std::cref(other_semaphore));
+    const auto expect_both_rejected = [&] {
+        EXPECT_THAT(
+            [&] { ttnn::experimental::generic_op({output}, program.spec, no_semaphore); },
+            ThrowsMessage<std::exception>(
+                HasSubstr("GlobalSemaphoreParameter 'sem' has no GlobalSemaphore in run_args.global_semaphore_args")));
+        EXPECT_THAT(
+            [&] { ttnn::experimental::generic_op({output}, program.spec, extra_semaphore); },
+            ThrowsMessage<std::exception>(
+                HasSubstr("has a GlobalSemaphore for 'other', which the ProgramSpec does not declare")));
+    };
+    expect_both_rejected();
+
+    // Later calls reuse the prepared program.
+    ttnn::experimental::prepare_generic_op({output}, program.spec, program.run_args);
+    const auto entries = this->device_->num_program_cache_entries();
+    for (const bool validate : {true, false}) {
+        const auto restore = set_validate_program_args(validate);
+        expect_both_rejected();
+        EXPECT_EQ(this->device_->num_program_cache_entries(), entries);
+    }
+    const auto other_program = make_global_semaphore_program(other_semaphore);
+    ttnn::experimental::generic_op({output}, other_program.spec, other_program.run_args);
+    EXPECT_EQ(this->device_->num_program_cache_entries(), entries);
+}
+
 // The op does not opt into per-core allocation, so ttnn rejects a per-core allocated tensor before the op sees it.
 TEST_F(GenericOpProgramSpecHybridAllocatorTest, TestGenericOpProgramSpecRejectsAPerCoreAllocatedTensor) {
     const CoreRangeSet cores(CoreRange(CoreCoord{0, 0}, CoreCoord{1, 0}));
@@ -1177,6 +1248,39 @@ TEST_F(MeshDevice1x2Fixture, TestGenericOpProgramSpecRejectsARangeOverADeviceWit
     EXPECT_THAT(
         [&] { ttnn::experimental::generic_op({input, output}, mesh_spec, mesh_run_args); },
         ThrowsMessage<std::exception>(HasSubstr("which does not hold io_tensors[0]")));
+}
+
+// A GlobalSemaphore's address means nothing on another MeshDevice. Metal checks this only on the first call and, on
+// later calls, with validate_program_args on; generic_op checks every call. Each device of the mesh is a submesh here:
+// the program runs on one, with a GlobalSemaphore of the other. The parent mesh enqueues nothing, since Metal lets only
+// one mesh at a time use a command queue on a device.
+TEST_F(MeshDevice1x2Fixture, TestGenericOpProgramSpecRejectsAGlobalSemaphoreOnAnotherMeshDevice) {
+    namespace distributed = tt::tt_metal::distributed;
+    auto& mesh_device = *get_mesh_device();
+    const auto program_mesh =
+        mesh_device.create_submesh(distributed::MeshShape(1, 1), distributed::MeshCoordinate(0, 0));
+    const auto other_mesh = mesh_device.create_submesh(distributed::MeshShape(1, 1), distributed::MeshCoordinate(0, 1));
+    const auto semaphore = make_global_semaphore(program_mesh.get());
+    const auto other_semaphore = make_global_semaphore(other_mesh.get());
+    const auto clear_program_cache = ttsl::make_cleanup([&program_mesh] { program_mesh->clear_program_cache(); });
+    const Tensor output = make_unused_output(program_mesh.get());
+    const auto program = make_global_semaphore_program(semaphore);
+    const auto other_program = make_global_semaphore_program(other_semaphore);
+    const auto expect_rejected = [&] {
+        EXPECT_THAT(
+            [&] { ttnn::experimental::generic_op({output}, other_program.spec, other_program.run_args); },
+            ThrowsMessage<std::exception>(
+                HasSubstr("the GlobalSemaphore for 'sem' is on another MeshDevice than the one the program runs on")));
+    };
+    expect_rejected();
+
+    ttnn::experimental::generic_op({output}, program.spec, program.run_args);
+    const auto entries = program_mesh->num_program_cache_entries();
+    for (const bool validate : {true, false}) {
+        const auto restore = set_validate_program_args(validate);
+        expect_rejected();
+        EXPECT_EQ(program_mesh->num_program_cache_entries(), entries);
+    }
 }
 
 }  // namespace ttnn::operations::generic::test
