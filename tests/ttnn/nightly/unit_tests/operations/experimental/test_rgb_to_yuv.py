@@ -428,7 +428,7 @@ class TestYUVPerformance:
 
 def test_patchified_input(device):
     """A patchified (1, T, H/p, W/p, 3*p*p) input must give the planes of reshape + permute to CHWT."""
-    T, Hp, Wp, p = 37, 6, 10, 4  # partial T, Y and UV tiles
+    T, Hp, Wp, p = 17, 6, 10, 4  # partial T, Y and UV tiles; wide rows need T <= 32
     C = 3 * p * p
     torch.manual_seed(0)
     # Past [-1, 1] so the clip and the uint8 saturation are exercised too.
@@ -446,7 +446,7 @@ def test_patchified_input(device):
     chwt = ttnn.permute(chwt, (0, 4, 2, 6, 3, 5, 1))
     chwt = ttnn.reshape(chwt, (3, Hp * p, Wp * p, T))
     coefficients = ttnn.experimental.yuv_bt601_coefficients()
-    ref = ttnn.experimental.rgb_to_yuv(chwt, coefficients=coefficients)
-    out = ttnn.experimental.rgb_to_yuv(patched, coefficients=coefficients, input_patch_size=p)
+    ref = ttnn.experimental.rgb_to_yuv(chwt, coefficients=coefficients, wide_rows=True)
+    out = ttnn.experimental.rgb_to_yuv(patched, coefficients=coefficients, wide_rows=True, input_patch_size=p)
     for name, a, b in zip("YUV", ref, out):
         assert torch.equal(ttnn.to_torch(a), ttnn.to_torch(b)), f"{name} plane differs"
