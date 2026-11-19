@@ -363,6 +363,45 @@ def test_full_buffer():
     assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
 
 
+def test_conditional_zones():
+    """DeviceZoneScopedNIf in the DRAM backend: a zone whose constant condition is false writes no marker and
+    takes no slot of the profiler buffer.
+
+    test_conditional_zones.cpp opens two such zones per iteration on every worker RISC (DM0, DM1 and the
+    TRISCs), one active and one inactive, LOOP_COUNT times, sized so the active one fills most of the buffer:
+    an inactive zone that still took slots would cut the active zone's count short."""
+    LOOP_COUNT = 110  # test_conditional_zones.cpp
+    ACTIVE = ("TEST-CT-ON",)
+    INACTIVE = ("TEST-CT-OFF",)
+
+    run_device_profiler_test(testName="build/test/tt_metal/tools/profiler/test_conditional_zones", noPostProcess=True)
+
+    csv_path = PROFILER_LOGS_DIR / "profile_log_device.csv"
+    assert os.path.isfile(csv_path), f"no device log at {csv_path}"
+    # Skip the architecture line; columns as process_device_log.py reads them:
+    # chip_id, core_x, core_y, risc, timer_id, time, data, run_host_id, trace_id, trace_id_count, zone_name, type, ...
+    df = pd.read_csv(csv_path, skiprows=1, header=0, na_filter=False)
+    chip_col, core_x_col, core_y_col, risc_col = df.columns[0], df.columns[1], df.columns[2], df.columns[3]
+    zone_col, type_col = df.columns[10], df.columns[11]
+    zones = df[(df[chip_col] == 0) & df[type_col].str.strip().isin(["ZONE_START", "ZONE_END"])].copy()
+    zones[zone_col] = zones[zone_col].str.strip()
+    zones[risc_col] = zones[risc_col].str.strip()
+
+    seen = set(zones[zone_col])
+    for name in INACTIVE:
+        assert name not in seen, f"inactive zone {name} wrote markers"
+    for name in ACTIVE:
+        rows = zones[zones[zone_col] == name]
+        assert len(rows) > 0, f"active zone {name} is not in the device log"
+        per_lane = rows.groupby([core_x_col, core_y_col, risc_col, type_col]).size()
+        assert set(per_lane.values) == {LOOP_COUNT}, (
+            f"{name}: every (core, RISC) must record {LOOP_COUNT} starts and {LOOP_COUNT} ends, "
+            f"got counts {sorted(set(per_lane.values))}: inactive zones took buffer slots, or markers were dropped"
+        )
+        riscs = set(rows[risc_col])
+        assert {"BRISC", "NCRISC"} <= riscs and any(r.startswith("TRISC") for r in riscs), f"{name} on {sorted(riscs)}"
+
+
 def wildcard_match(pattern, words):
     if not pattern.endswith("*"):
         return [word for word in words if pattern == word]
