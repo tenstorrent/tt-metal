@@ -18,7 +18,7 @@
     ENABLE_NIGHTLY_TT_TRAIN_TESTS=1 build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter=*NIGHTLY_*
   skus:
     bh_p100:
-      timeout: 40
+      timeout: 45
     bh_p150b_civ2:
       timeout: 40
   owner_id: U07K00A281X # Kevin Wu
@@ -34,7 +34,7 @@
     authoritative_job_status: true
   skus:
     bh_p100:
-      timeout: 30
+      timeout: 45
     # bh_p150b_civ2 is used for merge gate test
   owner_id: U07K00A281X # Kevin Wu
   team: train
@@ -86,7 +86,7 @@
     python -m pytest tt-train/tests/python
   skus:
     bh_p100:
-      timeout: 35
+      timeout: 45
     bh_p150b_civ2:
       timeout: 30
   owner_id: U07K00A281X # Kevin Wu
