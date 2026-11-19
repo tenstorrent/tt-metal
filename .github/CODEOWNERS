@@ -725,12 +725,13 @@ tt-train/sources/ttml/metal/** @tenstorrent/tt-train @lgalasTT
 tt-train/sources/ttml/ops/** @tenstorrent/tt-train @lgalasTT
 tt-train/tests/** @tenstorrent/tt-train @lgalasTT @abustamanteTT
 # Files related to the productization of training. Code ownership is limited until support is stable.
-tt-train/configs/training_configs/unified_trainer/** @mmilosevicTT @mcupacTT @jmalone-tt @vladimirjovanovicTT
+tt-train/configs/experimental/training_configs/** @mmilosevicTT @mcupacTT @jmalone-tt @vladimirjovanovicTT
+tt-train/docs/PRODUCTIZATION_OF_TRAINING.md @mmilosevicTT @mcupacTT @jmalone-tt @vladimirjovanovicTT
 tt-train/sources/ttml/ttml/datasets/provider/** @mmilosevicTT @mcupacTT @jmalone-tt @vladimirjovanovicTT
 tt-train/sources/ttml/ttml/datasets/utils/** @mmilosevicTT @mcupacTT @jmalone-tt @vladimirjovanovicTT
+tt-train/sources/ttml/ttml/experimental/** @mmilosevicTT @mcupacTT @jmalone-tt @vladimirjovanovicTT
 tt-train/sources/ttml/ttml/models/provider/** @mmilosevicTT @mcupacTT @jmalone-tt @vladimirjovanovicTT
 tt-train/sources/ttml/ttml/models/utils/** @mmilosevicTT @mcupacTT @jmalone-tt @vladimirjovanovicTT
-tt-train/sources/ttml/ttml/unified_trainer/** @mmilosevicTT @mcupacTT @jmalone-tt @vladimirjovanovicTT
 # Last on purpose: CODEOWNERS is last-match-wins, so this must follow the directory rules
 # above for infra to keep co-ownership of every CMakeLists.txt.
 tt-train/**/CMakeLists.txt @tenstorrent/tt-train @lgalasTT @abustamanteTT @tenstorrent/metalium-developers-infra
