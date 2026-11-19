@@ -41,6 +41,7 @@
 #include <tt-umd-workload/simulation/simulation_chip.hpp>
 #include <tt-umd/tt_device/tt_device.hpp>
 #include <tt-umd/pcie/pci_device.hpp>
+#include <tt-umd/tt_device/protocol/pcie_interface.hpp>
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <tt-umd/types/cluster_types.hpp>
@@ -863,11 +864,11 @@ std::optional<int> Cluster::get_physical_slot(ChipId chip) const {
         log_warning(tt::LogDevice, "get_physical_slot is not supported for non-silicon devices");
         return std::nullopt;
     }
-    umd::PCIDevice* pci_device = this->driver_->get_tt_device(chip)->get_pci_device();
-    if (pci_device == nullptr) {
+    auto* pcie_interface = this->driver_->get_tt_device(chip)->get_pcie_interface();
+    if (pcie_interface == nullptr) {
         return std::nullopt;
     }
-    return pci_device->get_device_info().physical_slot;
+    return pcie_interface->get_physical_slot();
 }
 
 void Cluster::deassert_risc_reset_at_core(
