@@ -542,6 +542,7 @@ def test_accepting_a_setting_switch_ships_it_as_the_default(tmp_path, monkeypatc
     assert '"KERNEL": Setting(\n        "unified",\n        ("loop", "unified")' in out
     assert '"FP32": Setting(False)' in out and '"FIDELITY": Setting("HiFi4", ("HiFi4", "HiFi2"))' in out
     assert model_precision.set_defaults(spec, {"FIDELITY": "HiFi4"}) == []  # already the default: no edit
+    assert model_precision.set_defaults(spec, {"FP32": False}) == ["FP32: True -> False"]  # F274: a YAML bool (off)
 
 
 def test_the_accept_reuses_the_on_side_when_the_code_is_unchanged(mk, sandbox):
@@ -875,3 +876,17 @@ def test_a_position_profile_names_its_chunk_role(monkeypatch):
     from models.demos.common.bringup.testing import profile
 
     assert 'f"_p{pos}{role}"' in inspect.getsource(profile.run_profile)
+
+
+def test_ab_table_shows_gated_test_metrics(tmp_path):
+    """F273: a frozen test's fixed-threshold metric (a steady wall) appears on vs off in the A/B table."""
+    from models.demos.common.bringup.orchestrator import Orchestrator
+
+    o = Orchestrator.__new__(Orchestrator)
+    o.run_dir = tmp_path
+    vals = {"new": {"steady_wall_ms_p1": 93.4, "err_layer_L1": 0.1}, "old": {"steady_wall_ms_p1": 108.1}}
+    o.ab_metrics = lambda tid, d, side, name: vals[side]
+    task = {"id": "P.1", "gate": {"metrics": {"steady_wall_ms_p1": "> 0", "err_layer_L*": "<= limit"}}}
+    rows = o.ab_gated_rows(task, {"tests": {"t": {}}}, [("new", "on"), ("old", "off")], str)
+    assert any("steady_wall_ms_p1 (t) | 93.4 | 108.1 | -14.7" in r for r in rows)
+    assert not any("err_layer" in r for r in rows)

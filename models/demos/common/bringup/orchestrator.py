@@ -2175,6 +2175,34 @@ class Orchestrator:
                 out[label] = got[key]
         return out
 
+    def ab_gated_rows(self, task: dict, rec: dict, sides, fmt) -> list[str]:
+        """F273: the gate's fixed-threshold metrics the frozen tests record (test_skip_positions' steady walls, ...),
+        on vs off. The table showed only pass / fail for them, so a perf pick's own result was missing (DeepSeek-V4.1
+        P.78: steady_wall_ms_p145408 108.1 -> 93.4 ms was in the side records only). Accuracy ('limit') thresholds
+        have their own section."""
+        import fnmatch
+
+        globs = [g for g, c in (task.get("gate", {}).get("metrics") or {}).items() if not str(c).endswith("limit")]
+        globs = [g for g in globs if not g.startswith("determinism")]
+        d = self.run_dir / "ab" / task["id"]
+        rows = []
+        for name in rec["tests"]:
+            got = {s: self.ab_metrics(task["id"], d, s, name) for s, _ in sides}
+            keys = sorted({k for m in got.values() for k in m if any(fnmatch.fnmatchcase(k, g) for g in globs)})
+            for k in keys:
+                a, b = (got[s].get(k) for s, _ in sides)
+                num = all(isinstance(v, (int, float)) for v in (a, b))
+                rows.append(f"| {k} ({name}) | {fmt(a)} | {fmt(b)} | {f'{a - b:+.1f}' if num else ''} |")
+        if not rows:
+            return []
+        return [
+            "",
+            "## Gated metrics of the tests (on vs off)",
+            "",
+            "| | on | off | on - off |",
+            "|---|---|---|---|",
+        ] + rows
+
     def ab_table(self, task: dict, rec: dict) -> str:
         fmt = lambda v: "-" if v is None else f"{v:.4f}" if isinstance(v, float) else str(v)  # noqa: E731
         sides = [("new", "on"), ("old", "off")]
@@ -2221,6 +2249,7 @@ class Orchestrator:
         for name, r in rec["tests"].items():
             for side, label in sides:
                 out += [f"- {name} {label}: {c}" for c in (r.get(side) or {}).get("checks", [])]
+        out += self.ab_gated_rows(task, rec, sides, fmt)
         rungs = rec["rungs"] if rec["ladder"] else []
         out += ["", "## End to end (ladder)", ""] if rungs else []
         out += ["| | " + " | ".join(f"{r} {lbl}" for r in rungs for _, lbl in sides) + " |"] if rungs else []

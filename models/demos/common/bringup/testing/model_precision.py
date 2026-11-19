@@ -86,7 +86,9 @@ def set_defaults(spec, switch: dict) -> list[str]:
             st, n = hit
             old = st.table[n].default
             raw = switch.get(n, switch.get(st.env_name(n)))
-            new = raw.lower() in ("1", "true", "yes") if isinstance(old, bool) else type(old)(raw)
+            # F274: a YAML on / off / yes / true is already a bool (DeepSeek-V4.1 P.78 crashed here at accept)
+            raw = str(raw)
+            new = raw.lower() in ("1", "true", "yes", "on") if isinstance(old, bool) else type(old)(raw)
             if new == old:
                 continue
             a = v.args[0]
