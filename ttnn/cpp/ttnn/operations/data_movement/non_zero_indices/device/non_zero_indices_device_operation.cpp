@@ -9,7 +9,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 
 #include <limits>
-#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/math.hpp>
 
 using namespace tt::tt_metal;
 
@@ -22,7 +22,7 @@ void NonZeroIndicesDeviceOperation::validate_on_program_cache_miss(
         "non_zero_indices: input must be rank-4, got rank {}",
         input_tensor.logical_shape().rank());
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to Non-zero need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to Non-zero need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to Non-zero need to be allocated in buffers on device!");
 
     const uint32_t elem_size = input_tensor.element_size();
     TT_FATAL(
@@ -34,10 +34,8 @@ void NonZeroIndicesDeviceOperation::validate_on_program_cache_miss(
         args.output_memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "non_zero_indices: output_memory_config must be INTERLEAVED; variable-length output cannot be sharded");
 
-    // The ROW_MAJOR kernel uses buffer()->page_size() and num_dev_pages() as loop bounds, which
-    // reflect the padded shape.  If padded_shape != logical_shape, padding rows/columns would be
-    // scanned and any non-zero padding byte would emit an out-of-range index.  TILE layout handles
-    // padding explicitly; for ROW_MAJOR, require no shape padding.
+    // The ROW_MAJOR kernel scans whole pages, so shape padding would emit out-of-range indices.
+    // TILE layout masks padding; ROW_MAJOR must have none.
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
         TT_FATAL(
             input_tensor.padded_shape() == input_tensor.logical_shape(),
@@ -54,9 +52,9 @@ void NonZeroIndicesDeviceOperation::validate_on_program_cache_miss(
         total_elements);
     // The output indices CB stages all indices in L1 before writing to DRAM.
     // Each non-zero element emits 4 uint32 values (b, n, h, c), so the worst-case
-    // CB size is 2 × round_up_to_mul32(volume × 4 × sizeof(uint32_t)).
+    // CB size is 2 × tt::round_up(volume × 4 × sizeof(uint32_t), 32).
     const uint64_t aligned_output_bytes =
-        static_cast<uint64_t>(round_up_to_mul32(static_cast<uint32_t>(total_elements) * 4 * sizeof(uint32_t)));
+        static_cast<uint64_t>(tt::round_up(static_cast<uint32_t>(total_elements * 4 * sizeof(uint32_t)), 32u));
     const uint64_t indices_cb_bytes = 2 * aligned_output_bytes;
     const uint64_t l1_size = input_tensor.device()->l1_size_per_core();
     TT_FATAL(

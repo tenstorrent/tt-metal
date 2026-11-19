@@ -2,108 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from tt_py_test_utils_common.topk_test_utils import TEST_PADDING_VALUE, UINT16_MAX, run_topk_test
+
 import pytest
 
 pytestmark = pytest.mark.use_module_device
 
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_equal, assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_equal, assert_numeric_metrics, merge_gate_subset
 
-UINT16_MAX = 65535
 # Smallest tile-aligned width whose indices need 32 bits: 65536 still fits (largest index 65535).
 W_NEEDS_UINT32 = UINT16_MAX + 1 + 32
-TEST_PADDING_VALUE = -42
-
-
-def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids=None, pass_indices_tensor=False):
-    torch.manual_seed(2005)
-
-    if dtype == ttnn.bfloat8_b:
-        pytest.xfail("BFLOAT8_B not supported by pad operation in topk")
-
-    # float32 sorts at full 32-bit precision (no bf16 downcast), so its single-core compute
-    # buffers are ~2x the bf16 size. The result-prep (2*Kt) + output (Kt) tiles dominate L1, so
-    # the ceiling is a tile count, not a width: measured max is 54 output tiles (k <= 1728) in
-    # Wormhole's ~1.5MB per-core L1; beyond that the buffers overflow. Multi-core can't help
-    # here (it requires k <= 64). Kt = ceil(k/32).
-    if dtype == ttnn.float32 and (k + 31) // 32 > 54:
-        pytest.skip("exact float32 top-K exceeds single-core L1 beyond k=1728 (54 output tiles)")
-
-    # Input tensor
-    shape = [N, C, H, W]
-    # Index width follows the tile-padded width; 16 bits hold every width up to 65536 (index 65535).
-    padded_W = -(-W // 32) * 32
-    ttnn_indices_dtype = ttnn.uint16 if padded_W <= UINT16_MAX + 1 else ttnn.uint32
-    torch_indices_dtype = torch.uint16 if padded_W <= UINT16_MAX + 1 else torch.uint32
-    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
-    input = torch.randn(shape, dtype=torch_dtype) * 0.9
-    ttnn_input = ttnn.from_torch(input, dtype, layout=ttnn.Layout.TILE, device=device)
-    ttnn_input = ttnn.fill_implicit_tile_padding(ttnn_input, TEST_PADDING_VALUE)
-
-    pyt_topk_values, pyt_topk_indices = torch.topk(input, k, dim=dim, largest=largest, sorted=True)
-
-    if pass_indices_tensor:
-        # The payload must differ from the iota topk generates on its own, or the gather below
-        # cannot tell a read from a regeneration. Column i is labelled W - 1 - i.
-        indices_tensor_torch = (W - 1 - torch.arange(W)).expand(shape).to(torch_indices_dtype)
-        indices_tensor = ttnn.from_torch(
-            indices_tensor_torch, ttnn_indices_dtype, layout=ttnn.Layout.TILE, device=device
-        )
-        indices_tensor = ttnn.fill_implicit_tile_padding(indices_tensor, TEST_PADDING_VALUE)
-    else:
-        indices_tensor = None
-
-    ttnn_topk_values, ttnn_topk_indices = ttnn.topk(
-        ttnn_input,
-        k,
-        dim=dim,
-        largest=largest,
-        sorted=sorted,
-        sub_core_grids=sub_core_grids,
-        indices_tensor=indices_tensor,
-    )
-
-    # Convert TTNN outputs to Torch for comparison
-    ttnn_torch_values = ttnn.to_torch(ttnn_topk_values)
-    ttnn_torch_indices = ttnn.to_torch(ttnn_topk_indices, dtype=torch_indices_dtype)
-
-    # Assert output shapes
-    desired_shape = [N, C, H, W]
-    desired_shape[dim] = k
-    assert list(ttnn_topk_values.shape) == desired_shape
-    assert list(ttnn_topk_indices.shape) == desired_shape
-
-    # test for equivalance
-    assert_numeric_metrics(
-        pyt_topk_values,
-        ttnn_torch_values,
-        pcc_threshold=0.9999,
-        rtol=1e-06,
-        atol=1e-06,
-        frobenius_threshold=1e-09,
-    )
-    assert_equal(ttnn_torch_values, pyt_topk_values)
-
-    # Assert indices correctness using gather
-    # pcc is not a good measure for the raw indices
-    # if index 49 and index 8 are tied, the order of the indices can be different
-    # but the values associated with the indices should be the same
-    # if index 7 and 8 are tied, but swapped, the pcc will be better than if index 49 and 8 are tied but swapped
-    # rounding may also cause more ties than expected
-    # the bigger we get, the tighter the distribution of the top K elements, so the pcc will be worse as stability/rounding will cause more ties
-    # use cosine similarity on the gathered indices as this will show the top elements are all about the same
-    # topk returns the labels it is given, so turn each label back into the column it names.
-    # The labelling above is its own inverse: label L names column W - 1 - L.
-    # Without a payload the op generates plain column indices, so no conversion is needed.
-    ttnn_torch_columns = ttnn_torch_indices.to(torch.int64)
-    if pass_indices_tensor:
-        ttnn_torch_columns = W - 1 - ttnn_torch_columns
-    ttnn_torch_gather_from_indices = torch.gather(input, dim, ttnn_torch_columns)
-    cosine = torch.nn.CosineSimilarity(dim=dim)
-    ttnn_torch_cosine = torch.mean(cosine(pyt_topk_values, ttnn_torch_gather_from_indices))
-
-    assert ttnn_torch_cosine > 0.99, "Cosine similarity between topk values and gather from indices is less than 0.99"
 
 
 @pytest.mark.parametrize(
@@ -220,12 +130,13 @@ def test_topk_sub_core_grids(N, C, H, W, dim, k, dtype, sorted, largest, device,
     run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids, pass_indices_tensor)
 
 
-@pytest.mark.parametrize("W", [40, 1000])
+# W=20 and W=32 also get a whole pad tile appended by the reader.
+@pytest.mark.parametrize("W", [20, 32, 40, 1000])
 @pytest.mark.parametrize("largest", [True, False])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
 def test_topk_padded_width_sentinel_ties(W, largest, dtype, device):
     """Rows with fewer than k values beyond the pad sentinel must not return indices into the padding."""
-    k = 32
+    k = min(32, W)
     torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
     torch.manual_seed(0)
     torch_input = torch.full((1, 1, 32, W), float("-inf") if largest else float("inf"), dtype=torch_dtype)
@@ -237,6 +148,56 @@ def test_topk_padded_width_sentinel_ties(W, largest, dtype, device):
     assert bool((indices < W).all()), "index points into the padding"
     assert_equal(torch.topk(torch_input, k, dim=-1, largest=largest, sorted=True).values, values)
     assert_equal(values, torch.gather(torch_input, -1, indices))
+
+
+# Reader padding: W <= 32 adds a pad tile, W % 32 != 0 fills the last tile, W = 64 needs neither.
+@pytest.mark.parametrize(
+    "shape, dim",
+    [((1, 1, 32, W), -1) for W in (1, 31, 32, 33, 63, 64, 65)] + [((40, 64), 0), ((2, 40, 64), 1)],
+    ids=["w1", "w31", "w32", "w33", "w63", "w64", "w65", "rank2_dim0", "rank3_dim1"],
+)
+@pytest.mark.parametrize("largest", [True, False])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
+def test_topk_reader_width_padding(shape, dim, largest, dtype, device):
+    """Padding is pre-filled with a winning value, so an unfilled pad slot shows up; outputs must be k wide."""
+    torch.manual_seed(0)
+    k = min(5, shape[dim])
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    torch_input = torch.randn(shape, dtype=torch_dtype)
+    ttnn_input = ttnn.from_torch(torch_input, dtype, layout=ttnn.Layout.TILE, device=device)
+    ttnn_input = ttnn.fill_implicit_tile_padding(ttnn_input, 42 if largest else -42)
+
+    ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=dim, largest=largest, sorted=True)
+    values = ttnn.to_torch(ttnn_values)
+    indices = ttnn.to_torch(ttnn_indices).to(torch.int64)
+
+    torch_values = torch.topk(torch_input, k, dim=dim, largest=largest, sorted=True).values
+    assert list(values.shape) == list(torch_values.shape)
+    assert list(indices.shape) == list(torch_values.shape)
+    assert_equal(torch_values, values)
+    assert_equal(values, torch.gather(torch_input, dim, indices))
+
+
+def test_topk_new_k_on_cached_shape(device):
+    """A new k on a cached shape returns exactly k columns, and repeating k=5 hits the program cache."""
+    shape = [1, 1, 32, 100]
+
+    def run(k, seed):
+        torch.manual_seed(seed)
+        torch_input = torch.randn(shape, dtype=torch.bfloat16)
+        ttnn_input = ttnn.from_torch(torch_input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+        ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=True, sorted=True)
+        values = ttnn.to_torch(ttnn_values)
+        indices = ttnn.to_torch(ttnn_indices).to(torch.int64)
+        assert list(values.shape) == shape[:-1] + [k]
+        assert_equal(torch.topk(torch_input, k, dim=-1, largest=True, sorted=True).values, values)
+        assert_equal(values, torch.gather(torch_input, -1, indices))
+
+    run(k=5, seed=0)
+    run(k=7, seed=1)
+    entries = device.num_program_cache_entries()
+    run(k=5, seed=2)
+    assert device.num_program_cache_entries() == entries, "repeating k=5 on the same shape must hit the program cache"
 
 
 @pytest.mark.parametrize(
@@ -470,6 +431,12 @@ def test_topk_fp32_input_with_uint16_indices_tensor_raise(device, expect_error):
 
     input_torch = torch.randn(shape, dtype=torch.bfloat16)
     ttnn_input = ttnn.from_torch(input_torch, ttnn.float32, layout=ttnn.Layout.TILE, device=device)
+
+    # Warm the cache with UINT32 indices first: the UINT16 call must still miss it (dtype is hashed) and raise.
+    uint32_indices = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.int32), ttnn.uint32, layout=ttnn.Layout.TILE, device=device
+    )
+    ttnn.topk(ttnn_input, k=k, dim=-1, largest=True, sorted=True, indices_tensor=uint32_indices)
 
     indices_torch = torch.zeros(shape, dtype=torch.uint16)
     indices_tensor = ttnn.from_torch(indices_torch, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
@@ -843,16 +810,21 @@ def test_topk_w4096_low_ht_default_routes_to_composite(H, W, k, device):
 
 
 @pytest.mark.parametrize(
-    "N, C, H, W, dim, k",
-    (
-        (1, 1, 32, 64, 3, 32),  # small dim -> single-core path
-        (1, 1, 32, 4224, 3, 32),  # larger dim, non-pow2 -> genuinely single-core
-        (1, 1, 32, 4096, 3, 32),  # pow2 low-tile-row dim -> multi-core path (Ht-aware gate)
-        (1, 1, 32, 8192, 3, 50),  # power-of-2 dim, k<=64 -> multi-core path (32-bit indices)
-    ),
+    *merge_gate_subset(
+        {
+            "largest": (True, False),
+            "index_dtype": (ttnn.int32, ttnn.uint32),
+            "N, C, H, W, dim, k": (
+                (1, 1, 32, 64, 3, 32),  # small dim -> single-core path
+                (1, 1, 32, 4224, 3, 32),  # larger dim, non-pow2 -> genuinely single-core
+                (1, 1, 32, 4096, 3, 32),  # pow2 low-tile-row dim -> multi-core path (Ht-aware gate)
+                (1, 1, 32, 8192, 3, 50),  # power-of-2 dim, k<=64 -> multi-core path (32-bit indices)
+            ),
+        },
+        keep=lambda largest, index_dtype, W, k, **_: (largest and W == 4224)
+        or (not largest and index_dtype == ttnn.int32 and W == 8192 and k == 50),
+    )
 )
-@pytest.mark.parametrize("index_dtype", (ttnn.int32, ttnn.uint32))
-@pytest.mark.parametrize("largest", (True, False))
 def test_topk_int32_indices(N, C, H, W, dim, k, index_dtype, largest, device):
     # Exercises 32-bit (UINT32/INT32) index outputs on both the single-core and multi-core paths.
     torch.manual_seed(2005)
@@ -1174,11 +1146,11 @@ def test_topk_large_k_routing_engages(device):
     (
         (64, 4),
         (64, 8),
-        (64, 16),
+        pytest.param(64, 16, marks=pytest.mark.merge_gate),
         (64, 32),
         (64, 64),
         (8192, 32),  # W >= 8192 -> multi-core path
-        (8192, 64),
+        pytest.param(8192, 64, marks=pytest.mark.merge_gate),
     ),
 )
 @pytest.mark.parametrize("largest", [True, False])

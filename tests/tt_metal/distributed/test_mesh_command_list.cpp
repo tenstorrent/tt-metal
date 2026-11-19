@@ -10,6 +10,7 @@
 #include <functional>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -17,34 +18,41 @@
 #include <utility>
 #include <vector>
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/byte_based_tensor_transfers.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
+#include <tt-metalium/experimental/allocator.hpp>
 #include <tt-metalium/experimental/command_list.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/experimental/sram_arena/sram_arena.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <internal/mesh_device.hpp>
 
 #include "tests/tt_metal/tt_metal/api/metal2_host_api/test_helpers.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
+#include "tt_metal/impl/allocator/allocator.hpp"
 
 namespace tt::tt_metal::experimental::test {
 namespace {
 
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 using namespace tt::tt_metal::distributed;
 
 using m2::test_helpers::BindTensorParameterToKernel;
 using m2::test_helpers::MakeMinimalDFB;
 using m2::test_helpers::MakeMinimalGen1DMKernel;
 using m2::test_helpers::MakeMinimalWorkUnit;
+using ::testing::Contains;
 using ::testing::HasSubstr;
+using ::testing::Not;
 using ::testing::ThrowsMessage;
 
 constexpr m2::NodeCoord kNode{0, 0};
@@ -130,7 +138,7 @@ m2::ProgramSpec make_l1_write_spec(const std::string& name, const m2::Nodes& tar
 
 MeshWorkload make_l1_write_workload(
     MeshDevice& mesh_device, uint32_t address, uint32_t value, const std::string& name) {
-    auto workload = m2::MakeMeshWorkloadFromSpec(mesh_device, make_l1_write_spec(name));
+    auto workload = MakeMeshWorkloadFromSpec(mesh_device, make_l1_write_spec(name));
     auto& program = workload.get_programs().begin()->second;
 
     m2::ProgramRunArgs args;
@@ -139,7 +147,7 @@ MeshWorkload make_l1_write_workload(
         .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(kNode, {{"address", address}}),
         .common_runtime_arg_values = {{"value", value}},
     }};
-    m2::SetProgramRunArgs(program, args);
+    SetProgramRunArgs(program, args);
     return workload;
 }
 
@@ -158,7 +166,7 @@ MeshWorkload make_l1_write_workload(
         values.emplace(device_range, value);
     }
 
-    auto workload = m2::MakeMeshWorkloadFromSpecs(mesh_device, specs);
+    auto workload = MakeMeshWorkloadFromSpecs(mesh_device, specs);
     for (auto& [device_range, program] : workload.get_programs()) {
         m2::ProgramRunArgs args;
         args.kernel_run_args = {m2::ProgramRunArgs::KernelRunArgs{
@@ -166,7 +174,7 @@ MeshWorkload make_l1_write_workload(
             .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(kNode, {{"address", address}}),
             .common_runtime_arg_values = {{"value", values.at(device_range)}},
         }};
-        m2::SetProgramRunArgs(program, args);
+        SetProgramRunArgs(program, args);
     }
     return workload;
 }
@@ -186,7 +194,7 @@ CmdListCommonRuntimeArgInfo l1_write_value_arg(const Program& program) {
 auto* device(const std::shared_ptr<MeshDevice>& mesh_device) { return mesh_device->impl().get_devices().at(0); }
 
 IDevice* device(const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoordinate& device_coord) {
-    return mesh_device->get_device(device_coord);
+    return internal::get_device(*mesh_device, device_coord);
 }
 
 void write_l1(const std::shared_ptr<MeshDevice>& mesh_device, uint32_t address, uint32_t value) {
@@ -218,6 +226,130 @@ uint32_t read_l1(const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoord
     return result.at(0);
 }
 
+constexpr uint32_t kPageSize = 1024;
+
+// One kPageSize row-major page per row.
+TensorSpec dram_tensor_spec(uint32_t num_pages) {
+    return TensorSpec(
+        Shape{num_pages, kPageSize / 2},
+        TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+}
+
+// Copies TensorParameter "input_tensor" to "output_tensor" one page at a time through an L1 DFB.
+m2::ProgramSpec make_loopback_spec(const std::string& name, const TensorSpec& tensor_spec) {
+    auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
+    producer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/tensor_accessor_loopback_producer.cpp";
+    producer.advanced_options.num_runtime_varargs = 1;
+    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
+    consumer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/tensor_accessor_loopback_consumer.cpp";
+    consumer.advanced_options.num_runtime_varargs = 1;
+
+    auto dfb = MakeMinimalDFB("input_dfb", kPageSize, /*num_entries=*/2);
+    dfb.data_format_metadata = DataFormat::Float16_b;
+    producer.dfb_bindings.push_back(m2::ProducerOf(m2::DFBSpecName{"input_dfb"}, "input_dfb"));
+    consumer.dfb_bindings.push_back(m2::ConsumerOf(m2::DFBSpecName{"input_dfb"}, "input_dfb"));
+    BindTensorParameterToKernel(producer, "input_tensor", "input_tensor");
+    BindTensorParameterToKernel(consumer, "output_tensor", "output_tensor");
+
+    return m2::ProgramSpec{
+        .name = name,
+        .kernels = {producer, consumer},
+        .dataflow_buffers = {dfb},
+        .tensor_parameters =
+            {
+                m2::TensorParameter{.unique_id = m2::TensorParamName{"input_tensor"}, .spec = tensor_spec},
+                m2::TensorParameter{.unique_id = m2::TensorParamName{"output_tensor"}, .spec = tensor_spec},
+            },
+        .work_units = {MakeMinimalWorkUnit("main", kNode, {"producer", "consumer"})},
+    };
+}
+
+// The loopback, with its DFB allocated at offset 0 of SRAMArenaParameter `arena_name`.
+m2::ProgramSpec make_loopback_spec_with_arena_dfb(
+    const std::string& name,
+    const TensorSpec& tensor_spec,
+    const SRAMArenaParamName& arena_name,
+    const LockstepSRAMArenaProperties& properties) {
+    auto spec = make_loopback_spec(name, tensor_spec);
+    spec.advanced_options.sram_arena_parameters = {{.unique_id = arena_name, .properties = properties}};
+    spec.dataflow_buffers.at(0).advanced_options.allocation_override = SRAMArenaAllocation{.arena = arena_name};
+    return spec;
+}
+
+// A minimal kernel on kNode whose scratchpad "pad" is allocated from SRAMArenaParameter "arena".
+m2::ProgramSpec make_arena_scratchpad_spec(const std::string& name) {
+    auto kernel = MakeMinimalGen1DMKernel(kKernelName, DataMovementProcessor::RISCV_0);
+    kernel.scratchpad_bindings = {{.scratchpad_spec_name = m2::ScratchpadSpecName{"pad"}, .accessor_name = "pad"}};
+    m2::ProgramSpec spec{
+        .name = name,
+        .kernels = {kernel},
+        .scratchpads = {{.unique_id = m2::ScratchpadSpecName{"pad"}, .size_per_node = 1024}},
+        .work_units = {MakeMinimalWorkUnit("main", kNode, {kKernelName})},
+    };
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}};
+    spec.advanced_options.sram_arena_parameters = {
+        {.unique_id = SRAMArenaParamName{"arena"}, .properties = LockstepSRAMArenaProperties{4096}}};
+    return spec;
+}
+
+m2::ProgramRunArgs loopback_run_args(const MeshTensor& input, const MeshTensor& output) {
+    const uint32_t num_pages = input.logical_shape()[0];
+    m2::ProgramRunArgs args;
+    args.kernel_run_args = {
+        m2::ProgramRunArgs::KernelRunArgs{
+            .kernel = m2::KernelSpecName{"producer"},
+            .advanced_options = AdvancedKernelRunArgs{.runtime_varargs = {{kNode, {num_pages}}}},
+        },
+        m2::ProgramRunArgs::KernelRunArgs{
+            .kernel = m2::KernelSpecName{"consumer"},
+            .advanced_options = AdvancedKernelRunArgs{.runtime_varargs = {{kNode, {num_pages}}}},
+        },
+    };
+    args.tensor_args = {
+        {m2::TensorParamName{"input_tensor"}, m2::ProgramRunArgs::TensorArgument{input}},
+        {m2::TensorParamName{"output_tensor"}, m2::ProgramRunArgs::TensorArgument{output}},
+    };
+    return args;
+}
+
+MeshWorkload make_loopback_workload(
+    MeshDevice& mesh_device, const MeshTensor& input, const MeshTensor& output, const std::string& name) {
+    auto workload = MakeMeshWorkloadFromSpec(mesh_device, make_loopback_spec(name, input.tensor_spec()));
+    SetProgramRunArgs(workload.get_programs().begin()->second, loopback_run_args(input, output));
+    return workload;
+}
+
+CmdListParameters patchable_input(const Program& program, const CmdListTensorArgName& name) {
+    return {
+        .tensor_parameters = {
+            {name,
+             std::vector<CmdListTensorArgInfo>{
+                 {.program = std::cref(program), .param_name = m2::TensorParamName{"input_tensor"}}}}}};
+}
+
+void write_tensor(const MeshTensor& tensor, const std::vector<uint32_t>& data) {
+    ::tt::tt_metal::detail::WriteToBuffer(*tensor.mesh_buffer().get_reference_buffer(), data);
+}
+
+std::vector<uint32_t> read_tensor(const MeshTensor& tensor) {
+    std::vector<uint32_t> result;
+    ::tt::tt_metal::detail::ReadFromBuffer(*tensor.mesh_buffer().get_reference_buffer(), result);
+    return result;
+}
+
+// Interleaved DRAM buffer of pages_per_bank kPageSize pages in every bank.
+std::shared_ptr<MeshBuffer> allocate_dram(MeshDevice& mesh_device, uint32_t pages_per_bank) {
+    const uint32_t num_banks = mesh_device.allocator()->get_num_banks(BufferType::DRAM);
+    return MeshBuffer::create(
+        ReplicatedBufferConfig{.size = pages_per_bank * num_banks * kPageSize},
+        DeviceLocalBufferConfig{.page_size = kPageSize, .buffer_type = BufferType::DRAM},
+        &mesh_device);
+}
+
 TEST_F(CommandListTest, BuildsIndependentSnapshotsAndReplaysBlockingAndNonBlocking) {
     // Record the first workload, build a snapshot, then append a second workload
     // and build a new independent snapshot.
@@ -227,10 +359,10 @@ TEST_F(CommandListTest, BuildsIndependentSnapshotsAndReplaysBlockingAndNonBlocki
 
     CommandListBuilder builder(*mesh_device_);
     EXPECT_EQ(&builder.device(), mesh_device_.get());
-    builder.add(workload_a);
+    builder.add(cq, workload_a);
     auto list_a = builder.build(cq);
 
-    builder.add(workload_b);
+    builder.add(cq, workload_b);
     auto list_ab = builder.build(cq);
     EXPECT_EQ(&list_a.device(), mesh_device_.get());
     EXPECT_EQ(list_a.cq_id(), cq.id());
@@ -344,6 +476,7 @@ TEST_F(CommandListTest, UpdatesRuntimeAndCommonRuntimeArgumentsTransactionally) 
 
     CommandListBuilder builder(*mesh_device_);
     builder.add(
+        cq,
         workload,
         CmdListParameters{
             .runtime_parameters = {{address_param, std::vector<CmdListRuntimeArgInfo>{l1_write_address_arg(program)}}},
@@ -411,100 +544,37 @@ TEST_F(CommandListTest, UpdatesRuntimeAndCommonRuntimeArgumentsTransactionally) 
 TEST_F(CommandListTest, UpdatesTensorArgumentForSubsequentReplays) {
     // Create two compatible inputs and one output for a tensor-accessor loopback.
     constexpr uint32_t num_pages = 2;
-    constexpr uint32_t page_size = 1024;
-    constexpr uint32_t total_bytes = num_pages * page_size;
-
-    const auto page_config = PageConfig(Layout::ROW_MAJOR);
-    const auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
-    const auto tensor_layout = TensorLayout(DataType::BFLOAT16, page_config, memory_config);
-    const auto tensor_spec = TensorSpec(Shape{num_pages, 512}, tensor_layout);
-
+    const auto tensor_spec = dram_tensor_spec(num_pages);
     MeshTensor input_a = MeshTensor::allocate_on_device(*mesh_device_, tensor_spec);
     MeshTensor input_b = MeshTensor::allocate_on_device(*mesh_device_, tensor_spec);
     MeshTensor output = MeshTensor::allocate_on_device(*mesh_device_, tensor_spec);
 
-    auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
-    producer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/tensor_accessor_loopback_producer.cpp";
-    producer.advanced_options.num_runtime_varargs = 1;
-    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
-    consumer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/tensor_accessor_loopback_consumer.cpp";
-    consumer.advanced_options.num_runtime_varargs = 1;
-
-    auto dfb = MakeMinimalDFB("input_dfb", page_size, /*num_entries=*/2);
-    dfb.data_format_metadata = DataFormat::Float16_b;
-    producer.dfb_bindings.push_back(m2::ProducerOf(m2::DFBSpecName{"input_dfb"}, "input_dfb"));
-    consumer.dfb_bindings.push_back(m2::ConsumerOf(m2::DFBSpecName{"input_dfb"}, "input_dfb"));
-    BindTensorParameterToKernel(producer, "input_tensor", "input_tensor");
-    BindTensorParameterToKernel(consumer, "output_tensor", "output_tensor");
-
     // Bind input A when recording and expose only that input as patchable.
-    m2::ProgramSpec spec{
-        .name = "tensor_patch",
-        .kernels = {producer, consumer},
-        .dataflow_buffers = {dfb},
-        .tensor_parameters =
-            {
-                m2::TensorParameter{.unique_id = m2::TensorParamName{"input_tensor"}, .spec = tensor_spec},
-                m2::TensorParameter{.unique_id = m2::TensorParamName{"output_tensor"}, .spec = tensor_spec},
-            },
-        .work_units = {MakeMinimalWorkUnit("main", kNode, {"producer", "consumer"})},
-    };
-    auto workload = m2::MakeMeshWorkloadFromSpec(*mesh_device_, spec);
-    auto& program = workload.get_programs().begin()->second;
-
-    m2::ProgramRunArgs args;
-    args.kernel_run_args = {
-        m2::ProgramRunArgs::KernelRunArgs{
-            .kernel = m2::KernelSpecName{"producer"},
-            .advanced_options = m2::AdvancedKernelRunArgs{.runtime_varargs = {{kNode, {num_pages}}}},
-        },
-        m2::ProgramRunArgs::KernelRunArgs{
-            .kernel = m2::KernelSpecName{"consumer"},
-            .advanced_options = m2::AdvancedKernelRunArgs{.runtime_varargs = {{kNode, {num_pages}}}},
-        },
-    };
-    args.tensor_args = {
-        {m2::TensorParamName{"input_tensor"}, m2::ProgramRunArgs::TensorArgument{input_a}},
-        {m2::TensorParamName{"output_tensor"}, m2::ProgramRunArgs::TensorArgument{output}},
-    };
-    m2::SetProgramRunArgs(program, args);
-
+    auto workload = make_loopback_workload(*mesh_device_, input_a, output, "tensor_patch");
     const CmdListTensorArgName input_param{"input"};
-
-    CommandListBuilder builder(*mesh_device_);
-    builder.add(
-        workload,
-        CmdListParameters{
-            .tensor_parameters =
-                {{input_param,
-                  std::vector<CmdListTensorArgInfo>{{
-                      .program = std::cref(program),
-                      .param_name = m2::TensorParamName{"input_tensor"},
-                  }}}},
-        });
     auto& cq = mesh_device_->mesh_command_queue(0);
+    CommandListBuilder builder(*mesh_device_);
+    builder.add(cq, workload, patchable_input(workload.get_programs().begin()->second, input_param));
     auto command_list = builder.build(cq);
 
-    std::vector<uint32_t> data_a(total_bytes / sizeof(uint32_t));
-    std::vector<uint32_t> data_b(total_bytes / sizeof(uint32_t));
+    std::vector<uint32_t> data_a(num_pages * kPageSize / sizeof(uint32_t));
+    std::vector<uint32_t> data_b(data_a.size());
     for (size_t i = 0; i < data_a.size(); ++i) {
         data_a[i] = static_cast<uint32_t>(i);
         data_b[i] = 0x80000000u + static_cast<uint32_t>(i);
     }
     const std::vector<uint32_t> zeros(data_a.size(), 0);
-    ::tt::tt_metal::detail::WriteToBuffer(*input_a.mesh_buffer().get_reference_buffer(), data_a);
-    ::tt::tt_metal::detail::WriteToBuffer(*input_b.mesh_buffer().get_reference_buffer(), data_b);
-    ::tt::tt_metal::detail::WriteToBuffer(*output.mesh_buffer().get_reference_buffer(), zeros);
+    write_tensor(input_a, data_a);
+    write_tensor(input_b, data_b);
+    write_tensor(output, zeros);
 
     // The initial replay copies input A to the output.
     EnqueueCommandList(cq, command_list, /*blocking=*/true);
-    std::vector<uint32_t> result;
-    ::tt::tt_metal::detail::ReadFromBuffer(*output.mesh_buffer().get_reference_buffer(), result);
-    EXPECT_EQ(result, data_a);
+    EXPECT_EQ(read_tensor(output), data_a);
 
     // A tensor that does not match the declared TensorSpec is rejected.
     MeshTensor mismatched =
-        MeshTensor::allocate_on_device(*mesh_device_, TensorSpec(Shape{num_pages, 256}, tensor_layout));
+        MeshTensor::allocate_on_device(*mesh_device_, TensorSpec(Shape{num_pages, 256}, tensor_spec.tensor_layout()));
     EXPECT_THAT(
         [&] {
             command_list.update_args(CmdListArgPatch{
@@ -517,11 +587,9 @@ TEST_F(CommandListTest, UpdatesTensorArgumentForSubsequentReplays) {
     command_list.update_args(CmdListArgPatch{
         .tensor_args = {{input_param, m2::ProgramRunArgs::TensorArgument{input_b}}},
     });
-    ::tt::tt_metal::detail::WriteToBuffer(*output.mesh_buffer().get_reference_buffer(), zeros);
+    write_tensor(output, zeros);
     EnqueueCommandList(cq, command_list, /*blocking=*/true);
-    result.clear();
-    ::tt::tt_metal::detail::ReadFromBuffer(*output.mesh_buffer().get_reference_buffer(), result);
-    EXPECT_EQ(result, data_b);
+    EXPECT_EQ(read_tensor(output), data_b);
 }
 
 TEST_F(CommandListTest, UpdatesTensorBindingsThatCrossPatchWindows) {
@@ -570,7 +638,7 @@ void kernel_main() {
                 .relaxations = TensorSpecRelaxations{.dynamic_tensor_shape = true}}},
             .work_units = {MakeMinimalWorkUnit("main", kNode, {kKernelName})},
         };
-        auto workload = m2::MakeMeshWorkloadFromSpec(*mesh_device_, spec);
+        auto workload = MakeMeshWorkloadFromSpec(*mesh_device_, spec);
         auto& program = workload.get_programs().begin()->second;
         m2::ProgramRunArgs args;
         args.kernel_run_args = {m2::ProgramRunArgs::KernelRunArgs{
@@ -579,10 +647,11 @@ void kernel_main() {
             .common_runtime_arg_values = leading_values,
         }};
         args.tensor_args = {{m2::TensorParamName{"io"}, m2::ProgramRunArgs::TensorArgument{recorded}}};
-        m2::SetProgramRunArgs(program, args);
+        SetProgramRunArgs(program, args);
 
         CommandListBuilder builder(*mesh_device_);
         builder.add(
+            cq,
             workload,
             CmdListParameters{
                 .tensor_parameters =
@@ -621,7 +690,7 @@ void kernel_main() {
 }
 )"};
     kernel.runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = crta_names};
-    auto workload = m2::MakeMeshWorkloadFromSpec(
+    auto workload = MakeMeshWorkloadFromSpec(
         *mesh_device_,
         m2::ProgramSpec{
             .name = "window_neighbors",
@@ -635,16 +704,16 @@ void kernel_main() {
         .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(kNode, {{"address", kAddressA}}),
         .common_runtime_arg_values = {{"first", 0}, {"second", 0}, {"third", 0}},
     }};
-    m2::SetProgramRunArgs(program, args);
+    SetProgramRunArgs(program, args);
 
     CmdListParameters parameters;
     for (const auto& name : crta_names) {
         parameters.common_runtime_parameters[CmdListCommonRuntimeArgName{name}] = {
             {.program = std::cref(program), .kernel_name = m2::KernelSpecName{kKernelName}, .arg_name = name}};
     }
-    CommandListBuilder builder(*mesh_device_);
-    builder.add(workload, parameters);
     auto& cq = mesh_device_->mesh_command_queue(0);
+    CommandListBuilder builder(*mesh_device_);
+    builder.add(cq, workload, parameters);
     auto command_list = builder.build(cq);
 
     // Patch one parameter at a time. A patch built from stale window contents would write the recorded 0 back over
@@ -670,7 +739,7 @@ TEST_F(CommandListTest, UpdatesEveryTargetOfAParameter) {
     constexpr uint32_t kPatchedValue = 0xCAFE0003;
     const m2::NodeCoord other_node{1, 0};
     auto two_nodes =
-        m2::MakeMeshWorkloadFromSpec(*mesh_device_, make_l1_write_spec("two_nodes", m2::NodeRange(kNode, other_node)));
+        MakeMeshWorkloadFromSpec(*mesh_device_, make_l1_write_spec("two_nodes", m2::NodeRange(kNode, other_node)));
     auto& two_node_program = two_nodes.get_programs().begin()->second;
     auto rtas = m2::MakeRuntimeArgsForSingleNode(kNode, {{"address", kAddressA}});
     m2::AddRuntimeArgsForNode(rtas, other_node, {{"address", kAddressA}});
@@ -680,7 +749,7 @@ TEST_F(CommandListTest, UpdatesEveryTargetOfAParameter) {
         .runtime_arg_values = rtas,
         .common_runtime_arg_values = {{"value", kValueA}},
     }};
-    m2::SetProgramRunArgs(two_node_program, args);
+    SetProgramRunArgs(two_node_program, args);
     auto one_node = make_l1_write_workload(*mesh_device_, kAddressC, kValueB, "one_node");
     auto& one_node_program = one_node.get_programs().begin()->second;
 
@@ -688,8 +757,10 @@ TEST_F(CommandListTest, UpdatesEveryTargetOfAParameter) {
     const CmdListCommonRuntimeArgName value_param{"payload"};
     auto two_node_address = l1_write_address_arg(two_node_program);
     two_node_address.nodes = {kNode, other_node};
+    auto& cq = mesh_device_->mesh_command_queue(0);
     CommandListBuilder builder(*mesh_device_);
     builder.add(
+        cq,
         two_nodes,
         CmdListParameters{
             .runtime_parameters = {{address_param, std::vector<CmdListRuntimeArgInfo>{two_node_address}}},
@@ -697,12 +768,12 @@ TEST_F(CommandListTest, UpdatesEveryTargetOfAParameter) {
                 {{value_param, std::vector<CmdListCommonRuntimeArgInfo>{l1_write_value_arg(two_node_program)}}},
         });
     builder.add(
+        cq,
         one_node,
         CmdListParameters{
             .common_runtime_parameters =
                 {{value_param, std::vector<CmdListCommonRuntimeArgInfo>{l1_write_value_arg(one_node_program)}}},
         });
-    auto& cq = mesh_device_->mesh_command_queue(0);
     auto command_list = builder.build(cq);
 
     // One patch moves both nodes' writes to kAddressB and changes the value written by both workloads.
@@ -746,6 +817,7 @@ TEST_F(CommandListTest, OrdersNonBlockingPatchesWithReplays) {
     const CmdListCommonRuntimeArgName value_param{"payload"};
     CommandListBuilder builder(*mesh_device_);
     builder.add(
+        cq,
         workload,
         CmdListParameters{
             .runtime_parameters = {{address_param, std::vector<CmdListRuntimeArgInfo>{l1_write_address_arg(program)}}},
@@ -777,7 +849,7 @@ TEST_F(CommandListMultiDeviceTest, ReplaysMeshWideWorkloadOnEveryDevice) {
     auto& cq = mesh_device_->mesh_command_queue(0);
 
     CommandListBuilder builder(*mesh_device_);
-    builder.add(workload);
+    builder.add(cq, workload);
     auto command_list = builder.build(cq);
 
     const MeshCoordinateRange all_devices(mesh_device_->shape());
@@ -825,9 +897,9 @@ TEST_F(CommandListMultiDeviceTest, ReplaysHeterogeneousAndNonConvexDeviceRanges)
 
     auto& cq = mesh_device_->mesh_command_queue(0);
     CommandListBuilder builder(*mesh_device_);
-    builder.add(mesh_wide);
-    builder.add(split_rows);
-    builder.add(non_convex);
+    builder.add(cq, mesh_wide);
+    builder.add(cq, split_rows);
+    builder.add(cq, non_convex);
     auto command_list = builder.build(cq);
 
     for (const auto& coord : all_devices) {
@@ -873,6 +945,7 @@ TEST_F(CommandListMultiDeviceTest, UpdatesParametersAcrossHeterogeneousDeviceRan
     auto& cq = mesh_device_->mesh_command_queue(0);
     CommandListBuilder builder(*mesh_device_);
     builder.add(
+        cq,
         split_rows,
         CmdListParameters{
             .runtime_parameters =
@@ -903,15 +976,36 @@ TEST_F(CommandListMultiDeviceTest, UpdatesParametersAcrossHeterogeneousDeviceRan
     }
 }
 
+TEST_F(CommandListMultiDeviceTest, SynchronizedAllocatorMergesOverlappingDramAllocations) {
+    // After unit-mesh aggregation, the parent mesh's allocator takes the merged state of its submeshes' allocators,
+    // and checked replay on the parent queries that merged view. Each submesh allocates independently from the same
+    // base address, so their buffers can partially overlap. A replay on the parent writes a range on every device, so
+    // overlapping buffers must merge into one entry that covers them all.
+    auto sub0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
+    auto sub1 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 1));
+
+    // Submesh 0: X at [0-4). Submesh 1: a pad at [0-2), then Y at [2-6). Offsets are in pages per bank from the shared
+    // base address, which is where each fresh submesh allocator places its first buffer.
+    const auto x = allocate_dram(*sub0, 4);
+    const auto pad = allocate_dram(*sub1, 2);
+    const auto y = allocate_dram(*sub1, 4);
+    const DeviceAddr base = x->address();
+    ASSERT_EQ(pad->address(), base);
+    ASSERT_EQ(y->address(), base + (2 * kPageSize));
+
+    ::tt::tt_metal::experimental::synchronize_allocator_state(
+        mesh_device_->allocator().get(), {sub0->allocator().get(), sub1->allocator().get()});
+
+    // X, the pad, and Y merge into the single allocation [0-6). Allocations are disjoint, so no other one overlaps it.
+    EXPECT_THAT(
+        mesh_device_->allocator_impl()->get_dram_allocations(),
+        Contains(std::pair<DeviceAddr, DeviceAddr>{base, base + (6 * kPageSize)}));
+}
+
 TEST_F(CommandListTest, AllowsTemporaryTensorLifetimeDuringBuild) {
     constexpr uint32_t num_pages = 2;
-    constexpr uint32_t page_size = 1024;
-    constexpr uint32_t total_bytes = num_pages * page_size;
-
-    const auto page_config = PageConfig(Layout::ROW_MAJOR);
-    const auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
-    const auto tensor_layout = TensorLayout(DataType::BFLOAT16, page_config, memory_config);
-    const auto tensor_spec = TensorSpec(Shape{num_pages, 512}, tensor_layout);
+    constexpr uint32_t total_bytes = num_pages * kPageSize;
+    const auto tensor_spec = dram_tensor_spec(num_pages);
 
     // Allocate the persistent output before command-list recording starts.
     MeshTensor output = MeshTensor::allocate_on_device(*mesh_device_, tensor_spec);
@@ -926,32 +1020,8 @@ TEST_F(CommandListTest, AllowsTemporaryTensorLifetimeDuringBuild) {
     }
 
     // Create a workload that copies an input tensor to the persistent output.
-    auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
-    producer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/tensor_accessor_loopback_producer.cpp";
-    producer.advanced_options.num_runtime_varargs = 1;
-    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
-    consumer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/tensor_accessor_loopback_consumer.cpp";
-    consumer.advanced_options.num_runtime_varargs = 1;
-
-    auto dfb = MakeMinimalDFB("input_dfb", page_size, /*num_entries=*/2);
-    dfb.data_format_metadata = DataFormat::Float16_b;
-    producer.dfb_bindings.push_back(m2::ProducerOf(m2::DFBSpecName{"input_dfb"}, "input_dfb"));
-    consumer.dfb_bindings.push_back(m2::ConsumerOf(m2::DFBSpecName{"input_dfb"}, "input_dfb"));
-    BindTensorParameterToKernel(producer, "input_tensor", "input_tensor");
-    BindTensorParameterToKernel(consumer, "output_tensor", "output_tensor");
-
-    m2::ProgramSpec spec{
-        .name = "temporary_tensor_lifetime",
-        .kernels = {producer, consumer},
-        .dataflow_buffers = {dfb},
-        .tensor_parameters =
-            {
-                m2::TensorParameter{.unique_id = m2::TensorParamName{"input_tensor"}, .spec = tensor_spec},
-                m2::TensorParameter{.unique_id = m2::TensorParamName{"output_tensor"}, .spec = tensor_spec},
-            },
-        .work_units = {MakeMinimalWorkUnit("main", kNode, {"producer", "consumer"})},
-    };
-    auto workload = m2::MakeMeshWorkloadFromSpec(*mesh_device_, spec);
+    auto workload =
+        MakeMeshWorkloadFromSpec(*mesh_device_, make_loopback_spec("temporary_tensor_lifetime", tensor_spec));
     auto& program = workload.get_programs().begin()->second;
 
     // Allocate the input during recording and bind it to the workload added to the command list.
@@ -962,35 +1032,208 @@ TEST_F(CommandListTest, AllowsTemporaryTensorLifetimeDuringBuild) {
             mesh_device_->mesh_command_queue(0), reinterpret_cast<const std::byte*>(expected.data()), temporary);
         Finish(mesh_device_->mesh_command_queue(0));
 
-        m2::ProgramRunArgs args;
-        args.kernel_run_args = {
-            m2::ProgramRunArgs::KernelRunArgs{
-                .kernel = m2::KernelSpecName{"producer"},
-                .advanced_options = m2::AdvancedKernelRunArgs{.runtime_varargs = {{kNode, {num_pages}}}},
-            },
-            m2::ProgramRunArgs::KernelRunArgs{
-                .kernel = m2::KernelSpecName{"consumer"},
-                .advanced_options = m2::AdvancedKernelRunArgs{.runtime_varargs = {{kNode, {num_pages}}}},
-            },
-        };
-        args.tensor_args = {
-            {m2::TensorParamName{"input_tensor"}, m2::ProgramRunArgs::TensorArgument{temporary}},
-            {m2::TensorParamName{"output_tensor"}, m2::ProgramRunArgs::TensorArgument{output}},
-        };
-        m2::SetProgramRunArgs(program, args);
-        builder.add(workload);
+        SetProgramRunArgs(program, loopback_run_args(temporary, output));
+        builder.add(write_cq, workload);
     }
 
     // Build and replay after the recorded input tensor has been deallocated.
     // Replay intentionally uses the captured raw address after the allocation is released. The stale DRAM contents
     // remain usable until another allocation reuses or overwrites that storage; no live MeshTensor handle is required.
+    // Checked replay accepts this: nothing occupies the input's freed range, and the live output exactly fills its own.
     auto& cq = mesh_device_->mesh_command_queue(0);
     auto command_list = builder.build(cq);
-    EnqueueCommandList(cq, command_list, /*blocking=*/true);
+    EnqueueCommandList(cq, command_list, /*blocking=*/true, /*check_dram_overlap=*/true);
 
     std::vector<uint32_t> result(total_bytes / sizeof(uint32_t));
     ::tt::tt_metal::enqueue_read_tensor(cq, output, reinterpret_cast<std::byte*>(result.data()));
     EXPECT_EQ(result, expected);
+}
+
+TEST_F(CommandListTest, CheckedReplayAcceptsOnlyFreeOrExactRanges) {
+    // Checked replay passes a recorded DRAM range that is free or exactly filled by one live allocation, warning when
+    // that allocation is not the tensor bound to the range, and fails on any other overlap. One command list is built
+    // over a fixed layout of DRAM slots; each overlap shape is then made by freeing slots and allocating into the hole.
+    //
+    // Placement is predictable because DRAM allocates bottom-up with first fit: an allocation lands at the start of the
+    // lowest hole that fits it. Every address the test relies on is asserted, so a change in placement fails loudly
+    // instead of quietly testing a different shape.
+    const auto input_spec = dram_tensor_spec(4 * mesh_device_->allocator()->get_num_banks(BufferType::DRAM));
+    auto& cq = mesh_device_->mesh_command_queue(0);
+
+    // Layout, in pages per bank from P0:  [P0 0-2][T 2-6][P1 6-8][fence 8-10]
+    // T is the recorded input, and P0 and P1 touch it on both sides. The fence is never freed, so a hole that includes
+    // P1 stays bounded instead of merging with the free space above it, which keeps every hole's size exact.
+    MeshTensor output = MeshTensor::allocate_on_device(*mesh_device_, input_spec);
+    auto p0 = allocate_dram(*mesh_device_, 2);
+    std::optional<MeshTensor> t = MeshTensor::allocate_on_device(*mesh_device_, input_spec);
+    auto p1 = allocate_dram(*mesh_device_, 2);
+    const auto fence = allocate_dram(*mesh_device_, 2);
+    // Every slot and intruder is interleaved over all banks with the same address in each, so one per-bank offset,
+    // counted in pages from P0, places it.
+    const DeviceAddr base = p0->address();
+    auto offset_of = [&](DeviceAddr address) { return (address - base) / kPageSize; };
+    ASSERT_EQ(offset_of(t->mesh_buffer().address()), 2u);
+    ASSERT_EQ(offset_of(p1->address()), 6u);
+    ASSERT_EQ(offset_of(fence->address()), 8u);
+
+    // Record and build before making any holes. Kernel binaries are allocated in DRAM while the workload is recorded,
+    // and one landing in a hole would shift every placement below.
+    auto workload = make_loopback_workload(*mesh_device_, *t, output, "checked_replay");
+    const CmdListTensorArgName input_param{"input"};
+    CommandListBuilder builder(*mesh_device_);
+    builder.add(cq, workload, patchable_input(workload.get_programs().begin()->second, input_param));
+    auto command_list = builder.build(cq);
+    auto replay = [&](bool check_dram_overlap) {
+        EnqueueCommandList(cq, command_list, /*blocking=*/true, check_dram_overlap);
+    };
+    auto make_data = [&](uint32_t first) {
+        std::vector<uint32_t> data(input_spec.logical_shape()[0] * kPageSize / sizeof(uint32_t));
+        std::iota(data.begin(), data.end(), first);
+        return data;
+    };
+    // The check logs to stdout. A passing checked replay warns when a range is exactly filled by an allocation other
+    // than the tensor bound to it.
+    constexpr const char* kNotBoundWarning = "other than the tensor bound to it";
+    auto checked_replay_log = [&] {
+        testing::internal::CaptureStdout();
+        replay(/*check_dram_overlap=*/true);
+        return testing::internal::GetCapturedStdout();
+    };
+
+    // The recorded input and output are live, so each recorded range is exactly filled by the tensor bound to it, and
+    // replay passes without a warning. P0 and P1 touch the input's range on both sides; touching is not overlapping, so
+    // they must not count.
+    const auto data_a = make_data(0xA0000000u);
+    write_tensor(*t, data_a);
+    EXPECT_THAT(checked_replay_log(), Not(HasSubstr(kNotBoundWarning)));
+    EXPECT_EQ(read_tensor(output), data_a);
+
+    // An allocation outside every recorded range never matters.
+    {
+        const auto unrelated = allocate_dram(*mesh_device_, 2);
+        replay(/*check_dram_overlap=*/true);
+    }
+
+    // Free the input and fill its slot exactly with other allocations. The check identifies a slot by its address and
+    // size, so replay passes, but it warns because the allocation is not the bound tensor. A same-size replacement
+    // tensor is the intended case; a plain buffer stands in for one that must not be overwritten, such as a
+    // command-list command buffer. The check cannot tell the two apart, so both warn.
+    t.reset();
+    {
+        const auto same_size_buffer = allocate_dram(*mesh_device_, 4);
+        ASSERT_EQ(offset_of(same_size_buffer->address()), 2u);
+        EXPECT_THAT(checked_replay_log(), HasSubstr(kNotBoundWarning));
+    }
+    t = MeshTensor::allocate_on_device(*mesh_device_, input_spec);
+    ASSERT_EQ(offset_of(t->mesh_buffer().address()), 2u);
+    const auto data_b = make_data(0xB0000000u);
+    write_tensor(*t, data_b);
+    EXPECT_THAT(checked_replay_log(), HasSubstr(kNotBoundWarning));
+    EXPECT_EQ(read_tensor(output), data_b);
+
+    // Every other overlap fails. Each case frees some slots, allocates intruders into the hole, and expects replay to
+    // throw. It then frees the intruders and reallocates the freed slots in address order, so each lands at the start
+    // of what remains of the hole and the next case starts from the original layout.
+    enum class Slot { P0, T, P1 };
+    struct Intruder {
+        uint32_t pages_per_bank;
+        DeviceAddr expected_offset;
+    };
+    struct OverlapCase {
+        const char* name;
+        std::vector<Slot> freed;
+        std::vector<Intruder> intruders;
+        // Indices of intruders freed again before replay.
+        std::vector<size_t> released;
+    };
+    // Each comment gives where the intruders sit, against T at [2-6).
+    const std::vector<OverlapCase> cases = {
+        // [2-4): inside the range, starting with it.
+        {"smaller at the same address", {Slot::T}, {{2, 2}}, {}},
+        // [2-8): starts with the range and runs past its end.
+        {"larger at the same address", {Slot::T, Slot::P1}, {{6, 2}}, {}},
+        // [0-4): starts below the range and ends inside it.
+        {"straddles the start", {Slot::P0, Slot::T}, {{4, 0}}, {}},
+        // [4-8): starts inside the range and runs past its end. The filler at [2-4) only pushes it there.
+        {"straddles the end", {Slot::T, Slot::P1}, {{2, 2}, {4, 4}}, {0}},
+        // [0-8): covers the range and both neighbors.
+        {"encloses the range", {Slot::P0, Slot::T, Slot::P1}, {{8, 0}}, {}},
+        // [2-4) and [4-6): two allocations that together fill the range exactly.
+        {"two allocations tile the range", {Slot::T}, {{2, 2}, {2, 4}}, {}},
+    };
+    auto free_slot = [&](Slot slot) {
+        switch (slot) {
+            case Slot::P0: p0.reset(); break;
+            case Slot::T: t.reset(); break;
+            case Slot::P1: p1.reset(); break;
+        }
+    };
+    auto restore_slot = [&](Slot slot) {
+        switch (slot) {
+            case Slot::P0:
+                p0 = allocate_dram(*mesh_device_, 2);
+                EXPECT_EQ(offset_of(p0->address()), 0u);
+                break;
+            case Slot::T:
+                t = MeshTensor::allocate_on_device(*mesh_device_, input_spec);
+                EXPECT_EQ(offset_of(t->mesh_buffer().address()), 2u);
+                break;
+            case Slot::P1:
+                p1 = allocate_dram(*mesh_device_, 2);
+                EXPECT_EQ(offset_of(p1->address()), 6u);
+                break;
+        }
+    };
+
+    // The check runs before anything is enqueued, so every failed replay must leave these zeros in the output.
+    const std::vector<uint32_t> zeros(data_a.size(), 0);
+    write_tensor(output, zeros);
+    for (const auto& overlap : cases) {
+        SCOPED_TRACE(overlap.name);
+        for (const auto slot : overlap.freed) {
+            free_slot(slot);
+        }
+        std::vector<std::shared_ptr<MeshBuffer>> intruders;
+        for (const auto& [pages_per_bank, expected_offset] : overlap.intruders) {
+            intruders.push_back(allocate_dram(*mesh_device_, pages_per_bank));
+            ASSERT_EQ(offset_of(intruders.back()->address()), expected_offset);
+        }
+        for (const size_t i : overlap.released) {
+            intruders[i].reset();
+        }
+        EXPECT_THAT(
+            [&] { replay(/*check_dram_overlap=*/true); },
+            ThrowsMessage<std::runtime_error>(HasSubstr("does not exactly match")));
+        intruders.clear();
+        for (const auto slot : overlap.freed) {
+            restore_slot(slot);
+        }
+    }
+    EXPECT_EQ(read_tensor(output), zeros);
+
+    // With the check disabled, replay never queries the allocator, so the same smaller allocation at the input's
+    // address does not stop it.
+    t.reset();
+    {
+        const auto intruder = allocate_dram(*mesh_device_, 2);
+        ASSERT_EQ(offset_of(intruder->address()), 2u);
+        EXPECT_NO_THROW(replay(/*check_dram_overlap=*/false));
+    }
+    restore_slot(Slot::T);
+
+    // update_args moves the recorded input range, and the bound tensor, to the new tensor. The input's old range is no
+    // longer recorded, so an overlap there passes; the new tensor fills its own range, so there is no warning; and
+    // replay copies the new tensor.
+    MeshTensor new_input = MeshTensor::allocate_on_device(*mesh_device_, input_spec);
+    const auto data_c = make_data(0xC0000000u);
+    write_tensor(new_input, data_c);
+    command_list.update_args(
+        CmdListArgPatch{.tensor_args = {{input_param, m2::ProgramRunArgs::TensorArgument{new_input}}}});
+    t.reset();
+    const auto intruder = allocate_dram(*mesh_device_, 2);
+    ASSERT_EQ(offset_of(intruder->address()), 2u);
+    EXPECT_THAT(checked_replay_log(), Not(HasSubstr(kNotBoundWarning)));
+    EXPECT_EQ(read_tensor(output), data_c);
 }
 
 TEST_F(CommandListTest, BuilderLifecyclePreservesBuiltLists) {
@@ -1007,20 +1250,20 @@ TEST_F(CommandListTest, BuilderLifecyclePreservesBuiltLists) {
         ThrowsMessage<std::runtime_error>(HasSubstr("while a CommandListBuilder is active")));
 
     // Clearing removes the recording, after which build rejects the empty builder.
-    builder.add(workload);
+    builder.add(cq, workload);
     builder.clear();
     EXPECT_THAT(
         [&] { (void)builder.build(cq); },
         ThrowsMessage<std::runtime_error>(HasSubstr("Cannot build an empty CommandList")));
 
-    builder.add(workload);
+    builder.add(cq, workload);
     auto command_list = builder.build(cq);
 
     // Moving transfers the recording and reservation; explicit deallocation invalidates
     // the destination and releases the reservation for a replacement builder.
     CommandListBuilder moved_builder(std::move(builder));
     EXPECT_THAT(
-        [&] { builder.add(workload); },  // NOLINT(bugprone-use-after-move)
+        [&] { builder.add(cq, workload); },  // NOLINT(bugprone-use-after-move)
         ThrowsMessage<std::runtime_error>(HasSubstr("CommandListBuilder has been moved from")));
     EXPECT_EQ(&moved_builder.device(), mesh_device_.get());
     moved_builder.deallocate();
@@ -1031,7 +1274,7 @@ TEST_F(CommandListTest, BuilderLifecyclePreservesBuiltLists) {
         [&] { moved_builder.clear(); },
         ThrowsMessage<std::runtime_error>(HasSubstr("CommandListBuilder has been deallocated")));
     EXPECT_THAT(
-        [&] { moved_builder.add(workload); },
+        [&] { moved_builder.add(cq, workload); },
         ThrowsMessage<std::runtime_error>(HasSubstr("CommandListBuilder has been deallocated")));
     EXPECT_THAT(
         [&] { (void)moved_builder.build(cq); },
@@ -1051,7 +1294,7 @@ TEST_F(CommandListTest, CommandListMoveAndDeallocateInvalidateTheHandle) {
     auto workload = make_l1_write_workload(*mesh_device_, kAddressA, kValueA, "list_lifecycle");
     auto& cq = mesh_device_->mesh_command_queue(0);
     CommandListBuilder builder(*mesh_device_);
-    builder.add(workload);
+    builder.add(cq, workload);
     auto command_list = builder.build(cq);
 
     CommandList moved_list(std::move(command_list));
@@ -1094,14 +1337,14 @@ TEST_F(CommandListTest, RejectsEmptyAndLegacyWorkloadsWithoutChangingTheRecordin
 
     MeshWorkload empty_workload;
     EXPECT_THAT(
-        [&] { builder.add(empty_workload); },
+        [&] { builder.add(cq, empty_workload); },
         ThrowsMessage<std::runtime_error>(HasSubstr("Cannot prepare an empty MeshWorkload")));
 
     // Command lists accept only ProgramSpec-created Metal 2.0 programs.
     MeshWorkload legacy_workload;
-    legacy_workload.add_program(MeshCoordinateRange(mesh_device_->shape()), CreateProgram());
+    legacy_workload.add_program(MeshCoordinateRange(mesh_device_->shape()), CreateProgram(*this->mesh_device_));
     EXPECT_THAT(
-        [&] { builder.add(legacy_workload); },
+        [&] { builder.add(cq, legacy_workload); },
         ThrowsMessage<std::runtime_error>(HasSubstr("Command lists only support Metal 2.0 programs")));
 
     // Both failed additions are transactional: the builder is still empty.
@@ -1120,7 +1363,8 @@ TEST_F(CommandListTest, RejectsUnresolvableParametersWithoutChangingTheRecording
     auto& cq = mesh_device_->mesh_command_queue(0);
     CommandListBuilder builder(*mesh_device_);
     auto expect_add_throws = [&](const CmdListParameters& parameters, const std::string& message) {
-        EXPECT_THAT([&] { builder.add(workload, parameters); }, ThrowsMessage<std::runtime_error>(HasSubstr(message)));
+        EXPECT_THAT(
+            [&] { builder.add(cq, workload, parameters); }, ThrowsMessage<std::runtime_error>(HasSubstr(message)));
     };
 
     // The parameter's program must belong to the workload being added.
@@ -1158,12 +1402,7 @@ TEST_F(CommandListTest, RejectsUnresolvableParametersWithoutChangingTheRecording
         "TensorParameter 'missing' is not declared");
 
     // A TensorParameter that backs a borrowed-memory DFB cannot be patched.
-    const auto dram_spec = TensorSpec(
-        Shape{2, 512},
-        TensorLayout(
-            DataType::BFLOAT16,
-            PageConfig(Layout::ROW_MAJOR),
-            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+    const auto dram_spec = dram_tensor_spec(2);
     const uint32_t num_l1_banks = mesh_device_->allocator()->get_num_banks(BufferType::L1);
     const auto scratch_spec = TensorSpec(
         Shape{2 * num_l1_banks, 512},
@@ -1175,54 +1414,21 @@ TEST_F(CommandListTest, RejectsUnresolvableParametersWithoutChangingTheRecording
     MeshTensor output = MeshTensor::allocate_on_device(*mesh_device_, dram_spec);
     MeshTensor scratch = MeshTensor::allocate_on_device(*mesh_device_, scratch_spec);
 
-    auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
-    producer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/tensor_accessor_loopback_producer.cpp";
-    producer.advanced_options.num_runtime_varargs = 1;
-    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
-    consumer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/tensor_accessor_loopback_consumer.cpp";
-    consumer.advanced_options.num_runtime_varargs = 1;
-    auto dfb = MakeMinimalDFB("input_dfb", /*entry_size=*/1024, /*num_entries=*/2);
-    dfb.data_format_metadata = DataFormat::Float16_b;
-    dfb.borrowed_from = m2::TensorParamName{"scratch_tensor"};
-    producer.dfb_bindings.push_back(m2::ProducerOf(m2::DFBSpecName{"input_dfb"}, "input_dfb"));
-    consumer.dfb_bindings.push_back(m2::ConsumerOf(m2::DFBSpecName{"input_dfb"}, "input_dfb"));
-    BindTensorParameterToKernel(producer, "input_tensor", "input_tensor");
-    BindTensorParameterToKernel(consumer, "output_tensor", "output_tensor");
-    auto borrowed_workload = m2::MakeMeshWorkloadFromSpec(
-        *mesh_device_,
-        m2::ProgramSpec{
-            .name = "borrowed_dfb",
-            .kernels = {producer, consumer},
-            .dataflow_buffers = {dfb},
-            .tensor_parameters =
-                {
-                    m2::TensorParameter{.unique_id = m2::TensorParamName{"input_tensor"}, .spec = dram_spec},
-                    m2::TensorParameter{.unique_id = m2::TensorParamName{"output_tensor"}, .spec = dram_spec},
-                    m2::TensorParameter{.unique_id = m2::TensorParamName{"scratch_tensor"}, .spec = scratch_spec},
-                },
-            .work_units = {MakeMinimalWorkUnit("main", kNode, {"producer", "consumer"})},
-        });
+    // The loopback, with its DFB borrowing memory from an extra L1 scratch tensor.
+    auto borrowed_spec = make_loopback_spec("borrowed_dfb", dram_spec);
+    borrowed_spec.dataflow_buffers.at(0).borrowed_from = m2::TensorParamName{"scratch_tensor"};
+    borrowed_spec.tensor_parameters.push_back(
+        m2::TensorParameter{.unique_id = m2::TensorParamName{"scratch_tensor"}, .spec = scratch_spec});
+    auto borrowed_workload = MakeMeshWorkloadFromSpec(*mesh_device_, borrowed_spec);
     auto& borrowed_program = borrowed_workload.get_programs().begin()->second;
-    m2::ProgramRunArgs borrowed_args;
-    borrowed_args.kernel_run_args = {
-        m2::ProgramRunArgs::KernelRunArgs{
-            .kernel = m2::KernelSpecName{"producer"},
-            .advanced_options = m2::AdvancedKernelRunArgs{.runtime_varargs = {{kNode, {2}}}},
-        },
-        m2::ProgramRunArgs::KernelRunArgs{
-            .kernel = m2::KernelSpecName{"consumer"},
-            .advanced_options = m2::AdvancedKernelRunArgs{.runtime_varargs = {{kNode, {2}}}},
-        },
-    };
-    borrowed_args.tensor_args = {
-        {m2::TensorParamName{"input_tensor"}, m2::ProgramRunArgs::TensorArgument{input}},
-        {m2::TensorParamName{"output_tensor"}, m2::ProgramRunArgs::TensorArgument{output}},
-        {m2::TensorParamName{"scratch_tensor"}, m2::ProgramRunArgs::TensorArgument{scratch}},
-    };
-    m2::SetProgramRunArgs(borrowed_program, borrowed_args);
+    auto borrowed_args = loopback_run_args(input, output);
+    borrowed_args.tensor_args.emplace(
+        m2::TensorParamName{"scratch_tensor"}, m2::ProgramRunArgs::TensorArgument{scratch});
+    SetProgramRunArgs(borrowed_program, borrowed_args);
     EXPECT_THAT(
         [&] {
             builder.add(
+                cq,
                 borrowed_workload,
                 {.tensor_parameters = {
                      {CmdListTensorArgName{"scratch"},
@@ -1236,6 +1442,34 @@ TEST_F(CommandListTest, RejectsUnresolvableParametersWithoutChangingTheRecording
     EXPECT_THAT(
         [&] { (void)builder.build(cq); },
         ThrowsMessage<std::runtime_error>(HasSubstr("Cannot build an empty CommandList")));
+}
+
+TEST_F(CommandListTest, PatchesTensorParameterOfProgramWithArenaAllocatedDFB) {
+    // A TensorParameter stays patchable when the program's DFB is allocated from an SRAM arena of the same name.
+    const auto dram_spec = dram_tensor_spec(2);
+    MeshTensor input = MeshTensor::allocate_on_device(*mesh_device_, dram_spec);
+    MeshTensor output = MeshTensor::allocate_on_device(*mesh_device_, dram_spec);
+    const LockstepSRAMArenaProperties properties{.per_bank_size = 2 * kPageSize};
+    SRAMArena arena = SRAMArena::allocate(*mesh_device_, properties);
+    const SRAMArenaParamName arena_name{"input_tensor"};
+    auto workload = MakeMeshWorkloadFromSpec(
+        *mesh_device_, make_loopback_spec_with_arena_dfb("arena_dfb", dram_spec, arena_name, properties));
+    auto& program = workload.get_programs().begin()->second;
+    auto args = loopback_run_args(input, output);
+    args.advanced_options.sram_arena_args = {{arena_name, std::cref(arena)}};
+    SetProgramRunArgs(program, args);
+    auto& cq = mesh_device_->mesh_command_queue(0);
+    CommandListBuilder builder(*mesh_device_);
+    EXPECT_NO_THROW(builder.add(cq, workload, patchable_input(program, CmdListTensorArgName{"input"})));
+}
+
+TEST_F(CommandListTest, RejectsWorkloadWithUnboundArenaScratchpad) {
+    // Recording a workload whose arena scratchpad has no bound SRAMArena is rejected.
+    auto workload = MakeMeshWorkloadFromSpec(*mesh_device_, make_arena_scratchpad_spec("unbound_arena_scratchpad"));
+    auto& cq = mesh_device_->mesh_command_queue(0);
+    CommandListBuilder builder(*mesh_device_);
+    EXPECT_THAT(
+        [&] { builder.add(cq, workload); }, ThrowsMessage<std::runtime_error>(HasSubstr("has no bound SRAMArena")));
 }
 
 TEST_F(CommandListTest, ReplaysCommandListsUnderTheirRecordedSubDeviceLayouts) {
@@ -1255,14 +1489,14 @@ TEST_F(CommandListTest, ReplaysCommandListsUnderTheirRecordedSubDeviceLayouts) {
     mesh_device_->load_sub_device_manager(full_grid_manager);
     auto list_a = [&] {
         CommandListBuilder builder(*mesh_device_);
-        builder.add(workload_a);
+        builder.add(cq, workload_a);
         return builder.build(cq);
     }();
 
     mesh_device_->load_sub_device_manager(single_core_manager);
     auto list_b = [&] {
         CommandListBuilder builder(*mesh_device_);
-        builder.add(workload_b);
+        builder.add(cq, workload_b);
         return builder.build(cq);
     }();
 
@@ -1299,13 +1533,13 @@ TEST_F(CommandListTest, ReplaysCommandListsUnderTheirRecordedSubDeviceLayouts) {
 }
 
 TEST_F(CommandListMultiCQTest, EnforcesTheCommandQueueUsedAtBuildTime) {
-    // Build independent command lists from one recording, one per command queue.
+    // Build independent command lists from one recording, one per command queue. Kernel binaries upload through cq1.
     auto workload = make_l1_write_workload(*mesh_device_, kAddressA, kValueA, "cq_binding");
     auto& cq0 = mesh_device_->mesh_command_queue(0);
     auto& cq1 = mesh_device_->mesh_command_queue(1);
 
     CommandListBuilder builder(*mesh_device_);
-    builder.add(workload);
+    builder.add(cq1, workload);
     auto list0 = builder.build(cq0);
     auto list1 = builder.build(cq1);
     EXPECT_EQ(list0.cq_id(), cq0.id());
@@ -1333,7 +1567,7 @@ TEST_F(CommandListTest, TracesAndCommandListsCanRunInSequenceButNotCoexist) {
         EXPECT_THAT(
             [&] { (void)mesh_device_->begin_mesh_trace(cq); },
             ThrowsMessage<std::runtime_error>(HasSubstr("while a CommandListBuilder or CommandList exists")));
-        builder.add(list_workload);
+        builder.add(cq, list_workload);
         auto first_list = builder.build(cq);
         auto second_list = builder.build(cq);
         builder.deallocate();
@@ -1367,7 +1601,7 @@ TEST_F(CommandListTest, TracesAndCommandListsCanRunInSequenceButNotCoexist) {
 
     // Releasing the trace makes command lists available again.
     CommandListBuilder builder(*mesh_device_);
-    builder.add(list_workload);
+    builder.add(cq, list_workload);
     auto command_list = builder.build(cq);
     write_l1(mesh_device_, kAddressA, 0);
     EnqueueCommandList(cq, command_list, /*blocking=*/true);

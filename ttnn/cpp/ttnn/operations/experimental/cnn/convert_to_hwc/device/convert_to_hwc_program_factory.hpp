@@ -29,6 +29,10 @@ struct ConvertToHwcConfig {
     uint32_t element_size_bytes{};
     tt::DataFormat input_format{};
 
+    // Output tensor properties (the packer converts to the output format)
+    uint32_t output_element_size_bytes{};
+    tt::DataFormat output_format{};
+
     // Shard specifications
     uint32_t l1_input_shard_height{};
     uint32_t l1_input_shard_width{};
@@ -65,6 +69,6 @@ struct ConvertToHWCProgramFactory {
         Tensor& tensor_return_value);
 };
 
-uint32_t compute_alignment_requirement_in_elements(const Tensor& input_tensor);
+uint32_t compute_alignment_requirement_in_elements(tt::tt_metal::DataType output_dtype);
 
 }  // namespace ttnn::experimental::prim
