@@ -1231,3 +1231,43 @@
   --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_mhc_post_fast.py"`; zones (fresh open):
   `MHCP_FAST=both scripts/run_safe_pytest.sh --run-all --no-precompile
   models/demos/deepseek_v41_flash_d_p/tests/perf/test_mhc_post_probe.py -s`.
+
+## P.81 (perf, attempt 2): grouped wo_a as ttnn.bringup.grouped_matmul (ATTN_ROOFLINE True | False); sdpa / RoPE not built
+
+- Expected saving (written after the first op probe, before the model runs; the brief asked for it before code, it
+  came late): device -0.8 to -0.9 ms a chunk (wo_a 20 calls x (0.175 - 0.133) ms), host ~0 (one prepared program in
+  place of one stock matmul a call). Far from the brief's <= 13 ms attention target; below its 1 ms keep line.
+- wo_a diagnosis (corrects X.7_roofline.md's "11 weight readers, 2.0x DRAM floor"): the stock 2D program
+  (fuse_batch False) splits only M over the grid rows: 5 x 11 = 55 cores at M = 160, each 8 groups x 3 x 128 tile
+  products: compute-bound. A stock 1D multicast (32 cores, one weight reader a column tile) is slower: 0.26-0.35 ms.
+- Built: ttnn.bringup.grouped_matmul (new Python fork, ttnn/ttnn/bringup/grouped_matmul_ttnn: README / CHANGELOG /
+  INDEX): one grid row a group (8 x 11 = 88 cores <= 110, rule 18), x multicast along the row by its column-0 core,
+  each core its own weight columns, Float32 partials L1-accumulated by the packer, prepared program (OV-23), bounded
+  semaphore waits. Op probe (8x4, rt profiler, slowest chip): 0.175 -> 0.133 ms (block_w 4; 8: 0.140, 32: 0.150),
+  bit-identical to the stock call. ~320 GB/s of the 42.6 MB a call. Tried and dropped: weight reads depth - 1 blocks
+  ahead under NoC transaction ids (0.143-0.155: slower), rt 2 full-sync DEST (0.135).
+- Model: tt/attention.py `_out_wo` takes it when ATTN_ROOFLINE and `supported(...)` (G <= grid rows; else the stock
+  call: other boxes' layouts stay as they were where it does not apply); Settings ATTN_ROOFLINE (bool, default True),
+  WO_A_GMM_BLOCK_W 4, WO_A_GMM_DEPTH 4.
+- Gotcha: a block addressed by slot (kb % depth) must have the same size on every core of the CB: the column with 2
+  output tiles (others 3) wrapped differently and was wrong (6 % of the output) until blocks were padded to the
+  widest column count in L1 (PNX stride; no extra reads).
+- Not built (why): sparse_sdpa query balance / direct bfp4 read and the fused RoPE. Estimate from attempt 1's numbers
+  (DS41-307): ~21 us fixed a query + ~20 us a 128-key chunk; a k-split pays the fixed part per piece (<= 3 pieces a
+  core) and nets ~0.4 ms a chunk; splitting only the 50 second-round queries by heads (no combine) ~0.9 ms; direct
+  bfp4 unpack <= 0.9 ms (stub). Each needs C++ fork kernel builds, i.e. runner restarts = device opens, and the
+  overseer stopped direct opens mid-task (host RAM leak: room for ~1-2 opens): not attempted in this attempt.
+- Op runs this attempt: 6 direct run_safe_pytest opens of op probes before the overseer's rule change (18:10), then
+  everything through the resident runner (tests/test_grouped_matmul_wo_a.py, BATCH_SHARED; the probe file now
+  BATCH_SHARED too).
+- Re-run: `python -m models.demos.common.bringup.resident submit --spec $BRINGUP_SPEC --cmd "scripts/run_safe_pytest.sh
+  --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_grouped_matmul_wo_a.py"`; timing:
+  `... --cmd "P81_SITES=wo_a scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/perf/test_attn_proj_probe.py"`.
+- `orchestrator measure --task P.81` (change on; resident runner, one restart for the edited ttnn python, one load):
+  device section attention at p145408: prose 20.45 / agentic 20.39 / multilingual 20.39 ms (P.83's on side 21.32 /
+  21.27 / 21.39: -0.87..-1.00); p1024000 20.58 / 20.46 / 20.36. Steady wall p145408 prose 85.5 (spread 27.8: one
+  111 ms run) / agentic 77.0 / multilingual 83.6 ms (P.83: 84.9 / 78.9 / 83.6); p1024000 96.5 / 91.1 / 92.7. What
+  bounds wo_a now: ~320 GB/s of its 42.6 MB a call (DRAM floor at 410 GB/s: 0.104 ms) vs 0.133 measured. Accuracy:
+  `--part test_ladder` has no run on the A/B side (F285); the change is bit-identical at the op level (wo_a's shape and
+  dtypes, tests/test_grouped_matmul_wo_a.py); the accept gate runs the frozen tests. No `gate --check` run.

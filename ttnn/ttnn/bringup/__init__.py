@@ -30,6 +30,9 @@ PYTHON_OPS = {
     # Blaze's 192 B indexer key rows -> bfloat8_b tiles (e4m3 x scale, nearest even), in place at a tile row
     # (deepseek_v41_flash_d_p P.76, INDEX_K_SOURCE=served)
     "unpack_fp8_rows": ("fp8_rows_ttnn", "unpack_fp8_rows"),
+    # batched matmul with one weight per group, one grid row a group (deepseek_v41_flash_d_p P.81: the attention's
+    # grouped wo_a, ATTN_ROOFLINE)
+    "grouped_matmul": ("grouped_matmul_ttnn", "grouped_matmul"),
 }
 
 # Retired forks (INDEX.md, "Retired forks"): python name -> what replaced it. The fork's folder and binding are gone; a

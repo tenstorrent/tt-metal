@@ -67,6 +67,7 @@ init_kvpe_cache); a (slot, layer) slab of the serving engine's 0_window_kv tenso
 from __future__ import annotations
 
 import torch
+from ttnn.bringup.grouped_matmul_ttnn import supported as gmm_supported
 
 import ttnn
 
@@ -2205,15 +2206,33 @@ class TtWindowAttention:
         # BF16_ACTIVATIONS=on (P.20): wo_a writes bf16 (the GPU code's bf16 einsum), no cast after it; GEMM_INPUTS=bfp8
         # (FIX.7): it writes wo_b's input as bfloat8_b (the reference's fp8 act quant of wo_b's input) directly
         ydt = gemm_dtype() if (self.glue and bf16_activations()) else ttnn.float32
-        y = mm.matmul(
-            oa,
-            self.wo_a,
-            site="attn.wo_a",
-            dtype=ydt,
-            compute_kernel_config=self.ckc,
-            memory_config=DRAM,
-            out=host_alloc.mm_out(self.mesh, "attn.wo_a", oa, self.wo_a, ydt),
-        )
+        out = host_alloc.mm_out(self.mesh, "attn.wo_a", oa, self.wo_a, ydt)
+        grid = max_grid()
+        bw = settings.get("WO_A_GMM_BLOCK_W")
+        if settings.get("ATTN_ROOFLINE") and gmm_supported(
+            tuple(oa.shape), tuple(self.wo_a.shape), oa.dtype, self.wo_a.dtype, ydt, self.mesh, grid, bw
+        ):
+            # ATTN_ROOFLINE (P.81): one grid row a group, each core its own weight columns (ttnn.bringup.grouped_matmul)
+            y = ttnn.bringup.grouped_matmul(
+                oa,
+                self.wo_a,
+                dtype=ydt,
+                compute_kernel_config=self.ckc,
+                output_tensor=out,
+                max_grid=grid,
+                block_w=bw,
+                depth=settings.get("WO_A_GMM_DEPTH"),
+            )
+        else:
+            y = mm.matmul(
+                oa,
+                self.wo_a,
+                site="attn.wo_a",
+                dtype=ydt,
+                compute_kernel_config=self.ckc,
+                memory_config=DRAM,
+                out=out,
+            )
         dealloc(oa)
         # [1, G/TP, S/SP, rank] -> [1, 1, S/SP, G/TP * rank] (the chip's K range of wo_b, group-major)
         if self.glue:

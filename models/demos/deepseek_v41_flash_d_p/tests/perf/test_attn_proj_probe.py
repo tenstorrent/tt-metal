@@ -23,6 +23,7 @@ from models.demos.common.bringup.testing.harness import mesh_parametrize
 from models.demos.deepseek_v41_flash_d_p.tt import mm_configs as mm
 
 ITERS = int(os.environ.get("P81_ITERS", "20"))
+BATCH_SHARED = True  # (resident runner: the held mesh, no device open)
 DRAM = ttnn.DRAM_MEMORY_CONFIG
 
 
@@ -235,6 +236,52 @@ def _wo_a(mesh):
             cands.append((tag, [f]))
         except Exception as ex:
             print(f"[p81]    {tag}: FAILED {str(ex).splitlines()[0][:160]}")
+    # attempt 2: 1D multicast of in0, batch not fused (each core loops the 8 groups): one weight reader a column tile
+    # (32 a group) instead of the 2D program's 11
+    for tag, bw, grid in (("1d nb bw32 32c", 32, (8, 4)),):
+        pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(*grid),
+            in0_block_w=bw,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            out_block_h=5,
+            out_block_w=1,
+            per_core_M=5,
+            per_core_N=1,
+            fuse_batch=False,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+        f = lambda _=None, pc=pc: ttnn.matmul(
+            x, w, dtype=ttnn.bfloat8_b, compute_kernel_config=ckc, memory_config=DRAM, program_config=pc
+        )
+        try:
+            outs.append((tag, f()))
+            cands.append((tag, [f]))
+        except Exception as ex:
+            print(f"[p81]    {tag}: FAILED {str(ex).splitlines()[0][:200]}")
+    # attempt 2: ttnn.bringup.grouped_matmul (one grid row a group, 88 cores)
+    for tag, bw, dp, rt in (
+        ("gmm bw8 d2", 8, 2, 1),
+        ("gmm bw4 d4 (shipped)", 4, 4, 1),
+        ("gmm bw4 d2", 4, 2, 1),
+        ("gmm bw4 d4 rt2", 4, 4, 2),
+    ):
+        f = lambda _=None, bw=bw, dp=dp, rt=rt: ttnn.bringup.grouped_matmul(
+            x,
+            w,
+            dtype=ttnn.bfloat8_b,
+            compute_kernel_config=ckc,
+            max_grid=ttnn.CoreCoord(11, 10),
+            block_w=bw,
+            depth=dp,
+            rt=rt,
+        )
+        try:
+            outs.append((tag, f()))
+            cands.append((tag, [f]))
+        except Exception as ex:
+            print(f"[p81]    {tag}: FAILED {str(ex).splitlines()[0][:200]}")
     times = _time(mesh, cands)
     _report("wo_a 8x160x4096x1024", _chip0(outs[0][1]), truth, outs, times)
 

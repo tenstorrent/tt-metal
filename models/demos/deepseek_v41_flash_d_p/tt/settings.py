@@ -754,6 +754,29 @@ TABLE = {
         "179.7 -> 141.0 us. X', y, the feed bit-identical; stats column 24 (sum x'^2) in another fp32 order (rel "
         "<= 1e-5), so the hc within 2.4e-7. False = the P.36 program",
     ),
+    "ATTN_ROOFLINE": Setting(
+        True,
+        (True, False),
+        "P.81 (OWNER 2026-11-18: attention at its roofline). True = the attention's grouped wo_a ([1, G, rows, hpg 512] "
+        "@ [1, G, hpg 512, rank] a chip) runs ttnn.bringup.grouped_matmul: one grid row a group (8 x 11 = 88 cores on "
+        "the 8x4, <= MAX_WORKER_CORES), each core its own weight columns of one group, x multicast along the row, fp32 "
+        "partials L1-accumulated (Float32 packer). The stock 2D program (fuse_batch False) splits only M over the grid "
+        "rows: 55 cores at M = 160, compute-bound. Op probe (8x4, tests/perf/test_attn_proj_probe.py): 0.175 -> 0.133 "
+        "ms a call, output bit-identical. Where the layout does not apply (more groups than grid rows) the stock call "
+        "stays. False = the stock batched matmul (mm_configs WO_A)",
+    ),
+    "WO_A_GMM_BLOCK_W": Setting(
+        4,
+        (1, 2, 4, 8, 16, 32),
+        "P.81, ATTN_ROOFLINE: K tiles a block of ttnn.bringup.grouped_matmul at the attention's wo_a. Op probe (8x4): "
+        "bw 4 0.133, 8 0.140, 16 0.144, 32 0.150 ms (depth 4; bit-identical: one fp32 sum either way)",
+    ),
+    "WO_A_GMM_DEPTH": Setting(
+        4,
+        None,
+        "P.81, ATTN_ROOFLINE: K blocks of x and of the weight buffered a core (grouped_matmul depth). 2 and 4 within "
+        "0.001 ms at bw 8 on the 8x4",
+    ),
     "FFN_FEED": Setting(
         "on",
         ("on", "off"),

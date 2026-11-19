@@ -6259,7 +6259,28 @@
   "waiting": null
  },
  "P.81": {
+  "ab_pending": null,
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "d0abb91574d8cdcab1dda347ce09f24b4a450243",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "a72ff1beb2fa0ffd78ba8438f67599c498d8554b",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "e6413c1d49e3d144b0349ea968e1ea4d7d941470",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "9dfb264d-a39a-4fe3-9b1b-05a0695d15e9"
+  },
   "attempt": 1,
+  "attempts": 0,
+  "duration_s": 910.8,
   "history": [
    {
     "by": "overseer: attempt 2",
@@ -6275,13 +6296,43 @@
     "by": "overseer",
     "status": "TODO",
     "t": "2026-11-19T12:37:48"
+   },
+   {
+    "s": 910.8,
+    "status": "PASS",
+    "t": "2026-11-19T18:45:19"
    }
   ],
-  "reason": [
-   "parked behind the host-time work (owner: bigger fish first)"
-  ],
+  "last_run": "2026-11-19T18:45:17",
+  "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/P.81.log",
+  "rc": 0,
+  "reason": [],
   "role": "perf",
-  "status": "TODO",
+  "stamp": {
+   "reused": [],
+   "units": {
+    "P.81#test_contract": "2f77db58bac31d57",
+    "P.81#test_decoder_skip_decode": "5e86fc98058e28f7",
+    "P.81#test_determinism": "69793f2736af77f6",
+    "P.81#test_ladder": "33dd88e916756a30",
+    "P.81#test_outside_history": "226e193f97ed1b39",
+    "P.81#test_skip_positions": "0bcd533493f8bc07",
+    "P.81#test_skip_positions.7.0": "fe979500aab883ad",
+    "P.81#test_skip_positions.8.0": "567ffd5c816d8da8"
+   }
+  },
+  "started": "2026-11-19T18:30:06",
+  "status": "PASS",
+  "units": {
+   "P.81#test_contract": "PASS",
+   "P.81#test_decoder_skip_decode": "PASS",
+   "P.81#test_determinism": "PASS",
+   "P.81#test_ladder": "PASS",
+   "P.81#test_outside_history": "PASS",
+   "P.81#test_skip_positions": "PASS",
+   "P.81#test_skip_positions.7.0": "PASS",
+   "P.81#test_skip_positions.8.0": "PASS"
+  },
   "waiting": null
  },
  "P.82": {
