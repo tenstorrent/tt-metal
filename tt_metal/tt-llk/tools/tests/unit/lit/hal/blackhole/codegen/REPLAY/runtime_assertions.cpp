@@ -7,8 +7,8 @@
 // RUN: %{blackhole_compare_codegen} %t.dump
 
 // Compare each HAL function with its adjacent reference_ function with
-// LLK_ASSERT enabled; references state each check as an LLK_ASSERT before the
-// operation. Disable identical-code folding so both bodies are emitted
+// LLK_ASSERT enabled; references state each check as the HAL does, with
+// hal::detail::require or LLK_ASSERT, before the operation. Disable identical-code folding so both bodies are emitted
 // independently, and block reordering so the layout of the assert branches does
 // not depend on GCC's placement heuristics.
 
@@ -51,7 +51,7 @@ extern "C" __attribute__((noinline, used)) std::uint32_t get_operation_runtime(c
 extern "C" __attribute__((noinline, used)) std::uint32_t reference_get_operation_runtime(const std::uint32_t start, const std::uint32_t count)
 {
     const bool valid = start < 32 && count >= 1 && count <= 32 - start;
-    LLK_ASSERT(valid, "Replay range requires count >= 1 and start + count <= 32");
+    hal::detail::require(valid, "Replay range requires count >= 1 and start + count <= 32");
     return TT_OP_REPLAY(start, count, 0 /*execute_while_loading*/, 0 /*load_mode*/);
 }
 
