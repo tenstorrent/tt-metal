@@ -35,6 +35,8 @@ which is what carries a small expert id through copy4rows intact.
 """
 
 
+from dataclasses import dataclass
+
 import pytest
 import torch
 from conftest import skip_for_quasar
@@ -52,6 +54,7 @@ from helpers.llk_params import (
     MathOperation,
 )
 from helpers.param_config import parametrize
+from helpers.perf.blaze import execute_llk, with_functional_defaults
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import StimuliMode, TestConfig
 from helpers.test_variant_parameters import (
@@ -70,6 +73,18 @@ from helpers.test_variant_parameters import (
 pytestmark = skip_for_quasar
 
 FORMATS = InputOutputFormat(DataFormat.Float16_b, DataFormat.UInt16)
+
+
+@dataclass(frozen=True)
+class PerfInvocation:
+    """Explicit measurement context passed from a perf wrapper to the shared runner."""
+
+    is_perf: bool
+    perf_report: object
+    run_types: object
+    loop_factor: int
+    config_index: int = 0
+
 
 MODE_GATE, MODE_BINARY, MODE_MOVE, MODE_RUN = 0, 1, 2, 3
 MOVE_STEP0, MOVE_STEP1, MOVE_STEP1_HI, MOVE_STEP2, MOVE_COPY4ROWS = 0, 1, 2, 3, 4
@@ -211,18 +226,25 @@ def _config(
     acc_to_dest=False,
     num_faces=4,
 ):
-    return TestConfig(
-        "sources/generalized_moe_gate_test.cpp",
-        FORMATS,
-        templates=[
-            gmg,
-            MATH_OP(mathop=mathop),
-            MATH_FIDELITY(fidelity),
-            APPROX_MODE(approx),
-            ACC_TO_DEST(acc_to_dest),
-            DEST_SYNC(dest_sync),
+    templates = [
+        # Placeholder so perf_schema_derive sees every GENERALIZED_MOE_GATE
+        # column; runtime always replaces it with the caller's config.
+        GENERALIZED_MOE_GATE(),
+        MATH_OP(mathop=mathop),
+        MATH_FIDELITY(fidelity),
+        APPROX_MODE(approx),
+        ACC_TO_DEST(acc_to_dest),
+        DEST_SYNC(dest_sync),
+    ]
+    templates[0] = gmg
+    return dict(
+        test_name="sources/generalized_moe_gate_test.cpp",
+        formats=FORMATS,
+        templates=templates,
+        runtimes=[
+            TILE_COUNT(4 * gmg.sections),
+            NUM_FACES(num_faces, num_faces, num_faces),
         ],
-        runtimes=[TILE_COUNT(4), NUM_FACES(num_faces, num_faces, num_faces)],
         variant_stimuli=StimuliConfig(
             torch.cat([_tile(t) for t in tiles]),
             DataFormat.Float16_b,
@@ -238,26 +260,43 @@ def _config(
     )
 
 
-def _run(*configurations, view=_faces):
+def _run(
+    *configurations,
+    view=_faces,
+    perf=None,
+):
     """Build every variant before running any of them.
 
     run() raises the compile-producer skip, so a test that builds inside the run loop never reaches
     its later variants and the consumer pass then looks for an ELF nobody produced.
     """
-    if len(configurations) > 1 and TestConfig.STIMULI_MODE != StimuliMode.INLINE:
-        # StimuliConfig.save_to_cache and GeneratorProxy both key on sha256(PYTEST_CURRENT_TEST),
-        # i.e. one cache slot per test node, so a test with several configurations would have them
-        # all collapse onto whichever ran first. Under --stimuli-only it is worse: the first run()
-        # raises the cache-and-skip, so the later configurations never get written at all. The
-        # differential tests here are exactly the ones that would then pass vacuously, comparing a
-        # stimulus against itself, so refuse rather than report a green.
+    if perf is not None:
+        perf_configuration = configurations[perf.config_index]
+        execute_llk(
+            is_perf=perf.is_perf,
+            perf_report=perf.perf_report,
+            run_types=perf.run_types,
+            loop_factor=perf.loop_factor,
+            test_config_kwargs=perf_configuration,
+        )
+        return None
+    if len(configurations) == 1:
+        outcome = execute_llk(
+            is_perf=False,
+            test_config_kwargs=configurations[0],
+        )
+        return view(outcome.result)
+    if TestConfig.STIMULI_MODE != StimuliMode.INLINE:
         pytest.skip(
             "multi-configuration test cannot use the per-test-node stimuli cache "
             "(--stimuli-only / --use-stimuli); see tt-llk stimuli cache keying"
         )
-    for configuration in configurations:
+    configs = [
+        TestConfig(**with_functional_defaults(kwargs)) for kwargs in configurations
+    ]
+    for configuration in configs:
         configuration.prepare()
-    results = [view(configuration.run().result) for configuration in configurations]
+    results = [view(configuration.run().result) for configuration in configs]
     return results[0] if len(results) == 1 else results
 
 
@@ -380,7 +419,7 @@ def _assert_gate_output(faces, golden, topk, ordered=True, **tolerance):
         else [ApproximationMode.No]
     ),
 )
-def test_generalized_moe_gate(topk, softmax, approx):
+def test_generalized_moe_gate(topk, softmax, approx, *, perf=None):
     payload, bias, keys = _gate_stimuli(seed=topk * 2 + int(softmax))
     ids = _ids_face()
 
@@ -396,8 +435,11 @@ def test_generalized_moe_gate(topk, softmax, approx):
             _gate_tiles(payload, ids),
             src_b=bias,
             approx=approx,
-        )
+        ),
+        perf=perf,
     )
+    if perf is not None:
+        return
 
     golden = get_golden_generator(GeneralizedMoeGateGolden)(
         keys, payload, ids, topk=topk, output_softmax=softmax, eps=EPS, scale=SCALE
@@ -491,7 +533,7 @@ def _sigmoid_stimuli(seed, grouped):
 # grouped path exists for, and the two front-ends had never met. Grouped pins topk to 8 itself, so
 # there is nothing to sweep there.
 @parametrize(grouped=[False, True], topk=lambda grouped: [8] if grouped else [4, 8])
-def test_generalized_moe_gate_sigmoid(grouped, topk):
+def test_generalized_moe_gate_sigmoid(grouped, topk, *, perf=None):
     payload, bias = _sigmoid_stimuli(seed=77, grouped=grouped)
     ids = _ids_face()
 
@@ -509,8 +551,11 @@ def test_generalized_moe_gate_sigmoid(grouped, topk):
             # the raw L1 tile, so this path uploads the payload as-is and the golden transposes.
             [payload, _id_tile(ids), _zeros(), _zeros()],
             src_b=bias,
-        )
+        ),
+        perf=perf,
     )
+    if perf is not None:
+        return
 
     # The emitted score is the activation, not the raw payload, and it is read at the transposed
     # position: both claims land in the weight comparison. The key is the activation plus the
@@ -533,7 +578,7 @@ def test_generalized_moe_gate_sigmoid(grouped, topk):
 # The grouped answer is well defined only when the eight group top-2 sums are pairwise distinct, so
 # that which four groups survive is unambiguous. Most seeds tie somewhere; 128 does not.
 @parametrize(seed=[128], approx=[ApproximationMode.No, ApproximationMode.Yes])
-def test_generalized_moe_gate_grouped(seed, approx):
+def test_generalized_moe_gate_grouped(seed, approx, *, perf=None):
     payload, bias, keys = _gate_stimuli(seed=seed)
     ids = _ids_face()
 
@@ -545,8 +590,11 @@ def test_generalized_moe_gate_grouped(seed, approx):
             _gate_tiles(payload, ids),
             src_b=bias,
             approx=approx,
-        )
+        ),
+        perf=perf,
     )
+    if perf is not None:
+        return
 
     golden = get_golden_generator(GeneralizedMoeGateGolden)(
         keys, payload, ids, eps=EPS, scale=SCALE, grouped=True
@@ -562,7 +610,9 @@ def test_generalized_moe_gate_grouped(seed, approx):
     approx=[ApproximationMode.No, ApproximationMode.Yes],
     dest_sync=[DestSync.Half, DestSync.Full],
 )
-def test_generalized_moe_gate_grouped_single_face(sigmoid, scaling, approx, dest_sync):
+def test_generalized_moe_gate_grouped_single_face(
+    sigmoid, scaling, approx, dest_sync, *, perf=None
+):
     do_extra_scale, extra_scale = scaling
     ids = _ids_face()
     if sigmoid:
@@ -592,8 +642,11 @@ def test_generalized_moe_gate_grouped_single_face(sigmoid, scaling, approx, dest
             approx=approx,
             dest_sync=dest_sync,
             num_faces=1,
-        )
+        ),
+        perf=perf,
     )
+    if perf is not None:
+        return
     golden = get_golden_generator(GeneralizedMoeGateGolden)(
         keys,
         payload,
@@ -611,7 +664,7 @@ def test_generalized_moe_gate_grouped_single_face(sigmoid, scaling, approx, dest
 # pins. The SyncHalf and four-face corners are controls: they keep a failure attributable to the
 # axis that moved rather than to the seed.
 @parametrize(dest_sync=[DestSync.Half, DestSync.Full], num_faces=[1, 4])
-def test_generalized_moe_gate_shipping_config(dest_sync, num_faces):
+def test_generalized_moe_gate_shipping_config(dest_sync, num_faces, *, perf=None):
     payload, bias, keys = _gate_stimuli(seed=61)
     ids = _ids_face()
 
@@ -624,8 +677,11 @@ def test_generalized_moe_gate_shipping_config(dest_sync, num_faces):
             src_b=bias,
             dest_sync=dest_sync,
             num_faces=num_faces,
-        )
+        ),
+        perf=perf,
     )
+    if perf is not None:
+        return
 
     golden = get_golden_generator(GeneralizedMoeGateGolden)(
         keys, payload, ids, eps=EPS, scale=SCALE
@@ -638,7 +694,7 @@ def test_generalized_moe_gate_shipping_config(dest_sync, num_faces):
 # is the one setting where the weights have to sum to exactly 1, and the only one where the
 # reciprocal sees the sum unpadded.
 @parametrize(norm=[(0.0, 1.0), (EPS, SCALE)], softmax=[False, True])
-def test_generalized_moe_gate_normalization(norm, softmax):
+def test_generalized_moe_gate_normalization(norm, softmax, *, perf=None):
     eps, scale = norm
     payload, bias, keys = _gate_stimuli(seed=19)
     ids = _ids_face()
@@ -653,8 +709,11 @@ def test_generalized_moe_gate_normalization(norm, softmax):
             ),
             _gate_tiles(payload, ids),
             src_b=bias,
-        )
+        ),
+        perf=perf,
     )
+    if perf is not None:
+        return
 
     golden = get_golden_generator(GeneralizedMoeGateGolden)(
         keys, payload, ids, output_softmax=softmax, eps=eps, scale=scale
@@ -679,7 +738,7 @@ def test_generalized_moe_gate_normalization(norm, softmax):
 # (the key is payload+bias, so rank 0's payload is not the maximum) with scores small enough that
 # nothing could overflow either way. This is the regime the max-subtraction was written for: bias
 # zero, logits large enough that removing the subtraction saturates.
-def test_generalized_moe_gate_softmax_logits():
+def test_generalized_moe_gate_softmax_logits(*, perf=None):
     generator = torch.Generator().manual_seed(13)
     # Eight winners near the top of what exp can take, spaced 0.5 apart: bf16's step at that
     # magnitude is exactly 0.5, so the logits are exact and the ranking is unambiguous. exp(95.5)
@@ -698,8 +757,11 @@ def test_generalized_moe_gate_softmax_logits():
             ),
             # src_b defaults to zero: with no bias the sort key is the logit itself.
             _gate_tiles(payload, ids),
-        )
+        ),
+        perf=perf,
     )
+    if perf is not None:
+        return
 
     golden = get_golden_generator(GeneralizedMoeGateGolden)(
         payload, payload, ids, output_softmax=True, eps=0.0, scale=1.0
@@ -760,7 +822,7 @@ def test_generalized_moe_gate_ties():
 # through SFPIADD's sign-extended 12-bit immediate, which the LLK static_asserts below 2048, and 1792
 # is the last 256-aligned block base under it (block 7 of the 8-block ceiling).
 @parametrize(store=[(0, 2), (4, 6)], idx_offset=[0, 256, 1792])
-def test_generalized_moe_gate_produce_run(store, idx_offset):
+def test_generalized_moe_gate_produce_run(store, idx_offset, *, perf=None):
     store_lo, store_hi = store
     payload, bias, keys = _gate_stimuli(seed=23)
     ids = _ids_face()
@@ -778,8 +840,11 @@ def test_generalized_moe_gate_produce_run(store, idx_offset):
             ),
             _gate_tiles(payload, ids),
             src_b=bias,
-        )
+        ),
+        perf=perf,
     )
+    if perf is not None:
+        return
 
     winners = keys.reshape(-1).to(torch.float32).argsort(descending=True)[:8]
     slots = _run_slots(store_lo, store_hi)
@@ -859,7 +924,7 @@ def _binary_key_region(mathop, operand_a, src_b, fidelity, acc_base, acc_to_dest
     mathop=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
     reload=[False, True],
 )
-def test_generalized_moe_gate_binary(mathop, reload):
+def test_generalized_moe_gate_binary(mathop, reload, *, perf=None):
     # COPY takes SrcA from the unpacker and drops a copy in the score region on the way; RELOAD
     # reads it back out. Seeding that region with something other than the unpacked operand is what
     # makes the two distinguishable.
@@ -875,7 +940,10 @@ def test_generalized_moe_gate_binary(mathop, reload):
             fidelity=fidelity,
         ),
         view=_all_faces,
+        perf=perf,
     )
+    if perf is not None:
+        return
 
     operand_a = seed if reload else src_a
     assert torch.equal(
@@ -895,7 +963,7 @@ def test_generalized_moe_gate_binary(mathop, reload):
 # set all three ops accumulate. Read this together with the test above, where the same three run
 # with it clear: that pair is what pins ELWMUL accumulating regardless.
 @parametrize(mathop=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul])
-def test_generalized_moe_gate_binary_acc_to_dest(mathop):
+def test_generalized_moe_gate_binary_acc_to_dest(mathop, *, perf=None):
     mathop = _one(mathop)
     src_a, src_b, seed, acc_base = _binary_stimuli(seed=57)
     fidelity = _binary_fidelity(mathop)
@@ -910,7 +978,10 @@ def test_generalized_moe_gate_binary_acc_to_dest(mathop):
             acc_to_dest=True,
         ),
         view=_all_faces,
+        perf=perf,
     )
+    if perf is not None:
+        return
 
     assert torch.equal(
         _from_dst(tiles[KEYS]).reshape(-1).to(torch.bfloat16),
@@ -921,7 +992,7 @@ def test_generalized_moe_gate_binary_acc_to_dest(mathop):
 # num_faces is the mop's outer loop count, so it decides how much of the tile the binary touches.
 # The tests above run it at 4; the op ships at 1.
 @parametrize(num_faces=[1, 2])
-def test_generalized_moe_gate_binary_num_faces(num_faces):
+def test_generalized_moe_gate_binary_num_faces(num_faces, *, perf=None):
     num_faces = _one(num_faces)
     src_a, src_b, seed, acc_base = _binary_stimuli(seed=88)
 
@@ -933,7 +1004,10 @@ def test_generalized_moe_gate_binary_num_faces(num_faces):
             num_faces=num_faces,
         ),
         view=_all_faces,
+        perf=perf,
     )
+    if perf is not None:
+        return
 
     assert (
         tiles.shape[1] == num_faces
@@ -951,7 +1025,7 @@ def test_generalized_moe_gate_binary_num_faces(num_faces):
 # covers the two the fused path only reaches indirectly, and each window must move the rows the same
 # way.
 @parametrize(src_dst=[(0, 4), (4, 8), (8, 12), (12, 0)], srcb=[16, 20, 24, 28])
-def test_generalized_moe_gate_copy4rows(src_dst, srcb):
+def test_generalized_moe_gate_copy4rows(src_dst, srcb, *, perf=None):
     # Two argnames, so pytest passes the tuple through as-is -- no _one() unwrap.
     src, dst = src_dst
     tags, tiles = _tag_tiles()
@@ -966,8 +1040,11 @@ def test_generalized_moe_gate_copy4rows(src_dst, srcb):
                 srcb=srcb,
             ),
             tiles,
-        )
+        ),
+        perf=perf,
     )
+    if perf is not None:
+        return
 
     for region in (SCORES, IDS, KEYS):
         want = tags[region].clone()
@@ -1003,14 +1080,14 @@ def test_generalized_moe_gate_copy4rows(src_dst, srcb):
         ),  # the whole pipeline: MOPs, merges and the normalize interleaved
     ]
 )
-def test_generalized_moe_gate_dest_sections(what):
+def test_generalized_moe_gate_dest_sections(what, *, perf=None):
     mode, sub_op = _one(what)
     tags, tiles = _tag_tiles()
     payload, bias, keys = _gate_stimuli(seed=61)
     ids = _ids_face()
 
     gate = mode == MODE_GATE
-    lower, upper = _run(
+    result = _run(
         _config(
             GENERALIZED_MOE_GATE(
                 mode=mode,
@@ -1025,7 +1102,11 @@ def test_generalized_moe_gate_dest_sections(what):
             src_b=bias if gate else None,
         ),
         view=_sections,
+        perf=perf,
     )
+    if perf is not None:
+        return
+    lower, upper = result
 
     if gate:
         # The gate leaves SrcB residue in columns 8-15 of its output row, which is not part of the
@@ -1067,7 +1148,7 @@ def test_generalized_moe_gate_dest_sections(what):
             ), f"place_field also wrote region {region}"
 
 
-def test_generalized_moe_gate_copy4rows_back_to_back():
+def test_generalized_moe_gate_copy4rows_back_to_back(*, perf=None):
     tags, tiles = _tag_tiles()
 
     faces = _run(
@@ -1084,8 +1165,11 @@ def test_generalized_moe_gate_copy4rows_back_to_back():
                 srcb_2=20,
             ),
             tiles,
-        )
+        ),
+        perf=perf,
     )
+    if perf is not None:
+        return
 
     for region in (SCORES, IDS, KEYS):
         want = tags[region].clone()
@@ -1098,7 +1182,7 @@ def test_generalized_moe_gate_copy4rows_back_to_back():
 
 
 @parametrize(knobs=[(0, 8), (4, 0), (4, 8)])
-def test_generalized_moe_gate_step1_hi(knobs):
+def test_generalized_moe_gate_step1_hi(knobs, *, perf=None):
     """step1_hi's two knobs pick which four rows it reads and where it writes the result.
 
     The layout it produces is not specified anywhere outside the instruction sequence, so rather
@@ -1109,7 +1193,7 @@ def test_generalized_moe_gate_step1_hi(knobs):
     tags, tiles = _tag_tiles()
     shifted = [_word_tile(torch.roll(t, shifts=-d2b_dst, dims=0)) for t in tags]
 
-    faces, reference = _run(
+    result = _run(
         _config(
             GENERALIZED_MOE_GATE(
                 mode=MODE_MOVE,
@@ -1125,7 +1209,11 @@ def test_generalized_moe_gate_step1_hi(knobs):
             ),
             shifted,
         ),
+        perf=perf,
     )
+    if perf is not None:
+        return
+    faces, reference = result
 
     for region in (SCORES, IDS, KEYS):
         got = faces[region][b2d_base : b2d_base + 8]
@@ -1157,10 +1245,10 @@ def test_generalized_moe_gate_step1_hi(knobs):
 # num_tiles=3. The grouped path calls step1 and the ungrouped path calls step1_hi, so nothing else
 # would notice if one were edited and the other left behind. That equivalence is the claim here, and
 # it is also what lets the step1_hi test above stand as step1's layout cover.
-def test_generalized_moe_gate_step1_matches_step1_hi():
+def test_generalized_moe_gate_step1_matches_step1_hi(*, perf=None):
     tags, tiles = _tag_tiles()
 
-    step1, step1_hi = _run(
+    result = _run(
         _config(GENERALIZED_MOE_GATE(mode=MODE_MOVE, sub_op=MOVE_STEP1), tiles),
         _config(
             GENERALIZED_MOE_GATE(
@@ -1168,7 +1256,11 @@ def test_generalized_moe_gate_step1_matches_step1_hi():
             ),
             tiles,
         ),
+        perf=perf,
     )
+    if perf is not None:
+        return
+    step1, step1_hi = result
 
     for region in (SCORES, IDS, KEYS, INTERMEDIATE):
         assert torch.equal(
@@ -1186,7 +1278,7 @@ def test_generalized_moe_gate_step1_matches_step1_hi():
     ), "step1 touched the scratch region"
 
 
-def test_generalized_moe_gate_step0():
+def test_generalized_moe_gate_step0(*, perf=None):
     """step0 puts group g on DEST row g, in all four regions.
 
     It reads DEST rows 0-7 into every other row of the SrcB transpose window and reads the same
@@ -1198,8 +1290,11 @@ def test_generalized_moe_gate_step0():
     tags, tiles = _tag_tiles()
 
     faces = _run(
-        _config(GENERALIZED_MOE_GATE(mode=MODE_MOVE, sub_op=MOVE_STEP0), tiles)
+        _config(GENERALIZED_MOE_GATE(mode=MODE_MOVE, sub_op=MOVE_STEP0), tiles),
+        perf=perf,
     )
+    if perf is not None:
+        return
 
     # num_tiles=4, so unlike every other MOP here this one does reach the scratch region.
     for region in (SCORES, IDS, KEYS, INTERMEDIATE):
@@ -1212,7 +1307,7 @@ def test_generalized_moe_gate_step0():
 
 
 @parametrize(output_tiles=[2, 3])
-def test_generalized_moe_gate_step2(output_tiles):
+def test_generalized_moe_gate_step2(output_tiles, *, perf=None):
     """step2 turns the merged run into the output layout: rank r moves to row 0, column r.
 
     The run arrives down column 0 of rows 0-7, so this is the same window transpose read back one
@@ -1229,8 +1324,11 @@ def test_generalized_moe_gate_step2(output_tiles):
                 mode=MODE_MOVE, sub_op=MOVE_STEP2, output_tiles=output_tiles
             ),
             tiles,
-        )
+        ),
+        perf=perf,
     )
+    if perf is not None:
+        return
 
     for region in range(output_tiles):
         assert torch.equal(
@@ -1316,17 +1414,21 @@ def _stored_run(faces, store_lo, store_hi):
 # are the claims here, and not which eight of the sixteen it keeps: the direction convention a
 # bitonic merge wants for its four input quarters is not written down outside the instruction
 # sequence, so a selection golden would enshrine whatever the op does today.
-def test_generalized_moe_gate_merge4_top8():
+def test_generalized_moe_gate_merge4_top8(*, perf=None):
     keys, ids, scores = _merge4_stimuli(seed=57)
     shifted = [torch.roll(t, shifts=8, dims=0) for t in (keys, ids, scores)]
     store_lo, store_hi = 8, 10  # the run's home for the checks below
     other_lo, other_hi = 12, 14  # a second store pair, to show the pair is honest
 
-    at_zero, at_eight, stored_elsewhere = _run(
+    result = _run(
         _merge4_config(0, (store_lo, store_hi), keys, ids, scores),
         _merge4_config(8, (store_lo, store_hi), *shifted),
         _merge4_config(0, (other_lo, other_hi), keys, ids, scores),
+        perf=perf,
     )
+    if perf is not None:
+        return
+    at_zero, at_eight, stored_elsewhere = result
 
     run = _stored_run(at_zero, store_lo, store_hi)
     # read_base names the first of the four offsets it reads, so base 8 reads {8,10,12,14}: rows
@@ -1364,7 +1466,7 @@ def test_generalized_moe_gate_merge4_top8():
     placement=[(0, 2, 4, 6), (0, 2, 8, 10), (4, 6, 0, 2), (0, 4, 8, 12)],
     after_mop=lambda placement: [False, True] if placement == (0, 2, 4, 6) else [False],
 )
-def test_generalized_moe_gate_relocate_run(placement, after_mop):
+def test_generalized_moe_gate_relocate_run(placement, after_mop, *, perf=None):
     from_lo, from_hi, to_lo, to_hi = placement
     tags, tiles = _tag_tiles()
 
@@ -1382,8 +1484,11 @@ def test_generalized_moe_gate_relocate_run(placement, after_mop):
                 row_dst=12,
             ),
             tiles,
-        )
+        ),
+        perf=perf,
     )
+    if perf is not None:
+        return
 
     for region in (SCORES, IDS, KEYS):
         want = tags[region].clone()
@@ -1409,7 +1514,7 @@ def test_generalized_moe_gate_relocate_run(placement, after_mop):
         [False, True] if (field, src, dst) == (0, (0, 4), (0, 2)) else [False]
     ),
 )
-def test_generalized_moe_gate_place_field(field, src, dst, after_mop):
+def test_generalized_moe_gate_place_field(field, src, dst, after_mop, *, perf=None):
     src_lo, src_hi = src
     dst_lo, dst_hi = dst
     tags, tiles = _tag_tiles()
@@ -1430,8 +1535,11 @@ def test_generalized_moe_gate_place_field(field, src, dst, after_mop):
                 row_dst=12,
             ),
             tiles,
-        )
+        ),
+        perf=perf,
     )
+    if perf is not None:
+        return
 
     want = tags[home].clone()
     if after_mop:
@@ -1535,7 +1643,7 @@ def _combine_tiles(keys, ids, scores):
 # merge then has to accept it as an equal of the run already sitting there. That the placed cells
 # form a run a merge can consume is the run format's whole contract, and nothing else checks it.
 @parametrize(store=[(8, 10), (12, 14)])
-def test_generalized_moe_gate_combine(store):
+def test_generalized_moe_gate_combine(store, *, perf=None):
     store_lo, store_hi = _one(store)
     keys, ids, scores = _combine_stimuli(seed=404)
 
@@ -1549,8 +1657,11 @@ def test_generalized_moe_gate_combine(store):
                 idx_offset=IDX_OFFSET_NONE,
             ),
             _combine_tiles(keys, ids, scores),
-        )
+        ),
+        perf=perf,
     )
+    if perf is not None:
+        return
 
     _assert_combined(faces, keys, ids, scores, store_lo, store_hi, IDX_OFFSET_NONE)
 
@@ -1558,7 +1669,7 @@ def test_generalized_moe_gate_combine(store):
 # Same combine, except the arriving run is already sitting in DEST at {8,10} and reaches the merge
 # slot by relocation. copy_topk_run's own test only checks that the cells moved; that what lands is
 # still a run a merge will accept is a separate claim, and this is what makes it.
-def test_generalized_moe_gate_combine_relocated():
+def test_generalized_moe_gate_combine_relocated(*, perf=None):
     keys, ids, scores = _combine_stimuli(seed=404)
     poison = torch.full((4, 16), 4096.0)
     store_lo, store_hi = 12, 14
@@ -1590,8 +1701,11 @@ def test_generalized_moe_gate_combine_relocated():
                 ),
                 _zeros(),
             ],
-        )
+        ),
+        perf=perf,
     )
+    if perf is not None:
+        return
 
     _assert_combined(faces, keys, ids, scores, store_lo, store_hi, IDX_OFFSET_NONE)
 
@@ -1602,7 +1716,7 @@ def test_generalized_moe_gate_combine_relocated():
 # Nothing else composes a placed run with the normalize, which is where a run that merges correctly
 # but carries the wrong payload would still show up.
 @parametrize(topk=[4, 6, 8], softmax=[False, True])
-def test_generalized_moe_gate_combine_finalize(topk, softmax):
+def test_generalized_moe_gate_combine_finalize(topk, softmax, *, perf=None):
     keys, ids, scores = _combine_stimuli(seed=404, score_divisor=128.0)
 
     faces = _run(
@@ -1616,8 +1730,11 @@ def test_generalized_moe_gate_combine_finalize(topk, softmax):
                 scale=fp32_bits(SCALE),
             ),
             _combine_tiles(keys, ids, scores),
-        )
+        ),
+        perf=perf,
     )
+    if perf is not None:
+        return
 
     # The output is instance 0's answer, so its candidates are DEST columns 0 and 1 of rows 0-7.
     golden = get_golden_generator(GeneralizedMoeGateGolden)(
@@ -1635,7 +1752,7 @@ def test_generalized_moe_gate_combine_finalize(topk, softmax):
 # The gate-level cover above cannot run under ttsim, and this can, so it is the one that will catch
 # a regression in the offset add before silicon does. Comparing two runs of the same stimulus needs
 # no golden and no knowledge of where in the run a rank lands.
-def test_generalized_moe_gate_idx_offset():
+def test_generalized_moe_gate_idx_offset(*, perf=None):
     tags, tiles = _tag_tiles()
 
     def config(idx_offset):
@@ -1650,7 +1767,10 @@ def test_generalized_moe_gate_idx_offset():
             tiles,
         )
 
-    base, shifted = _run(config(0), config(256))
+    result = _run(config(0), config(256), perf=perf)
+    if perf is not None:
+        return
+    base, shifted = result
 
     # A merge is eight independent sorts side by side and the offset add is applied to all of them,
     # so check every instance: an add that reaches only instance 0 is a live failure mode, the ids
@@ -1675,3 +1795,27 @@ def test_generalized_moe_gate_idx_offset():
         assert torch.equal(
             base[region], shifted[region]
         ), f"idx_offset also wrote region {region}"
+
+
+def invoke_with_perf(
+    fn,
+    *args,
+    is_perf,
+    perf_report,
+    run_types,
+    loop_factor,
+    perf_config_index=0,
+    **kwargs,
+):
+    """Run a functional case with an explicit perf context."""
+    return fn(
+        *args,
+        perf=PerfInvocation(
+            is_perf=is_perf,
+            perf_report=perf_report,
+            run_types=run_types,
+            loop_factor=loop_factor,
+            config_index=perf_config_index,
+        ),
+        **kwargs,
+    )
