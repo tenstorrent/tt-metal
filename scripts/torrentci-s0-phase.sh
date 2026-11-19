@@ -23,5 +23,5 @@ awk -v arm="$S0_ARM" -v ph="$phase" -v j="${CMAKE_BUILD_PARALLEL_LEVEL-unset}" -
     wall = w1 - w0; du = u1 - u0; dp = p1 - p0; dn = n1 - n0
     printf "S0 arm=%s phase=%s j=%s rc=%s wall_s=%.1f d_usage_usec=%.0f cores=%.2f d_nr_periods=%d d_nr_throttled=%d thr_ratio=%.3f d_throttled_usec=%.0f load1_start=%s load1_end=%s node_cpus=%s\n",
       arm, ph, j, rc, wall, du, (wall > 0 ? du / 1e6 / wall : 0), dp, dn, (dp > 0 ? dn / dp : 0), t1 - t0, l0, l1, ncpu
-  }'
+  }' | tee -a /tmp/s0-summary.txt
 exit "$rc"
