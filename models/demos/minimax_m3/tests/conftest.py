@@ -5,11 +5,12 @@ Fixtures and a hook for the vision encoder's device tests (unit/test_vision_*_vs
 
 The reference is Hugging Face's vision tower and projector, with eager attention, at the checkpoint's sizes. Its
 weights are seeded random values, so no checkpoint is needed. Weights and inputs are bf16 values, as the chip holds
-them, so the tests measure the chip's arithmetic and not the rounding of its inputs. The fixtures are session scoped
-and cache what they build.
+them, so the tests measure the chip's arithmetic and not the rounding of its inputs. The reference fixtures are
+session scoped and cache what they build. ensure_gc replaces models/conftest.py's fixture for every test here.
 """
 from __future__ import annotations
 
+import gc
 from types import SimpleNamespace
 
 import pytest
@@ -28,6 +29,17 @@ def pytest_runtest_call(item):
     if mesh_device is not None:
         grid = mesh_device.compute_with_storage_grid_size()
         logger.info(f"[{item.name}] compute grid {grid.x}x{grid.y}")
+
+
+@pytest.fixture(autouse=True)
+def ensure_gc(request):
+    """Collect garbage before each test, as models/conftest.py's ensure_gc does, except before a vision host test.
+
+    A vision test without a chip holds no device memory, so a full collection before it only costs time.
+    """
+    if request.node.path.name.startswith("test_vision_") and "mesh_device" not in request.fixturenames:
+        return
+    gc.collect()
 
 
 @pytest.fixture(scope="session")

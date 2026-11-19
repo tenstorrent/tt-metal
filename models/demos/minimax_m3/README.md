@@ -101,6 +101,39 @@ pytest models/demos/minimax_m3/tests/unit/ -k test_vision_
 M3_VISION_TIMING=1 pytest -s models/demos/minimax_m3/tests/perf/test_vision_encoder_timing.py
 ```
 
+### Images: the media module
+
+The encoder service turns each image into vision tokens through the media module, `MiniMaxM3Media` in
+[`multimodal/media.py`](multimodal/media.py). The service opens one chip and calls:
+
+```python
+import ttnn
+from models.demos.minimax_m3.multimodal import format as media_format
+from models.demos.minimax_m3.multimodal.media import MiniMaxM3Media
+
+media = MiniMaxM3Media(hf_config)  # the checkpoint's config.json, as a dict
+item = media.prepare("image", rgb)  # rgb: a decoded uint8 [height, width, 3]; resized as Hugging Face's processor does
+runs = media.expansion(item)  # [(IMAGE_START, 1), (image_token_index, item.n_tokens), (IMAGE_END, 1)]
+value = memoryview(bytearray(media.stored_nbytes(item)))  # or a slot of shared memory of that size
+
+mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 1), **media.device_params)
+media.load(mesh_device, weights_path, "image", {})  # weights_path: the checkpoint directory
+media.encode([item], [value])  # writes a header, then the image's bf16 vision tokens
+media.close()  # frees the encoder; the caller closes the chip
+ttnn.close_mesh_device(mesh_device)
+
+rows = media_format.embeddings(value, 6144)  # what prefill reads: [item.n_tokens, 6144] bf16 bit patterns
+```
+
+- An image gives at most 576 vision tokens, at 672x672 after the resize.
+- `load` compiles the chip's programs for the resized sizes in `model_options["warmup_sizes"]`, [height, width] pairs,
+  by default 672x672 and 560x756, so the first images of those sizes do not wait for a compile.
+- `model_options["stub_embeddings"]` makes `encode` write stand-in rows with no chip and no weights, to test the
+  serving path.
+- One call at a time: `load`, `encode` and `close` are not thread safe. Tested on P150 cards.
+- Without the media module, `TtMiniMaxM3VisionEncoder` in [`multimodal/encoder.py`](multimodal/encoder.py) runs the
+  encoder directly: `from_weights_path` once, then `forward(pixels)` and `read_embeddings(tokens, out)` per image.
+
 ### Compute precision
 
 Two switches ([`tt/compute_configs.py`](tt/compute_configs.py)), each on for MiniMax-M3.1 and off for MiniMax-M3 by
@@ -235,6 +268,7 @@ tt/attention/     dense SP (ring_joint) + sparse MSA (indexer + sparse_sdpa_msa)
 tt/moe/   EP MoE (TtMiniMaxMoE + fused swigluoai routed expert), activation
 tt/               dense_mlp, layer, model, rms_norm, topk, mlp, weight_cache, tt_prefill_runtime
 tt/vision/        vision encoder (ViT tower + projector), its input checks, RoPE tables and program configs; loader.py reads its weights from the checkpoint
+multimodal/       media module (media.py), the stored value's format (format.py) and the vision encoder's entry point (encoder.py)
 reference/        torch reference model + sparse GQA prefill
 scripts/          golden KV-cache generation + verification
 scripts/prefill_matrix/  repeatable (new x cached) prefill perf matrix on the 16-stage pipeline (see its README)
