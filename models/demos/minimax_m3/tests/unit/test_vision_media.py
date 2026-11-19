@@ -70,7 +70,8 @@ def test_media_rejects_another_patch_geometry(expect_error, vision):
 
 
 def test_prepare_takes_read_only_and_flipped_images(monkeypatch):
-    """prepare takes a read-only image with no warning, and a flipped or channel-swapped view like its copy."""
+    """prepare takes a read-only image with no warning, and a flipped or channel-swapped view like its copy, also a
+    flipped one-row image, whose negative stride is on a length-1 axis."""
     from_numpy = torch.from_numpy
 
     def from_numpy_warns_every_time(array):  # torch itself warns about a read-only array once per process
@@ -86,7 +87,7 @@ def test_prepare_takes_read_only_and_flipped_images(monkeypatch):
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         assert np.array_equal(media.prepare("image", read_only).pixels, media.prepare("image", image).pixels)
-    for view in (image[::-1], image[:, ::-1], image[..., ::-1]):
+    for view in (image[::-1], image[:, ::-1], image[..., ::-1], rgb(1, 150)[::-1]):
         assert np.array_equal(media.prepare("image", view).pixels, media.prepare("image", view.copy()).pixels)
 
 
