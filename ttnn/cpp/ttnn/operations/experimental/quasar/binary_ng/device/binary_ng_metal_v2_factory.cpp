@@ -1088,6 +1088,12 @@ ProgramArtifacts create_no_bcast_artifacts(
 
 ttnn::device_operation::ProgramArtifacts BinaryNgDeviceOperation::ProgramFactoryMetalV2::create_program_artifacts(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, tensor_return_value_t& c) {
+    // On Quasar only the reference arm (TTNN_QSR_NATIVE=0) gets here. matches_metal_v2_slice already refuses the other
+    // cases; this check catches a later edit of that gate.
+    TT_FATAL(
+        tensor_args.input_tensor_a.device()->arch() != tt::ARCH::QUASAR || !native_tuning().enabled,
+        "The deprecated Metal 2.0 factory runs on Quasar only with TTNN_QSR_NATIVE=0, but matches_metal_v2_slice "
+        "admitted this op");
     return create_no_bcast_artifacts(operation_attributes, tensor_args, c);
 }
 
