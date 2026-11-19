@@ -5,6 +5,9 @@
 #pragma once
 
 #include <atomic>
+#include <memory>
+#include <unordered_set>
+#include <vector>
 
 #include "device/device_impl.hpp"
 #include "firmware_initializer.hpp"
@@ -38,14 +41,27 @@ private:
     // No-op when debug tooling disables erisc IRAM.
     void compile_fabric_only();
 
+    // Build and compile the fabric program for one device.
+    // Returns nullptr if the device has no fabric routers.
+    std::unique_ptr<Program> compile_fabric(Device* dev) const;
+
+    // Write runtime args and launch messages for an already-compiled fabric program on one device.
+    void configure_fabric(Device* dev, Program& fabric_program) const;
+
     // Wait for fabric router handshake on all devices.
     void wait_for_fabric_router_sync(uint32_t timeout_ms) const;
 
     // Compute the fabric router sync timeout from runtime options.
     uint32_t get_fabric_router_sync_timeout_ms() const;
 
+    // Drop all per-device state and mark this initializer as torn down.
+    void reset_state(std::unordered_set<InitializerKey>& init_done);
+
     tt::tt_fabric::ControlPlane& control_plane_;
     std::vector<Device*> devices_;
+    // Fabric program per device, parallel to devices_. A null entry means that device has no fabric routers.
+    // Each compile task writes only its own slot and the vector is never resized while tasks run, so no lock is needed.
+    std::vector<std::unique_ptr<Program>> fabric_programs_;
     std::atomic_flag initialized_;
 };
 

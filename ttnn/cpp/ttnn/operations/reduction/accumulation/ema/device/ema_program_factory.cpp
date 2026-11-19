@@ -7,8 +7,8 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/math.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 
@@ -23,7 +23,7 @@ constexpr auto ema_buffer_depth = 2;
 
 namespace {
 
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 // The constants below carry a per-factory prefix so this file and the sibling accumulation factory
 // can safely share a translation unit: both are sources of the unity-built ttnn_op_reduction
@@ -47,7 +47,7 @@ const TensorParamName EMA_OUTPUT{"output"};
 
 ttnn::device_operation::ProgramArtifacts EmaDeviceOperation::EmaProgramFactory::create_program_artifacts(
     const EmaParams& operation_attributes, const EmaInputs& tensor_args, Tensor& tensor_return_value) {
-    using namespace tt::tt_metal::experimental;
+    using namespace tt::tt_metal;
 
     const auto& input = tensor_args.input.mesh_tensor();
     const auto& output = tensor_return_value.mesh_tensor();
