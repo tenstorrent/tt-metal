@@ -91,21 +91,23 @@ def test_ring_all_gather_on_every_chip(rr_mesh, axis, num_links):
     result = ttnn.from_device(ttnn.to_layout(gathered, ttnn.ROW_MAJOR_LAYOUT))
     buffer = result.host_buffer()
 
-    checked = 0
-    for coord in result.tensor_topology().mesh_coords():
-        if not view.is_local(coord):
-            continue
-        shard = buffer.get_shard(coord)
-        if shard is None:
-            continue
-        # The host buffer is exposed as raw bytes; the tensor is float32 row-major.
-        got = np.ascontiguousarray(np.from_dlpack(shard)).view(np.float32).reshape(-1)
-        want = expected_gather(axis, int(coord[0]), int(coord[1])).reshape(-1)
-        assert np.array_equal(got, want), (
-            f"rank {rank} chip ({coord[0]},{coord[1]}) axis {axis} links {num_links}: got {got.size} values, "
-            f"unique {np.unique(got)[:20]}, first {got[:4]}; want {want.size} values, unique {np.unique(want)}"
-        )
-        checked += 1
-    assert checked > 0, "no local chip was checked"
-    logger.info(f"RR_CHECK OK rank {rank} axis {axis} links {num_links}: {checked} local chips")
-    barrier()
+    try:
+        checked = 0
+        for coord in result.tensor_topology().mesh_coords():
+            if not view.is_local(coord):
+                continue
+            shard = buffer.get_shard(coord)
+            if shard is None:
+                continue
+            # The host buffer is exposed as raw bytes; the tensor is float32 row-major.
+            got = np.ascontiguousarray(np.from_dlpack(shard)).view(np.float32).reshape(-1)
+            want = expected_gather(axis, int(coord[0]), int(coord[1])).reshape(-1)
+            assert np.array_equal(got, want), (
+                f"rank {rank} chip ({coord[0]},{coord[1]}) axis {axis} links {num_links}: got {got.size} values, "
+                f"unique {np.unique(got)[:20]}, first {got[:4]}; want {want.size} values, unique {np.unique(want)}"
+            )
+            checked += 1
+        assert checked > 0, "no local chip was checked"
+        logger.info(f"RR_CHECK OK rank {rank} axis {axis} links {num_links}: {checked} local chips")
+    finally:
+        barrier()
