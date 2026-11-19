@@ -110,6 +110,15 @@ class TestHscJudgement(unittest.TestCase):
     def test_off_newly_set_fails(self):
         self.assertEqual(_judge(_status(), _status(override={(4, 0x42): OFF})).status, FAIL)
 
+    def test_over_current_trip_names_its_reason(self):
+        from diag.hsc import _flags, flag_names
+
+        trip = (0x4852, 0x00)  # IOUT summary, power not good, OFF, IOUT_OC_FAULT, CML
+        self.assertEqual(flag_names(_flags(trip)), "OFF, IOUT_OC_FAULT")
+        check = _judge(_status(), _status(override={(1, 0x42): trip}))
+        self.assertEqual(check.status, FAIL)
+        self.assertIn("tray 1 HSC 0x42: OFF, IOUT_OC_FAULT newly set during the tests", check.details)
+
     def test_flag_already_set_before_warns(self):
         latched = _status(override={(3, 0x40): UV_WARN})
         self.assertEqual(_judge(latched, latched).status, WARN)

@@ -180,7 +180,7 @@ and after, and the chips are recounted from a fresh `tt-smi` snapshot. The reads
 are `ipmitool raw 0x06 0x52` reads of those two registers only; nothing is
 written and the latches are not cleared. A weak bus bar often does not fail the
 test that sags it: the chip survives and the input under-voltage flag stays
-latched, or a chip drops off PCIe after the load. See `hsc_input_status` and
+latched, a tray trips off on over-current, or a chip drops off PCIe after the load. See `hsc_input_status` and
 `pcie_enum_count_after_tests` in the checks below.
 
 The reset cadence and test set per tier are in `tiers.py`; the gtest filters and
@@ -691,7 +691,7 @@ The detected rev is also recorded at the top of the JSON report as `detected_boa
 ### Around the tests
 | Check | Rule | On fail |
 |---|---|---|
-| `hsc_input_status` | The 8 tray HSCs' `VIN_UV_WARN`, `VIN_UV_FAULT` and OFF flags, read before and after the tests (via `ipmitool raw`, as root or `sudo -n`). | **FAIL** on a flag newly set during the tests. **WARN** on a flag already set before them (cannot be told apart) or an HSC that did not answer. **SKIP** when none answered. |
+| `hsc_input_status` | The 8 tray HSCs' `VIN_UV_WARN`, `VIN_UV_FAULT`, `IOUT_OC_FAULT` and OFF flags, read before and after the tests (via `ipmitool raw`, as root or `sudo -n`). | **FAIL** on a flag newly set during the tests. **WARN** on a flag already set before them (cannot be told apart) or an HSC that did not answer. **SKIP** when none answered. |
 | `pcie_enum_count_after_tests` | All 32 chips enumerated in a fresh snapshot taken after the tests. | **FAIL** |
 
 ### GDDR
