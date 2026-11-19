@@ -6473,6 +6473,22 @@
    "X.1": "PASS"
   }
  },
+ "X.10": {
+  "attempt": 1,
+  "history": [
+   {
+    "by": "overseer (measured directly)",
+    "status": "PASS",
+    "t": "2026-11-19T13:33:58"
+   }
+  ],
+  "last_run": "2026-11-19T13:33:58",
+  "note": "Measured by the overseer on the runner (the agent was stopped after 6 reloads): exposed 14.5 ms (engram ~5.2, layer-2 launches 4.9, start/end 3.6, Python 0.8) + serving ids readback 1.53 ms (tests/perf/test_ids_readback.py); on-device engram net ~-5 ms at 142k (history gather no longer hidden: +1 ms at 142k, +5-6 ms at 1M). results/X.10_idle_p145408_tagentic.json, supervision.md 13:27-13:40.",
+  "reason": [],
+  "role": "perf",
+  "status": "PASS",
+  "waiting": null
+ },
  "X.2": {
   "attempts": 0,
   "duration_s": 2.4,

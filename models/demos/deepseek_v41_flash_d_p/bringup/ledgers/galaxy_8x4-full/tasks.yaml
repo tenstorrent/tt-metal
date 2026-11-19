@@ -5527,13 +5527,49 @@ tasks:
       steady_wall_ms_p1024000: '> 0'
       steady_wall_ms_p145408_tagentic: '> 0'
       steady_wall_ms_p145408_tmultilingual: '> 0'
+- id: P.87
+  title: 'OWNER 2026-11-19 perf: engram tables on the Galaxy (hash + row gather on the device, no ids readback): ~-5 ms a chunk at 142k'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - X.10
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - ttnn/ttnn/bringup
+  brief:
+    prior_work: 'X.10 (exposed host 14.5 ms at 142k agentic: engram ~5.2 = layer-1 wait 1.85 + prefetch launches at the wait 1.43 + main thread slowed by the engram job 1.92; + the serving ids readback 1.53 ms a chunk, tests/perf/test_ids_readback.py), P.78 HOST_HIDE (numba hash + threaded gather, layer 14 deferred), P.6 ENGRAM_ASYNC, FIX.10 (ENGRAM_TABLE=resident on the host), bringup/ENGRAM_HOST_PATH.md, engram_handoff.md, P.74 / P.75 / P.77 (the history all-gather hidden in the engram wait: ~1.1 ms at 142k, ~5-6 ms at 1M for 3 sources), tt-d-gen ask 2 (host ids with every chunk: the alternative to on-device ids).'
+    details: 'OWNER 2026-11-19: move the engram n-gram tables onto the Galaxy. Today: the engine''s ids are on the device, prefill reads them back (adapter._host_ids: 8 blocking reads, 1.53 ms a chunk), hashes them on the host and gathers rows from the host tables (98 GB a table, two tables: layers 1 and 14), uploads them. Build: (1) the two tables sharded over the 32 chips in the rows'' current format (~6.1-6.5 GB a chip; check the 1M DRAM budget with the persistent history buffers), uploaded ONCE at startup (one-time load cost, measured); (2) the n-gram hash on the device from the engine''s device ids and the slot''s 3-id tail (bit-identical to reference/ngram.EngramHasher / the numba hash); (3) a sharded row gather + exchange to the chips that own the tokens (8x4 torus); (4) embed and every engram layer read device ids: no readback on the critical path; (5) OWNER 2026-11-19: ONE FUSED kernel does the engram lookup (hash, sharded row gather, exchange to the token owners) AND the KV-history all-gather (P.74 / P.75 / P.77: the 3 sources'' 4-bit records into the persistent buffers, today hidden in the engram wait: ~1.1 ms at 142k, ~5-6 ms at 1M), so the history transfer runs on the fabric while the lookup reads DRAM; no separate gather op left on the critical path. Report the fused kernel''s time vs the two separate (lookup alone, gather alone). Behind ENGRAM_DEVICE=off|on, a CALL-time switch (both paths available in one load: the tables are loaded when the switch exists). Engram rows bit-identical to the host path. TESTING, owner rule, utmost priority: no full model loads to test. Correctness by op-level tests on the mesh alone (hash, gather, exchange vs the host path on real ids: agentic / prose texts, the slot tail); timing only through the resident runner already holding layers 0-20 (one request, both switch values, no reload); never more than 2 device opens in this task; before any load write in BREADCRUMBS why the question cannot be answered on the host or with fewer layers. Target: steady wall at 142k agentic -5 ms (14.5 + 1.5 ms exposed today, engram share ~6.7); report 1M too. Keep only at >= 2 ms wall. Kernel work is the job.'
+  ab:
+    env:
+      ENGRAM_DEVICE: 'off'
+    change:
+      ENGRAM_DEVICE: 'on'
+  ab_mode: full
+  ab_rungs:
+  - last
+  gate:
+    cmd: BRINGUP_POS_TOKENS=agentic DS41_DECODER_SKIP=decode SKIP_POS=145408,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py && BRINGUP_POS_TOKENS=prose DS41_DECODER_SKIP=decode SKIP_POS=145408 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py && BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py
+    metrics:
+      err_layer_L*: '<= limit'
+      err_state_*_L*: '<= limit'
+      err_final_hidden: '<= limit'
+      top5_overlap: '>= limit'
+      determinism_max_abs_diff: '== 0'
+      contract_checks_failed: '== 0'
+      outside_history_max_abs_diff: '== 0'
+      steady_wall_ms_p145408_tagentic: '> 0'
+      steady_wall_ms_p145408_tprose: '> 0'
 - id: P.83
   title: 'OWNER 2026-11-19 perf: mhc_post to its DRAM roofline (7.8 -> <= 3 ms a chunk at 142k; ~40 us a call vs 137-169 us measured)'
   step: perf
   role: perf
   device: true
   deps:
-  - X.10
+  - P.87
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
   - models/demos/deepseek_v41_flash_d_p/tests/
