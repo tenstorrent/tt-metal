@@ -90,6 +90,17 @@
 // forwards this one; with NSLICE_WEIGHT_PAGE_RUNS a round is one ND shard, read as one run. Measured on res4.x @ LoFi
 // (unzoned, medians of 3, bit-identical): 11636 -> 10953 ns; the round period went 1.03 -> 0.74 us.
 //
+// N-slice round 0 (NSLICE_ROUND0, the descriptor's round-0 reader): every slot is fresh at kernel start, so round 0
+// needs no handshake. One column participant per column, the round-0 reader Q (the column sender, or the row the
+// descriptor picks for the shortest DRAM read path), issues its read at walk setup, before anything else of the walk,
+// and multicasts it to its column (data, then the column's data-ready flag). The column sender, which sits on its
+// slice's spare row, relays it to the slice's spare members (the forwarder starts at round 1; the members do not ack
+// round 0), and runs the helper protocol from round 1. The N-slice async bias is read once the core's round 0 landed,
+// and a fresh slot's read (round < depth) does not wait for this core's multicasts to leave L1. Measured on res5.0 @
+// LoFi (zoned, us after kernel start, p50 / max): round 0 landed on spare members at 5.7 / 6.6, now 4.3 / 4.5, on grid
+// members at 4.4 / 5.1, now 3.2 / 3.5; the 39 KB round-0 read took 0.9-2.2 us from the column senders' rows (NoC1
+// climbs shared by up to four reads), 0.8-0.9 us from the picked rows.
+//
 // Every push of cb_combine_slots is its whole capacity, so its write pointer never leaves the CB base and
 // the same base address is right on every core. The counters only grow, so round j waits for
 // (j + 1) x the per-round count.
@@ -231,6 +242,14 @@ void kernel_main() {
     // Weight servers: 1 on a receiver, then its server's (x, y).
     constexpr uint32_t server_arg = split_flag_arg + 1;
     [[maybe_unused]] const bool server_receiver = weight_servers && get_arg_val<uint32_t>(server_arg) != 0;
+#ifdef NSLICE_ROUND0
+    // N-slice round 0 (see the file comment), after the weight-server args (the N-slice walk has no kw-fold args):
+    // [this core is its column's round-0 reader, the column's multicast rectangle (NoC-ordered sx, sy, ex, ey), the
+    // column's other participants, then on the column sender the spare members' rectangle and count (0: none)].
+    constexpr uint32_t round0_arg = server_arg + 3;
+    [[maybe_unused]] const bool round0_reader = get_arg_val<uint32_t>(round0_arg) != 0;
+    [[maybe_unused]] const uint32_t round0_spare_dests = get_arg_val<uint32_t>(round0_arg + 10);
+#endif
     // Weight servers: the server's slot-reuse ack counter (slot 0's under SERVER_SLOT_ACKS).
     [[maybe_unused]] uint64_t server_ack_noc = 0;
     if (server_receiver) {
@@ -784,11 +803,15 @@ void kernel_main() {
     };
 #endif
 #ifdef CONV2D_3X3_HOST_FILL
-    // Host-planned writer fill (descriptor _host_fill_args, after the server args): [batches],
-    // then per batch [pieces] and (owner x << 16 | y, offset, slab row << 16 | rows) per piece. One M-block per core
-    // and the whole slab in the ring (empty at kernel start), so every batch is issued from kernel start (up to the
-    // window in flight) without the reader's hand-over, and counted in slab_fwd_done in order as it lands.
+    // Host-planned writer fill (descriptor _host_fill_args, after the server args and any N-slice round-0 args):
+    // [batches], then per batch [pieces] and (owner x << 16 | y, offset, slab row << 16 | rows) per piece. One M-block
+    // per core and the whole slab in the ring (empty at kernel start), so every batch is issued from kernel start (up
+    // to the window in flight) without the reader's hand-over, and counted in slab_fwd_done in order as it lands.
+#ifdef NSLICE_ROUND0
+    uint32_t hf_arg = round0_arg + 11;  // after the N-slice round-0 args
+#else
     uint32_t hf_arg = server_arg + 3;
+#endif
     const uint32_t hf_batches = split_here ? get_arg_val<uint32_t>(hf_arg) : 0;
     ++hf_arg;
     uint32_t hf_issued = 0;
@@ -1518,8 +1541,11 @@ void kernel_main() {
     uint32_t prefetched_round = 0xFFFFFFFF;
     [[maybe_unused]] auto start_weight_reads = [&](uint32_t round, uint32_t y) {
         // The multicasts do not wait for their data to leave L1 (CallerManaged): the slot's last multicast must have
-        // left it before it is refilled (it went out rounds ago, so this returns at once).
-        noc_async_writes_flushed();
+        // left it before it is refilled. A fresh slot (round < depth) never was a multicast source: the flush would
+        // only wait for the multicasts just issued from the other slots (round 0's two under NSLICE_ROUND0).
+        if (round >= nslice_weight_depth) {
+            noc_async_writes_flushed();
+        }
         weight_reads.begin(TRID_WEIGHTS + (round & 1));
         uint32_t l1 = weights_base + (round % nslice_weight_depth) * slice_weight_tiles * weight_tile_bytes;
         const uint32_t n0 = y * out_n_tiles;
@@ -1554,6 +1580,27 @@ void kernel_main() {
 #endif
         dataflow_kernel_lib::set_read_trid(weight_reads.noc, 0);
     };
+#ifdef NSLICE_ROUND0
+    // The round-0 reader's read (M-block 0's first owner slice), before anything else of the walk; issue_weight_slice
+    // finds it in flight.
+    if constexpr (nslice_outer) {
+        if (num_m_blocks_this_core > 0 && round0_reader) {
+            uint32_t y0 = k_cols;
+            for (uint32_t j = 0; j < k_cols && y0 == k_cols; ++j) {
+                const uint32_t owner = conv2d_3x3::nslice_owner<k_cols>(my_col, j);
+                if (conv2d_3x3::ring_is_owner<num_owning_cols>(owner)) {
+                    y0 = conv2d_3x3::ring_slice_of(owner);
+                }
+            }
+            if (y0 < k_cols) {
+                MaybeDeviceZoneScope("writer_round0_issue");
+                cb_reserve_back(cb_weights, slice_weight_tiles);
+                start_weight_reads(0, y0);
+                prefetched_round = 0;
+            }
+        }
+    }
+#endif
     // The ring credit of M-block credit_m (see nslice_round), given from inside the weight waits as soon as it is
     // ready: the slab is dead (shared-L1 walk) and compute popped the previous M-block's slots (it pushes and pops the
     // whole CB once per M-block, so its acked count is then credit_m whole CBs). Giving it only after the first weight
@@ -1709,16 +1756,103 @@ void kernel_main() {
         // never waits gave the credit only at the blocking wait after round depth, ~2.5 us late, and its grid row's
         // ring stalled ~2 us behind it (res4.x).
         poll_credit();
-        if (weight2_receiver) {
-            // Spare-column member: the column stream's second multicast.
-            if (round == 0) {
-                issue_async_bias();
+        bool round0_done = false;
+#ifdef NSLICE_ROUND0
+        // Round 0 of a column participant (see the file comment).
+        constexpr uint32_t m1_ct = get_named_compile_time_arg_val("weight_mcast_ct_offset");
+        const bool column_sender = weight_sender && weight_mcast.should_send(0);
+        // The column sender's round-1 read: its slot is fresh, so it goes out under round 0's multicasts.
+        auto prefetch_round1 = [&]() {
+            if (column_sender && nslice_weight_depth > 1 && next_y < k_cols &&
+                cb_pages_reservable_at_back(cb_weights, 2 * slice_weight_tiles)) {
+                cb_reserve_back(cb_weights, 2 * slice_weight_tiles);
+                start_weight_reads(1, next_y);
+                prefetched_round = 1;
             }
+        };
+        if (round == 0 && !weight2_receiver && (weight_receiver || column_sender)) {
+            round0_done = true;
+            if (round0_reader) {
+                if (prefetched_round != 0) {
+                    reserve_polling(slice_weight_tiles);
+                    start_weight_reads(0, y);
+                }
+                prefetch_round1();
+                while (!ncrisc_noc_read_with_transaction_id_flushed(weight_reads.noc.get_noc_id(), TRID_WEIGHTS)) {
+                    poll_credit();
+                }
+                weight_reads.wait(TRID_WEIGHTS);
+                // The flag's source: a cell nothing else writes on this core: the data-ready cell on the sender (the
+                // helper's own flag source), the consumer-ready cell on a receiver (receivers ack the sender's).
+                const uint32_t flag_src = get_semaphore(
+                    column_sender
+                        ? dataflow_kernel_lib::detail::
+                              positional_mcast_semaphore<m1_ct, dataflow_kernel_lib::mcast_wire::DATA_READY>()
+                        : dataflow_kernel_lib::detail::
+                              positional_mcast_semaphore<m1_ct, dataflow_kernel_lib::mcast_wire::CONSUMER_READY>());
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(flag_src) = VALID;
+                MaybeDeviceZoneScope("writer_round0_send");
+                const uint32_t sx = get_arg_val<uint32_t>(round0_arg + 1);
+                const uint32_t sy = get_arg_val<uint32_t>(round0_arg + 2);
+                const uint32_t ex = get_arg_val<uint32_t>(round0_arg + 3);
+                const uint32_t ey = get_arg_val<uint32_t>(round0_arg + 4);
+                const uint32_t dests = get_arg_val<uint32_t>(round0_arg + 5);
+                noc_async_write_multicast(
+                    weights_base,
+                    get_noc_multicast_addr(sx, sy, ex, ey, weights_base),
+                    slice_weight_tiles * weight_tile_bytes,
+                    dests,
+                    true);
+                noc_semaphore_set_multicast(
+                    flag_src,
+                    get_noc_multicast_addr(
+                        sx,
+                        sy,
+                        ex,
+                        ey,
+                        get_semaphore(
+                            dataflow_kernel_lib::detail::
+                                positional_mcast_semaphore<m1_ct, dataflow_kernel_lib::mcast_wire::DATA_READY>())),
+                    dests);
+            } else {
+                reserve_polling(slice_weight_tiles);
+                if (column_sender) {
+                    // Round 0 comes from the column's round-0 reader into this core's data-ready cell.
+                    prefetch_round1();
+                    Semaphore<> ready(
+                        dataflow_kernel_lib::detail::
+                            positional_mcast_semaphore<m1_ct, dataflow_kernel_lib::mcast_wire::DATA_READY>());
+                    while (ready.value() != VALID) {
+                        poll_credit();
+                    }
+                    ready.set(INVALID);
+                } else {
+                    receive_polling(weight_mcast, round, true);
+                    column_received = true;
+                }
+            }
+            issue_async_bias();
+        }
+#endif
+        if (round0_done) {
+        } else if (weight2_receiver) {
+            // Spare-column member: the column stream's second multicast.
             reserve_polling(slice_weight_tiles);
             receive_polling_on(
                 weight_mcast2,
                 round,
-                std::integral_constant<uint32_t, get_named_compile_time_arg_val("weight_mcast2_ct_offset")>{});
+                std::integral_constant<uint32_t, get_named_compile_time_arg_val("weight_mcast2_ct_offset")>{},
+#ifdef NSLICE_ROUND0
+                // Round 0 comes from the column sender into a fresh slot: no ack to the forwarder.
+                round == 0
+#else
+                false
+#endif
+            );
+            // Read once round 0 landed: the column stream, which paces the walk, starts first.
+            if (round == 0) {
+                issue_async_bias();
+            }
         } else if (!weight_receiver || (weight_sender && weight_mcast.should_send(round))) {
             // A sender spends its rounds issuing reads and multicasting, rarely in a wait: it polls the credit between
             // the steps too (res5: a sender that reached the credit only after its first rounds gave it ~3 us late, and
@@ -1738,9 +1872,6 @@ void kernel_main() {
                 prefetched_round = round + 1;
                 poll_credit();
             }
-            if (round == 0) {
-                issue_async_bias();
-            }
             while (!ncrisc_noc_read_with_transaction_id_flushed(
                 weight_reads.noc.get_noc_id(), TRID_WEIGHTS + (round & 1))) {
                 poll_credit();
@@ -1753,19 +1884,55 @@ void kernel_main() {
                 weight_sender->template send<dataflow_kernel_lib::SourceL1Guard::CallerManaged>(
                     l1, l1, slice_weight_tiles * weight_tile_bytes);
             }
-            poll_credit();
-        } else {
+            // Read once this core's round 0 is out (see the spare member's).
             if (round == 0) {
                 issue_async_bias();
             }
+            poll_credit();
+        } else {
             reserve_polling(slice_weight_tiles);
             receive_polling(weight_mcast, round, early_acked_round == round);
             column_received = true;
+            if (round == 0) {
+                issue_async_bias();
+            }
         }
         // The round is this core's own first: the forward only reads its slot, which is reserved again (overwritten)
         // only after the forward's source reads completed, on this RISC (forwarding before the push held the
         // forwarders' own walks one forward behind: res5.0's forwarders ended ~1 us after their rows).
         cb_push_back(cb_weights, slice_weight_tiles);
+#ifdef NSLICE_ROUND0
+        if (round == 0 && round0_spare_dests != 0) {
+            // The column sender relays round 0 to its slice's spare members (on its own row), after its push (the
+            // multicast only reads the slot). Its data-ready cell is its own flag source from round 1 on.
+            MaybeDeviceZoneScope("writer_round0_relay");
+            const uint32_t flag_src =
+                get_semaphore(dataflow_kernel_lib::detail::
+                                  positional_mcast_semaphore<m1_ct, dataflow_kernel_lib::mcast_wire::DATA_READY>());
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(flag_src) = VALID;
+            const uint32_t sx = get_arg_val<uint32_t>(round0_arg + 6);
+            const uint32_t sy = get_arg_val<uint32_t>(round0_arg + 7);
+            const uint32_t ex = get_arg_val<uint32_t>(round0_arg + 8);
+            const uint32_t ey = get_arg_val<uint32_t>(round0_arg + 9);
+            noc_async_write_multicast(
+                weights_base,
+                get_noc_multicast_addr(sx, sy, ex, ey, weights_base),
+                slice_weight_tiles * weight_tile_bytes,
+                round0_spare_dests,
+                true);
+            noc_semaphore_set_multicast(
+                flag_src,
+                get_noc_multicast_addr(
+                    sx,
+                    sy,
+                    ex,
+                    ey,
+                    get_semaphore(dataflow_kernel_lib::detail::positional_mcast_semaphore<
+                                  get_named_compile_time_arg_val("weight_mcast2_ct_offset"),
+                                  dataflow_kernel_lib::mcast_wire::DATA_READY>())),
+                round0_spare_dests);
+        }
+#endif
         if (weight2_sender) {
             // A forwarder acks the column's next round (its slot reserved, if already free) before it forwards this
             // one: acking only after the forward put the forward (~0.35-0.45 us) between every two column multicasts.
@@ -1782,13 +1949,20 @@ void kernel_main() {
             // round's slot is free, rounds [0, depth) use fresh slots, and this core gives its ring credit before round
             // depth, so no member waits on anything this core still owes. The ack wait polls the credit; the send
             // returns once the multicast is issued (the slot is acked for reuse only after a flush).
-            MaybeDeviceZoneScope("writer_spare_forward");
-            const uint32_t l1 = weights_base + (round % nslice_weight_depth) * slice_weight_tiles * weight_tile_bytes;
-            wait_acks_polling_on(
-                weight_mcast2,
-                std::integral_constant<uint32_t, get_named_compile_time_arg_val("weight_mcast2_ct_offset")>{});
-            weight2_sender->template send<dataflow_kernel_lib::SourceL1Guard::CallerManaged>(
-                l1, l1, slice_weight_tiles * weight_tile_bytes);
+#ifdef NSLICE_ROUND0
+            // Round 0 went to the spare members from the column sender.
+            if (round != 0)
+#endif
+            {
+                MaybeDeviceZoneScope("writer_spare_forward");
+                const uint32_t l1 =
+                    weights_base + (round % nslice_weight_depth) * slice_weight_tiles * weight_tile_bytes;
+                wait_acks_polling_on(
+                    weight_mcast2,
+                    std::integral_constant<uint32_t, get_named_compile_time_arg_val("weight_mcast2_ct_offset")>{});
+                weight2_sender->template send<dataflow_kernel_lib::SourceL1Guard::CallerManaged>(
+                    l1, l1, slice_weight_tiles * weight_tile_bytes);
+            }
         }
         ++k_blocks_issued;
     };

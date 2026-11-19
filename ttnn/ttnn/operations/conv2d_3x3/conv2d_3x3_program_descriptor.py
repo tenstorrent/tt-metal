@@ -362,6 +362,25 @@ MAX_MCAST_RECTANGLES = 3
 # +9%); one DRAM stream per spare row (same pages as the column sender's, same time: res5.1 / res5.2 +6% / +7%); the
 # spare members' fill split over both NoCs (flat); the last M ranges instead of the cheapest (res5.2 +1.4 us).
 SPARE_MGROUPS = True
+# N-slice round 0 (writer NSLICE_ROUND0): every weight slot is fresh at kernel start, so round 0 of each column stream
+# goes out without a handshake from one round-0 reader per column, its read issued at walk setup; the column sender
+# relays it to its slice's spare members from its own row (the forwarder starts at round 1). On Blackhole, with one
+# ND shard per round of at least NSLICE_ROUND0_MODEL_MIN_BYTES and one grid row per column, the reader is the column
+# participant whose DRAM read path is least shared (_round0_reader_rows); elsewhere it is the column sender.
+# Measured (Blackhole p150b, LoFi, unzoned, medians of 3 in two sessions, bit-identical; the async bias read after
+# round 0 and fresh slots read without the slot-reuse flush are part of it): res5.0 -1.9% / -2.6% (27402 -> 26876 ns),
+# res4.x -1.7% / -1.3%, res5.1 and res5.2 within +-1.2%: bounded by the spare members' tap-shift prelude (fill-bound).
+# With the fill stubbed (round 0 then gates every core): res5.0 -7.1%, res5.1 -7.2%, res5.2 -7.1%, res4.x -4.0%; the
+# reader rows are worth -2.4 / -7.3 points of that on res5.1 / res5.2 (readers on the sender rows: -4.8% / +0.2%).
+NSLICE_ROUND0_MODEL = True
+NSLICE_ROUND0_MODEL_MIN_BYTES = 16384
+# Blackhole NoC1 DRAM endpoint row per bank (soc descriptor dram_views worker_endpoint[1]; the relocated set once
+# CMFW moved its MRISC port), keyed by whether the endpoints are relocated. Banks 0-3 sit on DRAM column x 0, 4-7 on
+# x 9; worker rows are physical y 2..11.
+_ROUND0_NOC1_EP_Y = {
+    False: {0: 1, 1: 10, 2: 4, 3: 7, 4: 1, 5: 10, 6: 4, 7: 7},
+    True: {0: 11, 1: 3, 2: 8, 3: 6, 4: 0, 5: 2, 6: 9, 7: 5},
+}
 # Semaphore ids per program (the device's limit: ids 0..15).
 MAX_SEMAPHORES = 16
 WEIGHT_MCAST_SPARE_PREFIX = "weight_mcast2"
@@ -1411,6 +1430,128 @@ def block_core(shard_spec, row, col):
     return ttnn.CoreCoord(start.x + row, start.y + col)
 
 
+@functools.lru_cache(maxsize=64)
+def _round0_reader_rows(banks, sender_rows, num_rows, spare, relocated):
+    """Grid row of each column's round-0 reader (NSLICE_ROUND0_MODEL), from a Blackhole NoC1 path model: a DRAM read
+    response climbs north (y decreasing, mod 12) along its bank's DRAM column from the bank's NoC1 endpoint to the
+    reader's row, then runs west along that row. Readers on distinct rows share only the climbs; a read slows with the
+    number of reads sharing its busiest climb link (res5.0, 39 KB rounds: 0.8 us alone, 1.1 us shared by two, 1.5-2.4
+    us by five to eight). Minimizes, over distinct rows: the worst column's sharing (plus one for a reader off the
+    sender's row where spare members wait for the sender's relay), then the sum, the climb hops, the readers moved."""
+    ep_y = _ROUND0_NOC1_EP_Y[relocated]
+    n = len(banks)
+    rows = range(num_rows)
+
+    def climb(bank, row):
+        y, side, links = ep_y[bank], bank // 4, []
+        while y != row + 2:
+            links.append((side, y))
+            y = (y - 1) % 12
+        return tuple(links)
+
+    climbs = {(k, r): climb(banks[k], r) for k in range(n) for r in rows}
+
+    def score(assign):
+        use = {}
+        for k, r in assign.items():
+            for link in climbs[(k, r)]:
+                use[link] = use.get(link, 0) + 1
+        per = [
+            max((use[link] for link in climbs[(k, r)]), default=1) + (1 if spare and r != sender_rows[k] else 0)
+            for k, r in assign.items()
+        ]
+        return (
+            max(per),
+            sum(per),
+            sum(len(climbs[(k, r)]) for k, r in assign.items()),
+            sum(1 for k, r in assign.items() if r != sender_rows[k]),
+        )
+
+    best = [None, None]
+    order = sorted(range(n), key=lambda k: min(len(climbs[(k, r)]) for r in rows))
+
+    def search(i, assign, used):
+        if best[0] is not None and assign and score(assign)[0] > best[0][0]:
+            return
+        if i == n:
+            s = score(assign)
+            if best[0] is None or s < best[0]:
+                best[0], best[1] = s, dict(assign)
+            return
+        k = order[i]
+        for r in sorted(rows, key=lambda r: (len(climbs[(k, r)]), r != sender_rows[k])):
+            if r not in used:
+                assign[k] = r
+                used.add(r)
+                search(i + 1, assign, used)
+                used.discard(r)
+                del assign[k]
+
+    search(0, {}, set())
+    return tuple(best[1][k] for k in range(n))
+
+
+def _round0_args(input_tensor, weight_tensor, g, b, work, m_blocks_per_index, spare_groups, column_channel, spare):
+    """NSLICE_ROUND0 writer args per core (x, y): [round-0 reader, column rectangle (NoC1-ordered), column dests,
+    spare rectangle, spare dests] (zeros where absent): the reader's column fields, the column sender's spare ones."""
+    device = input_tensor.device()
+    _, rows_n, _ = column_channel
+    most = max(m_blocks_per_index[i] for _, i, _ in work)
+    grid_rows = sorted({i for _, i, _ in work if i not in spare_groups and m_blocks_per_index[i] == most})
+    spare_rows = {i for _, i, _ in work if i in spare_groups and m_blocks_per_index[i] == most}
+    k_cols = max(c for _, _, c in work) + 1
+
+    def rect(cores):
+        lo = device.worker_core_from_logical_core(ttnn.CoreCoord(min(c.x for c in cores), min(c.y for c in cores)))
+        hi = device.worker_core_from_logical_core(ttnn.CoreCoord(max(c.x for c in cores), max(c.y for c in cores)))
+        return [hi.x, hi.y, lo.x, lo.y]  # the writer's NoC1 order
+
+    # The staggered column sender of column c is participant c % rows (_column_weight_mcast).
+    reader_rows = [c % rows_n for c in range(k_cols)]
+    wspec = weight_tensor.memory_config().nd_shard_spec
+    round_bytes = b.block_k_tiles * b.num_k_blocks * g.out_n_tiles * g.weight_tile_bytes
+    shard_rows = {i: core.y for core, i, c in work if c == 0}
+    if (
+        NSLICE_ROUND0_MODEL
+        and device.arch() == ttnn._ttnn.device.Arch.BLACKHOLE
+        and device.dram_grid_size().x == 8
+        and input_tensor.memory_config().shard_spec.orientation == ttnn.ShardOrientation.ROW_MAJOR
+        and wspec is not None
+        and list(wspec.shard_shape)[-2:] == [b.block_k_tiles * b.num_k_blocks * TILE, g.out_n_tiles * TILE]
+        and round_bytes >= NSLICE_ROUND0_MODEL_MIN_BYTES
+        and k_cols <= rows_n
+        and all(shard_rows[grid_rows[r]] == r for r in range(rows_n))
+    ):
+        # Bank 0's NoC0 endpoint as a virtual coordinate (y = 12 + 3 x row-in-column + endpoint index): its endpoint
+        # index tells the relocated endpoint set from the original one.
+        relocated = {14: False, 12: True}.get(device.dram_core_from_logical_core(ttnn.CoreCoord(0, 0)).y)
+        if relocated is not None:
+            owners = ring_owner_cols(g, b)
+            num_owning = _div_up(g.tensor_n_tiles, g.out_n_tiles)
+            banks = []
+            for c in range(k_cols):
+                # The column's first owner slice (conv2d_3x3_nslice_order.hpp), in ND shard (c, slice): bank round-robin.
+                for j in range(k_cols):
+                    o = (c + 2 * k_cols - 1 - j) % k_cols
+                    if (o in owners) if owners is not None else (o < num_owning):
+                        banks.append((c * num_owning + (owners.index(o) if owners is not None else o)) % 8)
+                        break
+            if len(banks) == k_cols:
+                reader_rows = list(
+                    _round0_reader_rows(tuple(banks), tuple(reader_rows), rows_n, spare is not None, relocated)
+                )
+    args = {}
+    for c in range(k_cols):
+        column = [core for core, i, cc in work if i in grid_rows and cc == c]
+        reader = next(core for core, i, cc in work if i == grid_rows[reader_rows[c]] and cc == c)
+        sender = next(core for core, i, cc in work if i == grid_rows[c % rows_n] and cc == c)
+        args.setdefault((reader.x, reader.y), [0] * 11)[0:6] = [1] + rect(column) + [len(column) - 1]
+        members = [core for core, i, cc in work if i in spare_rows and cc == c]
+        if spare is not None and members:
+            args.setdefault((sender.x, sender.y), [0] * 11)[6:11] = rect(members) + [len(members)]
+    return args
+
+
 def _block_device_extents(shard_spec, device_grid):
     """(rows, columns) of the device from the shard grid's first core, along its M axis and its channel-slice axis."""
     start = shard_spec.grid.bounding_box().start
@@ -2407,6 +2548,13 @@ def create_program_descriptor(
         if spare_groups
         else None
     )
+    round0_args = (
+        _round0_args(
+            input_tensor, weight_tensor, g, b, work, m_blocks_per_index, spare_groups, column_channel, spare_channel
+        )
+        if g.k_split and b.nslice and not kwf and column_channel is not None
+        else {}
+    )
     if tile_fill_split and g.k_split and column_channel is not None:
         # The column channels' pure receivers (the staggered sender of column g is participant row g % rows: its writer
         # blocks in DRAM reads and multicast sends: measured +9% with it split) that read enough from higher shards.
@@ -2963,6 +3111,7 @@ def create_program_descriptor(
             + server_rt_args(core)
             + (_kwf_xchg_writer_args(g, work, m_index, m_ranges, device) if kwf_xchg else [])
             + kwf_writer_fill
+            + (round0_args.get((core.x, core.y), [0] * 11) if round0_args else [])
             + (host_fill_words[(core.x, core.y)][1] if host_fill else [])
         )
 
@@ -3149,7 +3298,8 @@ def create_program_descriptor(
             + _page_run_defines
             + _round0_defines
             + slot_ack_defines
-            + _host_fill_defines,
+            + _host_fill_defines
+            + ([("NSLICE_ROUND0", "1")] if round0_args else []),
             config=ttnn.WriterConfigDescriptor(),
         )
         for slice_channels, (writer_cores, writer_rt) in writer_groups.items()
