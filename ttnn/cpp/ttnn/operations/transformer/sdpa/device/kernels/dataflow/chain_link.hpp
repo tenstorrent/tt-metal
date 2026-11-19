@@ -257,6 +257,49 @@ public:
         }
     }
 
+    // forward() of a page already pushed: its address is captured, the CB's write pointer has moved on.
+    void forward_at(Noc noc, uint32_t cb_addr, uint32_t num_tiles, uint32_t tile_bytes) const {
+        Semaphore<> sender_sem(sender_sem_id_);
+        if constexpr (mcast_enabled) {
+            sender_sem.wait(sender_wait_count_);
+            sender_sem.set(0);
+            noc.async_write_multicast(
+                CoreLocalMem<uint32_t>(cb_addr),
+                MulticastEndpoint{},
+                num_tiles * tile_bytes,
+                mcast_num_dests_,
+                {},
+                {.noc_x_start = mcast_start_x_,
+                 .noc_y_start = mcast_start_y_,
+                 .noc_x_end = mcast_end_x_,
+                 .noc_y_end = mcast_end_y_,
+                 .addr = cb_addr},
+                /*linked=*/true);
+            Semaphore<>(valid_sem_id_)
+                .relay_multicast(
+                    noc,
+                    Semaphore<>(receiver_sem_id_),
+                    mcast_start_x_,
+                    mcast_start_y_,
+                    mcast_end_x_,
+                    mcast_end_y_,
+                    mcast_num_dests_,
+                    /*linked=*/false);
+            noc.async_writes_flushed();
+        } else {
+            sender_sem.wait(1);
+            sender_sem.set(0);
+            noc.async_write(
+                CoreLocalMem<uint32_t>(cb_addr),
+                UnicastEndpoint{},
+                num_tiles * tile_bytes,
+                {.offset_bytes = 0},
+                {.noc_x = next_core_x_, .noc_y = next_core_y_, .addr = cb_addr});
+            noc.async_writes_flushed();
+            Semaphore<>(valid_sem_id_).relay_unicast(noc, Semaphore<>(receiver_sem_id_), next_core_x_, next_core_y_);
+        }
+    }
+
 private:
     // Semaphore IDs (resolved to L1 addresses on use via Semaphore<>).
     uint32_t sender_sem_id_;
