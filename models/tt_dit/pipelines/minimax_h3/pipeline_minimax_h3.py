@@ -1850,7 +1850,7 @@ class MiniMaxH3Pipeline:
             # Shard and gather once at each host load, so the shard and gather programs compile with the load (the
             # warmup) rather than at the first request's decode.
             module.shard(self.sp_axis)
-            module.gather(self.ccl_manager)
+            module.gather(self.vae_ccl_manager)
 
     @property
     def vae(self) -> MiniMaxH3Vae:
