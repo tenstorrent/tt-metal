@@ -69,8 +69,11 @@ void py_module_types(nb::module_& mod) {
         No warm-up run is needed: recording compiles each workload and uploads its kernel binaries.
 
         Only one builder may exist per mesh device, and no trace can be captured while a builder or command list
-        exists. An exception inside ``with builder:`` ends recording and keeps what was recorded so far; call
-        ``clear()`` to discard it.
+        exists.
+
+        An exception that leaves ``with builder:`` ends recording. Building from what was recorded before it is not
+        supported: call ``clear()`` and record again. An operation rejected for not being Metal 2.0 records nothing,
+        so catching that error inside the block and continuing to record is supported.
 
         Args:
             mesh_device (ttnn.MeshDevice): Mesh device to record on.
