@@ -130,7 +130,7 @@ def test_tilize(device):
 
     # Tilize the tensor
     tilized_tensor = ttnn.tilize(input_tensor)
-    logger.info(f"Tilized Tensor Layout: {tilized_tensor.layout}")  # Layout.TILE
+    logger.debug(f"Tilized Tensor Layout: {tilized_tensor.layout}")  # Layout.TILE
 
 
 def test_tilize_with_val_padding(device):
@@ -193,7 +193,7 @@ def test_untilize(device):
 
     # Untilize the tensor
     untilized_tensor = ttnn.untilize(tilized_tensor)
-    logger.info(f"Untilized Tensor Layout: {untilized_tensor.layout}")  # Layout.ROW_MAJOR
+    logger.debug(f"Untilized Tensor Layout: {untilized_tensor.layout}")  # Layout.ROW_MAJOR
 
 
 def test_untilize_with_unpadding(device):
