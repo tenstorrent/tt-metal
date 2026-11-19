@@ -188,3 +188,4 @@ jobs:
       manylinux-docker-image: ${{
         (matrix.config.platform == 'Ubuntu 24.04' && inputs.ubuntu-2404-manylinux-tag) ||
         inputs.ubuntu-2204-manylinux-tag }}
+# Baseline marker for a CI timing comparison. Do not merge.
