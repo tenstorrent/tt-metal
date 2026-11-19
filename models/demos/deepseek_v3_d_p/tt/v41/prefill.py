@@ -41,6 +41,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 import DeepseekV4RotaryEmbedding
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 
+from . import hostprof as HP
 from .attention import V41CSA, v41_hf_config
 from .block import HC, V41HyperConnection, V41PrefillBlock, identity_pre_row
 from .engram import V41PrefillEngram
@@ -621,6 +622,8 @@ class V41Prefill:
         real_len = len(part)
         prof = PhaseProfile(self.mesh) if PROFILE else None
         mark = prof if prof is not None else (lambda name: None)
+        if HP.ON:
+            HP.start()
         rows = {}
 
         def _fetch():
@@ -633,10 +636,14 @@ class V41Prefill:
             # not waited for (V41_PREFILL_ENGRAM_EARLY=0: after it, as before)
             rows = _fetch()
             mark("engram.host")
+        if HP.ON:
+            HP.mark("engram.fetch_start")
         streams = self._streams(part)
         self._route_bias(part)
         pre = identity_pre_row(self.mesh, self.chunk // self.sp, self.sp_axis)
         mark("embed")
+        if HP.ON:
+            HP.mark("embed")
         if self.engrams and engram_host is not None and not ENGRAM_EARLY:
             rows = _fetch()
             mark("engram.host")
@@ -644,9 +651,15 @@ class V41Prefill:
         for blk in self.blocks:
             L = blk.layer
             if L in self.engrams:
+                if HP.ON:
+                    HP.mark("other")
                 r = rows[L].result() if hasattr(rows[L], "result") else rows[L]
                 mark("engram.wait")
+                if HP.ON:
+                    HP.mark("engram.wait")
                 rd = self.engrams[L].upload_rows(r, self.chunk)
+                if HP.ON:
+                    HP.mark("engram.upload")
                 isl = getattr(self.engrams[L], "_island", None) is not None
                 # DS41F-0163 V41_PREFILL_ENGRAM_ISLAND: the island's outputs are persistent (not owned: never freed here)
                 new = self.engrams[L].forward_island(streams, rd) if isl else self.engrams[L](streams, rd)
@@ -656,9 +669,15 @@ class V41Prefill:
                         ttnn.deallocate(t)
                 streams, owned = new, not isl
                 mark("engram.dev")
+                if HP.ON:
+                    HP.mark("engram.forward")
             if kv_only20 and L >= self.cfg.first_decoder_layer:
+                if HP.ON:
+                    HP.mark("other")
                 blk.kv_only_islands(streams, pre, real_len=real_len, owned=owned, owned_pre=blk is self.blocks[0])
                 mark("kv_only")
+                if HP.ON:
+                    HP.mark("kv_only20")
                 break
             streams, pre = blk.forward_islands(
                 streams, pre, real_len=real_len, owned=owned, owned_pre=blk is self.blocks[0]
@@ -673,6 +692,11 @@ class V41Prefill:
         self.kv_actual += real_len
         if prof is not None:
             self.last_profile = prof.report(f"chunk [{start}, {start + real_len}) slot {self.slot} (islands)")
+        if HP.ON:
+            HP.mark("other")
+            logger.info(
+                f"[v41 hostprof] chunk [{start}, {start + real_len}) slot {self.slot} kv20={int(kv_only20)} {HP.report()}"
+            )
 
     # ---- export ---------------------------------------------------------------------------------------------------
     def _window(self, state) -> torch.Tensor:
