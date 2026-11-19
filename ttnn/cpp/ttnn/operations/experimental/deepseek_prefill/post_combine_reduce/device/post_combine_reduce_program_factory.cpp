@@ -14,9 +14,11 @@ namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce 
 
 namespace {
 
-uint32_t get_num_pages(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->num_pages(); }
-uint32_t get_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->page_size(); }
-uint32_t get_aligned_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->aligned_page_size(); }
+uint32_t get_num_pages(const ttnn::Tensor& tensor) { return (uint32_t)tensor.mesh_buffer().num_pages(); }
+uint32_t get_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.mesh_buffer().page_size(); }
+uint32_t get_aligned_page_size(const ttnn::Tensor& tensor) {
+    return (uint32_t)tensor.mesh_buffer().aligned_page_size();
+}
 
 }  // namespace
 
@@ -34,7 +36,9 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     const bool use_dispatch_table_skip = indices_opt.has_value();
     auto* device = combine_output.device();
 
-    const auto& combine_shape = combine_output.padded_shape();
+    const ttnn::Shape combine_shape = logical_combine_shape(tensor_args);
+    const auto& row_index_opt = tensor_args.combine_row_index;
+    const bool row_indexed = row_index_opt.has_value();
 
     const uint32_t expert_dim = operation_attributes.expert_dim;
 
@@ -83,9 +87,38 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     uint32_t num_cores_total = num_cores_x * num_cores_y;
 
     const uint32_t total_chunks = num_tokens / TOKENS_PER_CHUNK;
-    const uint32_t num_cores = std::min(total_chunks, num_cores_total);
-    const uint32_t base_chunks_per_core = total_chunks / num_cores;
-    const uint32_t extra_chunks = total_chunks % num_cores;
+
+    // Split each token row's emb_dim into emb_slices column slices of whole CB pages, each reduced by its own
+    // cores. One core per 32-token chunk leaves most of the grid idle at small token counts (8 cores at 256
+    // tokens), and the op becomes latency-bound per core. Two limits, both measured on GLM-5.3 (emb 6144 = 6
+    // pages, 8 experts, Blackhole, us at 640 / 512 / 256 tokens per chip):
+    //   1 slice 256 / 241 / 221, 2 slices 235 / 207 / 177, 3 slices 242 / 193 / 99, 6 slices 317 / 254 / 145.
+    //   - a slice keeps at least kMinSlicePages pages (4 KB row reads): 2 KB slices lose at every size, as each
+    //     row's DRAM page is then read by six cores at once;
+    //   - at most kMaxSlicedCores cores: past that the extra readers stop paying for themselves (3 slices on 60
+    //     cores lose to 2 on 40 at 640 tokens).
+    // The largest slice count within both limits is used. emb_dim of an odd page count (7168 = 7 pages:
+    // DeepSeek, Kimi) and non-1024-aligned emb_dim (GPT-OSS) keep one slice, i.e. the unsliced program.
+    constexpr uint32_t kMinSlicePages = 2;
+    constexpr uint32_t kMaxSlicedCores = 48;
+    uint32_t emb_slices = 1;
+    if (emb_dim % TILE_SIZE == 0) {
+        for (uint32_t s = emb_dim_cb_tiles / kMinSlicePages; s > 1; --s) {
+            if (emb_dim_cb_tiles % s == 0 && total_chunks * s <= std::min(kMaxSlicedCores, num_cores_total)) {
+                emb_slices = s;
+                break;
+            }
+        }
+    }
+    const uint32_t slice_cb_tiles = emb_dim_cb_tiles / emb_slices;
+    const uint32_t slice_bytes = emb_slices == 1 ? emb_dim_bytes : slice_cb_tiles * TILE_SIZE * BF16_BYTES;
+    const uint32_t slice_out_tiles = emb_slices == 1 ? emb_dim_out_tiles : slice_cb_tiles * TILE_SIZE / TILE_WIDTH;
+
+    // Cores per slice; each slice's cores split the chunks as before.
+    const uint32_t cores_per_slice = std::min(total_chunks, num_cores_total / emb_slices);
+    const uint32_t num_cores = cores_per_slice * emb_slices;
+    const uint32_t base_chunks_per_core = total_chunks / cores_per_slice;
+    const uint32_t extra_chunks = total_chunks % cores_per_slice;
 
     constexpr bool row_major = true;
 
@@ -98,9 +131,21 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_return_value.dtype());
 
     uint32_t tile_size = tt::tile_size(input_cb_data_format);
+    // Per-token weights ([..., num_experts]): one page holds a token's num_experts weights; the writer reads a
+    // 32-token chunk of pages at once into c_4 instead of one DRAM read per (token, expert).
+    const bool weights_per_token = weights.padded_shape().rank() + 1 == combine_shape.rank();
+    const uint32_t weights_aligned_page_size = get_aligned_page_size(weights);
 
-    // c_0: Stream one expert at a time through c_0 to minimize L1 footprint.
-    uint32_t combine_cb_size = emb_dim_cb_tiles * tile_size;
+    // c_0: the reader fetches all of a token's expert rows under one NoC barrier and double-buffers
+    // tokens, so reads overlap compute instead of paying a round trip per row. Only when two tokens'
+    // rows fit in C0_BATCH_BUDGET_BYTES; wider rows (DeepSeek/Kimi 7168 x 8 experts) keep streaming one
+    // expert at a time to hold the L1 footprint. Row-indexed combine also streams: the reader zeroes
+    // its single c_0 slot once so slots it skips stay finite.
+    constexpr uint32_t C0_BATCH_BUDGET_BYTES = 64 * 1024;
+    const uint32_t token_rows_bytes = num_experts * slice_cb_tiles * tile_size;
+    const bool batch_experts = !row_indexed && 2 * token_rows_bytes <= C0_BATCH_BUDGET_BYTES;
+    const uint32_t experts_per_batch = batch_experts ? num_experts : 1;
+    uint32_t combine_cb_size = batch_experts ? 2 * token_rows_bytes : slice_cb_tiles * tile_size;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = combine_cb_size,
         .core_ranges = core_range_set,
@@ -111,8 +156,15 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         }}},
     });
 
-    // c_1: Stream one weight at a time (matching expert-by-expert input streaming).
-    uint32_t weight_cb_size = tile_size;
+    // c_1: the same rule for the weights, one tile per expert. The writer reads all of a token's
+    // weights under one barrier, two tokens deep, only when that fits in C1_BATCH_BUDGET_BYTES (up to
+    // 8 bf16 experts per token, every model today); a wider top-k streams one weight at a time in a
+    // single tile, as before, so L1 does not grow with the expert count.
+    constexpr uint32_t C1_BATCH_BUDGET_BYTES = 32 * 1024;
+    const uint32_t token_weights_bytes = num_experts * tile_size;
+    const bool batch_weights = 2 * token_weights_bytes <= C1_BATCH_BUDGET_BYTES;
+    const uint32_t weights_per_batch = batch_weights ? num_experts : 1;
+    uint32_t weight_cb_size = batch_weights ? 2 * token_weights_bytes : tile_size;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = weight_cb_size,
         .core_ranges = core_range_set,
@@ -171,8 +223,36 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         });
     }
 
+    if (weights_per_token) {
+        // c_4: one 32-token chunk of per-token weight pages (writer-only scratch).
+        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+            .total_size = TOKENS_PER_CHUNK * weights_aligned_page_size,
+            .core_ranges = core_range_set,
+            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_4),
+                .data_format = weight_cb_data_format,
+                .page_size = TOKENS_PER_CHUNK * weights_aligned_page_size,
+            }}},
+        });
+    }
+
+    uint32_t row_index_aligned_page_size = 0;
+    if (row_indexed) {
+        // c_5: one 32-token chunk of combine_row_index pages (reader-only scratch).
+        row_index_aligned_page_size = get_aligned_page_size(*row_index_opt);
+        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+            .total_size = TOKENS_PER_CHUNK * row_index_aligned_page_size,
+            .core_ranges = core_range_set,
+            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_5),
+                .data_format = tt::DataFormat::UInt32,
+                .page_size = TOKENS_PER_CHUNK * row_index_aligned_page_size,
+            }}},
+        });
+    }
+
     // c_16: Output — one chunk at a time (compute produces TOKENS_PER_CHUNK tiles per iteration)
-    uint32_t output_cb_size = TOKENS_PER_CHUNK * emb_dim_cb_tiles * tile_size;
+    uint32_t output_cb_size = TOKENS_PER_CHUNK * slice_cb_tiles * tile_size;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = output_cb_size,
         .core_ranges = core_range_set,
@@ -184,7 +264,7 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     });
 
     // c_17: Row-major scratch for tilize — one chunk at a time
-    uint32_t rowmajor_cb_size = TOKENS_PER_CHUNK * emb_dim_cb_tiles * tile_size;
+    uint32_t rowmajor_cb_size = TOKENS_PER_CHUNK * slice_cb_tiles * tile_size;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = rowmajor_cb_size,
         .core_ranges = core_range_set,
@@ -201,21 +281,29 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     auto* indices_buffer = use_dispatch_table_skip ? indices_opt->buffer() : nullptr;
     auto* dispatch_table_buffer = use_dispatch_table_skip ? dispatch_table_opt->buffer() : nullptr;
 
-    // Reader compile-time args: num_experts, emb_dim_cb_tiles, emb_dim_bytes, combine accessor.
+    // Reader compile-time args: num_experts, emb_dim_cb_tiles, emb_dim_bytes, experts_per_batch, combine accessor.
     // Reader does not need to know about expert-skip; that logic lives in compute + writer.
     std::vector<uint32_t> reader_compile_time_args = {
         num_experts,
-        emb_dim_cb_tiles,
-        emb_dim_bytes,
+        slice_cb_tiles,
+        slice_bytes,
+        experts_per_batch,
     };
     tt::tt_metal::TensorAccessorArgs(combine_buffer).append_to(reader_compile_time_args);
+    // Row-indexed combine: flag, skip row, index page size, then the index accessor (combine's as a placeholder).
+    auto* row_index_buffer = row_indexed ? row_index_opt->buffer() : combine_buffer;
+    reader_compile_time_args.push_back(static_cast<uint32_t>(row_indexed ? 1 : 0));
+    reader_compile_time_args.push_back(operation_attributes.skip_row);
+    reader_compile_time_args.push_back(row_index_aligned_page_size);
+    reader_compile_time_args.push_back(row_indexed ? static_cast<uint32_t>(combine_output.padded_shape()[0]) : 0);
+    tt::tt_metal::TensorAccessorArgs(row_index_buffer).append_to(reader_compile_time_args);
 
     // Compute compile-time args. The skip-mode toggle is appended last so the
     // DeepSeek-only arg (dispatch_table page count) retains a stable position
     // across both modes (it is zero in the GPT-OSS path).
     std::vector<uint32_t> compute_compile_time_args = {
         num_experts,
-        emb_dim_cb_tiles,
+        slice_cb_tiles,
         dispatch_table_num_pages,
         static_cast<uint32_t>(use_dispatch_table_skip ? 1 : 0),
     };
@@ -227,7 +315,7 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     // kernel guards every use of them with `if constexpr (use_dispatch_table_skip)`.
     std::vector<uint32_t> writer_compile_time_args = {
         num_experts,
-        emb_dim_cb_tiles,
+        slice_cb_tiles,
         emb_dim_out_tiles,
         dispatch_table_num_pages,
         dispatch_table_page_size_val,
@@ -242,6 +330,11 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     tt::tt_metal::TensorAccessorArgs(use_dispatch_table_skip ? indices_buffer : weight_buffer)
         .append_to(writer_compile_time_args);
     writer_compile_time_args.push_back(static_cast<uint32_t>(use_dispatch_table_skip ? 1 : 0));
+    writer_compile_time_args.push_back(static_cast<uint32_t>(weights_per_token ? 1 : 0));
+    writer_compile_time_args.push_back(weights_aligned_page_size);
+    writer_compile_time_args.push_back(weights_per_batch);
+    // Output tiles of one slice per 32-token block; emb_dim_out_tiles above stays the output's row stride.
+    writer_compile_time_args.push_back(slice_out_tiles);
 
     // Build kernel descriptors and push them onto desc.kernels.  Stable indices
     // (0=reader, 1=compute, 2=writer) below let emplace_runtime_args identify
@@ -277,20 +370,29 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
 
-    // Distribute chunks of 32 tokens across cores. The first `extra_chunks` cores
-    // get (base_chunks_per_core + 1) chunks; the remaining get base_chunks_per_core.
+    // Each emb slice gets cores_per_slice cores, which distribute the chunks of 32 tokens: within a slice the
+    // first `extra_chunks` cores get (base_chunks_per_core + 1) chunks, the remaining base_chunks_per_core.
     uint32_t token_start = 0;
     for (uint32_t i = 0; i < num_cores; ++i) {
         const CoreCoord& core = cores[i];
-        const uint32_t chunks_this_core = base_chunks_per_core + (i < extra_chunks ? 1 : 0);
+        const uint32_t slice = i / cores_per_slice;
+        const uint32_t i_in_slice = i % cores_per_slice;
+        if (i_in_slice == 0) {
+            token_start = 0;
+        }
+        const uint32_t chunks_this_core = base_chunks_per_core + (i_in_slice < extra_chunks ? 1 : 0);
 
-        // Reader RT args: [combine_buffer*, token_start, chunks_this_core].
+        // Reader RT args: [combine_buffer*, token_start, chunks_this_core, slice_offset_bytes(, row_index_buffer*)].
         // Push the buffer pointer first so the framework records a BufferBinding
         // for the cache-hit fast path.
         tt::tt_metal::KernelDescriptor::RTArgList reader_rt_args;
         reader_rt_args.push_back(combine_buffer);
         reader_rt_args.push_back(token_start);
         reader_rt_args.push_back(chunks_this_core);
+        reader_rt_args.push_back(slice * slice_bytes);
+        if (row_indexed) {
+            reader_rt_args.push_back(row_index_buffer);
+        }
         reader_kernel_desc.emplace_runtime_args(core, reader_rt_args);
 
         // Compute RT args (no Buffer*).
@@ -312,6 +414,7 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         }
         writer_rt_args.push_back(token_start);
         writer_rt_args.push_back(chunks_this_core);
+        writer_rt_args.push_back(slice * slice_out_tiles);
         writer_kernel_desc.emplace_runtime_args(core, writer_rt_args);
 
         token_start += chunks_this_core * TOKENS_PER_CHUNK;

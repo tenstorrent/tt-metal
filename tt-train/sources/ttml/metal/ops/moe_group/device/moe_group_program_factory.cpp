@@ -6,12 +6,15 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <optional>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
+#include "moe_group_device_operation.hpp"
 
 namespace {
 
@@ -22,6 +25,29 @@ constexpr auto kWorkerWriterPath =
 constexpr auto kTilizeKernelPath =
     "tt-train/sources/ttml/metal/ops/moe_group/device/kernels/compute/moe_group_tilize_kernel.cpp";
 
+// Kernel handles are the push order into ProgramDescriptor::kernels, which keeps the legacy creation order: combined
+// group 1, combined group 2, writer group 1, writer group 2, compute group 1, compute group 2, each group-2 kernel only
+// when group 2 has cores. Without group 2 the writer is handle 1.
+constexpr uint32_t kCombinedGroup1KernelIdx = 0U;
+constexpr uint32_t kCombinedGroup2KernelIdx = 1U;
+constexpr uint32_t kWriterGroup1KernelIdx = 2U;
+constexpr uint32_t kWriterGroup2KernelIdx = 3U;
+constexpr uint32_t kWriterKernelIdxWithoutGroup2 = 1U;
+
+// combined kernel runtime args
+constexpr uint32_t kPlanAddrIdx = 0U;
+constexpr uint32_t kDispatchedAddrIdx = 1U;
+constexpr uint32_t kMetadataAddrIdx = 4U;
+constexpr uint32_t kCountsAddrIdx = 5U;
+constexpr uint32_t kCombinedOffsetsAddrIdx = 6U;
+constexpr uint32_t kLeidsAddrIdx = 7U;
+constexpr uint32_t kScoresAddrIdx = 11U;
+constexpr uint32_t kGroupedScoresAddrIdx = 12U;
+constexpr uint32_t kKSlotAddrIdx = 13U;
+// writer runtime args
+constexpr uint32_t kGroupedAddrIdx = 0U;
+constexpr uint32_t kWriterOffsetsAddrIdx = 3U;
+
 // CB indices
 constexpr uint32_t kCbSrc0 = tt::CBIndex::c_0;
 constexpr uint32_t kCbOut = tt::CBIndex::c_2;
@@ -29,6 +55,12 @@ constexpr uint32_t kCbScan = tt::CBIndex::c_3;
 constexpr uint32_t kCbPlan = tt::CBIndex::c_4;
 constexpr uint32_t kCbOffset = tt::CBIndex::c_5;
 constexpr uint32_t kCbCtrl = tt::CBIndex::c_6;  // NCRISC->compute: per-core active block count
+
+// Phase semaphore ids, in the order legacy CreateSemaphore handed them out; the kernels get them as compile-time args.
+constexpr uint32_t kScanPhase1SemId = 0U;
+constexpr uint32_t kScanPhase2SemId = 1U;
+constexpr uint32_t kScanPhase3SemId = 2U;
+constexpr uint32_t kPlanReadySemId = 3U;
 
 constexpr uint32_t kTargetChunkBytes = 128U * 1024U;
 
@@ -55,7 +87,18 @@ uint32_t pick_num_chunks(uint32_t h) {
 
 namespace ttml::metal::ops::moe_group::device {
 
-MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
+namespace {
+
+// The grouped output's tile rows (t_cap / TILE_HEIGHT) over the device's compute grid. create_descriptor() pins it
+// against split_work_to_cores, and override_runtime_arguments() walks the same cores from it.
+WorkSplit make_work_split(const operation_attributes_t& attrs, const tensor_args_t& args) {
+    return compute_work_split(
+        args.dispatched.device()->compute_with_storage_grid_size(), attrs.t_cap / tt::constants::TILE_HEIGHT);
+}
+
+}  // namespace
+
+tt::tt_metal::ProgramDescriptor MoeGroupProgramFactory::create_descriptor(
     const operation_attributes_t& attrs, const tensor_args_t& args, tensor_return_value_t& outputs) {
     auto* device = args.dispatched.device();
     auto& grouped = std::get<0>(outputs);
@@ -65,7 +108,7 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     auto& offsets = std::get<4>(outputs);
     auto& plan = std::get<5>(outputs);
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::ProgramDescriptor desc;
 
     const uint32_t h = attrs.h;
     const uint32_t e_local = attrs.e_local;
@@ -91,7 +134,6 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     // No more separate scan core.
     // -------------------------------------------------------------------------
     const auto compute_grid = device->compute_with_storage_grid_size();
-    const uint32_t num_cores_y = compute_grid.y;
 
     const tt::tt_metal::CoreCoord lead_coord{0, 0};
     const tt::tt_metal::CoreRange full_range{
@@ -106,6 +148,8 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     // remainders.
     auto [num_workers, worker_all, worker_group_1, worker_group_2, tiles_group_1, tiles_group_2] =
         tt::tt_metal::split_work_to_cores(compute_grid, total_tiles);
+    const WorkSplit split = make_work_split(attrs, args);
+    check_work_split(split, num_workers, worker_group_1, worker_group_2, tiles_group_1, tiles_group_2);
 
     const uint32_t num_total_cores = num_workers;  // every core does scan + worker
 
@@ -117,22 +161,22 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     // -------------------------------------------------------------------------
     const uint32_t bf16_tile_bytes = tt::tile_size(tt::DataFormat::Float16_b);
 
-    create_circular_buffer(
-        program, all_cores, kCbSrc0, tt::DataFormat::Float16_b, bf16_tile_bytes, 2U * tiles_per_chunk);
-    create_circular_buffer(
-        program, all_cores, kCbOut, tt::DataFormat::Float16_b, bf16_tile_bytes, 2U * tiles_per_chunk);
+    desc.cbs.push_back(
+        make_cb_descriptor(all_cores, kCbSrc0, tt::DataFormat::Float16_b, bf16_tile_bytes, 2U * tiles_per_chunk));
+    desc.cbs.push_back(
+        make_cb_descriptor(all_cores, kCbOut, tt::DataFormat::Float16_b, bf16_tile_bytes, 2U * tiles_per_chunk));
 
     constexpr uint32_t kPlanCbBytes = 32U * sizeof(uint32_t);
-    create_circular_buffer_bytes(program, all_cores, kCbPlan, tt::DataFormat::UInt32, kPlanCbBytes);
+    desc.cbs.push_back(make_cb_descriptor_bytes(all_cores, kCbPlan, tt::DataFormat::UInt32, kPlanCbBytes));
 
     const uint32_t offset_cb_bytes = tt::round_up((e_local + 1U) * sizeof(uint32_t), kL1_ALIGN);
-    create_circular_buffer_bytes(program, all_cores, kCbOffset, tt::DataFormat::UInt32, offset_cb_bytes);
+    desc.cbs.push_back(make_cb_descriptor_bytes(all_cores, kCbOffset, tt::DataFormat::UInt32, offset_cb_bytes));
 
     // cb_ctrl: NCRISC reader publishes per-core active-block count after the
     // worker phase reads offsets[E_local]; compute reads it to size the bulk
     // tilize call. 16B page (one uint32 padded to L1 alignment).
     constexpr uint32_t cb_ctrl_bytes = 16U;
-    create_circular_buffer_bytes(program, all_cores, kCbCtrl, tt::DataFormat::UInt32, cb_ctrl_bytes);
+    desc.cbs.push_back(make_cb_descriptor_bytes(all_cores, kCbCtrl, tt::DataFormat::UInt32, cb_ctrl_bytes));
 
     // cb_scan: every core's scratch for scan + shared tables (only meaningful on lead).
     // Layout: [stage 128B][leids_buf 32B][counts e_local*4][offsets (e_local+1)*4]
@@ -195,7 +239,7 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     uint32_t scan_scratch_bytes = overhead_bytes + two_shared_tables + md_block_bytes + sc_block_bytes +
                                   plan_stage_bytes + gs_stage_bytes + ks_stage_bytes + fill_bytes;
     scan_scratch_bytes = tt::round_up(scan_scratch_bytes, kL1_ALIGN);
-    create_circular_buffer_bytes(program, all_cores, kCbScan, tt::DataFormat::UInt32, scan_scratch_bytes);
+    desc.cbs.push_back(make_cb_descriptor_bytes(all_cores, kCbScan, tt::DataFormat::UInt32, scan_scratch_bytes));
 
     // Compute address of shared tables in cb_scan (offset within scratch).
     // Layout: stage(kStageBytes), leids_buf(kLeidsBufBytes), counts, offsets, cursors.
@@ -204,10 +248,10 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     const uint32_t shared_tables_offset = tt::round_up(shared_tables_offset_raw, kL1_ALIGN);
 
     // Phase semaphores
-    const uint32_t scan_phase1_sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0U);
-    const uint32_t scan_phase2_sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0U);
-    const uint32_t scan_phase3_sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0U);
-    const uint32_t plan_ready_sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0U);
+    desc.semaphores.push_back(make_semaphore_descriptor(kScanPhase1SemId, all_cores, 0U));
+    desc.semaphores.push_back(make_semaphore_descriptor(kScanPhase2SemId, all_cores, 0U));
+    desc.semaphores.push_back(make_semaphore_descriptor(kScanPhase3SemId, all_cores, 0U));
+    desc.semaphores.push_back(make_semaphore_descriptor(kPlanReadySemId, all_cores, 0U));
 
     // -------------------------------------------------------------------------
     // Buffer pointers
@@ -260,10 +304,10 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
         // RT-arg list shrinks.
         lead_virt.x,                     // 12
         lead_virt.y,                     // 13
-        scan_phase1_sem_id,              // 14
-        scan_phase2_sem_id,              // 15
-        scan_phase3_sem_id,              // 16
-        plan_ready_sem_id,               // 17
+        kScanPhase1SemId,                // 14
+        kScanPhase2SemId,                // 15
+        kScanPhase3SemId,                // 16
+        kPlanReadySemId,                 // 17
         shared_tables_offset,            // 18
         mcast_sx,                        // 19
         mcast_sy,                        // 20
@@ -281,11 +325,8 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     tt::tt_metal::TensorAccessorArgs(grouped_scores_buf).append_to(combined_ct_args);
     tt::tt_metal::TensorAccessorArgs(k_slot_buf).append_to(combined_ct_args);
 
-    auto combined_kernel_g1 = create_reader_kernel(program, worker_group_1, combined_ct_args, {}, kCombinedKernelPath);
-    tt::tt_metal::KernelHandle combined_kernel_g2{};
-    if (!worker_group_2.ranges().empty()) {
-        combined_kernel_g2 = create_reader_kernel(program, worker_group_2, combined_ct_args, {}, kCombinedKernelPath);
-    }
+    auto combined_kernel_g1 = make_reader_kernel_descriptor(worker_group_1, combined_ct_args, {}, kCombinedKernelPath);
+    auto combined_kernel_g2 = make_reader_kernel_descriptor(worker_group_2, combined_ct_args, {}, kCombinedKernelPath);
 
     // -------------------------------------------------------------------------
     // Worker writer kernel (BRISC) — unchanged
@@ -296,36 +337,29 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
         Wt,
         e_local,
         last_chunk_tiles,
-        num_total_cores,     // 5 — stride (= num_workers)
-        plan_ready_sem_id};  // 6
+        num_total_cores,   // 5 — stride (= num_workers)
+        kPlanReadySemId};  // 6
     tt::tt_metal::TensorAccessorArgs(grouped_buf).append_to(writer_ct_args);
     tt::tt_metal::TensorAccessorArgs(offsets_buf).append_to(writer_ct_args);
 
-    auto writer_kernel_g1 = create_writer_kernel(program, worker_group_1, writer_ct_args, {}, kWorkerWriterPath);
-    tt::tt_metal::KernelHandle writer_kernel_g2{};
-    if (!worker_group_2.ranges().empty()) {
-        writer_kernel_g2 = create_writer_kernel(program, worker_group_2, writer_ct_args, {}, kWorkerWriterPath);
-    }
+    auto writer_kernel_g1 = make_writer_kernel_descriptor(worker_group_1, writer_ct_args, {}, kWorkerWriterPath);
+    auto writer_kernel_g2 = make_writer_kernel_descriptor(worker_group_2, writer_ct_args, {}, kWorkerWriterPath);
 
     // -------------------------------------------------------------------------
     // Compute (tilize) kernel — unchanged
     // -------------------------------------------------------------------------
-    [[maybe_unused]] auto compute_g1 = create_compute_kernel(
-        program,
+    auto compute_g1 = make_compute_kernel_descriptor(
         worker_group_1,
         {kCbSrc0, kCbOut, tiles_group_1, tiles_per_chunk, num_chunks, kCbCtrl},
         {},
         kTilizeKernelPath,
         false);
-    if (!worker_group_2.ranges().empty()) {
-        [[maybe_unused]] auto compute_g2 = create_compute_kernel(
-            program,
-            worker_group_2,
-            {kCbSrc0, kCbOut, tiles_group_2, tiles_per_chunk, num_chunks, kCbCtrl},
-            {},
-            kTilizeKernelPath,
-            false);
-    }
+    auto compute_g2 = make_compute_kernel_descriptor(
+        worker_group_2,
+        {kCbSrc0, kCbOut, tiles_group_2, tiles_per_chunk, num_chunks, kCbCtrl},
+        {},
+        kTilizeKernelPath,
+        false);
 
     // -------------------------------------------------------------------------
     // Per-core RT args. Need to know each core's scan slice + worker assignment +
@@ -367,97 +401,110 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
         // tensor buffer addresses and per-core identity/slice bounds.
         // Everything previously here that was globally-constant (sem ids,
         // lead NOC, mcast rect, shared_tables_offset, worker_stride) moved
-        // to CT args in combined_ct_args above.
-        std::vector<uint32_t> reader_rt = {
-            plan_buf->address(),            // 0
-            dispatched_buf->address(),      // 1
-            worker_idx,                     // 2 my_worker_start (interleaved tile_row)
-            tiles_this_core,                // 3 my_worker_count
-            metadata_buf->address(),        // 4
-            counts_buf->address(),          // 5
-            offsets_buf->address(),         // 6
-            leids_buf->address(),           // 7
-            worker_idx,                     // 8 my_core_idx
-            my_slice_start,                 // 9
-            my_slice_end,                   // 10
-            scores_buf->address(),          // 11
-            grouped_scores_buf->address(),  // 12
-            k_slot_buf->address(),          // 13
-        };
+        // to CT args in combined_ct_args above. Slots as named at the top of
+        // the file; override_runtime_arguments() rewrites the addresses on
+        // every cache hit. The per-core values follow from the hashed
+        // attributes.
+        const bool is_g1 = worker_group_1.contains(core);
+        auto& combined_kernel = is_g1 ? combined_kernel_g1 : combined_kernel_g2;
+        combined_kernel.emplace_runtime_args(
+            core,
+            {
+                plan_buf,            // 0
+                dispatched_buf,      // 1
+                worker_idx,          // 2 my_worker_start (interleaved tile_row)
+                tiles_this_core,     // 3 my_worker_count
+                metadata_buf,        // 4
+                counts_buf,          // 5
+                offsets_buf,         // 6
+                leids_buf,           // 7
+                worker_idx,          // 8 my_core_idx
+                my_slice_start,      // 9
+                my_slice_end,        // 10
+                scores_buf,          // 11
+                grouped_scores_buf,  // 12
+                k_slot_buf,          // 13
+            });
 
-        std::vector<uint32_t> writer_rt = {
-            grouped_buf->address(),  // 0
-            worker_idx,              // 1 my_start
-            tiles_this_core,         // 2 my_count
-            offsets_buf->address(),  // 3
-        };
-
-        bool is_g1 = worker_group_1.contains(core);
-        SetRuntimeArgs(program, is_g1 ? combined_kernel_g1 : combined_kernel_g2, core, reader_rt);
-        SetRuntimeArgs(program, is_g1 ? writer_kernel_g1 : writer_kernel_g2, core, writer_rt);
+        auto& writer_kernel = is_g1 ? writer_kernel_g1 : writer_kernel_g2;
+        writer_kernel.emplace_runtime_args(
+            core,
+            {
+                grouped_buf,      // 0
+                worker_idx,       // 1 my_start
+                tiles_this_core,  // 2 my_count
+                offsets_buf,      // 3
+            });
         worker_idx++;
     }
 
-    return cached_program_t{
-        std::move(program),
-        {/* num_cores       = */ num_workers,
-         /* scan_coord      = */ lead_coord,
-         /* scan_kernel     = */ combined_kernel_g1,  // reuse field for combined kernel g1
-         /* reader_kernel_g1 = */ combined_kernel_g1,
-         /* reader_kernel_g2 = */ combined_kernel_g2,
-         /* writer_kernel_g1 = */ writer_kernel_g1,
-         /* writer_kernel_g2 = */ writer_kernel_g2,
-         /* worker_all      = */ worker_all,
-         /* worker_group_1  = */ worker_group_1,
-         /* worker_group_2  = */ worker_group_2,
-         /* num_cores_y     = */ num_cores_y}};
+    // Kernels in legacy creation order, which gives the handles named at the top of the file: combined, writer and
+    // compute, each for group 1 then group 2. The group 2 kernels are skipped when the tiles split evenly
+    // (worker_group_2 empty).
+    for (auto* kernel :
+         {&combined_kernel_g1, &combined_kernel_g2, &writer_kernel_g1, &writer_kernel_g2, &compute_g1, &compute_g2}) {
+        if (!kernel->core_ranges.ranges().empty()) {
+            desc.kernels.push_back(std::move(*kernel));
+        }
+    }
+
+    return desc;
 }
 
 void MoeGroupProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
+    tt::tt_metal::Program& program,
     const operation_attributes_t& attrs,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& outputs) {
-    auto& program = cached_program.program;
-    auto& sv = cached_program.shared_variables;
+    const tensor_args_t& args,
+    tensor_return_value_t& outputs,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    const WorkSplit split = make_work_split(attrs, args);
 
-    auto& grouped = std::get<0>(outputs);
-    auto& grouped_scores = std::get<1>(outputs);
-    auto& k_slot = std::get<2>(outputs);
-    auto& counts = std::get<3>(outputs);
-    auto& offsets = std::get<4>(outputs);
-    auto& plan = std::get<5>(outputs);
+    const uint32_t plan_addr = std::get<5>(outputs).buffer()->address();
+    const uint32_t dispatched_addr = args.dispatched.buffer()->address();
+    const uint32_t metadata_addr = args.metadata.buffer()->address();
+    const uint32_t counts_addr = std::get<3>(outputs).buffer()->address();
+    const uint32_t offsets_addr = std::get<4>(outputs).buffer()->address();
+    const uint32_t leids_addr = args.local_expert_ids.buffer()->address();
+    const uint32_t scores_addr = args.scores.buffer()->address();
+    const uint32_t grouped_scores_addr = std::get<1>(outputs).buffer()->address();
+    const uint32_t k_slot_addr = std::get<2>(outputs).buffer()->address();
+    const uint32_t grouped_addr = std::get<0>(outputs).buffer()->address();
 
-    auto* metadata_buf = tensor_args.metadata.buffer();
-    auto* scores_buf = tensor_args.scores.buffer();
-    auto* plan_buf = plan.buffer();
-    auto* grouped_scores_buf = grouped_scores.buffer();
-    auto* k_slot_buf = k_slot.buffer();
-    auto* counts_buf = counts.buffer();
-    auto* offsets_buf = offsets.buffer();
-    auto* leids_buf = tensor_args.local_expert_ids.buffer();
-    auto* dispatched_buf = tensor_args.dispatched.buffer();
-    auto* grouped_buf = grouped.buffer();
+    auto& combined_group_1_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kCombinedGroup1KernelIdx);
+    auto& writer_group_1_runtime_args = tt::tt_metal::GetRuntimeArgs(
+        program, split.has_group_2() ? kWriterGroup1KernelIdx : kWriterKernelIdxWithoutGroup2);
+    // Without group 2 there are no group-2 kernels and every core is in group 1, so the aliases are never indexed.
+    auto& combined_group_2_runtime_args = split.has_group_2()
+                                              ? tt::tt_metal::GetRuntimeArgs(program, kCombinedGroup2KernelIdx)
+                                              : combined_group_1_runtime_args;
+    auto& writer_group_2_runtime_args = split.has_group_2()
+                                            ? tt::tt_metal::GetRuntimeArgs(program, kWriterGroup2KernelIdx)
+                                            : writer_group_1_runtime_args;
 
-    auto worker_cores_vec = tt::tt_metal::corerange_to_cores(sv.worker_all, sv.num_cores, /*row_wise=*/true);
-    for (const auto& core : worker_cores_vec) {
-        bool is_g1 = sv.worker_group_1.contains(core);
+    // The cores and groups of create_descriptor()'s row-wise walk over worker_all, visited column-major instead: only
+    // addresses are written here, so the order does not matter.
+    for_each_core_with_work(split, [&](const CoreWork& work) {
+        const auto& core = work.core;
 
-        auto& reader_rt = GetRuntimeArgs(program, is_g1 ? sv.reader_kernel_g1 : sv.reader_kernel_g2)[core.x][core.y];
-        reader_rt[0] = plan_buf->address();
-        reader_rt[1] = dispatched_buf->address();
-        reader_rt[4] = metadata_buf->address();
-        reader_rt[5] = counts_buf->address();
-        reader_rt[6] = offsets_buf->address();
-        reader_rt[7] = leids_buf->address();
-        reader_rt[11] = scores_buf->address();
-        reader_rt[12] = grouped_scores_buf->address();
-        reader_rt[13] = k_slot_buf->address();
+        auto& combined_args =
+            (work.in_group_1 ? combined_group_1_runtime_args : combined_group_2_runtime_args)[core.x][core.y];
+        combined_args[kPlanAddrIdx] = plan_addr;
+        combined_args[kDispatchedAddrIdx] = dispatched_addr;
+        combined_args[kMetadataAddrIdx] = metadata_addr;
+        combined_args[kCountsAddrIdx] = counts_addr;
+        combined_args[kCombinedOffsetsAddrIdx] = offsets_addr;
+        combined_args[kLeidsAddrIdx] = leids_addr;
+        combined_args[kScoresAddrIdx] = scores_addr;
+        combined_args[kGroupedScoresAddrIdx] = grouped_scores_addr;
+        combined_args[kKSlotAddrIdx] = k_slot_addr;
 
-        auto& writer_rt = GetRuntimeArgs(program, is_g1 ? sv.writer_kernel_g1 : sv.writer_kernel_g2)[core.x][core.y];
-        writer_rt[0] = grouped_buf->address();
-        writer_rt[3] = offsets_buf->address();
-    }
+        auto& writer_args =
+            (work.in_group_1 ? writer_group_1_runtime_args : writer_group_2_runtime_args)[core.x][core.y];
+        writer_args[kGroupedAddrIdx] = grouped_addr;
+        writer_args[kWriterOffsetsAddrIdx] = offsets_addr;
+    });
 }
+
+TTML_ASSERT_DESCRIPTOR_OVERRIDE(MoeGroupDeviceOperation, MoeGroupProgramFactory);
 
 }  // namespace ttml::metal::ops::moe_group::device

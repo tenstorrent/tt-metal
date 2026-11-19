@@ -22,6 +22,8 @@ class CFGCombiner:
     comes first - either in the first half of the batch dimension (single-device case) or on the
     first device (multi-device case).
 
+    With ``rescale``, the combined prediction is scaled to the norm of the conditional one, per
+    token over the last dimension, as the diffusers Qwen-Image pipelines do.
     """
 
     def __init__(
@@ -29,15 +31,16 @@ class CFGCombiner:
         devices: tuple[ttnn.MeshDevice] | tuple[ttnn.MeshDevice, ttnn.MeshDevice],
         *,
         via_host: bool = True,
+        rescale: bool = False,
     ) -> None:
         match devices:
             case (_,):
-                self._inner = _SingleCombiner()
+                self._inner = _SingleCombiner(rescale=rescale)
             case (uncond_device, cond_device):
                 if via_host:
-                    self._inner = _HostCombiner(uncond_device, cond_device)
+                    self._inner = _HostCombiner(uncond_device, cond_device, rescale=rescale)
                 else:
-                    self._inner = _SocketCombiner(uncond_device, cond_device)
+                    self._inner = _SocketCombiner(uncond_device, cond_device, rescale=rescale)
             case _:
                 msg = "devices must be a tuple of one or two MeshDevices"
                 raise ValueError(msg)
@@ -48,6 +51,9 @@ class CFGCombiner:
 
 
 class _SingleCombiner:
+    def __init__(self, *, rescale: bool) -> None:
+        self._rescale = rescale
+
     def combine(self, predictions: Sequence[ttnn.Tensor], cfg_scale: float) -> tuple[ttnn.Tensor]:
         if len(predictions) != 1:
             msg = f"expected 1 prediction tensor for single-device combiner, got {len(predictions)}"
@@ -63,13 +69,14 @@ class _SingleCombiner:
         split_pos = n // 2
         uncond = prediction[0:split_pos]
         cond = prediction[split_pos:]
-        combined = ttnn.lerp(uncond, cond, cfg_scale)
+        combined = _combine(uncond, cond, cfg_scale, rescale=self._rescale)
 
         return (combined,)
 
 
 class _HostCombiner:
-    def __init__(self, uncond_device: ttnn.MeshDevice, cond_device: ttnn.MeshDevice) -> None:
+    def __init__(self, uncond_device: ttnn.MeshDevice, cond_device: ttnn.MeshDevice, *, rescale: bool) -> None:
+        self._rescale = rescale
         self._uncond_device = uncond_device
         self._cond_device = cond_device
 
@@ -89,14 +96,15 @@ class _HostCombiner:
         received_uncond = received_uncond.to(self._cond_device)
         received_cond = received_cond.to(self._uncond_device)
 
-        combined0 = ttnn.lerp(uncond, received_cond, cfg_scale)
-        combined1 = ttnn.lerp(received_uncond, cond, cfg_scale)
+        combined0 = _combine(uncond, received_cond, cfg_scale, rescale=self._rescale)
+        combined1 = _combine(received_uncond, cond, cfg_scale, rescale=self._rescale)
 
         return combined0, combined1
 
 
 class _SocketCombiner:
-    def __init__(self, uncond_device: ttnn.MeshDevice, cond_device: ttnn.MeshDevice) -> None:
+    def __init__(self, uncond_device: ttnn.MeshDevice, cond_device: ttnn.MeshDevice, *, rescale: bool) -> None:
+        self._rescale = rescale
         self._devices = (uncond_device, cond_device)
         self._sockets = _create_sockets(uncond_device, cond_device)
         self._recv_buffers: tuple[ttnn.Tensor, ttnn.Tensor] | None = None
@@ -123,8 +131,8 @@ class _SocketCombiner:
         ttnn.experimental.recv_async(received_uncond, self._sockets[0].rx)
         ttnn.experimental.send_async(cond, self._sockets[1].tx)
 
-        combined0 = ttnn.lerp(uncond, received_cond, cfg_scale)
-        combined1 = ttnn.lerp(received_uncond, cond, cfg_scale)
+        combined0 = _combine(uncond, received_cond, cfg_scale, rescale=self._rescale)
+        combined1 = _combine(received_uncond, cond, cfg_scale, rescale=self._rescale)
 
         return combined0, combined1
 
@@ -201,3 +209,13 @@ def distribute_cfg(
         case _:
             msg = f"unsupported number of submeshes: expected 1 or 2, got {len(devices)}"
             raise ValueError(msg)
+
+
+def _combine(uncond: ttnn.Tensor, cond: ttnn.Tensor, cfg_scale: float, *, rescale: bool) -> ttnn.Tensor:
+    combined = ttnn.lerp(uncond, cond, cfg_scale)
+    if not rescale:
+        return combined
+
+    cond_norm = ttnn.sqrt(ttnn.sum(cond * cond, dim=-1, keepdim=True))
+    inverse_norm = ttnn.rsqrt(ttnn.sum(combined * combined, dim=-1, keepdim=True) + 1e-12)
+    return combined * (cond_norm * inverse_norm)

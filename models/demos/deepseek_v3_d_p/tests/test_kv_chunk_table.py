@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.runners import kv_chunk_table
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import assert_full_mesh_stripe_order
 
 
 def test_glm_merged_table_config_names_survive_protobuf_round_trip(tmp_path, monkeypatch):
@@ -29,6 +30,7 @@ def test_glm_merged_table_config_names_survive_protobuf_round_trip(tmp_path, mon
         num_layers=1,
         mesh_shape=(1, 1),
         sp_axis=0,
+        tp_axis=1,
         num_users=1,
         path=str(tmp_path / "glm_merge_table.pb"),
         stage_layouts=stage_layouts,
@@ -67,6 +69,7 @@ def test_kimi_k3_kda_config_names_match_decode(tmp_path, monkeypatch):
         num_layers=2,
         mesh_shape=(8, 4),
         sp_axis=0,
+        tp_axis=1,
         num_users=1,
         path=str(tmp_path / "k3_merge_table.pb"),
         stage_layouts=[[{"rank": 0, "first_layer": 0, "count": 1, "base_addr": 0x10000}]],
@@ -76,3 +79,29 @@ def test_kimi_k3_kda_config_names_match_decode(tmp_path, monkeypatch):
 
     assert [table.config_name(i) for i in range(table.num_configs())] == ["00", "01", "02"]
     assert table.config(0).num_layers == 2
+    # The KDA configs reach the KV Manager as one Snapshot window each; kvpe stays a token cache.
+    tensor_type = ttnn.experimental.disaggregation.KvChunkTensorType
+    assert [table.config(i).tensor_type for i in range(3)] == [
+        tensor_type.Kv,
+        tensor_type.Snapshot,
+        tensor_type.Snapshot,
+    ]
+    assert [table.config(i).max_sequence_length for i in (1, 2)] == [36_864, 36_864]
+    assert [table.config(i).chunk_n_tokens for i in (1, 2)] == [96, 64]
+
+
+def _with_distribution_rank(rank):
+    return SimpleNamespace(
+        tensor_topology=lambda: SimpleNamespace(distribution_shape=lambda: [4] * rank),
+    )
+
+
+def test_full_mesh_gather_of_a_striped_cache_is_refused_with_sp_on_axis_1(expect_error):
+    # Striped over every mesh coordinate (rank-2 topology): the row-major label is the stripe order only at
+    # sp_axis=0, so a full-mesh gather at sp_axis=1 must raise instead of returning rows out of order.
+    striped = _with_distribution_rank(2)
+    assert_full_mesh_stripe_order(striped, 0, "test")
+    with expect_error(RuntimeError, "needs sp_axis=0, got sp_axis=1"):
+        assert_full_mesh_stripe_order(striped, 1, "test")
+    # Sharded on one axis (rank-1 topology): no full-mesh ordering to get wrong.
+    assert_full_mesh_stripe_order(_with_distribution_rank(1), 1, "test")

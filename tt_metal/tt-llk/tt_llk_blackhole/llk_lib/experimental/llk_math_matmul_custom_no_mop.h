@@ -56,7 +56,8 @@ inline void matmul_configure_addrmod_no_mop(
                               (in1_tile_c_dim == TILE_C_DIM) && !partial_face;
     if (!is_full_tile)
     {
-        matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL>(transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false /*ROW_MOP*/>(
+            transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         return;
     }
 

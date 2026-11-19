@@ -7,7 +7,7 @@
 #include "paged_fused_update_cache_device_operation_types.hpp"
 
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "ttnn/metal_v2_artifacts.hpp"
 
@@ -40,7 +40,7 @@ struct PagedRowMajorFusedUpdateCacheProgramFactory {
 
     // Cache-hit hook: re-applies every tensor binding plus the hash-excluded cache_start_id /
     // tile_update_offset_B.
-    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+    static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
         const PagedFusedUpdateCacheParams& operation_attributes,
         const PagedFusedUpdateCacheInputs& tensor_args,
         PagedFusedUpdateCacheResult& tensor_return_value,
@@ -59,7 +59,7 @@ struct PagedRowMajorFusedUpdateCacheMeshWorkloadFactory {
 
     // Same program layout as the single-device factory, so it reuses that patch. Only included
     // coordinates have a program, so every range reaching this hook is an included one.
-    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+    static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
         const PagedFusedUpdateCacheParams& operation_attributes,
         const PagedFusedUpdateCacheInputs& tensor_args,
         PagedFusedUpdateCacheResult& tensor_return_value,

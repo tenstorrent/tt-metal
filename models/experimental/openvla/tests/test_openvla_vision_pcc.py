@@ -23,7 +23,7 @@ import torch.nn as nn
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.experimental.openvla.tt import tt_optimized_openvla_vision
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 def ttnn_to_torch_safe(tensor, mesh_device=None):

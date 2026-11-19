@@ -30,7 +30,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmStatefulLoopback) {
         GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
     }
 
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
 
     constexpr uint32_t chunk_bytes = 64;
     constexpr uint32_t num_chunks = 4;
@@ -55,11 +55,11 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmStatefulLoopback) {
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(this->device().shape());
 
-    const experimental::KernelSpecName STATEFUL{"stateful_dram_loopback"};
+    const KernelSpecName STATEFUL{"stateful_dram_loopback"};
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "dm_stateful_loopback",
-        .kernels = {experimental::KernelSpec{
+        .kernels = {KernelSpec{
             .unique_id = STATEFUL,
             .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/stateful_dram_loopback.cpp",
             .num_threads = 1,
@@ -67,26 +67,26 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmStatefulLoopback) {
                 {
                     .runtime_arg_names = {"dram_in_addr", "dram_out_addr", "l1_addr", "dram_bank_id"},
                 },
-            .hw_config = experimental::DataMovementHardwareConfig{},
+            .hw_config = DataMovementHardwareConfig{},
         }},
-        .work_units = {experimental::WorkUnitSpec{
+        .work_units = {WorkUnitSpec{
             .name = "main",
             .kernels = {STATEFUL},
             .target_nodes = node,
         }},
     };
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program = tt_metal::experimental::MakeProgramFromSpec(this->device(), spec);
 
-    experimental::ProgramRunArgs params;
-    params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+    ProgramRunArgs params;
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
         .kernel = STATEFUL,
-        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(
             node,
             {{"dram_in_addr", dram_in_address},
              {"dram_out_addr", dram_out_address},
              {"l1_addr", l1_address},
              {"dram_bank_id", 0u}})});
-    experimental::SetProgramRunArgs(program, params);
+    tt_metal::experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
