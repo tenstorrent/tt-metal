@@ -139,12 +139,14 @@ FORCE_INLINE void deliver(
         return;
     }
 
+#if defined(ARCH_WORMHOLE)
     // Semaphore increment state. The send types that end in a semaphore increment track their respective state, and we
     // have one call at the end to local_atomic_inc() that uses this state. We do this over each branch having its own
     // call to local_atomic_inc() for code size savings (one inlined call vs multiple).
     uint64_t inc_noc_addr;
     uint32_t inc_value;
     bool inc_flush;
+#endif
     if (type == NocSendType::NOC_UNICAST_SCATTER_WRITE) {
         channel_trimming_usage_recorder.set_noc_send_type_used(CH, type);
         using ChunkEncoding = tt::tt_fabric::NocScatterWriteChunkEncoding;
@@ -175,34 +177,56 @@ FORCE_INLINE void deliver(
         const uint64_t last_noc_addr = scatter.noc_address[chunks - 1];
         if (last == ChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE) {
             local_write<false>(payload + offset, last_noc_addr, static_cast<uint16_t>(payload_size - offset), trid);
-            count_local_writes(writes + 1);
-            return;
-        } else {
-            count_local_writes(writes);
+            writes++;
+        }
+        count_local_writes(writes);
+        if (last != ChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE) {
             ASSERT(last != ChunkEncoding::CHUNK_ENCODING_NOP);
+#if defined(ARCH_WORMHOLE)
             inc_noc_addr = last_noc_addr;
             inc_value = scatter.chunk_size[chunks - 1];
             inc_flush = last == ChunkEncoding::CHUNK_ENCODING_SEMINC_FLUSH;
+            goto atomic_inc;
+#else
+            local_atomic_inc(
+                last_noc_addr, scatter.chunk_size[chunks - 1], last == ChunkEncoding::CHUNK_ENCODING_SEMINC_FLUSH, CH);
+#endif
         }
-    } else if (type == NocSendType::NOC_UNICAST_ATOMIC_INC) {
+        return;
+    }
+    if (type == NocSendType::NOC_UNICAST_ATOMIC_INC) {
         channel_trimming_usage_recorder.set_noc_send_type_used(CH, type);
         const auto& inc = header->command_fields.unicast_seminc;
+#if defined(ARCH_WORMHOLE)
         inc_noc_addr = inc.noc_address;
         inc_value = inc.val;
         inc_flush = inc.flush != 0;
-    } else if (type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC) {
+        goto atomic_inc;
+#else
+        local_atomic_inc(inc.noc_address, inc.val, inc.flush != 0, CH);
+#endif
+        return;
+    }
+    if (type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC) {
         channel_trimming_usage_recorder.set_noc_send_type_used(CH, type);
         const auto& fused = header->command_fields.unicast_seminc_fused;
         local_write<counts_local_writes>(payload, fused.noc_address, payload_size, trid);
+#if defined(ARCH_WORMHOLE)
         inc_noc_addr = fused.semaphore_noc_address;
         inc_value = fused.val;
         inc_flush = fused.flush != 0;
-    } else {
-        deliver_other(header, payload_size, type, trid, CH);
+        goto atomic_inc;
+#else
+        local_atomic_inc(fused.semaphore_noc_address, fused.val, fused.flush != 0, CH);
+#endif
         return;
     }
-
+    deliver_other(header, payload_size, type, trid, CH);
+#if defined(ARCH_WORMHOLE)
+    return;
+atomic_inc:
     local_atomic_inc(inc_noc_addr, inc_value, inc_flush, CH);
+#endif
 }
 
 }  // namespace fabric_router
