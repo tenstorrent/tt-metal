@@ -6,7 +6,6 @@
 #include "binary.hpp"
 #include <algorithm>
 #include <cmath>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 
@@ -938,7 +937,7 @@ inline auto invoke_binary_ng_impl(
             return a_width;
         }
     }();
-    const auto result = [&] {
+    auto result = [&] {
         if (non_finite_at_padding && is_block_float(out_dtype) && out_width % tt::constants::FACE_WIDTH != 0) {
             const auto intermediate_memory_config =
                 output.has_value() ? std::optional<MemoryConfig>{output->memory_config()} : memory_config;
