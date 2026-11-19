@@ -116,7 +116,8 @@ def test_module_imports_without_ttnn():
     assert (
         caps["supports_sample_on_device"] is True and caps["max_device_top_k"] == gvs.DEVICE_TOP_K == 10
     )  # the 8x4 default
-    assert caps["device_top_k_unbounded_as"] == 10  # GLM sets no top-k: default requests stay on the device
+    # the adapter declares only max_device_top_k: the plugin host-samples a step with an unset or larger top-k
+    assert "device_top_k_unbounded_as" not in caps
     assert caps["supports_device_penalties"] is False and caps["supports_async_decode"] is True
     assert caps["fabric_config"] is None
     for key in (

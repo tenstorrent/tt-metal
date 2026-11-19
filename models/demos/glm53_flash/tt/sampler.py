@@ -21,8 +21,9 @@ sampling 0.15 ms, the whole step 0.81 ms eager at 8 users; output ``[1, 1, 1, us
 -> identical draws, new seeds -> varied draws, a peaked row always its argmax, every draw inside the torch top-32.
 
 Routing (the vLLM plugin, 2026-10-31): a batch goes to the device only when every sampled row has
-``1 <= top_k <= max_device_top_k``; ``MAX_TOP_K`` = 32 is what the reference models declare. Rows with an unbounded
-top-k (vLLM's default) need the plugin's opt-in to approximate it by ``MAX_TOP_K`` (``clamp_k``).
+``1 <= top_k <= max_device_top_k``; ``MAX_TOP_K`` = 32 is what the reference models declare. A batch with a row whose
+top-k is unset (vLLM's default) or larger goes to the plugin's host sampler; a serving profile sets a bounded default
+with --override-generation-config. ``clamp_k`` bounds the top-k this sampler is given to ``MAX_TOP_K``.
 """
 
 from __future__ import annotations

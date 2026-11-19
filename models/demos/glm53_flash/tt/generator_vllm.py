@@ -611,12 +611,11 @@ class GLM53FlashForCausalLM:
         # steps) and vLLM's async scheduling are admitted; off = every decode reloads tokens / positions from the host
         "supports_async_decode": resident_decode_enabled(),
         # Device sampling: the head's greedy argmax for greedy rows (and top_k == 1); with GLM53_DEVICE_SAMPLING=1
-        # (tt/sampler.py) every decode row samples on device under its top-k (<= MAX_TOP_K) / top-p / temperature,
-        # rows without a top-k bound from the top-MAX_TOP_K (the plugin's generic opt-in
-        # ``device_top_k_unbounded_as``); without it the plugin routes any sampled row to host sampling.
+        # (tt/sampler.py) every decode row samples on device under its top-k (<= MAX_TOP_K) / top-p / temperature;
+        # the plugin routes a row without a top-k bound or above MAX_TOP_K (and, without it, any sampled row) to host
+        # sampling -- a serving profile's --override-generation-config top_k keeps default requests on the device.
         "supports_sample_on_device": True,
         "max_device_top_k": MAX_TOP_K if device_sampling_enabled() else 1,
-        "device_top_k_unbounded_as": MAX_TOP_K if device_sampling_enabled() else None,
         "supports_device_penalties": False,
         # A prompt split across engine steps resumes through FunctionalDecoder's chunked prefill (``start``).
         "supports_chunked_prefill": True,

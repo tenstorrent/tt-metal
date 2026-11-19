@@ -114,8 +114,10 @@ def _mesh_shape_from_env() -> tuple[int, int]:
 
 def _device_top_k() -> int:
     """The head's device sampler bound (kernels/head/topk_select.cpp, StackBackend(topk=K, sample=True)): temperature /
-    top-k / top-p rows are drawn from the K best candidates inside the traced decode step; a request without a top-k
-    bound (GLM's generation config sets none) or above K is drawn from those K (device_top_k_unbounded_as). K is the
+    top-k / top-p rows are drawn from the K best candidates inside the traced decode step; the plugin samples a whole
+    step on its host sampler (and without speculation) when any sampled row's top-k is unset (GLM's generation config
+    sets none) or above K, so a serving profile sets a bounded default (--override-generation-config '{"top_k": 10}':
+    tt-inference-server's GLM profiles). K is the
     largest the head's in-program candidate gather carries: every chip's K candidates x 6 bf16 fields in lane 0's
     64 tiles (mk_head.MkHead), 10 on the 32-chip 8x4, 32 (the sampler's cap) on 8 chips.
     GLM53_STACK_DEVICE_SAMPLING=0: greedy on device only, sampled rows on the host sampler over the full logits."""
@@ -1519,7 +1521,6 @@ class GLM53StackForCausalLM:
         # next step while one runs
         "supports_sample_on_device": True,
         "max_device_top_k": DEVICE_TOP_K,
-        "device_top_k_unbounded_as": DEVICE_TOP_K if DEVICE_TOP_K > 1 else None,
         "supports_device_penalties": False,
         "supports_device_grammar": False,
         "supports_async_decode": ASYNC_DECODE,
