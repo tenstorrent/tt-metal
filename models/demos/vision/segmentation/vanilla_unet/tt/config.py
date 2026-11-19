@@ -10,10 +10,24 @@ from models.tt_cnn.tt.builder import (
     AutoShardedStrategyConfiguration,
     Conv2dConfiguration,
     HeightShardedStrategyConfiguration,
+    HeightSliceStrategyConfiguration,
     L1FullSliceStrategyConfiguration,
     MaxPool2dConfiguration,
     ShardingStrategy,
 )
+
+# The L1 plan (L1 input shards, L1 activations, unsliced convs) is sized for an 8x8 grid; a grid with
+# fewer cores runs from DRAM instead.
+FULL_PLAN_MIN_CORES = 64
+
+
+def reduced_grid(device) -> bool:
+    """Whether ``device``'s grid has fewer cores than the L1 plan is sized for. A device of None is
+    taken to have a full grid."""
+    if device is None:
+        return False
+    grid = device.compute_with_storage_grid_size()
+    return grid.x * grid.y < FULL_PLAN_MIN_CORES
 
 
 @dataclass
@@ -82,8 +96,10 @@ class TtUNetConfigBuilder:
         input_width: int = 640,
         batch_size: int = 1,
         init_features: int = 32,
+        device=None,
     ):
         self.parameters = parameters
+        self.reduced_grid = reduced_grid(device)
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.input_height = input_height
@@ -104,8 +120,12 @@ class TtUNetConfigBuilder:
     def build_configs(self) -> TtUNetLayerConfigs:
         return TtUNetLayerConfigs(
             # Input memory configurations
-            l1_input_memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, self.l1_input_shard_spec
+            l1_input_memory_config=(
+                ttnn.DRAM_MEMORY_CONFIG
+                if self.reduced_grid
+                else ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, self.l1_input_shard_spec
+                )
             ),
             # Encoder 1
             encoder1_conv1=self._create_conv_config_from_params(
@@ -368,6 +388,17 @@ class TtUNetConfigBuilder:
         enable_act_double_buffer=False,
     ) -> Conv2dConfiguration:
         """Create a Conv2dConfiguration from preprocessed parameters dict containing weight and bias"""
+        slice_strategy = L1FullSliceStrategyConfiguration()
+        config_tensors_in_dram = False
+        if self.reduced_grid:
+            # A reduced grid's L1 holds no whole activation: the conv reads and writes DRAM in the
+            # height slices conv2d chooses, with conv2d's own block height, and its config tensors
+            # go to DRAM since L1_SMALL holds only a few banks there.
+            sharding_strategy = HeightShardedStrategyConfiguration()
+            slice_strategy = HeightSliceStrategyConfiguration()
+            config_tensors_in_dram = True
+            enable_weights_double_buffer = False
+            enable_act_double_buffer = False
         return Conv2dConfiguration(
             input_height=input_height,
             input_width=input_width,
@@ -389,7 +420,8 @@ class TtUNetConfigBuilder:
             math_fidelity=math_fidelity,
             fp32_dest_acc_en=fp32_dest_acc_en,
             packer_l1_acc=packer_l1_acc,
-            slice_strategy=L1FullSliceStrategyConfiguration(),
+            slice_strategy=slice_strategy,
+            config_tensors_in_dram=config_tensors_in_dram,
             output_layout=ttnn.TILE_LAYOUT,
         )
 
@@ -435,6 +467,7 @@ def create_unet_configs_from_parameters(
     input_height: int = 480,
     input_width: int = 640,
     batch_size: int = 1,
+    device=None,
 ) -> TtUNetLayerConfigs:
     """
     Create Vanilla UNet configuration object given weights and input tensor dimensions
@@ -447,6 +480,7 @@ def create_unet_configs_from_parameters(
         input_height=input_height,
         input_width=input_width,
         batch_size=batch_size,
+        device=device,
     )
 
     return builder.build_configs()

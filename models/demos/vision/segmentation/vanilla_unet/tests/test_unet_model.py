@@ -32,7 +32,7 @@ def test_vanilla_unet_model(
         initialize_model=lambda: reference_model, custom_preprocessor=create_unet_preprocessor(device), device=None
     )
     configs = create_unet_configs_from_parameters(
-        parameters=parameters, input_height=input_height, input_width=input_width, batch_size=batch
+        parameters=parameters, input_height=input_height, input_width=input_width, batch_size=batch, device=device
     )
 
     torch_input_tensor, ttnn_input_tensor = create_unet_input_tensors(

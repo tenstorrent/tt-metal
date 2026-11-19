@@ -140,6 +140,7 @@ def run_unet_demo_single_image(
             input_height=resolution[0],
             input_width=resolution[1],
             batch_size=batch_size,
+            device=device,
         )
         ttnn_model = create_unet_from_configs(ttnn_configs, device)
         logger.info(f"TT-NN model initialized in {time.time() - start_time:.2f}s")
