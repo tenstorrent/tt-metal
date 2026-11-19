@@ -226,17 +226,44 @@ def test_component_without_state_setter_is_refused(expect_error):
     check_train_state({}, dataloader=iter([]))  # nothing stored for it: nothing to restore it with
 
 
+_GENERATORS = ("ttml", "python", "numpy", "ttml.init", "torch")
+
+
+def _live_generators() -> tuple:
+    """Every generator's current state, in _GENERATORS order, comparable with ==."""
+    numpy_state = np.random.get_state()
+    return (
+        ttml.autograd.AutoContext.get_instance().get_generator_state(),
+        random.getstate(),
+        (numpy_state[1].tobytes(),) + tuple(numpy_state[2:]),
+        ttml.init.get_rng_state(),
+        torch.get_rng_state().numpy().tobytes(),
+    )
+
+
+def _leave_the_stored_state() -> None:
+    """Reseed and draw from every generator, so that none holds the state just captured: one set from its intact
+    entry before a later entry is refused then differs from what it was."""
+    ttml.autograd.AutoContext.get_instance().set_seed(7)
+    advance_generators()
+
+
+def _assert_unchanged(before: tuple) -> None:
+    changed = [name for name, now, then in zip(_GENERATORS, _live_generators(), before) if now != then]
+    assert not changed, f"set before the stored state was refused: {changed}"
+
+
 def test_rng_state_is_checked_whole_before_any_generator_is_set(expect_error):
-    random.seed(21)
     block = capture_rng(world_rank=0)
-    before = random.getstate()
+    _leave_the_stored_state()
+    before = _live_generators()
     broken = json.loads(json.dumps(block))
     broken["ranks"]["0"]["numpy"]["state"] = "not hex"
     with expect_error(CheckpointError, "the stored RNG state is malformed"):
         check_train_state({"rng": broken}, rng=True, world_rank=0)
     with expect_error(CheckpointError, "the stored RNG state is malformed"):
         restore_rng(broken, world_rank=0)
-    assert random.getstate() == before, "python's generator was not set before numpy's failed to decode"
+    _assert_unchanged(before)  # python's entry, decoded before numpy's, is intact
     newer = dict(block, format=2)
     with expect_error(VersionError, "newer than this reader"):
         check_train_state({"rng": newer}, rng=True, world_rank=0)
@@ -251,33 +278,29 @@ def test_rng_state_is_checked_whole_before_any_generator_is_set(expect_error):
 @pytest.mark.parametrize("damage", list(WRONG_LENGTH_RNG.values()), ids=list(WRONG_LENGTH_RNG))
 def test_rng_state_of_the_wrong_length_changes_no_generator(damage, expect_error):
     # Valid JSON and hex of the wrong length for its generator: refused while decoding, before any generator is set.
-    ctx = ttml.autograd.AutoContext.get_instance()
     block = capture_rng(world_rank=0)
+    _leave_the_stored_state()
     broken = json.loads(json.dumps(block))
     damage(broken["ranks"]["0"])
-    before = (ctx.get_generator_state(), random.getstate(), np.random.get_state()[1].copy(), torch.get_rng_state())
+    before = _live_generators()
     with expect_error(CheckpointError, "the stored RNG state is malformed"):
         restore_rng(broken, world_rank=0)
-    after = (ctx.get_generator_state(), random.getstate(), np.random.get_state()[1], torch.get_rng_state())
-    assert after[0] == before[0] and after[1] == before[1], "ttml and python untouched"
-    assert np.array_equal(after[2], before[2]) and torch.equal(after[3], before[3]), "numpy and torch untouched"
+    _assert_unchanged(before)
 
 
 @pytest.mark.parametrize("damage", list(MISREAD_RNG.values()), ids=list(MISREAD_RNG))
 def test_misreadable_rng_state_is_refused(damage, expect_error):
     """RNG state a setter would misread is refused, and no generator changes."""
-    ctx = ttml.autograd.AutoContext.get_instance()
     block = capture_rng(world_rank=0)
+    _leave_the_stored_state()
     broken = json.loads(json.dumps(block))
     damage(broken["ranks"]["0"])
-    before = (ctx.get_generator_state(), random.getstate(), np.random.get_state()[1].copy(), torch.get_rng_state())
+    before = _live_generators()
     with expect_error(CheckpointError, "the stored RNG state is malformed .*pass rng=False to load"):
         check_train_state({"rng": broken}, rng=True, world_rank=0)
     with expect_error(CheckpointError, "the stored RNG state is malformed"):
         restore_rng(broken, world_rank=0)
-    after = (ctx.get_generator_state(), random.getstate(), np.random.get_state()[1], torch.get_rng_state())
-    assert after[0] == before[0] and after[1] == before[1], "ttml and python untouched"
-    assert np.array_equal(after[2], before[2]) and torch.equal(after[3], before[3]), "numpy and torch untouched"
+    _assert_unchanged(before)
     check_train_state({"rng": broken}, rng=False)  # not asked for: not decoded, so a load without rng goes ahead
 
 
