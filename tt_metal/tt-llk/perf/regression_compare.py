@@ -218,7 +218,19 @@ def compare_runs(
             regressions.append(record)
         elif record["improvement"]:
             improvements.append(record)
-    missing_points = [k for k in base if k not in cur]
+    missing_points = []
+    for key, mean_col in base:
+        if (key, mean_col) in cur:
+            continue
+        marker, config = key
+        missing_points.append(
+            {
+                "marker": marker,
+                "run_type": _run_type_of(mean_col),
+                "config": config,
+                MODULE_COL: dict(config).get(MODULE_COL, ""),
+            }
+        )
     return {
         "records": records,
         "regressions": regressions,
@@ -227,6 +239,25 @@ def compare_runs(
         "missing_points": missing_points,
         "noise_filtered": noise_filtered,
     }
+
+
+def coverage_gap(result):
+    """``(unmatched current, unmatched baseline, added modules, removed modules)``.
+
+    A module on one side only is the suite changing: a test added or removed.
+    A module on both sides with points that did not match is a gap the gate
+    cannot vouch for, whether a leg was lost or a sweep changed shape.
+    """
+    compared = {r[MODULE_COL] for r in result["records"]}
+    current = compared | {p[MODULE_COL] for p in result["new_points"]}
+    baseline = compared | {p[MODULE_COL] for p in result["missing_points"]}
+    shared = current & baseline
+    return (
+        [p for p in result["new_points"] if p[MODULE_COL] in shared],
+        [p for p in result["missing_points"] if p[MODULE_COL] in shared],
+        sorted(current - baseline),
+        sorted(baseline - current),
+    )
 
 
 _TOP_N = 25
@@ -562,12 +593,17 @@ def main(argv=None):
             },
             fh,
         )
-    if a.require_full_coverage and (result["new_points"] or result["missing_points"]):
+    gap_new, gap_missing, added, removed = coverage_gap(result)
+    if added or removed:
         print(
-            f"\u274c {len(result['new_points'])} point(s) have no baseline and "
-            f"{len(result['missing_points'])} baseline point(s) were not measured. "
-            f"{len(result['records'])} of "
-            f"{len(result['records']) + len(result['new_points'])} generated point(s) compared."
+            f"Suite changed: {len(added)} module(s) added {added}, "
+            f"{len(removed)} removed {removed}. Their points are reported, not compared."
+        )
+    if a.require_full_coverage and (gap_new or gap_missing):
+        print(
+            f"\u274c {len(gap_new)} point(s) have no baseline and "
+            f"{len(gap_missing)} baseline point(s) were not measured, in modules both "
+            f"sides ran. {len(result['records'])} point(s) compared."
         )
         raise SystemExit(2)
     # exit non-zero if regressions, so the skill/CI can gate on it
