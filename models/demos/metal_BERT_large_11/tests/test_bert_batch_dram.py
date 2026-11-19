@@ -9,6 +9,7 @@ from transformers import BertTokenizer
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc, profiler
+from models.demos.metal_BERT_large_11.tt import grid
 from models.demos.metal_BERT_large_11.tt.bert_model import TtBertBatchDram
 from models.demos.metal_BERT_large_11.tt.model_config import (
     get_model_config,
@@ -389,7 +390,8 @@ def test_bert_batch_dram_with_program_cache(
         expected_programs = 17
     else:
         expected_programs = 16
-    if batch > device.compute_with_storage_grid_size().y:
-        # Without a core row per image, FF1 applies its GELU as a separate op.
+    device_grid = device.compute_with_storage_grid_size()
+    if "OP9_FF1_MM_CONFIG" not in model_config and not grid.fits_matmul_configs(batch, device_grid):
+        # FF1 without a program config applies its GELU as a separate op.
         expected_programs += 1
     assert device.num_program_cache_entries() == expected_programs

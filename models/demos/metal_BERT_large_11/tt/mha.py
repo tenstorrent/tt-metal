@@ -10,7 +10,7 @@ import torch
 from tt_lib.utils import pad_weight
 
 import ttnn
-from models.demos.metal_BERT_large_11.tt import custom_matmuls
+from models.demos.metal_BERT_large_11.tt import custom_matmuls, grid
 from models.demos.metal_BERT_large_11.tt.tensor_utils import load_or_compute_and_cache
 
 
@@ -50,10 +50,9 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
     grid_size = model_config.get("GRID_SIZE", device.compute_with_storage_grid_size())
 
     def op2_create_qkv_heads(qkv):
-        if not qkv.is_sharded() and grid_size.x < custom_matmuls.MAX_GRID_COLUMNS:
-            # The experimental op takes one core column per tile row of the sequence (12 for 384),
-            # whatever grid it is given; the generic op splits the same [Q | K | V] layout on any grid.
-            batch, _, sequence, width = qkv.shape
+        batch, _, sequence, width = qkv.shape
+        if not qkv.is_sharded() and not grid.fits_experimental_split_heads(batch, sequence, grid_size):
+            # The generic op splits the same [Q | K | V] layout on any grid.
             return ttnn.transformer.split_query_key_value_and_split_heads(
                 ttnn.reshape(qkv, (batch, sequence, width)),
                 num_heads=num_heads,
