@@ -115,18 +115,23 @@ struct dp_top_callstack_t {
         std::uint32_t kernel_offset = 0;
 
 #if DEVICE_PRINT_IS_KERNEL
-        // The kernel offset is the kernel's load address, computed as the firmware computes kernel_lma.
+        // The kernel offset is the address the kernel runs from, computed as the firmware computes it.
+#if defined(ARCH_WORMHOLE) && defined(COMPILE_FOR_NCRISC)
+        // Wormhole's NCRISC runs its kernel from IRAM, where the firmware copies it (kernel_vma).
+        kernel_offset = MEM_NCRISC_KERNEL_BASE;
+#else
         const std::uint32_t launch_index = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
         const auto& config = GET_MAILBOX_ADDRESS_DEV(launch[launch_index])->kernel_config;
-#if defined(COMPILE_FOR_DRISC)
-        // A DRAM-core kernel loads at its link address, not into the kernel config buffer, so its
-        // kernel_text_offset is the absolute load address.
+#if defined(COMPILE_FOR_DRISC) || (defined(ARCH_WORMHOLE) && defined(COMPILE_FOR_ERISC))
+        // A DRAM-core kernel, and a kernel on Wormhole's active Ethernet core, loads at its link address, not into
+        // the kernel config buffer, so its kernel_text_offset is the absolute load address.
         kernel_offset = config.kernel_text_offset[internal_::get_hw_thread_idx()];
 #else
         // kernel_config_base[] is indexed by ProgrammableCoreType. PROGRAMMABLE_CORE_TYPE is set by
         // the HAL JIT defines from the build's HalProgrammableCoreType.
         kernel_offset = config.kernel_config_base[PROGRAMMABLE_CORE_TYPE] +
                         config.kernel_text_offset[internal_::get_hw_thread_idx()];
+#endif
 #endif
 #endif
 
