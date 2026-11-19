@@ -14,9 +14,11 @@ device of its own.
 groups must not interleave: the TP tests come first, the FSDP test last.
 """
 
+import glob
 import json
 import os
 import random
+import secrets
 import shutil
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -33,9 +35,12 @@ import ttml
 import ttml.distributed_checkpointing as dcp
 from ttml.common.schedulers import CosineAnnealingScheduler
 from ttml.distributed_checkpointing import _load, _save
+from ttml.distributed_checkpointing._index import staging_dir
+from ttml.distributed_checkpointing._layouts import Pad, fused_segments
 from ttml.distributed_checkpointing._state_dict import collect_model
 from ttml.fsdp import _ShardedState
-from ttml.modules import AbstractModuleBase, Buffer, LinearLayer, ModuleList, Parameter
+from ttml.modules import AbstractModuleBase, Buffer, ColumnParallelLinear, LinearLayer, ModuleList, Parameter
+from ttml.modules.lora import LoraColumnParallelLinear, LoraConfig, LoraLinear
 
 pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(1800)]
 
@@ -257,10 +262,6 @@ def test_incomplete_directory_and_existing_directory_are_refused(tp_mesh, tmp_pa
 def test_save_refuses_a_staging_directory_it_did_not_create(tp_mesh, tmp_path, monkeypatch, expect_error):
     """A staging directory that already exists belongs to another save of the same step that drew the same nonce, or
     to one that died: the save is refused before writing anything, and the directory is left as it was."""
-    import secrets
-
-    from ttml.distributed_checkpointing._index import staging_dir
-
     model, params, opt = fresh_tp(DIM)
     path = str(tmp_path / "step_0000002")
     monkeypatch.setattr(secrets, "randbits", lambda bits: 12345)
@@ -280,9 +281,6 @@ def test_save_refuses_a_staging_directory_it_did_not_create(tp_mesh, tmp_path, m
 class _LoraQKV(AbstractModuleBase):
     def __init__(self, dim: int) -> None:
         super().__init__()
-        from ttml.modules import ColumnParallelLinear
-        from ttml.modules.lora import LoraColumnParallelLinear, LoraConfig
-
         base = ColumnParallelLinear(dim, 2 * dim, has_bias=False, fused_segments=(dim, dim // 2, dim // 2))
         self.qkv_linear = LoraColumnParallelLinear(base, LoraConfig(rank=8))
 
@@ -295,9 +293,6 @@ class _LoraHeads(AbstractModuleBase):
 
     def __init__(self, dim: int) -> None:
         super().__init__()
-        from ttml.modules import ColumnParallelLinear
-        from ttml.modules.lora import LoraColumnParallelLinear, LoraConfig, LoraLinear
-
         tp_head = ColumnParallelLinear(dim, 128, has_bias=False)
         tp_head.weight.checkpoint_layout = {"logical_extent": (2, 100)}
         self.tp_head = LoraColumnParallelLinear(tp_head, LoraConfig(rank=8))
@@ -307,9 +302,6 @@ class _LoraHeads(AbstractModuleBase):
 
 
 def test_lora_declares_the_rows_it_adds_to(tp_mesh, tmp_path, expect_error):
-    from ttml.distributed_checkpointing._layouts import Pad, fused_segments
-    from ttml.modules import ColumnParallelLinear
-
     infos = {lt.key.rsplit("/", 1)[-1]: lt.info for lt in collect_model(_LoraQKV(DIM))}
     segments = (DIM, DIM // 2, DIM // 2)
     assert infos["weight"].transform == fused_segments(2, segments, 2)
@@ -331,8 +323,6 @@ def test_lora_declares_the_rows_it_adds_to(tp_mesh, tmp_path, expect_error):
 
 
 def test_save_refuses_bad_state_before_writing_and_leaks_nothing(tp_mesh, tmp_path, monkeypatch, expect_error):
-    from ttml.distributed_checkpointing import _save
-
     model, params, opt = fresh_tp(DIM)
     train_step(model, opt, DIM)
     with expect_error(dcp.CheckpointError, r"header at /step: a int64 has no JSON form"):
@@ -360,8 +350,6 @@ def test_save_refuses_bad_state_before_writing_and_leaks_nothing(tp_mesh, tmp_pa
 
 def test_failed_load_says_model_is_partly_restored(tp_mesh, tmp_path, monkeypatch, expect_error):
     """A load that fails after placing tensors says the model is partly restored."""
-    from ttml.distributed_checkpointing import _load
-
     model, params, opt = fresh_tp(DIM)
     path = str(tmp_path / "step_0000001")
     dcp.save(path, model=model, optimizer=opt)
@@ -393,8 +381,6 @@ def test_failed_load_says_model_is_partly_restored(tp_mesh, tmp_path, monkeypatc
 
 def test_truncated_data_file_is_refused_first(tp_mesh, tmp_path, expect_error):
     """A truncated data file is refused before anything is placed."""
-    import glob
-
     model, params, opt = fresh_tp(DIM)
     train_step(model, opt, DIM)
     path = str(tmp_path / dcp.step_dir_name(1))
@@ -483,8 +469,6 @@ class _Qkv(AbstractModuleBase):
 
     def __init__(self, dim: int, fused_segments=None) -> None:
         super().__init__()
-        from ttml.modules import ColumnParallelLinear
-
         self.qkv_linear = ColumnParallelLinear(dim, 2 * dim, has_bias=False, fused_segments=fused_segments)
 
 
