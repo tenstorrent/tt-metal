@@ -4,10 +4,11 @@
 
 """The L1 a pipeline leaves to its matmuls, the `l1_limit` of `models.tt_dit.utils.matmul_config_search`.
 
-Each case builds a pipeline with its preset for the mesh, with its warmup, and runs one request,
-the state it serves in. Before every single-chip matmul of every transformer forward it reads the
-lowest allocated L1 address of the matmul's device; the matmuls of the text encoders and the VAE
-are left out. The allocator fills L1 top-down, so a matmul's static circular buffers must end at
+Each case builds a pipeline with its preset for the mesh, with its warmup, and runs a request
+traced where serving traces, the state it serves in. Before every single-chip matmul of the
+transformer it reads the lowest allocated L1 address of the matmul's device; the matmuls of the
+text encoders and the VAE are left out. A trace replay runs no Python, so the lowest address at
+each replay is read too and reported apart (`lowest_at_replay`). The allocator fills L1 top-down, so a matmul's static circular buffers must end at
 or below the lowest address seen. Pick cases with -k (the model and mesh, e.g. -k "klein and 2x4").
 
     pytest models/tt_dit/tests/test_l1_probe.py -k "klein and 2x4"
@@ -69,15 +70,22 @@ def _run_qwen(mesh_device: ttnn.MeshDevice, model_location_generator: Callable[[
 def _run_wan(mesh_device: ttnn.MeshDevice, model_location_generator: Callable[[str], str]) -> None:
     from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt, WanPipelineI2V
 
+    # Every size the mesh serves, warmed untraced by the pipeline, then one traced request at each,
+    # as serving runs them.
     pipeline = WanPipelineI2V.create_pipeline(
-        mesh_device=mesh_device,
-        checkpoint_name="Wan-AI/Wan2.2-I2V-A14B-Diffusers",
-        height=480,
-        width=832,
+        mesh_device=mesh_device, checkpoint_name="Wan-AI/Wan2.2-I2V-A14B-Diffusers"
     )
-    image = Image.open(_IMAGE).convert("RGB").resize((832, 480))
-    # Two steps, so that both experts run.
-    pipeline(prompts=["a watercolor"], image_prompt=[ImagePrompt(image=image, frame_pos=0)], num_inference_steps=2)
+    for width, height in pipeline._resolutions:
+        image = Image.open(_IMAGE).convert("RGB").resize((width, height))
+        # Two steps, so that both experts run.
+        pipeline(
+            prompts=["a watercolor"],
+            image_prompt=[ImagePrompt(image=image, frame_pos=0)],
+            num_inference_steps=2,
+            width=width,
+            height=height,
+            traced=True,
+        )
 
 
 def _fake_load_torch_state_dict(self: Any, state_dict: Any, *, strict: bool = True) -> Any:
@@ -146,33 +154,55 @@ def _run_ideogram(mesh_device: ttnn.MeshDevice, model_location_generator: Callab
             pipeline(prompts=["a watercolor"], height=2048, width=2048, seed=0)
 
 
+# Per model: the runner, the transformer class, its methods that run matmuls, and its submodules
+# the pipeline calls directly.
 _MODELS = {
-    "klein": (_run_klein, "models.tt_dit.models.transformers.transformer_flux2", "Flux2Transformer", "forward"),
-    "qwen": (_run_qwen, "models.tt_dit.models.transformers.transformer_qwenimage", "QwenImageTransformer", "forward"),
+    "klein": (
+        _run_klein,
+        "models.tt_dit.models.transformers.transformer_flux2",
+        "Flux2Transformer",
+        ("forward",),
+        ("context_embedder",),  # once per request, outside forward
+    ),
+    "qwen": (
+        _run_qwen,
+        "models.tt_dit.models.transformers.transformer_qwenimage",
+        "QwenImageTransformer",
+        ("forward", "prologue", "run_blocks", "epilogue"),  # DBCache calls the three parts directly
+        (),
+    ),
     "wan": (
         _run_wan,
         "models.tt_dit.models.transformers.wan2_2.transformer_wan",
         "WanTransformer3DModel",
-        "forward inner_step cache_head cache_body cache_tail",  # DBCache splits a forward in three
+        # combined_step runs inner_step; DBCache splits a step in three; the prompt's projection
+        # runs once per request.
+        ("forward", "inner_step", "cache_head", "cache_body", "cache_tail", "prepare_text_conditioning"),
+        (),
     ),
     "ideogram": (
         _run_ideogram,
         "models.tt_dit.models.transformers.transformer_ideogram4",
         "Ideogram4Transformer",
-        "forward",
+        ("forward",),
+        (),
     ),
 }
+
+# Per spatial bucket each Wan expert keeps its traces, as in test_pipeline_wan_resolutions.
+_WAN_TRACE_REGION_PER_BUCKET = 256 * 1024 * 1024
 
 _CASES = [
     ("klein", (2, 2), line_params_flux2_klein),
     ("klein", (2, 4), line_params_flux2_klein),
     ("klein", (4, 8), line_params_flux2_klein),
     *(("qwen", shape, _QWEN_EDIT_PARAMS[shape]) for shape in ((2, 2), (2, 4), (4, 8))),
-    ("wan", (1, 4), line_params_req_exact_devices),
-    ("wan", (2, 2), line_params_req_exact_devices),
-    ("wan", (2, 4), line_params_req_exact_devices),
-    ("wan", (4, 8), ring_params_req_exact_devices),
-    ("wan", (4, 32), ring_params_8k_req_exact_devices),
+    ("wan", (1, 4), {**line_params_req_exact_devices, "trace_region_size": _WAN_TRACE_REGION_PER_BUCKET}),
+    ("wan", (2, 2), {**line_params_req_exact_devices, "trace_region_size": _WAN_TRACE_REGION_PER_BUCKET}),
+    ("wan", (2, 4), {**line_params_req_exact_devices, "trace_region_size": _WAN_TRACE_REGION_PER_BUCKET}),
+    # 480p and 720p
+    ("wan", (4, 8), {**ring_params_req_exact_devices, "trace_region_size": 2 * _WAN_TRACE_REGION_PER_BUCKET}),
+    ("wan", (4, 32), {**ring_params_8k_req_exact_devices, "trace_region_size": 2 * _WAN_TRACE_REGION_PER_BUCKET}),
     ("ideogram", (2, 4), {**line_params_req_exact_devices, **_IDEOGRAM}),
     ("ideogram", (4, 8), {**ring_params_req_exact_devices, **_IDEOGRAM}),
 ]
@@ -210,25 +240,34 @@ def test_l1_probe(
     if is_ci_env:
         monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
 
-    run, module, cls, method = _MODELS[model]
+    run, module, cls, methods, submodules = _MODELS[model]
     lowest: dict[tuple[int, int], int] = {}
     calls: dict[tuple[int, int], int] = defaultdict(int)
-    forwards = 0  # transformer forwards running, so that only their matmuls are recorded
+    replays: list[int] = []
+    forwards = 0  # transformer calls running, so that only their matmuls are recorded
 
     def wrap_matmul(fn: Any) -> Any:
         @functools.wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            x = args[0] if args else kwargs.get("input_tensor")
             w = args[1] if len(args) > 1 else kwargs.get("weight_tensor")
-            x = x[0] if isinstance(x, (list, tuple)) else x  # concatenated inputs
-            assert x is not None and w is not None
+            assert w is not None
             if forwards:
                 key = (int(w.padded_shape[-2]), int(w.padded_shape[-1]))
                 calls[key] += 1
-                address = _lowest_allocated(x.device())
+                address = _lowest_allocated(w.device())
                 if address is not None:
                     lowest[key] = min(lowest.get(key, address), address)
             return fn(*args, **kwargs)
+
+        return wrapper
+
+    def wrap_execute_trace(fn: Any) -> Any:
+        @functools.wraps(fn)
+        def wrapper(device: ttnn.MeshDevice, *args: Any, **kwargs: Any) -> Any:
+            address = _lowest_allocated(device)
+            if address is not None:
+                replays.append(address)
+            return fn(device, *args, **kwargs)
 
         return wrapper
 
@@ -244,11 +283,24 @@ def test_l1_probe(
 
         return wrapper
 
+    def wrap_init(fn: Any) -> Any:
+        @functools.wraps(fn)
+        def wrapper(self: Any, *args: Any, **kwargs: Any) -> None:
+            fn(self, *args, **kwargs)
+            for name in submodules:
+                child = getattr(self, name)
+                object.__setattr__(child, "forward", wrap_forward(child.forward))
+
+        return wrapper
+
     for name in _MATMULS:
         monkeypatch.setattr(ttnn.experimental, name, wrap_matmul(getattr(ttnn.experimental, name)))
+    monkeypatch.setattr(ttnn, "execute_trace", wrap_execute_trace(ttnn.execute_trace))
     klass = getattr(importlib.import_module(module), cls)
-    for name in method.split():
+    for name in methods:
         monkeypatch.setattr(klass, name, wrap_forward(getattr(klass, name)))
+    if submodules:
+        monkeypatch.setattr(klass, "__init__", wrap_init(klass.__init__))
 
     run(mesh_device, model_location_generator)
 
@@ -260,6 +312,9 @@ def test_l1_probe(
         "mesh": list(mesh_device.shape),
         "grid": str(mesh_device.compute_with_storage_grid_size()),
         "l1_limit": min(lowest.values()),
+        # Over every replay, the encoders' and the VAE's too. A transformer trace replayed with less
+        # L1 free than at its capture would overwrite what sits below.
+        "lowest_at_replay": min(replays, default=None),
         "per_matmul": [
             {"K": k, "N": n, "lowest_allocated": lowest.get((k, n)), "calls": calls[(k, n)]} for k, n in sorted(calls)
         ],
@@ -268,3 +323,5 @@ def test_l1_probe(
     out.mkdir(parents=True, exist_ok=True)
     (out / f"{result['case']}.json").write_text(json.dumps(result, indent=2))
     logger.info(f"L1_PROBE {json.dumps(result)}")
+    if replays and min(replays) < result["l1_limit"]:
+        logger.warning(f"a trace replayed with L1 allocated below l1_limit, down to {min(replays)}")
