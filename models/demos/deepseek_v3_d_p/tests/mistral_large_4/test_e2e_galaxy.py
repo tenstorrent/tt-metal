@@ -136,10 +136,46 @@ def mesh_device():
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
+_LAST_STATE = None
+KV_LAYERS = (0, 1, 3, 35, 39, 71)
+
+
+def _kv_vs_golden(model, state, seq: int, layers) -> dict | None:
+    """The served caches after a prefill against the golden's state (cpu_golden.py --state): each owned cache of
+    KV_LAYERS, index keys rotated as the cache holds them, and layer 39's copy of layer 35's KV (KV_MIRRORS)."""
+    from safetensors.torch import load_file
+
+    from models.demos.deepseek_v3_d_p.tt.mistral_large_4.indexer import hadamard_matrix
+    from models.demos.deepseek_v3_d_p.tt.mistral_large_4.settings import settings
+
+    d = GOLDEN / "kv_cache"
+    if not d.exists():
+        return None
+    out = {}
+    for i in (j for j in KV_LAYERS if j in layers):
+        g = load_file(str(d / f"layer_{i}.safetensors"))
+        got = state.to_torch(i, seq)
+        for n in ("kv_latent", "k_rope", "index_key"):
+            gt = g.get(f"{n}_cache_layer_{i}")
+            if gt is None or not gt.shape[-1] or not got[n].shape[-1]:
+                continue
+            gt = gt[:seq].float()
+            if n == "index_key" and settings.get("INDEXER_HADAMARD"):
+                gt = gt @ hadamard_matrix(gt.shape[-1])
+            out[f"L{i}.{n}"] = _cmp(got[n].float(), gt)
+    m = model
+    if 39 in m.kv_region and 35 in layers and not m.cfg.owns_kv(39):
+        kv = state._read(m.kvpe, len(m.kv_region), m.kv_region[39], seq)
+        g = load_file(str(d / "layer_35.safetensors"))
+        out["L39.mirror_of_L35.kv_latent"] = _cmp(kv[:, : m.cfg.kv_lora].float(), g["kv_latent_cache_layer_35"][:seq].float())
+    return out
+
+
 def _prefill(model, tokens, seq: int, chunk: int, layers, watch=None):
     """One prefill of tokens[:seq]; watch(c, name, host tensor) gets the dumped layers' outputs, the final norm and
     the last chunk's final norm device tensor (name "final_dev"). Returns the per-chunk seconds."""
-    state = model.new_state(seq)
+    global _LAST_STATE
+    state = _LAST_STATE = model.new_state(seq)
     times = []
     for c in range(seq // chunk):
         start = c * chunk
@@ -493,6 +529,9 @@ def test_e2e_full(mesh_device):
 
     result["chunk_seconds_first"] = _prefill(model, tokens, seq, chunk, layers, Watch())
     result["load_seconds"] = round(model.load_seconds, 1)
+    result["kv_vs_golden"] = _kv_vs_golden(model, _LAST_STATE, seq, layers)
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    OUT.write_text(json.dumps(result, indent=2) + "\n")  # the accuracy results survive a later failure
     if os.environ.get("ML4_E2E_WARM", "1") == "1":
         result["chunk_seconds_warm"] = _prefill(model, tokens, seq, chunk, layers)
         result["prefill_seconds_warm"] = round(sum(result["chunk_seconds_warm"]), 2)
