@@ -310,3 +310,26 @@
   ids); 1M 97.4 ms.
 - RAM unaccounted after P.80: 135.2 GiB of 566 GiB (119.3 before; +16 GiB this task).
 - Owner patch applied (X.9 census over texts, P.84 replication, held-out walls in P.81-P.83); validate: valid.
+
+## 2026-11-19 07:00 UTC: OWNER pointer (Mac): one process for every text / position of a gate; estimate from X.9
+
+- X.9's check (11 units, 3107 s = 52 min), from its log timestamps:
+  - a census unit (316 s): device open + layers 0-20 loaded 142 s, layers 21-39's MoE weights 100 s, the census
+    itself (previous chunk, compile, 4 chunks) 42 s, pytest / teardown ~30 s;
+  - a wall unit (314 s): load 0-20 143 s, layers 21-39 96 s, the wall (warm-up 10 + 10 timed runs) 75 s;
+  - determinism 256 s (its own two passes).
+  The measurement is 13-24 % of a unit; the rest is loading, ten times over.
+- One process for the ten text runs: load once (143 s + 96 s) + 5 x 42 + 5 x 75 s = ~14 min, + determinism 4 min =
+  ~18 min vs 52: -34 min (-65 %) on X.9; every multi-text perf gate from here on (P.81-P.83 add 2 texts x 2 positions)
+  saves about the same share.
+- Second finding: under DS41_DECODER_SKIP=decode the run uses layers 0-19 + layer 20's KV head, but every process
+  also builds layers 20-39's MoE weights (~96-100 s a process, ~30 % of each unit). Loading only the layers a run uses
+  saves that in EVERY device unit, not only multi-text ones.
+- Plan (framework, after X.9 stops; X.9 not interrupted): (1) F279: the per-run variables of the position tests
+  (BRINGUP_POS_TOKENS, SKIP_POS, CENSUS_POS, CENSUS_CHUNKS) become batch item variables and test_skip_positions /
+  the census declare BATCH_SHARED, so consecutive text / position units share one process (core/batch gate_groups,
+  F259 / FIX.29 already do this for framework tests); the model's slot state is fresh per run (new_state, as the
+  position tests already do per point); the run order is recorded with each wall. Determinism stays its own unit (two
+  passes, bit for bit) and a selftest checks the grouping. (2) Layers loaded = the layers the run executes
+  (decoder skip): a model-side fix job (hooks / device_model layer list), A/B-free (same outputs), measured by load
+  time.
