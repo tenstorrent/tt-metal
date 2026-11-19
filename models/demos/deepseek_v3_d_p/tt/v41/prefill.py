@@ -52,6 +52,7 @@ def _first_device(t) -> torch.Tensor:
 
 
 PROFILE = os.environ.get("V41_PREFILL_PROFILE", "0") == "1"
+PRE_CACHED = os.environ.get("V41_PREFILL_PRE_CACHED", "0") == "1"  # prefill TTFT plan 1.4 (WS1): identity pre row once
 # DS41F-0068: the chunk embedding uploaded S-sharded / TP-replicated and split on device (0 = the D-over-TP mapper)
 EMBED_PARTITION = os.environ.get("V41_PREFILL_EMBED_PARTITION", "1") == "1"
 ENGRAM_EARLY = (
@@ -540,6 +541,10 @@ class V41Prefill:
                 blk.attn.precreate_shared_masks(blk.state)
         streams = self._streams([0] * self.chunk)
         pre = identity_pre_row(self.mesh, self.chunk // self.sp, self.sp_axis)
+        if PRE_CACHED:
+            # V41_PREFILL_PRE_CACHED: the identity pre row every chunk rebuilt + uploaded (a constant), allocated ONCE and
+            # BEFORE the captures -- a buffer allocated after a capture can sit in the islands' intermediates (DS41F-0037)
+            self._pre_cached = identity_pre_row(self.mesh, self.chunk // self.sp, self.sp_axis)
         t0 = time.time()
         from .engram import ENGRAM_ISLAND
 
@@ -635,7 +640,8 @@ class V41Prefill:
             mark("engram.host")
         streams = self._streams(part)
         self._route_bias(part)
-        pre = identity_pre_row(self.mesh, self.chunk // self.sp, self.sp_axis)
+        cached = getattr(self, "_pre_cached", None) if PRE_CACHED else None
+        pre = cached if cached is not None else identity_pre_row(self.mesh, self.chunk // self.sp, self.sp_axis)
         mark("embed")
         if self.engrams and engram_host is not None and not ENGRAM_EARLY:
             rows = _fetch()
@@ -657,11 +663,13 @@ class V41Prefill:
                 streams, owned = new, not isl
                 mark("engram.dev")
             if kv_only20 and L >= self.cfg.first_decoder_layer:
-                blk.kv_only_islands(streams, pre, real_len=real_len, owned=owned, owned_pre=blk is self.blocks[0])
+                blk.kv_only_islands(
+                    streams, pre, real_len=real_len, owned=owned, owned_pre=blk is self.blocks[0] and cached is None
+                )
                 mark("kv_only")
                 break
             streams, pre = blk.forward_islands(
-                streams, pre, real_len=real_len, owned=owned, owned_pre=blk is self.blocks[0]
+                streams, pre, real_len=real_len, owned=owned, owned_pre=blk is self.blocks[0] and cached is None
             )
             owned = False
             mark(f"block.{type(blk.attn).__name__}")
