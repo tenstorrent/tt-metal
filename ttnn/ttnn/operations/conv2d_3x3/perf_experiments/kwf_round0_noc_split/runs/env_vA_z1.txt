@@ -1,0 +1,1 @@
+KRN_NOSPLIT=1

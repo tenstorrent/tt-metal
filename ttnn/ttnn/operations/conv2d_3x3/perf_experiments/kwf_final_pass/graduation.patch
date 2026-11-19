@@ -1,0 +1,239 @@
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_kw_fold.hpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_kw_fold.hpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_kw_fold.hpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_kw_fold.hpp
+@@ -91,6 +91,19 @@
+ // ~18.8 cycles per tile-MAC instead of ~23.4), res2 11.28 -> 10.55 us. A 1-tile n-group keeps the three rounds: its
+ // pair is a 1 x 2 subblock, two tile-MACs per matmul call (~40 cycles of per-call unpack cost each) instead of four:
+ // center_head.1 10.68 -> 12.14 us (zoned).
++// The final pass (raw, on the tilize-with-bias above): it runs after the walk on the critical path, about drain + setup
++// + 47 cycles per output tile. The per-tile bound is the pack: the BH non-8-bit tilize workaround leaves tile row r in
++// srcA rows 2r / 2r + 1, and the Tilize pack MOP unswizzles it at 32 PACRs per tile (~41 cycles, ~47 with the per-tile
++// destination program; the default 16-PACR MOP measured ~36). The unpacker, at ~46 cycles per tile with a config
++// context, address program and semaphore round trip per tile, was co-bound with it; tiles now go plane-major, so a
++// plane's tile-rows inside one image row are consecutive 4 KB of ACC and unpack as one run (one context, the srcA
++// UNPACR's L1 Z step reads the next tile: ~34 cycles per tile). The unpacker's reconfiguration, tilize init, bias rows
++// and the exchange's C strip read nothing the walk is still packing, so they go before the ACC wait, behind the
++// packer's drain of the walk. The packer's switch to the output format is pack_reconfig_data_format with the formats
++// folded at compile time (capability: the generic form is noinline and builds every RMW at run time; the pack thread's
++// final setup measured 0.22 -> 0.12 us zoned, and it sits between the drain and the first output pack).
++// Measured (Blackhole p150b, LoFi bf8_b, unzoned, medians of 3 alternating pairs, bit-identical): res2 10.28 -> 10.10,
++// sem res2 fc1 84.22 -> 83.92, sem dec res2 fc0 94.05 -> 93.62 us, the other kw-fold focus cases -0.5% to +0.0%.
+ 
+ #pragma once
+ 
+@@ -108,6 +121,7 @@
+ namespace conv2d_3x3::kw_fold {
+ 
+ constexpr uint32_t FINAL_BATCH = 4;  // output tiles per DEST section in the final pass
++constexpr uint32_t FINAL_RUN_MAX = 16;  // tiles per final-pass unpack run (srcA L1 Z steps; one 512-wide image row)
+ 
+ // Column rounds stream kw = 1 first: Q_1 covers every valid ACC row once, so it packs as an overwrite that Q_0 / Q_2
+ // accumulate onto (no bias seed). The writer and the weight server read the rounds in this order.
+@@ -188,6 +202,57 @@
+     TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
+     set_dst_write_addr(0);
+ }
++
++// pack_reconfig_data_format(cb) with the CB's formats and tile shape folded at compile time: the same register writes
++// as reconfig_packer_data_format (tt_llk_blackhole common/inc/cpack_common.h), whose generic form is noinline and
++// builds every RMW at run time (~200 cycles on the final pass's critical path, against ~50 here).
++template <uint32_t cb>
++inline void pack_reconfig_const(uint32_t tile_size) {
++    constexpr uint32_t src = pack_src_format[cb];
++    constexpr uint32_t dst = pack_dst_format[cb];
++    constexpr uint32_t out_src = masked_data_format(src);
++    constexpr uint32_t out_dst = masked_data_format(dst);
++    constexpr bool fp8 = (dst & 0x1F) == to_underlying(DataFormat::Fp8_e4m3);
++    constexpr uint32_t hw_src = fp8 ? to_underlying(DataFormat::Float16) : out_src;
++    constexpr uint32_t num_faces = pack_tile_num_faces[cb];
++    constexpr uint32_t tile_c_dim = pack_tile_c_dim[cb];
++    pack_config_u config;
++    config.val[2] = 0;
++    config.f.uncompress = 1;
++    config.f.out_data_format = out_dst;
++    config.f.in_data_format = hw_src;
++    TT_SETDMAREG(0, LOWER_HALFWORD(config.val[2]), 0, LO_16(p_gpr_pack::TMP_LO));
++    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK | p_stall::THCON);
++    TTI_WRCFG(p_gpr_pack::TMP_LO, p_cfg::WRCFG_32b, THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 2);
++    constexpr bool is_32b = src == to_underlying(DataFormat::Int32) || src == to_underlying(DataFormat::UInt32) ||
++                            src == to_underlying(DataFormat::Float32);
++    constexpr bool is_int8 = src == to_underlying(DataFormat::Int8) || src == to_underlying(DataFormat::UInt8);
++    dest_rd_ctrl_u dest_rd_ctrl;
++    dest_rd_ctrl.val = 0;
++    dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_32b_data = is_32b || DST_ACCUM_MODE;
++    dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_int8 = !(DST_ACCUM_MODE || is_32b) && is_int8;
++    if constexpr (dst == to_underlying(DataFormat::UInt8)) {
++        dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_unsigned = 1;
++    }
++    if constexpr ((DST_ACCUM_MODE && src == to_underlying(DataFormat::Float16)) || (!IS_A_FORMAT(src) && fp8)) {
++        dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Round_10b_mant = 1;
++    }
++    cfg_reg_rmw_tensix<
++        PCK_DEST_RD_CTRL_Read_32b_data_ADDR32,
++        PCK_DEST_RD_CTRL_Read_32b_data_SHAMT,
++        PCK_DEST_RD_CTRL_FIELDS_MASK>(dest_rd_ctrl.val);
++    if constexpr (IS_BFP_FORMAT(out_dst)) {
++        cfg_reg_rmw_tensix<THCON_SEC0_REG1_Exp_section_size_RMW>(num_faces);
++    } else if constexpr (out_dst == to_underlying(DataFormat::Lf8) || out_dst == to_underlying(DataFormat::Int8)) {
++        TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, THCON_SEC0_REG1_Row_start_section_size_ADDR32);
++    }
++    cfg_reg_rmw_tensix<THCON_SEC0_REG1_Pac_LF8_4b_exp_RMW>(fp8);
++    TT_SETDMAREG(0, LOWER_HALFWORD(tile_size), 0, LO_16(p_gpr_pack::TILE_HEADER));
++    reconfigure_exp_threshold<DST_ACCUM_MODE>(out_dst);
++    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG2_Dstacc_RMW>(fp8 ? to_underlying(DataFormat::Float16) : out_src);
++    set_packer_strides<PackMode::Default>(out_src, tile_c_dim);
++    TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
++}
+ #endif
+ 
+ #ifdef TRISC_UNPACK
+@@ -205,18 +270,20 @@
+     tmp.program();
+     TTI_SETADCXX(p_setadc::UNP_B, 8 * FACE_C_DIM - 1, 0x0);
+ }
+-// _llk_unpack_tilize_ (non-8-bit, srcA) for column tile col_tile of the rows at addr, plus srcB from addr_b.
+-template <uint32_t cb_acc>
+-inline void unpack_tilize_bias_at(uint32_t addr, uint32_t col_tile, uint32_t addr_b) {
+-    const uint32_t id = get_operand_id(cb_acc);
+-    const uint32_t a = (addr >> 4) - 1 + (SCALE_DATUM_SIZE(unpack_src_format[id], col_tile) << 1);
++// _llk_unpack_tilize_ (non-8-bit, srcA) for a run of n tiles whose rows are consecutive in ACC from addr, each plus
++// srcB from addr_b: one config context per run. The tilize srcA UNPACR steps its L1 Z counter, and with the whole-tile
++// x_dim (1024 datums) and z_dim 1 a Z step reads the next 1024 datums, i.e. the next 32 ACC rows: one MOP per tile,
++// no address reprogramming, context switch or semaphore inside the run.
++inline void unpack_tilize_bias_run(uint32_t addr, uint32_t n, uint32_t addr_b) {
+     volatile uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
+     TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, 0b1111);
+     wait_for_next_context(2);
+-    _llk_unpack_configure_addresses_(a, (addr_b >> 4) - 1, cfg);
++    _llk_unpack_configure_addresses_((addr >> 4) - 1, (addr_b >> 4) - 1, cfg);
+     semaphore_post(semaphore::UNPACK_SYNC);
+     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+-    ckernel::ckernel_template::run();
++    for (uint32_t k = 0; k < n; ++k) {
++        ckernel::ckernel_template::run();
++    }
+     t6_semaphore_get(semaphore::UNPACK_SYNC);
+     switch_config_context(unp_cfg_context);
+ }
+@@ -604,17 +671,23 @@
+             // ---- output tile = tilize(ACC rows) + bias, ReLU on the pack: the n-group's gw output columns.
+             {
+                 MaybeDeviceZoneScope("compute_kwf_final");
+-                acc_ready.wait_front(1);
+-                [[maybe_unused]] uint32_t acc_rd = 0;
+-                [[maybe_unused]] uint32_t rows_rd = 0;
+-                UNPACK((acc_rd = get_local_cb_interface(get_operand_id(cb_acc)).fifo_rd_ptr << 4));
+-                UNPACK((rows_rd = get_local_cb_interface(get_operand_id(cb_bias_rows)).fifo_rd_ptr << 4));
+-                // The reader's fp32 bias rows (one 512 B page per output column tile: 4 copies of [b_0 .. b_31]).
++                // Everything that does not read ACC goes before the ACC wait, so the unpacker's reconfiguration
++                // overlaps the packer's drain of the walk: the bias rows (one 512 B page per output column tile: 4
++                // copies of [b_0 .. b_31], from the reader), the exchange's C strip (it lands in rows the walk never
++                // packs), the tilize init and the bias MOP.
+                 if (blk == 0 && g == 0) {
+                     bias_rows.wait_front(N);
+                 }
++                if constexpr (xchg) {
++                    if (xb) {
++                        // Exchange: the last d valid rows come back from the lower core (C), which sends them a round
++                        // before this pass.
++                        MaybeDeviceZoneScope("compute_kwf_halo_wait");
++                        halo_in.wait_front(++halo_seen);
++                    }
++                }
+                 reconfig_data_format(cb_acc, cb_bias_rows);
+-                pack_reconfig_data_format(cb_out);
++                PACK((pack_reconfig_const<cb_out>(get_local_cb_interface(cb_out).fifo_page_size)));
+                 if constexpr (relu) {
+                     pack_relu_config(ReluConfig::zero());
+                 }
+@@ -624,41 +697,58 @@
+                 if (g == 0) {
+                     out.reserve_back(bm * N);
+                 }
++                acc_ready.wait_front(1);
+                 const uint32_t n_first = g * gw;
+                 const uint32_t total = valid * gw;
+-                if constexpr (xchg) {
+-                    if (xb) {
+-                        // Exchange: the last d valid rows come back from the lower core (C), which sends them a round
+-                        // before this pass.
+-                        MaybeDeviceZoneScope("compute_kwf_halo_wait");
+-                        halo_in.wait_front(++halo_seen);
+-                    }
+-                }
+-                for (uint32_t f0 = 0; f0 < total; f0 += FINAL_BATCH) {
+-                    const uint32_t cnt = total - f0 < FINAL_BATCH ? total - f0 : FINAL_BATCH;
+-                    MATH((llk_math_wait_for_dest_available()));
+-                    PACK((llk_packer_wait_for_math_done()));
+-                    for (uint32_t j = 0; j < cnt; ++j) {
+-                        const uint32_t u = (f0 + j) / gw;
+-                        const uint32_t nn = (f0 + j) - u * gw;  // column tile within the n-group
+-                        UNPACK((unpack_tilize_bias_at<cb_acc>(
+-                            acc_rd + nn * PLANE + rowbase<d, tpr>(t0, u + 1) * PITCH,
+-                            0,
+-                            rows_rd + (n_first + nn) * ROWS_BYTES)));
+-                        MATH((llk_math_eltwise_unary_datacopy<
+-                              DataCopyType::A2D,
+-                              DST_ACCUM_MODE,
+-                              BroadcastType::NONE,
+-                              UnpackToDestEn>(j, cb_acc)));
+-                    }
+-                    for (uint32_t j = 0; j < cnt; ++j) {
+-                        const uint32_t u = (f0 + j) / gw;
+-                        const uint32_t nn = (f0 + j) - u * gw;
+-                        PACK((llk_pack<DST_ACCUM_MODE, true, PackMode::Default>(j, cb_out, u * N + n_first + nn)));
++                // Tiles go plane-major (column tile nn, then tile-row u): a plane's tile-rows inside one image row are
++                // consecutive 4 KB in ACC, so the unpacker takes each such run in one config context.
++                UNPACK(({
++                    const uint32_t acc_rd = get_local_cb_interface(get_operand_id(cb_acc)).fifo_rd_ptr << 4;
++                    const uint32_t rows_rd = get_local_cb_interface(get_operand_id(cb_bias_rows)).fifo_rd_ptr << 4;
++                    for (uint32_t nn = 0; nn < gw; ++nn) {
++                        for (uint32_t u = 0; u < valid;) {
++                            const uint32_t rb = rowbase<d, tpr>(t0, u + 1);
++                            uint32_t e = u + 1;
++                            while (e < valid && e - u < FINAL_RUN_MAX &&
++                                   rowbase<d, tpr>(t0, e + 1) == rb + 32 * (e - u)) {
++                                ++e;
++                            }
++                            unpack_tilize_bias_run(
++                                acc_rd + nn * PLANE + rb * PITCH, e - u, rows_rd + (n_first + nn) * ROWS_BYTES);
++                            u = e;
++                        }
++                    }
++                }));
++                MATH(({
++                    for (uint32_t f0 = 0; f0 < total; f0 += FINAL_BATCH) {
++                        const uint32_t cnt = total - f0 < FINAL_BATCH ? total - f0 : FINAL_BATCH;
++                        llk_math_wait_for_dest_available();
++                        for (uint32_t j = 0; j < cnt; ++j) {
++                            llk_math_eltwise_unary_datacopy<
++                                DataCopyType::A2D,
++                                DST_ACCUM_MODE,
++                                BroadcastType::NONE,
++                                UnpackToDestEn>(j, cb_acc);
++                        }
++                        llk_math_dest_section_done<DST_ACCUM_MODE>();
++                    }
++                }));
++                PACK(({
++                    uint32_t u = 0;
++                    uint32_t nn = 0;
++                    for (uint32_t f0 = 0; f0 < total; f0 += FINAL_BATCH) {
++                        const uint32_t cnt = total - f0 < FINAL_BATCH ? total - f0 : FINAL_BATCH;
++                        llk_packer_wait_for_math_done();
++                        for (uint32_t j = 0; j < cnt; ++j) {
++                            llk_pack<DST_ACCUM_MODE, true, PackMode::Default>(j, cb_out, u * N + n_first + nn);
++                            if (++u == valid) {
++                                u = 0;
++                                ++nn;
++                            }
++                        }
++                        llk_pack_dest_section_done<DST_ACCUM_MODE>();
+                     }
+-                    MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+-                    PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+-                }
++                }));
+                 if (g + 1 == NG) {
+                     out.push_back(bm * N);
+                 }

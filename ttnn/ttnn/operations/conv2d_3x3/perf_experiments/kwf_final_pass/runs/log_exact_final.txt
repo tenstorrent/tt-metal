@@ -1,0 +1,160 @@
+SAFE_PYTEST: Waiting for device lock...
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: on — collect + parallel compile (x64) inside the pytest session, local
+SAFE_PYTEST: env UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=64 PYTHONPATH=/localdev/pmilojevic/workspaces/opgen:/localdev/pmilojevic/workspaces/opgen pytest -p tests.plugins.up_front_collect --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py -s
+========================================
+2026-11-19 15:32:06.061 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/workspaces/opgen
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, anyio-4.16.0, benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, cov-7.0.0, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-11-19 15:32:06.248 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-19 15:32:06.248 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-19 15:32:06.250 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-19 15:32:06.250 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-19 15:32:06.273 | info     |             UMD | Established firmware bundle version: 19.16.1 (topology_discovery.cpp:700)
+2026-11-19 15:32:06.274 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-19 15:32:06.536 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:174)
+2026-11-19 15:32:06.536 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-19 15:32:06.536 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-19 15:32:06.536 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-19 15:32:06.544 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-19 15:32:07.117 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-19 15:32:07.260 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-19 15:32:07.260 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-19 15:32:07.390 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+collected 22 items
+KFP_EXACT stem.conv1 @ LoFi [perf] differ 0 of 8388608 max 0.0 pcc cand 0.999999 base 0.999999
+KFP_EXACT stem.conv2 @ LoFi [perf] differ 0 of 8388608 max 0.0 pcc cand 0.999999 base 0.999999
+KFP_EXACT stem.conv3 @ LoFi [perf] differ 0 of 16777216 max 0.0 pcc cand 0.999999 base 0.999999
+KFP_EXACT res2.{0,1,2}.conv2 @ LoFi [perf] differ 0 of 2097152 max 0.0 pcc cand 0.999999 base 0.999999
+KFP_EXACT res3.0.conv2 @ LoFi [perf] differ 0 of 1048576 max 0.0 pcc cand 0.999999 base 0.999999
+KFP_EXACT res3.{1,2,3}.conv2 + instance res3.fuse_conv.1 @ LoFi [perf] differ 0 of 1048576 max 0.0 pcc cand 0.999999 base 0.999999
+KFP_EXACT res4.0.conv2 @ LoFi [perf] differ 0 of 524288 max 0.0 pcc cand 0.999999 base 0.999999
+KFP_EXACT res4.{1..5}.conv2 @ LoFi [perf] differ 0 of 524288 max 0.0 pcc cand 0.999999 base 0.999999
+KFP_EXACT res5.0.conv2 @ LoFi [perf] differ 0 of 1048576 max 0.0 pcc cand 0.999999 base 0.999999
+KFP_EXACT res5.1.conv2 @ LoFi [perf] differ 0 of 1048576 max 0.0 pcc cand 0.999999 base 0.999999
+KFP_EXACT res5.2.conv2 @ LoFi [perf] differ 0 of 1048576 max 0.0 pcc cand 0.999999 base 0.999999
+KFP_EXACT aspp.convs.1 (x2 heads) @ LoFi [perf] differ 0 of 524288 max 0.0 pcc cand 0.999999 base 0.999999
+KFP_EXACT aspp.convs.2 (x2 heads) @ LoFi [perf] differ 0 of 524288 max 0.0 pcc cand 0.999999 base 0.999999
+KFP_EXACT aspp.convs.3 (x2 heads, 1024-ch slice) @ LoFi [perf] differ 0 of 524288 max 0.0 pcc cand 0.999999 base 0.999999
+KFP_EXACT semantic decoder.res3.fuse_conv.0 @ LoFi [perf] differ 0 of 2097152 max 0.0 pcc cand 0.999999 base 0.999999
+KFP_EXACT instance decoder.res3.fuse_conv.0 @ LoFi [perf] differ 0 of 1048576 max 0.0 pcc cand 0.999999 base 0.999999
+KFP_EXACT semantic decoder.res3.fuse_conv.1 @ LoFi [perf] differ 0 of 2097152 max 0.0 pcc cand 0.999999 base 0.999999
+KFP_EXACT semantic decoder.res2.fuse_conv.0 @ LoFi [perf] differ 0 of 8388608 max 0.0 pcc cand 0.999999 base 0.999999
+KFP_EXACT instance decoder.res2.fuse_conv.0 @ LoFi [perf] differ 0 of 4194304 max 0.0 pcc cand 0.999999 base 0.999999
+KFP_EXACT semantic res2.fuse_conv.1 + semantic_head.head.{0,1} @ LoFi [perf] differ 0 of 8388608 max 0.0 pcc cand 0.999999 base 0.999999
+KFP_EXACT instance res2.fuse_conv.1 + center_head.0 + offset_head.0 @ LoFi [perf] differ 0 of 4194304 max 0.0 pcc cand 0.999999 base 0.999999
+KFP_EXACT center_head.1 + offset_head.1 @ LoFi [perf] differ 0 of 1048576 max 0.0 pcc cand 0.999999 base 0.999999
+
+UP_FRONT_INLINE: collect pass over 22 item(s) took 3.5s
+UP_FRONT_INLINE: compile route local (programs=44, farm_min=10)
+
+UP_FRONT_COLLECT: 44 ops stashed across 22 bodies -> 44 unique programs (swallowed 0, skipped-capture 0)
+UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=130 fallback=0
+2026-11-19 15:32:09.864 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-19 15:32:09.943 | info     |           Metal | Enabling program cache on MeshDevice 3 (mesh_device.cpp:1322)
+UP_FRONT_COLLECT: 44 collected · 44 built · 0 already compiled in 1.9s (workers=64, errors=0) -> on-disk JIT cache warm
+UP_FRONT_COLLECT_RESULT: status=ok reason=ok unique=44 programs=44 errors=0 pytest_exit=0 xpass_strict=0 other_failures=0 built=44 compile_s=2.1 collect_s=3.5 route=local
+UP_FRONT_INLINE: compile step took 2.1s; starting the real pass
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[stem.conv1] 2026-11-19 15:32:12.000 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+KFP_EXACT stem.conv1 @ LoFi [perf] differ 0 of 8388608 max 0.0 pcc cand 0.999999 base 0.999999
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[stem.conv2] KFP_EXACT stem.conv2 @ LoFi [perf] differ 0 of 8388608 max 0.0 pcc cand 0.999999 base 0.999999
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[stem.conv3] KFP_EXACT stem.conv3 @ LoFi [perf] differ 0 of 16777216 max 0.0 pcc cand 0.999999 base 0.999999
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[res2.{0,1,2}.conv2] KFP_EXACT res2.{0,1,2}.conv2 @ LoFi [perf] differ 0 of 2097152 max 0.0 pcc cand 0.999999 base 0.999999
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[res3.0.conv2] KFP_EXACT res3.0.conv2 @ LoFi [perf] differ 0 of 1048576 max 0.0 pcc cand 0.999999 base 0.999999
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[res3.{1,2,3}.conv2_+_instance_res3.fuse_conv.1] KFP_EXACT res3.{1,2,3}.conv2 + instance res3.fuse_conv.1 @ LoFi [perf] differ 0 of 1048576 max 0.0 pcc cand 0.999999 base 0.999999
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[res4.0.conv2] KFP_EXACT res4.0.conv2 @ LoFi [perf] differ 0 of 524288 max 0.0 pcc cand 0.999999 base 0.999999
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[res4.{1..5}.conv2] KFP_EXACT res4.{1..5}.conv2 @ LoFi [perf] differ 0 of 524288 max 0.0 pcc cand 0.999999 base 0.999999
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[res5.0.conv2] KFP_EXACT res5.0.conv2 @ LoFi [perf] differ 0 of 1048576 max 0.0 pcc cand 0.999999 base 0.999999
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[res5.1.conv2] KFP_EXACT res5.1.conv2 @ LoFi [perf] differ 0 of 1048576 max 0.0 pcc cand 0.999999 base 0.999999
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[res5.2.conv2] KFP_EXACT res5.2.conv2 @ LoFi [perf] differ 0 of 1048576 max 0.0 pcc cand 0.999999 base 0.999999
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[aspp.convs.1_(x2_heads)] KFP_EXACT aspp.convs.1 (x2 heads) @ LoFi [perf] differ 0 of 524288 max 0.0 pcc cand 0.999999 base 0.999999
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[aspp.convs.2_(x2_heads)] KFP_EXACT aspp.convs.2 (x2 heads) @ LoFi [perf] differ 0 of 524288 max 0.0 pcc cand 0.999999 base 0.999999
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[aspp.convs.3_(x2_heads,_1024-ch_slice)] KFP_EXACT aspp.convs.3 (x2 heads, 1024-ch slice) @ LoFi [perf] differ 0 of 524288 max 0.0 pcc cand 0.999999 base 0.999999
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[semantic_decoder.res3.fuse_conv.0] KFP_EXACT semantic decoder.res3.fuse_conv.0 @ LoFi [perf] differ 0 of 2097152 max 0.0 pcc cand 0.999999 base 0.999999
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[instance_decoder.res3.fuse_conv.0] KFP_EXACT instance decoder.res3.fuse_conv.0 @ LoFi [perf] differ 0 of 1048576 max 0.0 pcc cand 0.999999 base 0.999999
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[semantic_decoder.res3.fuse_conv.1] KFP_EXACT semantic decoder.res3.fuse_conv.1 @ LoFi [perf] differ 0 of 2097152 max 0.0 pcc cand 0.999999 base 0.999999
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[semantic_decoder.res2.fuse_conv.0] KFP_EXACT semantic decoder.res2.fuse_conv.0 @ LoFi [perf] differ 0 of 8388608 max 0.0 pcc cand 0.999999 base 0.999999
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[instance_decoder.res2.fuse_conv.0] KFP_EXACT instance decoder.res2.fuse_conv.0 @ LoFi [perf] differ 0 of 4194304 max 0.0 pcc cand 0.999999 base 0.999999
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[semantic_res2.fuse_conv.1_+_semantic_head.head.{0,1}] KFP_EXACT semantic res2.fuse_conv.1 + semantic_head.head.{0,1} @ LoFi [perf] differ 0 of 8388608 max 0.0 pcc cand 0.999999 base 0.999999
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[instance_res2.fuse_conv.1_+_center_head.0_+_offset_head.0] KFP_EXACT instance res2.fuse_conv.1 + center_head.0 + offset_head.0 @ LoFi [perf] differ 0 of 4194304 max 0.0 pcc cand 0.999999 base 0.999999
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[center_head.1_+_offset_head.1] KFP_EXACT center_head.1 + offset_head.1 @ LoFi [perf] differ 0 of 1048576 max 0.0 pcc cand 0.999999 base 0.999999
+PASSEDUP_FRONT_INLINE: real pass took 2.5s
+
+
+- generated xml file: /localdev/pmilojevic/workspaces/opgen/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+0.38s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[stem.conv3]
+0.26s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[semantic_decoder.res2.fuse_conv.0]
+0.24s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[semantic_res2.fuse_conv.1_+_semantic_head.head.{0,1}]
+0.23s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[stem.conv1]
+0.22s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[stem.conv2]
+0.11s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[aspp.convs.1_(x2_heads)]
+0.10s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[aspp.convs.2_(x2_heads)]
+0.10s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[stem.conv1]
+0.09s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[instance_decoder.res2.fuse_conv.0]
+0.08s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[instance_res2.fuse_conv.1_+_center_head.0_+_offset_head.0]
+0.07s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[aspp.convs.3_(x2_heads,_1024-ch_slice)]
+0.06s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[semantic_decoder.res3.fuse_conv.0]
+0.06s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[res5.0.conv2]
+0.05s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[res5.2.conv2]
+0.05s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[semantic_decoder.res3.fuse_conv.1]
+0.05s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[res5.1.conv2]
+0.05s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[instance_decoder.res3.fuse_conv.0]
+0.04s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[res3.0.conv2]
+0.04s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[res2.{0,1,2}.conv2]
+0.04s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[center_head.1_+_offset_head.1]
+0.04s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[res3.{1,2,3}.conv2_+_instance_res3.fuse_conv.1]
+0.03s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[res4.0.conv2]
+0.03s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[res4.{1..5}.conv2]
+0.02s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[center_head.1_+_offset_head.1]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py::test_kfp_exact[aspp.convs.3_(x2_heads,_1024-ch_slice)]
+============================== 22 passed in 8.13s ==============================
+2026-11-19 15:32:15.273 | info     |    BuildKernels | JIT cache stats: 240/276 hits (87.0%) [240 cached, 208 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-19 15:32:15.273 | info     |    BuildKernels | JIT telemetry: 44 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-19 15:32:15.326 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:605)
+2026-11-19 15:32:15.326 | info     |             UMD | Closing devices in cluster (cluster.cpp:1496)
+2026-11-19 15:32:15.635 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1506)
+2026-11-19 15:32:15.635 | info     |             UMD | Cluster destructor started. (cluster.cpp:1227)
+2026-11-19 15:32:15.635 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1240)
+========================================
+PRECOMPILE: UP_FRONT_INLINE: collect pass over 22 item(s) took 3.5s
+PRECOMPILE: UP_FRONT_INLINE: compile route local (programs=44, farm_min=10)
+PRECOMPILE: UP_FRONT_COLLECT: 44 ops stashed across 22 bodies -> 44 unique programs (swallowed 0, skipped-capture 0)
+PRECOMPILE: UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=130 fallback=0
+PRECOMPILE: UP_FRONT_COLLECT: 44 collected · 44 built · 0 already compiled in 1.9s (workers=64, errors=0) -> on-disk JIT cache warm
+PRECOMPILE: UP_FRONT_INLINE: compile step took 2.1s; starting the real pass
+SAFE_PYTEST_RESULT: PASS
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 0m15s (15s total, device-lock-acquired -> exit)

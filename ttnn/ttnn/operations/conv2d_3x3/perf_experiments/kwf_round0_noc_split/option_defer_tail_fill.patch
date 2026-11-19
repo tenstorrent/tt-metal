@@ -1,0 +1,198 @@
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py	2026-11-19 13:44:47.765066215 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py	2026-11-19 15:07:37.411546779 +0000
+@@ -312,6 +312,20 @@
+ # on res3.x 6 measured 12.6-12.9 (a chunk per path set-up where the reads pace the stream), 4 12.9, 2 12.3, 3 12.1.
+ WEIGHT_SERVERS = True
+ WEIGHT_SERVER_CHUNKS = 3
++# kw-fold under weight servers: the writer defers its first-block NoC1 fill batches that the first Q_1 subblock does not
++# read until round 0 is in compute's hands (fewer fill reads beside round 0's multicast). Measured (LoFi bf8_b, unzoned,
++# bit-identical): res2 10.20 -> 9.96 us; center_head.1 9.62 -> 9.91 (its 17 KB deferred batch is read by the second Q_1
++# subblock); the other server-fed kw-fold layers flat.
++KWF_FILL_DEFER = True
++
++
++def _kwf_fill_defer_batch(g, b, bm):
++    """The first slab batch (block 0) the first Q_1 subblock does not read: its h rows read kernel row 2 up to slab row
++    h + 2R (the slab starts one tile-row above the lower halo)."""
++    sbw, sbh = _kw_fold_subblock(g.tensor_n_tiles)
++    h = min(sbh if sbw == 1 else 1, bm)
++    r = g.dilation * g.input_width // TILE
++    return _div_up(h + 2 * r + 1, b.untilize_batch_rows)
+ # Hardware multicast rectangles one channel may carry (dataflow_kernel_lib::MAX_MCAST_RECTANGLES).
+ MAX_MCAST_RECTANGLES = 3
+ 
+@@ -2498,13 +2512,18 @@
+     _ring_owner_defines = (
+         [("RING_OWNER_MASK", f"{sum(1 << c for c in ring_owners)}u")] if ring_owners is not None else []
+     )
++    _defer_defines = (
++        [("KWF_FILL_DEFER_BATCH", str(_kwf_fill_defer_batch(g, b, bm)))]
++        if KWF_FILL_DEFER and kwf and weight_servers is not None
++        else []
++    )
+     readers = [
+         ttnn.KernelDescriptor(
+             kernel_source=str(KERNEL_DIR / "conv2d_3x3_reader.cpp"),
+             core_ranges=_core_range_set(reader_cores),
+             compile_time_args=reader_ct_args(*slice_channels),
+             runtime_args=reader_rt,
+-            defines=_kwf_dm_defines + _pad_dm_defines + _ring_owner_defines + _sd_dm_defines,
++            defines=_kwf_dm_defines + _pad_dm_defines + _ring_owner_defines + _sd_dm_defines + _defer_defines,
+             config=ttnn.ReaderConfigDescriptor(),
+         )
+         for slice_channels, (reader_cores, reader_rt) in reader_groups.items()
+@@ -2515,7 +2534,7 @@
+             core_ranges=_core_range_set(writer_cores),
+             compile_time_args=writer_ct_args_for(*slice_channels),
+             runtime_args=writer_rt,
+-            defines=_kwf_dm_defines + _ring_owner_defines + _sd_dm_defines,
++            defines=_kwf_dm_defines + _ring_owner_defines + _sd_dm_defines + _defer_defines,
+             config=ttnn.WriterConfigDescriptor(),
+         )
+         for slice_channels, (writer_cores, writer_rt) in writer_groups.items()
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp	2026-11-19 13:44:47.873067765 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp	2026-11-19 15:09:16.998977492 +0000
+@@ -607,6 +607,57 @@
+     // per-block count is what the left column forwards).
+     [[maybe_unused]] uint32_t ring_need = 0;
+     [[maybe_unused]] int32_t ring_pushed_hi = 0;
++#if defined(CONV2D_3X3_KW_FOLD) && defined(KWF_FILL_DEFER_BATCH)
++    // Deferred writer fill (KWF_FILL_DEFER_BATCH, see the writer): the first block's bias-row decode (the block below)
++    // runs while the deferred batches land, polling them every 4 columns (~0.15 us), so it starts when it did without
++    // the deferral. Behind them it started ~1.3 us later on res3.x and gated the final pass (11.16 vs 10.36 us).
++    [[maybe_unused]] bool kwf_bias_done = false;
++    [[maybe_unused]] auto kwf_bias_rows_polled = [&](auto&& poll) {
++        MaybeDeviceZoneScope("reader_kwf_bias_rows");
++        while (!cb_pages_available_at_front(KWF_CB_BIAS, KWF_N)) {
++            poll();
++        }
++        cb_wait_front(KWF_CB_BIAS, KWF_N);
++        invalidate_l1_cache();
++        cb_reserve_back(KWF_CB_BIAS_ROWS, KWF_N);
++        const uint32_t raw = get_read_ptr(KWF_CB_BIAS);
++        const uint32_t tile_bytes = get_tile_size(KWF_CB_BIAS);
++        uint32_t* rows = reinterpret_cast<uint32_t*>(get_write_ptr(KWF_CB_BIAS_ROWS));
++        for (uint32_t n = 0; n < KWF_N; ++n, rows += 128) {
++            const uint32_t t = raw + n * tile_bytes;
++            for (uint32_t c = 0; c < 32; ++c) {
++                // ~40 ns per column: a landed batch waits at most ~0.2 us.
++                if (c % 4 == 0) {
++                    poll();
++                }
++#if KWF_BIAS_BFP8
++                const uint32_t e = reinterpret_cast<const uint8_t*>(t)[16 * (c / 16)];
++                const uint32_t m = reinterpret_cast<const uint8_t*>(t)[64 + 256 * (c / 16) + c % 16];
++                const uint32_t mag = m & 0x7f;
++                uint32_t v = 0;
++                if (mag != 0) {
++                    uint32_t mm = mag;
++                    uint32_t sh = 0;
++                    while (!(mm & 0x40)) {
++                        mm <<= 1;
++                        ++sh;
++                    }
++                    v = ((m & 0x80) << 24) | ((e - sh) << 23) | ((mm & 0x3f) << 17);
++                }
++#else
++                const uint32_t v =
++                    static_cast<uint32_t>(reinterpret_cast<const uint16_t*>(t)[256 * (c / 16) + c % 16]) << 16;
++#endif
++                rows[c] = v;
++                rows[32 + c] = v;
++                rows[64 + c] = v;
++                rows[96 + c] = v;
++            }
++        }
++        cb_push_back(KWF_CB_BIAS_ROWS, KWF_N);
++        cb_pop_front(KWF_CB_BIAS, KWF_N);
++    };
++#endif
+     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
+         const uint32_t block_tiles_done = m_block_idx * block_m_tiles;
+         const uint32_t block_valid_tiles =
+@@ -812,6 +863,29 @@
+                         }
+                     }
+                 }
++#if defined(CONV2D_3X3_KW_FOLD) && defined(KWF_FILL_DEFER_BATCH)
++                if constexpr (whole_slab && tile_fill_split) {
++                    if (m_block_idx == 0 && split_here) {
++                        while (pushed < num_batches && pushed < KWF_FILL_DEFER_BATCH) {
++                            retire();
++                        }
++                        auto ready = [&]() -> bool {
++                            if (!ncrisc_noc_read_with_transaction_id_flushed(
++                                    reads.noc.get_noc_id(), TRID_FILL_BASE + pushed % fill_window)) {
++                                return false;
++                            }
++                            return !writer_rows_of[pushed % wr_slots] ||
++                                   Semaphore<>(slab_fwd_done_sem_id).value() > fill_batches_handed;
++                        };
++                        kwf_bias_rows_polled([&]() {
++                            while (pushed < num_batches && ready()) {
++                                retire();
++                            }
++                        });
++                        kwf_bias_done = true;
++                    }
++                }
++#endif
+                 while (pushed < num_batches) {
+                     retire();
+                 }
+@@ -946,7 +1020,11 @@
+ 
+ #ifdef CONV2D_3X3_KW_FOLD
+         // kw-fold (conv2d_3x3_kw_fold.hpp): no gather, and no accumulator seed (compute packs Q_1 as an overwrite).
++#ifdef KWF_FILL_DEFER_BATCH
++        if (m_block_idx == 0 && !kwf_bias_done) {
++#else
+         if (m_block_idx == 0) {
++#endif
+             // kw-fold's final pass adds the bias as srcB rows: per output column tile n, 4 copies of the fp32 row
+             // [b_0 .. b_31] (KWF_CB_BIAS_ROWS page n), decoded from the bias tiles the writer reads into cb_bias after
+             // its first M-block's weights. Done after the first block's fill, not at kernel end: a later block's fill
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp	2026-11-19 13:44:47.945068799 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp	2026-11-19 15:07:37.408546736 +0000
+@@ -464,6 +464,12 @@
+     // Slab-direct: this block's forward slab reads (transaction id 9) are in flight; slab_fwd_done goes up as soon as
+     // they landed, from every wait that serves the fill (the weight-round waits included).
+     [[maybe_unused]] bool sd_slab_pending = false;
++#ifdef KWF_FILL_DEFER_BATCH
++    // kw-fold under weight servers: until round 0 is in compute's hands, block 0's batches from KWF_FILL_DEFER_BATCH on
++    // (slab rows the first Q_1 subblock does not read) stay unissued, so fewer NoC1 fill reads run beside round 0's
++    // multicast on this core's NoC1 port. Issued right after round 0 is pushed.
++    [[maybe_unused]] bool fill_defer = true;
++#endif
+     // Every batch the reader has handed over so far (windowed: retire the landed ones, issue up to the window).
+     [[maybe_unused]] auto serve_fill = [&]() {
+         if constexpr (slab_direct) {
+@@ -483,6 +489,11 @@
+                 while (fill_issued - fill_served < fill_writer_window &&
+                        Semaphore<>(slab_free_sem_id).value() > fill_issued) {
+                     fill_next();
++#ifdef KWF_FILL_DEFER_BATCH
++                    if (fill_defer && fill_m == 0 && fill_b >= KWF_FILL_DEFER_BATCH) {
++                        break;
++                    }
++#endif
+                     fill_issue(TRID_WFILL_BASE + fill_issued % fill_writer_window);
+                     ++fill_issued;
+                 }
+@@ -967,6 +978,13 @@
+         }
+         cb_push_back(cb_weights, weight_k_block_tiles);
+         ++k_blocks_issued;
++#ifdef KWF_FILL_DEFER_BATCH
++        // Round 0 is in compute's hands: issue the deferred batches (before the bias, which waits on nothing here).
++        if (fill_defer) {
++            fill_defer = false;
++            serve_fill();
++        }
++#endif
+         if constexpr (weight_servers) {
+             if constexpr (kw_fold) {
+                 // The first n-group's final pass needs the bias: complete it once that group's three rounds are out
