@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/transformer/sdpa/device/recipe/sdpa_recipe_ring_distributed.hpp"
 #include "ring_distributed_sdpa_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
@@ -19,6 +20,10 @@ using namespace tt::tt_metal;
 namespace ttnn::prim {
 void RingDistributedSdpaDeviceOperation::validate_on_program_cache_miss(
     const RingDistributedSDPAParams& operation_attributes, const RingDistributedSDPAInputs& tensor_args) {
+    if (operation_attributes.precision) {
+        // resolve_ring_distributed_recipe checks the ring arguments; recipe_program validates the rest.
+        return;
+    }
     std::vector<Tensor> input_tensors = {tensor_args.q, tensor_args.k, tensor_args.v};
 
     const auto& input_tensor_q = tensor_args.q;
@@ -258,6 +263,10 @@ void RingDistributedSdpaDeviceOperation::validate_on_program_cache_miss(
 
 tt::tt_metal::TensorSpec RingDistributedSdpaDeviceOperation::compute_output_specs(
     const RingDistributedSDPAParams& operation_attributes, const RingDistributedSDPAInputs& tensor_args) {
+    if (operation_attributes.precision) {
+        return ttnn::operations::transformer::sdpa::detail::ring_distributed_recipe_output_spec(
+            operation_attributes, tensor_args);
+    }
     const auto& input_tensor_q = tensor_args.q;
     const auto& q_shape = input_tensor_q.logical_shape();
 
@@ -339,7 +348,8 @@ Tensor ring_distributed_sdpa(
     const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     const std::optional<ttnn::Tensor>& page_table,
-    std::optional<int64_t> chunk_start_idx) {
+    std::optional<int64_t> chunk_start_idx,
+    std::optional<ttnn::operations::transformer::SDPAPrecision> precision) {
     using OperationType = ttnn::prim::RingDistributedSdpaDeviceOperation;
 
     if (not scale.has_value()) {
@@ -353,6 +363,7 @@ Tensor ring_distributed_sdpa(
         .program_config = program_config,
         .compute_kernel_config = compute_kernel_config,
         .chunk_start_idx = chunk_start_idx,
+        .precision = precision,
     };
 
     auto tensor_args = OperationType::tensor_args_t{
@@ -361,6 +372,9 @@ Tensor ring_distributed_sdpa(
         .v = input_tensor_v,
         .page_table = page_table,
     };
+    if (precision) {
+        ttnn::operations::transformer::sdpa::detail::resolve_ring_distributed_recipe(operation_attributes, tensor_args);
+    }
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

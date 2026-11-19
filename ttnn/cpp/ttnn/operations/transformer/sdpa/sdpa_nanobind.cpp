@@ -703,7 +703,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("joint_strategy"),
         nb::arg("program_config").noconvert(),
         nb::arg("scale") = nb::none(),
-        nb::arg("compute_kernel_config").noconvert() = nb::none());
+        nb::arg("compute_kernel_config").noconvert() = nb::none(),
+        nb::arg("precision") = nb::none());
 
     const auto* const ring_joint_doc = R"doc(
         RingJointAttention operation supports both:
@@ -1301,6 +1302,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("program_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("page_table") = nb::none(),
-        nb::arg("chunk_start_idx") = nb::none());
+        nb::arg("chunk_start_idx") = nb::none(),
+        nb::arg("precision") = nb::none());
 }
 }  // namespace ttnn::operations::transformer

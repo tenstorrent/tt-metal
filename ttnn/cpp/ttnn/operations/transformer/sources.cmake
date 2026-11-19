@@ -19,6 +19,8 @@ set(TTNN_OP_TRANSFORMER_SRCS
     sdpa/device/sdpa_program_factory.cpp
     sdpa/device/recipe/sdpa_recipe_blocking.cpp
     sdpa/device/recipe/sdpa_recipe_dense.cpp
+    sdpa/device/recipe/sdpa_recipe_joint.cpp
+    sdpa/device/recipe/sdpa_recipe_ring_distributed.cpp
     sdpa/device/recipe/sdpa_recipe_program.cpp
     sdpa/sdpa.cpp
     sdpa/device/sparse_sdpa_device_operation.cpp

@@ -19,6 +19,10 @@ struct JointSDPAParams {
     tt::tt_metal::MemoryConfig output_memory_config;
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config;
     DeviceComputeKernelConfig compute_kernel_config;
+    // Precision recipe (device/recipe/); unset: the legacy kernels.
+    std::optional<ttnn::operations::transformer::SDPAPrecision> precision;
+    // Recipe calls: the L1 their layout may use (recipe_l1_budget), set before the program-cache lookup.
+    uint64_t recipe_l1_budget = 0;
 
     std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
 

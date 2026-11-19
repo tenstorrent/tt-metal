@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/transformer/sdpa/device/recipe/sdpa_recipe_joint.hpp"
 #include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
@@ -21,6 +22,10 @@ using namespace tt::tt_metal;
 namespace ttnn::prim {
 void JointSDPADeviceOperation::validate_on_program_cache_miss(
     const JointSDPAParams& args, const JointSDPAInputs& tensor_args) {
+    if (args.precision) {
+        // The recipe program validates the call when it is built (recipe_program).
+        return;
+    }
     const auto& input_tensor_q = tensor_args.input_q;
     const auto& input_tensor_k = tensor_args.input_k;
     const auto& input_tensor_v = tensor_args.input_v;
@@ -160,6 +165,9 @@ void JointSDPADeviceOperation::validate_on_program_cache_miss(
 
 JointSDPAResultSpec JointSDPADeviceOperation::compute_output_specs(
     const JointSDPAParams& args, const JointSDPAInputs& tensor_args) {
+    if (args.precision) {
+        return ttnn::operations::transformer::sdpa::detail::joint_recipe_output_specs(args, tensor_args);
+    }
     const auto& input = tensor_args.input_q;
     const auto& joint_input = tensor_args.joint_q;
     return {
@@ -240,7 +248,8 @@ JointSDPAResult joint_scaled_dot_product_attention(
     const std::string& joint_strategy,
     const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config,
     const std::optional<float> scale,
-    const std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<ttnn::operations::transformer::SDPAPrecision> precision) {
     using OperationType = ttnn::prim::JointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -250,6 +259,7 @@ JointSDPAResult joint_scaled_dot_product_attention(
 
     auto operation_attributes = OperationType::operation_attributes_t{
         joint_strategy, scale_val, tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG, program_config, kernel_config_val};
+    operation_attributes.precision = precision;
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,
@@ -259,6 +269,9 @@ JointSDPAResult joint_scaled_dot_product_attention(
         .joint_k = joint_tensor_k,
         .joint_v = joint_tensor_v};
 
+    if (precision) {
+        ttnn::operations::transformer::sdpa::detail::resolve_joint_recipe(operation_attributes, tensor_args);
+    }
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 

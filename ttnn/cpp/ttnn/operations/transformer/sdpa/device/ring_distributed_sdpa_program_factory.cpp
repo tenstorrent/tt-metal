@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/transformer/sdpa/device/recipe/sdpa_recipe_ring_distributed.hpp"
 #include "ring_distributed_sdpa_device_operation.hpp"
 #include "sdpa_interleaved_cb_ids.hpp"
 #include "sdpa_subblock_utils.hpp"
@@ -606,8 +607,14 @@ WorkloadDescriptor RingDistributedSdpaDeviceOperation::RingDistributedSdpaProgra
     const auto coords = tensor_coords.coords();
     wd.programs.reserve(coords.size());
     for (const auto& coord : coords) {
-        auto desc = build_ring_distributed_sdpa_program_descriptor(
-            operation_attributes, tensor_args, tensor_return_value, coord);
+        auto desc = operation_attributes.precision
+                        ? ttnn::operations::transformer::sdpa::detail::ring_distributed_recipe_descriptor(
+                              operation_attributes,
+                              tensor_args,
+                              tensor_return_value,
+                              resolve_ring_id(operation_attributes, tensor_args, coord))
+                        : build_ring_distributed_sdpa_program_descriptor(
+                              operation_attributes, tensor_args, tensor_return_value, coord);
         wd.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
     }
     return wd;

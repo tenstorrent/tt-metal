@@ -201,7 +201,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
     const std::string& joint_strategy,
     ttnn::operations::transformer::SDPAProgramConfig program_config,
     std::optional<float> scale,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<SDPAPrecision> precision) {
     auto output_tensors = ttnn::prim::joint_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_k,
@@ -212,7 +213,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
         joint_strategy,
         program_config,
         scale,
-        compute_kernel_config);
+        compute_kernel_config,
+        precision);
     return {output_tensors[prim::JOINT_SDPA_OUTPUT_IDX], output_tensors[prim::JOINT_SDPA_JOINT_OUTPUT_IDX]};
 }
 
@@ -566,7 +568,8 @@ ttnn::Tensor ring_distributed_scaled_dot_product_attention(
     const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<ttnn::Tensor>& page_table,
-    std::optional<int64_t> chunk_start_idx) {
+    std::optional<int64_t> chunk_start_idx,
+    std::optional<SDPAPrecision> precision) {
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -581,7 +584,8 @@ ttnn::Tensor ring_distributed_scaled_dot_product_attention(
         program_config,
         kernel_config_val,
         page_table,
-        chunk_start_idx);
+        chunk_start_idx,
+        precision);
 }
 
 }  // namespace ttnn::transformer

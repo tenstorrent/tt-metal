@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/transformer/sdpa/device/recipe/sdpa_recipe_joint.hpp"
 #include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 
@@ -30,6 +31,10 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
+    if (operation_attributes.precision) {
+        return ttnn::operations::transformer::sdpa::detail::joint_recipe_descriptor(
+            operation_attributes, tensor_args, tensor_return_value);
+    }
     const auto& args = operation_attributes;
     auto& output_tensors = tensor_return_value;
     /*
