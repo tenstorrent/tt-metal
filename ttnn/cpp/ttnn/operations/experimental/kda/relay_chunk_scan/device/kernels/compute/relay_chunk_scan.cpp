@@ -16,7 +16,9 @@
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/broadcast/bcast.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/activations.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/matmul_subblock.hpp"
 
@@ -213,64 +215,33 @@ void broadcast_weight() {
 
 // Each of the next `chunks` gate rows into its chunk's g = sigmoid(gate) * weight.
 void gate_factors(uint32_t chunks) {
-    pack_reconfig_data_format(cb_gate_factor);
+    DataflowBuffer gate(cb_gate);
+    DataflowBuffer weight_rows(cb_weight_rows);
+    DataflowBuffer gate_factor(cb_gate_factor);
+    constexpr auto gate_row =
+        ckl::input(cb_gate, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block);
+    constexpr auto weight_row =
+        ckl::input(cb_weight_rows, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block);
+    constexpr auto gate_factor_row = ckl::output(cb_gate_factor, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd);
     for (uint32_t c = 0; c < chunks; ++c) {
-        cb_wait_front(cb_gate, kt);
-        cb_reserve_back(cb_gate_factor, kt);
         if constexpr (fp32_output) {
             // The product on the SFPU, in FP32: the FPU's DEST reuse would round sigmoid(gate) to srcA's format.
-            for (uint32_t first = 0; first < kt; first += half_dst) {
-                tile_regs_acquire();
-                reconfig_data_format_srca(cb_gate);
-                copy_init(cb_gate);
-                for (uint32_t i = 0; i < half_dst; ++i) {
-                    copy_tile(cb_gate, first + i, i);
-                }
-                sigmoid_tile_init();
-                for (uint32_t i = 0; i < half_dst; ++i) {
-                    sigmoid_tile<VectorMode::RC, false, true>(i);
-                }
-                reconfig_data_format_srca(cb_weight_rows);
-                copy_init(cb_weight_rows);
-                for (uint32_t i = 0; i < half_dst; ++i) {
-                    copy_tile(cb_weight_rows, first + i, half_dst + i);
-                }
-                mul_binary_tile_init();
-                for (uint32_t i = 0; i < half_dst; ++i) {
-                    mul_binary_tile(i, half_dst + i, i);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t i = 0; i < half_dst; ++i) {
-                    pack_tile(i, cb_gate_factor);
-                }
-                tile_regs_release();
-            }
+            ckl::eltwise_chain(
+                ckl::IterationShape::tiles(kt).block_size(kt),
+                ckl::CopyTile<gate_row, ckl::Dst::D0>{gate},
+                ckl::Sigmoid<ckl::Dst::D0>{},
+                ckl::CopyTile<weight_row, ckl::Dst::D1>{weight_rows},
+                ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
+                ckl::PackTile<gate_factor_row, ckl::Dst::D0>{gate_factor});
         } else {
-            tile_regs_acquire();
-            reconfig_data_format_srca(cb_gate);
-            copy_init(cb_gate);
-            for (uint32_t j = 0; j < kt; ++j) {
-                copy_tile(cb_gate, j, j);
-            }
-            sigmoid_tile_init();
-            for (uint32_t j = 0; j < kt; ++j) {
-                sigmoid_tile<VectorMode::RC, false, false>(j);
-            }
-            reconfig_data_format(cb_weight_rows, cb_weight_rows);
-            mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_weight_rows);
-            for (uint32_t j = 0; j < kt; ++j) {
-                mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_weight_rows, j, j);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t j = 0; j < kt; ++j) {
-                pack_tile(j, cb_gate_factor);
-            }
-            tile_regs_release();
+            // A BF16 g needs only the BF16-accurate sigmoid, and the FPU product reusing DEST.
+            ckl::eltwise_chain(
+                ckl::IterationShape::tiles(kt).block_size(kt),
+                ckl::CopyTile<gate_row>{gate},
+                ckl::Sigmoid<ckl::Dst::D0, ckl::Approx::Exact, ckl::SigmoidPrecision::Bf16>{},
+                ckl::DestReuseBinary<ckl::BinaryFpuOp::Mul, weight_row, ckl::DestReuseType::DEST_TO_SRCA>{weight_rows},
+                ckl::PackTile<gate_factor_row>{gate_factor});
         }
-        cb_push_back(cb_gate_factor, kt);
-        cb_pop_front(cb_gate, kt);
     }
 }
 
@@ -305,36 +276,20 @@ void normalize() {
             rsqrt_tile(dst, VectorMode::C);
         });
     // Per pass: x / rms on the FPU, then times g beside it on the SFPU, in FP32.
-    cb_wait_front(cb_inv_rms, 1);
-    cb_wait_front(cb_gate_factor, kt);
-    cb_reserve_back(cb_norm, kt);
-    pack_reconfig_data_format(cb_norm);
-    for (uint32_t first = 0; first < kt; first += half_dst) {
-        tile_regs_acquire();
-        reconfig_data_format(cb_out, cb_inv_rms);
-        mul_bcast_cols_init(cb_out, cb_inv_rms);
-        for (uint32_t j = 0; j < half_dst; ++j) {
-            mul_tiles_bcast_cols(cb_out, cb_inv_rms, first + j, 0, j);
-        }
-        reconfig_data_format_srca(cb_gate_factor);
-        copy_init(cb_gate_factor);
-        for (uint32_t j = 0; j < half_dst; ++j) {
-            copy_tile(cb_gate_factor, first + j, half_dst + j);
-        }
-        mul_binary_tile_init();
-        for (uint32_t j = 0; j < half_dst; ++j) {
-            mul_binary_tile(j, half_dst + j, j);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t j = 0; j < half_dst; ++j) {
-            pack_tile(j, cb_norm);
-        }
-        tile_regs_release();
-    }
-    cb_push_back(cb_norm, kt);
-    cb_pop_front(cb_inv_rms, 1);
-    cb_pop_front(cb_gate_factor, kt);
+    DataflowBuffer gate_factor(cb_gate_factor);
+    DataflowBuffer norm(cb_norm);
+    ckl::eltwise_chain(
+        ckl::IterationShape::tiles(kt).block_size(kt),
+        ckl::BinaryFpu<
+            ckl::BinaryFpuOp::Mul,
+            ckl::input(cb_out, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
+            ckl::input(cb_inv_rms, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd)>{
+            out, inv_rms},
+        ckl::CopyTile<
+            ckl::input(cb_gate_factor, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+            ckl::Dst::D1>{gate_factor},
+        ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
+        ckl::PackTile<ckl::output(cb_norm, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>{norm});
 }
 
 // Chunk outputs x = F0_c + (FI_c - F0_c) @ seed for this core's chunks [begin, end), a row at a time once the whole
