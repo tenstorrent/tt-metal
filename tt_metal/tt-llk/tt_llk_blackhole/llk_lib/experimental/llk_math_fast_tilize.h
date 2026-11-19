@@ -31,7 +31,9 @@ inline void _llk_math_fast_tilize_init_([[maybe_unused]] const std::uint32_t unp
     {
         // DEST remap (remap_addrs + swizzle_32b) is enabled here to mirror
         // pack_untilize_dest_init's BH workaround (see tt-metal#17132 / tt-llk#989).
-        // No uninit - leaving the bits set is benign for subsequent ops.
+        // No uninit: the bits stay set for later kernels on the core. They change which Dst writes share a write
+        // port, so a kernel that lets an SFPLOADMACRO store overlap another writer of the same Dst half can lose a
+        // write with them set and not without (tt-metal#64475). The fix belongs in that kernel, not here.
         _llk_math_reconfig_remap_(true);
     }
 

@@ -82,6 +82,7 @@ from .llk_params import (
     MailboxesQuasar,
 )
 from .logger import logger
+from .pack_loadmacro_scan import check_pack_elf
 from .stimuli_config import StimuliConfig
 from .target_config import TestTargetConfig
 from .test_variant_parameters import (
@@ -2007,6 +2008,11 @@ class TestConfig:
                 ]
                 for fut in futures:
                     fut.result()
+
+            if TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE:
+                check_pack_elf(
+                    self.test_name, VARIANT_ELF_DIR / "pack.elf", TestConfig.OBJDUMP
+                )
 
             if self.profiler_build == ProfilerBuild.Yes:
                 # Extract profiler metadata
