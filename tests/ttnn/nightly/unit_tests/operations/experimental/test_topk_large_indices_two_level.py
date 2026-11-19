@@ -138,6 +138,36 @@ def test_two_level_generators(device, kind, n):
         assert torch.equal(normalize(got[row, :nb]), _block_maxima(torch_input[row], n)), f"row {row} maxima"
 
 
+# Stage 3 stages the selected blocks that share an aligned span (2 KB while at least one block in 8 is selected, 1 KB
+# on sparser rows) and copies them to their slots. These inputs pin the 2048 winning blocks so every chunk is staged:
+# - n = 524,272 (16 past a block boundary, 16,384 blocks, 2 KB spans): blocks 0, 10, 20 and 31 of every span, so each
+#   staged range is a whole span; the partial last block is a member of a staged group, and the keys past n in it
+#   are larger than every valid key;
+# - n = 1,048,576 (32,768 blocks, 1 KB spans): blocks 0 and 15 of every span, 32 staged pairs per chunk.
+@pytest.mark.parametrize("n,members", [(524_272, (0, 10, 20, 31)), (1_048_576, (0, 15))])
+def test_two_level_staged_gather_patterns(device, n, members):
+    rows, width = 2, (n + BLOCK - 1) // BLOCK * BLOCK + BLOCK
+    span_blocks = 32 if n <= 8 * 2048 * BLOCK else 16
+    g = torch.Generator().manual_seed(21)
+    x = torch.randn(rows, width, generator=g) * 0.1 - 5.0
+    blocks = torch.tensor([s * span_blocks + m for s in range(2048 // len(members)) for m in members])
+    assert int(blocks.max()) < (n + BLOCK - 1) // BLOCK
+    hot = 1.0 + torch.rand(rows, blocks.numel(), generator=g)
+    for row in range(rows):
+        # Each winning block's first key carries its maximum; the last block's lies inside the valid prefix.
+        x[row, blocks * BLOCK] = hot[row]
+    x[:, n:] = 100.0
+    torch_input = x.to(torch.bfloat16)
+    out = ttnn.experimental.topk_large_indices(
+        _dev(torch_input.reshape(1, 1, rows, width), device),
+        k=K,
+        valid_length=n,
+        block_select=32,
+        two_level_cutover=FORCE_TWO_LEVEL,
+    )
+    _check_rows(torch_input, _indices(out, rows), n, range(rows))
+
+
 def test_two_level_poisoned_tail_and_last_lane(device):
     """The last valid key sits in a partially valid block next to stale keys larger than everything valid."""
     rows, width, n = 2, 131_072, 100_017
