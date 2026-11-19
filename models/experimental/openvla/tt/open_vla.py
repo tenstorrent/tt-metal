@@ -692,6 +692,10 @@ class OpenVLALanguageModel(GenerationMixin):
         current_pos = torch.tensor([seq_len], dtype=torch.int32)
         # Convert prefilled_token to int32 for TT compatibility
         out_tok = prefilled_token.to(torch.int32).view(1)  # Ensure shape [1] and int32
+        # Teacher forcing for accuracy tests: decode from these tokens, still recording the model's own top-1
+        forced_tokens = getattr(self, "forced_tokens", None)
+        if forced_tokens is not None:
+            out_tok = torch.tensor([forced_tokens[0]], dtype=torch.int32)
         # The prefill picks the first action token, so decode produces the remaining ones
         output_toks = [output_logits.view(1, 1, -1)]
         CHECKPOINTS.checkpoint("end_PREFILL")
@@ -728,7 +732,7 @@ class OpenVLALanguageModel(GenerationMixin):
             logits_cpu = logits.cpu().float()
             # logits shape is [1, 1, vocab] - take last position and argmax
             next_token = torch.argmax(logits_cpu[:, -1, :], dim=-1).to(torch.int32)  # [1] shape, int32
-            out_tok = next_token
+            out_tok = next_token if forced_tokens is None else torch.tensor([forced_tokens[i + 1]], dtype=torch.int32)
             decode_tokens.append(next_token.item())
 
         # Save tokens for external access
@@ -1622,6 +1626,14 @@ class TTOpenVLAForActionPrediction(PrismaticForConditionalGeneration, Generation
         # Run VLA inference
         if self.ttnn_device is not None:
             # The TT language model decodes every action token greedily within one forward call.
+            unsupported = sorted(set(kwargs) - {"pixel_values", "attention_mask", "do_sample"})
+            if kwargs.get("do_sample"):
+                unsupported.append("do_sample=True")
+            attention_mask = kwargs.get("attention_mask")
+            if attention_mask is not None and not torch.all(attention_mask == 1):
+                unsupported.append("an attention_mask with padding")
+            if unsupported:
+                raise ValueError(f"predict_action on device decodes greedily and does not take {unsupported}")
             self.language_model.num_actions = self.get_action_dim(unnorm_key)
             self(
                 input_ids=input_ids,

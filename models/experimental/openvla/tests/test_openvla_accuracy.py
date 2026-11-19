@@ -8,16 +8,22 @@ Accuracy tests for OpenVLA pieces that the PCC tests with random weights do not 
 1. Language model Q/K weights: attention scores after RoPE match HF Llama (host only)
 2. SigLIP featurizer: TT features match timm, position embedding included (random weights)
 3. Vision backbone: DINOv2 and SigLIP features match the reference on the checkpoint (needs OPENVLA_WEIGHTS)
-4. Language model prefill: logits after the first decoder layers match HF Llama on the checkpoint (needs OPENVLA_WEIGHTS)
-5. predict_action: returns the language model's own greedy action tokens (needs OPENVLA_WEIGHTS)
+4. Language model prefill: logits after the first decoder layers match HF Llama on the checkpoint
+   (needs OPENVLA_WEIGHTS)
+5. predict_action: returns the generated action tokens in order, decoded to actions; teacher-forced on the HF
+   reference tokens, each TT top-1 is in the reference top-5 (needs OPENVLA_WEIGHTS)
+6. predict_action on device rejects generation options it cannot honour (host only)
 
+Reference for 5: references/generate_reference_actions.py (HF, bfloat16 on CPU, revision 47a0ec7f).
 Reference for 3 and 4: openvla/openvla-7b (revision 47a0ec7f) on CPU in float32, through the timm towers of
 PrismaticVisionBackbone (the code of the checkpoint's modeling_prismatic.py) and transformers' LlamaForCausalLM.
 """
 
 import json
 import os
+from types import SimpleNamespace
 
+import numpy as np
 import pytest
 import torch
 from safetensors import safe_open
@@ -84,13 +90,16 @@ def load_openvla_weights(weights_path, prefixes):
     return tensors
 
 
-def fixed_pixel_values():
-    """A fixed 224x224 pattern, normalized for DINOv2 and SigLIP and stacked on channels as the OpenVLA processor does."""
-    y, x = torch.meshgrid(torch.linspace(0, 1, 224), torch.linspace(0, 1, 224), indexing="ij")
-    image = torch.stack([x, y, 0.5 + 0.5 * torch.sin(12 * x) * torch.cos(12 * y)])
+def normalize_image(image):
+    """A 3x224x224 image in [0, 1], normalized for DINOv2 and SigLIP and stacked on channels as OpenVLA does."""
     dinov2_mean = torch.tensor([0.484375, 0.455078125, 0.40625]).view(3, 1, 1)
     dinov2_std = torch.tensor([0.228515625, 0.2236328125, 0.224609375]).view(3, 1, 1)
     return torch.cat([(image - dinov2_mean) / dinov2_std, (image - 0.5) / 0.5]).unsqueeze(0)
+
+
+def fixed_pixel_values():
+    y, x = torch.meshgrid(torch.linspace(0, 1, 224), torch.linspace(0, 1, 224), indexing="ij")
+    return normalize_image(torch.stack([x, y, 0.5 + 0.5 * torch.sin(12 * x) * torch.cos(12 * y)]))
 
 
 def to_tt_pixel_values(pixel_values, device):
@@ -278,63 +287,132 @@ def test_language_model_prefill_checkpoint_pcc(mesh_device, openvla_weights_path
 # =============================================================================
 # TEST 5: Action tokens
 # =============================================================================
+# From references/generate_reference_actions.py: the HF greedy action tokens and, at each step, the HF top-5
+REFERENCE_ACTIONS = {
+    "orange_red_block": {
+        "rgb": (255, 100, 50),
+        "instruction": "pick up the red block",
+        "tokens": [31868, 31744, 31947, 31864, 31834, 31823, 31872],
+        "top5": [
+            [31868, 31839, 31861, 31999, 31884],
+            [31744, 31798, 31885, 31794, 31776],
+            [31947, 31949, 31847, 31886, 31913],
+            [31864, 31870, 31827, 31917, 31896],
+            [31834, 31786, 31866, 31782, 31855],
+            [31823, 31848, 31850, 31812, 31827],
+            [31872, 31744, 31873, 31858, 31811],
+        ],
+    },
+    "blue_put_cup": {
+        "rgb": (40, 90, 200),
+        "instruction": "put the cup on the plate",
+        "tokens": [31860, 31865, 31876, 31873, 31860, 31853, 31744],
+        "top5": [
+            [31860, 31999, 31871, 31995, 31873],
+            [31865, 31855, 31832, 31843, 31831],
+            [31876, 31877, 31887, 31881, 31888],
+            [31873, 31872, 31881, 31882, 31883],
+            [31860, 31861, 31859, 31868, 31857],
+            [31853, 31854, 31852, 31855, 31856],
+            [31744, 31872, 31745, 31785, 31758],
+        ],
+    },
+}
+OPENVLA_VOCAB_SIZE = 32000
+OPENVLA_ACTION_BINS = 256
+
+
+def reference_unnormalized_actions(tokens, stats):
+    """OpenVLA's token-to-action decoding: each token's bin center, scaled from [-1, 1] to [q01, q99] where masked."""
+    bins = np.linspace(-1, 1, OPENVLA_ACTION_BINS)
+    bin_centers = (bins[:-1] + bins[1:]) / 2.0
+    normalized = bin_centers[np.clip(OPENVLA_VOCAB_SIZE - np.array(tokens) - 1, 0, bin_centers.shape[0] - 1)]
+    low, high = np.array(stats["q01"]), np.array(stats["q99"])
+    mask = np.array(stats.get("mask", np.ones_like(low, dtype=bool)))
+    return np.where(mask, 0.5 * (normalized + 1) * (high - low) + low, normalized)
+
+
 @pytest.mark.parametrize("device_params", [OPENVLA_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [OPENVLA_MESH_DEVICE], indirect=True)
 def test_predict_action_tokens(mesh_device, openvla_weights_path):
     """
-    predict_action must return the tokens the language model generated, starting with the one the prefill picked,
-    and all of them must be action tokens (an end-of-sequence token here means the actions are shifted by one).
+    For each reference case, greedy predict_action must return the tokens the language model generated, starting
+    with the one the prefill picked, all of them action tokens (an end-of-sequence token here means the actions are
+    shifted by one), decoded to actions. Then, with the reference tokens fed back in (teacher forcing), the model's
+    top-1 at every step must be in the reference top-5.
     """
-    merged_tensors = {}
-    for shard in [
-        "model-00001-of-00003.safetensors",
-        "model-00002-of-00003.safetensors",
-        "model-00003-of-00003.safetensors",
-    ]:
-        with safe_open(os.path.join(openvla_weights_path, shard), framework="pt", device="cpu") as f:
-            for key in f.keys():
-                merged_tensors[key] = f.get_tensor(key)
-
+    merged_tensors = load_openvla_weights(openvla_weights_path, ("",))
     kwargs = {
         "return_unused_kwargs": True,
         "torch_dtype": torch.bfloat16,
         "low_cpu_mem_usage": False,
         "name_or_path": "openvla/openvla-7b",
-        "pretrained_model_name_or_path": "openvla/openvla-7b",
+        "pretrained_model_name_or_path": openvla_weights_path,
     }
     config_dict, kwargs = OpenVLAConfig.get_config_dict(**kwargs)
     vla_config, kwargs = OpenVLAConfig.from_dict(config_dict, **kwargs)
     vla = TTOpenVLAForActionPrediction(vla_config, ttnn_device=mesh_device, local_state_dict=merged_tensors).to(
         "cpu", dtype=torch.bfloat16
     )
+    first_action_token = OPENVLA_VOCAB_SIZE - OPENVLA_ACTION_BINS
+    action_stats = vla_config.norm_stats["bridge_orig"]["action"]
 
-    prompt = "In: What action should the robot take to pick up the red block?\nOut:"
-    inputs = vla.language_model.tokenizer(prompt, return_tensors="pt")
-    # What the OpenVLA processor gives for a solid orange image: DINOv2 then SigLIP normalization, stacked on channels
-    color = torch.tensor([255.0, 100.0, 50.0]) / 255
-    dinov2_pixel = (color - torch.tensor([0.485, 0.456, 0.406])) / torch.tensor([0.229, 0.224, 0.225])
-    siglip_pixel = (color - 0.5) / 0.5
-    pixel_values = torch.cat([dinov2_pixel, siglip_pixel]).view(1, 6, 1, 1).expand(1, 6, 224, 224).to(torch.bfloat16)
-    _, action_tokens = vla.predict_action(
-        input_ids=inputs["input_ids"],
-        attention_mask=inputs["attention_mask"],
-        pixel_values=pixel_values,
-        unnorm_key="bridge_orig",
-        do_sample=False,
-        return_tokens=True,
-    )
-    generated_tokens = vla.language_model._last_generated_tokens
-    first_action_token = vla.vocab_size - vla.config.n_action_bins
+    for case, reference in REFERENCE_ACTIONS.items():
+        prompt = f"In: What action should the robot take to {reference['instruction']}?\nOut:"
+        inputs = vla.language_model.tokenizer(prompt, return_tensors="pt")
+        image = (torch.tensor(reference["rgb"], dtype=torch.float32) / 255).view(3, 1, 1).expand(3, 224, 224)
+        predict_kwargs = {
+            "input_ids": inputs["input_ids"],
+            "attention_mask": inputs["attention_mask"],
+            "pixel_values": normalize_image(image).to(torch.bfloat16),
+            "unnorm_key": "bridge_orig",
+            "do_sample": False,
+            "return_tokens": True,
+        }
+        actions, action_tokens = vla.predict_action(**predict_kwargs)
+        generated_tokens = vla.language_model._last_generated_tokens
 
-    print(f"\n{'='*60}")
-    print(f"ACTION TOKEN RESULTS")
-    print(f"{'='*60}")
-    print(f"  Returned:  {action_tokens}")
-    print(f"  Generated: {generated_tokens}")
-    print(f"{'='*60}\n")
+        vla.language_model.forced_tokens = reference["tokens"]
+        try:
+            vla.predict_action(**predict_kwargs)
+            forced_top1 = vla.language_model._last_generated_tokens
+        finally:
+            vla.language_model.forced_tokens = None
+        outside_top5 = [i for i, token in enumerate(forced_top1) if token not in reference["top5"][i]]
 
-    assert len(action_tokens) == vla.get_action_dim("bridge_orig")
-    assert action_tokens == generated_tokens, "predict_action did not return the generated tokens"
-    assert all(
-        first_action_token <= token < vla.vocab_size for token in action_tokens
-    ), f"Non-action token in {action_tokens}"
+        print(f"\n{'='*60}")
+        print(f"ACTION TOKEN RESULTS ({case})")
+        print(f"{'='*60}")
+        print(f"  Greedy:              {action_tokens}")
+        print(f"  Reference:           {reference['tokens']}")
+        print(f"  Teacher-forced top-1: {forced_top1}")
+        print(f"  Steps outside the reference top-5: {outside_top5}")
+        print(f"{'='*60}\n")
+
+        assert len(action_tokens) == vla.get_action_dim("bridge_orig")
+        assert action_tokens == generated_tokens, f"{case}: predict_action did not return the generated tokens"
+        assert all(
+            first_action_token <= token < OPENVLA_VOCAB_SIZE for token in action_tokens
+        ), f"{case}: non-action token in {action_tokens}"
+        assert np.allclose(
+            actions, reference_unnormalized_actions(action_tokens, action_stats)
+        ), f"{case}: actions {actions} are not the decoded tokens {action_tokens}"
+        assert not outside_top5, f"{case}: top-1 outside the reference top-5 at steps {outside_top5}: {forced_top1}"
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"do_sample": True},
+        {"num_beams": 2},
+        {"logits_processor": []},
+        {"attention_mask": torch.tensor([[0, 1, 1]])},
+    ],
+)
+def test_predict_action_rejects_unsupported_generate_options(kwargs):
+    """The device path decodes greedily in one forward call, so options it would ignore must raise."""
+    vla = SimpleNamespace(ttnn_device=object(), cached_output=None, _skip_kv_reset=True)
+    with pytest.raises(ValueError, match="decodes greedily"):
+        TTOpenVLAForActionPrediction.predict_action(
+            vla, input_ids=torch.tensor([[1, 2, 29871]]), unnorm_key="bridge_orig", pixel_values=None, **kwargs
+        )
