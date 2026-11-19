@@ -166,7 +166,7 @@ void renumber_chip(YAML::Node& cluster, uint32_t from, uint32_t to) {
 enum Outcome : int { kOpened = 0, kRefused = 3, kWrongView = 4, kSetupFailed = 5 };
 
 // The Mock environment of SPEC-0014 § Contract, Environment: no emulator server, the cluster descriptor in the Mock
-// variable, the list, and the package variable when `files.package` is not empty.
+// variable, the list when `files.socs` is not empty, and the package variable when `files.package` is not empty.
 void export_mock(const Files& files) {
     for (const char* unset :
          {"TT_METAL_EMU_SERVER", "TT_METAL_EMU_CLUSTER_DESC", "TT_METAL_SIMULATOR", "TT_METAL_EMU_PACKAGE_SOC_DESC"}) {
@@ -177,7 +177,11 @@ void export_mock(const Files& files) {
         socs += (socs.empty() ? "" : ",") + soc.string();
     }
     ::setenv("TT_METAL_MOCK_CLUSTER_DESC_PATH", files.cluster.c_str(), 1);
-    ::setenv("TT_METAL_EMU_SOC_DESC", socs.c_str(), 1);
+    if (socs.empty()) {
+        ::unsetenv("TT_METAL_EMU_SOC_DESC");
+    } else {
+        ::setenv("TT_METAL_EMU_SOC_DESC", socs.c_str(), 1);
+    }
     ::setenv("TT_MESH_GRAPH_DESC_PATH", files.mesh_graph.c_str(), 1);
     if (!files.package.empty()) {
         ::setenv("TT_METAL_EMU_PACKAGE_SOC_DESC", files.package.c_str(), 1);
@@ -474,6 +478,122 @@ TEST_F(VclusterMetalDescDeathTest, E6NonProgrammableDramViewInTwoChipsOpens) {
             edit(files.socs[chip], [&](YAML::Node& soc) { soc["dram_views"].push_back(view); });
         }
     });
+}
+
+// --- § Contract, Refusals, "Further conditions, from the code review" ---------------------------------------------
+
+// E0 on Mock: the package variable set and the list unset.
+TEST_F(VclusterMetalDescDeathTest, E0PackageVariableWithoutTheList) {
+    EXPECT_REFUSED(
+        [](Files& files) { files.socs.clear(); },
+        "TT_METAL_EMU_PACKAGE_SOC_DESC is set and TT_METAL_EMU_SOC_DESC is not( |$)");
+}
+
+// E4's message for chip 1 with `key` the whole key named, not a prefix of it.
+std::string e4_kind(const std::string& key) { return e4(key) + "( |$)"; }
+
+YAML::Node a_map() {
+    YAML::Node map(YAML::NodeType::Map);
+    map["a"] = 1;
+    return map;
+}
+
+YAML::Node a_sequence() {
+    YAML::Node sequence(YAML::NodeType::Sequence);
+    sequence.push_back("a");
+    return sequence;
+}
+
+// E4, node kinds: each of these is refused with E4's text and never as a yaml-cpp exception.
+TEST_F(VclusterMetalDescDeathTest, E4EthIsAMap) {
+    EXPECT_REFUSED(in_chip(1, [](YAML::Node& soc) { soc["eth"] = a_map(); }), e4_kind("eth"));
+}
+
+TEST_F(VclusterMetalDescDeathTest, E4EthIsAScalar) {
+    EXPECT_REFUSED(in_chip(1, [](YAML::Node& soc) { soc["eth"] = "4-1"; }), e4_kind("eth"));
+}
+
+TEST_F(VclusterMetalDescDeathTest, E4DramViewsIsAMap) {
+    EXPECT_REFUSED(in_chip(1, [](YAML::Node& soc) { soc["dram_views"] = a_map(); }), e4_kind("dram_views"));
+}
+
+TEST_F(VclusterMetalDescDeathTest, E4KeraunosCoresIsAMap) {
+    EXPECT_REFUSED(
+        in_chip(1, [](YAML::Node& soc) { soc["keraunos"]["cores"] = a_map(); }), e4_kind("keraunos\\.cores"));
+}
+
+TEST_F(VclusterMetalDescDeathTest, E4KeraunosIsAScalar) {
+    EXPECT_REFUSED(in_chip(1, [](YAML::Node& soc) { soc["keraunos"] = "k0"; }), e4_kind("keraunos"));
+}
+
+TEST_F(VclusterMetalDescDeathTest, E4KeraunosIsASequence) {
+    EXPECT_REFUSED(in_chip(1, [](YAML::Node& soc) { soc["keraunos"] = a_sequence(); }), e4_kind("keraunos"));
+}
+
+TEST_F(VclusterMetalDescDeathTest, E4DocumentIsASequence) {
+    EXPECT_REFUSED(
+        [](Files& files) { std::ofstream(files.socs.at(1)) << "- eth\n- keraunos\n"; },
+        e4_kind("\\(the document is not a map\\)"));
+}
+
+// E5: a `programmable` value that is not the package's text makes the view unequal to the package's, before it is
+// read as a boolean.
+TEST_F(VclusterMetalDescDeathTest, E5ProgrammableNotABoolean) {
+    EXPECT_REFUSED(
+        in_chip(0, [](YAML::Node& soc) { soc["dram_views"][0]["programmable"] = "maybe"; }),
+        "Chip 0 descriptor [^ ]*chip_0_soc_desc\\.yaml: DRAM view \\{.*programmable: maybe.*\\} is not the package "
+        "descriptor's");
+}
+
+// E5: an Ethernet core listed twice in one chip's file.
+TEST_F(VclusterMetalDescDeathTest, E5EthernetCoreTwice) {
+    EXPECT_REFUSED(
+        in_chip(0, [](YAML::Node& soc) { soc["eth"].push_back("4-0"); }),
+        "Chip 0 descriptor [^ ]*chip_0_soc_desc\\.yaml lists Ethernet core 4-0 twice");
+}
+
+// E5: a keraunos.cores entry listed twice in one chip's file.
+TEST_F(VclusterMetalDescDeathTest, E5KeraunosEntryTwice) {
+    EXPECT_REFUSED(
+        in_chip(0, [](YAML::Node& soc) { soc["keraunos"]["cores"].push_back(package_keraunos_entry("4-0")); }),
+        "Chip 0 descriptor [^ ]*chip_0_soc_desc\\.yaml lists keraunos\\.cores entry \\{core: 4-0, hsio: 0, cce: 0\\} "
+        "twice");
+}
+
+// E5: a DRAM view listed twice in one chip's file.
+TEST_F(VclusterMetalDescDeathTest, E5DramViewTwice) {
+    EXPECT_REFUSED(
+        in_chip(0, [](YAML::Node& soc) { soc["dram_views"].push_back(YAML::Clone(soc["dram_views"][0])); }),
+        "Chip 0 descriptor [^ ]*chip_0_soc_desc\\.yaml lists DRAM view \\{.*\\} twice");
+}
+
+// E6 compares views by the package's entry they equal, whatever order their keys are written in: chip 1's first view
+// in chip 0's file with `programmable` written first.
+TEST_F(VclusterMetalDescDeathTest, E6ProgrammableDramViewInTwoChipsByKeyOrder) {
+    EXPECT_REFUSED(
+        [](Files& files) {
+            const YAML::Node view = YAML::LoadFile(files.socs[1].string())["dram_views"][0];
+            if (!view["programmable"].as<bool>() || view.begin()->first.Scalar() == "programmable") {
+                throw std::runtime_error("chip 1's first DRAM view is not programmable, or has programmable first");
+            }
+            YAML::Node reordered(YAML::NodeType::Map);
+            reordered["programmable"] = YAML::Clone(view["programmable"]);
+            for (const auto& kv : view) {
+                if (kv.first.Scalar() != "programmable") {
+                    reordered[kv.first.Scalar()] = YAML::Clone(kv.second);
+                }
+            }
+            edit(files.socs[0], [&](YAML::Node& soc) { soc["dram_views"].push_back(reordered); });
+        },
+        "Chips 0 and 1 both list DRAM view ");
+}
+
+// E6: a chip's file that lists no programmable DRAM view.
+TEST_F(VclusterMetalDescDeathTest, E6NoProgrammableDramView) {
+    EXPECT_REFUSED(
+        in_chip(1, [](YAML::Node& soc) { soc["dram_views"] = YAML::Node(YAML::NodeType::Sequence); }),
+        "Chip 1 descriptor [^ ]*chip_1_soc_desc\\.yaml lists no programmable DRAM view; every DRAM core of the package "
+        "would be its own");
 }
 
 // E7, § Verification 3: the package's and every chip's architecture changed alike to Blackhole.
