@@ -96,9 +96,17 @@ def set_ctl(words: str) -> None:
     os.replace(CTL + ".tmp", CTL)
 
 
-def push(toks: list, start: int, end: int, last: bool, mark: bool = True) -> None:
+# WS1 (11-19): PREFIX_CHECK_DECODER_CONE=N marks every chunk that overlaps [floor128(S - N), S) with bit 28 (tt-d-gen
+# pd_decoder_cone), so a V41_PREFILL_DECODER_MARKED runner runs (and the digests cover) the last-chunk decoder;
+# PREFIX_CHECK_PROFILE_DIGEST=1 digests every P prompt too (byte-identity of long prompts)
+DECODER_CHUNK = 1 << 28
+DECODER_CONE = int(os.environ.get("PREFIX_CHECK_DECODER_CONE", "0"))
+PROFILE_DIGEST = os.environ.get("PREFIX_CHECK_PROFILE_DIGEST", "0") == "1"
+
+
+def push(toks: list, start: int, end: int, last: bool, mark: bool = True, dec: bool = False) -> None:
     body = toks[start:end] + [1] * (CHUNK - (end - start))
-    word = (MARKED | (LAST if last else 0)) if mark else 0
+    word = (MARKED | (LAST if last else 0) | (DECODER_CHUNK if dec else 0)) if mark else 0
     header = struct.pack("<3i", word, start, end)
     pp._push(service, PAYLOAD, pp._h2d_rows(body, start if end > start else 0), None, header)
 
@@ -134,8 +142,9 @@ def run_prompt(phase: str, name: str, arm: str, *, digest=False, mark=True, time
     base = acked
     marks = {base + (k + 1) * ACKS_PER_CHUNK: None for k in range(len(chunks))}
     t0 = time.perf_counter()
+    cone0 = max(0, (S - DECODER_CONE) // 128 * 128) if DECODER_CONE > 0 else S
     for k, (s, e) in enumerate(chunks):
-        push(toks, s, e, k == len(chunks) - 1, mark)
+        push(toks, s, e, k == len(chunks) - 1, mark, dec=DECODER_CONE > 0 and e > cone0)
     ok = wait_acks(base + len(chunks) * ACKS_PER_CHUNK, timeout_s, marks)
     done = [None if v is None else round(v - t0, 4) for v in marks.values()]
     r = {
@@ -241,7 +250,7 @@ def main() -> None:
             res.append(run_prompt("R2", name, "off", digest=True))
     if "P" in PHASES:
         for name in PROFILE_NAMES:
-            res.append(run_prompt("P", name, "off", timeout_s=7200.0))
+            res.append(run_prompt("P", name, "off", digest=PROFILE_DIGEST, timeout_s=7200.0))
     if "S2" in PHASES:
         log(f"S2 expected per-chunk patterns at chunk {CHUNK} (s2_plan dry run): {list(zip(S2, EXPECT_S2))}")
         res.append(run_prompt("S2", "X", "clear"))  # the store emptied, X computed (and stored)
