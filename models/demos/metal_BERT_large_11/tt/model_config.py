@@ -189,9 +189,13 @@ def get_model_config(batch, device_grid_size, model_config_str):
         }
         model_config.update(new_config_values)
 
-    elif model_config_str == "BFLOAT8_B-L1" or model_config_str == "BFLOAT8_B-DRAM":
+    elif (
+        model_config_str in ("BFLOAT8_B-L1", "BFLOAT8_B-DRAM")
+        and batch <= device_grid_size.y
+        and device_grid_size.x >= 8
+    ):
         # One core row per image, up to 12 columns; every per_core_N below covers its output's width
-        # on 8 columns or more.
+        # on 8 columns or more. On a smaller grid ttnn chooses each matmul's program config.
         grid_size = ttnn.CoreCoord(min(12, device_grid_size.x), batch)
         new_config_values = {
             "OP3_PRE_SOFTMAX_BMM_CONFIG": ttnn.MatmulMultiCoreReuseProgramConfig(
@@ -297,7 +301,10 @@ def get_model_config(batch, device_grid_size, model_config_str):
             grid_size = ttnn.CoreCoord(batch, activation_grid_dim)
             shard_orientation = ttnn.ShardOrientation.COL_MAJOR
         else:
-            assert False, f"Device grid size does not support batch {batch} {model_config_str} configuration"
+            # Without an 8 x batch grid the model runs interleaved in DRAM, with the program configs
+            # ttnn chooses for the device's grid.
+            logger.info(f"Grid {device_grid_size} has no 8 x {batch} cores; running BFLOAT8_B-DRAM instead")
+            return get_model_config(batch, device_grid_size, "BFLOAT8_B-DRAM")
         transpose_mm_mcast = shard_orientation == ttnn.ShardOrientation.COL_MAJOR
         new_config_values = {
             "GRID_SIZE": grid_size,
@@ -415,12 +422,5 @@ def get_tt_cache_path(model_version):
 
 
 def skip_unsupported_config(device, model_config_str, batch):
-    grid_size = device.compute_with_storage_grid_size()
     if device.arch() == ttnn.device.Arch.WORMHOLE_B0 and model_config_str != "BFLOAT8_B-SHARDED":
         pytest.skip("Only BFLOAT8_B-SHARDED supported for WH B0")
-
-    # Requires a minumum 8xB or Bx8 grid size for sharding
-    if "SHARDED" in model_config_str and not (
-        (grid_size.x >= 8 and grid_size.y >= batch) or (grid_size.x >= batch and grid_size.y >= 8)
-    ):
-        pytest.skip("Unsupported grid size for sharded test")

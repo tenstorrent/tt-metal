@@ -11,6 +11,12 @@ import ttnn
 MAX_GRID_COLUMNS = 12
 
 
+def fits_one_image_per_row(input_tensor_a):
+    """Whether the device's grid has a core row per image, which the program configs below assume.
+    On a smaller grid every matmul here runs with the program config ttnn chooses."""
+    return input_tensor_a.padded_shape[0] <= input_tensor_a.device().compute_with_storage_grid_size().y
+
+
 def grid_columns(device):
     """The core columns a matmul splits its output's width over: up to 12, as many as the device's
     grid has."""
@@ -21,6 +27,8 @@ def _multicast_config(input_tensor_a, n, per_core_N, out_subblock_h, out_subbloc
     """A multicast matmul config on one core row per image and grid_columns columns. ``per_core_N``
     and the subblock width are the 12-column values; with fewer columns per_core_N grows until the
     columns cover the ``n`` output tiles, and the subblock width shrinks to a divisor of it."""
+    if not fits_one_image_per_row(input_tensor_a):
+        return None
     batch_size = input_tensor_a.padded_shape[0]
     columns = grid_columns(input_tensor_a.device())
     per_core_N = max(per_core_N, math.ceil(n / columns))
@@ -100,7 +108,7 @@ def bert_large_ff1_matmul(
         transpose_mcast=False,
         fused_activation=fused_activation,
     )
-    return ttnn.linear(
+    output = ttnn.linear(
         input_tensor_a,
         input_tensor_b,
         bias=bias,
@@ -108,6 +116,12 @@ def bert_large_ff1_matmul(
         memory_config=output_mem_config,
         dtype=output_dtype,
     )
+    if program_config is None and fused_activation is not None:
+        # The activation is fused through the program config; without one it runs after the matmul.
+        op, approximate = fused_activation
+        assert op == ttnn.UnaryOpType.GELU, f"Unsupported activation {op}"
+        output = ttnn.gelu(output, fast_and_approximate_mode=approximate, memory_config=output_mem_config)
+    return output
 
 
 def bert_large_ff2_matmul(
@@ -176,14 +190,16 @@ def bert_large_pre_softmax_bmm(
     assert input_tensor_a.padded_shape == [batch_size, 16, 384, 64], "Unsupported input shape"
     assert input_tensor_b.padded_shape == [batch_size, 16, 64, 384], "Unsupported input shape"
 
-    program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
-        compute_with_storage_grid_size=(grid_columns(input_tensor_a.device()), batch_size),
-        in0_block_w=1,
-        out_subblock_h=4,
-        out_subblock_w=2,
-        per_core_M=12,
-        per_core_N=12,
-    )
+    program_config = None
+    if fits_one_image_per_row(input_tensor_a):
+        program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=(grid_columns(input_tensor_a.device()), batch_size),
+            in0_block_w=1,
+            out_subblock_h=4,
+            out_subblock_w=2,
+            per_core_M=12,
+            per_core_N=12,
+        )
     return ttnn.matmul(
         input_tensor_a,
         input_tensor_b,
@@ -201,14 +217,16 @@ def bert_large_post_softmax_bmm(
     assert input_tensor_a.padded_shape == [batch_size, 16, 384, 384], "Unsupported input shape"
     assert input_tensor_b.padded_shape == [batch_size, 16, 384, 64], "Unsupported input shape"
 
-    program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
-        compute_with_storage_grid_size=(grid_columns(input_tensor_a.device()), batch_size),
-        in0_block_w=2,
-        out_subblock_h=4,
-        out_subblock_w=2,
-        per_core_M=12,
-        per_core_N=2,
-    )
+    program_config = None
+    if fits_one_image_per_row(input_tensor_a):
+        program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=(grid_columns(input_tensor_a.device()), batch_size),
+            in0_block_w=2,
+            out_subblock_h=4,
+            out_subblock_w=2,
+            per_core_M=12,
+            per_core_N=2,
+        )
     return ttnn.matmul(
         input_tensor_a,
         input_tensor_b,
