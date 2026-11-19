@@ -19,7 +19,7 @@ finish() { log "__case_exit:$1"; exit "$1"; }
 mkdir -p "$R/bench" "$LOGDIR"
 
 # 1. No switches: the setup is the config file plus the branches. Any of these left in the shell changes the run.
-stale=$(env | cut -d= -f1 | grep -E '^(LLAMA_GALAXY_|TT_PLUGIN_EXP_|TRACE_REGION_SIZE$)' | tr '\n' ' ')
+stale=$(env | cut -d= -f1 | grep -E '^(LLAMA_GALAXY_|TT_PLUGIN_|TRACE_REGION_SIZE$)' | tr '\n' ' ')
 [ -n "$stale" ] && { log "unset these first: $stale"; finish 7; }
 
 TM=$TEJA/tt-metal; PL=$TEJA/vllm-tt-plugin
@@ -36,7 +36,7 @@ export MESH_DEVICE=TG TT_LLAMA_TEXT_VER=llama3_70b_galaxy VLLM_RPC_TIMEOUT=90000
 stop_server() {
   [ -n "${SRV:-}" ] && kill "$SRV" 2>/dev/null
   for i in $(seq 1 30); do pgrep -f server_example_tt.py > /dev/null || break; sleep 5; done
-  pkill -9 -f server_example_tt.py; pkill -9 -f 'vllm|EngineCore'; sleep 5
+  pkill -9 -f server_example_tt.py; pkill -9 -f 'EngineCore'; sleep 5  # not 'vllm': it matches this script's own path
   tt-smi -glx_reset_auto >> "$R/reset_$TAG.log" 2>&1
   cp "$LOGDIR/vllm_server_$TAG.log" "$R/" 2>/dev/null
   [ -d "$LOGDIR/bench_$TAG" ] && cp -r "$LOGDIR/bench_$TAG" "$R/"

@@ -21,7 +21,13 @@ model = "dry" if DRY else json.load(urllib.request.urlopen("http://localhost:800
 
 # Real English text: tt-metal markdown docs, prose lines only.
 paras = []
-for f in sorted(glob.glob(os.path.join(REPO, "**", "*.md"), recursive=True))[:400]:
+HERE = os.path.dirname(os.path.abspath(__file__))  # its README is not filler
+docs = [
+    f
+    for f in glob.glob(os.path.join(REPO, "**", "*.md"), recursive=True)
+    if os.path.dirname(os.path.abspath(f)) != HERE
+]
+for f in sorted(docs)[:400]:
     for line in open(f, errors="ignore"):
         line = line.strip()
         if len(line) > 80 and not line.startswith(("|", "#", "```", "<", "!", "-", "*")):

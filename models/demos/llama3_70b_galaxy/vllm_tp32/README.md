@@ -1,7 +1,6 @@
 # Llama-3.3-70B TP32 serving on WH Galaxy: how to reproduce the reference run
 
-This folder runs the model the way the reference numbers below were measured: same branches, same
-server flags, same config, same benchmark, same scoring and gates. Nothing else is needed. In
+This folder runs the model the way the reference numbers below were measured: same server flags, same config, same benchmark, same scoring and gates. Nothing else is needed. In
 particular, **no `LLAMA_GALAXY_*` or `TT_PLUGIN_*` environment variables**: every kept lever is now
 the default code path, and the scheduler settings are config keys.
 
@@ -21,13 +20,16 @@ cd ~/teja/vllm-tt-plugin && git fetch gtobar gtobar/serving-config && git checko
 - Only Python and YAML changed since `gtobar/prefill-levers` (`3dd62e0b`). If that branch is
   already built in `~/teja/tt-metal`, no rebuild is needed.
 - The plugin must be installed from this checkout (editable install), the same as before.
+- cfg1 ran the model tree at `fb2d3765`. The branch adds `6840080a` (an assert on the cached-prefix
+  gather group size, and padding defaults that only Qwen callers use). Llama behaviour is unchanged by
+  code reading; it has not been re-measured.
 - Both trees must be clean under `models/` and `src/`. The script logs the commit and a dirty count of
   each tree.
 
 ## 2. Clear old switches
 
 ```bash
-unset $(env | cut -d= -f1 | grep -E '^(LLAMA_GALAXY_|TT_PLUGIN_EXP_|TRACE_REGION_SIZE$)')
+unset $(env | cut -d= -f1 | grep -E '^(LLAMA_GALAXY_|TT_PLUGIN_|TRACE_REGION_SIZE$)')
 ```
 
 The script refuses to start (exit 7) while any of them is set. The env-var names from the previous
@@ -90,8 +92,8 @@ Server flags (in `run_serving.sh`):
 
 - `trace_region_size` 800000000 is also the registry value in `models/model_trace_region_sizes.yaml`.
   The 512-row cached-prefix shapes and the replica-miss traces do not fit in less.
-- `arrival_wait_ms` requires `flush_prefill_output`. `keep_decode_chain` requires async scheduling.
-  The plugin refuses to start otherwise.
+- `arrival_wait_ms` requires `flush_prefill_output`. `keep_decode_chain` requires async scheduling,
+  DP lane mode and on-device sampling. The plugin refuses to start otherwise.
 - bfp4 weights (FF2, attention) and HiFi2 prefill SDPA are on through `LlamaOptimizations.performance()`,
   which is what vLLM uses. `accuracy()` keeps them off.
 
@@ -108,25 +110,31 @@ Server flags (in `run_serving.sh`):
 
 ## 6. Reference results
 
-Same host, five runs of this configuration (pm12, pm14-16 used the old switches with the same values;
-cfg1 is this folder's setup with no env vars). `score_<tag>.txt` has the same rows.
+Same host. pm14-16 used the old switches with the same values; cfg1 is this folder's setup with no
+env vars. All values come from the bench JSONs in `bench_<tag>/` (decode tok/s/user = 1000 / TPOT ms).
+`slide5.py` scores a subset of these lines; the 240 RPM means and the warm-cache decode row are not in it.
 
-| SLA line | target | pm12-16 (4 runs) | cfg1 |
-|---|---|---|---|
-| Decode, 1 user at 4K (tok/s) | ≥ 25 | 58.0 | 58.0 |
-| 60 RPM: TTFT mean / P99 | ≤ 1 / 5 s | 0.60-0.61 / 1.35-1.36 s | 0.60 / 1.35 s |
-| 60 RPM: decode mean / P99 (tok/s/user) | ≥ 25 / 15 | 28.6 / 20.9 | 28.6 / 20.9 |
-| 60 RPM: end-to-end mean / P99 | ≤ 20 / 140 s | 18.5 / 33.0 s | 18.5 / 33.0 s |
-| 60 RPM + prefix: TTFT mean / P99 | ≤ 0.5 / 1.5 s | 0.4952-0.4989 / 1.13-1.14 s | 0.4959 / 1.14 s |
-| 240 RPM: TTFT P99 / decode P99 (tok/s/user) | ≤ 5 s / ≥ 15 | 4.2 s / 16.3-16.4 | 4.2 s / 16.4 |
-| Cold 16K / 32K TTFT | ≤ 5 / 10 s | 1.75-1.76 / 3.42 s | 1.76 / 3.42 s |
-| Prefix hit rate | 40% | 39.0% | 39.0% |
-| Needle / prefix needle | all | 21/21, 30/30 | 21/21, 30/30 |
-| MMLU (mmlu_llama, 5-shot, chat) | ≥ 80% | 82.37% (20 per subject) | 82.27% ± 0.31 (full, 14042) |
+| SLA line | target | pm14-16 (3 runs) | cfg1 | |
+|---|---|---|---|---|
+| MMLU (mmlu_llama, 5-shot, chat) | ≥ 80% | 82.37% (20 per subject, pm14) | 82.27% ± 0.31 (full, 14042) | pass |
+| 1 user at 4K: TTFT / decode | 1 s / 25 tok/s | 0.38-0.39 s / 58.0 | 0.38 s / 58.0 | pass |
+| Cold 16K / 32K TTFT | 5 / 10 s | 1.75-1.76 / 3.42 s | 1.76 / 3.42 s | pass |
+| 60 RPM: TTFT mean / P99 | 1 / 5 s | 0.60-0.61 / 1.35-1.36 s | 0.60 / 1.35 s | pass |
+| 60 RPM: decode mean / P99 | 25 / 15 tok/s | 28.6 / 20.9 | 28.6 / 20.9 | pass |
+| 60 RPM: end-to-end mean / P99 | 20 / 140 s | 18.5 / 33.0 s | 18.5 / 33.0 s | pass |
+| Warm cache (40% prefix): TTFT mean / P99 | 0.5 / 1.5 s | 0.495-0.496 / 1.13-1.14 s | 0.496 / 1.14 s | pass, at the edge |
+| Warm cache: decode mean / P99 | 25 / 15 tok/s | 29.8-29.9 / 22.3 | 29.9 / 22.4 | pass |
+| Prefix-cache hit rate | 40% | 39.0% | 39.0% | pass (≥ 38% rule) |
+| 240 RPM: TTFT mean / P99 | 1 / 5 s | 0.74 / 4.16-4.18 s | 0.73 / 4.16 s | pass |
+| 240 RPM: decode mean / P99 | 25 / 15 tok/s | 21.8 / 16.3-16.4 | 21.7 / 16.4 | **mean fails**, P99 passes |
+| Users per Galaxy | 128 peak | 32 | 32 | fail (4 lanes x 8) |
+| Needle / prefix needle (gates) | all | 21/21, 30/30 | 21/21, 30/30 | pass |
 
 Notes for comparing:
 
 - Decode P99 is a floor: `1000 / p99_tpot_ms`, the tok/s/user of the slowest 1% of tokens. Higher is better.
+- 240 RPM decode mean (21.7) is below 25 in every run. Likely cause (not measured): at 4 requests/s the
+  32 slots stay full and prefills keep cutting into each lane's decode steps.
 - The prefix hit rate scores PASS at ≥ 38%. The workload is designed for 40%, and the target slide
   counts 38.7% as a pass.
 - The 60 RPM + prefix TTFT mean sits at the target (0.4952-0.4989 over five runs). The script prints it
