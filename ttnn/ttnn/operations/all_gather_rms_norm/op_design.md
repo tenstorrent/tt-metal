@@ -435,3 +435,33 @@ Helpers considered and rejected (raw_api entries):
 | Ring on G = 2 | a 2-chip ring is the line | `plan()` treats it as a line (example) |
 | num_links=None | must be the usable minimum over every hop | `min(len(get_forwarding_link_indices(a, b)))` over the group's hops |
 | Hang triage | many parties | `blackhole-ccl-kernels.md` §14 signatures; port sender in `wait_for_empty_write_slot` = route / receiver stall; member reader on `sem_landed` = a missing notification |
+
+## Implementation notes (Phase 0, as built) — deviations and realizations
+
+Binding elements implemented as designed: R1 mirror_resident_gather (raw slices relayed by port cores straight into
+the compute cores' `cb_x`, same core / offset on every chip; `cb_x` first CB over compute_used ∪ ports_union),
+balanced ring / line schedule of `fabric_all_gather`, one port (reader NCRISC/NoC0 + sender BRISC/NoC1) per
+(direction, link) placed by the probe next to its Ethernet core, ready fence, one fused arrival increment per
+(wave, shard) entry, relay with `relay_lag_waves = 1`, landing notifications serviced by the port reader's polling
+loop, row-groups × k members over `worker grid − ports_union`, base-op symmetric partial exchange, LN pivot-shifted
+member moments + Chan combine, dense assembly by home member + foreign contributions for `w_non_aligned`.
+
+| Item | Design | As built | Why |
+|---|---|---|---|
+| k > 8 (owner combine, base op R3) | built | **deferred**: `select_split` candidates capped at `K_SYM_MAX = 8` (symmetric all-gather) | scope; the cap only changes the decode shapes' k (e.g. (32,2048): k = 8 instead of ~24). Refinement: port the base op's row-partial owner combine |
+| `out_unit_tiles` | `min(mw, 16)` | cap 4, halved down to 1 when the CB plan does not fit L1 | measured: a 12-tile unit kept the writer from overlapping the normalize of the same row (focus tail); L1 pressure from L1-sharded inputs/outputs in the golden matrix |
+| gamma / beta load | reader, compact 192 B pages | writer, full-tile pages; tile-aligned slices: base-op direct row-0 reads issued at start and finished after the partial exchange; non-aligned: staged sticks + RISC-V element shift | the first cut's element scatter cost ~11 µs ahead of the exchange (zones); compact pages are an L1-only refinement |
+| LN passes | chain / reduce helpers | aligned bf16/bf8b (`AGRMS_LN_FPU`): pivot = one block `reduce` (row stride = pitch); centering on the FPU into `cb_cent`; D1 / D2 by `reduce` + DEST-accumulated squares; normalize = FPU sub + `DestReuseBcast` COL/ROW. fp32 or non-aligned: raw SFPU loops (copy_tile UnpackToDestFp32 → exact x − K; slice tails masked by a row-0 mask) | the all-SFPU path costs ~10 element inits per tile (indexer 22.7 µs, zones: ~14 µs of LN compute on a 1×4-tile block); FPU subtraction is exact only for bf16/bf8b operands |
+| LN combine (k = 1) | Chan over k | shortcut μ = mean_1, M2 = M2_1 | saves ~8 full-tile SFPU ops per row |
+| `cb_pivot` | one CB (K_m then K_g) | `cb_km` + `cb_kg` | both live in a multi-row block's combine window |
+| dense assembly | ≤ 4 shift matrices per member | generic `(e0, e1, delta)` 0/1 matrices per member (host-enumerated, incl. identity for foreign tiles), output-dtype format | W_local < 32 makes an output tile span > 2 slices; one generic matrix form covers every case |
+| sharded input / output | accessor path (zero-copy deferred) | as designed | — |
+| program cache | `custom_program_hash` | sha1 of every structural input (shapes, dtypes, memory configs, cfg, mesh, ports_union, k, waves, compute config) + coord | — |
+
+Measured (eval `ccl_perf` protocol via `tests/ttnn/unit_tests/operations/all_gather_rms_norm/perf_agrms.py`,
+5 experiments, fastest chip, QuietBox 2 1x4 ring, 2 links): focus 640×384 rms **21.25 µs** (roofline 7.6,
+target 10.1); indexer 640×32 layer_norm **16.16 µs** (roofline 0.6). Not dispatch-bound.
+Zone breakdown of the focus case (profiler on; one call): kernel start ≈ 2.8 µs, port connection open done ≈
+5.0 µs, fabric send ≈ 12.3 µs per port (≈ 30 GB/s = 62 % of a link: TRANSPORT), last wave lands ≈ 18.7 µs, tail
+after the last landing ≈ 5.8 µs (moments 1 µs, exchange + combine ≈ 1.1 µs, normalize ≈ 3 µs, last store
+≈ 0.5 µs: OVERLAP).

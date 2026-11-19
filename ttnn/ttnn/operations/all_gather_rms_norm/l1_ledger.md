@@ -85,3 +85,38 @@ NoC ≈ 3·S + 0.64 MB.
 > Cheapest-traffic split considered: R1 itself (raw slices into compute L1, mirror layout, relay) — it is at the minimum
 > on the DRAM and fabric tiers. Implemented: R1. The alternatives (normalize-then-gather, gather-to-DRAM) move the same
 > or more bytes and add a fabric round or 2·G·S of DRAM; they are `rejected` rows in the regime table.
+
+## As built (Phase 0 implementation) — deltas from the planned inventory
+
+Single source of truth: `cb_plan()` in `all_gather_rms_norm_program_descriptor.py` (both the L1-fit solve in
+`select_split()` and the CB declarations read it). CB indices: `kernels/all_gather_rms_norm_common.hpp`.
+
+| CB (index) | Capacity (pages) | Page format | Producer | Consumer | Delta vs plan / Shares with / why not |
+|---|---|---|---|---|---|
+| `cb_x` (0) | `rows · pitch` | input dtype | reader (DRAM read) / fabric landing | compute (+ port readers by raw address) | as planned; FIRST CB over compute_used ∪ ports_union on every chip. Never transformed in place: the ports read it for relays |
+| `cb_port_stage` (1) | `2 · PORT_BATCH_CHUNKS · chunk_pages` | input dtype | port_reader | port_sender | as planned |
+| `cb_gamma` / `cb_beta` (2/3) | `pitch` | gamma dtype, FULL tile page (only row 0 of faces 0/1 written) | writer | compute | delta: full-tile page instead of the base op's 192 B compact stride (≤ 2·pitch·T_g bytes; simpler addressing for the element-shift loader of non-aligned slices). Refinement candidate if L1-bound |
+| `cb_ones` (4) | 1 | bf16 | reader | compute | as planned |
+| `cb_mask` (5, ln ∧ W_local % 32 ≠ 0) | 1 | bf16 row-0 0/1 mask (`prepare_reduce_mask`) | reader | compute | delta: bf16 row-0 mask (unary_bcast ROW) instead of a T_acc full mask |
+| `cb_moment_a` (6) | `rows` | T_acc | compute | compute | rms Σx² tiles; ln (SFPU path) Σx tiles |
+| `cb_moment_b` (7, ln) | `2 · rows` | T_acc | compute | compute | SFPU path (D1, D2 interleaved); FPU path: D2 tiles (rows) |
+| `cb_km` (8, ln) | `rows` | bf16 | compute | compute | the planned `cb_pivot` split in two (K_m here, K_g in `cb_kg`): both live in the combine window of a multi-row block |
+| `cb_partial` (9) | `n_stat · rows` | T_acc | compute | writer (k > 1) / compute (k = 1) | as planned |
+| `cb_gathered` (10, k > 1) | `n_stat · k · rows` | T_acc | writer (peers) | compute | as planned (symmetric only: k ≤ 8, owner combine deferred) |
+| `cb_rowstat` (11) | `rows` | T_acc | compute | compute | rms inv_rms; ln inv_std (shift moved to `cb_shift`) |
+| `cb_out` (12) | `OUT_DEPTH · out_unit`, `out_unit` = largest of {min(pitch, 4), /2, …, 1} that fits | output dtype | compute | writer | delta: unit cap 4 (stores overlap the normalize of the row) and shrinks under L1 pressure |
+| `cb_mstat` (13, ln) | `2 · rows` | T_acc (UnpackToDestFp32) | compute | compute | column-0 D1 / D2 per row |
+| `cb_shift` (14, ln) | `rows` | T_acc | compute | compute | ln shift = (K_g − μ)·inv_std |
+| `cb_kg` (15, ln) | `rows` | bf16 | compute | compute | ln K_g = bf16(μ) (the pack is the rounding) |
+| `cb_mu` (16, ln) | 1 | T_acc (UnpackToDestFp32) | compute | compute | μ between the two combine windows of a row |
+| `cb_affine_stage` (17, gamma) | `Σ(n + 1) + 1` slots × 128 B | bytes | writer | writer | staging of dense gamma/beta sticks (non-aligned element shift only) |
+| `cb_norm` (18, dense) | `rows · pitch` | output dtype | compute | compute | the planned dense-mode `cb_out` block |
+| `cb_shift_mats` (19, dense) | `max n_mats` | output dtype (0/1) | reader | compute | generic (e0, e1, delta) shift matrices incl. identity; format = output dtype (matmul operands symmetric) |
+| `cb_foreign` (20, dense) | `rows · max_fin` | output dtype | writer (peers) | compute | as planned |
+| `cb_contrib` (21, dense) | `rows · max_fout` | output dtype | compute | writer | as planned |
+| `cb_cent` (22, ln FPU path) | `rows · pitch` | T_acc | compute | compute | NEW: centered block c' = x − K_m (aligned bf16/bf8b LN). Cannot alias `cb_x` (relay source) — the in-place transform is ruled out by the ports' raw-address relay reads |
+
+`cb_out_dense` of the plan is the plain `cb_out` stream in dense mode (the assembly packs straight into it).
+Data-movement budget: unchanged from the plan (DRAM: x read once by the own members, output written once; fabric:
+raw slices, balanced ring schedule; cross-core: port L1 reads of outgoing runs, k-member partial exchange, dense
+foreign contributions).
