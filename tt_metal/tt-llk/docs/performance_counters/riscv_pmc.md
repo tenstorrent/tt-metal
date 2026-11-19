@@ -49,7 +49,7 @@ The metal consumer is `tt_metal/hw/inc/internal/profiler/riscv_pmc.hpp`: marker 
 
 Unlike the Tensix counters, a record carries the raw `mhpmevent` select, not an enumerator ordinal, because the select format is the hardware's own and a run may OR several events. The host decodes names by looking selects up in the tables, so `PmcEvent` has no wire-format constraint beyond being append only for stable names.
 
-The firmware hooks are in `tt_metal/hw/firmware/src/tt-1xx/{brisc,ncrisc,trisc}.cc` and `tt-2xx/{trisc,dm}.cc`; the option is parsed in `tt_metal/llrt/rtoptions.cpp` and turned into `-DPROFILE_RISCV_PMC{,_EV3,_EV4,_DM_EV3,_DM_EV4,_DM_EV5,_DM_EV6}` in `tt_metal/jit_build/build.cpp`. Nothing was added to the memory map, `dev_msgs.h` or the HAL: the markers use the existing per-RISC profiler buffer. The hash suffix is added only when the option is on.
+The Blackhole Tensix hooks are in the kernel entries `tt_metal/hw/firmware/src/tt-1xx/{brisck,ncrisck,trisck}.cc`, so they cost the firmware regions nothing and the L1 layout stays as it is; the ethernet and Quasar hooks are in the firmware, `tt-1xx/active_erisc.cc` and `tt-2xx/{trisc,dm}.cc`; the option is parsed in `tt_metal/llrt/rtoptions.cpp` and turned into `-DPROFILE_RISCV_PMC{,_EV3,_EV4,_DM_EV3,_DM_EV4,_DM_EV5,_DM_EV6}` in `tt_metal/jit_build/build.cpp`. Nothing was added to the memory map, `dev_msgs.h` or the HAL: the markers use the existing per-RISC profiler buffer. The hash suffix is added only when the option is on.
 
 Adding an event: append the enumerator to `PmcEvent`, add one `{PmcEvent::NAME, select}` entry to the right table and bump the array size. The host parsers read the headers, so nothing else changes.
 
@@ -63,8 +63,8 @@ One or two selects, hex or decimal, comma separated; `mhpmevent4` defaults to 0.
 nibble layout of section 5 and apply to every core except the Quasar data-movement cores, which take
 their own one to four selects in `TT_METAL_PROFILE_RISCV_PMC_DM` (section 7). Left unset, the DM counters stay idle and
 only `mcycle` and `minstret` are captured on those cores. Setting the option
-forces the device profiler on. The selects are compile-time constants of the baby-core firmware and are
-part of the firmware build key, so changing them rebuilds the firmware. Both selects zero is rejected.
+forces the device profiler on. The selects are compile-time constants of the kernel and firmware builds and are
+part of the build key, so changing them rebuilds both. Both selects zero is rejected.
 
 Each core emits three `TS_DATA` markers per kernel launch (five on a Quasar data-movement core with counter 5 or 6 armed), all payload in the `data` column of
 `profile_log_device.csv`:
@@ -77,22 +77,19 @@ Each core emits three `TS_DATA` markers per kernel launch (five on a Quasar data
 | 9095 | `(mhpmcounter6 delta << 32) \| mhpmcounter5 delta`, Quasar data-movement cores with a non-zero select 5 or 6 only |
 | 9096 | `(mhpmevent6 << 32) \| mhpmevent5`, same cores |
 
-The deltas cover the kernel invocation in the firmware (waypoint `R` to `D`). On an ethernet core they cover the kernel call only. On Quasar DM0, which runs no kernel itself, they cover the window from the TRISC launch to the end of the dataflow-buffer drain. On Blackhole BRISC the
-bracket also covers `wait_for_go_message()` when BRISC has no kernel. The selects are re-emitted every
+On a Blackhole Tensix core the deltas cover `kernel_main()` (`run_kernel()` on a TRISC), after the go message, and a core that runs no kernel in a launch publishes nothing for it; dispatch kernels are not captured. On an ethernet core they cover the kernel call only. On Quasar DM0, which runs no kernel itself, they cover the window from the TRISC launch to the end of the dataflow-buffer drain. The selects are re-emitted every
 launch so each capture says which events it counted. The room for the markers is held back from the
 kernel's own zones at launch, so a kernel that fills the profiler buffer still gets its markers; only a buffer that
 was already full before the launch drops them. The Tensix counter multi-pass flow keeps the
 markers from pass 0 only, which is correct because the selects do not change between passes.
 
-Firmware cost with the option on: BRISC grows by about 260 B, NCRISC by about 225 B, the Blackhole
-TRISCs by about 235 B, the active ethernet ERISC0 by about 265 B (17624 B of 24576 B), the Quasar TRISCs by 280 to
+Cost with the option on: on the Blackhole Tensix cores the hook is part of the kernel image, 264 to 280 B per core
+(`metal_example_eltwise_binary` on a p100a), so the firmware regions and the L1 layout do not change. The active
+ethernet ERISC0 firmware grows by about 265 B (17624 B of 24576 B), the Quasar TRISCs by 280 to
 300 B and the Quasar DM image by about 790 B (8100 B of 12288 B), 1104 B with all four DM counters armed (8412 B).
-The Blackhole BRISC region is 9728 B so that the hook still links next to the five Tensix counter groups (9468 B
-on a card with 7 DRAM banks).
 
 Only one event pair is captured per run (two pairs on a Quasar data-movement core); a sweep over several pairs needs one run per pair. Without
-the option the hooks compile to nothing and the firmware images are byte-identical to a build without
-this feature.
+the option the hooks compile to nothing.
 
 ## 4. CSR map
 
