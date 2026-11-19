@@ -54,8 +54,8 @@ protected:
         return Tensor::from_vector(values, spec, device_);
     }
 
-    // Records ttnn::pad, whose factory allocates an L1 pad-value tensor and hands it to the program cache, then
-    // replays the list and checks the output. after_build runs between build() and the replay.
+    // Records a single-core row-major ttnn::pad, whose factory allocates an L1 pad-value tensor and hands it to the
+    // program cache, then replays the list and checks the output. after_build runs between build() and the replay.
     void expect_pad_replays(const std::function<void()>& after_build) const {
         constexpr uint32_t width = 32;
         constexpr float pad_value = 3.0f;
@@ -74,7 +74,10 @@ protected:
         {
             auto recording = builder.record_scope();
             output = ttnn::pad(
-                input, ttsl::SmallVector<std::array<uint32_t, 2>>{{0, 0}, {0, 0}, {0, 0}, {0, width}}, pad_value);
+                input,
+                ttsl::SmallVector<std::array<uint32_t, 2>>{{0, 0}, {0, 0}, {0, 0}, {0, width}},
+                pad_value,
+                /*use_multicore=*/false);
         }
         CommandList command_list = builder.build(QueueId{0});
         builder.deallocate();
