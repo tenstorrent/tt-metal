@@ -84,6 +84,7 @@
 #include "ttnn/operations/experimental/indexer_score/indexer_score_nanobind.hpp"
 #include "ttnn/operations/experimental/gemma4/sliding_ring_sdpa/sliding_ring_sdpa_nanobind.hpp"
 #include "ttnn/operations/experimental/kda/kda_nanobind.hpp"
+#include "ttnn/operations/experimental/gdn/gdn_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/moe_gpt/moe_gpt_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/dispatch_fabric2d/dispatch_fabric2d_nanobind.hpp"
@@ -243,6 +244,7 @@ void py_module(nb::module_& mod) {
     indexer_score::detail::bind_indexer_score(mod);
     ttnn::experimental::gemma4::bind_sliding_ring_sdpa(mod);
     kda::detail::bind_kda(mod);
+    gdn::detail::bind_gdn(mod);
     moe_gpt::detail::bind_moe_gpt(mod);
 
     // DeepSeek prefill MoE operations
