@@ -601,3 +601,4 @@
 - 17:12 UTC P.83 agent: 3 op-probe runs through the safe runner directly (device opens), one HANG at 17:09 (reset by the safe runner, recovered). Told it: op probes through the runner (0 opens), bounded waits / signalled semaphores. RAM unaccounted 207.7 GiB.
 - 17:35 UTC P.83 accepted (device -1.1..-1.5 ms a chunk at 142k, -1.0..-1.6 at 1M; 3 runner restarts + 3 direct probe opens incl. one hang). DEVICE OPEN (justified): the accept gate's fresh full-model accuracy process (runner steps aside).
 - 17:51 UTC P.83 gate PASS -> bdbd25c2e83 (mhc_post fast: device -1.1..-1.5 ms a chunk). RAM unaccounted 212.5 GiB. Next: P.81 attention.
+- 17:51 UTC DEVICE (justified): P.81 attention launched (fork / fuse per the owner, OV-56); op probes and A/B through the runner.
