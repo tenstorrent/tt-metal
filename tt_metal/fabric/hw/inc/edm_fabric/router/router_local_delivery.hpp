@@ -89,12 +89,7 @@ FORCE_INLINE void count_local_writes(uint32_t writes) {
 }
 
 // An atomic increment; a flushed one first waits for every earlier write to be acknowledged.
-#if defined(ARCH_WORMHOLE)
-// Needed for wormhole to get around small IRAM size.
-__attribute__((noinline)) void local_atomic_inc(uint64_t addr, uint32_t value, bool flush, uint8_t channel) {
-#else
 FORCE_INLINE void local_atomic_inc(uint64_t addr, uint32_t value, bool flush, uint8_t channel) {
-#endif
     if (flush) {
         flush_write_to_noc_pipeline</*all_writes_counted=*/counts_local_writes>(channel);
     }
@@ -143,6 +138,13 @@ FORCE_INLINE void deliver(
         local_write<counts_local_writes>(payload, header->command_fields.unicast_write.noc_address, payload_size, trid);
         return;
     }
+
+    // Semaphore increment state. The send types that end in a semaphore increment track their respective state, and we
+    // have one call at the end to local_atomic_inc() that uses this state. We do this over each branch having its own
+    // call to local_atomic_inc() for code size savings (one inlined call vs multiple).
+    uint64_t inc_noc_addr;
+    uint32_t inc_value;
+    bool inc_flush;
     if (type == NocSendType::NOC_UNICAST_SCATTER_WRITE) {
         channel_trimming_usage_recorder.set_noc_send_type_used(CH, type);
         using ChunkEncoding = tt::tt_fabric::NocScatterWriteChunkEncoding;
@@ -173,30 +175,34 @@ FORCE_INLINE void deliver(
         const uint64_t last_noc_addr = scatter.noc_address[chunks - 1];
         if (last == ChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE) {
             local_write<false>(payload + offset, last_noc_addr, static_cast<uint16_t>(payload_size - offset), trid);
-            writes++;
-        }
-        count_local_writes(writes);
-        if (last != ChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE) {
+            count_local_writes(writes + 1);
+            return;
+        } else {
+            count_local_writes(writes);
             ASSERT(last != ChunkEncoding::CHUNK_ENCODING_NOP);
-            local_atomic_inc(
-                last_noc_addr, scatter.chunk_size[chunks - 1], last == ChunkEncoding::CHUNK_ENCODING_SEMINC_FLUSH, CH);
+            inc_noc_addr = last_noc_addr;
+            inc_value = scatter.chunk_size[chunks - 1];
+            inc_flush = last == ChunkEncoding::CHUNK_ENCODING_SEMINC_FLUSH;
         }
-        return;
-    }
-    if (type == NocSendType::NOC_UNICAST_ATOMIC_INC) {
+    } else if (type == NocSendType::NOC_UNICAST_ATOMIC_INC) {
         channel_trimming_usage_recorder.set_noc_send_type_used(CH, type);
         const auto& inc = header->command_fields.unicast_seminc;
-        local_atomic_inc(inc.noc_address, inc.val, inc.flush != 0, CH);
-        return;
-    }
-    if (type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC) {
+        inc_noc_addr = inc.noc_address;
+        inc_value = inc.val;
+        inc_flush = inc.flush != 0;
+    } else if (type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC) {
         channel_trimming_usage_recorder.set_noc_send_type_used(CH, type);
         const auto& fused = header->command_fields.unicast_seminc_fused;
         local_write<counts_local_writes>(payload, fused.noc_address, payload_size, trid);
-        local_atomic_inc(fused.semaphore_noc_address, fused.val, fused.flush != 0, CH);
+        inc_noc_addr = fused.semaphore_noc_address;
+        inc_value = fused.val;
+        inc_flush = fused.flush != 0;
+    } else {
+        deliver_other(header, payload_size, type, trid, CH);
         return;
     }
-    deliver_other(header, payload_size, type, trid, CH);
+
+    local_atomic_inc(inc_noc_addr, inc_value, inc_flush, CH);
 }
 
 }  // namespace fabric_router
