@@ -100,17 +100,20 @@ pytest models/experimental/openvla/tt/open_vla.py::test_openvla_model -v
 
 ## Accuracy Tests
 
-`tests/test_openvla_accuracy.py` compares against openvla/openvla-7b (revision 47a0ec7f) run on CPU in float32:
-the timm towers of `PrismaticVisionBackbone` for the vision features and transformers' `LlamaForCausalLM` for
-the language model, on a fixed 224x224 test pattern and the prompt
-`In: What action should the robot take to pick up the red block?\nOut:`.
+`tests/test_openvla_accuracy.py` compares against openvla/openvla-7b (revision 47a0ec7f). The feature and logits
+tests run the timm towers of `PrismaticVisionBackbone` and transformers' `LlamaForCausalLM` on CPU in float32, on a
+fixed 224x224 test pattern and the prompt `In: What action should the robot take to pick up the red block?\nOut:`.
+The `predict_action` test uses action tokens from the HF model in bfloat16 on CPU, made by
+`references/generate_reference_actions.py`.
 
 | Test | Tolerance | ttsim Wormhole |
 |------|-----------|----------------|
 | DINOv2 features, checkpoint weights | PCC > 0.97 | 0.981 |
 | SigLIP features, checkpoint weights | PCC > 0.97 | 0.988 |
 | Logits after 2 decoder layers, BOS + 256 patches + prompt | PCC > 0.97, TT top-1 in reference top-5 | 0.996, same top-1 |
-| `predict_action` token order | returned tokens are the generated ones, all action tokens | |
+| `predict_action`, two solid-color images | returned tokens are the generated ones, all action tokens, actions are their de-normalized bin centers; with the reference tokens fed back in, TT top-1 in the reference top-5 at all 7 steps | |
+
+The `predict_action` test reads the config and `norm_stats` from the `OPENVLA_WEIGHTS` snapshot, so it should be revision 47a0ec7f (`references/setup_openvla_weights.sh` downloads that revision).
 
 ## Known Issues
 
