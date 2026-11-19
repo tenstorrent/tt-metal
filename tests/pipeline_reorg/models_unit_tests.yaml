@@ -1765,6 +1765,36 @@
   team: models
   budget_type: unit
 
+- name: TT-DiT MiniMax-H3 component unit tests
+  cmd: |
+    export NO_PROMPT=1
+    export TT_MESH_ID=0
+    export TT_MESH_HOST_RANK=0
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
+    # The MiniMax-H3 torch reference is only in this diffusers commit (models/tt_dit/models/MiniMaxH3.md).
+    H3_DIFFUSERS="${PIPELINE_DIR:?CI staging directory required}/.h3_diffusers"
+    uv pip install --no-deps --target "$H3_DIFFUSERS" \
+      "diffusers @ git+https://github.com/huggingface/diffusers@abc5e9bf71fd38f53cd471bc3acaa84bc5ecbfdc" || exit 1
+    export PYTHONPATH="$H3_DIFFUSERS${PYTHONPATH:+:$PYTHONPATH}"
+    # Stop at the first failed command: the devices are not reset between commands (#57706).
+    run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" python3 -m pytest --timeout 1800 "$@" || exit $?; }
+    run models/tt_dit/tests/models/minimax_h3/test_packing_minimax_h3.py \
+      models/tt_dit/tests/models/minimax_h3/test_policy_minimax_h3.py \
+      models/tt_dit/tests/models/minimax_h3/test_scheduler_minimax_h3.py \
+      models/tt_dit/tests/models/minimax_h3/test_length_classes_minimax_h3.py \
+      models/tt_dit/tests/models/minimax_h3/test_adaln_tilerow_minimax_h3.py \
+      models/tt_dit/tests/models/minimax_h3/test_h3_adapter_loader_minimax_h3.py
+    run models/tt_dit/tests/models/minimax_h3/test_transformer_minimax_h3.py \
+      -k "4x8sp1tp0nl2_ring_is_fsdp0 and not perf and not prod_768p and not real_weights and not ref2va"
+  model: minimax-h3
+  skus:
+    bh_sc1:
+      timeout: 40
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+  budget_type: unit
+
 # ----------------------------------------------------------------------------
 # WAN 2.2 single-galaxy multihost tests (bh_sc1 / exabox-multihost-ci-sc1)
 # ----------------------------------------------------------------------------

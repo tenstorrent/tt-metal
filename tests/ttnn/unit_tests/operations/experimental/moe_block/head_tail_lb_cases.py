@@ -9,7 +9,11 @@ config (the tokens a mesh row, 640 or 384: chunk = SP x that - a multiple of 32 
 Determinism: CALLS calls on the same inputs, float outputs folded on the device (op_checks.DeterminismMarker), the
 small integer outputs (routing rows, route words, plan tensors) compared on the host.
 Perf: op_checks.PERF_RUNS (5) traced replays on the real-time program profiler, the op's slowest chip, median, against
-its baseline (per machine: the LoudBox's, or a Galaxy's 2x4 tray; MOE_PERF_RECORD=1 records it)."""
+its baseline in the op test's own table (op_checks.check_perf).
+LoudBox only: the cases ask for exactly the machine's chip count (require_exact_physical_num_devices), so on a Galaxy
+they skip before the mesh opens - a 2x4 corner of a Galaxy does not open (its fabric routers time out in their first
+handshake; tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py skips its LoudBox cases the same
+way)."""
 
 import sys
 from dataclasses import dataclass
@@ -96,7 +100,7 @@ MODELS = {
 class Case:
     model: str
     row_tokens: int  # tokens a mesh row (chunk = SP x row_tokens)
-    margin: float = 0.05  # (the baselines: each op test's perf baselines file)
+    margin: float = 0.05  # (the perf margin over the baseline in each op test's table)
     seed: int = 3
 
     @property
@@ -126,6 +130,7 @@ def _device_params(model):
         "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
         "l1_small_size": 16384,
         "trace_region_size": 64 << 20,
+        "require_exact_physical_num_devices": True,  # (LoudBox only: skips on a Galaxy before the mesh opens)
     }
 
 

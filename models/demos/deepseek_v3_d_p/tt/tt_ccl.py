@@ -191,9 +191,10 @@ class TT_CCL:
 
         self.sparse_kv_push_planner = None  # SparseKvPushPlanner, created on first use
 
-        # The routed expert / combine_fabric2d overlap's fwd_arrived, final_arrived and expert_go, shared by every
-        # MoE layer. Created on first use; see get_combine_overlap_semaphores.
-        self.combine_overlap_semaphores = None
+        # The routed expert / combine_fabric2d overlap's fwd_arrived, final_arrived and expert_go, then its channel
+        # counters, shared by every MoE layer; one set per combine axis. Created on first use; see
+        # get_combine_overlap_semaphores.
+        self.combine_overlap_semaphores = {}
         # combine_fabric2d's DRAM forwarding buffer, one per shape; see get_combine_forwarding_buffer.
         self.combine_forwarding_buffers = {}
         # dispatch_fabric2d's forwarding and staging buffers, one pair per shape; see get_dispatch_fabric2d_buffers.
@@ -240,27 +241,32 @@ class TT_CCL:
             self.fused_rmsnorm_resources[key] = resources
         return resources
 
-    def get_combine_overlap_semaphores(self):
+    def get_combine_overlap_semaphores(self, combine_axis: int):
         """fwd_arrived, final_arrived and expert_go, then combine's channel counters, for
-        hybrid_routed_expert_moe overlapped with combine.
+        hybrid_routed_expert_moe overlapped with combine along mesh axis ``combine_axis`` (the MoE's SP axis).
 
-        Neighbouring chips bump these across launches, so they must outlive every program: one set for the mesh,
-        shared by all MoE layers, which run one after another and each leave the counts as they found them. On every
-        worker core, so the address is uniform across the mesh and covers both ops' rows.
+        Neighbouring chips bump these across launches, so they must outlive every program: one set for the mesh
+        and combine axis, shared by all MoE layers, which run one after another and each leave the counts as they
+        found them. On every worker core, so the address is uniform across the mesh and covers both ops' rows.
+
+        The channel counter count depends on the length of the combine axis, and the op requires exactly that many:
+        a set sized for axis 0 of an 8x4 mesh (19) is refused by a combine along axis 1 (4).
 
         The channel counters are here rather than inside the op for a second reason: the routed expert's L1
         arena takes every free byte before combine is built, so nothing can be allocated there at all.
         """
-        if self.combine_overlap_semaphores is None:
+        semaphores = self.combine_overlap_semaphores.get(combine_axis)
+        if semaphores is None:
             channels = ttnn.experimental.deepseek_prefill.hybrid_routed_expert_moe_channel_semaphore_count(
-                self.mesh_device
+                self.mesh_device, combine_axis=combine_axis
             )
-            self.combine_overlap_semaphores = tuple(
+            semaphores = tuple(
                 ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(3 + channels)
             )
             # Every chip must have zeroed its copies before any neighbour bumps them.
             ttnn.synchronize_device(self.mesh_device)
-        return self.combine_overlap_semaphores
+            self.combine_overlap_semaphores[combine_axis] = semaphores
+        return semaphores
 
     def get_combine_forwarding_buffer(
         self, emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links, fwd_vc_pages, combine_axis=0

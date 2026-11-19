@@ -160,18 +160,18 @@ ttsl::hash::hash_t AllGatherMinimalMatmulAsyncOp::compute_program_hash(
     const std::optional<BlockSizes> default_blocks =
         attributes.config.has_value() ? std::nullopt
                                       : std::optional<BlockSizes>(default_block_sizes(M, K, N, fp32_dest_acc_en));
-    // With multicast (Fabric2D, not transposed) the factory sizes the output buffer to one row when each core has a
-    // single M block (agmm_single_m_block); the row count is not in the hash.
+    // The factory sizes the output buffer to one row when each core has a single M block (agmm_single_m_block); the
+    // row count is not in the hash.
     const bool fabric_2d = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
     const bool transposed = resolve_transpose_core_grid(attributes, M, N, fabric_2d);
     const auto grid = attributes.config.has_value() ? attributes.config->compute_with_storage_grid_size
                                                     : act_tensor.device()->compute_with_storage_grid_size();
     const uint32_t M_block_tiles =
         attributes.config.has_value() ? attributes.config->M_block_size : std::get<0>(*default_blocks);
-    // Whether the factory may give the output buffer one row (agmm_single_m_block on its multicast path): a superset of
-    // where it does, which only splits the cache further.
+    // Whether the factory may give the output buffer one row: a superset of where it does, which only splits the cache
+    // further.
     const bool one_row_output =
-        fabric_2d && !transposed && agmm_single_m_block(M / tt::constants::TILE_HEIGHT, M_block_tiles, grid.y);
+        agmm_single_m_block(M / tt::constants::TILE_HEIGHT, M_block_tiles, transposed ? grid.x : grid.y);
     return ttsl::hash::hash_objects_with_default_seed(
         attributes,
         transposed,
@@ -206,6 +206,9 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
             !attributes.force_transpose && !attributes.transpose_core_grid.value_or(false),
             "all_gather_minimal_matmul_async: the transposed grid is not ported to Fabric2D");
     }
+    TT_FATAL(
+        !(attributes.use_mcast && tensor_args.persistent_weight_buffer.has_value()),
+        "all_gather_minimal_matmul_async: use_mcast is not ported to FSDP");
 
     // Layout requirements: all inputs must be TILE layout
     TT_FATAL(
@@ -651,7 +654,8 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     std::optional<ttnn::ccl::Topology> fsdp_topology,
     bool fuse_swiglu,
     const std::vector<uint32_t>& chunk_sizes,
-    std::optional<bool> transpose_core_grid) {
+    std::optional<bool> transpose_core_grid,
+    bool use_mcast) {
     using OperationType = ttnn::experimental::prim::AllGatherMinimalMatmulAsyncOp;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -700,7 +704,8 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
         fsdp_topology_,
         fuse_swiglu,
         chunk_sizes,
-        transpose_core_grid};
+        transpose_core_grid,
+        use_mcast};
     auto tensor_args = OperationType::tensor_args_t{
         input_tensor,
         weight_tensor,
