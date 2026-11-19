@@ -1,20 +1,13 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-# Vendored by bringup_fw.scaffold from bringup-sc tools/prefill/bringup_fw/reference/interface.py (sha256 efb6f023e5b7944e5cbe5f096786c42bc00f0f42eeca5746bd46436dbd47b6d4). Do not edit: rerun the scaffold.
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
-#
-# SPDX-License-Identifier: Apache-2.0
 """The interface every model's CPU reference implements, and the block-graph runner built on it.
 
 A model's ``hooks.reference(spec, layers=None, dtype=torch.float32)`` returns an object with the methods below.
 
-Dtypes. ``dtype`` is the compute dtype. Every weight tensor is held in ``weight_dtype(spec)`` (spec
-``reference.weight_dtype``, bf16 by default: half the host memory, and the run's RAM checks count on it) and cast to
-the activation's dtype in the op that uses it, ``F.linear(x, as_compute(w, x))``, never kept as an fp32 copy. fp32
-weights slip in through ``.float()`` at load, ``nn.Linear`` / ``nn.Embedding`` built without a dtype, and dequantizing
-loaders that return fp32 (cast their result). The model's own fp32 work (norm variance, softmax, router logits, RoPE
-tables, recurrent state) stays fp32 as upstream does it.
+Dtypes. ``dtype`` is the compute dtype. Weights are held in ``weight_dtype(spec)`` (spec ``reference.weight_dtype``,
+bf16 by default) and cast to the activation's dtype in the op that uses them, ``F.linear(x, as_compute(w, x))``, never
+kept as an fp32 copy. Norm variance, softmax, router logits and RoPE tables stay fp32 as upstream computes them.
 
     layer_ids: list[int]
     new_state(max_seq) -> state                      per-layer chunked-prefill state (KV cache, recurrent state, ...)
@@ -29,16 +22,12 @@ tables, recurrent state) stays fp32 as upstream does it.
 
 Recorder names. ``forward_chunk`` calls ``rec(name, tensor)`` at every boundary: ``embed``, ``final_norm``,
 ``logits``, and per layer ``L{i}.in`` (block input), ``L{i}.<step output>`` for every step, where the last step's
-output is ``out``. Extra names (e.g. ``L{i}.q``) are allowed. The golden step stores these; component, swap and
-ladder tests read them.
+output is ``out``. Extra names (e.g. ``L{i}.q``) are allowed. Golden and component tests read these.
 
-The reference's own forward should run each block through ``run_block`` so the graph is the code, not a
-description of it. The reference gate replays the graph from recorded boundaries and requires an exact match.
+The reference's forward runs each block through ``run_block``, so the graph is the code.
 
 Profile sections. ``run_block`` marks one section per step (``signpost(step name)``); device code may mark finer ones
-itself (``signpost("attention.sdpa")``, imported from this module). A signpost does nothing unless the framework's
-profiler (bringup_fw/testing/profiler.py) has set ``SECTION_HOOK`` while it profiles, so a handed-off package runs
-it for free.
+(``signpost("attention.sdpa")``). A signpost does nothing unless a profiler has set ``SECTION_HOOK``.
 """
 
 from __future__ import annotations
@@ -55,7 +44,7 @@ def noop(name: str, t: torch.Tensor) -> None:
     pass
 
 
-SECTION_HOOK: Callable[[str], None] | None = None  # set by the framework's profiler while it profiles
+SECTION_HOOK: Callable[[str], None] | None = None  # set by a profiler while it profiles
 
 
 def signpost(name: str) -> None:
@@ -72,7 +61,7 @@ class Step:
     inputs: tuple[str, ...]  # boundary names read: "in", "attn_norm", ...
     output: str  # boundary name written; the block's last step writes "out"
     kind: str = "op"  # template family: norm, attention, mlp, moe, router, residual, embedding, op
-    stateful: bool = False  # reads or writes the per-layer state (the swap test then carries a state prefix)
+    stateful: bool = False  # reads or writes the per-layer state
 
 
 @dataclass

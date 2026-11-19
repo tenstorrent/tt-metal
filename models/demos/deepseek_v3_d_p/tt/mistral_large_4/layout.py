@@ -1,13 +1,12 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""The residual layout on the 8x4 mesh and its host boundary (plan.md "Mesh and layout").
+"""The residual layout on the 8x4 mesh and its host boundary.
 
 Axis 0 (rows) = SP: each mesh row holds S/8 consecutive rows of the chunk. Axis 1 (columns) = TP: each chip holds
 H/4 hidden columns. A per-chip tensor is [1, 1, S/8, H/4], bf16, TILE, DRAM interleaved.
 
-These helpers are the harness boundary only (device_component's wrapper, device_model's from_host / to_host); no
-module forward calls them.
+These helpers are the test harness's host boundary only; no module forward calls them.
 """
 
 import torch

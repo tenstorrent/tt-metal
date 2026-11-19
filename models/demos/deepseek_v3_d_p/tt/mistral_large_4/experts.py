@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Routed experts, expert-parallel over all 32 chips (plan.md attn_moe "experts"; "MoE dispatch groups").
+"""Routed experts, expert-parallel over all 32 chips.
 
 Adapted from models/demos/deepseek_v3_d_p/tt/moe/tt_moe.py (TtMoERoutingSetup, TtDispatchModule, TtRoutedExpert's
 extract -> FFN -> insert loop, TtCombineModule, TtReduceModule). 4 dispatch groups, one per TP column c, each of the 8
@@ -18,12 +18,9 @@ chips of its column (SP axis 0); group c owns experts 32c..32c+31, chip r of it 
     reduce   post_combine_reduce: sum_k weight_k * slot_k over this group's slots -> [1, 1, 640, 6144]
              -> EXPERTS_PARTIAL_DTYPE -> reduce_scatter(axis 1) sums the 4 groups -> bf16 [1, 1, 640, 1536]
 
-EXPERTS_IMPL picks the expert step. "unified" (perf 3): unified_routed_expert_moe, as tt-metal's DeepSeek / GLM / Kimi
-prefill runs it, every local expert in one op on its own token count (about 160 rows of an average expert per chunk),
-x packed to bfloat8_b inside. "loop" (the bring-up's): extract -> gate / up / silu * up / down -> insert per local
-expert, each over the most tokens an expert can get (all 5120 of its group). The bring-up chose the loop because the
-fused kernel failed its per-component norm-ratio gate at bfloat8_b weights (known_issues); the shipped model runs
-bfloat4_b experts and is judged end to end (PERF.md).
+EXPERTS_IMPL picks the expert step. "unified": unified_routed_expert_moe, as the DeepSeek / GLM / Kimi prefill runs it,
+every local expert in one op on its own token count, x packed to bfloat8_b inside. "loop": extract -> gate / up /
+silu * up / down -> insert per local expert, each over the most tokens an expert can get (all 5120 of its group).
 """
 
 import torch
@@ -57,7 +54,7 @@ def _unified_compute_config(mesh):
 
 
 class TtExperts:
-    # read when they run, not when built: a sweep can change them between runs of one loaded model (PERF.md)
+    # read at call time, not build time: settings may change between runs of one loaded model
     @property
     def cfg(self):
         return _compute_config(self.mesh)
@@ -68,12 +65,12 @@ class TtExperts:
 
     @property
     def topology(self):
-        # the dispatch / combine (axis 0); read at run time so a sweep can vary it
+        # the dispatch / combine (axis 0)
         return getattr(ttnn.Topology, settings.get("EXPERTS_TOPOLOGY"))
 
     @property
     def tp_topology(self):
-        # perf 8: the TP (axis 1) gather and reduce_scatter; the dispatch / combine keep EXPERTS_TOPOLOGY
+        # the TP (axis 1) gather and reduce_scatter; the dispatch / combine use EXPERTS_TOPOLOGY
         return getattr(ttnn.Topology, settings.get("EXPERTS_TP_TOPOLOGY"))
 
     @property
@@ -197,7 +194,7 @@ class TtExperts:
         # dispatch the full-width rows along the group
         x_full = tp_gather.gather(x, self.tp_topology, self.w[0]["w1"].shape[-2])
         if settings.get("EXPERTS_DISPATCH_IN") == "tile":
-            # perf 14: dispatch untilizes a TILE input itself (its compute kernel); same bf16 rows
+            # dispatch untilizes a TILE input itself; same bf16 rows
             x_rm = x_full
         else:
             x_rm = ttnn.to_layout(x_full, ttnn.ROW_MAJOR_LAYOUT)
@@ -206,7 +203,7 @@ class TtExperts:
         idx3 = ttnn.reshape(indices_rm, (1, rows, k))
         ov = None
         if overlap is not None and sub_device.enabled():
-            # perf 16: dispatch on the row-0 sub-device, overlap() (the shared expert) on the rest of the grid
+            # dispatch on the row-0 sub-device, overlap() (the shared expert) on the rest of the grid
             ov = sub_device.overlap(self.mesh)
             ov.load()
         buf, meta = ttnn.experimental.deepseek_prefill.dispatch(
@@ -227,7 +224,7 @@ class TtExperts:
         )
         if ov is not None:
             # nothing dispatch reads is freed before the clear: a buffer freed while the other sub-device's op
-            # still runs could be handed to the concurrent op (tt_shared_expert.py's note)
+            # still runs could be handed to the concurrent op
             overlap(ov)
             ov.clear()
         elif overlap is not None:

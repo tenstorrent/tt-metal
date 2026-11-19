@@ -4,7 +4,7 @@
 """The HF oracle for Mistral Large 4: transformers' own ``mistral_large4`` text model, vendored.
 
 The checkpoint needs transformers 5.21 (model type ``mistral_large4``, added upstream by huggingface/transformers
-b5e1cb8b015b "Add Mistral Large 4 (#50121)", 2026-10-29); this workspace has 5.12.1. The text-model classes below are
+b5e1cb8b015b "Add Mistral Large 4 (#50121)"), newer than the version installed here. The text-model classes below are
 copied from that commit's ``modeling_mistral_large4.py`` with only these changes:
   * absolute imports, no hub-kernel / output-capture / config-default decorators (no effect on CPU eager);
   * ``create_causal_mask`` without ``allow_is_causal_skip`` (new in 5.17; 5.12 never skips the mask for eager);

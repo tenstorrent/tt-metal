@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""The prefill runner's runtime for mistral_large4_1t: the all-device model (tt/model.py) over the served layers, on
-the engine-owned caches (tt/runners/kv_table.py).
+"""The prefill runner's runtime for mistral_large_4: the all-device model (model.py) over the served layers, on
+the engine-owned caches (kv_table.py).
 
 Input: the H2D stream's uint32 ROW_MAJOR [1, 1, chunk / SP] per chip (SP row r holds the chunk's rows in the engine's
 ring_sdpa_reshuffle order; replicated over TP), PAD_ID past actual_end; TtModel.embed_device clamps it and embeds it.
@@ -11,13 +11,13 @@ Acks: one per served layer per chunk, in layer order, after that layer's cache w
 zeroed): device-to-host (PREFILL_LAYER_ACK_D2H=1: a socket-service record on the same queue after the layer's ops),
 else on the host after a device synchronize, through the completion sink.
 
-Traced (the runner's PREFILL_USE_TRACE=1, params.use_trace; the default of model/serve.py, PREFILL_USE_TRACE=0 runs
-eagerly): the forward of every served layer runs on the device-held chunk values (tt/chunk_meta.py), captured ONCE as
-a ttnn trace and replayed per chunk after the chunk's ids, record and metadata are copied into persistent buffers
-(tt-metal's GLM-5.3 TtPrefillRuntime contract). The capture runs at startup, before the runner reports ready
-(startup_capture: a warm-up record through the H2D service first compiles the socket program, which tt-metal's order
-requires before a capture); without the recorded service it falls back to the runner's capture on the first record. Device-to-host acks are recorded inside the
-capture (one per layer, reading a persistent copy of the chunk's metadata_msg); host-sink acks fire after the replay.
+Traced (PREFILL_USE_TRACE=1, params.use_trace; PREFILL_USE_TRACE=0 runs eagerly): the forward of every served layer
+runs on the device-held chunk values (chunk_meta.py), captured ONCE as a ttnn trace and replayed per chunk after the
+chunk's ids, record and metadata are copied into persistent buffers (as the GLM-5.3 TtPrefillRuntime). The capture runs
+at startup, before the runner reports ready (startup_capture: a warm-up record through the H2D service first compiles
+the socket program, which must happen before a capture); without a recorded service it falls back to the runner's
+capture on the first record. Device-to-host acks are recorded inside the capture (one per layer, reading a persistent
+copy of the chunk's metadata_msg); host-sink acks fire after the replay.
 """
 
 from __future__ import annotations
@@ -33,11 +33,11 @@ import ttnn
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4 import sub_device
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4 import kv_table as KT
 
-# model/serve.py records the H2D service the runner builds (it lives in the runner's scope), so the traced runtime can
-# take a warm-up record through it before the request loop (startup_capture)
+# the launcher records the H2D service the runner builds here, so the traced runtime can take a warm-up record through
+# it before the request loop (startup_capture)
 H2D_SERVICES = []
 WARMUP_WORD = -2  # prefill_runner's WARMUP_METADATA_WORD: a record the runner's loop drops
-# a client of the runner's H2D service (as tt-metal's prefill_producer) that pushes one warm-up record
+# a client of the runner's H2D service (as prefill_producer) that pushes one warm-up record
 _PUSH_WARMUP = """
 import struct, sys
 import numpy as np
@@ -50,7 +50,7 @@ service.barrier()
 
 
 class MistralLarge4PrefillRuntime:
-    """model: tt/model.py TtModel over geo.layers, built on the engine's caches; config: the runner's
+    """model: model.py TtModel over geo.layers, built on the engine's caches; config: the runner's
     PrefillRunParams; geo: kv_table.Geometry."""
 
     def __init__(self, mesh_device, model, config, geo: KT.Geometry):
@@ -124,8 +124,7 @@ class MistralLarge4PrefillRuntime:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         # the staging copies compiled here too: a program first compiled after the capture allocates device buffers
-        # the replays may overwrite (srv-02: the record copy compiled on the first chunk, a 5.6 s stall and tt-metal's
-        # "allocating device buffers ... active trace" warning)
+        # the replays may overwrite
         ids = self._zero_ids()
         ttnn.copy(ids, self._ids)
         ttnn.deallocate(ids)
@@ -151,7 +150,7 @@ class MistralLarge4PrefillRuntime:
 
     def capture_trace(self, kv_cache) -> None:
         """Record the traced forward once (the runner calls this on the first record, after set_d2h_ack_service:
-        the socket programs are compiled by then, as tt-metal's traced runtime requires). With D2H acks, the warm pass
+        the socket programs must be compiled before a capture). With D2H acks, the warm pass
         that compiles the ack programs ran in set_d2h_ack_service (else here); its warmup_ack_count records go to the
         runner, which drains them. The caches are zeroed again before the capture."""
         if not self.traced or self._tid is not None:
@@ -204,8 +203,8 @@ class MistralLarge4PrefillRuntime:
     def startup_capture(self) -> None:
         """Capture before the request loop (the runner calls the ack hooks after opening the H2D service and before it
         reports ready): a client process pushes one warm-up record, taken here with the runner's socket op (its program
-        compiles now, before the capture, as tt-metal requires: a program first compiled after a capture can land on
-        memory the replays write), then the capture. Falls back to the runner's capture on the first record when the
+        compiles now, before the capture: a program first compiled after a capture can land on memory the replays
+        write), then the capture. Falls back to the runner's capture on the first record when the
         H2D service was not recorded or the push fails (the record, if pushed, is then the runner's warm-up record)."""
         import time
 
@@ -365,7 +364,7 @@ class MistralLarge4PrefillRuntime:
         rows, cols = tuple(self.mesh_device.shape)
         banks, host = self._banks(), KT.host_name()
         if stage_layouts:
-            assert all(len(s) == 1 for s in stage_layouts), "mistral_large4_1t serves one rank"
+            assert all(len(s) == 1 for s in stage_layouts), "mistral_large_4 serves one rank"
             banks, host = int(stage_layouts[0][0]["num_banks"]), f"host-{stage_layouts[0][0]['host_tag']:08x}"
         row_fnids = [
             [self.mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(r, c)) for c in range(cols)] for r in range(rows)

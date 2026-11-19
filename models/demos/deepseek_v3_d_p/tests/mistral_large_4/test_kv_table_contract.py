@@ -34,7 +34,7 @@ class _Cfg:
 
 
 def _geometry(monkeypatch, mirrors=True):
-    monkeypatch.setenv("MISTRAL_LARGE4_1T_KV_MIRRORS", "1" if mirrors else "0")
+    monkeypatch.setenv("MISTRAL_LARGE_4_KV_MIRRORS", "1" if mirrors else "0")
     return KT.Geometry.of(_Cfg(), range(NUM_LAYERS), sp=8, chunk=5120, max_seq=56320, slots=2)
 
 

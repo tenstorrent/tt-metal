@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Standalone CPU reference of Mistral Large 4 (1T-A52B, text decoder) for chunked prefill.
 
-Implements the interface in _bringup_interface.py, independent of transformers (HF is only the oracle in check_hf,
-reference/hf_oracle.py). Weights come straight from the consolidated FP8 checkpoint (reference/weights.py) and are
+Implements the interface in _bringup_interface.py, independent of transformers (HF is only the oracle,
+hf_oracle.py). Weights come straight from the consolidated FP8 checkpoint (weights.py) and are
 held in ``weight_dtype(spec)`` (bf16: an FP8 block times its power-of-two scale is exact in bf16); compute runs in
 ``dtype`` (fp32), each weight cast in the op that uses it. Routed experts stay in the checkpoint's FP8 (the
 ExpertStore: 1 TB in bf16 would not fit) and are dequantized straight into the compute dtype for the GEMM that uses
@@ -51,10 +51,9 @@ Indexer (32 heads x 128): q = ssmax'_h(p) * wq_b(LayerNorm(x)) (LayerNorm eps 1e
     the top 2048 (HF: top-k over the causally masked scores; a row with <= 2048 visible keys selects all of them).
 State per layer: kv_latent [max_seq, 512] (normed latent) and k_rope [max_seq, r] (RoPE'd, interleaved), [*, 0] on
     NoPE layers and both [*, 0] on shared-KV layers; index_key [max_seq, 128] (LayerNorm'd, RoPE'd on rope layers) on
-    full-indexer layers, [*, 0] on shared-index layers. index_key is state the spec's state.tensors does not name yet
-    (a chunk's indexer scores every earlier key, so chunked prefill needs the prefix's index keys): state_tensors
-    returns it anyway, and load_state takes it when given; the indexer refuses a prefix whose index keys were not
-    loaded rather than score zeros.
+    full-indexer layers, [*, 0] on shared-index layers. A chunk's indexer scores every earlier key, so chunked
+    prefill needs the prefix's index keys: the indexer refuses a prefix whose index keys were not loaded rather than
+    score zeros.
 
 Precision: weights in ``weight_dtype``, activations and state in ``dtype`` (fp32 for the gates); norm variance,
 softmax, router logits and RoPE tables fp32 as upstream. Chunked == one-shot: attention / indexer row blocks are
@@ -328,8 +327,8 @@ def layer_names(cfg: Config, i: int) -> dict[str, str]:
 
 class State:
     """Per layer: kv [max_seq, 512] and kr [max_seq, r] (layers that own their KV), ik [max_seq, 128] (full-indexer
-    layers). ik_len: how many positions of each layer's index keys are valid (an index-key prefix the golden lacks
-    is caught instead of read as zeros)."""
+    layers). ik_len: how many positions of each layer's index keys are valid (a missing index-key prefix is caught
+    instead of read as zeros)."""
 
     def __init__(self, cfg: Config, layers: list[int], max_seq: int, dtype):
         self.max_seq = max_seq

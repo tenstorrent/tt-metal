@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""The all-device model (task M.1): hidden state on the device from the embedding to the final norm.
+"""The all-device model: hidden state on the device from the embedding to the final norm.
 
-Each block runs through ``run_block`` over the reference's block graph, every step a device module (tt/*.py) on the
-residual layout of tt/layout.py ([1, 1, S/8, H/4] per chip, rows over SP, columns over TP). Nothing goes to the host
+Each block runs through ``run_block`` over the reference's block graph, every step a device module of this package on the
+residual layout of layout.py ([1, 1, S/8, H/4] per chip, rows over SP, columns over TP). Nothing goes to the host
 between the embedding and the final norm.
 
-The served KV cache is the model's state (serving_contract.md "KV cache"): two configs, both bfloat8_b TILE,
+The served KV cache is the model's state: two configs, both bfloat8_b TILE,
 ND-sharded [1, 1, 32, width] ROUND_ROBIN_1D over the DRAM banks (init_kvpe_cache), SP-sharded and TP-replicated, 2
 slots. ``kvpe`` (576 wide) has one region per layer that owns its KV (NoPE layers keep the pe columns zero), ``index``
 (128 wide) one per full-indexer layer. Every module of a layer writes the region it owns; a shared-KV layer reads its
@@ -22,7 +22,7 @@ lays it out as the engine's H2D stream does (ring_sdpa_reshuffle by ``start``): 
 g with (g // (S/8)) % 8 == r. ``layer(i, h, start, state, end=)`` writes rows [start, end) of the caches the layer owns
 and zeroes the pad rows of the last record. Modules are built on a layer's first call (weights read then).
 
-Trace-safe forward (``meta``, tt/chunk_meta.py): with ``TtModel.meta`` set, every per-chunk value (slot, start, end)
+Trace-safe forward (``meta``, chunk_meta.py): with ``TtModel.meta`` set, every per-chunk value (slot, start, end)
 is read on the device from the ChunkMeta tensors instead of being baked into the ops, and every chunk runs one code
 path, so ``forward_meta`` captured once as a ttnn trace replays for any chunk after ``meta.write``.
 """
@@ -42,7 +42,7 @@ from models.demos.deepseek_v3_d_p.tt.mistral_large_4.attention import _stamp_sp_
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4.layout import SP_AXIS, TP_AXIS, residual_to_device, residual_to_host
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4.settings import settings
 
-NUM_USERS = 2  # serving_answers slots
+NUM_USERS = 2  # cache slots
 
 
 def alloc_caches(mesh, cfg, max_seq: int, kv_regions: int, index_regions: int, num_users: int):
@@ -86,7 +86,7 @@ class State:
     def kv_caches(self) -> dict:
         return {"kvpe": self.model.kvpe, "index": self.model.index}
 
-    # ---- host side (harness and contract tests; never inside a layer)
+    # ---- host side (tests; never inside a layer)
     def _write(self, cache, n_regions: int, region: int, rows: torch.Tensor, length: int) -> None:
         """Host rows [>= length, W] of positions [0, length) (any 32-aligned length) -> the cache, a chunk at a time
         through update_padded_kv_cache, where the model writes them; rows from ``length`` on stay as they are."""
@@ -183,8 +183,8 @@ class TtModel:
         weights read then); ``cache`` names the served cache and the region the module owns (attention: cache,
         cache_layer, cache_layers; indexer the same for the index cache). embed_weight [V, H], norm_weight [H],
         lm_head_weight [V, H] or None (host, any float dtype). block_graph(layer) -> list[Step]. caches: the served
-        caches {"kvpe", "index"} when the serving engine owns them (tt/runners/adapter.py allocate_kv_cache, the same
-        layout for num_users slots); None allocates them here."""
+        caches {"kvpe", "index"} when the runner owns them (tt/runners/adapters/mistral_large_4.py allocate_kv_cache,
+        the same layout for num_users slots); None allocates them here."""
         t0 = time.time()
         self.mesh, self.cfg, self.layers = mesh, cfg, list(layers)
         self.max_seq, self.chunk = max_seq, chunk
@@ -211,7 +211,7 @@ class TtModel:
                 mesh, cfg, max_seq, len(self.kv_region), len(self.index_region), num_users
             )
         for t in (self.kvpe, self.index):
-            if t is not None:  # None: the serving engine binds its caches later (tt/runners/runtime.py)
+            if t is not None:  # None: the runner binds its caches later (runtime.py)
                 _stamp_sp_topology(t, mesh)
 
         from models.demos.deepseek_v3_d_p.tt.mistral_large_4.norm import TtDistributedRmsNorm
@@ -233,7 +233,7 @@ class TtModel:
             self.lm_head = ttnn.from_torch(
                 lm_head_weight.float()[None, None],
                 device=mesh,
-                dtype=ttnn.bfloat8_b,  # rule 7: weights bfp8; [V/4, H] per chip, read with transpose_b
+                dtype=ttnn.bfloat8_b,  # [V/4, H] per chip, read with transpose_b
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=shape, dims=dims),
@@ -296,7 +296,7 @@ class TtModel:
             got = self._topk.get(src)
             assert got is not None and got[0] == c.start, f"layer {i} reuses layer {src}'s top-k, not run on this chunk"
             if settings.get("TOPK_SHARED") == "alias":
-                # perf 13: the source's top-k itself; layer() never frees a _topk tensor, and the source replaces it only
+                # the source's top-k itself; layer() never frees a _topk tensor, and the source replaces it only
                 # when it runs the next chunk, after every layer of this one
                 return got[1]
             return m["topk_shared"](got[1])
@@ -327,7 +327,7 @@ class TtModel:
 
         overlap_on = settings.get("MOE_OVERLAP") != "off"
         if cfg.is_moe(i) and settings.get("MOE_REDUCE") == "fused":
-            # perf 12: the experts' group partial is added into the shared expert's fp32 partial and one
+            # the experts' group partial is added into the shared expert's fp32 partial and one
             # reduce_scatter sums both; experts_out is that partial, shared_out the block's MoE output
             def shared_fused(c, x, ex):
                 sh = m["shared_expert"]
@@ -341,7 +341,7 @@ class TtModel:
             stash = {}
 
             def experts_fused(c, x, r):
-                # MOE_OVERLAP: the shared expert's partial is computed while dispatch runs (tt/sub_device.py)
+                # MOE_OVERLAP: the shared expert's partial is computed while dispatch runs (sub_device.py)
                 ov = (lambda sub: stash.__setitem__("sh", m["shared_expert"].partial(x, sub))) if overlap_on else None
                 stash["ex"] = m["experts"](x, r, reduce=False, indices=_router_ids(), overlap=ov)
                 return stash["ex"]
@@ -364,13 +364,11 @@ class TtModel:
         return fns
 
     def resize(self, max_seq: int) -> None:
-        """Long ISL: every max_seq-sized device tensor (the served caches, the attention / indexer gather scratches,
-        the RoPE, softmax-scaling and position tables, the split tables of the metadata path) freed and allocated
-        again for ``max_seq``, without reading the weights again. The caches must be the model's own; they come back
-        zeroed by the next new_state, so a new sequence follows. A layer not built yet builds later at the size its
-        builder is given (the caller's spec). Frees everything first, so a size that does not fit fails in an
-        allocation here (resize again, smaller). Growing in place can fail on fragmentation (the freed per-layer
-        tables leave holes between the weights; long ISL 1): build at the largest size and resize down."""
+        """Frees and reallocates every max_seq-sized device tensor (the served caches, the attention / indexer gather
+        scratches, the RoPE, softmax-scaling, position and split tables) for ``max_seq``, without reading the weights
+        again. The caches must be the model's own; the next new_state zeroes them. A layer not built yet builds later at
+        the size its builder is given. Growing in place can fail on fragmentation (freed per-layer tables leave holes
+        between the weights): build at the largest size and resize down."""
         assert max_seq % self.chunk == 0, (max_seq, self.chunk)  # whole chunks: block-cyclic blocks split over SP
         assert self._own_caches, "the serving engine owns the caches"
         from models.demos.deepseek_v3_d_p.tt.mistral_large_4 import rope, seqbuf
@@ -401,7 +399,7 @@ class TtModel:
             if "indexer" in m:
                 m["indexer"].build_seq(max_seq, self.index)
 
-    # ---- the model interface (testing/harness.py, serving_contract.md)
+    # ---- the model interface
     def new_state(self, max_seq: int) -> State:
         """A new sequence: the caches zeroed, no cross-layer value of an earlier chunk kept."""
         for _, tk in self._topk.values():
@@ -436,7 +434,7 @@ class TtModel:
     def embed_device(self, ids: ttnn.Tensor) -> ttnn.Tensor:
         """The engine's uint32 ROW_MAJOR ids [1, 1, S/8] per chip -> the residual. PAD_ID is clamped to V - 1 on the
         device (uint32 minimum is exact); pad rows are masked later by actual_end."""
-        tile = ttnn.to_layout(ids, ttnn.TILE_LAYOUT)  # known_issues: uint32 minimum on TILE, exact
+        tile = ttnn.to_layout(ids, ttnn.TILE_LAYOUT)  # uint32 minimum on TILE, exact
         safe = ttnn.minimum(tile, self.vocab - 1)
         ttnn.deallocate(tile)
         safe_rm = ttnn.to_layout(safe, ttnn.ROW_MAJOR_LAYOUT)
@@ -474,7 +472,7 @@ class TtModel:
 
     # ---- the trace-safe forward
     def enable_meta(self):
-        """Allocate the ChunkMeta the layers read from now on (tt/chunk_meta.py). Returns it."""
+        """Allocate the ChunkMeta the layers read from now on (chunk_meta.py). Returns it."""
         from models.demos.deepseek_v3_d_p.tt.mistral_large_4.chunk_meta import ChunkMeta
 
         if self.meta is None:
@@ -485,7 +483,7 @@ class TtModel:
         """One chunk through ``layers`` with every per-chunk value read from self.meta (written before with
         meta.write): unpack the record, the layers, then the final norm (``final``). The same ops for every chunk, so it
         can be captured once and replayed (h_in a persistent input). h_in stays the caller's. after_layer(k, layer):
-        called after each layer's ops (the serving runtime's acks). Returns the output (final norm or last hidden)."""
+        called after each layer's ops (the runtime's acks). Returns the output (final norm or last hidden)."""
         meta = self.meta
         assert meta is not None, "enable_meta() first"
         slot, start, end = meta.host  # host view only: the ops read the device record

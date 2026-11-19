@@ -9,9 +9,8 @@ powers of two, ``use_ue8m0_for_qscales``), and bf16 for the tensors the quantiza
 kv_a / kv_b, the indexer's wk and weights_proj, the router, embeddings, the LM head). An FP8 value times a power of
 two is exact in bf16, so dequantizing to bf16 loses nothing.
 
-Reads go straight to the shards with parallel O_DIRECT preads (2+ GB/s from the NFS checkpoint, page cache untouched:
-a forward over 40 MoE layers scans more bytes than the page cache holds, so cached reads would evict exactly what the
-next chunk needs).
+Reads go straight to the shards with parallel O_DIRECT preads, bypassing the page cache: a forward over 40 MoE layers
+scans more bytes than the page cache holds.
 
 Routed experts (14.5 GB of FP8 per MoE layer, 128 experts x w1/w2/w3) never fit in host memory all together. The
 store keeps a layer's raw FP8 weights and scales (the checkpoint's own bytes) resident while a byte budget allows, and

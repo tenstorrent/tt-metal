@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""perf 7: the ffn_norm output gathered over TP once per block (FFN_GATHER=shared).
+"""The ffn_norm output gathered over TP once per block (FFN_GATHER=shared).
 
 The router, the routed experts and the shared expert each all_gather the same [1, 1, S/8, H/4] ffn_norm output to
 [1, 1, S/8, H] over TP. With FFN_GATHER=shared the first of them gathers it and the others reuse it; the gathered
 tensor lives until the next block's gather replaces it (a reader never deallocates it). FFN_GATHER=each keeps one
-gather per module, as the bring-up did.
+gather per module.
 """
 
 import ttnn

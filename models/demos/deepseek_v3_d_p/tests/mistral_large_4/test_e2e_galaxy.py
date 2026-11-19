@@ -37,12 +37,12 @@ from models.demos.deepseek_v3_d_p.tt.runners.adapters.mistral_large_4 import CHE
 CKPT = os.environ.get("ML4_CKPT") or os.environ.get("PREFILL_HF_MODEL") or CHECKPOINT_DIR
 GOLDEN = Path(os.environ.get("ML4_GOLDEN", ""))
 OUT = Path(os.environ.get("ML4_E2E_OUT", "generated/ml4_e2e/result.json"))
-PCC_TARGET, PCC_LOWER = 0.99, 0.85  # the bring-up spec's acceptance
+PCC_TARGET, PCC_LOWER = 0.99, 0.85
 CAPACITY = 56320  # the served slot capacity: the model is built as it serves, whatever the golden's length
 
 
 class _Spec:
-    """What the device model's builder reads off a spec (bringup/hooks.py)."""
+    """What the device model's builder (tt/mistral_large_4/hooks.py) reads off a spec."""
 
     def __init__(self, hf_dir: str, seq: int, chunk: int):
         self.hf_dir = Path(hf_dir)
@@ -53,7 +53,7 @@ class _Spec:
 
 
 
-REPLAY_ISSUE_MS: list = []  # perf 16: host enqueue ms of every traced replay (MOE_OVERLAP's segments)
+REPLAY_ISSUE_MS: list = []  # host enqueue ms of every traced replay
 
 def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     a, b = a.double().flatten(), b.double().flatten()
@@ -66,7 +66,7 @@ def _rel(a: torch.Tensor, b: torch.Tensor) -> float:
 
 
 def _top1_detail(lg: torch.Tensor, g: torch.Tensor) -> dict:
-    """perf 8: how far a last-position top-1 flip is. Each side's rank of the other's top-1 (0 = its own top-1), the
+    """How far a last-position top-1 flip is. Each side's rank of the other's top-1 (0 = its own top-1), the
     logit gap to it on each side, and the top-5 overlap, for the last row; top-5 containment over all rows."""
     a, b = lg[-1].double(), g[-1].double()
     ta, tb = int(a.argmax()), int(b.argmax())
@@ -125,8 +125,8 @@ class _Gold:
 def mesh_device():
     from models.demos.deepseek_v3_d_p.tt.mistral_large_4 import fabric
 
-    fabric.set_from_env()  # ML4_FABRIC / ML4_FABRIC_PAYLOAD; default the bring-up's 1D ring
-    # perf 7: ML4_TRACE_REGION_MB reserves a trace region; 0 (default) = traces allocated from DRAM as captured
+    fabric.set_from_env()  # ML4_FABRIC / ML4_FABRIC_PAYLOAD; default 1D ring
+    # ML4_TRACE_REGION_MB reserves a trace region; 0 (default) = traces allocated from DRAM as captured
     region = int(os.environ.get("ML4_TRACE_REGION_MB", "0")) * 1024 * 1024
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(8, 4), **({"trace_region_size": region} if region else {}))
     try:
@@ -204,7 +204,7 @@ def _prefill(model, tokens, seq: int, chunk: int, layers, watch=None):
 
 
 def _dram_mb(mesh) -> float:
-    """DRAM allocated on a chip (all banks), MB: before and after a capture, the trace's size (perf 7)."""
+    """DRAM allocated on a chip (all banks), MB: before and after a capture, the trace's size."""
     v = ttnn.get_memory_view(mesh, ttnn.BufferType.DRAM)
     return round(v.total_bytes_allocated_per_bank * v.num_banks / 2**20, 1)
 
@@ -227,9 +227,8 @@ def _depth_fit(times):
 
 
 def _prefill_traced(model, tokens, seq: int, chunk: int, layers, repeats: int = 1):
-    """perf 7: each chunk's 72 layers and final norm captured as a ttnn trace, replayed (timed: the device time of a
-    traced chunk, no host dispatch) and released before the next chunk; one trace at a time fits next to the weights
-    (a 2 GB trace region leaves ~73 MB per DRAM bank). The embedding runs eagerly and is copied into the trace's
+    """Each chunk's layers and final norm captured as a ttnn trace, replayed (timed) and released before the next
+    chunk; one trace at a time fits next to the weights. The embedding runs eagerly and is copied into the trace's
     persistent input. Returns per-chunk replay seconds, capture seconds, trace MB of DRAM, and {chunk: final norm host}."""
     mesh = model.mesh
     state = model.new_state(seq)  # caches zeroed; each replay writes its chunk as an eager prefill does
@@ -319,7 +318,7 @@ def _kv_same(a: dict, b: dict) -> dict:
 
 
 def _meta_suite(model, tokens, seq: int, chunk: int, layers, eager_final: dict, gold, rows: int, repeats: int) -> dict:
-    """The trace-safe (metadata) forward: tt/chunk_meta.py. (1) its exact fp32 table selection vs the eager slices;
+    """The trace-safe (metadata) forward (tt/mistral_large_4/chunk_meta.py). (1) its exact fp32 table selection vs the eager slices;
     (2) an eager prefill on the metadata path vs the eager one (bit-identical expected); (3) serving-like chunks (slot
     1, a start inside a chunk, a partial end) eager vs metadata, outputs and KV; (4) ONE captured trace of the
     metadata forward replayed for every chunk of the prompt and the serving-like chunks, against eager."""
@@ -375,7 +374,7 @@ def _meta_suite(model, tokens, seq: int, chunk: int, layers, eager_final: dict, 
     res["meta_eager_bit_identical"] = all(v["equal"] for v in res["meta_eager_vs_eager"].values())
 
     # (3) serving-like chunks: (slot, start, end); eager, then the metadata path, outputs (real rows) and KV
-    # a start on a block boundary (tt-d-gen reuse at 4480), one inside a block with a partial end, a short last chunk
+    # a start on a block boundary (prefix reuse at 4480), one inside a block with a partial end, a short last chunk
     cases = [(1, 4480, 4480 + chunk), (1, 9024, 9024 + chunk - 151), (0, seq - chunk, seq - 320)]
     kv_layers = [i for i in (0, 1, 3, 35, 39, 71) if i in layers]
     case_eager, case_res = {}, {}
@@ -537,7 +536,7 @@ def test_e2e_full(mesh_device):
         result["prefill_seconds_warm"] = round(sum(result["chunk_seconds_warm"]), 2)
         result["depth_fit_warm"] = _depth_fit(result["chunk_seconds_warm"])
     if os.environ.get("ML4_E2E_TRACE") == "meta":
-        # the trace-safe forward: one capture replayed for every chunk (tt/chunk_meta.py)
+        # the trace-safe forward: one capture replayed for every chunk
         try:
             repeats = int(os.environ.get("ML4_E2E_TRACE_REPEATS", "3"))
             result["dram_free_mb_before_trace"] = _dram_free_mb(model.mesh)
@@ -575,11 +574,10 @@ def test_e2e_full(mesh_device):
     assert result["logits"]["last_top1"][0] == result["logits"]["last_top1"][1], "last position's top-1 differs"
 
 
-# ---- serving soak (ported from the long-context branch's test_trace_soak, nvukobrat/ml4-long-ctx 140d02e + soak-06's
-# boot check; metadata path only, the trace calls through tt/sub_device.py for MOE_OVERLAP's segments)
+# ---- serving soak: the metadata path's trace replayed many times (trace calls go through sub_device.py)
 def _boot_check() -> None:
-    """ML4_BOOT_CHECK_LOG (the job's own log): fail at once, before the 1.8 h load, when the mesh came up with tt-metal's
-    real-time profiler clock sync failing ("sync failed - not enough samples"); every hang during a load followed it."""
+    """ML4_BOOT_CHECK_LOG (the job's own log): fail before the weight load when the mesh came up with the real-time
+    profiler clock sync failing ("sync failed - not enough samples"), which precedes hangs during the load."""
     log = os.environ.get("ML4_BOOT_CHECK_LOG")
     if not log:
         return
@@ -592,9 +590,9 @@ def _boot_check() -> None:
 
 @pytest.mark.skipif(os.environ.get("ML4_SOAK") != "1", reason="needs a Blackhole Galaxy (ML4_SOAK=1)")
 def test_trace_soak(mesh_device):
-    """Serving reliability: the traced serving forward (one capture of the metadata path, tt/chunk_meta.py) replayed
-    ML4_SOAK_N times (default 600), cycling the chunk start over the first ML4_SOAK_CHUNKS positions (default 11: a
-    56320-token prompt) and the slot over 2, as tt-d-gen drives it; one line per replay (time, slot, start, host enqueue
+    """Serving reliability: the traced forward (one capture of the metadata path) replayed ML4_SOAK_N times (default
+    600), cycling the chunk start over the first ML4_SOAK_CHUNKS positions (default 11: a 56320-token prompt) and the
+    slot over 2, as a serving engine drives it; one line per replay (time, slot, start, host enqueue
     ms, replay ms). A hang shows as the dispatch timeout (TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE runs tt-triage)."""
     _boot_check()
     max_seq, slots = int(os.environ.get("ML4_SOAK_MAX_SEQ", CAPACITY)), int(os.environ.get("ML4_SOAK_SLOTS", "2"))
@@ -607,7 +605,7 @@ def test_trace_soak(mesh_device):
     out_path = Path(os.environ.get("ML4_SOAK_OUT", str(OUT)))
     res = {"node": os.environ.get("SLURMD_NODENAME") or socket.gethostname(), "max_seq": max_seq, "slots": slots,
            "replays": n_rep, "positions": n_pos, "settings": {k: v for k, v in os.environ.items()
-                                                              if k.startswith(("MISTRAL_LARGE4_1T_", "ML4_FABRIC"))}}
+                                                              if k.startswith(("MISTRAL_LARGE_4_", "ML4_FABRIC"))}}
 
     def dump():
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -667,12 +665,12 @@ def test_trace_soak(mesh_device):
     assert len(ms) == n_rep and res["final_finite"]
 
 
-# ---- context-length sweep (PERF.md "Long context"): one load, one capture, every ISL replayed through it
+# ---- context-length sweep: one load, one capture, every ISL replayed through it
 SWEEP_ISL = (5120, 10240, 20480, 40960, 56320, 102400, 204800, 409600, 655360, 880640, 1044480)
 
 
 def _golden_logits(head: torch.Tensor, x: torch.Tensor, softcap: float) -> torch.Tensor:
-    """The reference's logits of final-norm rows x [n, H] (fp32, the checkpoint's LM head; reference/model.py)."""
+    """The reference's logits of final-norm rows x [n, H] (fp32, the checkpoint's LM head)."""
     out = []
     for a in range(0, head.shape[0], 16384):
         out.append(x.float() @ head[a : a + 16384].float().t())
@@ -683,20 +681,19 @@ def _golden_logits(head: torch.Tensor, x: torch.Tensor, softcap: float) -> torch
 @pytest.mark.skipif(os.environ.get("ML4_CTX_SWEEP") != "1", reason="needs a Blackhole Galaxy (ML4_CTX_SWEEP=1)")
 def test_ctx_sweep(mesh_device):
     """Prefill time against context length on one Galaxy. One model load at the longest ISL (ML4_CTX_ISL, default
-    SWEEP_ISL; 1 slot, SEQ_BUFFERS=shared, SSMAX_TABLE=shared_log, the 1-slot long serving build), one eager
-    metadata-path chunk (builds every layer, compiles), ONE capture of the trace-safe forward (tt/chunk_meta.py, the
-    traced serving forward), then each ISL as a prefill from position 0 replayed chunk by chunk through that capture
+    SWEEP_ISL; 1 slot, SEQ_BUFFERS=shared, SSMAX_TABLE=shared_log), one eager
+    metadata-path chunk (builds every layer, compiles), ONE capture of the trace-safe forward, then each ISL as a prefill from position 0 replayed chunk by chunk through that capture
     (meta.write, the embedded chunk copied into the persistent input, execute, synchronize: the chunk's ms).
 
     Tokens: the golden prompt (56320), then the prompt again (token p = prompt[p % 56320]). Accuracy: up to 56320, the
     final norm of every chunk vs the CPU golden, and the last 32 rows' logits vs the reference's (the golden's logits on
     its last chunk; on earlier chunks the reference's LM head on the golden's final norm); beyond, finite outputs and the
-    last 32 rows' top-1 vs the next prompt token. Writes ML4_CTX_OUT in the sweep schema (commit, node, points)."""
+    last 32 rows' top-1 vs the next prompt token. Writes ML4_CTX_OUT (commit, node, points)."""
     from safetensors.torch import load_file
 
     _boot_check()
-    os.environ.setdefault("MISTRAL_LARGE4_1T_SEQ_BUFFERS", "shared")
-    os.environ.setdefault("MISTRAL_LARGE4_1T_SSMAX_TABLE", "shared_log")
+    os.environ.setdefault("MISTRAL_LARGE_4_SEQ_BUFFERS", "shared")
+    os.environ.setdefault("MISTRAL_LARGE_4_SSMAX_TABLE", "shared_log")
     from models.demos.deepseek_v3_d_p.reference.mistral_large_4._bringup_interface import weight_dtype
     from models.demos.deepseek_v3_d_p.reference.mistral_large_4.model import Config
     from models.demos.deepseek_v3_d_p.reference.mistral_large_4.weights import checkpoint, load_dense
@@ -713,8 +710,8 @@ def test_ctx_sweep(mesh_device):
     res = {
         "commit": os.environ.get("ML4_COMMIT", ""),
         "node": os.environ.get("SLURMD_NODENAME") or socket.gethostname(),
-        "build": {"max_seq": max_seq, "slots": 1, "seq_buffers": os.environ["MISTRAL_LARGE4_1T_SEQ_BUFFERS"],
-                  "ssmax_table": os.environ["MISTRAL_LARGE4_1T_SSMAX_TABLE"],
+        "build": {"max_seq": max_seq, "slots": 1, "seq_buffers": os.environ["MISTRAL_LARGE_4_SEQ_BUFFERS"],
+                  "ssmax_table": os.environ["MISTRAL_LARGE_4_SSMAX_TABLE"],
                   "trace_region_mb": int(os.environ.get("ML4_TRACE_REGION_MB", "0"))},
         "points": [],
         "breakdown": [],
@@ -781,7 +778,7 @@ def test_ctx_sweep(mesh_device):
                 sub_device.execute(mesh, tid)
                 ttnn.synchronize_device(mesh)
                 pt["chunk_ms"].append(round((time.time() - t) * 1e3, 2))
-                if c % 16 == 0:  # where a hang happened (ctx-01: a device timeout 2 min into the 880640 pass)
+                if c % 16 == 0:  # progress, to locate a hang
                     print(f"{time.strftime('%H:%M:%S')} ISL {isl} chunk {c}/{n}: {pt['chunk_ms'][-1]} ms", flush=True)
                 golden_chunk = c < gseq // chunk
                 if golden_chunk or c == n - 1 or c % 16 == 0 or every:
@@ -833,23 +830,23 @@ def test_ctx_sweep(mesh_device):
     assert not pccs or min(pccs) >= 0.96, pccs
 
 
-# ---- run-to-run determinism of the long build (ctx sweeps: two runs of one build differ past 20480 tokens)
+# ---- run-to-run determinism of the long build
 @pytest.mark.skipif(os.environ.get("ML4_NDET") != "1", reason="needs a Blackhole Galaxy (ML4_NDET=1)")
 def test_ndet(mesh_device):
     """Where the long build stops being deterministic. One load (ML4_NDET_MAX_SEQ, default 1044480: 1 slot,
     SEQ_BUFFERS=shared, SSMAX_TABLE=shared_log), then ML4_NDET_REPS (default 3) passes of chunks 0..ML4_NDET_CHUNKS-1
     (default 11) from position 0 through the metadata path, uncaptured (the traced forward's ops, one at a time), as the
     sweep's ISL passes. Every layer's output is hashed (blake2b-8 of each device shard, host side); from chunk
-    ML4_NDET_DETAIL_FROM (default 4, the first chunk the sweeps ever differed at) every step boundary of every layer
-    too (tt/model.py run_block's rec). Writes ML4_NDET_OUT; prints the first (chunk, layer, step) any pass differs
+    ML4_NDET_DETAIL_FROM (default 4) every step boundary of every layer too (mistral_large_4/model.py run_block's
+    rec). Writes ML4_NDET_OUT; prints the first (chunk, layer, step) any pass differs
     from pass 0 at. Across jobs: compare the JSONs (same node, other node, other payload)."""
     from models.demos.deepseek_v3_d_p.tt.mistral_large_4 import model as tm
 
     _boot_check()
     max_seq = int(os.environ.get("ML4_NDET_MAX_SEQ", "1044480"))
     if max_seq > CAPACITY:
-        os.environ.setdefault("MISTRAL_LARGE4_1T_SEQ_BUFFERS", "shared")
-        os.environ.setdefault("MISTRAL_LARGE4_1T_SSMAX_TABLE", "shared_log")
+        os.environ.setdefault("MISTRAL_LARGE_4_SEQ_BUFFERS", "shared")
+        os.environ.setdefault("MISTRAL_LARGE_4_SSMAX_TABLE", "shared_log")
     reps = int(os.environ.get("ML4_NDET_REPS", "3"))
     n = int(os.environ.get("ML4_NDET_CHUNKS", "11"))
     detail_from = int(os.environ.get("ML4_NDET_DETAIL_FROM", "4"))
@@ -860,7 +857,7 @@ def test_ndet(mesh_device):
     out_path = Path(os.environ.get("ML4_NDET_OUT", str(OUT)))
     res = {"node": os.environ.get("SLURMD_NODENAME") or socket.gethostname(), "max_seq": max_seq, "reps": reps,
            "chunks": n, "detail_from": detail_from, "payload": int(os.environ.get("ML4_FABRIC_PAYLOAD", "12288")),
-           "settings": {k: v for k, v in os.environ.items() if k.startswith("MISTRAL_LARGE4_1T_")}, "passes": []}
+           "settings": {k: v for k, v in os.environ.items() if k.startswith("MISTRAL_LARGE_4_")}, "passes": []}
 
     def dump():
         out_path.parent.mkdir(parents=True, exist_ok=True)

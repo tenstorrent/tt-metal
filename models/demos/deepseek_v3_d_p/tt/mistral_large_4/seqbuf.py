@@ -1,14 +1,14 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Device tensors sized by max_seq that are the same for every layer, kept once per mesh (long ISL, iteration 1).
+"""Device tensors sized by max_seq that are the same for every layer, kept once per mesh.
 
 ``SEQ_BUFFERS=shared`` gives every layer the same copy of: the attention's SP-gather scratch kv_full
-[1, 1, max_seq, 576] bfp8 (612 B per token per chip, replicated; 72 copies were 44 KB per token), the indexer's
-k_full [1, 1, max_seq, 128], the RoPE tables (one inverse frequency for every RoPE layer: YaRN x a global LeRoPE
-alpha), the indexer's fp32 RoPE and position RowTables, and the zero sin table of the softmax-scaling tables. The
-scratches are overwritten by every layer before they are read, and layers run one after another on one command
-queue (eager or traced), so one copy serves all. ``per_layer`` (default) keeps a copy per layer, as before.
+[1, 1, max_seq, 576] bfp8 (replicated), the indexer's k_full [1, 1, max_seq, 128], the RoPE tables (one inverse
+frequency for every RoPE layer: YaRN x a global LeRoPE alpha), the indexer's fp32 RoPE and position RowTables, and
+the zero sin table of the softmax-scaling tables. The scratches are overwritten by every layer before they are read,
+and layers run one after another on one command queue (eager or traced), so one copy serves all. ``per_layer``
+(default) keeps a copy per layer.
 
 ``get(mesh, key, build)`` returns the mesh's copy of ``key`` (built on first use) or, per_layer, a new one.
 ``release(mesh)`` deallocates the mesh's shared copies (TtModel.resize).

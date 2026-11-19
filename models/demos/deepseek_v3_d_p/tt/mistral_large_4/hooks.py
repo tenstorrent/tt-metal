@@ -1,12 +1,9 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Bring-up hooks for mistral_large4_1t: the framework reaches the model only through these functions.
-
-Device side (implement stages): device_component, device_model, and optionally device_params. The CPU side
-(reference, tokenizer, hf_model, hf_layers) is in reference_hooks.py, the reference stage's.
-The block-graph contract is in reference/_bringup_interface.py (vendored, do not edit). This package never imports
-the framework (bringup_fw); the framework's lint fails it if it does.
+"""Device-side hooks for mistral_large_4: per-step device modules (device_component) and the all-device model
+(device_model). The CPU side is in reference/mistral_large_4/hooks.py; the block graph in
+reference/mistral_large_4/_bringup_interface.py.
 """
 
 import types
@@ -33,14 +30,14 @@ def _norm(mesh, spec, layer: int, key: str):
     from models.demos.deepseek_v3_d_p.tt.mistral_large_4.norm import TtDistributedRmsNorm
     from models.demos.deepseek_v3_d_p.tt.mistral_large_4.settings import settings
 
-    # attn_norm feeds the indexer, which reads it at ATTN_NORM_DTYPE (fp32: S.attn_nope_shared_kv_moe.02)
+    # attn_norm feeds the indexer, which reads it at ATTN_NORM_DTYPE
     dtype = getattr(ttnn, settings.get("ATTN_NORM_DTYPE")) if key == "attn_norm" else ttnn.bfloat16
     return TtDistributedRmsNorm(mesh, _layer_weights(spec, layer, [key])[key], Config(spec.hf_dir).eps, out_dtype=dtype)
 
 
 def _counted(module, *x):
-    """module(*x) on ttnn's standard Operation path: FastOperation skips the pre-operation hooks the framework's
-    device proof counts ops with (it then reports 0 ops); the ops are the same. Scoped to this call."""
+    """module(*x) on ttnn's standard Operation path, so pre-operation hooks see its ops (FastOperation skips them);
+    the ops are the same. Scoped to this call."""
     import ttnn
 
     fast = ttnn.CONFIG.enable_fast_runtime_mode
@@ -132,7 +129,7 @@ def _new_attention(mesh, spec, layer: int, **cache):
         eps=cfg.eps,
         max_seq=max_seq,
         chunk=chunk,
-        pe_dim=cfg.qk_rope,  # NoPE layers keep the 576-wide kvpe record, pe zero (nope_kv_layout pad576)
+        pe_dim=cfg.qk_rope,  # NoPE layers keep the 576-wide kvpe record, pe zero
         **cache,
     )
 
@@ -161,20 +158,14 @@ def _experts(mesh, spec, layer: int):
 
 
 def swap_context(spec, ref, layer, golden, chunk, rctx, dctx):
-    """reference_hooks.swap_context (the golden's source-layer top-k / KV), plus: a shared-KV layer's source prefix
-    rows [0, chunk start) are also put on the reference context's state (``shared_kv_prefix``, views of the same
-    tensors). They are this layer's KV state as the device reads it, layer 35's served bfp8 region, and the component
-    checks' precision model rounds a stateful step's state through bfloat8_b (an owning layer's kv / kr); without them
-    it attends a full-precision prefix the device never sees (layer 39: rel 0.0145 of the attention output, column 2159
-    0.10). The reference context's ``shared_kv`` prefix rows [0, chunk start) are themselves rounded through bfloat8_b,
-    as the device attends them (unrounded, layer 39's swap test scored the CPU attention's worst row 0.054 from the
-    device's, limit 0.05; S.attn_nope_shared_kv_moe.03); the chunk's own rows stay full precision (ATTN_CHUNK_KV).
+    """The reference hooks' swap_context (the golden's source-layer top-k / KV), with the reference state's KV prefix
+    rows [0, chunk start) rounded through bfloat8_b as the device's bfp8 kvpe cache holds them, so the CPU step reads
+    the same values the device attends:
 
-    An owning layer's own kv / kr prefix rows [0, chunk start) on the reference state are rounded through bfloat8_b
-    as ttnn stores them: the device attends that prefix from the served kvpe cache (serving_answers kv_dtype bfp8), so
-    the CPU step "on the same inputs" reads the same values. Without it the swap test's fixed per-row limits (worst row
-    0.05, row norm ratio 1 +- 0.02) scored the served format itself: at layer 1 a CPU emulation with only that prefix
-    rounded gives worst row 0.071, ratio [0.971, 1.048]; the device scored 0.062, [0.963, 1.042] (S.attn_moe.03).
+      * a shared-KV layer's source prefix rows (``shared_kv``) are rounded and also put on the reference state
+        (``shared_kv_prefix``, views of the same tensors); the chunk's own rows stay full precision (ATTN_CHUNK_KV).
+      * an owning layer's own kv / kr prefix rows are rounded in place.
+
     Index keys stay exact."""
     from models.demos.deepseek_v3_d_p.reference.mistral_large_4 import hooks as reference_hooks
 
@@ -198,7 +189,7 @@ def swap_context(spec, ref, layer, golden, chunk, rctx, dctx):
 
 def _served_kv(t):
     """Host rows [n, d] rounded through bfloat8_b, as the served kvpe cache holds them: blocks of 16 values along a row
-    share the largest exponent, 7 mantissa bits each, round to nearest (ttnn's codec on 5120 x 512: rel 1e-5 apart)."""
+    share the largest exponent, 7 mantissa bits each, round to nearest."""
     import torch
 
     n, d = t.shape
@@ -210,8 +201,8 @@ def _served_kv(t):
 
 
 def device_component(mesh, spec, layer, step):
-    """fn(ctx, *host inputs) -> host tensor. The host <-> device conversion is the harness boundary (tt/layout.py);
-    the module between runs on the device only."""
+    """fn(ctx, *host inputs) -> host tensor. The host <-> device conversion (layout.py) wraps a module that runs on
+    the device only."""
     from models.demos.deepseek_v3_d_p.tt.mistral_large_4.layout import residual_to_device, residual_to_host
 
     if step in ("attn_norm", "ffn_norm"):
@@ -244,7 +235,7 @@ def device_component(mesh, spec, layer, step):
 
         def fn(ctx, x):
             # x (attn_norm) is the graph input only; the source full layer's top-k comes through ctx.extra["shared_topk"]
-            # (swap_context; the all-device model hands on the source indexer's device tensor instead)
+            # (swap_context; the model hands on the source indexer's device tensor instead)
             return topk_to_host(_counted(mod, topk_to_device(ctx.extra["shared_topk"], mesh)), mesh)
 
         return fn
@@ -288,7 +279,7 @@ def device_component(mesh, spec, layer, step):
 
         key = (id(mesh), layer, step)
         if key not in _MODULES:
-            # the MoE layers' shared expert is the dense SwiGLU with its own weights (reference/model.py swiglu)
+            # the MoE layers' shared expert is the dense SwiGLU with its own weights (reference model's swiglu)
             p = "shared_" if step == "shared_expert" else ""
             w = _layer_weights(spec, layer, [p + "w1", p + "w3", p + "w2"])
             _MODULES[key] = TtMlp(mesh, w[p + "w1"], w[p + "w3"], w[p + "w2"])
@@ -322,11 +313,11 @@ def device_component(mesh, spec, layer, step):
             return residual_to_host(_counted(mod, residual_to_device(x, mesh), router_to_device(routing, mesh)), mesh)
 
         return fn
-    raise NotImplementedError(f"implement stage: no device module for {step} yet")
+    raise NotImplementedError(f"no device module for {step} yet")
 
 
 def _new_module(mesh, spec, layer: int, step: str, **cache):
-    """A new device module of one step (the all-device model's builder: tt/model.py TtModel ``build``)."""
+    """A new device module of one step (TtModel's ``build``)."""
     from models.demos.deepseek_v3_d_p.reference.mistral_large_4.model import Config
 
     if step in ("attn_norm", "ffn_norm"):
@@ -374,9 +365,9 @@ def _new_module(mesh, spec, layer: int, step: str, **cache):
 
 
 def device_model(mesh, spec, layers, lm_head=True, num_users=None, caches=None):
-    """The all-device model (tt/model.py): every step of every block a device module, the served KV cache its state.
+    """The all-device model (model.py TtModel): every step of every block a device module, the KV cache its state.
     Each layer's modules are built on its first call; its host weights are dropped once built. num_users / caches: the
-    serving engine's slots and its caches (tt/runners/adapter.py); None: the model's own (tt/model.py NUM_USERS)."""
+    runner's slots and caches (tt/runners/adapters/mistral_large_4.py); None: the model's own (NUM_USERS)."""
     from models.demos.deepseek_v3_d_p.reference.mistral_large_4._bringup_interface import weight_dtype
     from models.demos.deepseek_v3_d_p.reference.mistral_large_4.model import Config, Reference
     from models.demos.deepseek_v3_d_p.reference.mistral_large_4.weights import checkpoint, load_dense

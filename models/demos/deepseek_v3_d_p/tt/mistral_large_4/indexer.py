@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""DSA indexer of the full-indexer layers (plan.md attn_dense "indexer"; components.yaml notes).
+"""DSA indexer of the full-indexer layers.
 
 Adapted from models/demos/deepseek_v3_d_p/tt/mla/indexer.py (TtIndexer), without its q-LoRA input, Hadamard basis and
 full-mesh striped cache. Per chip (SP row r of 8, TP column t of 4), for one 5120-token chunk at ``start``:
@@ -19,7 +19,7 @@ full-mesh striped cache. Per chip (SP row r of 8, TP column t of 4), for one 512
              natural order by a reshape / permute of the block-cyclic blocks -> per head relu(q_h k^T) (linear, fp32)
              times the head weight, summed over the 32 heads in fp32; the chunk's own key columns get a
              constant per-chip causal mask (0 / -inf, built at load). "ring": ring_indexer_score_dsa (same gather and
-             causal rule in one op, but it sums the heads in bf16 DEST: layer 1 top-k overlap 0.989 < 0.99).
+             causal rule in one op, but it sums the heads in bf16 DEST).
              Then topk_large_indices k=2048 over [0, end) -> uint32 [1, 1, 160, 2048], 0xFFFFFFFF pads
              (a row that sees fewer than 2048 keys), sorted by score, not by position.
 
@@ -42,8 +42,8 @@ NORM_EPS = 1e-6
 
 
 def hadamard_matrix(n: int) -> torch.Tensor:
-    """The Sylvester Walsh-Hadamard matrix H_n / sqrt(n) (fp32; symmetric, orthonormal): tt-blaze's HadamardH128, whose
-    rotation the Reload decode's indexer K branch applies to the keys it caches."""
+    """The Sylvester Walsh-Hadamard matrix H_n / sqrt(n) (fp32; symmetric, orthonormal); must match the rotation the
+    decode indexer applies to the keys it caches."""
     h = torch.ones(1, 1)
     while h.shape[0] < n:
         h = torch.cat([torch.cat([h, h], 1), torch.cat([h, -h], 1)], 0)
@@ -66,7 +66,7 @@ def _topology():
 
 
 class TtIndexer:
-    # read when they run, not when built: a sweep can change them between runs of one loaded model (PERF.md)
+    # read at call time, not build time: settings may change between runs of one loaded model
     @property
     def mm_cfg(self):
         return _compute_config(self.mesh, settings.get("INDEXER_MATH_FIDELITY"), settings.get("INDEXER_FP32_ACC"))
@@ -83,7 +83,7 @@ class TtIndexer:
     def shift(self):
         return self.composed and settings.get("INDEXER_SCORE_SHIFT")
 
-    # perf 6: the score path, LayerNorm and query dtype are read when the indexer runs (both paths' tables are built)
+    # the score path, LayerNorm and query dtype are read at call time (both paths' tables are built)
     @property
     def composed(self):
         return settings.get("INDEXER_SCORE") == "composed"
@@ -140,7 +140,7 @@ class TtIndexer:
         self.q_rows = self.rows // self.tp  # this chip's query rows
         assert self.q_rows % ttnn.TILE_SIZE == 0, f"{self.q_rows} query rows per chip are not whole tiles"
         self.cache_layer, self.cache_layers = cache_layer, cache_layers
-        wdt = ttnn.bfloat8_b  # rule 7: weights bfp8
+        wdt = ttnn.bfloat8_b
 
         def repl(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
             return ttnn.from_torch(
@@ -166,8 +166,8 @@ class TtIndexer:
             for mode in ("composed", "fused")
         }
 
-        # the host inputs of the max_seq-sized tables, kept for resize (long ISL); the metadata path's fp32 tables are
-        # built when first used
+        # the host inputs of the max_seq-sized tables, kept for resize; the metadata path's fp32 tables are built
+        # when first used
         self._inv_freq = inv_freq
         self._ssmax_sb = (w["idx_ssmax_s"].float().clone(), w["idx_ssmax_b"].float().clone())
         self._split = None
@@ -210,7 +210,7 @@ class TtIndexer:
         self.sems = [[ttnn.create_global_semaphore(mesh, crs, 0) for _ in range(2)] for _ in range(2)]
         self.sem_i = 0
 
-    # ---- the max_seq-sized tensors (long ISL: rebuilt by resize, shared over layers with SEQ_BUFFERS=shared)
+    # ---- the max_seq-sized tensors (rebuilt by resize, shared over layers with SEQ_BUFFERS=shared)
     def build_seq(self, max_seq: int, cache=None) -> None:
         """RoPE and softmax-scaling tables, the gather scratch and (allocated here when None) the cache, for max_seq.
         The eager path's fp32 RowTables (q / k RoPE, f, query positions) are built on first eager use (_eager_tables):
@@ -224,7 +224,7 @@ class TtIndexer:
         self.rope = rope_tables(mesh, self._inv_freq, max_seq, chunk) if self.rope_dim else None
         self.ssmax = self.ssmax_sb = None
         if self.w_dtype == ttnn.float32 and settings.get("SSMAX_TABLE") == "shared_log":
-            # long ISL 3: f = s * log(p + 1) + b in fp32 on the device from one log table per mesh; s_h, b_h as rows
+            # f = s * log(p + 1) + b in fp32 on the device from one log table per mesh; s_h, b_h as rows
             self.ssmax_sb = (repl(s.reshape(1, 1, 1, -1), ttnn.float32), repl(b.reshape(1, 1, 1, -1), ttnn.float32))
         elif self.w_dtype != ttnn.float32:
             self.ssmax = scale_tables(mesh, f, chunk)
@@ -320,7 +320,7 @@ class TtIndexer:
     # ---- pieces
     def _layer_norm(self, x, w, b):
         """LayerNorm over the last dim (eps NORM_EPS). INDEXER_NORM "composed": mean, centre, variance, rsqrt, scale and
-        shift as separate fp32 ops (x fp32: layer 39 index keys rel 0.0003 vs fp32, ttnn.layer_norm 0.0013)."""
+        shift as separate fp32 ops."""
         if not self.norm_composed:
             return ttnn.layer_norm(
                 x,
@@ -678,7 +678,7 @@ class TtIndexer:
             where = dict(
                 chunk_start_idx=start,
                 # the op needs a tile-aligned length; the extra columns are zeroed pad rows, and topk_large_indices'
-                # valid_length=end drops them (tt-d-gen serving: a 9000-token request, serve-fast2)
+                # valid_length=end drops them
                 kv_len=-(-end // ttnn.TILE_SIZE) * ttnn.TILE_SIZE,
                 cache_batch_idx=slot * self.cache_layers + self.cache_layer,
             )
@@ -707,7 +707,7 @@ class TtIndexer:
 
     def __call__(self, x: ttnn.Tensor, start: int, slot: int = 0, end: int | None = None, meta=None) -> ttnn.Tensor:
         """x: attn_norm [1, 1, S/8, H/4] per chip (ATTN_NORM_DTYPE: fp32 or bf16), the chunk at absolute positions [start, start + S).
-        Returns the top-k key positions uint32 [1, 1, S/32, 2048] per chip (module docstring). meta (tt/chunk_meta.py):
+        Returns the top-k key positions uint32 [1, 1, S/32, 2048] per chip (module docstring). meta (chunk_meta.py):
         the chunk's slot, start and end read on the device (the trace-safe path; ring score only)."""
         end = start + self.chunk if end is None else end
         assert meta is None or not self.composed, "the metadata path scores with the ring op (INDEXER_SCORE=ring)"

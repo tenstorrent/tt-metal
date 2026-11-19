@@ -1,9 +1,8 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Per-chunk values on the device, so one captured forward replays for every chunk (tt-metal's GLM-5.3 traced
-prefill: models/demos/deepseek_v3_d_p/tt/tt_prefill_runtime.py, its per-chunk metadata [slot_id, actual_start,
-actual_end] updated in place before each replay).
+"""Per-chunk values on the device, so one captured forward replays for every chunk (as tt_prefill_runtime.py's
+per-chunk metadata [slot_id, actual_start, actual_end], updated in place before each replay).
 
 ``ChunkMeta`` holds one packed uint32 record per chip ([1, 1, 1, WORDS], a persistent DRAM tensor) that the host
 rewrites before each chunk (``write``), and the 1-element tensors the trace-safe op forms read (``unpack``: device

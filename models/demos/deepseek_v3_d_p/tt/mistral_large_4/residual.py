@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Residual add (attn_residual, mlp_residual; the same op serves moe_combine).
 
-Both inputs are the TP-split residual layout ([1, 1, S/8, H/4] bf16 per chip, tt/layout.py), so the add is per chip,
-with no collective (as models/demos/deepseek_v3_d_p/tt/tt_prefill_block.py does). Output bf16, DRAM interleaved.
+Both inputs are the TP-split residual layout ([1, 1, S/8, H/4] bf16 per chip, layout.py), so the add is per chip,
+with no collective (as tt_prefill_block.py does). Output bf16, DRAM interleaved.
 """
 
 import ttnn

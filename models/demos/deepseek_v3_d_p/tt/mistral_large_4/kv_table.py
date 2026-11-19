@@ -1,27 +1,24 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""The served caches, their address table and the producer's read-back of them (serving contract, "KV cache" and
-"Adapter and table").
+"""The served caches, their address table and the producer's read-back of them.
 
-Caches (tt/model.py alloc_caches, DeepSeek's init_kvpe_cache): per chip [slots * regions, 1, max_seq / SP, width],
+Caches (model.py alloc_caches, DeepSeek's init_kvpe_cache): per chip [slots * regions, 1, max_seq / SP, width],
 bfloat8_b TILE, ND-sharded [1, 1, 32, width] ROUND_ROBIN_1D over the chip's B DRAM banks, replicated over TP. The
-region of (slot, layer) is batch slot * regions + region, as the device model indexes them (tt/model.py State):
+region of (slot, layer) is batch slot * regions + region, as the device model indexes them (model.py State):
 
-- config 0 (``"00"``, kind ``kvpe``), width 576 = [kv_latent 512 | k_rope 64]: one region per layer that owns its KV
+- config 0 (``"0"``, kind ``kvpe``), width 576 = [kv_latent 512 | k_rope 64]: one region per layer that owns its KV
   (NoPE layers keep the pe columns zero); shared-KV layers read their source layer's region and have no entry.
-- config 1 (``"01"``, kind ``index``), width 128, the DSA indexer key: one region per full-indexer layer; shared-index
-  layers have no entry. With INDEXER_HADAMARD (the P/D deployment) the keys are rotated by H128 / sqrt(128), as the
-  Reload decode caches them.
+- config 1 (``"1"``, kind ``index``), width 128, the DSA indexer key: one region per full-indexer layer; shared-index
+  layers have no entry. With INDEXER_HADAMARD the keys are rotated by H128 / sqrt(128), as the decode caches them.
 
 Shard j of a cache (flat over [batch, rows / 32]) sits in bank j % B at buffer_address + (j // B) * record_bytes: one
 32-token record is one shard, contiguous in one bank. Position g of a slot lives on SP row (g // W) % SP at local row
 (g // chunk) * W + g % W (W = chunk / SP: the engine's ring_sdpa_reshuffle, block-cyclic with period chunk). A record
 never crosses a chip (W % 32 == 0); its device group is the TP chips of that SP row, which hold identical replicas.
 
-Table layer k is model layer first + k (the served layers are one contiguous run). Config names "00" / "01" keep the
-KVPE cache at config id 0 and the index cache at 1 (the table numbers configs in name order; tt-metal's
-deepseek_v3_d_p kv_chunk_table uses the same names).
+Table layer k is model layer first + k (the served layers are one contiguous run). The table numbers configs in name
+order, so "0" / "1" keep the KVPE cache at config id 0 and the index cache at 1.
 """
 
 from __future__ import annotations
@@ -35,7 +32,7 @@ import torch
 import ttnn
 
 RECORD_TOKENS = 32
-KV, INDEX = "0", "1"  # table config names, as the tt-blaze decode ring names them
+KV, INDEX = "0", "1"  # table config names, as the decode ring names them
 CONFIGS = (KV, INDEX)  # in id order
 KINDS = {KV: "kvpe", INDEX: "index"}
 _TILE_BYTES = {"BFLOAT8_B": 1088, "BFLOAT16": 2048}
@@ -45,7 +42,7 @@ _ELEMENT_BYTES = {"BFLOAT16": 2}
 @dataclass(frozen=True)
 class Geometry:
     """What the caches and the table hold: layers (model layer of table layer k), kv_owners / index_layers (the
-    layers with a region in config 0 / 1, in region order, as tt/model.py TtModel kv_region / index_region), and the
+    layers with a region in config 0 / 1, in region order, as model.py TtModel kv_region / index_region), and the
     serving shape."""
 
     layers: tuple
@@ -60,7 +57,7 @@ class Geometry:
 
     @classmethod
     def of(cls, cfg, layers, *, sp: int, chunk: int, max_seq: int, slots: int) -> "Geometry":
-        """cfg: reference/model.py Config."""
+        """cfg: reference/mistral_large_4/model.py Config."""
         layers = tuple(layers)
         assert layers == tuple(range(layers[0], layers[0] + len(layers))), f"served layers must be contiguous: {layers}"
         from models.demos.deepseek_v3_d_p.tt.mistral_large_4.settings import settings
@@ -186,7 +183,7 @@ def config_rows(st: dict, n: int, kvpe_width: int) -> dict:
         from models.demos.deepseek_v3_d_p.tt.mistral_large_4.indexer import hadamard_matrix
         from models.demos.deepseek_v3_d_p.tt.mistral_large_4.settings import settings
 
-        # INDEXER_HADAMARD: the cache holds the keys rotated (tt/indexer.py TtIndexer._rotate)
+        # INDEXER_HADAMARD: the cache holds the keys rotated (indexer.py TtIndexer._rotate)
         out[INDEX] = ik @ hadamard_matrix(ik.shape[-1]) if settings.get("INDEXER_HADAMARD") else ik
     return out
 

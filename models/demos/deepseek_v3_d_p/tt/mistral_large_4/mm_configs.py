@@ -1,16 +1,13 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""perf 12: matmul program configs for the per-chip [640, K] x [K, N] projections and the per-head W_uk / W_uv
-(MM_CONFIG).
+"""Matmul program configs for the per-chip [640, K] x [K, N] projections and the per-head W_uk / W_uv (MM_CONFIG).
 
 ttnn's automatic choice is slow for the down projections whose output is the fp32 TP partial (wo, the shared
-expert's / dense MLP's w2: K 48-192 tiles, N 192 tiles): 0.39 ms for wo where a 2D multicast over the 12x10 grid
-takes 0.15 ms (0.11 ms with the output in L1), bit-identical (devrun acc-07-mm, one chip, HiFi4 + fp32 dest).
-The rule, as tt-metal's DeepSeek / GLM prefill (models/demos/deepseek_v3_d_p/tt/moe/tt_shared_expert.py
-get_program_configs, tt/mla/mla_config.py 640-row entries): M over the grid's 10 rows, N over its columns (12 or
-11, whichever pads N less), the largest K block <= 16 tiles that divides K (no packer L1 accumulation, so the sums
-are the automatic config's), the widest 1-row output subblock in the 4-tile fp32 DEST.
+expert's / dense MLP's w2: K 48-192 tiles, N 192 tiles). The rule, as the DeepSeek / GLM prefill
+(moe/tt_shared_expert.py get_program_configs, mla/mla_config.py 640-row entries): M over the grid's 10 rows, N over
+its columns (12 or 11, whichever pads N less), the largest K block <= 16 tiles that divides K, the widest 1-row
+output subblock in the 4-tile fp32 DEST.
 """
 
 import math
@@ -52,8 +49,7 @@ def config_2d(m_t: int, k_t: int, n_t: int, grid) -> ttnn.MatmulMultiCoreReuseMu
 
 
 def config_batched(m_t: int, k_t: int, n_t: int, batch: int, grid):
-    """Per-head matmuls (W_uk, W_uv: [1, heads, 640, K] x [1, heads, K, N]): blocks of 4 x N tiles per core
-    (W_uv 0.22 -> 0.056 ms, W_uk 0.082 -> 0.052 ms in acc-07-mm, bit-identical)."""
+    """Per-head matmuls (W_uk, W_uv: [1, heads, 640, K] x [1, heads, K, N]): blocks of 4 x N tiles per core."""
     pm = 4 if m_t % 4 == 0 else m_t
     pn = n_t if n_t <= 16 else max(d for d in range(1, 17) if n_t % d == 0)
     if batch * (m_t // pm) * (n_t // pn) > grid.x * grid.y:
@@ -90,7 +86,7 @@ def get(name, x, w, transpose_b: bool = True, grid=None):
 
 
 def get_indexer(x, w):
-    """perf 16 (INDEXER_MM=tuned): the indexer's projections, x [1, 1, M, K] @ w [K, N] (stored [K, N], no transpose),
+    """INDEXER_MM=tuned: the indexer's projections, x [1, 1, M, K] @ w [K, N] (stored [K, N], no transpose),
     M 640 (wk) or 160 (wq_b, wproj: the TP-partitioned query rows): the 2D rule with the grid's rows cut to M's tiles."""
     if settings.get("INDEXER_MM") != "tuned":
         return None

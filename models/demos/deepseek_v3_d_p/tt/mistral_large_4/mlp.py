@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Dense SwiGLU MLP, TP over the intermediate (plan.md attn_dense "mlp"; components.yaml notes).
+"""Dense SwiGLU MLP, TP over the intermediate.
 
-Adapted from models/demos/deepseek_v3_d_p/tt/tt_ffn.py (TtFfn.forward). Per chip (SP row r of 8, TP column t of 4):
+Adapted from tt_ffn.py (TtFfn.forward). Per chip (SP row r of 8, TP column t of 4):
 
     x      [1, 1, 640, 1536] ffn_norm -> all_gather(axis 1) -> x_full [1, 1, 640, 6144]
     gate   x_full @ w1 (this column's quarter of the intermediate, column-parallel) [1, 1, 640, I/4]; up likewise w3
@@ -36,7 +36,7 @@ def _topology():
 
 
 class TtMlp:
-    # read when they run, not when built: a sweep can change them between runs of one loaded model (PERF.md)
+    # read at run time, so a changed setting applies to an already loaded model
     @property
     def cfg(self):
         return _compute_config(self.mesh)
@@ -61,14 +61,14 @@ class TtMlp:
             return ttnn.from_torch(
                 t.float()[None, None].contiguous(),
                 device=mesh,
-                dtype=ttnn.bfloat8_b,  # rule 7: weights bfp8
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=dims),
             )
 
         # Kept [N, K] (checkpoint order) and read with transpose_b, so a bfp8 block runs along the contraction
-        # (tt/attention.py: [K, N] blocks shared an exponent across output columns).
+        # rather than sharing an exponent across output columns.
         self.w1 = put(w1, 2)  # [I/4, H]: this column's intermediate
         self.w3 = put(w3, 2)
         self.w2 = put(w2, 3)  # [H, I/4]: the same intermediate columns
@@ -90,7 +90,7 @@ class TtMlp:
 
     def partial(self, x: ttnn.Tensor, sub=None) -> ttnn.Tensor:
         """x: ffn_norm [1, 1, S/8, H/4] bf16 per chip -> this column's partial [1, 1, S/8, H] in MLP_PARTIAL_DTYPE.
-        sub (tt/sub_device.Overlap, MOE_OVERLAP): every op on the shared expert's sub-device (no collective: x's TP
+        sub (sub_device.Overlap, MOE_OVERLAP): every op on the shared expert's sub-device (no collective: x's TP
         gather is the one the router and the experts already made)."""
         x_full = tp_gather.gather(x, _topology(), self.w1.shape[-1])
         gate = self._linear(x_full, self.w1, self.mid_dtype, "mlp_gate", sub)
@@ -107,7 +107,7 @@ class TtMlp:
         )
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
-        # the 4 TP partials are summed in MLP_PARTIAL_DTYPE: a bf16 reduce over TP biases the sum (known_issues)
+        # the 4 TP partials are summed in MLP_PARTIAL_DTYPE: a bf16 reduce over TP biases the sum
         part = self._linear(h, self.w2, self.partial_dtype, "mlp_down", sub)
         ttnn.deallocate(h)
         return part

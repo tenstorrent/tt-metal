@@ -13,8 +13,8 @@ chunk at ``ML4_PERF_START`` (default 51200, the last chunk of a 56320-token prom
 4. ops (``ML4_PERF_OP_LAYERS``, default one layer per variant: 0,1,3,17,39): the device profiler read after every
    outermost ttnn call on those layers: per op, its calls, programs and device time.
 
-The profiler is read and its programs dropped between runs: without that, the unprofiled runs fill its DRAM buffers
-("markers were dropped") before the profiled one starts, which is how the bring-up's profile of 9 layers failed.
+The profiler is read and its programs dropped between runs: otherwise the unprofiled runs fill its DRAM buffers
+("markers were dropped") before the profiled one starts.
 Perf is measured with the KV and index caches empty before the chunk: top-k and attention do the same work on any
 prefix, so the timing is that of a chunk at that position. Accuracy is the e2e test's (test_e2e_galaxy.py).
 
@@ -53,7 +53,7 @@ CHUNK = 5120
 
 
 class _Spec:
-    """What the device model's builder reads off a spec (bringup/hooks.py)."""
+    """What the device model's builder (tt/mistral_large_4/hooks.py) reads off a spec."""
 
     def __init__(self, hf_dir: str, seq: int, chunk: int):
         self.hf_dir = Path(hf_dir)
@@ -207,7 +207,7 @@ class WallTimer(Profiler):
 
 
 def _dram_mb(mesh) -> float:
-    """DRAM allocated on a chip (all banks), MB: before and after a capture, the trace's size (perf 7)."""
+    """DRAM allocated on a chip (all banks), MB: before and after a capture, the trace's size."""
     v = ttnn.get_memory_view(mesh, ttnn.BufferType.DRAM)
     return round(v.total_bytes_allocated_per_bank * v.num_banks / 2**20, 1)
 
@@ -218,12 +218,12 @@ def _dram_free_mb(mesh) -> float:
 
 
 class TraceSteps:
-    """perf 7: one ttnn trace per block step, captured in order and replayed in order with a device synchronize
+    """One ttnn trace per block step, captured in order and replayed in order with a device synchronize
     after each, so each step's replay time is its device time without host dispatch (plus one synchronize). The
     final norm lands in the last step's trace. Replaying in capture order keeps every buffer as the capture left it.
     Quacks like a Profiler for _breakdown (kernel_ns per "L<i>.<step>").
 
-    perf 8: on ``op_layers`` every outermost ttnn call is a trace of its own (op rows: device ms per op without host
+    On ``op_layers`` every outermost ttnn call is a trace of its own (op rows: device ms per op without host
     dispatch); anything those layers enqueue outside a ttnn call runs eagerly during the capture and is not timed."""
 
     def __init__(self, mesh, op_layers=()):
@@ -322,7 +322,7 @@ _RID_MOD = 1 << 21  # the profiler keeps a program's runtime id as (id << 10 | c
 
 
 class DeviceOps:
-    """perf 11: exact device kernel time per op on a few layers, from the device profiler's C++ post-process
+    """Exact device kernel time per op on a few layers, from the device profiler's C++ post-process
     (TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1).
 
     Every program carries its ttnn runtime id (the device-operation counter when it was enqueued; a trace's replay
@@ -531,8 +531,8 @@ def _ccl_share(rows):
 def mesh_device():
     from models.demos.deepseek_v3_d_p.tt.mistral_large_4 import fabric
 
-    fabric.set_from_env()  # ML4_FABRIC / ML4_FABRIC_PAYLOAD; default the bring-up's 1D ring
-    # perf 7: ML4_TRACE_REGION_MB reserves a trace region; 0 (default) = traces allocated from DRAM as captured
+    fabric.set_from_env()  # ML4_FABRIC / ML4_FABRIC_PAYLOAD; default 1D ring
+    # ML4_TRACE_REGION_MB reserves a trace region; 0 (default) = traces allocated from DRAM as captured
     region = int(os.environ.get("ML4_TRACE_REGION_MB", "0")) * 1024 * 1024
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(8, 4), **({"trace_region_size": region} if region else {}))
     try:
@@ -543,7 +543,7 @@ def mesh_device():
 
 
 def _variant(cfg, i: int) -> str:
-    """The layer's variant, as the bring-up named the five block types."""
+    """The layer's block variant (one of five)."""
     if not cfg.is_moe(i):
         return "attn_dense"
     if not cfg.owns_kv(i):
@@ -563,7 +563,7 @@ def test_perf_chunk(mesh_device):
     result = {"layers": [layers[0], layers[-1]], "start": start, "chunk": CHUNK, "op_layers": sorted(op_layers)}
     for k in ("TT_METAL_DEVICE_PROFILER", "TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT"):
         result[k] = os.environ.get(k, "")
-    result["settings"] = {k: v for k, v in os.environ.items() if k.startswith("MISTRAL_LARGE4_1T_")}
+    result["settings"] = {k: v for k, v in os.environ.items() if k.startswith("MISTRAL_LARGE_4_")}
 
     t0 = time.time()
     model = device_model(mesh_device, _Spec(CKPT, CAPACITY, CHUNK), layers, lm_head=False)
@@ -686,7 +686,7 @@ def _rel(a: torch.Tensor, b: torch.Tensor) -> float:
 
 
 def _top1_detail(lg: torch.Tensor, g: torch.Tensor) -> dict:
-    """perf 8: how far a last-position top-1 flip is. Each side's rank of the other's top-1 (0 = its own top-1), the
+    """How far a last-position top-1 flip is. Each side's rank of the other's top-1 (0 = its own top-1), the
     logit gap to it on each side, and the top-5 overlap, for the last row; top-5 containment over all rows."""
     a, b = lg[-1].double(), g[-1].double()
     ta, tb = int(a.argmax()), int(b.argmax())
@@ -703,7 +703,7 @@ def _top1_detail(lg: torch.Tensor, g: torch.Tensor) -> dict:
 
 def _variants() -> list[dict]:
     """ML4_SWEEP_VARIANTS: a JSON file or inline JSON, [{"name": ..., "env": {"EXPERTS_IMPL": "loop", ...}}]; env keys
-    are settings names (tt/settings.py) without the MISTRAL_LARGE4_1T_ prefix. Every variant runs on top of the
+    are settings names (tt/mistral_large_4/settings.py) without the MISTRAL_LARGE_4_ prefix. Every variant runs on top of the
     defaults; the first is the reference the others are compared with."""
     raw = os.environ.get("ML4_SWEEP_VARIANTS", '[{"name": "default", "env": {}}]')
     return json.loads(Path(raw).read_text() if not raw.lstrip().startswith("[") else raw)
@@ -714,11 +714,11 @@ def test_sweep(mesh_device):
     """One model load, many settings variants: each runs the last chunk of the golden's prompt (its KV and index
     caches loaded from the golden's state up to that chunk) to compile, twice timed (warm, synced at the end), and once
     against the golden (layers 35 and 71, the final norm and the last 32 rows of logits). Only settings read when the
-    model runs can differ between variants (all but the weight dtypes and the router / experts topology). A variant with ``"trace": true`` captures the chunk as one ttnn trace and times its replay (perf 7; without
+    model runs can differ between variants (all but the weight dtypes and the router / experts topology). A variant with ``"trace": true`` captures the chunk as one ttnn trace and times its replay (without
     ML4_TRACE_REGION_MB the trace buffer comes from free DRAM); with ``"trace_steps": true`` also one trace per block step, for device ms per step. A variant with ``"breakdown": true`` also runs once with a device synchronize at every block step, and
     once more with one after every outermost ttnn call on its ``op_layers`` (default 0,1,3,17,39): wall ms per step
     and per op, profiler-free (WallTimer). ``dispatch_ms_runs`` is how long the host took to issue a timed run.
-    A variant with ``"device_profile": true`` (perf 11; optional ``"profile_layers"``, default [16, 17, 18], and
+    A variant with ``"device_profile": true`` (optional ``"profile_layers"``, default [16, 17, 18], and
     ``"profile_devices"``, chip ids to aggregate over) is not timed: it records the device kernel time of every op on
     those layers (``device_profile``; eager, or the layers as one trace with ``"trace": true``) and needs the device
     profiler for the whole job, so run it in a job of its own (the profiler slows every kernel a little, and the
@@ -790,7 +790,7 @@ def test_sweep(mesh_device):
         model.free(final)
 
     def traced(rec):
-        """perf 7: the chunk's 72 layers and final norm captured as one ttnn trace (the embedding stays eager, its
+        """The chunk's layers and final norm captured as one ttnn trace (the embedding stays eager, its
         output the trace's persistent input), replayed three times timed, then read against the golden (final norm
         and logits; no per-layer dumps). Returns the persistent final-norm output; the caller releases the trace."""
         h_in = model.embed(tokens, start=start)
@@ -828,7 +828,7 @@ def test_sweep(mesh_device):
         return tid, h_in, final
 
     def traced_steps(rec, op_layers=()):
-        """perf 7: the chunk again as one trace per block step (TraceSteps), replayed twice; the second replay's
+        """The chunk again as one trace per block step (TraceSteps), replayed twice; the second replay's
         device time per step goes to rec["trace_steps"] (no accuracy read: the outputs are the full trace's)."""
         h_in = model.embed(tokens, start=start)
         model.sync()
@@ -888,7 +888,7 @@ def test_sweep(mesh_device):
         return got
 
     def device_profile(v, rec):
-        """perf 11: per-op device kernel time on ``profile_layers`` (DeviceOps). Eager: one run, the profiler read
+        """Per-op device kernel time on ``profile_layers`` (DeviceOps). Eager: one run, the profiler read
         every few layers. ``"trace": true``: layers 0..first eager, then the profiled layers (first..last) captured
         as one trace and replayed once (the whole chunk would overflow the profiler's buffers in one replay); the
         kernels are the same, only host dispatch differs. Accuracy from one more eager run (the profiler's builds)."""
@@ -1017,7 +1017,7 @@ def test_sweep(mesh_device):
     assert any("chunk_wall_ms" in r or "device_profile" in r for r in result["variants"].values())
 
 
-# ---- long context: device time per op at chunk positions up to 1M (PERF.md "Long context")
+# ---- long context: device time per op at chunk positions up to 1M
 CTX_POSITIONS = (0, 51200, 512000, 1039360)
 _CCL = ("all_gather", "reduce_scatter", "all_to_all", "dispatch", "combine", "all_reduce", "ring_", "point_to_point")
 
@@ -1047,8 +1047,8 @@ def _ctx_groups(ops: list, n_layers: int) -> dict:
 def test_ctx_profile(mesh_device):
     """Warm-chunk device kernel time per op (DeviceOps) on ``ML4_CTX_PROFILE_LAYERS`` (default 16, 17, 18) at chunk
     starts ``ML4_CTX_POSITIONS`` (default CTX_POSITIONS), on the 1-slot long build (max_seq ML4_CTX_MAX_SEQ, default
-    1044480; SEQ_BUFFERS=shared, SSMAX_TABLE=shared_log, no LM head) and on the trace-safe (metadata) forward the traced
-    serving runs, here eagerly so the profiler is read between layers. Per position: one unprofiled run (compiles),
+    1044480; SEQ_BUFFERS=shared, SSMAX_TABLE=shared_log, no LM head) and on the trace-safe (metadata) forward that serving
+    traces, here eagerly so the profiler is read between layers. Per position: one unprofiled run (compiles),
     then the profiled one; the caches are empty (the indexer scores and the KV gather cover the whole prefix
     [0, start + chunk) whatever it holds; attention reads the top-2048). Needs the device profiler for the whole job:
 
@@ -1056,15 +1056,15 @@ def test_ctx_profile(mesh_device):
         TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES=1 TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY=1 ML4_CTX_PROFILE=1 ...
 
     Results (ms per layer: ms_max of the profiled layers / their count) go to ML4_PERF_OUT."""
-    os.environ.setdefault("MISTRAL_LARGE4_1T_SEQ_BUFFERS", "shared")
-    os.environ.setdefault("MISTRAL_LARGE4_1T_SSMAX_TABLE", "shared_log")
+    os.environ.setdefault("MISTRAL_LARGE_4_SEQ_BUFFERS", "shared")
+    os.environ.setdefault("MISTRAL_LARGE_4_SSMAX_TABLE", "shared_log")
     max_seq = int(os.environ.get("ML4_CTX_MAX_SEQ", "1044480"))
     positions = [int(x) for x in os.environ.get("ML4_CTX_POSITIONS", ",".join(map(str, CTX_POSITIONS))).split(",")]
     pl = [int(x) for x in os.environ.get("ML4_CTX_PROFILE_LAYERS", "16,17,18").split(",")]
     layers = _layers()
     profiling = os.environ.get("TT_METAL_PROFILER_CPP_POST_PROCESS") == "1"
     result = {"max_seq": max_seq, "profile_layers": pl, "node": os.environ.get("SLURMD_NODENAME") or socket.gethostname(),
-              "settings": {k: v for k, v in os.environ.items() if k.startswith("MISTRAL_LARGE4_1T_")}, "positions": {}}
+              "settings": {k: v for k, v in os.environ.items() if k.startswith("MISTRAL_LARGE_4_")}, "positions": {}}
 
     def dump():
         OUT.parent.mkdir(parents=True, exist_ok=True)

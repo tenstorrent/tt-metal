@@ -3,17 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 """The fabric the Galaxy tests open the mesh with, picked by environment (set before ``open_mesh_device``).
 
-ML4_FABRIC        ring1d (default): FABRIC_1D_RING, as the bring-up ran
-                  torus_xy: FABRIC_2D_TORUS_XY with RELAXED_INIT, tt-metal's production 8x4 profile (GLM-5.3, Kimi)
+ML4_FABRIC        ring1d (default): FABRIC_1D_RING
+                  torus_xy: FABRIC_2D_TORUS_XY with RELAXED_INIT (the 8x4 profile of GLM-5.3 and Kimi)
                   fabric2d: plain FABRIC_2D
-ML4_FABRIC_PAYLOAD  max fabric packet payload in bytes (default 12288, perf 15: the CCLs' 4096 B pages travel 3 to a
-                  packet instead of 1 in the default 4352 B packet; -4.6% per chunk, bit-identical; 0 = the fabric's
-                  default; GLM-5.3 uses its hidden size)
+ML4_FABRIC_PAYLOAD  max fabric packet payload in bytes (default 12288: the CCLs' 4096 B pages travel 3 to a packet
+                  instead of 1 in the default 4352 B packet; 0 = the fabric's default)
 """
 
 import os
 
-DEFAULT_PAYLOAD = 12288  # perf 15
+DEFAULT_PAYLOAD = 12288
 RUNNER_DEFAULT_PAYLOAD = 4352  # the fabric's default packet, which payload 0 asks for
 
 _CONFIGS = {

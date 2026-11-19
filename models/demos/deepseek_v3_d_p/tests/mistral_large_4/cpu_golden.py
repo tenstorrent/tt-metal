@@ -9,7 +9,7 @@ of layers on the first ``--seq`` tokens of a prompt, in chunks of ``--chunk``. N
 
 Writes DIR/chunk_<c>.safetensors per chunk (``L<i>``: the output of each dumped layer, ``final_norm``; bfloat16, rows
 in position order) and, for the last chunk, ``logits`` (fp32, its last LOGITS_ROWS rows), then DIR/meta.json. With
-``--state``, also the serving checks' golden in tt-metal's prefill trace layout: DIR/metadata.json (``token_ids``) and
+``--state``, also the KV-cache golden in the prefill trace layout: DIR/metadata.json (``token_ids``) and
 DIR/kv_cache/layer_<i>.safetensors (``kv_latent_cache_layer_<i>``, ``k_rope_cache_layer_<i>``,
 ``index_key_cache_layer_<i>``: each layer's state over the whole sequence, ``--state-dtype``; [seq, 0] where it owns none). Holds
 the dense weights in bf16 (about 44 GB for every layer) and streams the routed experts from the checkpoint.
@@ -33,7 +33,7 @@ DUMP = (0, 1, 2, 3, 4, 7, 8, 15, 16, 17, 18, 31, 35, 36, 39, 40, 47, 55, 63, 67,
 
 
 class Spec:
-    """The spec fields the reference reads (reference/model.py Reference)."""
+    """The spec fields the reference (reference/mistral_large_4/model.py) reads."""
 
     def __init__(self, hf_dir: str, max_seq: int):
         self.hf_dir = Path(hf_dir)
@@ -123,7 +123,7 @@ def main(argv=None):
         "layers": [layers[0], layers[-1]],
         "dump": dump,
         "logits_rows": LOGITS_ROWS,
-        "reference": "fp32 compute, bf16 weights (reference/model.py)",
+        "reference": "fp32 compute, bf16 weights (reference/mistral_large_4/model.py)",
         "load_seconds": round(load_s, 1),
         "chunk_seconds": times,
     }

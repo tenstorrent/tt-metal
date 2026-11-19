@@ -40,8 +40,8 @@ class IndexedTables:
     """cos / sin [T, W] (natural positions, host fp32) and trans, on the mesh in the indexed op's layout."""
 
     def __init__(self, mesh, cos: torch.Tensor, sin, chunk: int):
-        """sin may be a device table already in this layout (long ISL: one zero sin table shared by every layer's
-        scaling table)."""
+        """sin may be a device table already in this layout (one zero sin table shared by every layer's scaling
+        table)."""
         sp = mesh.shape[SP_AXIS]
         max_seq = cos.shape[0]
         assert chunk % (ttnn.TILE_SIZE * sp) == 0 and max_seq % chunk == 0, (max_seq, chunk, sp)
@@ -139,7 +139,7 @@ class RowTables:
 
 def log_positions(max_seq: int, width: int = ttnn.TILE_SIZE) -> torch.Tensor:
     """log(p + 1) of every position, fp32 [max_seq, width] (the column repeated): the softmax scaling's
-    f[p, h] = s_h log(p + 1) + b_h is computed from it on the device (SSMAX_TABLE=shared_log; long ISL 3)."""
+    f[p, h] = s_h log(p + 1) + b_h is computed from it on the device (SSMAX_TABLE=shared_log)."""
     return torch.arange(1, max_seq + 1).float().log()[:, None].expand(max_seq, width).contiguous()
 
 
@@ -151,7 +151,7 @@ def log_rows(mesh, max_seq: int, chunk: int, n: int, sub: int = 0) -> "RowTables
 
 
 def rope_tables(mesh, inv_freq: torch.Tensor, max_seq: int, chunk: int) -> IndexedTables:
-    """SEQ_BUFFERS=shared: one copy per (max_seq, chunk, inverse frequencies), every RoPE layer's (tt/seqbuf.py)."""
+    """SEQ_BUFFERS=shared: one copy per (max_seq, chunk, inverse frequencies), every RoPE layer's (seqbuf.py)."""
     return seqbuf.get(
         mesh, ("rope", max_seq, chunk, seqbuf.tensor_key(inv_freq)), lambda: _rope_tables(mesh, inv_freq, max_seq, chunk)
     )
@@ -278,7 +278,7 @@ def select_split(meta, t: SplitTables, n: int, subshard: bool) -> ttnn.Tensor:
 
 
 def release_split(mesh) -> None:
-    """Deallocates the mesh's SplitTables (long ISL: TtModel.resize builds them again at the new max_seq)."""
+    """Deallocates the mesh's SplitTables (TtModel.resize builds them again at the new max_seq)."""
     for k in [k for k in _SPLIT if k[0] == id(mesh)]:
         t = _SPLIT.pop(k)
         for x in [*t.parts, t.zero, t.trans, *t.ones.values()]:

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Absorbed sparse MLA of the layers that own their KV (plan.md attn_dense "attention"; components.yaml notes).
+"""Absorbed sparse MLA.
 
 Adapted from models/demos/deepseek_v3_d_p/tt/mla/mla.py (ttMLA sparse path: _kv_stem, _q_stem, _sparse_mla,
 _o_proj_epilogue) without its q-LoRA, its TP-deduped cache and its full-mesh (2D fabric) gather. Per chip (SP row r
@@ -26,11 +26,11 @@ of 8, TP column t of 4), for one 5120-token chunk at ``start``:
              -> back to heads [1, 16, 640, 512] -> @ W_uv (512 -> 128) -> concat heads [640, 2048] -> @ wo (rows of
              this column's heads, fp32 partial) -> reduce_scatter(axis 1) -> bf16 [1, 1, 640, 1536].
 
-NoPE layers (rope_dim 0, plan.md attn_nope_moe; serving nope_kv_layout pad576): q is 128 NoPE dims per head, split
+NoPE layers (rope_dim 0): q is 128 NoPE dims per head, split
 into heads by reshape + permute; wkv_a gives only the 512 latent; the kvpe record stays 576 wide with the pe columns
 512..575 exact zeros (the latent padded by ttnn.pad), and q = [q_lat | zeros], so the scores are the latent's alone.
 
-Shared-KV layers (kv_source_layers[i] != i, plan.md attn_nope_shared_kv_moe): no wkv_a / kv_a_norm and no cache write.
+Shared-KV layers (kv_source_layers[i] != i): no wkv_a / kv_a_norm and no cache write.
 The module reads its source layer's kvpe region (``cache`` / ``cache_layer`` of the source, which has already written
 this chunk's rows) through the same SP gather; with ``kvpe`` (the source's bf16 rows of this chunk) those rows are
 pasted as on the owning layer (ATTN_CHUNK_KV).
@@ -82,7 +82,7 @@ class _HeadTables(IndexedTables):
 
 
 class TtAttention:
-    # read when they run, not when built: a sweep can change them between runs of one loaded model (PERF.md)
+    # read at call time, not build time: settings may change between runs of one loaded model
     @property
     def composed(self):
         core = settings.get("ATTN_SDPA")
@@ -136,23 +136,21 @@ class TtAttention:
         self.max_seq, self.chunk = max_seq, chunk
         if settings.get("ATTN_KV_ROWS") == "extent" and "gathered_prefix_tensor" not in (ttnn.untilize.__doc__ or ""):
             raise RuntimeError(
-                "MISTRAL_LARGE4_1T_ATTN_KV_ROWS=extent needs ttnn.untilize(gathered_prefix_tensor=...), which this "
-                "tt-metal does not have: apply ci/patches/tt-metal-untilize-gathered-prefix.patch (patches.json) "
-                "or leave ATTN_KV_ROWS at max_seq"
+                "MISTRAL_LARGE_4_ATTN_KV_ROWS=extent needs ttnn.untilize(gathered_prefix_tensor=...), which this "
+                "tt-metal does not have; leave ATTN_KV_ROWS at max_seq"
             )
         self.rows = chunk // self.sp  # this SP row's rows per chunk
-        # NoPE layers keep the served record width (pad576): pe columns written as zeros
+        # NoPE layers keep the 576-wide record: pe columns written as zeros
         self.pe = rope_dim if pe_dim is None else pe_dim
         self.width = kv_lora + self.pe
         self.scale = (nope_dim + rope_dim) ** -0.5  # explicit: sparse_sdpa's default is K_DIM^-0.5 (576)
         self.cache_layer, self.cache_layers = cache_layer, cache_layers
         self.owns_kv = "wkv_a" in w
-        # a KV source layer (a later shared-KV layer reads its region) keeps its chunk's bf16 kvpe rows here for that
-        # layer (the ``kvpe`` argument), until its next call (chunk_kv_start: that chunk's start); set by the all-device
-        # model
+        # a KV source layer keeps its chunk's bf16 kvpe rows here for the shared-KV layers that read it (their
+        # ``kvpe`` argument), until its next call; set by the model
         self.keep_chunk_kv, self.chunk_kv, self.chunk_kv_start = False, None, None
-        self.mirror_layer = None  # a shared-KV layer's own kvpe region (KV_MIRRORS), set by the all-device model
-        wdt = ttnn.bfloat8_b  # rule 7: weights bfp8
+        self.mirror_layer = None  # a shared-KV layer's own kvpe region (KV_MIRRORS), set by the model
+        wdt = ttnn.bfloat8_b
         shape = tuple(mesh.shape)
 
         def put(t, dtype=wdt, dims=None, layout=ttnn.TILE_LAYOUT):
@@ -172,10 +170,9 @@ class TtAttention:
 
         hd = nope_dim + rope_dim
         on_tp = lambda d: (d, None) if TP_AXIS == 0 else (None, d)  # noqa: E731  (tensor dim d split over TP)
-        # Every weight is kept [N, K] (checkpoint order) and read with transpose_b, so a bfp8 block (16 values of a
-        # tile row) runs along the contraction. Stored [K, N], an output column shares its blocks with its 15
-        # neighbours: wo's column 5022 (norm 1/15 of the mean) took the exponent of column 5010, whose weights are
-        # 10x larger, and scored column rel 1.93 (0.02 with K blocks).
+        # Weights stay [N, K] (checkpoint order) and are read with transpose_b, so a bfp8 block (16 values of a tile
+        # row) runs along the contraction; [K, N] blocks would share exponents across output columns of very
+        # different norms.
         # a shared-KV layer attends its source's bfp8 prefix: its own weights in ATTN_SHARED_KV_WEIGHTS
         own_dt = wdt if self.owns_kv else getattr(ttnn, settings.get("ATTN_SHARED_KV_WEIGHTS"))
         self.wq = put(w["wq"].float()[None, None], dtype=own_dt, dims=on_tp(2))  # [heads * hd, H]: this column's heads
@@ -188,13 +185,13 @@ class TtAttention:
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
         kv_b = w["wkv_b"].float().view(n_heads, nope_dim + v_dim, kv_lora)
-        # the absorbed wkv_b halves (rule 7: bfp8), blocks along the latent 512 as they contract in the reference
+        # the absorbed wkv_b halves, bfp8 blocks along the latent 512 (the contraction)
         kvb_dt = getattr(ttnn, settings.get("ATTN_WKV_B_DTYPE")) if self.owns_kv else own_dt
         self.w_uk = put(kv_b[:, :nope_dim][None], dtype=kvb_dt, dims=on_tp(1))  # [1, heads, nope, lora]
         self.w_uv = put(kv_b[:, nope_dim:][None], dtype=kvb_dt, dims=on_tp(1))  # [1, heads, v, lora]
         self.wo = put(w["wo"].float()[None, None], dims=on_tp(3))  # [H, heads * v]: this column's heads
 
-        # the host inputs of the max_seq-sized tables, kept for resize (long ISL)
+        # the host inputs of the max_seq-sized tables, kept for resize
         self._inv_freq, self._ssmax_sb = inv_freq, (w["ssmax_s"].float().clone(), w["ssmax_b"].float().clone())
         self.ones = put(torch.ones(1, 1, self.rows, ttnn.TILE_SIZE), dtype=ttnn.bfloat16)
         widen = torch.zeros(1, 1, ttnn.TILE_SIZE, self.heads * hd)  # f per head -> its hd columns of q
@@ -207,7 +204,7 @@ class TtAttention:
         self.rope = self.ssmax = self.ssmax_sb = self.kv_full = self._log = None
         self.build_seq(max_seq, cache)
 
-    # ---- the max_seq-sized tensors (long ISL: rebuilt by resize, shared over layers with SEQ_BUFFERS=shared)
+    # ---- the max_seq-sized tensors (rebuilt by resize, shared over layers with SEQ_BUFFERS=shared)
     def build_seq(self, max_seq: int, cache=None) -> None:
         """RoPE and softmax-scaling tables, the gather scratch and (allocated here when None) the cache, for max_seq."""
         mesh, chunk = self.mesh, self.chunk
@@ -218,10 +215,9 @@ class TtAttention:
         s, b = self._ssmax_sb
         self.ssmax = self.ssmax_sb = self._log = None
         if settings.get("SSMAX_TABLE") == "shared_log":
-            # long ISL 3: f = s * log(p + 1) + b in fp32 on the device from one log table per mesh (eager: its
-            # RowTables slice, built on first eager use; traced: its SplitTables selection at meta.start, once per
-            # chunk for every layer), rounded to bf16 as the per-layer table was; this column's s_h, b_h as rows
-            # [1, 1, 1, 32] (zeros past its heads, as the table's zero columns)
+            # f = s * log(p + 1) + b in fp32 on the device from one log table per mesh (eager: RowTables slice;
+            # traced: SplitTables selection at meta.start), rounded to bf16; this column's s_h, b_h as rows
+            # [1, 1, 1, 32] (zeros past its heads)
             rows_sb = []
             for v in (s, b):
                 r = torch.zeros(1, 1, 1, self.tp * ttnn.TILE_SIZE)
@@ -311,8 +307,7 @@ class TtAttention:
                 self._log = log_rows(self.mesh, self.max_seq, self.chunk, self.rows)
             lg = self._log.rows(start)
         else:
-            # built and prepared on the first metadata-path chunk, which runs eagerly before any capture (as the
-            # indexer's split tables)
+            # built and prepared on the first metadata-path chunk, which runs eagerly before any capture
             t = log_split(self.mesh, self.max_seq, self.chunk)
             t.prepare(self.rows)
             lg = select_split(meta, t, self.rows, False)
@@ -352,7 +347,7 @@ class TtAttention:
 
     def write_kv(self, x_full, start: int, slot: int, end: int, meta=None):
         """kvpe rows of this chunk -> the cache rows [start, end) of (slot, cache_layer). Returns them in bf16.
-        meta (tt/chunk_meta.py): slot, start and end read on the device instead (trace-safe forms)."""
+        meta (chunk_meta.py): slot, start and end read on the device instead (trace-safe forms)."""
         kv = self._linear(x_full, self.wkv_a, dtype=ttnn.bfloat16, name="wkv_a")  # [1, 1, 640, 576] ([1, 1, 640, 512] on NoPE layers)
         if self.rope_dim:
             lat = ttnn.slice(kv, [0, 0, 0, 0], [1, 1, self.rows, self.lora])
@@ -510,19 +505,17 @@ class TtAttention:
             return gathered  # the persistent scratch itself: callers free only what is not self.kv_full
         g = min(self.max_seq, -(-end // slab) * slab)
         if meta is None and settings.get("ATTN_KV_ROWS") == "gathered" and g < self.max_seq and gathered.dtype == ttnn.bfloat8_b:
-            # long ISL 3: only the gathered slabs (g / 8 rows of each rank's max_seq / 8) -> bf16 ROW_MAJOR
-            # [1, 1, g, 576], still rank-major: sparse_sdpa's block-cyclic remap takes its per-rank stride from the kv
-            # rows (T / sp), so the compact prefix is read in place. The view is free (tile-aligned rows)
+            # only the gathered slabs (g / 8 rows of each rank's max_seq / 8) -> bf16 ROW_MAJOR [1, 1, g, 576], still
+            # rank-major: sparse_sdpa's block-cyclic remap takes its per-rank stride from the kv rows (T / sp)
             v = ttnn.reshape(gathered, [1, self.sp, self.max_seq // self.sp, self.width])
             rm = ttnn.untilize_with_unpadding(
                 v, output_tensor_end=[0, self.sp - 1, g // self.sp - 1, self.width - 1], memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
             return ttnn.reshape(rm, [1, 1, g, self.width])
         if meta is not None and settings.get("ATTN_KV_ROWS") == "extent":
-            # long context fix 1: untilize only the slabs the gather wrote (g = min(round_up(start + chunk, chunk),
-            # max_seq), g / sp rows of each rank's segment), the extent read on the device from the chunk start, so one
-            # capture serves every chunk; the output keeps the full [max_seq, 576] shape, rows past g stale (sparse_sdpa
-            # reads only top-k positions < end <= g; the paste writes inside g)
+            # untilize only the slabs the gather wrote (g = min(round_up(start + chunk, chunk), max_seq)), the extent
+            # read on the device so one capture serves every chunk; rows past g stay stale (sparse_sdpa reads only
+            # top-k positions < end <= g)
             return ttnn.untilize(
                 gathered,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -531,7 +524,7 @@ class TtAttention:
                 num_segments=self.sp,
             )
         if gathered.dtype in (ttnn.bfloat8_b, ttnn.bfloat16) and settings.get("ATTN_KV_UNTILIZE") == "fused":
-            # perf 8: untilize unpacks bfp8 to bf16 itself (exact), so the full-prefix typecast is one op too many
+            # untilize unpacks bfp8 to bf16 itself (exact), no separate typecast
             return ttnn.to_layout(gathered, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
         kv16 = ttnn.typecast(gathered, ttnn.bfloat16)
         kv_rm = ttnn.to_layout(kv16, ttnn.ROW_MAJOR_LAYOUT)
@@ -542,7 +535,7 @@ class TtAttention:
         """The chunk's bf16 kvpe rows of every SP row, ROW_MAJOR [1, 1, chunk, 576] (ATTN_PASTE_GATHER)."""
         links = settings.get("NUM_LINKS")
         if settings.get("ATTN_PASTE_GATHER") == "row_major":
-            # perf 12: untilize this row's rows, then gather (the untilize is 8x smaller; same values)
+            # untilize this row's rows, then gather (same values, 8x smaller untilize)
             rows_rm = ttnn.to_layout(kvpe, ttnn.ROW_MAJOR_LAYOUT)
             full_rm = ttnn.all_gather(rows_rm, dim=2, cluster_axis=SP_AXIS, num_links=links, topology=_topology())
             ttnn.deallocate(rows_rm)
@@ -578,8 +571,8 @@ class TtAttention:
         per_rank = kv_rm.shape[2] // sp  # max_seq / 8, or g / 8 for the gathered rows only (ATTN_KV_ROWS)
         full_rm = self._gather_chunk_rm(kvpe)
         if settings.get("ATTN_PASTE") == "slab" and start % self.chunk == 0 and start + self.chunk <= kv_rm.shape[2]:
-            # perf 8: a chunk-aligned chunk is one block of ``rows`` per SP row at the same local offset on every rank,
-            # so the 2 * sp slice / slice_write pairs below are one strided write through [1, sp, per_rank, width] views
+            # a chunk-aligned chunk is one block of ``rows`` per SP row at the same local offset on every rank: one
+            # strided write through [1, sp, per_rank, width] views
             c = start // self.chunk
             dst = ttnn.reshape(kv_rm, [1, sp, per_rank, self.width])
             src = ttnn.reshape(full_rm, [1, sp, rows, self.width])
@@ -654,8 +647,7 @@ class TtAttention:
             ttnn.deallocate(scs)
             ttnn.deallocate(mb)
             # unnormalized exp(s - max) in fp32, then bf16; the output is divided by the sum of those bf16 values,
-            # so the weights it averages with sum to 1 exactly (ttnn.softmax on these scores: layer 1 median row norm
-            # -0.5 %)
+            # so the weights it averages with sum to 1 exactly
             mx = ttnn.max(sc2, dim=-1, keepdim=True)
             d = ttnn.subtract(sc2, mx)
             ttnn.deallocate(sc2)
@@ -711,7 +703,7 @@ class TtAttention:
         uint32 [1, 1, S/32, k] per chip (chip (r, t): query rows 640 r + 160 t + [0, 160)), natural key positions,
         0xFFFFFFFF pads as a contiguous tail. kvpe (shared-KV layers only, optional): the source layer's bf16 kvpe rows
         of this chunk [1, 1, S/8, 576] per chip, as its write_kv returns them; not deallocated here. Returns attn_out
-        [1, 1, S/8, H/4] bf16 per chip. meta (tt/chunk_meta.py): the chunk's slot, start and end read on the device
+        [1, 1, S/8, H/4] bf16 per chip. meta (chunk_meta.py): the chunk's slot, start and end read on the device
         (the trace-safe path; start / slot / end are then only the host's view)."""
         end = start + self.chunk if end is None else end
         if x.shape[-1] == self.wq.shape[-1]:  # NORM_GATHER=input: attn_norm handed on the full row
@@ -776,8 +768,8 @@ class TtAttention:
         ttnn.deallocate(o_lat)
         oc = ttnn.experimental.nlp_concat_heads(o, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1, 1, 640, heads*128]
         ttnn.deallocate(o)
-        # [1, 1, 640, H] partial over this column's heads. The 4 partials can cancel to a small sum (layer 0 column
-        # 5022: golden norm 1/15 of the mean), so they are summed in ATTN_PARTIAL_DTYPE before rounding to bf16
+        # [1, 1, 640, H] partial over this column's heads. The 4 partials can cancel to a small sum, so they are summed
+        # in ATTN_PARTIAL_DTYPE before rounding to bf16
         part = ttnn.matmul(
             oc,
             self.wo,
@@ -833,7 +825,7 @@ def _stamp_sp_topology(cache, mesh) -> None:
     cache.update_tensor_topology(ttnn.TensorTopology(dist, placements, coords))
 
 
-# ---- harness boundary (device_component's wrapper; never called from a forward)
+# ---- host <-> device helpers for tests (never called from a forward)
 def topk_to_device(topk: torch.Tensor, mesh) -> ttnn.Tensor:
     """[S, k] host top-k (natural positions, -1 pads) -> uint32 [1, 1, S/32, k] per chip, chip (r, t) holding rows
     (4 r + t) * S/32 + [0, S/32) (the indexer's layout), pads 0xFFFFFFFF."""

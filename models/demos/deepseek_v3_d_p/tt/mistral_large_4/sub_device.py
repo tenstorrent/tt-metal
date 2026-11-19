@@ -1,15 +1,15 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""perf 16: the shared expert overlapped with the routed experts' dispatch on disjoint cores (MOE_OVERLAP).
+"""The shared expert overlapped with the routed experts' dispatch on disjoint cores (MOE_OVERLAP).
 
-As tt-metal's DeepSeek prefill (models/demos/deepseek_v3_d_p/tt/moe/tt_moe.py overlap_shared_expert_with_dispatch):
+As the DeepSeek prefill (moe/tt_moe.py overlap_shared_expert_with_dispatch):
 a sub-device manager splits the Tensix grid into a dispatch strip (row 0) and a shared-expert strip (rows 1..);
 dispatch runs on the first and the shared expert's matmuls on the second, so Fast Dispatch runs them concurrently.
 The manager is loaded around that region only (every other op keeps the whole grid).
 
 A sub-device manager cannot be loaded or cleared inside a trace capture, so a capture that meets one is split there
-(as models/demos/deepseek_v3_d_p/utils/sub_device_trace.py): the load / clear runs on the host between two trace
+(as utils/sub_device_trace.py): the load / clear runs on the host between two trace
 segments, at capture and at every replay. ``begin_capture`` / ``end_capture`` / ``execute`` / ``release`` stand in
 for ttnn's trace calls everywhere the package captures; with MOE_OVERLAP off they are those calls (one segment).
 """

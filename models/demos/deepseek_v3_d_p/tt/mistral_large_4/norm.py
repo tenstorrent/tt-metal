@@ -3,10 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Distributed RMSNorm over the TP-split residual (attn_norm, ffn_norm, final_norm).
 
-Adapted from models/demos/deepseek_v3_d_p/tt/tt_distributed_rms_norm.py (non-fused path):
+Adapted from tt_distributed_rms_norm.py (non-fused path):
     rms_norm_pre_all_gather (local sum(x^2), [S/8, 32] per chip) -> all_gather(cluster_axis=1) -> rms_norm_post_all_gather
 The input is bf16: an fp32 input leaves nonzero junk in columns 1-31 of the stats tile, which the post op sums into
-the variance (known_issues "rms_norm_pre_all_gather on an fp32 input"). The output stays TP-split, bf16 (or out_dtype).
+the variance. The output stays TP-split, bf16 (or out_dtype).
 """
 
 import torch
@@ -28,7 +28,7 @@ def compute_config(mesh):
 
 
 class TtDistributedRmsNorm:
-    # read when they run, not when built: a sweep can change them between runs of one loaded model (PERF.md)
+    # read at run time, so a changed setting applies to an already loaded model
     @property
     def cfg(self):
         return compute_config(self.mesh)
@@ -60,7 +60,7 @@ class TtDistributedRmsNorm:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=(None, 2)),
         )
-        # perf 13: the whole weight on every chip, for NORM_GATHER=input (the layer norms; set by the model)
+        # the whole weight on every chip, for NORM_GATHER=input (the layer norms; set by the model)
         self.gather_input = False
         self.weight_full = ttnn.from_torch(
             weight.float().reshape(1, 1, h // 32, 32),
@@ -77,7 +77,7 @@ class TtDistributedRmsNorm:
         on every chip (the readers all gather the norm's output anyway; 2-3 ops fewer per norm)."""
         mode = settings.get("NORM_GATHER") if self.gather_input else "stats"
         if mode == "rms_norm":
-            # perf 14: the gathered row through ttnn.rms_norm, which streams a row too wide for L1 (its large-tensor
+            # the gathered row through ttnn.rms_norm, which streams a row too wide for L1 (its large-tensor
             # kernels); an fp32 output (attn_norm) normalizes an fp32 copy of the row
             links = self.num_links or settings.get("NUM_LINKS")
             topo = getattr(ttnn.Topology, settings.get("NORM_GATHER_TOPOLOGY"))
@@ -99,8 +99,8 @@ class TtDistributedRmsNorm:
             links = self.num_links or settings.get("NUM_LINKS")
             topo = getattr(ttnn.Topology, settings.get("NORM_GATHER_TOPOLOGY"))
             x_full = ttnn.all_gather(x, dim=3, cluster_axis=TP_AXIS, num_links=links, topology=topo)
-            # a whole 6144-wide row per core overflows L1 in both ops (fast-06 / fast-07: 1.69 MB of buffers on 12
-            # cores); the 2D grid splits each row's tiles over the grid's rows
+            # a whole 6144-wide row per core overflows L1 in both ops; the 2D grid splits each row's tiles over the
+            # grid's rows
             stats = ttnn.rms_norm_pre_all_gather(
                 x_full, dtype=self.stats_dtype, compute_kernel_config=self.cfg, use_2d_core_grid=True
             )
