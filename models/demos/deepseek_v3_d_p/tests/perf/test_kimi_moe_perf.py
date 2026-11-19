@@ -73,8 +73,8 @@ class _MoEPerfCase:
 _K2_7 = _MoEPerfCase(
     label="kimi-k2.7",
     config=KimiK27Config,
-    expected_ns=2_968_000,
-    expected_untraced_ns=3_431_000,
+    expected_ns=2_786_000,
+    expected_untraced_ns=3_214_000,
     shape_note="384 experts / top-8, 7168 emb",
 )
 
