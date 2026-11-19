@@ -134,7 +134,14 @@ def _stub_runtime(patch):
             "reformat_logprobs": _unused,
         },
         "models.common.sampling.tt_penalties": {"TTPenalties": _unused},
-        "models.common.sampling.tt_sampling": {"TTSampling": _unused},
+        # the plain sampler: its class (unused on the host) and the top-1 tie-break constants the record's
+        # sampler stage shares with it (spec_sampling.py; the device test asserts the values agree)
+        "models.common.sampling.tt_sampling": {
+            "TTSampling": _unused,
+            "TIEBREAK_DELTA_SCALE": 2**-6,
+            "TIEBREAK_DELTA_FLOOR": 1e-30,
+            "TIEBREAK_INDEX_SENTINEL": 2**24,
+        },
         "models.common.llama_models": {
             name: _unused
             for name in (

@@ -11,11 +11,11 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import kda_state_dict_sha256
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import assert_accurate, make_actual_start
 from models.demos.deepseek_v3_d_p.tests.kda.utils import make_small_kda_test_config, random_weights
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig, KDARecurrenceProgramConfig
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, make_actual_start
 
 pytestmark = run_for_blackhole()
 
@@ -176,6 +176,16 @@ def test_kimi_k3_fixed_geometry_configuration(local_rows, expected_group_chunks)
     config = kimi_k3_program_config(active_seq_len_local=local_rows, tp_ccl_topology=ttnn.Topology.Linear)
     assert config.recurrence.summary_group_chunks == expected_group_chunks
     assert config.recurrence.local_scan_strategy == "grouped"
+
+
+def test_kimi_k3_math_fidelity():
+    from models.demos.deepseek_v3_d_p.tt.kda.config import kimi_k3_program_config
+
+    config = kimi_k3_program_config(active_seq_len_local=640, tp_ccl_topology=ttnn.Topology.Linear)
+    assert config.recurrence.scan_math_fidelity == ttnn.MathFidelity.HiFi3
+    assert config.recurrence.affine_prefix_math_fidelity == ttnn.MathFidelity.HiFi3
+    assert config.output_projection_math_fidelity == ttnn.MathFidelity.HiFi3
+    assert config.input_projection_math_fidelity == ttnn.MathFidelity.HiFi2
 
 
 def test_kimi_k3_rejects_untuned_geometry(expect_error):
