@@ -31,6 +31,7 @@ from models.tt_cnn.tt.pipeline import (
 from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
+# The target is a Wormhole device throughput.
 @run_for_wormhole_b0()
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
@@ -69,7 +70,6 @@ def create_unet_pipeline_model(model):
     return run
 
 
-@run_for_wormhole_b0()
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "device_params",
@@ -176,7 +176,6 @@ def test_vanilla_unet_perf_e2e(
     logger.info(f"PCC check was successful ({pcc_message:.5f} > {VANILLA_UNET_PCC_WH:.5f})")
 
 
-@run_for_wormhole_b0()
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "device_params",
