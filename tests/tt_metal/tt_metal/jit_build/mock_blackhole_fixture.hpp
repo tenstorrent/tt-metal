@@ -44,7 +44,8 @@ protected:
         const auto& hal = MetalContext::instance(kernel.get_context_id()).hal();
         const uint32_t core_idx = hal.get_programmable_core_type_index(kernel.get_kernel_programmable_core_type());
         const uint32_t class_idx = enchantum::to_underlying(kernel.get_kernel_processor_class());
-        return BuildEnvManager::get_instance(kernel.get_context_id())
+        return MetalContext::instance(kernel.get_context_id())
+            .build_env_manager()
             .get_kernel_build_state(device->build_id(), core_idx, class_idx, processor_id);
     }
 };

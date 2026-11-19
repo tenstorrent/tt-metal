@@ -6,7 +6,7 @@
 #include <cstdlib>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "llrt/get_platform_architecture.hpp"

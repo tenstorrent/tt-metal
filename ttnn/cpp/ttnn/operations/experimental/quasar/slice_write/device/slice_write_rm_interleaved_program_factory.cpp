@@ -32,8 +32,8 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
     uint32_t num_sticks_per_core_group_1,
     uint32_t num_sticks_per_core_group_2,
     uint32_t max_read_size) {
-    auto* input_buffer = input_tensor.buffer();
-    auto* output_buffer = output_tensor.buffer();
+    const auto* input_buffer = &input_tensor.mesh_buffer();
+    const auto* output_buffer = &output_tensor.mesh_buffer();
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
 
@@ -98,7 +98,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
     }
 
     using namespace tt::tt_metal::experimental;
-    auto src_buffer_alignment = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto src_buffer_alignment = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
     uint32_t page_alignment_offset = (output_tensor_start[-1] * input_tensor.element_size()) % src_buffer_alignment;
@@ -206,21 +206,21 @@ SliceWriteRMInterleavedProgramFactory::cached_program_t SliceWriteRMInterleavedP
     auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
 
-    tt::tt_metal::Buffer* src0_buffer = input.buffer();
+    const auto* src0_buffer = &input.mesh_buffer();
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
 
     uint32_t input_row_size_bytes = input_padded_shape[-1] * input.element_size();
 
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
+    const auto* dst_buffer = &output.mesh_buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t max_read_size = 4096;
 
-    auto src_buffer_alignment = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto src_buffer_alignment = input.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
-    auto dst_buffer_alignment = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto dst_buffer_alignment = output.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
@@ -257,7 +257,7 @@ SliceWriteRMInterleavedProgramFactory::cached_program_t SliceWriteRMInterleavedP
     std::map<std::string, std::string> writer_defines;
     if (stride[-1] != 1) {
         writer_defines["LAST_DIM_STRIDED"] = "1";
-        uint32_t output_row_size_bytes = input_padded_shape[-1] * input.element_size();
+        uint32_t output_row_size_bytes = output.padded_shape()[-1] * output.element_size();
         cb_page_size = tt::round_up(output_row_size_bytes, alignment);
         tt::tt_metal::CircularBufferConfig cb_dst0_config =
             tt::tt_metal::CircularBufferConfig(

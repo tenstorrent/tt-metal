@@ -57,7 +57,7 @@ ProgramDescriptor MorehClipGradNormStep1Operation::create_descriptor(
 
     for (uint32_t j = 0; j < num_inputs; ++j) {
         const auto& input_shape_without_padding = inputs.at(j).logical_shape();
-        origin_hw_vec.emplace_back(input_shape_without_padding[2], input_shape_without_padding[3]);
+        origin_hw_vec.emplace_back(input_shape_without_padding[-2], input_shape_without_padding[-1]);
     }
 
     auto [p, decimal, p_is_negative] = get_p_decimal_p_is_negative(norm_type);

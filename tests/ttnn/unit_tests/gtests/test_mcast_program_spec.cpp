@@ -5,6 +5,26 @@
 #include "distributed/mesh_device_impl.hpp"
 
 namespace ttnn::kernel_lib::host::test {
+TEST_F(McastHostFixture, SpecAttachUsesActiveArchitectureNoc) {
+    for (const bool chain : {false, true}) {
+        for (const auto noc : {NOC::NOC_0, NOC::NOC_1}) {
+            SCOPED_TRACE(::testing::Message() << "chain=" << chain << " config_1xx.noc=" << noc);
+            const McastConfig config{
+                .noc = device_->arch() == tt::ARCH::QUASAR ? NOC::NOC_0 : noc,
+                .irregular_receiver_set_mode = chain ? TransferMode::ChainUnicast : TransferMode::Multicast};
+            auto mcast = make_mcast(device_, {GroupInput(cores({{0, 0}, {2, 0}}), {{0, 0}})}, config);
+            auto spec = spec_pair();
+            for (auto& kernel : spec.kernels) {
+                auto& hw = std::get<m2::DataMovementHardwareConfig>(kernel.hw_config);
+                hw.config_1xx->noc = noc;
+            }
+            m2::ProgramRunArgs args;
+            EXPECT_NO_THROW(mcast.attach(spec, args, "channel", spec_targets));
+            EXPECT_EQ(spec.semaphores.size(), chain ? 3u : 2u);
+        }
+    }
+}
+
 TEST_F(McastHostFixture, SpecAttachPopulatesNamedMetadataResourcesAndRuntimePrefixes) {
     auto mcast = make_mcast(device_, {GroupInput(grid({0, 0}, {1, 0}), {{0, 0}})});
     auto spec = spec_pair(2);
@@ -75,14 +95,17 @@ TEST_F(McastHostFixture, SpecAttachComposesAndNativeRunArgsCopiesKeepPayloads) {
 
 TEST_F(McastHostFixture, SpecAttachFailuresLeaveBothObjectsUnchanged) {
     auto mcast = make_mcast(device_, {GroupInput(grid({0, 0}, {1, 0}), {{0, 0}})});
-    for (const auto* const violation :
-         {"missing-prefix",
-          "trailing-values",
-          "duplicate-run-entry",
-          "unplaced-run-node",
-          "wrong-sender-noc",
-          "duplicate-target",
-          "duplicate-prefix"}) {
+    std::vector<const char*> violations{
+        "missing-prefix",
+        "trailing-values",
+        "duplicate-run-entry",
+        "unplaced-run-node",
+        "duplicate-target",
+        "duplicate-prefix"};
+    if (device_->arch() != tt::ARCH::QUASAR) {
+        violations.push_back("wrong-sender-noc");
+    }
+    for (const auto* const violation : violations) {
         auto spec = spec_pair(1);
         m2::ProgramRunArgs args;
         for (const auto& name : spec_targets) {
@@ -178,8 +201,12 @@ TEST_F(McastHostFixture, SpecAttachAllowsOtherNocOnlyOnPureMulticastReceivers) {
     auto spec = spec_pair();
     std::get<m2::DataMovementHardwareConfig>(spec.kernels[1].hw_config).config_1xx->noc = NOC::NOC_1;
     m2::ProgramRunArgs args;
-    EXPECT_ANY_THROW(chain.attach(spec, args, "chain", spec_targets));
-    EXPECT_TRUE(args.kernel_run_args.empty());
+    if (device_->arch() == tt::ARCH::QUASAR) {
+        EXPECT_NO_THROW(chain.attach(spec, args, "chain", spec_targets));
+    } else {
+        EXPECT_ANY_THROW(chain.attach(spec, args, "chain", spec_targets));
+        EXPECT_TRUE(args.kernel_run_args.empty());
+    }
     EXPECT_NO_THROW(multicast.attach(spec, args, "multicast", spec_targets));
 }
 }  // namespace ttnn::kernel_lib::host::test
@@ -252,7 +279,7 @@ void run_spec_device_contract(
     // Named RT values may be declared after attach: generated get_vararg must use
     // the final named-argument offset, preserving both the caller prefix and helper slices.
     spec.kernels.front().runtime_arg_schema.runtime_arg_names = {"seed", "report_addr"};
-    auto workload = m2::MakeMeshWorkloadFromSpec(device, spec);
+    auto workload = m2::experimental::MakeMeshWorkloadFromSpec(device, spec);
     auto* physical = device.impl().get_devices().front();
     for (uint32_t run = 0; run < 3; ++run) {
         const uint32_t seed = 19 + run * 173;
@@ -268,7 +295,7 @@ void run_spec_device_contract(
             tt::tt_metal::detail::WriteToDeviceL1(physical, node, report_addr, zero);
         }
         for (auto& [region, program] : workload.get_programs()) {
-            m2::SetProgramRunArgs(program, invocation);
+            m2::experimental::SetProgramRunArgs(program, invocation);
         }
         EnqueueMeshWorkload(device.mesh_command_queue(), workload, true);
         for (auto node : placed) {
