@@ -330,7 +330,7 @@
     subtorus_dispatch_combine || exit $?
     echo "===== all 3 sections passed ====="
   test_type: subtorus_4x4_ops
-  test_tags: [ccl, kv_cache]
+  test_tags: [kimi_k2_7, kimi_k3, glm_5_3, ccl]
   test_group: module
   skus:
     bh_sc1:
@@ -379,7 +379,7 @@
     subtorus_modules || exit $?
     echo "===== all 2 sections passed ====="
   test_type: subtorus_4x4_pcc
-  test_tags: [moe, ccl, kv_cache]
+  test_tags: [kimi_k2_7, kimi_k3, glm_5_3, moe, ccl, kv_cache]
   test_group: module
   skus:
     bh_sc1:
