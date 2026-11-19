@@ -8,9 +8,11 @@ import pytest
 import torch
 import ttnn
 
+from tt_py_test_utils_common.utility_functions import is_blackhole
 from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
     UnreadableDocstring,
     check_readable,
+    docstring_blackhole_dtype_layout_params,
     docstring_dtype_layout_params,
     docstring_interleaved_buffer_type_params,
     interleaved_memory_config,
@@ -90,3 +92,35 @@ def test_split_docstring_supported_inputs(dtype, layout, buffer_type, device):
             assert output_chunk.layout == layout, case
             assert output_chunk.memory_config().buffer_type == buffer_type, case
             assert_exact(expected_chunk, ttnn.to_torch(output_chunk), signed_zeros=not bfloat16_retiled)
+
+
+@pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.split))
+@pytest.mark.parametrize("dtype, layout", docstring_blackhole_dtype_layout_params(ttnn.split))
+def test_split_docstring_blackhole_inputs(dtype, layout, buffer_type, device):
+    """Runs the dtypes the ttnn.split docstring lists for Blackhole, in every interleaved buffer type it lists, on the
+    splits of test_split_docstring_supported_inputs. Values are compared after a conversion to FLOAT32 on host, which
+    holds every FP8_E4M3 value."""
+    check_readable(dtype, layout, buffer_type)
+    if not is_blackhole():
+        pytest.skip("the docstring lists these dtypes for Blackhole")
+
+    def read(tensor):
+        return ttnn.to_torch(ttnn.to_dtype(tensor.cpu(), ttnn.float32))
+
+    memory_config = interleaved_memory_config(buffer_type)
+    torch.manual_seed(0)
+    for shape, split_size, dim in _DOCSTRING_SPLIT_CASES:
+        input_tensor = ttnn.from_torch(
+            torch.randn(shape) * 8, dtype=dtype, layout=layout, device=device, memory_config=memory_config
+        )
+        expected = torch.split(read(input_tensor), split_size, dim)
+
+        output = ttnn.split(input_tensor, split_size, dim)
+
+        case = f"shape {shape}, split_size {split_size}, dim {dim}"
+        assert len(output) == len(expected), case
+        for expected_chunk, output_chunk in zip(expected, output):
+            assert output_chunk.dtype == dtype, case
+            assert output_chunk.layout == layout, case
+            assert output_chunk.memory_config().buffer_type == buffer_type, case
+            assert_exact(expected_chunk, read(output_chunk))
