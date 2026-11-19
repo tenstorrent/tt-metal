@@ -301,10 +301,26 @@ constexpr std::uint32_t matmul_api_reuse_dir() {
     }
 }
 
+// Whether a LoFi call of these cbs may hold either operand (matmul_operands_reorder of their formats)
+ALWI bool matmul_api_operands_reorder(const std::uint32_t in0_cb_id, const std::uint32_t in1_cb_id) {
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
+    return matmul_operands_reorder(
+        static_cast<DataFormat>(unpack_src_format[get_operand_id(in0_cb_id)]),
+        static_cast<DataFormat>(unpack_src_format[get_operand_id(in1_cb_id)]),
+        MM_THROTTLE != 0);
+#else
+    return false;
+#endif
+}
+
 // reuse_dir 3: the direction matmul_reuse_dir picks for the operand formats of the CBs and the block
 ALWI std::uint32_t matmul_api_runtime_dir(
     const std::uint32_t in0_cb_id, const std::uint32_t in1_cb_id, const std::uint32_t ct_dim, const std::uint32_t rt_dim) {
 #if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
+    // decided by the formats alone where they cannot reorder, so an init of constant cbs folds it as its calls do
+    if (!matmul_api_operands_reorder(in0_cb_id, in1_cb_id)) {
+        return 0;
+    }
     return matmul_reuse_dir(
         MathFidelity::LoFi,
         static_cast<DataFormat>(unpack_src_format[get_operand_id(in0_cb_id)]),
@@ -543,18 +559,22 @@ constexpr bool matmul_fe_tile_mop() {
         matmul_fe_mark::is_used_d<8, K>(0) && !matmul_fe_mark::is_used_d<15, K>(0)) {
         return false;
     } else if constexpr (
-        !row_mop_on && kt_key == 0 && MATH_FIDELITY == MathFidelity::LoFi && DST_SYNC_MODE == DstSync::SyncHalf &&
-        matmul_fe_mark::is_used_d<8, K>(0) && !matmul_fe_mark::is_used_d<13, K>(0) &&
-        !matmul_fe_mark::is_used_d<15, K>(0) && !matmul_kernel_lofi_mix(unpack_src_format)) {
-        // LoFi half sync: the row form in a kernel with a constant block and no constant one-tile or kt-1 block, whose
-        // call it slows (bmm's reload init passes its constant block through a helper's parameters, so tag 7 does not
-        // tell a run-time-block kernel); a kernel pairing a 32-bit operand with a fast one keeps the tile MOP (the row form hangs
-        // the 2D-mcast bmm of Float32 x Float16_b blocks of two or more rows)
+        !row_mop_on && kt_key == 0 && MATH_FIDELITY == MathFidelity::LoFi && matmul_fe_mark::is_used_d<8, K>(0) &&
+        !matmul_fe_mark::is_used_d<13, K>(0) && !matmul_fe_mark::is_used_d<15, K>(0) &&
+        (DST_SYNC_MODE == DstSync::SyncHalf ? !matmul_kernel_lofi_mix(unpack_src_format)
+                                            : !matmul_operands_reorder(
+                                                  static_cast<DataFormat>(unpack_src_format[0]),
+                                                  static_cast<DataFormat>(unpack_src_format[1]),
+                                                  MM_THROTTLE != 0))) {
+        // LoFi: the row form in a kernel with a constant block and no constant one-tile or kt-1 block, whose call it
+        // slows (bmm's reload init passes its constant block through a helper's parameters, so tag 7 does not tell a
+        // run-time-block kernel). Operands that can be held either way keep the tile MOP: their calls of run-time dims
+        // stay on direction 3, while an init of constant dims folds it and would program the row MOP, which those calls
+        // would run once per tile.
         return false;
     } else if constexpr (
-        !row_mop_on && kt_key == 0 &&
-        (MATH_FIDELITY == MathFidelity::HiFi2 || matmul_fe_hifi3_short_m_tile_mop()) && matmul_fe_named_m_block() != 0 &&
-        matmul_fe_named_m_block() < 4) {
+        !row_mop_on && kt_key == 0 && (MATH_FIDELITY == MathFidelity::HiFi2 || matmul_fe_hifi3_short_m_tile_mop()) &&
+        matmul_fe_named_m_block() != 0 && matmul_fe_named_m_block() < 4) {
         return true;
     } else {
         return llk_math_matmul_tile_mop<row_mop_on, kt_key, form_out>();
@@ -801,6 +821,26 @@ ALWI void matmul_block_llk_runtime(
     const std::uint32_t rt_dim,
     const std::uint32_t kt_dim) {
 #if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
+    if (const bool reorder = matmul_api_operands_reorder(in0_cb_id, in1_cb_id);
+        __builtin_constant_p(reorder) && !reorder) {
+        // direction 0 whatever the block, as the init of these cbs folds it
+        matmul_block_llk<
+            0,
+            unpack_ttsync,
+            stream_z,
+            row_mop_on,
+            kt_key,
+            form_out,
+            in1_order,
+            row_end_fold,
+            in0_format,
+            in1_format,
+            out_format,
+            block_rt,
+            block_ct,
+            block_kt>(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, idst, transpose, ct_dim, rt_dim, kt_dim);
+        return;
+    }
     const std::uint32_t d = matmul_api_runtime_dir(in0_cb_id, in1_cb_id, ct_dim, rt_dim);
     const bool reuse_a = d == 0 ? ct_dim >= rt_dim : d == 1;
     matmul_block_llk<3, unpack_ttsync, stream_z, row_mop_on, kt_key, form_out, in1_order, row_end_fold, in0_format, in1_format, out_format, block_rt, block_ct, block_kt>(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, idst, transpose, ct_dim, rt_dim, kt_dim, reuse_a);
