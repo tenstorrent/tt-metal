@@ -42,3 +42,43 @@
     credited landing.
 - **Tests added**: `test_all_gather_rms_norm.py` (acceptance, 19), `test_all_gather_rms_norm_precision_baseline.py`
   (20), `perf_agrms.py` (perf harness wrapper).
+
+## Refinement 1 — L1 fit for wide rows and L1-sharded I/O: port the base op's owner combine (k > 8) and compact gamma pages
+- Date: 2026-11-19
+- What was done:
+  - **Owner combine for k > 8** (base op R3 / Perf 2 row partial, unicast return): `_k_candidates` now runs up to
+    `K_CAP_MAX = 128` (writer RT-arg bound) with the slice-aligned rule, and `select_split` prices k > 8 with the base
+    op's `OWNER_MEMBER_COST · ceil(rows/k) · k`. Row r is owned by member r % k. Partials travel in ROW form (two 16-datum
+    face rows into row m % 32 of gather tile m / 32 of the owner: `ceil(k/32)` gather pages per owned row instead of k);
+    the owner zero-fills the never-written rows, combines, and returns column-form statistics (faces 0/2) into slot r of
+    every member's `cb_rowstat` (+ `cb_shift`, `cb_kg`), one `SEM_INV` increment per row. rms: member collapse = ones-row
+    × sumsqᵀ matmul, owner = `reduce_tile` COL + `transpose_dest` + the column-0 finalize (base op code). layer_norm (not
+    in the base op): member finalize transposes (mean_m, M2_m) in DEST; the owner's Chan combine is centered on a pivot
+    `K = bf16(mean of member 0)` (SFPU, fp32), weights n_m from a column-0 constant (`cb_wcol`), sums over members by a
+    ones-row matmul of centered terms only, then `transpose_dest` → (inv_std, shift, K_g). Every perf-flagged shape
+    keeps its regime (focus k = 4, indexer k = 1).
+  - **Compact gamma / beta pages** (base op Perf 2): `cb_gamma` / `cb_beta` page stride = `gamma_page_layout()` (192 B
+    for bf16 / fp32, + tail pages for the last page's unpacker read) instead of a whole gamma tile; loaders unchanged
+    except the stride.
+  - **Port stage batch fitted** to L1 (`port_batch_candidates`: 4 → 2 → 1 packets per batch); the cap stays the default.
+  - **LN L1**: live-disjoint scratch CBs share one region (one CBDescriptor, several buffer indices: `cb_alias_groups`):
+    moments scratch (`cb_moment_a`/`cb_moment_b` or `cb_cent`) with the owner's `cb_dev`, and `cb_mstat` with `cb_mu`.
+    With fp32 DEST the LN FPU path falls back to the SFPU moments path (no block-sized `cb_cent`) when no split fits.
+  - **Global semaphores no longer pin L1**: the cached (arrival, ready) pairs were created under the first call's L1
+    shards and, once those were freed, set the CB budget of every later call (measured: budgets 625 KB → 101 KB → 68 KB
+    as configs accumulated; the isolated cells all fit). `_relocate_pinning_sems` re-creates a pair once free L1 has
+    opened above it (allocator is top-down) and keeps the higher one; a no-op in steady state.
+  - Program hash now covers the fitted knobs (out unit, port batch, LN path). `FORCE_K` / `LAST_INFO` test hooks.
+- Accuracy achieved (1×4 ring, owner path k = 24 / 16, worst device and slice): bf16 rms (1,1,32,2048) PCC 0.999998,
+  rel RMS 0.0018; bf16 LN PCC 0.999998, rel RMS 0.0021; bf16 LN fp32_dest_acc_en=False PCC 0.99997, rel RMS 0.0095;
+  fp32 LN offset 50 (1,1,32,1024) PCC 1.000000, rel RMS 0.0015.
+- Golden test progress: the 31 Phase-0 OOM cells 31/31; family slices `1x1x32x2048` 840 pass / 0 fail;
+  `1x1x32x1280, 1x1x32x1792, 1x1x8x1792, 1x1x640x384, 1x1x64x1000, 1x1x32x50, 4x128x47, 32x17` 5009 pass / 256 fail (all
+  bf16 LN acc16 precision, Refinement 2's family; none new); ring-mock + regression 160/160.
+- Perf (eval protocol, 5 experiments, fastest chip): case0 21.29 µs, case1 16.32 µs — unchanged (baseline 21.29 / 16.33).
+- Issues encountered: the "OOM" budgets in the batch were mostly L1 fragmentation by the op's own persistent global
+  semaphores, not the cells' footprint (each remaining cell passed alone); fixed at the source. Not done (not needed by
+  any named cell): zero-copy own shard / output shard (item 3), owner-spread / root multicast return (base op perf).
+- Tests added: `test_all_gather_rms_norm_owner.py` (13: forced k = 12 / 16 / 20 / 40 incl. zero-filled gather rows, two
+  gather tiles, multi-row owners, rms / LN FPU / LN SFPU, 16-bit DEST, non-aligned dense assembly);
+  `test_all_gather_rms_norm_debug_l1.py` (debug, kept: L1 block view across calls, owner metrics).

@@ -142,3 +142,28 @@ Open (folded into op_requirements.md Refinement 1, the L1-fit refinement): `cb_g
 for row-0 data (24 KB on the focus case vs ~2.3 KB with the base op's compact 192 B stride); `cb_moment_a` /
 `cb_moment_b` on the LN SFPU path are live-disjoint (pass A is popped before pass B packs) and could alias — the
 "kept separate for clarity" justification above is not a mechanism reason.
+
+## Refinement 1 deltas (owner combine, compact gamma, port batch, aliasing)
+
+| CB (index) | Capacity | Format | Producer | Consumer | Delta / Shares with / why not |
+|---|---|---|---|---|---|
+| `cb_gamma` / `cb_beta` (2/3) | `pitch + g_tail` pages of `gamma_page_layout()` stride (192 B bf16 / fp32) | gamma dtype | writer | compute | compact row-0 pages (was a full tile per page: 24 KB → 2.5 KB on the focus case) |
+| `cb_port_stage` (1) | `2 · port_batch · chunk_pages`, `port_batch` ∈ {4, 2, 1} largest that fits | input dtype | port_reader | port_sender | the batch halves under L1 pressure (cap = the measured 4) |
+| `cb_gathered` (10, owner k > 8) | `ceil(rows/k) · n_stat · ceil(k/32)` | T_acc | writer (peers, row form) | compute (owner) | row-form gather: 32 members per page instead of one page per member |
+| `cb_own_ret` (23, owner) | `ceil(rows/k) · n_stat` | T_acc | compute (owner) | writer | rms inv_rms; ln (inv_std, shift) per owned row |
+| `cb_own_kg` (24, owner ∧ ln) | `ceil(rows/k)` | bf16 | compute (owner) | writer | K_g per owned row |
+| `cb_dev` (25, owner ∧ ln) | `2 · ceil(k/32)` | T_acc | compute | compute | **aliased** with the moments scratch (below) |
+| `cb_wcol` (26, owner ∧ ln) | `ceil(k/32)` | T_acc | reader | compute | n_m weights, written at kernel start → cannot alias |
+| `cb_km` (8, owner ∧ ln) | `max(rows, 2)` | bf16 | compute | compute | also carries the owner's pivot K and K_g after the member pivots are popped |
+| `cb_mu` (16, owner ∧ ln) | 2 | T_acc | compute | compute | (mu, inv_std) between the owner's windows; **aliased** with `cb_mstat` |
+| `cb_rowstat` / `cb_shift` / `cb_kg` (owner) | `rows` | — | **writer** (owners' returns) | compute | the writer is their only producer on the owner path (lockstep slot r written by the row's owner) |
+
+Alias regions (`cb_alias_groups`, one CBDescriptor with several buffer indices; all compute → compute, never NoC-written):
+`{cb_moment_a, cb_moment_b, cb_dev}` (LN SFPU path) or `{cb_cent, cb_dev}` (LN FPU path) — the moments scratch is popped by
+the end of member_moments, `cb_dev` lives only in the owner combine; `{cb_mstat, cb_mu}` — `cb_mstat` is popped by the member
+finalize. Region size is rounded to whole `cb_dev` / `cb_mu` blocks (they cycle per owned row). `cb_gathered`,
+`cb_rowstat`, `cb_shift`, `cb_kg`, `cb_foreign` are written by peers at any time and are never aliased. The LN FPU path's
+`cb_cent` is dropped (SFPU moments path) when no split fits with it and DEST is fp32.
+
+Data-movement budget: unchanged on DRAM and fabric. Cross-core: the owner path replaces the k²·rows faces-0/2 partial
+exchange with k·rows·n_stat row-form writes (2 × 16 datums) plus an n_ret·rows·k faces-0/2 return.

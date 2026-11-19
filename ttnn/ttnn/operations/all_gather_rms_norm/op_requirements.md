@@ -48,7 +48,7 @@
   2357 supported_pass, 174 supported_fail (143 numerical-precision → Refinement 2, 31 OOM → Refinement 1),
   644 xfail_expected (the two EXCLUSIONS), 0 xpass_drift, 0 xfail_wrong_mode.
 
-### [ ] Refinement 1 — L1 fit for wide rows and L1-sharded I/O: port the base op's owner combine (k > 8) and compact gamma pages
+### [x] Refinement 1 — L1 fit for wide rows and L1-sharded I/O: port the base op's owner combine (k > 8) and compact gamma pages
 
 **Goal**: move every cell that fails with `OOM: no member split fits L1` to passing. Phase 0 caps the member count at
 `K_SYM_MAX = 8` (the base op's owner combine was deferred), so wide decode rows and every cell whose L1-sharded input +
@@ -83,6 +83,13 @@ LN SFPU path, compact gamma (item 2).
 
 **Done when**: every sampled OOM cell above passes (re-run their full golden families), no new failure elsewhere,
 both PERF FOCUS cases within noise of the baseline above.
+**Outcome**: all 31 Phase-0 OOM cells pass (run as one batch); families re-run: `1x1x32x2048` 840/840,
+`1x1x32x1280 / 1x1x32x1792 / 1x1x8x1792 / 1x1x640x384 / 1x1x64x1000 / 1x1x32x50 / 4x128x47 / 32x17` 5009 pass, 256
+fail — all bf16 layer_norm with fp32_dest_acc_en=False (the pre-existing Refinement 2 family; the decode families that
+moved to the owner path no longer fail it). Unit dir 54/54, ring-mock + regression 160/160. Perf case0 21.29 µs,
+case1 16.32 µs (baseline 21.29 / 16.33): neither changes regime. Root cause of most of the small budgets (19–166 KB):
+the op's cached global semaphores were allocated under the first call's L1 shards and pinned the CB region for every
+later call; they are now re-created higher once free L1 opens above them.
 
 ### [ ] Refinement 2 — layer_norm precision with 16-bit DEST (fp32_dest_acc_en=False)
 

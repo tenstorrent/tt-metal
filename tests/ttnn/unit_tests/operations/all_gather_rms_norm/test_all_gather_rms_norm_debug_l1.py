@@ -73,3 +73,40 @@ def test_l1_view_golden_sequence(mesh_device):
     _view(mesh_device, "after third")
     run_all_gather_rms_norm(((1, 1, 32, 8192),), mesh_device=mesh_device, **dict(axes, cluster_axis=1))
     print("budget fourth", pd.LAST_INFO["budget"])
+
+
+@pytest.mark.parametrize("device_params", _DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["mesh1x4"], indirect=True)
+@pytest.mark.parametrize(
+    "case",
+    [
+        dict(shape=(1, 1, 32, 2048), gamma_layout=R),
+        dict(shape=(1, 1, 32, 2048), norm_type="layer_norm", gamma_layout=R, with_beta=True),
+        dict(shape=(1, 1, 32, 2048), norm_type="layer_norm", gamma_layout=R, with_beta=True, fp32_dest_acc_en=False),
+        dict(
+            shape=(1, 1, 32, 1024),
+            dtype=ttnn.float32,
+            norm_type="layer_norm",
+            gamma_layout=R,
+            gamma_dtype=ttnn.float32,
+            offset=50.0,
+        ),
+    ],
+    ids=["rms_bf16", "ln_bf16", "ln_bf16_acc16", "ln_fp32_offset50"],
+)
+def test_owner_metrics(mesh_device, case, monkeypatch):
+    """Owner path accuracy (prints worst PCC / rel RMS over devices and slices) for the changelog."""
+    from . import test_all_gather_rms_norm as acc
+
+    seen = []
+    orig = acc._pcc_rel_rms
+
+    def rec(a, e):
+        r = orig(a, e)
+        seen.append(r)
+        return r
+
+    monkeypatch.setattr(acc, "_pcc_rel_rms", rec)
+    run_case(mesh_device, cluster_axis=1, topology=ttnn.Topology.Ring, **case)
+    print("owner metrics min_pcc", min(p for p, _ in seen), "max_rel_rms", max(r for _, r in seen))
+    print("owner info", {k: pd.LAST_INFO[k] for k in ("k", "owner", "rows", "pitch")})

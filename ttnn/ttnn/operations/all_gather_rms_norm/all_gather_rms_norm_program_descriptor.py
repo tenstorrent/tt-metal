@@ -12,7 +12,8 @@ Per chip: one ProgramDescriptor. Roles:
   * compute cores (worker grid - ports_union, row-major; row-group g = cores [g*k, g*k + k)): the base op's
       reader / compute / writer, extended: own members read their slice of x from the input, remote members wait
       for the landing; the k members of a row-group combine their per-row moments over the NoC (symmetric
-      all-gather), normalize their block and store it.
+      all-gather for k <= 8; per-row owner with row-form partials beyond, base op R3), normalize their block and store
+      it.
 
 Knobs (single source here, handed to the kernels as CT / RT args): w_split_cores k (select_split), core_row_tiles
 (the whole per-group assignment, one block), wave_row_groups (plan_waves), port_batch_chunks, chunk_pages (fabric

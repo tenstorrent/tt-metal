@@ -448,7 +448,7 @@ member moments + Chan combine, dense assembly by home member + foreign contribut
 
 | Item | Design | As built | Why |
 |---|---|---|---|
-| k > 8 (owner combine, base op R3) | built | **deferred**: `select_split` candidates capped at `K_SYM_MAX = 8` (symmetric all-gather) | scope; the cap only changes the decode shapes' k (e.g. (32,2048): k = 8 instead of ~24). Refinement: port the base op's row-partial owner combine |
+| k > 8 (owner combine, base op R3) | built | **built in Refinement 1**: row-form partials + unicast return (base op Perf 1 interleaved return; no root multicast / owner spread yet); LN owner Chan combine pivot-centered (not in the base op) | the decode shapes now pick k ≈ 16–32 |
 | `out_unit_tiles` | `min(mw, 16)` | cap 4, halved down to 1 when the CB plan does not fit L1 | measured: a 12-tile unit kept the writer from overlapping the normalize of the same row (focus tail); L1 pressure from L1-sharded inputs/outputs in the golden matrix |
 | gamma / beta load | reader, compact 192 B pages | writer, full-tile pages; tile-aligned slices: base-op direct row-0 reads issued at start and finished after the partial exchange; non-aligned: staged sticks + RISC-V element shift | the first cut's element scatter cost ~11 µs ahead of the exchange (zones); compact pages are an L1-only refinement |
 | LN passes | chain / reduce helpers | aligned bf16/bf8b (`AGRMS_LN_FPU`): pivot = one block `reduce` (row stride = pitch); centering on the FPU into `cb_cent`; D1 / D2 by `reduce` + DEST-accumulated squares; normalize = FPU sub + `DestReuseBcast` COL/ROW. fp32 or non-aligned: raw SFPU loops (copy_tile UnpackToDestFp32 → exact x − K; slice tails masked by a row-0 mask) | the all-SFPU path costs ~10 element inits per tile (indexer 22.7 µs, zones: ~14 µs of LN compute on a 1×4-tile block); FPU subtraction is exact only for bf16/bf8b operands |
@@ -475,3 +475,12 @@ after the last landing ≈ 5.8 µs (moments 1 µs, exchange + combine ≈ 1.1 µ
 | k > 8 owner combine (base op R3) | deferred by the implementer (candidates capped at 8) | the decode / wide-hidden shapes with L1-sharded I/O (and 128×8192 interleaved LN) OOM in `select_split`: op_requirements.md Refinement 1 |
 | LN with `fp32_dest_acc_en=False` | per-row offset rms 0.012–0.020 (μ rounded to bf16 before x − μ) + per-row scale +1 % (16-bit variance accumulation); residual after both 0.003 | op_requirements.md Refinement 2 (two-word mean through the Chan combine; variance accumulation order) |
 | Zone breakdown, indexer LN case (single un-traced call, least-skewed chip) | last landing ≈ 14.8 µs after the first zone; local LN tail after it ≈ 8.5 µs (moments 1.5–3, k = 1 Chan combine ≈ 3.4 µs of full-tile SFPU on column-0 data, normalize ≈ 1.7, store) | op_requirements.md perf refinements |
+
+## Refinement 1 deviations (as built)
+
+| Item | Base op / plan | Built | Why |
+|---|---|---|---|
+| Owner return | root multicast (sharded) / single-owner multicast + owner spread (Perf 1/2) | unicast faces 0/2 to every member, one `SEM_INV` inc per row; no owner spread | correctness port first; the multicast / spread are perf levers for the decode tail (OVERLAP refinements) |
+| LN owner combine | — (base op has no LN) | row form: pivot K = bf16(mean_0), centered weighted terms (SFPU fp32), member sums by a ones-row matmul, transpose_dest to column form | every FPU operand is centered (big row offsets stay exact); the pivot needs no extra exchange round |
+| L1 budget | `cb_l1_budget` = distance to the lowest L1 buffer | + persistent global semaphores relocated when free L1 opens above them | they were the lowest buffer after the first sharded call's tensors were freed (measured) |
+| LN moments path | FPU fast path for aligned bf16 / bf8b | FPU unless no split fits and DEST is fp32 → SFPU path | `cb_cent` is block-sized in the accumulator format |
