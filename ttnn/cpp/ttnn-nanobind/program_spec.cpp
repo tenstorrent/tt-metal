@@ -146,7 +146,8 @@ auto setter_accepts_none() { return nb::for_setter(nb::arg("value").none()); }
 // Tripwires: adding a field to one of these Metal 2.0 types must be a deliberate choice. Bind it below,
 // or note why Python leaves it out, then update the count. DFBAdvancedOptions has none: Python binds only
 // alias_with, which Blaze uses, and the other advanced options stay C++ only until a caller needs them. Python
-// binds no varargs: Metal 2.0 keeps them only to ease migration, and array arguments replace them.
+// binds no varargs: Metal 2.0 keeps them only to ease migration, and array arguments replace them. GlobalSemaphore
+// parameters, bindings and args stay C++ only until Python can pass a GlobalSemaphore in run args.
 static_assert(reflect::size<m2::TensorSpecRelaxations>() == 5);
 static_assert(reflect::size<m2::TensorParameter>() == 3);
 static_assert(reflect::size<m2::DataflowBufferSpec>() == 7);
@@ -167,12 +168,12 @@ static_assert(reflect::size<m2::DFBBinding>() == 5);
 static_assert(reflect::size<m2::SemaphoreBinding>() == 2);
 static_assert(reflect::size<m2::ScratchpadBinding>() == 2);
 static_assert(reflect::size<m2::TensorBinding>() == 2);
-static_assert(reflect::size<m2::KernelSpec>() == 13, "advanced_options is C++ only");
+static_assert(reflect::size<m2::KernelSpec>() == 14, "advanced_options and global_semaphore_bindings are C++ only");
 static_assert(reflect::size<m2::WorkUnitSpec>() == 3);
-static_assert(reflect::size<m2::ProgramSpec>() == 8, "advanced_options is C++ only");
+static_assert(reflect::size<m2::ProgramSpec>() == 9, "advanced_options and global_semaphore_parameters are C++ only");
 static_assert(reflect::size<m2::KernelRunArgs>() == 6, "advanced_options is C++ only");
 static_assert(reflect::size<m2::DFBRunOverrides>() == 3);
-static_assert(reflect::size<m2::ProgramRunArgs>() == 4, "advanced_options is C++ only");
+static_assert(reflect::size<m2::ProgramRunArgs>() == 5, "advanced_options and global_semaphore_args are C++ only");
 
 // Data formats are ttnn data types in Python, so a format without one, such as Float16, cannot be set. A buffer
 // takes the format that ttnn's own ops declare for a tensor of that data type: int8 becomes UInt8, because the

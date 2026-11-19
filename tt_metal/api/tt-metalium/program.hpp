@@ -74,16 +74,4 @@ private:
     std::shared_ptr<detail::ProgramImpl> internal_;
 };
 
-// Only Used in op_profiler, we might want to expose this via a tooling interface instead of through here.
-class IDevice;
-namespace detail {
-struct KernelMeta;
-// Collects the meta data of kernels in a program, and the metadata of the binaries within the kernel if device is non-null
-// Note: device is nullable
-[[deprecated(
-    "Use experimental::collect_kernel_meta from <tt-metalium/experimental/op_profiler_support.hpp> instead. This "
-    "overload will be removed after 2026-11-14.")]]
-std::vector<detail::KernelMeta> collect_kernel_meta(const Program& program, IDevice* device);
-}; //namespace detail
-
 }  // namespace tt::tt_metal

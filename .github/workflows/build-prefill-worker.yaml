@@ -81,6 +81,30 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Validate and pin tt-llm-engine image
+        id: engine
+        env:
+          ENGINE_IMAGE: ${{ inputs.tt-llm-engine-image }}
+        run: |
+          set -euo pipefail
+          # Only tt-llm-engine images on GHCR, with a tag and/or digest.
+          re='^ghcr\.io/tenstorrent/tt-llm-engine/[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)*(:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(@sha256:[a-f0-9]{64})?$'
+          if [[ ! "$ENGINE_IMAGE" =~ $re || "$ENGINE_IMAGE" != *[:@]* ]]; then
+            echo "::error::tt-llm-engine-image must be ghcr.io/tenstorrent/tt-llm-engine/<name> with :<tag>, @sha256:<digest>, or both."
+            exit 1
+          fi
+
+          DIGEST=$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$ENGINE_IMAGE")
+          if [[ ! "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+            echo "::error::Could not resolve a digest for '$ENGINE_IMAGE'."
+            exit 1
+          fi
+          if [[ "$ENGINE_IMAGE" == *@* && "${ENGINE_IMAGE##*@}" != "$DIGEST" ]]; then
+            echo "::error::Resolved digest $DIGEST does not match '$ENGINE_IMAGE'."
+            exit 1
+          fi
+          echo "image=${ENGINE_IMAGE%@*}@${DIGEST}" >> "$GITHUB_OUTPUT"
+
       - name: Compute tool tags
         id: tool-tags
         run: |
@@ -101,7 +125,7 @@ jobs:
           HARBOR_PREFIX: ${{ needs.check-harbor.outputs.harbor-prefix }}
           PROXY_HTTP: ${{ env.PROXY_HTTP }}
           PROXY_HTTPS: ${{ env.PROXY_HTTPS }}
-          ENGINE_IMAGE: ${{ inputs.tt-llm-engine-image }}
+          ENGINE_IMAGE: ${{ steps.engine.outputs.image }}
           GIT_REF: ${{ github.ref_name }}
         run: |
           set -euo pipefail
@@ -123,10 +147,11 @@ jobs:
             SET+="${TARGET}.args.HTTP_PROXY=${PROXY_HTTP}"$'\n'
             SET+="${TARGET}.args.HTTPS_PROXY=${PROXY_HTTPS}"$'\n'
           fi
+          DELIM="EOF_$(openssl rand -hex 16)"
           {
-            echo "set<<EOF"
+            echo "set<<$DELIM"
             echo "$SET"
-            echo "EOF"
+            echo "$DELIM"
           } >> "$GITHUB_OUTPUT"
 
       - name: Build and push release-models
@@ -144,6 +169,7 @@ jobs:
         env:
           TAG_NAME: ${{ env.TAG_NAME }}
           REPO_IMAGE_NAME: ${{ env.REPO_IMAGE_NAME }}
+          ENGINE_IMAGE: ${{ steps.engine.outputs.image }}
         run: |
           set -euo pipefail
           DIGEST=$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$TAG_NAME")
@@ -154,4 +180,6 @@ jobs:
             echo "$TAG_NAME"
             echo "${REPO_IMAGE_NAME}@${DIGEST}"
             echo '```'
+            echo ""
+            echo "tt-llm-engine image: \`${ENGINE_IMAGE}\`"
           } >> "$GITHUB_STEP_SUMMARY"

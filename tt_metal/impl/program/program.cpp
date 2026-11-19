@@ -939,6 +939,33 @@ std::vector<std::string> ProgramImpl::get_registered_tensor_parameter_names() co
     return names;
 }
 
+void ProgramImpl::register_global_semaphore_parameter(const std::string& name, const distributed::MeshDevice& device) {
+    if (!metal2_registry_) {
+        metal2_registry_ = Metal2NameRegistry{};
+    }
+    const auto [it, inserted] = metal2_registry_->global_semaphore_parameters.try_emplace(name, &device);
+    TT_FATAL(inserted, "Duplicate GlobalSemaphore parameter name: {}", name);
+}
+
+const distributed::MeshDevice* ProgramImpl::get_global_semaphore_parameter_device(const std::string& name) const {
+    if (!metal2_registry_) {
+        return nullptr;
+    }
+    auto it = metal2_registry_->global_semaphore_parameters.find(name);
+    return it == metal2_registry_->global_semaphore_parameters.end() ? nullptr : it->second;
+}
+
+std::vector<std::string> ProgramImpl::get_registered_global_semaphore_parameter_names() const {
+    std::vector<std::string> names;
+    if (metal2_registry_) {
+        names.reserve(metal2_registry_->global_semaphore_parameters.size());
+        for (const auto& [name, device] : metal2_registry_->global_semaphore_parameters) {
+            names.push_back(name);
+        }
+    }
+    return names;
+}
+
 detail::BoundTensorFootprint detail::make_bound_tensor_footprint(const MeshTensor& tensor) {
     const auto& mesh_buffer = tensor.mesh_buffer();
     return BoundTensorFootprint{
@@ -988,10 +1015,6 @@ const std::vector<ProgramImpl::DFBStorageBinding>& ProgramImpl::get_dfb_storage_
 std::vector<detail::KernelMeta> experimental::collect_kernel_meta(
     const Program& program, distributed::MeshDevice& mesh_device) {
     return program.impl().collect_kernel_meta(&mesh_device);
-}
-
-std::vector<detail::KernelMeta> detail::collect_kernel_meta(const Program& program, IDevice* device) {
-    return program.impl().collect_kernel_meta(device);
 }
 
 std::vector<detail::KernelMeta> ProgramImpl::collect_kernel_meta(IDevice* device) const {
@@ -1103,6 +1126,15 @@ KernelGroup::KernelGroup(
                 kernel_config.num_sw_threads()[processor_index] = config.num_threads_per_cluster;
                 kernel_config.kernel_thread_id()[processor_index] = thread_idx;
             }
+        } else if (auto* dk = dynamic_cast<experimental::quasar::DispatchEngineKernel*>(kernel.get())) {
+            // A dispatch-engine kernel is one thread on one DM. Left at 0, get_num_threads() would make
+            // thread-partitioned device code (PrefetcherPipe::owns_receiver) divide by zero.
+            const uint32_t processor_index = hal.get_processor_index(
+                hal.get_programmable_core_type(programmable_core_type_index),
+                HalProcessorClassType::DM,
+                dk->get_kernel_processor_type(0));
+            kernel_config.num_sw_threads()[processor_index] = 1;
+            kernel_config.kernel_thread_id()[processor_index] = 0;
         }
         // Quasar: set per-processor num_sw_threads and kernel_thread_id for trisc/runtime access
         if (auto* qk = dynamic_cast<experimental::quasar::QuasarComputeKernel*>(kernel.get())) {
