@@ -507,7 +507,11 @@ def run_plan(
         # F283: a second load for this plan (a gate's units) is refused; a model an earlier plan left (the resident
         # runner's previous request) is not this gate's load: that run goes to a new process as before
         one = plan.get("one_load") or os.environ.get(B.ONE_LOAD_ENV) == "1"
-        if fresh and fresh["by"] != name and fresh.get("same_plan") and one:
+        # F287 (P.84 A/B, 2026-11-19): a model another plan loaded (the resident runner's previous request, whose run
+        # may carry this run's name: both A/B sides' runs are "test_skip_positions.0") is never this run's own second
+        # configuration: the run goes to a new process
+        other = bool(fresh) and (fresh["by"] != name or not fresh.get("same_plan", True))
+        if fresh and other and fresh.get("same_plan") and one:
             note = (
                 f"\n# F283: {fresh['why']}: refused (owner rule 2026-11-19, spec tests.one_load: one model load per "
                 "gate); the run fails instead of going to a fresh process\n"
@@ -517,7 +521,7 @@ def run_plan(
                     f.write(note)
             print(note.strip(), flush=True)
             rc, fresh = 1, {}
-        if fresh and fresh["by"] != name:  # F269: this run and the rest of the plan in a fresh process
+        if fresh and other:  # F269: this run and the rest of the plan in a fresh process
             release()
             DEFERRED.append(name)
             out["running"] = None

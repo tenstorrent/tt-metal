@@ -5,6 +5,7 @@
 one_load_errors, core/gate pre-check and validate, testing/batch's runtime refusal). CPU only."""
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -274,3 +275,48 @@ def test_task_accounting_counts_safe_runner_processes_and_runner_restarts(tmp_pa
     )
     a = resident.task_accounting(tmp_path / "res", hm, "P.84")
     assert a == {"opens": 3, "process_opens": 2, "runner_opens": 1, "runner_loads": 1}
+
+
+def test_ab_sides_with_the_same_run_name_and_another_load_switch_go_to_a_new_process(tmp_path, monkeypatch):
+    """F287 (P.84 A/B rerun): the off side's request loaded the model with MOE_REPLICAS off; the on side's run, also
+    named "test_skip_positions.0", needs it on. It failed as if it had asked for two models itself; it must go to a new
+    process (the runner restarts with that configuration: one open, one load, reported)."""
+    from types import SimpleNamespace
+
+    loads = []
+
+    class Model:
+        def __init__(self, layers):
+            loads.append(os.environ.get("X_REPLICAS"))
+            self.layers, self.state = list(layers), None
+
+        def sync(self):
+            pass
+
+    hooks = SimpleNamespace(
+        device_model=lambda mesh, s, layers, lm_head: Model(layers),
+        batch_settings=lambda: {"REPLICAS": os.environ.get("X_REPLICAS")},
+    )
+    spec = SimpleNamespace(data={"target": {"seq": 128, "chunk": 32}}, hooks=lambda: hooks)
+    monkeypatch.setenv("BRINGUP_RESULTS_DIR", str(tmp_path))
+    monkeypatch.setenv("BRINGUP_TASK", "P.84")
+
+    def main(args, plugins=None):
+        try:
+            TB.device_model(spec, "MESH", [0, 1], lm_head=False)
+        except TB.NeedsFreshProcess:
+            return 1
+        return 0
+
+    def side(v):
+        e = {"name": "test_skip_positions.0", "env": {"X_REPLICAS": v}, "args": ["t.py"], "key": "k"}
+        return {"entries": [dict(e, log=str(tmp_path / f"{v}.log"))]}
+
+    TB.release()
+    try:
+        assert TB.run_plan("MESH", (1, 1), side("off"), None, main=main, keep=True) == []  # the off side, held
+        failed = TB.run_plan("MESH", (1, 1), side("on"), None, main=main, keep=True)
+        assert failed == [] and TB.DEFERRED == ["test_skip_positions.0"] and loads == ["off"]
+        assert "fresh process" in (tmp_path / "on.log").read_text()
+    finally:
+        TB.release()
