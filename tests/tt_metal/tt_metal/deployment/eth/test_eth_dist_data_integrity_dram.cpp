@@ -117,10 +117,12 @@ static bool run_test_integrity_dram_dist(
     // double threshold = get_eth_bw() * 0.5;
 
     bool pass = true;
+    if (!is_sender) {
+        pass &=
+            tensix_compare_dram_banks(fixture, mesh_device, dram_start_addr, dram_end_addr, send_bank_id, recv_bank_id);
+    }
     // auto* const send_device = send_mesh_device->impl().get_devices()[0];
     // pass &= bandwidth_check(send_device, send_core, send_delta_addr, total_transferred, threshold);
-    // pass &= tensix_compare_dram_banks(
-    //     fixture, recv_mesh_device, dram_start_addr, dram_end_addr, send_bank_id, recv_bank_id);
 
     return pass;
 }
