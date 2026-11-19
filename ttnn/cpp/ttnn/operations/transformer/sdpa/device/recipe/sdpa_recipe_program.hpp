@@ -136,10 +136,9 @@ struct RecipeKeyRange {
     // layer's shape; inactive: the cache's shape.
     PagedCacheGeometryOverride paged_geometry;
     // Ring-distributed SDPA: Q holds the whole sequence and the call computes two slabs of q_slab_rows rows (whole Q
-    // chunks), the output stacking them. Each entry gives a range of mesh devices the Q rows its slabs start at; slab
+    // chunks), the output stacking them. Each device's program gets its slabs' first rows (set_recipe_q_slabs); slab
     // row r of slab s sits at global position q_offset + start[s] + r.
     uint32_t q_slab_rows = 0;  // 0: Q is computed whole
-    std::vector<std::pair<ttnn::MeshCoordinateRange, std::array<uint32_t, 2>>> q_slab_starts;
     bool active() const { return causal || sliding_window > 0 || segments.has_value(); }
 };
 

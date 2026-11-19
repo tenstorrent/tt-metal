@@ -456,18 +456,12 @@ void validate_key_range(const Tensor& q, const RecipeKeyRange& key_range) {
     }
     if (key_range.q_slab_rows) {
         TT_FATAL(key_range.causal, "SDPA recipe Q slabs (ring-distributed SDPA) are causal");
-        TT_FATAL(!key_range.q_slab_starts.empty(), "SDPA recipe Q slabs need their start rows");
-        for (const auto& [devices, starts] : key_range.q_slab_starts) {
-            for (const uint32_t start : starts) {
-                TT_FATAL(
-                    start % 32 == 0 && start + key_range.q_slab_rows <= q.logical_shape()[2],
-                    "SDPA recipe Q slab [{}, {} + {}) must be tile-aligned and inside Q's {} rows",
-                    start,
-                    start,
-                    key_range.q_slab_rows,
-                    q.logical_shape()[2]);
-            }
-        }
+        // The slab starts are per device (set_recipe_q_slabs): whole tile rows inside Q.
+        TT_FATAL(
+            key_range.q_slab_rows % 32 == 0 && 2 * key_range.q_slab_rows <= q.logical_shape()[2],
+            "SDPA recipe Q slabs of {} rows must be tile-aligned, two inside Q's {} rows",
+            key_range.q_slab_rows,
+            q.logical_shape()[2]);
     }
     if (key_range.page_table) {
         const auto& table = *key_range.page_table;
@@ -1133,6 +1127,12 @@ uint64_t recipe_output_l1_bytes(
 
 void set_recipe_q_slabs(ProgramDescriptor& program, uint32_t q_chunk_rows, const std::array<uint32_t, 2>& starts) {
     using namespace sdpa_recipe_args;
+    TT_FATAL(
+        starts[0] % q_chunk_rows == 0 && starts[1] % q_chunk_rows == 0,
+        "SDPA recipe Q slab starts {} and {} must be whole Q chunks of {} rows",
+        starts[0],
+        starts[1],
+        q_chunk_rows);
     for (auto& [core, args] : program.kernels[0].runtime_args) {
         args[kReaderSlab] = starts[0] / q_chunk_rows;
         args[kReaderSlab + 1] = starts[1] / q_chunk_rows;

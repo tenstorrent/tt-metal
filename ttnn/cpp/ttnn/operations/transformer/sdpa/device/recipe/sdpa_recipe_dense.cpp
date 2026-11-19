@@ -104,6 +104,9 @@ void resolve_dense_recipe(SDPAParams& attrs, const SDPAInputs& tensors) {
     const auto call = dense_recipe_call(attrs, tensors);
     validate_dense_recipe(attrs, tensors, call);
     const auto policy = dense_recipe_policy(attrs, tensors);
+    if (tensors.attn_mask) {
+        validate_recipe_mask(tensors.q, tensors.k, *tensors.attn_mask, policy);
+    }
     const auto& q = tensors.q;
     const auto& qs = q.padded_shape();
     const uint32_t out_head_dim = call.options.head_dim_v ? call.options.head_dim_v : qs[3];
