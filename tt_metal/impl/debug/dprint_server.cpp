@@ -576,9 +576,16 @@ bool DPrintServer::Impl::poll_print_buffer(
     auto print_buffer_address = buffer_info.structure_address + buffer_info.buffer_offset;
     auto print_buffer_size = buffer_info.buffer_size;
     auto read_write_pointer_address = buffer_info.get_read_write_pointer_address();
-    constexpr uint32_t eightbytes = 8;
-    auto from_dev = cluster.read_core(device_id, virtual_core, read_write_pointer_address, eightbytes);
-    uint32_t wpos = from_dev[0], rpos = from_dev[1];
+    // Reads rpos, then wpos. The device ends a reset by storing wpos and then rpos, so once rpos shows the reset done,
+    // a later read of wpos shows it too. One read of both can return the new rpos with the old wpos, and the host then
+    // reads data that the device is rewriting from the start of the buffer.
+    uint32_t wpos = 0, rpos = 0;
+    auto read_positions = [&]() {
+        rpos = cluster.read_core(
+            device_id, virtual_core, read_write_pointer_address + sizeof(uint32_t), sizeof(uint32_t))[0];
+        wpos = cluster.read_core(device_id, virtual_core, read_write_pointer_address, sizeof(uint32_t))[0];
+    };
+    read_positions();
 
     if (wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC || wpos == DEBUG_PRINT_SERVER_STARTING_MAGIC ||
         rpos == DEVICE_PRINT_RESET_BUFFER_MAGIC || wpos == rpos) {
@@ -636,9 +643,7 @@ bool DPrintServer::Impl::poll_print_buffer(
 
             // We should probably drain while core is in stall state.
             // Read wpos and rpos again and repeat
-            from_dev = cluster.read_core(device_id, virtual_core, read_write_pointer_address, eightbytes);
-            wpos = from_dev[0];
-            rpos = from_dev[1];
+            read_positions();
 
             // Device should be much faster than host, but in case we are running simulation,
             // we should check if device has reset buffer and we have caught up to it.
