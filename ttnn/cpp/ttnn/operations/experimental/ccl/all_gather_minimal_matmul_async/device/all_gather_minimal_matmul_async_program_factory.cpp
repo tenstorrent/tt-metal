@@ -283,6 +283,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     const std::optional<ttnn::GlobalSemaphore>& barrier_semaphore,
     //    bool using_persistent_buffers,
     const bool transpose_core_grid,
+    const bool mcast,
     const uint32_t num_workers_per_link,
     const uint32_t num_buffers_per_channel,
     uint32_t N_chunks,
@@ -490,12 +491,9 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     // Fabric2D Linear: the 1D path's one-way ring (each rank sends to rank - 1, rank 0 to the last rank), routed by
     // fabric node. The two ends of the line reach each other through it (linear_far_end_coord).
     const bool linear_2d = fabric_2d && topology == ttnn::ccl::Topology::Linear;
-    // Fabric2D (the KDA Galaxy path): input blocks reach a whole row or column of the matmul grid in one multicast
-    // write instead of hopping core to core. Every other configuration keeps the core-to-core relay.
-    const bool mcast = fabric_2d && !transpose_core_grid;
-    // Multicast path: the last K block packs straight to the output over its FP32 partials. Needs a plain output (no
+    // Direct output: the last K block packs straight to the output over its FP32 partials. Needs a plain output (no
     // bias, ternary, SwiGLU or activation), 1-tile-high subblocks, whole subblocks per N block.
-    const bool direct_out = mcast && !fuse_swiglu && !use_bias && !use_fused_ternary && !fused_activation.has_value() &&
+    const bool direct_out = !fuse_swiglu && !use_bias && !use_fused_ternary && !fused_activation.has_value() &&
                             subblock_h == 1 && fp32_dest_acc_en && K_blocks > 1 &&
                             N_tiles_per_core % N_block_tiles == 0 && N_block_tiles % subblock_w == 0;
     // With direct output, a core whose only output block is this one has it packed and written a row at a time, so one
@@ -864,9 +862,9 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     const auto full_tile = [](const tt::tt_metal::Tile& tile) {
         return tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH;
     };
-    const bool row_mop = mcast && device->arch() == tt::ARCH::BLACKHOLE &&
-                         full_tile(input_tensor.tensor_spec().tile()) && full_tile(weight_tensor.tensor_spec().tile());
-    // Multicast path options, read by the kernels as constexprs.
+    const bool row_mop = device->arch() == tt::ARCH::BLACKHOLE && full_tile(input_tensor.tensor_spec().tile()) &&
+                         full_tile(weight_tensor.tensor_spec().tile());
+    // Kernel options, read as constexprs.
     const tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs agmm_named_args = {
         {"mcast", mcast},
         {"row_mop", row_mop},
@@ -1846,7 +1844,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
              {"in1_chain_increasing", in1_noc == tt::tt_metal::NOC::NOC_0}});
     }
 
-    // in1 down each column from row 0, in0 along each row from x = 0; without multicast the channels are absent.
+    // Each block goes from its sender core across its row or column of the grid (in1 down the columns, in0 along the
+    // rows; the other way round on a transposed grid); without multicast the channels are absent.
     std::array<std::reference_wrapper<tt::tt_metal::KernelDescriptor>, 2> in1_targets{
         desc.kernels[kIn1SenderKernelIdx], desc.kernels[kIn1ReceiverKernelIdx]};
     std::array<std::reference_wrapper<tt::tt_metal::KernelDescriptor>, 3> in0_targets{
@@ -1868,30 +1867,31 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         }
         return desc;
     }
-    const auto column_mcast = [&](bool handshake) {
+    const auto pipe = [&](tt::tt_metal::NOC noc, bool along_columns, bool handshake) {
         return ttnn::kernel_lib::host::Mcast(
             *device,
-            ttnn::kernel_lib::host::McastConfig{.noc = in1_noc, .handshake = handshake},
+            ttnn::kernel_lib::host::McastConfig{.noc = noc, .handshake = handshake},
             tt::tt_metal::CoreRangeSet(core_grid),
-            grid_size.y,
+            along_columns ? grid_size.y : grid_size.x,
             ttnn::kernel_lib::host::McastFixedSenderConfig{},
-            ttnn::kernel_lib::host::McastCoreOrder::ColumnMajor);
+            along_columns ? ttnn::kernel_lib::host::McastCoreOrder::ColumnMajor
+                          : ttnn::kernel_lib::host::McastCoreOrder::RowMajor);
     };
-    auto in1_mcast = column_mcast(/*handshake=*/true);
-    in1_mcast.attach(desc, "in1_mcast", in1_targets, next_semaphore_id);
+    // The pipes' ids go above every id already in the program: on Fabric1D the mux clients' semaphores are allocated
+    // per core (find_available_semaphore_id) past the grid ones, on cores the pipes also span.
+    uint32_t first_mcast_semaphore_id = next_semaphore_id;
+    for (const auto& semaphore : desc.semaphores) {
+        first_mcast_semaphore_id = std::max(first_mcast_semaphore_id, semaphore.id + 1);
+    }
+    auto in1_mcast = pipe(in1_noc, !transpose_core_grid, /*handshake=*/true);
+    in1_mcast.attach(desc, "in1_mcast", in1_targets, first_mcast_semaphore_id);
     uint32_t mcast_semaphore_id = in1_mcast.next_semaphore_id();
     for (const auto& channel : in1_chunk_channels) {
-        auto in1_chunk_mcast = column_mcast(/*handshake=*/false);
+        auto in1_chunk_mcast = pipe(in1_noc, !transpose_core_grid, /*handshake=*/false);
         in1_chunk_mcast.attach(desc, channel, in1_targets, mcast_semaphore_id);
         mcast_semaphore_id = in1_chunk_mcast.next_semaphore_id();
     }
-    ttnn::kernel_lib::host::Mcast in0_mcast(
-        *device,
-        ttnn::kernel_lib::host::McastConfig{.noc = in0_noc},
-        tt::tt_metal::CoreRangeSet(core_grid),
-        grid_size.x,
-        ttnn::kernel_lib::host::McastFixedSenderConfig{},
-        ttnn::kernel_lib::host::McastCoreOrder::RowMajor);
+    auto in0_mcast = pipe(in0_noc, transpose_core_grid, /*handshake=*/true);
     in0_mcast.attach(desc, "in0_mcast", in0_targets, mcast_semaphore_id);
 
     return desc;
@@ -1926,6 +1926,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory(
     const std::optional<ttnn::GlobalSemaphore>& barrier_semaphore,
     // bool using_persistent_buffers,
     const bool transpose_core_grid,
+    const bool mcast,
     const uint32_t num_workers_per_link,
     const uint32_t num_buffers_per_channel,
     uint32_t N_chunks,
@@ -1962,6 +1963,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory(
         barrier_semaphore,
         // using_persistent_buffers,
         transpose_core_grid,
+        mcast,
         num_workers_per_link,
         num_buffers_per_channel,
         N_chunks,
@@ -2056,6 +2058,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         attributes.barrier_semaphore,
         // attributes.using_persistent_buffers,
         transpose_core_grid,
+        attributes.use_mcast,
         attributes.num_workers_per_link,
         attributes.num_buffers_per_channel,
         attributes.chunks,

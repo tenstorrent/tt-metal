@@ -814,6 +814,26 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
         "test_name_aliases": {"perf_sdpa_custom_mm": "perf_sdpa_custom_mm"},
     },
+    "perf_sdpa_reduce_row": {
+        "version": 1,
+        "columns": [
+            "dest_acc",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "loop_factor",
+            "marker",
+            "reduce_pool",
+            "tile_cnt",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {"perf_sdpa_reduce_row": "perf_sdpa_reduce_row"},
+    },
     "perf_sdpa_weighted_reduce": {
         "version": 1,
         "columns": [
@@ -858,6 +878,29 @@ PERF_TEST_SCHEMAS = {
         ],
         "aliases": {},
         "test_name_aliases": {"perf_sfpu_sdpa": "perf_sfpu_sdpa"},
+    },
+    "perf_sfpu_sdpa_exp_unclamped": {
+        "version": 1,
+        "columns": [
+            "dest_acc",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "loop_factor",
+            "marker",
+            "scale_en",
+            "tile_cnt",
+            "unpack_to_dest",
+            "value_bits",
+        ],
+        "aliases": {},
+        "test_name_aliases": {
+            "perf_sfpu_sdpa_exp_unclamped": "perf_sfpu_sdpa_exp_unclamped"
+        },
     },
     "perf_sum_reduce_scalar": {
         "version": 1,

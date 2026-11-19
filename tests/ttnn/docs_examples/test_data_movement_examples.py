@@ -27,8 +27,8 @@ def test_nonzero(device):
     count_tensor, indices_tensor = ttnn.nonzero(input_tensor_ttnn)
     count = int(ttnn.to_torch(count_tensor)[0, 0, 0, 0])
     indices = ttnn.to_torch(indices_tensor)[0, 0, 0, : 4 * count].reshape(count, 4)
-    logger.info(f"Non-zero count: {count}")  # 3
-    logger.info(f"Non-zero indices: {indices.tolist()}")  # [[0, 0, 0, 3], [0, 0, 0, 10], [0, 0, 0, 20]]
+    logger.debug(f"Non-zero count: {count}")  # 3
+    logger.debug(f"Non-zero indices: {indices.tolist()}")  # [[0, 0, 0, 3], [0, 0, 0, 10], [0, 0, 0, 20]]
 
 
 def test_pad(device):
@@ -116,12 +116,12 @@ def test_slice(device):
 
     # Slice the tensor
     sliced_tensor = ttnn.slice(input_tensor, [0, 0, 0, 0], [1, 1, 64, 16], [1, 1, 2, 1])
-    logger.info(f"Sliced Tensor Shape: {sliced_tensor.shape}")  # Shape([1, 1, 32, 16])
+    logger.debug(f"Sliced Tensor Shape: {sliced_tensor.shape}")  # Shape([1, 1, 32, 16])
 
     # Create a tensor to slice without step
     input_tensor = ttnn.rand((1, 1, 64, 32), dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
     output = ttnn.slice(input_tensor, [0, 0, 0, 0], [1, 1, 32, 32])
-    logger.info(f"Sliced Tensor Shape: {output.shape}")  # Shape([1, 1, 32, 32])
+    logger.debug(f"Sliced Tensor Shape: {output.shape}")  # Shape([1, 1, 32, 32])
 
 
 def test_tilize(device):
@@ -220,7 +220,7 @@ def test_indexed_fill(device):
 
     # Perform indexed fill
     output_tensor = ttnn.indexed_fill(batch_id_ttnn, input_tensor_a, input_tensor_b)
-    logger.info("Indexed Fill Output Tensor Shape:", output_tensor.shape)
+    logger.debug("Indexed Fill Output Tensor Shape:", output_tensor.shape)
 
 
 def test_gather(device):
@@ -263,4 +263,4 @@ def test_sort(device):
 def test_narrow(device):
     input_tensor = ttnn.rand((32, 16, 16, 4), dtype=ttnn.bfloat16, device=device)
     narrowed_tensor = ttnn.narrow(input_tensor, 0, 0, 12)
-    logger.info("Narrowed Tensor Shape:", narrowed_tensor.shape)
+    logger.debug("Narrowed Tensor Shape:", narrowed_tensor.shape)
