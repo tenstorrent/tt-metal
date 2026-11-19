@@ -604,3 +604,5 @@
 - 17:51 UTC DEVICE (justified): P.81 attention launched (fork / fuse per the owner, OV-56); op probes and A/B through the runner.
 - 18:29 UTC P.81 accepted (wo_a grouped matmul fork, bit-identical, device ~-1.0 ms a chunk; 2 runner restarts). sdpa / RoPE not built: each < 1 ms by the agent's measured estimates. DEVICE OPEN (justified): the accept gate's fresh full-model accuracy process.
 - 18:45 UTC P.81 gate PASS -> 04c14a09d00 (wo_a grouped matmul; err_final_hidden 0.1362, top5 1.0, determinism 0.0, contract 0, outside history 0.0). RAM unaccounted 216.1 GiB. Owner queue done (mHC, attention); nothing else queued.
+- 19:22 UTC DEVICE (justified, owner): AgentX-like ladder on HEAD 087ba04c142 (P.83 + P.81 in), runner request (reserve 48.2 GiB after a load: ok).
+- 19:28 UTC AgentX-like ladder on HEAD (agentic_cc, steady, harness): 51k 74.1 ms / 69.1k tok/s; 128k 75.2 / 68.1k; 256k 77.2 / 66.3k; 512k 79.5 / 64.4k; 768k 84.9 / 60.3k; 1M 87.4 / 58.6k (earlier today 67.5 / 66.1 / 65.0 / 62.2 / 58.9 / 56.6k). 1 open / 1 load; RAM unaccounted 215.9 -> 217.9 GiB.
