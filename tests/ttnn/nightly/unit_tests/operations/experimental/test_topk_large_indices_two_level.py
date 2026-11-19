@@ -172,6 +172,26 @@ def test_two_level_staged_gather_patterns(device, n, members, first_span):
     _check_rows(torch_input, _indices(out, rows), n, range(rows))
 
 
+def test_two_level_split_row_ties_order_as_a_whole_row(device):
+    """A row halved across a core pair returns the same ordered indices, ties included, as on one core."""
+    width, n = 262_144, 262_144
+    row = generate("ties8", 1, width, 22, n=n)
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(1, 1))])
+    results = []
+    for rows in (1, 2):  # one row on two cores is a split row; two rows on two cores are whole rows
+        out = ttnn.experimental.topk_large_indices(
+            _dev(row.repeat(rows, 1).reshape(1, 1, rows, width), device),
+            k=K,
+            valid_length=n,
+            block_select=32,
+            two_level_cutover=FORCE_TWO_LEVEL,
+            sub_core_grids=grid,
+        )
+        results.append(_indices(out, rows)[0])
+    _check_rows(row, results[0].reshape(1, -1), n, range(1))
+    assert torch.equal(results[0], results[1])
+
+
 def test_two_level_poisoned_tail_and_last_lane(device):
     """The last valid key sits in a partially valid block next to stale keys larger than everything valid."""
     rows, width, n = 2, 131_072, 100_017

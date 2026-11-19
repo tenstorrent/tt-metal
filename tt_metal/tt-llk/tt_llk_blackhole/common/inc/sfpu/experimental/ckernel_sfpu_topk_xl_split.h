@@ -34,6 +34,16 @@ constexpr std::uint32_t STEPS_PER_CHUNK      = 9;
 constexpr std::uint32_t STAGES_FIRST_CHUNK   = 7;
 constexpr std::uint32_t STAGES_MERGING_CHUNK = 9;
 
+// Added to every chunk's stamp (its chunk id within its 32-chunk block) of the rows that follow, so a row that is the
+// second part of a longer one keeps that row's chunk ids: their fused values order ties as one row would, and the
+// separated indices are the longer row's. Stamps stay 5 bits: offset + chunks <= 32.
+inline std::uint32_t stamp_offset = 0;
+
+inline void set_stamp_offset(const std::uint32_t offset)
+{
+    stamp_offset = offset;
+}
+
 inline bool decode_step(const std::uint32_t c1, const std::uint32_t r, const std::uint32_t num_chunks, std::uint32_t& chunk, std::uint32_t& stage)
 {
     if ((r & 1) == 0)
@@ -375,7 +385,7 @@ inline __attribute__((always_inline)) void sfpu_stage_body(
     switch (stage)
     {
         case 0:
-            sfpu::_topk_xl_split_stamp_<K>(tile_offset, chunk);
+            sfpu::_topk_xl_split_stamp_<K>(tile_offset, chunk + stamp_offset);
             if constexpr (K == 2048)
             {
                 sfpu::_topk_xl_split_sort_head_2048_(tile_offset, ascending);
