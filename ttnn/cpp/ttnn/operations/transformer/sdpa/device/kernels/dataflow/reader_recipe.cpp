@@ -642,7 +642,7 @@ FORCE_INLINE void read_recipe() {
                     }
                 }
                 if (forward) {
-                    link.forward(noc, kptr, kv_tiles, kbytes);
+                    link.forward(noc, kcb, kv_tiles, kbytes);
                 }
                 // Publish on every rank only AFTER forwarding has released its source.
                 // Crucially, K is published BEFORE reserving V, retaining K lookahead
@@ -666,7 +666,7 @@ FORCE_INLINE void read_recipe() {
                     }
                 }
                 if (forward) {
-                    link.forward(noc, vptr, v_tiles, vbytes);
+                    link.forward(noc, vcb, v_tiles, vbytes);
                 }
                 vcb.push_back(v_tiles);
             }
