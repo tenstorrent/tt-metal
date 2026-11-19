@@ -538,8 +538,6 @@ def import_tracy_op_logs(
             # tracy-csvexport does not quote zone names: a host zone named with a comma (e.g. the MoE block's
             # "moe_tail: override (hit, engine)") splits its name. The name is the first column; fold the extra
             # leading fields back into it.
-            import csv
-
             with open(tracyOpTimesLog, newline="") as f:
                 rows = list(csv.reader(f))
             header, width = rows[0], len(rows[0])
