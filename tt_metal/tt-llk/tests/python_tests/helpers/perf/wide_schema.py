@@ -62,8 +62,6 @@ _TIMING_COLUMNS = [
 # Counter metrics are deliberately not here, see DROPPED_COLUMNS below. Quasar has
 # its own published table in wide_schema_quasar.py — do not mix Quasar columns in.
 DB_SCHEMA = [
-    Column("input_range_high", "float64", True, "configuration"),
-    Column("input_range_low", "float64", True, "configuration"),
     Column("marker", "string", False, "identity"),
     # formats
     Column("formats.input_A", "string", True, "formats"),
