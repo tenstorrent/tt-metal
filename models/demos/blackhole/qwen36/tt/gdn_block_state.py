@@ -188,9 +188,9 @@ class GdnBlockState:
         kv_by_slot = {e[2]: kv_caches[n] for n, (_, e) in enumerate(attn)}
         if len(kv_by_slot) != len(attn):
             raise ValueError("two attention layers share a layer slot; each needs its own K and V buffers")
-        kda = getattr(ttnn.experimental, "kda", None)
-        if not (hasattr(ttnn.experimental, "alias_view") and hasattr(kda, "gdn_decode_step")):
-            raise ValueError("GDN state in KV cache blocks needs ttnn.experimental.alias_view and kda.gdn_decode_step")
+        gdn = getattr(ttnn.experimental, "gdn", None)
+        if not (hasattr(ttnn.experimental, "alias_view") and hasattr(gdn, "gdn_decode_step")):
+            raise ValueError("GDN state in KV cache blocks needs ttnn.experimental.alias_view and gdn.gdn_decode_step")
         k0 = kv_caches[0][0]
         self.num_blocks, kv_heads, block_size, head_dim = (int(x) for x in k0.shape)
         self.dims = GdnDims(

@@ -278,7 +278,7 @@ def gdn_layer(monkeypatch):
     from models.demos.blackhole.qwen36.tt.gdn import tp
 
     reduce_scatters = []
-    monkeypatch.setattr(ttnn.experimental.kda, "gdn_spec_step", lambda *a, **k: "gated")
+    monkeypatch.setattr(ttnn.experimental.gdn, "gdn_spec_step", lambda *a, **k: "gated")
     monkeypatch.setattr(ttnn, "reshape", lambda t, shape: FT(shape, "view"))
     monkeypatch.setattr(ttnn, "deallocate", lambda t: None)
     monkeypatch.setattr(tp.tpc, "matmul_1d_decode", lambda *a, **k: FT((1, 1, 32, 64), "qkvzab"))
