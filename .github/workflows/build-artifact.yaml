@@ -611,14 +611,19 @@ jobs:
         # the smaller variant save first, and then the larger variant downloads its
         # extra packages on every run.
         # hashFiles lists each file that calls CPMAddPackage at configure time
-        # (git grep -l CPMAddPackage), plus cmake/CPM.cmake for the CPM version.
+        # (git grep --recurse-submodules -l CPMAddPackage), plus each CPM.cmake
+        # that sets a CPM version. Tracy's profiler/CMakeLists.txt is not listed:
+        # the wasm sub-build fetches its packages during Compile, after the save.
         run: |
           variant="tracy-${{ inputs.tracy && 'on' || 'off' }}-tttrain-${{ inputs.skip-tt-train && 'off' || 'on' }}"
           echo "key=cpm-z9l-${variant}-${{ hashFiles(
             'cmake/CPM.cmake',
             'third_party/CMakeLists.txt',
             'tt_metal/third_party/CMakeLists.txt',
+            'tt_metal/third_party/tracy/cmake/CPM.cmake',
+            'tt_metal/third_party/tracy/cmake/vendor.cmake',
             'tt_metal/third_party/umd/third_party/CMakeLists.txt',
+            'tt-train/cmake/CPM.cmake',
             'tt-train/cmake/dependencies.cmake',
             'tt-train/sources/examples/mnist_mlp/CMakeLists.txt') }}" >> "$GITHUB_OUTPUT"
 
