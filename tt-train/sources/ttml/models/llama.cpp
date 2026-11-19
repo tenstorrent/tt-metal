@@ -4,7 +4,6 @@
 
 #include "llama.hpp"
 
-#include "core/tt_tensor_utils.hpp"
 #include "serialization/safetensors.hpp"
 #include "serialization/serialization.hpp"
 

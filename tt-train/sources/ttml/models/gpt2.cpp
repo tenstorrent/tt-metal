@@ -7,7 +7,6 @@
 #include <string_view>
 
 #include "autograd/tensor.hpp"
-#include "core/tt_tensor_utils.hpp"
 #include "core/xtensor_utils.hpp"
 #include "modules/positional_embeddings.hpp"
 #include "serialization/safetensors.hpp"

@@ -82,10 +82,11 @@ names the compute dtype. It is applied by `core::apply_precision_config()`
 (`sources/ttml/core/parameter_dtype.{hpp,cpp}`) after the model is built and before the optimizer is created, so the
 optimizer state follows: in Python by `ttml.common.utils.create_optimizer()` when it is given the whole config (as in
 `train.py`), and in C++ by the `nano_gpt` runner and the 3-tier optimizer worker. Runners that pass only the optimizer
-section, such as the SFT and GRPO trainers, don't apply it. The load order is: build the model, convert, then load
-weights and checkpoints. Every loader writes the dtype a tensor is stored in, so values loaded after the conversion
-keep their fp32 bits; loaded before it, they are rounded to bf16 first. `train.py` and the `nano_gpt` runner keep this
-order; `nano_gpt`'s save-and-exit path skips the conversion, so it exports the weights in the dtype the model builds.
+section, such as the SFT and GRPO trainers, don't apply it. The load order is: build the model, convert, load
+weights, create the optimizer, then load a training checkpoint, which restores the optimizer state too. Every loader
+writes the dtype a tensor is stored in, so values loaded after the conversion keep their fp32 bits; loaded before it,
+they are rounded to bf16 first. `train.py` and the `nano_gpt` runner keep this order; `nano_gpt`'s save-and-exit path
+skips the conversion, so it exports the weights in the dtype the model builds.
 3-tier workers keep bf16 parameters for `RemoteOptimizer`; the optimizer worker holds the fp32 master weights.
 The fp32 parameter is the master weight: fused `AdamW` updates it in place with fp32 moments, and forward and backward
 read its bf16 view, which is refreshed into its existing buffer the first time it is read after the step. Parameters
