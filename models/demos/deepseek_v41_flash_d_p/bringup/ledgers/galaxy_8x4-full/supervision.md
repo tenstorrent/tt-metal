@@ -464,3 +464,10 @@
 - Loads per queued task after the change (full + executed): P.84 1 + 1 (5 + 2 units), X.10 1 + 1 (1 + 2),
   P.81 / P.82 / P.83 1 + 1 (5 + 3 each), FIX.11 1 + 0 (9 units; 3 contract tests outside the shared model keep their
   own processes), FIX.13 1 + 1 (7 + 1; 6 own processes). `validate`: valid.
+
+## 08:34 UTC: OWNER: reserve 40 GiB, no reboot; P.84 on the runner
+- Reserve after the planned load set to 40 GiB (e4b1d34cd4c). Agents' briefs: model-level device runs through
+  `resident submit` (F286); a direct safe-runner model test would cost a fresh open.
+- DEVICE OPEN (justified): start the resident runner for P.84 (static agentic replicas): one open, one load of layers
+  0-20, held for the task's agent checks and A/B timing sides; the accept gate's fresh full-model process runs after
+  the runner steps aside (never both loaded). Before: unaccounted 163.5 GiB, MemAvailable 350 GiB.
