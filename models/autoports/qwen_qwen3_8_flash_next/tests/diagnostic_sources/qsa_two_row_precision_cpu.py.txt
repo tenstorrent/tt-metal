@@ -1,0 +1,51 @@
+import hashlib,json,math,sys
+from pathlib import Path
+import torch
+import torch.nn.functional as F
+from transformers.models.qwen4_exp.modeling_qwen4_exp import apply_rotary_pos_emb
+from models.autoports.qwen_qwen3_8_flash_next.tests.probe_qsa import load_reference
+root=Path('/home/ttuser/qwen38-flash');torch.set_num_threads(8);torch.set_grad_enabled(False)
+config,hf,rope,_,prov=load_reference(root/'hf/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/812d96e10a0dd82b69d749e68693698cf6c36daa')
+source=torch.load(root/'qsa_cpu_prefill_262144.pt',weights_only=True,mmap=True)
+report={'scope':'CPU same-operands score and selected-row projection/norm controls. IEEE FP32 tree models arithmetic order only; not a hardware prediction or acceptance.','source_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),'provenance':prov,'rows':{}}
+def tree(x):
+ tails=[]
+ while x.shape[-1]>1:
+  width=x.shape[-1];half=width//2
+  if width%2:tails.append(x[...,-1:])
+  x=x[...,:half]+x[...,half:2*half]
+ for tail in tails:x=x+tail
+ return x
+
+def projection(x,policy):
+ w=hf.indexer.index_qk_proj.weight
+ if policy=='hf':return hf.indexer.index_qk_proj(x)
+ if policy=='fp64':return F.linear(x.double(),w.double()).bfloat16()
+ return torch.cat([tree(x.float().unsqueeze(-2)*w[i:i+32].float()[None,None]).squeeze(-1) for i in range(0,640,32)],-1).bfloat16()
+def norm(x,module,policy):
+ if policy=='hf':return module(x)
+ v=x.double() if policy=='fp64' else x.float()
+ mean=v.square().mean(-1,keepdim=True) if policy=='fp64' else tree(v.square())/v.shape[-1]
+ return (v*torch.rsqrt(mean+module.eps)*(1+module.weight.to(v.dtype))).bfloat16()
+def scores(q,k,policy):
+ if policy=='fp64':return (q.double()@k.double().T).relu().sum(0)/math.sqrt(128)
+ if policy=='tree':dots=tree(q.float()[:,None,:]*k.float()[None,:,:]).squeeze(-1)
+ else:dots=q.float()@k.float().T
+ return dots.relu().sum(0)/math.sqrt(128)
+def details(value,baseline,blocks):
+ old=set(baseline.topk(512).indices.tolist());new=set(value.topk(512).indices.tolist())
+ return {'changed_blocks':sorted(old^new),'removed':sorted(old-new),'added':sorted(new-old),'max_score_error':float((value.double()-baseline.double()).abs().max()),'critical_scores':{str(b):float(value[b]) for b in blocks}}
+for pos,critical in [(105584,[23259,25012,12468]),(58531,[9685,9988,2847])]:
+ pre=pos//32*32;row=pos-pre;f=torch.load(root/f'qsa_score_window_{pre}.pt',weights_only=True,mmap=True);count=(pos+1)//4;k=f['compressed_after'][0,:count];q=f['projections']['index_query'][0,:,row];base=scores(q,k,'hf');hidden=source['hidden'][:,pre:pre+32];cos,sin=rope(hidden,torch.arange(pre,pre+32).reshape(1,-1));orig=projection(hidden,'hf')
+ item={'same_operands_scores':{policy:details(scores(q,k,policy),base,critical) for policy in ['hf','fp64','tree']},'query_controls':{},'projection_changes':{}}
+ for proj in ['hf','fp64','tree']:
+  raw=projection(hidden,proj);item['projection_changes'][proj]={'full_chunk_different_BF16_elements':int((raw!=orig).sum()),'target_query_different_BF16_elements':int((raw[0,row,:512]!=orig[0,row,:512]).sum())}
+  for n in ['hf','fp64','tree']:
+   normalized=norm(raw[...,:512].reshape(1,32,4,128),hf.indexer.q_layernorm,n)
+   rotated=apply_rotary_pos_emb(normalized.transpose(1,2),cos=cos,sin=sin)[0,:,row]
+   scored=scores(rotated,k,'fp64')
+   item['query_controls'][proj+'projection_'+n+'norm']={'different_query_elements':int((rotated!=q).sum()),**details(scored,base,critical)}
+ report['rows'][str(pos)]=item
+ print(pos,json.dumps(item),flush=True)
+assert 'ttnn' not in sys.modules
+Path('models/autoports/qwen_qwen3_8_flash_next/doc/functional_decoder/qsa_two_row_precision_cpu.json').write_text(json.dumps(report,indent=2)+'\n')

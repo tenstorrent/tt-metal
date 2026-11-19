@@ -1,0 +1,462 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""CPU-only aggregate adapter tests; all fixture timings are synthetic.
+
+Run as a module to avoid repository pytest hardware setup. The final test runs
+the installed tt-perf-report CLI and checks the official device parser output.
+"""
+
+import copy
+import csv
+import hashlib
+import json
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from models.autoports.qwen_qwen3_8_flash_next.tests.report_trace_performance import (
+    analyze_device,
+    select_device_replay,
+    select_host_replay,
+    validate_profile,
+)
+
+
+def fixture():
+    check = {"finite": True, "output_exact_vs_eager": True, "state_exact_vs_eager": {"state": True}}
+    profile = {
+        "profiler_mode": "whole_trace_aggregate",
+        "passed": True,
+        "runtime_audit": True,
+        "allocation_tracking": True,
+        "mode": "prefill",
+        "trace_id": 7,
+        "capture_begin_raw_op_id": 10,
+        "capture_end_raw_op_id": 12,
+        "trace_replay_calls": ["unmeasured_warmup", "measured_final"],
+        "warm_replay": copy.deepcopy(check),
+        "measured_replay": copy.deepcopy(check),
+        "synthetic_test_fixture": True,
+    }
+    metadata = {
+        "trace_replays": {"0": {"7": [100, 300]}},
+        "signposts": {
+            "sp_1": {"data": "TT_SIGNPOST: PERF_PREFILL", "tracy_time": 200},
+            "sp_2": {"data": "TT_SIGNPOST: PERF_PREFILL_END", "tracy_time": 400},
+        },
+        "ops": [
+            {
+                "global_call_count": raw << 10,
+                "op_type": "tt_dnn_device",
+                "op_code": "FixtureOp",
+                "device_id": 0,
+                "metal_trace_id": 7,
+                "tracy_time": raw,
+            }
+            for raw in (10, 11)
+        ],
+    }
+    log = "Synthetic adapter fixture only.\nRUN_RECORDED_FINISHED exit_code=0\n"
+    return profile, metadata, log
+
+
+def raw_rows():
+    rows = []
+    for counter in (1, 2):
+        for x in (1, 2):
+            begin = counter * 1_000_000 + x * 100
+            end = begin + 200_000 + x * 1000
+            for zone, phase, timestamp in (
+                ("TRACE-FW", "ZONE_START", begin),
+                ("TRACE-KERNEL", "ZONE_START", begin + 10),
+                ("TRACE-KERNEL", "ZONE_END", end - 10),
+                ("TRACE-FW", "ZONE_END", end),
+            ):
+                rows.append(
+                    [
+                        0,
+                        x,
+                        2,
+                        "TENSIX_RISC_AGG",
+                        123,
+                        timestamp,
+                        0,
+                        counter << 10,
+                        "",
+                        "",
+                        zone,
+                        phase,
+                        1,
+                        "synthetic.cpp",
+                        "",
+                    ]
+                )
+    return rows
+
+
+def write_raw(path, rows=None):
+    with Path(path).open("w", newline="") as stream:
+        stream.write("ARCH: blackhole, CHIP_FREQ[MHz]: 1000, Max Compute Cores: 120\n")
+        writer = csv.writer(stream)
+        writer.writerow(
+            [
+                "PCIe slot",
+                "core_x",
+                "core_y",
+                "RISC processor type",
+                "timer_id",
+                "time[cycles since reset]",
+                "data",
+                "run host ID",
+                "trace id",
+                "trace id counter",
+                "zone name",
+                "type",
+                "source line",
+                "source file",
+                "meta data",
+            ]
+        )
+        writer.writerows(raw_rows() if rows is None else rows)
+
+
+def device_fixture():
+    profile, _, log = fixture()
+    cores = [{"logical": [x, 0], "translated": [x + 1, 2]} for x in range(2)]
+    layout = {
+        "control_words": 64,
+        "control_indices": {"TRACE_REPLAY_STATUS": 58, "DEVICE_BUFFER_END_INDEX_BR_ER": 24, "DROPPED_ZONES": 56},
+        "marker_indices": {
+            "ID_LL": 3,
+            "GUARANTEED_MARKER_1_H": 4,
+            "GUARANTEED_MARKER_2_H": 6,
+            "GUARANTEED_MARKER_3_H": 8,
+            "GUARANTEED_MARKER_4_H": 10,
+        },
+        "marker_bits": {"PROFILER_MARKER_TS_HIGH_BITS": 12, "PROFILER_MARKER_TIMER_ID_BITS": 19},
+    }
+    events = [
+        {"name": "capture_begin", "monotonic_ns": 10, "raw_op_id": 10},
+        {"name": "capture_end", "monotonic_ns": 20, "raw_op_id": 12, "trace_id": 7},
+    ]
+    drains = []
+    for ordinal, start, end, sampled in ((1, 100, 110, 150), (2, 300, 310, 450)):
+        if ordinal == 2:
+            events.append({"name": "PERF_PREFILL", "monotonic_ns": 200})
+        for label, timestamp in (("replay_begin", start), ("replay_end", end)):
+            events.append(
+                {"name": label, "monotonic_ns": timestamp, "ordinal": ordinal, "trace_id": 7, "raw_op_id": 12}
+            )
+        samples = []
+        for core in cores:
+            control = [0] * 64
+            control[58], control[24] = 0x20000000, 12
+            raw = [0, 0, 0, ordinal] + [0] * 8
+            for row in raw_rows():
+                if row[1] == core["translated"][0] and row[7] >> 10 == ordinal:
+                    field = {
+                        ("TRACE-FW", "ZONE_START"): 4,
+                        ("TRACE-FW", "ZONE_END"): 6,
+                        ("TRACE-KERNEL", "ZONE_START"): 8,
+                        ("TRACE-KERNEL", "ZONE_END"): 10,
+                    }[(row[10], row[11])]
+                    raw[field], raw[field + 1] = 0x80000000 | (row[5] >> 32), row[5] & 0xFFFFFFFF
+            samples.append({**core, "control": control, "markers": raw})
+        drains.append({"ordinal": ordinal, "sampled_monotonic_ns": sampled, "cores": samples})
+    events.append({"name": "PERF_PREFILL_END", "monotonic_ns": 400})
+    profile["metadata_authority"] = "harness_trace_protocol_v1"
+    profile["measurement_protocol"] = {
+        "authority": "harness_trace_protocol_v1",
+        "marker_clock": "synthetic monotonic ordering fixture",
+        "device": 0,
+        "worker_grid": [2, 1],
+        "known_cores": cores,
+        "coverage_source_sha256": {"synthetic": "fixture"},
+        "layout": layout,
+        "events": events,
+        "predrain": drains,
+    }
+    return profile, log
+
+
+class TraceProfileTests(unittest.TestCase):
+    def test_clean_timing_requires_disabled_diagnostics(self):
+        profile, _, log = fixture()
+        profile.update(
+            measurement_regime="clean_timing",
+            runtime_audit=False,
+            allocation_tracking=False,
+            allocation_diagnostics=False,
+            environment={
+                "TT_METAL_TRACE_ALLOC_TRACKING": "0",
+                "TT_METAL_TRACE_ALLOC_TRACEBACKS": "0",
+                "TT_METAL_WATCHER": None,
+            },
+        )
+        self.assertEqual(validate_profile(profile, log), "prefill")
+        for key in ("runtime_audit", "allocation_tracking", "allocation_diagnostics"):
+            with self.subTest(flag=key):
+                invalid = copy.deepcopy(profile)
+                invalid[key] = True
+                with self.assertRaises(ValueError):
+                    validate_profile(invalid, log)
+        for key in ("TT_METAL_TRACE_ALLOC_TRACKING", "TT_METAL_TRACE_ALLOC_TRACEBACKS", "TT_METAL_WATCHER"):
+            with self.subTest(environment=key):
+                invalid = copy.deepcopy(profile)
+                invalid["environment"][key] = "1"
+                with self.assertRaises(ValueError):
+                    validate_profile(invalid, log)
+        invalid = copy.deepcopy(profile)
+        invalid["measured_replay"]["state_exact_vs_eager"]["state"] = False
+        with self.assertRaises(ValueError):
+            validate_profile(invalid, log)
+
+    def test_unknown_timing_regime_rejected(self):
+        profile, _, log = fixture()
+        profile["measurement_regime"] = "unchecked"
+        with self.assertRaises(ValueError):
+            validate_profile(profile, log)
+
+    def test_explicit_device_protocol(self):
+        profile, log = device_fixture()
+        proof = select_device_replay(profile, log)
+        self.assertEqual(proof["metadata_authority"], "harness_trace_protocol_v1")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "device.csv"
+            write_raw(path)
+            self.assertEqual(analyze_device(path, proof)["trace_kernel"]["duration_ns"], 202080)
+            write_raw(path, [row for row in raw_rows() if row[1] == 1])
+            with self.assertRaises(ValueError):
+                analyze_device(path, proof)
+        mutations = [
+            lambda p: p["measurement_protocol"]["events"].pop(),
+            lambda p: p["measurement_protocol"]["events"][5].update(raw_op_id=13),
+            lambda p: p["measurement_protocol"]["events"][5].update(ordinal=1),
+            lambda p: p["measurement_protocol"]["known_cores"].pop(),
+            lambda p: p["measurement_protocol"]["predrain"][0].update(sampled_monotonic_ns=301),
+            lambda p: p["measurement_protocol"]["predrain"][0]["cores"][0]["control"].__setitem__(58, 0),
+            lambda p: p["measurement_protocol"]["predrain"][1]["cores"][0]["markers"].__setitem__(3, 1),
+            lambda p: p["measurement_protocol"]["predrain"][1]["cores"][0]["markers"].__setitem__(4, 0),
+        ]
+        for mutation in mutations:
+            bad = copy.deepcopy(profile)
+            mutation(bad)
+            with self.assertRaises(ValueError):
+                select_device_replay(bad, log)
+
+    def test_device_protocol_perf_cli(self):
+        profile, log = device_fixture()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_raw(root / "device.csv")
+            profile["native_csv"] = {"sha256": hashlib.sha256((root / "device.csv").read_bytes()).hexdigest()}
+            (root / "profile.json").write_text(json.dumps(profile))
+            (root / "capture.log").write_text(log)
+            command = [
+                sys.executable,
+                "-m",
+                "models.autoports.qwen_qwen3_8_flash_next.tests.report_trace_performance",
+                "--device-csv",
+                str(root / "device.csv"),
+                "--device-protocol",
+                "--profile-json",
+                str(root / "profile.json"),
+                "--capture-log",
+                str(root / "capture.log"),
+                "--output-dir",
+                str(root / "report"),
+            ]
+            result = subprocess.run(command, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            summary = json.loads((root / "report/latency_summary.json").read_text())
+            self.assertEqual(summary["metadata_authority"], "harness_trace_protocol_v1")
+            self.assertIsNone(summary["op_gap_sum_ms"])
+            self.assertAlmostEqual(summary["device_trace_elapsed_ms"], 0.202080)
+            self.assertIn("WHOLE_TRACE_PREFILL_AGGREGATE", (root / "report/prefill_perf_report.txt").read_text())
+
+    def test_official_parser_and_final_replay(self):
+        proof = select_host_replay(*fixture())
+        with tempfile.TemporaryDirectory() as directory:
+            raw = Path(directory) / "device.csv"
+            write_raw(raw)
+            result = analyze_device(raw, proof)
+        self.assertEqual(proof["selected_replay_counter"], 2)
+        self.assertEqual(result["trace_kernel"]["start_cycle"], 2_000_110)
+        self.assertEqual(result["trace_kernel"]["end_cycle"], 2_202_190)
+        self.assertEqual(result["trace_kernel"]["duration_ns"], 202080)
+        self.assertEqual(result["cores"], [[1, 2], [2, 2]])
+        self.assertNotIn("ttnn", sys.modules)
+
+    def test_host_failures_rejected(self):
+        variants = []
+        profile, meta, log = fixture()
+        bad = copy.deepcopy(profile)
+        bad["measured_replay"]["state_exact_vs_eager"]["state"] = False
+        variants.append((bad, meta, log))
+        bad = copy.deepcopy(meta)
+        bad["trace_replays"]["0"]["7"] = [100, 150, 300]
+        variants.append((profile, bad, log))
+        bad = copy.deepcopy(meta)
+        bad["signposts"]["sp_1"]["tracy_time"] = 350
+        variants.append((profile, bad, log))
+        bad = copy.deepcopy(meta)
+        bad["ops"].pop()
+        variants.append((profile, bad, log))
+        bad = copy.deepcopy(meta)
+        bad["ops"].append({**bad["ops"][0], "metal_trace_id": None, "tracy_time": 310})
+        variants.append((profile, bad, log))
+        variants.extend(
+            (profile, meta, value)
+            for value in (
+                "",
+                log + "Profiler DRAM buffers were full, markers were dropped!",
+                log + "[streaming profiler] not capturing",
+                log + "Instrumentation failure: Too many source locations.",
+            )
+        )
+        for index, value in enumerate(variants):
+            with self.subTest(index=index), self.assertRaises(ValueError):
+                select_host_replay(*value)
+
+    def test_missing_duplicate_wrong_mode_and_counter_rejected(self):
+        proof = select_host_replay(*fixture())
+        variants = [raw_rows()[:-1], [*raw_rows(), raw_rows()[0]], raw_rows()[:8]]
+        bad = raw_rows()
+        bad[-1][7] = 3 << 10
+        variants.append(bad)
+        bad = raw_rows()
+        bad[0][3], bad[0][10] = "BRISC", "BRISC-FW"
+        variants.append(bad)
+        bad = raw_rows()
+        bad[9][5] = bad[11][5] + 1
+        variants.append(bad)
+        with tempfile.TemporaryDirectory() as directory:
+            raw = Path(directory) / "device.csv"
+            for index, rows in enumerate(variants):
+                write_raw(raw, rows)
+                with self.subTest(index=index), self.assertRaises(ValueError):
+                    analyze_device(raw, proof)
+
+    def test_actual_host_metadata_parser(self):
+        from tracy.common import TRACY_OPS_DATA_FILE_NAME, TRACY_OPS_TIMES_FILE_NAME, generate_logs_folder
+
+        from models.autoports.qwen_qwen3_8_flash_next.tests.profile_trace_capture import process_trace_only
+
+        profile, expected, log = fixture()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            logs = generate_logs_folder(root)
+            logs.mkdir(parents=True)
+            messages = [{"MessageName": "TT_METAL_TRACE_BEGIN: 0, 7", "total_ns": 1}]
+            times = []
+            for row in expected["ops"]:
+                op = {
+                    **row,
+                    "op_hash": row["global_call_count"],
+                    "attributes": {},
+                    "input_tensors": [],
+                    "output_tensors": [],
+                }
+                messages.append(
+                    {"MessageName": "TT_DNN_DEVICE_OP ->\n" + json.dumps(op), "total_ns": row["tracy_time"]}
+                )
+                times.append(
+                    {
+                        "name": "TT_DNN_DEVICE_OP",
+                        "zone_text": f'id:{row["global_call_count"]}',
+                        "special_parent_text": "",
+                        "ns_since_start": row["tracy_time"],
+                        "exec_time_ns": 1,
+                    }
+                )
+            for message, timestamp in (
+                ("TT_METAL_TRACE_END: 0, 7", 20),
+                ("TT_METAL_TRACE_REPLAY: 0, 7", 100),
+                ("TT_SIGNPOST: PERF_PREFILL", 200),
+                ("TT_METAL_TRACE_REPLAY: 0, 7", 300),
+                ("TT_SIGNPOST: PERF_PREFILL_END", 400),
+            ):
+                messages.append({"MessageName": message, "total_ns": timestamp})
+            with (logs / TRACY_OPS_DATA_FILE_NAME).open("w", newline="") as stream:
+                writer = csv.DictWriter(stream, fieldnames=list(messages[0]), delimiter=";", quotechar="`")
+                writer.writeheader()
+                writer.writerows(messages)
+            with (logs / TRACY_OPS_TIMES_FILE_NAME).open("w", newline="") as stream:
+                writer = csv.DictWriter(stream, fieldnames=list(times[0]))
+                writer.writeheader()
+                writer.writerows(times)
+            # The fixture is already a valid operation-only export. Test the
+            # official message parser without pretending to create a Tracy
+            # binary from these synthetic records.
+            with patch(
+                "models.autoports.qwen_qwen3_8_flash_next.tests.profile_trace_capture.export_operation_times",
+                return_value=(logs, ["synthetic fixture: no Tracy binary"]),
+            ):
+                process_trace_only(root, None, False, device_only=False)
+            actual = json.loads((logs / "trace_host_metadata.json").read_text())
+            self.assertEqual(select_host_replay(profile, actual, log)["selected_replay_counter"], 2)
+        self.assertNotIn("ttnn", sys.modules)
+
+    def test_operation_export_preserves_original(self):
+        from models.autoports.qwen_qwen3_8_flash_next.tests.profile_trace_capture import export_operation_times
+
+        with tempfile.TemporaryDirectory() as directory:
+            logs = Path(directory)
+            original = b"original malformed child source,kept byte for byte\n"
+            (logs / "tracy_ops_times.csv").write_bytes(original)
+            (logs / "tracy_ops_data.csv").write_text("original complete messages")
+
+            def exporter(command, stdout, check):
+                self.assertEqual(command[1:4], ["-u", "-f", "TT_"])
+                self.assertTrue(check)
+                stdout.write("name,ns_since_start\nTT_DNN_DEVICE_OP,123\n")
+
+            with patch(
+                "models.autoports.qwen_qwen3_8_flash_next.tests.profile_trace_capture.subprocess.run",
+                side_effect=exporter,
+            ):
+                target, _ = export_operation_times(logs, Path("csvexport"))
+            self.assertEqual((logs / "tracy_ops_times.csv").read_bytes(), original)
+            self.assertEqual((target / "tracy_ops_data.csv").read_bytes(), (logs / "tracy_ops_data.csv").read_bytes())
+            self.assertIn("TT_DNN_DEVICE_OP,123", (target / "tracy_ops_times.csv").read_text())
+
+    def test_actual_perf_report_cli(self):
+        profile, metadata, log = fixture()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_raw(root / "device.csv")
+            (root / "profile.json").write_text(json.dumps(profile))
+            (root / "host.json").write_text(json.dumps(metadata))
+            (root / "capture.log").write_text(log)
+            command = [
+                sys.executable,
+                "-m",
+                "models.autoports.qwen_qwen3_8_flash_next.tests.report_trace_performance",
+                "--device-csv",
+                str(root / "device.csv"),
+                "--host-metadata-json",
+                str(root / "host.json"),
+                "--profile-json",
+                str(root / "profile.json"),
+                "--capture-log",
+                str(root / "capture.log"),
+                "--output-dir",
+                str(root / "report"),
+            ]
+            result = subprocess.run(command, capture_output=True, text=True)
+            console = root / "report/prefill_perf_report.console.log"
+            self.assertEqual(
+                result.returncode, 0, result.stdout + result.stderr + (console.read_text() if console.exists() else "")
+            )
+            summary = json.loads((root / "report/latency_summary.json").read_text())
+            self.assertAlmostEqual(summary["device_trace_elapsed_ms"], 0.202080)
+            self.assertIsNone(summary["device_kernel_sum_ms"])
+            self.assertIsNone(summary["op_gap_sum_ms"])
+            self.assertIn("WHOLE_TRACE_PREFILL_AGGREGATE", (root / "report/prefill_perf_report.txt").read_text())
+
+
+if __name__ == "__main__":
+    unittest.main()

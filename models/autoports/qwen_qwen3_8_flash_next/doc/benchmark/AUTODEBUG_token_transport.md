@@ -1,0 +1,9 @@
+# Random-prompt transport diagnosis
+
+Observed setup pilot: upstream vLLM 0.26 random dataset, seed 4103, two requests, 4096 input / 128 output. Client reports two 4096-token prompts, but the working server reported a 4529-token second prompt. This violates exact input accounting and must not become a measured performance row.
+
+CPU reproduction re-created the two upstream prompts using the pinned tokenizer snapshot. The dedicated benchmark client loads `CachedQwen3_5Tokenizer` under transformers 5.23.0; the working server environment loads `CachedQwen2Tokenizer`. Identical prompt text encodes as 4096/4096 tokens in the client and 4096/4529 tokens in the server environment. These measurements and original prompts/token IDs are retained in setup/random-roundtrip-diagnosis.json and setup/random-roundtrip-original.json. This test made no inference request. Importing the working environment's vLLM tokenizer also loaded its TT plugin module; no device was opened or operation launched.
+
+The upstream 0.26 `_align_prompts_to_server_tokenizer` checks the first prompt only. When that first token count matches, it returns all prompts unchanged. The first prompt in this reproduction matches, so the mismatching second prompt bypasses correction. Even its correction branch sends text after detokenization and does not prove every final server count. No native random-token-ID transport CLI flag exists in this pinned client.
+
+The completions protocol accepts list[int] prompt values and the upstream endpoint function passes request.prompt directly into the JSON payload. This permits preserving the exact generated workload tokens while avoiding a second tokenizer's incompatible text segmentation. It does not require changing model, server, precision, template, output length, sampling, concurrency, timing or scoring.

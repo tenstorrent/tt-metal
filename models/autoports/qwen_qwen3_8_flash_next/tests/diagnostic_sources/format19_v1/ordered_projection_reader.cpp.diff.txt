@@ -1,0 +1,12 @@
+--- ordered_projection_reader.cpp.before
++++ ordered_projection_reader.cpp.after
+@@ -38,7 +38,8 @@
+             cb_reserve_back(cb_left, 1);
+             cb_reserve_back(cb_right, 1);
+             volatile tt_l1_ptr uint16_t* left = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_left));
+-            volatile tt_l1_ptr uint16_t* right = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_right));
++            volatile tt_l1_ptr uint16_t* right =
++                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_right));
+             for (uint32_t row = 0; row < 32; ++row) {
+                 const uint16_t value = row < count ? x[k_tile * 1024 + tile_element(row, k_local)] : 0;
+                 for (uint32_t column = 0; column < 32; ++column) {

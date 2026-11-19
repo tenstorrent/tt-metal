@@ -20,6 +20,7 @@ void kernel_main() {
     // Number of logical users (== number of running cores). Only this many input-index rows exist
     // and are streamed in, even though the values tile is padded to a full tile_height.
     constexpr auto num_users = get_arg(args::num_users);
+    constexpr bool input_sorted = get_arg(args::input_sorted) == 1;
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
@@ -42,10 +43,12 @@ void kernel_main() {
             noc.async_read(
                 s0, input_values_dfb, tile_bytes_input_values, {.page_id = tile_id_input_values}, {.offset_bytes = 0});
             tile_id_input_values++;
-            if constexpr (use_32bit_index) {
-                dataflow_kernel_lib::generate_index_tile<uint32_t>(dfb::index, j);
-            } else {
-                dataflow_kernel_lib::generate_index_tile<uint16_t>(dfb::index, j);
+            if constexpr (!input_sorted) {
+                if constexpr (use_32bit_index) {
+                    dataflow_kernel_lib::generate_index_tile<uint32_t>(dfb::index, j);
+                } else {
+                    dataflow_kernel_lib::generate_index_tile<uint16_t>(dfb::index, j);
+                }
             }
             noc.async_read_barrier();
             input_values_dfb.push_back(onetile);

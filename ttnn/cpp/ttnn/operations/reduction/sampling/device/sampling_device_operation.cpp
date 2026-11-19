@@ -71,6 +71,15 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
         input_shape[2],
         input_shape[3]);
     // N and C are guaranteed to be 1 by the check above, so the user count is just dim 2 (H).
+    if (args.input_sorted) {
+        TT_FATAL(input_shape[3] == 64, "Sampling input_sorted requires exactly 64 paired candidates per user");
+        const auto& tile = input_values_tensor.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == 32 && tile.get_width() == 32, "Sampling input_sorted requires standard 32x32 tiles");
+        // Descending values and identically permuted IDs are a caller precondition. Do not read
+        // device tensors on the host to check ordering or per-user k (which must be in [1, 64]).
+    }
+
     const uint32_t num_users = input_shape[2];
     TT_FATAL(
         num_users >= 1 && num_users <= 32,
@@ -197,9 +206,10 @@ ttnn::Tensor sampling(
     const Tensor& temp,
     const std::optional<uint32_t>& seed,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
-    const std::optional<Tensor>& preallocated_output_tensor) {
+    const std::optional<Tensor>& preallocated_output_tensor,
+    bool input_sorted) {
     return ttnn::device_operation::launch<SamplingDeviceOperation>(
-        SamplingParams{.seed = seed, .sub_core_grids = sub_core_grids},
+        SamplingParams{.seed = seed, .sub_core_grids = sub_core_grids, .input_sorted = input_sorted},
         SamplingInputs{
             .input_values = input_values_tensor,
             .input_indices = input_indices_tensor,

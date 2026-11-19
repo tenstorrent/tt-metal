@@ -1,0 +1,20 @@
+[
+  {
+    "source": "tests/close_capacity_evidence.py",
+    "preserved": "tests/diagnostic_sources/close_capacity_evidence.py.pre_qsa_dependency.txt",
+    "sha256": "e6d0dc0f02c07b7d40278f5e8a388d0d50b7bfefb403b48c6e096c7b149a3006",
+    "matching_historical_provenance": [
+      "doc/functional_decoder/provenance/final_batch_capacity_verification_v1.json",
+      "doc/functional_decoder/provenance/capacity_search_import_closure_v1.json",
+      "doc/functional_decoder/provenance/final_capacity_summary.json"
+    ]
+  },
+  {
+    "source": "tests/validate_batch_capacity.py",
+    "preserved": "tests/diagnostic_sources/validate_batch_capacity.py.pre_qsa_dependency.txt",
+    "sha256": "b6d74d2edca47c20f21a2645d361b96b5541f01e147b4445ffb613957c107935",
+    "matching_historical_provenance": [
+      "doc/functional_decoder/provenance/final_batch_capacity_verification_v1.json"
+    ]
+  }
+]

@@ -224,7 +224,7 @@ class TTSampling(LightweightModule):
         Mirrors the rewrites format_sampling_params() applies, so the device is guarded even when a
         caller reaches reset_params() directly:
 
-        * ``k`` outside [1, max_top_k]. ttnn.sampling walks k entries of each user's two-face
+        * ``k`` outside [1, max_top_k]. ttnn.sampling walks k entries of each user's
           candidate row. A k above max_top_k (callers pass vocab_size to mean "no top-k filter")
           runs the top-p scan and the draw off the end of that row into unrelated L1, and k < 1
           -- the documented "no restriction" encoding -- is worse: from_torch(dtype=uint32) turns
@@ -301,7 +301,12 @@ class TTSampling(LightweightModule):
         # Round up to the next tile boundary (32) — device tensors must be tile-aligned.
         raw_batch = getattr(args, "max_batch_size", 32)
         self.max_batch_size = max(32, ((raw_batch + 31) // 32) * 32)
+        # Capacity is immutable; candidate width selects the actual native program.
+        # Opting into capacity >32 must not widen ordinary narrow-only batches.
         self.max_top_k = getattr(args, "max_top_k", 32)
+        if not isinstance(self.max_top_k, int) or not 1 <= self.max_top_k <= 64:
+            raise ValueError(f"max_top_k must be an integer in [1, 64], got {self.max_top_k!r}")
+        self.candidate_width = min(32, self.max_top_k)
         self.cluster_shape = args.cluster_shape
 
         self.sampling_all_gather_axis = getattr(args, "sampling_all_gather_axis", 0)
@@ -340,11 +345,15 @@ class TTSampling(LightweightModule):
         if hasattr(args, "model_config") and "GALAXY_NUM_LINKS" in args.model_config:
             # Calculate num_gather_links based on model config
             max_num_gather_links = args.model_config["GALAXY_NUM_LINKS"]
-            self.num_gather_links = (
-                args.max_top_k // 32 if args.max_top_k // 32 <= max_num_gather_links else max_num_gather_links
-            )
+            self._num_gather_links_by_width = {
+                width: min(width // 32, max_num_gather_links)
+                for width in ((32, 64) if self.max_top_k > 32 else (self.max_top_k,))
+            }
         else:
-            self.num_gather_links = 1
+            self._num_gather_links_by_width = {
+                width: 1 for width in ((32, 64) if self.max_top_k > 32 else (self.max_top_k,))
+            }
+        self.num_gather_links = self._num_gather_links_by_width[self.candidate_width]
         if hasattr(args, "model_config") and "DECODE_SAMPLING_INPUT_MEMCFG" in args.model_config:
             self.sampling_memory_config = args.model_config["DECODE_SAMPLING_INPUT_MEMCFG"]
         else:
@@ -379,6 +388,7 @@ class TTSampling(LightweightModule):
             temp = torch.ones(total_param_size)
 
         k, temp = self._normalize_device_params(k, temp)
+        self._select_candidate_width(k)
         self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
 
         # Create sampling parameter tensors on device
@@ -636,26 +646,41 @@ class TTSampling(LightweightModule):
             )
         return self.cluster_shape[self.sampling_all_gather_axis]
 
-    def _create_indices_tensors(self):
-        """Create the per-shard index offsets added to the top-k indices after the gather."""
-        num_devices_in_mesh = self._get_num_sampling_shards()
-        indices_device_offsets = torch.ones(
-            1, 1, self.max_batch_size, self.max_top_k * num_devices_in_mesh, dtype=torch.int64
-        )
-        padded_per_device = self.padded_vocab_size // num_devices_in_mesh
+    def _select_candidate_width(self, k):
+        """Select from normalized host parameters, never from a device read.
 
-        for device_id in range(num_devices_in_mesh):
-            indices_device_offsets[:, :, :, device_id * self.max_top_k : (device_id + 1) * self.max_top_k] = (
-                device_id * padded_per_device
+        Every physical row is sampled by the native operation. Owners that retain
+        inactive request metadata must neutralize those rows before reset_params.
+        Both offset allocations stay alive across width changes and trace replay.
+        """
+        self.candidate_width = 64 if self.max_top_k > 32 and bool(torch.any(k > 32)) else min(32, self.max_top_k)
+        self.num_gather_links = self._num_gather_links_by_width[self.candidate_width]
+        if hasattr(self, "_indices_device_offsets_by_width"):
+            self.tt_indices_device_offsets = self._indices_device_offsets_by_width[self.candidate_width]
+
+    def _create_indices_tensors(self):
+        """Allocate all supported per-shard offsets before any sampling capture."""
+        num_devices_in_mesh = self._get_num_sampling_shards()
+        padded_per_device = self.padded_vocab_size // num_devices_in_mesh
+        widths = (32, 64) if self.max_top_k > 32 else (self.max_top_k,)
+        self._indices_device_offsets_by_width = {}
+        for width in widths:
+            indices_device_offsets = torch.ones(
+                1, 1, self.max_batch_size, width * num_devices_in_mesh, dtype=torch.int64
             )
-        self.tt_indices_device_offsets = ttnn.from_torch(
-            indices_device_offsets,
-            device=self.mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self.cluster_shape),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+            for device_id in range(num_devices_in_mesh):
+                indices_device_offsets[:, :, :, device_id * width : (device_id + 1) * width] = (
+                    device_id * padded_per_device
+                )
+            self._indices_device_offsets_by_width[width] = ttnn.from_torch(
+                indices_device_offsets,
+                device=self.mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self.cluster_shape),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        self.tt_indices_device_offsets = self._indices_device_offsets_by_width[self.candidate_width]
 
     def _create_invalid_vocab_mask(self):
         self.tt_invalid_vocab_mask = None
@@ -893,6 +918,8 @@ class TTSampling(LightweightModule):
             enable_log_probs, num_logprobs=num_logprobs, empty_slots=empty_slots
         )
         self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
+        # Select the trace family only after host validation has accepted the reset.
+        self._select_candidate_width(k)
         if not self._force_argmax_sampling:
             # When _sampling_dp > 1, create multi-device host tensors so
             # copy_host_to_device_tensor writes per-row shards correctly.
@@ -978,8 +1005,8 @@ class TTSampling(LightweightModule):
         once the remaining routes implement a performant stable mode.
 
         KNOWN LIMITATION: this picks the lowest global id among the GATHERED candidates. If a single
-        device shard holds more than `max_top_k` (32) maxima tied at the same value, its top-k
-        breaks the tie by array position and drops all but 32 of them, so the true lowest-id token
+        device shard holds more than `candidate_width` maxima tied at the same value, its top-k
+        breaks the tie by array position and retains only that many, so the true lowest-id token
         may never reach the gathered set and this pass cannot recover it. Enabling `stable=True`
         on every route (at the costs above) would close that window.
 
@@ -1264,22 +1291,22 @@ class TTSampling(LightweightModule):
         route_full_row = (
             self.multi_step_reduction
             and self.sub_core_grid_topk is None
-            and topk_would_route_to_large_indices(x_bf16, self._num_vocab_splits * self.max_top_k)
+            and topk_would_route_to_large_indices(x_bf16, self._num_vocab_splits * self.candidate_width)
         )
         if route_full_row:
             # stable dropped for the same reason as the chunked path below:
             # _adjust_values_for_tiebreak guarantees the greedy pick (#33492).
             #
             # k is multiplied by the split count the chunked path would have used, so the
-            # candidate set keeps that path's exact width (num_splits x max_top_k): every
+            # candidate set keeps that path's exact width (num_splits x candidate_width): every
             # downstream shape is unchanged, and sampling sees a full-row top-(num_splits*k)
             # that is a strict quality upgrade over the union of the per-chunk top-ks. At the
-            # production max_top_k=32 this also keeps the candidate row two tiles wide --
+            # narrow candidate_width=32 this also keeps the candidate row two tiles wide --
             # ttnn.sampling deadlocks on a SINGLE-tile candidate row whose values all tie
             # (compute-internal CB deadlock, writer CWFW; tenstorrent/tt-metal#53781).
             topk_values_gathered_bf16_interleaved, topk_indices_gathered = ttnn.topk(
                 x_bf16,
-                k=self._num_vocab_splits * self.max_top_k,
+                k=self._num_vocab_splits * self.candidate_width,
                 dim=-1,
                 stable=False,
             )
@@ -1299,7 +1326,7 @@ class TTSampling(LightweightModule):
             # that would not route keep today's arguments bit-for-bit, and a
             # call the model constrained to a sub-grid is never relaxed.
             use_routed_topk = self.sub_core_grid_topk is None and topk_would_route_to_large_indices(
-                x_bf16_list[0], self.max_top_k
+                x_bf16_list[0], self.candidate_width
             )
 
             for i in range(len(x_bf16_list)):
@@ -1308,7 +1335,7 @@ class TTSampling(LightweightModule):
                 # ttnn.topk to the multi-core factory, so single-core chunks stay.
                 topk_values, topk_indices = ttnn.topk(
                     x_bf16_list[i],
-                    k=self.max_top_k,
+                    k=self.candidate_width,
                     dim=-1,
                     sub_core_grids=self.sub_core_grid_topk,
                     # _topk_stable is False: the fast unstable network is used and
@@ -1350,11 +1377,11 @@ class TTSampling(LightweightModule):
             # _adjust_values_for_tiebreak already provides it host-side.
             # Sub-grid-constrained calls never relax.
             use_routed_topk = self.sub_core_grid_topk is None and topk_would_route_to_large_indices(
-                x_bf16, self.max_top_k
+                x_bf16, self.candidate_width
             )
             topk_values, topk_indices = ttnn.topk(
                 x_bf16,
-                k=self.max_top_k,
+                k=self.candidate_width,
                 dim=-1,
                 sub_core_grids=self.sub_core_grid_topk,
                 # _topk_stable is False: the fast unstable network is used and
@@ -1374,7 +1401,7 @@ class TTSampling(LightweightModule):
                 cluster_axis=sampling_cluster_axis,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 num_links=self.num_gather_links,
-                buffer_key="SAMPLING_VALUES",
+                buffer_key="SAMPLING_VALUES" if self.candidate_width <= 32 else "SAMPLING_VALUES_64",
             )
 
             ttnn.deallocate(topk_values)
@@ -1400,7 +1427,7 @@ class TTSampling(LightweightModule):
                 cluster_axis=sampling_cluster_axis,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 num_links=self.num_gather_links,
-                buffer_key="SAMPLING_INDICES",
+                buffer_key="SAMPLING_INDICES" if self.candidate_width <= 32 else "SAMPLING_INDICES_64",
             )
             ttnn.deallocate(topk_indices)
 
@@ -1442,10 +1469,12 @@ class TTSampling(LightweightModule):
 
             topk_global_indices_interleaved = ttnn.to_memory_config(topk_global_indices, ttnn.DRAM_MEMORY_CONFIG)
 
-        # Untilize indices for sampling operation
-        topk_global_indices_interleaved_untilised = ttnn.untilize(
-            topk_global_indices_interleaved, use_multicore=True, sub_core_grids=self.sub_core_grids
-        )
+        # Keep the narrow-family dispatch order unchanged. Wide candidates must
+        # first be globally sorted with their integer token IDs kept paired.
+        if self.candidate_width <= 32:
+            topk_global_indices_interleaved_untilised = ttnn.untilize(
+                topk_global_indices_interleaved, use_multicore=True, sub_core_grids=self.sub_core_grids
+            )
         # Perform the actual sampling with top-k, top-p, and temperature.
         # Host-side tie-break (in lieu of stable=True on every top-k route; see _topk_stable):
         # for argmax users (k==1) only, boost the single lowest-GLOBAL-INDEX tied maximum in the
@@ -1453,10 +1482,37 @@ class TTSampling(LightweightModule):
         # ordered the tied candidates. Random users are byte-for-byte unchanged. Correcting the INPUT
         # (not the RM output buffer) is required: no ttnn op writes an interleaved ROW_MAJOR tensor
         # in-place on a restricted sub-device. See _adjust_values_for_tiebreak for the full rationale
-        # and its known limitation (>max_top_k maxima tied within one device shard).
+        # and its known limitation (>candidate_width maxima tied within one device shard).
         sampling_values = self._adjust_values_for_tiebreak(
             topk_values_gathered_bf16_interleaved, topk_global_indices_interleaved
         )
+        if self.candidate_width == 64:
+            # Correct greedy ties before sorting: a post-sort boost could invalidate
+            # the presorted native contract. Preserve UINT32 IDs through gather;
+            # vocabularies above 65535 cannot represent their IDs in UINT16 or BF16.
+            sorted_values, sorted_positions = ttnn.topk(
+                sampling_values,
+                k=64,
+                dim=-1,
+                largest=True,
+                sorted=True,
+                stable=False,
+                sub_core_grids=self.sub_core_grid_topk,
+            )
+            ttnn.deallocate(sampling_values)
+            sampling_values = sorted_values
+            sorted_indices = ttnn.gather(
+                topk_global_indices_interleaved,
+                dim=3,
+                index=sorted_positions,
+                sub_core_grids=self.sub_core_grids,
+            )
+            ttnn.deallocate(sorted_positions)
+            topk_global_indices_interleaved_untilised = ttnn.untilize(
+                sorted_indices, use_multicore=True, sub_core_grids=self.sub_core_grids
+            )
+            ttnn.deallocate(sorted_indices)
+
         # Seed immediately before the draw. The tie-break's int32 ops run on the
         # SFPU (use_sfpu_reduce_path admits INT32 MIN/MAX/SUM) on the same sub-core grid,
         # and rand_tile's PRNG/LREG state is programmed by manual_seed -- so any SFPU work
@@ -1467,6 +1523,7 @@ class TTSampling(LightweightModule):
             user_ids=self.user_ids_tt_tensor,
             sub_core_grids=self._sampling_sub_core_grids,
         )
+        sampling_kwargs = {"input_sorted": True} if self.candidate_width == 64 else {}
         tt_out_tok = ttnn.sampling(
             sampling_values,
             topk_global_indices_interleaved_untilised,
@@ -1475,6 +1532,7 @@ class TTSampling(LightweightModule):
             temp=self.temp_tensor,
             sub_core_grids=self._sampling_sub_core_grids,
             output_tensor=tt_out_tok,
+            **sampling_kwargs,
         )
 
         # Compute logprobs if enabled

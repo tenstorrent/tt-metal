@@ -635,6 +635,12 @@ inline void perform_reduce_row_face_pair(
         lltt::replay(0, 6);
     }
 
+    if constexpr (is_float_add) {
+        // Each merged group's result is selected at a different column. Align
+        // its operands first so every row uses the same FP32 addition order.
+        TTI_SFPNOP;
+        TTI_SFPSHFT2(0, p_sfpu::LREG4, p_sfpu::LREG4, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    }
     // merge(A, B) by 1 -> LREG0.
     row_merge_select<ROW_MERGE_MASK_ODD, p_sfpu::LREG0, p_sfpu::LREG4>();
     TTI_SFPSHFT2(0, p_sfpu::LREG4, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
@@ -647,14 +653,34 @@ inline void perform_reduce_row_face_pair(
     load_row_operand<p_sfpu::LREG2, INSTRUCTION_MODE, clear_high_bits, int32_order>(d + ROW_ODD_COLUMNS);
     row_fold<fold, p_sfpu::LREG6, p_sfpu::LREG7>();
     load_row_operand<p_sfpu::LREG3, INSTRUCTION_MODE, clear_high_bits, int32_order>(d + ROWS_PER_FACE);
-    row_fold<fold, p_sfpu::LREG4, p_sfpu::LREG5>();
+    if constexpr (is_float_add) {
+        // Match the recorded A/B association: x0 + (x1 + (x2 + x3)).
+        // A balanced C/D tree changes rounding when a row moves between groups.
+        row_fold<fold, p_sfpu::LREG5, p_sfpu::LREG6>();
+    } else {
+        row_fold<fold, p_sfpu::LREG4, p_sfpu::LREG5>();
+    }
     load_row_operand<p_sfpu::LREG7, INSTRUCTION_MODE, clear_high_bits, int32_order>(
         d + ROWS_PER_FACE + ROW_ODD_COLUMNS);
-    row_fold<fold, p_sfpu::LREG1, p_sfpu::LREG2>();
-    row_fold<fold, p_sfpu::LREG3, p_sfpu::LREG7>();
-    row_fold<fold, p_sfpu::LREG4, p_sfpu::LREG6>();
-    row_fold<fold, p_sfpu::LREG1, p_sfpu::LREG3>();
+    if constexpr (is_float_add) {
+        row_fold<fold, p_sfpu::LREG3, p_sfpu::LREG7>();
+        row_fold<fold, p_sfpu::LREG4, p_sfpu::LREG5>();
+        row_fold<fold, p_sfpu::LREG2, p_sfpu::LREG3>();
+        row_fold<fold, p_sfpu::LREG1, p_sfpu::LREG2>();
+    } else {
+        row_fold<fold, p_sfpu::LREG1, p_sfpu::LREG2>();
+        row_fold<fold, p_sfpu::LREG3, p_sfpu::LREG7>();
+        row_fold<fold, p_sfpu::LREG4, p_sfpu::LREG6>();
+        row_fold<fold, p_sfpu::LREG1, p_sfpu::LREG3>();
+    }
 
+    if constexpr (is_float_add) {
+        TTI_SFPSHFT2(0, p_sfpu::LREG4, p_sfpu::LREG4, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+        TTI_SFPSHFT2(0, p_sfpu::LREG4, p_sfpu::LREG4, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+        TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+        TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+        TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    }
     // merge(C, D) by 1 -> LREG4.
     row_merge_select<ROW_MERGE_MASK_ODD, p_sfpu::LREG4, p_sfpu::LREG1>();
     TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG2, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);

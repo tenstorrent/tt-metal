@@ -1,0 +1,42 @@
+# Serving contract audit before final acceptance
+
+CPU-only independent audit, 2026-11-14. This is not stage-review. No hardware, executable production changes, ledger changes, or gate relaxation. Final B32, B1 accuracy/performance, and maximum-context acceptance were pending when inspected.
+
+The five missing rows remain work. Much of their text is stale: `serving_probe_v7.json` passes all 16 reduced real-layer checks with 2,180 stable program-cache entries, and its heterogeneous `sampled_controls` equal `sampled_batch_controls` exactly. The older v4 mismatch must remain historical evidence rather than describe the current v7 result. `prefill_factored_full48_v1.json` passes full48 shared-pool B2 execution, mixed/reversed prefill, both odd/even-boundary continuations, and submission-order logits/tokens/private and logical KV state. Its 202 retained captures and 2,182 program entries remain stable. These are scoped passes, not substitutes for pending acceptance.
+
+| Missing row | Current support | Exact remaining observation |
+| --- | --- | --- |
+| `get_max_tokens_all_users` | CPU planner accounts for weights, private recurrent/index state and scratch, checkpoints, persistent workspace, runtime reserve, null page, and plugin output reservations. TP4/DP1 only; no silent context shrink. | Reconcile final loaded/prepared/high-water memory with the current source inventory and runtime reserve, in bytes **per rank** (memory-view fields are per bank, eight banks). Record the actual returned token budget and plugin-expanded block count for each supported construction. Complete the once-only 262144-context prefill/decode boundary run. Any reduced capability needs the permitted physical-limit evidence, not forecast rejection alone. |
+| `get_kv_cache_spec` | `cache_spec()` enumerates actual tensors in decoder order; reduced v7 records BF16 paged K/V and compressed keys, FP32 recurrence, per-slot histories/positions. | Save full48 bound `cache_spec`: 36 recurrent layers, 12 QSA layers at indices 3,7,...,47, PLE at 1; every QSA K/V `[blocks,1,32,256]`, BF16 TILE DRAM; BF16 indexer and FP32 recurrent state. Confirm every fixed slot and scratch aliases the appropriate pool pair. The pending B32 harness explicitly collects this. Document later adapter translation to class-callable vLLM specs; do not claim an already implemented `get_kv_cache_spec(vllm_config)` method or count GDN state as token KV. |
+| `allocate_kv_cache_per_layer` | Setup-only opaque `SharedKVPool`; validated tensor-index aliases, deferred allocation, poisoned instance on failed replacement, borrowed ownership protection, all48 B2 bound execution. | Pending B32 must complete with all 12 pools, stable K/V addresses, full48 state/row-order checks, no late compile or request-time trace retirement, and measured memory. Preserve reduced private-versus-pool exactness and release/reuse evidence separately. The ledger currently also binds this row to the unresolved B1/B2 numerical gate; do not promote it silently while that condition remains failed. |
+| `decode_forward` | v7 exercises explicit positions/cache/page tables, inactive/dormant rows, stale-host resident token feedback, changed and unchanged mappings, host compatibility, reloads and immutable host snapshots. Full48 B2 submission-order checks pass. | Complete full48 B32 HF top-1/5/100 reporting, per-phase and per-request top5 >=98% / top100 =100%, matched-history migration/state controls, inactive no-op, and resident sampling steps. Require zero steady token/position/page uploads, retained segment and sampling IDs, and coherent device QSA positions. Fresh full48 B1 accuracy remains required. Resolve/retest the recorded forced-43 and survivor numerical failures under the unchanged policy and gates; a different successful workload does not overwrite them. |
+| `request_isolation` | v7 now passes mixed sampling parameters, reordered B2 requests, release/survivor seed and feedback isolation. Full48 B2 order invariance is exact. | Pending B32 must match request histories through slot migration, active-width transitions, and dormant rows. Retain the corresponding full state/logit evidence, not seed progression alone. Close the cross-geometry numerical failure explicitly before replacing this row's missing status. The pinned plugin's concrete test shuffles a heterogeneous seeded/greedy batch; that is narrower than a universal B1/B2 bitwise-invariance assertion, but does not authorize dropping the existing failed gate. |
+
+The pending B32 harness allocates **512 blocks per pool** at C512. The sizing API returns 16416 tokens; the pinned worker then adds 32 output pages, producing **545 blocks**. The additional 33 full-stack blocks cost **12,976,128 bytes/rank**. Final memory reconciliation must account for them and allocator contiguity; do not describe the 512-block run as literal execution of the 545-block setting. At B1 C262144 the API returns 262176 and worker-expanded allocation is 8194 blocks, versus 8192 pages for private context storage. The maximum-context private run proves context execution but does not, by itself, prove every shared-pool allocation setting. Arithmetic can state a conservative measured-memory bound explicitly; it cannot be relabeled as an executed allocator test.
+
+## Numerical evidence boundaries
+
+`shared_pool_generator_v5.json` records migrated forced-43 whole PCC 0.979649656, minimum row PCC 0.970201804, top1/top5 0.5, top100 1; survivor forced-44 whole PCC 0.994277325, top1/top5/top100 1. Same-geometry private/pooled/migrated controls are exact. Thus a cache-migration bug is not established, but the frozen gate failed.
+
+The matched original-HF CPU controls are important counterevidence to universal batch invariance. HF v1 natural B1/B2 forced-43 PCC is 0.992546833 (minimum 0.987764712), with all top-k agreements 1. HF v2 now follows the exact B2-input42 → reorder → B2-input43 → survivor B1-input44 history: survivor versus natural B1 gives PCC 0.995195317, top1 0, top5/top100 1; versus continued B2 gives PCC 0.994139507, top1 0, top5/top100 1. Repeats are exact. HF therefore also changes with active-width history, but does not reproduce TT's forced-43 top5 loss or its larger PCC drift. These controls do not automatically waive the TT gate.
+
+The historical comparison scorer mixes reference `argmax` with candidate `topk(100)[0]`; BF16 ties can report failed top1 even for exact tensors. Repairing that inconsistent metric requires preserving raw artifacts, thresholds, and old/new evidence. It cannot explain away forced-43 PCC or top5 loss. No metric was changed in this audit.
+
+## Source/documentation findings
+
+No additional concrete model/generator execution defect was established by this scoped source audit. `cache_spec` is a low-level instance description, not the future vLLM factory itself; this stage should document that mapping without implementing the adapter. External meshes remain caller-owned, and pool binding precedes preparation/capture.
+
+At the parent's request, corrected two stale scratch descriptions in `tt/cache_pool.py` and `shared_kv_pool_audit.md`: current B>1 canonical prefill uses `generator.prefill_cache = scratch` after copying the request's state/page tables. Scratch borrows those pages without independent simultaneous request ownership or a separate scheduler reservation. The cache-pool edit changes docstrings only; AST comparison after removing docstrings is identical. The source hash below records the pre-edit audit input; the corrected cache-pool SHA256 is `3ef966dbfe58404b77586c8e8268e8f53f50a5601356aa80d58ee8b17c0384c6`. The ledger's v4 program counts and now-fixed sampled-control mismatch still need current scoped evidence. These documentation corrections do not change acceptance status.
+
+Inspected pinned plugin setup contract and `tests/tt/test_request_isolation.py` at commit `042a94863ad27d88207bcf71abdf67122c6f4c27`, current model/generator/cache helpers, both current serving/prefill artifacts, historical pool v5, HF v1/v2, and pending B32 harness source. No plugin/server run is claimed.
+
+Source hashes at audit time:
+
+```json
+{
+  "tt/model.py": "bc46bb7e0428947cb29d7fc312b3fe6c3fd147eb88c4e6fa847f13755c10352a",
+  "tt/generator.py": "f539343185c824cbc73b820c241b03d9d953fc73e0808fa421be0e21db4abc63",
+  "tt/cache_budget.py": "28b2f5cdfe258281e5910eb08444f0721517b240ebdb38ccc4c1ea8e59f70a1f",
+  "tt/cache_pool.py": "bbaebcca112c915ce210bf4a55f5b4a8ae456c499dd288cf9c4075011cecbfac"
+}
+```

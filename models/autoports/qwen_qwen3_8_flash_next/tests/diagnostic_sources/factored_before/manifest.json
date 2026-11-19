@@ -1,0 +1,12 @@
+{
+  "scope": "Frozen diagnostic source before production factoring integration; generator includes the newer canonical prefill workspace and is not claimed identical to prior artifact generator hashes",
+  "files": {
+    "probe_decode_trace_memory.py": "bf2bbfb6db970b62497c1a8719b621f5e2cf31ab8ebf19678a80138f3e75ee56",
+    "probe_factored_decode_traces.py": "f83f3d165ea9e21993080588833502e69b03daa2b510a786b26c486d66e8d5c8",
+    "probe_factored_decode_slots.py": "840dbdbfc525a14df0199b45fcaa0abafb53e3a73cc5744455c77115fa4dcea8",
+    "probe_factored_decode_buckets.py": "a327e487ce7b389e72230cb045269c0dc09eea7ac3affdf6808729ebba38b211",
+    "factored_slot_copy.py": "b34f4d6168716a1e9b3d54cb47e777df7eacf5fdda6cf8b892ed5d99cfeb05b3",
+    "factored_bucket_copy.py": "de652a41fb7af690e398c0db9d44d419893a250843e70ea973be1d85807b9184",
+    "generator.py": "6b38b367a6fca1b9e212561a7c6e4883964b047883b6faaad7885a726249dc84"
+  }
+}

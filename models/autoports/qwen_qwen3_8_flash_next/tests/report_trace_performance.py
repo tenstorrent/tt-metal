@@ -1,0 +1,480 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Strict offline whole-trace replay selection and actual tt-perf-report output.
+
+One aggregate row represents one complete warmed replay. Its Device Time is
+the official TRACE-KERNEL first/last interval, INCLUDING internal idle gaps.
+It is not a sum of individual kernels. Per-op details and op gaps are absent.
+The official raw-device parser performs the same-device cross-core aggregation;
+no host-clock projection or invented synchronization offsets are applied.
+"""
+
+import argparse
+import csv
+import hashlib
+import inspect
+import json
+import lzma
+import re
+import shutil
+import subprocess
+import sys
+from collections import Counter
+from pathlib import Path
+
+
+def validate_profile(profile, log):
+    if profile.get("profiler_mode") != "whole_trace_aggregate" or profile.get("passed") is not True:
+        raise ValueError("Missing successful whole-trace profile")
+    regime = profile.get("measurement_regime", "tracked_correctness")
+    if regime == "clean_timing":
+        for key in ("runtime_audit", "allocation_tracking", "allocation_diagnostics"):
+            if profile.get(key) is not False:
+                raise ValueError(f"Clean timing has diagnostics enabled or unrecorded: {key}")
+        environment = profile.get("environment", {})
+        for key in ("TT_METAL_TRACE_ALLOC_TRACKING", "TT_METAL_TRACE_ALLOC_TRACEBACKS"):
+            if environment.get(key) != "0":
+                raise ValueError(f"Clean timing lacks explicit disabled setting: {key}")
+        if environment.get("TT_METAL_WATCHER") not in (None, "", "0"):
+            raise ValueError("Clean timing has Watcher enabled")
+    elif regime == "tracked_correctness":
+        if profile.get("runtime_audit") is not True or profile.get("allocation_tracking") is not True:
+            raise ValueError("Runtime/allocation audit missing")
+    else:
+        raise ValueError("Unknown measurement regime")
+    for label in ("warm_replay", "measured_replay"):
+        check = profile[label]
+        if (
+            not check["finite"]
+            or not check["output_exact_vs_eager"]
+            or not check["state_exact_vs_eager"]
+            or not all(check["state_exact_vs_eager"].values())
+        ):
+            raise ValueError("Replay output/state differs from eager baseline")
+    if "RUN_RECORDED_FINISHED exit_code=0" not in log:
+        raise ValueError("Capture must have completed under run_recorded with exit0")
+    for pattern in (
+        r"markers were dropped",
+        r"profiler.*buffers were full",
+        r"not capturing",
+        r"Instrumentation failure",
+        r"Too many source locations",
+        r"profiler.*never finished",
+        r"TT_FATAL",
+        r"Traceback \(most recent call last\)",
+        r"Skipping .*op.*(?:no matching|malformed|no prior)",
+    ):
+        if re.search(pattern, log, re.I):
+            raise ValueError(f"Incomplete or invalid capture: {pattern}")
+    mode = profile["mode"]
+    if mode not in ("prefill", "decode") or profile["trace_replay_calls"] != ["unmeasured_warmup", "measured_final"]:
+        raise ValueError("Exactly one warm replay and one measured final replay are required")
+    return mode
+
+
+def select_host_replay(profile, metadata, log):
+    mode = validate_profile(profile, log)
+    replays = metadata["trace_replays"]
+    if len(replays) != 1:
+        raise ValueError("Whole-trace adapter supports exactly one device")
+    device, traces = next(iter(replays.items()))
+    if set(map(int, traces)) != {int(profile["trace_id"])}:
+        raise ValueError("Captured/replayed trace identity mismatch")
+    times = list(map(int, next(iter(traces.values()))))
+    if len(times) != 2 or times[0] >= times[1]:
+        raise ValueError("Expected exactly two ordered actual host trace replay events")
+    markers = {}
+    for name in (f"PERF_{mode.upper()}", f"PERF_{mode.upper()}_END"):
+        hits = [
+            int(item["tracy_time"])
+            for item in metadata["signposts"].values()
+            if item["data"].strip() == f"TT_SIGNPOST: {name}"
+        ]
+        if len(hits) != 1:
+            raise ValueError(f"Missing/duplicate signpost: {name}")
+        markers[name] = hits[0]
+    start, end = markers[f"PERF_{mode.upper()}"], markers[f"PERF_{mode.upper()}_END"]
+    if not times[0] < start < times[1] < end:
+        raise ValueError("Only the final replay must lie inside measured signposts")
+    begin, finish = int(profile["capture_begin_raw_op_id"]), int(profile["capture_end_raw_op_id"])
+    if not 0 < begin < finish < (1 << 21):
+        raise ValueError("Invalid captured device-operation range")
+    captured = []
+    for op in metadata["ops"]:
+        timestamp = int(op["tracy_time"])
+        encoded = int(op["global_call_count"])
+        if start < timestamp < end:
+            if op["op_type"] == "tt_dnn_device" or encoded >> 31:
+                raise ValueError("Measured replay contains new eager device operations or host fallback")
+        if op.get("metal_trace_id") == int(profile["trace_id"]):
+            if encoded >> 31 or op["op_type"] != "tt_dnn_device":
+                raise ValueError("Captured model pass contains host fallback")
+            if int(op["device_id"]) != int(device) or encoded & 1023 != int(device):
+                raise ValueError("Captured operation device mismatch")
+            captured.append(encoded >> 10)
+    if len(captured) != len(set(captured)) or set(captured) != set(range(begin, finish)):
+        raise ValueError("Captured host operation inventory is incomplete or duplicated")
+    return {
+        "metadata_authority": "tracy_host_capture",
+        "device": int(device),
+        "trace_id": int(profile["trace_id"]),
+        "selected_replay_counter": 2,
+        "host_replay_timestamps": times,
+        "markers": markers,
+        "captured_operation_count": finish - begin,
+    }
+
+
+def select_device_replay(profile, log):
+    """Validate explicit harness events; these are not exported Tracy events."""
+    mode = validate_profile(profile, log)
+    protocol = profile.get("measurement_protocol", {})
+    if (
+        profile.get("metadata_authority") != "harness_trace_protocol_v1"
+        or protocol.get("authority") != "harness_trace_protocol_v1"
+    ):
+        raise ValueError("Missing explicit device-only protocol authority")
+    events = protocol["events"]
+    labels = [
+        "capture_begin",
+        "capture_end",
+        "replay_begin",
+        "replay_end",
+        f"PERF_{mode.upper()}",
+        "replay_begin",
+        "replay_end",
+        f"PERF_{mode.upper()}_END",
+    ]
+    if [event["name"] for event in events] != labels:
+        raise ValueError("Missing, extra, or reordered protocol event")
+    timestamps = [event["monotonic_ns"] for event in events]
+    if any(type(value) is not int or value <= 0 for value in timestamps) or any(
+        a >= b for a, b in zip(timestamps, timestamps[1:])
+    ):
+        raise ValueError("Protocol ordering clock is not strictly increasing")
+    begin, finish = profile["capture_begin_raw_op_id"], profile["capture_end_raw_op_id"]
+    if not 0 < begin < finish < (1 << 21) or events[0]["raw_op_id"] != begin or events[1]["raw_op_id"] != finish:
+        raise ValueError("Invalid or inconsistent captured operation range")
+    trace_id = profile["trace_id"]
+    if events[1]["trace_id"] != trace_id:
+        raise ValueError("Capture trace identity mismatch")
+    for index, ordinal in ((2, 1), (3, 1), (5, 2), (6, 2)):
+        event = events[index]
+        if (event["ordinal"], event["trace_id"], event["raw_op_id"]) != (ordinal, trace_id, finish):
+            raise ValueError("Wrong replay identity/order or new eager operation during protocol")
+    grid = protocol["worker_grid"]
+    expected_logical = {(x, y) for y in range(grid[1]) for x in range(grid[0])}
+    cores = protocol["known_cores"]
+    if (
+        not 0 < len(expected_logical) <= 320
+        or len(cores) != len(expected_logical)
+        or {tuple(core["logical"]) for core in cores} != expected_logical
+    ):
+        raise ValueError("Independent worker inventory does not cover the proven full grid")
+    if len({tuple(core["translated"]) for core in cores}) != len(cores) or not protocol.get("coverage_source_sha256"):
+        raise ValueError("Missing source coverage identity or duplicate translated core")
+    drains = protocol["predrain"]
+    if [drain["ordinal"] for drain in drains] != [1, 2]:
+        raise ValueError("Need two independently read pre-drain inventories")
+    layout = protocol["layout"]
+    control_indices = layout["control_indices"]
+    marker_indices = layout["marker_indices"]
+    bits = layout["marker_bits"]
+    high_bits = bits["PROFILER_MARKER_TS_HIGH_BITS"]
+    timer_bits = bits["PROFILER_MARKER_TIMER_ID_BITS"]
+    signatures = []
+    for ordinal, drain in enumerate(drains, 1):
+        if [dict(logical=item["logical"], translated=item["translated"]) for item in drain["cores"]] != cores:
+            raise ValueError("Pre-drain samples do not match independent inventory")
+        timestamp = drain["sampled_monotonic_ns"]
+        if not (timestamps[3] < timestamp < timestamps[4] if ordinal == 1 else timestamps[7] < timestamp):
+            raise ValueError("Raw sampling overlaps measured replay or precedes completion")
+        current = []
+        for sample in drain["cores"]:
+            control, raw = sample["control"], sample["markers"]
+            if len(control) != layout["control_words"] or len(raw) != 12:
+                raise ValueError("Incomplete known-core raw state")
+            if (
+                control[control_indices["TRACE_REPLAY_STATUS"]] != 0x20000000
+                or control[control_indices["DEVICE_BUFFER_END_INDEX_BR_ER"]] < 12
+                or control[control_indices["DROPPED_ZONES"]] != 0
+            ):
+                raise ValueError("Known core lacks completed non-dropped trace instrumentation")
+            if raw[:2] != [0, 0] or raw[marker_indices["ID_LL"]] != ordinal:
+                raise ValueError("Invalid raw sentinel or replay ordinal")
+            cycles = []
+            for name in (
+                "GUARANTEED_MARKER_1_H",
+                "GUARANTEED_MARKER_2_H",
+                "GUARANTEED_MARKER_3_H",
+                "GUARANTEED_MARKER_4_H",
+            ):
+                slot = marker_indices[name]
+                high, low = raw[slot : slot + 2]
+                if not high & (1 << (high_bits + timer_bits)):
+                    raise ValueError("Unwritten marker on known participating core")
+                cycles.append(((high & ((1 << high_bits) - 1)) << 32) | low)
+            if not cycles[0] <= cycles[2] < cycles[3] <= cycles[1]:
+                raise ValueError("Invalid known-core marker ordering")
+            current.append(cycles)
+        signatures.append(current)
+    return {
+        "metadata_authority": protocol["authority"],
+        "marker_clock": protocol["marker_clock"],
+        "device": protocol["device"],
+        "trace_id": trace_id,
+        "selected_replay_counter": 2,
+        "host_replay_timestamps": [timestamps[2], timestamps[5]],
+        "markers": {labels[4]: timestamps[4], labels[7]: timestamps[7]},
+        "captured_operation_count": finish - begin,
+        "captured_operation_count_authority": "Native operation counter delta during capture; no exported individual-op inventory",
+        "known_core_count": len(cores),
+        "known_core_signatures": signatures,
+        "coverage_source_sha256": protocol["coverage_source_sha256"],
+    }
+
+
+def analyze_device(path, proof):
+    from tracy import device_post_proc_config
+    from tracy.process_device_log import import_log_run_stats
+
+    with Path(path).open() as stream:
+        header = stream.readline().strip()
+        rows = [{key.strip(): value.strip() for key, value in row.items()} for row in csv.DictReader(stream)]
+    endpoints = {}
+    for row in rows:
+        if row["zone name"] not in ("TRACE-FW", "TRACE-KERNEL"):
+            if row["zone name"].endswith(("-FW", "-KERNEL")) and row["type"] in ("ZONE_START", "ZONE_END"):
+                raise ValueError("Mixed per-op and whole-trace profiler data")
+            continue
+        if row["RISC processor type"] != "TENSIX_RISC_AGG" or int(row["PCIe slot"]) != proof["device"]:
+            raise ValueError("Unexpected RISC/device for trace aggregate")
+        encoded = int(row["run host ID"])
+        if encoded & 1023 != proof["device"] or encoded >> 10 not in (1, 2):
+            raise ValueError("Unexpected replay counter; cannot silently select an ordinal")
+        key = (encoded >> 10, int(row["core_x"]), int(row["core_y"]), row["zone name"], row["type"])
+        if row["type"] not in ("ZONE_START", "ZONE_END") or key in endpoints:
+            raise ValueError("Duplicate/invalid aggregate endpoint")
+        endpoints[key] = int(row["time[cycles since reset]"])
+    cores = {counter: {(x, y) for replay, x, y, _, _ in endpoints if replay == counter} for counter in (1, 2)}
+    if not cores[1] or cores[1] != cores[2]:
+        raise ValueError("Warm/measured replay core coverage differs or is empty")
+    for counter in (1, 2):
+        for x, y in cores[counter]:
+            try:
+                fw_start, fw_end, kernel_start, kernel_end = [
+                    endpoints[(counter, x, y, zone, phase)]
+                    for zone, phase in (
+                        ("TRACE-FW", "ZONE_START"),
+                        ("TRACE-FW", "ZONE_END"),
+                        ("TRACE-KERNEL", "ZONE_START"),
+                        ("TRACE-KERNEL", "ZONE_END"),
+                    )
+                ]
+            except KeyError as error:
+                raise ValueError("Missing per-core trace endpoint") from error
+            if not fw_start <= kernel_start < kernel_end <= fw_end:
+                raise ValueError("Invalid per-core aggregate interval ordering")
+    if "known_core_signatures" in proof:
+        for counter in (1, 2):
+            observed = Counter(
+                tuple(
+                    endpoints[(counter, x, y, zone, phase)]
+                    for zone, phase in (
+                        ("TRACE-FW", "ZONE_START"),
+                        ("TRACE-FW", "ZONE_END"),
+                        ("TRACE-KERNEL", "ZONE_START"),
+                        ("TRACE-KERNEL", "ZONE_END"),
+                    )
+                )
+                for x, y in cores[counter]
+            )
+            expected = Counter(tuple(item) for item in proof["known_core_signatures"][counter - 1])
+            if len(cores[counter]) != proof["known_core_count"] or observed != expected:
+                raise ValueError("Native CSV does not contain every independently known core's exact endpoints")
+    setup = device_post_proc_config.default_setup()
+    setup.deviceInputLog = str(path)
+    setup.timerAnalysis = {key: setup.timerAnalysis[key] for key in ("trace_fw_duration", "trace_kernel_duration")}
+    analyzed = import_log_run_stats(setup)
+    info = analyzed["deviceInfo"]
+    if info["arch"] != "blackhole" or info["freq"] <= 0 or set(analyzed["devices"]) != {proof["device"]}:
+        raise ValueError("Unexpected device identity or invalid measured clock header")
+    operations = analyzed["devices"][proof["device"]]["cores"]["DEVICE"]["riscs"]["TENSIX"]["ops"]
+    intervals = {}
+    for operation in operations:
+        for name, zone in (("trace_fw_duration", "TRACE-FW"), ("trace_kernel_duration", "TRACE-KERNEL")):
+            series = operation["analysis"][name]["series"]
+            if len(series) != 1:
+                raise ValueError("Official parser did not find exactly one complete interval")
+            interval = series[0]
+            ids = {int(item["run_host_id"]) for item in interval["duration_type"]}
+            if len(ids) != 1:
+                raise ValueError("Official aggregate crosses replay identities")
+            counter = next(iter(ids)) >> 10
+            key = (counter, name)
+            if key in intervals or counter not in (1, 2):
+                raise ValueError("Duplicate/unexpected official replay interval")
+            start = min(endpoints[(counter, x, y, zone, "ZONE_START")] for x, y in cores[counter])
+            end = max(endpoints[(counter, x, y, zone, "ZONE_END")] for x, y in cores[counter])
+            if (interval["start_cycle"], interval["end_cycle"], interval["duration_cycles"]) != (
+                start,
+                end,
+                end - start,
+            ):
+                raise ValueError("Official aggregate does not match complete observed endpoint coverage")
+            intervals[key] = {
+                "start_cycle": start,
+                "end_cycle": end,
+                "duration_cycles": end - start,
+                "duration_ns": (end - start) * 1000 / info["freq"],
+            }
+    if set(intervals) != {(counter, name) for counter in (1, 2) for name in setup.timerAnalysis}:
+        raise ValueError("Missing official warm/measured trace interval")
+    if intervals[(1, "trace_fw_duration")]["end_cycle"] >= intervals[(2, "trace_fw_duration")]["start_cycle"]:
+        raise ValueError("Warm and measured replay intervals overlap/reverse")
+    return {
+        "raw_header": header,
+        "device_info": info,
+        "cores": [list(core) for core in sorted(cores[2])],
+        "trace_fw": intervals[(2, "trace_fw_duration")],
+        "trace_kernel": intervals[(2, "trace_kernel_duration")],
+        "warm_trace_fw": intervals[(1, "trace_fw_duration")],
+        "warm_trace_kernel": intervals[(1, "trace_kernel_duration")],
+        "analysis_source": inspect.getfile(import_log_run_stats),
+        "analysis_source_sha256": hashlib.sha256(Path(inspect.getfile(import_log_run_stats)).read_bytes()).hexdigest(),
+        "clock_alignment": "Official same-device core_to_device_timeseries and op_first_last_analysis; raw device wall-clock cycles, no additional host/core offset transform",
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--device-csv", type=Path, required=True)
+    authority = parser.add_mutually_exclusive_group(required=True)
+    authority.add_argument("--host-metadata-json", type=Path)
+    authority.add_argument("--device-protocol", action="store_true")
+    parser.add_argument("--profile-json", type=Path, required=True)
+    parser.add_argument("--capture-log", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
+    args = parser.parse_args()
+    profile = json.loads(args.profile_json.read_text())
+    if args.device_protocol:
+        proof = select_device_replay(profile, args.capture_log.read_text())
+        if profile.get("native_csv", {}).get("sha256") != hashlib.sha256(args.device_csv.read_bytes()).hexdigest():
+            raise ValueError("Native CSV differs from the file bound after device close")
+    else:
+        metadata = json.loads(args.host_metadata_json.read_text())
+        proof = select_host_replay(profile, metadata, args.capture_log.read_text())
+    analysis = analyze_device(args.device_csv, proof)
+    mode = profile["mode"]
+    output = args.output_dir
+    output.mkdir(parents=True, exist_ok=True)
+    raw = output / "raw_device.csv"
+    if args.device_csv.resolve() != raw.resolve():
+        shutil.copyfile(args.device_csv, raw)
+    row = {
+        "OP TYPE": "tt_dnn_device",
+        "OP CODE": f"WHOLE_TRACE_{mode.upper()}_AGGREGATE",
+        "GLOBAL CALL COUNT": (2 << 10) | proof["device"],
+        "DEVICE ID": proof["device"],
+        "CORE COUNT": len(analysis["cores"]),
+        "DEVICE ARCH": "blackhole",
+        "AVAILABLE WORKER CORE COUNT": analysis["device_info"]["max_compute_cores"],
+        "DEVICE KERNEL START CYCLE": analysis["trace_kernel"]["start_cycle"],
+        "DEVICE KERNEL END CYCLE": analysis["trace_kernel"]["end_cycle"],
+        "DEVICE KERNEL DURATION [ns]": analysis["trace_kernel"]["duration_ns"],
+        "DEVICE FW DURATION [ns]": analysis["trace_fw"]["duration_ns"],
+        "OP TO OP LATENCY [ns]": "",
+        "INPUT_0_MEMORY": "",
+        "ATTRIBUTES": f"Complete captured decoder pass; aggregate elapsed includes internal gaps; no per-op timing/details; marker authority={proof['metadata_authority']}",
+        "HOST START TS": proof["host_replay_timestamps"][1],
+        "HOST END TS": "",
+        "HOST DURATION [ns]": "",
+    }
+    rows = [
+        {
+            "OP TYPE": "signpost",
+            "OP CODE": f"PERF_{mode.upper()}",
+            "HOST START TS": proof["markers"][f"PERF_{mode.upper()}"],
+            "ATTRIBUTES": f"Actual measurement marker from {proof['metadata_authority']}; host timestamp is ordering only",
+        },
+        row,
+        {
+            "OP TYPE": "signpost",
+            "OP CODE": f"PERF_{mode.upper()}_END",
+            "HOST START TS": proof["markers"][f"PERF_{mode.upper()}_END"],
+            "ATTRIBUTES": f"Actual measurement marker from {proof['metadata_authority']}; host timestamp is ordering only",
+        },
+    ]
+    csv_path = output / "whole_trace_ops.csv"
+    with csv_path.open("w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(row))
+        writer.writeheader()
+        writer.writerows(rows)
+    command = [
+        str(Path(sys.executable).parent / "tt-perf-report"),
+        str(csv_path),
+        "--start-signpost",
+        f"PERF_{mode.upper()}",
+        "--end-signpost",
+        f"PERF_{mode.upper()}_END",
+        "--tracing-mode",
+        "--no-advice",
+        "--no-summary",
+        "--no-color",
+        "--arch",
+        "blackhole",
+    ]
+    filtered = output / f"{mode}_perf_report.csv"
+    commands = []
+    for extra, suffix in ((["--csv", str(filtered)], "console.log"), ([], "txt")):
+        invocation = command + extra
+        commands.append(invocation)
+        with (output / f"{mode}_perf_report.{suffix}").open("w") as stream:
+            subprocess.run(invocation, stdout=stream, stderr=subprocess.STDOUT, check=True)
+    with filtered.open() as stream:
+        rendered = list(csv.DictReader(stream))
+    if len(rendered) != 1 or "WHOLE_TRACE_" not in str(rendered[0]) or not rendered[0].get("Device Time [μs]"):
+        raise ValueError("tt-perf-report did not preserve exactly one measured aggregate row")
+    reported_us = float(rendered[0]["Device Time [μs]"])
+    if abs(reported_us - analysis["trace_kernel"]["duration_ns"] / 1000) > 1:
+        raise ValueError("Rendered device time differs from official aggregate")
+    summary = {
+        "mode": mode,
+        "measurement": "single warmed whole-trace replay",
+        "metadata_authority": proof["metadata_authority"],
+        "device_trace_elapsed_ms": analysis["trace_kernel"]["duration_ns"] / 1e6,
+        "device_trace_firmware_elapsed_ms": analysis["trace_fw"]["duration_ns"] / 1e6,
+        "device_kernel_sum_ms": None,
+        "op_gap_sum_ms": None,
+        "per_op_timings_available": False,
+        "internal_gaps_included_in_trace_elapsed": True,
+        "captured_operation_count": proof["captured_operation_count"],
+        "aggregate_rows": 1,
+        "report_column": "Device Time [μs] (whole-trace elapsed, not a per-op kernel sum)",
+    }
+    provenance = {
+        "scope": __doc__,
+        "selection": proof,
+        "analysis": analysis,
+        "profile": profile,
+        "commands": commands,
+        "sources": {},
+        "archives": [],
+        "passed": True,
+    }
+    source_paths = [args.device_csv, args.profile_json, args.capture_log, csv_path]
+    if args.host_metadata_json is not None:
+        source_paths.append(args.host_metadata_json)
+    for path in source_paths:
+        provenance["sources"][str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
+    for path in (raw, csv_path, filtered):
+        packed = path.with_suffix(path.suffix + ".xz")
+        packed.write_bytes(lzma.compress(path.read_bytes(), preset=6, check=lzma.CHECK_CRC64))
+        provenance["archives"].append({"path": str(packed), "sha256": hashlib.sha256(packed.read_bytes()).hexdigest()})
+    (output / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
+    (output / "latency_summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    print(json.dumps(summary, indent=2))
+
+
+if __name__ == "__main__":
+    main()

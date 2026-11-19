@@ -126,6 +126,9 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     // Use the stable bitonic top-k network: on exact value ties the candidate at the lowest position
     // wins, so the sampled index does not depend on how the network swaps equal values.
     const bool stable_sort = true;
+    const bool input_sorted = operation_attributes.input_sorted;
+    // Keep descriptor allocation/bindings stable. The generated-index and sorter streams have
+    // zero producer AND consumer traffic in sorted mode; paired RM IDs are read directly.
 
     tt::DataFormat input_values_dfb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(input_values_tensor.dtype());
@@ -282,7 +285,8 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
              {"input_indices_page_size", aligned_final_indices_rm_unit_size},
              {"tile_height", tile_height},
              {"use_32bit_index", static_cast<uint32_t>(use_32bit_index)},
-             {"num_users", num_users}},
+             {"num_users", num_users},
+             {"input_sorted", static_cast<uint32_t>(input_sorted)}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
@@ -405,7 +409,8 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
              {"logWt", static_cast<uint32_t>(std::log2(Wt))},
              {"seed", random_seed},
              {"tile_width", tile_width},
-             {"stable_sort", static_cast<uint32_t>(stable_sort)}},
+             {"stable_sort", static_cast<uint32_t>(stable_sort)},
+             {"input_sorted", static_cast<uint32_t>(input_sorted)}},
         .hw_config = ComputeHardwareConfig{compute_config},
     };
 
@@ -493,10 +498,11 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
                  // out_stick_size is supplied for every writer but read by none of them.
                  {"out_stick_size", aligned_out0_unit_size},
                  {"core_id", core_index},
-                 {"ids_per_batch", tile_width},
+                 {"ids_per_batch", input_sorted ? 64u : tile_width},
                  {"num_cores", num_cores},
                  {"use_32bit_index", static_cast<uint32_t>(use_32bit_index)},
-                 {"num_users", num_users}},
+                 {"num_users", num_users},
+                 {"input_sorted", static_cast<uint32_t>(input_sorted)}},
             .hw_config = ttnn::create_writer_datamovement_config(),
         };
     };

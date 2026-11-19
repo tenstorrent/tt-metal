@@ -1,0 +1,196 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-License-Identifier: Apache-2.0
+// Exact FP32 operand recurrence: no FPU dot/outer-product truncation through TF32.
+// One core owns one 128x128 head state, carrying it in FP32 circular buffers.
+#include <cstdint>
+#include "api/compute/common.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/transpose_dest.h"
+#include "api/compute/sfpu_binary_bcast.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/fill.h"
+#include "api/compute/reconfig_data_format.h"
+#include "api/dataflow/circular_buffer.h"
+#ifdef TRISC_MATH
+#include "llk_sfpu/ckernel_sfpu_reduce.h"
+#endif
+
+namespace {
+constexpr uint32_t cb_q = 0, cb_k = 1, cb_v = 2, cb_decay = 3, cb_beta = 4, cb_S = 5;
+constexpr uint32_t cb_out = 6, cb_state = 7, cb_s2 = 8, cb_s3 = 9, cb_sd = 10, cb_vread = 11, cb_u = 12;
+
+void exact_load(uint32_t cb, uint32_t tile, uint32_t dst) {
+    reconfig_data_format_srca(cb);
+    copy_init(cb);
+    copy_tile(cb, tile, dst);
+}
+
+// SFPU reduction consumes only DST tile0. The accumulator in tile3 survives.
+// Re-init before each call: broadcast/reduce share SFPU replay/constant state.
+void reduce_columns_tile0() {
+    MATH((::_llk_math_eltwise_unary_sfpu_init_<SfpuType::reduce>()));
+    MATH((ckernel::sfpu::init_reduce<PoolType::SUM, DataFormat::Float32, true>()));
+    MATH((::_llk_math_eltwise_sfpu_start_(0)));
+    MATH((ckernel::sfpu::calculate_reduce<PoolType::SUM, ReduceDim::REDUCE_COL, DataFormat::Float32, true>()));
+    MATH((::_llk_math_eltwise_sfpu_done_()));
+}
+
+// out[1,V] = row_vector[1,K] . matrix[K,V]. All multiplies and sums
+// remain FP32 in DST; only row0 of the resulting tiles is consumed.
+void exact_dot(uint32_t vector, uint32_t matrix, uint32_t out) {
+    CircularBuffer output(out);
+    output.reserve_back(4);
+    for (uint32_t vi = 0; vi < 4; ++vi) {
+        tile_regs_acquire();
+        fill_tile_init();
+        fill_tile(3, 0.0f);
+        for (uint32_t ki = 0; ki < 4; ++ki) {
+            exact_load(matrix, ki * 4 + vi, 0);
+            exact_load(vector, ki, 1);
+            transpose_dest_init<true>();
+            transpose_dest<true>(1);
+            sfpu_mul_bcast_col_init();
+            sfpu_mul_bcast_col(0, 1);
+            reduce_columns_tile0();
+            add_binary_tile_init();
+            add_binary_tile(3, 0, 3);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile<true>(3, out, vi);
+        tile_regs_release();
+    }
+    output.push_back(4);
+}
+
+// S_new = decayed_state + k[:,None] * delta[None,:], with separate FP32
+// product and sum boundaries matching HF. No matrix-unit source registers.
+void exact_rank1(uint32_t out, bool emit_state) {
+    CircularBuffer output(out), final(cb_state);
+    output.reserve_back(16);
+    if (emit_state) {
+        final.reserve_back(16);
+    }
+    for (uint32_t ki = 0; ki < 4; ++ki) {
+        for (uint32_t vi = 0; vi < 4; ++vi) {
+            tile_regs_acquire();
+            exact_load(cb_sd, ki * 4 + vi, 0);
+            exact_load(cb_k, ki, 1);
+            transpose_dest_init<true>();
+            transpose_dest<true>(1);
+            exact_load(cb_u, vi, 2);
+            fill_tile_init();
+            fill_tile(3, 1.0f);
+            sfpu_mul_bcast_col_init();
+            sfpu_mul_bcast_col(3, 1);
+            sfpu_mul_bcast_row_init();
+            sfpu_mul_bcast_row(3, 2);
+            add_binary_tile_init();
+            add_binary_tile(0, 3, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile<true>(0, out, ki * 4 + vi);
+            if (emit_state) {
+                pack_tile<true>(0, cb_state, ki * 4 + vi);
+            }
+            tile_regs_release();
+        }
+    }
+    output.push_back(16);
+    if (emit_state) {
+        final.push_back(16);
+    }
+}
+
+void delta_rule_residual(uint32_t a, uint32_t b, uint32_t beta, uint32_t o, uint32_t n) {
+    CircularBuffer cb_o(o);
+    cb_o.reserve_back(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        tile_regs_acquire();
+        reconfig_data_format_srca(a);
+        copy_init(a);
+        copy_tile(a, i, 0);
+        reconfig_data_format_srca(b);
+        copy_init(b);
+        copy_tile(b, i, 1);
+        reconfig_data_format_srca(beta);
+        copy_init(beta);
+        copy_tile(beta, 0, 2);
+        sub_binary_tile_init();
+        sub_binary_tile(0, 1, 0);
+        sfpu_mul_bcast_col_init();
+        sfpu_mul_bcast_col(0, 2);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile<true>(0, o, i);
+        tile_regs_release();
+    }
+    cb_o.push_back(n);
+}
+
+// out = A * scalar, n tiles. scalar is the [0,0] element of the single `scal` tile.
+// Exact carried-state decay. FPU broadcast multiplication would unpack S and
+// exp(g) through TF32, introducing a systematic loss on every recurrent step.
+void bcast_scalar_mul(uint32_t a, uint32_t scal, uint32_t o, uint32_t n) {
+    CircularBuffer cb_o(o);
+    cb_o.reserve_back(n);
+    const uint32_t precise_a = a;
+    for (uint32_t i = 0; i < n; ++i) {
+        tile_regs_acquire();
+        reconfig_data_format_srca(precise_a);
+        copy_init(precise_a);
+        copy_tile(precise_a, i, 0);
+        reconfig_data_format_srca(scal);
+        copy_init(scal);
+        copy_tile(scal, 0, 1);
+        fill_tile_init();
+        fill_tile(2, 0.0f);
+        sfpu_normalize_bcast_scalar_init();
+        sfpu_normalize_bcast_scalar(0, 2, 1);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile<true>(0, o, i);
+        tile_regs_release();
+    }
+    cb_o.push_back(n);
+}
+
+}  // namespace
+
+void kernel_main() {
+    static_assert(get_compile_time_arg_val(0) == 4 && get_compile_time_arg_val(1) == 4);
+    const uint32_t count = get_arg_val<uint32_t>(0);
+    compute_kernel_hw_startup(cb_q, cb_v, cb_out);
+    CircularBuffer q(cb_q), k(cb_k), v(cb_v), decay(cb_decay), beta(cb_beta);
+    CircularBuffer sd(cb_sd), vread(cb_vread), u(cb_u);
+    for (uint32_t token = 0; token < count; ++token) {
+        const uint32_t old_state = token == 0 ? cb_S : (token & 1 ? cb_s2 : cb_s3);
+        const uint32_t new_state = token & 1 ? cb_s3 : cb_s2;
+        CircularBuffer old(old_state), next(new_state);
+        decay.wait_front(1);
+        old.wait_front(16);
+        bcast_scalar_mul(old_state, cb_decay, cb_sd, 16);
+        decay.pop_front(1);
+        old.pop_front(16);
+        sd.wait_front(16);
+        k.wait_front(4);
+        exact_dot(cb_k, cb_sd, cb_vread);
+        vread.wait_front(4);
+        v.wait_front(4);
+        beta.wait_front(1);
+        delta_rule_residual(cb_v, cb_vread, cb_beta, cb_u, 4);
+        v.pop_front(4);
+        vread.pop_front(4);
+        beta.pop_front(1);
+        u.wait_front(4);
+        exact_rank1(new_state, token + 1 == count);
+        k.pop_front(4);
+        u.pop_front(4);
+        sd.pop_front(16);
+        next.wait_front(16);
+        q.wait_front(4);
+        exact_dot(cb_q, new_state, cb_out);
+        q.pop_front(4);
+        // next remains resident until the following token's state decay.
+    }
+}

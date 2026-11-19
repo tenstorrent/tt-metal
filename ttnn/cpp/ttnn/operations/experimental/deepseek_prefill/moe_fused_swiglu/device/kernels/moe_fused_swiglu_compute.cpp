@@ -29,6 +29,11 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
+// Other program factories also consume this kernel. Preserve their existing
+// rounding unless this operation explicitly selects the deterministic variant.
+#ifndef MOE_FPU_STOCHASTIC_ROUNDING
+#define MOE_FPU_STOCHASTIC_ROUNDING 1
+#endif
 #if defined(SWIGLU_OAI) && defined(SITU_GLU)
 #error "SWIGLU_OAI and SITU_GLU are mutually exclusive activation variants"
 #endif
@@ -448,11 +453,15 @@ void kernel_main() {
     // but because it programs the UNPACK/MATH/PACK config and must precede every compute API call,
     // including the activation init below. Nothing may be inserted above it.
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x_tiles, cb_w_gate, cb_gate_acc);
+#if MOE_FPU_STOCHASTIC_ROUNDING
     // Round FPU results into the bf16 DEST stochastically: the default rounding biases long bf16-DEST
     // accumulations 2-5% high, which compounds across layers into lower end-to-end KV PCC. The PRNG
     // is reseeded on every launch so the rounding, and so the output, is bitwise reproducible.
     UNPACK((_llk_unpack_configure_stoch_rnd_<ckernel::StochRndType::Fpu>()));
     MATH((ckernel::init_prng_seed(0x5EED1234u)));
+#endif
+    // Otherwise retain startup's deterministic rounding, with unchanged formats
+    // and fidelity. It avoids dependence on expert/row placement in the PRNG stream.
 
     (void)get_arg_val<uint32_t>(0);  // retained runtime slot for cache-compatible argument layout
     const uint32_t kr_rows = get_arg_val<uint32_t>(1);

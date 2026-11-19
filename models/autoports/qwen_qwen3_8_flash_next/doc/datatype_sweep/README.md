@@ -1,0 +1,74 @@
+# Qwen3.8-Flash-Next datatype sweep
+
+Selected **`combined_shared4_mixed`**, the fastest evaluated policy at **9.776829665936 traced teacher-forcing t/s/u**, with minimum full-model top-1/top-5/top-100 **0.96/1.0/1.0** and all four final P1 checks passing. The complete measured policy is installed in [selected_precision_config.json](selected_precision_config.json). Post-selection token-out passes at **9.801183224430 t/s/u**, TTFT **4711.342390 ms**. Final normal-default accuracy, resume, context and frozen qualitative checks pass. Independent review returned [pass-with-carried](stage_review_v1.md), with no blocking findings; local checkpoint bookkeeping is recorded in [work_log.md](work_log.md). Search is frozen under the user's stage time/token cap; no vLLM integration has begun.
+
+All measurements retain the full 48-layer model on four Blackhole p300c devices, mesh 1×4, TP4/EP4, batch 1 and **262144-token capacity**. The selected KV dtype/layout is unchanged. The stage does not reduce advertised context.
+
+## Accuracy, timing and selection
+
+Every candidate must meet top-1 ≥0.90, top-5 ≥0.98 and top-100 =1.0 independently on prefill and teacher forcing for the main [AIME24 chat-template reference](../../readiness_aime24_chat.refpt), with 100 generated tokens, and the 512-position raw natural-text reference. [Natural provenance](natural_text.provenance.json) identifies the original-HF checkpoint, pinned revision and real book tokens; natural teacher forcing is not chat evaluation. P1 and capability gates are additional requirements.
+
+Ranking uses warmed AIME teacher-forcing decode with positive model trace replays and no capture/release within each measured call. Eager/untraced numbers are excluded. Readback and caller-sampling overhead is part of this measurement regime. The post-selection no-readback token-out benchmark is a separate metric: **9.801183224430 t/s/u** is the later-report/vLLM comparison number.
+
+[Refreshed baseline](inherited_e4_lofi_v3.json): AIME prefill/teacher-forcing top-1 0.97/0.96; natural-text 0.9765625/0.98046875; all top-5/top-100 are 1.0. Its two AIME traced samples are 9.679690005441 and 9.679232307530 t/s/u, mean **9.679461156485**, spread **0.000457697911**. The selected observed mean is about **1.006% higher**.
+
+| Completed policy | AIME traced mean t/s/u | Observed repeat range | Minimum top-1 / top-5 / top-100 | Qualification |
+|---|---:|---|---|---|
+| [combined8_lofi](combined8_lofi_v1.json) | 9.770645764193 | 9.768476204876–9.772815323510 | 0.98 / 1.0 / 1.0 | Numerically passes; slower; P1 not separately claimed |
+| [combined8_hifi2](combined8_hifi2_v1.json) | 9.772632882954 | 9.770907951484–9.774357814424 | 0.96 / 1.0 / 1.0 | Numerically passes; slower; P1 not separately claimed |
+| [combined8_mixed](combined8_mixed_v1.json) | 9.766010167783 | 9.764977930420–9.767042405146 | 0.96 / 1.0 / 1.0 | Numerically passes; slower; P1 not separately claimed |
+| [combined_shared4_mixed](combined_shared4_mixed_v1.json) | **9.776829665936** | 9.776718981752–9.776940350121 | **0.96 / 1.0 / 1.0** | **Selected; P1 and final capability checks pass** |
+
+The selected mean exceeds the next policy by **0.004196782982 t/s/u**, above the accepted initial baseline spread. Some combined policies have larger resident repeat spreads, up to **0.004339118634**. This is the fastest observed mean, with limited evidence about close-policy ordering across processes. Additional cross-process repeats and noise characterization were stopped by the user cap; no confidence claim is inferred from unperformed repeats.
+
+The authoritative [26 report inputs](report_inputs.json) comprise 19 coarse policies, four combined policies, one fitting high-precision control and two incomplete capability failures. Twenty-four inputs complete their numerical checks; KV8 remains independently rejected. [Material group comparisons](material_group_comparison.md) retain BFP8 LoFi/HiFi2 and material BFP4 LoFi/HiFi2 controls, commands, exceptions and measured group results. [Evidence manifest](evidence_manifest.json) indexes every authoritative input and provenance. The final reporter writes [sweep_results.json](sweep_results.json), [sweep_results.csv](sweep_results.csv), [top-1 Pareto](top1_perf_pareto.png) and [top-5 Pareto](top5_perf_pareto.png); consult their actual gate statuses rather than treating every numerical pass as qualified.
+
+## Selected precision and runtime contract
+
+| Runtime group | Selected dtype / fidelity |
+|---|---|
+| Routed expert gate/up/down, all layers | BFP4 / LoFi |
+| Shared gate/up/down, interior layers | BFP4 / LoFi |
+| Shared projections, layers 0 and 47 | BFP8 / HiFi4 |
+| QSA QKV/output and LM head | BFP8 / HiFi2 |
+| GR and GDN Z/A/B projections | BFP8 / LoFi |
+| Activation, residual, CCL, KV cache, logits and sampling floating state | BF16 |
+
+The JSON also records fixed numerics: router logits/top-k and GDN recurrent state are FP32, token IDs are uint32, token embeddings are BF16, and packed PLE/key-value assumptions remain explicit. These fixed contracts have distinct source-only, selector/config and direct tensor evidence; they must not be described uniformly as tensor-introspected. [Precision propagation audit](precision_propagation_audit.md) documents that distinction. `tt/precision.py:load_policy` resolves the installed artifact by default; model construction resolves layer exceptions and passes group/fidelity policies into decoder/head paths. The measured candidate's complete requested policy equals the installed artifact. The completed [normal-default token-out run](post_selection_token_out_v1.json) independently checks complete policy equality, 12 distinct BF16 K/V pairs of shape `[8192,1,32,256]`, public cache budget and unchanged 262144 capacity. Its `performance.selected_default_snapshot` preserves this proof; source provenance remains unchanged through the measured window. [Selected precision audit](selected_precision_propagation_audit.md) checks recorded policy/runtime comparisons, including normal-default construction; its JSON records the exact audited inputs and comparison count. No ignored JSON field is sufficient proof.
+
+BFP8 is the initial precision target. All-BFP8 experts cannot fit: expert weights plus packed PLE alone exceed allocatable DRAM by 5.59 GB/rank, before other tensors. [Capacity audit](initial_precision_capacity_audit.md) records the arithmetic. The highest fitting tested control [e8_two_hifi4](e8_two_hifi4_v1.json) uses BFP8 routed experts at layers 0/47 and BFP4 elsewhere, with global expert HiFi4. Three-/four-layer upgrades fail retained trace/workspace capacity; [AUTOFIX.md](AUTOFIX.md) records bounded attempts. This is a precision-fit limitation, not permission to lower context or waive P1.
+
+[Final P1](p1_final_v1.json) passes with selected `combined_shared4_mixed` against that control on two sampled chat/thinking texts and **3435 scored answer positions**. ΔNLL is **0.00212 ±0.00131**, below the unchanged 0.004 bound; KL×1000 is **2.47593 ≤5**. The control's original-HF KL×1000 is **3.62242 ≤4**. Selected traced-decode top-1 is **0.99023**, reference **0.98828**, over 512 positions. [Runtime evidence](p1_final_v1.runtime.json) records 255 model replays for each selected 256-token call; these correctness calls include readback/setup capture and supply no ranking timing. The canonical [precision_reasoning.json](../eval_readiness/precision_reasoning.json) names the selected config. [Readiness gate](logs/stage_gate_v2.log) passes all four checks with no waivers (`items: []`). [Decoded text provenance](p1_texts_decoded.json) preserves original token IDs and text; it does not replace the independent shared-suite qualitative review.
+
+## Capacity, rejected KV policy and required final results
+
+[Context contract](../context_contract.json) recomputes both candidate cache payloads: BF16 **3221225472 B/rank**, BFP8 **1711276032 B/rank**, saving **1509949440 B/rank**. Both allocate full 262144 capacity in completed short-reference runs. These figures cover K/V payload only; they do not claim a larger feasible context.
+
+KV BFP8 is rejected despite numerical reference passes: full-model B32 minimum per-phase vocabulary PCC **0.971848264 <0.99**, while top-1 matches. The separate decoder diagnostic pass does not waive this full-model failure. See [paired summary](kv_b32_snapshot_summary.json), [failed required control](kv_short_prefix_b32_comparison_v2.json) and [source audit](kv_drift_audit.md). Selected BF16 K/V preserves TILE/page32, local head width256 and distinct K/V tensors.
+
+- **Post-selection token-out: passed.** [Result](post_selection_token_out_v1.json), [command/provenance](post_selection_token_out_v1.provenance.json): warmed 128-token prompt, 128 outputs, batch1; public-generate TTFT **4711.342390161 ms** and resident no-readback decode **9.801183224430 t/s/u**. The 127-step window has 127 model and 127 sampling replays, zero per-step readbacks/captures/releases, and boundary synchronization outside the per-token loop. The public `decode_forward` serving-contract control measures **9.803960292545 t/s/u**; this is a generator contract measurement, not vLLM integration. Use the resident token-out number for later reports; keep teacher-forcing ranking separate. The negative raw `layer_stack_overhead_ms` values subtract historical Stage5 blocking/old-policy layer measurements; they are arithmetic comparisons across regimes, not physical negative overhead or valid additive attribution.
+- **Final selected-default validation: passed.** [Driver result](final_validation_v1.json) records all 48 layers, full 262144 capacity, policy equality and successful runtime body guards. AIME prefill scores are **0.96/1.0/1.0**; teacher forcing **0.97/1.0/1.0**. Its audited timing, **8.820901850898487 t/s/u**, includes NoTorchCalls/body wrappers and is correctness-only; exclude it from performance ranking or comparisons with the clean token-out benchmark. Driver wall time is 2618.874349 seconds.
+- **Non-aligned prompts and context: passed.** [257-token resume](final_validation_v1/prefill_resume_check.json) passes starts 32, 68 and 256, minimum PCC **0.999944448254**, top-1 agreement **1.0**; no-history/fresh-suffix controls fail as expected. [Context smoke](final_validation_v1/context_smoke.json) passes a **32769-token prompt plus two outputs**, finite logits, 1025 prefill replays and one decode replay without capture/release, at full **262144** allocated capacity. All QSA layers/ranks reach position 32770; a further no-readback model/sampler replay reaches 32771. Context wall time is 1248.605318 seconds. Selected KV/layout is unchanged, so this fulfills the 32K–64K smoke requirement without a new maximum-context claim.
+- **Completion provenance:** `passed=true`, `VALIDATION_DONE` and orderly UMD close at **2026-11-16 06:37:03 UTC** establish completed driver work. The supervising wrapper was interrupted before recording a numeric exit status; shell exit is **unknown**, and no exit 0 claim is made. [Provenance](final_validation_v1.provenance.json) and owner recovery notes retain this distinction. The driver's historical `qualitative.blind_verdict` placeholder is resolved by the separately frozen comparison below.
+- **Runtime precision audit, plots and reports:** selected/default runtime evidence is linked above; final reporter output remains separate from raw validation. [Chart audit](chart_readability_audit_v1.json) verifies numbered points/full policy key, unchanged coordinates, red selected marker, dotted thresholds and measured Pareto frontier. A measured frontier does not waive eligibility gates. Top-5 ties require the key and top-1 plot to expose accuracy tradeoffs; selected is fastest among evaluated passing policies, with the close-ordering uncertainty already stated.
+- **Blind qualitative verdict:** [within matched-control margin](final_validation_v1/qualitative/blind_comparison.json), zero frozen-rubric failures across 60 selected TT and 60 HF samples. [Supplemental anomaly audit](final_validation_v1/qualitative/qualitative_anomaly_audit.md) retains six unsupported call/process remarks in selected TT, four in prior optimized TT and none in pinned HF; source origin is unresolved. Verbosity meta commentary occurs on both backends. These and form/factual nits remain visible outside the frozen rubric; a short-cap pass is not broad answer-quality validation. **Independent stage review: [pass-with-carried](stage_review_v1.md); these limitations remain carried.**
+
+## Commands, artifacts and handoff
+
+Exact replayable argv, hardware/mesh, environment, policy, per-reference rows and counters remain in each candidate JSON and matching `*.provenance.json`; final P1 command is in `p1_final_v1.json`. The selected measured candidate command is:
+
+```bash
+python_env/bin/python -m models.autoports.qwen_qwen3_8_flash_next.tests.run_datatype_candidate \
+  --build-kwargs-file models/autoports/qwen_qwen3_8_flash_next/doc/datatype_sweep/configs/combined_shared4_mixed.kwargs.json \
+  --reference models/autoports/qwen_qwen3_8_flash_next/readiness_aime24_chat.refpt \
+  --reference models/autoports/qwen_qwen3_8_flash_next/doc/datatype_sweep/natural_text.refpt \
+  --output models/autoports/qwen_qwen3_8_flash_next/doc/datatype_sweep/combined_shared4_mixed_v1.json --repeats 2
+```
+
+This records the existing experiment; do not overwrite it. `tests/audit_datatype_precision.py` checks recorded actual 48-layer group/fidelity fields and optional selected-default identity. Reporter support for genuine compatible cross-process repeats is tested in [repeat aggregation audit](repeat_aggregation_audit_v1.json); deferred repetitions are not silently fabricated.
+
+The [work log](work_log.md) carries unrun `combined_shared4_qsa4_mixed`, adaptive combinations/fidelity/layer tuning and extra cross-process noise characterization to the next stage under the user cap. The preparatory unrun policy is neither an accepted nor a rejected measured point. Required final gates remain separate from optional search.
+
+Commit scope retains compact structured results/provenance, docs, configs, plots, references. P1 score caches stay local under the repository tensor-artifact ignore rule. Raw logs except readiness gate logs, four KV diagnostic `.pt` tensors and `prior_root_AUTODEBUG.md` remain local-only; compact JSON/audits retain their conclusions. No raw artifact is deleted, compressed or archived. Local stage-owned commit SHAs will be recorded in the work log; never push.
+
+The clean token-out timing run used allocation tracking off. Separate candidate and final selected-default validation used tracking on with program-cache skipping disabled and unchanged runtime sources; those runs supply trace-safety correctness evidence. The timing artifact alone is not tracker-verified. See the independent review for exact regimes and remaining limitations.

@@ -1,0 +1,180 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Local selection consequences of fixed projection policies, not a full-context control.
+
+Apply each policy uniformly to the seven recorded critical 32-row chunks; all
+other compressed keys retain literal HF values. This isolates critical operand
+changes. It cannot establish acceptance of a uniformly changed full history.
+"""
+
+import argparse
+import json
+import math
+import sys
+from pathlib import Path
+
+import torch
+
+from .probe_qsa import load_reference
+from .probe_qsa_fp64_indexer_control import comparison, digest, write_json
+from .probe_qsa_projection_orders_cpu import grouped, sequential_pairs, tree
+
+
+@torch.inference_mode()
+def main():
+    from transformers.models.qwen4_exp.modeling_qwen4_exp import apply_rotary_pos_emb, repeat_kv
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--snapshot", type=Path, required=True)
+    parser.add_argument("--source-cache", type=Path, required=True)
+    parser.add_argument("--device-cache", type=Path, required=True)
+    parser.add_argument("--projection-cache", type=Path, required=True)
+    parser.add_argument("--order-cache", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--windows", default="", help="Additional whole original 32-row windows")
+    parser.add_argument(
+        "--policies", default="literal,half_split_tree,group64_tree_then_sequential,pair_2lanes_two_round"
+    )
+    args = parser.parse_args()
+    torch.set_num_threads(8)
+    source = torch.load(args.source_cache, weights_only=True, mmap=True, map_location="cpu")
+    device = torch.load(args.device_cache, weights_only=True, mmap=True, map_location="cpu")
+    cache = torch.load(args.projection_cache, weights_only=True, mmap=True, map_location="cpu")
+    orders = torch.load(args.order_cache, weights_only=True, mmap=True, map_location="cpu")
+    _, model, rope, _, provenance = load_reference(args.snapshot)
+    assert source["key"] == orders["identity"]["source_key"] == cache["identity"]["source_key"]
+    assert source["key"] == device["reference_fixture"]["source_key"]
+    assert source["key"]["reference_sha256"] == provenance["reference_sha256"]
+    assert source["key"]["config_sha256"] == provenance["config_sha256"]
+    source_hash = digest(args.source_cache)
+    assert source_hash == orders["identity"]["source_sha256"] == cache["identity"]["reference_fixture_sha256"]
+    assert digest(args.device_cache) == cache["identity"]["device_output_sha256"]
+    report = {
+        "scope": __doc__,
+        "accepted": False,
+        "device_executed": False,
+        "identity": {
+            "source_key": source["key"],
+            "reference": provenance,
+            "harness_sha256": digest(Path(__file__)),
+            "input_sha256": {
+                str(path): digest(path)
+                for path in [args.source_cache, args.device_cache, args.projection_cache, args.order_cache]
+            },
+        },
+        "changed_chunks": orders["report"]["critical_chunks"],
+        "rows": [],
+    }
+    policies = args.policies.split(",")
+    assert policies[0] == "literal"
+    windows = [int(x) for x in args.windows.split(",") if x]
+    assert all(x % 32 == 0 and 0 <= x < 262144 for x in windows)
+    report["changed_chunks"] = list(dict.fromkeys(report["changed_chunks"] + windows))
+    report["additional_full_windows"] = windows
+    report["policies"] = policies
+    functions = {
+        "half_split_tree": tree,
+        "group64_tree_then_sequential": lambda x: grouped(x, 64),
+        "pair_2lanes_two_round": lambda x: sequential_pairs(x, 2, False),
+        "pair_2lanes_one_round_emulation": lambda x: sequential_pairs(x, 2, True),
+    }
+    assert all(name == "literal" or name in functions for name in policies)
+    for start in windows:
+        if start in orders["chunks"]:
+            continue
+        hidden = source["hidden"][:, start : start + 32]
+        weight = model.indexer.index_qk_proj.weight
+        literal = model.indexer.index_qk_proj(hidden)[0]
+        products = (hidden[0].T.float()[:, :, None] * weight.T.float()[:, None, :]).contiguous()
+        outputs = {name: functions[name](products) for name in policies if name != "literal"}
+        orders["chunks"][start] = {"literal": literal, "outputs": outputs}
+        del products
+    compressed = {}
+    queries = {}
+    for name in policies:
+        compressed[name] = cache["compressed"]["literal"].clone()
+        queries[name] = {}
+        for start in report["changed_chunks"]:
+            projection = (
+                orders["chunks"][start]["literal"]
+                if name == "literal"
+                else orders["chunks"][start]["outputs"][name].bfloat16()
+            ).unsqueeze(0)
+            hidden = source["hidden"][:, start : start + 32]
+            cos, sin = rope(hidden, torch.arange(start, start + 32).reshape(1, -1))
+            query = model.indexer.q_layernorm(projection[..., :512].reshape(1, 32, 4, 128))
+            queries[name][start] = apply_rotary_pos_emb(query.transpose(1, 2), cos=cos, sin=sin)
+            pooled = projection[..., 512:].float().reshape(1, 8, 4, 128).mean(2).bfloat16()
+            pooled = model.indexer.k_layernorm(pooled)
+            cos, sin = rope(hidden, torch.arange(start, start + 32, 4).reshape(1, -1))
+            pooled = apply_rotary_pos_emb(pooled.unsqueeze(1), cos=cos, sin=sin).squeeze(1)
+            if name == "literal":
+                assert torch.equal(pooled, cache["compressed"]["literal"][:, start // 4 : (start + 32) // 4])
+                assert torch.equal(queries[name][start], cache["queries"]["literal"][:, :, start : start + 32])
+            compressed[name][:, start // 4 : (start + 32) // 4] = pooled
+    for position in list(
+        dict.fromkeys([105584, 58531, 16748] + [start + row for start in windows for row in range(32)])
+    ):
+        start, row = position // 32 * 32, position % 32
+        hidden = source["hidden"][:, start : start + 32]
+        cos, sin = rope(hidden, torch.arange(start, start + 32).reshape(1, -1))
+        q, gate = model.q_proj(hidden).reshape(1, 32, 24, 512).chunk(2, -1)
+        q = apply_rotary_pos_emb(model.q_norm(q).transpose(1, 2), cos=cos, sin=sin)[:, :, row : row + 1]
+        gate = gate.transpose(1, 2)[:, :, row : row + 1]
+        complete = (position + 1) // 4
+        literal_blocks = None
+        entry = {"position": position, "policies": {}}
+        for name in policies:
+            query = queries[name][start][:, :, row : row + 1].float()
+            scores = torch.matmul(
+                query, compressed[name][:, :complete].float().transpose(-1, -2).unsqueeze(1)
+            ).relu().sum(1)[0, 0] / math.sqrt(128)
+            blocks = scores.topk(512).indices.sort().values
+            if name == "literal":
+                literal_blocks = blocks
+            selected = (
+                torch.cat(((blocks[:, None] * 4 + torch.arange(4)).flatten(), torch.arange(complete * 4, position + 1)))
+                .sort()
+                .values
+            )
+            keys = repeat_kv(cache["keys"][:, :, selected], 12)
+            values = repeat_kv(cache["values"][:, :, selected], 12)
+            logits = torch.matmul(q, keys.transpose(-1, -2)) * (256**-0.5)
+            probabilities = logits.softmax(-1, dtype=torch.float32).to(q.dtype)
+            attention = torch.matmul(probabilities, values) * torch.sigmoid(gate)
+            output = model.o_proj(attention.reshape(1, 1, 6144))
+            if name == "literal":
+                assert torch.equal(output, source["expected"][:, position : position + 1])
+            literal_set, policy_set = set(literal_blocks.tolist()), set(blocks.tolist())
+            entry["policies"][name] = {
+                "missing_literal_blocks": sorted(literal_set - policy_set),
+                "extra_blocks": sorted(policy_set - literal_set),
+                "vs_literal": comparison(source["expected"][:, position : position + 1], output)[0],
+                "vs_saved_TT": comparison(device["actual"][:, position : position + 1], output)[0],
+            }
+        report["rows"].append(entry)
+        write_json(args.output, report)
+    assert "ttnn" not in sys.modules
+    report["status"] = "completed_local_diagnostic"
+    report["summary"] = {
+        name: {
+            "minimum_vs_literal": min(
+                row["policies"][name]["vs_literal"]["minimum_row_pcc_fp64"] for row in report["rows"]
+            ),
+            "failed_literal_positions": [
+                row["position"]
+                for row in report["rows"]
+                if row["policies"][name]["vs_literal"]["minimum_row_pcc_fp64"] < 0.995
+            ],
+            "selection_changed_positions": [
+                row["position"] for row in report["rows"] if row["policies"][name]["missing_literal_blocks"]
+            ],
+        }
+        for name in policies
+    }
+    write_json(args.output, report)
+    print(json.dumps(report["rows"]), flush=True)
+
+
+if __name__ == "__main__":
+    main()

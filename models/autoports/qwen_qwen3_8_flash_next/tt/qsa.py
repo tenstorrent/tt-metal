@@ -1,0 +1,299 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Qwen4Exp indexed attention, one device-resident token step at a time.
+
+This correctness baseline accepts [1,1,1,2560] BF16 hidden states. Each request
+owns QSAState, including a device INT32 position, externally permutable paged
+K/V, three raw indexer keys, and an independent compressed indexer cache.
+The caller advances the device position and calls step for each valid token;
+padding rows must not be submitted. Prefix restoration must restore *both*
+KV and indexer state. A position reset alone is not a cache-state reset.
+
+Supported positions are contiguous causal text positions, 0..capacity-1.
+Physical capacity is an allocation choice, not a change to the HF config or
+advertised 262144 context. Use one state per request for a batch; a host loop
+over known logical rows/tokens is allowed, with no token/position readback.
+This implementation does not implement arbitrary attention-mask holes or
+multimodal three-axis RoPE positions.
+
+The indexer averages four *raw* keys in FP32 and rounds to BF16, then applies
+its k norm and 64-dimensional partial RoPE at the group's first position.
+Only complete groups compete for the top 512; the incomplete tail is always
+visible. Main paged SDPA receives an explicit selection-plus-causal mask.
+All runtime work stays on device. Weight/state construction is setup-only.
+"""
+
+from dataclasses import dataclass
+
+from .precise_projection import precise_indexer_rope
+
+
+@dataclass
+class QSAState:
+    capacity: int
+    page_size: int
+    position: object
+    page_table: object
+    k_cache: object
+    v_cache: object
+    raw_history: object
+    compressed_keys: object
+    block_numbers: object
+    token_numbers: object
+
+
+class QSA:
+    def __init__(self, loader, config):
+        import torch
+
+        import ttnn
+
+        from .decoder_components import linear, rms
+        from .ordered_projection import OrderedIndexerProjection
+
+        expected = (2560, 24, 2, 256, 4, 1, 128, 4, 2048)
+        actual = (
+            config.hidden_size,
+            config.num_attention_heads,
+            config.num_key_value_heads,
+            config.head_dim,
+            config.indexer_n_heads,
+            config.indexer_kv_heads,
+            config.indexer_head_dim,
+            config.indexer_compress_ratio,
+            config.indexer_budget,
+        )
+        if actual != expected or config.attention_bias:
+            raise ValueError(f"Only the target Qwen3.8-Flash-Next QSA contract is supported: {actual}")
+        if config.rope_parameters["rope_type"] != "default":
+            raise ValueError("The target uses default partial RoPE")
+        self.rotary_dim = int(config.head_dim * config.rope_parameters["partial_rotary_factor"])
+        if self.rotary_dim != 64:
+            raise ValueError("Expected 64 rotary dimensions")
+        self.ttnn, self.linear, self.rms = ttnn, linear, rms
+        self.loader, self.compute = loader, loader.compute
+        self.eps, self.context = config.rms_norm_eps, config.max_position_embeddings
+        prefix = "self_attn."
+        self.q = loader.matrix(prefix + "q_proj.weight")
+        self.k = loader.matrix(prefix + "k_proj.weight")
+        self.v = loader.matrix(prefix + "v_proj.weight")
+        self.out = loader.matrix(prefix + "o_proj.weight")
+        self.q_norm = loader.norm(prefix + "q_norm.weight")
+        self.k_norm = loader.norm(prefix + "k_norm.weight")
+        self.index_qk = loader.matrix(prefix + "indexer.index_qk_proj.weight")
+        self.project_index_qk = OrderedIndexerProjection(loader)
+        self.index_q_norm = loader.norm(prefix + "indexer.q_layernorm.weight")
+        self.index_k_norm = loader.norm(prefix + "indexer.k_layernorm.weight")
+        inv = 1.0 / (config.rope_parameters["rope_theta"] ** (torch.arange(0, 64, 2).float() / 64))
+        phase = torch.arange(self.context).float()[:, None] * inv[None, :]
+        # ROW_MAJOR avoids a whole-table layout conversion on each lookup.
+        self.cos = ttnn.from_torch(
+            torch.cat([phase.cos(), phase.cos()], dim=-1).bfloat16(),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=loader.mesh_device,
+        )
+        self.sin = ttnn.from_torch(
+            torch.cat([phase.sin(), phase.sin()], dim=-1).bfloat16(),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=loader.mesh_device,
+        )
+        self.cache_memory = {
+            width: ttnn.create_sharded_memory_config(
+                (32, width),
+                core_grid=ttnn.CoreGrid(x=1, y=1),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            for width in (128, 256)
+        }
+        self.sdpa_program = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=loader.mesh_device.compute_with_storage_grid_size(),
+            q_chunk_size=0,
+            k_chunk_size=32,
+            exp_approx_mode=False,
+        )
+
+    def make_state(self, *, capacity=None, page_size=32, page_table=None, position=None):
+        """Setup only. page_table is a host permutation or a supplied device table.
+
+        The state capacity must cover all pages named by the table. This helper
+        allocates one request's pool; a larger shared pool can be supplied by
+        replacing the state's k_cache/v_cache/page_table before preparation.
+        """
+        import torch
+
+        t = self.ttnn
+        capacity = self.context if capacity is None else capacity
+        if not (128 <= capacity <= self.context and capacity % 128 == 0):
+            raise ValueError("capacity must be a multiple of 128 within the advertised context")
+        if page_size % 32 or capacity % page_size:
+            raise ValueError("page_size must be tile aligned and divide physical capacity")
+        if position is None:
+            position = t.from_torch(torch.zeros(1, dtype=torch.int32), dtype=t.int32, device=self.loader.mesh_device)
+        if page_table is None:
+            page_table = torch.arange(capacity // page_size, dtype=torch.int32).reshape(1, -1)
+        if isinstance(page_table, torch.Tensor):
+            if tuple(page_table.shape) != (1, capacity // page_size):
+                raise ValueError("page table must cover the entire physical capacity")
+            if not torch.equal(page_table.sort().values.flatten().long(), torch.arange(capacity // page_size)):
+                raise ValueError("setup page table must be a permutation of the allocated pages")
+            page_table = t.from_torch(page_table.int(), dtype=t.int32, device=self.loader.mesh_device)
+        zeros = self.loader.tensor
+        return QSAState(
+            capacity=capacity,
+            page_size=page_size,
+            position=position,
+            page_table=page_table,
+            k_cache=zeros(torch.zeros(capacity // page_size, 2, page_size, 256)),
+            v_cache=zeros(torch.zeros(capacity // page_size, 2, page_size, 256)),
+            raw_history=zeros(torch.zeros(1, 1, 3, 128)),
+            compressed_keys=zeros(torch.zeros(1, 1, capacity // 4, 128)),
+            block_numbers=zeros(torch.arange(capacity // 4).float().reshape(1, 1, 1, -1), t.float32),
+            token_numbers=zeros(torch.arange(capacity).float().reshape(1, 1, 1, -1), t.float32),
+        )
+
+    def _rope(self, value, position):
+        t = self.ttnn
+        ids = t.reshape(t.to_layout(t.typecast(position, t.uint32), t.ROW_MAJOR_LAYOUT), (1, 1))
+        cos = t.reshape(
+            t.to_layout(t.embedding(ids, self.cos, layout=t.ROW_MAJOR_LAYOUT), t.TILE_LAYOUT), (1, 1, 1, 64)
+        )
+        sin = t.reshape(
+            t.to_layout(t.embedding(ids, self.sin, layout=t.ROW_MAJOR_LAYOUT), t.TILE_LAYOUT), (1, 1, 1, 64)
+        )
+        if value.shape[-1] == 128:
+            return precise_indexer_rope(value, cos, sin)
+        first, second = value[..., :32], value[..., 32:64]
+        rotated = t.concat([t.neg(second), first], dim=-1)
+        rope = t.add(t.multiply(value[..., :64], cos), t.multiply(rotated, sin))
+        return t.concat([rope, value[..., 64:]], dim=-1)
+
+    def _update(self, cache, value, position, page_table=None):
+        t = self.ttnn
+        value = t.to_memory_config(value, self.cache_memory[value.shape[-1]])
+        t.experimental.paged_update_cache(cache, value, update_idxs_tensor=position, page_table=page_table)
+
+    def indexer_scores(self, query, compressed_keys):
+        """FP32 scores [1,1,T,K] for [1,4,T,128] queries, T=1..32.
+
+        Native HiFi4 FP32-output dots lose near-cutoff keys and reproduce
+        full-context row PCC failures on exact HF operands. Elementwise FP32
+        products plus a balanced addition tree restore all selected sets in
+        the four causal-control windows. Head reduction/scaling retain their
+        separately verified native implementation. See qsa_score_windows.json.
+
+        Static 8192-key blocks bound the largest product tensor to 128MiB at
+        T=32. A 65536-key control used eight times the scratch for essentially
+        the same measured latency (0.527s versus 0.530s). Every context key is
+        evaluated; masking and top-k remain unchanged and fully device-side.
+        """
+        t = self.ttnn
+        count, key_count = query.shape[-2], compressed_keys.shape[-2]
+        if tuple(query.shape) != (1, 4, count, 128) or not 1 <= count <= 32:
+            raise ValueError("Expected indexer queries [1,4,1..32,128]")
+        if tuple(compressed_keys.shape) != (1, 1, key_count, 128) or key_count % 32:
+            raise ValueError("Expected tile-aligned compressed keys [1,1,K,128]")
+        query = t.typecast(query, t.float32)
+        keys = t.typecast(compressed_keys, t.float32)
+        heads = []
+        for head in range(4):
+            q = t.reshape(query[:, head : head + 1], (1, count, 1, 128))
+            blocks = []
+            for start in range(0, key_count, 8192):
+                end = min(start + 8192, key_count)
+                products = t.multiply(q, keys[:, :, start:end])
+                width = 128
+                while width > 1:
+                    half = width // 2
+                    products = t.add(products[..., :half], products[..., half:width])
+                    width = half
+                blocks.append(t.reshape(products, (1, 1, count, end - start)))
+            heads.append(t.concat(blocks, dim=-1) if len(blocks) > 1 else blocks[0])
+        dots = t.concat(heads, dim=1)
+        return t.multiply(t.sum(t.relu(dots), dim=1, keepdim=True), 128**-0.5)
+
+    def selection_mask(self, x, *, state):
+        """Advance raw/compressed indexer state and return [1,1,24,capacity]."""
+        t = self.ttnn
+        pos = t.to_layout(t.reshape(t.typecast(state.position, t.float32), (1, 1, 1, 1)), t.TILE_LAYOUT)
+        group = t.floor(t.multiply(pos, 0.25))
+        group_start = t.multiply(group, 4)
+        complete = t.floor(t.multiply(t.add(pos, 1), 0.25))
+        is_complete = t.eq(t.subtract(pos, group_start), 3)
+        write_pos = t.where(is_complete, group, -1.0)
+        write_pos = t.reshape(t.to_layout(t.typecast(write_pos, t.int32), t.ROW_MAJOR_LAYOUT), (1,))
+
+        qk = self.project_index_qk(x)
+        q = t.reshape(qk[..., :512], (1, 1, 4, 128))
+        raw = qk[..., 512:]
+        q = self._rope(self.rms(q, self.index_q_norm, self.eps), pos)
+        history = t.concat([state.raw_history, raw], dim=2)
+        pooled = t.typecast(t.mean(t.typecast(history, t.float32), dim=2, keepdim=True), t.bfloat16)
+        pooled = self._rope(self.rms(pooled, self.index_k_norm, self.eps), group_start)
+        self._update(state.compressed_keys, pooled, write_pos)
+        t.copy(history[:, :, 1:, :], state.raw_history)
+
+        scores = self.indexer_scores(t.permute(q, (0, 2, 1, 3)), state.compressed_keys)
+        valid = t.lt(state.block_numbers, complete)
+        if state.capacity // 4 <= 512:
+            selected = valid
+        else:
+            scores = t.where(valid, scores, float("-inf"))
+            _, indices = t.topk(scores, k=512, dim=-1, sorted=False)
+            # Cast first: ones_like(integer, dtype=float32) takes a host fill
+            # fallback in this checkout; same-dtype floating ones_like is SFPU.
+            selected = t.zeros_like(t.typecast(scores, t.bfloat16))
+            # Scatter's UINT32 tile-to-row-major path supports at most 256
+            # indices per row. Split the exact 512 selected indices; neither
+            # their integer values nor the selection policy is approximated.
+            for start in (0, 256):
+                half = indices[..., start : start + 256]
+                selected = t.scatter(selected, dim=3, index=half, src=t.ones_like(t.typecast(half, t.bfloat16)))
+            selected = t.logical_and(selected, valid)
+        selected = t.repeat_interleave(t.typecast(selected, t.bfloat16), repeats=4, dim=3)
+        tail = t.ge(state.token_numbers, t.multiply(complete, 4))
+        visible = t.le(state.token_numbers, pos)
+        allowed = t.logical_and(t.logical_or(selected, tail), visible)
+        # A finite sentinel preserves the online-softmax reduction when a
+        # worker receives only masked chunks. -inf caused zero attention in
+        # that case on this checkout; exp(-1e9) is zero at compute precision.
+        mask = t.where(allowed, 0.0, -1.0e9)
+        mask = t.typecast(mask, t.bfloat16)
+        return t.repeat(mask, (1, 1, 24, 1))
+
+    def step(self, x, *, state, return_mask=False):
+        """One token, device-valued current position; suitable for trace capture.
+
+        Returns [1,1,1,2560]. The position input is not advanced here. Device
+        cache and indexer state are updated in place. No host conversion occurs.
+        """
+        t = self.ttnn
+        if tuple(x.shape) != (1, 1, 1, 2560):
+            raise ValueError("QSA.step expects one valid token [1,1,1,2560]")
+        mask = self.selection_mask(x, state=state)
+        q_gate = t.reshape(self.linear(x, self.q, self.compute), (1, 1, 24, 512))
+        q, gate = q_gate[..., :256], q_gate[..., 256:]
+        k = t.reshape(self.linear(x, self.k, self.compute), (1, 1, 2, 256))
+        v = t.reshape(self.linear(x, self.v, self.compute), (1, 1, 2, 256))
+        q = self._rope(self.rms(q, self.q_norm, self.eps), state.position)
+        k = self._rope(self.rms(k, self.k_norm, self.eps), state.position)
+        self._update(state.k_cache, k, state.position, state.page_table)
+        self._update(state.v_cache, v, state.position, state.page_table)
+        attention = t.transformer.paged_scaled_dot_product_attention_decode(
+            q,
+            state.k_cache,
+            state.v_cache,
+            state.page_table,
+            is_causal=False,
+            attn_mask=mask,
+            cur_pos_tensor=state.position,
+            scale=256**-0.5,
+            program_config=self.sdpa_program,
+            compute_kernel_config=self.compute,
+            memory_config=t.DRAM_MEMORY_CONFIG,
+        )
+        attention = t.multiply(attention, t.sigmoid(gate))
+        result = self.linear(t.reshape(attention, (1, 1, 1, 6144)), self.out, self.compute)
+        return (result, mask) if return_mask else result

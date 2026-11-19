@@ -464,28 +464,53 @@ void kernel_main() {
     // Stable top-k: on exact value ties the candidate at the lowest position wins, so the sampled
     // token does not depend on how the bitonic network happens to swap equal values.
     constexpr bool stable_sort = get_arg(args::stable_sort) == 1;
+    constexpr bool input_sorted = get_arg(args::input_sorted) == 1;
     generate_rand_tile(dfb::rand_tile, seed);
 
     const uint32_t nearest32_K = 32;
     const uint32_t logk = 5;  // log(32)
 
-    // top-k
-    top_k<
-        Ht,
-        Wt,
-        nearest32_K,
-        logWt,
-        logk,
-        dfb::input_values,
-        dfb::index,
-        dfb::input_transposed,
-        dfb::index_transposed,
-        dfb::values,
-        dfb::output_ind,
-        tile_width,
-        true,
-        stable_sort>();
-    constexpr uint32_t Kt = nearest32_K / tile_width;
+    // Keep the producer handle alive through softmax consumption (DFB teardown may drain).
+    DataflowBuffer sorted_values(dfb::values);
+    if constexpr (input_sorted) {
+        static_assert(!input_sorted || (Ht == 1 && Wt == 2 && tile_width == 32));
+        // Random generation remains first. These values are already sorted; copy both tiles
+        // verbatim and leave the generated-index/sorter streams untouched on both endpoints.
+        reconfig_data_format_srca(dfb::input_values);
+        copy_init(dfb::input_values);
+        pack_reconfig_data_format(dfb::values);
+        DataflowBuffer input_values(dfb::input_values);
+        input_values.wait_front(2);
+        sorted_values.reserve_back(2);
+        tile_regs_acquire();
+        copy_tile(dfb::input_values, 0, 0);
+        copy_tile(dfb::input_values, 1, 1);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, dfb::values);
+        pack_tile(1, dfb::values);
+        tile_regs_release();
+        input_values.pop_front(2);
+        sorted_values.push_back(2);
+    } else {
+        // top-k
+        top_k<
+            Ht,
+            Wt,
+            nearest32_K,
+            logWt,
+            logk,
+            dfb::input_values,
+            dfb::index,
+            dfb::input_transposed,
+            dfb::index_transposed,
+            dfb::values,
+            dfb::output_ind,
+            tile_width,
+            true,
+            stable_sort>();
+    }
+    constexpr uint32_t Kt = input_sorted ? 2 : nearest32_K / tile_width;
 
     // scale temperature
 

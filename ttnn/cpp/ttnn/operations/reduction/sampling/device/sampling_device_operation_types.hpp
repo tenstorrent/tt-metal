@@ -14,6 +14,7 @@ namespace ttnn::prim {
 struct SamplingParams {
     std::optional<uint32_t> seed;
     std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
+    bool input_sorted = false;
 };
 
 struct SamplingInputs {

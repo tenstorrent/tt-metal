@@ -52,7 +52,9 @@ ttnn::Tensor moe_fused_swiglu(
     // dropped like a zero count. Wide open by default; a hybrid dispatch narrows it so this
     // op and unified_routed_expert_moe split the experts by load over ONE counts vector.
     uint32_t min_active_tokens = 0,
-    uint32_t max_active_tokens = std::numeric_limits<uint32_t>::max());
+    uint32_t max_active_tokens = std::numeric_limits<uint32_t>::max(),
+    // FPU accumulation rounding only; formats, fidelity and pack rounding are unchanged.
+    bool stochastic_rounding = true);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::moe_fused_swiglu
 

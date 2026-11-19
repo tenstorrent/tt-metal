@@ -1,0 +1,193 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""CPU-only, fail-closed summary of a completed synthetic pytest run.
+
+Run this through run_recorded with a distinct summary provenance path. Preserve
+the original pytest provenance. --xml-sha256 binds the inspected XML digest in
+the summary command; the original wrapper records its path, not its digest.
+This summary is evidence verification, never a stage-review verdict.
+"""
+
+import argparse
+import hashlib
+import json
+import math
+import xml.etree.ElementTree as ET
+from collections import Counter
+from datetime import datetime, timezone
+from pathlib import Path
+
+from .verify_format19_dependency import FormatSourceClosure
+
+CLASSNAME = "models.autoports.qwen_qwen3_8_flash_next.tests.test_synthetic_decoder"
+EXPECTED_CASES = tuple(
+    f"test_full_decoder_prefill_and_traced_decode[{kind}-{length}]"
+    for kind in ("linear_layer0", "indexed_layer3")
+    for length in (1, 33)
+) + ("test_ple_arithmetic_only[1]", "test_ple_arithmetic_only[33]")
+SOURCE_SUFFIXES = (".py", ".cpp", ".hpp", ".h")
+
+
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def timestamp(value):
+    result = datetime.fromisoformat(value)
+    if result.tzinfo is None:
+        raise ValueError("Run/XML timestamp must include timezone")
+    return result.astimezone(timezone.utc)
+
+
+def parse_xml(path):
+    document = ET.parse(path).getroot()
+    suites = list(document.iter("testsuite"))
+    if len(suites) != 1:
+        raise ValueError("Expected exactly one pytest testsuite")
+    suite = suites[0]
+    cases = list(suite.iter("testcase"))
+    if Counter(case.get("name") for case in cases) != Counter(EXPECTED_CASES):
+        raise ValueError("XML must contain exactly the six expected test identities, once each")
+    if any(case.get("classname") != CLASSNAME for case in cases):
+        raise ValueError("Unexpected testcase module")
+    counts = {key: int(suite.attrib[key]) for key in ("tests", "failures", "errors", "skipped")}
+    if counts != {"tests": 6, "failures": 0, "errors": 0, "skipped": 0}:
+        raise ValueError(f"Unsuccessful or incomplete XML counts: {counts}")
+    if any(list(document.iter(tag)) for tag in ("failure", "error", "skipped")):
+        raise ValueError("XML contains failure/error/skip elements despite suite counts")
+    records = []
+    for case in cases:
+        properties = case.findall("properties/property")
+        names = [item.get("name") for item in properties]
+        if len(names) != len(set(names)):
+            raise ValueError(f"Duplicate testcase properties: {case.get('name')}")
+        values = {item.get("name"): item.get("value") for item in properties}
+        pcc_names = (
+            ("ple_arithmetic_prefill_pcc", "ple_arithmetic_decode_pcc")
+            if case.get("name").startswith("test_ple_arithmetic_only")
+            else ("prefill_pcc", "decode_0_pcc", "decode_1_pcc", "decode_2_pcc")
+        )
+        pcc = {key: float(values[key]) for key in pcc_names}
+        if any(not math.isfinite(value) or value < 0.995 for value in pcc.values()):
+            raise ValueError(f"Testcase PCC property fails: {case.get('name')}")
+        records.append({"name": case.get("name"), "classname": CLASSNAME, "pcc": pcc, "properties": values})
+    return {**counts, "test_cases": records, "xml_suite_timestamp": suite.attrib["timestamp"]}
+
+
+def junit_paths(argv, cwd):
+    result = []
+    for index, argument in enumerate(argv):
+        if argument.startswith("--junitxml=") or argument.startswith("--junit-xml="):
+            result.append((cwd / argument.split("=", 1)[1]).resolve())
+        elif argument in ("--junitxml", "--junit-xml"):
+            if index + 1 >= len(argv):
+                raise ValueError("Missing JUnit output argument")
+            result.append((cwd / argv[index + 1]).resolve())
+    return result
+
+
+def summarize(root, xml, pytest_provenance, expected_xml_sha256, format_binding=None):
+    report = {
+        "scope": "Four complete synthetic layer0/3 decoder tests and two PLE arithmetic-only tests; no full resident synthetic PLE decoder or stage acceptance claim.",
+        "passed": False,
+        "xml_sha256_matches": False,
+        "source_identity_matches_pytest_run": False,
+        "threshold": 0.995,
+        "errors_found": [],
+        "summary_source_sha256": digest(Path(__file__)),
+    }
+    try:
+        formatting = FormatSourceClosure(root, format_binding)
+        report["format_source_closure"] = formatting.proof
+        xml = xml.resolve()
+        pytest_provenance = pytest_provenance.resolve()
+        report["xml"] = {"path": str(xml), "sha256": digest(xml), "expected_sha256": expected_xml_sha256}
+        report["pytest_provenance"] = {"path": str(pytest_provenance), "sha256": digest(pytest_provenance)}
+        report["xml_sha256_matches"] = report["xml"]["sha256"] == expected_xml_sha256
+        if not report["xml_sha256_matches"]:
+            raise ValueError("XML SHA256 differs from explicitly supplied identity")
+        report.update(parse_xml(xml))
+        provenance = json.loads(pytest_provenance.read_text())
+        report["pytest_exit_code"] = provenance.get("exit_code")
+        if provenance.get("status") != "finished" or type(report["pytest_exit_code"]) is not int:
+            raise ValueError("Original pytest provenance is not a completed process")
+        if report["pytest_exit_code"] != 0:
+            raise ValueError("Original pytest process failed")
+        sources = {
+            str(path.relative_to(root)): digest(path)
+            for path in (root / "tt").rglob("*")
+            if path.is_file() and path.suffix in SOURCE_SUFFIXES
+        }
+        for name in ("tests/test_synthetic_decoder.py", "tests/synthetic_weights.py"):
+            sources[name] = digest(root / name)
+        recorded = provenance.get("source_sha256", {})
+        report["verified_current_source_sha256"] = sources
+        report["missing_or_changed_sources"] = []
+        for name in sources:
+            try:
+                formatting.verify(name, recorded.get(name))
+            except ValueError:
+                report["missing_or_changed_sources"].append(name)
+        report["missing_or_changed_sources"] += [
+            name for name in recorded if name.startswith("tt/") and name not in sources
+        ]
+        if report["missing_or_changed_sources"]:
+            raise ValueError(
+                "Original run source identity is missing/stale: " + ", ".join(report["missing_or_changed_sources"])
+            )
+        report["source_identity_matches_pytest_run"] = all(recorded.get(name) == sha for name, sha in sources.items())
+        report["source_identity_or_exact_format_closure"] = True
+        cwd = Path(provenance["cwd"])
+        argv = provenance["argv"]
+        if junit_paths(argv, cwd) != [xml]:
+            raise ValueError("Original command does not uniquely bind this XML path")
+        target = (root / "tests/test_synthetic_decoder.py").resolve()
+        if not any((cwd / argument).resolve() == target for argument in argv):
+            raise ValueError("Original command does not name the synthetic test module")
+        log = cwd / provenance["log"]
+        report["pytest_log"] = {"path": str(log.resolve()), "sha256": digest(log)}
+        if not provenance.get("log_sha256") or digest(log) != provenance["log_sha256"]:
+            raise ValueError("Original pytest log identity is missing or changed")
+        if "RUN_RECORDED_FINISHED exit_code=0" not in log.read_text():
+            raise ValueError("Original pytest completion marker is missing")
+        started, finished = timestamp(provenance["started_utc"]), timestamp(provenance["finished_utc"])
+        suite_started = timestamp(report["xml_suite_timestamp"])
+        modified = datetime.fromtimestamp(xml.stat().st_mtime, timezone.utc)
+        if not started <= suite_started <= finished or not started <= modified <= finished:
+            raise ValueError("XML suite timestamp or file modification is outside the original run")
+        report["supporting_fixture_files"] = [
+            {"path": str(root / name), "sha256": digest(root / name)}
+            for name in ("doc/functional_decoder/target_text_config.json", "doc/functional_decoder/weight_stats.json")
+        ]
+        report[
+            "identity_limitation"
+        ] = "The original wrapper binds XML by command path and run timestamps, not a creation-time digest. This summary records the explicitly supplied/readback XML hash; fixture JSON hashes are observed at summary time."
+        report["passed"] = True
+    except (OSError, ValueError, KeyError, TypeError, ET.ParseError) as exc:
+        report["errors_found"].append(str(exc))
+    return report
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument("--xml", type=Path, required=True)
+    parser.add_argument("--pytest-provenance", type=Path, required=True)
+    parser.add_argument("--xml-sha256", required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--format-source-closure", type=Path)
+    args = parser.parse_args()
+    if args.output.resolve() in (args.xml.resolve(), args.pytest_provenance.resolve()):
+        parser.error("Summary output must not overwrite either input")
+    if len(args.xml_sha256) != 64 or any(char not in "0123456789abcdef" for char in args.xml_sha256):
+        parser.error("--xml-sha256 must be a lowercase SHA256 hex digest")
+    binding = json.loads(args.format_source_closure.read_text()) if args.format_source_closure else None
+    report = summarize(args.root.resolve(), args.xml, args.pytest_provenance, args.xml_sha256, binding)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(report, indent=2) + "\n")
+    print(json.dumps({"passed": report["passed"], "errors_found": report["errors_found"], "output": str(args.output)}))
+    raise SystemExit(0 if report["passed"] else 1)
+
+
+if __name__ == "__main__":
+    main()

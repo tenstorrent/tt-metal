@@ -79,6 +79,7 @@ def test_ttsampling_reset_params_scale_logprobs_per_row(monkeypatch, expect_erro
     monkeypatch.setattr(ttnn, "copy_host_to_device_tensor", lambda host, device: copies.__setitem__(device, host))
     sampling = TTSampling.__new__(TTSampling)
     sampling.max_top_k = 32
+    sampling._num_gather_links_by_width = {32: 1}
     sampling._allow_force_argmax_sampling = False
     sampling._sampling_dp = 1
     for name in ("k_tensor", "p_tensor", "temp_tensor", "_greedy_col", "_scale_logprobs"):
@@ -129,6 +130,7 @@ def test_sampling_trace_bucket_isolation():
     """Default users keep one flat namespace; Qwen bucket widths get distinct slots."""
     sampling = SamplingGenerator.__new__(SamplingGenerator)
     sampling._trace_states = {}
+    sampling.tt_sampling = SimpleNamespace(candidate_width=32)
     sampling._active_trace_bucket = None
 
     default_key, default_slot = sampling._trace_slot(False, False, True)
@@ -150,10 +152,153 @@ def test_sampling_trace_bucket_isolation():
     assert len(sampling._trace_states) == 3
 
 
+@pytest.mark.parametrize("bucket", [None, 1, 8])
+@pytest.mark.parametrize("grammar_on", [False, True])
+def test_sampling_candidate_width_retains_distinct_traces(bucket, grammar_on):
+    """A wide request cannot replay a narrow sort, and returning to narrow reuses its trace."""
+    sampling = SamplingGenerator.__new__(SamplingGenerator)
+    sampling._trace_states = {}
+    sampling._active_trace_bucket = bucket
+    sampling.tt_sampling = SimpleNamespace(candidate_width=32)
+    narrow_key, narrow = sampling._trace_slot(False, False, False, grammar_on)
+    narrow["id"] = "narrow-capture"
+    sampling.tt_sampling.candidate_width = 64
+    wide_key, wide = sampling._trace_slot(False, False, False, grammar_on)
+    wide["id"] = "wide-capture"
+    assert wide_key != narrow_key
+    assert wide is not narrow
+    assert wide_key.candidate_width == 64 and narrow_key.candidate_width == 32
+    sampling.tt_sampling.candidate_width = 32
+    assert sampling._trace_slot(False, False, False, grammar_on)[1] is narrow
+    assert narrow["id"] == "narrow-capture" and wide["id"] == "wide-capture"
+    assert len(sampling._trace_states) == 2
+
+
+@pytest.mark.parametrize("capacity", [32, 40, 64])
+def test_sampling_reset_selects_persistent_candidate_offsets(monkeypatch, capacity):
+    """Changing distributions refreshes fixed inputs without reallocating either trace's offsets."""
+    device = object()
+    allocations = []
+    copies = {}
+
+    def from_torch(tensor, **kwargs):
+        tensor = tensor.clone()
+        if kwargs.get("device") is device:
+            allocations.append(tensor)
+        return tensor
+
+    monkeypatch.setattr(ttnn, "from_torch", from_torch)
+    monkeypatch.setattr(ttnn, "ShardTensor2dMesh", lambda *args, **kwargs: None)
+    monkeypatch.setattr(ttnn, "copy_host_to_device_tensor", lambda host, target: copies.__setitem__(target, host))
+    sampler = TTSampling.__new__(TTSampling)
+    sampler.max_top_k = capacity
+    sampler.candidate_width = 32
+    sampler._num_gather_links_by_width = {32: 1, 64: 1}
+    sampler.max_batch_size = 32
+    sampler.padded_vocab_size = 248320
+    sampler.cluster_shape = (1, 4)
+    sampler.mesh_device = device
+    sampler.multi_step_reduction = False
+    sampler._sampling_dp = 1
+    sampler._allow_force_argmax_sampling = False
+    sampler.log_probs_calculator = SimpleNamespace(
+        _use_topk_logprobs=False, enable_log_probs=False, set_log_probs_mode=lambda *args, **kwargs: None
+    )
+    for name in ("k_tensor", "p_tensor", "temp_tensor", "_greedy_col", "_scale_logprobs"):
+        setattr(sampler, name, name)
+    sampler._create_indices_tensors()
+    offsets = dict(sampler._indices_device_offsets_by_width)
+    assert set(offsets) == ({32} if capacity == 32 else {32, 64})
+    for width, tensor in offsets.items():
+        assert list(tensor.shape) == [1, 1, 32, width * 4]
+        for rank in range(4):
+            assert torch.all(tensor[..., rank * width : (rank + 1) * width] == rank * 62080)
+
+    for k, temp in ((20, 1.0), (40, 1.0), (1, 1.0), (64, 1.0), (40, 0.0), (32, 1.0)):
+        effective_k = 1 if temp == 0 else min(k, capacity)
+        width = 64 if effective_k > 32 else 32
+        sampler.reset_params(k=[k] + [1] * 31, p=[0.95] * 32, temp=[temp] + [1.0] * 31)
+        assert sampler.candidate_width == width
+        assert sampler.tt_indices_device_offsets is offsets[width]
+        assert copies["k_tensor"][0].item() == effective_k
+        assert len(allocations) == len(offsets), "A request transition allocated new offset storage"
+
+
+@pytest.mark.parametrize("initial_width,rejected_k", [(32, 40), (64, 20)])
+@pytest.mark.parametrize("rejection", ["temperature_shape", "topk_logprobs", "logprobs_setter"])
+def test_failed_sampling_reset_preserves_candidate_family(
+    monkeypatch, expect_error, initial_width, rejected_k, rejection
+):
+    """Rejected settings cannot select a different trace while device parameters remain unchanged."""
+    sampler = TTSampling.__new__(TTSampling)
+    sampler.max_top_k = 64
+    sampler.candidate_width = initial_width
+    sampler._num_gather_links_by_width = {32: 1, 64: 2}
+    sampler.num_gather_links = sampler._num_gather_links_by_width[initial_width]
+    offsets = {32: object(), 64: object()}
+    sampler._indices_device_offsets_by_width = offsets
+    sampler.tt_indices_device_offsets = offsets[initial_width]
+    sampler._force_argmax_sampling = False
+    setter_calls = []
+
+    def set_log_probs_mode(*args, **kwargs):
+        setter_calls.append(True)
+        if rejection == "logprobs_setter":
+            raise ValueError("rejected logprobs settings")
+
+    sampler.log_probs_calculator = SimpleNamespace(
+        _use_topk_logprobs=rejection == "topk_logprobs", set_log_probs_mode=set_log_probs_mode
+    )
+
+    def unexpected_upload(*args, **kwargs):
+        pytest.fail("A rejected reset touched persistent device parameters")
+
+    monkeypatch.setattr(ttnn, "from_torch", unexpected_upload)
+    monkeypatch.setattr(ttnn, "copy_host_to_device_tensor", unexpected_upload)
+    temperature_flags = [True] if rejection == "temperature_shape" else True
+    expected_error = {
+        "temperature_shape": "log_probs_enable_temperature has shape",
+        "topk_logprobs": "not supported with top-k log-probs",
+        "logprobs_setter": "rejected logprobs settings",
+    }[rejection]
+    with expect_error(ValueError, expected_error):
+        sampler.reset_params(
+            k=[rejected_k] * 32,
+            p=[0.95] * 32,
+            temp=[1.0] * 32,
+            log_probs_enable_temperature=temperature_flags,
+        )
+    assert sampler.candidate_width == initial_width
+    assert sampler.tt_indices_device_offsets is offsets[initial_width]
+    assert sampler.num_gather_links == sampler._num_gather_links_by_width[initial_width]
+    assert sampler._force_argmax_sampling is False
+    assert setter_calls == ([True] if rejection == "logprobs_setter" else [])
+
+
+@pytest.mark.parametrize("chunks", [1, 2])
+def test_decode_state_formatter_preserves_explicit_sampler_capacity(chunks):
+    """Both single and DP chunk formatting must carry a wide request through unchanged."""
+    sampling = SamplingGenerator.__new__(SamplingGenerator)
+    sampling.tt_sampling = SimpleNamespace(max_batch_size=32, max_top_k=64)
+    sampling.validate_decode_state_commands = lambda **kwargs: None
+    sampling.commit_decode_state_commands = lambda **kwargs: None
+    uploaded = []
+    sampling.reset_sampling_params = uploaded.append
+    sampling.apply_decode_state(
+        [SamplingParams(temperature=1.0, top_k=40, top_p=0.95, seed=42)] * chunks,
+        reload_sampling_params=True,
+        reset_sampling_state=False,
+    )
+    assert len(uploaded) == 1
+    assert uploaded[0].top_k[::32] == [40] * chunks
+    assert uploaded[0].seed[::32] == [42] * chunks
+
+
 def test_grammar_uses_separate_trace():
     """Masked and unmasked sampling use different cached traces."""
     sampling = SamplingGenerator.__new__(SamplingGenerator)
     sampling._trace_states = {}
+    sampling.tt_sampling = SimpleNamespace(candidate_width=32)
     sampling._active_trace_bucket = None
 
     _, grammar_off = sampling._trace_slot(False, False, True, False)
@@ -236,6 +381,7 @@ def test_greedy_switch_keeps_cached_traces():
     """Switching to greedy sampling keeps previously cached variants."""
 
     class ToggleSampling:
+        candidate_width = 32
         force_argmax_sampling = False
         log_probs_calculator = SimpleNamespace(enable_log_probs=False)
 

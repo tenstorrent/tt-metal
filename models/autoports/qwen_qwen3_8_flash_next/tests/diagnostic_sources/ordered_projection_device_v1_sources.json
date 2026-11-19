@@ -1,0 +1,31 @@
+{
+  "provenance": "doc/functional_decoder/provenance/ordered_projection_device_v1.json",
+  "provenance_sha256": "28c90373b6bc7c0c416a207a0d3f12fb7c72530ff576ed3180c896416f18bc12",
+  "files": [
+    {
+      "executed_source": "tt/ordered_projection.py",
+      "preserved_source": "tests/diagnostic_sources/ordered_projection_device_v1_tt_ordered_projection.py.txt",
+      "sha256": "422206671e095c88899c45ae303826a2419fb248c43620cc04ba658bd4d8ea33"
+    },
+    {
+      "executed_source": "tt/kernels/ordered_projection_reader.cpp",
+      "preserved_source": "tests/diagnostic_sources/ordered_projection_device_v1_tt_kernels_ordered_projection_reader.cpp.txt",
+      "sha256": "f04e14870d5a81a6fd1b7b6922fbbe1eee9c8b196b77bcac53291fb0e45f992b"
+    },
+    {
+      "executed_source": "tt/kernels/ordered_projection_compute.cpp",
+      "preserved_source": "tests/diagnostic_sources/ordered_projection_device_v1_tt_kernels_ordered_projection_compute.cpp.txt",
+      "sha256": "c9701ee9c1acb1c209463cf6cc19b6acc4e4fa397a0ba87f1ff62c45f2df9c77"
+    },
+    {
+      "executed_source": "tt/kernels/ordered_projection_writer.cpp",
+      "preserved_source": "tests/diagnostic_sources/ordered_projection_device_v1_tt_kernels_ordered_projection_writer.cpp.txt",
+      "sha256": "b2359f2e53ef1d1572a0b9a789f80c2b3cbf5e6e8b27f11ad833b8106dbca1c7"
+    },
+    {
+      "executed_source": "tests/probe_ordered_projection.py",
+      "preserved_source": "tests/diagnostic_sources/ordered_projection_device_v1_tests_probe_ordered_projection.py.txt",
+      "sha256": "c5d3c760abeb3f783e64c7867fcfc0f4abad4dbd9628f1141e936612fa87cb48"
+    }
+  ]
+}

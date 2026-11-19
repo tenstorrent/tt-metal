@@ -28,7 +28,8 @@ ttnn::Tensor moe_fused_swiglu(
     const std::optional<std::vector<ttnn::Tensor>>& up_biases,
     const std::optional<std::vector<ttnn::Tensor>>& down_biases,
     uint32_t min_active_tokens,
-    uint32_t max_active_tokens) {
+    uint32_t max_active_tokens,
+    bool stochastic_rounding) {
     constexpr uint32_t TILE = 32;
     TT_FATAL(!w_gates.empty(), "moe_fused_swiglu: at least one local expert is required");
     TT_FATAL(
@@ -114,7 +115,8 @@ ttnn::Tensor moe_fused_swiglu(
         output,
         expert_region_offsets,
         min_active_tokens,
-        max_active_tokens);
+        max_active_tokens,
+        stochastic_rounding);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::moe_fused_swiglu

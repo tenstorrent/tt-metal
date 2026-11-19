@@ -1,0 +1,265 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Offline closure of device-protocol performance evidence, never stage acceptance.
+
+Reparse native warm/measured endpoints and rerender tt-perf-report in a temporary
+directory. Existing capture/report artifacts are read only. Require the complete
+runtime inventory and explicitly selected harness dependencies to match both
+recorded invocations; unrelated added/changed tests do not invalidate a capture.
+"""
+
+import argparse
+import hashlib
+import json
+import lzma
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+MODULE = "models.autoports.qwen_qwen3_8_flash_next.tests.report_trace_performance"
+SOURCE_SUFFIXES = {".py", ".cpp", ".hpp", ".h"}
+
+
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def require(condition, reason):
+    if not condition:
+        raise ValueError(reason)
+
+
+def source_closure(root, record, required):
+    recorded = record["source_sha256"]
+    current_runtime = {
+        str(path.relative_to(root))
+        for path in (root / "tt").rglob("*")
+        if path.is_file() and path.suffix in SOURCE_SUFFIXES
+    }
+    recorded_runtime = {name for name in recorded if name.startswith("tt/")}
+    require(current_runtime and current_runtime == recorded_runtime, "Runtime source inventory changed or incomplete")
+    checked = sorted(current_runtime | set(required))
+    for name in checked:
+        require(recorded.get(name) == digest(root / name), f"Required source identity changed: {name}")
+    return {name: recorded[name] for name in checked}
+
+
+def completed_record(root, path, required):
+    record = json.loads(path.read_text())
+    require(record.get("status") == "finished" and record.get("exit_code") == 0, f"Unsuccessful provenance: {path}")
+    log = Path(record["cwd"]) / record["log"]
+    require(record.get("log_sha256") == digest(log), f"Recorded log changed: {log}")
+    require("RUN_RECORDED_FINISHED exit_code=0" in log.read_text(), f"Missing completion marker: {log}")
+    sources = source_closure(root, record, required)
+    return record, log, sources
+
+
+def argument_path(record, flag):
+    argv = record["argv"]
+    require(argv.count(flag) == 1, f"Expected exactly one argument {flag}")
+    return (Path(record["cwd"]) / argv[argv.index(flag) + 1]).resolve()
+
+
+def checked_archive(path, expected_hash):
+    require(digest(path) == expected_hash, f"Archive identity changed: {path}")
+    restored = lzma.decompress(path.read_bytes())
+    original = path.with_suffix("")
+    if original.exists():
+        require(original.read_bytes() == restored, f"Archive/original mismatch: {original}")
+    return restored
+
+
+def validate_performance_gate(root, gate):
+    root = root.resolve()
+    config = gate["offline_validator"]
+    require(config["kind"] == "device_trace_performance_v1", "Unsupported performance validator")
+    artifact = (root / gate["artifact"]).resolve()
+    output = artifact.parent / "report"
+    profile = json.loads(artifact.read_text())
+    mode = profile["mode"]
+    require(mode in ("prefill", "decode"), "Unknown performance mode")
+    require(profile["layer"] == gate["layer"], "Profile layer binding differs")
+    required = gate["required_sources"]
+    capture, capture_log, capture_sources = completed_record(root, root / gate["provenance"], required)
+    conversion_path = root / config["report_provenance"]
+    conversion, conversion_log, conversion_sources = completed_record(root, conversion_path, required)
+    require(capture_sources == conversion_sources, "Capture/conversion source identities differ")
+    require(
+        any((Path(capture["cwd"]) / arg).resolve() == artifact for arg in capture["argv"]),
+        "Capture command does not bind profile artifact",
+    )
+    argv = conversion["argv"]
+    require(argv.count("--device-protocol") == 1 and "--host-metadata-json" not in argv, "Wrong report protocol")
+    require(argv.count("-m") == 1 and argv[argv.index("-m") + 1] == MODULE, "Wrong offline report module")
+    require(argument_path(conversion, "--profile-json") == artifact, "Conversion uses a different profile")
+    require(argument_path(conversion, "--capture-log") == capture_log.resolve(), "Conversion uses a different log")
+    require(argument_path(conversion, "--output-dir") == output.resolve(), "Conversion report directory differs")
+    native = argument_path(conversion, "--device-csv")
+    report_path = output / "provenance.json"
+    report = json.loads(report_path.read_text())
+    require(report.get("passed") is True and report["profile"] == profile, "Report/profile disagreement")
+    cwd = Path(conversion["cwd"])
+    expected_archives = {
+        output / "raw_device.csv.xz",
+        output / "whole_trace_ops.csv.xz",
+        output / f"{mode}_perf_report.csv.xz",
+    }
+    archive_records = {(cwd / row["path"]).resolve(): row["sha256"] for row in report["archives"]}
+    require(
+        len(report["archives"]) == 3 and set(archive_records) == expected_archives,
+        "Incomplete/duplicate report archives",
+    )
+    restored = {path.with_suffix("").name: checked_archive(path, sha) for path, sha in archive_records.items()}
+    native_bytes = restored["raw_device.csv"]
+    require(
+        hashlib.sha256(native_bytes).hexdigest() == profile["native_csv"]["sha256"], "Native CSV/profile hash mismatch"
+    )
+    if native.exists():
+        require(native.read_bytes() == native_bytes, "Original native CSV differs from archive")
+    bound_sources = {(cwd / name).resolve(): sha for name, sha in report["sources"].items()}
+    expected_sources = {native, artifact, capture_log.resolve(), output / "whole_trace_ops.csv"}
+    require(set(bound_sources) == expected_sources, "Report source closure incomplete or unexpected")
+    for path, expected in bound_sources.items():
+        content = (
+            native_bytes
+            if path == native
+            else restored[path.name]
+            if path.name == "whole_trace_ops.csv"
+            else path.read_bytes()
+        )
+        require(hashlib.sha256(content).hexdigest() == expected, f"Report source identity mismatch: {path}")
+    coverage = profile["measurement_protocol"]["coverage_source_sha256"]
+    require(coverage, "Missing independent core coverage source proof")
+    for name, sha in coverage.items():
+        require(digest(cwd / name) == sha, f"Core-coverage source changed: {name}")
+    analysis = report["analysis"]
+    require(
+        digest(cwd / analysis["analysis_source"]) == analysis["analysis_source_sha256"],
+        "Official native parser changed",
+    )
+    renderer = [
+        str(Path(sys.executable).parent / "tt-perf-report"),
+        str(output / "whole_trace_ops.csv"),
+        "--start-signpost",
+        f"PERF_{mode.upper()}",
+        "--end-signpost",
+        f"PERF_{mode.upper()}_END",
+        "--tracing-mode",
+        "--no-advice",
+        "--no-summary",
+        "--no-color",
+        "--arch",
+        "blackhole",
+    ]
+    # Compare paths canonically, preserving every non-path renderer argument.
+    expected_commands = [renderer + ["--csv", str(output / f"{mode}_perf_report.csv")], renderer]
+    require(len(report["commands"]) == 2, "Missing actual renderer invocations")
+    for recorded, expected in zip(report["commands"], expected_commands):
+        require(len(recorded) == len(expected), "Renderer command changed")
+        for index, (actual, wanted) in enumerate(zip(recorded, expected)):
+            is_path = index in (0, 1) or index > 0 and expected[index - 1] == "--csv"
+            require(
+                (cwd / actual).resolve() == Path(wanted).resolve() if is_path else actual == wanted,
+                "Renderer command mismatch",
+            )
+    with tempfile.TemporaryDirectory(prefix="qwen_trace_evidence_") as directory:
+        temporary = Path(directory)
+        restored_native = temporary / "native.csv"
+        restored_native.write_bytes(native_bytes)
+        rerender = temporary / "report"
+        command = [
+            sys.executable,
+            "-m",
+            MODULE,
+            "--device-protocol",
+            "--device-csv",
+            str(restored_native),
+            "--profile-json",
+            str(artifact),
+            "--capture-log",
+            str(capture_log),
+            "--output-dir",
+            str(rerender),
+        ]
+        process = subprocess.run(command, cwd=cwd, capture_output=True, text=True, timeout=180)
+        require(process.returncode == 0, f"Offline native validation/rerender failed: {process.stderr[-4000:]}")
+        generated = json.loads((rerender / "provenance.json").read_text())
+        for key in ("selection", "analysis", "profile"):
+            require(generated[key] == report[key], f"Recomputed {key} differs from recorded report")
+        for name in ("whole_trace_ops.csv", f"{mode}_perf_report.csv"):
+            require((rerender / name).read_bytes() == restored[name], f"Recomputed report CSV differs: {name}")
+        for name in (f"{mode}_perf_report.txt", "latency_summary.json"):
+            require(
+                (rerender / name).read_bytes() == (output / name).read_bytes(), f"Recomputed report differs: {name}"
+            )
+    checked_paths = {
+        artifact,
+        root / gate["provenance"],
+        conversion_path,
+        capture_log,
+        conversion_log,
+        report_path,
+        output / f"{mode}_perf_report.txt",
+        output / "latency_summary.json",
+        *expected_archives,
+    }
+    return {
+        "status": "offline_performance_evidence_verified_review_required",
+        "runtime_and_selected_harness_sha256": capture_sources,
+        "artifact_sha256": {str(path): digest(path) for path in sorted(checked_paths)},
+        "restored_csv_sha256": {name: hashlib.sha256(data).hexdigest() for name, data in restored.items()},
+        "validator_sha256": digest(Path(__file__)),
+        "native_parser_and_renderer_reproduced_exactly": True,
+        "participating_cores": len(analysis["cores"]),
+        "architecture_max_compute_cores": analysis["device_info"]["max_compute_cores"],
+        "device_trace_elapsed_ms": analysis["trace_kernel"]["duration_ns"] / 1e6,
+        "limitation": "Whole-trace elapsed includes internal gaps; no per-op, utilization, roofline, or stage-acceptance claim.",
+        "acceptance_inferred": False,
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument("--gate-manifest", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    gates = json.loads(args.gate_manifest.read_text())["gates"]
+    selected = [
+        gate for gate in gates if gate.get("offline_validator", {}).get("kind") == "device_trace_performance_v1"
+    ]
+    require(
+        len(selected) == 6
+        and {gate["id"] for gate in selected}
+        == {f"layer{layer}_{mode}_performance" for layer in (0, 1, 3) for mode in ("prefill", "decode")},
+        "Expected exactly six layer/mode performance bindings",
+    )
+    from .summarize_functional_evidence import evaluate_gate
+
+    results = [evaluate_gate(args.root.resolve(), gate) for gate in selected]
+    passed = all(row["status"] == "declared_checks_satisfied_review_required" for row in results)
+    report = {
+        "scope": __doc__,
+        "bindings_sha256": digest(args.gate_manifest),
+        "gates": results,
+        "passed": passed,
+        "stage_acceptance": "not_evaluated",
+    }
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(report, indent=2) + "\n")
+    print(
+        json.dumps(
+            {
+                "output": str(args.output),
+                "passed": passed,
+                "gates": [{"id": row["id"], "status": row["status"], "reason": row.get("reason")} for row in results],
+                "stage_acceptance": "not_evaluated",
+            }
+        )
+    )
+    raise SystemExit(0 if passed else 1)
+
+
+if __name__ == "__main__":
+    main()

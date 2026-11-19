@@ -1,0 +1,174 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Verify the recorded PLE normal5/normal6 memory bound, not stage acceptance.
+
+This is deliberately specific to the resident representation, tuple trace and
+mandatory-state/workspace liveness documented by this evidence. Watcher5 is an
+instrumented failure, never evidence for a normal-runtime maximum of four.
+"""
+
+import argparse
+import json
+import re
+from pathlib import Path
+
+from .validate_trace_evidence import argument_path, digest, require
+from .verify_ple_capacity_dependency import ple_source_closure
+
+CASES = {
+    "ple_private_batch5_normal_v1": (5, False, 0),
+    "ple_private_batch6_normal_v1": (6, False, 1),
+    "ple_private_batch5_controlled_v1": (5, True, 1),
+}
+DEPENDENCIES = [
+    "tests/probe_batch.py",
+    "tests/probe_ple_batch_quantization.py",
+    "tests/probe_ple_quantization.py",
+    "tests/run_recorded.py",
+]
+
+
+def trace_allocation(document, failed):
+    snapshots = document["memory_snapshots"]
+    before = snapshots["before_end_capture"]
+    after = snapshots["exception_before_release_trace" if failed else "after_end_capture"]
+    require(before["banks"] == after["banks"] == 8, "Unexpected bank geometry")
+    old = {row["address"]: row for row in before["allocated_blocks_at_least_1mib_per_bank"]}
+    new = [row for row in after["allocated_blocks_at_least_1mib_per_bank"] if row["address"] not in old]
+    require(len(new) == 1, "Cannot uniquely identify end-capture trace allocation")
+    block = new[0]
+    size = block["size_all_banks"]
+    require(type(size) is int and size > 0 and size == block["size_per_bank"] * 8, "Invalid trace block size")
+    require(after["allocated_bytes"] - before["allocated_bytes"] == size, "Trace allocation delta differs")
+    require(before["free_bytes"] - after["free_bytes"] == size, "Trace free-byte delta differs")
+    return size
+
+
+def validate_bound(root, bound_path):
+    root = root.resolve()
+    bound_path = bound_path.resolve()
+    base = bound_path.parent
+    bound = json.loads(bound_path.read_text())
+    require(bound["largest_observed_normal_batch"] == 5, "Wrong normal batch maximum")
+    require(set(bound["cases"]) == set(CASES), "Missing normal/watcher comparison")
+    for name, expected in bound["source_sha256"].items():
+        require(digest(root / name) == expected, f"Bound source changed: {name}")
+    checked = {str(bound_path): digest(bound_path)}
+    evidence = {}
+    for name, (batch, watcher, exit_code) in CASES.items():
+        case = bound["cases"][name]
+        artifact = base / case["artifact"]
+        provenance_path = base / case["provenance"]
+        require(artifact.name == name + ".json", "Wrong case artifact")
+        require(digest(artifact) == case["sha256"], "Case artifact digest changed")
+        document = json.loads(artifact.read_text())
+        record = json.loads(provenance_path.read_text())
+        require(record.get("status") == "finished" and record.get("exit_code") == exit_code, "Wrong process outcome")
+        log = Path(record["cwd"]) / record["log"]
+        require(record.get("log_sha256") == digest(log), "Recorded batch log changed")
+        require(f"RUN_RECORDED_FINISHED exit_code={exit_code}" in log.read_text(), "Missing process completion")
+        require(argument_path(record, "--output") == artifact.resolve(), "Wrong recorded output path")
+        sources, qsa_dependency = ple_source_closure(root, record, DEPENDENCIES, document, "batch")
+        require(bool(record["environment"].get("TT_METAL_WATCHER")) is watcher, "Normal/watcher evidence confused")
+        require(document["layer"] == 1 and document["batch"] == batch, "Wrong decoder/batch")
+        require(document["lengths"] == [1 + i % 3 for i in range(batch)], "Different tuple allocation profile")
+        require(
+            document["expert_dtype"] == "bfloat8_b" and document["runtime_audit"] is True, "Wrong expert/audit policy"
+        )
+        require(("--ple-quantization-control" in record["argv"]), "Missing explicit numerical control policy")
+        if exit_code == 0:
+            require(document["passed"] is True and document["deterministic"] is True, "Normal5 did not pass")
+            require(document["literal_hf_strict_passed"] is False, "Literal strict result is not disclosed")
+            require(document["ple_all_matched_control_metrics_passed"] is True, "Matched-control failure")
+        else:
+            require(document.get("passed") is not True, "Failed capture called passed")
+            error = document.get("error", "")
+            require(
+                "mesh_trace.cpp" in error and "overlaps with DRAM activity during trace capture" in error,
+                "Different failure",
+            )
+            overlap = re.search(
+                r"address (\d+).*Allocation high water mark: (\d+), Deletion high water mark: (\d+)", error, re.S
+            )
+            require(overlap is not None, "Missing captured address/highwater evidence")
+            address, allocated, deleted = map(int, overlap.groups())
+            require(max(allocated, deleted) > address, "No trace/highwater collision")
+            if batch == 6:
+                require(
+                    max(allocated, deleted) - address
+                    == bound["batch6_bound"]["captured_address_overlap_bytes_per_bank"],
+                    "Wrong measured collision",
+                )
+        size = trace_allocation(document, bool(exit_code))
+        require(size == case["trace_bytes"], "Trace reservation differs from bound case")
+        resident = document["memory_snapshots"]["resident_before_state"]
+        require(case["resident_before_state_bytes"] == resident["allocated_bytes"], "Resident base differs")
+        evidence[name] = {
+            "trace_bytes": size,
+            "resident_bytes": resident["allocated_bytes"],
+            "total_bytes": resident["total_bytes_per_bank"] * resident["banks"],
+            "runtime_and_selected_harness_sha256": sources,
+            "qsa_unreachable_dependency_proof": qsa_dependency,
+        }
+        for path in (artifact, provenance_path, log):
+            checked[str(path)] = digest(path)
+    values = bound["mandatory_state_payload_per_request_bytes"]
+    expected_states = {
+        "gdn_conv_BF16_padded_1_1_32_10240": 32 * 10240 * 2,
+        "gdn_recurrent_FP32_1_48_128_128": 48 * 128 * 128 * 4,
+        "ple_conv_BF16_padded_1_1_32_10240": 32 * 10240 * 2,
+        "token_history_UINT32_1_16_payload": 16 * 4,
+    }
+    require(values == expected_states, "Mandatory state payload changed")
+    state = sum(expected_states.values())
+    require(bound["mandatory_state_payload_per_request_sum"] == state, "State sum differs")
+    six = evidence["ple_private_batch6_normal_v1"]
+    numbers = bound["batch6_bound"]
+    # Private activated BF16 [1,512,32,640] must coexist with down
+    # BF16 [1,512,32,2560] while sparse_matmul allocates its result.
+    workspace = 512 * 32 * (640 + 2560) * 2
+    live = six["resident_bytes"] + six["trace_bytes"] + 6 * state + workspace
+    expected = {
+        "total_device_dram_bytes": six["total_bytes"],
+        "resident_before_state_bytes": six["resident_bytes"],
+        "measured_trace_bytes": six["trace_bytes"],
+        "six_mandatory_states_bytes": 6 * state,
+        "activated_plus_down_bytes": workspace,
+        "conservative_live_bytes": live,
+        "exceeds_device_by_bytes": live - six["total_bytes"],
+    }
+    for name, value in expected.items():
+        require(type(numbers[name]) is int and numbers[name] == value, f"Bound arithmetic differs: {name}")
+    require(live > six["total_bytes"], "No aggregate physical obstruction")
+    require(
+        numbers["captured_address_overlap_bytes_all_banks"] == numbers["captured_address_overlap_bytes_per_bank"] * 8,
+        "Wrong total address overlap",
+    )
+    return {
+        "status": "recorded_batch_capacity_verified_review_required",
+        "normal_passing_batch": 5,
+        "normal_failed_batch": 6,
+        "watcher5_is_separate_instrumentation_failure": True,
+        "literal_hf_strict_passed": False,
+        "verified_bound": expected,
+        "artifact_sha256": checked,
+        "case_source_closure": evidence,
+        "validator_sha256": digest(Path(__file__)),
+        "stage_acceptance": "not_evaluated",
+        "scope": bound["scope"],
+        "limitations": bound["limitations"],
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--bound", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    result = validate_bound(Path(__file__).resolve().parents[1], args.bound)
+    args.output.write_text(json.dumps(result, indent=2) + "\n")
+    print(json.dumps({key: result[key] for key in ("status", "verified_bound", "stage_acceptance")}))
+
+
+if __name__ == "__main__":
+    main()

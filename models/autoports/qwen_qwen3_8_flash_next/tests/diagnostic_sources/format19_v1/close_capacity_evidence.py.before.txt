@@ -1,0 +1,419 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""CPU-only capacity evidence closure; no continuous-range or hard-limit verdict.
+
+Input manifest has candidate_length and records. Each record has role, artifact,
+provenance (model-relative paths). Roles: search, fresh_public_success,
+fresh_public_failure, terminal_residues, hf_accuracy; optional workspace_sweep.
+Require one search, fresh success at N, fresh failure at N+1, one terminal32
+record covering N-31..N, and literal-HF accuracy at N and N-1. The optional
+stronger workspace sweep is reported separately from the public contract.
+
+Search observations remain candidate-only, including any per-residue binary
+search's monotonicity assumption. Even all required records closing does NOT
+prove all smaller lengths, an architectural maximum, or an unavoidable hard
+physical limit: contiguous-allocation failures may be fragmentation. A source
+and physical-resource argument must be reviewed separately before reduction.
+"""
+
+import argparse
+import json
+import math
+from pathlib import Path
+
+from .validate_trace_evidence import digest, require
+from .verify_ple_capacity_dependency import ple_source_closure
+
+CAPACITY_SOURCES = [
+    "tests/probe_decoder_capacity.py",
+    "tests/capacity_residue_search.py",
+    "tests/probe_ple_decoder.py",
+    "tests/probe_linear_contract.py",
+    "tests/probe_ple_quantization.py",
+    "tests/run_recorded.py",
+]
+HF_SOURCES = [
+    "tests/probe_ple_decoder.py",
+    "tests/probe_linear_contract.py",
+    "tests/probe_ple_quantization.py",
+    "tests/run_recorded.py",
+]
+PATCH_FIELDS = (
+    "reserved_sparse_down_workspace",
+    "per_call_sparse_down_workspace",
+    "inplace_expert_activation",
+    "reuse_private_reduction_buffer",
+    "split_gr_query_rows",
+)
+
+
+def metric_check(value, rows):
+    require(value["passed"] is True and value["finite"] is True, "HF metric failed or nonfinite")
+    for name in ("whole", "contribution"):
+        item = value[name]
+        require(
+            item["rows"] == rows and item["failed_row_count"] == 0 and item["nonfinite_row_count"] == 0,
+            f"Incomplete or failing {name} row metrics",
+        )
+        for key in ("global_pcc", "minimum_row_pcc"):
+            number = item[key]
+            require(type(number) in (int, float) and math.isfinite(number) and number >= 0.995, f"Failed {name}/{key}")
+
+
+def prepared_capacity(document):
+    for name in (
+        "prepare_programs",
+        "prepare_all_tails",
+        "reserve_decode_input",
+        "decode_lifecycle",
+        "chunk_io_prepared_before_large_io",
+    ):
+        require(document[name] is True, f"Missing prepared lifecycle setting: {name}")
+    require(document["hash_lengths"] == list(range(1, 33)), "Missing hash preparation buckets")
+    require(document["implicit_probe32"] is False, "Unexpected implicit pre-probe lifecycle")
+    for name in PATCH_FIELDS:
+        require(
+            document[name]["enabled"] is False,
+            f"Experimental capacity policy cannot close default-runtime evidence: {name}",
+        )
+    require(
+        document["search_is_candidate_only"] is True and document["capability_reduction_accepted"] is False,
+        "Probe improperly promotes candidate evidence",
+    )
+
+
+def successful_lifecycle(entry):
+    require(entry["passed"] is True and entry["phase"] == "complete", "Capacity row did not complete")
+    require(
+        entry["preparation_state_restored"] is True and entry["decode_lifecycle_completed"] is True,
+        "Preparation restoration or decode lifecycle incomplete",
+    )
+    require(entry["decode_output_finite"] is True, "Nonfinite decode output")
+    signatures = {(row["phase"], row["tokens"]) for row in entry["prepared_signatures"]}
+    require(signatures == {("prefill", n) for n in range(1, 33)} | {("decode", 1)}, "Prepared signatures incomplete")
+    for phase in ("decoder_chunk", "repeated_decoder_chunk"):
+        observed = [row for row in entry["completed_chunk_checks"] if row["pass"] == phase]
+        require(len(observed) == len(entry["chunk_plan"]), f"Incomplete chunk lifecycle: {phase}")
+        require(
+            [{key: row[key] for key in ("start", "count", "stage")} for row in observed] == entry["chunk_plan"],
+            f"Observed chunk order differs: {phase}",
+        )
+
+
+def full_public_success(entry):
+    successful_lifecycle(entry)
+    length = entry["length"]
+    expected = [
+        {"start": start, "count": min(32, length - start), "stage": "actual_public_chunk"}
+        for start in range(0, length, 32)
+    ]
+    require(entry["chunk_plan"] == expected, "Not the complete public offset sequence")
+    passes = entry["full_public_passes"]
+    require(
+        len(passes) == 2 and all(row["output_finite"] is True for row in passes),
+        "Missing finite complete/repeated public pass",
+    )
+
+
+def close_capacity(root, manifest):
+    candidate = manifest["candidate_length"]
+    require(type(candidate) is int and 33 <= candidate < 262143, "Invalid observed boundary candidate")
+    records = manifest["records"]
+    roles = [row["role"] for row in records]
+    for role in ("search", "fresh_public_success", "fresh_public_failure", "terminal_residues"):
+        require(roles.count(role) == 1, f"Require exactly one record: {role}")
+    require(
+        roles.count("hf_accuracy") == 2 and roles.count("workspace_sweep") <= 1,
+        "Need two HF records and at most one optional sweep",
+    )
+    require(
+        set(roles)
+        <= {
+            "search",
+            "fresh_public_success",
+            "fresh_public_failure",
+            "terminal_residues",
+            "hf_accuracy",
+            "workspace_sweep",
+        },
+        "Unknown evidence role",
+    )
+    results, hf_lengths, common_policy, memory_necessity = [], set(), None, None
+    for binding in records:
+        role = binding["role"]
+        path = root / binding["artifact"]
+        document = json.loads(path.read_text())
+        provenance_path = root / binding["provenance"]
+        imported_closure = None
+        if binding.get("import_source_closure"):
+            require(role == "search", "Imported-source exception is scoped only to the historical capacity search")
+            from .prove_capacity_import_closure import DEPENDENCY, prove_import_closure
+
+            proof_path = root / binding["import_source_closure"]
+            imported_closure = prove_import_closure(root, provenance_path)
+            require(
+                json.loads(proof_path.read_text()) == imported_closure, "Saved imported-source proof does not reproduce"
+            )
+            provenance = json.loads(provenance_path.read_text())
+            require(
+                provenance.get("status") == "finished" and provenance.get("exit_code") == 0,
+                "Search process incomplete or failed",
+            )
+            log = Path(provenance["cwd"]) / provenance["log"]
+            require(
+                digest(log) == provenance["log_sha256"] and "RUN_RECORDED_FINISHED exit_code=0" in log.read_text(),
+                "Search log mismatch",
+            )
+            # Only this exact dependency's recorded full-file mismatch is
+            # replaced by the separately reconstructed unchanged-import proof.
+            # Preserve the original provenance and record both identities.
+            proven_record = {**provenance, "source_sha256": dict(provenance["source_sha256"])}
+            proven_record["source_sha256"][DEPENDENCY] = imported_closure["current_dependency_sha256"]
+            sources, qsa_dependency = ple_source_closure(root, proven_record, CAPACITY_SOURCES, document, "capacity")
+        else:
+            provenance = json.loads(provenance_path.read_text())
+            require(
+                provenance.get("status") == "finished" and provenance.get("exit_code") == 0,
+                "Unsuccessful capacity provenance",
+            )
+            log = Path(provenance["cwd"]) / provenance["log"]
+            require(
+                digest(log) == provenance["log_sha256"] and "RUN_RECORDED_FINISHED exit_code=0" in log.read_text(),
+                "Capacity log mismatch",
+            )
+            sources, qsa_dependency = ple_source_closure(
+                root,
+                provenance,
+                HF_SOURCES if role == "hf_accuracy" else CAPACITY_SOURCES,
+                document,
+                "hf_accuracy" if role == "hf_accuracy" else "capacity",
+            )
+        require(
+            any((Path(provenance["cwd"]) / value).resolve() == path.resolve() for value in provenance["argv"]),
+            "Artifact absent from recorded command",
+        )
+        policy = (document["expert_dtype"], document["cache_dir"])
+        common_policy = common_policy or policy
+        require(policy == common_policy, "Different expert/cache policies across capacity evidence")
+        result = {
+            **binding,
+            "artifact_sha256": digest(path),
+            "provenance_sha256": digest(provenance_path),
+            "log_sha256": digest(log),
+            "runtime_and_required_harness_sha256": sources,
+            "qsa_unreachable_dependency_proof": qsa_dependency,
+        }
+        if imported_closure is not None:
+            result["import_source_closure_proof"] = imported_closure
+            result["import_source_closure_sha256"] = digest(proof_path)
+        if role == "hf_accuracy":
+            length = document["seq_len"]
+            require(
+                length in (candidate, candidate - 1) and length not in hf_lengths,
+                "HF boundary/neighbor coverage differs",
+            )
+            hf_lengths.add(length)
+            require(
+                document["layer_idx"] == 1 and document["weights"] == "real" and document["threshold"] == 0.995,
+                "Wrong HF reference contract",
+            )
+            require(
+                document["passed"] is True and document["prepare_all_tails"] is True,
+                "HF run failed or different preparation",
+            )
+            require(
+                all(
+                    document["runtime_audit"].get(key) is True
+                    for key in ("prefill", "repeated_prefill", "decode_warm_capture_replay")
+                ),
+                "HF runtime audit incomplete",
+            )
+            require(
+                document["decode_steps"] in (1, 3) and len(document["decode"]) == document["decode_steps"],
+                "Missing traced decode",
+            )
+            require(
+                document["captures"] == 1 and document["replays"] == 2 * document["decode_steps"],
+                "Wrong trace lifecycle",
+            )
+            require(
+                document["reset_replay_equal"] is True and document["prefill_reset_equal"] is True,
+                "Repeated outputs differ",
+            )
+            require(
+                set(document["reset_state_equal"]) == {"conv", "recurrent", "ple_conv", "token_history"}
+                and all(value is True for value in document["reset_state_equal"].values()),
+                "Repeated state differs",
+            )
+            metric_check(document["prefill"], length)
+            for metric in document["decode"]:
+                metric_check(metric, 1)
+            result.update(
+                length=length, scope="Complete real-input literal-HF public prefill/decode and repeated lifecycle"
+            )
+        else:
+            prepared_capacity(document)
+            probes = document["probes"]
+            if role == "search":
+                search = document["per_residue_search"]
+                require(
+                    search["candidate_only"] is True and search["residues"] == list(range(1, 33)),
+                    "Missing all32 residue search",
+                )
+                require(
+                    {row["residue"] for row in search["results"]} == set(range(1, 33)) and len(search["results"]) == 32,
+                    "Residue search incomplete",
+                )
+                for row in search["results"]:
+                    require(
+                        row["candidate_only"] is True and row["monotonicity_assumed_not_proven"] is True,
+                        "Search inference is not labeled",
+                    )
+                    for observed in row["observations"]:
+                        require(
+                            any(
+                                probe["length"] == observed["length"] and probe["passed"] is observed["passed"]
+                                for probe in probes
+                            ),
+                            "Search observation has no actual probe",
+                        )
+                require(document["advertised_context"] == 262144, "Unexpected advertised context")
+                available = document["resident_model"]["free_bytes"]
+                require(type(available) is int and available > 0, "Missing resident free memory")
+                memory_necessity = {
+                    "advertised_hidden_input_bytes": 262144 * 10240 * 2,
+                    "resident_model_free_bytes_before_all_tail_preparation": available,
+                    "advertised_input_alone_exceeds_resident_free": 262144 * 10240 * 2 > available,
+                    "scope": "Necessity of some resident-input reduction only; does not prove the candidate boundary is unavoidable",
+                }
+                result.update(scope="Search only; neither monotonicity nor a continuous range is inferred")
+            elif role in ("fresh_public_success", "fresh_public_failure"):
+                length = candidate + (role == "fresh_public_failure")
+                require(
+                    document["full_public_prefill"] is True
+                    and document["explicit_lengths"] == [length]
+                    and len(probes) == 1
+                    and probes[0]["length"] == length,
+                    "Boundary must be a fresh single-candidate complete-public run",
+                )
+                entry = probes[0]
+                if role == "fresh_public_success":
+                    full_public_success(entry)
+                else:
+                    require(
+                        entry["passed"] is False and entry.get("python_traceback"),
+                        "Missing observed failure and Python operation",
+                    )
+                    error = entry.get("error", "").lower()
+                    require(
+                        any(
+                            term in error
+                            for term in (
+                                "out of memory",
+                                "not enough space",
+                                "allocation failed",
+                                "cannot allocate",
+                                "failed to allocate",
+                            )
+                        ),
+                        "Failure is not an allocation failure",
+                    )
+                    result["failure"] = {
+                        key: entry.get(key)
+                        for key in ("phase", "active_chunk", "error", "python_traceback", "memory_phases")
+                    }
+                    result[
+                        "failure_classification"
+                    ] = "Allocation failure observed; fragmentation versus hard aggregate DRAM limit remains an independent review question"
+                result.update(length=length)
+            elif role == "terminal_residues":
+                lengths = list(range(candidate - 31, candidate + 1))
+                require(
+                    document["terminal_residues_end"] == candidate
+                    and document["explicit_lengths"] == lengths
+                    and [entry["length"] for entry in probes] == lengths,
+                    "Terminal32 interval/order incomplete",
+                )
+                for entry in probes:
+                    successful_lifecycle(entry)
+                result.update(
+                    lengths=lengths,
+                    full_public=document["full_public_prefill"],
+                    scope="Observed terminal32 lifecycle only; proxy rows are not complete-public or HF proof",
+                )
+            else:
+                require(
+                    document["full_public_prefill"] is False
+                    and document["public_chunks_only"] is False
+                    and document["explicit_lengths"] == [candidate]
+                    and len(probes) == 1,
+                    "Wrong stronger-sweep profile",
+                )
+                successful_lifecycle(probes[0])
+                require(
+                    probes[0]["all_tails_checked_with_full_resident_io"] is True
+                    and probes[0]["all_tails_rechecked_after_trace"] is True,
+                    "Missing strongest all-count lifecycle",
+                )
+                result.update(length=candidate, scope="Stronger workspace sweep; distinct from public API capacity")
+        results.append(result)
+    return {
+        "scope": __doc__,
+        "evidence_closed": True,
+        "candidate_length": candidate,
+        "input_manifest": manifest,
+        "physical_reduction_necessity": memory_necessity,
+        "records": results,
+        "search_is_candidate_only": True,
+        "continuous_range_proven": False,
+        "hard_physical_limit_proven": False,
+        "capability_reduction_accepted": False,
+        "stage_acceptance": "not_evaluated",
+        "required_review": [
+            "Inspect exact allocation bytes, allocator fragmentation/order and removable private liveness before accepting a hard-limit reduction.",
+            "Terminal32 plus search is not exhaustive smaller-length execution. Review bounded I/O signatures, physical allocation envelopes and all relevant lifecycles; never promote binary-search monotonicity to proof.",
+            "Any stronger workspace-sweep limit is distinct from the public-contract limit. Larger observed per-signature successes must remain disclosed.",
+        ],
+    }
+
+
+def revalidate_capacity_summary(root, document):
+    """Gate-time nested identity checks; do not trust a previous summary flag."""
+    regenerated = close_capacity(root, document["input_manifest"])
+    for key, value in regenerated.items():
+        require(document.get(key) == value, f"Capacity summary no longer reproduces: {key}")
+    require(document["validator_sha256"] == digest(Path(__file__)), "Capacity validator changed")
+    return {
+        "status": "capacity_observations_verified_review_required",
+        "records_checked": len(regenerated["records"]),
+        "continuous_range_proven": False,
+        "hard_physical_limit_proven": False,
+        "acceptance_inferred": False,
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    report = close_capacity(args.root.resolve(), json.loads(args.manifest.read_text()))
+    report["manifest_sha256"] = digest(args.manifest)
+    report["validator_sha256"] = digest(Path(__file__))
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(report, indent=2) + "\n")
+    print(
+        json.dumps(
+            {
+                "output": str(args.output),
+                "evidence_closed": True,
+                "capability_reduction_accepted": False,
+                "stage_acceptance": "not_evaluated",
+            }
+        )
+    )
+
+
+if __name__ == "__main__":
+    main()

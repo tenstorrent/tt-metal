@@ -312,9 +312,31 @@ void kernel_main() {
             fabric_connection,
             sem_route_id,
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{done_sem_noc_addr_in_pkt, 0});
+        if constexpr (load_balance_across_alt_routes) {
+            // Even rings send data on both route sets. A completion on the original
+            // route cannot order data that reached the antipode on the other route.
+            // Reuse the header only after its first send has left local memory.
+            noc.async_writes_flushed();
+            uint8_t starts[1] = {1};
+            fabric_api::fabric_multicast_noc_unicast_atomic_inc_set_state<
+                UnicastAtomicIncUpdateMask::DstAddr | UnicastAtomicIncUpdateMask::Val |
+                UnicastAtomicIncUpdateMask::Flush>(
+                fabric_connection,
+                sem_route_id,
+#ifndef FABRIC_2D
+                starts,
+#endif
+                ranges_alt,
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{done_sem_noc_addr_in_pkt, 1u, true});
+            fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::None>(
+                fabric_connection, sem_route_id);
+        }
     }
-    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(done_sem), barrier_wait_value);
-    noc_semaphore_inc(safe_get_noc_addr(sem_noc0_x, sem_noc0_y, done_sem), (uint32_t)(-(int32_t)barrier_wait_value));
+    // Each complete route set covers every other rank exactly once, including 2D
+    // line/rectangle routing. Startup still uses only the original route set.
+    const uint32_t completion_wait_value = barrier_wait_value * (load_balance_across_alt_routes ? 2u : 1u);
+    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(done_sem), completion_wait_value);
+    noc_semaphore_inc(safe_get_noc_addr(sem_noc0_x, sem_noc0_y, done_sem), uint32_t{0} - completion_wait_value);
     noc.async_atomic_barrier();
 
     if constexpr (enable_fabric) {

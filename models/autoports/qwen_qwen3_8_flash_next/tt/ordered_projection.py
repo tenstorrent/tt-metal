@@ -1,0 +1,176 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""QSA indexer projection with pinned CPU BF16 pair order on the device.
+
+BF16 input [1,1,Q,2560], Q1..32; setup-prepacked BF16 weight
+[1,1,2560,640]; BF16 output [1,1,Q,640]. Each K1024 partial (K512 forQ1) starts at
+FP32 zero, consumes adjacent products high-index then low-index, and the
+partials combine in order before explicit integer-RNE BF16 typecast. Products of
+normal finite BF16 operands are exact FP32, so distinct SFPU multiply/add
+matches the pinned BF16 FMA update for those operands. General denormal,
+NaN/Inf and signed-zero equivalence is not asserted.
+
+The QSA constructor uses this projection. The all-Q1..32 exact-output and
+changed-input trace checks are recorded in ordered_projection_device_v3.json;
+full-decoder acceptance is recorded separately. One fixed generic
+program uses20cores and330KiB/core of temporary L1, without host tensor
+conversion or persistent runtime caches. The generic kernel returns an80KiB
+FP32 temporary; ordinary device typecast writes the40KiB BF16 result, including
+an optional preallocated output. This explicit conversion fixes the direct
+packer midpoint behavior demonstrated in ordered_projection_device_v2.json.
+Optional fp32_output=True exposes prepack sums; direct_bf16_pack=True retains
+the failed pack-only path for diagnosis. Setup owns weight transpose/upload.
+Q is a runtime reader argument; descriptors are independent of logical count.
+Prepare all used math paths before tracing as usual. No output/state is
+retained by this object between calls.
+"""
+
+from pathlib import Path
+
+_KERNEL_ROOT = Path(__file__).parent / "kernels"
+
+
+def ordered_indexer_projection(
+    hidden_states, transposed_weight, *, output=None, block_size=None, fp32_output=False, direct_bf16_pack=False
+):
+    import ttnn as t
+
+    if not isinstance(hidden_states, t.Tensor) or not isinstance(transposed_weight, t.Tensor):
+        raise ValueError("Expected device tensors")
+    count = hidden_states.shape[-2]
+    if tuple(hidden_states.shape) != (1, 1, count, 2560) or not 1 <= count <= 32:
+        raise ValueError("Expected BF16 input [1,1,1..32,2560]")
+    if tuple(transposed_weight.shape) != (1, 1, 2560, 640):
+        raise ValueError("Expected pretransposed BF16 weight [1,1,2560,640]")
+    block_size = (512 if count == 1 else 1024) if block_size is None else block_size
+    if type(block_size) is not int or block_size not in (512, 1024):
+        raise ValueError("Candidate block_size must be512 or1024")
+    if type(fp32_output) is not bool or type(direct_bf16_pack) is not bool:
+        raise ValueError("Diagnostic mode flags must be bool")
+    if fp32_output and direct_bf16_pack:
+        raise ValueError("FP32 output and direct BF16 packing are mutually exclusive")
+    output_dtype = t.float32 if fp32_output else t.bfloat16
+    kernel_dtype = t.bfloat16 if direct_bf16_pack else t.float32
+    output_tile_bytes = 2048 if direct_bf16_pack else 4096
+    device = hidden_states.device()
+
+    def validate(value, padded, dtype=t.bfloat16):
+        if (
+            not t.is_tensor_storage_on_device(value)
+            or not value.is_allocated()
+            or value.dtype != dtype
+            or value.layout != t.TILE_LAYOUT
+            or value.memory_config() != t.DRAM_MEMORY_CONFIG
+            or tuple(value.padded_shape) != padded
+            or value.device() != device
+        ):
+            raise ValueError("Ordered projection requires exact interleaved DRAM BF16 tile geometry on one device")
+
+    validate(hidden_states, (1, 1, 32, 2560))
+    validate(transposed_weight, (1, 1, 2560, 640))
+    if output is None:
+        output = t.empty(
+            (1, 1, count, 640),
+            dtype=output_dtype,
+            layout=t.TILE_LAYOUT,
+            device=device,
+            memory_config=t.DRAM_MEMORY_CONFIG,
+        )
+    if not isinstance(output, t.Tensor) or tuple(output.shape) != (1, 1, count, 640):
+        raise ValueError("Output shape must be [1,1,Q,640]")
+    validate(output, (1, 1, 32, 640), output_dtype)
+    if output.buffer_address() in (hidden_states.buffer_address(), transposed_weight.buffer_address()):
+        raise ValueError("Output may not alias an input")
+    kernel_output = output
+    if not fp32_output and not direct_bf16_pack:
+        kernel_output = t.empty(
+            (1, 1, count, 640),
+            dtype=t.float32,
+            layout=t.TILE_LAYOUT,
+            device=device,
+            memory_config=t.DRAM_MEMORY_CONFIG,
+        )
+    grid = device.compute_with_storage_grid_size()
+    if grid.x * grid.y < 20:
+        raise ValueError("Ordered projection requires20 compute cores")
+    cores = [t.CoreCoord(i % grid.x, i // grid.x) for i in range(20)]
+    ranges = t.CoreRangeSet([t.CoreRange(core, core) for core in cores])
+    reader, writer, compute = t.RuntimeArgs(), t.RuntimeArgs(), t.RuntimeArgs()
+    for column, core in enumerate(cores):
+        reader[core.x][core.y] = [hidden_states.buffer_address(), transposed_weight.buffer_address(), column, count]
+        writer[core.x][core.y] = [kernel_output.buffer_address(), column]
+        compute[core.x][core.y] = [block_size]
+    read_ct = []
+    for value in (hidden_states, transposed_weight):
+        read_ct.extend(t.TensorAccessorArgs(value).get_compile_time_args())
+    write_ct = [output_tile_bytes, *t.TensorAccessorArgs(kernel_output).get_compile_time_args()]
+    configs = [
+        ("ordered_projection_reader.cpp", read_ct, reader, t.ReaderConfigDescriptor()),
+        ("ordered_projection_writer.cpp", write_ct, writer, t.WriterConfigDescriptor()),
+        (
+            "ordered_projection_compute.cpp",
+            [],
+            compute,
+            t.ComputeConfigDescriptor(
+                math_fidelity=t.MathFidelity.HiFi4,
+                fp32_dest_acc_en=True,
+                dst_full_sync_en=False,
+                math_approx_mode=False,
+            ),
+        ),
+    ]
+    # Scratch0/1 cache input and this core's weight tiles. Stream2/3 feed the
+    # exact BF16 operands, and output4 is packed once after the FP32 sum.
+    cbs = [
+        t.CBDescriptor(
+            total_size=tiles * 2048,
+            core_ranges=ranges,
+            format_descriptors=[t.CBFormatDescriptor(buffer_index=index, data_format=t.bfloat16, page_size=2048)],
+        )
+        for index, tiles in ((0, 80), (1, 80), (2, 2), (3, 2))
+    ]
+    cbs.append(
+        t.CBDescriptor(
+            total_size=output_tile_bytes,
+            core_ranges=ranges,
+            format_descriptors=[
+                t.CBFormatDescriptor(buffer_index=4, data_format=kernel_dtype, page_size=output_tile_bytes)
+            ],
+        )
+    )
+    kernels = [
+        t.KernelDescriptor(
+            kernel_source=str(_KERNEL_ROOT / filename),
+            source_type=t.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=ranges,
+            compile_time_args=ct,
+            runtime_args=rt,
+            config=config,
+        )
+        for filename, ct, rt, config in configs
+    ]
+    t.generic_op(
+        [hidden_states, transposed_weight, kernel_output], t.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[])
+    )
+    if not fp32_output and not direct_bf16_pack:
+        # Direct BF16 pack rounds exact midpoints differently on this device.
+        # Typecast explicitly rounds the FP32 bits to nearest-even before pack.
+        # Supplying output_tensor preserves the caller's traced output address.
+        t.typecast(kernel_output, t.bfloat16, output_tensor=output)
+    return output
+
+
+class OrderedIndexerProjection:
+    """QSA setup boundary matching the shared weight loader/name contract."""
+
+    def __init__(self, loader, name="self_attn.indexer.index_qk_proj.weight"):
+        import ttnn
+
+        weight = loader.state_dict[name]
+        if tuple(weight.shape) != (640, 2560):
+            raise ValueError("Expected target indexer weight [640,2560]")
+        # Setup only: exact BF16 values are transposed once and kept immutable.
+        self.weight = loader.tensor(weight.transpose(0, 1).contiguous().reshape(1, 1, 2560, 640), ttnn.bfloat16)
+
+    def __call__(self, hidden_states):
+        return ordered_indexer_projection(hidden_states, self.weight)

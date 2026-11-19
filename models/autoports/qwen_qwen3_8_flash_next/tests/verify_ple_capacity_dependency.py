@@ -1,0 +1,131 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Source-only PLE closure across the exact unreachable QSA constructor change.
+
+Never checks or changes a record's numerical/physical outcome. Callers retain
+all success, expected-failure, log and capacity assertions. A capacity report
+without a layer field is accepted only from the unchanged layer1-only harness.
+"""
+
+import ast
+import json
+from pathlib import Path
+
+from .validate_trace_evidence import SOURCE_SUFFIXES, argument_path, digest, require, source_closure
+from .verify_format19_dependency import FormatSourceClosure
+from .verify_linear_qsa_dependency import (
+    BASELINE,
+    BASELINE_SHA,
+    ROOT,
+    RUNTIME_BASELINE,
+    RUNTIME_BASELINE_SHA,
+    verify_branch,
+    verify_transition,
+)
+
+ADDED = {
+    "tt/ordered_projection.py": "a952d765473f0cb3e68205d9b588a2344726fabae5b30a2107035c13b255e4e4",
+    "tt/kernels/ordered_projection_compute.cpp": "c9701ee9c1acb1c209463cf6cc19b6acc4e4fa397a0ba87f1ff62c45f2df9c77",
+    "tt/kernels/ordered_projection_reader.cpp": "f04e14870d5a81a6fd1b7b6922fbbe1eee9c8b196b77bcac53291fb0e45f992b",
+    "tt/kernels/ordered_projection_writer.cpp": "72c000b5775221692fda5422db0f746d1c9ed1b436d36cd75a9269dc1b1e73a9",
+}
+CONFIG_SHA = "889658f2508e8c61d409b02e70e0d78d8d4452ec65aaafbe129805d213d2e74b"
+HARNESS = {
+    "capacity": "probe_decoder_capacity",
+    "hf_accuracy": "probe_ple_decoder",
+    "batch": "probe_batch",
+}
+
+
+def prove_layer1(root, record, document, profile):
+    require(profile in HARNESS, "Unknown PLE evidence profile")
+    name = HARNESS[profile]
+    argv = record["argv"]
+    require(
+        argv.count("-m") == 1
+        and argv[argv.index("-m") + 1] == f"models.autoports.qwen_qwen3_8_flash_next.tests.{name}",
+        "Wrong executed PLE harness module",
+    )
+    harness = f"tests/{name}.py"
+    require(record["source_sha256"].get(harness) == digest(root / harness), "Executed PLE harness source changed")
+    if profile == "batch":
+        require(argv.count("--layer") == 1 and argv[argv.index("--layer") + 1] == "1", "Not layer1 batch command")
+        require(type(document.get("layer")) is int and document["layer"] == 1, "Not layer1 batch report")
+    else:
+        tree = ast.parse((root / harness).read_text())
+        constructors = [
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute)
+            and isinstance(n.func.value, ast.Name)
+            and n.func.value.id == "FunctionalDecoder"
+            and n.func.attr == "from_state_dict"
+        ]
+        require(len(constructors) == 1, "Unexpected PLE decoder construction sites")
+        indices = [k.value for k in constructors[0].keywords if k.arg == "layer_idx"]
+        require(
+            len(indices) == 1
+            and isinstance(indices[0], ast.Constant)
+            and type(indices[0].value) is int
+            and indices[0].value == 1,
+            "Capacity/HF harness does not construct constant layer1",
+        )
+        for key in ("layer", "layer_idx"):
+            require(
+                key not in document or (type(document[key]) is int and document[key] == 1), "Conflicting report layer"
+            )
+    config = argument_path(record, "--snapshot") / "config.json"
+    require(digest(config) == CONFIG_SHA, "Target configuration identity changed")
+    require(
+        json.loads(config.read_text())["text_config"]["layer_types"][1] == "linear_attention", "Layer1 is not linear"
+    )
+    return {"layer": 1, "harness": harness, "harness_sha256": digest(root / harness), "config_sha256": CONFIG_SHA}
+
+
+def ple_source_closure(root, record, required, document, profile, format_binding=None):
+    """Return source hashes plus explicit exception proof; no outcome waiver."""
+    formatting = FormatSourceClosure(root, format_binding)
+    current = {
+        str(p.relative_to(root)) for p in (root / "tt").rglob("*") if p.is_file() and p.suffix in SOURCE_SUFFIXES
+    }
+    recorded = record["source_sha256"]
+    runtime = {name for name in recorded if name.startswith("tt/")}
+    # Ordinary unchanged-source records use the existing strict validator.
+    if runtime == current and recorded.get("tt/qsa.py") == digest(root / "tt/qsa.py"):
+        return source_closure(root, record, required, format_binding), formatting.proof
+    layer = prove_layer1(root, record, document, profile)
+    raw = ROOT / RUNTIME_BASELINE
+    require(digest(raw) == RUNTIME_BASELINE_SHA, "Pinned runtime baseline changed")
+    baseline = json.loads(raw.read_text())
+    require(runtime == set(baseline), "Historical runtime inventory changed or incomplete")
+    require(current == set(baseline) | set(ADDED), "Unexpected current runtime inventory")
+    require(recorded.get("tt/qsa.py") == BASELINE_SHA, "Wrong historical QSA source")
+    transition = verify_transition((ROOT / BASELINE).read_bytes(), (root / "tt/qsa.py").read_bytes())
+    unchanged = {}
+    for name, expected in baseline.items():
+        require(recorded.get(name) == expected, f"Recorded runtime baseline changed: {name}")
+        if name != "tt/qsa.py":
+            formatting.verify(name, expected)
+            unchanged[name] = expected
+    for name, expected in ADDED.items():
+        formatting.verify(name, expected, "Unreachable candidate source changed")
+    for name in required:
+        formatting.verify(name, recorded.get(name))
+    branch = verify_branch((root / "tt/functional_decoder.py").read_text())
+    proof = {
+        "scope": "Only exact QSA-local constructor substitution and four unreachable ordered files; no outcome or physical-claim waiver",
+        "layer_proof": layer,
+        "transition": transition,
+        "branch": branch,
+        "historical_shared_runtime_sha256": unchanged,
+        "historical_unreachable_added_runtime_sha256": ADDED,
+        "recorded_report_passed": document.get("passed"),
+        "recorded_exit_code": record.get("exit_code"),
+        "historical_runtime_inventory_sha256": RUNTIME_BASELINE_SHA,
+        "helper_sha256": digest(Path(__file__)),
+        "shared_transition_helper_sha256": digest(Path(__file__).with_name("verify_linear_qsa_dependency.py")),
+        "stage_acceptance": "not_evaluated",
+        "format_source_closure": formatting.proof,
+    }
+    return {name: recorded[name] for name in sorted(runtime | set(required))}, proof

@@ -42,6 +42,8 @@ struct OperationArguments {
     tt::tt_metal::MemoryConfig output_memory_config{
         tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
+    // Reflected below: deterministic and stochastic calls must not reuse a program.
+    bool stochastic_rounding = true;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "experts_per_chip",
@@ -55,7 +57,8 @@ struct OperationArguments {
         "fuse_bias",
         "output_dtype",
         "output_memory_config",
-        "compute_kernel_config");
+        "compute_kernel_config",
+        "stochastic_rounding");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -70,7 +73,8 @@ struct OperationArguments {
             fuse_bias,
             output_dtype,
             output_memory_config,
-            compute_kernel_config);
+            compute_kernel_config,
+            stochastic_rounding);
     }
 };
 

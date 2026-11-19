@@ -1,0 +1,190 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""CPU-only preflight: require a closed passing normal QSA prefix producer.
+
+A version1 prefix export is written before the producer's final decode gate.
+Its existence alone is insufficient. This check binds the closed producer,
+passing full/tail/decode gates, exact source identity, and normal export before
+launching a separate full-public decoder bridge. Recovery exports are rejected.
+"""
+
+import argparse
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+import torch
+
+from .qsa_state_fixture import load_prefix, runtime_source_hashes
+
+
+def digest(path):
+    value = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        while block := stream.read(8 * 1024 * 1024):
+            value.update(block)
+    return value.hexdigest()
+
+
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def verify_closed_producer(provenance, report):
+    require(
+        provenance["status"] == "finished" and provenance["exit_code"] == 0, "Prefix producer has not closed with exit0"
+    )
+    require(report.get("passed") is True, "Prefix producer overall gate failed or is missing")
+    require(report["prefill"]["passed"] is True, "Prefix all-row gate failed")
+    boundary = report["full_boundary_branch"]
+    require(
+        boundary["full_prefill_length"] == 262144 and boundary["full_prefill"]["passed"] is True,
+        "Full262144-row gate failed",
+    )
+    require(
+        boundary["tail_prefill_rows"] == 31 and boundary["tail_prefill"]["passed"] is True,
+        "Nonaligned tail gate failed",
+    )
+    require(
+        len(report["decode"]) == 1 and all(row["passed"] is True for row in report["decode"]),
+        "Final decode gate failed",
+    )
+    require(bool(report["decode_repeat_equal"]) and all(report["decode_repeat_equal"]), "Decode repetition gate failed")
+    require(report["position_after_prefill"] == 262143, "Wrong prefix position")
+    require(all(report["runtime_audit"].values()), "Runtime audit not clean")
+
+
+def flag_path(argv, flag):
+    require(argv.count(flag) == 1, f"Missing or ambiguous producer flag {flag}")
+    return Path(argv[argv.index(flag) + 1]).resolve()
+
+
+def verify(args):
+    root = Path(__file__).resolve().parents[1]
+    producer = json.loads(args.producer_provenance.read_text())
+    result = json.loads(args.producer_report.read_text())
+    verify_closed_producer(producer, result)
+    require(digest(Path(producer["log"])) == producer["log_sha256"], "Producer log changed")
+    require(flag_path(producer["argv"], "--output") == args.producer_report.resolve(), "Wrong producer result")
+    require(
+        flag_path(producer["argv"], "--prefix-state-cache") == args.prefix_state.resolve(),
+        "Producer did not write requested export",
+    )
+    require(
+        flag_path(producer["argv"], "--fixture-cache") == args.source_cache.resolve(), "Wrong producer source fixture"
+    )
+    require("--full-boundary-branch" in producer["argv"], "Producer is not full-boundary run")
+    current = runtime_source_hashes()
+    for name, expected in current.items():
+        require(producer["source_sha256"].get("tt/" + name) == expected, f"Producer runtime changed: {name}")
+    for name in ["probe_qsa_prefill.py", "probe_qsa.py", "qsa_state_fixture.py", "probe_linear_contract.py"]:
+        require(
+            producer["source_sha256"].get("tests/" + name) == digest(root / "tests" / name),
+            f"Producer dependency changed: {name}",
+        )
+    source = torch.load(args.source_cache, weights_only=True, mmap=True, map_location="cpu")
+    fixture = torch.load(args.cpu_fixture, weights_only=True, mmap=True, map_location="cpu")
+    cpu_report = json.loads(args.cpu_report.read_text())
+    cpu_provenance = json.loads(args.cpu_provenance.read_text())
+    require(
+        cpu_provenance["status"] == "finished" and cpu_provenance["exit_code"] == 0,
+        "CPU reference preparation incomplete",
+    )
+    require(digest(Path(cpu_provenance["log"])) == cpu_provenance["log_sha256"], "CPU preparation log changed")
+    require(cpu_report["device_executed"] is False, "CPU fixture preparation used device path")
+    require(fixture["key"] == cpu_report["CPU_fixture"]["key"], "CPU fixture key/report mismatch")
+    require(fixture["key"]["source_fixture_key"] == source["key"], "CPU fixture source changed")
+    require(
+        fixture["key"]["harness_sha256"] == digest(root / "tests/probe_qsa_full_context.py"),
+        "Bridge harness changed after CPU preparation",
+    )
+    require(fixture["key"]["prefix"] == 262143 and fixture["key"]["capacity"] == 262144, "Wrong CPU reference context")
+    require(len(fixture["inputs"]) == len(fixture["expected"]) == 2, "Expected two independent final inputs")
+    require(not torch.equal(*fixture["inputs"]), "Final inputs are identical")
+    for value in fixture["inputs"] + fixture["expected"]:
+        require(
+            value.shape == (1, 1, 10240) and value.dtype == torch.bfloat16 and bool(torch.isfinite(value).all()),
+            "Invalid CPU final tensor",
+        )
+    saved = load_prefix(args.prefix_state, source_key=source["key"], prefix=262143, capacity=262144)
+    require(saved["provenance"] == result["provenance"], "Prefix/reference producer mismatch")
+    require(saved["prefix_metric"] == result["prefill"], "Prefix metric differs from closed producer")
+    require(Path(saved["source_fixture_path"]).resolve() == args.source_cache.resolve(), "Prefix source path mismatch")
+    require(
+        Path(result["prefix_state_export"]["path"]).resolve() == args.prefix_state.resolve(),
+        "Closed report names another prefix",
+    )
+    require(result["prefix_state_export"]["runtime_source_sha256"] == current, "Export runtime differs")
+    for field in ["snapshot", "config_sha256", "reference_sha256", "transformers"]:
+        require(fixture["key"]["provenance"][field] == result["provenance"][field], f"HF provenance differs: {field}")
+    return {
+        "status": "verified_normal_prefix_and_CPU_reference",
+        "stage_acceptance": "not_evaluated",
+        "device_executed": False,
+        "prefix_version": saved["version"],
+        "prefix_origin": saved["origin"],
+        "prefix": 262143,
+        "capacity": 262144,
+        "producer_passed": True,
+        "runtime_source_sha256": current,
+        "artifact_sha256": {
+            str(path): digest(path)
+            for path in [
+                args.prefix_state,
+                args.source_cache,
+                args.cpu_fixture,
+                args.cpu_report,
+                args.cpu_provenance,
+                args.producer_report,
+                args.producer_provenance,
+            ]
+        },
+        "CPU_fixture_key": fixture["key"],
+        "preflight_source_sha256": digest(Path(__file__)),
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    for name in [
+        "producer-report",
+        "producer-provenance",
+        "prefix-state",
+        "source-cache",
+        "cpu-fixture",
+        "cpu-report",
+        "cpu-provenance",
+        "output",
+    ]:
+        parser.add_argument("--" + name, type=Path, required=True)
+    args = parser.parse_args()
+    assert "ttnn" not in sys.modules
+    try:
+        report = verify(args)
+    except Exception as error:
+        report = {
+            "status": "failed_closed",
+            "device_executed": False,
+            "stage_acceptance": "not_evaluated",
+            "error": f"{type(error).__name__}: {error}",
+        }
+        raise
+    finally:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(report, indent=2) + "\n")
+    assert "ttnn" not in sys.modules
+    print(
+        json.dumps(
+            {
+                "status": report["status"],
+                "prefix_version": report["prefix_version"],
+                "producer_passed": report["producer_passed"],
+            }
+        )
+    )
+
+
+if __name__ == "__main__":
+    main()

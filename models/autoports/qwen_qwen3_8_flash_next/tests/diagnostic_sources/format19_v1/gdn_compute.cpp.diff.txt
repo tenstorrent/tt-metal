@@ -1,0 +1,53 @@
+--- gdn_compute.cpp.before
++++ gdn_compute.cpp.after
+@@ -128,12 +128,21 @@
+     cb_o.reserve_back(n);
+     for (uint32_t i = 0; i < n; ++i) {
+         tile_regs_acquire();
+-        reconfig_data_format_srca(a); copy_init(a); copy_tile(a, i, 0);
+-        reconfig_data_format_srca(b); copy_init(b); copy_tile(b, i, 1);
+-        reconfig_data_format_srca(beta); copy_init(beta); copy_tile(beta, 0, 2);
+-        sub_binary_tile_init(); sub_binary_tile(0, 1, 0);
+-        sfpu_mul_bcast_col_init(); sfpu_mul_bcast_col(0, 2);
+-        tile_regs_commit(); tile_regs_wait();
++        reconfig_data_format_srca(a);
++        copy_init(a);
++        copy_tile(a, i, 0);
++        reconfig_data_format_srca(b);
++        copy_init(b);
++        copy_tile(b, i, 1);
++        reconfig_data_format_srca(beta);
++        copy_init(beta);
++        copy_tile(beta, 0, 2);
++        sub_binary_tile_init();
++        sub_binary_tile(0, 1, 0);
++        sfpu_mul_bcast_col_init();
++        sfpu_mul_bcast_col(0, 2);
++        tile_regs_commit();
++        tile_regs_wait();
+         pack_tile<true>(0, o, i);
+         tile_regs_release();
+     }
+@@ -149,12 +158,18 @@
+     const uint32_t precise_a = exact_copy_view(a);
+     for (uint32_t i = 0; i < n; ++i) {
+         tile_regs_acquire();
+-        reconfig_data_format_srca(precise_a); copy_init(precise_a); copy_tile(precise_a, i, 0);
+-        reconfig_data_format_srca(scal); copy_init(scal); copy_tile(scal, 0, 1);
+-        fill_tile_init(); fill_tile(2, 0.0f);
++        reconfig_data_format_srca(precise_a);
++        copy_init(precise_a);
++        copy_tile(precise_a, i, 0);
++        reconfig_data_format_srca(scal);
++        copy_init(scal);
++        copy_tile(scal, 0, 1);
++        fill_tile_init();
++        fill_tile(2, 0.0f);
+         sfpu_normalize_bcast_scalar_init();
+         sfpu_normalize_bcast_scalar(0, 2, 1);
+-        tile_regs_commit(); tile_regs_wait();
++        tile_regs_commit();
++        tile_regs_wait();
+         pack_tile<true>(0, o, i);
+         tile_regs_release();
+     }

@@ -2740,3 +2740,24 @@ class TestFormatSamplingParamsLanes:
         it broadcasts to max_batch_size, not to the active lane count."""
         out = self._fmt(temperature=[1.0, 1.0], top_k=8, top_p=1.0, enable_log_probs=True)
         assert all(out.enable_log_probs), "enable_log_probs should cover every lane"
+
+    @pytest.mark.parametrize("top_k", [1, 20, 32, 33, 40, 50, 64, 65, -1])
+    @pytest.mark.parametrize("temperature", [0.0, 0.7, 1.0])
+    def test_explicit_capacity_preserves_wide_requests_and_legacy_default(self, top_k, temperature):
+        params = SamplingParams(temperature=temperature, top_k=top_k, top_p=0.95, seed=42)
+        legacy = format_sampling_params(params, BATCH_SIZE)
+        wide = format_sampling_params(params, BATCH_SIZE, max_top_k=64)
+        for result, capacity in ((legacy, 32), (wide, 64)):
+            expected = 1 if temperature == 0 else capacity if top_k < 1 else min(top_k, capacity)
+            assert result.top_k[0] == expected
+            assert result.top_k[1:] == [1] * (BATCH_SIZE - 1)
+            assert result.seed == [42] + [None] * (BATCH_SIZE - 1)
+            assert result.top_p[0] == (0.0 if temperature == 0 else 0.95)
+        assert params.top_k == top_k and params.temperature == temperature
+
+    @pytest.mark.parametrize("capacity", [0, 65, 1.5, None])
+    def test_invalid_capacity_is_rejected(self, capacity, expect_error):
+        with expect_error(ValueError, "max_top_k"):
+            format_sampling_params(
+                SamplingParams(temperature=1.0, top_k=40, top_p=0.95), BATCH_SIZE, max_top_k=capacity
+            )

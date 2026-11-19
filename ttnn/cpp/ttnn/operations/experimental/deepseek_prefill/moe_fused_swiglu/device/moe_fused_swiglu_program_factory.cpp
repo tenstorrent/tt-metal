@@ -566,6 +566,7 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
         dataflow_defines.emplace_back("FUSE_BIAS", "1");
     }
     KernelDescriptor::Defines compute_defines;
+    compute_defines.emplace_back("MOE_FPU_STOCHASTIC_ROUNDING", operation_arguments.stochastic_rounding ? "1" : "0");
     if (stage_profile_enabled()) {
         dataflow_defines.emplace_back("MOE_FUSED_SWIGLU_STAGE_PROFILE", "1");
         compute_defines.emplace_back("MOE_FUSED_SWIGLU_STAGE_PROFILE", "1");

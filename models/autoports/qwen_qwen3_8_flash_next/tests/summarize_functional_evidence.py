@@ -1,0 +1,446 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Offline inventory of functional-decoder evidence; never a stage-review verdict.
+
+Optional gate manifest: {"gates": [{"id": "...", "artifact": "doc/...json",
+"provenance": "doc/...json", "scope": "literal tested scope",
+"required_sources": ["tt/functional_decoder.py", "tests/probe.py"],
+"checks": [{"pointer": "/passed", "equals": true}]}]}.
+Pointers use RFC6901 object/list traversal; numeric checks support ge/le.
+Explicit kind=all_of gates combine a nonempty depends_on list as a DAG; their
+status remains review-required and cannot satisfy inspection/review/commit gates.
+Without explicit bindings/checks, required gates remain unreviewed. A successful
+process is not automatically an accuracy, watcher, context, or review pass.
+"""
+
+import argparse
+import hashlib
+import io
+import json
+import lzma
+import math
+import subprocess
+from pathlib import Path
+
+REQUIRED_GATES = (
+    "documented_decoder_contract",
+    "layer_kind_coverage",
+    "paged_prefill",
+    "paged_traced_decode",
+    "page_table_and_current_position",
+    "nonaligned_boundaries",
+    "largest_feasible_prefill",
+    "advertised_decode_context",
+    "real_weights",
+    "pcc_acceptance",
+    "continuation_contribution_pcc",
+    "warmed_prefill_performance_all_kinds",
+    "warmed_traced_decode_performance_all_kinds",
+    "runtime_fallback_audit",
+    "determinism_and_repeated_inputs",
+    "watcher_clean",
+    "context_contract",
+    "readme_and_work_log",
+    "stage_review",
+    "local_commit_shas",
+)
+
+
+def stream_digest(stream):
+    digest = hashlib.sha256()
+    size = 0
+    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+        digest.update(chunk)
+        size += len(chunk)
+    return digest.hexdigest(), size
+
+
+def file_digest(path):
+    with path.open("rb") as stream:
+        return stream_digest(stream)[0]
+
+
+def verify_archive(root, entry):
+    result = {"source": entry["source"], "integrity": "failed"}
+    try:
+        part_records = entry.get("archive_parts") or [entry["archive"]]
+        parts = [part["path"] if isinstance(part, dict) else part for part in part_records]
+        buffers = []
+        for part, name in zip(part_records, parts):
+            content = (root / name).read_bytes()
+            if isinstance(part, dict) and (
+                hashlib.sha256(content).hexdigest() != part["sha256"] or len(content) != part["bytes"]
+            ):
+                raise ValueError(f"Archive part identity mismatch: {name}")
+            buffers.append(content)
+        packed = b"".join(buffers)
+        if hashlib.sha256(packed).hexdigest() != entry["archive_sha256"] or len(packed) != entry["archive_bytes"]:
+            raise ValueError("Compressed identity mismatch")
+        with lzma.LZMAFile(io.BytesIO(packed)) as stream:
+            digest, size = stream_digest(stream)
+        if digest != entry["source_sha256"] or size != entry["source_bytes"]:
+            raise ValueError("Restored identity mismatch")
+        original = root / entry["source"]
+        result.update(
+            integrity="verified",
+            archive_parts=parts,
+            original_status="absent"
+            if not original.exists()
+            else "matches"
+            if file_digest(original) == digest
+            else "differs_from_archive",
+        )
+    except (OSError, ValueError, lzma.LZMAError, EOFError, KeyError) as error:
+        result["error"] = str(error)
+    return result
+
+
+def provenance_summary(root, path, current_runtime):
+    record = json.loads(path.read_text())
+    sources = record.get("source_sha256", {})
+    runtime_changes = [
+        name
+        for name, digest in sources.items()
+        if name.startswith("tt/") and (not (root / name).is_file() or file_digest(root / name) != digest)
+    ]
+    unrecorded_runtime = sorted(set(current_runtime) - sources.keys())
+    test_changes = [
+        name
+        for name, digest in sources.items()
+        if name.startswith("tests/") and (not (root / name).is_file() or file_digest(root / name) != digest)
+    ]
+    log_path = Path(record.get("log", ""))
+    if not log_path.is_absolute():
+        log_path = Path(record.get("cwd", ".")) / log_path
+    log_status = "missing"
+    if log_path.is_file():
+        log_status = (
+            "unbound"
+            if not record.get("log_sha256")
+            else ("matches" if file_digest(log_path) == record["log_sha256"] else "mismatch")
+        )
+    return {
+        "path": str(path.relative_to(root)),
+        "recorded_status": record.get("status"),
+        "recorded_exit_code": record.get("exit_code"),
+        "started_utc": record.get("started_utc"),
+        "argv": record.get("argv"),
+        "log_status": log_status,
+        "runtime_source_status": "unbound"
+        if not any(name.startswith("tt/") for name in sources)
+        else "mismatch"
+        if runtime_changes
+        else "incomplete"
+        if unrecorded_runtime
+        else "matches_recorded_runtime",
+        "changed_runtime_sources": runtime_changes,
+        "unrecorded_runtime_sources": unrecorded_runtime,
+        "changed_recorded_test_sources": test_changes,
+        "acceptance_inferred": False,
+    }
+
+
+def pointer_value(document, pointer):
+    if not pointer:
+        return document
+    if not pointer.startswith("/"):
+        raise ValueError("JSON pointer must start with /")
+    value = document
+    for part in pointer[1:].split("/"):
+        part = part.replace("~1", "/").replace("~0", "~")
+        value = value[int(part)] if isinstance(value, list) else value[part]
+    return value
+
+
+def evaluate_gate(root, gate):
+    result = {
+        "id": gate["id"],
+        "scope": gate.get("scope"),
+        "status": "needs_review",
+        "artifact": gate.get("artifact"),
+        "provenance": gate.get("provenance"),
+    }
+    if not all(gate.get(key) for key in ("artifact", "provenance", "scope", "required_sources", "checks")):
+        result["reason"] = "Explicit artifact/provenance/scope/source dependencies/checks are required"
+        return result
+    try:
+        artifact = root / gate["artifact"]
+        document = json.loads(artifact.read_text())
+        provenance = json.loads((root / gate["provenance"]).read_text())
+        result["artifact_sha256"] = file_digest(artifact)
+        if provenance.get("status") != "finished" or provenance.get("exit_code") != 0:
+            raise ValueError("Process provenance is unfinished or unsuccessful")
+        run_directory = Path(provenance.get("cwd", "."))
+        log = run_directory / provenance.get("log", "")
+        if not provenance.get("log_sha256") or file_digest(log) != provenance["log_sha256"]:
+            raise ValueError("Recorded command log is missing or changed")
+        if not any(
+            (run_directory / argument).resolve() == artifact.resolve()
+            for argument in provenance.get("argv", [])
+            if isinstance(argument, str)
+        ):
+            raise ValueError("Artifact path is not bound by recorded command arguments")
+        source_hashes = provenance.get("source_sha256", {})
+        mismatches = [
+            name
+            for name in gate["required_sources"]
+            if not source_hashes.get(name) or file_digest(root / name) != source_hashes[name]
+        ]
+        from .verify_format19_dependency import FormatSourceClosure
+
+        formatting = FormatSourceClosure(root, gate.get("format_source_closure"))
+        if formatting.proof is not None:
+            remaining = []
+            for name in mismatches:
+                if name in formatting.files:
+                    formatting.verify(name, source_hashes.get(name))
+                else:
+                    remaining.append(name)
+            mismatches = remaining
+            result["format_source_closure"] = formatting.proof
+        closure = gate.get("source_closure")
+        if closure is not None:
+            from . import verify_linear_qsa_dependency as linear_closure
+
+            if not isinstance(closure, dict) or closure.get("kind") != "linear_qsa_constructor_v1":
+                raise ValueError("Unknown source closure kind")
+            expected_binding = {
+                "kind": "linear_qsa_constructor_v1",
+                "historical_qsa_sha256": linear_closure.BASELINE_SHA,
+                "current_qsa_sha256": file_digest(root / "tt/qsa.py"),
+                "baseline_inventory_sha256": linear_closure.RUNTIME_BASELINE_SHA,
+            }
+            if closure != expected_binding:
+                raise ValueError("Source closure binding is stale or contains unknown fields")
+            if mismatches != ["tt/qsa.py"]:
+                raise ValueError(f"Source closure permits only the exact tt/qsa.py mismatch: {mismatches}")
+            live_record = linear_closure.verify_record(
+                root, gate["artifact"], gate["provenance"], gate.get("format_source_closure")
+            )
+            transition = linear_closure.verify_transition(
+                (linear_closure.ROOT / linear_closure.BASELINE).read_bytes(), (root / "tt/qsa.py").read_bytes()
+            )
+            result["source_closure"] = {
+                "binding": closure,
+                "live_record": live_record,
+                "exact_transition_proof": transition,
+                "branch_proof": linear_closure.verify_branch((root / "tt/functional_decoder.py").read_text()),
+                "verifier_sha256": file_digest(Path(linear_closure.__file__)),
+                "recorded_hashes_preserved": True,
+                "stage_acceptance": "not_evaluated_review_required",
+            }
+        elif mismatches:
+            raise ValueError(f"Required source identity is missing or stale: {mismatches[0]}")
+        result["additional_required_artifacts"] = {}
+        for name in gate.get("additional_required_artifacts", []):
+            path = root / name
+            if not path.is_file() or path.stat().st_size == 0:
+                raise ValueError(f"Additional required artifact is missing or empty: {name}")
+            result["additional_required_artifacts"][name] = file_digest(path)
+        result["checks"] = []
+        for check in gate["checks"]:
+            value = pointer_value(document, check["pointer"])
+            operators = [key for key in ("equals", "ge", "le") if key in check]
+            if len(operators) != 1:
+                raise ValueError("Each check needs exactly one comparison")
+            operator = operators[0]
+            expected = check[operator]
+            if operator == "equals":
+                passed = type(value) is type(expected) and value == expected
+            else:
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                    raise ValueError("Numeric check needs a finite number")
+                passed = value >= expected if operator == "ge" else value <= expected
+            result["checks"].append({**check, "observed": value, "passed": passed})
+            if not passed:
+                raise ValueError(f"Evidence check failed: {check['pointer']}")
+        if gate.get("offline_validator"):
+            if gate["offline_validator"]["kind"] == "device_trace_performance_v1":
+                from .validate_trace_evidence import validate_performance_gate
+
+                result["offline_validation"] = validate_performance_gate(root, gate)
+            elif gate["offline_validator"]["kind"] == "ple_batch_capacity_v1":
+                from .validate_batch_capacity import validate_bound
+
+                result["offline_validation"] = validate_bound(
+                    root, root / gate["offline_validator"]["bound"], gate.get("format_source_closure")
+                )
+            elif gate["offline_validator"]["kind"] == "capacity_observations_v1":
+                from .close_capacity_evidence import revalidate_capacity_summary
+
+                result["offline_validation"] = revalidate_capacity_summary(root, document)
+            else:
+                raise ValueError("Unknown offline validator kind")
+        result.update(
+            status="declared_checks_satisfied_review_required",
+            limitation="Artifact identity is recorded now; original run provenance does not bind output digest. Scope and completeness require stage review.",
+        )
+    except (OSError, ValueError, KeyError, TypeError, IndexError, lzma.LZMAError, subprocess.TimeoutExpired) as error:
+        result.update(status="unmet", reason=str(error))
+    return result
+
+
+def evaluate_gates(root, bindings):
+    """Evaluate concrete leaves and explicit all_of DAGs, never stage acceptance.
+
+    depends_on on a concrete leaf is descriptive only; it cannot replace that
+    leaf's artifact/source/numerical validator. Inspection/review/commit kinds
+    remain pending until separately implemented concrete closure is supplied.
+    """
+    by_id = {}
+    for gate in bindings:
+        name = gate.get("id")
+        if not isinstance(name, str) or not name or name in by_id:
+            raise ValueError("Gate IDs must be unique nonempty strings")
+        by_id[name] = gate
+    results, visiting = {}, []
+    pending_kinds = {"inspection_closure", "post_review_record", "post_review_commit_record"}
+
+    def obligations(gate, result):
+        rows = []
+        for field in ("review_obligations", "additional_review"):
+            for text in gate.get(field, []):
+                rows.append({"gate": gate["id"], "text": text})
+        if result.get("limitation"):
+            rows.append({"gate": gate["id"], "text": result["limitation"]})
+        for text in result.get("offline_validation", {}).get("limitations", []):
+            rows.append({"gate": gate["id"], "text": text})
+        return rows
+
+    def visit(name):
+        if name in results:
+            return results[name]
+        gate = by_id[name]
+        base = {
+            "id": name,
+            "scope": gate.get("scope"),
+            "kind": gate.get("kind", "artifact"),
+            "acceptance_inferred": False,
+            "stage_acceptance": "not_evaluated_review_required",
+        }
+        if name in visiting:
+            return {**base, "status": "unmet", "reason": "Dependency cycle: " + " -> ".join(visiting + [name])}
+        kind = gate.get("kind", "artifact")
+        if not isinstance(kind, str):
+            result = {**base, "status": "unmet", "reason": "Unknown gate kind"}
+        elif kind == "all_of":
+            dependencies = gate.get("depends_on")
+            error = None
+            if not isinstance(dependencies, list) or not dependencies:
+                error = "all_of requires nonempty dependencies"
+            elif any(not isinstance(item, str) or not item for item in dependencies):
+                error = "all_of dependency IDs must be nonempty strings"
+            elif len(set(dependencies)) != len(dependencies):
+                error = "all_of dependencies must be unique"
+            elif any(item not in by_id for item in dependencies):
+                error = "Unknown dependencies: " + ", ".join(item for item in dependencies if item not in by_id)
+            elif any(
+                gate.get(field)
+                for field in (
+                    "artifact",
+                    "provenance",
+                    "required_sources",
+                    "checks",
+                    "offline_validator",
+                    "source_closure",
+                )
+            ):
+                error = "all_of cannot replace or mix concrete artifact validation"
+            if error:
+                result = {**base, "status": "unmet", "reason": error}
+            else:
+                visiting.append(name)
+                children = [visit(item) for item in dependencies]
+                visiting.pop()
+                failed = [row["id"] for row in children if row["status"] != "declared_checks_satisfied_review_required"]
+                result = {
+                    **base,
+                    "status": "unmet" if failed else "declared_checks_satisfied_review_required",
+                    "dependencies": [
+                        {key: child[key] for key in ("id", "status", "scope", "reason") if key in child}
+                        for child in children
+                    ],
+                    "unmet_dependencies": failed,
+                    "dependency_scopes": {},
+                }
+                if failed:
+                    result["reason"] = "Dependencies are not satisfied: " + ", ".join(failed)
+                for child in children:
+                    result["dependency_scopes"][child["id"]] = child.get("scope")
+                    result["dependency_scopes"].update(child.get("dependency_scopes", {}))
+                inherited = [item for child in children for item in child.get("review_obligations", [])]
+                result["review_obligations"] = inherited
+        elif kind in pending_kinds:
+            result = {
+                **base,
+                "status": "needs_review",
+                "reason": "Explicit independent inspection/review/commit closure is pending",
+            }
+        elif kind == "artifact":
+            result = evaluate_gate(root, gate)
+        else:
+            result = {**base, "status": "unmet", "reason": "Unknown gate kind"}
+        combined = result.get("review_obligations", []) + obligations(gate, result)
+        unique = {json.dumps(row, sort_keys=True): row for row in combined}
+        result["review_obligations"] = list(unique.values())
+        results[name] = result
+        return result
+
+    for name in by_id:
+        visit(name)
+    return {name: results[name] for name in by_id}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument("--gate-manifest", type=Path)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    root = args.root.resolve()
+    evidence = root / "doc/functional_decoder"
+    sources = {
+        str(path.relative_to(root)): file_digest(path)
+        for path in (root / "tt").rglob("*")
+        if path.is_file() and path.suffix in (".py", ".cpp", ".hpp", ".h")
+    }
+    bindings = json.loads(args.gate_manifest.read_text())["gates"] if args.gate_manifest else []
+    gates = evaluate_gates(root, bindings)
+    for name in REQUIRED_GATES:
+        gates.setdefault(name, {"id": name, "status": "unbound", "acceptance_inferred": False})
+    archive_manifest = evidence / "evidence_archives.json"
+    from .archive_manifest import load_archive_manifest
+
+    archive_document = load_archive_manifest(root, archive_manifest) if archive_manifest.exists() else {"entries": []}
+    archives = archive_document["entries"]
+    report = {
+        "scope": "Offline evidence inventory; never a clean-pass or stage acceptance verdict",
+        "runtime_source_sha256": sources,
+        "gates": list(gates.values()),
+        "context_contract_as_recorded": json.loads((root / "doc/context_contract.json").read_text()),
+        "provenance": [
+            provenance_summary(root, path, sources) for path in sorted((evidence / "provenance").glob("*.json"))
+        ],
+        "archive_manifest_sha256": file_digest(archive_manifest) if archive_manifest.exists() else None,
+        "archive_manifest_parts": archive_document.get("entry_parts", []),
+        "archives": [verify_archive(root, entry) for entry in archives],
+        "stage_acceptance": "not_evaluated",
+    }
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(report, indent=2) + "\n")
+    print(
+        json.dumps(
+            {
+                "output": str(args.output),
+                "provenance_records": len(report["provenance"]),
+                "archive_entries": len(archives),
+                "archive_failures": sum(row["integrity"] != "verified" for row in report["archives"]),
+                "gates_unbound": sum(row["status"] == "unbound" for row in gates.values()),
+                "stage_acceptance": "not_evaluated",
+            }
+        )
+    )
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,17 @@
+import hashlib,json
+from pathlib import Path
+import torch
+root=Path('models/autoports/qwen_qwen3_8_flash_next').resolve();doc=root/'doc/functional_decoder'
+torch.set_num_threads(8)
+def identity(p):
+ p=Path(p);h=hashlib.sha256()
+ with p.open('rb') as f:
+  for b in iter(lambda:f.read(1048576),b''):h.update(b)
+ return {'path':str(p),'bytes':p.stat().st_size,'sha256':h.hexdigest()}
+a=Path('/home/ttuser/qwen38-flash/qsa_ordered_device_262144_v1.pt');r=Path('/home/ttuser/qwen38-flash/qsa_cpu_prefill_262144.pt');s=Path('/home/ttuser/qwen38-flash/qsa_ordered_tt_prefix_262143_v1.pt')
+x=torch.load(a,map_location='cpu',mmap=True,weights_only=False);y=torch.load(r,map_location='cpu',mmap=True,weights_only=False)
+assert x['length']==262144 and x['actual'].shape==y['expected'].shape==(1,262144,2560)
+row=105584;u=x['actual'][0,row].double();v=y['expected'][0,row].double();uc=u-u.mean();vc=v-v.mean();pcc=float((uc@vc)/(uc.norm()*vc.norm()))
+assert torch.isfinite(u).all() and pcc>=.995
+report={'scope':'CPU-only single-row comparison of saved actual from-empty full TT run; not a replacement full-row gate','row':row,'pcc_fp64':pcc,'max_abs_error':float((u-v).abs().max()),'finite':True,'threshold':.995,'passed':True,'stage_acceptance':False,'torch_version':torch.__version__,'source':identity(__file__),'inputs':[identity(a),identity(r),identity(s)],'producer_report':identity(doc/'qsa_ordered_device_full_boundary_v1.json'),'producer_provenance':identity(doc/'provenance/qsa_ordered_device_full_boundary_v1.json'),'producer_log':identity(doc/'logs/qsa_ordered_device_full_boundary_v1.log')}
+(doc/'qsa_ordered_repaired_row_cpu_v1.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report,indent=2))

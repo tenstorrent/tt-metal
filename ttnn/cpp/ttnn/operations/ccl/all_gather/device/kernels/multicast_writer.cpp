@@ -238,6 +238,24 @@ void kernel_main() {
             fabric_connection,
             sem_route_id,
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{done_sem_noc_addr_in_pkt, 0});
+        if constexpr (load_balance_across_alt_routes) {
+            // Match every payload route, including the alternate antipode path.
+            // Drain the first header send before updating its routing in place.
+            noc.async_writes_flushed();
+            uint8_t starts[1] = {1};
+            fabric_api::fabric_multicast_noc_unicast_atomic_inc_set_state<
+                UnicastAtomicIncUpdateMask::DstAddr | UnicastAtomicIncUpdateMask::Val |
+                UnicastAtomicIncUpdateMask::Flush>(
+                fabric_connection,
+                sem_route_id,
+#ifndef FABRIC_2D
+                starts,
+#endif
+                ranges_alt,
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{done_sem_noc_addr_in_pkt, 1u, true});
+            fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::None>(
+                fabric_connection, sem_route_id);
+        }
     }
 
     if constexpr (enable_fabric) {

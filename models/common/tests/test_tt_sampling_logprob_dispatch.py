@@ -71,6 +71,7 @@ def test_enabling_topk_reporting_refreshes_candidate_parameters(monkeypatch):
     sampler = object.__new__(TTSampling)
     sampler._allow_force_argmax_sampling = True
     sampler.max_top_k = 32
+    sampler._num_gather_links_by_width = {32: 1}
     sampler._sampling_dp = 1
     sampler._greedy_col = object()
     sampler._scale_logprobs = object()
@@ -91,6 +92,8 @@ def test_enabling_topk_reporting_refreshes_candidate_parameters(monkeypatch):
 
 def test_scalar_log_probs_enable_temperature_broadcasts_scale_tensor(monkeypatch):
     sampler = object.__new__(TTSampling)
+    sampler.max_top_k = 32
+    sampler._num_gather_links_by_width = {32: 1}
     sampler._allow_force_argmax_sampling = False
     sampler._is_force_argmax_sampling = lambda k, p, temp: False
     sampler._normalize_device_params = lambda k, temp: (torch.as_tensor(k), torch.as_tensor(temp))
