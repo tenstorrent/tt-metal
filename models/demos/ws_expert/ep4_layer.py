@@ -534,8 +534,9 @@ def build_combine(mesh, lc: EP4Cfg, res, louts, O, P, cnt_t, fence, sides=None):
             wr_ct += ta(P) + ta(fence)
             rd_rt, cp_rt, wr_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
             for me, ((x, y), (a, nt)) in enumerate(zip(acores, rng)):
-                rd_rt[x][y] = [louts["runs"].buffer_address(), O.buffer_address(), a, nt, ast.buffer_address()]
-                rd_rt[x][y] += list(sides[r * Cn + c]) if lc.oside else []
+                rd_rt[x][y] = [louts["runs"].buffer_address(), O.buffer_address(), a, nt, ast.buffer_address()] + (
+                    list(sides[r * Cn + c]) if lc.oside else []
+                )
                 cp_rt[x][y] = [nt, ast.buffer_address()]
                 args = [me, a, nt, c, P.buffer_address(), fence.buffer_address(), ast.buffer_address()]
                 args += [pidx.get((h, l), 0xFF) for h in range(4) for l in range(2)]
