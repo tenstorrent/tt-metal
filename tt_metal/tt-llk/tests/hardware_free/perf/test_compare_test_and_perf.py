@@ -388,3 +388,53 @@ def test_single_pair_lookup_finds_dest_reuse_either_order(
     assert forward[0][3] is True
     assert backward[0][0] == extra
     assert backward[0][3] is False
+
+
+@pytest.mark.parametrize(
+    ("arch", "path", "perf"),
+    [
+        ("blackhole", "test_fused.py", False),
+        ("blackhole", "perf_fused.py", True),
+        ("quasar", "quasar/test_fused_quasar.py", False),
+    ],
+)
+def test_fused_family_enumerates_yaml_cases_without_a_fuser_config(
+    arch: str, path: str, perf: bool
+):
+    root = Path(cmp.__file__).resolve().parent
+    module = cmp.import_test_module(root / path, root, arch)
+
+    functions = cmp.parametrized_functions(module)
+    sweep = cmp.axis_value_sets(functions["test_fuser"])
+
+    assert {
+        "yaml",
+        "case",
+        "dest_acc",
+        "formats",
+        "operations",
+        "unpack_to_dest",
+    } <= set(sweep.axes)
+    assert ("run_type" in sweep.axes) == perf
+    yamls = set(sweep.axes["yaml"])
+    assert "'fpu_elwadd'" in yamls
+    # supported_archs drops the wormhole-only file; the Quasar directory joins only the Quasar module.
+    assert "'hifi_elwmul_overwrite'" not in yamls
+    assert ("'quasar/hifi_elwmul_overwrite'" in yamls) == (arch == "quasar")
+
+
+def test_fused_family_lists_pack_thread_operations_and_keeps_case_identity():
+    root = Path(cmp.__file__).resolve().parent
+    module = cmp.import_test_module(root / "test_fused.py", root, "blackhole")
+    mark = next(m for m in module.test_fuser.pytestmark if m.name == "parametrize")
+    names = mark.args[0].split(",")
+    rows = [dict(zip(names, row)) for row in mark.args[1]]
+
+    pack_sfpu = [r for r in rows if r["yaml"] == "pack_sfpu"]
+    assert pack_sfpu and all("Exp" in r["operations"] for r in pack_sfpu)
+    sfpu_unary = [r for r in rows if r["yaml"] == "sfpu_unary"]
+    assert len({r["case"] for r in sfpu_unary}) == len(sfpu_unary)
+
+
+def test_run_type_is_a_measurement_axis():
+    assert "run_type" in cmp.MEASUREMENT_AXES
