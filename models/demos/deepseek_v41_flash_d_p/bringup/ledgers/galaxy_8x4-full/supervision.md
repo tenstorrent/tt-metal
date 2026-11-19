@@ -251,3 +251,15 @@
   perf attempt and then stops at "apply or not?"; closed by gate --continue.
 - RAM unaccounted after X.8: 104.6 GiB (94.9 after X.7).
 - Next: P.78 (hide the host time).
+
+## 2026-11-19 02:22 UTC: host hiding accepted (P.78 PASS 1face0ec48f)
+
+- HOST_HIDE=on (numba hash + threaded gather for layer 1's engram rows; layer 14's job deferred until the host
+  leads): steady wall 142k 108.1 -> 93.4 ms (-14.7), 1M 121.2 -> 105.2 ms (-16.0); accuracy identical, determinism
+  0.0 both sides; device work unchanged. ~54.8k tok/s at 142k.
+- Accept first crashed: my ab values `on` / `off` unquoted = YAML bools; F274 (set_defaults takes a bool) + F273 (the
+  A/B table shows the gate's test metrics on vs off: the steady walls were missing). The agent again set the
+  setting's default to the new value itself (the off side was still measured with HOST_HIDE=False: A/B valid).
+- RAM unaccounted after P.78: 117.1 GiB (94.9 after X.7, 104.6 after X.8): climbing ~10 GiB a task, no reboot since
+  09:17 on 11-18.
+- Next: P.79 (MoE experts + combine to the DRAM roofline).
