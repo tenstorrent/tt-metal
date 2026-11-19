@@ -157,6 +157,8 @@ def test_shard_and_gather(mesh_device: ttnn.MeshDevice, expect_error) -> None:  
     replicated.shard(0)
     assert replicated.mesh_axes == (1, 0)
     assert_layout_matches_data()
+    with expect_error(RuntimeError, "ShardableModule has weights with a transient split"):
+        model()  # Parameter.shard alone, without Module.shard, is enough for the call to refuse
     replicated.gather(ccl_manager)
     assert replicated.mesh_axes == (None, None)
     assert_layout_matches_data()

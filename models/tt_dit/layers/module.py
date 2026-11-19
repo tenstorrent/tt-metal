@@ -91,7 +91,6 @@ class Module(ABC):
         self._children = {}
         self._parameters = {}
         self._is_loaded = False
-        self._has_transient_split = False
         self.coresident_exclusions = None  # modules that cannot be resident in memory at the same time as this module. They should be deallocated before this module is loaded.
         self._coresident_peers: list[Module] = []
         self._eviction_hooks: list[Callable[[], None]] = []
@@ -203,7 +202,6 @@ class Module(ABC):
     def _mark_loaded(self) -> None:
         """Recursively mark this module and all descendants as loaded."""
         self._is_loaded = True
-        self._has_transient_split = False
         for _, child in self.named_children():
             child._mark_loaded()  # noqa: SLF001
 
@@ -279,7 +277,6 @@ class Module(ABC):
                     raise LoadingError(msg) from err
 
             self._is_loaded = True
-            self._has_transient_split = False
         finally:
             if watchdog is not None:
                 watchdog.__exit__()
@@ -292,7 +289,6 @@ class Module(ABC):
         for _, parameter in self.named_parameters():
             parameter.deallocate()
 
-        self._has_transient_split = False
         self._set_evicted()
 
     def shard(self, mesh_axis: int) -> None:
@@ -309,7 +305,7 @@ class Module(ABC):
         the hole its predecessor's full weight left; `gather` then frees them as one block, not as holes scattered
         between the gathered weights.
 
-        Calling the module or any submodule raises until `gather`. Raises, before changing anything, if
+        Calling a module whose own parameters were split raises until `gather`. Raises, before changing anything, if
         `mesh_axis` already splits any parameter (see `Parameter.shard`), or if a module overrides
         `deallocate_weights`: `shard` does not run the override, so whatever it frees would stay on the device.
         """
@@ -331,7 +327,6 @@ class Module(ABC):
         for t in defer_free:
             ttnn.deallocate(t)
         for module in modules:
-            module._has_transient_split = True  # noqa: SLF001
             module._set_evicted()  # noqa: SLF001
 
     def gather(self, ccl_manager: Any) -> None:  # noqa: ANN401
@@ -396,7 +391,7 @@ class Module(ABC):
         pass
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
-        if self._has_transient_split and self.is_sharded():
+        if any(p.is_sharded() for _, p in self.named_parameters()):
             msg = f"{type(self).__name__} has weights with a transient split; gather it first"
             raise RuntimeError(msg)
         return self.forward(*args, **kwargs)
