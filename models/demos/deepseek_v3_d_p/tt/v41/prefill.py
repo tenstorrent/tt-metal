@@ -48,6 +48,10 @@ from .block import HC, V41HyperConnection, V41PrefillBlock, identity_pre_row
 from .engram import V41PrefillEngram
 
 
+def _kv_name(kv_b) -> str:
+    return "full" if kv_b is None else str(kv_b)
+
+
 def _first_device(t) -> torch.Tensor:
     """A replicated device tensor -> the first chip's copy on the host (fp32)."""
     return ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()
@@ -57,7 +61,11 @@ PROFILE = os.environ.get("V41_PREFILL_PROFILE", "0") == "1"
 # WS4 (tt-blaze prefill TTFT plan, Phase 2): each run of consecutive CSA consumer blocks (encoder 3-7, 9-13, 15-19) replays as ONE
 # trace on a full traced chunk -- A, A1c, the fixed-row glue, A2c, the carry and B of every block, the blocks chained in place
 # (no copy-in). The sources, the SWA layers, Engram and chunk 0 / ragged / decoder chunks keep the per-layer islands. Default off.
-SUPER = os.environ.get("V41_PREFILL_SUPER_ISLANDS", "0") == "1"
+# =2: the CSA sources too -- a segment runs from a source's tail (carry, B) through its consumers (and an Engram layer) to the next
+# source's head (A + A1); between segments only the source's position-dependent glue (eager) and its A2 (one island per score
+# bucket, reading the segment's outputs). The SWA layers 0 / 1 and the decoder layers keep the per-layer islands.
+SUPER_LEVEL = int(os.environ.get("V41_PREFILL_SUPER_ISLANDS", "0") or 0)
+SUPER = SUPER_LEVEL >= 1
 # DS41F-0068: the chunk embedding uploaded S-sharded / TP-replicated and split on device (0 = the D-over-TP mapper)
 EMBED_PARTITION = os.environ.get("V41_PREFILL_EMBED_PARTITION", "1") == "1"
 ENGRAM_EARLY = (
@@ -557,8 +565,210 @@ class V41Prefill:
             streams, pre = blk.enable_trace_islands(streams, pre, self.chunk)
         self.islands = True
         logger.info(f"[v41 prefill] trace islands captured for {len(self.blocks)} blocks in {time.time() - t0:.1f} s")
-        if SUPER:
+        if SUPER_LEVEL >= 2:
+            self._enable_super_plan()
+        elif SUPER:
             self._enable_super_islands()
+
+    # ---- WS4 level 2: the whole encoder run from the first source on, as segments split only at the sources' glue -------------
+    def _enable_super_plan(self) -> None:
+        from .attention import V41CSA, V41CSAConsumer
+
+        assert all(int(getattr(b.state, "slot", 0)) == 0 for b in self.blocks), "super-islands assume one physical slot"
+        t0 = time.time()
+        C = self.chunk
+        enc = [i for i, b in enumerate(self.blocks) if b.layer < self.cfg.first_decoder_layer]
+        srcs = [i for i in enc if isinstance(self.blocks[i].attn, V41CSA) and self.blocks[i]._attn_islands_enabled()]
+        self._plan = None
+        if not srcs or srcs[0] == 0:
+            logger.warning("[v41 super2] no traced CSA source after block 0: plan disabled")
+            return
+        s0, end = srcs[0], enc[-1]
+        for i in range(s0, end + 1):
+            b = self.blocks[i]
+            cons = isinstance(b.attn, V41CSAConsumer) and b._attn_islands_enabled()
+            if b.layer in self.engrams and getattr(self.engrams[b.layer], "_island", None) is None:
+                logger.warning(
+                    f"[v41 super2] Engram L{b.layer} has no island (V41_PREFILL_ENGRAM_ISLAND=1 needed): plan disabled"
+                )
+                return
+            if not (i in srcs or cons) or (b.layer in self.engrams and i not in srcs):
+                logger.warning(
+                    f"[v41 super2] block {b.layer} is neither a traced source nor a traced consumer: plan disabled"
+                )
+                return
+        # capture-time positions, as _capture_attn_islands: a valid full chunk just past chunk 0
+        saved = {}
+        for i in range(s0, end + 1):
+            b = self.blocks[i]
+            saved[i] = (b.state.kv_actual, b.state.entry_count, getattr(b.state, "mask_zeroed_upto", None))
+            b.state.kv_actual = C
+            if i in srcs:
+                b.state.entry_count = C // b.attn.compressor.compress_rate
+            b.attn.prepare_chunk(b.state, C)
+
+        def head_ops(b, s, pre):
+            attn_pre, attn_post, attn_comb, h = b._ops_a(s, pre)
+            outs = b.attn.forward_pre(h, b.state, C)
+            return [attn_pre, attn_post, attn_comb, h] + list(outs)
+
+        def tail_ops(b, src_in, attn_pre, attn_post, attn_comb, next_carry, y_a2):
+            ttnn.copy(next_carry, b.state.sliding_carry)  # _a3_carry on a full chunk
+            y_buf = b._islands[4]
+            y = ttnn.typecast(y_a2, y_buf.dtype) if y_a2.dtype != y_buf.dtype else y_a2
+            out = b._ops_b(src_in, y, attn_pre, attn_post, attn_comb, C)
+            return list(out[:HC]), out[HC]
+
+        n_out = None
+        segs, prev_head = [], None
+        bounds = srcs + [end + 1]
+        start_inputs = list(
+            self.blocks[s0 - 1]._islands[1].outputs
+        )  # block s0-1's island-B outputs: HC streams + ffn_pre
+        for k, si in enumerate(bounds):
+            # segment k: [tail of source bounds[k-1]] + consumers (bounds[k-1], si) + [Engram of si] + [head of si]
+            lo = bounds[k - 1] + 1 if k > 0 else s0
+            cons = [i for i in range(lo, min(si, end + 1))]
+            head = si if si <= end else None
+            if k == 0:
+                ins = start_inputs
+            else:
+                ph = prev_head  # outputs of the previous segment for its head source
+                ins = list(ph["src_in"]) + [ph["attn_pre"], ph["attn_post"], ph["attn_comb"], ph["outs"][3]]
+                ins.append(self.blocks[bounds[k - 1]].attn._a3_out[0][0])  # the source's A2 y (persistent)
+
+            def body(*args, _k=k, _cons=cons, _head=head, _prev=bounds[k - 1] if k > 0 else None):
+                if _k == 0:
+                    s, pre = list(args[:HC]), args[HC]
+                else:
+                    src_in = list(args[:HC])
+                    s, pre = tail_ops(self.blocks[_prev], src_in, *args[HC : HC + 5])
+                for i in _cons:
+                    out = self.blocks[i].super_consumer_ops(s, pre, C)
+                    s, pre = list(out[:HC]), out[HC]
+                if _head is None:
+                    return tuple(s) + (pre,)
+                hb = self.blocks[_head]
+                if hb.layer in self.engrams:
+                    e = self.engrams[hb.layer]
+                    s = e.forward(s, e._isl_rows)
+                return tuple(s) + tuple(head_ops(hb, s, pre))
+
+            moes = []
+            if k > 0:
+                moes.append(self.blocks[bounds[k - 1]].moe)
+            moes += [self.blocks[i].moe for i in cons]
+            isl = TraceIsland(self.mesh, body, ins, moes=moes, name=f"v41.super2.seg{k}")
+            outs = isl.capture()
+            seg = dict(island=isl, cons=cons, head=head, prev=bounds[k - 1] if k > 0 else None)
+            if head is not None:
+                o = list(outs)
+                prev_head = dict(
+                    src_in=o[:HC],
+                    attn_pre=o[HC],
+                    attn_post=o[HC + 1],
+                    attn_comb=o[HC + 2],
+                    h=o[HC + 3],
+                    outs=o[HC + 4 :],
+                )
+                seg["head_out"] = prev_head
+                # the head source's A2, one island per score bucket (and the full width), reading this segment's outputs and
+                # writing the source's persistent A2 outputs (the consumers' top-k buffer)
+                hb = self.blocks[head]
+                a2_out = hb.attn._a3_out[0]
+                buckets = [None] + list(hb.attn.capacity_buckets(hb.state, C // self.sp))
+                a2s = {}
+                for kv_b in buckets:
+
+                    def a2_fn(_b=hb, _ph=prev_head, _kv=kv_b, _dst=a2_out):
+                        res = _b.attn.forward_attn(_ph["h"], _ph["outs"], _b.state, C, kv_bucket=_kv)
+                        for dst, t in zip(_dst, res):
+                            ttnn.copy(t, dst)
+                            ttnn.deallocate(t)
+                        return _dst
+
+                    a = TraceIsland(self.mesh, a2_fn, [], name=f"v41.super2.A2.L{hb.layer}.b{_kv_name(kv_b)}")
+                    a.capture()
+                    a2s[kv_b] = a
+                seg["a2s"] = a2s
+            else:
+                seg["final_out"] = list(outs)
+            segs.append(seg)
+        for i, (ka, ec, mz) in saved.items():
+            b = self.blocks[i]
+            b.state.kv_actual, b.state.entry_count = ka, ec
+            if mz is not None:
+                b.state.mask_zeroed_upto = mz
+        self._plan = dict(s0=s0, end=end, srcs=srcs, segs=segs, start_inputs=start_inputs)
+        logger.info(
+            f"[v41 super2] blocks {self.blocks[s0].layer}..{self.blocks[end].layer} as {len(segs)} segment(s) "
+            f"({[sg['island'].num_segments for sg in segs]} trace pieces), "
+            f"sources {[self.blocks[i].layer for i in srcs]}, captured in {time.time() - t0:.1f} s"
+        )
+
+    def _super_plan_eligible(self, real_len: int, streams, pre, owned: bool) -> bool:
+        pl = getattr(self, "_plan", None)
+        if pl is None or owned or int(real_len) != self.chunk:
+            return False
+        if not all(a is b for a, b in zip(list(streams) + [pre], pl["start_inputs"])):
+            return False
+        for i in range(pl["s0"], pl["end"] + 1):
+            b = self.blocks[i]
+            if b._moe_pc_len != self.chunk or int(b.state.kv_actual) == 0 or not b.attn.trace_ready(b.state):
+                return False
+        return True
+
+    def _run_super_plan(self, rows, mark) -> tuple:
+        """Replay the level-2 plan on a full traced chunk -> (streams, pre) = the last encoder block's outputs."""
+        pl = self._plan
+        C = self.chunk
+        for i in range(pl["s0"], pl["end"] + 1):  # every position scalar first (they depend on the chunk start only)
+            b = self.blocks[i]
+            b.attn.prepare_chunk(b.state, C)
+        if HP.ON:
+            HP.mark("super2.prepare")
+        out = None
+        for seg in pl["segs"]:
+            hb = self.blocks[seg["head"]] if seg["head"] is not None else None
+            if hb is not None and hb.layer in self.engrams:
+                L = hb.layer
+                if HP.ON:
+                    HP.mark("other")
+                r = rows[L].result() if hasattr(rows[L], "result") else rows[L]
+                if HP.ON:
+                    HP.mark("engram.wait")
+                rd = self.engrams[L].upload_rows(r, C)
+                copy_into(self.engrams[L]._isl_rows, rd)
+                ttnn.deallocate(rd)
+                if HP.ON:
+                    HP.mark("engram.upload")
+            out = seg["island"].replay()
+            if HP.ON:
+                HP.mark("super2.seg")
+            for i in seg["cons"]:
+                self.blocks[i].super_after(C)
+            if hb is not None:
+                ph = seg["head_out"]
+                hb.attn.glue_chunk(hb.state, ph["outs"], C, None)
+                if HP.ON:
+                    HP.mark("super2.glue")
+                a2 = seg["a2s"][None]
+                for kv_b in sorted(k for k in seg["a2s"] if k is not None):
+                    if hb.attn.bucket_need(hb.state, C) <= kv_b:
+                        a2 = seg["a2s"][kv_b]
+                        break
+                a2.replay()
+                if HP.ON:
+                    HP.mark("super2.A2")
+                # _source_epilogue_chunk without the carry copy (the next segment does it)
+                st = hb.state
+                st.entry_count += C // hb.attn.compressor.compress_rate
+                st.kv_actual += C
+                hb.attn.last_path = "A3"
+                hb.attn.shared = dict(path="A3", idx=hb.attn._a3_out[0][1], state=st, entry_count=st.entry_count)
+            mark(f"super2.seg{pl['segs'].index(seg)}")
+        o = list(out)
+        return o[:HC], o[HC]
 
     def _enable_super_islands(self) -> None:
         """WS4: one super-island per maximal run of consecutive CSA consumer blocks, captured AFTER every per-layer island (its
@@ -704,9 +914,15 @@ class V41Prefill:
         owned = True
         sup = getattr(self, "_super", None) or {}
         skip_until = -1
+        pl = getattr(self, "_plan", None)
         for bi, blk in enumerate(self.blocks):
             L = blk.layer
             if bi < skip_until:
+                continue
+            if pl is not None and bi == pl["s0"] and self._super_plan_eligible(real_len, streams, pre, owned):
+                streams, pre = self._run_super_plan(rows, mark)
+                owned = False
+                skip_until = pl["end"] + 1
                 continue
             if bi in sup:
                 idx, isl = sup[bi]
