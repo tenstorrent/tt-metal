@@ -294,3 +294,80 @@ def test_sharding(mesh_device, input_shape, out_channels, kernel_size, stride):
     logger.info("reorder")
     tt_input_NTHWC_rm = ttnn.to_layout(tt_input_NTHWC, ttnn.ROW_MAJOR_LAYOUT)
     print_tensor_mem_info(tt_input_NTHWC_rm)
+
+
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "C_in, C_in_block, C_out_block, T, H, W, out_block, halo",
+    [
+        # Two C_in blocks (reducer path), two C_out blocks, partial H/W edge blocks: fused epilogue.
+        (256, 128, 64, 4, 9, 13, (1, 2, 4), False),
+        # LTX VAE res conv in halo mode: the residual CBs would cost it the L1 prefetch shard, so conv3d
+        # adds the residual separately.
+        (128, 64, 128, 12, 8, 16, (10, 4, 8), True),
+    ],
+    ids=["fused", "halo_falls_back"],
+)
+def test_conv3d_residual(mesh_device, device_params, C_in, C_in_block, C_out_block, T, H, W, out_block, halo):
+    """conv3d with residual_tensor must equal conv3d followed by ttnn.add, bit for bit."""
+    mesh = mesh_device.create_submesh(ttnn.MeshShape(2, 4))
+    torch.manual_seed(0)
+    C_out = 128
+
+    def to_dev(t, layout=ttnn.ROW_MAJOR_LAYOUT):
+        return ttnn.from_torch(
+            t, device=mesh, dtype=ttnn.bfloat16, layout=layout, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh)
+        )
+
+    conv = torch.nn.Conv3d(C_in, C_out, kernel_size=3, padding=(0, 1, 1))
+    tt_x = to_dev(torch.randn(1, T, H, W, C_in))
+    tt_w = ttnn.experimental.prepare_conv3d_weights(
+        weight_tensor=ttnn.from_torch(conv.weight.data, dtype=ttnn.bfloat16),
+        groups=1,
+        C_in_block=C_in_block,
+        alignment=32,
+        device=mesh,
+    )
+    tt_b = to_dev(conv.bias.data.reshape(1, -1), ttnn.TILE_LAYOUT)
+    # Random neighbour rows, so a reader that dropped the halo (zero-padding the edges) would show.
+    halo_kwargs = dict(halo_buffer=to_dev(torch.randn(2 * T * (W + H + 2), C_in))) if halo else {}
+    T_out_block, H_out_block, W_out_block = out_block
+    cfg = ttnn.Conv3dConfig(
+        weights_dtype=ttnn.bfloat16,
+        output_layout=ttnn.ROW_MAJOR_LAYOUT,
+        T_out_block=T_out_block,
+        W_out_block=W_out_block,
+        H_out_block=H_out_block,
+        C_out_block=C_out_block,
+        C_in_block=C_in_block,
+        compute_with_storage_grid_size=mesh.compute_with_storage_grid_size(),
+    )
+    kcfg = ttnn.init_device_compute_kernel_config(
+        mesh.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, packer_l1_acc=False
+    )
+
+    def run(residual=None):
+        return ttnn.experimental.conv3d(
+            input_tensor=tt_x,
+            weight_tensor=tt_w,
+            bias_tensor=tt_b,
+            device=mesh,
+            dtype=ttnn.bfloat16,
+            output_channels=C_out,
+            kernel_size=(3, 3, 3),
+            stride=(1, 1, 1),
+            padding=(0, 1, 1),
+            padding_mode="zeros",
+            groups=1,
+            config=cfg,
+            compute_kernel_config=kcfg,
+            residual_tensor=residual,
+            **halo_kwargs,
+        )
+
+    plain = run()
+    tt_res = to_dev(torch.randn(tuple(plain.shape)))
+    ref = ttnn.to_torch(ttnn.get_device_tensors(ttnn.add(tt_res, plain))[0])
+    fused = ttnn.to_torch(ttnn.get_device_tensors(run(tt_res))[0])
+    assert torch.equal(fused, ref)

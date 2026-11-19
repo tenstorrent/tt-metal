@@ -424,3 +424,29 @@ class TestYUVPerformance:
         print(f"  Iterations: {n_iters}")
         print(f"  Average: {avg_ms:.2f} ms")
         print(f"  Throughput: {gbs:.2f} GB/s (bf16 input)")
+
+
+def test_patchified_input(device):
+    """A patchified (1, T, H/p, W/p, 3*p*p) input must give the planes of reshape + permute to CHWT."""
+    T, Hp, Wp, p = 37, 6, 10, 4  # partial T, Y and UV tiles
+    C = 3 * p * p
+    torch.manual_seed(0)
+    # Past [-1, 1] so the clip and the uint8 saturation are exercised too.
+    x = torch.randn(1, T, Hp, Wp, C) * 0.8
+    # Channels padded to a tile, as conv3d emits them; large values there fail the test if the reader picks them up.
+    x_pad = torch.cat([x, torch.full((1, T, Hp, Wp, 64 - C), 7.0)], dim=-1)
+    host = ttnn.reshape(
+        ttnn.from_torch(x_pad, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
+        ttnn.Shape(x.shape),
+        ttnn.Shape(x_pad.shape),
+    )
+    patched = ttnn.clip(ttnn.to_device(host, device), -1.0, 1.0)
+    clipped = ttnn.clip(ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device), -1.0, 1.0)
+    chwt = ttnn.reshape(clipped, (1, T, Hp, Wp, 3, p, p))
+    chwt = ttnn.permute(chwt, (0, 4, 2, 6, 3, 5, 1))
+    chwt = ttnn.reshape(chwt, (3, Hp * p, Wp * p, T))
+    coefficients = ttnn.experimental.yuv_bt601_coefficients()
+    ref = ttnn.experimental.rgb_to_yuv(chwt, coefficients=coefficients)
+    out = ttnn.experimental.rgb_to_yuv(patched, coefficients=coefficients, input_patch_size=p)
+    for name, a, b in zip("YUV", ref, out):
+        assert torch.equal(ttnn.to_torch(a), ttnn.to_torch(b)), f"{name} plane differs"

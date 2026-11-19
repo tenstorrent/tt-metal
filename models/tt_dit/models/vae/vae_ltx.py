@@ -1033,7 +1033,7 @@ class LTXVideoDecoder(Module):
 
         p, q, r = 1, self.patch_size, self.patch_size
         # LTX_VAE_FUSE_UNPATCH=1: rgb_to_yuv reads conv_out's patchified output directly (yuv output,
-        # single host), skipping the unpatch below. Off by default: not yet compared on device with it.
+        # single host), skipping the unpatch below. Off by default.
         fuse_unpatch = output_type == "yuv" and _fuse_unpatch_enabled() and not ttnn.using_distributed_env()
         if not fuse_unpatch:
             # Depth-to-space unpatch on device, output BCTHW so the gather's innermost dim stays large

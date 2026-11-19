@@ -220,8 +220,8 @@ void kernel_main() {
                             } else {
                                 // I'm a reducer.
                                 if constexpr (use_residual) {
-                                    // validate() guarantees no output pad and no depth-to-space, so the
-                                    // residual shares the output's page index and channel offset.
+                                    // validate() guarantees no output pad, so the residual shares the
+                                    // output's page index and channel offset.
                                     cb_residual.reserve_back(output_tiles);
                                     uint32_t res_write_offset = 0;
                                     for (uint32_t t = t_block; t < t_block_end; ++t) {
