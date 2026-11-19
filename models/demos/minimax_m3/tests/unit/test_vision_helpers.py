@@ -8,7 +8,6 @@ from __future__ import annotations
 import torch
 
 from .vision_helpers import (
-    ATTENTION_CI_GRIDS,
     CI_GRIDS,
     MAX_REL_L2_AT_GRID,
     VISION_GRIDS,
@@ -50,10 +49,9 @@ def test_vision_check_close():
 
 def test_vision_parametrize_rejects_unknown_grid(expect_error):
     """parametrize_vision_grids takes the CI grids and raises ValueError for a grid id that VISION_GRIDS lacks."""
-    assert set(ATTENTION_CI_GRIDS) <= VISION_GRIDS.keys()
-    for ci_grids in (CI_GRIDS, ATTENTION_CI_GRIDS):
-        parametrize_vision_grids(ci_grids)
-    with expect_error(ValueError, r"grid ids \['h40w45'\] of ci_grids are not in VISION_GRIDS"):
+    assert set(CI_GRIDS) <= VISION_GRIDS.keys()
+    parametrize_vision_grids(CI_GRIDS)
+    with expect_error(ValueError, r"grid ids \['h40w45'\] of ci_grids are not among the \d+ grids"):
         parametrize_vision_grids(("h16w16", "h40w45"))
 
 
