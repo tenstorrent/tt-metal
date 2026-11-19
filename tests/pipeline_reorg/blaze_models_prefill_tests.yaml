@@ -486,9 +486,8 @@
     subtorus_glm_prefill_transformer() (
       export MESH_DEVICE=TG
       export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4
-      # The 4x4 TTNN caches are built into a scratch directory: the shared ones are laid out for the 8x4 mesh and read-only.
-      export TT_GLM53_PREFILL_TTNN_CACHE=${RUNNER_TEMP:-/tmp}/glm53_4x4_prefill_cache
-      export TT_GLM53_MTP_TTNN_CACHE=${RUNNER_TEMP:-/tmp}/glm53_4x4_mtp_cache
+      # The shared 78-layer cache holds the 4x4_sp1 layout beside the 8x4 one; the tests only read it.
+      export TT_GLM53_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill
       timeout -k 2m 40m mpirun --bind-to none --pernode --tag-output bash -lc '
         set -e
         export OMP_NUM_THREADS=$(nproc)
@@ -500,13 +499,12 @@
     subtorus_glm_chunked() (
       export MESH_DEVICE=TG
       export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4
-      # The 4x4 TTNN caches are built into a scratch directory: the shared ones are laid out for the 8x4 mesh and read-only.
-      export TT_GLM53_PREFILL_TTNN_CACHE=${RUNNER_TEMP:-/tmp}/glm53_4x4_prefill_cache
-      export TT_GLM53_MTP_TTNN_CACHE=${RUNNER_TEMP:-/tmp}/glm53_4x4_mtp_cache
+      # The shared 78-layer cache holds the 4x4_sp1 layout beside the 8x4 one; the tests only read it.
+      export TT_GLM53_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill
       timeout -k 2m 40m mpirun --bind-to none --pernode --tag-output bash -lc '
         set -e
         export OMP_NUM_THREADS=$(nproc)
-        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 1200 -k "L1 and cold_cache and (notrace or traced)" models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 1200 -k "L10 and warm_cache and (notrace or traced)" models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked
         models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 1200 -k "L1 and chunks2 and iters1 and (notrace or traced)" models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc
       '
     )
