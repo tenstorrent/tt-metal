@@ -5,10 +5,12 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>               // RoutingDirection
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>         // Topology
 #include <hostdevcommon/fabric_common.h>                                // chan_id_t
 #include "tt_metal/fabric/builder/protected_domain_effect.hpp"          // ChipRoutingFacts
+#include "tt_metal/fabric/builder/router_channel_layouts.hpp"
 #include <tt-umd/types/core_coordinates.hpp>                        // CoreType
 
 namespace tt::tt_metal {
@@ -145,6 +147,13 @@ public:
      * @param ctx Cluster-wide coordination info (master router, channel mask, etc.)
      */
     virtual void create_kernel(tt::tt_metal::Program& program, const KernelCreationContext& ctx) = 0;
+
+    /**
+     * This router's channel buffers, which its link peer and the routers feeding it need before their kernels are
+     * created. A router type with no fabric channel buffers returns nothing; a router whose link peer is a fabric
+     * router must return its layout, since the peer's compile time args read it.
+     */
+    virtual std::optional<RouterChannelLayout> get_channel_layout() const { return std::nullopt; }
 
 protected:
     // Protected constructor - only derived classes can construct

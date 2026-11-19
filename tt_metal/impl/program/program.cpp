@@ -858,7 +858,7 @@ void ProgramImpl::reserve_runtime_arg_buffers() {
                 continue;
             }
             // set_runtime_args may only allocate on the first call; skip if already sized
-            // (e.g. SetProgramRunArgs ran earlier on a non-factory path).
+            // (e.g. Program::set_program_run_args ran earlier on a non-factory path).
             if (!kernel->runtime_args(core).empty()) {
                 continue;
             }
@@ -869,7 +869,7 @@ void ProgramImpl::reserve_runtime_arg_buffers() {
         if (crta_words == 0) {
             continue;
         }
-        // set_common_runtime_args may only be called once; SetProgramRunArgs overwrites in place after.
+        // set_common_runtime_args may only be called once; Program::set_program_run_args overwrites in place after.
         if (!kernel->common_runtime_args().empty()) {
             continue;
         }
@@ -939,6 +939,33 @@ std::vector<std::string> ProgramImpl::get_registered_tensor_parameter_names() co
     return names;
 }
 
+void ProgramImpl::register_global_semaphore_parameter(const std::string& name, const distributed::MeshDevice& device) {
+    if (!metal2_registry_) {
+        metal2_registry_ = Metal2NameRegistry{};
+    }
+    const auto [it, inserted] = metal2_registry_->global_semaphore_parameters.try_emplace(name, &device);
+    TT_FATAL(inserted, "Duplicate GlobalSemaphore parameter name: {}", name);
+}
+
+const distributed::MeshDevice* ProgramImpl::get_global_semaphore_parameter_device(const std::string& name) const {
+    if (!metal2_registry_) {
+        return nullptr;
+    }
+    auto it = metal2_registry_->global_semaphore_parameters.find(name);
+    return it == metal2_registry_->global_semaphore_parameters.end() ? nullptr : it->second;
+}
+
+std::vector<std::string> ProgramImpl::get_registered_global_semaphore_parameter_names() const {
+    std::vector<std::string> names;
+    if (metal2_registry_) {
+        names.reserve(metal2_registry_->global_semaphore_parameters.size());
+        for (const auto& [name, device] : metal2_registry_->global_semaphore_parameters) {
+            names.push_back(name);
+        }
+    }
+    return names;
+}
+
 detail::BoundTensorFootprint detail::make_bound_tensor_footprint(const MeshTensor& tensor) {
     const auto& mesh_buffer = tensor.mesh_buffer();
     return BoundTensorFootprint{
@@ -988,10 +1015,6 @@ const std::vector<ProgramImpl::DFBStorageBinding>& ProgramImpl::get_dfb_storage_
 std::vector<detail::KernelMeta> experimental::collect_kernel_meta(
     const Program& program, distributed::MeshDevice& mesh_device) {
     return program.impl().collect_kernel_meta(&mesh_device);
-}
-
-std::vector<detail::KernelMeta> detail::collect_kernel_meta(const Program& program, IDevice* device) {
-    return program.impl().collect_kernel_meta(device);
 }
 
 std::vector<detail::KernelMeta> ProgramImpl::collect_kernel_meta(IDevice* device) const {
@@ -1720,8 +1743,8 @@ void detail::ProgramImpl::check_prefetcher_pipe_slot_bind(
         TT_FATAL(
             first_claim || claimed->second == &prefetcher_pipe,
             "PrefetcherPipe slot {} on core {} is claimed by two different PrefetcherPipe objects in one "
-            "SetProgramRunArgs; every node hosts one pipe per slot (two pipes carved with the same sender node "
-            "cannot share a sender kernel)",
+            "Program::set_program_run_args; every node hosts one pipe per slot (two pipes carved with the same "
+            "sender node cannot share a sender kernel)",
             prefetcher_pipe_id,
             core.str());
     }
@@ -1933,7 +1956,7 @@ void detail::ProgramImpl::register_prefetcher_pipe_relay_dfb(uint8_t prefetcher_
             num_producers);
     }
 
-    // Relays register at MakeProgramFromSpec, before any pipe binds; commit_prefetcher_pipe_slot_bind
+    // Relays register at Program construction, before any pipe binds; commit_prefetcher_pipe_slot_bind
     // points the DFB at the ring.
     for (const CoreCoord& core : corerange_to_cores(relay_cores)) {
         for (const auto& a : per_core_prefetcher_pipes_.at(core)) {
@@ -2400,7 +2423,7 @@ void detail::ProgramImpl::validate_scratchpad_bindings() const {
                     TT_FATAL(
                         binding.allocated_address != 0,
                         "Scratchpad '{}' on kernel '{}' has no bound SRAMArena '{}'. "
-                        "Supply its arena argument through SetProgramRunArgs before dispatch.",
+                        "Supply its arena argument through Program::set_program_run_args before dispatch.",
                         binding.accessor_name,
                         kernel->name(),
                         binding.allocation_override->arena);
@@ -3327,13 +3350,13 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     // case: when slot 0 is empty it aliases to a live non-default context (mock-only /
     // coexistence) instead of opening silicon. Allow DEFAULT programs on any device so that
     // bridge keeps working; do not overwrite context_id_. Reject only a real mismatch where the
-    // program was explicitly bound (CreateProgram(MeshDevice&) or Metal 2.0 MakeProgramFromSpec) to a
+    // program was explicitly bound (CreateProgram(MeshDevice&) or the Metal 2.0 Program constructor) to a
     // different context.
     TT_FATAL(
         context_id_ == DEFAULT_CONTEXT_ID || context_id_ == device_context_id,
         "Program {} was created for context_id {} but is being compiled on a device from context_id {}. "
         "A program bound to a non-default context must be compiled on a device from that same context "
-        "(CreateProgram(MeshDevice&) / Metal 2.0 MakeProgramFromSpec).",
+        "(CreateProgram(MeshDevice&) / Metal 2.0 Program(MeshDevice&, const ProgramSpec&)).",
         this->id,
         context_id_.get(),
         device_context_id.get());
@@ -3365,7 +3388,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
     // Emule never links a real RISC-V kernel binary -- DispatchCompiledProgramToDevice already skips
     // this function for Emule, JIT-compiling to x86 in execute_program_emulated instead. Eager callers
-    // (MakeProgramFromSpec/MakeMeshWorkloadFromSpecs) reach compile() directly, so skip here too.
+    // (the Metal 2.0 Program/MeshWorkload constructors) reach compile() directly, so skip here too.
     if (cluster.get_target_device_type() == tt::TargetDevice::Emule) {
         compiled_.insert(build_env.build_key());
         Inspector::program_compile_finished(this, device, build_env.build_key());

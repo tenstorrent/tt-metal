@@ -13,7 +13,7 @@
 
 #include <gtest/gtest.h>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -340,9 +340,9 @@ TYPED_TEST(DFBPlacementHardwareTest, GuardedAccessSkipsExcludedNode) {
     distributed::MeshDevice& fixture_device = this->fixture_device();
     auto spec = MakeGuardedDFBTransferSpecForTest();
     spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
-    auto workload = MakeMeshWorkloadFromSpec(fixture_device, spec);
+    distributed::MeshWorkload workload(fixture_device, spec);
     Program& program = workload.get_programs().begin()->second;
-    SetProgramRunArgs(program, MakeGuardedDFBTransferArgsForTest(0x100));
+    program.set_program_run_args(MakeGuardedDFBTransferArgsForTest(0x100));
     this->EnqueueFromTestFixture(workload);
     EXPECT_EQ(ReadDFBReportForTest(fixture_device, {0, 0}), ExpectedDFBReportForTest(0x100));
     EXPECT_EQ(ReadDFBReportForTest(fixture_device, {1, 0}), ExpectedDFBReportForTest(0, false));
@@ -351,9 +351,9 @@ TYPED_TEST(DFBPlacementHardwareTest, GuardedAccessSkipsExcludedNode) {
 TYPED_TEST(DFBPlacementHardwareTest, DisjointDFBsUseDifferentMetadata) {
     // Shared kernels transfer data with each node's selected DFB format and tile size.
     distributed::MeshDevice& fixture_device = this->fixture_device();
-    auto workload = MakeMeshWorkloadFromSpec(fixture_device, test_helpers::MakeDifferentDFBMetadataSpecForTest());
+    distributed::MeshWorkload workload(fixture_device, test_helpers::MakeDifferentDFBMetadataSpecForTest());
     Program& program = workload.get_programs().begin()->second;
-    SetProgramRunArgs(program, MakeGuardedDFBTransferArgsForTest(0x300));
+    program.set_program_run_args(MakeGuardedDFBTransferArgsForTest(0x300));
     this->EnqueueFromTestFixture(workload);
     EXPECT_EQ(
         ReadDFBReportForTest(fixture_device, {0, 0}),
@@ -368,9 +368,9 @@ TYPED_TEST(DFBPlacementHardwareTest, ExcludedNodeStorageRemainsUntouched) {
     distributed::MeshDevice& fixture_device = this->fixture_device();
     auto spec = MakeGuardedDFBTransferSpecForTest();
     spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
-    auto workload = MakeMeshWorkloadFromSpec(fixture_device, spec);
+    distributed::MeshWorkload workload(fixture_device, spec);
     Program& program = workload.get_programs().begin()->second;
-    SetProgramRunArgs(program, MakeGuardedDFBTransferArgsForTest(0x100));
+    program.set_program_run_args(MakeGuardedDFBTransferArgsForTest(0x100));
     FillExcludedDFBStorageForTest(fixture_device, program);
     this->EnqueueFromTestFixture(workload);
     EXPECT_EQ(ReadExcludedDFBStorageForTest(fixture_device, program), std::vector<uint32_t>(16, 0xDEADBEEF));
@@ -381,11 +381,11 @@ TYPED_TEST(DFBPlacementHardwareTest, RepeatedEnqueueTransfersNewData) {
     distributed::MeshDevice& fixture_device = this->fixture_device();
     auto spec = MakeGuardedDFBTransferSpecForTest();
     spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
-    auto workload = MakeMeshWorkloadFromSpec(fixture_device, spec);
+    distributed::MeshWorkload workload(fixture_device, spec);
     Program& program = workload.get_programs().begin()->second;
     std::vector<std::vector<uint32_t>> reports;
     for (uint32_t pattern : {0x100u, 0x200u, 0x300u}) {
-        SetProgramRunArgs(program, MakeGuardedDFBTransferArgsForTest(pattern));
+        program.set_program_run_args(MakeGuardedDFBTransferArgsForTest(pattern));
         this->EnqueueFromTestFixture(workload);
         reports.push_back(ReadDFBReportForTest(fixture_device, {0, 0}));
     }
@@ -412,9 +412,9 @@ TEST_F(QuasarDFBPlacementHardwareTest, RemapperStartupCompletesOnExcludedNode) {
     distributed::MeshDevice& fixture_device = this->fixture_device();
     auto spec = test_helpers::MakeQuasarDFBStartupSpecForTest();
     spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
-    auto program = MakeProgramFromSpec(fixture_device, spec);
+    Program program(fixture_device, spec);
     test_helpers::ClearDFBStartupReportsForTest(fixture_device, program);
-    SetProgramRunArgs(program, test_helpers::MakeQuasarDFBStartupArgsForTest());
+    program.set_program_run_args(test_helpers::MakeQuasarDFBStartupArgsForTest());
     auto completed = LaunchProgram(fixture_device, std::move(program));
     EXPECT_EQ(
         test_helpers::ReadDFBStartupReportsForTest(fixture_device, completed.get_programs().begin()->second),
@@ -426,9 +426,9 @@ TEST_F(QuasarDFBPlacementHardwareTest, RemapperStartupCompletesWithoutExcludedCo
     distributed::MeshDevice& fixture_device = this->fixture_device();
     auto spec = test_helpers::MakeQuasarDFBStartupSpecForTest(/*include_consumer_on_excluded_node=*/false);
     spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
-    auto program = MakeProgramFromSpec(fixture_device, spec);
+    Program program(fixture_device, spec);
     test_helpers::ClearDFBStartupReportsForTest(fixture_device, program);
-    SetProgramRunArgs(program, test_helpers::MakeQuasarDFBStartupArgsForTest());
+    program.set_program_run_args(test_helpers::MakeQuasarDFBStartupArgsForTest());
     auto completed = LaunchProgram(fixture_device, std::move(program));
     EXPECT_EQ(
         test_helpers::ReadDFBStartupReportsForTest(fixture_device, completed.get_programs().begin()->second),

@@ -70,16 +70,16 @@ FILL_CONSTANTS = (1.5, 12.0)
         same=True,
     ),
     dest_acc=[DestAccumulation.No],  # Only Float16_b / non-fp32 dest is supported
-    reduce_pool=[ReducePool.Max, ReducePool.Sum],
+    pool_type=[ReducePool.Max, ReducePool.Sum],
     fill_constant=list(FILL_CONSTANTS),
 )
 def test_sdpa_reduce_row(
     formats,
     dest_acc,
-    reduce_pool,
+    pool_type,
     fill_constant,
 ):
-    if reduce_pool == ReducePool.Sum:
+    if pool_type == ReducePool.Sum:
         # The Sum-pool golden (fill_constant * ROW_WIDTH) passed pre-promotion but mismatches
         # the device after the #53295 SDPA-header reconciliation on main; Max pool still
         # passes. TODO: re-derive the Sum golden against the reconciled
@@ -111,7 +111,7 @@ def test_sdpa_reduce_row(
     # *******************************************************
     # Per-row reduction over ROW_WIDTH equal values:
     #   MAX -> C, SUM -> ROW_WIDTH * C.
-    if reduce_pool == ReducePool.Max:
+    if pool_type == ReducePool.Max:
         reduced_value = float(fill_constant)
     else:
         reduced_value = float(fill_constant) * ROW_WIDTH
@@ -125,7 +125,7 @@ def test_sdpa_reduce_row(
         "sources/sdpa_reduce_row_test.cpp",
         formats,
         templates=[
-            SDPA_REDUCE_ROW_POOL(reduce_pool=reduce_pool),
+            SDPA_REDUCE_ROW_POOL(reduce_pool=pool_type),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),

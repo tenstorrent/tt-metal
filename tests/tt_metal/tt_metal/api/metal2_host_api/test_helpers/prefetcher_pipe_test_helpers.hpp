@@ -20,7 +20,7 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
@@ -202,14 +202,13 @@ inline KernelSpec& KernelNamed(ProgramSpec& spec, const std::string& name) {
     throw std::runtime_error("no kernel " + name);
 }
 
-#define EXPECT_SPEC_REJECTED(spec, substr)                                                 \
-    EXPECT_THAT(                                                                           \
-        [&] { ::tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device_, (spec)); }, \
+#define EXPECT_SPEC_REJECTED(spec, substr)                       \
+    EXPECT_THAT(                                                 \
+        [&] { ::tt::tt_metal::Program(*mesh_device_, (spec)); }, \
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(substr)))
 
 // A spec that passes validation builds a Program with its pipe slots reserved (no pipe bound yet).
-#define EXPECT_SPEC_VALID(spec) \
-    EXPECT_NO_THROW({ ::tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device_, (spec)); })
+#define EXPECT_SPEC_VALID(spec) EXPECT_NO_THROW({ ::tt::tt_metal::Program(*mesh_device_, (spec)); })
 
 inline experimental::PrefetcherPipe PipeSpaceOwner::MakePipeFor(
     distributed::MeshDevice& device,
