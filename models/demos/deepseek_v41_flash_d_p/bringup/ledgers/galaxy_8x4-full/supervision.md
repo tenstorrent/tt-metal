@@ -671,3 +671,14 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   MAX_ABORTS = inf; skill updated). Launches from now on use --attempts 20 so attempt budgets cannot stop a task
   overnight; any stop for a non-hardware reason is resumed at once. The running orchestrator (PB.1 attempt 4) loaded
   the old value; it ends after PB.1 and the next launch has F290.
+- 21:58 UTC PB.1 attempt 4 done, WAITING (perf decision). Reviewed: PACKED_DESIGN.md (327 lines: lanes are whole chips,
+  8 a lane on the 8x4, so attention can run once with per-chip args; per-chunk quantities and non-row-local ops listed;
+  pipelining plan; DRAM at 4 x 1M = 2.1 GB a chip v1 / 0.6 v2, fits ~11 of 32 GiB; 8192 accuracy from the existing
+  goldens, no new golden; risks at 256 rows a chip: P.83 mhc_post fast, P.81 grouped wo_a), tt/packed.py descriptor,
+  CPU oracle 28 cases bit-identical (found the CPU reference's own SwiGLU was not row-independent: fixed by row-wise
+  experts in the oracle), tt-d-gen ask draft. 0 device opens. DECIDED: accept (meets the brief).
+- 22:02 UTC tasks: gate metric names matched to the tests (top5_overlap_seg*, err_layer_L* / err_final_hidden* in
+  PB.2 / PB.5: the 8192 test also records an unlimited diagnostic err_chunk09_rows). DECIDED: PB.3A queued (one attention
+  call over all segments = the design's v2) after PB.3H and before PB.4: the owner made it part of the goal if the loop
+  misses the targets, and the design projects the loop at 121-145 ms vs the 122 ms bar; if PB.3H already meets both
+  targets, PB.3A keeps v2 only at >= 1 ms device. Orchestrator relaunched without --until, --attempts 20 (F290 in).

@@ -5742,8 +5742,9 @@ tasks:
       --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py && BRINGUP_CHUNK=8192 BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode BRINGUP_CHUNK_LAST=0 BRINGUP_POS=139264
       scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
-      err_*: <= limit
-      top5*: '>= limit'
+      err_layer_L*: <= limit
+      err_final_hidden*: <= limit
+      top5_overlap*: '>= limit'
       determinism_max_abs_diff: == 0
       steady_wall_ms_p139264_tagentic_cc: '> 0'
       steady_wall_ms_p524288_tagentic_cc: '> 0'
@@ -5810,7 +5811,7 @@ tasks:
       packed_determinism_max_abs_diff: == 0
       determinism_max_abs_diff: == 0
       err_seg*: <= limit
-      top5_seg*: '>= limit'
+      top5_overlap_seg*: '>= limit'
       packed_wall_ms_*: '> 0'
 - id: PB.3H
   title: 'OWNER 2026-11-19 packed prefill: hide the per-segment history all-gather (fused with / concurrent to another kernel: the current segment''s attention / indexer, or the chunk''s token-wise work),
@@ -5871,17 +5872,80 @@ tasks:
       packed_slot_digest_mismatches: == 0
       packed_determinism_max_abs_diff: == 0
       err_seg*: <= limit
-      top5_seg*: '>= limit'
+      top5_overlap_seg*: '>= limit'
       packed_wall_ms_*: '> 0'
       packed_gather_exposed_frac_4x2k_p139264: <= 0.25
       packed_gather_exposed_frac_mixed: <= 0.25
+- id: PB.3A
+  title: 'OWNER 2026-11-19 packed prefill: one attention call over all segments (sdpa and indexer once a layer with per-chip lane arguments; lane-targeted history gather): PACKED_DESIGN.md v2'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - PB.3H
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/reference
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/PACKED_DESIGN.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/drafts
+  - ttnn/ttnn/bringup
+  brief:
+    prior_work: 'No packing / multi-request chunk work in this ledger before (prior-work: packed, packing, segment, 8192: only FIX.8 bfp4 rows and X.6 packed-EQUIVALENT full chunks). X.8 (5f44e06b36f):
+      8192-token chunks ran on the X.7 tree (wall 149.3-150.2 vs 108.3 ms at ~147k, +15.4 % tok/s, determinism 0.0 at 8192, random ids); DS41-297: the chunk must be a multiple of 1024 on 8x4. Since then:
+      P.77 4-bit history, P.78 host hiding, C++ engram, P.83 mhc_post fast, P.81 grouped wo_a (results/agentx_ladder_20261119.md: 5120 steady walls 74.1-87.4 ms, 51k-1M, agentic_cc). PB.1 PACKED_DESIGN.md
+      sections 5 (v2: each 2048-row lane is a fixed set of whole chips, 8 on the 8x4, so sdpa / indexer can run ONCE with per-chip arguments: a per-chip table index into up to 4 gathered tables; the ring
+      indexer carrying the 4 slots'' key shares, each chip scoring its lane''s slot; a lane-targeted gather sending slot k''s rows only to lane k''s chips) and 10 (v1 projected 121-145 ms at 4x2k@139k:
+      misses 122; v2 104-120). PB.3 (v1 loop) and PB.3H (hidden gathers) walls.'
+    details: 'OWNER 20:45: if the looped attention misses the targets, hiding the gathers (PB.3H) and then ONE attention call over all segments are part of the goal, in that order. Build PACKED_DESIGN.md''s
+      v2: sparse_sdpa and the window sdpa once a layer with per-chip lane arguments (fork option on ttnn/ttnn/bringup''s sdpa: up to 4 table tensors + a per-chip table index, a runtime arg), the indexer
+      as one ring call (fork option on ring_indexer_score_dsa: up to 4 key buffers, per-chip selector and causal start), and the lane-targeted gather (each lane''s chips receive only their slot''s rows:
+      today''s per-chip bytes; fork of the gather, fabric payloads <= 6208 B, bounded waits) folded into PB.3H''s hidden schedule. Behind ONE call-time switch PACKED_ATTN_ONECALL=off|on (default off; off
+      = PB.3''s loop). Must be bit-identical to the loop (the oracle with the switch on). Smallest shape first (1 layer, 1 segment) on the runner. If PB.3H''s walls already meet BOTH targets (>= 67k at
+      4x2k_p139264 and >= 64k mixed, serving tok/s), write that in BREADCRUMBS and still build it only if it wins >= 1 ms device a chunk. OWNER RULES FOR EVERY B TASK (2026-11-19). FAST ITERATION IS THE
+      FIRST RULE: never load what you do not need; before any load write the one-line reason in BREADCRUMBS; iterate on the CPU, one layer, the characteristic layers [0, 1, 2, 3, 14, 20, 21, 24], then layers
+      0-20, and the full 40 only once (the gate does it). Every device open leaks 10-27 GiB of host RAM and a model load costs 2-4 min: ALL device work (op tests, probes, layer tests) goes through the resident
+      runner (python -m models.demos.common.bringup.resident status|submit --spec <spec> --cmd "<safe-runner command>"); never run scripts/run_safe_pytest.sh directly (it makes the runner step aside = a
+      fresh open). New test files: BATCH_SHARED = True (+ BATCH_ITEM_VARS for per-run env, BATCH_LAYERS for the layers it needs). A/B switches are call-time (read per chunk, listed in bringup/hooks.py batch_call_settings)
+      so both sides run in one load. New kernels: bounded waits, every awaited semaphore signalled, NOC writes inside buffers, fabric payloads <= 6208 B, smallest shape first (two hangs on 2026-11-19).
+      Only matmuls stay within 110 cores; other ops may use 120. Determinism (bit-identical repeats) outranks everything. Do not break tt-d-gen compatibility (served caches, formats, addresses, acks, chunk
+      header, the engine''s device input); the model does NOT know the next chunk; no per-prompt precompute, no extra host round trips. No fork regression / unit suites on the 8x4: run only the tests you
+      add and the model-level checks. Every Python-built op goes through ttnn.bringup.prepare_program / run_prepared. Forks first (ttnn/ttnn/bringup/INDEX.md), then TTNN. Do not change thresholds, goldens,
+      frozen tests, tasks.yaml, state or results/. Write per-segment, never per-test special cases. Record what you did and measured in BREADCRUMBS.md (PPB.<n> section). Plan and numbers: /data/dnijemcevic/bringup/handoff_20261119/BATCHING_PLAN.md
+      (the owner''s plan: design, oracle, ladder), /data/dnijemcevic/bringup/handoff_20261119/packed8k_projection.md (projected, not measured), /data/dnijemcevic/bringup/handoff_20261119/HANDOFF.md. OWNER
+      2026-11-19 20:45-21:00 (binding): GOAL = packed prefill AT THE PERF TARGETS, not just working: agentic text, steady, serving-equivalent: 4 x 2k each over ~139k history >= 67k new tok/s (<= ~122 ms
+      a 8192 chunk) and the mixed-history case (61k / 139k / 308k / 547k) >= 64k. NO SHORTCUTS, mimic serving: every chunk each segment''s history comes from ITS OWN slot''s served cache in tt-d-gen''s
+      layout and is gathered / refilled for that chunk (no per-chip gathered table or any per-slot device state assumed to persist across chunks or to belong to the same request; slots are arbitrary and
+      change every chunk; the model does not know the next chunk); device memory budgeted honestly (all segments'' history buffers resident at once, checked against the DRAM budget at 1M histories); inputs
+      as tt-d-gen delivers them (device ids, a per-segment descriptor in the chunk header; no per-prompt host precompute, no extra host round trips, no hardcoding to a trace); measured with real texts at
+      real history positions, padded and empty lanes included. Anything needing a shortcut is an OWNER DECISION: stop and write it in BREADCRUMBS. PIPELINE AND HIDE across segments from the start: per-segment
+      fixed costs (history gathers, engram lookups, launches, host prep) must not add up on the critical path: segment i+1''s lookup / gather / prep runs while segment i computes (fused with or concurrent
+      to attention, the indexer or the token-wise work, as P.87 fused the engram lookup with the history prefetch; or hidden behind the engram lookups as today). Judge by the device profile and the exposed-host
+      breakdown; report exposed vs hidden gather time per segment.'
+  gate:
+    cmd: BRINGUP_CHUNK=8192 DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_oracle.py
+      && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_reference.py
+      && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile
+      models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py
+    metrics:
+      packed_lane_equiv_max_abs_diff: == 0
+      packed_alone_vs_today_max_abs_diff: == 0
+      packed_slot_digest_mismatches: == 0
+      packed_determinism_max_abs_diff: == 0
+      err_seg*: <= limit
+      top5_overlap_seg*: '>= limit'
+      packed_wall_ms_*: '> 0'
 - id: PB.4
   title: 'OWNER 2026-11-19 packed prefill: bulk MoE over the 8192 packed rows (lane-equivalent; tune for the larger per-expert matrices, keep only >= 1 ms device a chunk)'
   step: perf
   role: perf
   device: true
   deps:
-  - PB.3H
+  - PB.3A
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
   - models/demos/deepseek_v41_flash_d_p/tests/
@@ -5926,8 +5990,8 @@ tasks:
   gate:
     cmd: BRINGUP_CHUNK=8192 DS41_PACKED=on scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_moe_block.py && BRINGUP_CHUNK=8192 DS41_PACKED_MOE=on
       scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_oracle.py && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on scripts/run_safe_pytest.sh
-      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_reference.py && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on BRINGUP_POS_TOKENS=agentic_cc
-      DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_reference.py && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on
+      BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py
     metrics:
       packed_moe_block_max_abs_diff: == 0
       packed_lane_equiv_max_abs_diff: == 0
@@ -5935,7 +5999,7 @@ tasks:
       packed_slot_digest_mismatches: == 0
       packed_determinism_max_abs_diff: == 0
       err_seg*: <= limit
-      top5_seg*: '>= limit'
+      top5_overlap_seg*: '>= limit'
       packed_wall_ms_*: '> 0'
 - id: PB.5
   title: 'OWNER 2026-11-19 packed prefill: accept gate (targets 4x2k@139k >= 67k and mixed >= 64k new tok/s serving-equivalent; one fresh 40-layer process at 8192: today''s path vs goldens, the packed oracle,
@@ -5953,11 +6017,13 @@ tasks:
     cmd: BRINGUP_CHUNK=8192 DS41_PACKED=on scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py && BRINGUP_CHUNK=8192 scripts/run_safe_pytest.sh --run-all
       --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_chunk8192_reference.py && BRINGUP_CHUNK=8192 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_oracle.py
       && BRINGUP_CHUNK=8192 DS41_PACKED=on scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_reference.py && BRINGUP_CHUNK=8192 DS41_PACKED=on
-      DS41_PACKED_GATHER_HIDE=on DS41_PACKED_MOE=on BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py
+      DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_MOE=on BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py
     metrics:
       determinism_max_abs_diff: == 0
-      err_*: <= limit
-      top5*: '>= limit'
+      err_layer_L*: <= limit
+      err_final_hidden*: <= limit
+      top5_overlap*: '>= limit'
+      err_seg*: <= limit
       packed_lane_equiv_max_abs_diff: == 0
       packed_alone_vs_today_max_abs_diff: == 0
       packed_slot_digest_mismatches: == 0
