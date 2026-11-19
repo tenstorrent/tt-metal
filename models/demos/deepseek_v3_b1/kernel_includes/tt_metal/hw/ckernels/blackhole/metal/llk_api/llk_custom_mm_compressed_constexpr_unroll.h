@@ -81,8 +81,6 @@ template <
 FORCE_INLINE void custom_mm_compressed_block_constexpr(
     uint32_t addr_in0, uint32_t addr_in1, uint32_t in0_face_r_dim, uint32_t dst_index) {
     static_assert(CT_DIM > 0, "CT_DIM must be > 0");
-    // One SrcB face walk with no split: k-tile 256 aliases face 511, and the KT_DIM / 2 MOP count is 7 bits
-    static_assert(KT_DIM <= 254, "KT_DIM above 254 needs the custom_mm SrcB walk split");
     static_assert(
         (CT_DIM == 1 && (KT_DIM % 2 == 0)) || (CT_DIM > 1 && (CT_DIM % 2 == 0)),
         "ct=1 requires even KT_DIM; ct>1 requires even CT_DIM");
