@@ -35,6 +35,9 @@ class EP4Cfg(LayerCfg):
     oeast: int = 0
     # G 4: the experts' muxes and row collectors placed by the NoC flow model (lane_cfgs)
     muxtop: int = 0
+    # O rows in the producing group's side's DRAM column (ws_lane5 L5Cfg.oside, no row collectors); O holds twice the
+    # pages, the combine reads each pair's row by its local expert's side (expert_side_masks)
+    oside: int = 0
 
     EPC = property(lambda s: s.nexp // s.C)
     KP = property(lambda s: -(-s.TX // s.SP))
@@ -339,6 +342,8 @@ def lane_cfgs(mesh, lc: EP4Cfg, G=2, l5kw=None, lkw=None):
     l5 = L5Cfg(**{**dict(hmc=2, mux_noc=-1 if ow else 0, yrm=1, yc=3, yc_n0=1), **(l5kw or {})})
     if lc.oeast:
         l5.oeast, l5.yc = 1, (l5kw or {}).get("yc", 2)
+    if lc.oside:
+        l5.oside, l5.yc = 1, 0
     if G == 4 and lc.muxtop:
         # muxes in the top rows of their columns, collectors below them, every row write on NOC1 (the NoC flow model's
         # layout: the muxes' NOC1 path to the ethernet row shares the fewest links with the row writes)
@@ -378,7 +383,7 @@ def own_slices(cfg, lane, T, lc: EP4Cfg, wg, wu, wd, Cn):
 def o_tensor(mesh, lc: EP4Cfg):
     """O [o_rows + 16, H] bf16 row-major (the last 16 rows the lane's posted-write fence), zero."""
     return ttnn.zeros(
-        [o_rows(lc) * (2 if lc.oeast else 1) + 16, lc.H],
+        [o_rows(lc) * (2 if lc.oeast or lc.oside else 1) + 16, lc.H],
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh,
@@ -405,7 +410,7 @@ def lane_program(mesh, lc: EP4Cfg, cfg, lane, l5, T, tab_t, xbuf, louts, ws_t, O
         T,
         0,
         dest_t=louts["dest"],
-        fence_row=o_rows(lc) * (2 if lc.oeast else 1),
+        fence_row=o_rows(lc) * (2 if lc.oeast or lc.oside else 1),
     )
 
 
@@ -455,7 +460,25 @@ def comb_ports(mesh, res):
     return {k: sorted(v) for k, v in out.items()}
 
 
-def build_combine(mesh, lc: EP4Cfg, res, louts, O, P, cnt_t, fence):
+def expert_side_masks(mesh, T, G):
+    """EP4Cfg.oside: per chip (row-major index) 5 words, bit le set when local expert le's lane sits on rectangle 2 / 3
+    (the east DRAM column's rows), from the last lane build's placement (ws_lane5.PLACED; identity without it)."""
+    from models.demos.ws_expert.ws_lane5 import PLACED
+
+    R, Cn = tuple(mesh.shape)
+    out = []
+    for X in range(R * Cn):
+        pm = PLACED.get((X // Cn, X % Cn), (tuple(range(G)), None))[0]
+        w = [0] * 5
+        for g in range(G):
+            if pm[g] >= 2:
+                for le in T["meta"][(X, g)]["order"]:
+                    w[le >> 5] |= 1 << (le & 31)
+        out.append(w)
+    return out
+
+
+def build_combine(mesh, lc: EP4Cfg, res, louts, O, P, cnt_t, fence, sides=None):
     """generic_op mesh program of the pre-sum and its sends (kernels e4_comb_*.cpp; one program a chip): adders on every
     core but the X ports (each a range of the group's tokens), the ports' fabric sends into the home chips' P.
     Returns (mesh program, io, stamps of the adders, stamps of the ports)."""
@@ -512,6 +535,7 @@ def build_combine(mesh, lc: EP4Cfg, res, louts, O, P, cnt_t, fence):
             rd_rt, cp_rt, wr_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
             for me, ((x, y), (a, nt)) in enumerate(zip(acores, rng)):
                 rd_rt[x][y] = [louts["runs"].buffer_address(), O.buffer_address(), a, nt, ast.buffer_address()]
+                rd_rt[x][y] += list(sides[r * Cn + c]) if lc.oside else []
                 cp_rt[x][y] = [nt, ast.buffer_address()]
                 args = [me, a, nt, c, P.buffer_address(), fence.buffer_address(), ast.buffer_address()]
                 args += [pidx.get((h, l), 0xFF) for h in range(4) for l in range(2)]
@@ -521,7 +545,7 @@ def build_combine(mesh, lc: EP4Cfg, res, louts, O, P, cnt_t, fence):
                     kernel_source=kpath("e4_comb_rd.cpp"),
                     core_ranges=aset,
                     compile_time_args=rd_ct,
-                    defines=[("E4_OEAST", "1")] if lc.oeast else [],
+                    defines=[("E4_OEAST", "1")] if lc.oeast else [("E4_OSIDE", "1")] if lc.oside else [],
                     runtime_args=rd_rt,
                     config=dm(0),
                 ),

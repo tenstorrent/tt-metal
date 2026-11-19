@@ -79,6 +79,10 @@ class L5Cfg:
     # yc: the logical rows of group g's collectors in its muxes' column (any rows of the column), instead of the first
     # yc spare cores within the group's rows
     yc_rows: tuple = ()
+    # yrm without collectors: each group's result rows in its own side's DRAM column - row d of a group on rectangle 0 / 1
+    # (west) at page (d >> 2) 8 + (d & 3) (banks 0-3), on rectangle 2 / 3 (east) at (d >> 2) 8 + 4 + (d & 3) (banks
+    # 4-7); every core's row writes go west on NOC1 a short way; the buffer holds twice the rows
+    oside: int = 0
     # yc: the east half's collectors (DRAM column x 9 east of them) write on NOC0 from the BRISC instead of NOC1 the
     # long way round; outside the NoC rule (the fence's acks return through the rectangles on NOC0), diagnostics
     yc_n0: int = 0
@@ -228,6 +232,7 @@ def build_lane5(
     assert lc.out_all, "the 5 x 5 lane writes every expert's rows"
     assert not l5.yrm or (l5.hmc == 2 and dest_t is not None and not l5.oaff), "yrm: hmc 2, dest_t, no oaff"
     assert not l5.yc or (l5.yrm and not l5.yt and not l5.ystate and fence_row is not None), "yc: yrm rows, fenced"
+    assert not l5.oside or (l5.yrm and not l5.yc and not l5.yt and not l5.ystate), "oside: yrm rows, no collectors"
     ln = lanes((R, Cn), lc)
     # (a 2-chip cycle: both directions lead to the same chip over the group's link - one mux a group, WL5_ONEMUX)
     onemux = len(lane_cycles(ln[0])[0]) == 2
@@ -425,6 +430,7 @@ def build_lane5(
                             hmc_rt[(x, y)] += (
                                 [(lambda q: q[0] | q[1] << 8)(noc(mesh, *xy)) for xy in cll[g]] if l5.yc else []
                             )
+                            hmc_rt[(x, y)] += [int(pm[g] >= 2)] if l5.oside else []
                     if l5.hmc == 2:
                         for j, (x, y) in sub:
                             (hx0, hy0), (hx1, hy1) = noc(mesh, *gr[0]), noc(mesh, *gr[-1])
@@ -494,6 +500,7 @@ def build_lane5(
                             defines=FAB_DEFS
                             + ([("WL5_OAFF", str(l5.oaff))] if l5.oaff else [])
                             + ([("WL5_Y_RM", "1")] if l5.yrm else [])
+                            + ([("WL5_OSIDE", "1")] if l5.oside else [])
                             + ([("WL5_YSTATE", "1")] if l5.yrm and l5.ystate else [])
                             + ([("WL5_YT", str(ysh.buffer_address()))] if l5.yrm and l5.yt else [])
                             + ([("WL5_Y_FENCE", str(fence_row))] if l5.yrm and fence_row is not None else [])

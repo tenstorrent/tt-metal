@@ -28,7 +28,8 @@
 // destination list, at this core's columns, posted, fenced (WL5_Y_FENCE: the result buffer's spare rows). WL5_YT (the
 // staging slot's L1 address): the rows come from the BRISC's transposed copy (l5h_writer.cpp QT; YREADY / YDONE in
 // scratch words 12 / 13) instead of CB 17. WL5_YC: the rows go to the group's row collectors instead (QY below); RT
-// 62 .. 62 + WL5_YC - 1 their NoC coordinates (x | y << 8).
+// 62 .. 62 + WL5_YC - 1 their NoC coordinates (x | y << 8). WL5_OSIDE (no WL5_YC): RT 62 this group's side (0 west,
+// 1 east): result row d at page (d >> 2) 8 + 4 side + (d & 3), the side's DRAM column.
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
@@ -640,6 +641,12 @@ void kernel_main() {
     constexpr uint32_t dst_l1 = idx_l1 + 256;
     volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_l1);
     uint32_t drained = 0, d_n = 0, d_r = 0, y_state = 0;
+#if defined(WL5_OSIDE)
+    const uint32_t oside = get_arg_val<uint32_t>(RX + 8) * 4;
+    auto orow = [oside](uint32_t d) { return (d >> 2) * 8 + oside + (d & 3); };
+#else
+    auto orow = [](uint32_t d) { return d; };
+#endif
 #if defined(WL5_YSTATE)
     uint64_t ybank[NUM_DRAM_BANKS];  // (bank b's NoC address of the result buffer's first row at this core's columns)
     for (uint32_t b = 0; b < NUM_DRAM_BANKS; ++b) {
@@ -700,7 +707,7 @@ void kernel_main() {
             }
 #else
             for (uint32_t r = 0; r < nr; ++r, l1 += seg) {
-                noc_async_write<NOC_MAX_BURST_SIZE + 1, true, true>(l1, os.get_noc_addr(dst[r], DS * 64), seg);
+                noc_async_write<NOC_MAX_BURST_SIZE + 1, true, true>(l1, os.get_noc_addr(orow(dst[r]), DS * 64), seg);
             }
 #endif
             y_state = 2;

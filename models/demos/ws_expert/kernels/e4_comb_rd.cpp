@@ -9,7 +9,8 @@
 // bytes zero, written once) and the gate weight as bf16 at element 0 of a CB 1 scalar tile (its other elements zero).
 // Up to NBUF rows in flight (transaction id 1 + slot), retired in order.
 // CT: 0 NBUF, 1 tab (L1), 2 tab flag (L1 word), 3 row bytes, 4 CB 1 bytes, then TensorAccessorArgs(runs), (O).
-// E4_OEAST (EP4Cfg.oeast): O row d at page (d >> 2) 8 + 4 + (d & 3) (ws_lane5.oeast_row).
+// E4_OEAST (EP4Cfg.oeast): O row d at page (d >> 2) 8 + 4 + (d & 3) (ws_lane5.oeast_row). E4_OSIDE (EP4Cfg.oside): at
+// (d >> 2) 8 + 4 side + (d & 3), side the bit of the pair's local expert (run record word 16 + j) in RT 5-9.
 // RT: 0 runs addr, 1 O addr, 2 a, 3 nt, 4 stamps (5 reads wait cycles, 6 CB space wait cycles).
 #include "api/dataflow/dataflow_api.h"
 
@@ -38,6 +39,12 @@ void kernel_main() {
     const auto os = TensorAccessor(oargs, get_arg_val<uint32_t>(1), row_bytes);
     const uint32_t a = get_arg_val<uint32_t>(2), nt = get_arg_val<uint32_t>(3);
     volatile tt_l1_ptr uint32_t* stamps = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(4));
+#if defined(E4_OSIDE)
+    uint32_t smask[5];
+    for (uint32_t i = 0; i < 5; ++i) {
+        smask[i] = get_arg_val<uint32_t>(5 + i);
+    }
+#endif
     const uint32_t rows_base = get_write_ptr(rows_cb), w_base = get_write_ptr(w_cb);
     for (uint32_t u = 0; u < NBUF; ++u) {
         zero_l1(rows_base + u * unit_bytes + row_bytes, unit_bytes - row_bytes);
@@ -80,6 +87,9 @@ void kernel_main() {
             noc_async_read_set_trid(1 + slot);
 #if defined(E4_OEAST)
             const uint32_t d = tb[ii * 32] + ij, pg = (d >> 2) * 8 + 4 + (d & 3);
+#elif defined(E4_OSIDE)
+            const uint32_t d = tb[ii * 32] + ij, le = tb[ii * 32 + 16 + ij];
+            const uint32_t pg = (d >> 2) * 8 + ((smask[le >> 5] >> (le & 31)) & 1) * 4 + (d & 3);
 #else
             const uint32_t pg = tb[ii * 32] + ij;
 #endif

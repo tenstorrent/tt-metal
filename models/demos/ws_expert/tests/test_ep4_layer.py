@@ -43,6 +43,7 @@ from models.demos.ws_expert.ep4_layer import (
     grp_tensor,
     head_outputs,
     head_program,
+    expert_side_masks,
     lane_cfgs,
     lane_program,
     lane_tables,
@@ -527,6 +528,7 @@ def test_ep4_experts(mesh_device, routing):
     G = int(os.environ.get("EP4_G", "2"))
     lc.oeast = int(os.environ.get("EP4_OEAST", "0"))
     lc.muxtop = int(os.environ.get("EP4_MUXTOP", "0"))
+    lc.oside = int(os.environ.get("EP4_OSIDE", "0"))
     cfg, lane, l5 = lane_cfgs(mesh, lc, G, l5kw=dict(why=int(os.environ.get("EP4_WHY", "0")), **l5_env()))
     T, pos = lane_tables(mesh, cfg, lane)
     tab_t = tables_tensor(mesh, T["tabs"])
@@ -599,6 +601,7 @@ def test_ep4_experts(mesh_device, routing):
         return host["x"][rem // lc.SP, p * lc.SP + rem % lc.SP]
 
     pccs = {}
+    sides = expert_side_masks(mesh, T, G) if lc.oside else None
     nsamp = int(os.environ.get("EP4_PCC_EXPERTS", "6"))
     for ch in chips:
         c = ch % C
@@ -616,7 +619,11 @@ def test_ep4_experts(mesh_device, routing):
             h = quantize(torch.nn.functional.silu(xr @ wgq) * (xr @ wuq), cfg.h_dt)
             ref = h @ quantize(wd[e].float(), cfg.w_dt)
             drow = dest[ch][le, :m]
-            got = Ox[ch][(drow >> 2) * 8 + 4 + (drow & 3) if lc.oeast else drow].float()
+            if lc.oeast:
+                drow = (drow >> 2) * 8 + 4 + (drow & 3)
+            elif lc.oside:
+                drow = (drow >> 2) * 8 + 4 * (sides[ch][le >> 5] >> (le & 31) & 1) + (drow & 3)
+            got = Ox[ch][drow].float()
             from models.demos.ws_expert.bench_util import pcc
 
             worst = min(worst, pcc(got, ref))
@@ -675,6 +682,7 @@ def test_ep4_layer(mesh_device, routing):
     G = int(os.environ.get("EP4_G", "2"))
     lc.oeast = int(os.environ.get("EP4_OEAST", "0"))
     lc.muxtop = int(os.environ.get("EP4_MUXTOP", "0"))
+    lc.oside = int(os.environ.get("EP4_OSIDE", "0"))
     reps = int(os.environ.get("EP4_REPS", "3"))
     cfg, lane, l5 = lane_cfgs(mesh, lc, G, l5kw=l5_env())
     T, pos = lane_tables(mesh, cfg, lane)
@@ -751,7 +759,7 @@ def test_ep4_layer(mesh_device, routing):
         return sts, lambda ci: shared_span_us(sts, ci, clk)
 
     def ph_comb():
-        b = build_combine(mesh, lc, res, louts, O, P, cnt_t, fence)
+        b = build_combine(mesh, lc, res, louts, O, P, cnt_t, fence, sides=expert_side_masks(mesh, T, G) if lc.oside else None)
         run_free(b, keep=[cnt_t, b[2], b[3]])
 
         def span(ci):
