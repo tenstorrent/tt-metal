@@ -450,6 +450,42 @@ def test_module_parameters_are_marked_as_parameters():
     assert not ttml.autograd.Tensor().is_parameter()
 
 
+@pytest.mark.requires_device
+def test_parameters_are_marked_however_they_reach_a_module(gradient_reduce_default):
+    """Every way a tensor becomes a module's parameter marks it: materialized after a lazy build, assigned to a name
+    that already holds a tensor (the module then overrides the one it has), or created by a LoRA wrapper. Under
+    reduce_dtype float32 each trainable one adds its gradients in fp32 from the second add."""
+    ttml.autograd.AutoContext.get_instance().get_device()
+    with ttml.lazy_init():
+        lazy = ttml.modules.LinearLayer(64, 32, has_bias=True)
+    assert len(lazy.parameters()) == 0
+    ttml.materialize_module(lazy)
+
+    replaced = ttml.modules.LinearLayer(64, 32, has_bias=False)
+    shape = tuple(replaced.weight.tensor.shape())
+    fresh = ttml.autograd.Tensor.from_numpy(np.ones(shape, np.float32), new_type=ttnn.DataType.BFLOAT16)
+    assert not fresh.is_parameter()
+    replaced.weight = Parameter(fresh)
+    assert fresh.is_parameter()
+
+    lora = ttml.modules.LoraLinear(
+        ttml.modules.LinearLayer(64, 32, has_bias=False), ttml.modules.LoraConfig(rank=4, alpha=8.0)
+    )
+
+    gradient_reduce_default(ttnn.DataType.FLOAT32)
+    for module, trainable in ((lazy, 2), (replaced, 1), (lora, 2)):
+        parameters = module.parameters()
+        assert all(tensor.is_parameter() for tensor in parameters.values())
+        accumulating = [tensor for tensor in parameters.values() if tensor.get_requires_grad()]
+        assert len(accumulating) == trainable
+        for tensor in accumulating:
+            grad = ttnn.zeros_like(tensor.get_value())
+            tensor.add_grad(grad)
+            assert tensor.get_grad().dtype == ttnn.DataType.BFLOAT16
+            tensor.add_grad(grad)
+            assert tensor.get_grad().dtype == ttnn.DataType.FLOAT32
+
+
 def test_registry_reads_variant_only_adamw_options():
     """Stochastic Rounding (AdamW) and Kahan Summation (AdamWComposite) are parsed only for the config that has the
     field, so a renamed field would silently drop its YAML key."""
