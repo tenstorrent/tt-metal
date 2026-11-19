@@ -2,31 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
-
-import torch
-import pytest
 import os
 
+import pytest
+import torch
+from loguru import logger
+
 import ttnn
-from models.experimental.mistral_24b.tt.rmsnorm import RMSNorm
-
-from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wormhole_b0_or_blackhole
+from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.tt_transformers.tt.load_checkpoints import convert_vision_meta_to_hf
-
-
-def reference_vision_rms(model_args):
-    """Mistral-specific reference method for vision RMS norm."""
-    model = model_args.reference_vision_transformer(wrap=False)
-    layer = model.vision_tower.transformer.layers[0].ffn_norm
-    layer._load_state_dict = layer.load_state_dict
-    layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, model_args.head_dim))
-    return layer
+from models.experimental.mistral_24b.tt.rmsnorm import RMSNorm
 
 
 @torch.no_grad()
-@run_for_wormhole_b0_or_blackhole()
 @pytest.mark.parametrize(
     "device",
     [
@@ -46,7 +34,6 @@ def reference_vision_rms(model_args):
 )
 def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device):
     dtype = ttnn.bfloat16
-    mode = "decode" if seq_len <= 32 else "prefill"
 
     tt_model_args = ModelArgs(
         device,
@@ -57,7 +44,7 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device):
     tt_model_args.n_layers = 1
     state_dict = tt_model_args.load_state_dict()
 
-    reference_model = reference_vision_rms(tt_model_args)
+    reference_model = tt_model_args.reference_vision_rms()
 
     first_layer_prefix = "vision_tower.transformer.layers.0.ffn_norm."
 
@@ -79,7 +66,7 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device):
     )
     input = torch.rand(batch_size, seq_len, 1024)
 
-    reference_output = reference_model(input.float())
+    reference_output = reference_model(input)
 
     tt_input = ttnn.from_torch(
         input,
@@ -89,6 +76,7 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device):
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device=device),
     )
 
+    mode = "prefill"
     tt_output = tt_model(tt_input, mode=mode)
 
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=-1))[

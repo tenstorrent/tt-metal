@@ -6,10 +6,10 @@ This file implements the Vision MultiModalProjector submodule specific for the M
 """
 
 import torch
+
+import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.mistral_24b.tt.rmsnorm import RMSNorm
-import ttnn
-from ttnn import ConcatMeshToTensor
 
 
 class TTMistral3PatchMerger(LightweightModule):
@@ -46,7 +46,6 @@ class TTMistral3PatchMerger(LightweightModule):
             )
 
         self.merging_weights = as_tensor("merging_layer", dtype)
-        self.merging_bias = as_tensor("merging_layer", ttnn.bfloat16, is_bias=False)
 
     def forward(self, image_features: ttnn.Tensor, image_sizes) -> ttnn.Tensor:
         image_sizes = [
@@ -63,9 +62,6 @@ class TTMistral3PatchMerger(LightweightModule):
         # where it previously accepted sum >= dim_size and silently mis-covered the data.
         # Normalising here makes the contract explicit instead of rank-dependent, and lets
         # split's own validation catch a genuine token-count mismatch loudly.
-        # NOTE this file is a near-duplicate of
-        # models/tt_transformers/tt/multimodal/mistral_24b/vision_mmp.py, which carries the
-        # same fix; the experimental copy is the one the e2e pipeline_tests exercise.
         if len(image_features.shape) != 2 or image_features.shape[0] != sum(tokens_per_image):
             image_features = ttnn.reshape(image_features, (-1, d))
 
@@ -82,7 +78,7 @@ class TTMistral3PatchMerger(LightweightModule):
             image_grid = ttnn.unsqueeze(image_grid, dim=0)  # Add batch dimension
             # Reshape the grid to merge patches
             if self.args.num_devices > 1:
-                image_grid_torch = ttnn.to_torch(image_grid, mesh_composer=ConcatMeshToTensor(self.device, dim=0))
+                image_grid_torch = ttnn.to_torch(image_grid, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
                 image_grid_torch = image_grid_torch[0].unsqueeze(0)  # shape: [1, 1024, 30, 44]
                 image_grid_torch = image_grid_torch.to(dtype=torch.bfloat16)
             else:
@@ -149,20 +145,7 @@ class TTMistral3MultiModalProjector(LightweightModule):
             )
 
         self.linear_1_weight = as_tensor("linear_1", dtype)
-        # Note: linear_1.bias exists in state_dict but the original Mistral model uses bias=False for these layers
-        # We load it for completeness but don't use it in forward pass to match original behavior
-        try:
-            self.linear_1_bias = as_tensor("linear_1", ttnn.bfloat16, is_bias=True)
-        except KeyError:
-            self.linear_1_bias = None
-
         self.linear_2_weight = as_tensor("linear_2", dtype)
-        # Note: linear_2.bias exists in state_dict but the original Mistral model uses bias=False for these layers
-        # We load it for completeness but don't use it in forward pass to match original behavior
-        try:
-            self.linear_2_bias = as_tensor("linear_2", ttnn.bfloat16, is_bias=True)
-        except KeyError:
-            self.linear_2_bias = None
 
     def forward(self, image_features: ttnn.Tensor, image_sizes):
         image_features = self.norm(image_features, mode="decode")
@@ -171,18 +154,13 @@ class TTMistral3MultiModalProjector(LightweightModule):
         hidden_states = ttnn.linear(
             image_features,
             self.linear_1_weight,
-            bias=self.linear_1_bias,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             activation="gelu",  # Using GELU activation as per Mistral 3 model
         )
 
         hidden_states = ttnn.linear(
-            hidden_states,
-            self.linear_2_weight,
-            bias=self.linear_2_bias,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            hidden_states, self.linear_2_weight, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
 
         return hidden_states
