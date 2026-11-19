@@ -591,3 +591,4 @@
   wins by ~2.7 ms (6.6 GB a chip, ~6 min table upload); C++ ties numba on wall, removes numba + the GIL tweak. 1 runner
   restart (device memory not returned), RAM unaccounted 203.9 -> 206.8 GiB (now 206.9). P.87 waiting for the owner;
   C++ patch applied in the worktree (uncommitted, with P.87's). Node needs a reboot before further opens.
+- 16:17 UTC OWNER: ship C++ (ENGRAM_HOST_IMPL=cpp default), keep engrams on device behind ENGRAM_DEVICE (default off); the 6.6 GB a chip tables now upload only when wanted at load (ENGRAM_DEVICE=on or ENGRAM_DEVICE_TABLES=on). Committed 2d301c633e4; 12 C++ CPU tests pass. Pending: the accept gate's fresh full-model accuracy + determinism run on this tree (also covers e3e47a009ab), after the node reboot (RAM unaccounted ~207 GiB; the reserve refuses opens).

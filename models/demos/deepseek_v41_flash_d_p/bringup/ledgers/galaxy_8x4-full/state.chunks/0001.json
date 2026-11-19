@@ -6330,6 +6330,42 @@
   "status": "REJECTED",
   "waiting": null
  },
+ "P.87": {
+  "ab_pending": null,
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "b66b8d8587cd55486bf815a8d6ecb781f84de4aa",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "a72ff1beb2fa0ffd78ba8438f67599c498d8554b",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "e6413c1d49e3d144b0349ea968e1ea4d7d941470",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "9ac6a821-ee2f-4547-853c-3f4f1670f82c"
+  },
+  "attempt": 2,
+  "commit": "2d301c633e4",
+  "history": [
+   {
+    "by": "owner decision; accuracy gate pending reboot",
+    "status": "PASS",
+    "t": "2026-11-19T16:17:01"
+   }
+  ],
+  "last_run": "2026-11-19T16:17:01",
+  "note": "OWNER 2026-11-19: ship the C++ host path (ENGRAM_HOST_IMPL=cpp default), keep the device tables behind ENGRAM_DEVICE (default off; ENGRAM_DEVICE_TABLES load-time). Accept gate (fresh full-model accuracy + determinism) PENDING: the node cannot open the device (RAM reserve) until a reboot.",
+  "reason": [],
+  "role": "perf",
+  "status": "PASS",
+  "waiting": "apply P.87 or not? A/B table at /scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/ab/P.87/table.md; the gate with the change on would PASS; then: python -m models.demos.common.bringup.orchestrator decide --task P.87 --accept|--reject --spec /home/dnijemcevic/repos/tt-metal/models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml, and resume"
+ },
  "P.9": {
   "agent": {
    "defs": {
