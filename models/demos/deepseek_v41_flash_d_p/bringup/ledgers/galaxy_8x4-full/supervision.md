@@ -363,3 +363,13 @@
   in validate). P.81-P.83 gates are one load each now (8 units, 1 group).
 - P.84 reopened as STATIC agentic replicas (owner): agentic text = 7 sessions (65k-218k tokens each); census of 14
   positions x 4 chunks (2 a session) running in ONE process; offline split 4 pick / 3 held-out sessions next.
+
+## 2026-11-19 07:45 UTC: P.84 static agentic replicas: offline passes, device step queued
+- Census: 14 agentic positions x 4 chunks (2 a session, 7 sessions) in ONE process: 527 s (one load 212 s, then ~22 s
+  a position; as separate processes ~74 min).
+- Offline (results/P.84_offline.*; 32 replicas a layer = one extra expert a chip, chosen on code + 4 agentic
+  sessions, scored on the other 3): agentic held-out 15.6 -> 11.1 ms a chunk (best split; even split 12.6), code
+  16.6 -> 11.3, prose 21.8 -> 20.5, multilingual 20.3 -> 18.5, math 17.2 -> 15.6: no text slower. Replica weights
+  17.9 MiB a layer a chip = 0.35 GiB a chip (layers 0-19), 0.70 GiB (40).
+- P.84 rewritten to the owner's static design (table in results/P.84_replicas.json, reuse the replica branch's
+  code, walls on agentic held-out + prose, one load). P.84 and P.81 both ready; they run through the resident runner.

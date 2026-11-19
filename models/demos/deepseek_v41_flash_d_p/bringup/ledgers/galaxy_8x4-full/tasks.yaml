@@ -5389,7 +5389,7 @@ tasks:
       steady_wall_ms_p145408_tmath: '> 0'
       steady_wall_ms_p145408_tmultilingual: '> 0'
 - id: P.84
-  title: 'OWNER 2026-11-19 perf: expert replication (approved on this branch): static or per-chunk replicas of the hot experts, if a scheme gains >= 3 ms a chunk at 142k on held-out texts'
+  title: 'OWNER 2026-11-19 perf: STATIC expert replicas for agentic workloads (one extra expert a chip, chosen offline, loaded at startup): -4.5 ms a chunk on agentic held-out by the offline fit'
   step: perf
   role: perf
   device: true
@@ -5403,8 +5403,8 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md
   - ttnn/ttnn/bringup
   brief:
-    prior_work: 'dnijemcevic/moe_replication P.46 (static table, in-sample oracle: quick wall 181.7 -> 167.1 ms), P.48 (rejected: online -7.9 %, frozen after chunk 0 = off within noise), R.1-R.5; bringup/.../moe_replication P.52-P.62b, P.69-P.71 (per-chunk / previous-chunk replicas, fill cost); FIX.33 (owner 2026-11-15: replication off model_bringup). Owner 2026-11-19: fully dynamic does not pay; previous-chunk parked (no reliable previous chunk from tt-d-gen); only a static set is new.'
-    details: 'OWNER 2026-11-19: expert replication is APPROVED on this branch (supersedes P.79''s ''replicas off this branch''; DS41-278). Input: X.9''s census over texts (results/X.9*.json, BREADCRUMBS X.9): is the hot set stable? P.79 / DS41-299: routed_experts_combine = 205 us + 6.77 us x the busiest chip''s 32-row tiles a layer; balanced rows would give ~13.4 ms vs 22.3 (prose) at 142k. Prior work: the replica branch bringup/deepseek_v41_flash_d_p/moe_replication (MOE_REPLICAS, MOE_PLANNER, tt/expert_prev.py; its replicas cost ~10.6 ms wall on the old MoE block, FIX.33): read it, do not merge it wholesale; this branch runs Marko''s moe_block_main block. Schemes: (b) static: a fixed replica set chosen offline (the same for every input) on the picking texts (prose, code, math); (c) dynamic: the hot set known per chunk after the gate and before the dispatch: per-chunk placement / balancing over redundant expert copies (EPLB-style), or splitting a hot expert''s rows over its replicas. Placement must be a pure function of the chunk''s routing (determinism, bit-identical repeats); outputs bit-identical or within the accuracy limits (the same expert weights wherever they run). (d) Choose by roofline: benefit = the busiest chip''s tiles -> ms by DS41-299''s fit; cost = replica DRAM per chip at 1M (state it), dispatch / combine changes, extra traffic. Validate on the held-out texts (agentic, multilingual): the gate''s walls run on them. Report the walls as a spread over texts. Stop rule: if no scheme gains >= 3 ms a chunk at 142k on the held-out texts, stop and report the census-based bound.'
+    prior_work: 'dnijemcevic/moe_replication P.46 (MOE_REPLICAS: one extra expert slot a chip filled at load from a static table, a replicated expert''s tokens split evenly over its holders; in-sample oracle quick wall 181.7 -> 167.1 ms, bit-identical), P.48 (online / frozen-after-chunk-0: rejected, frozen = off within noise), P.47 (runtime slot copy: not needed here); bringup/deepseek_v41_flash_d_p/moe_replication @ b9a45fb0b80 P.52-P.62b (replicas on the old MoE block: extra slot + routing, P.55c planner split, P.56 previous chunk), P.69-P.71; FIX.33 (owner 2026-11-15: replication off model_bringup, reversed 2026-11-19 for a STATIC set only). X.9 (no stable hot set across texts) and the offline result below.'
+    details: 'OWNER 2026-11-19 (reopened): STATIC expert replicas for an agentic (AgentX-like) workload: 32 replicas a layer = one extra expert a chip (13 experts a chip instead of 12), chosen OFFLINE, loaded at startup with the weights, never copied at run time. No dynamic placement, no previous-chunk learning (parked on tt-d-gen). The replica set is given: results/P.84_replicas.json (per layer {expert: replica chip}; chosen on code + 4 agentic sessions; results/P.84_offline.{txt,py}, P.84_sessions.json). Offline (DS41-299 fit, 14 agentic positions x 4 chunks, one load): agentic held-out sessions 15.6 -> 11.1 ms a chunk with the best split of each replicated expert''s rows between its home and replica chips (12.6 with an even split), code 16.6 -> 11.3, prose 21.8 -> 20.5, multilingual 20.3 -> 18.5: no text slower. Implement: (1) the 13th expert slot a chip, filled at load from the table (reuse the replica branch''s slot / placement / dispatch code: read it first, port only what fits Marko''s moe_block_main block: sparse_dispatch_2d routes a token''s pick of a replicated expert to home or replica, routed_experts_combine computes both slots, the combine sums them); (2) the split of a replicated expert''s rows between its two chips decided per chunk on the device (or in the fused head) as a pure function of the chunk''s routing counts (balance the two chips'' tiles: best split; the even split is the fallback if the best split costs more than it saves): determinism = bit-identical repeats; outputs within the accuracy limits (the same expert weights wherever a row runs; the combine''s summation order must stay fixed). Replica DRAM: 17.9 MiB a layer a chip: 0.35 GiB a chip for layers 0-19 (the prefill path), 0.70 GiB for 40: state it measured. Behind MOE_REPLICAS (off = today, bit-identical). Gate walls: agentic held-out sessions (positions 145408 and 770048 are in held-out sessions P.53 / P.55c) and prose at 142k and 1M. Stop rule: if the agentic held-out wall at 142k gains < 3 ms, or any text gets slower beyond noise, stop and report. One model load per gate.'
   ab:
     env:
       MOE_REPLICAS: 'off'
@@ -5414,7 +5414,7 @@ tasks:
   ab_rungs:
   - last
   gate:
-    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py && BRINGUP_POS_TOKENS=agentic DS41_DECODER_SKIP=decode SKIP_POS=145408,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py && BRINGUP_POS_TOKENS=multilingual DS41_DECODER_SKIP=decode SKIP_POS=145408,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py && BRINGUP_POS_TOKENS=agentic SKIP_POS=145408,770048 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py && BRINGUP_POS_TOKENS=prose SKIP_POS=145408,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
     metrics:
       err_layer_L*: '<= limit'
       err_state_*_L*: '<= limit'
@@ -5425,9 +5425,9 @@ tasks:
       contract_checks_failed_decoder_skip: '== 0'
       outside_history_max_abs_diff: '== 0'
       steady_wall_ms_p145408_tagentic: '> 0'
-      steady_wall_ms_p1024000_tagentic: '> 0'
-      steady_wall_ms_p145408_tmultilingual: '> 0'
-      steady_wall_ms_p1024000_tmultilingual: '> 0'
+      steady_wall_ms_p770048_tagentic: '> 0'
+      steady_wall_ms_p145408_tprose: '> 0'
+      steady_wall_ms_p1024000_tprose: '> 0'
 - id: P.81
   title: 'OWNER 2026-11-18 perf: attention at its roofline (21.9 -> <= 13 ms a chunk at 142k)'
   step: perf
