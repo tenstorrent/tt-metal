@@ -24,7 +24,7 @@
 #endif
 #include "api/circular_buffer_constants.h"
 #include "api/kernel_thread_globals.h"
-#include "llk_bfd_alloc.h"  // ckernel::trisc::BfdAllocatorState (definition of bfd_state below)
+#include "ckernel_buf_desc.h"  // ckernel::trisc::BD_TABLE_NUM_ENTRIES
 #if defined(UCK_CHLKC_MATH)
 #include "cmath_common.h"    // ckernel::math::AluCfgTracker (definition of alu_cfg below)
 #endif
@@ -87,8 +87,7 @@ thread_local std::uint32_t tdma_guard_armed_mask __attribute__((used)) = 0;
 namespace llk_reinit_guard {
 // #44071 re-init guard (Quasar). thread_local per TRISC (tt-llk#1678); declared extern in
 // llk_reinit_guard.h.
-thread_local std::uint8_t reinit_guard_slots[static_cast<std::uint8_t>(ckernel::trisc::BfdResource::Count)]
-    __attribute__((used)) = {};
+thread_local std::uint8_t reinit_guard_slots[ckernel::trisc::BD_TABLE_NUM_ENTRIES] __attribute__((used)) = {};
 }  // namespace llk_reinit_guard
 #endif
 
@@ -111,11 +110,6 @@ thread_local std::uint32_t op_info_offset __attribute__((used)) = 0;
 namespace trisc {
 // Flip between 0 and 1 to keep dest pointer between kernel calls
 thread_local std::uint32_t dest_register_offset __attribute__((used)) = 0;
-// BFD id allocator state (Quasar). Defined for all TRISC images alongside dest_register_offset;
-// thread_local so the host-threaded emulation gives each TRISC its own allocator (tt-llk#1678).
-// do_thread_crt1 clears this per-thread state before first use; bfd_alloc then sets next to the
-// partition base and current[] to BFD_ID_INVALID on the first allocation.
-thread_local BfdAllocatorState bfd_state __attribute__((used)) = {.next = 0, .current = {}, .initialized = false};
 }  // namespace trisc
 namespace pack {
 // Dest bank cleared by the dvalid pack section-done; thread_local per pack TRISC (tt-llk#1678).

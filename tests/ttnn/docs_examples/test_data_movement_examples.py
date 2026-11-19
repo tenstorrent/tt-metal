@@ -14,7 +14,7 @@ def test_concat(device):
 
     # Concatenate along dimension 3
     concatenated_tensor = ttnn.concat([tensor1, tensor2], dim=3)
-    logger.info(f"Concatenated Tensor Shape: {concatenated_tensor.shape}")  # Shape([1, 1, 64, 64])
+    logger.debug(f"Concatenated Tensor Shape: {concatenated_tensor.shape}")  # Shape([1, 1, 64, 64])
 
 
 def test_nonzero(device):
@@ -37,7 +37,7 @@ def test_pad(device):
 
     # Pad the last two dimensions with 12 zeros at the end
     padded_tensor = ttnn.pad(input_tensor, [(0, 0), (0, 0), (0, 12), (0, 12)], 0)
-    logger.info(f"Padded Tensor Shape: {padded_tensor.shape}")  # Shape([1, 1, 16, 16])
+    logger.debug(f"Padded Tensor Shape: {padded_tensor.shape}")  # Shape([1, 1, 16, 16])
 
 
 def test_permute(device):
@@ -164,7 +164,7 @@ def test_fill_rm(device):
 
     # Fill the tensor
     output = ttnn.fill_rm(N, C, H, W, hOnes, wOnes, xt, val_hi, val_lo)
-    logger.info(f"Filled Tensor Shape: {output.shape}")  # Shape([2, 3, 64, 96])
+    logger.debug(f"Filled Tensor Shape: {output.shape}")  # Shape([2, 3, 64, 96])
 
 
 def test_fill_ones_rm(device):
@@ -184,7 +184,7 @@ def test_fill_ones_rm(device):
 
     # Fill the tensor
     output = ttnn.fill_ones_rm(N, C, H, W, hOnes, wOnes, xt)
-    logger.info(f"Filled Ones Tensor Shape: {output.shape}")  # Shape([2, 3, 64, 96])
+    logger.debug(f"Filled Ones Tensor Shape: {output.shape}")  # Shape([2, 3, 64, 96])
 
 
 def test_untilize(device):
