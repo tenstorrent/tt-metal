@@ -97,6 +97,9 @@ CPF_RING_ALIGN = 1024  # the generator rounds a cached prefix down to a multiple
 CPF_RING_WARM_PREFIXES = (2048,)  # prefix lengths whose CPF ring traces are warmed; only these take the ring path
 CPF_RING_MIN_NEW = 2048  # fewest padded new rows that take the CPF ring path
 CPF_RING_GROUP_BLOCKS = 1  # paged blocks per prefix-gather group: each gathered row scores this many blocks of keys
+# Only 1, 2 and 4 build: at 8 the page-table split yields one part, concat aliases it and the gather
+# reads a freed tensor (TT_THROW 'Tensor is not allocated').
+assert CPF_RING_GROUP_BLOCKS in (1, 2, 4), CPF_RING_GROUP_BLOCKS
 CPF_REPLICA_MAX = 5120  # longest padded new-row count that uses the CPF prefix replica (2 ring traces per length)
 
 

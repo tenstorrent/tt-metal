@@ -29,7 +29,6 @@ from models.demos.llama3_70b_galaxy.tt.prefill_config import (
     CPF_REPLICA_MAX,
     CPF_RING_ALIGN,
     CPF_RING_WARM_PREFIXES,
-    PAD_1024_EXTRA_SEQLENS,
     cpf_pad512_seqlens,
     cpf_ring_eligible,
     padded_prefill_len,
@@ -87,7 +86,7 @@ def _fill_inactive_params_from_active(params, active_slots, max_batch):
     return replace(params, **updates)
 
 
-def get_prefill_warmup_sequence_lengths(max_seq_len: int, extra_seqlens=PAD_1024_EXTRA_SEQLENS) -> list[int]:
+def get_prefill_warmup_sequence_lengths(max_seq_len: int, extra_seqlens=()) -> list[int]:
     """
     Returns powers of 2 from 128 up to max_seq_len (inclusive), plus the extra padded lengths
     (prefill_config.prefill_extra_seqlens: Llama's PAD_1024_EXTRA_SEQLENS, none for Qwen).
@@ -110,7 +109,7 @@ def _acknowledge_trace_io_corruptible(tensors):
             trace_allocation_tracker.acknowledge_corruptible(tensor)
 
 
-def get_padded_prefill_len(seq_len: int, extra_seqlens=PAD_1024_EXTRA_SEQLENS) -> int:
+def get_padded_prefill_len(seq_len: int, extra_seqlens=()) -> int:
     """
     Get the padded prefill length for a given sequence length.
     This is used to pad the sequence length to the nearest power of 2, or to an
@@ -123,7 +122,7 @@ def _should_skip_prefix_caching(
     seq_len: int,  # Full sequence length: cached+new tokens
     num_cached: int,  # Number of cached tokens
     ring: bool = False,  # the request takes the CPF ring path (Generator._cpf_ring_request)
-    extra_seqlens=PAD_1024_EXTRA_SEQLENS,  # the model's extra padded lengths (get_padded_prefill_len)
+    extra_seqlens=(),  # the model's extra padded lengths (get_padded_prefill_len)
 ) -> bool:
     """Decide whether prefix-caching overhead exceeds compute savings.
 
