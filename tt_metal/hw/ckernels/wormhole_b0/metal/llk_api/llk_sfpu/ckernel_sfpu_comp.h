@@ -19,21 +19,6 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-// These constants and function should ideally go to SFPI
-#define BIT_MASK_32 0xFFFFFFFF
-#define SIGN 0x80000000
-#define MAGNITUDE 0x7FFFFFFF
-
-// Convert from sign-magnitude to two's complement format
-sfpi_inline vInt sfpu_sign_mag_to_twos_comp(vInt value) {
-    v_if(value & SIGN) {
-        vInt magnitude = value & MAGNITUDE;
-        value = (~magnitude + 1) & BIT_MASK_32;
-    }
-    v_endif;
-    return value;
-}
-
 inline void equal_zero_init() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -282,28 +267,35 @@ inline void calculate_nez_uint32() {
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_unary_int(int scalar) {
-    // Equality is a compare of the 32-bit words, so the tile word is loaded as stored
-    // (DataLayout::I32, SFPLOAD INT32). The default vInt load (INT32_SM) converts the word from
-    // sign-magnitude to two's complement on the way in, and the explicit conversion this kernel
-    // used to apply on top of it undid that for every word except 0x80000000, which the load turns
-    // into 0: a tile value of INT32_MIN compared equal to 0 and unequal to its own scalar.
-    vInt s = scalar;
+    // The Int32 Dest word and the host scalar are both two's complement, so the compare is on
+    // the raw word (DataLayout::I32 load/store). The previous SignMagToTwosComp load followed
+    // by a software sign-magnitude conversion cancelled on every word except INT_MIN, which
+    // it turned into 0 (eq(INT_MIN, INT_MIN) read 0, eq(INT_MIN, 0) read 1).
+    //
+    // No lane predication: v == s iff lz(v - s) == 32 (SFPLZ returns 32 only for 0), so
+    // eq = lz >> 5 and ne = (lz - 32) >> 31, both logical shifts giving exactly 0 or 1.
+    // Two rows share one TTINCRWC; its immediate cannot advance more than three rows. (A
+    // store-side increment would save the TTINCRWC, but it needs physical ADDR_MOD_6 programmed
+    // by this op's init, and unary_eq/ne share their init with the float kernels across
+    // architectures.)
+    const vInt s = scalar;
 
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        vInt v = dst_reg[0].mode<sfpi::DataLayout::I32>();
-        vInt val = 0;
-
-        if constexpr (COMP_MODE == SfpuType::unary_ne) {
-            v_if(v != s) { val = 1; }
-            v_endif;
-        } else if constexpr (COMP_MODE == SfpuType::unary_eq) {
-            v_if(v == s) { val = 1; }
-            v_endif;
+    auto row = [&](const int r) __attribute__((always_inline)) {
+        vInt v = dst_reg[r].mode<sfpi::DataLayout::I32>();
+        vUInt z = lz(v - s);
+        if constexpr (COMP_MODE == SfpuType::unary_eq) {
+            dst_reg[r].mode<sfpi::DataLayout::I32>() = sfpi::as<vInt>(z >> 5);
+        } else {
+            dst_reg[r].mode<sfpi::DataLayout::I32>() = sfpi::as<vInt>((z - 32) >> 31);
         }
+    };
 
-        dst_reg[0].mode<sfpi::DataLayout::I32>() = val;
-        dst_reg++;
+    static_assert(ITERATIONS % 2 == 0, "calculate_comp_unary_int processes two rows per iteration");
+#pragma GCC unroll 4
+    for (int d = 0; d < ITERATIONS; d += 2) {
+        row(0);
+        row(1);
+        dst_reg += 2;
     }
 }
 
