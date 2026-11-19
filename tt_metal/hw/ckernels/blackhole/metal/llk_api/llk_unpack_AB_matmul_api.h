@@ -7,6 +7,7 @@
 #include "llk_unpack_AB_matmul.h"
 #include "llk_unpack_common_api.h"
 #include "llk_size_mode.h"
+#include "api/compute/matmul_named_args.h"
 #include "sanitizer/api.h"
 
 /*************************************************************************
@@ -15,8 +16,12 @@
 
 // matmul_kernel_ttsync of the kernel's JIT inputs
 constexpr bool llk_unpack_AB_matmul_kernel_ttsync() {
-    // a kernel bound by the kernel config buffer keeps the polling unpack at LoFi (the ttsync unpack is larger)
-    return matmul_kernel_ttsync(MATH_FIDELITY, DST_SYNC_MODE == DstSync::SyncFull, DST_ACCUM_MODE, unpack_src_format) &&
+    // a kernel bound by the kernel config buffer keeps the polling unpack at LoFi (the ttsync unpack is larger); a LoFi
+    // half-sync kernel of long-K one-tile calls takes it (its poll binds the call)
+    return (matmul_kernel_ttsync(
+                MATH_FIDELITY, DST_SYNC_MODE == DstSync::SyncFull, DST_ACCUM_MODE, unpack_src_format) ||
+            (MATH_FIDELITY == MathFidelity::LoFi && DST_SYNC_MODE == DstSync::SyncHalf &&
+             llk_unpack_AB_matmul_named_1x1_long_k())) &&
            !(MATH_FIDELITY == MathFidelity::LoFi && LLK_SIZE_MODE);
 }
 
@@ -58,7 +63,14 @@ inline void llk_unpack_AB_matmul_init_impl(
 
 // kt_per_section and out_format pick the per-row or hoisted call (unpack_AB_matmul_hoist_rows); 0 and Invalid when
 // unknown.
-template <std::uint32_t auto_ttsync = false, std::uint32_t kt_per_section = 0, DataFormat out_format = DataFormat::Invalid, std::uint32_t reuse_dir = 0, std::uint32_t stream_z = 0>
+template <
+    std::uint32_t auto_ttsync = false,
+    std::uint32_t kt_per_section = 0,
+    DataFormat out_format = DataFormat::Invalid,
+    std::uint32_t reuse_dir = 0,
+    std::uint32_t stream_z = 0,
+    bool unkeyed_hoist = true,
+    bool one_tile_key = false>
 inline void llk_unpack_AB_matmul_impl(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -85,13 +97,15 @@ inline void llk_unpack_AB_matmul_impl(
         // unpack thread; not in a kernel bound by the kernel config buffer, where the hoisted body costs program size,
         // nor above LoFi with a 32-bit DEST, where it measured slower (minimal_matmul 888 2x2 bf16 HiFi2 +0.37 %, 444
         // 1x2 bfp8 HiFi2 +0.15 %)
-        (kt_per_section == 0 && !LLK_SIZE_MODE && (MATH_FIDELITY == MathFidelity::LoFi || !DST_ACCUM_MODE)) ||
+        (unkeyed_hoist && kt_per_section == 0 && !LLK_SIZE_MODE &&
+         (MATH_FIDELITY == MathFidelity::LoFi || !DST_ACCUM_MODE)) ||
             unpack_AB_matmul_hoist_rows<MATH_FIDELITY, DST_SYNC_MODE, DST_ACCUM_MODE, kt_per_section, out_format>(),
         // an unkeyed caller (kt_per_section 0) masks the low byte of the context 1 zmask as main does; the keyed forms
         // keep the full mask for rows of 9 to 16 tiles
         kt_per_section == 0 ? 8u : get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>(),
         stream_z,
-        reuse_dir>(
+        reuse_dir,
+        one_tile_key || llk_unpack_AB_matmul_named_1x1_long_k()>(
         base_address_a,
         base_address_b,
         tile_index_a,
@@ -215,7 +229,14 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     }
 }
 
-template <std::uint32_t auto_ttsync = false, std::uint32_t kt_per_section = 0, DataFormat out_format = DataFormat::Invalid, std::uint32_t reuse_dir = 0, std::uint32_t stream_z = 0>
+template <
+    std::uint32_t auto_ttsync = false,
+    std::uint32_t kt_per_section = 0,
+    DataFormat out_format = DataFormat::Invalid,
+    std::uint32_t reuse_dir = 0,
+    std::uint32_t stream_z = 0,
+    bool unkeyed_hoist = true,
+    bool one_tile_key = false>
 inline void llk_unpack_AB_matmul(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -268,7 +289,14 @@ inline void llk_unpack_AB_matmul(
         StateDiscard<std::uint32_t>(tile_index_a),
         StateDiscard<std::uint32_t>(tile_index_b)));
 
-    llk_unpack_AB_matmul_impl<auto_ttsync, kt_per_section, out_format, reuse_dir, stream_z>(
+    llk_unpack_AB_matmul_impl<
+        auto_ttsync,
+        kt_per_section,
+        out_format,
+        reuse_dir,
+        stream_z,
+        unkeyed_hoist,
+        one_tile_key>(
         base_address_a,
         base_address_b,
         tile_index_a,

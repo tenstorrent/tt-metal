@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Generate tests/helpers/include/matmul_pack_tables.h from llk_pack_block (tt_llk_blackhole/llk_lib/llk_pack_block.h, included by the metal API's llk_pack_tile_api.h):
 the form tables, the matmul masks, llk_pack_block_class and llk_pack_block_form as constexpr functions of plain values instead of an output id.
-usage: gen_matmul_pack_tables.py [--write]   (without --write: exit 1 when the committed header differs from the generated one)"""
+usage: gen_matmul_pack_tables.py [--write]   (without --write: exit 1 when the committed header differs from the generated one)
+"""
 import pathlib
 import re
 import sys
@@ -38,45 +39,102 @@ def _parts():
     tables = s[a : s.index("\n};\n", t) + 4]
     if "constexpr std::uint32_t llk_pack_form_cells[]" in s:
         # the cells decided per fidelity, K and unpack to DEST (pk-limit5 C3) follow the masks
-        tables = s[a : re.search(r"constexpr llk_pack_form_cells_at_t llk_pack_form_cells_at ?\{\};\n", s).end()]
+        tables = s[
+            a : re.search(
+                r"constexpr llk_pack_form_cells_at_t llk_pack_form_cells_at ?\{\};\n", s
+            ).end()
+        ]
     # llk_pack_block.h keeps each table out of clang-format; the copy is one such region
-    tables = "// clang-format off\n" + re.sub(r"^// clang-format (off|on)\n", "", tables, flags=re.M) + "// clang-format on\n"
+    tables = (
+        "// clang-format off\n"
+        + re.sub(r"^// clang-format (off|on)\n", "", tables, flags=re.M)
+        + "// clang-format on\n"
+    )
     cls = _func(s, "constexpr std::uint8_t llk_pack_class_of(")
-    cls = _sub(cls, "constexpr std::uint8_t llk_pack_class_of(const std::uint32_t i)", "constexpr std::uint32_t llk_pack_block_class_k(const std::uint32_t rows, const std::uint32_t faces, const std::uint32_t fmt)", 1)
+    cls = _sub(
+        cls,
+        "constexpr std::uint8_t llk_pack_class_of(const std::uint32_t i)",
+        "constexpr std::uint32_t llk_pack_block_class_k(const std::uint32_t rows, const std::uint32_t faces, const std::uint32_t fmt)",
+        1,
+    )
     cls = _sub(cls, "    const std::uint32_t rows = pack_tile_face_r_dim[i];\n", "", 1)
-    cls = re.sub(r"    const std::uint32_t fmt +\= pack_dst_format\[i\];\n", "", cls, count=1)
+    cls = re.sub(
+        r"    const std::uint32_t fmt +\= pack_dst_format\[i\];\n", "", cls, count=1
+    )
     cls = _sub(cls, "pack_tile_num_faces[i]", "faces")
-    folded = re.search(r"constexpr char llk_pack_block_form_of\(\s*const std::uint32_t row, const std::uint32_t ntiles, const char \(\*table\)\[4\]\[17\], (const bool next|const std::uint32_t state), (const bool matmul_ctx|const std::uint32_t ctx)\)", s)
+    folded = re.search(
+        r"constexpr char llk_pack_block_form_of\(\s*const std::uint32_t row, const std::uint32_t ntiles, const char \(\*table\)\[4\]\[17\], (const bool next|const std::uint32_t state), (const bool matmul_ctx|const std::uint32_t ctx)\)",
+        s,
+    )
     # the state (0 init, 1 reconfigure, 2 next) since the per-state masks, before them whether the block is a next one
     k_state = folded.group(1) if folded else "const bool next"
     # the mask context: whether a matmul init ran; since pk-ctx 0 other, 1 matmul, 2 matmul with a pack-thread SFPU
     k_ctx = folded.group(2) if folded else "const bool matmul_ctx"
-    k_head = "constexpr char llk_pack_block_form_k(const std::uint32_t row, const std::uint32_t ntiles, const char (*table)[4][17], " + k_state + ", const bool sync_full, const bool src32, const bool int8, " + k_ctx + ")"
+    k_head = (
+        "constexpr char llk_pack_block_form_k(const std::uint32_t row, const std::uint32_t ntiles, const char (*table)[4][17], "
+        + k_state
+        + ", const bool sync_full, const bool src32, const bool int8, "
+        + k_ctx
+        + ")"
+    )
     if folded:
         # the forms fold into compile-time words: llk_pack_block_form_of is the rule of a table row, llk_pack_block_form adds the Int8 rule
         form = _sub(_func(s, folded.group(0)), folded.group(0), k_head, 1)
-        int8 = re.search(r"    if \(!is_fp32_dest_acc_en && llk_pack_dst_is_int8\(output_id\)\)(?: \{\n|\n    \{\n)        return 'T';\n    \}\n", _func(s, "inline char llk_pack_block_form("))
+        int8 = re.search(
+            r"    if \(!is_fp32_dest_acc_en && llk_pack_dst_is_int8\(output_id\)\)(?: \{\n|\n    \{\n)        return 'T';\n    \}\n",
+            _func(s, "inline char llk_pack_block_form("),
+        )
         if int8 is None:
-            raise SystemExit("generator out of date: the Int8 rule of llk_pack_block_form")
+            raise SystemExit(
+                "generator out of date: the Int8 rule of llk_pack_block_form"
+            )
         brace = "\n{\n" if k_head + "\n{\n" in form else " {\n"
-        form = _sub(form, k_head + brace, k_head + brace + int8.group(0).replace("llk_pack_dst_is_int8(output_id)", "int8"), 1)
+        form = _sub(
+            form,
+            k_head + brace,
+            k_head
+            + brace
+            + int8.group(0).replace("llk_pack_dst_is_int8(output_id)", "int8"),
+            1,
+        )
     else:
         form = _func(s, "inline char llk_pack_block_form(")
         head = "inline char llk_pack_block_form(const std::uint32_t output_id, const std::uint32_t ntiles, const char (*table)[4][17], const bool next)"
         form = _sub(form, head, k_head, 1)
         form = _sub(form, "llk_pack_matmul_seen", "matmul_ctx", 1)
-        form = _sub(form, "    const std::uint32_t row = llk_pack_block_class(output_id);\n", "", 1)
+        form = _sub(
+            form,
+            "    const std::uint32_t row = llk_pack_block_class(output_id);\n",
+            "",
+            1,
+        )
         form = _sub(form, "llk_pack_dst_is_int8(output_id)", "int8", 1)
     form = _sub(form, "DST_SYNC_MODE == DstSync::SyncFull", "sync_full", 1)
-    form = _sub(form, "constexpr std::uint32_t family = llk_pack_src32_family<is_fp32_dest_acc_en> ? 1 : 0;", "const std::uint32_t family = (is_fp32_dest_acc_en && src32) ? 1 : 0;", 1)
+    form = _sub(
+        form,
+        "constexpr std::uint32_t family = llk_pack_src32_family<is_fp32_dest_acc_en> ? 1 : 0;",
+        "const std::uint32_t family = (is_fp32_dest_acc_en && src32) ? 1 : 0;",
+        1,
+    )
     if "llk_pack_form_cells" in form:
         # family is a plain value here, and the caller's table says whether a CB unpacks to DEST (llk_pack_form_table)
-        form = _sub(form, "constexpr std::uint32_t fam_bit = family == 0 ? 1 : (llk_pack_unpack_to_dest ? 4 : 2);",
-                    "const std::uint32_t fam_bit = family == 0 ? 1 : (table == llk_pack_init_form || table == llk_pack_reconf_form || table == llk_pack_next_form ? 4 : 2);", 1)
-    assert "output_id" not in form and "[i]" not in cls and "llk_pack_matmul_seen" not in form and "llk_pack_unpack_to_dest" not in form
+        form = _sub(
+            form,
+            "constexpr std::uint32_t fam_bit = family == 0 ? 1 : (llk_pack_unpack_to_dest ? 4 : 2);",
+            "const std::uint32_t fam_bit = family == 0 ? 1 : (table == llk_pack_init_form || table == llk_pack_reconf_form || table == llk_pack_next_form ? 4 : 2);",
+            1,
+        )
+    assert (
+        "output_id" not in form
+        and "[i]" not in cls
+        and "llk_pack_matmul_seen" not in form
+        and "llk_pack_unpack_to_dest" not in form
+    )
     for name in sorted(set(re.findall(r"\bllk_pack_mm_\w+", form))):
         if f"constexpr std::uint64_t {name}[" not in tables:
-            raise SystemExit(f"generator out of date: {name} is not among the copied tables")
+            raise SystemExit(
+                f"generator out of date: {name} is not among the copied tables"
+            )
     return tables, form, cls
 
 
@@ -91,7 +149,15 @@ def api_text():
         return s
     _, form, cls = _parts()
     a = s.index(API_BEGIN) + len(API_BEGIN)
-    return s[:a] + "template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt>\n" + form + "\n\n" + cls + "\n" + s[s.index(API_END, a):]
+    return (
+        s[:a]
+        + "template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt>\n"
+        + form
+        + "\n\n"
+        + cls
+        + "\n"
+        + s[s.index(API_END, a) :]
+    )
 
 
 def generate():
@@ -99,10 +165,14 @@ def generate():
     return (
         "// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC\n// SPDX-License-Identifier: Apache-2.0\n#pragma once\n\n"
         "// GENERATED by tests/python_tests/gen_matmul_pack_tables.py from llk_pack_block.h; do not edit. hardware_free/kernels/test_matmul_pack_tables.py fails when it differs.\n\n"
-        "#include <cstdint>\n#include \"ckernel_defs.h\"\n#include \"llk_defs.h\"\n\nnamespace matmul_pack_tables\n{\nusing namespace ckernel;\n\n"
-        + tables + "\n"
-        + "template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt>\n" + form + "\n\n"
-        + cls + "\n} // namespace matmul_pack_tables\n"
+        '#include <cstdint>\n#include "ckernel_defs.h"\n#include "llk_defs.h"\n\nnamespace matmul_pack_tables\n{\nusing namespace ckernel;\n\n'
+        + tables
+        + "\n"
+        + "template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt>\n"
+        + form
+        + "\n\n"
+        + cls
+        + "\n} // namespace matmul_pack_tables\n"
     )
 
 
@@ -113,7 +183,11 @@ if __name__ == "__main__":
         API.write_text(api)
         print("wrote", OUT, "and the generated region of", API.name)
     elif not OUT.exists() or OUT.read_text() != text or API.read_text() != api:
-        print("matmul_pack_tables.h or the generated region of llk_pack_tile_api.h differs from llk_pack_block: run gen_matmul_pack_tables.py --write")
+        print(
+            "matmul_pack_tables.h or the generated region of llk_pack_tile_api.h differs from llk_pack_block: run gen_matmul_pack_tables.py --write"
+        )
         sys.exit(1)
     else:
-        print("matmul_pack_tables.h and the generated region of llk_pack_tile_api.h match llk_pack_block")
+        print(
+            "matmul_pack_tables.h and the generated region of llk_pack_tile_api.h match llk_pack_block"
+        )

@@ -10,12 +10,12 @@ import pytest
 import torch
 from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.llk_params import DestAccumulation, DestSync, MathFidelity, PerfRunType
+from helpers.llk_params import DestAccumulation, DestSync, MathFidelity
+from helpers.pack_sweep import SHIM_CONFIG, bind_pack_src_b, sweep_templates
 from helpers.param_config import parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES, create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
     DEST_SYNC,
@@ -33,9 +33,7 @@ from helpers.test_variant_parameters import (
     TemplateParameter,
     generate_input_dim,
 )
-from helpers.pack_sweep import SHIM_CONFIG, bind_pack_src_b, sweep_templates
 from helpers.tile_constants import get_tile_params
-from ttexalens.tt_exalens_lib import read_from_device, write_to_device
 
 F = DataFormat
 BLOCKS = 6

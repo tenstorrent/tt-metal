@@ -230,11 +230,13 @@ class MATMUL_PRODUCTION(TemplateParameter):
         self.prod_dir = prod_dir
         # LLK_MATMUL_PROD_NO_ELIDE=1: the requested fidelity, for a bit-exact comparison against the phase elision
         self.no_elide = os.environ.get("LLK_MATMUL_PROD_NO_ELIDE") == "1"
+        # LLK_MATMUL_PACK_TILES=1: the key's production kernel packs per tile (minimal_matmul's pack_tile<true>), not pack_block
+        self.pack_tiles = os.environ.get("LLK_MATMUL_PACK_TILES") == "1"
         # every CB format of the key's production kernel (MATMUL_KERNEL_FORMATS, the formats matmul_kernel_ttsync reads)
         self.kernel_formats = tuple(kernel_formats)
 
     def __repr__(self) -> str:
-        return f"MATMUL_PRODUCTION({self.prod_dir}{', no_elide' if self.no_elide else ''}{', ' + '+'.join(self.kernel_formats) if self.kernel_formats else ''})"
+        return f"MATMUL_PRODUCTION({self.prod_dir}{', no_elide' if self.no_elide else ''}{', pack_tiles' if self.pack_tiles else ''}{', ' + '+'.join(self.kernel_formats) if self.kernel_formats else ''})"
 
     def convert_to_cpp(self) -> str:
         return (
@@ -246,6 +248,7 @@ class MATMUL_PRODUCTION(TemplateParameter):
             )
             + "};"
             + ("\n#define MATMUL_PROD_NO_ELIDE" if self.no_elide else "")
+            + ("\n#define MATMUL_PACK_TILES" if self.pack_tiles else "")
         )
 
     @staticmethod

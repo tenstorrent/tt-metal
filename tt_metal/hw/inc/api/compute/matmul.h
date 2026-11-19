@@ -14,6 +14,7 @@
 #endif
 #include "llk_assert.h"
 #include "sanitizer/api.h"
+#include "api/compute/matmul_named_args.h"
 #ifdef TRISC_MATH
 #include "llk_math_matmul_api.h"
 #endif
@@ -153,7 +154,9 @@ constexpr std::uint32_t llk_matmul_unpack_ttsync() {
     // LoFi class rule: the ttsync unpack gains on one-tile blocks (the poll binds) and loses where a call unpacks two
     // or more tiles of a row (its config writes then sit on the busy unpack thread); a block the front end cannot see
     // keeps the poll. A cell pick (3) stands
-    if constexpr (MATH_FIDELITY == MathFidelity::LoFi && unpack_auto_ttsync == 1 && !(block_rt == 1 && block_ct == 1)) {
+    if constexpr (
+        MATH_FIDELITY == MathFidelity::LoFi && unpack_auto_ttsync == 1 && !(block_rt == 1 && block_ct == 1) &&
+        !llk_unpack_AB_matmul_named_1x1_long_k()) {
         return 0;
     }
     if constexpr (
@@ -224,6 +227,18 @@ constexpr bool llk_matmul_kernel_mixes_32bit() {
 #else
     return false;
 #endif
+}
+
+// True when a CB of the kernel unpacks from a block-float format
+constexpr bool llk_matmul_kernel_has_bfp_cb() {
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
+    for (std::uint32_t cb = 0; cb < sizeof(unpack_src_format); cb++) {
+        if (unpack_src_format[cb] != static_cast<std::uint8_t>(DataFormat::Invalid) && IS_BFP_FORMAT(unpack_src_format[cb])) {
+            return true;
+        }
+    }
+#endif
+    return false;
 }
 
 // True when every CB of the kernel with a format holds whole 32x32 tiles of four faces (the two-row schemes need them)
@@ -418,7 +433,89 @@ namespace ckernel {
 namespace ckernel {
 #endif
 
+// A block arg the kernel names at compile time (minimal_matmul: subblock_h, subblock_w, K_block_tiles), else 0
+constexpr std::uint32_t matmul_fe_named_block_arg(const char* name) {
+#ifdef KERNEL_COMPILE_TIME_ARG_MAP
+    for (const auto& [arg_name, arg_value] : named_args_map) {
+        if (arg_name == std::string_view(name)) {
+            return arg_value;
+        }
+    }
+#endif
+    return 0;
+}
+
+// Hoisted unpack rows for the run-time calls. A kernel that names its subblock height (minimal_matmul) hoists only where
+// that measured faster: not for the one-row calls of a 1xN subblock (244 1x4 bfp8 LoFi +0.15 / +0.26 %), a 2x1
+// subblock only at LoFi (224 2x1 bfp8 HiFi2 +0.10 %), and not at LoFi with a 32-bit DEST over a block-float CB, K and M
+// blocks below 3 and 8 and no bias epilogue (424 2x2 bfp8 +0.22 %; a K block of 3 gains: tt_dit 1024x3072x1152 -0.5 %).
+constexpr bool matmul_fe_unkeyed_hoist() {
+#if !defined(UCK_CHLKC_UNPACK)
+    return true;
+#else
+    constexpr std::uint32_t sh = matmul_fe_named_block_arg("subblock_h");
+    constexpr std::uint32_t sw = matmul_fe_named_block_arg("subblock_w");
+    constexpr bool bfp = llk_matmul_kernel_has_bfp_cb();
+    if constexpr (sh == 0 || (sh == 1 && sw == 1)) {
+        // a one-tile-wide subblock of 16-bit operands keeps the per-row offsets (224 2x1 bf16 LoFi +0.1 %)
+        return sw != 1 || bfp;
+    } else if constexpr (sh == 1) {
+        return false;
+    } else if constexpr (sw == 1) {
+        return bfp && MATH_FIDELITY == MathFidelity::LoFi;
+    } else {
+#ifdef FUSE_BIAS
+        constexpr bool bias = true;
+#else
+        constexpr bool bias = false;
+#endif
+        return !(bfp && MATH_FIDELITY == MathFidelity::LoFi && DST_ACCUM_MODE && matmul_fe_named_block_arg("K_block_tiles") < 3 &&
+                 matmul_fe_named_block_arg("M_block_tiles") < 8 && !bias);
+    }
+#endif
+}
+
 #ifdef TRISC_MATH
+// A compile-time arg the kernel names (minimal_matmul: M_block_tiles, M_blocks_per_core), else 0
+#ifdef KERNEL_COMPILE_TIME_ARG_MAP
+constexpr std::uint32_t matmul_fe_named_arg(const std::string_view name) {
+    for (const auto& [arg_name, arg_value] : named_args_map) {
+        if (arg_name == name) {
+            return arg_value;
+        }
+    }
+    return 0;
+}
+#else
+// A kernel without named compile-time args names none
+constexpr std::uint32_t matmul_fe_named_arg(const char*) { return 0; }
+#endif
+
+// HiFi2 row forms need M block 4 (M block 2 lands the compute's L1 bursts under the
+// reader's NoC writes) and no fused addcmul or swiglu epilogue on the math thread (minimal_matmul +0.8 to +1.2 %)
+constexpr std::uint32_t matmul_fe_named_m_block() { return matmul_fe_named_arg("M_block_tiles"); }
+constexpr bool matmul_fe_hifi2_rowform_kernel() {
+#if defined(FUSE_TERNARY)
+    return false;
+#elif defined(FUSE_SWIGLU)
+    return matmul_fe_named_m_block() >= 4 && matmul_fe_named_arg("swiglu_in_k_loop") == 1;
+#else
+    return matmul_fe_named_m_block() >= 4;
+#endif
+}
+
+// HiFi3 with a 32-bit DEST below M block 4: the tile MOP for a one-tile-wide subblock of two or more rows and for a
+// wider one of 16-bit operands (minimal 224 2x1 bfp8 +0.18 %, 244 1x4 bf16 +0.12 % in the row form); a wider bfp8 one
+// keeps the row form (244 1x4 bfp8 -1.7 %), and so does a one-tile subblock
+constexpr bool matmul_fe_hifi3_short_m_tile_mop() {
+    if constexpr (MATH_FIDELITY != MathFidelity::HiFi3 || !DST_ACCUM_MODE) {
+        return false;
+    } else {
+        constexpr std::uint32_t w = matmul_fe_named_block_arg("subblock_w"), h = matmul_fe_named_block_arg("subblock_h");
+        return w != 0 && !(w == 1 && h == 1) && (w == 1 || !llk_matmul_kernel_has_bfp_cb());
+    }
+}
+
 // llk_math_matmul_tile_mop, and the row form at HiFi2 half sync with a 32-bit DEST in a kernel with a constant block
 // (matmul_hifi2_half_wide); the matmul_fe_hifi3_wide class keeps the row form (minimal_matmul 424/444/888 bf16 HiFi3
 // -2.5 to -3.2 %)
@@ -440,6 +537,11 @@ constexpr bool matmul_fe_tile_mop() {
         // tell a run-time-block kernel); a kernel pairing a 32-bit operand with a fast one keeps the tile MOP (the row form hangs
         // the 2D-mcast bmm of Float32 x Float16_b blocks of two or more rows)
         return false;
+    } else if constexpr (
+        !row_mop_on && kt_key == 0 &&
+        (MATH_FIDELITY == MathFidelity::HiFi2 || matmul_fe_hifi3_short_m_tile_mop()) && matmul_fe_named_m_block() != 0 &&
+        matmul_fe_named_m_block() < 4) {
+        return true;
     } else {
         return llk_math_matmul_tile_mop<row_mop_on, kt_key, form_out>();
     }
@@ -461,10 +563,10 @@ constexpr bool matmul_fe_main_math() {
 #endif
 
 #ifdef TRISC_MATH
-// The smallest kt_dim from which a plain call that runs main's math because the front end sees no constant block takes the row
-// form (0: never), outside size mode: LoFi half sync from kt 3 (census 65c1c: 40 of 76 keys faster, 0 slower; kt <= 2 loses to the
-// row path's per-call cost), HiFi2 half sync with a 32-bit DEST from kt 2 (a kt-1 block loses: ccl F32 4x1x1 +1.05). The init and the
-// calls receive the same kt_dim.
+// The smallest kt_dim from which a plain call that runs main's math because the front end sees no constant block takes
+// the row form (0: never), outside size mode: LoFi half sync from kt 3 (census 65c1c: 40 of 76 keys faster, 0 slower;
+// kt <= 2 loses to the row path's per-call cost), HiFi2 half sync with a 32-bit DEST from kt 2 in kernels that name an
+// M block of 4 or more (a kt-1 block loses: ccl F32 4x1x1 +1.05). The init and the calls receive the same kt_dim.
 template <std::uint32_t llk_dir, bool row_mop_on, std::uint32_t kt_key>
 constexpr std::uint32_t matmul_fe_rowform_min_kt() {
     if constexpr (
@@ -473,7 +575,9 @@ constexpr std::uint32_t matmul_fe_rowform_min_kt() {
         return 0;
     } else if constexpr (MATH_FIDELITY == MathFidelity::LoFi) {
         return 3;
-    } else if constexpr (matmul_hifi2_half_wide(MATH_FIDELITY, true, DST_ACCUM_MODE, llk_math_matmul_kernel_has_32bit_cb())) {
+    } else if constexpr (
+        matmul_hifi2_half_wide(MATH_FIDELITY, true, DST_ACCUM_MODE, llk_math_matmul_kernel_has_32bit_cb()) &&
+        matmul_fe_hifi2_rowform_kernel()) {
         return 2;
     } else {
         return 0;
@@ -520,7 +624,8 @@ ALWI void matmul_block_init_llk(
                     row_end_fold,
                     llk_math_matmul_half_end_fold<false, matmul_elided_fidelity<in0_format, in1_format, out_format>(), kt_key, out_format, in0_format, in1_format, block_rt, block_ct, block_kt>(),
                     block_ct,
-                    block_rt>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim);
+                    block_rt,
+                    true>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim);
                 return;
             }
         }
@@ -608,8 +713,15 @@ ALWI void matmul_block_llk(
     const std::uint32_t rt_dim,
     const std::uint32_t kt_dim,
     const std::uint32_t held_a = matmul_held_a_init) {
-    UNPACK((llk_unpack_AB_matmul<unpack_ttsync, kt_key, form_out, llk_dir, stream_z>(
-        in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim, held_a)));
+    constexpr bool one_tile_key = block_rt == 1 && block_ct == 1;
+    UNPACK(
+        (llk_unpack_AB_matmul < unpack_ttsync,
+         kt_key,
+         form_out,
+         llk_dir,
+         stream_z,
+         matmul_fe_unkeyed_hoist(),
+         one_tile_key > (in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim, held_a)));
 #ifdef TRISC_MATH
     if constexpr (matmul_fe_main_math<llk_dir, row_mop_on, kt_key, form_out, in1_order, row_end_fold, in0_format, in1_format, out_format, block_rt, block_ct>()) {
         if constexpr (matmul_fe_rowform_min_kt<llk_dir, row_mop_on, kt_key>() != 0) {

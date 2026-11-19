@@ -543,12 +543,13 @@ constexpr bool unpack_AB_matmul_hoist_rows()
 template <
     std::uint32_t kernel_broadcast_a = 0,
     std::uint32_t kernel_broadcast_b = 0,
-    std::uint32_t auto_ttsync                 = false,
+    std::uint32_t auto_ttsync        = false,
     std::uint32_t dest_max_tiles     = 16,
     bool hoist_rows                  = true,
     std::uint32_t max_row_tiles      = dest_max_tiles,
     std::uint32_t stream_z           = 0,
-    std::uint32_t reuse_dir          = 0>
+    std::uint32_t reuse_dir          = 0,
+    bool one_tile_calls              = false>
 inline void _llk_unpack_AB_matmul_(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -760,7 +761,19 @@ inline void _llk_unpack_AB_matmul_(
             }
         }
 
-        if constexpr (hoisted)
+        if (one_tile_calls && ct_dim == 1 && rt_dim == 1 && !(reuse_a ? unpA_partial_face : unpB_partial_face))
+        {
+            // a one-tile row: the MOP's base-address advance after its UNPACR is dead, the next call writes a fresh base
+            if (reuse_a)
+            {
+                TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+            }
+            else
+            {
+                TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+            }
+        }
+        else if constexpr (hoisted)
         {
             TT_INSN(unp_cfg_context == 0 ? mop_0 : mop_1);
         }

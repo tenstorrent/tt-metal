@@ -6,17 +6,30 @@ import importlib.util
 import pathlib
 import re
 
-GEN = pathlib.Path(__file__).resolve().parents[2] / "python_tests/gen_matmul_pack_tables.py"
-API = pathlib.Path(__file__).resolve().parents[4] / "hw/ckernels/blackhole/metal/llk_api/llk_pack_tile_api.h"
-BLOCK = pathlib.Path(__file__).resolve().parents[3] / "tt_llk_blackhole/llk_lib/llk_pack_block.h"
+GEN = (
+    pathlib.Path(__file__).resolve().parents[2]
+    / "python_tests/gen_matmul_pack_tables.py"
+)
+API = (
+    pathlib.Path(__file__).resolve().parents[4]
+    / "hw/ckernels/blackhole/metal/llk_api/llk_pack_tile_api.h"
+)
+BLOCK = (
+    pathlib.Path(__file__).resolve().parents[3]
+    / "tt_llk_blackhole/llk_lib/llk_pack_block.h"
+)
 
 
 def test_tables_match_api():
     spec = importlib.util.spec_from_file_location("gen_matmul_pack_tables", GEN)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    assert mod.OUT.read_text() == mod.generate(), "matmul_pack_tables.h differs from llk_pack_tile_api.h: run tests/python_tests/gen_matmul_pack_tables.py --write"
-    assert mod.API.read_text() == mod.api_text(), "the generated region of llk_pack_tile_api.h differs from llk_pack_block: run tests/python_tests/gen_matmul_pack_tables.py --write"
+    assert (
+        mod.OUT.read_text() == mod.generate()
+    ), "matmul_pack_tables.h differs from llk_pack_tile_api.h: run tests/python_tests/gen_matmul_pack_tables.py --write"
+    assert (
+        mod.API.read_text() == mod.api_text()
+    ), "the generated region of llk_pack_tile_api.h differs from llk_pack_block: run tests/python_tests/gen_matmul_pack_tables.py --write"
 
 
 def test_block_selection_matches_api():
@@ -46,11 +59,15 @@ def test_block_selection_matches_api():
         "constexpr std::uint32_t LLK_PACK_W_MAX_TILES = 127;",
         "constexpr std::uint32_t LLK_PACK_PAGE_WORDS_WIDE = 256;",
     ):
-        assert re.sub(r"\s+", "", line) in src, f"llk_pack_block changed ({line!r}): port it to block() in tests/helpers/include/matmul_pack_production.h"
+        assert (
+            re.sub(r"\s+", "", line) in src
+        ), f"llk_pack_block changed ({line!r}): port it to block() in tests/helpers/include/matmul_pack_production.h"
     # pack_block with the count as a function argument is main's loop (block() packs per tile for a runtime count), with a template count llk_pack_block
     pack = re.sub(r"\s+", " ", (API.parents[4] / "inc/api/compute/pack.h").read_text())
     for line in (
         "ALWI void pack_block(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ntiles) { LLK_SAN_FUNCTION(); #ifndef ARCH_QUASAR PACK((llk_matmul_pack<is_fp32_dest_acc_en, false, PackMode::Default>(ifrom_dst, icb, ntiles)));",
         "ALWI void pack_block(std::uint32_t ifrom_dst, std::uint32_t icb) { LLK_SAN_FUNCTION(); #if defined(ARCH_BLACKHOLE) PACK((llk_pack_block<ntiles, is_fp32_dest_acc_en, false, matmul_kt>(ifrom_dst, icb)));",
     ):
-        assert line in pack, f"pack_block changed ({line!r}): port it to block() in tests/helpers/include/matmul_pack_production.h"
+        assert (
+            line in pack
+        ), f"pack_block changed ({line!r}): port it to block() in tests/helpers/include/matmul_pack_production.h"

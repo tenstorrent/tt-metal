@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "llk_size_mode.h"
 #include "sanitizer/api.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -77,7 +78,7 @@ inline void llk_math_dest_clear_region_end() {
 
 template <bool is_fp32_dest_acc_en, bool next_op_sets_base = false>
 inline void llk_math_dest_section_done() {
-    _llk_math_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en, false, next_op_sets_base>();
+    _llk_math_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en, false, next_op_sets_base, LLK_SIZE_MODE>();
 }
 
 template <bool is_fp32_dest_acc_en>
