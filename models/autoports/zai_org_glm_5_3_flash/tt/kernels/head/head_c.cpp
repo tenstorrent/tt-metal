@@ -19,6 +19,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
 #include "models/autoports/zai_org_glm_5_3_flash/tt/kernels/head/head_common.hpp"
+#include "models/autoports/zai_org_glm_5_3_flash/tt/kernels/row_sum_sfpu.hpp"
 
 using namespace head;
 
@@ -43,9 +44,9 @@ FORCE_INLINE void pack_to(uint32_t d, uint32_t cb) {
     pack_tile(d, cb);
 }
 
-FORCE_INLINE void row_sum(uint32_t d) {  // column 0 of dst[d] <- the row sums of dst[d]
+FORCE_INLINE void row_sum(uint32_t d) {  // column 0 of dst[d] <- the row sums of dst[d] (rows = tokens: slot-uniform)
     sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
-    sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_ROW>(d);
+    glm53_row_sum_f32(d);
 }
 
 }  // namespace

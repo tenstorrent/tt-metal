@@ -25,6 +25,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "models/autoports/zai_org_glm_5_3_flash/tt/kernels/mla/ix_common.hpp"
 #include "models/autoports/zai_org_glm_5_3_flash/tt/kernels/mla/att_common.hpp"
+#include "models/autoports/zai_org_glm_5_3_flash/tt/kernels/row_sum_sfpu.hpp"
 
 namespace {
 using namespace mlaix;
@@ -72,7 +73,7 @@ void kernel_main() {
         add(0, 1);
     }
     sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
-    sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_ROW>(0);
+    glm53_row_sum_f32(0);  // rows = tokens: slot-uniform (row_sum_sfpu.hpp)
     binop_with_scalar_tile_init();
     mul_unary_tile(0, INV_128_BITS);
     emit(0, CB_MEAN);
@@ -103,7 +104,7 @@ void kernel_main() {
         add(0, 1);
     }
     sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
-    sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_ROW>(0);
+    glm53_row_sum_f32(0);  // rows = tokens: slot-uniform (row_sum_sfpu.hpp)
     binop_with_scalar_tile_init();
     mul_unary_tile(0, INV_128_BITS);
     add_unary_tile(0, EPS_BITS);

@@ -39,6 +39,7 @@
 #include "api/compute/copy_dest_values.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "models/autoports/zai_org_glm_5_3_flash/tt/kernels/mhc_pre/mhc_pre_sfpu.hpp"
+#include "models/autoports/zai_org_glm_5_3_flash/tt/kernels/row_sum_sfpu.hpp"
 
 // one compute_kernel_hw_startup per kernel: the later phases reconfigure instead (kernels/mk/owner_ffn_c.cpp)
 namespace mkc {

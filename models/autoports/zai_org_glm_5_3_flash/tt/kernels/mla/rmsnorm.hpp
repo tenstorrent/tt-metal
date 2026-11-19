@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Stage 7b MLA megakernel: row RMSNorm of KX bf16 tiles (rows = tokens) on the SFPU in exact fp32 — mhc_pre's
-// arithmetic (kernels/mhc_pre/compute.cpp: SFPU square + add, sfpu_reduce row sum, * 1/n + eps, rsqrt, column / row
+// arithmetic (kernels/mhc_pre/compute.cpp: SFPU square + add, glm53_row_sum_f32 row sum (row_sum_sfpu.hpp: the same
+// add tree for every token row), * 1/n + eps, rsqrt, column / row
 // broadcast multiplies), used by the q_b phase of the reader cores (RMSNorm_1536(q_a)) and by the latent core
 // (RMSNorm_512(kv_a)).
 //   norm_inv:  CB_X[0 .. KX) -> CB_INV (one fp32 tile, column 0 = rsqrt(sum_j x_j^2 / n + eps) per row)
@@ -23,6 +24,7 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/sfpu_binary_bcast.h"
 #include "api/compute/tile_move_copy.h"
+#include "models/autoports/zai_org_glm_5_3_flash/tt/kernels/row_sum_sfpu.hpp"
 
 namespace mlan {
 
@@ -49,7 +51,7 @@ FORCE_INLINE void norm_inv(uint32_t cb_x, uint32_t cb_inv, uint32_t inv_n_bits, 
         add_binary_tile(0, 1, 0);
     }
     sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
-    sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_ROW>(0);
+    glm53_row_sum_f32(0);
     binop_with_scalar_tile_init();
     mul_unary_tile(0, inv_n_bits);
     add_unary_tile(0, eps_bits);

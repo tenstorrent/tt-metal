@@ -39,6 +39,7 @@
 #include "mhc_pre_common.hpp"
 #include "mhc_pre_sfpu.hpp"
 #include "models/autoports/zai_org_glm_5_3_flash/tt/kernels/mk/phase_args.hpp"
+#include "models/autoports/zai_org_glm_5_3_flash/tt/kernels/row_sum_sfpu.hpp"
 
 using namespace mhc;
 
@@ -82,10 +83,11 @@ FORCE_INLINE void sum_tiles(uint32_t cb, uint32_t first, uint32_t stride, uint32
     }
 }
 
-// dst[d] (a per-column partial-sum tile) <- rsqrt(rowsum(dst[d]) * inv_n + eps) in column 0
+// dst[d] (a per-column partial-sum tile) <- rsqrt(rowsum(dst[d]) * inv_n + eps) in column 0 (rows = tokens: the
+// row sum is glm53_row_sum_f32, one add tree for every row -- a token's result does not depend on its slot)
 FORCE_INLINE void row_rms_inv(uint32_t d, uint32_t inv_n_bits, uint32_t eps_bits) {
     sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
-    sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_ROW>(d);
+    glm53_row_sum_f32(d);
     binop_with_scalar_tile_init();
     mul_unary_tile(d, inv_n_bits);
     add_unary_tile(d, eps_bits);

@@ -40,6 +40,7 @@
 #include "models/autoports/zai_org_glm_5_3_flash/tt/kernels/mhc_pre/mhc_pre_common.hpp"
 #include "models/autoports/zai_org_glm_5_3_flash/tt/kernels/kda_pre/kda_pre_common.hpp"
 #include "models/autoports/zai_org_glm_5_3_flash/tt/kernels/mhc_pre/mhc_pre_sfpu.hpp"
+#include "models/autoports/zai_org_glm_5_3_flash/tt/kernels/row_sum_sfpu.hpp"
 #include "models/autoports/zai_org_glm_5_3_flash/tt/kernels/kda_rec/kda_rec_common.hpp"
 #include "models/autoports/zai_org_glm_5_3_flash/tt/kernels/mhc_post/mhc_post_common.hpp"
 #include "models/autoports/zai_org_glm_5_3_flash/tt/kernels/mhc_post/mhc_post_v2_sfpu.hpp"

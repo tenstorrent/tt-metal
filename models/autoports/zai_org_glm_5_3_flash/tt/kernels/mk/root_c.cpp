@@ -27,6 +27,7 @@
 #include "models/autoports/zai_org_glm_5_3_flash/tt/kernels/mk/stack.hpp"
 #include "models/autoports/zai_org_glm_5_3_flash/tt/kernels/mhc_pre/mhc_pre_common.hpp"
 #include "models/autoports/zai_org_glm_5_3_flash/tt/kernels/mhc_pre/mhc_pre_sfpu.hpp"
+#include "models/autoports/zai_org_glm_5_3_flash/tt/kernels/row_sum_sfpu.hpp"
 
 namespace mkc {
 inline bool g_started = false;
