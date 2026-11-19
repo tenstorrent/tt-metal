@@ -11,6 +11,7 @@
 #include "llk_memory_checks.h"
 #include "sync.h"
 #include "utils/gpr.h"
+#include "utils/validate.h"
 
 namespace hal::atomic
 {
@@ -497,44 +498,44 @@ constexpr FifoPointer pointer_for()
 }
 
 template <std::uint32_t AddressIndex, std::uint32_t DataIndex>
-inline __attribute__((always_inline)) void assert_valid(const FetchIncrement<AddressIndex, DataIndex> operation)
+inline constexpr __attribute__((always_inline)) void validate(const FetchIncrement<AddressIndex, DataIndex> operation)
 {
-    LLK_ASSERT(is_valid(operation.address), "ATINCGET address GPR index must be in [0, 63]");
-    LLK_ASSERT(is_valid(operation.data), "ATINCGET data GPR index must be in [0, 63]");
-    LLK_ASSERT(operation.word_select < detail::WordsPerLine, "ATINCGET word selection must be in [0, 3]");
-    LLK_ASSERT(operation.counter_width >= 1u && operation.counter_width <= detail::CounterWidthMax, "ATINCGET counter width must be in [1, 32]");
+    hal::detail::require(is_valid(operation.address), "ATINCGET address GPR index must be in [0, 63]");
+    hal::detail::require(is_valid(operation.data), "ATINCGET data GPR index must be in [0, 63]");
+    hal::detail::require(operation.word_select < detail::WordsPerLine, "ATINCGET word selection must be in [0, 3]");
+    hal::detail::require(operation.counter_width >= 1u && operation.counter_width <= detail::CounterWidthMax, "ATINCGET counter width must be in [1, 32]");
 }
 
 template <std::uint32_t AddressIndex, std::uint32_t DataIndex>
-inline __attribute__((always_inline)) void assert_valid(const FifoAcquire<AddressIndex, DataIndex> operation)
+inline constexpr __attribute__((always_inline)) void validate(const FifoAcquire<AddressIndex, DataIndex> operation)
 {
-    LLK_ASSERT(is_valid(operation.address), "ATINCGETPTR address GPR index must be in [0, 63]");
-    LLK_ASSERT(is_valid(operation.data), "ATINCGETPTR result GPR index must be in [0, 63]");
-    LLK_ASSERT(is_valid(operation.pointer), "ATINCGETPTR pointer must be Read or Write");
-    LLK_ASSERT(
+    hal::detail::require(is_valid(operation.address), "ATINCGETPTR address GPR index must be in [0, 63]");
+    hal::detail::require(is_valid(operation.data), "ATINCGETPTR result GPR index must be in [0, 63]");
+    hal::detail::require(is_valid(operation.pointer), "ATINCGETPTR pointer must be Read or Write");
+    hal::detail::require(
         operation.capacity_log2 <= detail::FifoCapacityLog2Max && (operation.probe_only || operation.capacity_log2 <= detail::FifoUpdateCapacityLog2Max),
         "ATINCGETPTR FIFO capacity logarithm must be in [0, 14] for pointer updates or [0, 15] for readiness probes");
-    LLK_ASSERT(
+    hal::detail::require(
         operation.increment_log2 <= detail::IncrementLog2Max && operation.increment_log2 <= operation.capacity_log2,
         "ATINCGETPTR increment logarithm must not exceed the FIFO capacity logarithm");
-    LLK_ASSERT(!operation.probe_only || operation.increment_log2 == 0u, "ATINCGETPTR readiness probes cannot increment the pointer");
+    hal::detail::require(!operation.probe_only || operation.increment_log2 == 0u, "ATINCGETPTR readiness probes cannot increment the pointer");
 }
 
 template <std::uint32_t AddressIndex>
-inline __attribute__((always_inline)) void assert_valid(const CompareSet<AddressIndex> operation)
+inline constexpr __attribute__((always_inline)) void validate(const CompareSet<AddressIndex> operation)
 {
-    LLK_ASSERT(is_valid(operation.address), "ATCAS address GPR index must be in [0, 63]");
-    LLK_ASSERT(operation.word_select < detail::WordsPerLine, "ATCAS word selection must be in [0, 3]");
-    LLK_ASSERT(operation.compare < detail::CompareSetValueLimit, "ATCAS compare value must fit in four bits");
-    LLK_ASSERT(operation.set < detail::CompareSetValueLimit, "ATCAS replacement value must fit in four bits");
+    hal::detail::require(is_valid(operation.address), "ATCAS address GPR index must be in [0, 63]");
+    hal::detail::require(operation.word_select < detail::WordsPerLine, "ATCAS word selection must be in [0, 3]");
+    hal::detail::require(operation.compare < detail::CompareSetValueLimit, "ATCAS compare value must fit in four bits");
+    hal::detail::require(operation.set < detail::CompareSetValueLimit, "ATCAS replacement value must fit in four bits");
 }
 
 template <std::uint32_t AddressIndex, std::uint32_t DataIndex>
-inline __attribute__((always_inline)) void assert_valid(const MaskedWrite<AddressIndex, DataIndex> operation)
+inline constexpr __attribute__((always_inline)) void validate(const MaskedWrite<AddressIndex, DataIndex> operation)
 {
-    LLK_ASSERT(is_valid(operation.address), "ATSWAP address GPR index must be in [0, 63]");
-    LLK_ASSERT(is_valid(operation.data), "ATSWAP data GPR index must be in [0, 63]");
-    LLK_ASSERT(operation.data.index % detail::GprsPerQuad == 0u, "ATSWAP data GPR must be four-aligned");
+    hal::detail::require(is_valid(operation.address), "ATSWAP address GPR index must be in [0, 63]");
+    hal::detail::require(is_valid(operation.data), "ATSWAP data GPR index must be in [0, 63]");
+    hal::detail::require(operation.data.index % detail::GprsPerQuad == 0u, "ATSWAP data GPR must be four-aligned");
 }
 
 template <std::uint32_t AddressIndex, std::uint32_t DataIndex>
@@ -571,14 +572,7 @@ inline constexpr __attribute__((always_inline)) std::uint32_t encode(const Maske
 template <typename Descriptor>
 inline constexpr __attribute__((always_inline)) std::uint32_t checked_encode(const Descriptor& descriptor)
 {
-    if (__builtin_is_constant_evaluated() && !is_valid(descriptor))
-    {
-        __builtin_trap();
-    }
-    if (!__builtin_is_constant_evaluated())
-    {
-        assert_valid(descriptor);
-    }
+    validate(descriptor);
     return encode(descriptor);
 }
 
