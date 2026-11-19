@@ -179,22 +179,33 @@ def test_two_level_supplied_block_maxima(device, rows, columns):
     addresses the program must take up."""
     width, n = 1_049_600, 700_000
     blocks = width // BLOCK
+    kept = []
+    entries = []
     for seed, kind in ((9, "sinks"), (19, "iid")):
         torch_input = generate(kind, rows, width, seed, n=n)
         maxima = torch.full((rows, blocks), float("-inf"))
         for row in range(rows):
             nb = (n + BLOCK - 1) // BLOCK
             maxima[row, :nb] = _block_maxima(torch_input[row], n)
+        # Both calls' tensors stay allocated, so the second call's addresses differ from the first's.
+        tt_input = _dev(torch_input.reshape(1, 1, rows, width), device)
+        tt_maxima = _dev(maxima.to(torch.bfloat16).reshape(1, 1, rows, blocks), device)
+        kept.append((tt_input, tt_maxima))
         out = ttnn.experimental.topk_large_indices(
-            _dev(torch_input.reshape(1, 1, rows, width), device),
+            tt_input,
             k=K,
             valid_length=n,
             block_select=32,
             two_level_cutover=FORCE_TWO_LEVEL,
-            block_max_tensor=_dev(maxima.to(torch.bfloat16).reshape(1, 1, rows, blocks), device),
+            block_max_tensor=tt_maxima,
             sub_core_grids=_grid(device, columns),
         )
+        entries.append(device.num_program_cache_entries())
         _check_rows(torch_input, _indices(out, rows), n, range(rows))
+    assert entries[1] == entries[0], "the second call must reuse the cached program"
+    (first_input, first_maxima), (second_input, second_maxima) = kept
+    assert first_input.buffer_address() != second_input.buffer_address()
+    assert first_maxima.buffer_address() != second_maxima.buffer_address()
 
 
 @pytest.mark.parametrize("n,cutover,expected_mode", [(200_000, 200_001, 0), (200_001, 200_001, 1), (5_000, 0, 1)])
