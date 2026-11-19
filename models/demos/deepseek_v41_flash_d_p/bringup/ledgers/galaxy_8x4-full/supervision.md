@@ -607,3 +607,24 @@
 - 19:22 UTC DEVICE (justified, owner): AgentX-like ladder on HEAD 087ba04c142 (P.83 + P.81 in), runner request (reserve 48.2 GiB after a load: ok).
 - 19:28 UTC AgentX-like ladder on HEAD (agentic_cc, steady, harness): 51k 74.1 ms / 69.1k tok/s; 128k 75.2 / 68.1k; 256k 77.2 / 66.3k; 512k 79.5 / 64.4k; 768k 84.9 / 60.3k; 1M 87.4 / 58.6k (earlier today 67.5 / 66.1 / 65.0 / 62.2 / 58.9 / 56.6k). 1 open / 1 load; RAM unaccounted 215.9 -> 217.9 GiB.
 - 19:37 UTC HANDOFF written for the owner's restart (prompt packing next): /data/dnijemcevic/bringup/handoff_20261119/HANDOFF.md (+ ledger copy). Runner stopped; nothing running; RAM unaccounted 216.9 GiB.
+
+## 2026-11-19 evening: packed prefill (continuous batching), branch dnijemcevic/model_bringup_batching
+
+New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 223737, booted 19:43:48). Plan:
+/data/dnijemcevic/bringup/handoff_20261119/BATCHING_PLAN.md (4 segments x <= 2048 new tokens in one 8192-row chunk).
+- 20:28 UTC box: no chip held (no CHIP_IN_USE locks, no other users' device jobs). RAM baseline: used 44.1 GB of 566,
+  available 515.9, leaked (unaccounted) 3.1 GB. Scratch disk /scratch 97 % full (95 GB free).
+- 20:30-20:31 recover-hosts --skip-mpi-stress-test --skip-reset (link check, no reset): all detected links healthy.
+- 20:33 DEVICE OPEN (reason: the box test after the reboot): test_box.py PASS (1 passed, 9 s). RAM used 45.17 -> 45.11 GB.
+  (A first try without BRINGUP_SPEC failed at collection, no device work.)
+- 20:34 branch dnijemcevic/model_bringup_batching created from bcab6af973b (not pushed).
+- 20:55 tasks.yaml: tonight's tasks added as PB.0-PB.5 (= the plan's B.0-B.5; the ledger already has a B.1, the box
+  step). PB.0 box (scripted), PB.1 design + interfaces + CPU tests (agent, no device), PB.2 8192 single-request chunks
+  (agent; gate: accuracy vs goldens at 8192, determinism, walls 139264 / 524288 agentic_cc, profile), PB.3 PACKED=on
+  (agent; gate: lane equivalence, alone == today, slot digests, packed determinism all bit-identical; per-segment
+  reference within the existing limits; walls), PB.4 bulk MoE (agent; verify lane-equivalence, tune behind PACKED_MOE,
+  keep only >= 1 ms device), PB.5 accept (scripted, one fresh 40-layer process at 8192). PB.6 not added (only if PB.5
+  accepted). Decision: PB.5 holds only 8192 units: the framework's one-load rule (F283) refuses a gate with two chunk
+  geometries; the 5120 accept units (ladder last, contract, outside history) are not re-run tonight; PACKED=off at 8192
+  == today is in the oracle. Gate commands of PB.2-PB.5 name the tests PB.1 designs; I refine them from
+  PACKED_DESIGN.md after PB.1 (run is --until PB.1).
