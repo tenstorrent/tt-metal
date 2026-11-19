@@ -355,3 +355,11 @@
   the 0-20 subset needs the model change the runner agent is making; the census reads layers 0-19 only).
 - Resident runner, first request -> first chunk: estimate ~10:00 UTC (CPU pieces ~2-3 h, then the device demo);
   expected ~3-4 min for the cold first request (load 0-20 + compile), < 1 min for each later one.
+
+## 2026-11-19 07:25 UTC: owner items
+- X.9 accepted on its 06:47 check, no re-run (4ac9d10bf0b; metrics merged from the unit stamps). The orchestrator's
+  pointless A/B on it killed mid-load.
+- Load-once rule: given to the runner agent (it edits core/gate.py: refuse a gate needing > 1 load, at plan time and
+  in validate). P.81-P.83 gates are one load each now (8 units, 1 group).
+- P.84 reopened as STATIC agentic replicas (owner): agentic text = 7 sessions (65k-218k tokens each); census of 14
+  positions x 4 chunks (2 a session) running in ONE process; offline split 4 pick / 3 held-out sessions next.
