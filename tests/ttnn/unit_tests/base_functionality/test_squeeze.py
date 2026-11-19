@@ -10,9 +10,11 @@ import torch
 
 import ttnn
 
+from tt_py_test_utils_common.utility_functions import is_blackhole
 from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
     UnreadableDocstring,
     check_readable,
+    docstring_blackhole_dtype_layout_params,
     docstring_dtype_layout_params,
     docstring_interleaved_buffer_type_params,
     interleaved_memory_config,
@@ -283,4 +285,26 @@ def test_squeeze_docstring_sharded_inputs(memory_layout, layout, device):
     )
     for dim in (None, 0, [0, -3]):
         output = _assert_squeeze_like_torch(input_tensor, dim)
+        assert output.buffer_address() == input_tensor.buffer_address()
+
+
+@pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.squeeze))
+@pytest.mark.parametrize("dtype, layout", docstring_blackhole_dtype_layout_params(ttnn.squeeze))
+def test_squeeze_docstring_blackhole_inputs(dtype, layout, buffer_type, device):
+    """Runs the dtypes the ttnn.squeeze docstring lists for Blackhole, on each interleaved buffer type it lists, with
+    each form of ``dim`` that removes only dims before the last two. Values are compared after a conversion to FLOAT32
+    on host, which holds every FP8_E4M3 value."""
+    check_readable(dtype, layout, buffer_type)
+    if not is_blackhole():
+        pytest.skip("the docstring lists these dtypes for Blackhole")
+
+    def read(tensor):
+        return ttnn.to_torch(ttnn.to_dtype(tensor.cpu(), ttnn.float32))
+
+    memory_config = interleaved_memory_config(buffer_type)
+    torch.manual_seed(0)
+    x = torch.randn((1, 3, 1, 50, 64)) * 8
+    input_tensor = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
+    for dim in _VIEW_DIMS:
+        output = _assert_squeeze_like_torch(input_tensor, dim, read)
         assert output.buffer_address() == input_tensor.buffer_address()
