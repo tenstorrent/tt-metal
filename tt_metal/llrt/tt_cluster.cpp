@@ -40,6 +40,7 @@
 #include <tt-umd/firmware/firmware_utils.hpp>
 #include <tt-umd-workload/simulation/simulation_chip.hpp>
 #include <tt-umd/tt_device/tt_device.hpp>
+#include <tt-umd/pcie/pci_device.hpp>
 #include <tt-umd/tt_device/protocol/pcie_interface.hpp>
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
@@ -370,8 +371,9 @@ void Cluster::initialize_device_drivers() {
         const auto& mmio_ids = this->driver_->get_target_mmio_device_ids();
         if (!mmio_ids.empty()) {
             ChipId mmio_id = *mmio_ids.begin();
-            if (auto* pcie_interface = this->driver_->get_chip(mmio_id)->get_tt_device()->get_pcie_interface()) {
-                this->iommu_enabled_ = pcie_interface->is_iommu_enabled();
+            auto* pci = this->driver_->get_chip(mmio_id)->get_tt_device()->get_pci_device();
+            if (pci) {
+                this->iommu_enabled_ = pci->is_iommu_enabled();
             }
             // Ask through the same handle map_sysmem_buffer() goes through, rather than re-deriving the
             // IOMMU and KMD version gate here.
