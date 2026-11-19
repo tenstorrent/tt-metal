@@ -78,6 +78,9 @@ arguments) on the others:
   compute, Ethernet or DRAM RISCs.
 - Each has a ``DEVICE_PRINT_`` spelling as well, for example ``DEVICE_PRINT_MATH``.
 
+``DPRINT_FORCE_NOINLINE`` (``DEVICE_PRINT_FORCE_NOINLINE``) marks a function of yours that prints: while DPRINT is on,
+the compiler keeps exactly one copy of it; while DPRINT is off, the compiler decides as usual (see `Limits`_).
+
 A print is one statement, written with a trailing ``;``. Use it wherever a statement can stand: in unbraced ``if``
 and ``else`` branches, ``case`` labels, loops, lambdas, function and class templates, member functions,
 ``if constexpr`` branches and inline functions in headers. A print isn't an expression, so it can't be an operand
@@ -87,10 +90,14 @@ Arguments:
 
 - Each argument is evaluated once when DPRINT is on, and not at all when it is off, so don't put side effects such
   as ``i++`` in an argument.
+- Arguments are evaluated where the print stands, before the print takes its core's print buffer. On Blackhole a
+  RISC sees L1 that other RISCs, cores or the NOC wrote only after a fence or a cache invalidation, so call
+  ``invalidate_l1_cache()`` before printing such memory. The elements of a ``dp_typed_array_t`` are read later, after
+  the print has taken the buffer and invalidated the cache.
 - Arguments are copied, so bitfields, fields of packed structs and values read through ``volatile`` pointers can be
   printed directly.
-- A print may carry up to 128 bytes of arguments on any core, for example 32 values of 4 bytes. Larger prints work
-  where they fit in the print buffer, and fail to compile where they don't.
+- A print may carry up to 128 bytes of arguments on any core, for example 32 values of 4 bytes. `Limits`_ gives the
+  largest prints.
 
 Lines:
 
@@ -443,12 +450,51 @@ A mistake in a print is a compile error that points at the print. The messages c
    * - a print too big for its print buffer
      - a large ``dp_typed_array_t``
      - ``does not fit in the print buffer``
+   * - more than 64 arguments in one print (a ``dp_typed_array_t`` or a ``TileSlice`` is one)
+     - 65 values
+     - ``has more than 64 arguments``
+   * - more than 256 bytes of values in one print (``dp_typed_array_t`` and ``TileSlice`` arguments don't count)
+     - 33 values of 8 bytes
+     - ``take more than 256 bytes``
    * - a format that isn't a string literal
      - ``DPRINT(format_ptr, 1);``
      - ``format must be a string literal``
-   * - the old stream syntax
-     - ``DPRINT << x << ENDL();``
-     - ``Use DPRINT(format, ...) instead``
+
+Limits
+------
+
+Size:
+
+- A print carries its arguments in one message of its RISC's print buffer: a 4-byte header and the arguments, padded
+  to 4 bytes. Every RISC's buffer takes 128 bytes of arguments; a print that doesn't fit its RISC's buffer fails to
+  compile with ``does not fit in the print buffer``.
+- A print takes at most 64 arguments, and its values other than ``dp_typed_array_t`` and ``TileSlice`` arguments take
+  at most 256 bytes, for example 64 values of 4 bytes or 32 of 8 bytes. Split a bigger print into several prints, or
+  print an array as a ``dp_typed_array_t``.
+- A value takes its type's size: ``bool`` and ``char`` 1 byte; ``bf16_t``, ``bf8_t`` and ``bf4_t`` 2 bytes; an enum
+  its underlying type's size; a pointer, a ``CTSTR`` and a type name a pointer's size (4 bytes, 8 on Quasar's
+  data-movement RISCs); a ``dp_top_callstack_t`` three pointers. Values smaller than 4 bytes share 4-byte words, so
+  a print's size is the sum of its values' sizes, rounded up to 4.
+
+Stack and code size:
+
+- A print evaluates its arguments where it stands, and the function that contains it keeps their values, in
+  registers or on its stack, until the print has copied them. A function with wide prints therefore needs more stack,
+  also while it calls other functions, and deep call chains or recursion through such functions add it up. If a
+  kernel runs out of stack, or a function's stack frame goes over a compile-time limit, split the print, print fewer
+  values per print, or move the print into a function of its own marked ``DPRINT_FORCE_NOINLINE``.
+- The compiler can copy a function that prints into each of its callers, typically a function declared ``inline``, a
+  lambda or a member function, and every copy carries the function's prints. If a kernel grows too large while DPRINT
+  is on, mark such functions with ``DPRINT_FORCE_NOINLINE`` (``DEVICE_PRINT_FORCE_NOINLINE``): while DPRINT is on,
+  the compiler keeps exactly one copy of the function, neither copied into its callers nor specialized per constant
+  argument; while DPRINT is off, the macro is empty and the compiler decides as usual.
+
+.. code-block:: c++
+
+    DPRINT_FORCE_NOINLINE inline void print_cb_state(uint32_t cb_id) {
+        DPRINT("cb {}: rd {} wr {}\n", cb_id, get_local_cb_interface(cb_id).fifo_rd_ptr,
+               get_local_cb_interface(cb_id).fifo_wr_ptr);
+    }
 
 Best practices
 --------------

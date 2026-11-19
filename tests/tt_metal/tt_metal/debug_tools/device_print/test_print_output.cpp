@@ -440,6 +440,7 @@ TEST_F(DevicePrintOutputFixture, PrintSingleUintArg) {
     std::vector<uint32_t> runtime_args = {42};
     std::vector<std::string> messages = {
         "Printing uint32_t from arg: 42",
+        "Printing uint32_t from arg: 43",
     };
 
     TestOutputOnEveryRisc(
@@ -480,9 +481,7 @@ TEST_F(DevicePrintOutputFixture, PrintBasicTypes) {
     TestOutputOnEveryRisc("tests/tt_metal/tt_metal/test_kernels/device_print/print_basic_types.cpp", messages);
 }
 
-// Known issue: DEVICE_PRINT evaluates each argument three times, so today this prints "Evaluated once: 2 2" and
-// "Evaluated once: 3". Disabled until that is fixed.
-TEST_F(DevicePrintOutputFixture, DISABLED_PrintArgumentsEvaluatedOnce) {
+TEST_F(DevicePrintOutputFixture, PrintArgumentsEvaluatedOnce) {
     std::vector<std::string> messages = {
         "Evaluated once: 0 0",
         "Evaluated once: 1",
@@ -978,9 +977,7 @@ TEST_F(DevicePrintOutputFixture, PrintInlineFunction) {
     }
 }
 
-// Known issue: DPRINT, and DPRINT_UNPACK, DPRINT_MATH and DPRINT_PACK on their TRISC, expand to a bare { } block, and
-// DPRINT_DATA0 and DPRINT_DATA1 to a bare if, so today this kernel doesn't compile. Disabled until that is fixed.
-TEST_F(DevicePrintOutputFixture, DISABLED_PrintInUnbracedIfElse) {
+TEST_F(DevicePrintOutputFixture, PrintInUnbracedIfElse) {
     std::vector<std::string> messages = {
         "if",
         "else after DPRINT",

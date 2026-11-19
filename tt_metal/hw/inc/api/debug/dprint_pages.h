@@ -9,7 +9,7 @@
 #if (                                                            \
     defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || \
     (defined(COMPILE_FOR_TRISC) && (COMPILE_FOR_TRISC != 1)))
-inline void print_cb_details(uint32_t cb_id) {
+DEVICE_PRINT_FORCE_NOINLINE inline void print_cb_details(uint32_t cb_id) {
     DPRINT(
         "cb_id {}: {{ size: {}, limit: {}, page_size: {}, num_pages: {}, rd_ptr: {}, wr_ptr: {}, wr_tile_ptr: {} }}\n",
         cb_id,
@@ -91,7 +91,7 @@ inline void print_u32_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_t n
 
 namespace tt::compute::common {
 
-void print_tile_rows(
+DEVICE_PRINT_FORCE_NOINLINE void print_tile_rows(
     uint32_t cb_idx,
     uint32_t tile_idx,
     bool untilize = false,
@@ -121,7 +121,7 @@ void print_tile_rows(
     DPRINT("++++++\n");
 }
 
-inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+DEVICE_PRINT_FORCE_NOINLINE inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
     DPRINT("======\n");
     for (uint16_t r = 0; r < 32; ++r) {
         DPRINT(

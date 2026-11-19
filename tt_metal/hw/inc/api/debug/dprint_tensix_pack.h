@@ -322,7 +322,7 @@ inline void dprint_tensix_pack_relu_config_disable_risc_bp_disable_bmp_clear_ncr
     DPRINT("0x{:x}\n", config.DISABLE_RISC_BP_Disable_bmp_clear_ncrisc);
 }
 
-inline void dprint_tensix_pack_relu_config() {
+DEVICE_PRINT_FORCE_NOINLINE inline void dprint_tensix_pack_relu_config() {
     MATH(ckernel::packer::relu_config_t config = ckernel::packer::read_relu_config();
 
          DPRINT("ALU_ACC_CTRL_Zero_Flag_disabled_src: ");
@@ -375,7 +375,7 @@ inline void dprint_tensix_pack_dest_rd_ctrl_pck_dest_rd_ctrl_reserved(const cker
 }
 
 // Printing dest control bits
-inline void dprint_tensix_dest_rd_ctrl() {
+DEVICE_PRINT_FORCE_NOINLINE inline void dprint_tensix_dest_rd_ctrl() {
     PACK(ckernel::packer::dest_rd_ctrl_t dest = ckernel::packer::read_dest_rd_ctrl();
 
          DPRINT("PCK_DEST_RD_CTRL_Read_32b_data: ");
@@ -498,7 +498,7 @@ inline void dprint_tensix_pack_edge_offset_helper(const ckernel::packer::pck_edg
 }
 
 // Choose what register you want printed with reg_id (1-4), 0 for all
-inline void dprint_tensix_pack_edge_offset(uint reg_id = 0) {
+DEVICE_PRINT_FORCE_NOINLINE inline void dprint_tensix_pack_edge_offset(uint reg_id = 0) {
     std::array<ckernel::packer::pck_edge_offset_t, ckernel::packer::NUM_PACKERS> edge_vec;
     PACK(
         edge_vec = ckernel::packer::read_pack_edge_offset();
@@ -563,7 +563,7 @@ inline void dprint_tensix_pack_counters_helper(const ckernel::packer::pack_count
 }
 
 // Choose what register you want printed with reg_id (1-4), 0 for all
-inline void dprint_tensix_pack_counters(uint reg_id = 0) {
+DEVICE_PRINT_FORCE_NOINLINE inline void dprint_tensix_pack_counters(uint reg_id = 0) {
     std::array<ckernel::packer::pack_counters_t, ckernel::packer::NUM_PACKERS> counters_vec;
     PACK(
         counters_vec = ckernel::packer::read_pack_counters();
@@ -592,7 +592,7 @@ inline void dprint_tensix_pack_counters(uint reg_id = 0) {
 // Choose what register you want by id (1-4). 0 for all.
 // On Wormhole, REG_IDs 2 and 4 are the REG8 banks, whose word-2 layout differs from REG1
 // (bits 17-23, see cfg_defines.h); fields above src_if_sel are mislabeled for those banks.
-inline void dprint_tensix_pack_config(uint reg_id = 0) {
+DEVICE_PRINT_FORCE_NOINLINE inline void dprint_tensix_pack_config(uint reg_id = 0) {
     std::array<ckernel::packer::pack_config_t, ckernel::packer::NUM_PACKERS> config_vec;
     MATH(
         config_vec = ckernel::packer::read_pack_config(); if (reg_id >= 1 && reg_id <= ckernel::packer::NUM_PACKERS) {
@@ -614,7 +614,7 @@ inline void dprint_tensix_pack_config(uint reg_id = 0) {
 }
 
 // Choose what register you want printed (1-2). 0 for all.
-inline void dprint_tensix_pack_strides(uint reg_id = 0) {
+DEVICE_PRINT_FORCE_NOINLINE inline void dprint_tensix_pack_strides(uint reg_id = 0) {
     PACK(
         // Get pointer to registers for current state ID
         volatile uint tt_reg_ptr* cfg = get_cfg_pointer();

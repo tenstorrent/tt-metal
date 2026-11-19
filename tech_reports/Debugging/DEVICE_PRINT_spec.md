@@ -29,23 +29,26 @@ identifier for its call site and the raw argument values, and the host looks up 
 
 In priority order:
 
-1. **Small call sites.** Users put hundreds of prints in one kernel, and kernel code space is small, so a call site
-   takes as few instructions as possible. Everything that isn't specific to one call site is in a library that call
-   sites call. The call site itself copies the argument data into the message with the fewest instructions possible,
-   as straight-line code with no strings on the device. Each argument is evaluated once.
-2. **Compile-time checks.** Each print is validated when its kernel compiles: its format string, its argument types,
+1. **Small footprint.** Users put hundreds of prints in one kernel, and kernel code space is small. Call sites matter
+   most, because prints are many: a call site takes as few instructions as possible, as straight-line code with no
+   strings on the device, and everything that isn't specific to one call site is in the library.
+2. **Each argument evaluated once.** A print is one statement. Each argument is evaluated exactly once, in the
+   caller's scope, before the print takes the print buffer, and not at all when printing is off.
+3. **Compile-time checks.** Each print is validated when its kernel compiles: its format string, its argument types,
    and whether the placeholders match the arguments. The rules are fmt's, plus DPRINT's own limits, such as which
-   types it can print and how big a print can be. Mistakes are compile errors at the print, with the messages in the
-   manual's Compile-time checks table. Valid prints compile without warnings on every RISC type.
-3. **No cost when off.** With printing off, prints produce no code, so they add nothing to the kernel's size or run
+   types it can print and how big a print can be. The limits are public: the manual lists them, and a print beyond a
+   limit is a compile error where the compiler can tell. Mistakes are compile errors
+   at the print, with the messages in the manual's Compile-time checks table. Valid prints compile without warnings on
+   every RISC type.
+4. **No cost when off.** With printing off, prints produce no code, so they add nothing to the kernel's size or run
    time. Turning printing off causes no warnings either: a variable or parameter that only prints use needs no
    `[[maybe_unused]]`. A print that is off can still name its arguments, as long as it produces no code.
-4. **Little data.** A message carries its call site, each argument once at its natural size, and just enough to tell
+5. **Little data.** A message carries its call site, each argument once at its natural size, and just enough to tell
    which RISC sent it and where the next message starts. What stays the same between messages, such as the running
    kernel, isn't repeated in each one.
-5. **Reliable delivery.** No message is lost: each one arrives once, intact and in its RISC's program order, even
+6. **Reliable delivery.** No message is lost: each one arrives once, intact and in its RISC's program order, even
    when every RISC prints as fast as it can.
-6. **A robust host.** Nothing the device sends stops the host. A message it can't decode becomes a one-line
+7. **A robust host.** Nothing the device sends stops the host. A message it can't decode becomes a one-line
    diagnostic, and decoding goes on.
 
 ## 2. Requirements
@@ -58,6 +61,9 @@ In priority order:
 - A print works as another macro's argument (for example `MATH(...)`, which deletes it on the other TRISCs), and
   through wrapper macros that forward the whole call, format included, with or without arguments.
 - Arguments are evaluated in the caller's scope, so a print can name members through `this` and lambda captures.
+- DPRINT doesn't steer how the compiler inlines code: no assembly or stand-in functions that change the compiler's
+  estimates, and no guesses of the optimization level. Ordinary attributes on DPRINT's own functions are fine where
+  they make DPRINT's code smaller.
 - Any part of the selection that is compiled into a kernel is part of its build hash.
 
 ### 2.2 Transport
@@ -84,6 +90,7 @@ In priority order:
 - The library keeps its headers and the API that the manual documents, including the per-RISC `TileSlice` parameter
   lists, because the same `TileSlice` text compiles on every RISC. The register, circular-buffer and L1 dumps in
   `dprint_tensix*.h`, `dprint_pages.h` and `dump.h` keep their API too. Adding to the library is fine.
+- The library's helpers that print keep one copy per kernel, not one in each caller.
 - With printing off, code that uses the library compiles unchanged, and the library adds no code.
 
 ## 3. Constraints
@@ -129,3 +136,14 @@ how the host formats a value, is tested on one RISC. In particular, tests show t
 
 Call-site size, the data a message carries, warning-free builds with printing on and off, and a host that survives
 anything the device sends are checked during development instead.
+
+## 5. Comparing implementations
+
+A change to DPRINT is compared with the implementation it replaces, on every RISC type at its default optimization
+level:
+
+- Code size counts DPRINT's own footprint in a kernel: the library, the code of every print where it is written, and
+  the data that DPRINT's code adds. How the compiler inlines the user's own functions around their prints is the
+  user's code and doesn't count; the manual's `DPRINT_FORCE_NOINLINE` keeps one copy of a function that prints.
+- For any mix of prints, the footprint is no larger than before. The library may grow when the total shrinks.
+- A kernel can hold many prints of one kind, so no kind of print costs more code per print than before.

@@ -174,7 +174,7 @@ inline void dprint_tensix_unpack_config_reserved_5(const ckernel::unpacker::unpa
 
 // HARDWARE SPECIFIC FUNCTIONS
 
-inline void dprint_tensix_unpack_tile_descriptor_helper(
+DEVICE_PRINT_FORCE_NOINLINE inline void dprint_tensix_unpack_tile_descriptor_helper(
     const ckernel::unpacker::unpack_tile_descriptor_t& tile_descriptor) {
     DPRINT("in_data_format: ");
     dprint_tensix_unpack_tile_descriptor_in_data_format(tile_descriptor);
@@ -203,7 +203,7 @@ inline void dprint_tensix_unpack_tile_descriptor_helper(
 }
 
 // Choose which register you want (1-2). 0 for both.
-inline void dprint_tensix_unpack_tile_descriptor(uint reg_id = 0) {
+DEVICE_PRINT_FORCE_NOINLINE inline void dprint_tensix_unpack_tile_descriptor(uint reg_id = 0) {
     std::array<ckernel::unpacker::unpack_tile_descriptor_t, ckernel::unpacker::NUM_UNPACKERS> tile_descriptor_vec;
     UNPACK(
         tile_descriptor_vec = ckernel::unpacker::read_unpack_tile_descriptor();
@@ -271,7 +271,7 @@ inline void dprint_tensix_unpack_config_helper(const ckernel::unpacker::unpack_c
 }
 
 // Choose which register you want (1-2). 0 for both.
-inline void dprint_tensix_unpack_config(uint reg_id = 0) {
+DEVICE_PRINT_FORCE_NOINLINE inline void dprint_tensix_unpack_config(uint reg_id = 0) {
     std::array<ckernel::unpacker::unpack_config_t, ckernel::unpacker::NUM_UNPACKERS> config_vec;
     UNPACK(
         config_vec = ckernel::unpacker::read_unpack_config();
@@ -355,7 +355,7 @@ inline void dprint_tensix_alu_config_alu_acc_ctrl_int8_math_enabled(const ckerne
 }
 
 // Print content of the register field by field.
-inline void dprint_tensix_alu_config() {
+DEVICE_PRINT_FORCE_NOINLINE inline void dprint_tensix_alu_config() {
     MATH(ckernel::unpacker::alu_config_t config = ckernel::unpacker::read_alu_config();
 
          DPRINT("ALU_ROUNDING_MODE_Fpu_srnd_en: ");

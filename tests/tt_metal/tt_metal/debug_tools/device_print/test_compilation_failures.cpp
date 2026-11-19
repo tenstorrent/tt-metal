@@ -92,10 +92,7 @@ TEST_F(DevicePrintFailuresFixture, DISABLED_SpecNotSuitingChar) {
         "invalid format specifier");
 }
 
-// Known issue: a print's size isn't checked against the print buffer. Today this print fails only because its size
-// overflows a 10-bit field of the message header ("changes value from '4100' to '4'"), and a print of up to 1020 bytes
-// compiles even where it doesn't fit. Disabled until that is fixed.
-TEST_F(DevicePrintFailuresFixture, DISABLED_PrintTooBigForBuffer) {
+TEST_F(DevicePrintFailuresFixture, PrintTooBigForBuffer) {
     TestCompileKernelFailure(
         "tests/tt_metal/tt_metal/test_kernels/device_print/failures/print_too_big_for_buffer.cpp",
         "does not fit in the print buffer");
