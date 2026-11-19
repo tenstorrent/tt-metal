@@ -15,7 +15,7 @@ from loguru import logger
 import ttnn
 from models.common.tt_ccl import TT_CCL
 from models.common.utility_functions import comp_pcc
-from tests.ttnn.unit_tests.operations.qwen_mlp.multi_op_mlp import multi_op_mlp
+from tests.ttnn.unit_tests.operations.qwen_mlp.multi_op_mlp import fused_partial_mlp
 
 H = 5120
 I = 17408
@@ -32,7 +32,7 @@ ETH_BW = 800e9
 BFP4_BYTES_PER_ELEMENT = 576 / 1024
 BF16_BYTES = 2
 
-mlp_under_test = multi_op_mlp
+mlp_under_test = fused_partial_mlp
 
 
 def roofline_seconds(S):

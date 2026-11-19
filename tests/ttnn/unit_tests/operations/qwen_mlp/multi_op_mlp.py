@@ -3,6 +3,7 @@
 
 import ttnn
 from models.common.tt_ccl import TT_CCL
+from ttnn.operations.qwen_mlp import qwen_mlp_partial
 
 EPS = 1e-6
 NUM_LINKS = 2
@@ -49,10 +50,8 @@ def multi_op_partial_mlp(h, w_norm, w_gate_up, w_down):
     )
 
 
-def multi_op_mlp(h, w_norm, w_gate_up, w_down, ccl: TT_CCL):
-    """y = h + MLP(RMSNorm(h)) as a chain of existing ttnn ops."""
+def sum_across_chips_and_add_residual(h, partial_y, ccl: TT_CCL):
     mesh = h.device()
-    partial_y = multi_op_partial_mlp(h, w_norm, w_gate_up, w_down)
     scattered = ttnn.experimental.reduce_scatter_minimal_async(
         ttnn.reshape(partial_y, [1, 1, *partial_y.shape]),
         dim=3,
@@ -75,3 +74,11 @@ def multi_op_mlp(h, w_norm, w_gate_up, w_down, ccl: TT_CCL):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     return ttnn.add(h, ttnn.reshape(gathered, list(h.shape)), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
+def multi_op_mlp(h, w_norm, w_gate_up, w_down, ccl: TT_CCL):
+    return sum_across_chips_and_add_residual(h, multi_op_partial_mlp(h, w_norm, w_gate_up, w_down), ccl)
+
+
+def fused_partial_mlp(h, w_norm, w_gate_up, w_down, ccl: TT_CCL):
+    return sum_across_chips_and_add_residual(h, qwen_mlp_partial(h, w_norm, w_gate_up, w_down), ccl)
