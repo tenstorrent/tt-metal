@@ -12,13 +12,13 @@ import os
 import sys
 import warnings
 
-_PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__)) + os.sep
+_PACKAGE_DIR = os.path.dirname(os.path.realpath(__file__)) + os.sep
 
 
 def _is_inside_ttnn_package(frame) -> bool:
     filename = frame.f_code.co_filename
     # Pseudo-filenames such as "<string>" or "<frozen ...>" have no source file, so they are never TTNN's code.
-    return not filename.startswith("<") and os.path.abspath(filename).startswith(_PACKAGE_DIR)
+    return not filename.startswith("<") and os.path.realpath(filename).startswith(_PACKAGE_DIR)
 
 
 def _is_skipped_by_warnings(frame) -> bool:
