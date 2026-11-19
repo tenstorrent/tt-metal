@@ -274,11 +274,9 @@ class LTXCausalConv3d(Module):
         # cf_input_padded: x is already a padded [.,Hp,Wp,.] buffer
         # residual: added to the output in the conv3d epilogue (see can_fuse_residual).
         assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT
-        residual_kwargs = {}
         if residual is not None:
             # conv3d refuses a residual with output padding.
             assert not cf_output_padded
-            residual_kwargs = dict(residual_tensor=residual)
 
         # Temporal padding (T is not sharded — local op on every device).
         if self.time_pad > 0:
@@ -394,7 +392,7 @@ class LTXCausalConv3d(Module):
                     pad_offset_tensor=pp_pad_offset,
                     output_pad_h=(pHe if cf_output_padded else 0),
                     output_pad_w=(pWe if cf_output_padded else 0),
-                    **residual_kwargs,
+                    residual_tensor=residual,
                 )
 
             if self._use_halo_conv:
@@ -441,7 +439,7 @@ class LTXCausalConv3d(Module):
             logical_h_mask=conv_logical_h,
             logical_w_mask=conv_logical_w,
             pad_offset_tensor=pad_offset_tensor,
-            **residual_kwargs,
+            residual_tensor=residual,
         )
 
         return x_BTHWC
@@ -540,8 +538,6 @@ class LTXResnetBlock3D(Module):
             out_channels, out_channels, kernel_size=3, stride=1, conv_dims=conv_dims, **conv_kwargs
         )
 
-        # LTX_VAE_FUSE_RESIDUAL=1 (default off): conv2 adds the skip in its epilogue instead of a
-        # separate add over the whole activation.
         self.fuse_residual = _fuse_residual_enabled()
 
         self.has_shortcut = in_channels != out_channels

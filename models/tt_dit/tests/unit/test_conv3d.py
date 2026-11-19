@@ -296,8 +296,7 @@ def test_sharding(mesh_device, input_shape, out_channels, kernel_size, stride):
     print_tensor_mem_info(tt_input_NTHWC_rm)
 
 
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize(
     "C_in, C_in_block, C_out_block, T, H, W, out_block, halo",
     [
@@ -309,16 +308,13 @@ def test_sharding(mesh_device, input_shape, out_channels, kernel_size, stride):
     ],
     ids=["fused", "halo_falls_back"],
 )
-def test_conv3d_residual(mesh_device, device_params, C_in, C_in_block, C_out_block, T, H, W, out_block, halo):
+def test_conv3d_residual(mesh_device, C_in, C_in_block, C_out_block, T, H, W, out_block, halo):
     """conv3d with residual_tensor must equal conv3d followed by ttnn.add, bit for bit."""
-    mesh = mesh_device.create_submesh(ttnn.MeshShape(2, 4))
     torch.manual_seed(0)
     C_out = 128
 
     def to_dev(t, layout=ttnn.ROW_MAJOR_LAYOUT):
-        return ttnn.from_torch(
-            t, device=mesh, dtype=ttnn.bfloat16, layout=layout, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh)
-        )
+        return ttnn.from_torch(t, device=mesh_device, dtype=ttnn.bfloat16, layout=layout)
 
     conv = torch.nn.Conv3d(C_in, C_out, kernel_size=3, padding=(0, 1, 1))
     tt_x = to_dev(torch.randn(1, T, H, W, C_in))
@@ -327,7 +323,7 @@ def test_conv3d_residual(mesh_device, device_params, C_in, C_in_block, C_out_blo
         groups=1,
         C_in_block=C_in_block,
         alignment=32,
-        device=mesh,
+        device=mesh_device,
     )
     tt_b = to_dev(conv.bias.data.reshape(1, -1), ttnn.TILE_LAYOUT)
     # Random neighbour rows, so a reader that dropped the halo (zero-padding the edges) would show.
@@ -341,10 +337,10 @@ def test_conv3d_residual(mesh_device, device_params, C_in, C_in_block, C_out_blo
         H_out_block=H_out_block,
         C_out_block=C_out_block,
         C_in_block=C_in_block,
-        compute_with_storage_grid_size=mesh.compute_with_storage_grid_size(),
+        compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
     )
     kcfg = ttnn.init_device_compute_kernel_config(
-        mesh.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, packer_l1_acc=False
+        mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, packer_l1_acc=False
     )
 
     def run(residual=None):
@@ -352,7 +348,7 @@ def test_conv3d_residual(mesh_device, device_params, C_in, C_in_block, C_out_blo
             input_tensor=tt_x,
             weight_tensor=tt_w,
             bias_tensor=tt_b,
-            device=mesh,
+            device=mesh_device,
             dtype=ttnn.bfloat16,
             output_channels=C_out,
             kernel_size=(3, 3, 3),
