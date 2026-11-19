@@ -2862,7 +2862,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "test_name_aliases": {"perf_fused_quasar": "perf_fused_quasar"},
     },
     "perf_matmul_int4_dequant_quasar": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "c_dimm",
             "dest_acc",
@@ -2892,6 +2892,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "num_faces_c_dim_B",
             "num_faces_r_dim_A",
             "num_faces_r_dim_B",
+            "overlapped_workload",
             "r_dimm",
             "tile_cnt",
             "unpack_to_dest",
@@ -3094,7 +3095,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "test_name_aliases": {"perf_reduce_quasar": "perf_reduce_quasar"},
     },
     "perf_sfpu_add_parallel_matmul_quasar": {
-        "version": 3,
+        "version": 4,
         "columns": [
             "c_dimm",
             "dest_acc",
@@ -3116,6 +3117,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "num_faces",
             "num_faces_A",
             "num_faces_B",
+            "overlapped_workload",
             "r_dimm",
             "sfpu_impl",
             "tile_cnt",
@@ -3128,7 +3130,7 @@ PERF_TEST_SCHEMAS_QSR = {
         },
     },
     "perf_sfpu_exp_parallel_matmul_quasar": {
-        "version": 6,
+        "version": 7,
         "columns": [
             "approx_mode",
             "c_dimm",
@@ -3151,6 +3153,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "num_faces",
             "num_faces_A",
             "num_faces_B",
+            "overlapped_workload",
             "r_dimm",
             "sfpu_impl",
             "tile_cnt",
