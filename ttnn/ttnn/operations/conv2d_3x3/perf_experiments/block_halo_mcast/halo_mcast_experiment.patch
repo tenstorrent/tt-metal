@@ -1,0 +1,1018 @@
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+@@ -159,6 +159,36 @@
+ # res5.0), which now gains too. False keeps the padded-slab untilize / tilize prelude.
+ TAP_SHIFT = True
+ 
++# Halo multicast (perf experiment `block_halo_mcast`, Perf 12; measured REGRESSION, off): under the BLOCK K split on
++# the tap-shift prelude, each core's slab rows come from its column's owner shards, and vertically adjacent cores need
++# the same rows (aspp.convs.1: each input tile-row is in ~3.4 cores' slabs). Instead of every core pulling its rows,
++# each owner pushes its shard once: its reader multicasts it down the column (NoC0) to the cores below that read any of
++# its rows, its writer up the column (NoC1) to those above, each chain closed by a per-shard flag (semaphore
++# o % HALO_FLAGS). Every core keeps its input ring indexed by absolute input tile-row modulo HALO_RING_ROWS, so a
++# multicast lands at one address on all receivers; the ring holds every row a core receives without aliasing a row it
++# reads. Measured (Blackhole p150b, LoFi, unzoned, medians of 3 alternating, bit-identical): aspp.convs.1 47786 ->
++# 48950 ns (+2.4%, best option: no path reserve, exact runs, interleaved, 4-row value flags), aspp.convs.2 42014 ->
++# 43567 (+3.7%). The pushes halve the column's NoC0 link bytes, but each row's readers take it as different kernel
++# rows (needed at different times), so the push lands every reader's first band later than its own ordered pull did.
++HALO_MCAST = False
++# Rows per multicast chain: "shard" = the whole shard to the span of every core reading any of its rows; "exact" = runs
++# of rows sharing their farthest reader, each to that reader only.
++HALO_MCAST_RUNS = "exact"
++# Bench switch (kernels/conv2d_3x3_halo_mcast.hpp): 0 linked chains, 1 unlinked packets, 2 unlinked without path
++# reserve, 3 unicast writes to each core of the segment.
++HALO_MODE = 2
++# Bench switch: the reader interleaves its down multicast (one packet at a time) with pushing the landed shards.
++HALO_INTERLEAVE = 1
++# Bench switch: rows per progress flag of the interleaved down multicast (0: one flag per shard).
++HALO_FLAG_ROWS = 4
++# Bench switch: progress flags as absolute-value writes from a values table (CB_HALO_VALUES) instead of atomics.
++HALO_FLAG_VALUES = True
++CB_HALO_VALUES = 16
++# Bench switch: the interleaved down multicast sends top-down (needs progress flags).
++HALO_DESC = 0
++# Bench introspection (perf experiment only): the last descriptor's halo plan.
++DEBUG_INFO = {}
++
+ # Work-balanced BLOCK M split (balanced_block_ranges). On the N-slice ring walk a grid row's time is its prelude (fill-
+ # paced untilize of its slab rows, gather-paced tilize of its tile-rows) plus its walk (in-image kernel rows of each ring
+ # row group, after the kernel-row skip), so with dilation the rows whose output rows keep all three kernel rows in the
+@@ -667,6 +697,88 @@
+     return last_slot + 1, rows
+ 
+ 
++def _tile_slab_segments(g: Conv3x3Geometry, f, band_len):
++    """(first input tile-row, count) of each segment of one M-block's TILE slab plan (mirror of the reader's
++    tile_slab_plan: a band starting inside the previous band's tile-rows continues it)."""
++    segs = []
++    prev = None
++    for kh in range(3):
++        v_lo = f + kh * g.dilation * g.input_width
++        lo, hi = max(v_lo, 0), min(v_lo + band_len, g.num_in_px)
++        if lo >= hi:
++            continue
++        t_lo, t_hi = lo // TILE, _div_up(hi, TILE)
++        first_new = prev[1] if prev is not None and t_lo < prev[1] else t_lo
++        if t_hi > first_new:
++            segs.append((first_new, t_hi - first_new))
++        prev = (t_lo, t_hi)
++    return segs
++
++
++def halo_mcast_plan(g: Conv3x3Geometry, core_m_tiles, shard_rows, num_shards, ring_rows_max):
++    """HALO_MCAST over grid-row groups (one M-block each): None where it does not apply, else a dict with
++    `need` (per group: its slab plan's input tile-rows), per shard o: `runs` [(row_lo, row_hi, down_last, up_first)]
++    (multicast chains: down to groups o+1..down_last on NoC0, up to up_first..o-1 on NoC1; down_last == o / up_first ==
++    o for none), `down` / `up` (the flag rectangles: farthest group each way), `cover` per group (the covering shards'
++    bit mask, the last covering shard), `S` (ring rows) and `K` (flag semaphores: no two shards covering one group share
++    one)."""
++    ranges = core_m_ranges(g, core_m_tiles)
++    n_rows = _div_up(g.num_in_px, TILE)
++    need = []
++    for start, actual in ranges:
++        o_first = start * TILE
++        o_last = min((start + actual) * TILE, g.num_out_px) - 1
++        segs = _tile_slab_segments(g, _block_first_tap(g, o_first), _block_band_len(g, o_first, o_last))
++        need.append(sorted({t for a, n in segs for t in range(a, a + n)}))
++    groups = len(ranges)
++    readers_of = {}
++    for r, rows in enumerate(need):
++        for t in rows:
++            readers_of.setdefault(t, []).append(r)
++    shard_of = lambda t: t // shard_rows
++    runs, down, up = {}, {}, {}
++    for o in range(num_shards):
++        rows = range(o * shard_rows, min((o + 1) * shard_rows, n_rows))
++        if not rows:
++            continue
++        readers = sorted({r for t in rows for r in readers_of.get(t, [])})
++        if HALO_MCAST_RUNS == "shard":
++            lo, hi = min(readers + [o]), max(readers + [o])
++            runs[o] = [(rows[0], rows[-1] + 1, hi, lo)]
++        else:
++            rr = []
++            for t in rows:
++                rd = readers_of.get(t, [])
++                d_last, u_first = max(rd + [o]), min(rd + [o])
++                if rr and rr[-1][2] == d_last and rr[-1][3] == u_first:
++                    rr[-1] = (rr[-1][0], t + 1, d_last, u_first)
++                else:
++                    rr.append((t, t + 1, d_last, u_first))
++            runs[o] = rr
++        down[o] = max(run[2] for run in runs[o])
++        up[o] = min(run[3] for run in runs[o])
++    cover, S, K = [], 0, 1
++    for r in range(groups):
++        cov = [o for o in runs if up[o] <= r <= down[o]]
++        if not cov or any(shard_of(t) not in cov for t in need[r]):
++            return None
++        got = set(need[r]) if r in cov else set()
++        for o in cov:
++            if o == r:
++                continue
++            for lo_, hi_, d_last, u_first in runs[o]:
++                if (o < r <= d_last) or (u_first <= r < o):
++                    got |= set(range(lo_, hi_))
++        if not set(need[r]) <= got:
++            return None
++        S = max(S, max(got) - min(got) + 1)
++        K = max(K, max(cov) - min(cov) + 1)
++        cover.append((sum(1 << o for o in cov), max(cov)))
++    if S > ring_rows_max or num_shards > 32:
++        return None
++    return dict(need=need, runs=runs, down=down, up=up, cover=cover, S=S, K=K, n_rows=n_rows)
++
++
+ def padded_slab_capable(g: Conv3x3Geometry):
+     """Geometry side of PADDED_SLAB: every tap block of a tile-row is one run of a slab whose rows sit d pixels apart
+     (stride 1, p == d, whole-tile image rows)."""
+@@ -1815,6 +1927,7 @@
+         if g.sharded_output and g.tile_input
+         else 0
+     )
++    DEBUG_INFO.clear()
+     kwf_args = (g, b, has_bias, l1_cb_budget_bytes(resident), compute_kernel_config.math_fidelity)
+     kwf = kw_fold_mode(*kwf_args)
+     # The reader keeps the original K-blocking in its CT args (it only fills the slab: its K-block asserts stay true).
+@@ -1899,12 +2012,35 @@
+     # Tap shift (see TAP_SHIFT): the input ring shares the slab / combine-slots region instead of in0. The region's size
+     # must be a multiple of all three page sizes.
+     tap_shift = False
++    halo = None
+     if TAP_SHIFT and padded_slab and b.shared_slab_bytes and g.dilation < 32:
+         ring_bytes = b.slab_tile_rows * g.c_in_tiles * g.in0_tile_bytes
+         unit = math.lcm(TILE_BYTES_BF16, TILE_BYTES_FP32, g.in0_tile_bytes)
+         region = _div_up(max(slab_cb.total_size, ring_bytes), unit) * unit
+         if region - slab_cb.total_size <= leftover - (new_bytes - old_bytes):
+             tap_shift = True
++            # Halo multicast (see HALO_MCAST): grid-row groups only (no spare-column groups), one M-block per core, a
++            # ROW_MAJOR BLOCK grid; the input ring grows to the plan's S rows where the region (or the L1 left) holds it.
++            in_spec = input_tensor.memory_config().shard_spec
++            if (
++                HALO_MCAST
++                and g.k_split
++                and b.nslice
++                and b.max_m_blocks_per_core == 1
++                and not g.block_rows
++                and in_spec.orientation == ttnn.ShardOrientation.ROW_MAJOR
++            ):
++                room = leftover - (new_bytes - old_bytes) - (region - slab_cb.total_size)
++                row_bytes = g.c_in_tiles * g.in0_tile_bytes
++                halo = halo_mcast_plan(
++                    g,
++                    b.core_m_tiles,
++                    int(in_spec.shape[0]) // TILE,
++                    block_grid_shape(in_spec)[0],
++                    (region + room) // row_bytes,
++                )
++                if halo is not None:
++                    region = max(region, _div_up(halo["S"] * row_bytes, unit) * unit)
+             slab_cb = ttnn.CBDescriptor(
+                 total_size=region,
+                 core_ranges=cores,
+@@ -1983,6 +2119,8 @@
+         cbs.append(_cb(CB_INPUT_TILES, input_tensor.dtype, g.in0_tile_bytes, input_tile_pages, cores))
+     if b.nslice:
+         cbs.append(_cb(CB_RING_TOKEN, ttnn.float32, RING_TOKEN_BYTES, 1, cores))
++    if halo is not None and HALO_FLAG_VALUES and HALO_FLAG_ROWS:
++        cbs.append(_cb(CB_HALO_VALUES, ttnn.float32, 4 * 64, 1, cores))
+     if tap_major_im2col(g, b):
+         cbs.append(_cb(CB_ZERO_SRC, ttnn.bfloat16, pixel_bytes, TILE, cores))
+     # kw-fold has no gather (its reader only fills the slab) and owns CB_SRC_TABLE as its ACC-ready token.
+@@ -2048,7 +2186,9 @@
+     # Split TILE fill. Under a K split (N-slice-outer walk) only with the whole slab in the ring, where the reader hands
+     # the writer every batch up front; a per-batch hand-over on the 2-batch ring measured slower than no split there
+     # (aspp.convs.1 @ LoFi 75.8 vs 71.0 us).
+-    tile_fill_split = g.sharded_output and g.tile_input and (not g.k_split or (b.nslice and alias_ring))
++    tile_fill_split = (
++        g.sharded_output and g.tile_input and (not g.k_split or (b.nslice and alias_ring)) and halo is None
++    )
+     if g.k_split:
+         in_spec = input_tensor.memory_config().shard_spec
+         page_cols = TILE if g.tile_input else g.c_in_p
+@@ -2144,6 +2284,10 @@
+     kwf_xchg = kwf and kw_fold_halo_exchange(b)
+     kwf_xchg_sem_ids = (len(sem_ids), len(sem_ids) + 1) if kwf_xchg else (0, 0)
+     sem_ids += kwf_xchg_sem_ids if kwf_xchg else ()
++    # Halo multicast: one flag per covering shard (shard o's on semaphore halo_sem0 + o % K).
++    halo_sem0 = len(sem_ids)
++    if halo is not None:
++        sem_ids += tuple(range(halo_sem0, halo_sem0 + halo["K"]))
+     k_padded = g.tensor_kkh_tiles * TILE > 3 * g.c_in_p
+     # Work-balanced M split (g.m_ranges): the N-slice prelude, walk and forwarding sized by each M-block's valid
+     # tile-rows (the split row gather keeps its CT unit sequence), the fill / untilize by the block's own slab rows where
+@@ -2448,6 +2592,47 @@
+         return [0, 0, 0]
+ 
+     ring_owners = None if kwf else ring_owner_cols(g, b)
++    halo_rt_base = {}  # "reader" / "writer" -> index of the first halo runtime arg (the same on every core)
++
++    def halo_args(m_index, col, noc):
++        """Halo multicast runtime args of grid row m_index, column col: reader (noc 0, down) [own shard, covering
++        shards' bit mask, last covering shard, runs, then per run (row_lo, row_hi, dests, sx, sy, ex, ey), flag (dests,
++        sx, sy, ex, ey)]; writer (noc 1, up) the same without the covering shards. Rectangles in the NoC's multicast
++        order (NoC0: low corner first; NoC1: high corner first)."""
++        in_spec = input_tensor.memory_config().shard_spec
++        o = m_index
++        own = o in halo["runs"]
++
++        def xy(row):
++            v = device.worker_core_from_logical_core(block_core(in_spec, row, col))
++            return v.x, v.y
++
++        runs = []
++        if own:
++            for lo_, hi_, d_last, u_first in halo["runs"][o]:
++                far = d_last if noc == 0 else u_first
++                if far == o:
++                    continue
++                if runs and runs[-1][2] == far and runs[-1][1] == lo_:
++                    runs[-1] = (runs[-1][0], hi_, far)
++                else:
++                    runs.append((lo_, hi_, far))
++
++        def rect(far):
++            near = o + 1 if noc == 0 else o - 1
++            (nx, ny), (fx, fy) = xy(near), xy(far)
++            return [abs(far - near) + 1, nx, ny, fx, fy]
++
++        args = [int(own)]
++        if noc == 0:
++            args += list(halo["cover"][m_index])
++        args += [len(runs)]
++        for lo_, hi_, far in runs:
++            args += [lo_, hi_] + rect(far)
++        flag_far = (halo["down"] if noc == 0 else halo["up"]).get(o, o)
++        args += rect(flag_far) if runs else [0, 0, 0, 0, 0]
++        return args
++
+     for core, m_index, col in work:
+         m_tile_start, actual_m_tiles = m_ranges[m_index]
+         num_m_blocks_this_core = m_blocks_per_index[m_index]
+@@ -2479,6 +2664,10 @@
+             + [int(split_of(core))]
+             + slab_rows_per_block
+         )
++        if halo is not None:
++            base = len(reader_rt[core.x][core.y])
++            assert halo_rt_base.setdefault("reader", base) == base
++            reader_rt[core.x][core.y] = list(reader_rt[core.x][core.y]) + halo_args(m_index, col, 0)
+         compute_args = [num_m_blocks_this_core, int(out_valid_tiles > 0), col]
+         if g.k_split and b.nslice and not kwf:
+             # The N-slice ring walk's kernel-row masks (args 3..: no ring slab under a K split).
+@@ -2525,6 +2714,10 @@
+             + server_rt_args(core)
+             + (_kwf_xchg_writer_args(g, work, m_index, m_ranges, device) if kwf_xchg else [])
+         )
++        if halo is not None:
++            base = len(writer_rt[core.x][core.y])
++            assert halo_rt_base.setdefault("writer", base) == base
++            writer_rt[core.x][core.y] = list(writer_rt[core.x][core.y]) + halo_args(m_index, col, 1)
+ 
+     # kw-fold kernels: the mode flag and its compile-time shape (defines keep the regular kernels' CT args intact).
+     _kwf_dm_defines, _kwf_compute_defines = [], []
+@@ -2636,6 +2829,26 @@
+         [("RING_OWNER_MASK", f"{sum(1 << c for c in ring_owners)}u")] if ring_owners is not None else []
+     )
+     _wide_short_defines = [("RING_WIDE_SHORT_GROUP", "1")] if ct_group_rows else []
++    # Halo multicast (HALO_MCAST): the ring's rows, the flags, the shard geometry and the runtime args' base.
++    _halo_common = []
++    if halo is not None:
++        _halo_common = [
++            ("CONV2D_3X3_HALO_MCAST", "1"),
++            ("HALO_RING_ROWS", str(halo["S"])),
++            ("HALO_FLAGS", str(halo["K"])),
++            ("HALO_SEM0", str(halo_sem0)),
++            ("HALO_SHARD_ROWS", str(input_shard_rows)),
++            ("HALO_N_ROWS", str(halo["n_rows"])),
++            ("HALO_MODE", str(HALO_MODE)),
++            ("HALO_INTERLEAVE", str(HALO_INTERLEAVE)),
++            ("HALO_FLAG_ROWS", str(HALO_FLAG_ROWS)),
++            ("HALO_DESC", str(HALO_DESC)),
++            *([("HALO_CB_VALUES", str(CB_HALO_VALUES))] if HALO_FLAG_VALUES and HALO_FLAG_ROWS else []),
++        ]
++        DEBUG_INFO.update(halo_S=halo["S"], halo_K=halo["K"], halo_runs={k: v for k, v in halo["runs"].items()})
++    _halo_reader_defines = _halo_common + ([("HALO_RT_BASE", str(halo_rt_base["reader"]))] if halo else [])
++    _halo_writer_defines = _halo_common + ([("HALO_RT_BASE", str(halo_rt_base["writer"]))] if halo else [])
++    _halo_compute_defines = [("HALO_RING_ROWS", str(halo["S"]))] if halo else []
+     # N-slice walk: the writer reads the bias without a wait once the first weight round is issued and pushes it when it
+     # lands, so the column weight stream starts at kernel start (with the spare groups that stream paces the walk:
+     # res4.x 12022 -> 11607 ns; without them flat to -1.7%).
+@@ -2646,7 +2859,7 @@
+             core_ranges=_core_range_set(reader_cores),
+             compile_time_args=reader_ct_args(*slice_channels),
+             runtime_args=reader_rt,
+-            defines=_kwf_dm_defines + _pad_dm_defines + _ring_owner_defines + _sd_dm_defines,
++            defines=_kwf_dm_defines + _pad_dm_defines + _ring_owner_defines + _sd_dm_defines + _halo_reader_defines,
+             config=ttnn.ReaderConfigDescriptor(),
+         )
+         for slice_channels, (reader_cores, reader_rt) in reader_groups.items()
+@@ -2657,7 +2870,11 @@
+             core_ranges=_core_range_set(writer_cores),
+             compile_time_args=writer_ct_args_for(*slice_channels),
+             runtime_args=writer_rt,
+-            defines=_kwf_dm_defines + _ring_owner_defines + _sd_dm_defines + _async_bias_defines,
++            defines=_kwf_dm_defines
++            + _ring_owner_defines
++            + _sd_dm_defines
++            + _async_bias_defines
++            + _halo_writer_defines,
+             config=ttnn.WriterConfigDescriptor(),
+         )
+         for slice_channels, (writer_cores, writer_rt) in writer_groups.items()
+@@ -2671,7 +2888,8 @@
+         + _pad_compute_defines
+         + _ring_owner_defines
+         + _sd_compute_defines
+-        + _wide_short_defines,
++        + _wide_short_defines
++        + _halo_compute_defines,
+         config=ttnn.ComputeConfigDescriptor(
+             math_fidelity=compute_kernel_config.math_fidelity,
+             math_approx_mode=compute_kernel_config.math_approx_mode,
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
+@@ -132,6 +132,9 @@
+ #include "conv2d_3x3_nslice_order.hpp"
+ #include "conv2d_3x3_slab_direct.hpp"
+ #include "conv2d_3x3_slab_stream.hpp"
++#ifdef CONV2D_3X3_HALO_MCAST
++#include "conv2d_3x3_halo_mcast.hpp"
++#endif
+ 
+ namespace {
+ 
+@@ -750,6 +753,222 @@
+             const uint32_t num_segs = plan.num_segs;
+             const uint32_t(&seg_first)[3] = plan.seg_first;
+             const uint32_t(&seg_count)[3] = plan.seg_count;
++#ifdef CONV2D_3X3_HALO_MCAST
++            // ---- Halo multicast (the descriptor's HALO_MCAST): this core's slab rows come from its column's owner
++            // shards, pushed once by each owner: its reader multicasts the shard down the column (NoC0), its writer up
++            // (NoC1), each chain closed by flag o % HALO_FLAGS. The ring holds input tile-row t at slot t % S (the
++            // same address on every core), so the slab rows are not back to back here: compute and the center copy
++            // address them by slot, while the CB pages still count the plan's rows in order. The rows of the
++            // covering shards are pushed shard by shard (ascending, as the plan) once each shard's flag (own shard:
++            // its local copy) is in; every covering shard is waited for, so nothing lands after the slab is freed.
++            {
++                constexpr uint32_t S = HALO_RING_ROWS;
++                constexpr uint32_t K = HALO_FLAGS;
++                constexpr uint32_t R = HALO_SHARD_ROWS;
++                constexpr uint32_t n_rows = HALO_N_ROWS;
++                constexpr uint32_t hb = HALO_RT_BASE;
++                // A short channel slice moves only its real tiles; the padded tile columns of its ring rows stay zero.
++                constexpr uint32_t move_bytes = zero_slab_lanes ? real_row_bytes : row_bytes;
++                const bool own = get_arg_val<uint32_t>(hb) != 0;
++                // The covering shards (a bit mask: not always contiguous, e.g. at d = 18 a top row reads its own
++                // shard and two far ones) and the highest of them.
++                const uint32_t cov_mask = get_arg_val<uint32_t>(hb + 1);
++                const uint32_t cov_hi = get_arg_val<uint32_t>(hb + 2);
++                auto next_cov = [&](uint32_t sh) {
++                    do {
++                        ++sh;
++                    } while (sh <= cov_hi && !((cov_mask >> sh) & 1u));
++                    return sh;
++                };
++                const uint32_t cov_lo = (cov_mask & 1u) ? 0u : next_cov(0);
++                [[maybe_unused]] const uint32_t n_runs = get_arg_val<uint32_t>(hb + 3);
++                const uint32_t o = my_shard;
++                const uint32_t own_lo = o * R;
++                // This core's own shard: its column's channel slice of input tile-rows [own_lo, own_lo + R), back to
++                // back (a sharded buffer sits at the same address on every core).
++                const uint32_t shard_l1 = input_addr;
++                const uint32_t slab_pages = slab_rows_m * c_in_tiles;
++                {
++                    MaybeDeviceZoneScope("reader_fill_reserve");
++                    cb_reserve_back(cb_input_tiles, slab_pages);
++                }
++                auto ring_at = [&](uint32_t t) -> uint32_t { return input_ring_base + (t % S) * row_bytes; };
++#if HALO_INTERLEAVE && HALO_MODE != 3
++                // Interleaved: the own shard's local copies first, then one packet of the down multicast at a time,
++                // pushing the covering shards' rows as they land in between.
++                conv2d_3x3::halo::Sender<S> sender;
++#else
++                if (own && n_runs > 0) {
++                    MaybeDeviceZoneScope("reader_halo_send");
++                    conv2d_3x3::halo::send<S>(
++                        hb + 3,
++                        shard_l1,
++                        own_lo,
++                        input_ring_base,
++                        row_bytes,
++                        move_bytes,
++                        get_semaphore(HALO_SEM0 + o % K),
++                        (own_lo + R < n_rows ? own_lo + R : n_rows) - own_lo);
++                }
++#endif
++                // The own shard's plan rows (local copies) and the zero tile columns of a short slice's rows.
++                reads.begin(TRID_INPUT_TILES);
++                for (uint32_t sg = 0; sg < num_segs; ++sg) {
++                    for (uint32_t t = seg_first[sg]; t < seg_first[sg] + seg_count[sg]; ++t) {
++                        const bool mine = own && t >= own_lo && t < own_lo + R;
++                        if (mine) {
++                            reads.read(get_noc_addr(shard_l1 + (t - own_lo) * row_bytes), ring_at(t), move_bytes);
++                        }
++                        if constexpr (zero_slab_lanes) {
++                            reads.read(zero_src_noc, ring_at(t) + real_row_bytes, row_bytes - real_row_bytes);
++                        }
++                    }
++                }
++#if HALO_INTERLEAVE && HALO_MODE != 3
++                if (own) {
++                    sender.init(
++                        hb + 3,
++                        shard_l1,
++                        own_lo,
++                        input_ring_base,
++                        row_bytes,
++                        move_bytes,
++                        get_semaphore(HALO_SEM0 + o % K),
++                        (own_lo + R < n_rows ? own_lo + R : n_rows) - own_lo);
++                }
++#endif
++                uint32_t pushed = 0;
++                bool local_done = false;
++                // The rows of covering shard sh (the plan's, in order) once they landed.
++                auto shard_rows_in_plan = [&](uint32_t sh) {
++                    uint32_t cnt = 0;
++                    const uint32_t lo = sh * R, hi = lo + R < n_rows ? lo + R : n_rows;
++                    for (uint32_t sg = 0; sg < num_segs; ++sg) {
++                        const uint32_t a0 = seg_first[sg] > lo ? seg_first[sg] : lo;
++                        const uint32_t e = seg_first[sg] + seg_count[sg];
++                        const uint32_t a1 = e < hi ? e : hi;
++                        cnt += a1 > a0 ? a1 - a0 : 0;
++                    }
++                    return cnt;
++                };
++                // Plan rows in input tile-rows [lo, hi).
++                auto plan_rows_in = [&](uint32_t lo, uint32_t hi) {
++                    uint32_t cnt = 0;
++                    for (uint32_t sg = 0; sg < num_segs; ++sg) {
++                        const uint32_t a0 = seg_first[sg] > lo ? seg_first[sg] : lo;
++                        const uint32_t e = seg_first[sg] + seg_count[sg];
++                        const uint32_t a1 = e < hi ? e : hi;
++                        cnt += a1 > a0 ? a1 - a0 : 0;
++                    }
++                    return cnt;
++                };
++                [[maybe_unused]] auto push_rows = [&](uint32_t lo, uint32_t hi) {
++                    const uint32_t cnt = plan_rows_in(lo, hi);
++                    if (cnt > 0) {
++                        if (zero_slab_lanes && !local_done) {
++                            reads.wait(TRID_INPUT_TILES);
++                            local_done = true;
++                        }
++                        cb_push_back(cb_input_tiles, cnt * c_in_tiles);
++                        pushed += cnt * c_in_tiles;
++                    }
++                };
++                auto push_shard = [&](uint32_t sh) {
++                    const uint32_t cnt = shard_rows_in_plan(sh);
++                    if (cnt > 0) {
++                        if (zero_slab_lanes && !local_done) {
++                            reads.wait(TRID_INPUT_TILES);
++                            local_done = true;
++                        }
++                        cb_push_back(cb_input_tiles, cnt * c_in_tiles);
++                        pushed += cnt * c_in_tiles;
++                    }
++                };
++#if HALO_INTERLEAVE && HALO_MODE != 3
++                {
++                    MaybeDeviceZoneScope("reader_halo_wait");
++                    uint32_t sh = cov_lo;
++                    bool sent = !own;
++                    [[maybe_unused]] uint32_t cursor = sh * R;  // progress flags: rows of shard sh pushed up to here
++                    while (sh <= cov_hi || !sent) {
++                        if (!sent) {
++                            sent = sender.step();
++                        }
++                        if (sh <= cov_hi) {
++                            const uint32_t sh_lo = sh * R;
++                            const uint32_t sh_len = (sh_lo + R < n_rows ? sh_lo + R : n_rows) - sh_lo;
++                            uint32_t landed;
++                            if (own && sh == o) {
++                                const bool ready =
++                                    ncrisc_noc_read_with_transaction_id_flushed(noc_index, TRID_INPUT_TILES);
++                                local_done = local_done || ready;
++                                landed = ready ? sh_len : 0;
++                            } else {
++                                invalidate_l1_cache();
++                                const uint32_t v = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
++                                    get_semaphore(HALO_SEM0 + sh % K));
++                                landed = HALO_FLAG_ROWS ? v : (v != 0 ? sh_len : 0);
++                            }
++                            if constexpr (HALO_DESC && HALO_FLAG_ROWS > 0) {
++                                // Shards above this row's own come top-down: usable once no plan row below the
++                                // landed top part is still missing.
++                                const bool top_down = sh < o;
++                                const uint32_t landed_lo = top_down ? sh_lo + sh_len - landed : sh_lo;
++                                if (landed == sh_len || (top_down && plan_rows_in(cursor, landed_lo) == 0)) {
++                                    push_rows(cursor, sh_lo + sh_len);
++                                    sh = next_cov(sh);
++                                    cursor = sh * R;
++                                }
++                            } else if constexpr (HALO_FLAG_ROWS > 0) {
++                                if (sh_lo + landed > cursor) {
++                                    push_rows(cursor, sh_lo + landed);
++                                    cursor = sh_lo + landed;
++                                }
++                                if (landed == sh_len) {
++                                    sh = next_cov(sh);
++                                    cursor = sh * R;
++                                }
++                            } else if (landed == sh_len) {
++                                push_shard(sh);
++                                sh = next_cov(sh);
++                            }
++                        }
++                    }
++                }
++#if HALO_DESC && HALO_FLAG_ROWS > 0
++                {
++                    // Top-down shards were pushed once this core's rows of them landed: the rest of their multicast
++                    // still lands in this ring, so it must be in before the slab is freed.
++                    MaybeDeviceZoneScope("reader_halo_drain");
++                    for (uint32_t sh = cov_lo; sh <= cov_hi && sh < o; sh = next_cov(sh)) {
++                        const uint32_t sh_lo = sh * R;
++                        Semaphore<>(HALO_SEM0 + sh % K).wait_min((sh_lo + R < n_rows ? sh_lo + R : n_rows) - sh_lo);
++                    }
++                }
++#endif
++#else
++                for (uint32_t sh = cov_lo; sh <= cov_hi; sh = next_cov(sh)) {
++                    if (own && sh == o) {
++                        reads.wait(TRID_INPUT_TILES);
++                        local_done = true;
++                    } else {
++                        MaybeDeviceZoneScope("reader_halo_wait");
++                        Semaphore<>(HALO_SEM0 + sh % K)
++                            .wait_min(HALO_FLAG_ROWS ? (sh * R + R < n_rows ? R : n_rows - sh * R) : 1);
++                    }
++                    push_shard(sh);
++                }
++#endif
++                if (!local_done) {
++                    reads.wait(TRID_INPUT_TILES);
++                }
++                // Slab rows past the plan's last row are pushed unread (compute pops a fixed count).
++                ASSERT(pushed <= slab_pages);
++                if (pushed < slab_pages) {
++                    cb_push_back(cb_input_tiles, slab_pages - pushed);
++                }
++            }
++#else
+ 
+             // Slab rows past the plan's last row are pushed unread: compute untilizes a fixed count.
+             constexpr uint32_t batch_pages = untilize_batch_rows * c_in_tiles;
+@@ -859,6 +1078,7 @@
+                     retire();
+                 }
+             }
++#endif
+         } else {
+             // ---- fill_halo_slab (ROW_MAJOR): band kh tagged trid kh + 1; overlapping bands read only their
+             // new tail.
+@@ -1026,6 +1246,18 @@
+                     uint32_t run = block_valid_tiles - r;
+                     run = run < rows_left ? run : rows_left;
+                     const uint32_t row = t + shift_rows;
++#ifdef CONV2D_3X3_HALO_MCAST
++                    {
++                        // Halo multicast: input tile-row `row` sits at ring slot row % S.
++                        const uint32_t slot = row % HALO_RING_ROWS;
++                        const uint32_t to_end = HALO_RING_ROWS - slot;
++                        run = run < to_end ? run : to_end;
++                        reads.read(get_noc_addr(input_ring_base + slot * row_bytes), l1, run * row_bytes);
++                        l1 += run * row_bytes;
++                        r += run;
++                        continue;
++                    }
++#endif
+                     // Band kh's in-image rows hold every center row of kernel row kh: find the run's segment.
+                     uint32_t seg_lo = 0;
+                     uint32_t slab_row = 0;
+@@ -1521,7 +1753,8 @@
+         }
+ 
+         if constexpr (padded_slab) {
+-            // Compute tilized the prelude straight from the slab: its token says the slab is dead.
++            // Compute tilized the prelude straight from the slab: its token says the slab is dead (with the halo
++            // multicast, every covering shard's flag was waited for in the fill, so nothing lands in it later).
+             MaybeDeviceZoneScope("reader_slab_dead_wait");
+             cb_wait_front(cb_src_table, 1);
+             cb_pop_front(cb_src_table, 1);
+@@ -1687,4 +1920,7 @@
+     if constexpr (nslice_outer) {
+         noc_async_atomic_barrier();
+     }
++#ifdef CONV2D_3X3_HALO_MCAST
++    noc_async_write_barrier();
++#endif
+ }
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+@@ -99,6 +99,9 @@
+ #include "conv2d_3x3_nslice_order.hpp"
+ #include "conv2d_3x3_slab_direct.hpp"
+ #include "conv2d_3x3_slab_stream.hpp"
++#ifdef CONV2D_3X3_HALO_MCAST
++#include "conv2d_3x3_halo_mcast.hpp"
++#endif
+ 
+ void kernel_main() {
+     constexpr uint32_t cb_weights = get_compile_time_arg_val(0);
+@@ -233,6 +236,35 @@
+         noc_semaphore_inc(server_ack_noc, 1);
+     }
+ 
++#ifdef CONV2D_3X3_HALO_MCAST
++    {
++        // ---- Halo multicast, up half (the descriptor's HALO_MCAST; see the reader): an owner multicasts its shard's
++        // rows on NoC1 to the column cores above it that read them, into their ring slots (t % S), and closes the
++        // chain with its flag (o % HALO_FLAGS). Issued before the weight stream (a few non-blocking issues); the
++        // shard is the input tensor, so nothing waits for the sends to leave.
++        constexpr uint32_t hb = HALO_RT_BASE;
++        constexpr uint32_t S = HALO_RING_ROWS;
++        constexpr uint32_t R = HALO_SHARD_ROWS;
++        constexpr uint32_t halo_row_bytes = (c_in_p / 32) * input_page_bytes;
++        // A short channel slice moves only its real tiles (one row at a time); its padded tile columns stay zero.
++        constexpr uint32_t move_bytes = fill_zero_lanes ? (c_in / 32) * input_page_bytes : halo_row_bytes;
++        const bool own = get_arg_val<uint32_t>(hb) != 0;
++        const uint32_t n_runs = get_arg_val<uint32_t>(hb + 1);
++        if (own && n_runs > 0) {
++            MaybeDeviceZoneScope("writer_halo_send");
++            conv2d_3x3::halo::send<S>(
++                hb + 1,
++                input_addr,
++                my_shard * R,
++                get_write_ptr(cb_input_tiles),
++                halo_row_bytes,
++                move_bytes,
++                get_semaphore(HALO_SEM0 + my_shard % HALO_FLAGS),
++                (my_shard * R + R < HALO_N_ROWS ? R : HALO_N_ROWS - my_shard * R));
++        }
++    }
++#endif
++
+ #ifdef SD_BIAS_IN_WEIGHTS
+     // Slab-direct fused bias without weight servers: every weight round carries the core's bias tiles after its
+     // K-block (read and rewritten once by the round's DRAM reader, the multicast sender), so no core reads the bias
+@@ -1856,6 +1888,9 @@
+     if constexpr (!output_sharded || remote_output) {
+         noc_async_write_barrier();
+     }
++#ifdef CONV2D_3X3_HALO_MCAST
++    noc_async_write_barrier();
++#endif
+ #ifdef KWF_XCHG
+     // The last semaphore write of the halo exchange.
+     noc_async_write_barrier();
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_tap_shift.hpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_tap_shift.hpp
+@@ -375,7 +375,12 @@
+             uint32_t k_first = 0;
+             if (live) {
+                 const uint32_t i0 = static_cast<uint32_t>(h_in) * tpr + c0;
++#ifdef HALO_RING_ROWS
++                // Halo multicast: input tile-row i at ring slot i % S (the CB pages still count the plan's rows).
++                k_first = (has_prev ? i0 - 1 : i0) % HALO_RING_ROWS;
++#else
+                 k_first = slab_row(has_prev ? i0 - 1 : i0);
++#endif
+                 const uint32_t need = slab_row(has_next ? i0 + n : i0 + n - 1) + 1;
+                 if (need > waited) {
+                     in.wait_front(need * ct);
+@@ -386,12 +391,17 @@
+                 MATH((llk_math_wait_for_dest_available()));
+                 if (live) {
+                     uint32_t k = k_first;
++#ifdef HALO_RING_ROWS
++                    auto next = [](uint32_t k) { return k + 1 == HALO_RING_ROWS ? 0u : k + 1; };
++#else
++                    auto next = [](uint32_t k) { return k + 1; };
++#endif
+                     if (has_prev) {
+                         UNPACK((load(ring_l1 + (k * ct + ch) * tile_bytes)));
+                         MATH((move_prev<d, Hs>()));
+-                        ++k;
++                        k = next(k);
+                     }
+-                    for (uint32_t u = 0; u < n; ++u, ++k) {
++                    for (uint32_t u = 0; u < n; ++u, k = next(k)) {
+                         UNPACK((load(ring_l1 + (k * ct + ch) * tile_bytes)));
+                         MATH((move_tile<d, Hs>(r0 + 32 * u)));
+                     }
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_halo_mcast.hpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_halo_mcast.hpp
+@@ -0,0 +1,310 @@
++// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
++// SPDX-License-Identifier: Apache-2.0
++
++// Halo multicast (the descriptor's HALO_MCAST), sender half: an owner core pushes its input shard's rows to the cores of
++// its column whose slabs read them, into their input rings at slot t % HALO_RING_ROWS (input tile-row t sits at the
++// same L1 address on every core), then closes with its flag (semaphore HALO_SEM0 + o % HALO_FLAGS). The reader sends
++// down the column on NoC0, the writer up on NoC1; both call send() with the runs of their direction.
++//
++// Runtime args from `a`: n_runs, then per run (row_lo, row_hi, dests, sx, sy, ex, ey), then the flag's rectangle (dests,
++// sx, sy, ex, ey). A rectangle is a column segment in the NoC's multicast order (NoC0 low corner first, NoC1 high
++// corner first); the flag's covers every run's.
++//
++// RAW multicast (capability): dataflow_kernel_lib's SenderPipe / ReceiverPipe model one fixed sender per channel with a
++// receiver ack before every send. Here every owner of a column sends (8 senders x 2 directions per column), each into
++// its own column segment, with no ack: the ring slots are free at kernel start (one M-block per core), and the flags
++// are dispatch-initialized semaphores. A channel per (owner, direction) would take ~16 semaphores per core, and the
++// helper has no non-blocking send (one packet when the command buffer is free) for the interleaved form.
++//
++// Measured (Blackhole p150b, aspp.convs.1 @ LoFi, bit-identical in every mode): a REGRESSION against the pull fill in
++// every form. Zoned, one run each vs a same-session baseline of 47.9-48.6 us: linked shard chains 55.3, unlinked 63.4,
++// no path reserve 53.4, unicast push 53.6; exact runs 57.1 / 56.0 / 51.3 / 51.8; interleaved 61.6 / 50.8 (shard), 51.7
++// / 50.0 (exact); progress flags by atomic increment 59.8-60.6, by value writes 49.2-49.8, top-down 49.4-49.9.
++// Unzoned medians of 3: 47786 -> 48950 ns (best: no path reserve, exact, interleaved, 4-row value flags). The pushes
++// halve the column's NoC0 link bytes and end the fill no later, but a row's readers use it as different kernel rows
++// (needed at different times), so every reader's first band lands later than its ordered pull delivered it and the
++// tap-shift prelude ends 1-2 us later.
++//
++// HALO_MODE (bench switch): 0 linked chains with path reserve (the API default for a chain), 1 unlinked packets with
++// path reserve, 2 unlinked packets without path reserve, 3 unicast writes to each core of the segment.
++
++#pragma once
++
++#include <cstdint>
++
++#include "api/dataflow/dataflow_api.h"
++
++#ifndef HALO_MODE
++#define HALO_MODE 0
++#endif
++// Rows per progress flag of the reader's interleaved down multicast (0: one flag once the shard is in). With progress
++// flags the flag counts the shard's complete rows (an atomic increment after every piece of at most this many rows).
++#ifndef HALO_FLAG_ROWS
++#define HALO_FLAG_ROWS 0
++#endif
++// The interleaved down multicast sends its rows top-down (the rows the farthest readers take as their first band
++// first); with progress flags the flag then counts the shard's complete rows from its top.
++#ifndef HALO_DESC
++#define HALO_DESC 0
++#endif
++
++namespace conv2d_3x3::halo {
++
++template <uint32_t S>
++FORCE_INLINE uint32_t slot(uint32_t t) {
++    return t % S;
++}
++
++// One multicast (or, in mode 3, the unicast writes of every core of the segment).
++FORCE_INLINE void put(
++    uint32_t src, uint32_t dst, uint32_t bytes, uint32_t dests, uint32_t sx, uint32_t sy, uint32_t ex, uint32_t ey,
++    bool linked) {
++#if HALO_MODE == 3
++    const int32_t step = ey >= sy ? 1 : -1;
++    for (int32_t y = static_cast<int32_t>(sy);; y += step) {
++        noc_async_write(src, get_noc_addr(sx, static_cast<uint32_t>(y), dst), bytes);
++        if (y == static_cast<int32_t>(ey)) {
++            break;
++        }
++    }
++#elif HALO_MODE == 0
++    noc_async_write_multicast(src, get_noc_multicast_addr(sx, sy, ex, ey, dst), bytes, dests, linked);
++#else
++    ncrisc_noc_fast_write_any_len<noc_mode>(
++        noc_index,
++        write_cmd_buf,
++        src,
++        get_noc_multicast_addr(sx, sy, ex, ey, dst),
++        bytes,
++        NOC_MULTICAST_WRITE_VC,
++        true,
++        false,
++        dests,
++        HALO_MODE == 1);
++#endif
++}
++
++// Push this owner's shard rows (input tile-rows [own_lo, own_lo + R) at shard_l1, row_bytes apart) along the runs at
++// runtime arg `a`. move_bytes < row_bytes: a short channel slice, one row per write.
++template <uint32_t S>
++FORCE_INLINE void send(
++    uint32_t a, uint32_t shard_l1, uint32_t own_lo, uint32_t ring_base, uint32_t row_bytes, uint32_t move_bytes,
++    uint32_t flag, uint32_t shard_len) {
++    const uint32_t n_runs = get_arg_val<uint32_t>(a);
++    if (n_runs == 0) {
++        return;
++    }
++    // The flag counts the shard's complete rows (HALO_FLAG_ROWS) or is 1 once all are in.
++    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(flag) = HALO_FLAG_ROWS ? shard_len : 1;
++    const uint32_t fa = a + 1 + 7 * n_runs;
++    const uint32_t f_dests = get_arg_val<uint32_t>(fa);
++    const uint32_t fsx = get_arg_val<uint32_t>(fa + 1), fsy = get_arg_val<uint32_t>(fa + 2);
++    const uint32_t fex = get_arg_val<uint32_t>(fa + 3), fey = get_arg_val<uint32_t>(fa + 4);
++    const bool per_row = move_bytes < row_bytes;
++    a += 1;
++    for (uint32_t i = 0; i < n_runs; ++i, a += 7) {
++        const uint32_t r_lo = get_arg_val<uint32_t>(a);
++        const uint32_t r_hi = get_arg_val<uint32_t>(a + 1);
++        const uint32_t dests = get_arg_val<uint32_t>(a + 2);
++        const uint32_t sx = get_arg_val<uint32_t>(a + 3), sy = get_arg_val<uint32_t>(a + 4);
++        const uint32_t ex = get_arg_val<uint32_t>(a + 5), ey = get_arg_val<uint32_t>(a + 6);
++        // A linked chain stays open into the flag where the flag goes to the same rectangle.
++        const bool close_by_flag = i + 1 == n_runs && dests == f_dests && ex == fex && ey == fey;
++        for (uint32_t t = r_lo; t < r_hi;) {
++            uint32_t n = per_row ? 1 : r_hi - t;
++            const uint32_t to_end = S - slot<S>(t);
++            n = n < to_end ? n : to_end;
++            put(shard_l1 + (t - own_lo) * row_bytes,
++                ring_base + slot<S>(t) * row_bytes,
++                per_row ? move_bytes : n * row_bytes,
++                dests,
++                sx,
++                sy,
++                ex,
++                ey,
++                t + n < r_hi || close_by_flag);
++            t += n;
++        }
++    }
++#if HALO_MODE == 3
++    // Unicast: the flag to each core of the segment, after its data (same NoC and VC).
++    noc_async_writes_flushed();
++    const int32_t step = fey >= fsy ? 1 : -1;
++    for (int32_t y = static_cast<int32_t>(fsy);; y += step) {
++        noc_async_write_barrier();
++        noc_semaphore_set_remote(flag, get_noc_addr(fsx, static_cast<uint32_t>(y), flag));
++        if (y == static_cast<int32_t>(fey)) {
++            break;
++        }
++    }
++#else
++    noc_semaphore_set_multicast(flag, get_noc_multicast_addr(fsx, fsy, fex, fey, flag), f_dests, false);
++#endif
++}
++
++// Non-blocking form of send() (multicast modes 0..2): step() issues at most one packet, and only when the write command
++// buffer is free, so the reader can push the rows that already landed between packets (HALO_INTERLEAVE).
++template <uint32_t S>
++struct Sender {
++    uint32_t a = 0, fa = 0, n_runs = 0, run = 0;
++    uint32_t t = 0, r_hi = 0, dests = 0, sx = 0, sy = 0, ex = 0, ey = 0;
++    bool close_by_flag = false, done = true;
++    // The current contiguous piece: rows [t, t + n) (one row for a short slice), bytes_left of it unsent.
++    uint32_t src = 0, dst = 0, bytes_left = 0, piece_rows = 0;
++    uint32_t shard_l1 = 0, own_lo = 0, ring_base = 0, row_bytes = 0, move_bytes = 0, flag = 0;
++    uint32_t shard_len = 0, reported = 0;  // progress flags: rows of the shard reported complete
++    uint64_t flag_mcast = 0;
++    uint32_t flag_dests = 0;
++    uint32_t values_l1 = 0;  // HALO_CB_VALUES: word i holds i (the absolute-value progress flags' sources)
++
++    uint32_t r_lo = 0, runs_left = 0;
++    FORCE_INLINE void load_run() {
++        const uint32_t b = a + 1 + 7 * run;
++        r_lo = get_arg_val<uint32_t>(b);
++        r_hi = get_arg_val<uint32_t>(b + 1);
++        t = HALO_DESC ? r_hi : r_lo;
++        dests = get_arg_val<uint32_t>(b + 2);
++        sx = get_arg_val<uint32_t>(b + 3);
++        sy = get_arg_val<uint32_t>(b + 4);
++        ex = get_arg_val<uint32_t>(b + 5);
++        ey = get_arg_val<uint32_t>(b + 6);
++        close_by_flag = (HALO_DESC ? run == 0 : run + 1 == n_runs) && dests == get_arg_val<uint32_t>(fa) &&
++                        ex == get_arg_val<uint32_t>(fa + 3) && ey == get_arg_val<uint32_t>(fa + 4);
++        load_piece();
++    }
++    FORCE_INLINE void load_piece() {
++#if HALO_DESC
++        // Rows [t - n, t): consecutive slots (slot(t - 1) - n + 1 >= 0), at most HALO_FLAG_ROWS of them.
++        uint32_t n = move_bytes < row_bytes ? 1 : t - r_lo;
++        const uint32_t to_start = slot<S>(t - 1) + 1;
++        n = n < to_start ? n : to_start;
++        if constexpr (HALO_FLAG_ROWS > 0) {
++            n = n < HALO_FLAG_ROWS ? n : HALO_FLAG_ROWS;
++        }
++        piece_rows = n;
++        src = shard_l1 + (t - n - own_lo) * row_bytes;
++        dst = ring_base + slot<S>(t - n) * row_bytes;
++        bytes_left = move_bytes < row_bytes ? move_bytes : n * row_bytes;
++#else
++        uint32_t n = move_bytes < row_bytes ? 1 : r_hi - t;
++        const uint32_t to_end = S - slot<S>(t);
++        n = n < to_end ? n : to_end;
++        if constexpr (HALO_FLAG_ROWS > 0) {
++            n = n < HALO_FLAG_ROWS ? n : HALO_FLAG_ROWS;
++        }
++        piece_rows = n;
++        src = shard_l1 + (t - own_lo) * row_bytes;
++        dst = ring_base + slot<S>(t) * row_bytes;
++        bytes_left = move_bytes < row_bytes ? move_bytes : n * row_bytes;
++#endif
++    }
++    FORCE_INLINE void init(
++        uint32_t arg, uint32_t shard_l1_, uint32_t own_lo_, uint32_t ring_base_, uint32_t row_bytes_,
++        uint32_t move_bytes_, uint32_t flag_, uint32_t shard_len_) {
++        a = arg;
++        n_runs = get_arg_val<uint32_t>(a);
++        done = n_runs == 0;
++        if (done) {
++            return;
++        }
++        shard_l1 = shard_l1_, own_lo = own_lo_, ring_base = ring_base_, row_bytes = row_bytes_;
++        move_bytes = move_bytes_, flag = flag_, shard_len = shard_len_, reported = 0;
++#ifdef HALO_CB_VALUES
++        values_l1 = get_write_ptr(HALO_CB_VALUES);
++        for (uint32_t i = 0; i <= shard_len; ++i) {
++            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(values_l1)[i] = i;
++        }
++#endif
++        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(flag) = HALO_FLAG_ROWS ? shard_len : 1;
++        fa = a + 1 + 7 * n_runs;
++        runs_left = n_runs;
++        flag_dests = get_arg_val<uint32_t>(fa);
++        flag_mcast = get_noc_multicast_addr(
++            get_arg_val<uint32_t>(fa + 1),
++            get_arg_val<uint32_t>(fa + 2),
++            get_arg_val<uint32_t>(fa + 3),
++            get_arg_val<uint32_t>(fa + 4),
++            flag);
++        run = HALO_DESC ? n_runs - 1 : 0;
++        load_run();
++    }
++    // Issue the next packet if the command buffer is free; true once everything (the flag too) is issued.
++    FORCE_INLINE bool step() {
++        if (done) {
++            return true;
++        }
++        if (runs_left == 0) {
++            if constexpr (HALO_FLAG_ROWS > 0) {
++                if (reported < shard_len) {
++#ifdef HALO_CB_VALUES
++                    noc_semaphore_set_multicast(values_l1 + 4 * shard_len, flag_mcast, flag_dests, false);
++#else
++                    noc_semaphore_inc_multicast(flag_mcast, shard_len - reported, flag_dests);
++#endif
++                }
++            } else {
++                noc_semaphore_set_multicast(flag, flag_mcast, flag_dests, false);
++            }
++            done = true;
++            return true;
++        }
++        if (!noc_cmd_buf_ready(noc_index, write_cmd_buf)) {
++            return false;
++        }
++        const uint32_t len = bytes_left < NOC_MAX_BURST_SIZE ? bytes_left : NOC_MAX_BURST_SIZE;
++        const bool last_of_run = len == bytes_left && (HALO_DESC ? t - piece_rows <= r_lo : t + piece_rows >= r_hi);
++        ncrisc_noc_fast_write<noc_mode>(
++            noc_index,
++            write_cmd_buf,
++            src,
++            get_noc_multicast_addr(sx, sy, ex, ey, dst),
++            len,
++            NOC_MULTICAST_WRITE_VC,
++            true,
++            HALO_MODE == 0 && (!last_of_run || close_by_flag),
++            dests,
++            HALO_MODE != 2);
++        src += len;
++        dst += len;
++        bytes_left -= len;
++        if (bytes_left == 0) {
++            t = HALO_DESC ? t - piece_rows : t + piece_rows;
++            if constexpr (HALO_FLAG_ROWS > 0) {
++                // Rows below t (top-down: from t up) are complete (rows no down receiver reads count as complete).
++                const uint32_t upto = HALO_DESC ? own_lo + shard_len - t : t - own_lo;
++                if (upto > reported) {
++#ifdef HALO_CB_VALUES
++                    // An absolute-value flag write (word `upto` of the values table), as the data: same NoC and VC.
++                    while (!noc_cmd_buf_ready(noc_index, write_reg_cmd_buf)) {
++                    }
++                    ncrisc_noc_fast_write<noc_mode>(
++                        noc_index,
++                        write_reg_cmd_buf,
++                        values_l1 + 4 * upto,
++                        flag_mcast,
++                        4,
++                        NOC_MULTICAST_WRITE_VC,
++                        true,
++                        false,
++                        flag_dests,
++                        HALO_MODE != 2);
++#else
++                    while (!noc_cmd_buf_ready(noc_index, write_at_cmd_buf)) {
++                    }
++                    noc_semaphore_inc_multicast(flag_mcast, upto - reported, flag_dests);
++#endif
++                    reported = upto;
++                }
++            }
++            if (HALO_DESC ? t > r_lo : t < r_hi) {
++                load_piece();
++            } else if (--runs_left > 0) {
++                run = HALO_DESC ? run - 1 : run + 1;
++                load_run();
++            }
++        }
++        return false;
++    }
++};
++
++}  // namespace conv2d_3x3::halo

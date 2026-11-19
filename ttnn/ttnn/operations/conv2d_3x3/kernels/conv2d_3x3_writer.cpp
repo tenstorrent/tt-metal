@@ -1098,8 +1098,8 @@ void kernel_main() {
     // more rounds than slots): one ack counter per slot on the server (slot 0's is the kernel-start counter, the others
     // from SERVER_SLOT_ACKS on). On one total counter a core that runs ahead (a short ragged core, or one whose compute
     // frees slots early) acks later slots before a slower core acked an earlier one, and those acks count toward the
-    // earlier slot's reuse: the server could overwrite a slot a core was still multiplying (found with kw-fold N
-    // planes, where it gave PCC 0.95; on HEAD the window is one ragged core two acks ahead).
+    // earlier slot's reuse: the server could overwrite a slot a core was still multiplying (a receiver two acks ahead,
+    // e.g. the ragged short core, is enough).
     [[maybe_unused]] auto server_reuse_ack = [&]() {
 #ifdef SERVER_SLOT_ACKS
         const uint32_t slot = server_reuse_acks % nslice_weight_depth;

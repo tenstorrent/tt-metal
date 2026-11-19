@@ -48,7 +48,8 @@
 //
 // kw-fold fill (the descriptor's _kwf_fill_args): the host plans the slab as reads of (owner core, offset, slab row,
 // rows) pieces in runtime args, pushed in groups; on a split core the writer reads the slab's suffix (the higher
-// shards' rows and the last own rows). No on-device plan and no TensorAccessor lookup.
+// shards' rows and the last own rows). No on-device plan and no TensorAccessor lookup: per page run they cost ~0.1-0.2
+// us of RISC time on a control-bound fill (res2 @ LoFi 10.11 -> 9.85 us unzoned with the host plan alone).
 //
 // Split TILE fill (sharded TILE input, on the weight multicast's pure receivers; a per-core runtime flag): the same NoC
 // split for the tile-row fill. The reader reads its own and lower shards' tile-rows into each cb_input_tiles batch it
