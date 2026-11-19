@@ -15,4 +15,5 @@ set(UNIT_TESTS_DEPLOYMENT_SRC
     eth/test_eth_dist_link_up.cpp
     eth/test_eth_dist_bandwidth.cpp
     eth/test_eth_dist_bandwidth_bidir.cpp
+    eth/test_eth_dist_data_integrity_dram.cpp
 )
