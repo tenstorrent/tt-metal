@@ -11,7 +11,7 @@
 #include <variant>
 
 #include "buffer.hpp"
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include <tt_stl/span.hpp>
 #include "dispatch/system_memory_manager.hpp"
 

@@ -228,10 +228,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_Res       = params.buffer_Res;
 #endif
 
-#ifdef LLK_PROFILER
-    constexpr std::uint32_t NUM_GUARD = 0;
-#else
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t NUM_GUARD = params.NUM_GUARD_TILES;
+#else
+    constexpr std::uint32_t NUM_GUARD = NUM_GUARD_TILES;
 #endif
 
     const std::uint32_t total_tiles = FULL_RT_DIM * FULL_CT_DIM;

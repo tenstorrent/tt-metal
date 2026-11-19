@@ -38,6 +38,54 @@ auto make_tensor_accessor_tuple_impl_common(
 }
 }  // namespace detail
 
+// This core's place on the core grid and in its relay chains, computed on device from its logical coordinates instead
+// of per-core runtime args (the program factory's build_core_order_for_axis builds the same chains). The in0 chain runs
+// along the in1 axis (a row unless the grid is transposed) and the in1 chain along the in0 axis.
+struct AgmmCore {
+    uint32_t x, y;     // logical coordinates
+    uint32_t in0_idx;  // position along the in0 axis: this core's M range and in0 chain
+    uint32_t in1_idx;  // position along the in1 axis: this core's N range and in1 chain
+};
+
+template <bool transpose_grid>
+FORCE_INLINE AgmmCore agmm_core() {
+    const uint32_t x = get_absolute_logical_x();
+    const uint32_t y = get_absolute_logical_y();
+    return {x, y, transpose_grid ? x : y, transpose_grid ? y : x};
+}
+
+// A chain of length len starts at axis coordinate 0, then visits 1..len-1 on NOC_0 (increasing) or len-1..1 on NOC_1.
+// The map between chain index and axis coordinate is its own inverse.
+FORCE_INLINE uint32_t chain_coord(uint32_t index_or_coord, uint32_t len, bool increasing) {
+    return (index_or_coord == 0 || increasing) ? index_or_coord : len - index_or_coord;
+}
+
+struct RelayChain {
+    uint32_t index;                           // this core's position in the chain
+    bool is_sink;                             // the chain's last core
+    uint32_t prev_noc_x, prev_noc_y;          // the previous core (this core at the head)
+    uint32_t next_noc_x, next_noc_y;          // the next core (this core at the tail)
+    uint32_t injector_noc_x, injector_noc_y;  // the chain's head
+};
+
+// The chain through `core` along its row (along_x) or column. noc_coords: common arg index of the NoC x coordinate of
+// each of the grid's grid_x logical columns, followed by the NoC y coordinate of each logical row.
+template <uint32_t grid_x>
+FORCE_INLINE RelayChain
+relay_chain(const AgmmCore& core, bool along_x, uint32_t len, bool increasing, uint32_t noc_coords) {
+    const uint32_t index = chain_coord(along_x ? core.x : core.y, len, increasing);
+    const uint32_t last = len - 1;
+    const uint32_t prev = chain_coord(index == 0 ? 0 : index - 1, len, increasing);
+    const uint32_t next = chain_coord(index >= last ? last : index + 1, len, increasing);
+    const auto noc_x = [&](uint32_t axis_coord) {
+        return get_common_arg_val<uint32_t>(noc_coords + (along_x ? axis_coord : core.x));
+    };
+    const auto noc_y = [&](uint32_t axis_coord) {
+        return get_common_arg_val<uint32_t>(noc_coords + grid_x + (along_x ? core.y : axis_coord));
+    };
+    return {index, index == last, noc_x(prev), noc_y(prev), noc_x(next), noc_y(next), noc_x(0), noc_y(0)};
+}
+
 /**
  * Create a tuple of TensorAccessors from a tuple of TensorAccessorArgs.
  * Each tensor gets its address from consecutive RT args starting at address_rt_arg_index_start.

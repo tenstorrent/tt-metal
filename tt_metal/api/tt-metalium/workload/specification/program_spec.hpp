@@ -8,6 +8,7 @@
 
 #include <tt-metalium/workload/specification/kernel_spec.hpp>
 #include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/global_semaphore_parameter.hpp>
 #include <tt-metalium/workload/specification/semaphore_spec.hpp>
 #include <tt-metalium/workload/specification/scratchpad_spec.hpp>
 #include <tt-metalium/workload/specification/tensor_parameter.hpp>
@@ -30,6 +31,7 @@ namespace tt::tt_metal {
 //      o scratchpads
 //  - user-managed resources (parameters)
 //      o tensor parameters
+//      o GlobalSemaphore parameters
 //      o SRAM arena parameters (advanced option)
 //      o prefetcher pipe parameters (advanced option)
 //
@@ -105,6 +107,10 @@ struct ProgramSpec {
     // Tensor parameter declarations
     // Describes the tensors the Program's kernels will operate on and their properties
     Group<TensorParameter> tensor_parameters;
+
+    // GlobalSemaphore parameter declarations
+    // Names the GlobalSemaphores the Program's kernels will use
+    Group<GlobalSemaphoreParameter> global_semaphore_parameters;
 
     // See Advanced Options for additional user-managed resource parameters
     // (experimental features, and features for advanced users)

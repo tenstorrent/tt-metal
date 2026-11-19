@@ -89,8 +89,8 @@ def test_the_cache_check_call_binds_to_the_transformer():
 
 
 def test_every_forward_call_binds_to_the_transformer():
-    """The eager and traced chunk paths both call `self.model.forward`; neither is reached by an eager test."""
-    for call in _call_sites("self.model.forward", expected=2):
+    """The eager and traced chunk paths and the packed `prefill_forward` call `self.model.forward`; none is reached by an eager test."""
+    for call in _call_sites("self.model.forward", expected=3):
         _bind(TtKimiK3Transformer.forward, call, None)
 
 
@@ -108,6 +108,34 @@ def test_forward_rejects_mtp_arguments_before_device_work(expect_error, mtp_kwar
     model = object.__new__(TtKimiK3Transformer)
     with expect_error(ValueError, "no MTP predictor"):
         model.forward(object(), **mtp_kwargs)
+
+
+def test_forward_checks_the_index_cache_against_the_config(expect_error):
+    """K3 has no DSA indexer, so an index cache is a wiring mistake; K3.1's DSA layers cannot run without one."""
+    model = object.__new__(TtKimiK3Transformer)
+    model.has_indexer = False
+    with expect_error(ValueError, "no DSA indexer"):
+        model.forward(object(), index_kv_cache=object())
+    model.has_indexer, model.schedule = True, SimpleNamespace(num_mla_layers=1)
+    with expect_error(ValueError, "pass index_kv_cache"):
+        model.forward(object())
+
+
+def test_only_a_dsa_config_takes_a_sparse_kv_cache_format(expect_error):
+    """K3's dense MLA cache cannot take a sparse format; refused before any device work."""
+    from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
+    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
+
+    with expect_error(ValueError, "dense MLA KV cache"):
+        TtKimiK3Transformer(
+            None,
+            kimi_k3_hf_config(),
+            KimiK3Config,
+            {},
+            num_layers=1,
+            seq_len=5120,
+            sparse_kv_cache_format=MlaKvCacheFormat.SCALED_FP8,
+        )
 
 
 def test_runtime_rejects_mtp_before_the_shared_build(monkeypatch, expect_error):
@@ -387,3 +415,18 @@ def test_compile_rejects_slabs_that_do_not_match_the_runtime(monkeypatch, expect
         runtime.compile(SimpleNamespace(kda_states=SimpleNamespace(num_slots=num_slots, layer_ids=layer_ids)))
     assert runtime.model.kda_states is None
     parent_compile.assert_not_called()
+
+
+def test_only_k3_1_moves_the_indexer_score_off_the_op_default():
+    """K3.1 scores at HiFi2; the other DSA configs keep the op's default (None passed,
+    as before), so their indexer is unchanged."""
+    from models.demos.deepseek_v3_d_p.reference.deepseek_v3_2_config import deepseek_v32_hf_config
+    from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import glm_5_3_hf_config
+    from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import kimi_k3_1_hf_config
+    from models.demos.deepseek_v3_d_p.tt.mla.indexer import score_compute_kernel_config
+
+    k31 = score_compute_kernel_config(kimi_k3_1_hf_config(), ttnn.Arch.BLACKHOLE)
+    assert k31.math_fidelity == ttnn.MathFidelity.HiFi2
+    assert not (k31.fp32_dest_acc_en or k31.packer_l1_acc or k31.dst_full_sync_en)
+    for other in (glm_5_3_hf_config(), deepseek_v32_hf_config()):
+        assert score_compute_kernel_config(other, ttnn.Arch.BLACKHOLE) is None
