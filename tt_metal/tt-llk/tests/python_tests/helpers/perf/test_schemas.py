@@ -1561,6 +1561,27 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
         "test_name_aliases": {"perf_sfpu_sdpa_fw": "perf_sfpu_sdpa_fw"},
     },
+    "perf_sfpu_softmax_k": {
+        "version": 1,
+        "columns": [
+            "dest_acc",
+            "dest_sync",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "loop_factor",
+            "marker",
+            "softmax_k",
+            "tile_cnt",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {"perf_sfpu_softmax_k": "perf_sfpu_softmax_k"},
+    },
     "perf_sfpu_ternary": {
         "version": 6,
         "columns": [

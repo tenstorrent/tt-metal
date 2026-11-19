@@ -64,15 +64,21 @@ from helpers.golden_generators import (
     SoftmaxKGolden,
     get_golden_generator,
 )
-from helpers.llk_params import DestAccumulation, format_dict
+from helpers.llk_params import DestAccumulation, DestSync, format_dict
 from helpers.param_config import input_output_formats, parametrize
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import SOFTMAX_K, TILE_COUNT
+from helpers.test_variant_parameters import (
+    DEST_SYNC,
+    LOOP_FACTOR,
+    SOFTMAX_K,
+    TILE_COUNT,
+)
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test, result_tensor
 
 FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
+DEST_SYNCS = [DestSync.Half]
 
 FACE_DIM = 16
 SOFTMAX_ROWS = 4  # one SFPU row band: DEST rows 0-3
@@ -111,9 +117,20 @@ def _build_input_tile(k: int, torch_format) -> tuple[torch.Tensor, torch.Tensor]
 @parametrize(
     formats=FORMATS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_sync=DEST_SYNCS,
     k=ALL_K,
 )
-def test_sfpu_softmax_k(formats, dest_acc, k):
+def test_sfpu_softmax_k(
+    formats,
+    dest_acc,
+    dest_sync,
+    k,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     if dest_acc == DestAccumulation.Yes and k < FACE_DIM:
@@ -136,31 +153,41 @@ def test_sfpu_softmax_k(formats, dest_acc, k):
     ).flatten()
     src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch_format)
 
-    configuration = TestConfig(
-        "sources/sfpu_softmax_k_test.cpp",
-        formats,
-        templates=[
-            SOFTMAX_K(softmax_k=k),
-        ],
-        runtimes=[
-            TILE_COUNT(1),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=1,
-            tile_count_B=1,
-            tile_count_res=1,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/sfpu_softmax_k_test.cpp",
+            formats=formats,
+            templates=[
+                SOFTMAX_K(softmax_k=k),
+                DEST_SYNC(dest_sync),
+            ],
+            runtimes=[
+                LOOP_FACTOR(1),
+                TILE_COUNT(1),
+            ],
+            variant_stimuli=StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=1,
+                tile_count_B=1,
+                tile_count_res=1,
+            ),
+            dest_acc=dest_acc,
+            # A 32-bit input goes straight to DEST rather than through srcA.
+            unpack_to_dest=formats.input_format.is_32_bit(),
         ),
-        dest_acc=dest_acc,
-        # A 32-bit input goes straight to DEST rather than through srcA.
-        unpack_to_dest=formats.input_format.is_32_bit(),
     )
+    if is_perf:
+        return
 
-    res_from_L1 = configuration.run().result
+    res_from_L1 = outcome.result
     res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tile = untilize_block(
         res_tensor, formats.output_format, [TILE_DIM, TILE_DIM]

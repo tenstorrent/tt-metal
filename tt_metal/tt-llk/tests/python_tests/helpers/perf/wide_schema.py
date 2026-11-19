@@ -177,6 +177,7 @@ DB_SCHEMA = [
     Column("sfpu_bcast_dim", "string", True, "configuration"),
     Column("sign_magnitude", "bool", True, "configuration"),
     Column("signal_granularity", "int64", True, "configuration"),
+    Column("softmax_k", "int64", True, "configuration"),
     Column("srca_reuse_count", "int64", True, "configuration"),
     Column("sfploadmacro", "string", True, "configuration"),
     Column("stable_sort", "string", True, "configuration"),
