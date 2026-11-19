@@ -45,8 +45,9 @@ constexpr const char* overread_kernel = "tests/tt_metal/tt_metal/test_kernels/mi
 constexpr const char* mret_btb_alias_kernel = "tests/tt_metal/tt_metal/test_kernels/misc/l1_ecc_mret_btb_alias.cpp";
 const CoreCoord test_core{0, 0};
 constexpr auto report_deadline = std::chrono::seconds(30);
+constexpr uint32_t armed_irq_enables = ECC_CTRL_L1_SBE_IRQ_EN | ECC_CTRL_L1_DBE_IRQ_EN;
 // ECC_CTRL after firmware arms the halt.
-constexpr uint32_t armed_ecc_ctrl = static_cast<uint32_t>(EccView::L1_COUNTS) | ECC_CTRL_L1_DBE_IRQ_EN;
+constexpr uint32_t armed_ecc_ctrl = static_cast<uint32_t>(EccView::L1_COUNTS) | armed_irq_enables;
 
 }  // namespace
 
@@ -233,7 +234,7 @@ TEST_F(L1EccHaltTest, WatchdogHaltIsReleasedOnReopen) {
     ctx.get_cluster().read_core(record_.data(), record_.size(), test_target_, halt_record_addr());
     EXPECT_EQ(record_.view().reason(), L1_ECC_HALT_REASON_UNEXPECTED);
     // The handler selects other views before it halts, so only the interrupt enables are checked.
-    EXPECT_EQ(record_.view().ecc_ctrl() & ~ECC_CTRL_VIEW_MASK, ECC_CTRL_L1_DBE_IRQ_EN);
+    EXPECT_EQ(record_.view().ecc_ctrl() & ~ECC_CTRL_VIEW_MASK, armed_irq_enables);
 
     // Reopening must release the BRISC from its handler without a chip reset.
     destroy_shared_devices();
