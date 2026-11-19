@@ -550,11 +550,18 @@ FORCE_INLINE bool credit_completions(
         // and under traffic the pass's forward has read the same buffers' ready states first.
         if (handled_packet) {
             if constexpr (ReceiverChannel<VC>::forwards) {
-                wait_cmd_bufs_ready(
-                    LOCAL_NOC,
-                    CommandBuffers::local_writes,
-                    tt::tt_fabric::edm_to_downstream_noc,
-                    CommandBuffers::forward_data[VC]);
+                // Do not spin on the command buffers: a packet that is both forwarded and delivered issues two long
+                // writes, and on a single-ERISC router the wait also stalls the sender (large multicast packets
+                // measured 8-11% slower on a Wormhole Galaxy). The used reads of the ready states still order the
+                // status read after the commands issued so far. While this pass's writes are still being issued,
+                // prove an older slot if one waits (its commands went out a pass or more ago, on its own
+                // transaction ID); otherwise leave the credit to a later pass.
+                const bool local_write_ready = noc_cmd_buf_ready(LOCAL_NOC, CommandBuffers::local_writes);
+                const bool forward_ready =
+                    noc_cmd_buf_ready(tt::tt_fabric::edm_to_downstream_noc, CommandBuffers::forward_data[VC]);
+                if (!(local_write_ready & forward_ready) && waiting <= 1) {
+                    return false;
+                }
             } else {
                 while (!noc_cmd_buf_ready(LOCAL_NOC, CommandBuffers::local_writes));
             }
