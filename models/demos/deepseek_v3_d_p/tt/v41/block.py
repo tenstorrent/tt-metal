@@ -34,6 +34,7 @@ from .attention import V41CSA, V41SWA, V41CSAConsumer, V41CSAReindex
 
 # DS41F-0068: a ragged final chunk on the attention islands (default on with A3); 0 = eager attention for it
 A3_RAGGED = os.environ.get("PREFILL_V41_A3_RAGGED", "1") == "1"
+from . import hostprof as HP
 from .moe import build_v41_moe
 
 HC = M.HC
@@ -401,7 +402,11 @@ class V41PrefillBlock(LightweightModule):
                 ttnn.deallocate(t)
         if owned_pre:
             ttnn.deallocate(pre_row)
+        if HP.ON:
+            HP.mark("blk.copy_in")
         _attn_pre, _post, _comb, h = A.replay()
+        if HP.ON:
+            HP.mark("blk.A")
         traced = self._attn_islands_for(real_len)
         if traced is not None:
             y = self._attn_traced(h, real_len, *traced)  # A2's persistent output: copied, never freed
@@ -413,13 +418,19 @@ class V41PrefillBlock(LightweightModule):
                 copy_into(y_buf, y)
         else:
             y = self.attn(h, seq_len_actual=real_len, state=self.state)
+            if HP.ON:
+                HP.mark("attn.eager")
             if y.dtype != y_buf.dtype:
                 y2 = ttnn.typecast(y, y_buf.dtype)
                 ttnn.deallocate(y)
                 y = y2
             copy_into(y_buf, y)
             ttnn.deallocate(y)
+        if HP.ON:
+            HP.mark("blk.ycopy")
         outs = B.replay()
+        if HP.ON:
+            HP.mark("blk.B")
         return list(outs[:HC]), outs[HC]
 
     # ---- DS41F-0068: path A3, the CSA attention as two trace islands per slot (V4-Flash DS4F-0246 / 0300, tt/v4/block.py) ----
@@ -580,10 +591,20 @@ class V41PrefillBlock(LightweightModule):
     def _attn_traced(self, h, real_len: int, A1, A2, kw):
         attn, state = self.attn, self.state
         attn.prepare_chunk(state, real_len)
+        if HP.ON:
+            HP.mark("attn.prepare")
         outs = A1.replay()
+        if HP.ON:
+            HP.mark("attn.A1")
         attn.glue_chunk(state, outs, real_len, None, **(dict(src_state=kw["src_state"]) if "src_state" in kw else {}))
+        if HP.ON:
+            HP.mark("attn.glue")
         a2 = A2.replay()
+        if HP.ON:
+            HP.mark("attn.A2")
         attn.epilogue_chunk(state, outs, a2, None, real_len)
+        if HP.ON:
+            HP.mark("attn.epilogue")
         return a2[0]
 
     def _padding_rows_host(self, real_len: int):
