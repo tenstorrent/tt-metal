@@ -8,55 +8,22 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
-from models.demos.llama3_70b_galaxy.tt.llama_ccl import WO_AG_MAX
-from models.demos.llama3_70b_galaxy.tt.model_config import ring_sdpa_q_chunk_size
 from models.demos.llama3_70b_galaxy.tt.prefill_config import (
-    CPF_RING_MIN_NEW,
-    CPF_RING_WARM_PREFIXES,
+    CPF_RING_GATHER_K_CHUNK,
+    CPF_RING_GATHER_Q_CHUNK,
+    CPF_RING_GATHER_SCALE,
+    CPF_RING_GROUP_BLOCKS,
     MINMM_QKV_CONFIG,
-    prefill_minmm,
+    WO_AG_MAX,
+    WO_AG_MAX_QWEN,
+    cpf_ring_eligible,
+    prefill_minmm_qkv,
     prefill_slab_rows,
 )
 
 # Opt-in: prefill SDPA (ring, chunked/prefix-cached, regular) at HiFi2 instead of HiFi4.
 # Read once at import. Unset keeps the shared HiFi4 config object used before this change.
 PREFILL_SDPA_HIFI2 = os.environ.get("LLAMA_GALAXY_PREFILL_SDPA_HIFI2", "0") == "1"
-
-# LLAMA_GALAXY_PREFILL_CPF_RING: q/k chunk of the one-hot SDPA that gathers the owner's paged prefix K/V, and its
-# softmax scale (score gap between the matching row and any other row >= 2 * scale).
-CPF_RING_GATHER_Q_CHUNK = 32
-CPF_RING_GATHER_K_CHUNK = 256
-CPF_RING_GATHER_SCALE = 16.0
-# The generator rounds a cached prefix down to a multiple of this; ring traces are keyed by prefix length.
-CPF_RING_ALIGN = 1024
-
-
-def cpf_ring_warm_prefixes():
-    """The prefix lengths whose ring traces the generator warms up (CPF_RING_WARM_PREFIXES). Only these take the ring
-    path, so no ring trace is ever captured at serving time."""
-    return list(CPF_RING_WARM_PREFIXES)
-
-
-def cpf_ring_eligible(seq_len, prefix_len, block_size, support_seqlens):
-    """The one CPF ring rule for a batch-1 prefill of seq_len new rows over prefix_len cached rows, shared by
-    TtLlamaAttention._cpf_ring_enabled (which path runs) and the generator (trace key, skip rule, rounding, warmup),
-    so a trace keyed for the ring path always holds it and no other trace does. block_size is the paged KV cache's
-    (kv tensor dim 2: vLLM passes no paged_attention_config); support_seqlens the prefill TT_CCL's."""
-    if os.environ.get("LLAMA_GALAXY_PREFILL_CPF_RING", "0") != "1":
-        return False
-    P = int(prefix_len)
-    if P <= 0 or seq_len < CPF_RING_MIN_NEW:
-        return False
-    return (
-        P in cpf_ring_warm_prefixes()
-        and P in support_seqlens  # the K/V broadcast uses its ATTN_REPLICATE buffers
-        and P % CPF_RING_ALIGN == 0
-        and P % CPF_RING_GATHER_K_CHUNK == 0
-        and P % block_size == 0
-        and P % ring_sdpa_q_chunk_size(seq_len) == 0
-        and (P + seq_len) % 512 == 0  # SDPA_PROGCFG k_chunk_size for seq_len >= 2048
-        and seq_len % block_size == 0
-    )
 
 
 class TtLlamaAttention(LightweightModule):
@@ -1126,7 +1093,7 @@ class TtLlamaAttention(LightweightModule):
         return dense_out_reduced
 
     def _qkv_minmm_config(self, seq_len):
-        """MinimalMatmulConfig for the QKV matmul under LLAMA_GALAXY_PREFILL_MINMM=qkv.
+        """MinimalMatmulConfig for the prefill QKV minimal_matmul (prefill_minmm_qkv).
 
         Not XQKV_PREFILL_MINIMAL_PROGCFG: that config (7x8 grid, N block 8, subblock 1x8) is the one behind the
         "bad outputs for seqlen > 128" note. M > N, so the op puts N on the 8 grid rows: 40 N tiles -> 5 per core,
@@ -1144,11 +1111,10 @@ class TtLlamaAttention(LightweightModule):
         )
 
     def _cpf_ring_enabled(self, seq_len, batch_size, chunk_start_idx, page_table, block_size):
-        """LLAMA_GALAXY_PREFILL_CPF_RING=1 (opt-in, read at call time): run prefill over a cached prefix
-        (chunk_start_idx = P > 0) as ring SDPA on all 4 mesh columns instead of chunked SDPA on the owning column.
-        Rule: cpf_ring_eligible (new rows N >= CPF_RING_MIN_NEW, P a warmed prefix length with CCL
-        buffers, the ring op's chunk constraints)."""
-        if batch_size != 1 or page_table is None or self.is_blackhole:
+        """Run a Llama prefill over a cached prefix (chunk_start_idx = P > 0) as ring SDPA on all 4 mesh columns
+        instead of chunked SDPA on the owning column. Rule: cpf_ring_eligible (new rows N >= CPF_RING_MIN_NEW, P a
+        warmed prefix length with CCL buffers, the ring op's chunk constraints)."""
+        if batch_size != 1 or page_table is None or self.is_blackhole or self.is_qwen:
             return False
         return cpf_ring_eligible(seq_len, chunk_start_idx, block_size, getattr(self.tt_ccl, "support_seqlens", ()))
 
@@ -1226,17 +1192,15 @@ class TtLlamaAttention(LightweightModule):
         st = self._cpf_ring_state(keys_BKSD)
         block_size = int(keys_BKSD.shape[2])
         head_dim = int(keys_BKSD.shape[3])
-        # K and V share one all-reduce of [1, 1, 2P, head_dim] when 2P has ATTN_REPLICATE buffers, else one
-        # all-reduce per tensor at length P.
-        merge = 2 * P in getattr(self.tt_ccl, "support_seqlens", ())
-        # LLAMA_GALAXY_PREFILL_CPF_REPLICA=1 (opt-in, read at call time): a persistent per-layer replica of the last
-        # broadcast prefix K|V ([1, 1, 2P, head_dim] on every device). The generator sets tt_ccl._cpf_rep_mode per
-        # call: "write" = the usual gather + broadcast, then copy the result into the replica; "read" = the
-        # generator saw the same prefix tokens as the last "write" call, so the prefix K|V comes from the replica
-        # (no gather, mask or all-reduce). None = no replica.
-        rep_mode = None
-        if merge and os.environ.get("LLAMA_GALAXY_PREFILL_CPF_REPLICA", "0") == "1":
-            rep_mode = getattr(self.tt_ccl, "_cpf_rep_mode", None)
+        # K and V share one all-reduce of [1, 1, 2P, head_dim] (ATTN_REPLICATE buffers at 2P: P is a warmed prefix
+        # length, CPF_RING_WARM_PREFIXES, whose double is a prefill CCL length).
+        assert 2 * P in getattr(self.tt_ccl, "support_seqlens", ()), f"CPF ring: no prefill CCL buffers at 2P={2 * P}"
+        # CPF prefix replica: a persistent per-layer replica of the last broadcast prefix K|V ([1, 1, 2P, head_dim]
+        # on every device). The generator sets tt_ccl._cpf_rep_mode per call: "write" = the usual gather +
+        # broadcast, then copy the result into the replica; "read" = the generator saw the same prefix tokens as the
+        # last "write" call, so the prefix K|V comes from the replica (no gather, mask or all-reduce). None = no
+        # replica (new rows above CPF_REPLICA_MAX).
+        rep_mode = getattr(self.tt_ccl, "_cpf_rep_mode", None)
         rep = None
         if rep_mode in ("read", "write"):
             reps = st.setdefault("rep", {})
@@ -1259,16 +1223,12 @@ class TtLlamaAttention(LightweightModule):
             out = [ttnn.reshape(f, [int(f.shape[2]) // block_size, 1, block_size, head_dim]) for f in fulls]
             out.append(st["ident_pt"])
             return out
-        # grouped (when P is a multiple of 8 blocks): the gather runs as P / G independent batch rows of G = 8 blocks
-        # each (page table [P / G, 8], the smallest 32-byte page-table row), so each query row scores G keys instead
-        # of up to P. Otherwise one causal pass over all P rows.
-        # LLAMA_GALAXY_PREFILL_CPF_RING_GROUP=<1|2|4> (opt-in, read at call time): G = that many blocks per group
-        # instead of 8, so each query row scores G keys (gather work P * G). The page table rows stay 8 entries
-        # wide (32 bytes): row r holds blocks r*gb .. r*gb+7 (overlapping windows built from 8/gb shifted slices
-        # of the user's row, interleaved); the SDPA reads only the first gb of them (K length = G, chunk start 0).
-        gb = int(os.environ.get("LLAMA_GALAXY_PREFILL_CPF_RING_GROUP", "8"))
-        if gb not in (1, 2, 4, 8):
-            gb = 8
+        # grouped (when P is a multiple of 8 blocks): the gather runs as P / G independent batch rows of
+        # G = CPF_RING_GROUP_BLOCKS blocks each, so each query row scores G keys instead of up to P (gather work
+        # P * G). The page table rows are 8 entries wide (32 bytes, the smallest page-table row): row r holds blocks
+        # r*gb .. r*gb+7 (overlapping windows built from 8/gb shifted slices of the user's row, interleaved); the
+        # SDPA reads only the first gb of them (K length = G, chunk start 0). Otherwise one causal pass over all P.
+        gb = CPF_RING_GROUP_BLOCKS
         group = gb * block_size
         nb = P // block_size
         grouped = P % (8 * block_size) == 0
@@ -1278,32 +1238,28 @@ class TtLlamaAttention(LightweightModule):
         pcfg = st["pcfg"]
         if grouped:
             gather_q = ttnn.reshape(qcode, [P // group, 1, group, head_dim])
-            if gb == 8:
-                gather_pt = ttnn.reshape(ttnn.slice(page_table, [0, 0], [1, nb]), [P // group, 8])
-            else:
-                # built by layer 0 of every forward (also inside a trace capture, so a replay rebuilds it from the
-                # replayed page table), reused by the other layers of that forward
-                gkey = (P, gb)
-                if self.layer_num == 0 or st.get("gpt_key") != gkey:
-                    parts = [
-                        ttnn.reshape(ttnn.slice(page_table, [0, s], [1, s + nb]), [nb // 8, 1, 8])
-                        for s in range(0, 8, gb)
-                    ]
-                    cat = ttnn.concat(parts, dim=1)
-                    for t in parts:
-                        ttnn.deallocate(t)
-                    st["gpt"] = (ttnn.reshape(cat, [nb // gb, 8]),)
-                    st["gpt_key"] = gkey
-                gather_pt = st["gpt"][0]
-                key = ("pcfg", group)
-                if key not in st:
-                    st[key] = ttnn.SDPAProgramConfig(
-                        compute_with_storage_grid_size=(7, 10),
-                        exp_approx_mode=False,
-                        q_chunk_size=CPF_RING_GATHER_Q_CHUNK,
-                        k_chunk_size=min(CPF_RING_GATHER_K_CHUNK, group),
-                    )
-                pcfg = st[key]
+            # built by layer 0 of every forward (also inside a trace capture, so a replay rebuilds it from the
+            # replayed page table), reused by the other layers of that forward
+            gkey = (P, gb)
+            if self.layer_num == 0 or st.get("gpt_key") != gkey:
+                parts = [
+                    ttnn.reshape(ttnn.slice(page_table, [0, s], [1, s + nb]), [nb // 8, 1, 8]) for s in range(0, 8, gb)
+                ]
+                cat = ttnn.concat(parts, dim=1)
+                for t in parts:
+                    ttnn.deallocate(t)
+                st["gpt"] = (ttnn.reshape(cat, [nb // gb, 8]),)
+                st["gpt_key"] = gkey
+            gather_pt = st["gpt"][0]
+            key = ("pcfg", group)
+            if key not in st:
+                st[key] = ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=(7, 10),
+                    exp_approx_mode=False,
+                    q_chunk_size=CPF_RING_GATHER_Q_CHUNK,
+                    k_chunk_size=min(CPF_RING_GATHER_K_CHUNK, group),
+                )
+            pcfg = st[key]
         else:
             gather_q, gather_pt = qcode, page_table
         mask = ttnn.slice(self.tt_ccl._prefill_column_mask, [0, 0, 0, 0], [1, 1, 1, 1])
@@ -1337,40 +1293,32 @@ class TtLlamaAttention(LightweightModule):
             ttnn.deallocate(masked)
             return reduced
 
+        kv = ttnn.concat(gathered, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for g in gathered:
+            ttnn.deallocate(g)
+        reduced = broadcast(kv)
+        if rep_mode == "write":
+            ttnn.copy(reduced, rep)
         fulls = []
-        if merge:
-            kv = ttnn.concat(gathered, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            for g in gathered:
-                ttnn.deallocate(g)
-            reduced = broadcast(kv)
-            if rep_mode == "write":
-                ttnn.copy(reduced, rep)
-            for lo, new in ((0, k_new), (P, v_new)):
-                prefix = ttnn.slice(reduced, [0, 0, lo, 0], [1, 1, lo + P, head_dim])
-                fulls.append(ttnn.concat([prefix, new], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG))
-                ttnn.deallocate(prefix)
-        else:
-            for g, new in zip(gathered, (k_new, v_new)):
-                fulls.append(ttnn.concat([broadcast(g), new], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+        for lo, new in ((0, k_new), (P, v_new)):
+            prefix = ttnn.slice(reduced, [0, 0, lo, 0], [1, 1, lo + P, head_dim])
+            fulls.append(ttnn.concat([prefix, new], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+            ttnn.deallocate(prefix)
         out = [ttnn.reshape(f, [int(f.shape[2]) // block_size, 1, block_size, head_dim]) for f in fulls]
-        if grouped and gb == 8:
-            ttnn.deallocate(gather_pt)
         out.append(st["ident_pt"])
         return out
 
     def _prefill_qkv_seqsplit_enabled(self, seq_len, batch_size, chunk_start_idx, cpf_ring=False):
-        """LLAMA_GALAXY_PREFILL_QKV_SEQSPLIT=1 (opt-in, read at call time): cold batch-1 ring prefill on Wormhole.
-        LLAMA_GALAXY_PREFILL_CPF_QKV_SEQSPLIT=1 (opt-in, read at call time) extends it to a prefill over a cached
-        prefix that takes the CPF ring path (cpf_ring): the N new rows are split the same way, RoPE uses the
+        """Seq-split QKV heads + RoPE (Llama, Wormhole, batch 1, >= 2048 rows): a cold prefill, or a prefill over a
+        cached prefix that takes the CPF ring path (cpf_ring): the N new rows are split the same way, RoPE uses the
         prefix-offset cos/sin rows the model already sliced for this call."""
-        if os.environ.get("LLAMA_GALAXY_PREFILL_QKV_SEQSPLIT", "0") != "1":
-            return False
         cold = chunk_start_idx is None or chunk_start_idx == 0
-        if not cold and not (cpf_ring and os.environ.get("LLAMA_GALAXY_PREFILL_CPF_QKV_SEQSPLIT", "0") == "1"):
+        if not cold and not cpf_ring:
             return False
         ring = self.mesh_device.shape[1]
         return (
-            self.use_prefetcher
+            not self.is_qwen
+            and self.use_prefetcher
             and not self.is_blackhole
             and not self.qk_norm
             and batch_size == 1
@@ -1468,11 +1416,11 @@ class TtLlamaAttention(LightweightModule):
         # QKV matmuls
         ###
 
-        # LLAMA_GALAXY_PREFILL_MINMM=qkv: minimal_matmul on the unslabbed [1, 1, S, 2048] input.
-        qkv_minmm = self.use_prefetcher and batch_size == 1 and seq_len >= 2048 and prefill_minmm("qkv")
+        # Llama batch-1 prefill >= 2048 rows: minimal_matmul on the unslabbed [1, 1, S, 2048] input.
+        qkv_minmm = self.use_prefetcher and not self.is_qwen and prefill_minmm_qkv(seq_len, batch_size)
 
         # reshaping long sequence to matmul fit on device
-        # 3072/5120 (LLAMA_GALAXY_PREFILL_PAD) are not multiples of 2048, so they use 1024-row slabs.
+        # 3072/5120 (PAD_1024_EXTRA_SEQLENS) are not multiples of 2048, so they use 1024-row slabs.
         if seq_len > 2048 and not qkv_minmm:
             qkv_slab = 2048 if seq_len % 2048 == 0 else prefill_slab_rows(seq_len)
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // qkv_slab, qkv_slab, -1])
@@ -1519,11 +1467,10 @@ class TtLlamaAttention(LightweightModule):
 
         ttnn.deallocate(x_11SH)
 
-        # LLAMA_GALAXY_PREFILL_QKV_SEQSPLIT: heads, RoPE and the dtype casts on seqlen/4 rows per device.
+        # Seq-split QKV (_prefill_qkv_seqsplit_enabled): heads, RoPE and the dtype casts on seqlen/4 rows per device.
         cpf_ring_pre = (
             chunk_start_idx is not None
             and chunk_start_idx > 0
-            and os.environ.get("LLAMA_GALAXY_PREFILL_CPF_QKV_SEQSPLIT", "0") == "1"
             and self._cpf_ring_enabled(
                 seq_len,
                 batch_size,
@@ -1671,7 +1618,7 @@ class TtLlamaAttention(LightweightModule):
         ring_distributed_sdpa = seq_len > 1024 and batch_size == 1 and (chunk_start_idx is None or chunk_start_idx == 0)
         use_chunked_sdpa = chunk_start_idx is not None and chunk_start_idx > 0
 
-        # LLAMA_GALAXY_PREFILL_CPF_RING=1: cached-prefix prefill as ring SDPA on all 4 mesh columns.
+        # CPF ring (Llama): cached-prefix prefill as ring SDPA on all 4 mesh columns.
         cpf_ring_kv = None
         if use_chunked_sdpa and self._cpf_ring_enabled(
             seq_len, batch_size, chunk_start_idx, page_table, int(keys_BKSD.shape[2])
@@ -1828,8 +1775,8 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(attn_output_11SH)
 
         if seqsplit:
-            # LLAMA_GALAXY_PREFILL_SEQSPLIT: reduce-scatter along the sequence only; the decoder adds the
-            # residual and norms seqlen/8 rows, then all-gathers the norm output.
+            # Sequence-split prefill (TT_CCL.prefill_seqsplit_enabled): reduce-scatter along the sequence only; the
+            # decoder adds the residual and norms seqlen/8 rows, then all-gathers the norm output.
             output_11SH_reduced = self.tt_ccl.prefill_seq_reduce_scatter(
                 output_11SH, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
@@ -1843,7 +1790,9 @@ class TtLlamaAttention(LightweightModule):
             num_links=prefill_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             # Batched prefill (32 x 128 rows) stays on WO_AG: its persistent buffer exists at 4096.
-            buffer_key="WO_AG" if seq_len <= WO_AG_MAX or batch_size > 1 else "WO",
+            buffer_key="WO_AG"
+            if seq_len <= (WO_AG_MAX_QWEN if self.is_qwen else WO_AG_MAX) or batch_size > 1
+            else "WO",
         )
         output_11SH.deallocate()
 

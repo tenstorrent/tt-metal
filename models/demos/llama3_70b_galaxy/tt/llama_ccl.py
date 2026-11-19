@@ -8,7 +8,9 @@ import os
 from loguru import logger
 
 from models.demos.llama3_70b_galaxy.tt.prefill_config import (
-    PREFILL_CCL_BUFS_KINDS,
+    PREFILL_RS_BUFS_PER_CHANNEL,
+    PREFILL_SEQSPLIT_MAX,
+    PREFILL_SEQSPLIT_MIN,
     cpf_pad512_seqlens,
     prefill_extra_seqlens,
 )
@@ -17,33 +19,12 @@ from models.demos.llama3_70b_galaxy.tt.prefill_config import (
 LINE_RS = os.environ.get("LINE_RS", "0") == "1"
 LINE_AG = os.environ.get("LINE_AG", "0") == "1"
 
-# Prefill WO all-reduce: up to this seqlen it is an all-gather on dim 0 plus a local sum (buffer key
-# "WO_AG"); above it, a reduce-scatter plus all-gather (buffer key "WO"). Default 4096 is the original split.
-WO_AG_MAX = int(os.environ.get("LLAMA_GALAXY_WO_AG_MAX", "4096"))
-
-# LLAMA_GALAXY_PREFILL_SEQSPLIT=1 (opt-in, Wormhole ring prefill only): the residual stream between the
-# cluster_axis=0 reductions lives as seqlen/8 rows per device. The WO and FF2 all-reduces become a
-# reduce-scatter along the sequence (dim 2); the residual add and the RMSNorm then run on seqlen/8 rows,
-# and only the norm output is all-gathered (dim 2) for the next matmul. Unset = the original full-length
-# add + norm on every device. Applies to batch-1 prefill of PREFILL_SEQSPLIT_MIN..MAX rows (cold and
-# prefix-cached chunks alike: the add and norm do not depend on the position).
-PREFILL_SEQSPLIT = os.environ.get("LLAMA_GALAXY_PREFILL_SEQSPLIT", "0") == "1"
-PREFILL_SEQSPLIT_MIN = 2048
-PREFILL_SEQSPLIT_MAX = 8192
-
-# LLAMA_GALAXY_PREFILL_CCL_BUFS=<n> (opt-in, read at call time): num_buffers_per_channel for the Wormhole
-# prefill ring CCLs in PREFILL_CCL_BUFS_KINDS (the FF1/FF3 ring reduce-scatter; the ops default to 1).
-# Traced A/B (9 vs 1 layer, 16 buffers) per layer: rs (FF1/FF3 ring RS) -0.05 ms at 4096 and 6144,
-# +0.003 at 2048 (noise); seqrs neutral; ag and seqag slower at every length (+0.007..+0.020 ms).
-PREFILL_CCL_BUFS_ENV = "LLAMA_GALAXY_PREFILL_CCL_BUFS"
-
-
-def prefill_ccl_bufs(kind):
-    """num_buffers_per_channel for this prefill CCL kind, or None (op default) when the lever is off."""
-    value = os.environ.get(PREFILL_CCL_BUFS_ENV, "").strip()
-    if value in ("", "0"):
-        return None
-    return int(value) if kind in PREFILL_CCL_BUFS_KINDS else None
+# Llama sequence-split prefill (prefill_seqsplit_enabled): the residual stream between the cluster_axis=0
+# reductions lives as seqlen/8 rows per device. The WO and FF2 all-reduces become a reduce-scatter along the
+# sequence (dim 2); the residual add and the RMSNorm then run on seqlen/8 rows, and only the norm output is
+# all-gathered (dim 2) for the next matmul. Applies to batch-1 Wormhole ring prefill of
+# PREFILL_SEQSPLIT_MIN..MAX rows (cold and prefix-cached chunks alike: the add and norm do not depend on the
+# position). Qwen and every other prefill keep the full-length add + norm on every device.
 
 
 # If set, use line for those AG ops in prefill, otherwise use ring if available
@@ -231,11 +212,13 @@ class TT_CCL:
         if mode == "prefill":
             # For some prefill seqlens we always allocate CCL buffers. Otherwise they will require barrier syncing
             self.support_seqlens = [4096, 2048, 1024, 128]
-            # LLAMA_GALAXY_PREFILL_PAD lengths (3072/5120/6144) pad, trace and buffer like the ones above.
+            # Llama's padded lengths (3072/5120/6144) pad, trace and buffer like the ones above (none for Qwen).
             max_seq_len = getattr(model_args, "max_seq_len", 0)
-            extra_seqlens = [s for s in prefill_extra_seqlens() if s <= max_seq_len]
-            # LLAMA_GALAXY_PREFILL_CPF_PAD512: ring-only lengths (buffers here; traces only on the CPF ring path)
-            extra_seqlens += [s for s in cpf_pad512_seqlens() if s <= max_seq_len and s not in extra_seqlens]
+            extra_seqlens = [s for s in prefill_extra_seqlens(self.is_qwen) if s <= max_seq_len]
+            # Llama's CPF ring-only lengths (buffers here; traces only on the CPF ring path)
+            extra_seqlens += [
+                s for s in cpf_pad512_seqlens(self.is_qwen) if s <= max_seq_len and s not in extra_seqlens
+            ]
             self.pad_extra_seqlens = set(extra_seqlens)
             if extra_seqlens:
                 self.support_seqlens = sorted(set(self.support_seqlens) | set(extra_seqlens), reverse=True)
@@ -822,7 +805,7 @@ class TT_CCL:
             for key, shape in buffers_dict.items():
                 if self.use_qwen_prefill_ff2_gather_reduce and key in ("FF2", "FF2_batched"):
                     continue
-                # Batched prefill only runs 32 x 128 = 4096 rows, never a LLAMA_GALAXY_PREFILL_PAD length.
+                # Batched prefill only runs 32 x 128 = 4096 rows, never an extra padded (pad_extra_seqlens) length.
                 if key.endswith("_batched") and seqlen in self.pad_extra_seqlens:
                     continue
                 tt_intermediate_buffer = ttnn.as_tensor(
@@ -887,10 +870,10 @@ class TT_CCL:
             for key, shape in buffers_dict.items():
                 if self.use_qwen_prefill_ff2_gather_reduce and key in ("FF2",):
                     continue
-                # Attention uses WO_AG only up to WO_AG_MAX, and for batched prefill at 4096
+                # Attention uses WO_AG only up to WO_AG_MAX (Llama 0, Qwen 4096) and for batched prefill at 4096
                 # (llama_attention.forward_prefill); above that the WO all-reduce takes buffer key "WO",
                 # so this (8, 1, seqlen, 2048) buffer would go unused.
-                if key == "WO_AG" and seqlen > max(WO_AG_MAX, 4096):
+                if key == "WO_AG" and seqlen > 4096:
                     continue
                 tt_buffer = ttnn.as_tensor(
                     torch.zeros(shape[0]),
@@ -1411,11 +1394,10 @@ class TT_CCL:
         return ttnn_tensor_out
 
     def prefill_seqsplit_enabled(self, seq_len, batch_size=1):
-        """True when LLAMA_GALAXY_PREFILL_SEQSPLIT applies to this prefill (see PREFILL_SEQSPLIT)."""
+        """True when the sequence-split prefill layer applies to this prefill (Llama only; see PREFILL_SEQSPLIT_MIN)."""
         rows_per_device = seq_len // self.cluster_shape[0]
         return (
-            PREFILL_SEQSPLIT
-            and self.mode == "prefill"
+            self.mode == "prefill"
             and batch_size == 1
             and self.use_prefetcher
             and not self.is_blackhole
@@ -1525,7 +1507,11 @@ class TT_CCL:
             subdevice_id=self.worker_sub_device_id,
             cluster_axis=cluster_axis,
             num_workers_per_link=num_workers_per_link,
-            num_buffers_per_channel=prefill_ccl_bufs("rs") if (self.use_prefetcher and not self.is_blackhole) else None,
+            num_buffers_per_channel=(
+                PREFILL_RS_BUFS_PER_CHANNEL
+                if (self.use_prefetcher and not self.is_blackhole and not self.is_qwen)
+                else None
+            ),
         )
 
         # reshape input back

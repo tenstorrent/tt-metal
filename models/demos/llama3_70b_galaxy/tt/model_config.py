@@ -34,13 +34,7 @@ from models.demos.llama3_70b_galaxy.tt.load_checkpoints import (
     convert_meta_to_hf,
     standardize_hf_keys,
 )
-from models.demos.llama3_70b_galaxy.tt.prefill_config import (
-    CPF_PAD512_Q_CHUNK,
-    prefill_sdpa_q64_2048_enabled,
-    prefill_slab1024_q_chunk,
-    ring_sdpa_q_chunk_override,
-    prefill_slab_rows,
-)
+from models.demos.llama3_70b_galaxy.tt.prefill_config import prefill_slab_rows, ring_sdpa_q_chunk_size
 
 # HuggingFace reference-model wrappers are shared with models/tt_transformers instead of being
 # copied here, so a transformers version bump is fixed in one place (see Issue #42139 review).
@@ -56,26 +50,10 @@ from models.tt_transformers.tt.model_config import (
 # (That means some tokens, even full pages, can be recomputed.)
 SDPA_CHUNK_ALIGN = 128
 
-# LLAMA_GALAXY_PREFILL_SLAB1024: ring SDPA q_chunk_size for 4096/6144/8192 (None when unset).
-PREFILL_SLAB1024_Q_CHUNK = prefill_slab1024_q_chunk()
-
-
-def ring_sdpa_q_chunk_size(seqlen):
-    """q_chunk_size for ring_distributed_sdpa at seqlen >= 2048 (ring_size 4: each device takes two
-    seqlen/8 slices). The op places a slice at slice_index * (seqlen/8) // q_chunk_size, so q_chunk_size
-    must divide seqlen/8: 256 for every power of two >= 2048, 128 for 3072 and 5120.
-    LLAMA_GALAXY_PREFILL_SLAB1024 can lower it at 4096/6144/8192 (prefill_config.py)."""
-    default = 256 if (seqlen // 8) % 256 == 0 else 128 if (seqlen // 8) % 128 == 0 else 64  # 64: CPF_PAD512 lengths
-    if default == 64:
-        default = CPF_PAD512_Q_CHUNK
-    if seqlen == 2048 and prefill_sdpa_q64_2048_enabled():
-        return 64
-    return ring_sdpa_q_chunk_override(seqlen, default, PREFILL_SLAB1024_Q_CHUNK)
-
 
 def is_1024_slab_prefill_len(seq_len):
-    """True for padded prefill lengths above 2048 that are not multiples of 2048 (3072, 5120 from
-    LLAMA_GALAXY_PREFILL_PAD; 2560/3584/4608 from LLAMA_GALAXY_PREFILL_CPF_PAD512). Their 2D prefill matmuls run on
+    """True for padded prefill lengths above 2048 that are not multiples of 2048 (3072, 5120: PAD_1024_EXTRA_SEQLENS;
+    2560/3584: CPF_PAD512_SEQLENS). Their 2D prefill matmuls run on
     slabs of prefill_slab_rows rows (1024, or 512 when the length is not a multiple of 1024), unfused, with
     per_core_M = slab_per_core_m(seq_len) (slab tile rows over 8 grid rows)."""
     return seq_len > 2048 and seq_len % 2048 != 0

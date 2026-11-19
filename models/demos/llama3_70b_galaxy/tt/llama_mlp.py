@@ -4,7 +4,7 @@
 
 import torch
 import ttnn
-from models.demos.llama3_70b_galaxy.tt.prefill_config import prefill_minmm, prefill_slab_rows
+from models.demos.llama3_70b_galaxy.tt.prefill_config import prefill_minmm_mlp, prefill_slab_rows
 from models.common.lightweightmodule import LightweightModule
 import torch.nn.functional as F
 
@@ -370,7 +370,7 @@ class TtLlamaMLP(LightweightModule):
         prefill_num_links = self.model_config["GALAXY_NUM_LINKS"] if self.args.is_blackhole else 3
         use_w1_w3_interleaved = (seq_len >= 4096 or seq_len == 128) if not self.args.is_qwen else True
         # Only the ttnn.linear branches below read this. The interleaved config has no layout for
-        # 5120 (LLAMA_GALAXY_PREFILL_PAD), which takes the minimal_matmul branch, so skip building it there.
+        # 5120 (PAD_1024_EXTRA_SEQLENS), which takes the minimal_matmul branch, so skip building it there.
         short_lens_pc_1_3 = (
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len, use_w1_w3_interleaved)
             if seq_len < 4096 or batch_size > 1
@@ -385,15 +385,10 @@ class TtLlamaMLP(LightweightModule):
             slab = prefill_slab_rows(seq_len)
             x = ttnn.reshape(x, (1, seq_len // slab, slab, -1))
 
-        # LLAMA_GALAXY_PREFILL_MINMM=mlp2048 / mlp3072: minimal matmuls (FF2 fused with its all-gather) at 2048 /
-        # 3072 too (the 1024-row slab input [1, S/1024, 1024, 2048] goes to minimal_matmul as is, as at 2048).
+        # Llama: minimal matmuls (FF2 fused with its all-gather) below 4096 too, at MINMM_MLP_SEQLENS (the slab input
+        # [1, S/slab, slab, 2048] goes to minimal_matmul as is).
         mlp_minmm = (
-            (
-                (seq_len == 2048 and prefill_minmm("mlp2048"))
-                or (seq_len == 3072 and prefill_minmm("mlp3072"))
-                or (seq_len in (2560, 3584) and prefill_minmm("mlp512"))
-            )
-            and batch_size == 1
+            prefill_minmm_mlp(seq_len, batch_size)
             and self.args.use_prefetcher
             and not self.args.is_blackhole
             and not self.args.is_qwen
@@ -516,7 +511,7 @@ class TtLlamaMLP(LightweightModule):
             ttnn.deallocate(w2_in)
 
         if seqsplit:
-            # LLAMA_GALAXY_PREFILL_SEQSPLIT: reduce-scatter along the sequence only ([1, 1, seqlen/8, 2048]
+            # Sequence-split prefill: reduce-scatter along the sequence only ([1, 1, seqlen/8, 2048]
             # per device; the 1024-row slabs are flattened first). The decoder does the residual add.
             w2_out_reduced = self.tt_ccl.prefill_seq_reduce_scatter(
                 w2_out, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG

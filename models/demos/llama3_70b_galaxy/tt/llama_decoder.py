@@ -272,7 +272,7 @@ class TtTransformerBlock(LightweightModule):
         kv_cache=None,
         batch_size=1,
     ):
-        """LLAMA_GALAXY_PREFILL_SEQSPLIT prefill layer.
+        """Sequence-split prefill layer (Llama; TT_CCL.prefill_seqsplit_enabled).
 
         The residual stream is [1, 1, seqlen/8, dim/4] per device: device (r, c) of the 8x4 mesh holds
         sequence rows r*seqlen/8 .. (r+1)*seqlen/8 - 1 of hidden column block c. The WO and FF2 outputs
