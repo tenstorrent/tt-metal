@@ -753,9 +753,16 @@ sfpi_inline void _two_pass_store_split_mean_var_to_dst_row_(std::uint32_t recipr
     TTI_SFPSTORE(ckernel::p_sfpu::LREG7, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, WELFORD_SFPU_M2_TILE_OFFSET + offset3);
 }
 
-/** Store the retained LREG7 anchor at raw offset zero of the current DST tile. */
+/**
+ * Store the retained LREG7 anchor at raw offset zero of the current DST tile.
+ * Each state save stores its vector twice to the same address. On Blackhole, a store to Dst that
+ * executes in the same cycle as the packer's ZEROACC of the other Dst half loses its update of the
+ * row-valid bits, so rows written by a single store can read back as zero. Every store sets those
+ * bits for all four rows of its group, so the second store restores them.
+ */
 sfpi_inline void _two_pass_store_anchor_to_dst_()
 {
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG7, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, 0);
     TTI_SFPSTORE(ckernel::p_sfpu::LREG7, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, 0);
 }
 
@@ -768,10 +775,12 @@ sfpi_inline void _two_pass_load_anchor_from_dst_()
 /**
  * Store the retained LREG7 anchor in the mean-state tile's unused vector slot.
  * The mean vector occupies raw offset 0; offset 4 survives state spill/reload
- * and block combines without requiring another tile.
+ * and block combines without requiring another tile. Stored twice, as in
+ * _two_pass_store_anchor_to_dst_.
  */
 sfpi_inline void _two_pass_store_anchor_to_state_dst_()
 {
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG7, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, 4);
     TTI_SFPSTORE(ckernel::p_sfpu::LREG7, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, 4);
 }
 
@@ -791,6 +800,7 @@ sfpi_inline void _two_pass_clear_stats_()
 
 /**
  * Spill the current mean/M2 state to two consecutive DST tiles.
+ * Each vector is stored twice, as in _two_pass_store_anchor_to_dst_.
  * @tparam dual_m2 Whether LREG6 must be folded into LREG5 before the spill.
  */
 template <bool dual_m2>
@@ -802,6 +812,8 @@ sfpi_inline void _two_pass_store_mean_m2_to_dst_()
         WELFORD_SFPU_ONLINE_HAZARD_NOP();
     }
     TTI_SFPSTORE(ckernel::p_sfpu::LREG4, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, WELFORD_SFPU_MEAN_TILE_OFFSET);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG4, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, WELFORD_SFPU_MEAN_TILE_OFFSET);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG5, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, WELFORD_SFPU_M2_TILE_OFFSET);
     TTI_SFPSTORE(ckernel::p_sfpu::LREG5, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, WELFORD_SFPU_M2_TILE_OFFSET);
     TTI_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, 0);
 }
@@ -1256,14 +1268,17 @@ sfpi_inline void _store_mean_m2_to_dst_()
  *
  * This function does the same as _store_mean_m2_to_dst_ but allows for the data to be stored at an
  * offset that is dependent on the group id. This allows for data of multiple groups to be stored in
- * the same tile.
+ * the same tile. Each vector is stored twice, as in _two_pass_store_anchor_to_dst_.
  * @note Since group_id is known at runtime, we use TT_SFPSTORE instead of TTI_SFPSTORE.
  * @param group_id The group id to store the data for.
  */
 sfpi_inline void _store_mean_m2_to_dst_group_(std::uint32_t group_id)
 {
-    TT_SFPSTORE(ckernel::p_sfpu::LREG4, sfpi::SFPLOAD_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, WELFORD_SFPU_MEAN_TILE_OFFSET + (group_id << 2));
-    TT_SFPSTORE(ckernel::p_sfpu::LREG5, sfpi::SFPLOAD_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, WELFORD_SFPU_M2_TILE_OFFSET + (group_id << 2));
+    const std::uint32_t group_offset = group_id << 2;
+    TT_SFPSTORE(ckernel::p_sfpu::LREG4, sfpi::SFPLOAD_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, WELFORD_SFPU_MEAN_TILE_OFFSET + group_offset);
+    TT_SFPSTORE(ckernel::p_sfpu::LREG4, sfpi::SFPLOAD_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, WELFORD_SFPU_MEAN_TILE_OFFSET + group_offset);
+    TT_SFPSTORE(ckernel::p_sfpu::LREG5, sfpi::SFPLOAD_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, WELFORD_SFPU_M2_TILE_OFFSET + group_offset);
+    TT_SFPSTORE(ckernel::p_sfpu::LREG5, sfpi::SFPLOAD_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, WELFORD_SFPU_M2_TILE_OFFSET + group_offset);
 }
 
 /*
