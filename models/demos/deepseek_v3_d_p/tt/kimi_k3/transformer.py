@@ -120,6 +120,8 @@ class TtKimiK3Transformer(LightweightModule):
         # Chunks per packed forward (TtPrefillRuntime forward_tokens_budget); see forward_packed. Named so the
         # runtime's value reaches every block explicitly rather than through **block_kwargs.
         forward_chunks: int = 1,
+        # The MoE every MoE layer builds (tt/moe_impl.py: "block" - the MoE block's C++ ops, K3's default - or "ttmoe").
+        moe_impl: Optional[str] = None,
         **block_kwargs,
     ):
         super().__init__()
@@ -293,6 +295,7 @@ class TtKimiK3Transformer(LightweightModule):
                     weight_cache_path=weight_cache_path,
                     kv_only=kv_only_last_layer and is_last,
                     forward_chunks=forward_chunks,
+                    moe_impl=moe_impl,
                     **block_kwargs,
                 )
             )
