@@ -100,6 +100,8 @@ void bind_assign(nb::module_& mod) {
                 give a ``FLOAT32`` or ``BFLOAT16`` output, and a ``BFLOAT16`` input a ``FLOAT32`` output when its
                 values are not NaN.
 
+                On Blackhole, the input and the output can also be ``FP8_E4M3`` tensors in ROW_MAJOR layout.
+
             Memory Support:
                 - Interleaved: DRAM and L1
                 - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1
