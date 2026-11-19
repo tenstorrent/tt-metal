@@ -789,7 +789,7 @@ class ttMLA:
         # One chip's rows of a chunk: the cache's block-cyclic block.
         push_stripe_chunk = self.active_seq_len_local // self.tp_factor
         if self._sparse_kv_gather_buffer is not None and sparse_kv_push_supported(
-            mesh_device, push_stripe_chunk, self._sparse_kv_gather_buffer.shape[2]
+            mesh_device, push_stripe_chunk, self._sparse_kv_gather_buffer.shape[2], self.ccl_num_links
         ):
             dense = self._sparse_kv_gather_buffer
             self._push = self.tt_ccl.get_sparse_kv_push_planner(self.ccl_num_links)
