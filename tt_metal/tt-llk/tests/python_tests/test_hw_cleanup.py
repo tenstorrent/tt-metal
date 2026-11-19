@@ -24,17 +24,16 @@ a clean Blackhole compile plus the identity golden below.
 """
 
 import pytest
-import torch
 from conftest import blackhole_only
 from helpers.format_config import DataFormat
 from helpers.golden_generators import DataCopyGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, format_dict
+from helpers.llk_params import DestAccumulation
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import NUM_FACES, TILE_COUNT
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # WEDGES REAL BLACKHOLE — skipped on all backends. BH-card tt-exalens callstacks: MATH stalls
 # in _llk_math_pack_sync_init_->tensix_sync (the Tensix pipe won't drain) during the cleanup,
@@ -106,10 +105,7 @@ def test_hw_cleanup(formats, dest_acc, input_dimensions):
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(golden_tensor)
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     # All 1024 lanes of the single tile are defined (full identity datacopy), so
     # validate the whole tile at the Float16_b format tolerance.

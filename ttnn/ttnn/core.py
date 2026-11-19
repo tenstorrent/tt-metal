@@ -345,7 +345,10 @@ def create_sharded_memory_config_(
             else:
                 raise RuntimeError("Invalid shard orientation")
         elif tensor_memory_layout == TensorMemoryLayout.HEIGHT_SHARDED:
-            tensor_height_padded = roundup(tensor_height, total_num_cores) if tile_layout else tensor_height
+            # A tiled tensor pads each batch's height to a whole tile, so shards must cover the padded rows.
+            tensor_height_padded = (
+                roundup(batch_size * roundup(height, 32), total_num_cores * 32) if tile_layout else tensor_height
+            )
             shard_shape = divup(tensor_height_padded, total_num_cores), tensor_width
         elif tensor_memory_layout == TensorMemoryLayout.WIDTH_SHARDED:
             shard_shape = tensor_height, divup(tensor_width, total_num_cores)
@@ -372,6 +375,14 @@ def ttnn_dtype_to_torch_dtype(dtype):
         ttnn.bfloat16: torch.bfloat16,
         ttnn.bfloat8_b: torch.float32,
         ttnn.bfloat4_b: torch.float32,
+        ttnn.mxfp8_e4m3: torch.float32,
+        ttnn.mxfp8_e5m2: torch.float32,
+        ttnn.mxfp6_e2m3: torch.float32,
+        ttnn.mxfp6_e3m2: torch.float32,
+        ttnn.mxfp4: torch.float32,
+        ttnn.mxint8: torch.float32,
+        ttnn.mxint4: torch.float32,
+        ttnn.mxint2: torch.float32,
     }[dtype]
 
 

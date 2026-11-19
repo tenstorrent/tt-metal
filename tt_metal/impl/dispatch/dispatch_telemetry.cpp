@@ -19,7 +19,6 @@
 
 #include "impl/dispatch/dispatch_telemetry.hpp"
 #include <hostdevcommon/dispatch_telemetry_types.hpp>
-#include "llrt/tt_cluster.hpp"
 #include <tt-umd/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {

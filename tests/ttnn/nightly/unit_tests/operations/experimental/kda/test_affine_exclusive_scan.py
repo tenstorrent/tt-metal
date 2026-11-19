@@ -23,6 +23,7 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
 
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_scan_test_utils import (
     group_summary_nd_sharded,
+    pack_summary_slots,
 )
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import height_sharded_memory_config
 
@@ -68,7 +69,8 @@ _PRODUCTION_CASES = (
 # References are medians of five runs on the Blackhole LoudBox development machine bh-lb-42, whose DRAM-placement
 # medians in the same runs (97,625 / 75,386 / 65,397 ns) lie within 2% of the CI references above. Replace them with
 # CI runner medians once nightlies report them.
-_ND_SHARDED_DURATION_NS = {"sp1-tp8": 90327, "sp2-tp4": 71042, "sp4-tp2": 59443}
+# sp4-tp2 reads the complement form [E | B]: measured on a P150b (12x10 grid) 2026-11-02.
+_ND_SHARDED_DURATION_NS = {"sp1-tp8": 90327, "sp2-tp4": 71042, "sp4-tp2": 61300}
 
 
 def _affine_exclusive_scan_ops(
@@ -188,12 +190,6 @@ def _to_device(
     return ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
 
 
-def _pack(a: torch.Tensor, b: torch.Tensor, *, slots: int = 1) -> torch.Tensor:
-    """Packed [slots, N, K, K+V] summaries of [A | B] rows. An unsplit rank never reads a tail slot, so it is NaN."""
-    head = torch.cat([a, b], dim=-1)
-    return torch.stack([head, torch.full_like(head, float("nan"))][:slots])
-
-
 def _device_inputs(
     host: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
     device: ttnn.Device,
@@ -212,7 +208,7 @@ def _device_inputs(
     else:
         assert placement == "height-sharded-l1"
         memory_config = height_sharded_memory_config(device, slots * transforms, key_dim, key_dim + value_dim)
-    summaries = _to_device(_pack(a, b, slots=slots), device, dtype, memory_config=memory_config)
+    summaries = _to_device(pack_summary_slots(a, b, slots=slots), device, dtype, memory_config=memory_config)
     return summaries, _to_device(initial_state, device)
 
 
@@ -463,17 +459,31 @@ def test_affine_exclusive_scan_approximate_math_uses_distinct_accurate_program(
     )
 
 
+@pytest.mark.parametrize(
+    ("unsupported_config", "message"),
+    [
+        (
+            ttnn.types.BlackholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4, packer_l1_acc=True),
+            "packer_l1_acc=true is unsupported",
+        ),
+        (
+            ttnn.types.BlackholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=False),
+            "fp32_dest_acc_en=false is unsupported",
+        ),
+    ],
+    ids=["packer-l1-acc", "bf16-dest"],
+)
 def test_affine_exclusive_scan_rejects_unsupported_compute_config(
-    zero_actual_start, device: ttnn.Device, expect_error: Callable
+    zero_actual_start,
+    device: ttnn.Device,
+    expect_error: Callable,
+    unsupported_config: ttnn.DeviceComputeKernelConfig,
+    message: str,
 ) -> None:
     case = _UNIT_CASE
     host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim)
     device_inputs = _device_inputs(host, device)
-    unsupported_config = ttnn.types.BlackholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        packer_l1_acc=True,
-    )
-    with expect_error(RuntimeError, "packer_l1_acc=true is unsupported"):
+    with expect_error(RuntimeError, message):
         _run(
             *device_inputs,
             case.groups_per_head,
@@ -605,7 +615,7 @@ def test_affine_exclusive_scan_rejects_invalid_inputs(
 ) -> None:
     a, b, initial_state = _host_inputs(1, 4, 32, 32)
     groups_per_head = 4
-    packed = _pack(a, b)
+    packed = pack_summary_slots(a, b)
     summaries_tt = _to_device(packed, device)
     state_tt = _to_device(initial_state, device)
     tail_entry_states = None
@@ -633,11 +643,11 @@ def test_affine_exclusive_scan_rejects_invalid_inputs(
     elif case == "state_shape":
         state_tt = _to_device(initial_state[:, :, :31], device)
     elif case == "tail_without_seed":
-        summaries_tt = _to_device(_pack(a, b, slots=2), device)
+        summaries_tt = _to_device(pack_summary_slots(a, b, slots=2), device)
     elif case == "seed_without_tail":
         tail_entry_states = state_tt
     elif case == "tail_seed_shape":
-        summaries_tt = _to_device(_pack(a, b, slots=2), device)
+        summaries_tt = _to_device(pack_summary_slots(a, b, slots=2), device)
         tail_entry_states = _to_device(initial_state[:, :, :31], device)
     with expect_error(RuntimeError, message):
         with ttnn.manage_config("throw_exception_on_fallback", True):
@@ -686,7 +696,7 @@ def test_affine_exclusive_scan_rejects_unsupported_input_sharding(
 
     with expect_error(RuntimeError, "summaries must use interleaved, height-sharded or ND-sharded memory"):
         _run(
-            _to_device(_pack(a, b), device, memory_config=unsupported),
+            _to_device(pack_summary_slots(a, b), device, memory_config=unsupported),
             _to_device(initial_state, device),
             4,
             actual_start=zero_actual_start,

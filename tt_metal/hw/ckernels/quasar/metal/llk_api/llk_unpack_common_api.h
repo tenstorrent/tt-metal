@@ -54,15 +54,13 @@ inline std::uint8_t llk_unpack_program_bfd(const std::uint32_t operand_id) {
  * allocated from the per-TRISC partition (see llk_bfd_alloc.h) and each op's llk_unpack_*_init
  * programs its own table entry. DFB ids never double as BFD ids.
  *
- * Also the unpack thread's once-per-program unpack-to-dest init: its DEST bank reset, the seeds of the semaphores this
- * thread posts and the startup-barrier raise (see below).
+ * Also the unpack thread's once-per-program unpack-to-dest init: its DEST bank reset and the seeds of the semaphores
+ * this thread posts.
  *
  * @param operandA: The input0 operand circular buffer
  * @param operandB: The input1 operand circular buffer
- * @note With UnpackToDestEn, call exactly once per program and pair it with exactly one @ref llk_math_pack_sync_init on
- *       the math thread: math spins on the UNPACK_INIT barrier until the raise below lands, so a math-side call with no
- *       unpack-side partner hangs the math thread (watcher waypoint MHBW), and a second unpack-side call re-seeds
- *       UNPACK_MATH / UNPACK_PACK and raises again, racing the first pass (see @ref _llk_sync_barrier_raise_).
+ * @note With UnpackToDestEn, call exactly once per program, paired with @ref llk_math_pack_sync_init on the math
+ *       thread: a second call re-seeds UNPACK_MATH / UNPACK_PACK and can wipe posts not yet consumed.
  */
 inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand) {
     const std::uint32_t unpA_operand_id = get_operand_id(unpA_operand);
@@ -79,15 +77,13 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
     // loop, and a per-op reset would pin unpack to bank 0 while pack keeps alternating in SyncHalf.
     if constexpr (UnpackToDestEn) {
         _llk_unpack_dest_init_();
-        // Seed the semaphores this thread posts, in front of its own first wait and post on them (same stream, so no
-        // post can precede its SEMINIT), then raise the startup barrier behind the seeds. Math passes the barrier in
-        // llk_math_pack_sync_init before its first SEMWAIT on UNPACK_MATH, so no SEMINIT here lands on a pending
-        // waiter; pack's first get on UNPACK_PACK follows math's first MATH_PACK post, so it is ordered too.
+        // Seed the semaphores this thread posts, in front of its own first wait and post on them. Math arms no wait on
+        // UNPACK_MATH before this thread's first post (llk_math_wait_for_dest_available), and pack's first get on
+        // UNPACK_PACK follows math's first MATH_PACK post, so neither SEMINIT lands on a pending wait.
         constexpr std::uint32_t N = (DST_SYNC_MODE == DstSync::SyncFull) ? 1 : 2;
         _llk_sync_init_(semaphore::UNPACK_MATH, N /*max*/, 0 /*init*/);
         // DEST occupancy: unpack posts, pack gets; the unpacker's only gate, see llk_unpack_wait_for_dest_available.
         _llk_sync_init_(semaphore::UNPACK_PACK, N /*max*/, 0 /*init*/);
-        _llk_sync_barrier_raise_(semaphore::UNPACK_INIT);
     }
 }
 

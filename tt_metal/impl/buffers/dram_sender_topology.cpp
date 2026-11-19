@@ -6,19 +6,51 @@
 
 #include <algorithm>
 #include <limits>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 
 #include <tt_stl/assert.hpp>
 #include <device.hpp>
 
-#include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "llrt/hal.hpp"
+#include "llrt/metal_soc_descriptor.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "mesh_device.hpp"
 
 namespace tt::tt_metal {
+
+CoreCoord pick_unused_dram_logical_core(const metal_SocDescriptor& soc_desc, uint32_t bank_id, ChipId device_id) {
+    const uint32_t num_banks = soc_desc.get_num_dram_views();
+    TT_FATAL(
+        bank_id < num_banks, "bank_id={} out of range for device {} (num_banks={})", bank_id, device_id, num_banks);
+
+    std::set<std::pair<size_t, size_t>> reserved;
+    for (const auto& c : soc_desc.dram_view_worker_cores.at(bank_id)) {
+        reserved.emplace(c.x, c.y);
+    }
+    for (const auto& c : soc_desc.dram_view_eth_cores.at(bank_id)) {
+        reserved.emplace(c.x, c.y);
+    }
+
+    const uint32_t num_subchannels = soc_desc.get_grid_size(tt::CoreType::DRAM).y;
+    const size_t channel = soc_desc.get_channel_for_dram_view(static_cast<int>(bank_id));
+    for (uint32_t sub = 0; sub < num_subchannels; ++sub) {
+        tt::umd::CoreCoord coord = soc_desc.get_dram_core_for_channel(
+            static_cast<int>(channel), static_cast<int>(sub), tt::CoordSystem::TRANSLATED);
+        if (!reserved.contains({coord.x, coord.y})) {
+            return soc_desc.get_logical_dram_core_for_subchannel(static_cast<int>(bank_id), static_cast<int>(sub));
+        }
+    }
+    TT_THROW(
+        "No unused DRAM subchannel found for bank_id={} on device {}; all {} subchannels are reserved as "
+        "worker/eth endpoints",
+        bank_id,
+        device_id,
+        num_subchannels);
+}
 
 std::vector<std::pair<CoreCoord, CoreRangeSet>> build_dram_sender_mapping(
     const distributed::MeshDevice* mesh_device,
@@ -119,11 +151,11 @@ void write_dram_sender_l1(
     const CoreCoord& sender_logical,
     DeviceAddr local_addr,
     std::span<const std::byte> bytes) {
-    auto& metal_ctx = MetalContext::instance(mesh_device.impl().get_context_id());
+    auto& env = mesh_device.impl().metal_env();
     const uint64_t write_addr =
-        metal_ctx.hal().get_l1_noc_offset(HalProgrammableCoreType::DRAM) + static_cast<uint64_t>(local_addr);
+        env.get_hal().get_l1_noc_offset(HalProgrammableCoreType::DRAM) + static_cast<uint64_t>(local_addr);
     const CoreCoord virtual_core = device->virtual_core_from_logical_core(sender_logical, CoreType::DRAM);
-    metal_ctx.get_cluster().write_core(device->id(), tt_cxy_pair(device->id(), virtual_core), bytes, write_addr);
+    env.get_cluster().write_core(device->id(), tt_cxy_pair(device->id(), virtual_core), bytes, write_addr);
 }
 
 }  // namespace tt::tt_metal

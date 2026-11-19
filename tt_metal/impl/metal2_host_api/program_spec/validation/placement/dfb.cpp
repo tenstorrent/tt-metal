@@ -10,7 +10,7 @@
 #include "impl/metal2_host_api/helpers.hpp"
 #include "impl/metal2_host_api/program_spec/validation/placement/placement.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 // Device slots are allocated per core (two DFBs may share a slot iff their node sets are
 // disjoint), so the arch limit is on how many DFBs land on any single node — not on
@@ -60,4 +60,4 @@ void ValidateDFBSlotsPerNode(
     }
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal
