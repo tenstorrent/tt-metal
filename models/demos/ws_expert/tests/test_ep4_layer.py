@@ -561,19 +561,20 @@ def test_ep4_experts(mesh_device, routing):
     lz = dict(louts, counts=zc)
     O = o_tensor(mesh, lc)
     wo = []
-    for i in range(3):
+    for i in range(3 if int(os.environ.get("EP4_WONLY", "1")) else 0):  # (EP4_WONLY=0: no weights-only launches)
         mpd, io, st = lane_program(mesh, lc, cfg, lane, l5, T, tab_t, s["xbuf"], lz, ws_t, O)
         ttnn.generic_op(io, mpd)
         ttnn.synchronize_device(mesh)
         wo.append(lane_times(cfg, T, [[0] * EPC] * N, st, chips, clk))
         del mpd, io, st
-    sent = EPC * (R - 1) / (R * 4)  # (experts over a link direction: each crosses R - 1 of the ring's 2 x 2)
-    wend = [max(max(r[ci][1][g] for ci in chips) for r in wo[1:]) for g in range(G)]
-    logger.info(
-        f"EP4 experts {routing}: weights only (zero counts), NCRISC end per group (us, max over chips, last 2 launches) "
-        f"{[round(v, 1) for v in wend]} = {[round(sent * exp_bytes / (v * 1e3), 1) for v in wend]} GB/s a link "
-        f"direction ({sent:.0f} experts a link direction)"
-    )
+    if wo:
+        sent = EPC * (R - 1) / (R * 4)  # (experts over a link direction: each crosses R - 1 of the ring's 2 x 2)
+        wend = [max(max(r[ci][1][g] for ci in chips) for r in wo[1:]) for g in range(G)]
+        logger.info(
+            f"EP4 experts {routing}: weights only (zero counts), NCRISC end per group (us, max over chips, last 2 "
+            f"launches) {[round(v, 1) for v in wend]} = {[round(sent * exp_bytes / (v * 1e3), 1) for v in wend]} GB/s "
+            f"a link direction ({sent:.0f} experts a link direction)"
+        )
     # real rows
     e2es = []
     for i in range(WARM + MEAS if WARM < 5 else 5):
@@ -592,9 +593,13 @@ def test_ep4_experts(mesh_device, routing):
                 assert off == 0
         del mpd, io, st
     clk2 = aiclk_mhz(0)
-    # O against torch: sampled local experts on every chip
+    # O against torch: sampled local experts on the checked chips (EP4_CHECK_CHIPS "all" or "0,13,31": O is read back
+    # whole a chip, GBs each)
     host = s["host"]
-    Ox = per_chip(O)
+    chk = os.environ.get("EP4_CHECK_CHIPS", "all")
+    cchips = chips if chk == "all" else [int(v) for v in chk.split(",")]
+    Od = ttnn.get_device_tensors(O)
+    Ox = {ch: ttnn.to_torch(Od[ch]) for ch in cchips}
     idx = [u.to(torch.int64) & 0xFFFFFFFF for u in per_chip(louts["idx"])]
     dest = [u.to(torch.int64) & 0xFFFFFFFF for u in per_chip(louts["dest"])]
 
@@ -605,7 +610,7 @@ def test_ep4_experts(mesh_device, routing):
     pccs = {}
     sides = expert_side_masks(mesh, T, G) if lc.oside else None
     nsamp = int(os.environ.get("EP4_PCC_EXPERTS", "6"))
-    for ch in chips:
+    for ch in cchips:
         c = ch % C
         worst = 1.0
         for le in torch.linspace(0, EPC - 1, nsamp).round().long().tolist():
