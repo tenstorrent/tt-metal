@@ -7,6 +7,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -61,6 +62,25 @@ static Tensor convert_output_layout(const Tensor& tensor, const std::optional<La
         "TILE and typecast explicitly if a row-major result is needed.",
         tensor.dtype());
     return ttnn::to_layout(tensor, *output_layout);
+}
+
+static Tensor write_to_output(const Tensor& result, const std::optional<Tensor>& output, const char* op_name) {
+    if (!output.has_value()) {
+        return result;
+    }
+    TT_FATAL(
+        output->logical_shape() == result.logical_shape(),
+        "{} output shape {} does not match the reduced shape {}",
+        op_name,
+        output->logical_shape(),
+        result.logical_shape());
+    TT_FATAL(
+        output->layout() == result.layout(),
+        "{} output layout {} does not match the result layout {}",
+        op_name,
+        output->layout(),
+        result.layout());
+    return ttnn::assign(result, *output);
 }
 
 // input_shape has original shape while output_shape has reduction applied and last 2 dims padded.
@@ -831,19 +851,23 @@ Tensor sum(
     float scalar,
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool fast_and_approximate_mode,
-    const std::optional<Layout>& output_layout) {
-    return operations::reduction::convert_output_layout(
+    const std::optional<Layout>& output_layout,
+    const std::optional<Tensor>& output) {
+    const auto memory_config =
+        output.has_value() ? memory_config_arg.value_or(output->memory_config()) : memory_config_arg;
+    auto result = operations::reduction::convert_output_layout(
         operations::reduction::reduce<reduction_common::ReduceType::Sum>(
             input_tensor_arg,
             dim_arg,
             keepdim,
-            memory_config_arg,
+            memory_config,
             compute_kernel_config,
             scalar,
             sub_core_grids,
             fast_and_approximate_mode,
             output_layout),
         output_layout);
+    return operations::reduction::write_to_output(result, output, "ttnn.sum");
 }
 
 Tensor mean(
@@ -855,19 +879,23 @@ Tensor mean(
     float scalar,
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool fast_and_approximate_mode,
-    const std::optional<Layout>& output_layout) {
-    return operations::reduction::convert_output_layout(
+    const std::optional<Layout>& output_layout,
+    const std::optional<Tensor>& output) {
+    const auto memory_config =
+        output.has_value() ? memory_config_arg.value_or(output->memory_config()) : memory_config_arg;
+    auto result = operations::reduction::convert_output_layout(
         operations::reduction::reduce<reduction_common::ReduceType::Mean>(
             input_tensor_arg,
             dim_arg,
             keepdim,
-            memory_config_arg,
+            memory_config,
             compute_kernel_config,
             scalar,
             sub_core_grids,
             fast_and_approximate_mode,
             output_layout),
         output_layout);
+    return operations::reduction::write_to_output(result, output, "ttnn.mean");
 }
 
 Tensor max(

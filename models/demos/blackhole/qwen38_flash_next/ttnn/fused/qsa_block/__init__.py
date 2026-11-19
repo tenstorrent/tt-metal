@@ -1220,7 +1220,7 @@ def lane_score_rows_of(local_scores, lanes_of_rows, lanes: int, cache_rows: int,
 
 
 # ------------------------------------------------------------------------------------------- program B1: score merge
-# After the all-gather of the local score rows: moreh_sum's 16-bit-dest add_tiles accumulation in device order, then
+# After the all-gather of the local score rows: ttnn.sum's 16-bit-dest add_tiles accumulation in device order, then
 # binary_ng's SFPU add of the mask (NearestEven). Elementwise, so the ROW_MAJOR chunks are processed as tiles.
 
 SCORE_CHUNK = 1024
@@ -1316,7 +1316,15 @@ def score_merge_composed(gathered, mask):
     dram = ttnn.DRAM_MEMORY_CONFIG
     stacked = ttnn.reshape(gathered, (DEVICES, 1, 1, width))  # the pages are device-major, so this is the row order
     tiled = ttnn.to_layout(stacked, ttnn.TILE_LAYOUT, memory_config=dram)
-    summed = ttnn.moreh_sum(tiled, dim=0, keepdim=True, memory_config=dram)
+    # 16-bit dest: the add_tiles accumulation score_merge_compute.cpp reproduces bitwise.
+    config = ttnn.init_device_compute_kernel_config(
+        tiled.device().arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+    summed = ttnn.sum(tiled, dim=0, keepdim=True, memory_config=dram, compute_kernel_config=config)
     row_major = ttnn.to_layout(summed, ttnn.ROW_MAJOR_LAYOUT, memory_config=dram)
     row = ttnn.reshape(row_major, (1, 1, 1, width))
     out = ttnn.add(row, mask, memory_config=dram, fast_and_approximate_mode=False)
@@ -1328,7 +1336,7 @@ def score_merge_composed(gathered, mask):
 register(
     FusedKernel(
         name="qsa_score_merge",
-        replaces="QSA score merge after the all-gather: tilize, moreh_sum over devices, untilize, mask add "
+        replaces="QSA score merge after the all-gather: tilize, ttnn.sum over devices, untilize, mask add "
         "(4 programs/layer); with it the lanes' score-row windows (lane_score_rows_of: a slice per row and the concat)",
         tolerance=BITWISE,
         fused=score_merge,

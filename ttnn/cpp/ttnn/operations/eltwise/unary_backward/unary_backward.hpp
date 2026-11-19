@@ -13,7 +13,7 @@ namespace ttnn {
 
 namespace operations::unary_backward {
 
-Tensor change_layout_to_tile(const Tensor& input_tensor);
+Tensor change_layout_to_tile(const Tensor& input_tensor, const MemoryConfig& output_mem_config);
 
 }  // namespace operations::unary_backward
 

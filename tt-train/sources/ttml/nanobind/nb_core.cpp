@@ -146,9 +146,8 @@ void py_module(nb::module_& m) {
         },
         nb::arg("training_config"),
         nb::arg("parameters"),
-        "Apply training_config.precision before creating the optimizer: precision.master_dtype to the parameters, "
-        "and precision.reduce_dtype (None when unset) as the dtype the gradient syncs sum in by default. Returns the "
-        "master dtype applied, or None.");
+        "Apply training_config.precision to the parameters (precision.master_dtype) before creating the optimizer. "
+        "Returns the dtype applied, or None.");
 
     {
         auto py_distributed = static_cast<nb::module_>(m.attr("distributed"));
@@ -214,60 +213,15 @@ void py_module(nb::module_& m) {
         // Synchronize gradients across devices for DDP
         py_distributed.def(
             "synchronize_gradients",
-            static_cast<void (*)(const ttml::serialization::NamedParameters&, std::optional<ttnn::DataType>)>(
+            static_cast<void (*)(const ttml::serialization::NamedParameters&)>(
                 &ttml::core::distributed::synchronize_gradients),
-            nb::arg("parameters"),
-            nb::kw_only(),
-            nb::arg("reduce_dtype") = nb::none());
+            nb::arg("parameters"));
         py_distributed.def(
             "synchronize_gradients",
-            static_cast<void (*)(
-                const ttml::serialization::NamedParameters&,
-                const std::vector<uint32_t>&,
-                std::optional<ttnn::DataType>)>(&ttml::core::distributed::synchronize_gradients),
+            static_cast<void (*)(const ttml::serialization::NamedParameters&, const std::vector<uint32_t>&)>(
+                &ttml::core::distributed::synchronize_gradients),
             nb::arg("parameters"),
-            nb::arg("cluster_axes"),
-            nb::kw_only(),
-            nb::arg("reduce_dtype") = nb::none());
-        py_distributed.def(
-            "check_reduce_dtype",
-            &ttml::core::distributed::check_reduce_dtype,
-            nb::arg("reduce_dtype").none(),
-            "Raise ValueError unless reduce_dtype is None, BFLOAT16 or FLOAT32, the dtypes a gradient sum runs in.");
-        py_distributed.def(
-            "resolve_reduce_dtype",
-            &ttml::core::distributed::resolve_reduce_dtype,
-            nb::arg("reduce_dtype").none(),
-            "The dtype a gradient sum runs in: reduce_dtype once check_reduce_dtype accepts it, else the stored "
-            "training_config.precision.reduce_dtype (AutoContext.get_gradient_reduce_dtype), which may be None.");
-        py_distributed.def(
-            "reduce_scatter_route_dim",
-            [](const ttnn::Tensor& tensor,
-               const std::vector<uint32_t>& cluster_axes,
-               std::optional<ttnn::DataType> reduce_dtype) {
-                return ttml::core::distributed::reduce_scatter_route_dim(
-                    tensor, ttsl::SmallVector<uint32_t>(cluster_axes.begin(), cluster_axes.end()), reduce_dtype);
-            },
-            nb::arg("tensor"),
-            nb::arg("cluster_axes"),
-            nb::kw_only(),
-            nb::arg("reduce_dtype") = nb::none(),
-            "The tensor dim synchronize_tensor's fp32 reduce-scatter route scatters along for these arguments, or None "
-            "when the sum takes the all-reduce.");
-        py_distributed.def(
-            "synchronize_tensor",
-            [](const ttnn::Tensor& tensor,
-               const std::vector<uint32_t>& cluster_axes,
-               std::optional<ttnn::DataType> reduce_dtype) {
-                return ttml::core::distributed::synchronize_tensor(
-                    tensor, ttsl::SmallVector<uint32_t>(cluster_axes.begin(), cluster_axes.end()), reduce_dtype);
-            },
-            nb::arg("tensor"),
-            nb::arg("cluster_axes"),
-            nb::kw_only(),
-            nb::arg("reduce_dtype") = nb::none(),
-            "Average a tensor over the devices of cluster_axes. reduce_dtype=FLOAT32 sums in fp32 and casts the mean "
-            "back to the tensor's dtype; None or BFLOAT16 sums in the tensor's own dtype.");
+            nb::arg("cluster_axes"));
 
         // Raw (non-autograd) CCL collectives on ttnn tensors.
         // Unlike ttml.ops.distributed.* these do NOT register graph nodes, so they can be
