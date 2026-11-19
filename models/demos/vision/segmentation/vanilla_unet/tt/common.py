@@ -13,6 +13,21 @@ VANILLA_UNET_L1_SMALL_SIZE = 12 * 8192
 VANILLA_UNET_TRACE_SIZE = 294912
 VANILLA_UNET_PCC_WH = 0.97700
 
+NUM_LAYERS_ENV = "VANILLA_UNET_NUM_LAYERS"
+NUM_LEVELS = 4
+
+
+def num_levels_from_env() -> int:
+    """The number of encoder and decoder levels to run: VANILLA_UNET_NUM_LAYERS, 1 to 4, or all four
+    when it is unset."""
+    value = os.environ.get(NUM_LAYERS_ENV)
+    if value is None or value == "":
+        return NUM_LEVELS
+    num_levels = int(value)
+    if not 1 <= num_levels <= NUM_LEVELS:
+        raise ValueError(f"{NUM_LAYERS_ENV} must be between 1 and {NUM_LEVELS}, got {num_levels}")
+    return num_levels
+
 
 def load_reference_model(model_location_generator=None):
     if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
@@ -40,6 +55,7 @@ def load_reference_model(model_location_generator=None):
 
     reference_model.load_state_dict(new_state_dict)
     reference_model.eval()
+    reference_model.depth = num_levels_from_env()
     return reference_model
 
 
