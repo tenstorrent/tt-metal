@@ -47,6 +47,9 @@ struct TopkLargeIndicesSharedVariables {
     uint32_t num_rows = 0;
     uint32_t num_chunks = 0;
     bool two_level = false;
+    // A two-level program's own maxima tensor, written by phase 1 and read by phase 2 (unless the caller supplies
+    // the maxima or a maxima output). Grown when a cache hit brings more rows.
+    std::optional<Tensor> two_level_maxima;
 };
 
 struct TopkLargeIndicesProgramFactory {
@@ -95,9 +98,9 @@ bool split_whole_rows(uint32_t k, uint32_t num_rows, uint32_t input_last_dim, ui
 constexpr uint32_t two_level_block_keys = 32;
 constexpr uint32_t two_level_min_width = 65'536;
 constexpr uint32_t two_level_max_width = 2'097'152;
+// Row r runs on core r % num_cores, which tracks the readiness of up to this many rows.
+constexpr uint32_t two_level_max_rows_per_core = 4;
 bool two_level_enabled(const operation_attributes_t& attrs, uint32_t input_last_dim);
-// Stage-2 chunks of 2048 block maxima a row of this width can need: sizes the maxima CB, so it is hashed.
-uint32_t two_level_max_chunks(uint32_t input_last_dim);
 // The search length from which a two-level program runs two-level, measured per core count.
 uint32_t two_level_default_cutover(uint32_t num_cores);
 

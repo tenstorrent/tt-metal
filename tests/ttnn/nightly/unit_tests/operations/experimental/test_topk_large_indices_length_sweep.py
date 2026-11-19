@@ -13,7 +13,8 @@ The bound is passed the way sparse MLA passes it: valid_length_tensor plus a con
 valid_end_tensor. The numbers are top-k alone and untraced: no sub-device manager is loaded and the gather row is idle,
 so DRAM and NoC are uncontended.
 
-Opt-in (TOPK_LENGTH_SWEEP=1): a 2% spread gate on a shared runner is too tight for a nightly job. Set
+Opt-in (TOPK_LENGTH_SWEEP=1): a spread gate on a shared runner is too tight for a nightly job. Two-level runs claim
+their phase-1 work dynamically, so their spread gate is wider than the single-level one. Set
 TOPK_SWEEP_RESULTS=<path> to append one JSON line per case.
 """
 
@@ -115,7 +116,8 @@ def _check_rows(torch_input: torch.Tensor, tt_out, valid_length: int) -> None:
 
 
 # legacy: no block_select. tl_single / tl_two: a two-level program forced to one mode through the cutover.
-MODES = {"legacy": None, "tl_single": 0xFFFFFFFF, "tl_two": 0}
+# tl_default: a two-level program with the default cutover.
+MODES = {"legacy": None, "tl_single": 0xFFFFFFFF, "tl_two": 0, "tl_default": "default"}
 SWEEP_MODES = os.environ.get("TOPK_SWEEP_MODES", "legacy").split(",")
 
 
@@ -144,7 +146,12 @@ def test_topk_large_indices_length_sweep_perf(device, host_inputs, kind, grid_id
     valid_end = _metadata(device, valid_length)
     core_grid = _grid(GRIDS[grid_id])
 
-    two_level = {} if MODES[mode] is None else {"block_select": 32, "two_level_cutover": MODES[mode]}
+    if MODES[mode] is None:
+        two_level = {}
+    elif MODES[mode] == "default":
+        two_level = {"block_select": 32}
+    else:
+        two_level = {"block_select": 32, "two_level_cutover": MODES[mode]}
 
     def run():
         return ttnn.experimental.topk_large_indices(
@@ -184,4 +191,5 @@ def test_topk_large_indices_length_sweep_perf(device, host_inputs, kind, grid_id
     if path:
         with open(path, "a") as f:
             f.write(json.dumps(result) + "\n")
-    assert spread <= 0.02, f"run-to-run spread {spread:.3%} above 2%: {durations}"
+    max_spread = 0.08 if mode in ("tl_two", "tl_default") else 0.02
+    assert spread <= max_spread, f"run-to-run spread {spread:.3%} above {max_spread:.0%}: {durations}"

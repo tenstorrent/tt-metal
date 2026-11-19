@@ -32,13 +32,6 @@ void validate_static_args(const operation_attributes_t& attrs, const tensor_args
     TT_FATAL(input.layout() == Layout::ROW_MAJOR, "topk_large_indices input must be ROW_MAJOR");
     TT_FATAL(input.dtype() == DataType::BFLOAT16, "topk_large_indices input must be BFLOAT16");
     TT_FATAL(!input.is_sharded(), "topk_large_indices input must use interleaved memory");
-    if (attrs.block_select.has_value()) {
-        TT_FATAL(
-            *attrs.block_select == program::two_level_block_keys,
-            "topk_large_indices block_select supports {} only, got {}",
-            program::two_level_block_keys,
-            *attrs.block_select);
-    }
 }
 
 void validate_two_level_tensor(
@@ -188,6 +181,14 @@ void validate_runtime_args(const operation_attributes_t& attrs, const tensor_arg
         TT_FATAL(
             m.memory_config().buffer_type() == BufferType::DRAM, "topk_large_indices valid_end_tensor must be in DRAM");
     }
+    // block_select is not in the hash of the program it falls back to, so it is checked on every call.
+    if (attrs.block_select.has_value()) {
+        TT_FATAL(
+            *attrs.block_select == program::two_level_block_keys,
+            "topk_large_indices block_select supports {} only, got {}",
+            program::two_level_block_keys,
+            *attrs.block_select);
+    }
     // Width-dependent, so checked on every call: a block_select program runs two-level only for these widths and
     // is today's program otherwise.
     const bool two_level = program::two_level_enabled(attrs, n);
@@ -206,6 +207,19 @@ void validate_runtime_args(const operation_attributes_t& attrs, const tensor_arg
             n);
     } else {
         TT_FATAL(input.buffer()->is_dram(), "topk_large_indices two-level selection requires the input in DRAM");
+        // Phase 1 and the stage-3 gather address a row's keys as offsets into its page.
+        TT_FATAL(
+            input.buffer()->page_size() == input_row_bytes,
+            "topk_large_indices two-level selection needs one packed input row per page ({} B), got pages of {} B",
+            input_row_bytes,
+            input.buffer()->page_size());
+        const uint32_t num_cores = attrs.resolved_worker_core_grid.num_cores();
+        TT_FATAL(
+            num_rows <= uint64_t{program::two_level_max_rows_per_core} * num_cores,
+            "topk_large_indices two-level selection gives each core at most {} rows: {} rows over {} cores",
+            program::two_level_max_rows_per_core,
+            num_rows,
+            num_cores);
         // One page per row: the reader and writer address these by row.
         const uint32_t blocks = tt::div_up(n, program::two_level_block_keys);
         validate_two_level_tensor(input, tensor_args.block_max_tensor, DataType::BFLOAT16, blocks, "block_max_tensor");

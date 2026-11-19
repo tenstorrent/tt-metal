@@ -557,50 +557,67 @@ FORCE_INLINE void settle_next_program(uint32_t input_cb) {
 }
 
 #ifdef TOPK_TWO_LEVEL
-// Stage 1 of a two-level row (see topk_large_indices_two_level.hpp): tilize each 1024-key tile so a tile row holds 32
-// consecutive keys and reduce every row to its maximum; the writer gathers those into the row's maxima. With the
-// caller's maxima there is nothing to do here.
-template <uint32_t K>
-FORCE_INLINE void two_level_stage1(uint32_t search_len) {
-    using namespace topk_two_level;
-    if constexpr (get_named_compile_time_arg_val("tl_block_max_input") == 0) {
-        constexpr uint32_t cb_stage1 = get_named_compile_time_arg_val("tl_cb_stage1");
-        constexpr uint32_t cb_tiled = get_named_compile_time_arg_val("tl_cb_tiled");
-        constexpr uint32_t cb_scaler = get_named_compile_time_arg_val("tl_cb_scaler");
-        constexpr uint32_t cb_red = get_named_compile_time_arg_val("tl_cb_red");
-        constexpr uint32_t stage1_batch = get_named_compile_time_arg_val("tl_stage1_batch");
-        // Whole batches, as the reader sends them.
-        const uint32_t stage1_tiles = div_up(div_up(search_len, tile_keys), stage1_batch) * stage1_batch;
-        // The max reduce is batched by hand: kernel_lib's REDUCE_ROW takes one DEST acquire per output tile, which
-        // under this kernel's full-sync DEST serializes math and pack.
-        constexpr uint32_t dest_tiles = 8;
-        static_assert(stage1_batch % dest_tiles == 0);
-        CircularBuffer tiled(cb_tiled);
-        CircularBuffer reduced(cb_red);
-        CircularBuffer(cb_scaler).wait_front(1);
-        for (uint32_t tile = 0; tile < stage1_tiles; tile += stage1_batch) {
-            compute_kernel_lib::tilize<stage1_batch, cb_stage1, cb_tiled>(1);
-            reconfig_data_format(cb_tiled, cb_scaler);
-            pack_reconfig_data_format(cb_red);
-            reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_tiled, cb_scaler, cb_red);
-            tiled.wait_front(stage1_batch);
-            for (uint32_t group = 0; group < stage1_batch; group += dest_tiles) {
-                reduced.reserve_back(dest_tiles);
-                tile_regs_acquire();
-                for (uint32_t i = 0; i < dest_tiles; ++i) {
-                    reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_tiled, cb_scaler, group + i, 0, i);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t i = 0; i < dest_tiles; ++i) {
-                    pack_tile(i, cb_red);
-                }
-                tile_regs_release();
-                reduced.push_back(dest_tiles);
-            }
-            tiled.pop_front(stage1_batch);
-            reduce_uninit();
+// Phase 1 of a two-level program (see topk_large_indices_two_level.hpp): one unit's 32 tiles, tilized as one 32-row
+// block so every tile row holds 32 consecutive keys, and every row reduced to its maximum; the writer sends those to
+// the maxima tensor.
+FORCE_INLINE void two_level_unit() {
+    constexpr uint32_t cb_stage1 = get_named_compile_time_arg_val("tl_cb_stage1");
+    constexpr uint32_t cb_tiled = get_named_compile_time_arg_val("tl_cb_tiled");
+    constexpr uint32_t cb_scaler = get_named_compile_time_arg_val("tl_cb_scaler");
+    constexpr uint32_t cb_red = get_named_compile_time_arg_val("tl_cb_red");
+    constexpr uint32_t stage1_batch = get_named_compile_time_arg_val("tl_stage1_batch");
+    // The max reduce is batched by hand: kernel_lib's REDUCE_ROW takes one DEST acquire per output tile, which
+    // under this kernel's full-sync DEST serializes math and pack.
+    constexpr uint32_t dest_tiles = 8;
+    static_assert(stage1_batch % dest_tiles == 0);
+    CircularBuffer tiled(cb_tiled);
+    CircularBuffer reduced(cb_red);
+    CircularBuffer(cb_scaler).wait_front(1);
+    compute_kernel_lib::tilize<stage1_batch, cb_stage1, cb_tiled>(1);
+    reconfig_data_format(cb_tiled, cb_scaler);
+    pack_reconfig_data_format(cb_red);
+    reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_tiled, cb_scaler, cb_red);
+    tiled.wait_front(stage1_batch);
+    for (uint32_t group = 0; group < stage1_batch; group += dest_tiles) {
+        reduced.reserve_back(dest_tiles);
+        tile_regs_acquire();
+        for (uint32_t i = 0; i < dest_tiles; ++i) {
+            reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_tiled, cb_scaler, group + i, 0, i);
         }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t i = 0; i < dest_tiles; ++i) {
+            pack_tile(i, cb_red);
+        }
+        tile_regs_release();
+        reduced.push_back(dest_tiles);
+    }
+    tiled.pop_front(stage1_batch);
+    reduce_uninit();
+}
+
+// Runs the phase-1 units the reader sends until it announces one of this core's rows (returns header_row) or the
+// end (header_end). Phase 1 runs on the ordinary schedule, so a split in progress is ended first.
+FORCE_INLINE uint32_t two_level_next_row(uint32_t input_cb, uint32_t total_units, bool& split_on) {
+    using namespace topk_two_level;
+    constexpr uint32_t cb_stage1 = get_named_compile_time_arg_val("tl_cb_stage1");
+    constexpr uint32_t stage1_batch = get_named_compile_time_arg_val("tl_stage1_batch");
+    CircularBuffer stage1(cb_stage1);
+    while (true) {
+        stage1.wait_front(1);
+        const uint32_t code = read_tile_value(cb_stage1, 0, 0);
+        stage1.pop_front(1);
+        if (code >= total_units) {
+            stage1.wait_front(stage1_batch);
+            stage1.pop_front(stage1_batch);
+            return code;
+        }
+        if (split_on) {
+            topk_xl_split_end();
+            settle_next_program(input_cb);
+            split_on = false;
+        }
+        two_level_unit();
     }
 }
 #endif
@@ -716,25 +733,34 @@ void kernel_main() {
         const bool two_level_rows = two_level_mode;
         const uint32_t whole_row_chunks = num_chunks;
         const uint32_t whole_row_tail = tail_elements;
-        // A split row belongs whole to its first half; the second half skips it.
-        const uint32_t items = two_level_rows ? 2 * (sends_survivor ? num_rows - 1 : num_rows) : num_whole_rows;
+        // A two-level core runs its items until the reader's end header: two per row, between phase-1 units.
+        const uint32_t items = two_level_rows ? 0xFFFFFFFFu : num_whole_rows;
         const uint32_t maxima_chunks = topk_two_level::stage2_chunks(two_level_search_length);
+        const uint32_t total_units =
+            topk_two_level::Units::of(
+                two_level_search_length,
+                get_named_compile_time_arg_val("tl_stage1_batch"),
+                get_common_arg_val<uint32_t>(topk_common_args::compute_two_level_num_input_rows))
+                .total;
+        bool split_on = false;
         if (items > 0 && (two_level_rows ||
                           (num_chunks >= min_split_chunks && (num_chunks <= max_fused_chunks || segmented_split)))) {
             if (!two_level_rows) {
                 begin_thread_split();
+                split_on = true;
             }
             const bool prefetch = !two_level_rows && !segmented_split && num_chunks <= max_fused_chunks &&
                                   topk_xl_split_can_prefetch<K>(num_chunks);
             for (uint32_t row = 0; row < items; ++row) {
                 const bool maxima_item = two_level_rows && (row & 1) == 0;
                 if (maxima_item) {
-                    // Stage 1 runs on the ordinary single-thread schedule between the split items.
-                    if (row > 0) {
-                        topk_xl_split_end();
+                    if (two_level_next_row(input_cb, total_units, split_on) == topk_two_level::header_end) {
+                        break;
                     }
-                    two_level_stage1<K>(two_level_search_length);
-                    begin_thread_split();
+                    if (!split_on) {
+                        begin_thread_split();
+                        split_on = true;
+                    }
                 }
                 // Shadow the row bounds with this item's: the call below is the single-level loop's.
                 const uint32_t num_chunks = !two_level_rows
@@ -786,7 +812,14 @@ void kernel_main() {
             }
             // Pairs with the begin_thread_split() above, on both ways out of this block. Leaving the two
             // semaphores at max 15 is invisible to this op and breaks the next one.
+#ifdef TOPK_TWO_LEVEL
+            // A two-level core may end on a phase-1 unit, with no split open.
+            if (split_on) {
+                topk_xl_split_end();
+            }
+#else
             topk_xl_split_end();
+#endif
             if constexpr (segmented_split) {
                 settle_next_program(input_cb);
             }
@@ -806,12 +839,6 @@ void kernel_main() {
             first_row = num_whole_rows;
         }
     }
-#ifdef TOPK_TWO_LEVEL
-    // A two-level program's cores without rows have nothing more to do.
-    if (two_level_mode) {
-        return;
-    }
-#endif
 
     for (uint32_t row = first_row; row < num_rows; ++row) {
         const bool split_row = has_split && row == num_whole_rows;

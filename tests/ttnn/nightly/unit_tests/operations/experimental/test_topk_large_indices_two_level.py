@@ -338,9 +338,45 @@ def test_two_level_falls_back_outside_its_range(device, expect_error, k, width):
 
 
 def test_two_level_rejects_other_block_sizes(device, expect_error):
+    """block_select other than 32 raises, also when the single-level program for the shape is already cached."""
     tt_input = _dev(torch.zeros(1, 1, 1, 131_072, dtype=torch.bfloat16), device)
     with expect_error(RuntimeError, "supports 32 only"):
         ttnn.experimental.topk_large_indices(tt_input, k=K, block_select=16)
+    narrow = _dev(torch.zeros(1, 1, 1, 4096, dtype=torch.bfloat16), device)
+    ttnn.experimental.topk_large_indices(narrow, k=K)
+    with expect_error(RuntimeError, "supports 32 only"):
+        ttnn.experimental.topk_large_indices(narrow, k=K, block_select=16)
+
+
+def test_two_level_cores_with_several_rows(device):
+    """Up to four rows per core, each tracked by its own byte of the owner's readiness count."""
+    rows, width, n = 100, 131_072, 120_000
+    torch_input = generate("iid", rows, width, 17, n=n)
+    out = ttnn.experimental.topk_large_indices(
+        _dev(torch_input.reshape(1, 1, rows, width), device),
+        k=K,
+        valid_length=n,
+        block_select=32,
+        two_level_cutover=FORCE_TWO_LEVEL,
+        sub_core_grids=_grid(device, 3),
+    )
+    _check_rows(torch_input, _indices(out, rows), n, range(rows))
+
+
+def test_two_level_rejects_more_than_four_rows_per_core(device, expect_error):
+    rows, width = 120, 65_536
+    tt_input = _dev(torch.zeros(1, 1, rows, width, dtype=torch.bfloat16), device)
+    with expect_error(RuntimeError, "at most 4 rows"):
+        ttnn.experimental.topk_large_indices(tt_input, k=K, block_select=32, sub_core_grids=_grid(device, 3))
+
+
+def test_two_level_fallback_reuses_the_single_level_program(device):
+    """Outside the two-level range a block_select call is the single-level program, cache entry included."""
+    tt_input = _dev(generate("iid", 2, 131_088, 4).reshape(1, 1, 2, 131_088), device)
+    ttnn.experimental.topk_large_indices(tt_input, k=K)
+    entries = device.num_program_cache_entries()
+    ttnn.experimental.topk_large_indices(tt_input, k=K, block_select=32)
+    assert device.num_program_cache_entries() == entries
 
 
 def test_two_level_rejects_bad_block_max_tensor(device, expect_error):
@@ -389,9 +425,12 @@ def test_two_level_width_changes_on_cache_hits(device):
 
 
 def test_two_level_largest_width_class(device):
-    """The 2,097,152-wide class: 32 maxima chunks, the largest scratch and bitmap."""
-    rows, width, n = 2, 2_097_152, 2_000_000
+    """The 2,097,152-wide class over the whole width: 32 maxima chunks, the largest scratch and bitmap, and a winner
+    in the last key."""
+    rows, width = 2, 2_097_152
+    n = width
     torch_input = generate("iid", rows, width, 12, n=n)
+    torch_input[:, width - 1] = 100.0
     out = ttnn.experimental.topk_large_indices(
         _dev(torch_input.reshape(1, 1, rows, width), device),
         k=K,
@@ -436,12 +475,36 @@ def test_two_level_winning_block_count_at_the_limit(device, winning_blocks):
     _check_rows(torch_input, _indices(out, rows), width, range(rows))
 
 
+# The default cutover per top-k grid: 12 columns are 108 cores, 11 are 99.
+DEFAULT_CUTOVER = {12: 196_608, 11: 147_456}
+
+
 @pytest.mark.parametrize("columns", [12, 11])
-@pytest.mark.parametrize("n", [5_120, 56_320, 1_048_576])
-def test_two_level_default_cutover(device, columns, n):
-    """The default cutover on both top-k grids, on lengths either side of it."""
-    rows, width = 160, 1_049_600
+@pytest.mark.parametrize("offset", [-1, 0, 1])
+def test_two_level_default_cutover(device, columns, offset):
+    """The default cutover on both top-k grids: rows run two-level from exactly the cutover."""
+    rows, width = 160, 262_144
+    n = DEFAULT_CUTOVER[columns] + offset
     torch_input = generate("iid", rows, width, 14, n=n)
+    mode = _scalar(device, 7)
+    out = ttnn.experimental.topk_large_indices(
+        _dev(torch_input.reshape(1, 1, rows, width), device),
+        k=K,
+        valid_length_tensor=_scalar(device, n),
+        block_select=32,
+        sub_core_grids=_grid(device, columns),
+        dram_read_noc=ttnn.NOC.NOC_0,
+        mode_output=mode,
+    )
+    assert _mode(mode) == (1 if offset >= 0 else 0)
+    _check_rows(torch_input, _indices(out, rows), n, (0, 98, 107, 108, 159))
+
+
+@pytest.mark.parametrize("columns", [12, 11])
+def test_two_level_default_long_rows(device, columns):
+    """The production long case on both top-k grids under the default cutover."""
+    rows, width, n = 160, 1_049_600, 1_048_576
+    torch_input = generate("iid", rows, width, 16, n=n)
     out = ttnn.experimental.topk_large_indices(
         _dev(torch_input.reshape(1, 1, rows, width), device),
         k=K,
@@ -450,7 +513,7 @@ def test_two_level_default_cutover(device, columns, n):
         sub_core_grids=_grid(device, columns),
         dram_read_noc=ttnn.NOC.NOC_0,
     )
-    _check_rows(torch_input, _indices(out, rows), n, (0, 98, 107, 108, 159))
+    _check_rows(torch_input, _indices(out, rows), n, (0, 51, 52, 98, 107, 108, 143, 144, 159))
 
 
 @pytest.mark.parametrize("n", [1_500, 3_000])
@@ -478,9 +541,14 @@ def test_single_level_load_order_zero_class(device):
         words[position] = word
     words[70] = 0x0080
     words[80] = 0x8080
-    row = (words << 16).view(torch.float32).to(torch.bfloat16)
-    out = ttnn.experimental.topk_large_indices(_dev(row.reshape(1, 1, 1, n), device), k=16)
-    indices = ttnn.to_torch(out, dtype=torch.uint32).reshape(-1).to(torch.int64).tolist()
-    assert indices[0] == 70
-    assert set(indices[1:7]) == set(zero_class)
-    assert indices[7] == 80
+    # The control row holds +0 at every zero-class position: both rows must rank the same.
+    control = words.clone()
+    for position in zero_class:
+        control[position] = 0x0000
+    for row_words in (words, control):
+        row = (row_words << 16).view(torch.float32).to(torch.bfloat16)
+        out = ttnn.experimental.topk_large_indices(_dev(row.reshape(1, 1, 1, n), device), k=16)
+        indices = ttnn.to_torch(out, dtype=torch.uint32).reshape(-1).to(torch.int64).tolist()
+        assert indices[0] == 70
+        assert set(indices[1:7]) == set(zero_class)
+        assert indices[7] == 80

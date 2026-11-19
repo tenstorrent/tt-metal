@@ -26,162 +26,228 @@ FORCE_INLINE void fill_neginf(uint32_t l1_addr, uint32_t num_elements) {
     }
 }
 
-// Two-level rows: stage 1 streams each row's valid prefix as 1024-key tiles (or the caller's block maxima), stage 3
-// gathers the 2048 blocks the writer selected into a 65,536-key candidate row in 2048-key chunks.
-template <bool has_block_max, typename InputAccessor, typename MaxAccessor>
-FORCE_INLINE void two_level_rows(
+// What the reader hands the compute and the writer next (see topk_two_level::header_row): a header page then 32
+// tile pages in the stage-1 CB (the tiles carry a unit's keys and are unused otherwise), and a mailbox page.
+FORCE_INLINE uint32_t two_level_announce(uint32_t code, uint32_t row) {
+    using namespace topk_two_level;
+    constexpr uint32_t stage1_batch = get_named_compile_time_arg_val("tl_stage1_batch");
+    CircularBuffer writer_mailbox(get_named_compile_time_arg_val("tl_cb_writer_mailbox"));
+    writer_mailbox.reserve_back(1);
+    auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(writer_mailbox.get_write_ptr());
+    words[writer_header_code_word] = code;
+    words[writer_header_row_word] = row;
+    clobber_all_memory();
+    writer_mailbox.push_back(1);
+    CircularBuffer stage1_cb(get_named_compile_time_arg_val("tl_cb_stage1"));
+    stage1_cb.reserve_back(1 + stage1_batch);
+    const uint32_t base = stage1_cb.get_write_ptr();
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base) = code;
+    return base;
+}
+
+FORCE_INLINE void two_level_push_stage1() {
+    clobber_all_memory();
+    CircularBuffer(get_named_compile_time_arg_val("tl_cb_stage1"))
+        .push_back(1 + get_named_compile_time_arg_val("tl_stage1_batch"));
+}
+
+// One phase-1 unit: its 32 tiles of 1024 keys, keys past the search length -inf.
+template <typename InputAccessor>
+FORCE_INLINE void two_level_unit(
     const Noc& noc,
     const InputAccessor& input,
-    const MaxAccessor& block_max,
     uint32_t search_len,
-    uint32_t start_row,
-    uint32_t num_whole_rows,
-    bool takes_split_row,
-    uint32_t split_row) {
+    const topk_two_level::Units& units,
+    uint32_t unit) {
+    using namespace topk_two_level;
+    constexpr uint32_t tile_bytes = get_compile_time_arg_val(2);
+    constexpr uint32_t stage1_batch = get_named_compile_time_arg_val("tl_stage1_batch");
+    static_assert(tile_bytes == tile_keys * sizeof(uint16_t));
+    CircularBuffer stage1_cb(get_named_compile_time_arg_val("tl_cb_stage1"));
+    const uint32_t base = two_level_announce(unit, 0);
+    // The unit's tiles are contiguous in the row and in the CB: its live keys, in whole 64 B granules (the row is a
+    // multiple of 32 keys long, so this never leaves it), read one piece at a time. Phase 1 saturates the DRAM from
+    // the other cores too; keeping little in flight per core keeps the queues short for the rows' small reads.
+    constexpr uint32_t piece_bytes = 4096;
+    const uint32_t first_key = units.part(unit) * stage1_batch * tile_keys;
+    constexpr uint32_t unit_keys = stage1_batch * tile_keys;
+    const uint32_t live = search_len - first_key < unit_keys ? search_len - first_key : unit_keys;
+    const uint32_t live_bytes = div_up(live, block_keys) * block_bytes;
+    for (uint32_t offset = 0; offset < live_bytes; offset += piece_bytes) {
+        noc.async_read(
+            input,
+            stage1_cb,
+            live_bytes - offset < piece_bytes ? live_bytes - offset : piece_bytes,
+            {.page_id = units.row(unit), .offset_bytes = first_key * static_cast<uint32_t>(sizeof(uint16_t)) + offset},
+            {.offset_bytes = tile_bytes + offset});
+        noc.async_read_barrier();
+    }
+    if (live < unit_keys) {
+        fill_neginf(base + tile_bytes + live * sizeof(uint16_t), unit_keys - live);
+    }
+    two_level_push_stage1();
+}
+
+// Stages 2 and 3 of one row. Stage 2 streams the row's block maxima from the maxima tensor; stage 3 gathers the 2048
+// blocks the writer selected into a 65,536-key candidate row, 2048 keys per chunk.
+template <typename InputAccessor, typename MaxAccessor>
+FORCE_INLINE void two_level_row(
+    const Noc& noc, const InputAccessor& input, const MaxAccessor& block_max, uint32_t search_len, uint32_t row) {
     using namespace topk_two_level;
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
     constexpr uint32_t chunk_bytes = get_compile_time_arg_val(1);
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(2);
     constexpr uint32_t tiles_per_chunk = get_compile_time_arg_val(3);
-    constexpr uint32_t cb_stage1 = get_named_compile_time_arg_val("tl_cb_stage1");
-    constexpr uint32_t cb_table = get_named_compile_time_arg_val("tl_cb_table");
-    constexpr uint32_t cb_max = get_named_compile_time_arg_val("tl_cb_max");
-    constexpr uint32_t stage1_batch = get_named_compile_time_arg_val("tl_stage1_batch");
     constexpr uint32_t blocks_per_chunk = chunk_bytes / block_bytes;
     constexpr uint32_t candidate_chunks = selected_blocks / blocks_per_chunk;
-    static_assert(tile_bytes == tile_keys * sizeof(uint16_t));
 
     CircularBuffer input_cb(cb_in);
-    CircularBuffer stage1_cb(cb_stage1);
-    CircularBuffer table_cb(cb_table);
-    Semaphore<> max_ready_sem(get_named_compile_time_arg_val("tl_max_ready_sem"));
-    // The writer's maxima scratch: never pushed, so its write pointer is its base on every RISC.
-    const uint32_t max_scratch = CircularBuffer(cb_max).get_write_ptr();
+    CircularBuffer table_cb(get_named_compile_time_arg_val("tl_cb_table"));
 
     const uint32_t num_blocks = div_up(search_len, block_keys);
     const uint32_t last_block = num_blocks - 1;
     const uint32_t last_block_live = search_len - last_block * block_keys;
-    // Whole batches: every reserve of the stage-1 CB is a batch, so none wraps. Tiles past the row are all -inf.
-    const uint32_t stage1_tiles = div_up(div_up(search_len, tile_keys), stage1_batch) * stage1_batch;
     const uint32_t max_chunks = stage2_chunks(search_len);
-    const uint32_t num_rows = num_whole_rows + (takes_split_row ? 1 : 0);
+    two_level_announce(header_row, row);
+    two_level_push_stage1();
 
-    for (uint32_t local_row = 0; local_row < num_rows; ++local_row) {
-        const uint32_t row = local_row < num_whole_rows ? start_row + local_row : split_row;
-
-        if constexpr (!has_block_max) {
-            for (uint32_t tile = 0; tile < stage1_tiles; tile += stage1_batch) {
-                const uint32_t batch = stage1_tiles - tile < stage1_batch ? stage1_tiles - tile : stage1_batch;
-                stage1_cb.reserve_back(batch);
-                const uint32_t base = stage1_cb.get_write_ptr();
-                for (uint32_t t = 0; t < batch; ++t) {
-                    const uint32_t first_key = (tile + t) * tile_keys;
-                    if (first_key >= search_len) {
-                        continue;
-                    }
-                    const uint32_t live = search_len - first_key < tile_keys ? search_len - first_key : tile_keys;
-                    // Whole 64 B granules: the row is a multiple of 32 keys long, so this never leaves it.
-                    const uint32_t bytes = div_up(live, block_keys) * block_bytes;
-                    noc.async_read(
-                        input,
-                        stage1_cb,
-                        bytes,
-                        {.page_id = row, .offset_bytes = first_key * sizeof(uint16_t)},
-                        {.offset_bytes = t * tile_bytes});
-                }
-                noc.async_read_barrier();
-                for (uint32_t t = 0; t < batch; ++t) {
-                    const uint32_t first_key = (tile + t) * tile_keys;
-                    const uint32_t live =
-                        first_key >= search_len
-                            ? 0
-                            : (search_len - first_key < tile_keys ? search_len - first_key : tile_keys);
-                    if (live < tile_keys) {
-                        fill_neginf(base + t * tile_bytes + live * sizeof(uint16_t), tile_keys - live);
-                    }
-                }
-                clobber_all_memory();
-                stage1_cb.push_back(batch);
-            }
-            // The writer has gathered this row's maxima into its scratch.
-            max_ready_sem.wait_min(local_row + 1);
+    // Stage 2: the row's block maxima through the input CB, one chunk per reserve so a chunk never wraps. Past
+    // the row's blocks the chunk is -inf.
+    const uint32_t max_bytes = num_blocks * sizeof(uint16_t);
+    for (uint32_t chunk = 0; chunk < max_chunks; ++chunk) {
+        input_cb.reserve_back(tiles_per_chunk);
+        const uint32_t dst = input_cb.get_write_ptr();
+        const uint32_t first = chunk * chunk_bytes;
+        const uint32_t bytes =
+            max_bytes > first ? (max_bytes - first < chunk_bytes ? max_bytes - first : chunk_bytes) : 0;
+        for (uint32_t offset = 0; offset < bytes; offset += tile_bytes) {
+            const uint32_t piece = bytes - offset < tile_bytes ? bytes - offset : tile_bytes;
+            noc.async_read(
+                block_max, input_cb, piece, {.page_id = row, .offset_bytes = first + offset}, {.offset_bytes = offset});
         }
-
-        // Stage 2: the row's block maxima through the input CB, one chunk per reserve so a chunk never wraps. Past
-        // the row's blocks the chunk is -inf.
-        const uint32_t max_bytes = num_blocks * sizeof(uint16_t);
-        for (uint32_t chunk = 0; chunk < max_chunks; ++chunk) {
-            input_cb.reserve_back(tiles_per_chunk);
-            const uint32_t dst = input_cb.get_write_ptr();
-            const uint32_t first = chunk * chunk_bytes;
-            const uint32_t bytes =
-                max_bytes > first ? (max_bytes - first < chunk_bytes ? max_bytes - first : chunk_bytes) : 0;
-            if (bytes > 0) {
-                if constexpr (has_block_max) {
-                    for (uint32_t offset = 0; offset < bytes; offset += tile_bytes) {
-                        const uint32_t piece = bytes - offset < tile_bytes ? bytes - offset : tile_bytes;
-                        noc.async_read(
-                            block_max,
-                            input_cb,
-                            piece,
-                            {.page_id = row, .offset_bytes = first + offset},
-                            {.offset_bytes = offset});
-                    }
-                } else {
-                    noc_async_read(get_noc_addr(max_scratch + first, noc.get_noc_id()), dst, bytes, noc.get_noc_id());
-                }
-            }
-            fill_neginf(dst + bytes, (chunk_bytes - bytes) / sizeof(uint16_t));
-            noc.async_read_barrier();
-            clobber_all_memory();
-            input_cb.push_back(tiles_per_chunk);
-        }
-
-        // Stage 3: the writer's ascending table of selected blocks, sentinels last. A row is one page in one bank,
-        // so its NoC address is resolved once and each block read is an offset from it.
-        const uint64_t row_noc_addr = input.get_noc_addr(row, 0, noc.get_noc_id());
-        table_cb.wait_front(1);
-        const auto* table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(table_cb.get_read_ptr());
-        for (uint32_t chunk = 0; chunk < candidate_chunks; ++chunk) {
-            input_cb.reserve_back(tiles_per_chunk);
-            const uint32_t chunk_base = input_cb.get_write_ptr();
-            ASSERT((chunk_base & (block_bytes - 1)) == 0);
-            uint32_t partial_slot = blocks_per_chunk;
-            uint32_t slot = 0;
-            while (slot < blocks_per_chunk) {
-                const uint32_t block = table[chunk * blocks_per_chunk + slot];
-                if (block == sentinel) {
-                    fill_neginf(chunk_base + slot * block_bytes, block_keys);
-                    ++slot;
-                    continue;
-                }
-                // One read for a run of consecutive blocks within this chunk.
-                uint32_t run = 1;
-                while (slot + run < blocks_per_chunk && table[chunk * blocks_per_chunk + slot + run] == block + run) {
-                    ++run;
-                }
-                if (block <= last_block && last_block < block + run) {
-                    partial_slot = slot + (last_block - block);
-                }
-                noc_async_read(
-                    row_noc_addr + block * block_bytes,
-                    chunk_base + slot * block_bytes,
-                    run * block_bytes,
-                    noc.get_noc_id());
-                slot += run;
-            }
-            noc.async_read_barrier();
-            if (partial_slot < blocks_per_chunk && last_block_live < block_keys) {
-                // The last block is read whole; its keys past the search length are stale.
-                fill_neginf(
-                    chunk_base + partial_slot * block_bytes + last_block_live * sizeof(uint16_t),
-                    block_keys - last_block_live);
-            }
-            clobber_all_memory();
-            input_cb.push_back(tiles_per_chunk);
-        }
-        table_cb.pop_front(1);
+        fill_neginf(dst + bytes, (chunk_bytes - bytes) / sizeof(uint16_t));
+        noc.async_read_barrier();
+        clobber_all_memory();
+        input_cb.push_back(tiles_per_chunk);
     }
+
+    // Stage 3: the writer's ascending table of selected blocks, sentinels last. A row is one page in one bank,
+    // so its NoC address is resolved once and each block read is an offset from it.
+    const uint64_t row_noc_addr = input.get_noc_addr(row, 0, noc.get_noc_id());
+    table_cb.wait_front(1);
+    const auto* table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(table_cb.get_read_ptr());
+    for (uint32_t chunk = 0; chunk < candidate_chunks; ++chunk) {
+        input_cb.reserve_back(tiles_per_chunk);
+        const uint32_t chunk_base = input_cb.get_write_ptr();
+        ASSERT((chunk_base & (block_bytes - 1)) == 0);
+        uint32_t partial_slot = blocks_per_chunk;
+        uint32_t slot = 0;
+        while (slot < blocks_per_chunk) {
+            const uint32_t block = table[chunk * blocks_per_chunk + slot];
+            if (block == sentinel) {
+                fill_neginf(chunk_base + slot * block_bytes, block_keys);
+                ++slot;
+                continue;
+            }
+            // One read for a run of consecutive blocks within this chunk.
+            uint32_t run = 1;
+            while (slot + run < blocks_per_chunk && table[chunk * blocks_per_chunk + slot + run] == block + run) {
+                ++run;
+            }
+            if (block <= last_block && last_block < block + run) {
+                partial_slot = slot + (last_block - block);
+            }
+            noc_async_read(
+                row_noc_addr + block * block_bytes,
+                chunk_base + slot * block_bytes,
+                run * block_bytes,
+                noc.get_noc_id());
+            slot += run;
+        }
+        noc.async_read_barrier();
+        if (partial_slot < blocks_per_chunk && last_block_live < block_keys) {
+            // The last block is read whole; its keys past the search length are stale.
+            fill_neginf(
+                chunk_base + partial_slot * block_bytes + last_block_live * sizeof(uint16_t),
+                block_keys - last_block_live);
+        }
+        clobber_all_memory();
+        input_cb.push_back(tiles_per_chunk);
+    }
+    table_cb.pop_front(1);
+}
+
+// A two-level program's schedule on this core. Its rows (core_index, core_index + num_cores, ...) run as soon as
+// their maxima are complete; until then the core claims phase-1 units, so the cores without a ready row keep the
+// DRAM streaming. With the caller's maxima there is no phase 1 and every row is ready at once.
+template <typename InputAccessor, typename MaxAccessor>
+FORCE_INLINE void two_level_run(
+    const Noc& noc,
+    const InputAccessor& input,
+    const MaxAccessor& block_max,
+    uint32_t search_len,
+    const topk_two_level::Units& units,
+    uint32_t core_index,
+    uint32_t num_cores) {
+    using namespace topk_two_level;
+    constexpr bool has_block_max = get_named_compile_time_arg_val("tl_block_max_input") != 0;
+    const uint32_t local_rows = core_index < units.num_rows ? div_up(units.num_rows - core_index, num_cores) : 0;
+    const auto* ready =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_named_compile_time_arg_val("tl_ready_sem")));
+    const uint64_t counter = get_noc_addr(
+        get_common_arg_val<uint32_t>(topk_common_args::reader_coordinator_noc_x),
+        get_common_arg_val<uint32_t>(topk_common_args::reader_coordinator_noc_y),
+        get_semaphore(get_named_compile_time_arg_val("tl_unit_sem")),
+        noc.get_noc_id());
+    // A non-posted atomic increment returns the counter's old value to an L1 word of the issuing core. The claims
+    // return to a word of their own: the default one is shared with the writer's atomics.
+    const uint32_t claim_word = get_semaphore(get_named_compile_time_arg_val("tl_claim_sem"));
+    const auto* claimed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(claim_word);
+    const auto claim = [&](uint32_t increment, uint32_t return_word) {
+        noc_fast_atomic_increment<noc_mode, true>(
+            noc.get_noc_id(),
+            write_at_cmd_buf,
+            counter,
+            NOC_UNICAST_WRITE_VC,
+            increment,
+            31 /*wrap*/,
+            false /*linked*/,
+            false /*posted*/,
+            return_word);
+        noc.async_atomic_barrier();
+    };
+    bool units_left = !has_block_max;
+    uint32_t local_row = 0;
+    while (true) {
+        if (local_row < local_rows) {
+            invalidate_l1_cache();
+            if (has_block_max || ready_count(*ready, local_row) >= units.per_row) {
+                two_level_row(noc, input, block_max, search_len, core_index + local_row * num_cores);
+                ++local_row;
+                continue;
+            }
+        }
+        if (units_left) {
+            claim(1, claim_word);
+            invalidate_l1_cache();
+            const uint32_t unit = *claimed;
+            if (unit < units.total) {
+                two_level_unit(noc, input, search_len, units, unit);
+            } else {
+                units_left = false;
+            }
+            continue;
+        }
+        if (local_row == local_rows) {
+            break;
+        }
+    }
+    if constexpr (!has_block_max) {
+        // Point this command buffer's atomic returns back at the default word, for the kernels that run after.
+        claim(0, MEM_NOC_ATOMIC_RET_VAL_ADDR);
+    }
+    two_level_announce(header_end, 0);
+    two_level_push_stage1();
 }
 
 }  // namespace
@@ -328,17 +394,18 @@ void kernel_main() {
         const auto block_max = TensorAccessor(
             block_max_args,
             get_common_arg_val<uint32_t>(topk_common_args::block_max_address),
-            get_named_compile_time_arg_val("tl_block_max_row_bytes"));
-        // A split row belongs whole to its first half; the second half skips it.
-        two_level_rows<has_block_max>(
+            get_common_arg_val<uint32_t>(topk_common_args::two_level_max_row_bytes));
+        two_level_run(
             noc,
             input,
             block_max,
             search_len,
-            start_row,
-            has_split ? num_rows - 1 : num_rows,
-            has_split && !second_half,
-            split_row);
+            topk_two_level::Units::of(
+                search_len,
+                get_named_compile_time_arg_val("tl_stage1_batch"),
+                get_common_arg_val<uint32_t>(topk_common_args::two_level_num_input_rows)),
+            get_arg_val<uint32_t>(topk_core_args::reader_two_level_core_index),
+            get_common_arg_val<uint32_t>(topk_common_args::two_level_num_cores));
         return;
     }
 #endif

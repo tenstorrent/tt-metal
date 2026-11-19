@@ -6,8 +6,10 @@
 
 // Shared by the three kernels of a two-level program. A two-level program selects each row's top k from the
 // maxima of 32-key blocks first, then from the keys of the 2048 selected blocks only:
-//   stage 1: block maxima of the valid prefix (compute: tilize + max reduce; writer: dense maxima row);
-//   stage 2: top-2048 of the maxima -> selected block ids (compute), ascending block table (writer);
+//   stage 1 (phase 1, every core): block maxima of all rows, claimed by the cores in 32-tile units (reader: tiles;
+//            compute: tilize + max reduce; writer: maxima to the maxima tensor, then a count on the row's owner);
+//   stage 2 (each core its rows, as soon as a row's maxima are complete, between phase-1 units): top-2048 of the
+//            row's maxima -> selected block ids (compute), ascending block table (writer);
 //   stage 3: the selected blocks gathered into one 65,536-key candidate row (reader), its exact top-2048
 //            (compute), candidate positions mapped back to keys (writer).
 // The program decides once, from the search length, whether its rows run this way or the single-level way. The
@@ -34,6 +36,47 @@ constexpr uint32_t writer_mailbox_mode_word = 0;
 constexpr uint32_t writer_mailbox_search_length_word = 1;
 
 constexpr uint32_t div_up(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
+
+// The phase-1 units: 32-tile batches of the rows' keys. Cores claim them one at a time from a counter on the
+// coordinator, so a core that streams faster does more of them. Units are numbered in waves of wave_rows rows,
+// across the rows first within a wave: each input row is one DRAM page in one bank, so the units in flight at once
+// spread over every bank, while each wave's rows finish early enough for their owners to start on them.
+constexpr uint32_t wave_rows = 16;
+struct Units {
+    uint32_t total;
+    uint32_t num_rows;
+    uint32_t per_row;
+
+    constexpr uint32_t row(uint32_t unit) const {
+        const uint32_t wave = unit / (wave_rows * per_row);
+        const uint32_t rows = num_rows - wave * wave_rows < wave_rows ? num_rows - wave * wave_rows : wave_rows;
+        return wave * wave_rows + (unit - wave * wave_rows * per_row) % rows;
+    }
+    constexpr uint32_t part(uint32_t unit) const {
+        const uint32_t wave = unit / (wave_rows * per_row);
+        const uint32_t rows = num_rows - wave * wave_rows < wave_rows ? num_rows - wave * wave_rows : wave_rows;
+        return (unit - wave * wave_rows * per_row) / rows;
+    }
+
+    static constexpr Units of(uint32_t search_len, uint32_t batch_tiles, uint32_t num_rows) {
+        const uint32_t per_row = div_up(search_len, batch_tiles * tile_keys);
+        return {per_row * num_rows, num_rows, per_row};
+    }
+};
+
+// Row r belongs to core r % num_cores, as that core's local row r / num_cores. A core's row semaphore counts the
+// finished phase-1 units of each local row in its own byte (a row has at most 64 units); a row is ready when its
+// count reaches per_row.
+constexpr uint32_t max_local_rows = 4;
+constexpr uint32_t ready_increment(uint32_t local_row) { return 1u << (8 * local_row); }
+constexpr uint32_t ready_count(uint32_t word, uint32_t local_row) { return (word >> (8 * local_row)) & 0xFFu; }
+
+// What the reader sends the compute (a header page in the stage-1 CB, then 32 tile pages) and the writer (its
+// mailbox) next: a phase-1 unit's number, one of this core's rows, or the end.
+constexpr uint32_t header_row = 0xFFFFFFFEu;
+constexpr uint32_t header_end = 0xFFFFFFFFu;
+constexpr uint32_t writer_header_code_word = 0;
+constexpr uint32_t writer_header_row_word = 1;
 
 // Whether a program runs two-level for this search length. An empty row (a real-token end of 0) runs two-level
 // too: with no blocks every stage passes -inf through, so the row comes out as sentinels.
