@@ -35,6 +35,8 @@ from .prefill import V41Prefill
 # decoder Reuse layers) and exports every decoder layer's window ring, so the ring replays only the prompt's last < 128
 # tokens instead of R >= 2541 (V4-Flash's prefill also ran every layer). Default 0: the encoder + layer 20 KV-only.
 DECODER = os.environ.get("V41_PREFILL_DECODER", "0") == "1"
+# tt-blaze DS41F-0164: synchronize before a RESTORED chunk's acks (default on; V41_PREFILL_RESTORE_SYNC=0 = the old unsynced acks)
+RESTORE_SYNC = os.environ.get("V41_PREFILL_RESTORE_SYNC", "1") == "1"
 # DS41F-0073 marked decoder chunks: with DECODER, V41_PREFILL_DECODER_MARKED=1 runs layers 20..39 only on the chunks tt-d-gen
 # marks (pd_decoder_cone: slot word bit 28, the chunks covering the migrated prefix's last cone tokens); every other chunk runs
 # the encoder + layer 20 KV-only, as the default prefill. The decoder starts at the first marked chunk from zero windows --
@@ -423,6 +425,12 @@ class V41PrefillRuntime:
         written back from the host store instead (the export's rows included)."""
         self._request_id = int(request_id)
         self._reused[slot_id] += int(end) - int(start)
+        if restored and RESTORE_SYNC:
+            # tt-blaze DS41F-0164: the restore's writes (rows, slab, EXPORT rows) were only dispatched; the acks are host-side
+            # and, with tt-d-gen row streaming (TT_KVM_ROW_STREAM_TOKENS > 0, the prefill worker's default since 11-17), make the
+            # KV Manager -- its own process and device access, unordered with this queue -- read this chunk's export rows.
+            # A computed chunk syncs before its acks; a restore must too. ~free: the next chunk's ids read drains it anyway.
+            ttnn.synchronize_device(self.mesh_device)
         self._publish_reuse(slot_id)  # before the acks, as for a computed chunk
         if self._ack is not None:
             for L in range(self.num_layers):
