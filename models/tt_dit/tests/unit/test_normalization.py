@@ -854,3 +854,40 @@ def test_dit_fused_distributed_groupnorm_rejects_empty_mask_and_affine(
             input_mask=mask,
             weight=weight,
         )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize(
+    ("leading", "embedding_dim"),
+    [((1,), 5120), ((1, 16), 128), ((1, 2), 128), ((2, 16), 128)],
+    ids=["hidden", "q_heads", "k_heads", "batched"],
+)
+def test_rmsnorm_row_capacity(
+    mesh_device: ttnn.MeshDevice, leading: tuple[int, ...], embedding_dim: int, expect_error
+) -> None:
+    """`row_capacity` runs one program for every row count up to it and tracks the default program's result."""
+    torch.manual_seed(0)
+    row_capacity = 640
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
+    )
+
+    torch_model = TorchRMSNorm(embedding_dim, norm_eps=1e-6, bias=False).to(dtype=torch.bfloat16)
+    tt_model = RMSNorm(embedding_dim, norm_eps=1e-6, bias=False, mesh_device=mesh_device)
+    tt_model.load_torch_state_dict(torch_model.state_dict())
+
+    added = 0
+    for rows in (320, 32, row_capacity):
+        x = torch.randn(*leading, rows, embedding_dim, dtype=torch.bfloat16) * 2 + 4
+        tt_x = bf16_tensor(x, device=mesh_device)
+        default = ttnn.to_torch(tt_model(tt_x, compute_kernel_config=compute_kernel_config))
+        entries = mesh_device.num_program_cache_entries()
+        actual = ttnn.to_torch(tt_model(tt_x, compute_kernel_config=compute_kernel_config, row_capacity=row_capacity))
+        added += mesh_device.num_program_cache_entries() - entries
+        assert actual.shape == default.shape
+        assert_quality(default, actual, pcc=0.99999)
+        with torch.no_grad():
+            assert_quality(torch_model(x), actual, pcc=0.9995)
+    assert added == 1, f"{added} row-capacity norm programs"
+    with expect_error(ValueError, "program_config"):
+        tt_model(tt_x, program_config=ttnn.LayerNormDefaultProgramConfig(), row_capacity=row_capacity)

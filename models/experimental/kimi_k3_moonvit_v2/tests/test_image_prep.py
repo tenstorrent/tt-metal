@@ -126,6 +126,21 @@ def test_rejects_non_rgb(config, expect_error, monkeypatch, mode):
         image_prep.image_to_patches(Image.new(mode, (35, 35)), config)
 
 
+@pytest.mark.parametrize(
+    "pixels,message",
+    [
+        (np.zeros((28, 28, 3), np.float32), "uint8"),
+        (np.zeros((28, 28), np.uint8), "uint8"),
+        (np.zeros((28, 28, 4), np.uint8), "uint8"),
+        (np.zeros((28, 42, 3), np.uint8), "W of 28"),  # whole patches, not whole merge windows
+        (np.zeros((14, 28, 3), np.uint8), "H a multiple of 28"),
+    ],
+)
+def test_pixels_to_patches_rejects(config, expect_error, pixels, message):
+    with expect_error(ValueError, message):
+        image_prep.pixels_to_patches(pixels, config)
+
+
 SIZES = ((1, 1), (35, 35), (100, 57), (1920, 1080), (8000, 300), (300, 8000), (4662, 4662))
 
 
