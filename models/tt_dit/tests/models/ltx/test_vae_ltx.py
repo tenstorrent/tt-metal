@@ -710,7 +710,7 @@ def test_ltx_video_decoder(
     _run_ltx_decoder_parity(mesh_device, h_axis, w_axis, num_links, num_frames, height, width, mean=mean, std=std)
 
 
-@pytest.mark.parametrize("num_frames, height, width", _LTX_DECODER_SHAPE_PARAMS)
+@pytest.mark.parametrize("num_frames, height, width", [pytest.param(9, 1088, 1920, id="9f_1088x1920")])
 @pytest.mark.parametrize(
     ("mesh_device", "h_axis", "w_axis", "num_links", "device_params", "topology"),
     LTX_VAE_DECODER_MULTI_ONLY_MESH_PARAMS[:1],

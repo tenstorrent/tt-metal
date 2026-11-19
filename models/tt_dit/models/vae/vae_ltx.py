@@ -163,17 +163,6 @@ class LTXCausalConv3d(Module):
         self.external_padding = tuple(external_padding)
         self.internal_padding = tuple(internal_padding)
 
-        # Opt-in (LTX_VAE_FOLD_TIME_PAD=1): conv3d repeats the edge frames itself ("replicate" T pad),
-        # replacing the slice+concat copy of the whole activation. Replicate clamps every dim, so this is
-        # exact only with no internal H/W pad (both sharded: the halo exchange pads them).
-        self.fold_time_pad = (
-            os.environ.get("LTX_VAE_FOLD_TIME_PAD", "0") == "1"
-            and self.time_pad > 0
-            and self.time_pad % 2 == 0
-            and self.internal_padding[1] == 0
-            and self.internal_padding[2] == 0
-        )
-
         dims_T, dims_H, dims_W = (conv_dims.T, conv_dims.H, conv_dims.W) if conv_dims is not None else (0, 0, 0)
         self.conv_config = get_conv3d_config(
             self.in_channels,
@@ -219,7 +208,25 @@ class LTXCausalConv3d(Module):
         self._w_mask_cache: dict[tuple, ttnn.Tensor] = {}
         self._pad_offset_cache: dict[tuple, ttnn.Tensor] = {}
         # Persistent-padded path (default on): neighbor_pad_halo -> compact -> halo_scatter into a padded buffer ->
-        self._persist_pad = os.environ.get("TT_LTX_NO_PERSIST_PAD") is None
+        self._persist_pad = (
+            os.environ.get("TT_LTX_NO_PERSIST_PAD") is None
+            and self._use_halo_conv
+            and self.external_padding[1] > 0
+            and self.parallel_config.height_parallel.factor > 1
+            and self.external_padding[2] > 0
+            and self.parallel_config.width_parallel.factor > 1
+        )
+        # Opt-in (LTX_VAE_FOLD_TIME_PAD=1): conv3d repeats the edge frames itself ("replicate" T pad),
+        # replacing the slice+concat copy of the whole activation. Replicate clamps every dim, so this is
+        # exact only with no internal H/W pad (both sharded: the halo exchange pads them), and conv3d's
+        # halo-buffer mode (halo conv off the persistent-padded path) takes zeros only.
+        self.fold_time_pad = (
+            os.environ.get("LTX_VAE_FOLD_TIME_PAD", "0") == "1"
+            and self.time_pad > 0
+            and self.internal_padding[1] == 0
+            and self.internal_padding[2] == 0
+            and (self._persist_pad or not self._use_halo_conv)
+        )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # LTX-2 stores weights under "conv.weight" and "conv.bias"
@@ -260,22 +267,6 @@ class LTXCausalConv3d(Module):
         if "bias" in state:
             state["bias"] = state["bias"].reshape(1, -1)
 
-    def _folds_time_pad(self, causal: bool) -> bool:
-        """Whether this call hands the symmetric T pad to conv3d instead of concatenating edge frames.
-
-        Only plain conv3d calls take it: conv3d's halo-buffer mode (the compact halo path, taken when
-        only one of H/W exchanges a halo or the persistent-padded path is off) accepts zeros only."""
-        if not self.fold_time_pad or causal:
-            return False
-        h_pad_needed = self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1
-        w_pad_needed = self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
-        halo_buffer_mode = (
-            self._use_halo_conv
-            and (h_pad_needed or w_pad_needed)
-            and not (self._persist_pad and h_pad_needed and w_pad_needed)
-        )
-        return not halo_buffer_mode
-
     def forward(
         self,
         x_BTHWC: ttnn.Tensor,
@@ -290,7 +281,7 @@ class LTXCausalConv3d(Module):
         # cf_input_padded: x is already a padded [.,Hp,Wp,.] buffer
         assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT
 
-        fold_time_pad = self._folds_time_pad(causal)
+        fold_time_pad = self.fold_time_pad and not causal
         conv_t_pad = self.time_pad // 2 if fold_time_pad else self.internal_padding[0]
         conv_padding_mode = "replicate" if fold_time_pad else "zeros"
 
@@ -356,7 +347,7 @@ class LTXCausalConv3d(Module):
                 neighbor_sems.append(sem_getter(self.parallel_config.width_parallel.mesh_axis))
                 links.append(_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 3))
 
-            if self._use_halo_conv and self._persist_pad and h_pad_needed and w_pad_needed:
+            if self._persist_pad:
                 # Persistent-padded: neighbor_pad_halo -> compact -> halo_scatter into a padded buffer -> plain
                 pHe, pWe = self.external_padding[1], self.external_padding[2]
                 # Interior per-device dims (x carries the padded border when cf_input_padded).
