@@ -72,7 +72,7 @@ def test_scatter(device):
 
     # Perform scatter operation
     output = ttnn.scatter(input_ttnn, dim, index_ttnn, source_ttnn)
-    logger.info(f"Scatter operation result: {output}")
+    logger.debug(f"Scatter operation result: {output}")
 
 
 def test_scatter_add(device):
@@ -88,7 +88,7 @@ def test_scatter_add(device):
 
     # Perform scatter_add operation (adds source values to input at specified indices)
     output = ttnn.scatter_add(input_ttnn, dim, index_ttnn, source_ttnn)
-    logger.info(f"Scatter add operation result: {output}")
+    logger.debug(f"Scatter add operation result: {output}")
 
 
 def test_repeat(device):
@@ -130,16 +130,17 @@ def test_tilize(device):
 
     # Tilize the tensor
     tilized_tensor = ttnn.tilize(input_tensor)
-    logger.info("Tilized Tensor Shape:", tilized_tensor.shape)
+    logger.info(f"Tilized Tensor Layout: {tilized_tensor.layout}")  # Layout.TILE
 
 
 def test_tilize_with_val_padding(device):
     # Create a tensor to tilize with value padding
     input_tensor = ttnn.rand((1, 1, 64, 32), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
-    # Tilize the tensor with value padding
+    # Tilize the tensor, padding its last dimension to 64 with zeros
     tilized_tensor = ttnn.tilize_with_val_padding(input_tensor, output_tensor_shape=[1, 1, 64, 64], pad_value=0.0)
-    logger.info("Tilized Tensor with Value Padding Shape:", tilized_tensor.shape)
+    logger.debug(f"Tilized Tensor Shape: {tilized_tensor.shape}")  # Shape([1, 1, 64, 32])
+    logger.debug(f"Tilized Tensor Padded Shape: {tilized_tensor.padded_shape}")  # Shape([1, 1, 64, 64])
 
 
 def test_fill_rm(device):
@@ -199,9 +200,9 @@ def test_untilize_with_unpadding(device):
     # Create a tilized tensor with padding
     tilized_tensor = ttnn.rand((1, 1, 64, 64), dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
 
-    # Untilize the tensor with unpadding
-    untilized_tensor = ttnn.untilize_with_unpadding(tilized_tensor, output_tensor_end=(1, 1, 64, 32))
-    logger.info("Untilized Tensor with Unpadding Shape:", untilized_tensor.shape)
+    # Untilize the tensor and keep its first 32 columns; output_tensor_end holds inclusive end indices
+    untilized_tensor = ttnn.untilize_with_unpadding(tilized_tensor, output_tensor_end=(0, 0, 63, 31))
+    logger.debug(f"Untilized Tensor with Unpadding Shape: {untilized_tensor.shape}")  # Shape([1, 1, 64, 32])
 
 
 def test_indexed_fill(device):

@@ -14,6 +14,7 @@
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc.hpp"
+#include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -26,6 +27,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <iterator>
 #include <cmath>
 #include <numeric>
 
@@ -114,6 +116,13 @@ float get_pad_value(
         }
         return 0.0f;
     }
+    // For UINT32, Max and Sum pad with 0. Min pads with UINT32_MAX, carried as a bit pattern like INT32.
+    if (dtype == tt::tt_metal::DataType::UINT32) {
+        if (reduce_type == reduction_common::ReduceType::Min) {
+            return std::bit_cast<float>(static_cast<uint32_t>(0xFFFFFFFFu));  // UINT32_MAX
+        }
+        return 0.0f;
+    }
 
     return reduce_type == reduction_common::ReduceType::Max
                ? -std::numeric_limits<float>::infinity()
@@ -187,6 +196,11 @@ static Tensor reduce_impl(
         // Multi-axis reduces run one axis at a time. Every decomposition here is exact (a sum of
         // partial sums, a max of maxes, a min of mins) and the intermediates stay fp32, so each
         // sub-step carries the caller's fast_and_approximate_mode rather than being pinned.
+        const bool is_int_input = ttnn::prim::is_int_reduce_dtype(input_tensor_arg.dtype());
+        const bool is_uint32_input = input_tensor_arg.dtype() == DataType::UINT32;
+        // transpose converts a UINT32 pad value numerically and the UINT32_MAX bit pattern is a NaN.
+        // UINT32 transposes therefore pad with 0. Min refills the padding with UINT32_MAX after each transpose.
+        const float transpose_pad_value = is_uint32_input ? 0.0f : pad_value;
         auto reduce_nd_loop = [&](const bool use_reduce_type, float scalar) -> Tensor {
             Tensor output_tensor = input_tensor_arg;
             bool first = true;
@@ -197,11 +211,12 @@ static Tensor reduce_impl(
                     // Only apply the scalar once when reducing dim-by-dim,
                     // otherwise the result will be scaled multiple times.
                     float effective_scalar = first ? scalar : 1.0;
-                    if constexpr (
-                        reduce_type == reduction_common::ReduceType::Max ||
-                        reduce_type == reduction_common::ReduceType::Min) {
+                    if (reduce_type == reduction_common::ReduceType::Max ||
+                        reduce_type == reduction_common::ReduceType::Min || is_int_input) {
                         // Sum/Mean: scale once on the first partial reduction. Min/Max: only on the last
                         // partial step (min_reduce_axis) so the result is scalar * global op(x).
+                        // Integer Sum also scales on the last step. Its multiply truncates the result.
+                        // Truncated partial sums would not add up to the truncated scaled total.
                         effective_scalar = (i_dim == min_reduce_axis) ? scalar : 1.0;
                     }
                     first = false;
@@ -209,8 +224,16 @@ static Tensor reduce_impl(
                     bool transpose = i_dim < rank - 2;
                     int reduce_dim = i_dim;
                     if (transpose) {
-                        output_tensor = ttnn::transpose(output_tensor, i_dim, -2, memory_config, pad_value);
+                        output_tensor = ttnn::transpose(output_tensor, i_dim, -2, memory_config, transpose_pad_value);
                         reduce_dim = rank - 2;
+                        if (reduce_type == reduction_common::ReduceType::Min && is_uint32_input &&
+                            output_tensor.layout() == Layout::TILE &&
+                            output_tensor.logical_shape()[-2] % tt::constants::TILE_HEIGHT != 0) {
+                            // The transpose padded the reduced rows with 0. Refill them with the Min identity.
+                            // A ROW_MAJOR tensor has no tile padding yet. The reduce tilizes it with UINT32_MAX.
+                            output_tensor = ttnn::fill_implicit_tile_padding(
+                                output_tensor, ttnn::PadValue{std::bit_cast<uint32_t>(pad_value)});
+                        }
                     }
                     // Only the smallest-axis sub-step ends the chain; earlier sub-steps stay in fp32.
                     const bool sub_is_last = chain_active && is_last_in_chain && (i_dim == min_reduce_axis);
@@ -242,7 +265,7 @@ static Tensor reduce_impl(
                             /*fast_and_approximate_mode=*/fast_and_approximate_mode);
                     }
                     if (transpose) {
-                        output_tensor = ttnn::transpose(output_tensor, i_dim, -2, memory_config, pad_value);
+                        output_tensor = ttnn::transpose(output_tensor, i_dim, -2, memory_config, transpose_pad_value);
                     }
                 }
             }
@@ -285,20 +308,20 @@ static Tensor reduce_impl(
                             : (rank < 4) ? ttnn::unsqueeze_to_4D(input_tensor_arg)
                                          : input_tensor_arg;
 
+        // In the chain, pack FP32 except on the last stage where we pack bf16.
+        std::optional<tt::tt_metal::DataType> chain_output_dtype;
+        if (chain_active) {
+            chain_output_dtype = is_last_in_chain ? tt::tt_metal::DataType::BFLOAT16 : tt::tt_metal::DataType::FLOAT32;
+        }
+
         if constexpr (reduce_type == reduction_common::ReduceType::Sum) {
-            // In the chain, pack FP32 except on the last stage where we pack bf16.
-            std::optional<tt::tt_metal::DataType> sum_output_dtype;
-            if (chain_active) {
-                sum_output_dtype =
-                    is_last_in_chain ? tt::tt_metal::DataType::BFLOAT16 : tt::tt_metal::DataType::FLOAT32;
-            }
             output_tensor = ttnn::operations::reduction::generic::detail::reduce(
                 input_tensor,
                 tt::tt_metal::ReduceOpMath::SUM,
                 reduce_op_dim,
                 scalar,
                 memory_config,
-                sum_output_dtype,
+                chain_output_dtype,
                 compute_kernel_config,
                 sub_core_grids,
                 /*negate=*/false,
@@ -311,7 +334,7 @@ static Tensor reduce_impl(
                 reduce_op_dim,
                 scalar / reduced_volume,
                 memory_config,
-                std::nullopt,
+                chain_output_dtype,
                 compute_kernel_config,
                 sub_core_grids,
                 /*negate=*/false,
@@ -498,11 +521,17 @@ static Tensor std_var_impl(
 }
 
 template <reduction_common::ReduceType reduce_type>
-bool call_fast_nc(DataType dtype) {
-    if constexpr (reduce_type != reduction_common::ReduceType::Sum) {
-        return false;
+bool call_fast_nc(DataType dtype, float scalar) {
+    const bool float_dtype = dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B || dtype == DataType::FLOAT32;
+    if constexpr (reduce_type == reduction_common::ReduceType::Sum) {
+        // fast_reduce_nc scales with a float multiply, so an INT32 sum takes it only unscaled.
+        return float_dtype || (dtype == DataType::INT32 && scalar == 1.0f);
+    } else if constexpr (reduce_type == reduction_common::ReduceType::Mean) {
+        // bf8_b mean keeps the transpose path: fast_reduce_nc rounds bf8_b partial sums to a shared exponent between
+        // stages.
+        return dtype == DataType::BFLOAT16 || dtype == DataType::FLOAT32;
     }
-    return dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B;
+    return false;
 }
 
 Tensor non_height_width_reduce(
@@ -512,7 +541,9 @@ Tensor non_height_width_reduce(
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<DataType>& output_dtype = std::nullopt,
-    bool fp32_intermediate_stages = false) {
+    bool fp32_intermediate_stages = false,
+    bool fast_and_approximate_mode = false,
+    float post_mul_scaler = 1.0f) {
     auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
     const auto& input_shape = input_tensor.logical_shape();
     // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
@@ -540,8 +571,16 @@ Tensor non_height_width_reduce(
         config,
         sub_core_grids,
         output_dtype,
-        fp32_intermediate_stages);
+        fp32_intermediate_stages,
+        fast_and_approximate_mode,
+        post_mul_scaler);
     auto [start, end, step] = get_slice_parameters(input_shape, output_tensor.logical_shape());
+    // fast_reduce_nc keeps the input's padded H/W as logical, so trimming them back only relabels tile
+    // padding. Block-float output keeps the slice, which leaves its shared-exponent padding clean.
+    if (!tt::tt_metal::is_block_float(output_tensor.dtype()) && !output_tensor.is_sharded()) {
+        const ttsl::SmallVector<uint32_t> logical_shape(end.begin(), end.end());
+        return ttnn::experimental::view(output_tensor, ttnn::Shape{logical_shape}, output_tensor.padded_shape());
+    }
     output_tensor = ttnn::slice(output_tensor, start, end, step);
     return output_tensor;
 }
@@ -565,57 +604,48 @@ Tensor reduce(
             dt != DataType::INT32 && dt != DataType::UINT32, "ttnn.mean does not support integer inputs - got {}.", dt);
     }
 
-    // UINT32 has no exact reduce path of its own. Sum/Max/Min typecast UINT32 -> INT32, reduce and typecast back.
-    // Since the typecast keeps the bits, values >= 2^31 are read as negative. So int32 addition wraps mod 2^32.
-    // Min XORs the sign bit. That maps the unsigned order onto the signed order.
-    // Max XORs every bit except the sign bit. That maps the unsigned order onto the reversed signed order.
-    // Max then runs as an INT32 Min. UINT32 0 becomes INT32_MAX, which is the Min pad value.
-    // An INT32 Max would not work here. UINT32 0 would become INT32_MIN, below the Max pad value INT32_MIN + 1.
-    // A padded row of zeros would then return 1.
-    // UINT32 requires scalar == 1 since XOR cannot undo a multiply and the INT32 path multiplies in float32.
-    if constexpr (
-        reduce_type == reduction_common::ReduceType::Sum || reduce_type == reduction_common::ReduceType::Max ||
-        reduce_type == reduction_common::ReduceType::Min) {
-        if (input_tensor_arg.dtype() == DataType::UINT32) {
-            TT_FATAL(scalar == 1.0f, "UINT32 sum/max/min do not support scalar != 1, got {}.", scalar);
-            constexpr bool flip_bits = reduce_type != reduction_common::ReduceType::Sum;
-            constexpr auto int32_reduce_type =
-                flip_bits ? reduction_common::ReduceType::Min : reduction_common::ReduceType::Sum;
-            constexpr int32_t xor_mask = reduce_type == reduction_common::ReduceType::Max
-                                             ? std::numeric_limits<int32_t>::max()
-                                             : std::numeric_limits<int32_t>::min();
-            Tensor as_int32 =
-                ttnn::typecast(input_tensor_arg, DataType::INT32, std::nullopt, std::nullopt, sub_core_grids);
-            if constexpr (flip_bits) {
-                as_int32 =
-                    ttnn::bitwise_xor(as_int32, xor_mask, std::nullopt, std::nullopt, {}, {}, {}, sub_core_grids);
-            }
-            Tensor result = reduce<int32_reduce_type>(
-                as_int32,
-                dim_arg,
-                keepdim,
-                memory_config_arg,
-                compute_kernel_config,
-                scalar,
-                sub_core_grids,
-                fast_and_approximate_mode,
-                output_layout);
-            if constexpr (flip_bits) {
-                result = ttnn::bitwise_xor(result, xor_mask, std::nullopt, std::nullopt, {}, {}, {}, sub_core_grids);
-            }
-            return ttnn::typecast(result, DataType::UINT32, std::nullopt, std::nullopt, sub_core_grids);
+    ttsl::SmallVector<int> dim = reduction_common::generate_reduce_dim(input_tensor_arg, dim_arg);
+    const auto& arg_shape = input_tensor_arg.logical_shape();
+    const int rank = static_cast<int>(arg_shape.rank());
+
+    // Reducing a size-1 axis is the identity, so drop it rather than pay a launch or a transpose round-trip
+    // for it. Full reductions keep every axis, which leaves their precision chain unchanged.
+    ttsl::SmallVector<int> non_unit_dims;
+    if (rank > 0) {
+        std::copy_if(
+            dim.begin(), dim.end(), std::back_inserter(non_unit_dims), [&](int d) { return arg_shape[d] != 1; });
+    }
+    if (!non_unit_dims.empty() && non_unit_dims.size() < dim.size() && static_cast<int>(dim.size()) < rank) {
+        Tensor output_tensor = reduce<reduce_type>(
+            input_tensor_arg,
+            non_unit_dims,
+            /*keepdim=*/true,
+            memory_config_arg,
+            compute_kernel_config,
+            scalar,
+            sub_core_grids,
+            fast_and_approximate_mode,
+            output_layout);
+        if (keepdim) {
+            return output_tensor;
         }
+        ttsl::SmallVector<uint32_t> output_shape;
+        for (int axis = 0; axis < rank; ++axis) {
+            if (std::find(dim.begin(), dim.end(), axis) == dim.end()) {
+                output_shape.push_back(arg_shape[axis]);
+            }
+        }
+        return ttnn::reshape(output_tensor, ttnn::Shape{output_shape});
     }
 
-    ttsl::SmallVector<int> dim = reduction_common::generate_reduce_dim(input_tensor_arg, dim_arg);
     float pad_value = get_pad_value(reduce_type, input_tensor_arg.dtype());
     // TODO: generalize to support all types, parameters, and formats. Issue #18566
     ttsl::SmallVector<int> non_height_width_dims{}, height_width_dims{};
 
     bool is_tiled = input_tensor_arg.layout() == TILE_LAYOUT;
-    // For INT32 the pad sentinel is carried as a raw bit pattern (see get_pad_value); pass it through
+    // For INT32/UINT32 the pad sentinel is carried as a raw bit pattern (see get_pad_value); pass it through
     // PadValue's integer arm so fill_pad reinterprets the bits rather than decoding numerically.
-    const ttnn::PadValue fill_pad_value = input_tensor_arg.dtype() == tt::tt_metal::DataType::INT32
+    const ttnn::PadValue fill_pad_value = ttnn::prim::is_int_reduce_dtype(input_tensor_arg.dtype())
                                               ? ttnn::PadValue{std::bit_cast<uint32_t>(pad_value)}
                                               : ttnn::PadValue{pad_value};
     auto input_tensor = input_tensor_arg;
@@ -629,7 +659,6 @@ Tensor reduce(
                 input_tensor_arg.logical_shape()[-1] % tt::constants::TILE_WIDTH == 0,
             "MX reductions need tile-aligned H and W (no implicit tile padding), got shape {}",
             input_tensor_arg.logical_shape());
-        const int rank = static_cast<int>(input_tensor_arg.logical_shape().rank());
         for (const int d : dim) {
             const int axis = d < 0 ? d + rank : d;
             TT_FATAL(
@@ -637,8 +666,12 @@ Tensor reduce(
         }
         TT_FATAL(keepdim, "MX reductions need keepdim=True (the squeezing reshape is not wired for MX tiles)");
     }
-    if (is_tiled && (input_tensor.logical_shape()[-2] % tt::constants::TILE_HEIGHT != 0 ||
-                     input_tensor.logical_shape()[-1] % tt::constants::TILE_WIDTH != 0)) {
+    // Tile padding only reaches valid outputs when H or W is reduced, or through a block-float shared exponent.
+    const bool reduces_h_or_w =
+        dim.empty() || std::any_of(dim.begin(), dim.end(), [&](int d) { return d >= rank - 2; });
+    if (is_tiled && (reduces_h_or_w || tt::tt_metal::is_block_float(input_tensor.dtype())) &&
+        (input_tensor.logical_shape()[-2] % tt::constants::TILE_HEIGHT != 0 ||
+         input_tensor.logical_shape()[-1] % tt::constants::TILE_WIDTH != 0)) {
         // fill_pad writes in place. A reduction must not rewrite its caller's tensor.
         // Both ops stay on sub_core_grids: on the full grid they can land in another sub-device,
         // where nothing orders them against the producer of the input or the reduce.
@@ -655,14 +688,20 @@ Tensor reduce(
         (dim.size() < static_cast<size_t>(in_shape.rank()) ||
          input_tensor.logical_volume() > static_cast<uint64_t>(in_shape[-2]) * in_shape[-1]);
 
-    // fast_reduce_nc ignores `scalar` so it can't be used when scalar != 1.0f.
-    if (call_fast_nc<reduce_type>(input_tensor.dtype()) && scalar == 1.0f) {
+    if constexpr (reduce_type == reduction_common::ReduceType::Sum) {
+        // INT32 accumulates in a 32-bit DEST; with no config, both reduce paths default fp32_dest_acc_en on.
+        TT_FATAL(
+            input_tensor.dtype() != DataType::INT32 || !compute_kernel_config.has_value() ||
+                std::get<2>(
+                    ttnn::get_compute_kernel_config_args(input_tensor.device()->arch(), *compute_kernel_config)),
+            "ttnn.sum with INT32 input requires fp32_dest_acc_en=true in the compute kernel config");
+    }
+    if (call_fast_nc<reduce_type>(input_tensor.dtype(), scalar)) {
         auto dims = split_height_width_dims(dim, input_tensor);
         non_height_width_dims = dims.first;
         height_width_dims = dims.second;
 
         if (!non_height_width_dims.empty()) {
-            auto rank = input_tensor_arg.logical_shape().rank();
             auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
 
             // If the input is a rank 0 tensor (scalar), return a copy of it
@@ -684,6 +723,13 @@ Tensor reduce(
                 fast_nc_final_dtype = height_width_dims.empty() ? DataType::BFLOAT16 : DataType::FLOAT32;
                 fast_nc_intermediate_fp32 = non_height_width_dims.size() > 1;
             }
+            // The scale is applied once: by fast_reduce_nc when no H/W stage follows, else by the H/W stage,
+            // which divides a mean by its own H/W volume, so it takes only the N/C share of 1/N.
+            float nc_volume = 1.0f;
+            for (int d : non_height_width_dims) {
+                nc_volume *= static_cast<float>(input_tensor.logical_shape()[d]);
+            }
+            const float nc_scalar = reduce_type == reduction_common::ReduceType::Mean ? scalar / nc_volume : scalar;
             input_tensor = non_height_width_reduce(
                 input_tensor,
                 non_height_width_dims,
@@ -691,13 +737,18 @@ Tensor reduce(
                 compute_kernel_config,
                 sub_core_grids,
                 fast_nc_final_dtype,
-                fast_nc_intermediate_fp32);
+                fast_nc_intermediate_fp32,
+                fast_and_approximate_mode,
+                height_width_dims.empty() ? nc_scalar : 1.0f);
 
             if (height_width_dims.empty()) {
                 return adjust_shape(
                     input_tensor, input_tensor_arg.logical_shape(), keepdim, height_width_dims, non_height_width_dims);
             }
             dim = height_width_dims;
+            if constexpr (reduce_type == reduction_common::ReduceType::Mean) {
+                scalar = nc_scalar;
+            }
         }
     }
     return reduce_impl<reduce_type>(
