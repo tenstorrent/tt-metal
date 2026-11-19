@@ -605,16 +605,30 @@ jobs:
 
       - name: 📦 Compute CPM cache key
         id: cpm-key
+        # The key holds the build variant because configure fetches different CPM
+        # packages per variant: Tracy builds also install emsdk into .cpmcache, and
+        # skip-tt-train builds do not fetch the tt-train packages. One shared key lets
+        # the smaller variant save first, and then the larger variant downloads its
+        # extra packages on every run.
+        # hashFiles lists each file that calls CPMAddPackage at configure time
+        # (git grep -l CPMAddPackage), plus cmake/CPM.cmake for the CPM version.
         run: |
-          echo "key=cpm-z9l-${{ hashFiles(
+          variant="tracy-${{ inputs.tracy && 'on' || 'off' }}-tttrain-${{ inputs.skip-tt-train && 'off' || 'on' }}"
+          echo "key=cpm-z9l-${variant}-${{ hashFiles(
+            'cmake/CPM.cmake',
             'third_party/CMakeLists.txt',
+            'tt_metal/third_party/CMakeLists.txt',
             'tt_metal/third_party/umd/third_party/CMakeLists.txt',
-            'tt-train/cmake/dependencies.cmake') }}" >> "$GITHUB_OUTPUT"
+            'tt-train/cmake/dependencies.cmake',
+            'tt-train/sources/examples/mnist_mlp/CMakeLists.txt') }}" >> "$GITHUB_OUTPUT"
 
       - name: 📦 Restore CPM source cache (Garage S3)
         id: cpm-cache
         # Same fork guard as the ccache S3 steps: forks have no secrets, so skip S3
         # and let CMake configure fetch CPM sources from scratch.
+        # Outputs: hit=true when the download succeeds. save=true only on a real miss
+        # (HTTP 404). A connection error or other failure sets save=false, so this job
+        # does not overwrite a good cache entry that it could not read.
         if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         env:
           CACHE_KEY: ${{ steps.cpm-key.outputs.key }}
@@ -624,16 +638,26 @@ jobs:
           CREDS="${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}"
           URL="${AWS_ENDPOINT_URL_S3}/${CPM_S3_BUCKET}/${CPM_S3_PREFIX}/${CACHE_KEY}.tar.zst"
           echo "Restoring CPM cache from: ${URL}"
-          # -f => non-2xx (incl. 404 miss) exits non-zero; --retry rides out transient blips.
-          if curl -fsS --retry 3 --retry-delay 2 --max-time 120 \
+          # No -f: curl exits 0 on any HTTP status, and we read the status code.
+          # --retry covers timeouts and HTTP 408/429/5xx. --retry-connrefused also
+          # covers "connection refused", which --retry alone does not retry.
+          rc=0
+          http_code=$(curl -sS --retry 5 --retry-delay 2 --retry-connrefused --max-time 120 \
                --aws-sigv4 "${SIGV4}" --user "${CREDS}" \
-               "${URL}" -o .cpmcache.tar.zst; then
+               -w '%{http_code}' -o .cpmcache.tar.zst "${URL}") || rc=$?
+          if [ "${rc}" -eq 0 ] && [ "${http_code}" = "200" ]; then
             echo "CPM cache HIT (key=${CACHE_KEY})"
             echo "hit=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "CPM cache MISS or restore error (key=${CACHE_KEY}); continuing without cache"
-            rm -f .cpmcache.tar.zst   # remove any partial/empty download
+          elif [ "${rc}" -eq 0 ] && [ "${http_code}" = "404" ]; then
+            echo "CPM cache MISS (key=${CACHE_KEY}, HTTP 404); configure fetches sources, and this job saves the cache"
+            rm -f .cpmcache.tar.zst   # remove the 404 response body
             echo "hit=false" >> "$GITHUB_OUTPUT"
+            echo "save=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::CPM cache restore failed (curl exit=${rc}, HTTP ${http_code:-none}, key=${CACHE_KEY}); configure fetches sources, and this job does not save the cache"
+            rm -f .cpmcache.tar.zst   # remove any partial download or error body
+            echo "hit=false" >> "$GITHUB_OUTPUT"
+            echo "save=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: 📦 Unpack CPM cache
@@ -687,20 +711,16 @@ jobs:
           "${build_args[@]}"
 
       - name: 📦 Pack CPM cache
-        # Only pack when we can actually save. For fork PRs the restore step is
-        # skipped (no secrets), so 'hit' is unset and would otherwise trigger a
-        # pointless zstd compression that never gets uploaded.
-        if: >-
-          steps.cpm-cache.outputs.hit != 'true' &&
-          (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
+        # Pack only after a real miss (HTTP 404). For fork PRs the restore step is
+        # skipped (no secrets), so 'save' is unset and this step does not run.
+        if: steps.cpm-cache.outputs.save == 'true'
         run: |
           [ -d .cpmcache ] && tar -I 'zstd -T0 --long -9 -v' -cf .cpmcache.tar.zst .cpmcache || true
 
       - name: 📦 Save CPM source cache (Garage S3)
-        # Only upload on a miss, and only where we have S3 creds (same fork guard).
-        if: >-
-          steps.cpm-cache.outputs.hit != 'true' &&
-          (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
+        # Upload only after a real miss (HTTP 404). A restore error does not upload,
+        # so a job that could not reach Garage does not overwrite a good entry.
+        if: steps.cpm-cache.outputs.save == 'true'
         env:
           CACHE_KEY: ${{ steps.cpm-key.outputs.key }}
         run: |
@@ -715,7 +735,7 @@ jobs:
           echo "Saving CPM cache to: ${URL} ($(du -h .cpmcache.tar.zst | cut -f1))"
           # Use --upload-file instead of --data-binary so curl streams the tarball
           # from disk. A 1.2 GB CPM archive caused OOM with --data-binary @file.
-          if curl -fsS --retry 3 --retry-delay 2 --max-time 300 \
+          if curl -fsS --retry 3 --retry-delay 2 --retry-connrefused --max-time 300 \
                --upload-file .cpmcache.tar.zst \
                --aws-sigv4 "${SIGV4}" --user "${CREDS}" \
                "${URL}" -o /dev/null; then
