@@ -71,7 +71,7 @@ class ParallelFeedForward(Module):
     ):
         """`ff1_compute_kernel_config` / `ff2_compute_kernel_config` are each projection's compute config (None: the
         linear's default); a `compute_kernel_config` passed to `forward` overrides both. `ff1_output_dtype` (e.g.
-        bfloat8_b) sets the dtype of the ff1 -> ff2 intermediate; ff2's output then stays bfloat16."""
+        bfloat8_b) sets the dtype of the ff1 -> ff2 intermediate."""
         super().__init__()
 
         if inner_dim is None:
