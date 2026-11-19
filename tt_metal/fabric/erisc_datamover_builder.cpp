@@ -1046,11 +1046,16 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         sender_channel_to_check);
     TT_FATAL(receiver_channel_num_buffers > 0, "Receiver channel num buffers must be greater than 0");
 
-    // The router across the link published its receivers before any kernel is emitted (FabricBuilderContext).
+    // The router across the link published its receivers before any kernel is emitted (FabricBuilderContext). With no
+    // router there this launch, its receivers are taken to match this router's, as stock does.
     const auto [link_peer_node, link_peer_chan] =
         control_plane.get_connected_mesh_chip_chan_ids(this->local_fabric_node_id, this->my_eth_channel);
-    const RouterChannelLayout& peer_layout =
-        fabric_context.get_builder_context().get_router_channel_layout(link_peer_node, link_peer_chan);
+    const auto peer =
+        fabric_context.get_builder_context().get_peer_router_channel_layout(link_peer_node, link_peer_chan);
+    const RouterChannelLayout peer_layout =
+        std::holds_alternative<NullPeerLayout>(peer)
+            ? static_channel_allocator->get_layout()
+            : std::get<std::reference_wrapper<const RouterChannelLayout>>(peer).get();
 
     constexpr bool enable_risc_cpu_data_cache = false;
 
