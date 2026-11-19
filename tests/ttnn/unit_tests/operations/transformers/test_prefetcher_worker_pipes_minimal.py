@@ -186,10 +186,14 @@ def test_minimal_pipe_completion(device, num_layers, num_receivers):
         # The op takes one weight per tensor kind; the address table carries every layer's copy.
         ttnn.dram_prefetcher(tt_weights[:1] + [tt_addrs], num_layers, prefetcher_pipes=pipes)
         isolation.stall_on_workers()
-        for _layer in range(num_layers):
-            ttnn.experimental.test_tensor_prefetcher_pipe_consumer(
-                device, num_iters=layout.num_blocks, page_size_bytes=layout.entry_size, prefetcher_pipes=pipes
-            )
+        # One consumer drains every layer. Under async slow dispatch a second consumer launch would wait
+        # for the sender to exit, and the sender waits for that consumer's credits.
+        ttnn.experimental.test_tensor_prefetcher_pipe_consumer(
+            device,
+            num_iters=num_layers * layout.num_blocks,
+            page_size_bytes=layout.entry_size,
+            prefetcher_pipes=pipes,
+        )
         ttnn.synchronize_device(device)
 
 
@@ -227,6 +231,9 @@ def test_minimal_pipe_matmul(device):
     Completion alone cannot catch a block that arrives corrupt, at the wrong offset, or in the wrong
     order, so this is what makes the delivery contract testable rather than just the handshake.
     """
+    # Skip before the sender launches: it would otherwise wait forever on a matmul that fails to compile.
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        pytest.skip("The pipe-fed matmul reader does not support Quasar yet (prefetcher_pipe_in1_window.hpp)")
     layout = _MinimalLayout(device)
     _space, pipes = _make_pipe(device, layout)
     pt_weights, tt_weights, tt_addrs = _make_weights(device, layout, num_layers=1)
