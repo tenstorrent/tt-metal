@@ -4,9 +4,9 @@
 
 """The action expert on device: a 512-wide Cosmos3 Edge text stack over the LM's KV cache.
 
-Expert layer i writes the K/V of its 64 action tokens into rows `[p_pad, p_pad + 64)` of LM layer i's cache, with
-`p_pad` the CoT prefix rounded up to a tile, and attends non-causally over `[prefix ; own 64]` under an additive
-mask. The next call writes the same rows, which is the reference's crop back to the prefix.
+Expert layer i writes the K/V of its N action tokens (64 in the checkpoint) into rows `[p_pad, p_pad + N)` of LM
+layer i's cache, with `p_pad` the CoT prefix rounded up to a tile, and attends non-causally over `[prefix ; own N]`
+under an additive mask. The next call writes the same rows, which is the reference's crop back to the prefix.
 """
 
 from __future__ import annotations
@@ -31,11 +31,9 @@ from models.tt_dit.layers.linear import Linear
 from models.tt_dit.layers.module import Module, ModuleList
 from models.tt_dit.utils import tensor
 
-ACTION_TOKENS = 64
-
 # The reference masks with the fp32 minimum, which rounds to -inf in bf16; any finite value this far below the
 # scores gives the same zero weight without risking inf - inf in the softmax.
-_MASKED = -1e9
+MASKED = -1e9
 
 _MAX_CHUNK = 128
 
@@ -46,42 +44,45 @@ def _ceil(x: int, multiple: int) -> int:
 
 @dataclass
 class ExpertFrame:
-    """Per-frame expert conditioning, shared by every layer and every flow step."""
+    """Per-frame expert conditioning, shared by every layer and every flow step; N is the number of action tokens."""
 
     p_pad: int  # cache row of the first action token: the CoT prefix rounded up to a tile
-    mask: ttnn.Tensor  # [B, 1, 64, p_pad + 64] additive bf16
-    cos: ttnn.Tensor  # [B, 64, head_dim]
-    sin: ttnn.Tensor  # [B, 64, head_dim]
+    mask: ttnn.Tensor  # [B, 1, N, p_pad + N] additive bf16
+    cos: ttnn.Tensor  # [B, N, head_dim]
+    sin: ttnn.Tensor  # [B, N, head_dim]
 
 
 def make_expert_frame(
-    cot: CotResult, inp: ModelInputs, *, mesh_device: ttnn.MeshDevice, rope_theta: float = 1e8, head_dim: int = 128
+    cot: CotResult, inp: ModelInputs, *, ecfg: TextConfig, n_waypoints: int, mesh_device: ttnn.MeshDevice
 ) -> ExpertFrame:
-    """Mask and rotary tables of the action tokens for the B samples of `cot`, generated from the single prompt `inp`.
+    """Mask and rotary tables of the `n_waypoints` action tokens for the B samples of `cot`.
 
-    The action tokens continue each sample's text right after its anchor, at `rope_deltas + offset + arange(64)` on
-    every M-RoPE axis, so the interleaved M-RoPE reduces to 1D RoPE over the full frequency table. `rope_theta` and
-    `head_dim` are the expert's; the defaults are the checkpoint's.
+    `inp` is the single prompt the CoT was generated from. The action tokens continue each sample's text right after
+    its anchor, at `rope_deltas + offset + arange(n_waypoints)` on every M-RoPE axis, so the interleaved M-RoPE
+    reduces to 1D RoPE over the full frequency table.
     """
     batch = cot.tokens.shape[0]
     if inp.input_ids.shape[0] != 1 or not bool(inp.attention_mask.all()):
         msg = "the expert frame takes the single unpadded prompt the CoT was generated from"
         raise ValueError(msg)
+    if n_waypoints % ttnn.TILE_SIZE != 0:
+        msg = f"fill_cache writes whole tiles, so the action token count must be a multiple of 32, got {n_waypoints}"
+        raise ValueError(msg)
     p_pad = _ceil(cot.prefix_length, ttnn.TILE_SIZE)
-    if p_pad + ACTION_TOKENS > cot.cache.size:
-        msg = f"a {cot.cache.size}-row cache cannot hold the {ACTION_TOKENS} action rows after row {p_pad}"
+    if p_pad + n_waypoints > cot.cache.size:
+        msg = f"a {cot.cache.size}-row cache cannot hold the {n_waypoints} action rows after row {p_pad}"
         raise ValueError(msg)
 
     rope_deltas = inp.rope_deltas.repeat_interleave(batch, dim=0)
-    positions = expert_position_ids(cot.offsets, rope_deltas, ACTION_TOKENS)[0]
-    rope = RotaryEmbedding(head_size=head_dim, config=RopeConfig(theta=rope_theta))
+    positions = expert_position_ids(cot.offsets, rope_deltas, n_waypoints)[0]
+    rope = RotaryEmbedding(head_size=ecfg.head_dim, config=RopeConfig(theta=ecfg.rope_theta))
     cos, sin = rope.forward(
         tensor.from_torch(positions.float(), device=mesh_device, dtype=ttnn.float32), dtype=ttnn.bfloat16
     )
 
     # Columns from a sample's offset to p_pad are text after its anchor, or rows no sample wrote: both masked.
     prompt_mask = inp.attention_mask.repeat_interleave(batch, dim=0)
-    mask = expert_mask(cot.offsets, prompt_mask, p_pad, ACTION_TOKENS).clamp(min=_MASKED)
+    mask = expert_mask(cot.offsets, prompt_mask, p_pad, n_waypoints).clamp(min=MASKED)
     return ExpertFrame(p_pad=p_pad, mask=tensor.from_torch(mask, device=mesh_device), cos=cos, sin=sin)
 
 
@@ -127,10 +128,13 @@ class TtExpertAttention(Module):
             state["qkv.weight"] = torch.cat([state.pop(f"{p}_proj.weight") for p in "qkv"], dim=0)
 
     def forward(self, x: ttnn.Tensor, *, layer_kv: tuple[ttnn.Tensor, ttnn.Tensor], frame: ExpertFrame) -> ttnn.Tensor:
-        """`x` `[B, 64, hidden]` -> `[B, 64, hidden]`; writes this call's K/V into `layer_kv` at `frame.p_pad`."""
+        """`x` `[B, N, hidden]` -> `[B, N, hidden]`; writes this call's K/V into `layer_kv` at `frame.p_pad`."""
         batch, seq, _ = x.shape
         k_cache, v_cache = layer_kv
         kv_len = frame.p_pad + seq
+        if (frame.mask.shape[2], frame.mask.shape[3]) != (seq, kv_len):
+            msg = f"the frame mask {tuple(frame.mask.shape)} is not for {seq} action tokens after row {frame.p_pad}"
+            raise ValueError(msg)
         if k_cache.shape[0] != batch or k_cache.shape[1] != self.num_kv_heads or k_cache.shape[3] != self.head_dim:
             msg = f"cache {tuple(k_cache.shape)} does not match {batch} sequences of {self.num_kv_heads} KV heads"
             raise ValueError(msg)
@@ -214,7 +218,7 @@ class TtExpert(Module):
                 del state[key]
 
     def forward(self, x: ttnn.Tensor, *, cache: AlpamayoCache, frame: ExpertFrame) -> ttnn.Tensor:
-        """`x` `[B, 64, hidden]` action embeddings -> `[B, 64, hidden]` after the final norm."""
+        """`x` `[B, N, hidden]` action embeddings -> `[B, N, hidden]` after the final norm."""
         for i, layer in enumerate(self.layers):
             x = layer.forward(x, layer_kv=cache.layer_kv(i), frame=frame)
         return self.final_norm.forward(x)
