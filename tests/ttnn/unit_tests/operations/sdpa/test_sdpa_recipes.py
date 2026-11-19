@@ -1,0 +1,366 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""SDPA precision recipes (ttnn.SDPAPrecision): the fast subset that runs in the ttnn sanity sdpa group.
+
+Every recipe once, plus masks, causal / sliding-window / chunked / windowed key ranges, paged K/V, MLA, attention
+sinks, concatenated-heads output, joint attention, op-selected blocking, program cache and trace, precision routing,
+rejected arguments. The sweeps (all shapes, long K, rising maxima, every recipe for masks / joint / blocking)
+are in tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_recipes.py.
+"""
+
+import pytest
+import torch
+import ttnn
+
+from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
+    CAUSAL_SHAPES,
+    L2_PCT_BOUND,
+    OP_SELECTED_SHAPES,
+    SHAPES,
+    VARIANTS,
+    recipe_hardware,
+    check_accuracy,
+    check_attn_mask,
+    check_cache_hit_rebinds,
+    check_chunked,
+    check_chunked_trace,
+    check_concat_heads,
+    check_joint,
+    check_large_logits,
+    check_key_range,
+    check_legacy_arguments,
+    check_mixed_kv,
+    check_mla,
+    check_offset_rows,
+    check_op_selected_blocking,
+    check_routing,
+    check_sink,
+    check_windowed,
+    fp32_dest_config,
+    MLA_SHAPES,
+    inputs_for,
+    l2_pct,
+    program_config,
+    randn,
+    reference,
+    to_device,
+)
+
+pytestmark = recipe_hardware
+
+
+@pytest.mark.parametrize("variant", VARIANTS)
+def test_sdpa_recipe_accuracy(device, variant):
+    check_accuracy(device, variant, SHAPES["subtile_tails"])
+
+
+# Scaled logits up to 2e4 or down to -7.5e3: the FP32-state recipes keep TF32-exact row maxima, so no row of P leaves
+# the exp's range.
+@pytest.mark.parametrize("scale", ["moderate", "large", "negative"])
+@pytest.mark.parametrize("variant", ["balanced", "accurate"])
+def test_sdpa_recipe_large_logits(device, variant, scale):
+    check_large_logits(device, variant, scale)
+
+
+@pytest.mark.parametrize("variant", ["balanced", "accurate"])
+def test_sdpa_recipe_offset_rows(device, variant):
+    check_offset_rows(device, variant)
+
+
+@pytest.mark.parametrize("variant, mask_kind", [("standard", "key_padding"), ("fast_bfp8", "random")])
+def test_sdpa_recipe_attn_mask(device, variant, mask_kind):
+    check_attn_mask(device, variant, mask_kind)
+
+
+# Key ranges, one case per recipe family: the reference-max recipes' fused chunks between masked edge chunks, and the
+# FP32-state recipes. Sliding windows leave rows with no visible key in a Q chunk's first K chunk.
+@pytest.mark.parametrize("variant", ["standard", "accurate"])
+def test_sdpa_recipe_causal(device, variant):
+    check_key_range(device, variant, CAUSAL_SHAPES["subtile_tails"], causal=True)
+
+
+@pytest.mark.parametrize("variant, causal", [("fast_bfp8", True), ("balanced", False)], ids=["causal", "centred"])
+def test_sdpa_recipe_sliding_window(device, variant, causal):
+    check_key_range(device, variant, CAUSAL_SHAPES["q256_k512"], causal=causal, window=300)
+
+
+@pytest.mark.parametrize("variant", ["standard", "accurate"])
+def test_sdpa_recipe_tiny_scale_masks(expect_error, device, variant):
+    """Generated causal masks add -2^100 before the scale: at the smallest scale the recipes accept (2^-64) a masked
+    key still gets no weight, and a smaller scale is rejected on the host. Zero Q and K give every visible key the same
+    weight, so row r averages V[0] = 0 and r ones."""
+    s, d = 256, 64
+    v = torch.ones(1, 1, s, d)
+    v[:, :, 0] = 0
+    tensors = [to_device(device, x) for x in (torch.zeros(1, 1, s, d), torch.zeros(1, 1, s, d), v)]
+    run = lambda scale: ttnn.transformer.scaled_dot_product_attention(
+        *tensors,
+        is_causal=True,
+        scale=scale,
+        program_config=program_config(device, 64, 128),
+        precision=VARIANTS[variant][0],
+    )
+    actual = ttnn.to_torch(run(2.0**-64))[0, 0].float()
+    rows = torch.arange(s, dtype=torch.float32)[:, None]
+    assert torch.all(actual[0] == 0)
+    assert (actual - rows / (rows + 1)).abs().max() < 0.03  # STANDARD: BF16 state and output
+    with expect_error(RuntimeError, r"scale >= 2\^-64"):
+        run(2.0**-65)
+
+
+@pytest.mark.parametrize("variant", ["standard", "accurate"])
+def test_sdpa_recipe_large_scale_masks(expect_error, device, variant):
+    """The exps fold the scale into FP32 coefficients (1024 * log2(e) * scale on the exp grid), applied to s - m,
+    which is -2^100 for a generated mask: at the largest scale the recipes accept (2^16) a masked key still gets
+    no weight, and a larger scale is rejected on the host instead of failing the kernel build. Zero Q and K give
+    every visible key the same weight, so row r averages V[0] = 0 and r ones."""
+    s, d = 256, 64
+    v = torch.ones(1, 1, s, d)
+    v[:, :, 0] = 0
+    tensors = [to_device(device, x) for x in (torch.zeros(1, 1, s, d), torch.zeros(1, 1, s, d), v)]
+    run = lambda scale: ttnn.transformer.scaled_dot_product_attention(
+        *tensors,
+        is_causal=True,
+        scale=scale,
+        program_config=program_config(device, 64, 128),
+        precision=VARIANTS[variant][0],
+    )
+    actual = ttnn.to_torch(run(2.0**16))[0, 0].float()
+    rows = torch.arange(s, dtype=torch.float32)[:, None]
+    assert torch.all(actual[0] == 0)
+    assert (actual - rows / (rows + 1)).abs().max() < 0.03  # STANDARD: BF16 state and output
+    with expect_error(RuntimeError, r"scale <= 2\^16"):
+        run(2.0**17)
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 4194304}], indirect=True)
+def test_chunked_sdpa_recipe_trace(device):
+    check_chunked_trace(device, "standard", [512, 96])
+
+
+# Paged K/V: five shuffled cache blocks per sequence, declared in another layer's geometry (paged_cache_geometry).
+def test_chunked_sdpa_recipe_paged(device):
+    check_chunked(device, "balanced", 320, blocks_per_seq=5, block=128, cache_shape=(1, 256, 128))
+
+
+# MLA: V is K's first 128 columns of 192.
+def test_flash_mla_prefill_recipe(device):
+    check_mla(device, "standard", MLA_SHAPES["d192_v128"])
+
+
+def test_sdpa_recipe_attention_sink(device):
+    check_sink(device, "accurate", causal=True, shape=(1, 4, 2, 512, 512, 128, 256, 256))
+
+
+def test_sdpa_recipe_output_concat_heads(device):
+    check_concat_heads(device, "fast_bfp8")
+
+
+def test_windowed_sdpa_recipe(device):
+    check_windowed(device, "accurate", [0, 100, 356, 357, 800, 1024], causal=True, q_rows=512, q_offset=256)
+
+
+def test_joint_sdpa_recipe(device):
+    check_joint(device, "standard")
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+def test_joint_sdpa_recipe_head_sharded_topology(mesh_device):
+    """Head-sharded joint inputs: both outputs keep the inputs' topology (sharded on heads, not replicated), and each
+    device's shard holds its own heads."""
+    from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import reference
+
+    heads = 2 * mesh_device.get_num_devices()
+    host = [randn(1, heads, rows, 64, seed=70 + i) for i, rows in enumerate((256, 256, 256, 64, 64, 64))]
+    tensors = [
+        ttnn.from_torch(
+            x,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+        )
+        for x in host
+    ]
+    out, joint_out = ttnn.transformer.joint_scaled_dot_product_attention(
+        *tensors,
+        joint_strategy="rear",
+        program_config=program_config(mesh_device, 128, 128),
+        precision=ttnn.SDPAPrecision.STANDARD,
+    )
+    expected_topology = tensors[0].tensor_topology()
+    for name, tensor in (("output", out), ("joint output", joint_out)):
+        placements = [repr(p) for p in tensor.tensor_topology().placements()]
+        assert tensor.tensor_topology() == expected_topology, f"{name} placements {placements}"
+    composer = ttnn.ConcatMeshToTensor(mesh_device, dim=1)
+    actual = torch.cat([ttnn.to_torch(t, mesh_composer=composer) for t in (out, joint_out)], 2)
+    q, k, v = (torch.cat([host[i], host[i + 3]], 2) for i in range(3))
+    assert l2_pct(actual, reference(q, k, v)) < 3.5  # STANDARD's bound (sdpa_recipe_test_utils.L2_PCT_BOUND)
+
+
+def test_sdpa_recipe_op_selected_blocking(device):
+    check_op_selected_blocking(device, "standard", OP_SELECTED_SHAPES["short_k_cross"])
+
+
+@pytest.mark.parametrize("variant", ["standard", "fast_bfp8"])
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 4194304}], indirect=True)
+def test_sdpa_recipe_program_cache_and_trace(device, variant):
+    device.enable_program_cache()
+    q, k, v = randn(1, 2, 768, 128, seed=20), randn(1, 2, 1536, 128, seed=21), randn(1, 2, 1536, 128, seed=22)
+    inputs = inputs_for(device, variant, q, k, v)
+    cfg = program_config(device, 256, 512)
+    run = lambda tensors: ttnn.transformer.scaled_dot_product_attention(
+        *tensors, is_causal=False, program_config=cfg, precision=VARIANTS[variant][0]
+    )
+    first = ttnn.to_torch(run(inputs))
+    entries = device.num_program_cache_entries()
+    # A cache hit with new buffers must read the new addresses: negated V negates the output (up to rounding,
+    # which is not sign-symmetric), while a stale address would return the first output.
+    negated = inputs_for(device, variant, q, k, -v)
+    assert l2_pct(ttnn.to_torch(run(negated)), -first) < 1.0
+    assert device.num_program_cache_entries() == entries
+    trace = ttnn.begin_trace_capture(device, cq_id=0)
+    traced = run(inputs)
+    ttnn.end_trace_capture(device, trace, cq_id=0)
+    try:
+        for _ in range(2):
+            ttnn.execute_trace(device, trace, cq_id=0, blocking=True)
+            assert torch.equal(ttnn.to_torch(traced), first)
+    finally:
+        ttnn.release_trace(device, trace)
+
+
+# A cache hit with new inputs rebinds every buffer: the dense layout (mask, sink). The key-range layout (page table,
+# Q offset tensor, sink), joint and windowed are in the nightly file.
+@pytest.mark.parametrize("case", ["dense_mask_sink"])
+def test_sdpa_recipe_cache_hit_rebinds(device, case):
+    check_cache_hit_rebinds(device, case)
+
+
+# What legacy callers pass, on the recipe the FP32-dest legacy routes move to: ACCURATE with BFP8 Q/K/V (the
+# output comes back as BFP8), a custom scale with an attn_mask, L1 inputs and output, an FP32-dest HiFi4
+# compute_kernel_config with exp_approx_mode=False (ignored), and six batch/heads (GQA) on a 2x2 grid, so each
+# core runs Q chunks of several heads. STANDARD and the sweeps are in the nightly file.
+@pytest.mark.parametrize("variant", ["accurate"])
+def test_sdpa_recipe_legacy_arguments(device, variant):
+    check_legacy_arguments(
+        device,
+        variant,
+        q_dtype=ttnn.bfloat8_b,
+        kv_dtype=ttnn.bfloat8_b,
+        scale=0.3,
+        mask=True,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        compute_kernel_config=True,
+        shape=(2, 3, 1, 288, 640, 64, 96, 160),
+        grid=(2, 2),
+    )
+
+
+# Precision routing (no `precision`): FP32 dest runs ACCURATE at op-chosen blocking (dense causal with BFP8 Q/K/V and
+# a custom scale; chunked prefill from a start tensor), non-ring joint runs STANDARD, also at op-chosen blocking. The
+# other routing cases are in the nightly file (SDPA_ROUTING_NIGHTLY_CASES).
+@pytest.mark.parametrize("case", ["dense_causal_bfp8", "chunked_tensor_start", "joint_bf16_dest"])
+def test_sdpa_precision_routing(device, case):
+    check_routing(device, case)
+
+
+# K and V in different formats on the fused reference-max path (K BFP8, V BF16); routing case dense_mixed_kv (nightly)
+# covers the FP32-state path (K BF16, V BFP8).
+@pytest.mark.parametrize(
+    "variant, k_dtype, v_dtype",
+    [("standard", ttnn.bfloat8_b, ttnn.bfloat16)],
+    ids=["standard_kbfp8_vbf16"],
+)
+def test_sdpa_recipe_mixed_kv_dtypes(device, variant, k_dtype, v_dtype):
+    check_mixed_kv(device, variant, k_dtype, v_dtype)
+
+
+# Routed calls with L1 outputs back to back in one trace capture: the program hash sees the L1 the layout may use,
+# not the raw free L1, so the second call (with the first output still live) reuses the warm-up's program.
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 4194304}], indirect=True)
+def test_sdpa_recipe_trace_l1_outputs(device):
+    device.enable_program_cache()
+    q, k, v = randn(2, 4, 384, 64, seed=36), randn(2, 4, 384, 64, seed=37), randn(2, 4, 384, 64, seed=38)
+    tensors = [to_device(device, x) for x in (q, k, v)]
+    run = lambda: ttnn.transformer.scaled_dot_product_attention(
+        *tensors,
+        is_causal=False,
+        program_config=program_config(device, 128, 256),
+        compute_kernel_config=fp32_dest_config(device),
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    warm = run()
+    expected = ttnn.to_torch(warm)
+    warm.deallocate()
+    entries = device.num_program_cache_entries()
+    trace = ttnn.begin_trace_capture(device, cq_id=0)
+    outputs = [run() for _ in range(3)]
+    ttnn.end_trace_capture(device, trace, cq_id=0)
+    try:
+        ttnn.execute_trace(device, trace, cq_id=0, blocking=True)
+        for output in outputs:
+            assert torch.equal(ttnn.to_torch(output), expected)
+    finally:
+        ttnn.release_trace(device, trace)
+    assert device.num_program_cache_entries() == entries
+    assert l2_pct(expected, reference(q, k, v)) < L2_PCT_BOUND["accurate"]
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        "causal_sq_ne_sk",
+        "causal_with_attn_mask",
+        "attention_sink_shape",
+        "sub_core_grids",
+        "zero_scale",
+        "sharded_output",
+        "padded_head_dim",
+        "mask_shape",
+        "fp32_mask_for_bf16_recipe",
+    ],
+)
+def test_sdpa_recipe_rejects_unsupported(expect_error, device, invalid):
+    q, k, v = randn(1, 1, 256, 128, seed=23), randn(1, 1, 512, 128, seed=24), randn(1, 1, 512, 128, seed=25)
+    if invalid == "padded_head_dim":
+        q, k, v = (x[..., :80].contiguous() for x in (q, k, v))
+    tensors = [to_device(device, x) for x in (q, k, v)]
+    kwargs = dict(is_causal=False, precision=ttnn.SDPAPrecision.ACCURATE)
+    cfg = dict(compute_with_storage_grid_size=(1, 1), q_chunk_size=256, k_chunk_size=512)
+    if invalid == "causal_sq_ne_sk":
+        kwargs["is_causal"] = True
+    elif invalid == "causal_with_attn_mask":
+        kwargs["is_causal"] = True
+        tensors[1], tensors[2] = tensors[0], tensors[0]
+        kwargs["attn_mask"] = to_device(device, torch.zeros(1, 1, 256, 256))
+    elif invalid == "attention_sink_shape":
+        kwargs["attention_sink"] = tensors[0]
+    elif invalid == "sub_core_grids":
+        cfg["sub_core_grids"] = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    elif invalid == "zero_scale":
+        kwargs["scale"] = 0.0
+    elif invalid == "sharded_output":
+        kwargs["memory_config"] = ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
+    elif invalid == "mask_shape":
+        kwargs["attn_mask"] = to_device(device, torch.zeros(1, 1, 256, 256))
+    elif invalid == "fp32_mask_for_bf16_recipe":
+        kwargs["precision"] = ttnn.SDPAPrecision.STANDARD
+        kwargs["attn_mask"] = to_device(device, torch.zeros(1, 1, 256, 512), ttnn.float32)
+    kwargs["program_config"] = ttnn.SDPAProgramConfig(**cfg)
+    before = device.num_program_cache_entries()
+    with expect_error(RuntimeError, "SDPA|recipe|precision"):
+        ttnn.transformer.scaled_dot_product_attention(*tensors, **kwargs)
+    assert device.num_program_cache_entries() == before, "Unsupported arguments must fail before dispatch"
+
+
+def test_sdpa_recipe_requires_sfploadmacro(expect_error, device, monkeypatch):
+    """Kernels built without SFPLOADMACRO (the simulator's TT_METAL_DISABLE_SFPLOADMACRO) cannot run a recipe."""
+    tensors = [to_device(device, randn(1, 1, 256, 128, seed=s)) for s in (33, 34, 35)]
+    monkeypatch.setenv("TT_METAL_DISABLE_SFPLOADMACRO", "1")
+    before = device.num_program_cache_entries()
+    with expect_error(RuntimeError, "SFPLOADMACRO"):
+        ttnn.transformer.scaled_dot_product_attention(*tensors, is_causal=False, precision=ttnn.SDPAPrecision.BALANCED)
+    assert device.num_program_cache_entries() == before
+
