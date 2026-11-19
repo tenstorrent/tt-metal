@@ -81,8 +81,6 @@ constexpr uint32_t kWriterKernelIndex = 1;
 constexpr uint32_t kComputeKernelIndex = 2;
 // Q blocks a core may hold in L1 at once (the kernels' per-block state is a 32-bit bitmask).
 constexpr uint32_t kResidentMaxSlots = 32;
-// CBs start above persistent L1 (e.g. global semaphores), which available_program_l1_capacity does not count.
-constexpr uint64_t kPersistentL1Reserve = 16 * 1024;
 
 // The all-gather appends reader-forward, writer-forward, reader-backward, writer-backward after the three SDPA kernels.
 constexpr uint32_t kFirstAllGatherKernelIndex = 3;
@@ -945,8 +943,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     // q_blocks_per_pass) whose CBs end below the lowest live L1 buffer. P passes split every core's blocks evenly, so
     // each working core needs at least P blocks (no empty pass; group members stay in lockstep).
     // The live L1 top is not in the program hash: a cached program keeps the S of the call that built it.
-    const uint64_t l1_capacity = ttnn::operations::core::available_program_l1_capacity(mesh_device);
-    const uint64_t usable_l1 = l1_capacity > kPersistentL1Reserve ? l1_capacity - kPersistentL1Reserve : 0;
+    const uint64_t usable_l1 = ttnn::operations::core::usable_program_l1_capacity(mesh_device);
     uint32_t max_slots = std::min(kResidentMaxSlots, max_q_per_core);
     if (args.q_blocks_per_pass.has_value()) {
         max_slots = std::min(max_slots, *args.q_blocks_per_pass);
