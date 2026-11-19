@@ -373,7 +373,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@7586e1e528b173057dbaa828c9ae1fa945fd2a9f # cachew checkout
         timeout-minutes: 20
         with:
           # Package tests use installed binaries and runtime files. Their minimal
@@ -447,14 +447,6 @@ jobs:
               && matrix.leg.gate_workdir != 'tt_metal/tt-llk'
               && !startsWith(matrix.leg.gate_workdir, 'tt_metal/tt-llk/') }}
         run: uv pip install pytest-xdist
-
-      - name: Apply ttsim wormhole workaround patches
-        if: ${{ startsWith(matrix.leg.sku, 'sim_wh') }}
-        run: |
-          HEADER=$(find /opt/venv -name "cunpack_common.h" -path "*wormhole_b0*" 2>/dev/null | head -1)
-          echo "Patching: $HEADER"
-          sed -i -e '/TT_UNPACR(SrcA, 0, 0, context_id, 0, 1 \/\* Set OvrdThreadId\*\/, 0 \/\*Set Dvalid\*\/, p_unpacr::RAREFYB_DISABLE, 1, 0, 0, 0, 1);/d' \
-            "$HEADER"
 
       - name: ${{ matrix.leg.name }}
         if: ${{ !startsWith(matrix.leg.sku, 'sim_') }}

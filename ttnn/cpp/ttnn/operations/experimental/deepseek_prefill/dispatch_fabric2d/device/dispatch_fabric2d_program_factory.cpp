@@ -81,7 +81,7 @@ dspf2d::ScratchGeometry scratch_geometry(const DispatchFabric2dParams& args, uin
         .num_routed_experts = args.num_routed_experts,
         .experts_per_chip = args.experts_per_chip,
         .topk = args.num_experts_per_tok,
-        .num_forward = forward_descriptors_per_stream(extent)};
+        .num_forward = forward_chunks_per_stream(extent)};
 }
 
 L1Layout compute_l1_layout(
@@ -471,12 +471,10 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
                 assignment_words.push_back(a.dst_pos);
                 assignment_words.push_back(a.split_idx);
                 assignment_words.push_back(a.split_count);
-                // Hops from the downstream chip to this destination, which is what names the channel the
-                // tokens land in over there. Distance 1 is the downstream chip itself: written straight
-                // into its output, so no channel at all.
-                const uint32_t distance = (a.dst_pos + extent - pos) % extent;
-                const uint32_t mirrored = (stream % 2 == 0) ? distance : extent - distance;
-                own_vc_words.push_back(vc_for_own(mirrored, extent));
+                // The hops to this destination name the channel the tokens land in on the downstream chip.
+                // Distance 1 is the downstream chip itself: written straight into its output, so no channel
+                // at all.
+                own_vc_words.push_back(vc_for_own(a.distance, extent));
             }
 
             const auto to_words = [](const std::vector<dspf2d::ChunkDescriptor>& cs) {

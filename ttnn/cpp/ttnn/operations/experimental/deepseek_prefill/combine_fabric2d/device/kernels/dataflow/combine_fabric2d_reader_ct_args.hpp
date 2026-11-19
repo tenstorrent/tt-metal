@@ -135,14 +135,14 @@ struct ReaderCtArgs {
         // follows.
         uint32_t own_idx = 0;
         for (const auto& w : work) {
-            blocks_.push_back(w.is_relay ? (SCHED_FWD | w.relay_chunk) : own_idx++);
+            blocks_.push_back(w.is_forward ? (SCHED_FWD | w.forward_chunk) : own_idx++);
         }
         for (const auto& w : work) {
-            if (w.is_relay) {
+            if (w.is_forward) {
                 continue;
             }
             blocks_.push_back(w.dst_chip_id);
-            blocks_.push_back(w.dst_dg_index);
+            blocks_.push_back(w.dst_pos);
             blocks_.push_back(w.split_idx);
             blocks_.push_back(w.split_count);
             blocks_.push_back(op::vc_for_own(w.distance, op::ring_extent(args)));
@@ -301,7 +301,7 @@ private:
     static uint32_t count_own_assignments(const std::vector<op::Assignment>& work) {
         uint32_t num_own = 0;
         for (const auto& w : work) {
-            num_own += w.is_relay ? 0u : 1u;
+            num_own += w.is_forward ? 0u : 1u;
         }
         return num_own;
     }
