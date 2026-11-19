@@ -572,6 +572,14 @@ notes:
     are rows reaching the replicas at all, and is the busiest chip''s tile count falling? Then fix (global counts for the
     split, OV-52), call-time switch (OV-51), table agentic_traces (OV-53). Target: experts section falls by >= 3 ms at agentic
     145408.'
+- id: OV-55
+  tasks:
+  - P.87
+  status: open
+  t: '2026-11-19T13:34:25'
+  text: 'Overseer: op-level tests ALSO go through the resident runner (resident submit; the runner has the mesh open: a
+    mesh-only test there costs 0 device opens and 0 loads, e.g. tests/perf/test_ids_readback.py ran in 5 s). A direct scripts/run_safe_pytest.sh
+    is a device open that leaks 10-27 GiB of host RAM: avoid it. A C++ / .so rebuild restarts the runner once (expected).'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
