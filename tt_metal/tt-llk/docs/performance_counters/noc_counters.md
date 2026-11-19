@@ -59,7 +59,7 @@ The hardware description is in tt-llk (`tools/include/perf_counters/`, namespace
 | `noc_counters_hw.h` | `read(noc, reg)` |
 
 The metal consumer is `tt_metal/hw/inc/internal/profiler/noc_counters.hpp`: marker ids, payload layout and emission.
-The hooks are in `tt_metal/hw/firmware/src/tt-1xx/brisc.cc` and `tt-2xx/dm.cc`; the option is parsed in
+The hooks are in the BRISC kernel entry `tt_metal/hw/firmware/src/tt-1xx/brisck.cc` and the Quasar DM0 firmware `tt-2xx/dm.cc`; the option is parsed in
 `tt_metal/llrt/rtoptions.cpp` and becomes `-DPROFILE_NOC_COUNTERS=<mask>` in `tt_metal/jit_build/build.cpp`. The host
 side is `tools/python/tt_llk_perf/`: `headers.py` parses the tables, `noc_counters.py` decodes the markers and
 `noc_metrics.py` derives byte and request totals; `tools/tracy/perf_counter_analysis.py` has
@@ -76,13 +76,15 @@ export TT_METAL_PROFILE_NOC_COUNTERS=3     # master and slave counters
 ```
 
 The value is a group mask, hex or decimal (1 master, 2 slave, 4 atomic), or `on` for master and slave. `0` or unset
-leaves the capture out of the firmware entirely. Setting it forces the device profiler on. The mask is a compile-time
-constant of the firmware and part of the firmware build key, so changing it rebuilds the firmware; the key is
+leaves the capture out entirely. Setting it forces the device profiler on. The mask is a compile-time
+constant of the kernel and firmware builds and part of the build key, so changing it rebuilds both; the key is
 unchanged when the option is off.
 
-The counters belong to the tile, so one core captures once per launch: BRISC on Wormhole and Blackhole, DM0 on
-Quasar. The window opens before the other cores of the tile are started and closes after they have finished, so it
-covers the whole launch of the tile. The profiler's own writes to DRAM when its buffer fills, and the dispatch
+The counters belong to the tile, so one core captures once per launch: the BRISC kernel on Wormhole and Blackhole, DM0
+on Quasar. On Wormhole and Blackhole the window opens in the BRISC kernel before the go message that releases every
+core of the tile, and closes once NCRISC and the TRISCs have finished, so it covers the whole launch; a launch in which
+BRISC runs no kernel, or runs a dispatch kernel, publishes no capture. On Quasar the DM0 firmware opens it before the
+other cores are started and closes it after they have finished. The profiler's own writes to DRAM when its buffer fills, and the dispatch
 traffic around the launch, are not separated from the kernel's transfers.
 
 Each launch emits one header marker and one marker per pair of counters, all `TS_DATA` with the payload in the
@@ -121,23 +123,14 @@ the issued request counts and bytes per issued request. A metric whose group was
 the counters directly: NoC 0 `MST_RD_REQ_SENT` +128 and `MST_RD_DATA_WORD_RECEIVED` +4096 (2 x 128 KiB / 64 B), NoC 1
 `MST_NONPOSTED_WR_REQ_SENT` +64 and `MST_NONPOSTED_WR_DATA_WORD_SENT` +2048.
 
-## 7. Firmware size
+## 7. Size
 
-The capture is a read loop at the start of the launch and one emission routine at the end, so its size does not
-depend on the group mask. Measured with the firmware built offline, same toolchain, profiler on, option on versus
-option off:
-
-| Core | Extra bytes | Image before | Region |
-|---|---|---|---|
-| Blackhole BRISC | 316 to 332 | 7372 to 7396 B | 9984 B |
-| Wormhole BRISC | 332 | 5960 B | 7712 B |
-| Quasar DM0 | 444 | 7308 B | links, also with the RISC-V monitor and Tensix counter groups (9868 to 10308 B) |
-
-The other cores do not change. The image sizes are those of the runtime firmware build with the profiler's DRAM buffer
-(`PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC` nonzero), over every DRAM bank count a card can have. Blackhole BRISC with
-all five Tensix counter groups and the RISC-V monitor is 9420 to 9468 B; adding this capture makes it 9736 to 9784 B,
-so the region is 9984 B (it was 9728 B before this capture), a margin of 200 B. With the option off the firmware images
-are byte-identical to a build without the hooks.
+On Wormhole and Blackhole the capture is part of the BRISC kernel image, so the BRISC firmware region and the L1
+layout do not change. It is a read loop at the start of the launch, the wait for the other cores and one emission
+routine at the end, so its size does not depend on the group mask: 396 B on Blackhole and 420 B on Wormhole
+(the reader kernel of `metal_example_eltwise_binary`, mask 3). On Quasar it is in the DM0 firmware, 444 B over a 7308 B
+image, which still links with the RISC-V monitor and the Tensix counter groups (9868 to 10308 B of 12288 B). With the
+option off the hooks compile to nothing.
 
 ## 8. Open questions
 
