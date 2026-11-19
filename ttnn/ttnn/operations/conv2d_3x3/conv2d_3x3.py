@@ -34,6 +34,7 @@ from .conv2d_3x3_program_descriptor import (
     balanced_block_ranges,
     block_compute_rows,
     block_grid_shape,
+    block_spare_groups,
     create_program_descriptor,
     l1_cb_budget_bytes,
     m_split,
@@ -570,15 +571,30 @@ def conv2d_3x3(
         if block_sharded and geometry.k_split:
             # The K split's M split may run down more grid rows than the shard grid has; the output keeps the input's
             # shard grid and the shard rows' split.
-            rows = block_compute_rows(in_spec, device.compute_with_storage_grid_size(), geometry.tensor_m_tiles)
-            if rows != m_work_cores:
-                work_grid = (rows, 1)
-                geometry = dataclasses.replace(geometry, remote_output=True)
-            # Work-balanced ranges over those rows (balanced_block_ranges); the output still keeps its shard spec, and
-            # every tile-row a grid row computes off its own shard is stored remotely.
+            device_grid = device.compute_with_storage_grid_size()
+            rows = block_compute_rows(in_spec, device_grid, geometry.tensor_m_tiles)
+            # Spare-column M-groups (SPARE_MGROUPS): only on the N-slice walk with one M-block per core (each spare
+            # member takes exactly its column sender's rounds), so it is checked against that walk's blocking.
+            spare = block_spare_groups(in_spec, device_grid, geometry.k_cols, rows, geometry.tensor_m_tiles)
+            if spare:
+                spare_geometry = dataclasses.replace(geometry, remote_output=True, block_rows=rows)
+                try:
+                    spare_blocking = select_blocking(
+                        spare_geometry, (rows + spare, 1), l1_cb_budget_bytes(resident_shard_bytes)
+                    )
+                except ValueError:
+                    spare_blocking = None
+                if spare_blocking is None or not (spare_blocking.nslice and spare_blocking.max_m_blocks_per_core == 1):
+                    spare = 0
+            groups = rows + spare
+            if groups != m_work_cores:
+                work_grid = (groups, 1)
+                geometry = dataclasses.replace(geometry, remote_output=True, block_rows=rows if spare else 0)
+            # Work-balanced ranges over those groups (balanced_block_ranges); the output still keeps its shard spec, and
+            # every tile-row a group computes off its own shard is stored remotely.
             balanced = balanced_block_ranges(
                 geometry,
-                rows,
+                groups,
                 tuple(_core_m_ranges(geometry.tensor_m_tiles, core_m_tiles)),
                 l1_cb_budget_bytes(resident_shard_bytes),
             )

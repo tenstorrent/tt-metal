@@ -14,6 +14,8 @@ output N-slice y. Output BLOCK_SHARDED on the same grid.
 - multi-M-block shard: one combine round per M-block, with state crossing the rounds.
 - extended rows: the K split's M split runs down grid rows past the shard grid (to the device edge), and the
   owners store their finished tiles to output shards on other cores.
+- spare-column groups: more M-groups than grid rows, transposed into the device columns past the shard grid, their
+  weight rounds forwarded from the column streams.
 """
 
 import importlib
@@ -232,6 +234,8 @@ MULTI_BLOCK_CASES = [
 def test_conv2d_3x3_block_sharded_multi_m_block(dtype, layout, with_bias, device, monkeypatch):
     """One-tile-row M-blocks inside 4-tile-row output shards: every grid row runs four combine rounds,
     so the credit / arrival counters, the slot CB and the PACK_RELU / L1-acc state cross rounds."""
+    # The test pins the grid-row groups' structure (rows, ragged row, M-blocks): no spare-column groups.
+    monkeypatch.setattr(_pd, "SPARE_MGROUPS", False)
     torch.manual_seed(42)
     (H, W, c_in), c_out = (16, 64, 64), 96
     shard = (128, 32) if layout == ttnn.TILE_LAYOUT else (128, 16)
@@ -264,6 +268,8 @@ def test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row(dtype, layout, 
     must stream its own weight slice. W_out = 40, so a tile-row's taps span two image rows. The grid sits on the
     device's last 3 rows, so the M split stays on them (block_compute_rows), and it keeps the uniform split's ragged
     last row (no work-balanced ranges, which may move the short row off the grid's edge)."""
+    # The test pins the grid-row groups' structure (rows, ragged row, M-blocks): no spare-column groups.
+    monkeypatch.setattr(_pd, "SPARE_MGROUPS", False)
     torch.manual_seed(5)
     (H, W, c_in), c_out = (16, 40, 64), 64
     shard = (224, 32) if layout == ttnn.TILE_LAYOUT else (224, 16)
@@ -341,6 +347,8 @@ def test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row(dtype,
     """The ragged-row case on extended rows: the 3-row shard grid starts at y = 3, so 7 grid rows reach a 10-row
     device's edge; 20 output tile-rows split 3 per row, the last row runs 2 one-tile-row M-blocks (6 x 3 + 2) and
     streams its own weights while the 6 full rows share each column's multicast."""
+    # The test pins the grid-row groups' structure (rows, ragged row, M-blocks): no spare-column groups.
+    monkeypatch.setattr(_pd, "SPARE_MGROUPS", False)
     torch.manual_seed(5)
     (H, W, c_in), c_out = (16, 40, 64), 64
     shard = (224, 32) if layout == ttnn.TILE_LAYOUT else (224, 16)
@@ -422,3 +430,44 @@ def test_conv2d_3x3_block_sharded_writer_only_scatter(dtype, layout, device, mon
     H, W, c_in = case_hw[0]
     config = _block_config(H * W, c_in, layout, shards[layout])
     _run(case_hw, dtype, layout, config, device, with_bias=True, relu=True)
+
+
+SPARE_CASES = [
+    # res4.x: 8 slices, 13 groups of 5 tile-rows (10 grid rows + 3 spare columns), 1-tile N-slices.
+    pytest.param(((32, 64, 256), 256, 1, 1, 1), (256, 32), ttnn.ShardOrientation.ROW_MAJOR, id="res4_8x8"),
+    # res5.0: 2-tile N-slices, 5-row groups (4 + 1: the wide short group), the padded-slab prelude.
+    pytest.param(((32, 64, 512), 512, 2, 1, 2), (224, 64), ttnn.ShardOrientation.ROW_MAJOR, id="res5_0_8x10"),
+    # 2 slices, d = 8: 16 groups of 4 (6 spare columns), C_out 96: a short last N-slice.
+    pytest.param(((32, 64, 64), 96, 8, 1, 8), (256, 32), ttnn.ShardOrientation.ROW_MAJOR, id="k2_d8_co96"),
+    # COL_MAJOR: the slices run down y, the spare groups along the rows below the shard grid.
+    pytest.param(((32, 64, 64), 64, 1, 1, 1), (256, 32), ttnn.ShardOrientation.COL_MAJOR, id="k2_col_major"),
+]
+
+
+@pytest.mark.parametrize("dtype,layout", [LAYOUTS[1], LAYOUTS[2]])
+@pytest.mark.parametrize("case_hw,shard,orientation", SPARE_CASES)
+def test_conv2d_3x3_block_sharded_spare_groups(case_hw, shard, orientation, dtype, layout, device, monkeypatch):
+    """Spare-column M-groups: more M-groups than grid rows, transposed into the device columns past the shard grid
+    (rows below it on COL_MAJOR), their weights forwarded from the column streams; owners store remotely. The output
+    keeps its shard spec; the second dispatch on fresh shards must hit the program cache."""
+    torch.manual_seed(3)
+    grid = device.compute_with_storage_grid_size()
+    if (grid.x, grid.y) != (11, 10):
+        pytest.skip("pinned to the 11 x 10 grid")
+    (H, W, c_in), c_out, p, s, d = case_hw
+    config = _block_config(H * W, c_in, layout, shard, orientation=orientation)
+    real_select = _op_module.select_blocking
+    seen = []
+
+    def recording(g, work_grid, l1_budget):
+        b = real_select(g, work_grid, l1_budget)
+        seen.append((g.block_rows, b.num_m_groups, b.nslice, b.max_m_blocks_per_core))
+        return b
+
+    monkeypatch.setattr(_op_module, "select_blocking", recording)
+    _run(case_hw, dtype, layout, config, device, with_bias=True, relu=True)
+    block_rows, groups, nslice, m_blocks = seen[-1]
+    assert nslice and m_blocks == 1 and 0 < block_rows < groups, seen[-1]
+    n_programs = device.num_program_cache_entries()
+    _run(case_hw, dtype, layout, config, device, with_bias=True, relu=True, dispatches=2)
+    assert device.num_program_cache_entries() == n_programs, "re-dispatch on fresh shards missed the program cache"

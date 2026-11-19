@@ -324,6 +324,23 @@ WEIGHT_SERVERS = True
 WEIGHT_SERVER_CHUNKS = 3
 # Hardware multicast rectangles one channel may carry (dataflow_kernel_lib::MAX_MCAST_RECTANGLES).
 MAX_MCAST_RECTANGLES = 3
+# Spare-column M-groups (K split on the N-slice walk, one M-block per core): the device columns past the shard grid
+# (ROW_MAJOR; the rows below it on COL_MAJOR) host more M-groups, one per spare column, laid out transposed: channel
+# slice k of the group sits on the spare column's row k, and its ring runs down the column (one hop per step, as on a
+# grid row). Taken where more groups lower the output tile-rows per group (block_spare_groups): res4.x and res5.x run 13
+# groups of 5 tile-rows on 104 cores instead of 10 of 7 on 80. A member fills its slab from its channel slice's shards
+# like any extended row, and the owners store remotely. The spare groups take the cheapest M ranges (spare_m_indices).
+# Their weights come from the column weight streams without another DRAM read: the column participant after the sender
+# forwards each round, once it landed and was pushed, to the spare members of its slice (one row of the spare columns:
+# a second channel, WEIGHT_MCAST_SPARE_PREFIX, with the forwarder as its explicit sender).
+# Measured (Blackhole p150b, unzoned, medians of 3, bit-identical), with the N-slice async bias and the wide short
+# group (compute RING_WIDE_SHORT_GROUP): res4.x @ LoFi 12098 -> 11607 ns, res5.0 33368 -> 28524, res5.1 32741 -> 28131,
+# res5.2 32436 -> 26806; HiFi4 res4 30491 -> 22859, res5.0 103157 -> 79981. Options measured and not taken (zoned):
+# the column sender multicasting each round twice (+0.3 us per res4.x round on the stream every core waits for: res4.x
+# +9%); one DRAM stream per spare row (same pages as the column sender's, same time: res5.1 / res5.2 +6% / +7%); the
+# spare members' fill split over both NoCs (flat); the last M ranges instead of the cheapest (res5.2 +1.4 us).
+SPARE_MGROUPS = True
+WEIGHT_MCAST_SPARE_PREFIX = "weight_mcast2"
 
 
 def l1_cb_budget_bytes(resident_shard_bytes=0):
@@ -365,6 +382,9 @@ class Conv3x3Geometry:
     # K split with a work-balanced M split (balanced_m_ranges): grid row i owns output tile-rows
     # [m_ranges[i][0], m_ranges[i][0] + m_ranges[i][1]); empty: the uniform split (_core_m_ranges).
     m_ranges: tuple = ()
+    # Spare-column M-groups (SPARE_MGROUPS): M-groups on grid rows, the others transposed in the spare columns
+    # (spare_m_indices, block_spare_core). 0: every group is a grid row.
+    block_rows: int = 0
 
     @property
     def k_split(self):
@@ -1332,6 +1352,55 @@ def block_core(shard_spec, row, col):
     return ttnn.CoreCoord(start.x + row, start.y + col)
 
 
+def _block_device_extents(shard_spec, device_grid):
+    """(rows, columns) of the device from the shard grid's first core, along its M axis and its channel-slice axis."""
+    start = shard_spec.grid.bounding_box().start
+    if shard_spec.orientation == ttnn.ShardOrientation.ROW_MAJOR:
+        return device_grid.y - start.y, device_grid.x - start.x
+    return device_grid.x - start.x, device_grid.y - start.y
+
+
+def block_spare_groups(shard_spec, device_grid, k_cols, rows, tensor_m_tiles):
+    """Spare-column M-groups (SPARE_MGROUPS) on top of `rows` grid-row groups: the fewest that reach the fewest output
+    tile-rows per group. One group per spare column (its k_cols members on the column's first k_cols rows), so the
+    members of channel slice k across the spare groups are one row of the spare columns (one multicast rectangle)."""
+    max_rows, max_cols = _block_device_extents(shard_spec, device_grid)
+    if not SPARE_MGROUPS or k_cols < 2 or max_rows < k_cols:
+        return 0
+    best = 0
+    for e in range(1, max_cols - k_cols + 1):
+        if _div_up(tensor_m_tiles, rows + e) < _div_up(tensor_m_tiles, rows + best):
+            best = e
+    return best
+
+
+@functools.lru_cache(maxsize=256)
+def spare_m_indices(g: Conv3x3Geometry, core_m_tiles, num_groups):
+    """M work indices placed on the spare columns (g.block_rows grid-row groups, the rest spare): the cheapest ranges by
+    the row cost model (_balance_cost_table). The spare groups' slab fill comes from farther (all 8 members' reads share
+    one column's links) and their weight rounds land one forward later, so they take the least work: res5.2 29.25 ->
+    27.83 us, res5.0 / res5.1 -0.7 / -0.9 us (zoned, one run each) over the last ranges."""
+    if not g.block_rows or num_groups <= g.block_rows:
+        return ()
+    spare = num_groups - g.block_rows
+    ranges = core_m_ranges(g, core_m_tiles)[:num_groups]
+    cap = max(n for _, n in ranges)
+    sb_h, sb_w = _ring_subblock(cap, g.out_n_tiles)
+    table = _balance_cost_table(g, cap, sb_h, sb_w, True)
+    cost = [table[a][n - 1] for a, n in ranges]
+    cheapest = sorted(range(len(ranges)), key=lambda i: (cost[i], -i))[:spare]
+    return tuple(sorted(cheapest))
+
+
+def block_spare_core(shard_spec, k_cols, extra, col):
+    """Core of channel slice `col` of spare-column group `extra`: spare column k_cols + extra of the shard grid's
+    first core, row `col` (ROW_MAJOR; transposed on COL_MAJOR)."""
+    start = shard_spec.grid.bounding_box().start
+    if shard_spec.orientation == ttnn.ShardOrientation.ROW_MAJOR:
+        return ttnn.CoreCoord(start.x + k_cols + extra, start.y + col)
+    return ttnn.CoreCoord(start.x + col, start.y + k_cols + extra)
+
+
 def block_grid_shape(shard_spec):
     """(rows, cols) of a BLOCK shard grid. Shard (h, w) sits on shard core h * cols + w: a ROW_MAJOR
     orientation runs the height shards down the grid's y axis, COL_MAJOR down its x axis."""
@@ -1450,6 +1519,36 @@ def _column_weight_mcast(input_tensor, work, m_blocks_per_index):
     return receivers, len(rows), order
 
 
+def _spare_weight_mcast(input_tensor, work, m_blocks_per_index, spare, column_channel):
+    """Spare-column groups (SPARE_MGROUPS): the second multicast of each column weight stream. Group k is the spare
+    members of channel slice k that run the column's rounds (the most M-blocks), one row of the spare columns
+    (ROW_MAJOR; a column on COL_MAJOR); its explicit sender is the column participant after column k's staggered sender
+    (participant (k + 1) % rows of the column channel, _column_weight_mcast), a pure receiver that forwards each round
+    once it landed. (receivers, group size, receiver order, senders), or None."""
+    if column_channel is None or not spare:
+        return None
+    _, rows, _ = column_channel
+    most = max(m_blocks_per_index[i] for _, i, _ in work)
+    groups = sorted({i for _, i, _ in work if i in spare and m_blocks_per_index[i] == most})
+    if not groups:
+        return None
+    k_cols = max(col for _, _, col in work) + 1
+    by_column = input_tensor.memory_config().shard_spec.orientation == ttnn.ShardOrientation.ROW_MAJOR
+    members = [core for core, i, _ in work if i in groups]
+    receivers = _core_range_set(members)
+    if len(receivers.ranges()) != 1:
+        return None
+    # Slice k's members share a y (ROW_MAJOR): RowMajor order makes each group one row, slices in order.
+    order = ttnn.McastCoreOrder.RowMajor if by_column else ttnn.McastCoreOrder.ColumnMajor
+    grid_rows = sorted({i for _, i, _ in work if i not in spare and m_blocks_per_index[i] == most})
+    shift = 1 if rows > 1 else 0
+    senders = []
+    for col in range(k_cols):
+        row = grid_rows[(col + shift) % rows]
+        senders.append(next(core for core, i, c in work if i == row and c == col))
+    return receivers, len(groups), order, senders
+
+
 def _cb(index, data_format, page_size, num_pages, cores):
     return ttnn.CBDescriptor(
         total_size=page_size * num_pages,
@@ -1475,7 +1574,16 @@ def _work_items(input_tensor, g: Conv3x3Geometry, b: Conv3x3Blocking):
     if not g.k_split:
         return [(core, i, 0) for i, core in enumerate(_work_cores(input_tensor, b.num_m_groups, b.grid_x))]
     spec = input_tensor.memory_config().shard_spec
-    return [(block_core(spec, row, col), row, col) for row in range(b.num_m_groups) for col in range(g.k_cols)]
+    spare = spare_m_indices(g, b.core_m_tiles, b.num_m_groups)
+    grid_row = {i: r for r, i in enumerate(i for i in range(b.num_m_groups) if i not in spare)}
+    spare_col = {i: e for e, i in enumerate(spare)}
+
+    def core(i, col):
+        if i in grid_row:
+            return block_core(spec, grid_row[i], col)
+        return block_spare_core(spec, g.k_cols, spare_col[i], col)
+
+    return [(core(i, col), i, col) for i in range(b.num_m_groups) for col in range(g.k_cols)]
 
 
 # kw-fold + output shift (kernels/conv2d_3x3_kw_fold.hpp): on HEIGHT-sharded TILE input at stride 1, padding ==
@@ -1967,12 +2075,21 @@ def create_program_descriptor(
         split_cores = {(c.x, c.y) for c in core_list[first:] if mcast_receivers.contains(c)}
     # K split: each column multiplies against its own weight K-slice, one stream per column (built once: the split
     # fill picks its receivers from it).
-    column_channel = _column_weight_mcast(input_tensor, work, m_blocks_per_index) if g.k_split else None
+    spare_groups = spare_m_indices(g, b.core_m_tiles, b.num_m_groups) if g.k_split else ()
+    # The column channels take the grid-row groups; the spare-column groups get their rounds forwarded (spare_channel).
+    grid_work = [w for w in work if w[1] not in spare_groups]
+    column_channel = _column_weight_mcast(input_tensor, grid_work, m_blocks_per_index) if g.k_split else None
+    # Spare-column groups: the column streams' second multicast (see SPARE_MGROUPS).
+    spare_channel = (
+        _spare_weight_mcast(input_tensor, work, m_blocks_per_index, spare_groups, column_channel)
+        if spare_groups
+        else None
+    )
     if tile_fill_split and g.k_split and column_channel is not None:
         # The column channels' pure receivers (the staggered sender of column g is participant row g % rows: its writer
         # blocks in DRAM reads and multicast sends: measured +9% with it split) that read enough from higher shards.
         most = max(m_blocks_per_index[i] for _, i, _ in work)
-        part_rows = sorted({i for _, i, _ in work if m_blocks_per_index[i] == most})
+        part_rows = sorted({i for _, i, _ in work if m_blocks_per_index[i] == most and i not in spare_groups})
         hi_bytes = {
             row: _higher_shard_rows(g, b.core_m_tiles, bm, row, input_shard_rows) * g.c_in_tiles * g.in0_tile_bytes
             for row in part_rows
@@ -2036,7 +2153,11 @@ def create_program_descriptor(
     # row is ragged; template group heights alone -1% to +2%).
     rt_valid = bool(g.m_ranges) and g.k_split and b.nslice and not kwf
     rt_prelude = rt_valid and not row_split
-    ct_group_rows = rt_valid and _ring_subblock(bm, ns) == (4, 1)
+    # Spare-column groups: their uniform split's short last group (bm 5: 4 + 1) runs at its template height too, and a
+    # 1-row group of a 2..4-tile slice as one 1 x out_n subblock (compute RING_WIDE_SHORT_GROUP: 1 + out_n unpacks per
+    # k-step, not 2 out_n). res5.0 / res5.1 on 13 groups: 33.7 -> 29.3 / 33.7 -> 29.1 us zoned; runtime heights or 1 x 1
+    # short groups leave the 5-row walk as slow as HEAD's 6-row one (4 + 2).
+    ct_group_rows = (rt_valid or (g.block_rows > 0 and b.nslice and not kwf)) and _ring_subblock(bm, ns) == (4, 1)
 
     def rt_slab_rows(m_tile_start, actual_m_tiles, num_m_blocks):
         if not (g.tile_input and b.max_m_blocks_per_core == 1):
@@ -2514,6 +2635,11 @@ def create_program_descriptor(
     _ring_owner_defines = (
         [("RING_OWNER_MASK", f"{sum(1 << c for c in ring_owners)}u")] if ring_owners is not None else []
     )
+    _wide_short_defines = [("RING_WIDE_SHORT_GROUP", "1")] if ct_group_rows else []
+    # N-slice walk: the writer reads the bias without a wait once the first weight round is issued and pushes it when it
+    # lands, so the column weight stream starts at kernel start (with the spare groups that stream paces the walk:
+    # res4.x 12022 -> 11607 ns; without them flat to -1.7%).
+    _async_bias_defines = [("NSLICE_ASYNC_BIAS", "1")] if g.k_split and b.nslice and has_bias and not kwf else []
     readers = [
         ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "conv2d_3x3_reader.cpp"),
@@ -2531,7 +2657,7 @@ def create_program_descriptor(
             core_ranges=_core_range_set(writer_cores),
             compile_time_args=writer_ct_args_for(*slice_channels),
             runtime_args=writer_rt,
-            defines=_kwf_dm_defines + _ring_owner_defines + _sd_dm_defines,
+            defines=_kwf_dm_defines + _ring_owner_defines + _sd_dm_defines + _async_bias_defines,
             config=ttnn.WriterConfigDescriptor(),
         )
         for slice_channels, (writer_cores, writer_rt) in writer_groups.items()
@@ -2541,7 +2667,11 @@ def create_program_descriptor(
         core_ranges=cores,
         compile_time_args=compute_ct_args,
         runtime_args=compute_rt,
-        defines=_kwf_compute_defines + _pad_compute_defines + _ring_owner_defines + _sd_compute_defines,
+        defines=_kwf_compute_defines
+        + _pad_compute_defines
+        + _ring_owner_defines
+        + _sd_compute_defines
+        + _wide_short_defines,
         config=ttnn.ComputeConfigDescriptor(
             math_fidelity=compute_kernel_config.math_fidelity,
             math_approx_mode=compute_kernel_config.math_approx_mode,
@@ -2632,6 +2762,7 @@ def create_program_descriptor(
     # The writer's NoC (WriterConfigDescriptor).
     weight_mcast_config = ttnn.McastConfig(noc=ttnn.NOC.NOC_1)
     weight_mcast = None
+    spare_mcast = None
     if g.k_split:
         if column_channel is not None:
             receivers, group_size, order = column_channel
@@ -2641,6 +2772,16 @@ def create_program_descriptor(
             # 74.4 -> 69.8 us).
             sender_config = ttnn.McastFixedSenderConfig(sender_index=0, placement=ttnn.McastSenderPlacement.Staggered)
             weight_mcast = ttnn.Mcast(device, weight_mcast_config, receivers, group_size, sender_config, order)
+        if spare_channel is not None:
+            receivers, group_size, order, senders = spare_channel
+            spare_mcast = ttnn.Mcast(
+                device,
+                weight_mcast_config,
+                receivers,
+                group_size,
+                ttnn.McastExplicitFixedSenderConfig(senders),
+                order,
+            )
     else:
         if mcast_receivers is not None and weight_servers is None:
             weight_mcast = ttnn.Mcast(
@@ -2655,5 +2796,10 @@ def create_program_descriptor(
             ttnn.attach_absent_mcast(writer, WEIGHT_MCAST_PREFIX)
     else:
         weight_mcast.attach(descriptor, WEIGHT_MCAST_PREFIX, writers, len(semaphores))
+    if spare_mcast is None:
+        for writer in writers:
+            ttnn.attach_absent_mcast(writer, WEIGHT_MCAST_SPARE_PREFIX)
+    else:
+        spare_mcast.attach(descriptor, WEIGHT_MCAST_SPARE_PREFIX, writers, weight_mcast.next_semaphore_id())
     descriptor.kernels = readers + writers + [compute] + server_kernels
     return descriptor

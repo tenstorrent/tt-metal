@@ -1336,6 +1336,18 @@ void kernel_main() {
                 pack_reconfig_data_format(cb_combine_slots);
                 ckernel::matmul_block_init(cb_im2col_tiles, cb_weights, false, slice_sb_w, slice_sb_h, k_tiles);
                 uint32_t init_rows = slice_sb_h;
+                // Wide short group (RING_WIDE_SHORT_GROUP, CT group heights only): a 1-row group of a slice 2..4 tiles
+                // wide runs one 1 x out_n subblock (1 + out_n unpacks per k-step) instead of out_n 1 x 1 ones (2 each).
+                // The spare-column groups' 5-row slices (4 + 1) need it: res5.0 / res5.1 on 13 groups 33.7 -> 29.3 /
+                // 33.7 -> 29.1 us (zoned); with 1 x 1 short groups the 5-row walk is as slow as the 6-row one (4 + 2).
+                // Each output tile still sums its k-tiles in the same order in DEST: bit-identical. Raw LLK as the rest
+                // of this walk (compute_kernel_lib::matmul_block: one subblock shape per call, dividing the block).
+#ifdef RING_WIDE_SHORT_GROUP
+                constexpr bool wide_short = ct_group_rows && out_n_tiles >= 2 && out_n_tiles <= 4;
+#else
+                constexpr bool wide_short = false;
+#endif
+                uint32_t init_w = slice_sb_w;
                 // rt_valid: the ring row groups over the block's valid tile-rows (the reader forwards the same ones).
                 const uint32_t walk_groups = (valid_rows + slice_sb_h - 1) / slice_sb_h;
                 im2col_tiles.wait_front(prelude_rows * in0_k_tiles);
@@ -1354,18 +1366,21 @@ void kernel_main() {
                         const uint32_t rows = valid_rows - r0 < slice_sb_h ? valid_rows - r0 : slice_sb_h;
                         const uint32_t lo = kh_lo[r0 / slice_sb_h];
                         const uint32_t hi = kh_hi[r0 / slice_sb_h];
-                        if (rows != init_rows) {
-                            ckernel::matmul_block_init(cb_im2col_tiles, cb_weights, false, slice_sb_w, rows, k_tiles);
+                        const uint32_t group_w = (wide_short && rows == 1) ? out_n_tiles : slice_sb_w;
+                        if (rows != init_rows || group_w != init_w) {
+                            ckernel::matmul_block_init(cb_im2col_tiles, cb_weights, false, group_w, rows, k_tiles);
                             init_rows = rows;
+                            init_w = group_w;
                         }
                         ring_token.reserve_back(1);
                         // The group's matmuls and packs. ct_group_rows: the group height is a template constant (one
                         // instance per height 1..slice_sb_h), so the r x 1 subblock's unpack / math loops are
                         // specialized (on the balanced split's ranges; with runtime dims a 1-row group costs nearly a
                         // full one: res5.2 @ LoFi, a 4 + 1-row walk 26.4 us vs 24.9 us with template heights).
-                        auto group_mm = [&](auto rows_c) {
+                        auto group_mm = [&](auto rows_c, auto w_c) {
                             const uint32_t group_rows = rows_c();
-                            for (uint32_t c0 = 0; c0 < out_n_tiles; c0 += slice_sb_w) {
+                            constexpr uint32_t sb_w = decltype(w_c)::value;
+                            for (uint32_t c0 = 0; c0 < out_n_tiles; c0 += sb_w) {
                                 tile_regs_acquire();
                                 uint32_t in1_index = c0;
                                 if constexpr (nslice_center) {
@@ -1385,7 +1400,7 @@ void kernel_main() {
                                                 in1_index,
                                                 0,
                                                 false,
-                                                slice_sb_w,
+                                                sb_w,
                                                 group_rows,
                                                 in0_k_tiles);
                                             in1_index += out_n_tiles;
@@ -1399,7 +1414,7 @@ void kernel_main() {
                                                 in1_index,
                                                 0,
                                                 false,
-                                                slice_sb_w,
+                                                sb_w,
                                                 group_rows,
                                                 ct);
                                             in1_index += out_n_tiles;
@@ -1414,7 +1429,7 @@ void kernel_main() {
                                                 in1_index,
                                                 0,
                                                 false,
-                                                slice_sb_w,
+                                                sb_w,
                                                 group_rows,
                                                 in0_k_tiles);
                                             in1_index += out_n_tiles;
@@ -1436,7 +1451,7 @@ void kernel_main() {
                                             in1_index,
                                             0,
                                             false,
-                                            slice_sb_w,
+                                            sb_w,
                                             group_rows,
                                             k_tiles);
                                         ++in0_index;
@@ -1451,19 +1466,28 @@ void kernel_main() {
                                     slot_base + r0 * out_n_tiles + c0,
                                     out_n_tiles,
                                     group_rows,
-                                    slice_sb_w);
+                                    sb_w);
                                 tile_regs_release();
                             }
                         };
+                        using SbW = std::integral_constant<uint32_t, slice_sb_w>;
                         if constexpr (ct_group_rows) {
                             switch (rows) {
-                                case 1: group_mm(std::integral_constant<uint32_t, 1>{}); break;
-                                case 2: group_mm(std::integral_constant<uint32_t, 2>{}); break;
-                                case 3: group_mm(std::integral_constant<uint32_t, 3>{}); break;
-                                default: group_mm(std::integral_constant<uint32_t, 4>{}); break;
+                                case 1:
+                                    if constexpr (wide_short) {
+                                        group_mm(
+                                            std::integral_constant<uint32_t, 1>{},
+                                            std::integral_constant<uint32_t, out_n_tiles>{});
+                                    } else {
+                                        group_mm(std::integral_constant<uint32_t, 1>{}, SbW{});
+                                    }
+                                    break;
+                                case 2: group_mm(std::integral_constant<uint32_t, 2>{}, SbW{}); break;
+                                case 3: group_mm(std::integral_constant<uint32_t, 3>{}, SbW{}); break;
+                                default: group_mm(std::integral_constant<uint32_t, 4>{}, SbW{}); break;
                             }
                         } else {
-                            group_mm(RuntimeRows{rows});
+                            group_mm(RuntimeRows{rows}, SbW{});
                         }
                         ring_token.push_back(1);
                     }
