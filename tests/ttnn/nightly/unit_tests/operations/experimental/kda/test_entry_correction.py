@@ -111,6 +111,11 @@ def _terms(correction: EntryCorrection, zero: torch.Tensor, identity: torch.Tens
     return torch.stack([zero.reshape(blocks, -1, key), identity.reshape(blocks, -1, key)], dim=1)
 
 
+def _chunked(output: ttnn.Tensor) -> torch.Tensor:
+    host = ttnn.to_torch(output).float()
+    return host.reshape(host.shape[0], -1, _CHUNK, host.shape[-1])
+
+
 def _reference(host: tuple[torch.Tensor, ...], interval: _Interval) -> tuple[torch.Tensor, torch.Tensor, int]:
     """The valid chunk outputs and the final state, in FP64. tail_entry is never read on one rank."""
     zero, identity, final_e, final_b, entry, _ = (tensor.double() for tensor in host)
@@ -167,7 +172,7 @@ def test_entry_correction_accuracy_and_determinism(
     results = []
     for _ in range(3):
         output, final = correction(*inputs, actual_start, actual_end)
-        results.append((ttnn.to_torch(output).float()[:, :valid], ttnn.to_torch(final)))
+        results.append((_chunked(output)[:, :valid], ttnn.to_torch(final)))
         ttnn.deallocate(output)
         ttnn.deallocate(final)
     got_output, got_final = results[0]
@@ -190,7 +195,7 @@ def test_entry_correction_streams_terms_over_the_l1_budget(device: ttnn.Device) 
     results = []
     for _ in range(2):
         output, final = correction(*inputs, make_actual_start(device, 0), None)
-        results.append((ttnn.to_torch(output).float(), ttnn.to_torch(final)))
+        results.append((_chunked(output), ttnn.to_torch(final)))
         ttnn.deallocate(output)
         ttnn.deallocate(final)
     _assert_matches(expected, results[0], "streamed")
@@ -211,7 +216,7 @@ def test_entry_correction_cache_hit_reads_new_interval(device: ttnn.Device, isol
             *inputs, make_actual_start(device, interval.start), make_actual_start(device, interval.end)
         )
         *expected, valid = _reference(host, interval)
-        got = (ttnn.to_torch(output).float()[:, :valid], ttnn.to_torch(final))
+        got = (_chunked(output)[:, :valid], ttnn.to_torch(final))
         _assert_matches(expected, got, f"cached {interval_id}")
     assert device.num_program_cache_entries() == entries + 1
 
@@ -229,7 +234,7 @@ def test_entry_correction_rejects_aliased_entry_states(
         correction(terms, final_e, final_b, entry, entry, actual_start, None)
     output, final = correction(terms, final_e, final_b, entry, tail, actual_start, None)
     *expected, valid = _reference(host, _INTERVALS["full"])
-    got = (ttnn.to_torch(output).float()[:, :valid], ttnn.to_torch(final))
+    got = (_chunked(output)[:, :valid], ttnn.to_torch(final))
     _assert_matches(expected, got, "after a rejected alias")
 
 
@@ -251,7 +256,7 @@ def test_entry_correction_production_performance(device: ttnn.Device) -> None:
 
     (output, final), perf_record = profile_realtime_program(device, lambda: correction(*inputs, actual_start, None))
     duration_ns = perf_record["duration_ns"]
-    assert tuple(output.shape) == (_HEADS, _CHUNKS, _CHUNK, _KEY)
+    assert tuple(output.shape) == (_HEADS, _ROWS, _KEY)
     assert tuple(final.shape) == (_HEADS, _KEY, _KEY)
     performance = perf_model.performance(
         fpu=_entry_correction_ops(),
