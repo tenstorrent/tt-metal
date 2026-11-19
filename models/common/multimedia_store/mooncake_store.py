@@ -7,7 +7,8 @@
 
 - ``fetch_batch(requests)`` reads one byte range from each of several values in one go: one batched lookup at the
   master for the whole batch, plus, for whatever lives on other hosts, a second batched lookup and one batched
-  transfer. ``fetch(media_key)`` is a batch of one whole value; ``size(media_key)`` returns a
+  transfer. A batch with values on both this host and others then looks up this host's values once more, to renew
+  their leases after the transfer. ``fetch(media_key)`` is a batch of one whole value; ``size(media_key)`` returns a
   value's length.
 - A value in this host's segment comes back in place, read-only. A value in another host's segment is read into this
   reader's registered read buffer, which grows on demand, and comes back as a read-only view into it.
@@ -230,8 +231,9 @@ class MooncakeEmbeddingReader:
         """The bytes of each (media_key, offset, length) request, in order. Raises Missing or StoreUnavailable for the
         first request that fails, failing the whole batch, and ValueError for a range outside its value.
 
-        A value in this host's segment comes back in place. The lookup gives this client a lease on the object: for
-        the master's --default_kv_lease_ttl after the call (Mooncake's default is 10 s; deployments set it shorter),
+        A value in this host's segment comes back in place. The lookup gives this client a lease on the object (in a
+        batch that also reads from other hosts, the lookup after that read): for the master's --default_kv_lease_ttl
+        after the call (Mooncake's default is 10 s; deployments set it shorter),
         the master refuses to remove or evict it. After the lease it stays only while the writer's soft pin holds it
         (with allow_evict_soft_pinned_objects=false, the master does not evict it) and nothing removes it, so copy
         what you need before the lease ends.
@@ -250,18 +252,25 @@ class MooncakeEmbeddingReader:
         try:
             located = self._locate(list(dict.fromkeys(keys)))
             results: list[Optional[memoryview]] = [None] * len(requests)
-            remote = []  # (request index, store key, offset, length)
+            local, remote = [], []  # (request index, store key, offset, length)
             for i, (r, key) in enumerate(zip(requests, keys)):
                 value = located[key]
                 length = value.size - r.offset if r.length == -1 else r.length
                 if r.offset < 0 or length < 0 or r.offset + length > value.size:
                     raise ValueError(f"range ({r.offset}, {r.length}) outside the {value.size} B value {key!r}")
-                if value.local_address is not None:
-                    results[i] = _view_at(value.local_address + r.offset, length)
-                else:
-                    remote.append((i, key, r.offset, length))
+                (local if value.local_address is not None else remote).append((i, key, r.offset, length))
             if remote:
                 self._read_remote(remote, results)
+                if local:
+                    # The remote read can outlast the lookup's lease on the local values, after which the master may
+                    # remove them. Looking them up again renews the lease right before their views go to the caller,
+                    # and finds any that went in the meantime.
+                    located = self._locate(list(dict.fromkeys(key for _, key, _, _ in local)))
+            for i, key, offset, length in local:
+                value = located[key]
+                if value.local_address is None or offset + length > value.size:
+                    raise StoreUnavailable(f"{key} changed on this host's segment during the read")
+                results[i] = _view_at(value.local_address + offset, length)
         except (Missing, StoreUnavailable) as e:
             outcome = "misses" if isinstance(e, Missing) else "errors"
             self.stats.record({outcome: 1}, 0, (time.perf_counter() - t0) * 1e3)
@@ -305,7 +314,9 @@ class MooncakeEmbeddingReader:
             return
         size = max(nbytes, 2 * self._read_buffer.nbytes)
         if self._read_buffer.nbytes:  # views a caller still holds keep the old buffer alive; it is only unregistered
-            self._client.unregister_buffer(self._read_buffer.ctypes.data)
+            rc = self._client.unregister_buffer(self._read_buffer.ctypes.data)
+            if rc != 0:  # Mooncake may still hold the registration, so keep the buffer it points at
+                raise StoreUnavailable(f"unregistering the {self._read_buffer.nbytes} B read buffer failed: {rc}")
             self._read_buffer = np.empty(0, dtype=np.uint8)
             self.stats.read_buffer_bytes = 0
         buffer = np.empty(size, dtype=np.uint8)

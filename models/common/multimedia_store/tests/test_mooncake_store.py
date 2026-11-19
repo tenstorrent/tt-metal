@@ -54,6 +54,7 @@ class FakeClient:
         self.registered = {}
         self.registrable = 1 << 40  # bytes register_buffer accepts in one buffer
         self.setup_rc = setup_rc
+        self.unregister_rc = 0
         self.closed = False
 
     def setup(self, segment, metadata, segment_bytes, local_buffer_bytes, protocol, device, master):
@@ -73,8 +74,9 @@ class FakeClient:
         return 0
 
     def unregister_buffer(self, ptr):
-        del self.registered[ptr]
-        return 0
+        if self.unregister_rc == 0:
+            del self.registered[ptr]
+        return self.unregister_rc
 
     def health_check(self):
         return 0 if self.master_up else 2
@@ -170,7 +172,7 @@ def test_remote_value_is_a_view_into_the_read_buffer(setup):
     assert (s["local_hits"], s["remote_hits"], s["bytes_read"]) == (0, 1, remote.nbytes)
 
 
-def test_batch_mixes_local_and_remote_in_one_lookup(setup):
+def test_batch_mixes_local_and_remote(setup):
     client, reader, local, remote = setup
     requests = [
         FetchRequest(_key(1), 1000, 5000),
@@ -186,7 +188,9 @@ def test_batch_mixes_local_and_remote_in_one_lookup(setup):
     assert bytes(got[2]) == remote[-100:].tobytes()
     assert bytes(got[3]) == bytes(got[4]) == b""
     assert bytes(got[5]) == local.tobytes()
-    assert client.lookups == 2  # one batched lookup for all keys, then the snapshot of the one remote key
+    # One batched lookup for all keys, the snapshot of the one remote key, then the local key again, renewing its lease
+    # after the remote read.
+    assert client.lookups == 3
     s = reader.stats.snapshot()
     assert (s["local_hits"], s["remote_hits"], s["fetch_calls"]) == (3, 3, 1)
 
@@ -402,3 +406,40 @@ def test_close_waits_for_a_read_in_progress(setup):
     read.join(10)
     closing.join(10)
     assert got == [local.tobytes()] and client.closed
+
+
+@pytest.mark.parametrize("change", ["removed", "moved"])
+def test_local_value_changed_during_a_remote_read(setup, expect_error, change):
+    """A batch that also reads from another host looks this host's values up again after that read: its lease may
+    have run out meanwhile, so one the master removed, or that is no longer on this host, fails the batch instead of
+    coming back as a view of memory that may hold something else."""
+    client, reader, local, _ = setup
+    read = client.get_into_ranges_from_snapshot
+
+    def read_then_change(*args):
+        out = read(*args)
+        if change == "removed":
+            del client.objects[_key(1).hex()]
+        else:
+            client.put(_key(1), OTHER, local)
+        return out
+
+    client.get_into_ranges_from_snapshot = read_then_change
+    error, message = (Missing, _key(1).hex()) if change == "removed" else (StoreUnavailable, "changed on this host")
+    with expect_error(error, message):
+        reader.fetch_batch([FetchRequest(_key(1)), FetchRequest(_key(2))])
+
+
+def test_failed_unregistration_keeps_the_read_buffer(setup, expect_error):
+    """Growing the read buffer unregisters the old one. If Mooncake refuses, it may still use that memory, so the
+    reader keeps it rather than free it, and the read fails."""
+    client, reader, _, remote = setup
+    reader.fetch(_key(2))
+    (old,) = client.registered
+    client.put(_key(3), OTHER, np.zeros(2 * remote.nbytes, dtype=np.uint8))
+    client.unregister_rc = -1
+    with expect_error(StoreUnavailable, "unregistering the"):
+        reader.fetch(_key(3))
+    assert list(client.registered) == [old] and reader.stats.snapshot()["read_buffer_bytes"] == remote.nbytes
+    client.unregister_rc = 0
+    assert bytes(reader.fetch(_key(3))) == bytes(2 * remote.nbytes)

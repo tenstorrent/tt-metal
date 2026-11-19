@@ -276,16 +276,16 @@ def test_missing_key(cluster, expect_error):
 
 
 def test_batch_of_several_requests(cluster, expect_error):
-    """A forward's batch: ranges of values on this host and another in one lookup at the master and one batched read
-    from the other host. One missing key fails the whole batch."""
+    """A forward's batch: ranges of values on this host and another in batched lookups at the master and one batched
+    read from the other host. One missing key fails the whole batch."""
     here = [cluster.put(cluster.store.segment) for _ in range(3)]
     there = [cluster.put(cluster.other.segment) for _ in range(2)]
     requests = [FetchRequest(k, 64 + 1000 * i, 4096) for i, (k, _) in enumerate(here + there)]
     lookups = cluster.master_lookups()
     got = cluster.store.fetch_batch(requests)
-    # One batched lookup for all five keys, then one for the snapshot the other host's keys are read from; no lookup
-    # per key.
-    assert cluster.master_lookups() - lookups == 1 + 1
+    # One batched lookup for all five keys, one for the snapshot the other host's keys are read from, then this host's
+    # keys again to renew their leases after that read; no lookup per key.
+    assert cluster.master_lookups() - lookups == 1 + 1 + 1
     for i, ((_, value), result) in enumerate(zip(here + there, got)):
         assert bytes(result) == value[64 + 1000 * i : 64 + 1000 * i + 4096].tobytes()
     lookups = cluster.master_lookups()
