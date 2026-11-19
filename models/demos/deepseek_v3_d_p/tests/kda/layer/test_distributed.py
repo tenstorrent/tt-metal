@@ -316,7 +316,7 @@ def test_sp_segmented_prefill_matches_one_shot(
     label = f"tp_axis={tensor_parallel_axis} group={summary_group_chunks}"
     for name, output in (("one-shot", one_shot), ("chunked", chunked)):
         assert_accurate(
-            reference.to(torch.bfloat16),
+            reference.to(output.dtype),
             output,
             name=f"{label} {name} output vs fp32 reference",
             pcc_threshold=0.999,
