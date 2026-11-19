@@ -7,8 +7,8 @@ attention core.
 
 Mirrors the pure-torch ground truth in ../reference/attention.py method for method.
 
-Layout (tt/common.py MeshPlan; 4x8: hidden axis = 4 rows, head axis = 8 columns). Every
-projection is sharded once, 1/32 of its weight per chip, with no replica on either axis:
+Layout (tt/common.py MeshPlan; the 8x4 mesh: hidden axis = the 4-chip axis, head axis = the 8-chip
+axis). Every projection is sharded once, 1/32 of its weight per chip, with no replica on either axis:
 
     weight    in -> out              in split over     out split over    then
     qkv_a     6144 -> 2048 + 576     hidden axis       head axis         reduce(hidden), gather(head)
@@ -37,6 +37,14 @@ projections, gate and sink against the reference; prefill sparse attention (#658
 context-parallel sparse decode (#65889) replace it, on the same weights. Which positions a query
 may attend to arrives as an additive mask.
 
+Frame (tt/frames.py). The latent this sublayer hands to the cache is the one prefill writes
+(tenstorrent/tt-metal#65935, #65886): ``k_rope`` in INTERLEAVED RoPE pairs (2i, 2i + 1), where HF
+and ../reference pair (i, i + 32). The rope rows of kv_a_proj_with_mqa and of every head of
+q_b_proj are reordered when the weights are loaded, so q . k and the sublayer's output are HF's;
+only the order of the 64 rope dims of ``k_rope``, the queries and the keys differs from the
+reference (frames.rope_to_device / tail_to_device). ``cos`` / ``sin`` are the interleaved tables
+(frames.rope_tables).
+
 Tensors are [1, 1, T, width] with the T tokens down the tile rows, or [1, heads, T, width] inside
 the core. The caller applies the layer's pre-norm before and iHC's hc_post after.
 """
@@ -47,6 +55,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.hy4_preview.tt import frames
 from models.experimental.hy4_preview.tt.common import MeshPlan, compute_config
 
 
@@ -56,19 +65,21 @@ def _cols(x, start, end):
     return ttnn.slice(x, [0, 0, 0, start], [shape[0], shape[1], shape[2], end])
 
 
-def _rope(x, cos, sin):
-    """Half-split RoPE on the last dim: x * cos + rotate_half(x) * sin, rotate_half(x) = (-x2 | x1).
+def _rope(x, cos, sin, swap, ckc):
+    """Interleaved RoPE on the last dim: x * cos + (x @ swap) * sin, where (x @ swap) is
+    (-x1, x0, -x3, x2, ...) (frames.rope_swap).
 
-    x: [1, heads, T, d]; cos / sin: [1, 1, T, d], broadcast over the heads.
+    x: [1, heads, T, d]; cos / sin: [1, 1, T, d] interleaved tables, broadcast over the heads;
+    swap: [1, 1, d, d].
     """
-    d = x.shape[-1]
-    rotated = ttnn.concat([ttnn.neg(_cols(x, d // 2, d)), _cols(x, 0, d // 2)], dim=-1)
+    rotated = ttnn.matmul(x, swap, compute_kernel_config=ckc, dtype=x.dtype)
     return ttnn.add(ttnn.multiply(x, cos), ttnn.multiply(rotated, sin))
 
 
 class TtHy4Attention(LightweightModule):
     """One attention sublayer. ``weights`` holds the nine tensors by checkpoint name, as
-    reference.attention.Hy4Attention.weights() returns them (linear weights are [out, in]).
+    reference.attention.Hy4Attention.weights() returns them (linear weights are [out, in]), in the
+    checkpoint's frame; they are moved to the device frame here (module docstring).
 
     ``weight_dtype`` is the dtype of the six projections; activations are ``dtype``.
     """
@@ -95,7 +106,8 @@ class TtHy4Attention(LightweightModule):
                 f"mesh_partition needs a multiple of {ttnn.TILE_SIZE}"
             )
 
-        # BFP8 keeps 7 mantissa bits, which HiFi2 covers; BF16 weights take HiFi4.
+        # BFP8 keeps 7 mantissa bits, which HiFi2 covers; BF16 weights take HiFi4. (HiFi2 costs about 1%
+        # of scale, which PCC does not show: tests/test_moe.py test_ffn_gain_by_fidelity.)
         fidelity = ttnn.MathFidelity.HiFi2 if weight_dtype == ttnn.bfloat8_b else ttnn.MathFidelity.HiFi4
         self.ckc = compute_config(fidelity, fp32_acc=True, packer_l1_acc=True)
         self.core_ckc = compute_config(ttnn.MathFidelity.HiFi4, fp32_acc=True, packer_l1_acc=True)
@@ -117,6 +129,11 @@ class TtHy4Attention(LightweightModule):
                 t.float().contiguous().reshape(shape), layout=ttnn.TILE_LAYOUT, device=plan.mesh_device, dtype=dtype
             )
 
+        weights = frames.attention_weights(weights, c)
+        # +-1 entries, exact in any dtype; applied with HiFi4 so the rotated half is not rounded.
+        self.rope_swap = replicated(
+            frames.rope_swap(c.qk_rope_head_dim), (1, 1, c.qk_rope_head_dim, c.qk_rope_head_dim)
+        )
         self.w_qkv_a = linear(torch.cat([weights["q_a_proj"], weights["kv_a_proj_with_mqa"]], dim=0), "hidden")
         self.w_q_b = linear(weights["q_b_proj"], "hidden")
         self.w_gate = linear(weights["linear_gate"], "hidden")
@@ -145,7 +162,8 @@ class TtHy4Attention(LightweightModule):
         """x: [1,1,T,hidden/htp] -> (q_resid [1,1,T,q_lora], k_pass [1,1,T,kv_lora], k_rope [1,1,T,rope]),
         each whole and identical on every chip.
 
-        (k_pass | k_rope) is the per-token cache entry; q_resid also feeds the indexer.
+        (k_pass | k_rope) is the per-token cache entry, k_rope in interleaved pairs; q_resid also
+        feeds the indexer. cos / sin: [1,1,T,rope], interleaved tables.
         """
         c, plan = self.cfg, self.plan
         a = self._matmul(x, self.w_qkv_a)  # this chip's hidden slice x this chip's output slice
@@ -156,7 +174,7 @@ class TtHy4Attention(LightweightModule):
         k_rope = _cols(a, c.q_lora_rank + c.kv_lora_rank, self.qkv_a_dim)
         q_resid = ttnn.rms_norm(q_a, epsilon=c.norm_eps, weight=self.q_a_norm)
         k_pass = ttnn.rms_norm(kv_pass, epsilon=c.norm_eps, weight=self.kv_a_norm)
-        return q_resid, k_pass, _rope(k_rope, cos, sin)
+        return q_resid, k_pass, _rope(k_rope, cos, sin, self.rope_swap, self.core_ckc)
 
     def head_projections(self, x, q_resid, k_pass):
         """The three projections whose output is per head, for this chip's heads:
@@ -178,7 +196,7 @@ class TtHy4Attention(LightweightModule):
         """[1,1,T,heads*qk] -> [1,heads,T,qk], RoPE applied to the trailing rope dims."""
         c = self.cfg
         q = self._to_heads(q, c.qk_head_dim)
-        q_rope = _rope(_cols(q, c.qk_nope_head_dim, c.qk_head_dim), cos, sin)
+        q_rope = _rope(_cols(q, c.qk_nope_head_dim, c.qk_head_dim), cos, sin, self.rope_swap, self.core_ckc)
         return ttnn.concat([_cols(q, 0, c.qk_nope_head_dim), q_rope], dim=-1)
 
     def keys_values(self, kv, k_rope):
@@ -217,7 +235,7 @@ class TtHy4Attention(LightweightModule):
         return self.plan.all_reduce(self._matmul(gated, self.w_o), self.plan.head_axis)
 
     def forward(self, x, cos, sin, mask):
-        """x: [1,1,T,hidden/htp]; cos / sin: [1,1,T,rope]; mask: additive [1,1,T,T].
+        """x: [1,1,T,hidden/htp]; cos / sin: [1,1,T,rope] interleaved tables; mask: additive [1,1,T,T].
 
         Returns [1,1,T,hidden/htp], split over the hidden axis like x.
         """

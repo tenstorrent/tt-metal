@@ -6,7 +6,7 @@
 
 Every stage is compared, so a failure names the projection it is in:
     latent (q_a, kv_a, both norms, RoPE) | q_b | gate | kv_b | the core with its sink | o_proj,
-then the sublayer end to end. On one chip first (the arithmetic), then on the 4x8 Galaxy with
+then the sublayer end to end. On one chip first (the arithmetic), then on the 8x4 Galaxy with
 every projection sharded once across the 32 chips, at a small width and at Hy4's own, with BF16
 and BFP8 weights, and last with layer 0-5 weights from the checkpoint.
 
@@ -19,7 +19,14 @@ import torch
 
 import ttnn
 from models.experimental.hy4_preview.reference.attention import AttentionConfig, Hy4Attention, causal_mask, rope_cos_sin
-from models.experimental.hy4_preview.tests.common import GALAXY_DEVICE_PARAMS, GALAXY_MESH, check_pcc, hy4_tensors
+from models.experimental.hy4_preview.tests.common import (
+    GALAXY_DEVICE_PARAMS,
+    GALAXY_MESH,
+    SC1_HIDDEN_AXIS,
+    check_pcc,
+    hy4_tensors,
+)
+from models.experimental.hy4_preview.tt import frames
 from models.experimental.hy4_preview.tt.attention import TtHy4Attention
 from models.experimental.hy4_preview.tt.common import MeshPlan
 
@@ -96,7 +103,10 @@ def _check_sublayer(plan, cfg, ref, weight_dtype, pcc_stage, pcc_e2e, seq_len, s
 
     tt = TtHy4Attention(plan, cfg, ref.weights(), weight_dtype=weight_dtype)
     d_x = _up_rows(plan, x, plan.shard_hidden(3))
-    d_cos, d_sin = _up_rows(plan, cos), _up_rows(plan, sin)
+    # The device works in the cache's frame (tt/frames.py): interleaved RoPE tables, and the rope dims of
+    # k_rope, the queries and the keys in interleaved order. Everything else equals the reference as is.
+    d_cos, d_sin = (_up_rows(plan, t) for t in frames.rope_tables(cos, sin))
+    rope = cfg.qk_rope_head_dim
     d_mask = _up_rows(plan, mask)
 
     # latent: q_a, kv_a, both norms, RoPE on k_rope. Whole on every chip.
@@ -104,7 +114,7 @@ def _check_sublayer(plan, cfg, ref, weight_dtype, pcc_stage, pcc_e2e, seq_len, s
     for name, r, d in (
         ("q_resid", r_q_resid, d_q_resid),
         ("k_pass", r_k_pass, d_k_pass),
-        ("k_rope", r_k_rope, d_k_rope),
+        ("k_rope", frames.rope_to_device(r_k_rope), d_k_rope),
     ):
         shards = [ttnn.to_torch(s) for s in ttnn.get_device_tensors(d)]
         check_pcc(f"{label} {name}", r, shards[0], pcc_stage)
@@ -114,12 +124,12 @@ def _check_sublayer(plan, cfg, ref, weight_dtype, pcc_stage, pcc_e2e, seq_len, s
     d_q, d_gate, d_kv = tt.head_projections(d_x, _up_rows(plan, r_q_resid), _up_rows(plan, r_k_pass))
     check_pcc(f"{label} gate", r_gate, plan.to_torch_head_concat(d_gate, dim=-1), pcc_stage)
     d_qh = tt.queries(d_q, d_cos, d_sin)
-    check_pcc(f"{label} q", r_q, _heads_down(plan, d_qh), pcc_stage)
-    d_keys, d_values = tt.keys_values(d_kv, _up_rows(plan, r_k_rope))
-    check_pcc(f"{label} keys", r_keys, _heads_down(plan, d_keys), pcc_stage)
+    check_pcc(f"{label} q", frames.tail_to_device(r_q, rope), _heads_down(plan, d_qh), pcc_stage)
+    d_keys, d_values = tt.keys_values(d_kv, _up_rows(plan, frames.rope_to_device(r_k_rope)))
+    check_pcc(f"{label} keys", frames.tail_to_device(r_keys, rope), _heads_down(plan, d_keys), pcc_stage)
     check_pcc(f"{label} values", r_values, _heads_down(plan, d_values), pcc_stage)
 
-    # core with the sink, on the reference's q / keys / values
+    # core with the sink, on the reference's q / keys / values (both in the reference's frame: q . k is the same)
     head_mapper = plan.shard(head_dim=1)
     d_attn = tt.core(
         _up(plan, r_q[None], head_mapper),
@@ -177,7 +187,7 @@ def test_sink_takes_probability_mass(device):
 
 
 # ---------------------------------------------------------------------------------------------
-# 4x8 Galaxy: every projection sharded once, hidden over the 4 rows and heads over the 8 columns
+# 8x4 Galaxy: every projection sharded once, hidden over the 4-chip axis and heads over the 8-chip axis
 # ---------------------------------------------------------------------------------------------
 @pytest.mark.parametrize("device_params", [GALAXY_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [GALAXY_MESH], indirect=True)
@@ -187,7 +197,7 @@ def test_sink_takes_probability_mass(device):
 def test_attention_sc1(mesh_device, config, dtype, seq_len):
     cfg = CONFIGS[config]
     weight_dtype, pcc_stage, pcc_e2e = DTYPES[dtype]
-    plan = MeshPlan(mesh_device, hidden_axis=0)
+    plan = MeshPlan(mesh_device, hidden_axis=SC1_HIDDEN_AXIS)
     assert (plan.hidden_tp, plan.head_tp) == (4, 8)
     _check_sublayer(plan, cfg, _reference(cfg, seed=1), weight_dtype, pcc_stage, pcc_e2e, seq_len, 2, f"sc1 {config}")
 
@@ -208,5 +218,5 @@ def test_attention_sc1_real_weights(mesh_device, layer, dtype):
     with torch.no_grad():
         for name, value in zip(names, tensors):
             getattr(ref, name).copy_(value.reshape(getattr(ref, name).shape))
-    plan = MeshPlan(mesh_device, hidden_axis=0)
+    plan = MeshPlan(mesh_device, hidden_axis=SC1_HIDDEN_AXIS)
     _check_sublayer(plan, cfg, ref, weight_dtype, pcc_stage, pcc_e2e, 96, 2, f"sc1 real L{layer}")

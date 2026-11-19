@@ -3,16 +3,21 @@
 
 """Mesh plan and helpers shared by the Hy4-preview TTNN modules.
 
-SC1 parallel plan (Blackhole Galaxy, 4x8, tenstorrent/tt-metal#65884): one engine on all 32 chips,
-every weight sharded once.
+SC1 parallel plan (Blackhole Galaxy, tenstorrent/tt-metal#65884): one engine on all 32 chips, every
+weight sharded once. #65884 draws the mesh as 4 rows x 8 columns; the Galaxy's fabric is 8x4 and the
+plan runs on it as it is, the same mesh and axes prefill uses (#65935: sequence and heads on axis 0,
+hidden on axis 1), so the issue's 4 rows are mesh axis 1 and its 8 columns are mesh axis 0:
 
-* Hidden axis (``hidden_axis=0``, the 4 mesh rows): the residual streams' hidden dimension, and
-  the input rank of every attention projection, are split over the rows and replicated across the
-  columns. Collectives that sum over the hidden split run on ``cluster_axis=hidden_axis``, so each
-  stays inside one mesh column.
-* Head axis (the other axis, the 8 mesh columns): attention heads, 8 per chip. A projection whose
+* Hidden axis (``hidden_axis=1``, 4 chips): the residual streams' hidden dimension, and the input
+  rank of every attention projection, are split over it and replicated across the other axis.
+  Collectives that sum over the hidden split run on ``cluster_axis=hidden_axis``.
+* Head axis (the other axis, mesh axis 0, 8 chips): attention heads, 8 per chip. A projection whose
   input is split over the hidden axis and whose output is split over the head axis puts 1/32 of its
   weight on each chip.
+
+Chips are counted row-major over the 8x4 mesh, ``chip = head_coord * 4 + hidden_coord``: the order
+ttnn.get_device_tensors returns them in, and the linear chip of the KV stripe prefill writes
+(#65886: ``sp_coord * tp + tp_coord``), so tt/kv_layout.py addresses the same rows.
 """
 
 import torch
@@ -33,12 +38,12 @@ def compute_config(fidelity=ttnn.MathFidelity.HiFi4, fp32_acc=True, packer_l1_ac
 class MeshPlan:
     """Where the hidden dimension lives on the mesh.
 
-    ``hidden_axis`` is the mesh axis the hidden dimension is split over (0 on SC1), or None when
+    ``hidden_axis`` is the mesh axis the hidden dimension is split over (1 on SC1), or None when
     nothing is split (a single chip). ``num_links`` / ``topology`` left as None let each collective
     pick them from the active fabric.
     """
 
-    def __init__(self, mesh_device, hidden_axis=0, num_links=None, topology=None):
+    def __init__(self, mesh_device, hidden_axis=1, num_links=None, topology=None):
         assert hidden_axis in (None, 0, 1), f"hidden_axis must be None, 0 or 1, got {hidden_axis}"
         self.mesh_device = mesh_device
         self.hidden_axis = hidden_axis

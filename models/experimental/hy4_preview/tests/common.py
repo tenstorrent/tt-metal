@@ -12,8 +12,11 @@ from loguru import logger
 
 import ttnn
 
-# SC1 is one engine on the whole 4x8 Galaxy with collectives along both mesh axes, so it needs the 2D fabric.
-GALAXY_MESH = (4, 8)
+# SC1 is one engine on the whole Galaxy with collectives along both mesh axes, so it needs the 2D fabric.
+# The mesh is the fabric's own 8x4, the one prefill runs on (tenstorrent/tt-metal#65935): heads over
+# axis 0 (8 chips), hidden over axis 1 (4 chips).
+GALAXY_MESH = (8, 4)
+SC1_HIDDEN_AXIS = 1
 GALAXY_DEVICE_PARAMS = {"fabric_config": ttnn.FabricConfig.FABRIC_2D}
 
 # BF16 checkpoint dir (tencent/Hy4-preview); the same variable the prefill reference reads.

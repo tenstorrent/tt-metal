@@ -6,8 +6,8 @@
 Each piece is checked independently so a failure localises immediately:
     expand | project | hc_pre | hc_post | head | the wrapped sublayer | a stack of layers | the
     checkpoint's own parameters,
-on one chip, then on the 4x8 Galaxy with the hidden dimension split across a mesh axis: the 4 rows
-(the SC1 layout) and the 8 columns (the same code on the other axis).
+on one chip, then on the 8x4 Galaxy with the hidden dimension split across a mesh axis: the 4-chip
+axis (the SC1 layout) and the 8-chip axis (the same code on the other axis).
 
 Precision note: the one lossy step is the projection matmul mixes = RMSNorm(X) @ fn^T, a
 reduction over n*C = 24576 terms. In the real model it is squashed by the sigmoid and the small
@@ -277,13 +277,13 @@ def test_hc_head_real_weights(device):
 
 
 # ---------------------------------------------------------------------------------------------
-# 4x8 Galaxy: hidden split across a mesh axis
+# 8x4 Galaxy: hidden split across a mesh axis
 # ---------------------------------------------------------------------------------------------
 galaxy = [
     pytest.mark.parametrize("device_params", [GALAXY_DEVICE_PARAMS], indirect=True),
     pytest.mark.parametrize("mesh_device", [GALAXY_MESH], indirect=True),
-    # 0: hidden over the 4 rows, replicated across the 8 columns (SC1). 1: the other axis.
-    pytest.mark.parametrize("hidden_axis", [0, 1], ids=["rows4-sc1", "cols8"]),
+    # 1: hidden over the 4-chip axis, replicated across the 8-chip axis (SC1). 0: the other axis.
+    pytest.mark.parametrize("hidden_axis", [1, 0], ids=["axis1-4chips-sc1", "axis0-8chips"]),
 ]
 
 
