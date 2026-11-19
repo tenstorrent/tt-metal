@@ -347,3 +347,11 @@
   upload), restart only for a .so change; (3) layers loaded = layers executed (decode skip: 0-20);
   (4) gate units submit to it; fresh-process determinism once per accepted task; (5) a device demo with X.9's census
   and walls (prose, agentic). Each piece gets a status line here.
+
+## 2026-11-19 06:48 UTC: ETAs (owner)
+
+- X.9 census result: done; all five texts measured twice (first check 05:48, second 06:48), table in BREADCRUMBS X.9
+  and above; the one-process re-run starts when X.9's orchestrator stops (~06:55) and ends ~07:15 (all 40 layers:
+  the 0-20 subset needs the model change the runner agent is making; the census reads layers 0-19 only).
+- Resident runner, first request -> first chunk: estimate ~10:00 UTC (CPU pieces ~2-3 h, then the device demo);
+  expected ~3-4 min for the cold first request (load 0-20 + compile), < 1 min for each later one.
