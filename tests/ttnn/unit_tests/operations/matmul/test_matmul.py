@@ -5875,15 +5875,21 @@ def test_matmul_nd_sharded_without_2d_shard_spec(device, nd_operand, core_grid, 
     assert_equal(torch_a @ torch_b, ttnn.to_torch(output))
 
 
-def test_matmul_auto_2d_mcast_reads_nd_sharded_dram_b_in_place(device):
-    # A user core grid makes the auto config 2D multicast, whose in1 reader takes a DRAM ND-sharded B as is.
+# The auto config is 2D multicast here, whose in1 reader takes a DRAM ND-sharded B as is: through the user core grid
+# for an unbatched B, and through the simple config for a batched B without one.
+@pytest.mark.parametrize(
+    "batch, size, core_grid",
+    [(1, 512, ttnn.CoreGrid(y=4, x=4)), (2, 1024, None)],
+    ids=["user_core_grid", "batched_b"],
+)
+def test_matmul_auto_2d_mcast_reads_nd_sharded_dram_b_in_place(device, batch, size, core_grid):
     if device.dram_grid_size().x < 4:
         pytest.skip("needs at least 4 DRAM banks")
     torch.manual_seed(0)
-    torch_a = torch.randint(-1, 2, (1, 1, 512, 512)).bfloat16()
-    torch_b = torch.randint(-1, 2, (1, 1, 512, 512)).bfloat16()
+    torch_a = torch.randint(-1, 2, (batch, 1, size, size)).bfloat16()
+    torch_b = torch.randint(-1, 2, (batch, 1, size, size)).bfloat16()
     dram_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
-    nd_spec = ttnn.NdShardSpec(ttnn.Shape([512, 64]), dram_cores)
+    nd_spec = ttnn.NdShardSpec(ttnn.Shape([1, 1, size, size // 8]), dram_cores)
     a = ttnn.from_torch(torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     b = ttnn.from_torch(
         torch_b,
@@ -5895,7 +5901,7 @@ def test_matmul_auto_2d_mcast_reads_nd_sharded_dram_b_in_place(device):
     assert b.memory_config().shard_spec is None
 
     ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-    output = ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=4, x=4))
+    output = ttnn.matmul(a, b, core_grid=core_grid)
     graph = ttnn.graph.end_graph_capture()
 
     ops = {node["params"]["name"] for node in graph if node.get("node_type") == "function_start"}
