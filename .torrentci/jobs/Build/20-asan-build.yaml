@@ -1,0 +1,125 @@
+---
+# Mirrors the PR Gate's ASan build (build-artifact.yaml) as a shadow; never a
+# required check. Runs manually for now.
+jobs:
+  - id: asan-build
+    description: Configure and compile tt-metal (ASan, --build-all) in the CI build image
+    timeout: 1h
+    compiler-cache: ccache
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: ci-build}
+        resources:
+          # Measured: 16 jobs peak at 13.2 GiB; a CPU limit throttled 53% of periods.
+          requests: {cpu: '16', memory: 24Gi, ephemeral-storage: 100Gi}
+          limits: {memory: 32Gi, ephemeral-storage: 150Gi}
+    env:
+      - {name: CMAKE_BUILD_PARALLEL_LEVEL, value: '16'}
+      # Hash the compiler, not its mtime, so hits survive image rebuilds.
+      - {name: CCACHE_COMPILERCHECK, value: content}
+      # Keeps cache keys path-independent; remove once TorrentCI sets it by default.
+      - {name: CCACHE_BASEDIR, value: /workspace}
+      - {name: CPM_SOURCE_CACHE, value: /workspace/.cpmcache}
+    # CPM source cache: saves ~2.2 min of configure (162 s cold, 29 s warm).
+    # cpm-cache drops a restored tree whose dependency files changed.
+    cache:
+      key: 'cpm-v1-${ref_name}-${commit_sha}'
+      restore-keys: ['cpm-v1-${ref_name}-', cpm-v1-]
+      save-paths: [.cpmcache]
+    artifacts:
+      publish:
+        # For smoke, sdk-examples and build-prebuilt-tests-image.
+        - name: packages-ubuntu-24.04-amd64-ASan-x86_64-linux-clang-20-libstdcpp
+          path: packages.tar
+          content-type: application/x-tar
+          retention: dependents
+        # For build-docs (TT_FROM_PRECOMPILED_DIR).
+        - name: ttnn-import-ASan
+          path: ttnn-import.tar.zst
+          content-type: application/zstd
+          retention: dependents
+    steps:
+      - id: submodules
+        kind: shell
+        shell:
+          run:
+            - git submodule sync --recursive
+            - git submodule update --init --recursive --depth 1 --jobs 4
+      - id: cpm-cache
+        kind: shell
+        shell:
+          run:
+            - >-
+              cat cmake/CPM.cmake third_party/CMakeLists.txt tt_metal/third_party/CMakeLists.txt
+              tt_metal/third_party/umd/third_party/CMakeLists.txt tt-train/cmake/dependencies.cmake
+              .gitmodules | sha256sum | cut -d' ' -f1 > /tmp/cpm-deps.sha256
+            - >-
+              if [ ! -f .cpmcache/.deps.sha256 ]; then echo "CPM cache: miss";
+              elif cmp -s .cpmcache/.deps.sha256 /tmp/cpm-deps.sha256; then
+              echo "CPM cache: hit, $(du -sh .cpmcache | cut -f1)"; touch /tmp/cpm-unchanged;
+              else echo "CPM cache: dependencies changed, dropping it"; rm -rf .cpmcache; fi
+            - mkdir -p .cpmcache && cp /tmp/cpm-deps.sha256 .cpmcache/.deps.sha256
+      - id: configure
+        kind: shell
+        shell:
+          run:
+            - >-
+              ./build_metal.sh --build-dir build --build-type ASan
+              --toolchain-path cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
+              --build-all --enable-ccache --configure-only
+              --use-system-sfpi --disable-profiler
+      - id: compile
+        kind: shell
+        shell:
+          run:
+            - cmake --build build --target install
+            - ccache -s
+      - id: package
+        kind: shell
+        shell:
+          run:
+            - cmake --build build --target package
+            - ls -1sh build/*.deb build/*.ddeb || true
+      - id: stage-packages
+        kind: shell
+        shell:
+          run:
+            - >-
+              find build -maxdepth 1 -type f \( -name '*.deb' -o -name '*.ddeb' \)
+              -printf '%f\n' | sort > packages.list
+            - test -s packages.list
+            - tar -cf packages.tar -C build -T packages.list
+            - ls -l packages.tar
+      - id: stage-ttnn-import
+        kind: shell
+        shell:
+          run:
+            # Lean TT_FROM_PRECOMPILED_DIR tree (build/lib + runtime), as the
+            # PR Gate stages it.
+            - rm -rf ttnn-import
+            - mkdir -p ttnn-import/build/lib
+            - cp -a build/lib/*.so* ttnn-import/build/lib/
+            - find ttnn-import/build/lib -type f -name '*.so*' -exec strip --strip-unneeded {} +
+            - cp -a runtime ttnn-import/runtime
+            - du -sh ttnn-import ttnn-import/build/lib
+            - tar -I 'zstd -1 -T0' -cf ttnn-import.tar.zst -C ttnn-import .
+            - ls -l ttnn-import.tar.zst
+      - id: cpm-cache-save
+        kind: shell
+        shell:
+          run:
+            # The cache archive refuses symlinks, sparse files and .git paths.
+            # CPM only checks that a source directory exists, so drop .git and
+            # replace each symlink with a copy of its target.
+            - find .cpmcache -name .git -prune -exec rm -rf {} +
+            - >-
+              find .cpmcache -type l -exec sh -c 'for l; do
+              t=$(readlink -f "$l") && rm "$l" && cp -rL "$t" "$l" || true; done' _ {} +
+            - find .cpmcache -type l -delete
+            - >-
+              find .cpmcache -type f -size +0 -printf '%S %p\n' | awk '$1 < 1 {sub(/^[^ ]+ /, ""); print}'
+              | while IFS= read -r f; do cp --sparse=never "$f" "$f.dense" && mv "$f.dense" "$f"; done
+            # An unchanged restored tree is already stored; skip re-uploading it.
+            - if [ -f /tmp/cpm-unchanged ]; then rm -rf .cpmcache; fi

@@ -60,6 +60,7 @@ tests/pipeline_reorg/galaxy_multi_user_isolation_tests.yaml @sott0n @changh95
 .github/workflows/ttnn-run-sweeps*.yaml @stevendae @cmaryanTT @sjameelTT @bbradelTT @ntarafdar
 .github/workflows/vllm-model-tests-impl.yaml @viktorpusTT @tchedaTT @ppetrovicTT @tenstorrent/metalium-developers-infra
 .github/workflows/vllm-model-tests.yaml @viktorpusTT @tchedaTT @ppetrovicTT @tenstorrent/metalium-developers-infra
+.torrentci/ @tenstorrent/metalium-developers-infra
 tests/pipeline_reorg/llk_sfpu_report_tests.yaml @nstamatovicTT @fvranicTT
 
 /infra/ @tenstorrent/metalium-developers-infra
