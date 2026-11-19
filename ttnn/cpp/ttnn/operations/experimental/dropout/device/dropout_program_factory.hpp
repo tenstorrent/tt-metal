@@ -6,7 +6,7 @@
 
 #include <optional>
 
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "dropout_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
@@ -22,7 +22,7 @@ struct DropoutProgramFactory {
     // on every cache hit -- applied to the cached program in place, no spec rebuild. seed is
     // hash-excluded (per-device offset applied when use_per_device_seed); supersedes the framework's
     // tensor-binding refresh, so both tensor bindings are re-supplied here.
-    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+    static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
         const DropoutParams& operation_attributes,
         const DropoutInputs& tensor_args,
         Tensor& tensor_return_value,
@@ -44,7 +44,7 @@ struct DropoutMeshWorkloadFactory {
     // implementation keeps the cache-hit patch from drifting between them. Called once per range;
     // create_mesh_workload_artifacts emits one single-coordinate range per device, so the range's
     // start coordinate is the device whose seed is re-derived.
-    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+    static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
         const DropoutParams& operation_attributes,
         const DropoutInputs& tensor_args,
         Tensor& tensor_return_value,

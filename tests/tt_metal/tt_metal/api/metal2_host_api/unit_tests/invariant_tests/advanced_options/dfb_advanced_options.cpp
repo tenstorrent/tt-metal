@@ -9,7 +9,7 @@
 #include <stdexcept>
 #include <vector>
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
@@ -67,6 +67,31 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayWithBorrowedFromFails) {
     spec.tensor_parameters = {test_helpers::MakeMinimalTensorParameter("t", BufferType::L1)};
     spec.dataflow_buffers[0].borrowed_from = TensorParamName{"t"};
     EXPECT_SPEC_REJECTED(spec, "sets both prefetcher_pipe_relays and borrowed_from");
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaDFBWithBorrowedTensorFails) {
+    // A DFB cannot combine a tensor view with an arena allocation override, even at offset zero.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    ProgramSpec spec = test_helpers::MakeBorrowedDFBProgramSpec();
+    spec.advanced_options.sram_arena_parameters = {
+        {.unique_id = SRAMArenaParamName{"arena"}, .properties = LockstepSRAMArenaProperties{4096}}};
+    spec.dataflow_buffers[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}};
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("sets both borrowed_from and allocation_override")));
+}
+
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayWithAllocationOverrideFails) {
+    // A relay DFB cannot also allocate its storage in an SRAM arena.
+    ProgramSpec spec = MakeFullPipeSpec();
+    spec.advanced_options.sram_arena_parameters = {
+        {.unique_id = SRAMArenaParamName{"arena"},
+         .properties = LockstepSRAMArenaProperties{test_helpers::pipe_ring_size}}};
+    spec.dataflow_buffers[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}};
+    EXPECT_SPEC_REJECTED(spec, "sets both prefetcher_pipe_relays and allocation_override");
 }
 
 }  // namespace

@@ -8,6 +8,7 @@
 #include <tt-metalium/constants.hpp>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 
 namespace ttnn::experimental::prim {
@@ -15,6 +16,18 @@ namespace ttnn::experimental::prim {
 SelectFinalCarryOperation::program_factory_t SelectFinalCarryOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
     return SelectFinalCarryProgramFactory{};
+}
+
+// A cache hit matches every attribute and tensor spec the miss validated: only the buffers can differ.
+void SelectFinalCarryOperation::validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t& in) {
+    constexpr std::string_view operation_name = "select_final_carry";
+    const std::initializer_list<std::pair<const Tensor*, std::string_view>> tensors = {
+        {&in.rank_final, "rank_final"},
+        {&in.prefix_final, "prefix_final"},
+        {&in.actual_start, "actual_start"},
+        {in.actual_end ? &*in.actual_end : nullptr, "actual_end"}};
+    kda_factory_detail::check_allocated_on_device(in.rank_final, tensors, operation_name);
+    kda_factory_detail::check_distinct_buffers(tensors, operation_name);
 }
 
 void SelectFinalCarryOperation::validate_on_program_cache_miss(
@@ -36,6 +49,12 @@ void SelectFinalCarryOperation::validate_on_program_cache_miss(
         kda_factory_detail::check_interleaved(*tensor, operation_name, name);
     }
     kda_factory_detail::check_same_device(in.rank_final, in.prefix_final, operation_name, "prefix_final");
+    kda_factory_detail::check_distinct_buffers(
+        {{&in.rank_final, "rank_final"},
+         {&in.prefix_final, "prefix_final"},
+         {&in.actual_start, "actual_start"},
+         {in.actual_end ? &*in.actual_end : nullptr, "actual_end"}},
+        operation_name);
     kda_factory_detail::check_output_interleaved(attrs.output_mem_config, operation_name);
     const auto& tail = in.rank_final.logical_shape();
     const auto& prefix = in.prefix_final.logical_shape();
@@ -47,6 +66,18 @@ void SelectFinalCarryOperation::validate_on_program_cache_miss(
     const auto* mesh = in.rank_final.device();
     TT_FATAL(attrs.sequence_parallel_axis < mesh->shape().dims(), "{}: invalid sequence_parallel_axis", operation_name);
     TT_FATAL(attrs.num_links > 0, "{}: num_links must be positive", operation_name);
+    const auto available_links = ttnn::operations::ccl::common::get_num_links(*mesh, attrs.sequence_parallel_axis);
+    TT_FATAL(
+        attrs.num_links <= available_links,
+        "{}: num_links {} exceeds the {} links of the sequence-parallel axis",
+        operation_name,
+        attrs.num_links,
+        available_links);
+    TT_FATAL(
+        mesh->shape()[attrs.sequence_parallel_axis] > 1,
+        "{}: needs more than one sequence-parallel rank",
+        operation_name);
+    TT_FATAL(attrs.cores.size() >= attrs.num_links, "{}: needs a core per fabric link", operation_name);
 }
 
 SelectFinalCarryOperation::spec_return_value_t SelectFinalCarryOperation::compute_output_specs(
@@ -73,14 +104,18 @@ Tensor select_final_carry(
     uint32_t sequence_parallel_axis,
     uint32_t local_rows,
     uint32_t num_links,
-    tt::tt_fabric::Topology topology) {
+    tt::tt_fabric::Topology topology,
+    const std::vector<tt::tt_metal::CoreCoord>& cores,
+    const std::array<uint32_t, 2>& semaphore_addresses) {
     return ttnn::device_operation::launch<SelectFinalCarryOperation>(
         SelectFinalCarryParams{
             .sequence_parallel_axis = sequence_parallel_axis,
             .local_rows = local_rows,
             .num_links = num_links,
             .topology = topology,
-            .output_mem_config = memory_config},
+            .output_mem_config = memory_config,
+            .cores = cores,
+            .semaphore_addresses = semaphore_addresses},
         SelectFinalCarryInputs{
             .rank_final = rank_final,
             .prefix_final = prefix_final,

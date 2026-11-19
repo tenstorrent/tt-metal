@@ -326,12 +326,24 @@ struct dfb_dm0_isr_txn_threshold_t {
     uint8_t _pad[3];
 };
 
+// What DM0 needs to finish one implicit-sync DFB side at kernel exit (dfb_dm0_flush_side). Every txn id of
+// the side carries the same copy.
+constexpr uint8_t DFB_DM0_FINISH_FLAG_SPLIT = 0x1;      // each op is split across all of an issuer's counters
+constexpr uint8_t DFB_DM0_FINISH_FLAG_BROADCAST = 0x2;  // each op is posted to all of an issuer's counters
+struct dfb_dm0_finish_info_t {
+    uint8_t issuer_hart_mask;  // DM harts that issue on this side; their counters are listed in this order
+    uint8_t flags;             // DFB_DM0_FINISH_FLAG_*
+    uint8_t num_txn_ids;       // the side's txn ids, one ascending block starting at the lowest
+};
+static_assert(sizeof(dfb_dm0_finish_info_t) == 3, "dfb_dm0_finish_info_t must be 3 bytes");
+
 // 32-byte image matching TxnDFBDescriptor layout in dataflow_buffer_interface.h.
 struct dfb_dm0_txn_descriptor_image_t {
     uint8_t num_counters;
     uint8_t tile_counters[18];
     uint8_t tiles_to_post_or_ack;  // union post/ack share offset in TxnDFBDescriptor
-    uint8_t _pad[12];
+    dfb_dm0_finish_info_t finish;
+    uint8_t _pad[9];
 };
 
 // One entry per producer RISC that uses the remapper.

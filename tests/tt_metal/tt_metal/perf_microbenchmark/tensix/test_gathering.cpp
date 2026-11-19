@@ -27,7 +27,7 @@ int main() {
         {"LOOP_COUNT", "100"},
         {"LOOP_SIZE", "100"},
     };
-    auto program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateProgram(*device);
     tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/perf_microbenchmark/tensix/kernels/compute.cpp",

@@ -8,7 +8,8 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::prim {
 
@@ -35,7 +36,7 @@ bool can_use_specialized_factory(const CopyParams& operation_attributes, const C
         input_unit_size = input_tensor.memory_config().shard_spec()->shape[1] * input_tensor.element_size();
     }
 
-    const uint32_t input_alignment = input_tensor.buffer()->alignment();
+    const uint32_t input_alignment = input_tensor.mesh_buffer().alignment();
     const uint32_t aligned_input_unit_size = tt::align(input_unit_size, input_alignment);
     constexpr uint32_t num_input_units = 2;
     uint32_t total_cb_size = num_input_units * aligned_input_unit_size;
@@ -99,7 +100,7 @@ void CopyDeviceOperation::validate_on_program_cache_miss(
         "ttnn.copy only supports float, bfloat, fp8_e4m3, int32, uint32, uint16 and uint8 output tensors but got {}",
         operation_attributes.output_dtype);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to copy need to be on device!");
-    TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to copy need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.is_allocated(), "Operands to copy need to be allocated in buffers on device!");
 
     // Determine the actual output dtype based on preallocated output if present
     DataType output_dtype = operation_attributes.output_dtype;
@@ -122,7 +123,7 @@ void CopyDeviceOperation::validate_on_program_cache_miss(
             "spec than the one specified in the passed-in memory config.");
         TT_FATAL(out_tensor.dtype() == operation_attributes.output_dtype, "Mismatched output dtype");
         TT_FATAL(out_tensor.storage_type() == StorageType::DEVICE, "Output tensor needs to be on device!");
-        TT_FATAL(out_tensor.buffer() != nullptr, "Output tensor needs to be allocated in buffers on device!");
+        TT_FATAL(out_tensor.is_allocated(), "Output tensor needs to be allocated in buffers on device!");
         TT_FATAL(
             out_tensor.device() == input_tensor_a.device(),
             "Output tensor needs to be on the same device as the input tensor!");
@@ -167,7 +168,7 @@ CopyDeviceOperation::spec_return_value_t CopyDeviceOperation::compute_output_spe
                                         // padded_shape due to having a different shard_spec.
     return {tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
-        tt::tt_metal::TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             operation_attributes.output_dtype,
             tt::tt_metal::PageConfig(input_tensor.layout()),
             operation_attributes.output_mem_config,

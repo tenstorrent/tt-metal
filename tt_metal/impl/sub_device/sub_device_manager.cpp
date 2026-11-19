@@ -8,7 +8,7 @@
 #include <host_api.hpp>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
-#include <tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt_stl/span.hpp>
 #include <algorithm>
 #include <limits>
@@ -28,10 +28,6 @@
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "distributed/mesh_trace.hpp"
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/xy_pair.hpp>
-#include "impl/dispatch/vector_aligned.hpp"
-#include <impl/dispatch/dispatch_query_manager.hpp>
 
 using MeshTraceId = tt::tt_metal::distributed::MeshTraceId;
 using MeshTraceBuffer = tt::tt_metal::distributed::MeshTraceBuffer;

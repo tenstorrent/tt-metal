@@ -15,7 +15,7 @@ from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.t3000.falcon40b.tt.falcon_common import PytorchFalconCausalLM
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config
 from models.tt_transformers.tt.common import get_hf_tt_cache_path
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_and_get_pcc, comp_pcc
+from tt_py_test_utils_common.comparison_funcs import comp_and_get_pcc, comp_pcc
 from ttnn import ConcatMeshToTensor
 
 
@@ -371,6 +371,7 @@ def run_test_FalconCausalLM_end_to_end(
         assert does_pass
 
 
+@pytest.mark.falcon40b_config
 @pytest.mark.parametrize("num_devices", (8,), ids=["8chips"])
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len",
@@ -437,10 +438,6 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     mesh_device,
 ):
     model_config_str = f"{data_type}-{memcfg}"
-    if llm_mode == "prefill" and memcfg != "DRAM" or num_devices != 8:
-        pytest.skip("Prefill is only supported for DRAM memory config and 8 chips!")
-    if llm_mode == "decode" and memcfg != "SHARDED":
-        pytest.skip("Decode is only supported for SHARDED memory config!")
 
     out_pcc = 0.99
     k_cache_pcc = 0.99

@@ -5,6 +5,7 @@
 to the gates, and how the ``--ulp-measure`` records are judged against it."""
 
 import math
+from dataclasses import replace
 
 import pytest
 from conftest import TANH_DOMAINS
@@ -24,6 +25,8 @@ from helpers.ulp_budget_diff import (
 from helpers.ulp_domains import Domain
 from helpers.ulp_table import (
     MEASURED_ARCH,
+    OTHER_ARCH,
+    TABLE_PATHS,
     BudgetKey,
     Measurement,
     Metric,
@@ -202,13 +205,10 @@ def test_a_declared_tolerance_that_may_loosen_is_a_regression(base_row, head_row
 def test_an_unkeyed_budget_binds_only_on_the_measured_arch():
     """Elsewhere the registry hands the cell its tolerance, so a raise there loosens
     nothing; a row naming the arch binds there."""
-    assert MEASURED_ARCH is not ChipArchitecture.BLACKHOLE
     unkeyed = Row(input=F16B, output=F16B, measured=3)
-    bh = Row(input=F16B, output=F16B, arch=ChipArchitecture.BLACKHOLE, measured=5)
-    changes = compare(_table(unkeyed), _table(unkeyed, bh))
-    assert [(c.kind, c.cell[1].arch) for c in changes] == [
-        (Kind.GATED, ChipArchitecture.BLACKHOLE)
-    ]
+    keyed = Row(input=F16B, output=F16B, arch=OTHER_ARCH, measured=5)
+    changes = compare(_table(unkeyed), _table(unkeyed, keyed))
+    assert [(c.kind, c.cell[1].arch) for c in changes] == [(Kind.GATED, OTHER_ARCH)]
 
 
 @pytest.mark.parametrize(
@@ -272,6 +272,7 @@ def test_diff_exit_status(tmp_path, head, flags, status):
     write_table_file(_BASE, base_path)
     write_table_file(head, head_path)
     argv = ["diff", "--base", str(base_path), "--head", str(head_path), *flags]
+    argv += ["--arch", MEASURED_ARCH.value]
     assert main(argv) == status
 
 
@@ -296,7 +297,7 @@ def test_diff_exit_status(tmp_path, head, flags, status):
         "missing-file",
     ],
 )
-def test_a_table_the_registry_refuses_gets_no_verdict(tmp_path, head_text):
+def test_a_table_the_registry_refuses_gets_no_verdict(tmp_path, head_text, capsys):
     """Exit 2, "cannot load", even under --allow-raises: the flag admits a loosened
     gate, not a table no gate can be read from. A conflict marker, a mapping used as a
     key, an entry missing a field and a file that is not UTF-8 used to escape as
@@ -308,7 +309,9 @@ def test_a_table_the_registry_refuses_gets_no_verdict(tmp_path, head_text):
     elif head_text is not None:
         head_path.write_text(head_text)
     argv = ["diff", "--base", str(base_path), "--head", str(head_path)]
-    assert main([*argv, "--allow-raises"]) == 2
+    assert main([*argv, "--arch", MEASURED_ARCH.value, "--allow-raises"]) == 2
+    # Refused by the loader, not by the architecture check that runs first.
+    assert "cannot tell which architecture" not in capsys.readouterr().out
 
 
 def test_the_guard_imports_no_module_that_loads_the_checked_out_table():
@@ -629,18 +632,19 @@ def test_a_list_cell_that_lost_every_lane_is_a_regression():
     assert _verdicts(table, _tanh_measured([], lanes=0)) == [Verdict.NO_LANE]
 
 
-def test_headroom_exit_status(tmp_path):
+def test_headroom_exit_status(tmp_path, capsys):
     """0 within the figure, 1 past it or with nothing measured, 2 for records or a
     table that do not load."""
     table, measured = tmp_path / "table.yaml", tmp_path / "measured.jsonl"
     write_table_file(_table(Row(input=F16B, output=F16B, measured=1)), table)
     argv = ["headroom", "--table", str(table), "--measured", str(measured)]
+    argv += ["--arch", MEASURED_ARCH.value]
     for worst, status in ((1, 0), (9, 1)):
         measured.write_text(_measured(worst).to_json() + "\n")
         assert main(argv) == status
     measured.write_text("")
     assert main(argv) == 1  # an empty file is a sweep that recorded nothing
-    absent = argv[:4] + [str(tmp_path / "absent.jsonl")]
+    absent = [*argv[:4], str(tmp_path / "absent.jsonl"), *argv[5:]]
     assert main(absent) == 2  # a missing one is an input that is not there
     for text in ("{\n", '{"op": "Abs", "key": {}}\n'):
         measured.write_text(text)
@@ -649,3 +653,45 @@ def test_headroom_exit_status(tmp_path):
     assert main(argv) == 2
     measured.write_text(_measured(1).to_json() + "\n")
     assert main(argv[:2] + [str(tmp_path / "absent.yaml")] + argv[3:]) == 2
+    # Each 2 is the input's, not the architecture check's that runs first.
+    assert "cannot tell which architecture" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("arch", list(TABLE_PATHS), ids=lambda a: a.value)
+def test_headroom_judges_a_table_by_the_architecture_its_file_names(tmp_path, arch):
+    """A plain row binds only on its table's architecture. Judged under the shell's
+    `CHIP_ARCH` instead, the other table's wildcard plain rows would stop binding and a
+    reading past one would pass as "not judged"; the file name says which it is."""
+    table = tmp_path / TABLE_PATHS[arch].name
+    write_table_file(_table(Row(output=F16B, measured=1)), table)
+    measured = tmp_path / "measured.jsonl"
+    cell = replace(_CELL, arch=arch)
+    measured.write_text(Measurement(op=ABS, key=cell, worst=9, lanes=1).to_json())
+    argv = ["headroom", "--table", str(table), "--measured", str(measured)]
+    assert main(argv) == 1
+    other = next(a for a in TABLE_PATHS if a is not arch)
+    other_cell = replace(cell, arch=other)
+    measured.write_text(Measurement(op=ABS, key=other_cell, worst=9, lanes=1).to_json())
+    assert main(argv) == 2  # another chip's records, not judged against this table
+    assert main([*argv, "--arch", other.value]) == 1  # --arch overrides the name
+
+
+def test_headroom_takes_records_from_a_chip_that_reads_the_table(tmp_path):
+    """Quasar has no table of its own and reads Wormhole's, so its records are not
+    another chip's; no step budget binds them there."""
+    table = tmp_path / TABLE_PATHS[ChipArchitecture.WORMHOLE].name
+    write_table_file(_table(Row(output=F16B, measured=1)), table)
+    measured = tmp_path / "measured.jsonl"
+    cell = replace(_CELL, arch=ChipArchitecture.QUASAR)
+    measured.write_text(Measurement(op=ABS, key=cell, worst=9, lanes=1).to_json())
+    assert main(["headroom", "--table", str(table), "--measured", str(measured)]) == 0
+
+
+def test_a_table_whose_name_names_no_architecture_needs_arch(tmp_path):
+    """Exit 2 rather than fall back to the shell's `CHIP_ARCH` or a card."""
+    base, head = tmp_path / "base.yaml", tmp_path / "head.yaml"
+    for path in (base, head):
+        write_table_file(_BASE, path)
+    argv = ["diff", "--base", str(base), "--head", str(head)]
+    assert main(argv) == 2
+    assert main([*argv, "--arch", MEASURED_ARCH.value]) == 0

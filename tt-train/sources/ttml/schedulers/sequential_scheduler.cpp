@@ -44,43 +44,48 @@ SequentialScheduler::SequentialScheduler(
     }
 
     // The children were constructed back-to-back on the same optimizer, so the
-    // optimizer currently holds the LAST child's construction-time LR. Only the
-    // first child is active; restore its initial LR. Mirrors PyTorch's
-    // SequentialLR, which resets the LR to initial_lr and redoes the initial
-    // step of the first scheduler only.
-    update_lr(m_schedulers.front()->get_last_lr());
+    // optimizer currently holds the LAST child's construction-time LRs. Only the
+    // first child is active; redo its initial step. Mirrors PyTorch's
+    // SequentialLR, which redoes the initial step of the first scheduler only.
+    apply_lrs();
 }
+
+void SequentialScheduler::apply_lrs() {
+    m_last_lrs = m_schedulers[m_current_scheduler_index]->get_last_lrs();
+    get_optimizer()->set_group_lrs(m_last_lrs);
+}
+
 void SequentialScheduler::step() {
-    if (m_current_scheduler_index >= m_schedulers.size()) {
-        return;
-    }
-
-    auto &current_scheduler = m_schedulers[m_current_scheduler_index];
-    auto current_sched_steps = m_milestones[m_current_scheduler_index];
-    current_scheduler->step();
-    m_current_step_in_scheduler += 1;
-    m_last_lr = current_scheduler->get_last_lr();
-
-    if (m_current_step_in_scheduler >= current_sched_steps) {
+    if (static_cast<size_t>(m_current_step_in_scheduler) >= m_milestones[m_current_scheduler_index]) {
+        if (m_current_scheduler_index + 1 >= m_schedulers.size()) {
+            return;  // every child has run all its steps
+        }
         m_current_scheduler_index += 1;
         m_current_step_in_scheduler = 0;
     }
-}
-float SequentialScheduler::get_last_lr() const {
-    if (m_current_scheduler_index == 0) {
-        return (m_current_scheduler_index < m_schedulers.size())
-                   ? m_schedulers[m_current_scheduler_index]->get_last_lr()
-                   : m_last_lr;
-    } else if (m_current_scheduler_index < m_schedulers.size()) {
-        return m_schedulers[m_current_scheduler_index]->get_last_lr();
-    }
-    return m_last_lr;
+
+    auto &scheduler = *m_schedulers[m_current_scheduler_index];
+    scheduler.step();
+    m_current_step_in_scheduler += 1;
+    m_last_lrs = scheduler.get_last_lrs();
 }
 
-void SequentialScheduler::set_state_dict(const serialization::StateDict &dict) {
-    m_current_step_in_scheduler = serialization::get_value_type<int>(dict, "m_current_step_in_scheduler");
-    const float restored_last_lr = serialization::get_value_type<float>(dict, "m_last_lr");
-    m_current_scheduler_index = serialization::get_value_type<size_t>(dict, "m_current_scheduler_index");
+void SequentialScheduler::restore_own_state(const serialization::StateDict &dict) {
+    const auto index = serialization::get_value_type<size_t>(dict, "m_current_scheduler_index");
+    const auto step_in_scheduler = serialization::get_value_type<int>(dict, "m_current_step_in_scheduler");
+    if (index >= m_schedulers.size()) {
+        throw std::invalid_argument(fmt::format(
+            "SequentialScheduler state has scheduler index {}, but the chain has {} schedulers",
+            index,
+            m_schedulers.size()));
+    }
+    if (step_in_scheduler < 0 || static_cast<size_t>(step_in_scheduler) > m_milestones[index]) {
+        throw std::invalid_argument(fmt::format(
+            "SequentialScheduler state has {} steps in scheduler {}, outside [0, {}]",
+            step_in_scheduler,
+            index,
+            m_milestones[index]));
+    }
 
     // Restore every wrapped child scheduler's state. Each child ``i`` reads
     // back its keys from the flat dict under the ``scheduler_{i}/`` prefix.
@@ -89,26 +94,40 @@ void SequentialScheduler::set_state_dict(const serialization::StateDict &dict) {
     // constructed with the same number of children as the source. A
     // size mismatch will cause the child's ``set_state_dict`` to throw
     // because expected keys won't be present.
-    for (size_t i = 0; i < m_schedulers.size(); ++i) {
-        const auto prefix = scheduler_prefix(i);
-        serialization::StateDict child_dict;
-        for (const auto &[key, value] : dict) {
-            if (key.compare(0, prefix.size(), prefix) == 0) {
-                child_dict[key.substr(prefix.size())] = value;
-            }
-        }
-        m_schedulers[i]->set_state_dict(child_dict);
+    //
+    // A later child can still reject its state after earlier ones were restored (and wrote their LRs to the
+    // optimizer), so snapshot everything and roll back on failure.
+    std::vector<serialization::StateDict> snapshots;
+    snapshots.reserve(m_schedulers.size());
+    for (const auto &scheduler : m_schedulers) {
+        snapshots.push_back(scheduler->get_state_dict());
     }
-
-    // Each child's set_state_dict pushed ITS saved live LR to the optimizer,
-    // so the optimizer now holds the last child's — re-apply this chain's own
-    // live LR (the active child's).
-    update_lr(restored_last_lr);
+    const auto live_lrs = get_optimizer()->get_group_lrs();
+    try {
+        for (size_t i = 0; i < m_schedulers.size(); ++i) {
+            const auto prefix = scheduler_prefix(i);
+            serialization::StateDict child_dict;
+            for (const auto &[key, value] : dict) {
+                if (key.compare(0, prefix.size(), prefix) == 0) {
+                    child_dict[key.substr(prefix.size())] = value;
+                }
+            }
+            m_schedulers[i]->set_state_dict(child_dict);
+        }
+    } catch (...) {
+        for (size_t i = 0; i < m_schedulers.size(); ++i) {
+            m_schedulers[i]->set_state_dict(snapshots[i]);
+        }
+        get_optimizer()->set_group_lrs(live_lrs);
+        throw;
+    }
+    // Only after the children accepted their states, so a rejected state dict leaves the chain's position unchanged.
+    m_current_scheduler_index = index;
+    m_current_step_in_scheduler = step_in_scheduler;
 }
 serialization::StateDict SequentialScheduler::get_state_dict() const {
-    serialization::StateDict res;
+    auto res = LRSchedulerBase::get_state_dict();
     res["m_current_step_in_scheduler"] = m_current_step_in_scheduler;
-    res["m_last_lr"] = m_last_lr;
     res["m_current_scheduler_index"] = m_current_scheduler_index;
 
     // Save every wrapped child scheduler's state under the ``scheduler_{i}/``
