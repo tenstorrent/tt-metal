@@ -159,6 +159,9 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             !operation_attributes.output_mem_config.is_sharded(),
             "spec_pack_heads requires an interleaved output memory config, got {}",
             operation_attributes.output_mem_config.memory_layout());
+        // The reader loads the sink's unpacked row-tile 0, so packed row j*S + h would get sink row j*S + h instead
+        // of row j*32 + h.
+        TT_FATAL(!tensor_args.attention_sink.has_value(), "spec_pack_heads is not supported with attention_sink");
     }
 
     // Input 0 must be sharded by height or DRAM interleaved. All other inputs must be in DRAM.
