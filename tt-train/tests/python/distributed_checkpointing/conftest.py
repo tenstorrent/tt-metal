@@ -13,6 +13,8 @@ import sys
 import numpy as np
 import pytest
 
+import ttml
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
@@ -23,8 +25,6 @@ def _restore_process_generators():
     """The ttml, ttml.init, python, numpy and torch generators as they were before the test, so tests collected after
     this directory start from the state they would have had without it. Snapshotted through each generator's own API,
     not through the checkpoint code these tests check."""
-    import ttml  # here: the device-free format tests import nothing of ttml's runtime
-
     ctx = ttml.autograd.AutoContext.get_instance()
     torch = sys.modules.get("torch")
     init_rng = ttml.init._rng
