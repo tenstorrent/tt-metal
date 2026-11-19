@@ -2266,6 +2266,7 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     // checks below match the historical K=2048 codegen byte-for-byte.
     constexpr int row_scale_factor = 4;
 
+#pragma GCC unroll 1
     for (int col = 0; col < 2; col++)
     {
         // ── Phase 1 — build bitonic sequences of length 32 ─────────────────
@@ -2278,6 +2279,7 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         // overflow the 32-slot buffer. `sort_32` is left inline because
         // `dir` alternates per iter (replaying it would freeze the
         // direction).
+#pragma GCC unroll 1
         for (int i = 0; i < 4; i++)
         {
             load16_rows_x2<consecutive_32_offset>();
@@ -2313,6 +2315,7 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         // second store in each pair uses `store16_rows_x2<32, 48>` so
         // ADDR_MOD_1 (+48) folds the trailing +16 advance into the last
         // SFPSTORE, saving one math-thread issue per inner iter.
+#pragma GCC unroll 1
         for (int i = 0; i < 2; i++)
         {
 #if TOPK_XL_FUSED_MACRO
@@ -2380,6 +2383,7 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     // Pipelined; see `step_group_pipelined`. The last iteration prefetches one group past the end, which only writes LREGs that are dead by then.
     topk_xl_fused_macro::prologue_loads_rt<2>(dir);
     topk_xl_fused_macro::record_step_group_pipelined<2, 16>(dir);
+#pragma GCC unroll 1
     for (int i = 1; i < 8; i++)
     {
         lltt::replay(0, topk_xl_fused_macro::pipelined_group_len);
@@ -2388,6 +2392,7 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
     bitonic_sort_len_k(dir);
     load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
+#pragma GCC unroll 1
     for (int i = 1; i < 8; i++)
     {
         lltt::replay(0, 8);
@@ -2396,6 +2401,7 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     }
 #endif
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+#pragma GCC unroll 1
     for (int col = 0; col < 2; col++)
     {
         canonical_big_block_with_replay<4>(dir);
@@ -2424,6 +2430,7 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     TTI_SFPTRANSP(0, 0, 0, 0);
     bitonic_sort_len_4(dir);
     load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
+#pragma GCC unroll 1
     for (int i = 1; i < 8; i++)
     {
         lltt::replay(0, 8);
@@ -2437,6 +2444,7 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     // Flip SFPU swap direction for every 2 lanes.
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
     TTI_SFPCONFIG(0x5050, 0xF, 8);
+#pragma GCC unroll 1
     for (int col = 0; col < 2; col++)
     {
         canonical_big_block_with_replay<4>(dir);
@@ -2451,6 +2459,7 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
     bitonic_sort_len_8(dir);
     load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
+#pragma GCC unroll 1
     for (int i = 1; i < 8; i++)
     {
         lltt::replay(0, 8);
@@ -2463,6 +2472,7 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     // Flip SFPU swap direction for every 4 lanes.
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
     TTI_SFPCONFIG(0x5500, 0xF, 8);
+#pragma GCC unroll 1
     for (int col = 0; col < 2; col++)
     {
         canonical_big_block_with_replay<4>(dir);
@@ -2477,6 +2487,7 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
     bitonic_sort_len_16_alt(dir);
     load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
+#pragma GCC unroll 1
     for (int i = 1; i < 8; i++)
     {
         lltt::replay(0, 8);
@@ -2489,6 +2500,7 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     leave_transpose_cfg_block();
 
     // Final A + B + C pass per column to finish the sort at the new length.
+#pragma GCC unroll 1
     for (int col = 0; col < 2; col++)
     {
         canonical_big_block_with_replay<4>(dir);
