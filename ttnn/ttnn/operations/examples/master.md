@@ -421,3 +421,14 @@ plus **512 extra `SEMAPHORE_INC`** for push (`G*W`/group), the handshake pull ne
 the immutable input. Pull is faster wherever it behaves, but goes erratic above ~24 tiles/core (36 t/c
 1.46× slower than 48) where push stays monotone ≤1.5%. Prefer pull; compare only at `--kernel-iters 1`
 (push has no back-pressure, so in-kernel repeats inflate it).
+
+## ⭐⭐⭐ T3 — [`fabric_ring_exchange`](fabric_ring_exchange/README.md)
+**Concepts:** the fixed cost of a fabric exchange, shown by an all-gather from L1 to L1 with a very small
+payload (no DRAM, unlike `fabric_all_gather`); direct multi-hop sends vs store-and-forward.
+**Situation:** a fused CCL op all-gathers a few KiB per chip around a 4-chip ring inside one program, and
+its perf rounds stubbed the payloads and treated what was left as a fixed floor.
+**Measured result:** on a Blackhole QuietBox 2 (1×4 ring, `FABRIC_2D_TORUS_XY`), traced, slowest chip: the
+minimal correct exchange (ready fence + header-only items) costs **~5.0 µs**, and the 128 B relay exchange
+**5.38 µs**, 3× the roofline's 1.6 µs. Direct multi-hop sends are **1.1–1.7 µs slower** than relay at every size (128 B–32 KiB, 1 or 2 links), entirely
+because their fence waits for a ready from the 2-hop destination (`fence_direct` 6.35 vs `fence` 5.09 µs);
+the data path costs the same either way. A second link does not help payloads this small.
