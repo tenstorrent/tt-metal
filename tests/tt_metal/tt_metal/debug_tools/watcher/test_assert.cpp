@@ -20,6 +20,7 @@
 #include <tt_stl/assert.hpp>
 #include "debug_tools_fixture.hpp"
 #include <tt-metalium/hal_types.hpp>
+#include "internal/tt-2xx/quasar/tensix_neo_reg.h"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -268,6 +269,17 @@ static void RunTest(
     ASSERT_FALSE(exception.empty()) << "Timeout (" << timeout.count() << "ms) waiting for watcher exception.\n"
                                     << "Expected assert type: " << static_cast<int>(assert_type) << " on " << risc;
 
+    // The semaphore fault leaves the unsafe SEMPOST/SEMGET chicken bit set on NEO 0, and nothing resets it.
+    // TRISC0 is parked in its fault handler by now, so clearing it cannot race the faulting SEMGET.
+    if (processor.processor_class == HalProcessorClassType::COMPUTE && hw_assert_cause == 9) {
+        const auto& cluster = MetalContext::instance().get_cluster();
+        const tt_cxy_pair target(device_id, virtual_core);
+        uint32_t chicken_bits = 0;
+        cluster.read_reg(&chicken_bits, target, NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_CHICKEN_BITS_REG_ADDR);
+        chicken_bits &= ~T6_DEBUG_REGS_CHICKEN_BITS_ALLOW_UNSAFE_SEMPOST_SEMGET_MASK;
+        cluster.write_reg(&chicken_bits, target, NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_CHICKEN_BITS_REG_ADDR);
+    }
+
     // We should be able to find the expected watcher error in the log as well,
     // expected error message depends on the risc we're running on and the assert type.
     // TODO: replace below code snippet with helper after unifying all tests + watcher_device_reader
@@ -303,7 +315,7 @@ static void RunTest(
             // Neo level, so the same code on every TRISC.
             case 9:
                 hw_assert_cause = (static_cast<uint32_t>(TriscErrors::NEO_SEMAPHORES) << 8) |
-                                  static_cast<uint32_t>(SemaphoreErrors::GET_ON_UNINITIALIZED);
+                                  static_cast<uint32_t>(SemaphoreErrors::GET_UNDERFLOW);
                 break;
             default: hw_assert_cause = 0; break;
         }
