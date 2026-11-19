@@ -37,6 +37,17 @@ constexpr uint32_t writer_mailbox_search_length_word = 1;
 
 constexpr uint32_t div_up(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 
+#ifdef KERNEL_BUILD
+// Waits for this RISC's stores to L1, the last of them to the word at `addr`, to land before a CB push, the NoC or
+// another core reads them: the fence orders the stores, a load from the address returns after the store, and an
+// instruction using the loaded value waits for the load.
+inline __attribute__((always_inline)) void wait_l1_store(uint32_t addr) {
+    asm volatile("fence" ::: "memory");
+    uint32_t value = *reinterpret_cast<const volatile uint32_t*>(addr & ~3u);
+    asm volatile("mv %0, %0" : "+r"(value) : : "memory");
+}
+#endif
+
 // The writer's stage-2 block flags: a byte per block, scanned four 32-bit words at a time.
 constexpr uint32_t flag_words(uint32_t search_len) { return div_up(div_up(search_len, block_keys), 16) * 4; }
 

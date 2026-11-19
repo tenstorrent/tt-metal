@@ -172,13 +172,20 @@ def test_two_level_staged_gather_patterns(device, n, members, first_span):
     _check_rows(torch_input, _indices(out, rows), n, range(rows))
 
 
-@pytest.mark.parametrize("pattern", ["ties8", "exact_ties"])
+@pytest.mark.parametrize("pattern", ["ties8", "exact_ties", "half_boundary"])
 def test_two_level_split_row_ties_order_as_a_whole_row(device, pattern):
     """A row halved across a core pair returns the same ordered indices, ties included, as on one core. In
     exact_ties, exactly 2048 keys, one per block, tie for the top, so each candidate half holds 1024 of the winners
-    and a join that kept one half would miss the other's."""
+    and a join that kept one half would miss the other's. In half_boundary the row has 1025 live blocks: the partner's
+    first table page holds one block, then sentinels."""
     width, n = 262_144, 262_144
-    if pattern == "ties8":
+    if pattern == "half_boundary":
+        n = 1025 * BLOCK
+        row = generate("iid", 1, width, 23, n=n)
+        # The partner's only live block holds the row's maximum.
+        top = 1024 * BLOCK + 5
+        row[0, top] = 100.0
+    elif pattern == "ties8":
         row = generate("ties8", 1, width, 22, n=n)
     else:
         g = torch.Generator().manual_seed(22)
@@ -189,17 +196,22 @@ def test_two_level_split_row_ties_order_as_a_whole_row(device, pattern):
     grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(1, 1))])
     results = []
     for rows in (1, 2):  # one row on two cores is a split row; two rows on two cores are whole rows
+        mode = _scalar(device, 0)
         out = ttnn.experimental.topk_large_indices(
             _dev(row.repeat(rows, 1).reshape(1, 1, rows, width), device),
             k=K,
             valid_length=n,
             block_select=32,
             two_level_cutover=FORCE_TWO_LEVEL,
+            mode_output=mode,
             sub_core_grids=grid,
         )
+        assert _mode(mode) == 1
         results.append(_indices(out, rows)[0])
     _check_rows(row, results[0].reshape(1, -1), n, range(1))
     assert torch.equal(results[0], results[1])
+    if pattern == "half_boundary":
+        assert int(results[0][0]) == top
 
 
 def test_two_level_poisoned_tail_and_last_lane(device):

@@ -19,11 +19,14 @@ namespace {
 
 constexpr uint16_t neginf_bf16 = 0xFF80;
 
-FORCE_INLINE void fill_neginf(uint32_t l1_addr, uint32_t num_elements) {
+// Returns the address of the last key stored. Its caller waits for the stores (topk_two_level::wait_l1_store) before
+// the CB push that hands them on.
+FORCE_INLINE uint32_t fill_neginf(uint32_t l1_addr, uint32_t num_elements) {
     auto* p = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr);
     for (uint32_t i = 0; i < num_elements; ++i) {
         p[i] = neginf_bf16;
     }
+    return l1_addr + (num_elements - 1) * sizeof(uint16_t);
 }
 
 // What the reader hands the compute and the writer next (see topk_two_level::header_row): a header page then 32
@@ -36,7 +39,7 @@ FORCE_INLINE uint32_t two_level_announce(uint32_t code, uint32_t row) {
     auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(writer_mailbox.get_write_ptr());
     words[writer_header_code_word] = code;
     words[writer_header_row_word] = row;
-    clobber_all_memory();
+    wait_l1_store(reinterpret_cast<uint32_t>(&words[writer_header_row_word]));
     writer_mailbox.push_back(1);
     CircularBuffer stage1_cb(get_named_compile_time_arg_val("tl_cb_stage1"));
     stage1_cb.reserve_back(1 + stage1_batch);
@@ -45,8 +48,9 @@ FORCE_INLINE uint32_t two_level_announce(uint32_t code, uint32_t row) {
     return base;
 }
 
-FORCE_INLINE void two_level_push_stage1() {
-    clobber_all_memory();
+// last_store: the address of the reader's last L1 store into the pushed pages (the header, or a -inf fill after it).
+FORCE_INLINE void two_level_push_stage1(uint32_t last_store) {
+    topk_two_level::wait_l1_store(last_store);
     CircularBuffer(get_named_compile_time_arg_val("tl_cb_stage1"))
         .push_back(1 + get_named_compile_time_arg_val("tl_stage1_batch"));
 }
@@ -82,10 +86,14 @@ FORCE_INLINE void two_level_unit(
             {.offset_bytes = tile_bytes + offset});
         noc.async_read_barrier();
     }
-    if (live < unit_keys) {
-        fill_neginf(base + tile_bytes + live * sizeof(uint16_t), unit_keys - live);
-    }
-    two_level_push_stage1();
+    two_level_push_stage1(
+        live < unit_keys ? fill_neginf(base + tile_bytes + live * sizeof(uint16_t), unit_keys - live) : base);
+}
+
+// One read of the gather from the source set by noc_async_read_set_state (the row's DRAM bank, or this core's L1 for
+// the staged copies). Out of line: each inlined NoC read is a few hundred bytes of a tight kernel config buffer.
+__attribute__((noinline)) void gather_read(uint32_t src, uint32_t dst, uint32_t bytes, uint8_t noc_id) {
+    noc_async_read_with_state(src, dst, bytes, noc_id);
 }
 
 // Stage 3's gather: the selected blocks table[0 .. 64 * num_chunks) of `row` into num_chunks 2048-key candidate
@@ -97,12 +105,7 @@ FORCE_INLINE void two_level_unit(
 // range into a staging area, then copied to their slots by local L1 reads.
 // The staging area is the stage-1 CB, idle while a row gathers: reserving all of it waits until the compute has
 // consumed every page there, and nothing is pushed.
-// One read of the gather from the source set by noc_async_read_set_state (the row's DRAM bank, or this core's L1 for
-// the staged copies). Out of line: each inlined NoC read is a few hundred bytes of a tight kernel config buffer.
-__attribute__((noinline)) void gather_read(uint32_t src, uint32_t dst, uint32_t bytes, uint8_t noc_id) {
-    noc_async_read_with_state(src, dst, bytes, noc_id);
-}
-
+//
 // Out of line: two call sites, and the kernel config buffer is tight. Each chunk waits for its page of the table: from
 // this core's writer through the table CB, or (from_partner) from the split pair's first core, counted by half_sem.
 template <typename InputAccessor>
@@ -139,6 +142,7 @@ __attribute__((noinline)) void two_level_gather(
     const uint64_t row_noc_addr = input.get_noc_addr(row, 0, noc_id);
     // The row is one page in one DRAM bank: its reads differ only in the low address word.
     const uint32_t row_addr = static_cast<uint32_t>(row_noc_addr);
+    ASSERT(num_blocks == 0 || row_addr + num_blocks * block_bytes - 1 >= row_addr);
     // A slot's staged source address, with bit 31 set; 0 for a slot read in place. Zeroed by a loop, not an
     // initialiser, which would pull in memset.
     uint32_t copy_from[blocks_per_chunk];
@@ -152,6 +156,7 @@ __attribute__((noinline)) void two_level_gather(
             CircularBuffer(get_named_compile_time_arg_val("tl_cb_table")).wait_front(chunk + 1);
         }
         invalidate_l1_cache();
+        asm volatile("" ::: "memory");
         input_cb.reserve_back(tiles_per_chunk);
         const uint32_t chunk_base = input_cb.get_write_ptr();
         ASSERT((chunk_base & (block_bytes - 1)) == 0);
@@ -164,13 +169,15 @@ __attribute__((noinline)) void two_level_gather(
         }
         noc_async_read_set_state(row_noc_addr, noc_id);
         uint32_t partial_slot = blocks_per_chunk;
+        // The last -inf stored into the chunk, if any.
+        uint32_t last_fill = 0;
         uint32_t staged = staging;
         uint32_t copies = 0;
         uint32_t slot = 0;
         while (slot < blocks_per_chunk) {
             const uint32_t block = chunk_table[slot];
             if (block == sentinel) {
-                fill_neginf(chunk_base + slot * block_bytes, block_keys);
+                last_fill = fill_neginf(chunk_base + slot * block_bytes, block_keys);
                 ++slot;
                 continue;
             }
@@ -231,9 +238,12 @@ __attribute__((noinline)) void two_level_gather(
         }
         if (partial_slot < blocks_per_chunk && last_block_live < block_keys) {
             // The last block is read whole; its keys past the search length are stale.
-            fill_neginf(
+            last_fill = fill_neginf(
                 chunk_base + partial_slot * block_bytes + last_block_live * sizeof(uint16_t),
                 block_keys - last_block_live);
+        }
+        if (last_fill != 0) {
+            wait_l1_store(last_fill);
         }
         clobber_all_memory();
         input_cb.push_back(tiles_per_chunk);
@@ -263,7 +273,9 @@ FORCE_INLINE void two_level_stage2(const Noc& noc, const MaxAccessor& block_max,
             noc.async_read(
                 block_max, input_cb, piece, {.page_id = row, .offset_bytes = first + offset}, {.offset_bytes = offset});
         }
-        fill_neginf(dst + bytes, (chunk_bytes - bytes) / sizeof(uint16_t));
+        if (bytes < chunk_bytes) {
+            wait_l1_store(fill_neginf(dst + bytes, (chunk_bytes - bytes) / sizeof(uint16_t)));
+        }
         noc.async_read_barrier();
         clobber_all_memory();
         input_cb.push_back(tiles_per_chunk);
@@ -273,8 +285,8 @@ FORCE_INLINE void two_level_stage2(const Noc& noc, const MaxAccessor& block_max,
 // A two-level program's schedule on this core. Its whole rows (see topk_two_level::row_owner) run as soon as their
 // maxima are complete; until then the core claims phase-1 units, so the cores without a ready row keep the DRAM
 // streaming. With the caller's maxima there is no phase 1 and every row is ready at once. After the end header a
-// core of a split pair gathers its half of the pair's split row: the first core once its own writer has the table,
-// the second once the first core's writer has sent it the second half.
+// core of a split pair gathers its half of the pair's split row, a chunk as soon as its page of the table is there: the
+// first core's from its own writer, the second core's from the first core's writer.
 template <typename InputAccessor, typename MaxAccessor>
 FORCE_INLINE void two_level_run(
     const Noc& noc,
@@ -331,8 +343,7 @@ FORCE_INLINE void two_level_run(
             invalidate_l1_cache();
             if (has_block_max || ready_count(*ready, local_row) >= units.per_row) {
                 const uint32_t row = is_split_row ? split_row : core_index + local_row * num_cores;
-                two_level_announce(is_split_row ? header_split : header_row, row);
-                two_level_push_stage1();
+                two_level_push_stage1(two_level_announce(is_split_row ? header_split : header_row, row));
                 two_level_stage2(noc, block_max, search_len, row);
                 if (!is_split_row) {
                     two_level_gather(
@@ -368,8 +379,7 @@ FORCE_INLINE void two_level_run(
         // Point this command buffer's atomic returns back at the default word, for the kernels that run after.
         claim(0, MEM_NOC_ATOMIC_RET_VAL_ADDR);
     }
-    two_level_announce(header_end, 0);
-    two_level_push_stage1();
+    two_level_push_stage1(two_level_announce(header_end, 0));
     if (has_split) {
         // This core's half of the split row's candidates: the first core's by its own writer's table, the second
         // core's by the table half the first core's writer sends into its remote-table CB.
@@ -474,14 +484,21 @@ void kernel_main() {
 #endif
         mailbox->num_chunks = whole.num_chunks;
         mailbox->tail_elements = whole.tail_elements;
+        uint32_t last_store = reinterpret_cast<uint32_t>(&mailbox->tail_elements);
         if constexpr (row_split) {
             // The compute also needs this core's half of the split row.
             split = half_bounds(bounds, llk_k, second_half);
             CoreLocalMem<TopkMetadataBounds> split_mailbox(scratch + sizeof(TopkMetadataBounds));
             split_mailbox->num_chunks = split.num_chunks;
             split_mailbox->tail_elements = split.tail_elements;
+            last_store = reinterpret_cast<uint32_t>(&split_mailbox->tail_elements);
         }
+#ifdef TOPK_TWO_LEVEL
+        topk_two_level::wait_l1_store(last_store);
+#else
+        (void)last_store;
         clobber_all_memory();
+#endif
         meta_cb_obj.push_back(1);
     } else {
         bounds = calculate_topk_bounds(search_len, llk_k);
@@ -503,7 +520,7 @@ void kernel_main() {
         words[topk_two_level::mailbox_mode_word] =
             topk_two_level::two_level_mode_for(search_len, two_level_cutover) ? 1u : 0u;
         words[topk_two_level::mailbox_search_length_word] = search_len;
-        clobber_all_memory();
+        topk_two_level::wait_l1_store(reinterpret_cast<uint32_t>(&words[topk_two_level::mailbox_search_length_word]));
         meta_cb_obj.push_back(1);
 #endif
     }
@@ -516,7 +533,8 @@ void kernel_main() {
     auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(writer_mailbox.get_write_ptr());
     words[topk_two_level::writer_mailbox_mode_word] = two_level_mode ? 1u : 0u;
     words[topk_two_level::writer_mailbox_search_length_word] = search_len;
-    clobber_all_memory();
+    topk_two_level::wait_l1_store(
+        reinterpret_cast<uint32_t>(&words[topk_two_level::writer_mailbox_search_length_word]));
     writer_mailbox.push_back(1);
     if (two_level_mode) {
         constexpr bool has_block_max = get_named_compile_time_arg_val("tl_block_max_input") != 0;
@@ -528,7 +546,7 @@ void kernel_main() {
             for (uint32_t word = 0; word < tile_bytes / sizeof(uint32_t); ++word) {
                 scaler[word] = 0x3F803F80u;
             }
-            clobber_all_memory();
+            topk_two_level::wait_l1_store(reinterpret_cast<uint32_t>(&scaler[tile_bytes / sizeof(uint32_t) - 1]));
             scaler_cb.push_back(1);
         }
         constexpr auto block_max_args = TensorAccessorArgs<vend_args.next_compile_time_args_offset()>();
@@ -570,7 +588,12 @@ void kernel_main() {
                 chunk_words[word] = neginf_bf16_pair;
             }
             // Order the fill ahead of the push, as the metadata mailbox above does.
+#ifdef TOPK_TWO_LEVEL
+            topk_two_level::wait_l1_store(
+                reinterpret_cast<uint32_t>(&chunk_words[tiles_per_chunk * tile_bytes / sizeof(uint32_t) - 1]));
+#else
             clobber_all_memory();
+#endif
             input_cb.push_back(tiles_per_chunk);
             continue;
         }

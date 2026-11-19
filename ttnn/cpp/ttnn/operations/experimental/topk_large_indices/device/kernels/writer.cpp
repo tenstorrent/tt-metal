@@ -137,6 +137,8 @@ FORCE_INLINE void two_level_unit(
         asm volatile("" ::: "memory");
         red_cb.pop_front(1);
     }
+    // The last maxima stored are those of the last tile's row 31.
+    wait_l1_store(reinterpret_cast<uint32_t>(&dense[31 * stage1_batch + stage1_batch - 1]));
     noc.async_write(
         CoreLocalMem<uint16_t>(staging),
         max_out,
@@ -176,6 +178,7 @@ FORCE_INLINE void two_level_table(const Noc& noc, CircularBuffer& indices_cb, ui
         reinterpret_cast<uint8_t*>(CircularBuffer(get_named_compile_time_arg_val("tl_cb_block_flags")).get_write_ptr());
     indices_cb.wait_front(1);
     invalidate_l1_cache();
+    asm volatile("" ::: "memory");
     const auto* selected = reinterpret_cast<const uint32_t*>(indices_cb.get_read_ptr());
     constexpr uint32_t batch = 8;
     for (uint32_t i = 0; i < selected_blocks; i += batch) {
@@ -192,6 +195,7 @@ FORCE_INLINE void two_level_table(const Noc& noc, CircularBuffer& indices_cb, ui
             }
         }
     }
+    asm volatile("" ::: "memory");
     indices_cb.pop_front(1);
 
     table_cb.reserve_back(table_pages);
@@ -201,7 +205,12 @@ FORCE_INLINE void two_level_table(const Noc& noc, CircularBuffer& indices_cb, ui
     const uint32_t partner_y = split ? get_arg_val<uint32_t>(topk_core_args::writer_partner_noc_y) : 0;
     uint32_t pushed = 0;
     const auto publish = [&](uint32_t entries) {
-        asm volatile("" ::: "memory");
+        if ((pushed + 1) * table_page_entries > entries) {
+            return;
+        }
+        // A store to L1 may still be in flight when the NoC or the reader sees the page. The last store was
+        // table[entries - 1]: reading it back and using the value waits for the stores to land.
+        wait_l1_store(reinterpret_cast<uint32_t>(&table[entries - 1]));
         for (; (pushed + 1) * table_page_entries <= entries; ++pushed) {
             if (split && pushed >= table_pages / 2) {
                 const uint32_t offset = pushed * table_page_bytes;
@@ -213,7 +222,8 @@ FORCE_INLINE void two_level_table(const Noc& noc, CircularBuffer& indices_cb, ui
                     {.noc_x = partner_x,
                      .noc_y = partner_y,
                      .addr = remote_table_addr + offset - table_pages / 2 * table_page_bytes});
-                noc.async_writes_flushed();
+                // The partner reads the page once half_sem counts it, so the page must have landed.
+                noc.async_write_barrier();
                 Semaphore<>(get_named_compile_time_arg_val("tl_half_sem")).up(noc, partner_x, partner_y, 1);
             }
             table_cb.push_back(1);
@@ -245,7 +255,6 @@ FORCE_INLINE void two_level_table(const Noc& noc, CircularBuffer& indices_cb, ui
         table[count] = sentinel;
     }
     publish(selected_blocks);
-    noc.async_write_barrier();
 }
 
 // Stage 3's output for one of this core's rows: candidate positions in rank order, mapped through the table to key
@@ -268,10 +277,12 @@ FORCE_INLINE void two_level_output(
     copy_row_to_scratch<source_slices_per_row, output_slices_per_row, slice_bytes>(indices_cb, indices_scratch_cb, noc);
     indices_cb.pop_front(1);
     invalidate_l1_cache();
+    asm volatile("" ::: "memory");
     auto* ranked = reinterpret_cast<uint32_t*>(indices_scratch_cb.get_write_ptr());
     constexpr uint32_t ranks = output_slices_per_row * slice_bytes / sizeof(uint32_t);
     constexpr uint32_t batch = 8;
     static_assert(ranks % batch == 0);
+    uint32_t last_stored = 0;
     for (uint32_t i = 0; i < ranks; i += batch) {
         // Loads first, so their latencies overlap: the positions, then their blocks.
         uint32_t position[batch];
@@ -288,10 +299,12 @@ FORCE_INLINE void two_level_output(
         for (uint32_t j = 0; j < batch; ++j) {
             if (position[j] != sentinel) {
                 ranked[i + j] = block[j] * block_keys + position[j] % block_keys;
+                last_stored = i + j;
             }
         }
     }
-    asm volatile("" ::: "memory");
+    // The stores land before the NoC reads the row.
+    wait_l1_store(reinterpret_cast<uint32_t>(&ranked[last_stored]));
     indices_scratch_cb.push_back(1);
     indices_scratch_cb.wait_front(1);
     noc.async_write(indices_scratch_cb, indices, row_bytes, {.offset_bytes = 0}, {.page_id = row, .offset_bytes = 0});
@@ -364,6 +377,7 @@ void kernel_main() {
                 CircularBuffer scratch(get_named_compile_time_arg_val("tl_cb_block_flags"));
                 const uint32_t word_addr = scratch.get_write_ptr();
                 *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(word_addr) = two_level_mode ? 1u : 0u;
+                wait_l1_store(word_addr);
                 noc.async_write(CoreLocalMem<uint32_t>(word_addr), mode_out, sizeof(uint32_t), {}, {.page_id = 0});
                 noc.async_write_barrier();
             }

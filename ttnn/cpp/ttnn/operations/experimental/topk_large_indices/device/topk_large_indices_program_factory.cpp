@@ -496,7 +496,7 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     const uint32_t unit_semaphore_id = two_level ? tt::tt_metal::CreateSemaphore(program, all_cores, 0) : 0;
     const uint32_t claim_semaphore_id = two_level ? tt::tt_metal::CreateSemaphore(program, all_cores, 0) : 0;
     const uint32_t ready_semaphore_id = two_level ? tt::tt_metal::CreateSemaphore(program, all_cores, 0) : 0;
-    // half: on the second core of a split pair, set once its half of the split row's table has arrived.
+    // half: on the second core of a split pair, the count of its half's table pages that have arrived.
     const uint32_t half_semaphore_id = two_level ? tt::tt_metal::CreateSemaphore(program, all_cores, 0) : 0;
     const std::vector<std::pair<std::string, uint32_t>> two_level_named_args = {
         {"tl_unit_sem", unit_semaphore_id},
