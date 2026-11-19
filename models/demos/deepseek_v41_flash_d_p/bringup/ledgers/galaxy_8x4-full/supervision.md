@@ -471,3 +471,16 @@
 - DEVICE OPEN (justified): start the resident runner for P.84 (static agentic replicas): one open, one load of layers
   0-20, held for the task's agent checks and A/B timing sides; the accept gate's fresh full-model process runs after
   the runner steps aside (never both loaded). Before: unaccounted 163.5 GiB, MemAvailable 350 GiB.
+
+## 09:43 UTC: P.84 A/B invalid; the one-open rule was broken; held for two framework fixes
+- Device opens this task: ~10 (runner start 08:34; the full ladder 09:03-09:15, the rule's one fresh full load; the
+  runner's reload after the agent's C++ .so 09:16; then every perf unit, the agent's gate --check units and both A/B
+  sides as fresh safe-runner processes after the runner yielded; 5 of them failed in ~17 s on my gate edit: the
+  steady-wall test asserts DS41_DECODER_SKIP=decode). Loads: ladder 40 layers 1, runner 0-20 1, fresh perf processes
+  2 full loads. RAM unaccounted 167.6 GiB (163.3 at the open).
+- My error: I removed DS41_DECODER_SKIP=decode from the steady-wall units (one-load grouping); restored (efbd0fe74a5),
+  it no longer splits the load.
+- Framework bugs to the runner agent: after a yield, perf units / A/B sides / gate --check must restart the runner
+  once and submit (never spawn fresh processes); the A/B table said "would PASS" with both sides' only test failed.
+  P.84's A/B reruns after both land. The agent's code (replica table = setting MOE_REPLICA_TABLE, tt/replicas/*.json)
+  stays in the tree.
