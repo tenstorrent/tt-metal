@@ -70,6 +70,7 @@ class L5Cfg:
     # (a diagnostic: the cores' traffic and the protocol only)
     yc: int = 0
     yc_sink: int = 0
+    yc_sink_mask: int = 0  # yc_sink for the collectors of rectangle r only (bit r; diagnostics)
     # yc: the east half's collectors (DRAM column x 9 east of them) write on NOC0 from the BRISC instead of NOC1 the
     # long way round; outside the NoC rule (the fence's acks return through the rectangles on NOC0), diagnostics
     yc_n0: int = 0
@@ -507,7 +508,9 @@ def build_lane5(
                 y_ct += [a64(ycnt.buffer_address()), a64(ytab.buffer_address()), GC5, 0, l5.yc_sink]
                 for t in (counts_t, tab_t, dest_t, out_t):
                     y_ct += list(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-                y_rt, w_rt, split_cores = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), []
+                sunk = {xy for r, cl in enumerate(colls) if l5.yc_sink_mask >> r & 1 for xy in cl}
+                y_rt = {k: ttnn.RuntimeArgs() for k in (0, 1)}
+                w_rt, split_cores = {k: ttnn.RuntimeArgs() for k in (0, 1)}, []
                 for g, cl in enumerate(cll):
                     split = 1 if l5.yc_n0 and mux_at(g, 0)[0] != 0 else 0
                     for ci, (x, y) in enumerate(cl):
@@ -520,30 +523,36 @@ def build_lane5(
                             split,
                         ]
                         args += [(lambda q: q[0] | q[1] << 8)(noc(mesh, *xy)) for xy in gl[g]]
-                        y_rt[x][y] = args
+                        y_rt[(x, y) in sunk][x][y] = args
                         if split:
-                            w_rt[x][y] = list(args)
+                            w_rt[(x, y) in sunk][x][y] = list(args)
                             split_cores.append((x, y))
-                kernels.append(
-                    ttnn.KernelDescriptor(
-                        kernel_source=kpath("l5_ycoll.cpp"),
-                        core_ranges=crs(ycores),
-                        compile_time_args=y_ct,
-                        runtime_args=y_rt,
-                        config=dm(1),
-                    )
-                )
-                if split_cores:
+                for sink in (0, 1):
+                    yset = [xy for xy in ycores if (xy in sunk) == bool(sink)]
+                    if not yset:
+                        continue
+                    ct = y_ct[:12] + [l5.yc_sink or sink] + y_ct[13:]
                     kernels.append(
                         ttnn.KernelDescriptor(
                             kernel_source=kpath("l5_ycoll.cpp"),
-                            core_ranges=crs(split_cores),
-                            compile_time_args=y_ct,
-                            defines=[("YC_WRITER", "1")],
-                            runtime_args=w_rt,
-                            config=dm(0),
+                            core_ranges=crs(yset),
+                            compile_time_args=ct,
+                            runtime_args=y_rt[sink],
+                            config=dm(1),
                         )
                     )
+                    wset = [xy for xy in split_cores if (xy in sunk) == bool(sink)]
+                    if wset:
+                        kernels.append(
+                            ttnn.KernelDescriptor(
+                                kernel_source=kpath("l5_ycoll.cpp"),
+                                core_ranges=crs(wset),
+                                compile_time_args=ct,
+                                defines=[("YC_WRITER", "1")],
+                                runtime_args=w_rt[sink],
+                                config=dm(0),
+                            )
+                        )
             cp_rt = {own: ttnn.RuntimeArgs() for own in (1, 0)}
             for g, gr in enumerate(gl):
                 for j, (x, y) in enumerate(gr):
