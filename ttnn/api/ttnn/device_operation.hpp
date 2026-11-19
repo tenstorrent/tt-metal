@@ -848,21 +848,21 @@ CompiledProgram compile(
 }
 
 /**
- * Launch `compiled` with these operation attributes and tensors, as `launch` launches an operation whose program is
- * cached: their runtime arguments are applied to the compiled workload, which is then enqueued with the same
+ * Launch `compiled_program` with these operation attributes and tensors, as `launch` launches an operation whose
+ * program is cached: their runtime arguments are applied to the compiled workload, which is then enqueued with the same
  * bookkeeping (runtime ID, inspector, graph capture, profiler). `kernel_config_buffer`, when given, holds the Tensix
  * kernel-configuration blocks in place of the KERNEL_CONFIG window (create_kernel_config_buffer). Without one, a
  * CommandListBuilder recording on this thread records the workload as it records `launch`; with one, `run` throws
  * while recording, since a command list cannot hold a workload that runs from a kernel config buffer.
  *
- * The operation must be the one `compiled` was compiled from, with arguments of the same program cache key, on the
- * same MeshDevice.
+ * The operation must be the one `compiled_program` was compiled from, with arguments of the same program cache key, on
+ * the same MeshDevice.
  *
  * @return Outputs are allocated but values are not immediately available till the operation is complete.
  */
 template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_return_value_t run(
-    CompiledProgram& compiled,
+    CompiledProgram& compiled_program,
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args,
     const tt::tt_metal::experimental::KernelConfigBuffer* kernel_config_buffer = nullptr) {
@@ -884,10 +884,10 @@ typename device_operation_t::tensor_return_value_t run(
 
     ttnn::MeshDevice* mesh_device = mesh_device_operation_utils::get_mesh_device(operation_attributes, tensor_args);
     TT_FATAL(
-        mesh_device == &compiled.mesh_device(),
+        mesh_device == &compiled_program.mesh_device(),
         "Device operation \"{}\" was compiled for MeshDevice {}, but its tensors are on MeshDevice {}",
         operation_name,
-        compiled.mesh_device().id(),
+        compiled_program.mesh_device().id(),
         mesh_device->id());
 
     if constexpr (HasSkipLaunch<mesh_device_operation_t>) {
@@ -904,11 +904,11 @@ typename device_operation_t::tensor_return_value_t run(
     const auto key =
         detail::compute_program_cache_key<mesh_device_operation_t>(operation_attributes, tensor_args, mesh_device);
     TT_FATAL(
-        key == compiled.key(),
+        key == compiled_program.key(),
         "Device operation \"{}\" cannot run the program compiled from \"{}\": its arguments have a different program "
         "cache key, so they need a different program",
         operation_name,
-        compiled.operation_name());
+        compiled_program.operation_name());
 
     detail::log_operation<mesh_device_operation_t>(
         mesh_device->id(), operation_attributes, tensor_args, key.hash, /*program_cache_hit=*/true);
@@ -917,7 +917,7 @@ typename device_operation_t::tensor_return_value_t run(
         operation_attributes,
         tensor_args,
         tensor_return_value,
-        compiled.cached_program_factory(),
+        compiled_program.cached_program_factory(),
         [&](tt::tt_metal::distributed::MeshWorkload& workload,
             const typename mesh_device_operation_t::SpecSharedVariablesMap* spec_shared_variables) {
             detail::enqueue_mesh_workload<mesh_device_operation_t>(
@@ -933,7 +933,7 @@ typename device_operation_t::tensor_return_value_t run(
 
     if (ttnn::graph::GraphProcessor::has_active_instance()) {
         detail::set_pending_program_factory<mesh_device_operation_t>(
-            compiled.program_factory_index(), /*program_cache_hit=*/true);
+            compiled_program.program_factory_index(), /*program_cache_hit=*/true);
     }
 
     tracked_function.end(tensor_return_value);
