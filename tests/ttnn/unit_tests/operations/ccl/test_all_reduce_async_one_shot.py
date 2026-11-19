@@ -275,6 +275,25 @@ def test_all_reduce_async_one_shot_refuses_unsplittable_cores(mesh_device, expec
     ttnn.deallocate(out)
 
 
+@pytest.mark.parametrize("device_params", FABRICS[:1], indirect=True)
+@pytest.mark.parametrize("mesh_device", MESH_1X8, indirect=True)
+def test_all_reduce_async_one_shot_refuses_narrow_tiles(mesh_device, expect_error):
+    """one_shot counts a shard's tiles in 32-wide columns, so a 32x16-tile input would reduce half of each shard."""
+    tp, mem, sems, buf = _setup(mesh_device)
+    full, _ = _random(tp, 8, seed=6)
+    inp = ttnn.from_torch(
+        full,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile((32, 16)),
+        device=mesh_device,
+        memory_config=mem,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+    )
+    with expect_error(RuntimeError, "32x32 tiles"):
+        _ar(mesh_device, inp, buf, sems[0], mem, one_shot=True)
+
+
 @pytest.mark.parametrize("device_params", [_fabric_params(ttnn.FabricConfig.FABRIC_1D, 16 << 20)], indirect=True)
 @pytest.mark.parametrize("mesh_device", MESH_1X8, indirect=True)
 def test_all_reduce_async_one_shot_latency(mesh_device):

@@ -1957,7 +1957,7 @@ class TPGatedDeltaNet:
             x, tw["qkvz"], self.args.gdn_qkvz_decode_1d_progcfg, self.cfg, out_memory_config=ttnn.L1_MEMORY_CONFIG
         )
         qkvzab = ttnn.reshape(qkvzab, (1, B, qkvzab.shape[-1]))  # [q | k | v | z | a | b] rows
-        gated = ttnn.experimental.kda.gdn_decode_step(
+        gated = ttnn.experimental.gdn.gdn_decode_step(
             qkvzab,
             tw["dt_bias_fp32"],
             tw["neg_exp_A_fp32"],
@@ -2200,7 +2200,7 @@ class TPGatedDeltaNet:
             x, tw["qkvz"], self.args.gdn_qkvz_decode_1d_progcfg, self.cfg, out_memory_config=ttnn.L1_MEMORY_CONFIG
         )
         qkvzab = ttnn.reshape(qkvzab, (1, valid_len, qkvzab.shape[-1]))  # [q | k | v | z | a | b] rows u * T + t
-        gated = ttnn.experimental.kda.gdn_spec_step(
+        gated = ttnn.experimental.gdn.gdn_spec_step(
             qkvzab,
             None,  # no window pair: the history is in the blocks (conv_hist)
             None,

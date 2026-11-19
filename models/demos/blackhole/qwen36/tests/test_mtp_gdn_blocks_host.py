@@ -527,7 +527,7 @@ def test_a_verify_passes_the_fast_gdn_spec_step_options_at_the_tested_geometry(m
     from models.demos.blackhole.qwen36.tt.gdn import tp
 
     calls = []
-    monkeypatch.setattr(ttnn.experimental.kda, "gdn_spec_step", lambda *a, **k: calls.append(k) or "gated")
+    monkeypatch.setattr(ttnn.experimental.gdn, "gdn_spec_step", lambda *a, **k: calls.append(k) or "gated")
     monkeypatch.setattr(ttnn, "reshape", lambda t, shape: SimpleNamespace(shape=shape))
     monkeypatch.setattr(ttnn, "deallocate", lambda t: None)
     monkeypatch.setattr(tp.tpc, "matmul_1d_decode", lambda *a, **k: SimpleNamespace(shape=(1, 1, 32, 64)))

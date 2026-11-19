@@ -180,7 +180,7 @@ def test_all_reduce_async_residual_trace_follows_buffer_contents(mesh_device):
 
 @pytest.mark.parametrize("device_params", FABRICS[:1], indirect=True)
 @pytest.mark.parametrize("mesh_device", MESH_1X8, indirect=True)
-@pytest.mark.parametrize("case", ["dram_interleaved", "other_shard_spec", "bfloat8_b"])
+@pytest.mark.parametrize("case", ["dram_interleaved", "other_shard_spec", "bfloat8_b", "tile_32x16"])
 def test_all_reduce_async_residual_refuses_bad_residual(mesh_device, case, expect_error):
     tp, mem, sems, buf = _setup(mesh_device)
     rows = 8
@@ -193,8 +193,9 @@ def test_all_reduce_async_residual_refuses_bad_residual(mesh_device, case, expec
     else:
         residual = ttnn.from_torch(
             res,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat8_b if case == "bfloat8_b" else ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
+            tile=ttnn.Tile((32, 16)) if case == "tile_32x16" else None,
             device=mesh_device,
             memory_config=mem,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),

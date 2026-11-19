@@ -551,7 +551,7 @@ def test_the_gdn_verify_of_a_bucket_reads_its_rows_of_the_full_width_ctrl_page(m
     row count as max_users, so the op reads each user's start words where verify_tables put them; the full-width
     verify passes none (the program it always ran)."""
     calls = []
-    monkeypatch.setattr(ttnn.experimental.kda, "gdn_spec_step", lambda *a, **k: calls.append((a, k)) or "gated")
+    monkeypatch.setattr(ttnn.experimental.gdn, "gdn_spec_step", lambda *a, **k: calls.append((a, k)) or "gated")
     monkeypatch.setattr(ttnn, "reshape", lambda t, shape: SimpleNamespace(shape=shape))
     monkeypatch.setattr(ttnn, "deallocate", lambda t: None)
     T = 4
