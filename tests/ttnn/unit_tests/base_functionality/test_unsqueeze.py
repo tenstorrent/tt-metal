@@ -82,9 +82,10 @@ def _docstring_shard_layouts(op):
         return [pytest.param(reason, id="docstring-unreadable")]
 
 
-def _assert_unsqueeze_like_torch(input_tensor, dim):
-    """Unsqueezes ``input_tensor`` and checks the output against ``torch.unsqueeze`` and the input's dtype, layout and
-    memory configuration."""
+def _assert_unsqueeze_like_torch(input_tensor, dim, read=ttnn.to_torch):
+    """Unsqueezes ``input_tensor`` and checks the output against ``torch.unsqueeze`` of the input's values, read before
+    the unsqueeze, and the input's dtype, layout and memory configuration. ``read`` brings a tensor's values to host."""
+    expected = torch.unsqueeze(read(input_tensor), dim)
     output = ttnn.unsqueeze(input_tensor, dim)
 
     assert output.dtype == input_tensor.dtype
@@ -92,7 +93,7 @@ def _assert_unsqueeze_like_torch(input_tensor, dim):
     assert output.memory_config().memory_layout == input_tensor.memory_config().memory_layout
     assert output.memory_config().buffer_type == input_tensor.memory_config().buffer_type
     assert output.memory_config().shard_spec == input_tensor.memory_config().shard_spec
-    assert_exact(torch.unsqueeze(ttnn.to_torch(input_tensor), dim), ttnn.to_torch(output))
+    assert_exact(expected, read(output))
     return output
 
 
