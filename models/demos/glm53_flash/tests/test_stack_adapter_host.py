@@ -4370,6 +4370,7 @@ class _MockAsyncHostTierBackend(_MockHostTierBackend):
         self.gate = threading.Event()
         self.fail = False
         self.async_exports: list = []
+        self.discards: list = []
 
     def export_snapshot_async(self, kv, entry: int, n_tokens=None):
         self.async_exports.append((int(entry), n_tokens))
@@ -4381,6 +4382,10 @@ class _MockAsyncHostTierBackend(_MockHostTierBackend):
                 raise RuntimeError("mock: the staging read failed")
             return {"state": torch.tensor(state, dtype=torch.int64)}
 
+        def discard():  # (StackBackend: wait for the reads' event, drop the copies)
+            self.discards.append(int(entry))
+
+        finish.discard = discard
         return finish, self.BOUND
 
 
@@ -4575,6 +4580,38 @@ def test_prefix_cache_async_export_ordering(monkeypatch):
     assert pc.stats["export_failed"] == 2 and len(gone) == 2 and not pc._exports
     assert pc.store.host_used == sum(e.bytes for e in pc.store.entries.values() if e.tier == "host")
     assert backend.exports == [] and "ttnn" not in sys.modules
+    # ---- GLM53_PREFIX_EXPORT_INFLIGHT: with the export thread held, at most the cap is in flight -- a spill past it is
+    #      refused (the store drops the entry; host RAM stays bounded when exports fall behind a cold long prefill);
+    #      an export whose entry left the host tier before it ran is discarded (finish.discard), not assembled
+    backend.fail = False
+    backend.gate.clear()
+    monkeypatch.setattr(gvs, "EXPORT_INFLIGHT", 2)
+    seen, spill0 = [], pc._spill
+
+    def spill(e):
+        res = spill0(e)
+        seen.append(sum(1 for p in pc._exports.values() if not p.future.done()))
+        return res
+
+    monkeypatch.setattr(pc, "_spill", spill)
+    pc.store.spill_fn = spill
+    n_async, n_ref = pc.stats["spills_async"], pc.stats["spills_refused_inflight"]
+    f = _prompt(256, 61) + _prompt(128, 3) + _prompt(10, 7)
+    _prefill_steps(ad, kv, f, _blocks(2, len(f)), slot=2, ends=[128, 256, 384, len(f)])
+    ad.release_request(2)
+    assert seen and max(seen) <= 2 and pc.stats["spills_async"] - n_async == 2  # the cap: 2 in flight
+    assert pc.stats["spills_refused_inflight"] - n_ref == len(seen) - 2 >= 1  # every later spill refused (dropped)
+    with pc.lock:
+        queued = [k for k, p in pc._exports.items() if not p.future.running() and not p.future.done()]
+        assert len(queued) == 1  # the thread holds the first at the gate; the second waits behind it
+        pc.store.evict(queued[0])  # its entry leaves the host tier before the thread reaches it
+        pc._settle_exports()
+    backend.gate.set()
+    wait([p.future for p in pc._exports.values()], timeout=30)
+    with pc.lock:
+        pc._settle_exports()
+    assert pc.stats["exports_discarded"] == 1 and len(backend.discards) == 1 and not pc._exports
+    assert pc.store.host_used == sum(e.bytes for e in pc.store.entries.values() if e.tier == "host")
     # ---- the device side (StackBackend over a fake device, a stub-ttnn child): export_snapshot_async's finish() returns
     #      export_snapshot's blob -- keys, shapes, bytes, units, layout, replicated flag; shard / non-shard, replicated
     #      or not, per-slot or paged pools, a cut or the whole slot -- and moves the same counters (dsa_export_bytes /

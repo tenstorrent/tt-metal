@@ -2297,6 +2297,15 @@ class StackBackend(ModelBackend):
             self._time("export_async_finish", _time.perf_counter() - t1)
             return out
 
+        def discard() -> None:
+            """instead of finish(): nobody will read the blob (its host-tier entry left meanwhile) -- wait for the reads
+            (the copies are written until the event), then drop every copy unconverted"""
+            if ev is not None:
+                ttnn.event_synchronize(ev)
+            reads.clear()
+            self.counters["export_async_discarded"] = self.counters.get("export_async_discarded", 0) + 1
+
+        finish.discard = discard
         return finish, int(nbytes)
 
     def _state_ops(self, kv: StackCache, dst: int, src: Optional[int], dsa: bool = True) -> list:

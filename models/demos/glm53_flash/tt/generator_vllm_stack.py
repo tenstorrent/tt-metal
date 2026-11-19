@@ -174,6 +174,12 @@ PREFIX_KEEP_PREV_MIN = int(os.environ.get("GLM53_STACK_PREFIX_KEEP_PREV_MIN", "2
 # the spilled entry waits for its blob. The blocking export held the engine thread 0.3-1.9 s per spill (AgentX c16
 # 2026-11-15: 136 spills, 59 restores). Opt-in until a served hash gate with host-tier restores passed on device
 PREFIX_ASYNC_EXPORT = os.environ.get("GLM53_PREFIX_ASYNC_EXPORT", "0") == "1"
+# GLM53_PREFIX_EXPORT_INFLIGHT (default 4): at most this many async exports in flight -- each holds its staging rounds'
+# raw host copies (every chip's) from the enqueue until the thread assembles it (~0.9-1.7 s each), while a cold long
+# prefill spills one snapshot per 8,192-token chunk (~2 s apart, up to ~1 GB at 1 M). A spill past the cap is refused
+# (the store drops the entry, as without a host tier). Unbounded, the release sweep's 1 M x 8 cold point queued ~244 GiB
+# of spills in 32 min and the kernel OOM-killed the EngineCore at 539 GB RSS (2026-11-19, the tier accounted 64 GiB)
+EXPORT_INFLIGHT = int(os.environ.get("GLM53_PREFIX_EXPORT_INFLIGHT", "4"))
 SPEC_ENV = "GLM53_STACK_VLLM_SPEC"
 SPEC_MAX_ROWS = 4  # tt/spec_mtp.py: the speculative step runs at the B <= 4 chunk width (B 4 validated, chain_mk201)
 # GLM53_SPEC_MULTI=1 (default off; design doc/perf/mtp_multi_user_design.md): every live user speculates on a build of
@@ -893,10 +899,13 @@ class _PendingExport:
     blob; ``bytes``: the admission bound it was registered with (StackPrefixCache._land swaps in the blob, its size);
     ``run``: the assembly itself (serialized), which a restore runs in place when the export is still queued"""
 
-    __slots__ = ("future", "bytes", "run")
+    __slots__ = ("future", "bytes", "run", "stale")
 
     def __init__(self, future, nbytes: int, run=None):
         self.future, self.bytes, self.run = future, int(nbytes), run
+        # its entry left the host tier (evicted / replaced) before it landed: the thread skips the assembly
+        # (finish.discard: wait for the reads, drop the copies) -- nobody reads the blob
+        self.stale = False
 
 
 class StackPrefixCache:
@@ -984,7 +993,7 @@ class StackPrefixCache:
                       "confirmed_host", "spills", "restores", "restore_failed", "exact_uncut_splits",
                       "keep_prev_kept", "keep_prev_released", "keep_prev_hits", "confirm_memo_hits",
                       "confirm_memo_misses", "spills_async", "spills_async_sync", "exports_landed", "export_failed",
-                      "export_waits", "export_jumps")  # fmt: skip
+                      "export_waits", "export_jumps", "spills_refused_inflight", "exports_discarded")  # fmt: skip
         }
         self.stats.update(spill_s=0.0, restore_s=0.0, export_wait_s=0.0)
         self.base: dict = {}  # generator slot -> the key of the entry its request attached (dominated past it)
@@ -1110,8 +1119,12 @@ class StackPrefixCache:
         return True
 
     def _settle_exports(self) -> None:
-        """(self.lock held) land every in-flight export that finished (no wait)"""
+        """(self.lock held) land every in-flight export that finished (no wait); mark the ones whose entry left the host
+        tier stale (the thread then discards instead of assembling them)"""
         for key, p in list(self._exports.items()):
+            e = self.store.entries.get(key)
+            if e is None or e.host_blob is not p:
+                p.stale = True
             if p.future.done():
                 del self._exports[key]
                 self._land(key, p)
@@ -1122,15 +1135,24 @@ class StackPrefixCache:
         its admission bound); the entry serves the snapshot that evicted it as soon as this returns (queue order)"""
         t0 = time.perf_counter()
         if self.async_export:
+            self._settle_exports()
+            if sum(1 for p in self._exports.values() if not p.future.done()) >= EXPORT_INFLIGHT:
+                self.stats["spills_refused_inflight"] += 1  # (the store drops the entry: host RAM stays bounded)
+                return None
             res = self.gen.export_snapshot_async(self.kv, int(e.device_entry), n_tokens=int(e.n_tokens))
             if res is not None:
                 finish, nbytes = res
+                box: dict = {}
 
-                def run(finish=finish):
+                def run(finish=finish, box=box):
                     with self._export_run_lock:
+                        p_, discard = box.get("p"), getattr(finish, "discard", None)
+                        if p_ is not None and p_.stale and discard is not None:
+                            self.stats["exports_discarded"] += 1
+                            return discard()
                         return finish()
 
-                p = _PendingExport(self._pool().submit(run), int(nbytes), run)
+                p = box["p"] = _PendingExport(self._pool().submit(run), int(nbytes), run)
                 self._exports[e.key] = p
                 dt = time.perf_counter() - t0
                 self.stats["spills"] += 1
