@@ -1,0 +1,16 @@
+{"case": "block:res4_conv2_hifi4", "variant": "base", "tap_shift": true, "pcc": 0.9998825085167009, "pcc_threshold": 0.99, "finite": true, "out_sha": "45029e2b9127a037"}
+{"case": "block:res4_conv2_hifi4", "variant": "cand", "tap_shift": true, "pcc": 0.9998825085167009, "pcc_threshold": 0.99, "finite": true, "out_sha": "45029e2b9127a037"}
+{"case": "block:res4_conv2_bf16", "variant": "base", "tap_shift": true, "pcc": 0.999830152132216, "pcc_threshold": 0.99, "finite": true, "out_sha": "99ce4a0d3b86b983"}
+{"case": "block:res4_conv2_bf16", "variant": "cand", "tap_shift": true, "pcc": 0.41444795304331256, "pcc_threshold": 0.99, "finite": true, "out_sha": "ae7a4f433a0d3ca4"}
+{"case": "block:res5_d2_bf16", "variant": "base", "tap_shift": false, "pcc": 0.9998300890721745, "pcc_threshold": 0.99, "finite": true, "out_sha": "3271ca7674050c7b"}
+{"case": "block:res5_d2_bf16", "variant": "cand", "tap_shift": true, "pcc": 0.458892518551195, "pcc_threshold": 0.99, "finite": true, "out_sha": "41557640d3692ed4"}
+{"case": "block:res5_d3", "variant": "base", "tap_shift": true, "pcc": 0.9997628498748234, "pcc_threshold": 0.99, "finite": true, "out_sha": "6f5c3a2861687224"}
+{"case": "block:res5_d3", "variant": "cand", "tap_shift": true, "pcc": 0.9997628498748234, "pcc_threshold": 0.99, "finite": true, "out_sha": "6f5c3a2861687224"}
+{"case": "block:aspp_d6_hifi4", "variant": "base", "tap_shift": false, "pcc": 0.9998818867972264, "pcc_threshold": 0.99, "finite": true, "out_sha": "753d760275bd8895"}
+{"case": "block:aspp_d6_hifi4", "variant": "cand", "tap_shift": true, "pcc": 0.9998818867972264, "pcc_threshold": 0.99, "finite": true, "out_sha": "753d760275bd8895"}
+{"case": "block:w128_d1", "variant": "base", "tap_shift": true, "pcc": 0.9997638290201536, "pcc_threshold": 0.99, "finite": true, "out_sha": "d68c2d1b0253ff94"}
+{"case": "block:w128_d1", "variant": "cand", "tap_shift": true, "pcc": 0.9997638290201536, "pcc_threshold": 0.99, "finite": true, "out_sha": "d68c2d1b0253ff94"}
+{"case": "block:w128_d5", "variant": "base", "tap_shift": true, "pcc": 0.9997638802363517, "pcc_threshold": 0.99, "finite": true, "out_sha": "a998563410d826fe"}
+{"case": "block:w128_d5", "variant": "cand", "tap_shift": true, "pcc": 0.9997638802363517, "pcc_threshold": 0.99, "finite": true, "out_sha": "a998563410d826fe"}
+{"case": "block:w96_d7", "variant": "base", "tap_shift": true, "pcc": 0.999764772601083, "pcc_threshold": 0.99, "finite": true, "out_sha": "7b288ada84fb2b8e"}
+{"case": "block:w96_d7", "variant": "cand", "tap_shift": true, "pcc": 0.999764772601083, "pcc_threshold": 0.99, "finite": true, "out_sha": "7b288ada84fb2b8e"}

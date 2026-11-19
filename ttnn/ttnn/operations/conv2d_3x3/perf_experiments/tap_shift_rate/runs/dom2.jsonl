@@ -1,0 +1,6 @@
+{"case": "block:res4_conv2_bf16", "variant": "base", "tap_shift": true, "pcc": 0.999830152132216, "pcc_threshold": 0.99, "finite": true, "out_sha": "99ce4a0d3b86b983"}
+{"case": "block:res4_conv2_bf16", "variant": "cand", "tap_shift": true, "pcc": 0.999830152132216, "pcc_threshold": 0.99, "finite": true, "out_sha": "99ce4a0d3b86b983"}
+{"case": "block:res5_d2_bf16", "variant": "base", "tap_shift": false, "pcc": 0.9998300890721745, "pcc_threshold": 0.99, "finite": true, "out_sha": "3271ca7674050c7b"}
+{"case": "block:res5_d2_bf16", "variant": "cand", "tap_shift": true, "pcc": 0.9998300890721745, "pcc_threshold": 0.99, "finite": true, "out_sha": "3271ca7674050c7b"}
+{"case": "res4_1__5_conv2", "variant": "base", "tap_shift": true, "pcc": 0.9997648301925202, "pcc_threshold": 0.996, "finite": true, "out_sha": "b7775c40eb7fce5a"}
+{"case": "res4_1__5_conv2", "variant": "cand", "tap_shift": true, "pcc": 0.9997648301925202, "pcc_threshold": 0.996, "finite": true, "out_sha": "b7775c40eb7fce5a"}

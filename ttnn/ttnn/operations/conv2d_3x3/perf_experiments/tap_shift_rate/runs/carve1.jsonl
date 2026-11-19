@@ -1,0 +1,6 @@
+{"case": "res5_0_conv2", "variant": "base", "pcc": 0.999762199437235, "pcc_threshold": 0.996, "finite": true, "out_sha": "2a920f182b02bf9e", "tap_shift": false}
+{"case": "res5_0_conv2", "variant": "cand_nc", "pcc": 0.999762199437235, "pcc_threshold": 0.996, "finite": true, "out_sha": "2a920f182b02bf9e", "tap_shift": false}
+{"case": "res5_0_conv2", "variant": "base_nc", "pcc": 0.999762199437235, "pcc_threshold": 0.996, "finite": true, "out_sha": "2a920f182b02bf9e", "tap_shift": false}
+{"case": "aspp_convs_1", "variant": "base", "pcc": 0.9997648386088288, "pcc_threshold": 0.996, "finite": true, "out_sha": "2b95b081f832c43f", "tap_shift": false}
+{"case": "aspp_convs_1", "variant": "cand_nc", "pcc": 0.9997648386088288, "pcc_threshold": 0.996, "finite": true, "out_sha": "2b95b081f832c43f", "tap_shift": false}
+{"case": "aspp_convs_1", "variant": "base_nc", "pcc": 0.9997648386088288, "pcc_threshold": 0.996, "finite": true, "out_sha": "2b95b081f832c43f", "tap_shift": false}

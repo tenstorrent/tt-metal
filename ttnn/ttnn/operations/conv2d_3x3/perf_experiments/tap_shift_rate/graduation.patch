@@ -1,0 +1,669 @@
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_tap_shift.hpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_tap_shift.hpp
+@@ -5,33 +5,47 @@
+ // straight from the input ring's TILE slab on the FPU, with no row-major round trip (no untilize, no padded slab).
+ //
+ // With W % 32 == 0 every kernel-row offset is a whole number of input tile-rows; only the +-d pixel shift is sub-tile.
+-// The kw = 2 tap of output tile-row t (image row ho, column tile c) for kernel row kh is input tile (h, c) shifted up
+-// by d pixels, its last d pixels taken from tile (h, c + 1) (zero at the row's end); kw = 0 is (h, c) shifted down by
+-// d, its first d pixels from (h, c - 1) (zero at the row's start). h = ho + kh d - p; a tap outside the image is zero.
++// The kw = 2 tap of output tile-row t (image row ho, column tile c) for kernel row kh is input row h = ho + kh d - p,
++// pixels [32 c + d, 32 c + 32 + d); kw = 0 is pixels [32 c - d, 32 c + 32 - d); pixels outside the row (and rows
++// outside the image) are zero.
+ //
+-// Per (tile-row, kernel row, channel tile): the unpacker loads cur = (h, c) whole into SrcB (one full-tile UNPACR, one
+-// bank flip), the math thread moves its rows into the two DEST tiles (kw = 0 and kw = 2) with one-row MOVB2D, then
+-// loads each non-zero neighbour and moves its d rows per channel half. DEST rows never written stay zero (DEST is
+-// cleared at the start and by every section release). 4 DEST tiles per section, each packed by the standard pack to
+-// its in0 offset (the whole [rows, in0_k] block is reserved once and pushed once). Kernel-row major: each tap waits
+-// only for the slab rows it reads, so the prelude runs behind the fill instead of after it.
++// Row buffer: for one (kernel row, channel tile) and a group of n <= 2 consecutive units of one image row (columns
++// c0 .. c0 + n - 1), one DEST section (fp32, one half: 256 rows) holds the input row's pixels [32 c0 - d,
++// 32 (c0 + n) + d), pixel-contiguous per channel half: channel half hf at block row hf * Hs, pixel p at row r0 + p
++// (p from the group's first pixel). Each of the group's input tiles, and the d edge pixels of its row neighbours, is
++// unpacked ONCE (one full-tile UNPACR into SrcB) and moved into the slot; out-of-row pixels stay zero (DEST is cleared
++// on every section release). The packer then reads each tap (unit u, kw) as the 32-row window of both blocks starting
++// at its first pixel: W = window row (one DEST row per W), Z = block (Hs rows), Y = row in the window; faces F0 (Z 0,
++// Y 0..15), F1 (Z 1, Y 0..15), F2 (Z 0, Y 16..31), F3 (Z 1, Y 16..31). The shift costs the packer nothing: a tap is
++// one tile pack, as the tilize it replaced. HEAD's shift (one-row SrcB -> DEST moves building every tap tile, three
++// tile unpacks per tap pair) cost ~60 ns per tap; this costs 34-42 (isolated, below).
+ //
++// Hardware rules (Blackhole, measured, perf_experiments/tap_shift_rate/):
++//   * a 4-row PACR (all four interfaces) reads a window exactly only from a DEST row that is a multiple of 4; a 2-row
++//     PACR (two interfaces) from a multiple of 2;
++//   * a 4-row MOVB2D is exact only when its SrcB and DEST rows agree mod 8 (the DEST offset register included; also in
++//     16-bit DEST): a misaligned offset or source row is not fixed by the other;
++//   * the packer's Y / Z / W strides count one DEST row as 16 datums of its source format (set_packer_strides' Y);
++//   * SETRWC does not wait for SrcB valid: every pass starts with a move (which does);
++//   * (rejected) a 16-bit DEST shift (ALU Fp32_enabled = 0, packer Read_32b = 0, as the BH fast tilize) is exact but
++//     its bf8_b pack is slower than the fp32 one (43 vs 32 ns per tile here); the unpacker's SrcB row offset (CH1 Y)
++//     does place a tile lower in SrcB, but 4-row MOVB2D across a 16-row SrcB boundary reads the wrong rows.
++// Two layouts follow:
++//   A (d % 4 == 0): r0 = d rounded up to 8: every tile row lands 8-aligned (16 aligned 4-row MOVB2D per tile), and both
++//     windows (r0 + 32 u -+ d) start on a multiple of 4 (4-row PACR).
++//   B (otherwise): r0 = d: kw = 0 windows start at 32 u (4-row PACR), kw = 2 at 32 u + 2 d (4-row PACR for even d,
++//     2-row for odd d); rows move one at a time (4 replays of a 16-move run per tile).
+ // The values move unchanged (bf8_b / bf16 -> SrcB -> fp32 DEST -> the same format; a bf8_b 16-datum row keeps its
+ // datums and so its shared exponent): bit-identical to the untilize / padded tilize round trip.
+ //
+-// RAW LLK (capability): no helper builds a tile from row ranges of two tiles (compute_kernel_lib::tilize / untilize
+-// read and write at CB pointers and have no row shift), and none unpacks a whole tile into one Src bank outside the
+-// matmul. Measured (Blackhole p150b, LoFi, bit-identical, unzoned): res4.x 12426 -> 12050 ns (median of 3),
+-// aspp.convs.3 23633 -> 22708, res5.1 33899 -> 32922, res5.2 33610 -> 33008, res4 HiFi4 30661 -> 30353; res5.0,
+-// aspp.convs.2 flat; aspp.convs.1 +1.4% (6-tile slices: ~58 ns per tap tile against the fast tilize's ~23, the shift
+-// outlasts its fill). Per tap tile (1 core, d = 1) the shift costs 62 ns against the 1-wide tilize's 42: the win is
+-// structural (no untilize pass, no wait for the center push, the prelude runs behind the fill).
+-// Mechanism notes (Blackhole, measured):
+-//   * the stock AB unpack flips the Src bank per face (the eltwise math clears per face), so a bank never holds a whole
+-//     tile; the full-tile UNPACR (X end 1023, as the BH matmul's) puts F0..F3 in rows 0..63 of one bank;
+-//   * one-row MOVA2D with fp32 DEST leaves the rows of faces F1 / F3 unwritten; one-row MOVB2D is exact, so every row
+-//     goes through SrcB; 4-row MOVB2D is exact only when the SrcB and DEST rows agree mod 8 (taken for d % 8 == 0);
+-//   * SETRWC does not wait for SrcB valid: every pass starts with a move (which does).
++// RAW LLK (capability): no helper builds a tile from row ranges of two tiles or packs a tile from a DEST window that
++// is not a whole DEST tile (compute_kernel_lib::tilize / untilize read and write at CB pointers and have no row shift;
++// pack_tile packs whole DEST tiles), and none unpacks a whole tile into one Src bank outside the matmul. Measured
++// (Blackhole p150b, LoFi, fp32 DEST, bf8_b, one core, one M-block of 8 tile-rows, W = 64, ns per tap tile, HEAD ->
++// this): d = 1 60.5 -> 40.6, d = 2 59.7 -> 35.7, d = 4 58.1 -> 33.6, d = 8 59.9 -> 41.4, d = 12 58.8 -> 39.7,
++// d = 18 58.4 -> 42.0. In the op (unzoned, medians of 3 alternating pairs, bit-identical): res4.x 12079 -> 11379 ns,
++// aspp.convs.2 45326 -> 42095, aspp.convs.3 21213 -> 20689, res5.1 32725 -> 32394, res5.2 flat; on the Perf 10
++// carve-out (now taken): aspp.convs.1 51360 -> 48102, res5.0 33339 -> 32512.
+ 
+ #pragma once
+ 
+@@ -46,22 +60,29 @@
+ 
+ namespace conv2d_3x3::tap_shift {
+ 
+-// DEST row i of a 32x32 tile (fp32): F0 [0, 16) pixels 0..15 channels 0..15, F1 [16, 32) pixels 0..15 channels
+-// 16..31, F2 [32, 48) pixels 16..31 channels 0..15, F3 [48, 64). An unpacked SrcB tile has the same layout.
+-constexpr int pix_of_row(uint32_t i) { return static_cast<int>(i < 32 ? (i % 16) : 16 + (i % 16)); }
+-constexpr int fpos(int p) { return p < 16 ? p : p + 16; }
+-// Output pixel r takes pixel r + s of cur, or of the neighbour when that leaves the tile (|s| < 32).
+-constexpr bool from_nb(int s, uint32_t i) {
+-    const int p = pix_of_row(i) + s;
+-    return p < 0 || p >= 32;
+-}
+-constexpr uint32_t off_of(int s, uint32_t i) {
+-    const int r = pix_of_row(i);
+-    int p = r + s;
+-    p = p < 0 ? p + 32 : (p >= 32 ? p - 32 : p);
+-    return static_cast<uint32_t>((fpos(p) - fpos(r)) & 63);
++template <int32_t d>
++constexpr bool layout_a() {
++    return d % 4 == 0;
++}
++// Block row of the group's first pixel (pixel 0 of tile c0).
++template <int32_t d>
++constexpr uint32_t row0() {
++    return layout_a<d>() ? static_cast<uint32_t>(((d + 7) / 8) * 8) : static_cast<uint32_t>(d);
++}
++// Rows of one block for n units (a multiple of 8 for layout A's aligned moves, of 4 for the packer's windows).
++template <int32_t d>
++constexpr uint32_t block_rows(uint32_t n) {
++    return layout_a<d>() ? ((row0<d>() + 32 * n + d + 7) / 8) * 8 : ((32 * n + 2 * d + 3) / 4) * 4;
++}
++// Units per slot: both blocks fit one fp32 DEST half (256 rows).
++template <int32_t d, uint32_t tpr>
++constexpr uint32_t group_max() {
++    uint32_t g = tpr < 2 ? tpr : 2;
++    while (g > 1 && 2 * block_rows<d>(g) > 256) {
++        --g;
++    }
++    return g;
+ }
+-constexpr uint32_t srcrow(int s, uint32_t i) { return (off_of(s, i) + i) & 63; }
+ 
+ #ifdef TRISC_UNPACK
+ inline void unpack_init() {
+@@ -69,165 +90,206 @@
+     ckernel::ckernel_template tmp(1, 1, TT_OP_UNPACR(SrcB, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1));
+     tmp.program();
+ }
+-// One whole bf8_b tile at byte address `l1` into the next SrcB bank (the SrcA address is unused).
++// One whole tile at byte address `l1` into the next SrcB bank (the SrcA address is unused).
+ inline void load(uint32_t l1) { _llk_unpack_AB_<BroadcastType::NONE>((l1 >> 4) - 1, (l1 >> 4) - 1); }
+ #endif
+ 
+ #ifdef TRISC_MATH
+ constexpr uint32_t ADDR_MOD_ZERO = ADDR_MOD_7;
+ constexpr uint32_t ADDR_MOD_STEP = ADDR_MOD_6;
++ALWI void dest_row(uint32_t row) { TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, row + get_dest_buffer_base()); }
++ALWI void release_srcb() { TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD); }
+ 
+-// With d % 8 == 0 every run boundary (16 - d, d, 32 - d) is a multiple of 8, so each aligned group of 4 rows has one
+-// source and one offset: one 4-row MOVB2D per group (16 per tile instead of 64). Measured: 4-row MOVB2D is exact only
+-// when the SrcB and DEST rows agree mod 8 (d = 8 bit-identical; d = 4 and 12, rows 4 apart mod 8, differ), so d % 8 ==
+-// 4 keeps the one-row moves.
+-template <int s, bool nb, uint32_t i>
+-ALWI void row() {
+-    constexpr int a = s < 0 ? -s : s;
+-    if constexpr (a % 8 == 0) {
+-        if constexpr (i % 4 == 0 && from_nb(s, i) == nb) {
+-            static_assert(from_nb(s, i) == from_nb(s, i + 3) && off_of(s, i) == off_of(s, i + 3));
+-            TTI_MOVB2D(0, srcrow(s, i), ADDR_MOD_ZERO, p_movb2d::MOV_4_ROWS, i);
+-        }
+-    } else if constexpr (from_nb(s, i) == nb) {
+-        TTI_MOVB2D(0, srcrow(s, i), ADDR_MOD_ZERO, p_movb2d::MOV_1_ROW, i);
+-    }
+-}
+-template <int s, bool nb, uint32_t... I>
+-ALWI void move_rows(std::integer_sequence<uint32_t, I...>) {
+-    (row<s, nb, I>(), ...);
+-}
+-
+-// Replayed rows: runs of rows with the same source offset are one replay of a recorded run of one-row MOVB2D that step
+-// the SrcB and DEST counters by 1 (rows not in a pass are skipped with INCRWC). Rows 0..15 and 16..31 have the same
+-// offsets, as do 32..47 and 48..63. Replay buffer [0, 32): R1 x (16 - e), R2 x e, R3 x (16 - e), R4 x e.
+-//   d < 16 (e = d): offsets R1 = d, R2 = 16 + d, R3 = 64 - d, R4 = 48 - d. kw = 2 per 16-row block: R1 then R2 (blocks
+-//     0, 1 from cur; blocks 2, 3: R2's rows from nb); kw = 0: R4's rows (nb in blocks 0, 1, cur in 2, 3) then R3 (cur).
+-//   16 < d < 32 (e = d - 16): offsets R1 = e + 32, R2 = e + 48, R3 = 32 - e, R4 = 16 - e. kw = 2: R1 then R2 (cur then
+-//     nb in blocks 0, 1; nb in 2, 3); kw = 0: R4 then R3 (nb in blocks 0, 1; nb then cur in 2, 3).
+-// d % 8 == 0 takes the 4-row moves instead.
+-template <int d>
+-constexpr bool replayed() {
+-    return d % 8 != 0;
+-}
+-template <int d>
++template <int32_t d>
+ inline void math_init() {
+     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_ZERO);
+     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 1}, .dest = {.incr = 1}}.set(ADDR_MOD_STEP);
+     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD);
+-    if constexpr (replayed<d>()) {
+-        constexpr int e = d < 16 ? d : d - 16;
+-        constexpr int o1 = d < 16 ? d : e + 32;
+-        constexpr int o2 = d < 16 ? 16 + d : e + 48;
+-        constexpr int o3 = d < 16 ? 64 - d : 32 - e;
+-        constexpr int o4 = d < 16 ? 48 - d : 16 - e;
+-        load_replay_buf(0, 32, [] {
+-            for (int k = 0; k < 16 - e; ++k) {
+-                TTI_MOVB2D(0, o1, ADDR_MOD_STEP, p_movb2d::MOV_1_ROW, 0);
+-            }
+-            for (int k = 0; k < e; ++k) {
+-                TTI_MOVB2D(0, o2, ADDR_MOD_STEP, p_movb2d::MOV_1_ROW, 0);
+-            }
+-            for (int k = 0; k < 16 - e; ++k) {
+-                TTI_MOVB2D(0, o3, ADDR_MOD_STEP, p_movb2d::MOV_1_ROW, 0);
+-            }
+-            for (int k = 0; k < e; ++k) {
+-                TTI_MOVB2D(0, o4, ADDR_MOD_STEP, p_movb2d::MOV_1_ROW, 0);
++    if constexpr (!layout_a<d>()) {
++        load_replay_buf(0, 16, [] {
++            for (int k = 0; k < 16; ++k) {
++                TTI_MOVB2D(0, 0, ADDR_MOD_STEP, p_movb2d::MOV_1_ROW, 0);
+             }
+         });
+     }
+-    // DEST starts zero: the rows a tap never writes (neighbour or out-of-image rows) must read as zero.
++    // DEST starts zero: the pixels outside the image row must read as zero.
+     TTI_ZEROACC(p_zeroacc::CLR_ALL, DST_ACCUM_MODE, 0, ADDR_MOD_ZERO, 0);
+ }
+ 
+-// Skip n rows (both counters).
+-template <int n>
+-ALWI void skip() {
+-    if constexpr (n > 15) {
+-        TTI_INCRWC(0, 15, 15, 0);
+-        skip<n - 15>();
+-    } else if constexpr (n > 0) {
+-        TTI_INCRWC(0, n, n, 0);
++// Layout A: 4-row group g (SrcB rows [4 g, 4 g + 4), face f = g / 4) of pixel q = 16 (f / 2) + 4 (g % 4) in
++// [q_lo, q_hi) to block row Hs (f % 2) + base + q (relative to the DEST offset; base wraps for the left neighbour).
++template <uint32_t Hs, uint32_t base, uint32_t q_lo, uint32_t q_hi, uint32_t g>
++ALWI void a_group() {
++    constexpr uint32_t f = g / 4;
++    constexpr uint32_t q = 16 * (f / 2) + 4 * (g % 4);
++    if constexpr (q >= q_lo && q < q_hi) {
++        TTI_MOVB2D(0, 4 * g, ADDR_MOD_ZERO, p_movb2d::MOV_4_ROWS, Hs * (f % 2) + base + q);
+     }
+ }
+-
+-// The cur (nb = false) or neighbour (nb = true) rows of the DEST tile at the current write offset (counters from 0,
+-// back to 0 after).
+-template <int d, bool kw2, bool nb>
+-ALWI void pass() {
+-    if constexpr (!replayed<d>()) {
+-        move_rows<kw2 ? d : -d, nb>(std::make_integer_sequence<uint32_t, 64>{});
++template <uint32_t Hs, uint32_t base, uint32_t q_lo, uint32_t q_hi, uint32_t... G>
++ALWI void a_moves(std::integer_sequence<uint32_t, G...>) {
++    (a_group<Hs, base, q_lo, q_hi, G>(), ...);
++}
++// Layout B: SrcB row r (face f = r / 16) of pixel q = 16 (f / 2) + r % 16 in [q_lo, q_hi).
++template <uint32_t Hs, uint32_t base, uint32_t q_lo, uint32_t q_hi, uint32_t r>
++ALWI void b_row() {
++    constexpr uint32_t f = r / 16;
++    constexpr uint32_t q = 16 * (f / 2) + r % 16;
++    if constexpr (q >= q_lo && q < q_hi) {
++        TTI_MOVB2D(0, r, ADDR_MOD_ZERO, p_movb2d::MOV_1_ROW, Hs * (f % 2) + base + q);
++    }
++}
++template <uint32_t Hs, uint32_t base, uint32_t q_lo, uint32_t q_hi, uint32_t... R>
++ALWI void b_rows(std::integer_sequence<uint32_t, R...>) {
++    (b_row<Hs, base, q_lo, q_hi, R>(), ...);
++}
++// A whole tile with its pixel 0 at slot row `at`.
++template <int32_t d, uint32_t Hs>
++ALWI void move_tile(uint32_t at) {
++    dest_row(at);
++    if constexpr (layout_a<d>()) {
++        a_moves<Hs, 0, 0, 32>(std::make_integer_sequence<uint32_t, 16>{});
++    } else {
++        // The SrcB counter runs 0..63 over the four replays; DEST restarts at each face's block row.
++        lltt::replay(0, 16);  // F0 -> block 0 pixels 0..15
++        dest_row(at + Hs);
++        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
++        lltt::replay(0, 16);  // F1 -> block 1 pixels 0..15
++        dest_row(at + 16);
++        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
++        lltt::replay(0, 16);  // F2 -> block 0 pixels 16..31
++        dest_row(at + Hs + 16);
++        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
++        lltt::replay(0, 16);  // F3 -> block 1 pixels 16..31
++    }
++    release_srcb();
++}
++// The left neighbour's last d pixels (its pixel 0 at slot row r0 - 32; the DEST offset stays at the slot base).
++template <int32_t d, uint32_t Hs>
++ALWI void move_prev() {
++    constexpr uint32_t r0 = row0<d>();
++    dest_row(0);
++    if constexpr (layout_a<d>()) {
++        a_moves<Hs, r0 - 32, 32 - d, 32>(std::make_integer_sequence<uint32_t, 16>{});
++    } else {
++        b_rows<Hs, r0 - 32, 32 - d, 32>(std::make_integer_sequence<uint32_t, 64>{});
++    }
++    release_srcb();
++}
++// The right neighbour's first d pixels (its pixel 0 at slot row `at`).
++template <int32_t d, uint32_t Hs>
++ALWI void move_next(uint32_t at) {
++    dest_row(at);
++    if constexpr (layout_a<d>()) {
++        a_moves<Hs, 0, 0, d>(std::make_integer_sequence<uint32_t, 16>{});
+     } else {
+-        constexpr int e = d < 16 ? d : d - 16;
+-        constexpr uint32_t R1 = 0, R2 = 16 - e, R3 = 16, R4 = 32 - e;
+-        constexpr int a = 16 - e;  // R1 / R3 run
+-        if constexpr (d < 16 && kw2 && !nb) {
+-            lltt::replay(R1, a);
+-            lltt::replay(R2, e);
+-            lltt::replay(R1, a);
+-            lltt::replay(R2, e);
+-            lltt::replay(R1, a);
+-            skip<e>();
+-            lltt::replay(R1, a);
+-        } else if constexpr (d < 16 && kw2 && nb) {
+-            skip<32 + a>();
+-            lltt::replay(R2, e);
+-            skip<a>();
+-            lltt::replay(R2, e);
+-        } else if constexpr (d < 16 && !kw2 && !nb) {
+-            skip<e>();
+-            lltt::replay(R3, a);
+-            skip<e>();
+-            lltt::replay(R3, a);
+-            lltt::replay(R4, e);
+-            lltt::replay(R3, a);
+-            lltt::replay(R4, e);
+-            lltt::replay(R3, a);
+-        } else if constexpr (d < 16 && !kw2 && nb) {
+-            lltt::replay(R4, e);
+-            skip<a>();
+-            lltt::replay(R4, e);
+-        } else if constexpr (kw2 && !nb) {  // d > 16
+-            lltt::replay(R1, a);
+-            skip<e>();
+-            lltt::replay(R1, a);
+-        } else if constexpr (kw2 && nb) {
+-            skip<a>();
+-            lltt::replay(R2, e);
+-            skip<a>();
+-            lltt::replay(R2, e);
+-            lltt::replay(R1, a);
+-            lltt::replay(R2, e);
+-            lltt::replay(R1, a);
+-            lltt::replay(R2, e);
+-        } else if constexpr (!kw2 && !nb) {
+-            skip<32 + e>();
+-            lltt::replay(R3, a);
+-            skip<e>();
+-            lltt::replay(R3, a);
+-        } else {  // kw = 0, nb, d > 16
+-            lltt::replay(R4, e);
+-            lltt::replay(R3, a);
+-            lltt::replay(R4, e);
+-            lltt::replay(R3, a);
+-            lltt::replay(R4, e);
+-            skip<a>();
+-            lltt::replay(R4, e);
++        b_rows<Hs, 0, 0, d>(std::make_integer_sequence<uint32_t, 64>{});
++    }
++    release_srcb();
++}
++#endif
++
++#ifdef TRISC_PACK
++#define CONV2D_3X3_TS_PACR(am, intf, last) \
++    TTI_PACR(                              \
++        p_pacr::CFG_CTXT_0,                \
++        p_pacr::NO_ROW_PAD_ZERO,           \
++        p_pacr::DST_ACCESS_NORMAL_MODE,    \
++        am,                                \
++        p_pacr::ADDR_CNT_CTXT_0,           \
++        0,                                 \
++        intf,                              \
++        0,                                 \
++        0,                                 \
++        0,                                 \
++        0,                                 \
++        last)
++// Replay [0, 22): one 4-row-PACR window tap. [22, 30): one face of 2-row PACRs. [30]: a tile's last 2-row PACR.
++constexpr uint32_t R4 = 0, R4_LEN = 22, R2 = 22, R2_LAST = 30;
++template <uint32_t Hs>
++inline void pack_init(uint32_t out_id) {
++    // One DEST row = 16 datums of the packer's source format (as set_packer_strides). Y = row, Z = block, W = window.
++    const uint32_t row = FACE_C_DIM * datum_size_in_bytes(pack_src_format[out_id]);
++    const uint32_t y_stride = row, z_stride = Hs * row, w_stride = row;
++    TT_SETDMAREG(0, LOWER_HALFWORD(y_stride << PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT), 0, LO_16(p_gpr_pack::TMP0));
++    TT_SETDMAREG(0, UPPER_HALFWORD(y_stride << PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT), 0, HI_16(p_gpr_pack::TMP0));
++    TT_SETDMAREG(0, LOWER_HALFWORD(z_stride << PCK0_ADDR_CTRL_ZW_REG_0_Zstride_SHAMT), 0, LO_16(p_gpr_pack::TMP1));
++    TT_SETDMAREG(0, UPPER_HALFWORD(w_stride << PCK0_ADDR_CTRL_ZW_REG_0_Wstride_SHAMT), 0, HI_16(p_gpr_pack::TMP1));
++    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
++    TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32);
++    TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32);
++    TTI_NOP;
++    TTI_NOP;
++    // ADDR_MOD_0 (llk_pack_init): Y += 4 per 4-row PACR. ADDR_MOD_3 (only the fast tilize reads it, and its init sets
++    // it): Y += 2 per 2-row PACR.
++    addr_mod_pack_t{.y_src = {.incr = 2}}.set(ADDR_MOD_3);
++    TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0011);
++    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1111);
++    load_replay_buf(R4, R4_LEN + 9, [] {
++        CONV2D_3X3_TS_PACR(ADDR_MOD_0, p_pacr::ALL_INTF_ACTIVE, 0);  // F0: Z 0, Y 0..15
++        CONV2D_3X3_TS_PACR(ADDR_MOD_0, p_pacr::ALL_INTF_ACTIVE, 0);
++        CONV2D_3X3_TS_PACR(ADDR_MOD_0, p_pacr::ALL_INTF_ACTIVE, 0);
++        CONV2D_3X3_TS_PACR(ADDR_MOD_0, p_pacr::ALL_INTF_ACTIVE, 0);
++        TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0010);             // Y 0
++        TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 1, 0b0001);             // Z 1
++        CONV2D_3X3_TS_PACR(ADDR_MOD_0, p_pacr::ALL_INTF_ACTIVE, 0);  // F1: Z 1, Y 0..15
++        CONV2D_3X3_TS_PACR(ADDR_MOD_0, p_pacr::ALL_INTF_ACTIVE, 0);
++        CONV2D_3X3_TS_PACR(ADDR_MOD_0, p_pacr::ALL_INTF_ACTIVE, 0);
++        CONV2D_3X3_TS_PACR(ADDR_MOD_0, p_pacr::ALL_INTF_ACTIVE, 0);
++        TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0001);             // Z 0 (Y is 16)
++        CONV2D_3X3_TS_PACR(ADDR_MOD_0, p_pacr::ALL_INTF_ACTIVE, 0);  // F2: Z 0, Y 16..31
++        CONV2D_3X3_TS_PACR(ADDR_MOD_0, p_pacr::ALL_INTF_ACTIVE, 0);
++        CONV2D_3X3_TS_PACR(ADDR_MOD_0, p_pacr::ALL_INTF_ACTIVE, 0);
++        CONV2D_3X3_TS_PACR(ADDR_MOD_0, p_pacr::ALL_INTF_ACTIVE, 0);
++        TTI_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_Y, 16);
++        TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 1, 0b0001);             // Z 1
++        CONV2D_3X3_TS_PACR(ADDR_MOD_0, p_pacr::ALL_INTF_ACTIVE, 0);  // F3: Z 1, Y 16..31
++        CONV2D_3X3_TS_PACR(ADDR_MOD_0, p_pacr::ALL_INTF_ACTIVE, 0);
++        CONV2D_3X3_TS_PACR(ADDR_MOD_0, p_pacr::ALL_INTF_ACTIVE, 0);
++        CONV2D_3X3_TS_PACR(ADDR_MOD_0, p_pacr::ALL_INTF_ACTIVE, 1);
++        TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0010);             // Y 0
++        for (int k = 0; k < 8; ++k) {
++            CONV2D_3X3_TS_PACR(ADDR_MOD_3, p_pacr::TWO_INTFS_ACTIVE, 0);
+         }
+-        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD);
++        CONV2D_3X3_TS_PACR(ADDR_MOD_3, p_pacr::TWO_INTFS_ACTIVE, 1);
++    });
++}
++// One tap: the window at slot row w (of the packer's current DEST half) into output tile `off` of the CB.
++template <bool two_row>
++ALWI void pack_tap(uint32_t out_id, uint32_t w, uint32_t off) {
++    TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, w);
++    program_packer_destination(get_output_tile_address<true, PackMode::Default>(out_id, off));
++    if constexpr (!two_row) {
++        lltt::replay(R4, R4_LEN);
++    } else {
++        lltt::replay(R2, 8);                              // F0
++        TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0010);  // Y 0
++        TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 1, 0b0001);  // Z 1
++        lltt::replay(R2, 8);                              // F1
++        TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0001);  // Z 0
++        lltt::replay(R2, 8);                              // F2
++        TTI_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_Y, 16);
++        TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 1, 0b0001);  // Z 1
++        lltt::replay(R2, 7);                              // F3
++        lltt::replay(R2_LAST, 1);
++        TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0010);  // Y 0
+     }
++    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0001);  // Z 0
+ }
+-template <int d, bool kw2>
+-ALWI void cur_pass() {
+-    pass<d, kw2, false>();
++// Default strides, ADDR_MODs and MOP for cb_out (llk_pack_init), counters at 0.
++inline void pack_uninit(uint32_t cb_out) {
++    TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0011);
++    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1111);
++    TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, 0);
++    llk_pack_init(cb_out);
+ }
+-ALWI void release_srcb() { TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD); }
+-ALWI void dest_tile(uint32_t j) { math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(j); }
++#undef CONV2D_3X3_TS_PACR
+ #endif
+ 
+ // The prelude's taps 0 and 2 of every live unit, from the input ring (cb_in, the plan's slab rows back to back from
+ // its base, ct tiles per row) into the reserved in0 block of cb_out ([rows, in0_k], unit (t, kh) taps at
+ // t * in0_k + kh * 2 ct + {0, ct}). Dead units (kh outside [kh_lo, kh_hi) of t's ring row group) are not written.
++// Kernel-row major: each group waits only for the slab rows it reads, so the prelude runs behind the fill.
+ template <
+     uint32_t ct,
+     uint32_t in0_k,
+@@ -250,34 +312,31 @@
+     const uint8_t (&kh_lo)[num_groups],
+     const uint8_t (&kh_hi)[num_groups]) {
+     static_assert(dilation > 0 && dilation < 32 && padding == dilation && input_width % 32 == 0);
+-    constexpr int32_t tpr = input_width / 32;
++    constexpr int32_t d = dilation;
++    constexpr uint32_t tpr = static_cast<uint32_t>(input_width / 32);
++    constexpr uint32_t G = group_max<d, tpr>();
++    constexpr uint32_t Hs = block_rows<d>(G);
++    static_assert(2 * Hs <= 256, "one slot per fp32 DEST half");
++    constexpr uint32_t r0 = row0<d>();
++    // Window rows of unit u: kw = 0 at r0 + 32 u - d, kw = 2 at r0 + 32 u + d (2-row PACR: layout B, odd d).
++    constexpr bool kw2_two_row = !layout_a<d>() && (d % 2 == 1);
+     reconfig_data_format(cb_in, cb_in);
+     pack_reconfig_data_format(cb_out);
+     UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(cb_in, cb_in)));
+     UNPACK((unpack_init()));
+-    MATH((math_init<dilation>()));
++    MATH((math_init<d>()));
+     PACK((llk_pack_init(cb_out)));
++    [[maybe_unused]] uint32_t out_id = 0;
++    PACK((out_id = get_output_id(cb_out)));
++    PACK((pack_init<Hs>(out_id)));
+     [[maybe_unused]] uint32_t ring_l1 = 0;
+     [[maybe_unused]] uint32_t tile_bytes = 0;  // the input tile's page (bf8_b or bf16)
+     UNPACK((ring_l1 = get_local_cb_interface(get_operand_id(cb_in)).fifo_rd_ptr << 4));
+     UNPACK((tile_bytes = get_local_cb_interface(get_operand_id(cb_in)).fifo_page_size << 4));
+     out.reserve_back(rows * in0_k);
+-    uint32_t j = 0;       // DEST tiles in the open section
+-    uint32_t dst_off[4];  // their in0 offsets
+     uint32_t waited = 0;  // slab rows waited for
+-    auto close = [&]() {
+-        if (j == 0) {
+-            return;
+-        }
+-        MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+-        PACK((llk_packer_wait_for_math_done()));
+-        for (uint32_t i = 0; i < j; ++i) {
+-            PACK((llk_pack<DST_ACCUM_MODE, true, PackMode::Default>(i, cb_out, dst_off[i])));
+-        }
+-        PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+-        j = 0;
+-    };
+-    // Slab row of input tile-row i (the plan's segments back to back).
++    // Slab row of input tile-row i (the plan's segments back to back). A group's tiles are consecutive slab rows: a
++    // band's tiles are one run of the ring (a band that shares tiles with the previous one continues its segment).
+     auto slab_row = [&](uint32_t i) {
+         uint32_t base = 0;
+         for (uint32_t sg = 0; sg < plan.num_segs; ++sg) {
+@@ -288,75 +347,74 @@
+         }
+         return base;  // not reached for a row the prelude reads
+     };
++    auto dead = [&](uint32_t t, int32_t kh) {
++        const uint32_t g = t / group_h;
++        return kh < kh_lo[g] || kh >= kh_hi[g];  // the ring walk never reads it
++    };
+     for (int32_t kh = 0; kh < 3; ++kh) {
+-        for (uint32_t t = 0; t < rows; ++t) {
+-            const uint32_t g = t / group_h;
+-            if (kh < kh_lo[g] || kh >= kh_hi[g]) {
+-                continue;  // dead unit: the ring walk never reads it
++        uint32_t t = 0;
++        while (t < rows) {
++            if (dead(t, kh)) {
++                ++t;
++                continue;
+             }
+             const uint32_t o = o_first + t * 32;
+-            const int32_t ho0 = o / output_width;
+-            const int32_t c = (o % output_width) / 32;
+-            const int32_t h_in = ho0 + kh * dilation - padding;
+-            const bool live = o < o_end && h_in >= 0 && h_in < input_height;
+-            const bool has_prev = live && c > 0;
+-            const bool has_next = live && c + 1 < tpr;
+-            uint32_t k_cur = 0, k_prev = 0, k_next = 0;
++            const uint32_t ho0 = o / output_width;
++            const uint32_t c0 = (o % output_width) / 32;
++            const int32_t h_in = static_cast<int32_t>(ho0) + kh * dilation - padding;
++            const bool in_block = o < o_end;
++            const bool live = in_block && h_in >= 0 && h_in < input_height;
++            // The group: up to G live (or all not live) units of image row ho0, consecutive columns.
++            uint32_t n = 1;
++            while (n < G && t + n < rows && c0 + n < tpr && !dead(t + n, kh) &&
++                   ((o_first + (t + n) * 32 < o_end) == in_block)) {
++                ++n;
++            }
++            const bool has_prev = live && c0 > 0;
++            const bool has_next = live && c0 + n < tpr;
++            uint32_t k_first = 0;
+             if (live) {
+-                const uint32_t i_cur = static_cast<uint32_t>(h_in * tpr + c);
+-                k_cur = slab_row(i_cur);
+-                k_prev = has_prev ? slab_row(i_cur - 1) : k_cur;
+-                k_next = has_next ? slab_row(i_cur + 1) : k_cur;
+-                uint32_t need = k_cur > k_prev ? k_cur : k_prev;
+-                need = (need > k_next ? need : k_next) + 1;
++                const uint32_t i0 = static_cast<uint32_t>(h_in) * tpr + c0;
++                k_first = slab_row(has_prev ? i0 - 1 : i0);
++                const uint32_t need = slab_row(has_next ? i0 + n : i0 + n - 1) + 1;
+                 if (need > waited) {
+                     in.wait_front(need * ct);
+                     waited = need;
+                 }
+             }
+-            const uint32_t unit = t * in0_k + kh * 2 * ct;
+             for (uint32_t ch = 0; ch < ct; ++ch) {
+-                if (j == 0) {
+-                    MATH((llk_math_wait_for_dest_available()));
+-                }
+-                dst_off[j] = unit + ch;
+-                dst_off[j + 1] = unit + ct + ch;
++                MATH((llk_math_wait_for_dest_available()));
+                 if (live) {
+-                    UNPACK((load(ring_l1 + (k_cur * ct + ch) * tile_bytes)));
+-#ifdef TRISC_MATH
+-                    dest_tile(j);
+-                    cur_pass<dilation, false>();
+-                    dest_tile(j + 1);
+-                    cur_pass<dilation, true>();
+-                    release_srcb();
++                    uint32_t k = k_first;
+                     if (has_prev) {
+-                        dest_tile(j);
+-                        pass<dilation, false, true>();
+-                        release_srcb();
++                        UNPACK((load(ring_l1 + (k * ct + ch) * tile_bytes)));
++                        MATH((move_prev<d, Hs>()));
++                        ++k;
+                     }
+-                    if (has_next) {
+-                        dest_tile(j + 1);
+-                        pass<dilation, true, true>();
+-                        release_srcb();
+-                    }
+-#endif
+-                    if (has_prev) {
+-                        UNPACK((load(ring_l1 + (k_prev * ct + ch) * tile_bytes)));
++                    for (uint32_t u = 0; u < n; ++u, ++k) {
++                        UNPACK((load(ring_l1 + (k * ct + ch) * tile_bytes)));
++                        MATH((move_tile<d, Hs>(r0 + 32 * u)));
+                     }
+                     if (has_next) {
+-                        UNPACK((load(ring_l1 + (k_next * ct + ch) * tile_bytes)));
++                        UNPACK((load(ring_l1 + (k * ct + ch) * tile_bytes)));
++                        MATH((move_next<d, Hs>(r0 + 32 * n)));
+                     }
+                 }
+-                j += 2;
+-                if (j == 4) {
+-                    close();
++                MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
++                PACK((llk_packer_wait_for_math_done()));
++                for (uint32_t u = 0; u < n; ++u) {
++                    const uint32_t unit = (t + u) * in0_k + kh * 2 * ct + ch;
++                    PACK((pack_tap<false>(out_id, r0 + 32 * u - d, unit)));
++                    PACK((pack_tap<kw2_two_row>(out_id, r0 + 32 * u + d, unit + ct)));
+                 }
++                PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+             }
++            t += n;
+         }
+     }
+-    close();
+     out.push_back(rows * in0_k);
+     MATH((math::clear_dst_reg_addr()));
++    PACK((pack_uninit(cb_out)));
+ }
+ 
+ }  // namespace conv2d_3x3::tap_shift
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+@@ -147,21 +147,17 @@
+ PADDED_SLAB = True
+ 
+ # Tap shift (kernels/conv2d_3x3_tap_shift.hpp), on the padded-slab prelude with d < 32: compute builds the kw = 0 / 2
+-# taps on the FPU straight from the input ring's TILE slab (one-row SrcB -> DEST moves, 4-row where d % 8 == 0), kernel-
+-# row major, each tap waiting only for the slab rows it reads: no untilize, no row-major slab, no gap zeroing. The input
+-# ring leaves in0's L1 for the slab / combine-slots region (dead until the slab-dead token, as the slab was), so the
+-# prelude no longer waits for the reader's center push and runs behind the fill. Taken where the region, rounded to a
+-# multiple of its three page sizes, fits the L1 the padded slab left. Measured on the merged tree (Blackhole p150b,
+-# LoFi, bit-identical, unzoned, 3 alternating pairs): aspp.convs.3 -6.0%, aspp.convs.2 -3.0%, res5.2 -3.4%, res5.1
+-# -2.9%, res4.x -2.4%. False keeps the padded-slab untilize / tilize prelude.
++# taps on the FPU straight from the input ring's TILE slab, kernel-row major, each group of taps waiting only for the
++# slab rows it reads: no untilize, no row-major slab, no gap zeroing. Each input tile is unpacked once per (kernel row,
++# channel tile, pair of output tile-rows) into a pixel-contiguous DEST row buffer, and the packer reads every tap as a
++# shifted DEST window (~34-42 ns per tap, against ~60 for the per-row FPU shift of Perf 10 and ~23-42 for the fast /
++# 1-wide tilize). The input ring leaves in0's L1 for the slab / combine-slots region (dead until the slab-dead token,
++# as the slab was), so the prelude no longer waits for the reader's center push and runs behind the fill. Taken where
++# the region, rounded to a multiple of its three page sizes, fits the L1 the padded slab left. Measured (Blackhole
++# p150b, LoFi, bit-identical, unzoned, medians of alternating pairs vs the Perf 10 per-row shift): see changelog Perf 11
++# (tap_shift_rate). It replaced the Perf 10 carve-out (halo tile-rows per side < 3 x slice tiles: aspp.convs.1,
++# res5.0), which now gains too. False keeps the padded-slab untilize / tilize prelude.
+ TAP_SHIFT = True
+-# The shift rebuilds every tap tile (~60 ns each, against ~23-42 ns for the fast tilize it replaces) and pays by
+-# removing the untilize of the halo slab rows. Where the halo is short against the slice width, the removed untilize
+-# does not cover the dearer taps: carve-out at halo tile-rows per side (d * W / 32) < TAP_SHIFT_MIN_HALO_PER_TILE x
+-# slice tiles, on slices of 2+ tiles. Measured losers (unzoned, 3 alternating pairs, non-overlapping): aspp.convs.1
+-# (6-tile slices, halo 12) +2.7%, res5.0 (2-tile, halo 4) +1.1%. Winners sit at halo >= 4 x tiles (res5.1, aspp.convs.2)
+-# or at 1-tile slices, whose padded tilize is the slow 1-wide one (res4.x). 3 is the midpoint of the unmeasured gap.
+-TAP_SHIFT_MIN_HALO_PER_TILE = 3
+ 
+ # Work-balanced BLOCK M split (balanced_block_ranges). On the N-slice ring walk a grid row's time is its prelude (fill-
+ # paced untilize of its slab rows, gather-paced tilize of its tile-rows) plus its walk (in-image kernel rows of each ring
+@@ -1781,9 +1777,7 @@
+     # Tap shift (see TAP_SHIFT): the input ring shares the slab / combine-slots region instead of in0. The region's size
+     # must be a multiple of all three page sizes.
+     tap_shift = False
+-    halo_tile_rows = g.dilation * g.input_width // TILE
+-    short_halo = g.c_in_tiles >= 2 and halo_tile_rows < TAP_SHIFT_MIN_HALO_PER_TILE * g.c_in_tiles
+-    if TAP_SHIFT and padded_slab and b.shared_slab_bytes and g.dilation < 32 and not short_halo:
++    if TAP_SHIFT and padded_slab and b.shared_slab_bytes and g.dilation < 32:
+         ring_bytes = b.slab_tile_rows * g.c_in_tiles * g.in0_tile_bytes
+         unit = math.lcm(TILE_BYTES_BF16, TILE_BYTES_FP32, g.in0_tile_bytes)
+         region = _div_up(max(slab_cb.total_size, ring_bytes), unit) * unit

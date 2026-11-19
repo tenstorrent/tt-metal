@@ -147,21 +147,17 @@ NSLICE_CENTER_TAPS = True
 PADDED_SLAB = True
 
 # Tap shift (kernels/conv2d_3x3_tap_shift.hpp), on the padded-slab prelude with d < 32: compute builds the kw = 0 / 2
-# taps on the FPU straight from the input ring's TILE slab (one-row SrcB -> DEST moves, 4-row where d % 8 == 0), kernel-
-# row major, each tap waiting only for the slab rows it reads: no untilize, no row-major slab, no gap zeroing. The input
-# ring leaves in0's L1 for the slab / combine-slots region (dead until the slab-dead token, as the slab was), so the
-# prelude no longer waits for the reader's center push and runs behind the fill. Taken where the region, rounded to a
-# multiple of its three page sizes, fits the L1 the padded slab left. Measured on the merged tree (Blackhole p150b,
-# LoFi, bit-identical, unzoned, 3 alternating pairs): aspp.convs.3 -6.0%, aspp.convs.2 -3.0%, res5.2 -3.4%, res5.1
-# -2.9%, res4.x -2.4%. False keeps the padded-slab untilize / tilize prelude.
+# taps on the FPU straight from the input ring's TILE slab, kernel-row major, each group of taps waiting only for the
+# slab rows it reads: no untilize, no row-major slab, no gap zeroing. Each input tile is unpacked once per (kernel row,
+# channel tile, pair of output tile-rows) into a pixel-contiguous DEST row buffer, and the packer reads every tap as a
+# shifted DEST window (~34-42 ns per tap, against ~60 for the per-row FPU shift of Perf 10 and ~23-42 for the fast /
+# 1-wide tilize). The input ring leaves in0's L1 for the slab / combine-slots region (dead until the slab-dead token,
+# as the slab was), so the prelude no longer waits for the reader's center push and runs behind the fill. Taken where
+# the region, rounded to a multiple of its three page sizes, fits the L1 the padded slab left. Measured (Blackhole
+# p150b, LoFi, bit-identical, unzoned, medians of alternating pairs vs the Perf 10 per-row shift): see changelog Perf 11
+# (tap_shift_rate). It replaced the Perf 10 carve-out (halo tile-rows per side < 3 x slice tiles: aspp.convs.1,
+# res5.0), which now gains too. False keeps the padded-slab untilize / tilize prelude.
 TAP_SHIFT = True
-# The shift rebuilds every tap tile (~60 ns each, against ~23-42 ns for the fast tilize it replaces) and pays by
-# removing the untilize of the halo slab rows. Where the halo is short against the slice width, the removed untilize
-# does not cover the dearer taps: carve-out at halo tile-rows per side (d * W / 32) < TAP_SHIFT_MIN_HALO_PER_TILE x
-# slice tiles, on slices of 2+ tiles. Measured losers (unzoned, 3 alternating pairs, non-overlapping): aspp.convs.1
-# (6-tile slices, halo 12) +2.7%, res5.0 (2-tile, halo 4) +1.1%. Winners sit at halo >= 4 x tiles (res5.1, aspp.convs.2)
-# or at 1-tile slices, whose padded tilize is the slow 1-wide one (res4.x). 3 is the midpoint of the unmeasured gap.
-TAP_SHIFT_MIN_HALO_PER_TILE = 3
 
 # Work-balanced BLOCK M split (balanced_block_ranges). On the N-slice ring walk a grid row's time is its prelude (fill-
 # paced untilize of its slab rows, gather-paced tilize of its tile-rows) plus its walk (in-image kernel rows of each ring
@@ -1781,9 +1777,7 @@ def create_program_descriptor(
     # Tap shift (see TAP_SHIFT): the input ring shares the slab / combine-slots region instead of in0. The region's size
     # must be a multiple of all three page sizes.
     tap_shift = False
-    halo_tile_rows = g.dilation * g.input_width // TILE
-    short_halo = g.c_in_tiles >= 2 and halo_tile_rows < TAP_SHIFT_MIN_HALO_PER_TILE * g.c_in_tiles
-    if TAP_SHIFT and padded_slab and b.shared_slab_bytes and g.dilation < 32 and not short_halo:
+    if TAP_SHIFT and padded_slab and b.shared_slab_bytes and g.dilation < 32:
         ring_bytes = b.slab_tile_rows * g.c_in_tiles * g.in0_tile_bytes
         unit = math.lcm(TILE_BYTES_BF16, TILE_BYTES_FP32, g.in0_tile_bytes)
         region = _div_up(max(slab_cb.total_size, ring_bytes), unit) * unit

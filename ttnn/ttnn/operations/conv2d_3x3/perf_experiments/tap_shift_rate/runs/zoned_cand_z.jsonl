@@ -1,0 +1,4 @@
+{"case": "res4_1__5_conv2", "variant": "cand_z", "pcc": 0.9997648301925202, "pcc_threshold": 0.996, "finite": true, "out_sha": "b7775c40eb7fce5a", "tap_shift": false}
+{"case": "aspp_convs_2", "variant": "cand_z", "pcc": 0.9997641150313122, "pcc_threshold": 0.996, "finite": true, "out_sha": "aa60ee4d907e1f3f", "tap_shift": false}
+{"case": "aspp_convs_3", "variant": "cand_z", "pcc": 0.9998307564015425, "pcc_threshold": 0.996, "finite": true, "out_sha": "f074a976999e46fb", "tap_shift": false}
+{"case": "res5_1_conv2", "variant": "cand_z", "pcc": 0.9997639084469206, "pcc_threshold": 0.996, "finite": true, "out_sha": "9eddecd6a31375aa", "tap_shift": false}
