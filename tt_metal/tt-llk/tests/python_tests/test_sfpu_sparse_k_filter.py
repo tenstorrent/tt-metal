@@ -26,9 +26,9 @@ from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import ELEMENTS_PER_TILE
 from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import parametrize
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import SPARSE_K_CONFIG, TILE_COUNT
+from helpers.test_variant_parameters import LOOP_FACTOR, SPARSE_K_CONFIG, TILE_COUNT
 
 SFPU_ROW_ELEMENTS = 32
 FORMATS = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
@@ -98,47 +98,64 @@ def _sparse_k_golden(indices, layout, my_bank: int, out_shift: int, iterations: 
     return golden
 
 
-def _run(layout, my_bank, out_shift, iterations):
+def _run(
+    layout,
+    my_bank,
+    out_shift,
+    iterations,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     """Run one variant; returns (result, golden, indices) as int64 flat tiles."""
     torch_format = format_dict[FORMATS.input_format]
 
     src_A = _build_indices(layout, my_bank, torch_format)
     src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch_format)
 
-    golden = _sparse_k_golden(src_A, layout, my_bank, out_shift, iterations)
+    golden = None
+    if not is_perf:
+        golden = _sparse_k_golden(src_A, layout, my_bank, out_shift, iterations)
 
     bank_mask, shift, within_mask = layout
-    configuration = TestConfig(
-        "sources/sfpu_sparse_k_filter_test.cpp",
-        FORMATS,
-        templates=[
-            SPARSE_K_CONFIG(
-                sparse_k_iterations=iterations,
-                bank_mask=bank_mask,
-                my_bank=my_bank,
-                global_bank_shift=shift,
-                within_bank_mask=within_mask,
-                out_shift=out_shift,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/sfpu_sparse_k_filter_test.cpp",
+            formats=FORMATS,
+            templates=[
+                SPARSE_K_CONFIG(
+                    sparse_k_iterations=iterations,
+                    bank_mask=bank_mask,
+                    my_bank=my_bank,
+                    global_bank_shift=shift,
+                    within_bank_mask=within_mask,
+                    out_shift=out_shift,
+                ),
+            ],
+            runtimes=[LOOP_FACTOR(1), TILE_COUNT(1)],
+            variant_stimuli=StimuliConfig(
+                src_A,
+                FORMATS.input_format,
+                src_B,
+                FORMATS.input_format,
+                FORMATS.output_format,
+                tile_count_A=1,
+                tile_count_B=1,
+                tile_count_res=1,
             ),
-        ],
-        runtimes=[
-            TILE_COUNT(1),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            FORMATS.input_format,
-            src_B,
-            FORMATS.input_format,
-            FORMATS.output_format,
-            tile_count_A=1,
-            tile_count_B=1,
-            tile_count_res=1,
+            dest_acc=DestAccumulation.Yes,
+            unpack_to_dest=True,
         ),
-        dest_acc=DestAccumulation.Yes,
-        unpack_to_dest=True,
     )
-
-    res_from_L1 = configuration.run().result
+    if is_perf:
+        return None, None, None
+    res_from_L1 = outcome.result
     res = torch.tensor(res_from_L1, dtype=torch_format).to(torch.int64)
     return res, golden, src_A.to(torch.int64)
 

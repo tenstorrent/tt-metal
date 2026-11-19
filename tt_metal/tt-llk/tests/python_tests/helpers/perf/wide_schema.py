@@ -243,6 +243,12 @@ DB_SCHEMA = [
     Column("dest_tiles", "int64", True, "configuration"),
     Column("h16_tile_index", "int64", True, "configuration"),
     Column("hadamard_normalize", "bool", True, "configuration"),
+    Column("bank_mask", "int64", True, "configuration"),
+    Column("global_bank_shift", "int64", True, "configuration"),
+    Column("my_bank", "int64", True, "configuration"),
+    Column("out_shift", "int64", True, "configuration"),
+    Column("sparse_k_iterations", "int64", True, "configuration"),
+    Column("within_bank_mask", "int64", True, "configuration"),
     # timing (complete {mean, std} x base grid — see _TIMING_COLUMNS above)
     *_TIMING_COLUMNS,
     # ── provenance: stamped by the publish layer, never emitted by a test ──
