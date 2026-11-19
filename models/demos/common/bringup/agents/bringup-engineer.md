@@ -27,9 +27,10 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    tests) go through the resident runner (F281; owner rule 2026-11-19: one device open and one model load per task):
    `python -m models.demos.common.bringup.resident submit --spec $BRINGUP_SPEC --cmd "<the safe-runner command>"`
    (start it once with `... resident start --spec $BRINGUP_SPEC` if `resident status` says it is not up). It keeps
-   the model loaded; a model python change is reloaded in place. A direct `scripts/run_safe_pytest.sh` of a model
-   test makes the runner step aside and costs a fresh device open and a ~2-4 min load: use it only for op-level
-   tests (fork suites, probes) that do not load the model. Touch the device only through these, `scripts/run_safe_pytest.sh` or `scripts/tt-probe.sh`, in the foreground. Never run
+   the model loaded; a model python change is reloaded in place. A direct `scripts/run_safe_pytest.sh` makes the runner step
+   aside and costs a fresh device open (each open leaks 10-27 GiB of host RAM in the driver until a reboot): op-level
+   tests (fork suites, probes) go through the runner too (it has the mesh open: a mesh-only test costs 0 opens; mark the
+   test file BATCH_SHARED). Use the safe runner directly only when the runner cannot run the test, and say why. Touch the device only through these, `scripts/run_safe_pytest.sh` or `scripts/tt-probe.sh`, in the foreground. Never run
    `pytest`, `python -m pytest`, or `python` on device code directly, and never run `tt-smi -r`. The orchestrator
    reads your command log, and a direct call fails the step. Set `PYTHONPATH=$PWD` (the shell's value points at
    another checkout). `BRINGUP_SPEC` is already set. A device run that may take longer than ~9 minutes (a model load,
