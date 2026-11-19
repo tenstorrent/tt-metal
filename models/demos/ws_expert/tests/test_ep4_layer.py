@@ -444,6 +444,45 @@ def lane_times(cfg, T, counts, st, chips, clk):
     return out
 
 
+def group_report(cfg, st, chips, clk, R, why):
+    """Per group, over chips: compute end and NCRISC end (us from the chip's first loop start; median / max), and with
+    why the group NCRISCs' idle time by blocker (us, mean over the group's cores; median over chips) - one line a
+    group; the chips of mesh column 0 also per chip."""
+    sts = ttnn.get_device_tensors(st)
+    ce, ne, wy = {}, {}, {}
+    for ci in chips:
+        s = (ttnn.to_torch(sts[ci]).to(torch.int64) & 0xFFFFFFFF).reshape(cfg.G * cfg.GC, -1)
+        rel = ((s - int(s[0, 0]) + (1 << 31)) & 0xFFFFFFFF) - (1 << 31)
+        t0 = int(min(rel[:, 0].min(), rel[:, 485].min(), rel[:, 496].min()))
+        for g in range(cfg.G):
+            q, r = s[g * cfg.GC : (g + 1) * cfg.GC], rel[g * cfg.GC : (g + 1) * cfg.GC]
+            ce[(ci, g)] = (int(r[:, 63].max()) - t0) / clk
+            ne[(ci, g)] = (int((r[:, 485] + q[:, 484]).max()) - t0) / clk
+            if why:
+                wy[(ci, g)] = (q[:, 470:485].double().mean(0) / clk).tolist()
+    del sts
+    for g in range(cfg.G):
+        c = sorted(ce[(ci, g)] for ci in chips)
+        nn = sorted(ne[(ci, g)] for ci in chips)
+        line = (
+            f"EP4 group {g}: compute end median / max {statistics.median(c):.0f} / {c[-1]:.0f} us, NCRISC end "
+            f"{statistics.median(nn):.0f} / {nn[-1]:.0f} us"
+        )
+        if why:
+            m = [statistics.median(wy[(ci, g)][k] for ci in chips) for k in range(15)]
+            line += (
+                f"; NCRISC busy {m[0]:.0f}, idle none / arrival / credit / mux / refill "
+                f"{[round(v) for v in m[7:12]]}, first / last forward {m[12]:.0f} / {m[13]:.0f} us"
+            )
+        logger.info(line)
+    for ci in [ci for ci in chips if ci % 4 == 0]:
+        logger.info(
+            f"EP4 chip {ci}: compute end per group {[round(ce[(ci, g)]) for g in range(cfg.G)]} us, NCRISC end "
+            f"{[round(ne[(ci, g)]) for g in range(cfg.G)]} us"
+            + (f", mux idle {[round(wy[(ci, g)][10]) for g in range(cfg.G)]}" if why else "")
+        )
+
+
 @pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
 @pytest.mark.parametrize("device_params", [FABT], indirect=True)
 @pytest.mark.parametrize("routing", ["uniform", "zipf"])
@@ -459,7 +498,7 @@ def test_ep4_experts(mesh_device, routing):
     lc = EP4Cfg(T=n)
     TX, EPC = lc.TX, lc.EPC
     G = int(os.environ.get("EP4_G", "2"))
-    cfg, lane, l5 = lane_cfgs(mesh, lc, G)
+    cfg, lane, l5 = lane_cfgs(mesh, lc, G, l5kw=dict(why=int(os.environ.get("EP4_WHY", "0"))))
     T, pos = lane_tables(mesh, cfg, lane)
     tab_t = tables_tensor(mesh, T["tabs"])
     s = front(mesh, lc, routing, pos)
@@ -495,12 +534,12 @@ def test_ep4_experts(mesh_device, routing):
         ttnn.synchronize_device(mesh)
         wo.append(lane_times(cfg, T, [[0] * EPC] * N, st, chips, clk))
         del mpd, io, st
-    sent = EPC // G // R  # (experts a chip sends a lane: its own of the group)
+    sent = EPC * (R - 1) / (R * 4)  # (experts over a link direction: each crosses R - 1 of the ring's 2 x 2)
     wend = [max(max(r[ci][1][g] for ci in chips) for r in wo[1:]) for g in range(G)]
     logger.info(
         f"EP4 experts {routing}: weights only (zero counts), NCRISC end per group (us, max over chips, last 2 launches) "
         f"{[round(v, 1) for v in wend]} = {[round(sent * exp_bytes / (v * 1e3), 1) for v in wend]} GB/s a link "
-        f"direction ({sent} experts a direction a lane)"
+        f"direction ({sent:.0f} experts a link direction)"
     )
     # real rows
     e2es = []
@@ -509,6 +548,8 @@ def test_ep4_experts(mesh_device, routing):
         ttnn.generic_op(io, mpd)
         ttnn.synchronize_device(mesh)
         e2es.append(lane_times(cfg, T, counts, st, chips, clk))
+        if i == (WARM + MEAS if WARM < 5 else 5) - 1:
+            group_report(cfg, st, chips, clk, R, l5.why)
         del mpd, io, st
     clk2 = aiclk_mhz(0)
     # O against torch: sampled local experts on every chip
