@@ -235,7 +235,7 @@ def test_gather(device):
 
     # Gather elements along dimension 1 using the index tensor
     gathered_tensor = ttnn.gather(ttnn_input, 1, index=ttnn_index)
-    logger.info(f"Gathered Tensor Shape: {gathered_tensor.shape}")  # Shape([4, 2])
+    logger.debug(f"Gathered Tensor Shape: {gathered_tensor.shape}")  # Shape([4, 2])
 
 
 def test_sort(device):
@@ -247,17 +247,17 @@ def test_sort(device):
 
     # Sort the tensor in ascending order
     sorted_tensor, indices = ttnn.sort(input_tensor_ttnn)
-    logger.info(f"Sorted Tensor: {sorted_tensor}, Indices: {indices}")
+    logger.debug(f"Sorted Tensor: {sorted_tensor}, Indices: {indices}")
 
     # Sort the tensor in descending order
     sorted_tensor_desc, indices_desc = ttnn.sort(input_tensor_ttnn, descending=True)
-    logger.info(f"Sorted Tensor Descending: {sorted_tensor_desc}, Indices: {indices_desc}")
+    logger.debug(f"Sorted Tensor Descending: {sorted_tensor_desc}, Indices: {indices_desc}")
 
     # Sort along a specific dimension
     input_tensor_2d = torch.Tensor([[3, 1, 2], [6, 5, 4]])
     input_tensor_2d_ttnn = ttnn.from_torch(input_tensor_2d, dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
     sorted_tensor_dim, indices_dim = ttnn.sort(input_tensor_2d_ttnn, dim=1)
-    logger.info(f"Sorted Tensor along dim 1: {sorted_tensor_dim}, Indices: {indices_dim}")
+    logger.debug(f"Sorted Tensor along dim 1: {sorted_tensor_dim}, Indices: {indices_dim}")
 
 
 def test_narrow(device):
