@@ -123,11 +123,11 @@ def test_shard_and_gather(mesh_device: ttnn.MeshDevice, expect_error) -> None:  
             assert torch.equal(to_torch(p._data, mesh_axes=p.mesh_axes), state[name]), name  # noqa: SLF001
 
     model.shard(1)
-    assert not model.is_loaded() and model.is_sharded()
+    assert not model.is_loaded() and model.is_transiently_sharded()
     assert params["replicated"].mesh_axes == (1, None)
     assert params["tensor_parallel"].mesh_axes == (1, 0)
     assert params["tensor_parallel"].durable_mesh_axes == (None, 0)
-    assert not params["small"].is_sharded()  # no dim splits into whole tiles
+    assert not params["small"].is_transiently_sharded()  # no dim splits into whole tiles
     assert_layout_matches_data()
     with expect_error(RuntimeError, "gather it first"):
         params["replicated"].data  # noqa: B018
@@ -142,7 +142,7 @@ def test_shard_and_gather(mesh_device: ttnn.MeshDevice, expect_error) -> None:  
     assert params["replicated"].mesh_axes == (1, None)
 
     model.gather(ccl_manager)
-    assert model.is_loaded() and not model.is_sharded()
+    assert model.is_loaded() and not model.is_transiently_sharded()
     model()
     for name, p in params.items():
         assert p.mesh_axes == p.durable_mesh_axes, name
@@ -165,7 +165,7 @@ def test_shard_and_gather(mesh_device: ttnn.MeshDevice, expect_error) -> None:  
 
     replicated.shard(1)
     replicated.deallocate()
-    assert replicated.mesh_axes == (None, None) and not replicated.is_sharded()
+    assert replicated.mesh_axes == (None, None) and not replicated.is_transiently_sharded()
 
 
 class FreesExtraState(ShardableModule):

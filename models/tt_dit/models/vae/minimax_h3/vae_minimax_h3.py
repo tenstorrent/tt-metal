@@ -497,7 +497,7 @@ class MiniMaxH3Vae:
     def _ensure_loaded(self, module, subfolder: str) -> None:
         if module.is_loaded():
             return
-        if module.is_sharded():
+        if module.is_transiently_sharded():
             module.gather(self.ccl_manager)
             return
         state = dict(self._state_for(module))
