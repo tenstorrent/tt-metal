@@ -3,7 +3,7 @@
 """
 Device tests of TtMiniMaxM3VisionEncoder (multimodal/encoder.py) against the 2-layer reference of conftest.py.
 
-test_vision_encoder_vs_ref checks forward's output on noise images of the CI grids. M3_VISION_ALL_GRIDS=1 adds 84x56
+test_vision_encoder_vs_ref checks forward on noise images of the CI grids. M3_VISION_ALL_GRIDS=1 adds 756x560 and 84x56
 pixels (h4w6), a size small images resize to. test_vision_encoder_load_and_encode uses the encoder as load() and
 encode() do: one warm-up image, then two images read into their slots of one shared buffer.
 test_vision_media_load_and_encode runs the media module's load(), with one warm-up size, then prepare() and encode().
@@ -11,8 +11,6 @@ Its chip is opened with the module's device_params, as the service opens it. The
 only the media test writes them to a checkpoint. The encoder's host tests are in test_vision_encoder_api.py.
 """
 from __future__ import annotations
-
-import os
 
 import numpy as np
 import pytest
@@ -26,12 +24,11 @@ from models.demos.minimax_m3.tt.vision.preprocess import FACTOR, PATCH_SIZE, pat
 
 from ..test_factory import parametrize_mesh_with_fabric
 from .vision_checkpoint import write_checkpoint
-from .vision_helpers import CI_GRIDS, MAX_REL_L2, VISION_GRIDS, assert_close, grid_name
+from .vision_helpers import CI_GRIDS, MAX_REL_L2, VISION_GRIDS, all_grids, assert_close, grid_name
 
-# Resized image sizes in pixels as (height, width), by their patch grid: the CI grids of the vision tests, then h4w6.
-SIZES = {
-    grid_id: (h * PATCH_SIZE, w * PATCH_SIZE) for grid_id, (_, h, w) in VISION_GRIDS.items() if grid_id in CI_GRIDS
-}
+# Resized image sizes in pixels as (height, width), by their patch grid: the CI grids of the vision tests, and for the
+# full-grid run h40w54 and h4w6.
+SIZES = {g: (VISION_GRIDS[g][1] * PATCH_SIZE, VISION_GRIDS[g][2] * PATCH_SIZE) for g in (*CI_GRIDS, "h40w54")}
 SIZES["h4w6"] = (56, 84)
 HIDDEN = 6144  # values per vision token: MiniMax-M3's text hidden size, which the encoder's output must have
 NUM_LAYERS = 2
@@ -43,7 +40,7 @@ MEDIA_DEVICE_PARAMS = {}
 
 
 def _parametrize_sizes():
-    run_all = os.getenv("M3_VISION_ALL_GRIDS") == "1"
+    run_all = all_grids()
     params = [pytest.param(size, id=size_id) for size_id, size in SIZES.items() if run_all or size_id in CI_GRIDS]
     return pytest.mark.parametrize("size", params)
 

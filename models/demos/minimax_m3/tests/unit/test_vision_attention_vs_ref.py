@@ -17,20 +17,12 @@ from models.demos.minimax_m3.tt.vision.attention import M3VLAttention
 from models.demos.minimax_m3.tt.vision.rope import rope_tensors
 
 from ..test_factory import parametrize_mesh_with_fabric
-from .vision_helpers import (
-    ATTENTION_CI_GRIDS,
-    assert_close,
-    grid_name,
-    max_rel_l2,
-    parametrize_vision_grids,
-    rows_to_device,
-    to_host,
-)
+from .vision_helpers import assert_close, grid_name, max_rel_l2, parametrize_vision_grids, rows_to_device, to_host
 
 
 @torch.no_grad()
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
-@parametrize_vision_grids(ATTENTION_CI_GRIDS)
+@parametrize_vision_grids()
 def test_vision_attention_vs_ref(mesh_device, device_params, grid_thw, vision_reference, vision_activations):
     """Layer 0 self-attention matches the reference at PCC >= 0.9999, within its relL2 bound and with no NaN or Inf."""
     acts = vision_activations(grid_thw)

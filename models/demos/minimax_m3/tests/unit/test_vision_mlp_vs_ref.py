@@ -3,8 +3,8 @@
 """
 Device test of M3VLMLP against Hugging Face's MiniMaxM3VLVisionMLP.
 
-It runs layer 0's MLP on its input in the reference tower, with fuse_gelu off and on. The weights are seeded random
-values (tests/conftest.py), so no checkpoint is needed.
+It runs layer 0's MLP on its input in the reference tower, with fuse_gelu off, and with M3_VISION_ALL_GRIDS=1 also on.
+The weights are seeded random values (tests/conftest.py), so no checkpoint is needed.
 """
 from __future__ import annotations
 
@@ -15,16 +15,30 @@ import ttnn
 from models.demos.minimax_m3.tt.vision.mlp import M3VLMLP
 
 from ..test_factory import parametrize_mesh_with_fabric
-from .vision_helpers import MAX_REL_L2, assert_close, grid_name, parametrize_vision_grids, rows_to_device, to_host
+from .vision_helpers import (
+    MAX_REL_L2,
+    all_grids,
+    assert_close,
+    grid_name,
+    parametrize_vision_grids,
+    rows_to_device,
+    to_host,
+)
+
+# fuse_gelu is off by default (mlp.py), so the CI entry checks only the separate GELU. M3_VISION_ALL_GRIDS=1 adds the
+# fused one; otherwise it is left out rather than skipped, as the extra grids are.
+FUSE_GELU = [pytest.param(False, id="separate_gelu")]
+if all_grids():
+    FUSE_GELU.append(pytest.param(True, id="fused_gelu"))
 
 
 @torch.no_grad()
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
 @parametrize_vision_grids()
-@pytest.mark.parametrize("fuse_gelu", [False, True], ids=["separate_gelu", "fused_gelu"])
+@pytest.mark.parametrize("fuse_gelu", FUSE_GELU)
 def test_vision_mlp_vs_ref(mesh_device, device_params, grid_thw, fuse_gelu, vision_reference, vision_activations):
     """Layer 0 MLP matches the reference at PCC >= 0.9999, within its relL2 bound and with no NaN or Inf, with
-    fuse_gelu off and on."""
+    fuse_gelu off, and with M3_VISION_ALL_GRIDS=1 also on."""
     x_in = vision_activations(grid_thw)["layer0.mlp.in"].bfloat16().float()
     mlp = vision_reference().tower.layers[0].mlp
     ref_out = mlp(x_in)
