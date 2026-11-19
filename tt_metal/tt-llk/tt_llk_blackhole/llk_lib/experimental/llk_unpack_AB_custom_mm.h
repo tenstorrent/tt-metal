@@ -229,7 +229,8 @@ inline void _llk_unpack_AB_custom_mm_init_(
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
 }
 
-// Most k-tiles one SrcB base address covers.
+// Most k-tiles one SrcB base address covers: k-tile k reads faces k and k + 1 of an 8-bit Y + 8-bit Z face index,
+// which reaches face 255 + 255 = 510, so k-tile 255 would need face 511 and alias.
 constexpr std::uint32_t CUSTOM_MM_MAX_KT_PER_WALK = 255;
 
 /**
@@ -242,7 +243,9 @@ constexpr std::uint32_t CUSTOM_MM_MAX_KT_PER_WALK = 255;
  * @param cfg: Config register pointer of the unpack thread.
  * @param address_a: L1 address of the first weight tile (SrcA), in 16-byte words.
  * @param address_b: L1 address of the first activation tile (SrcB), in 16-byte words.
- * @param tile_size_b: L1 stride between activation k-tiles, in 16-byte words (the in0 CB page size).
+ * @param tile_size_b: L1 stride between activation k-tiles, in 16-byte words. Above CUSTOM_MM_MAX_KT_PER_WALK k-tiles
+ *                     it must equal the dense stride the counters step, two in0 faces (4 * face_r_dim words for
+ *                     16-bit in0), since later walks are placed with it.
  * @param block_increment: SrcA address step to the next tile of a k-row, in 16-byte words.
  * @param inner_increment: SrcA address step from the last tile of a k-row to the next k-row, in 16-byte words.
  * @param kt_dim: Inner dimension in tiles, 1 or more.
@@ -316,7 +319,8 @@ inline void _llk_unpack_AB_custom_mm_run_(
  * @param tile_index_a: First weight tile to read.
  * @param tile_index_b: First activation tile to read.
  * @param tile_size_a: Weight tile size, in 16-byte words.
- * @param tile_size_b: L1 stride between activation k-tiles, in 16-byte words.
+ * @param tile_size_b: L1 stride between activation k-tiles, in 16-byte words; above CUSTOM_MM_MAX_KT_PER_WALK k-tiles
+ *                     the dense two-face in0 stride, see @ref _llk_unpack_AB_custom_mm_run_.
  * @param kt_dim: Inner dimension in tiles, 1 or more.
  * @param ct_dim: Output width in tiles; must match the init, whose MOP bakes it in.
  * @note Call @ref _llk_unpack_AB_custom_mm_init_ first.

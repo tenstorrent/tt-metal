@@ -16,7 +16,7 @@
  *                 output tiles
  * rt_dim: 1
  * ct_dim: any integer from 1 to 34 (DEST capacity also bounds it, see llk_math_custom_mm_api.h)
- * kt_dim: any integer of 1 or more
+ * kt_dim: any integer of 1 or more; above 255, the in0 CB page must be exactly the in0 tile's two faces
  * fidelity: LoFi only
  * throttle: not supported
  *
@@ -63,7 +63,7 @@ inline void llk_unpack_AB_custom_mm_init(
  * @param operand1: CB of the weights; its read pointer is the SrcA base.
  * @param tile_index_0: First activation tile, relative to operand0's read pointer.
  * @param tile_index_1: First weight tile, relative to operand1's read pointer.
- * @param kt_dim: Inner dimension in tiles, 1 or more.
+ * @param kt_dim: Inner dimension in tiles, 1 or more. Above 255, operand0's page must be exactly two in0 faces.
  * @param ct_dim: Output width in tiles, 1 to 34.
  * @note Call @ref llk_unpack_AB_custom_mm_init first.
  * @note On the math thread, pair with @ref llk_math_custom_mm.
@@ -86,6 +86,13 @@ inline void llk_unpack_AB_custom_mm(
     const std::uint32_t tile_index_B = tile_index_0;
     const std::uint32_t tile_size_A = get_local_cb_interface(operandA_id).fifo_page_size;
     const std::uint32_t tile_size_B = get_local_cb_interface(operandB_id).fifo_page_size;
+    // Walks after the first are placed with the in0 page size, so it must be the dense two-face in0 k-tile
+    LLK_ASSERT(
+        kt_dim <= CUSTOM_MM_MAX_KT_PER_WALK ||
+            tile_size_B == (SCALE_DATUM_SIZE(
+                                unpack_src_format[operandB_id], 2 * get_operand_face_r_dim(operandB_id) * FACE_C_DIM) >>
+                            4),
+        "custom_mm: above 255 k-tiles the in0 CB page must be exactly two in0 faces");
     _llk_unpack_AB_custom_mm_<read_transposed>(
         base_address_A, base_address_B, tile_index_A, tile_index_B, tile_size_A, tile_size_B, kt_dim, ct_dim);
 }

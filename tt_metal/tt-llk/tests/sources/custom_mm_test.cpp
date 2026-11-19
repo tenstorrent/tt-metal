@@ -42,15 +42,12 @@
 // Buffer layout the driver assumes (matches helpers/compressed_utils.run_compressed, which
 // is the established layout for this exact tile geometry):
 //   buffer_A (SrcB, in0/A): kt*2 faces of [M,16], face-column order along K, contiguous.
-//   buffer_B (SrcA, in1/B): kt*ct [32,32] or [32,16] tiles, k-major / c-minor (the order the
-//                           SrcA CFGSHIFTMASK walk reads them with read_transposed=false,
-//                           block_increment = inner_increment = tile_size). With
-//                           CUSTOM_MM_TRANSPOSE each tile holds B^T instead ([32,32] or [16,32]).
+//   buffer_B (SrcA, in1/B): kt*ct [32,32] or [32,16] tiles, k-major / c-minor, or c-major / k-minor with
+//                           CUSTOM_MM_READ_TRANSPOSED (the order the SrcA CFGSHIFTMASK walk reads them).
+//                           With CUSTOM_MM_TRANSPOSE each tile holds B^T instead ([32,32] or [16,32]).
 //
-// The single unpack call issues one MOP covering the whole kt walk; the single math call
-// loops kt internally -- both are invoked ONCE (not per k-tile), exactly as the LLK's own
-// run wrappers do (_llk_unpack_AB_custom_mm_run_ issues one TT_MOP iteration per k-tile; the
-// finalize path is disabled here).
+// Each unpack and math call covers its whole kt walk (_llk_unpack_AB_custom_mm_run_ issues one TT_MOP
+// iteration per k-tile and splits SrcB into face walks above CUSTOM_MM_MAX_KT_PER_WALK k-tiles).
 
 #include <algorithm>
 #include <cstdint>
@@ -83,9 +80,13 @@ constexpr auto dest_layout = static_cast<ckernel::CustomMmDestLayout>(CUSTOM_MM_
 constexpr bool split_acc   = ckernel::custom_mm_split_acc(dest_layout);
 
 // CUSTOM_MM_TRANSPOSE: each in1 tile holds B^T ([N, 32], or [16, 32] for a narrow tile), and the unpacker transposes
-// each face back. It only selects the init's face transpose and face order; the weight tiles are still walked
-// k-major, so read_transposed stays false.
+// each face back. It only selects the init's face transpose and face order.
 constexpr bool transpose = CUSTOM_MM_TRANSPOSE;
+
+// CUSTOM_MM_READ_TRANSPOSED: the weight tiles are stored c-major with a stride of KT_DIM and walked column by column.
+// The stride is the whole K, so the K split across calls is not supported with it.
+constexpr bool read_transposed = CUSTOM_MM_READ_TRANSPOSED;
+static_assert(!read_transposed || num_calls == 1, "read_transposed needs a single call");
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -110,8 +111,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     const std::uint32_t in1_tile_size = TILE_SIZE_UNPACK_B / TILE_NUM_FACES * num_faces_B;
-    // L1 size of one in0 k-tile: two [M, 16] Float16_b faces, in 16-byte words
-    const std::uint32_t in0_k_tile_size = 4 * in0_face_r_dim;
+    // L1 size of one in0 k-tile: two dense [M, 16] faces in in0's format (unpack_A here), in 16-byte words
+    const std::uint32_t in0_k_tile_size = SCALE_DATUM_SIZE(formats.unpack_A_src, 2 * in0_face_r_dim * FACE_C_DIM) >> 4;
 
     {
         START_PERF_MEASURE("INIT")
@@ -160,7 +161,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t call = 0; call < num_calls; call++)
                 {
-                    _llk_unpack_AB_custom_mm_<false /* read_transposed */>(
+                    _llk_unpack_AB_custom_mm_<read_transposed>(
                         L1_ADDRESS(buffer_B[0]),
                         L1_ADDRESS(buffer_A[0]) + call * kt_per_call * in0_k_tile_size,
                         call * kt_per_call * CT_DIM /* tile_index_a */,

@@ -49,6 +49,7 @@ from dataclasses import dataclass
 import pytest
 import torch
 from conftest import blackhole_only, skip_for_quasar, skip_for_wormhole
+from helpers.custom_mm_utils import face_walk_operands
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import MatmulGolden
 from helpers.llk_params import (
@@ -124,6 +125,16 @@ class CUSTOM_MM_TRANSPOSE(TemplateParameter):
         return f"constexpr bool CUSTOM_MM_TRANSPOSE = {str(self.transpose).lower()};"
 
 
+@dataclass
+class CUSTOM_MM_READ_TRANSPOSED(TemplateParameter):
+    """in1 tiles are stored c-major / k-minor and the unpacker walks them column by column."""
+
+    read_transposed: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool CUSTOM_MM_READ_TRANSPOSED = {str(self.read_transposed).lower()};"
+
+
 class CustomMMStimuliConfig(StimuliConfig):
     """A into buffer_A (kt*2 faces of [M,16]), B tilized into buffer_B (kt*ct [32,32] or [32,16] tiles).
 
@@ -171,6 +182,7 @@ def _build_custom_mm(
     dest_sync=DestSync.Half,
     tile_c=DEFAULT_TILE_C_DIM,
     transpose=False,
+    read_transposed=False,
     *,
     is_perf=False,
     run_types=None,
@@ -180,6 +192,7 @@ def _build_custom_mm(
 
     ``tile_c`` is the in1 and output tile width: 32, or 16 for [32,16] in1 tiles.
     ``transpose`` stores each in1 tile as B^T: [tile_c, 32], so [32,32] or [16,32].
+    ``read_transposed`` stores the in1 tiles c-major / k-minor, the order the unpacker then walks.
     """
     K = kt * DEFAULT_TILE_R_DIM
     N = ct * tile_c
@@ -195,44 +208,48 @@ def _build_custom_mm(
     for i in range(kt * 2):
         packed_a += in0_packer(torch_a[:, i * FACE_C_DIM : (i + 1) * FACE_C_DIM])
 
-    # in1 (B -> SrcA): kt*ct [32,tile_c] tiles, k-major / c-minor -- the order the SrcA
-    # CFGSHIFTMASK walk reads them (read_transposed=false: contiguous tiles). With transpose
+    # in1 (B -> SrcA): kt*ct [32,tile_c] tiles, k-major / c-minor, or c-major / k-minor with
+    # read_transposed -- the order the SrcA CFGSHIFTMASK walk reads them. With transpose
     # each tile holds B^T, [tile_c, 32]; its faces still go along K in order for a [16,32] tile.
     in1_tile_dims = (
         [tile_c, DEFAULT_TILE_R_DIM] if transpose else [DEFAULT_TILE_R_DIM, tile_c]
     )
     packed_b = b""
     golden_b = torch_b.clone()
-    for r in range(kt):
-        for c in range(ct):
-            rows = slice(r * DEFAULT_TILE_R_DIM, (r + 1) * DEFAULT_TILE_R_DIM)
-            cols = slice(c * tile_c, (c + 1) * tile_c)
-            blk = torch_b[rows, cols]
-            if transpose:
-                blk = blk.T.contiguous()
-            # Face-major (tilized) layout inside each in1 tile. Tilize in the input
-            # format so the returned dtype matches the packer (pack_fp32 rejects a
-            # bfloat16 tensor, which is tilize_block's default Float16_b dtype).
-            tiled_blk = tilize_block(
-                blk,
+    tile_order = (
+        [(r, c) for c in range(ct) for r in range(kt)]
+        if read_transposed
+        else [(r, c) for r in range(kt) for c in range(ct)]
+    )
+    for r, c in tile_order:
+        rows = slice(r * DEFAULT_TILE_R_DIM, (r + 1) * DEFAULT_TILE_R_DIM)
+        cols = slice(c * tile_c, (c + 1) * tile_c)
+        blk = torch_b[rows, cols]
+        if transpose:
+            blk = blk.T.contiguous()
+        # Face-major (tilized) layout inside each in1 tile. Tilize in the input
+        # format so the returned dtype matches the packer (pack_fp32 rejects a
+        # bfloat16 tensor, which is tilize_block's default Float16_b dtype).
+        tiled_blk = tilize_block(
+            blk,
+            dimensions=in1_tile_dims,
+            stimuli_format=in1_format,
+            tile_dimensions=in1_tile_dims,
+        ).flatten()
+        # BFP packers need the face count; the others pack the whole tensor.
+        packed_tile = (
+            in1_packer(tiled_blk, num_faces=in1_num_faces)
+            if in1_format in _BFP_UNPACKERS
+            else in1_packer(tiled_blk)
+        )
+        packed_b += packed_tile
+        if in1_format in _BFP_UNPACKERS:
+            stored = untilize_block(
+                _BFP_UNPACKERS[in1_format](packed_tile, num_faces=in1_num_faces),
                 dimensions=in1_tile_dims,
-                stimuli_format=in1_format,
                 tile_dimensions=in1_tile_dims,
-            ).flatten()
-            # BFP packers need the face count; the others pack the whole tensor.
-            packed_tile = (
-                in1_packer(tiled_blk, num_faces=in1_num_faces)
-                if in1_format in _BFP_UNPACKERS
-                else in1_packer(tiled_blk)
             )
-            packed_b += packed_tile
-            if in1_format in _BFP_UNPACKERS:
-                stored = untilize_block(
-                    _BFP_UNPACKERS[in1_format](packed_tile, num_faces=in1_num_faces),
-                    dimensions=in1_tile_dims,
-                    tile_dimensions=in1_tile_dims,
-                )
-                golden_b[rows, cols] = stored.T if transpose else stored
+            golden_b[rows, cols] = stored.T if transpose else stored
 
     # Golden: plain A @ B (LoFi), row-major, NOT tilized -- the device-side layout is
     # undone in _device_rows. Instantiate MatmulGolden directly (not via
@@ -264,6 +281,7 @@ def _build_custom_mm(
                 calls if calls is not None else CUSTOM_MM_CALLS(),
                 CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG(preserve_zero_flag),
                 CUSTOM_MM_TRANSPOSE(transpose),
+                CUSTOM_MM_READ_TRANSPOSED(read_transposed),
                 CUSTOM_MM_LAYOUT(layout),
                 DEST_SYNC(dest_sync),
             ],
@@ -324,6 +342,7 @@ def _run_custom_mm(
     layout=CustomMmDestLayout.Dense,
     tile_c=DEFAULT_TILE_C_DIM,
     transpose=False,
+    read_transposed=False,
     *,
     is_perf=False,
     perf_report=None,
@@ -355,6 +374,7 @@ def _run_custom_mm(
         layout,
         tile_c=tile_c,
         transpose=transpose,
+        read_transposed=read_transposed,
         is_perf=is_perf,
         run_types=run_types,
         loop_factor=loop_factor,
@@ -385,7 +405,10 @@ def _run_custom_mm(
 
     assert passed_test(
         golden, res_tensor, out_format, custom_atol=custom_atol, print_pcc=True
-    ), f"custom_mm matmul failed for M={M} kt={kt} ct={ct} tile_c={tile_c} transpose={transpose} formats={formats}"
+    ), (
+        f"custom_mm matmul failed for M={M} kt={kt} ct={ct} tile_c={tile_c} transpose={transpose} "
+        f"read_transposed={read_transposed} formats={formats}"
+    )
     return res_tensor
 
 
@@ -513,72 +536,44 @@ def test_custom_mm_long_k(formats, M, kt, ct):
     _run_custom_mm(M, kt, ct, formats, DestAccumulation.No)
 
 
-# Matches CUSTOM_MM_MAX_KT_PER_WALK in llk_unpack_AB_custom_mm.h
-CUSTOM_MM_MAX_KT_PER_WALK = 255
-
-
-def _face_walk_starts(kt):
-    """First k-tile of each SrcB face walk, split as _llk_unpack_AB_custom_mm_run_ splits kt."""
-    num_walks = -(-kt // CUSTOM_MM_MAX_KT_PER_WALK)
-    base_kt, long_walks = divmod(kt, num_walks)
-    starts, start = [], 0
-    for walk in range(num_walks):
-        starts.append(start)
-        start += base_kt + (1 if walk < long_walks else 0)
-    return starts
-
-
-def _face_walk_operands(M, kt, ct):
-    """Exact bf16 integer operands. A is +-1 only on faces at the ends, the walk boundaries and every 256th face;
-    B is random in {-2, -1, 1, 2}.
-    """
-    torch.manual_seed(0)
-    num_faces = 2 * kt
-    sentinels = {0, 1, num_faces - 2, num_faces - 1}
-    for walk_start in _face_walk_starts(kt)[1:]:
-        face = 2 * walk_start
-        sentinels |= {face - 2, face - 1, face, face + 1}
-    sentinels |= set(range(255, num_faces, 256))
-
-    torch_a = torch.zeros((M, kt * DEFAULT_TILE_R_DIM), dtype=torch.float32)
-    for face in sentinels:
-        value = 1.0 if (face // 256) % 2 == 0 else -1.0
-        for m in range(M):
-            torch_a[m, face * FACE_C_DIM + (face + m) % FACE_C_DIM] = value
-    shape = (kt * DEFAULT_TILE_R_DIM, ct * DEFAULT_TILE_C_DIM)
-    magnitude = torch.randint(1, 3, shape)
-    sign = torch.randint(0, 2, shape) * 2 - 1
-    torch_b = (magnitude * sign).to(torch.float32)
-    return torch_a, torch_b
-
-
-# One walk (255), two (256, 300) and three (511, 765). Bfp8_b and Bfp4_b weights keep B within L1.
+# One walk (255), two (256, 300, and 510 = 2 x 255) and three (511, 765). The transposed case carries the SrcA
+# column walk across a walk boundary. Bfp8_b and Bfp4_b weights keep B within L1.
 FACE_WALK_CASES = [
     pytest.param(
         M,
         kt,
         ct,
         InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b, in1_format),
-        id=f"m{M}-k{kt}-ct{ct}-{in1_format.name}",
+        read_transposed,
+        id=f"m{M}-k{kt}-ct{ct}-{in1_format.name}"
+        + ("-read_transposed" if read_transposed else ""),
     )
-    for M, kt, ct, in1_format in (
-        (8, 255, 1, DataFormat.Float16_b),
-        (8, 256, 1, DataFormat.Float16_b),
-        (8, 256, 2, DataFormat.Bfp8_b),
-        (8, 300, 4, DataFormat.Bfp4_b),
-        (8, 511, 1, DataFormat.Bfp8_b),
-        (1, 765, 1, DataFormat.Bfp8_b),
+    for M, kt, ct, in1_format, read_transposed in (
+        (8, 255, 1, DataFormat.Float16_b, False),
+        (8, 256, 1, DataFormat.Float16_b, False),
+        (8, 256, 2, DataFormat.Bfp8_b, False),
+        (8, 300, 4, DataFormat.Bfp4_b, False),
+        (2, 300, 4, DataFormat.Bfp4_b, True),
+        (4, 510, 1, DataFormat.Bfp8_b, False),
+        (8, 511, 1, DataFormat.Bfp8_b, False),
+        (1, 765, 1, DataFormat.Bfp8_b, False),
     )
 ]
 
 
 @blackhole_only
-@pytest.mark.parametrize("M,kt,ct,formats", FACE_WALK_CASES)
-def test_custom_mm_face_walk_exact(formats, M, kt, ct):
+@pytest.mark.parametrize("M,kt,ct,formats,read_transposed", FACE_WALK_CASES)
+def test_custom_mm_face_walk_exact(formats, M, kt, ct, read_transposed):
     """kt_dim at and past one SrcB face walk, compared exactly against A @ B."""
-    torch_a, torch_b = _face_walk_operands(M, kt, ct)
+    torch_a, torch_b = face_walk_operands(M, kt, ct)
     res = _run_custom_mm(
-        M, kt, ct, formats, DestAccumulation.No, operands=(torch_a, torch_b)
+        M,
+        kt,
+        ct,
+        formats,
+        DestAccumulation.No,
+        operands=(torch_a, torch_b),
+        read_transposed=read_transposed,
     )
     golden = (torch_a @ torch_b).to(res.dtype)
     assert torch.equal(res, golden), (

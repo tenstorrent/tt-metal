@@ -34,7 +34,7 @@ namespace ckernel {
  * in1 tile shape: [32, 32], or [32, 16] ([16, 32] with transpose) for an N = 16 * ct_dim output of [M, 16] tiles
  * rt_dim: 1
  * ct_dim: any integer from 1 to 34, as long as the output tiles fit in DEST (see CustomMmDestLayout)
- * kt_dim: any integer of 1 or more
+ * kt_dim: any integer of 1 or more; above 255, the in0 CB page must be exactly the in0 tile's two faces
  * fidelity: LoFi only
  * throttle: not supported
  *
@@ -86,7 +86,7 @@ ALWI void custom_mm_block_init(
  * in1 tile shape: [32, 32], or [32, 16] ([16, 32] with transpose) for an N = 16 * ct_dim output of [M, 16] tiles
  * rt_dim: 1
  * ct_dim: any integer from 1 to 34, as long as the output tiles fit in DEST (see CustomMmDestLayout)
- * kt_dim: any integer of 1 or more
+ * kt_dim: any integer of 1 or more; above 255, the in0 CB page must be exactly the in0 tile's two faces
  * fidelity: LoFi only
  * throttle: not supported
  *
@@ -128,7 +128,7 @@ ALWI void custom_mm_block_init_short(
  * in1 tile shape: [32, 32], or [32, 16] ([16, 32] with transpose) for an N = 16 * ct_dim output of [M, 16] tiles
  * rt_dim: 1
  * ct_dim: any integer from 1 to 34, as long as the output tiles fit in DEST (see CustomMmDestLayout)
- * kt_dim: any integer of 1 or more
+ * kt_dim: any integer of 1 or more; above 255, the in0 CB page must be exactly the in0 tile's two faces
  * fidelity: LoFi only
  * throttle: not supported
  *
@@ -177,7 +177,7 @@ ALWI void custom_mm_block(
  * in1 tile shape: [32, 32], or [32, 16] ([16, 32] with transpose) for an N = 16 * ct_dim output of [M, 16] tiles
  * rt_dim: 1
  * ct_dim: any integer from 1 to 34, as long as the output tiles fit in DEST (see CustomMmDestLayout)
- * kt_dim: any integer of 1 or more
+ * kt_dim: any integer of 1 or more; above 255, the in0 CB page must be exactly the in0 tile's two faces
  * fidelity: LoFi only
  * throttle: not supported
  *
@@ -218,7 +218,7 @@ ALWI void custom_mm_block_unpack(
  * in1 tile shape: [32, 32], or [32, 16] ([16, 32] with transpose) for an N = 16 * ct_dim output of [M, 16] tiles
  * rt_dim: 1
  * ct_dim: any integer from 1 to 34, as long as the output tiles fit in DEST (see CustomMmDestLayout)
- * kt_dim: any integer of 1 or more
+ * kt_dim: any integer of 1 or more; above 255, the in0 CB page must be exactly the in0 tile's two faces
  * fidelity: LoFi only
  * throttle: not supported
  *

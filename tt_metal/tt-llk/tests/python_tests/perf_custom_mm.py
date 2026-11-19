@@ -3,6 +3,7 @@
 
 import pytest
 from conftest import blackhole_only
+from helpers.custom_mm_utils import face_walk_operands
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import CustomMmDestLayout, DestAccumulation, DestSync
 from helpers.param_config import input_output_formats, parametrize
@@ -27,7 +28,6 @@ from test_custom_mm import (
     ODD_K_CASES,
     SPLIT_ACC_LAYOUTS,
     SUPPORTED_M,
-    _face_walk_operands,
     _run_compact_against_default,
     _run_custom_mm,
 )
@@ -153,10 +153,10 @@ def test_perf_custom_mm_split_acc_multi_call(
 
 @pytest.mark.perf
 @blackhole_only
-@pytest.mark.parametrize("M,kt,ct,formats", FACE_WALK_CASES)
+@pytest.mark.parametrize("M,kt,ct,formats,read_transposed", FACE_WALK_CASES)
 @parametrize(**PERF_MEASUREMENT_AXES)
 def test_perf_custom_mm_face_walk(
-    perf_report, formats, M, kt, ct, run_types, loop_factor, is_perf
+    perf_report, formats, M, kt, ct, read_transposed, run_types, loop_factor, is_perf
 ):
     _run_custom_mm(
         M,
@@ -164,7 +164,8 @@ def test_perf_custom_mm_face_walk(
         ct,
         formats,
         DestAccumulation.No,
-        operands=_face_walk_operands(M, kt, ct),
+        operands=face_walk_operands(M, kt, ct),
+        read_transposed=read_transposed,
         **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
     )
 

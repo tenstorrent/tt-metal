@@ -45,6 +45,7 @@ from dataclasses import dataclass
 import pytest
 import torch
 from conftest import skip_for_quasar, skip_for_wormhole
+from helpers.custom_mm_utils import face_walk_operands
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import MatmulGolden
 from helpers.llk_params import DestAccumulation, MathFidelity
@@ -66,7 +67,6 @@ from helpers.tile_constants import (
 )
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
-from test_custom_mm import _face_walk_operands
 from ttexalens.tt_exalens_lib import write_to_device
 
 pytestmark = [skip_for_wormhole, skip_for_quasar]
@@ -348,7 +348,7 @@ def test_sdpa_custom_mm_face_walk_exact(request):
     """kt_dim = 256 as two SrcB face walks, compared exactly against A @ B."""
     _skip_on_simulator(request)
     M, kt, ct = 8, 256, 1
-    torch_a, torch_b = (t.to(torch.bfloat16) for t in _face_walk_operands(M, kt, ct))
+    torch_a, torch_b = (t.to(torch.bfloat16) for t in face_walk_operands(M, kt, ct))
     res = _run(
         M,
         kt * DEFAULT_TILE_R_DIM,
