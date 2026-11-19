@@ -47,7 +47,7 @@ extern "C" __attribute__((noinline, used)) void init_post_get_selectors()
 
 extern "C" __attribute__((noinline, used)) void reference_init_post_get_selectors()
 {
-    TTI_SEMINIT(2 /*max_value*/, 1 /*init_value*/, 0x12 /*sem_sel*/);
+    TTI_SEMINIT(2 /*max_value*/, 1 /*init_value*/, 0x02 | 0x10 /*sem_sel*/);
     TTI_SEMINIT(15 /*max_value*/, 0 /*init_value*/, 0xff /*sem_sel*/);
     TTI_SEMPOST(0x01 /*sem_sel*/);
     TTI_SEMGET(0x80 /*sem_sel*/);
@@ -63,7 +63,7 @@ extern "C" __attribute__((noinline, used)) void issue_encoded_operations()
 extern "C" __attribute__((noinline, used)) void reference_issue_encoded_operations()
 {
     TTI_SEMINIT(4 /*max_value*/, 3 /*init_value*/, 0x20 /*sem_sel*/);
-    TTI_SEMPOST(0xc0 /*sem_sel*/);
+    TTI_SEMPOST(0x40 | 0x80 /*sem_sel*/);
     TTI_SEMGET(0x04 /*sem_sel*/);
 }
 

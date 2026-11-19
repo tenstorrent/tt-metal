@@ -35,10 +35,10 @@ extern "C" __attribute__((noinline, used)) void stall_variants()
 
 extern "C" __attribute__((noinline, used)) void reference_stall_variants()
 {
-    TTI_STALLWAIT(384 /*stall_res*/, 2064 /*wait_res*/);
-    TTI_STALLWAIT(511 /*stall_res*/, 8191 /*wait_res*/);
-    TTI_STALLWAIT(0 /*stall_res*/, 0 /*wait_res*/);
-    TTI_STALLWAIT(32 /*stall_res*/, 384 /*wait_res*/);
+    TTI_STALLWAIT(0x080 | 0x100 /*stall_res*/, 0x0010 | 0x0800 /*wait_res*/);
+    TTI_STALLWAIT(0x1ff /*stall_res*/, 0x1fff /*wait_res*/);
+    TTI_STALLWAIT(0x000 /*stall_res*/, 0x0000 /*wait_res*/);
+    TTI_STALLWAIT(0x020 /*stall_res*/, 0x0080 | 0x0100 /*wait_res*/);
 }
 
 extern "C" __attribute__((noinline, used)) void semaphore_wait_variants()
@@ -60,9 +60,9 @@ extern "C" __attribute__((noinline, used)) void semaphore_wait_variants()
 
 extern "C" __attribute__((noinline, used)) void reference_semaphore_wait_variants()
 {
-    TTI_SEMWAIT(66 /*stall_res*/, 0x02 /*sem_sel*/, 1 /*wait_sem_cond*/);
-    TTI_SEMWAIT(4 /*stall_res*/, 0x81 /*sem_sel*/, 2 /*wait_sem_cond*/);
-    TTI_SEMWAIT(8 /*stall_res*/, 0xff /*sem_sel*/, 3 /*wait_sem_cond*/);
+    TTI_SEMWAIT(0x002 | 0x040 /*stall_res*/, 0x02 /*sem_sel*/, 0x1 /*wait_sem_cond*/);
+    TTI_SEMWAIT(0x004 /*stall_res*/, 0x01 | 0x80 /*sem_sel*/, 0x2 /*wait_sem_cond*/);
+    TTI_SEMWAIT(0x008 /*stall_res*/, 0xff /*sem_sel*/, 0x1 | 0x2 /*wait_sem_cond*/);
 }
 
 extern "C" __attribute__((noinline, used)) void issue_encoded_operations()
@@ -73,8 +73,8 @@ extern "C" __attribute__((noinline, used)) void issue_encoded_operations()
 
 extern "C" __attribute__((noinline, used)) void reference_issue_encoded_operations()
 {
-    TTI_STALLWAIT(4 /*stall_res*/, 8 /*wait_res*/);
-    TTI_SEMWAIT(16 /*stall_res*/, 0x04 /*sem_sel*/, 1 /*wait_sem_cond*/);
+    TTI_STALLWAIT(0x004 /*stall_res*/, 0x0008 /*wait_res*/);
+    TTI_SEMWAIT(0x010 /*stall_res*/, 0x04 /*sem_sel*/, 0x1 /*wait_sem_cond*/);
 }
 
 extern "C" __attribute__((noinline, used)) void stall_runtime(const sync::StallTarget targets, const sync::StallCondition conditions)

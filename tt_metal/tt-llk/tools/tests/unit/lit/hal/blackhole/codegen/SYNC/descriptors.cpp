@@ -110,7 +110,7 @@ extern "C" __attribute__((noinline, used)) void issue_sync_descriptor()
 
 extern "C" __attribute__((noinline, used)) void reference_issue_sync_descriptor()
 {
-    TTI_SEMWAIT(64 /*stall_res*/, 0x02 /*sem_sel*/, 1 /*wait_sem_cond*/);
+    TTI_SEMWAIT(0x040 /*stall_res*/, 0x02 /*sem_sel*/, 0x1 /*wait_sem_cond*/);
 }
 
 // Tensix forms combine selector lists into one mask.
@@ -122,8 +122,8 @@ extern "C" __attribute__((noinline, used)) void issue_semaphore_selectors()
 
 extern "C" __attribute__((noinline, used)) void reference_issue_semaphore_selectors()
 {
-    TTI_SEMGET(0x0a /*sem_sel*/);
-    TTI_SEMPOST(0x81 /*sem_sel*/);
+    TTI_SEMGET(0x02 | 0x08 /*sem_sel*/);
+    TTI_SEMPOST(0x01 | 0x80 /*sem_sel*/);
 }
 
 extern "C" __attribute__((noinline, used)) void issue_runtime_semaphore_selectors(hs::Semaphore first, hs::Semaphore second)
@@ -141,7 +141,7 @@ extern "C" __attribute__((noinline, used)) void reference_issue_runtime_semaphor
     const auto second_bit = 1u << hal::to_underlying(second);
     TT_SEMPOST(first_bit | second_bit);
     TT_SEMINIT(15 /*max_value*/, 5 /*init_value*/, first_bit | second_bit);
-    TT_SEMWAIT(64 /*stall_res*/, first_bit | second_bit, 1 /*wait_sem_cond*/);
+    TT_SEMWAIT(0x040 /*stall_res*/, first_bit | second_bit, 0x1 /*wait_sem_cond*/);
     TT_SEMGET(second_bit);
     TT_SEMPOST(second_bit);
 }

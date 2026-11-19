@@ -75,7 +75,7 @@ extern "C" __attribute__((noinline, used)) void issue_misc_descriptors()
     hm::run<hm::FlushTdma {hm::FlushScope::Packer}>();
     hm::run<hm::ResetTdma {}>();
     hm::run<hm::TbufCommand {}>();
-    hm::run<hm::ResourceDeclaration {3, 5, 7}>();
+    hm::run<hm::ResourceDeclaration {3, 0x001 | 0x004, 0x1 | 0x2 | 0x4}>();
 }
 
 extern "C" __attribute__((noinline, used)) void reference_issue_misc_descriptors()
@@ -83,7 +83,7 @@ extern "C" __attribute__((noinline, used)) void reference_issue_misc_descriptors
     TTI_FLUSHDMA(0x8 /*FlushSpec*/);
     TTI_RSTDMA;
     TTI_TBUFCMD;
-    TTI_RESOURCEDECL(7 /*linger_time*/, 5 /*resources*/, 3 /*op_class*/);
+    TTI_RESOURCEDECL(0x1 | 0x2 | 0x4 /*linger_time*/, 0x001 | 0x004 /*resources*/, 3 /*op_class*/);
 }
 
 extern "C" __attribute__((noinline, used)) void issue_runtime_misc_descriptor(hm::ResourceDeclaration descriptor)
