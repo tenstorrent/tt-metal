@@ -511,7 +511,7 @@ def test_ep4_experts(mesh_device, routing):
     lc = EP4Cfg(T=n)
     TX, EPC = lc.TX, lc.EPC
     G = int(os.environ.get("EP4_G", "2"))
-    lc.oeast = int(G == 4 and os.environ.get("EP4_OEAST", "1") != "0")
+    lc.oeast = int(os.environ.get("EP4_OEAST", "0"))
     cfg, lane, l5 = lane_cfgs(mesh, lc, G, l5kw=dict(why=int(os.environ.get("EP4_WHY", "0")), **l5_env()))
     T, pos = lane_tables(mesh, cfg, lane)
     tab_t = tables_tensor(mesh, T["tabs"])
@@ -564,12 +564,12 @@ def test_ep4_experts(mesh_device, routing):
         e2es.append(lane_times(cfg, T, counts, st, chips, clk))
         if i == (WARM + MEAS if WARM < 5 else 5) - 1:
             group_report(cfg, st, chips, clk, R, l5.why)
-            if lc.oeast:  # (the collectors' stamps, io's last: row writes off the east DRAM column)
+            if lc.oeast:  # (the collectors' stamps, io's last: row writes into another DRAM column than page 4's)
                 off = sum(
                     int((ttnn.to_torch(t).to(torch.int64) & 0xFFFFFFFF).reshape(-1, 512)[:, 21].sum())
                     for t in ttnn.get_device_tensors(io[-1])
                 )
-                logger.info(f"EP4 oeast: row writes outside NoC x 9 over all chips: {off}")
+                logger.info(f"EP4 oeast: row writes outside page 4's DRAM column over all chips: {off}")
                 assert off == 0
         del mpd, io, st
     clk2 = aiclk_mhz(0)
@@ -658,7 +658,7 @@ def test_ep4_layer(mesh_device, routing):
     lc = EP4Cfg(T=n)
     TX, EPC, K, H = lc.TX, lc.EPC, lc.K, lc.H
     G = int(os.environ.get("EP4_G", "2"))
-    lc.oeast = int(G == 4 and os.environ.get("EP4_OEAST", "1") != "0")
+    lc.oeast = int(os.environ.get("EP4_OEAST", "0"))
     reps = int(os.environ.get("EP4_REPS", "3"))
     cfg, lane, l5 = lane_cfgs(mesh, lc, G, l5kw=l5_env())
     T, pos = lane_tables(mesh, cfg, lane)

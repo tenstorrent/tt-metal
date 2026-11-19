@@ -16,7 +16,8 @@
 // acknowledged 4-B write into every DRAM bank's spare row, same NoC and VC) and the group's core 0 gets + 1 on word 3
 // of CRED. CT 12 (SINK, a diagnostic): no row writes (the cores' traffic and the protocol only).
 // YC_OEAST (L5Cfg.oeast): row d at page (d >> 2) 8 + 4 + (d & 3), every page in banks 4-7 (the east DRAM column); the
-// fence covers those 4 banks only (fence row: a multiple of 8). Stamp 21 counts row writes whose page is not at NoC x 9.
+// fence covers those 4 banks only (fence row: a multiple of 8). Stamp 21 counts row writes whose page's NoC x is not
+// page 4's (DRAM cores carry translated coordinates).
 // CT: 0 NSL, 1 ROWB, 2 STAGE, 3 YW (words: arrival 16 s, GO 64, NRW 80, SENT 96, FDONE 112, destinations 128, fence
 //     source 256), 4 CRED (on the group cores), 5 RMAX, 6 NEXP, 7 table page bytes, 8 counts L1, 9 table L1, 10 GCN,
 //     11 (unused), 12 SINK, then TensorAccessorArgs(counts), (table), (dest), (out).
@@ -59,6 +60,8 @@ void kernel_main() {
     constexpr uint32_t FB0 = 0;
 #endif
     uint32_t off_east = 0;
+    constexpr uint32_t XM = (1 << NOC_ADDR_NODE_ID_BITS) - 1;
+    const uint32_t xe = (os.get_noc_addr(4) >> NOC_ADDR_LOCAL_BITS) & XM;
     // the rows of one row tile from staging slot s to their destinations (posted), then wait until they have left
     auto write_rows = [&](uint32_t s, uint32_t nr, uint32_t& t_issue, uint32_t& t_sent) {
         const uint32_t a = wall();
@@ -66,7 +69,7 @@ void kernel_main() {
         for (uint32_t r = 0; r < nr; ++r) {
             const uint64_t na = os.get_noc_addr(orow(dst[r]));
 #if defined(YC_OEAST)
-            off_east += ((na >> NOC_ADDR_LOCAL_BITS) & ((1 << NOC_ADDR_NODE_ID_BITS) - 1)) != 9;
+            off_east += ((na >> NOC_ADDR_LOCAL_BITS) & XM) != xe;
 #endif
             noc_async_write<NOC_MAX_BURST_SIZE + 1, true, true>(STAGE + s * SLOTB + r * ROWB, na, ROWB);
         }
