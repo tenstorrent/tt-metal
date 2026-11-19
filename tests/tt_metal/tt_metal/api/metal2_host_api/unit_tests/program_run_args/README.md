@@ -9,7 +9,9 @@ The rules come from `program_run_args.hpp` and `program.hpp`:
 - `kernel_run_args` names each kernel at most once (`DuplicateKernelParamsFails`). This is the one rule listed as an
   invariant below.
 - `Program::set_program_run_args` needs every declared argument for every node the kernel runs on, and nothing undeclared.
-- `Program::update_program_run_args` and `Program::update_tensor_args` accept a subset; omitted arguments keep their previous values.
+- `Program::update_program_run_args` accepts a subset; omitted arguments keep their previous values.
+- `Program::update_tensor_args` needs a tensor argument for every declared TensorParameter
+  (`CPU_UpdateTensorArgs_MissingTensorArgFails`); the other arguments keep their previous values.
 - A tensor argument's `TensorSpec` must match its TensorParameter, as loosened by its `TensorSpecRelaxations`.
 
 ## Listed invariants
