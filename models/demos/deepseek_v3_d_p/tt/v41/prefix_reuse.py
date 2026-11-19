@@ -265,6 +265,7 @@ class V41PrefixReuse:
         )
         self._pend = {s: None for s in range(runtime.num_users)}
         self._pend_acks = {s: [] for s in range(runtime.num_users)}
+        self._gather_blocks = set()  # the restore all_gather shapes built before the captures (_gather_rows)
         self.deferred = (
             False  # the last begin_chunk deferred its chunk's restore: the runtime defers its acks (defer_acks)
         )
@@ -611,8 +612,10 @@ class V41PrefixReuse:
             n = self.chunk // ratio
             for src in (st.compressed_kv, st.index_k):
                 blocks.add((n, int(src.shape[3]), src.dtype))
-                if self.pair:  # V41_PREFILL_RESTORE_PAIR's two-chunk blocks too
-                    blocks.add((2 * n, int(src.shape[3]), src.dtype))
+        # V41_PREFILL_RESTORE_PAIR pairs a source only where its 2-chunk block is one of THESE shapes: a new all_gather program
+        # pins CCL semaphores in L1_SMALL, which the V4.1 mesh budgets at 1152 B per bank (DeepSeekV41FlashConfig) -- building
+        # the 2-chunk gathers too exhausted it (host 40, 11-19 04:15: _attention_sparse's next L1_SMALL buffer had 0 B)
+        self._gather_blocks = set(blocks)
         for n, W, dtype in sorted(blocks, key=str):
             ttnn.deallocate(self._upload_rows(torch.zeros(n, W, dtype=torch.bfloat16), dtype))
         ttnn.synchronize_device(mesh)
@@ -659,6 +662,15 @@ class V41PrefixReuse:
     def _restore_rows(self, slot: int, parts: list, ids: torch.Tensor, start: int) -> None:
         self._restore_rows_n(slot, [(parts, ids, start)])
 
+    def _pairable(self, n: int, st) -> bool:
+        """A multi-chunk block of ``n`` rows for state ``st`` needs no all_gather program the captures did not already build:
+        a new one pins CCL semaphores in the 1152 B-per-bank L1_SMALL (``_gather_rows``)."""
+        R = self.gather_rows
+        return all(
+            not R or n % (R * ttnn.TILE_SIZE) or (n, int(src.shape[3]), src.dtype) in self._gather_blocks
+            for src in (st.compressed_kv, st.index_k)
+        )
+
     def _restore_rows_n(self, slot: int, items: list) -> None:
         """Stored chunks back into the device through the writers a computed chunk uses (module docstring): the model's entry /
         key rows (+ the path-A slab), the export's rows from them, the Engram history. ``items``: [(parts, ids, start)] of
@@ -686,39 +698,45 @@ class V41PrefixReuse:
         srcs = entry_sources(self.pf)
         assert all(len(it[0]) == 2 * len(srcs) for it in items), ([len(it[0]) for it in items], len(srcs))
 
-        def cat(j):
-            return items[0][0][j] if k == 1 else torch.cat([it[0][j] for it in items], dim=0)
+        def cat(seg, j):
+            return seg[0][0][j] if len(seg) == 1 else torch.cat([it[0][j] for it in seg], dim=0)
 
+        paired = []
         for i, (_L, attn, st, ratio, blk) in enumerate(srcs):
-            e0 = start // ratio
-            rows = self._upload_rows(cat(2 * i), st.compressed_kv.dtype)
-            keys = self._upload_rows(cat(2 * i + 1), st.index_k.dtype)
-            ttnn.kv_cache.fill_cache_for_user_(st.compressed_kv, rows, 0, update_idx=e0)
-            ttnn.kv_cache.fill_cache_for_user_(st.index_k, keys, 0, update_idx=e0)
-            if blk and getattr(attn, "sparse_path", False):
-                # path A's slab [chunk S | entries | carry]: entry w at row S + w (TtCSA.forward / glue_chunk); layer 20's
-                # kv_only writes no slab
-                attn._slab_write(st, rows, self.chunk + e0)
-            if fast:
-                # export_entry_rows' _export_entries for this source, fed the uploaded rows: k full chunks' n = k C / ratio rows
-                # at e0 (MAXSEQ % C == 0, so the capacity clip never applies), keys typecast to bfp8 as a computed chunk's are
-                k8 = ttnn.typecast(keys, ttnn.bfloat8_b)
-                ent, idx = (self.exp.ent2, self.exp.idx2) if ratio == 2 else (self.exp.ent1, self.exp.idx1)
-                _write_entry_rows(
-                    self.exp,
-                    attn,
-                    self.exp.ent_batch(slot, _L),
-                    e0,
-                    k * self.chunk // ratio,
-                    rows,
-                    k8,
-                    ratio=ratio,
-                    ent=ent,
-                    idx=idx,
-                )
-                ttnn.deallocate(k8)
-            ttnn.deallocate(rows)
-            ttnn.deallocate(keys)
+            whole = k == 1 or self._pairable(k * self.chunk // ratio, st)
+            if k > 1 and whole:
+                paired.append(_L)
+            for seg in [items] if whole else [[it] for it in items]:
+                e0 = int(seg[0][2]) // ratio
+                rows = self._upload_rows(cat(seg, 2 * i), st.compressed_kv.dtype)
+                keys = self._upload_rows(cat(seg, 2 * i + 1), st.index_k.dtype)
+                ttnn.kv_cache.fill_cache_for_user_(st.compressed_kv, rows, 0, update_idx=e0)
+                ttnn.kv_cache.fill_cache_for_user_(st.index_k, keys, 0, update_idx=e0)
+                if blk and getattr(attn, "sparse_path", False):
+                    # path A's slab [chunk S | entries | carry]: entry w at row S + w (TtCSA.forward / glue_chunk); layer 20's
+                    # kv_only writes no slab
+                    attn._slab_write(st, rows, self.chunk + e0)
+                if fast:
+                    # export_entry_rows' _export_entries for this source, fed the uploaded rows: the segment's full chunks
+                    # (n = chunks x C / ratio rows) at e0 (MAXSEQ % C == 0, so the capacity clip never applies), keys typecast
+                    # to bfp8 as a computed chunk's are
+                    k8 = ttnn.typecast(keys, ttnn.bfloat8_b)
+                    ent, idx = (self.exp.ent2, self.exp.idx2) if ratio == 2 else (self.exp.ent1, self.exp.idx1)
+                    _write_entry_rows(
+                        self.exp,
+                        attn,
+                        self.exp.ent_batch(slot, _L),
+                        e0,
+                        len(seg) * self.chunk // ratio,
+                        rows,
+                        k8,
+                        ratio=ratio,
+                        ent=ent,
+                        idx=idx,
+                    )
+                    ttnn.deallocate(k8)
+                ttnn.deallocate(rows)
+                ttnn.deallocate(keys)
         sync()
         t1 = time.perf_counter()
         if not fast:
@@ -733,7 +751,7 @@ class V41PrefixReuse:
                     continue
                 self.rt.engram.hash_ids(slot, [int(v) for v in ids.tolist()], int(st0))
         span = f"[{start}, {start + k * self.chunk})"
-        blk_note = f" ({k} chunks, one block)" if k > 1 else ""
+        blk_note = f" ({k} chunks, one block for layers {paired})" if k > 1 else ""
         if timing:
             logger.info(
                 f"[{TAG}] slot {slot} restored {span} from the host store{blk_note} (synced): model rows "

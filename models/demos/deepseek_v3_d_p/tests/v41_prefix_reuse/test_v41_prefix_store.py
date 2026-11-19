@@ -343,6 +343,28 @@ def test_failed_restore_invalidates_the_device_retention_not_the_store(monkeypat
         check(s, layout, A2, what="A2 after a failed restore")
 
 
+def test_pairing_with_a_source_restored_per_chunk_equals_cold(monkeypatch):
+    """V41_PREFILL_RESTORE_PAIR on the device pairs only the sources whose 2-chunk block reuses a built all_gather (ratio 2: the
+    same shape as layer 20's 1-chunk block); layer 20 (ratio 1) restores per chunk inside the paired call. That mixed path == cold.
+    """
+    real = PR.V41PrefixReuse._pairable
+    seen = {"one": 0, "split": 0}
+
+    def ratio2_only(self, n, st):
+        whole = n == 2 * C // 2  # a ratio-2 source's 2-chunk block (C rows); layer 20's would be 2 C
+        seen["one" if whole else "split"] += 1
+        return whole and real(self, n, st)
+
+    monkeypatch.setattr(PR.V41PrefixReuse, "_pairable", ratio2_only)
+    layout = "cp2"
+    with T._env(**store_env(layout, spill=8), V41_PREFILL_RESTORE_PAIR="1", V41_PREFILL_RESTORE_FAST="1"):
+        s = StoreSystem(flag=True)
+        for p in (X, A, U, A2, U, A, U, AP, LONG, U, A2):
+            s.prompt(p)
+            check(s, layout, p, what=f"{len(p)} tokens, ratio-2-only pairing")
+    assert seen["one"] and seen["split"], seen
+
+
 # ---------------------------------------------------------------------------------------------- off == H1 (sanity)
 def test_an_extra_device_call_with_the_store_off_is_caught(tmp_path, monkeypatch):
     """The identity test is not vacuous: one synchronize per computed chunk with the store off makes it fail."""
