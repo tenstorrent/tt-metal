@@ -483,8 +483,9 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         const uint32_t bitmap_bytes =
             tt::round_up(tt::div_up(tt::div_up(input_width, two_level_block_keys), 32) * sizeof(uint32_t), 64);
         create_cb(cb_bitmap, 1, bitmap_bytes, tt::DataFormat::UInt32);
-        // The writer's copy of its row's table, then the half of a split row's table its pair's first core sends.
-        create_cb(cb_own_table, 1, table_bytes + table_bytes / 2, tt::DataFormat::UInt32);
+        // The writer's copy of its row's table, then (with split rows) the half of a split row's table its pair's
+        // first core sends.
+        create_cb(cb_own_table, 1, row_split ? table_bytes + table_bytes / 2 : table_bytes, tt::DataFormat::UInt32);
         // The mode and search length, then a header per item (see topk_two_level::header_row).
         create_cb(cb_writer_mailbox, 4, 64, tt::DataFormat::UInt32);
     }

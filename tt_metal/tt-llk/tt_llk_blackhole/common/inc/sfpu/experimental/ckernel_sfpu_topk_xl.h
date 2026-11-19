@@ -2263,7 +2263,9 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     const std::uint32_t tile_offset     = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
     constexpr int consecutive_32_offset = 16;
     // Kept as a local so the inner `if constexpr (row_scale_factor > 1)`
-    // checks below match the historical K=2048 codegen byte-for-byte.
+    // checks below read like the generic body's. The loops below stay rolled
+    // (`#pragma GCC unroll 1`): their bodies are long, and unrolling them
+    // costs math-image space the topk_large_indices kernels need.
     constexpr int row_scale_factor = 4;
 
 #pragma GCC unroll 1

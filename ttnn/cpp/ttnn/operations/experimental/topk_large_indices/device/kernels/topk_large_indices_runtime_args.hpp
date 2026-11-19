@@ -31,7 +31,7 @@ enum Reader {
 enum Compute { compute_search_length = 0, compute_two_level_num_input_rows = 1 };
 // Two-level programs only: two_level_max_address is the maxima tensor phase 1 writes, mode_output_address a test
 // output for the mode the program ran in (0 = none). writer_two_level_core_coords starts one word per core, in core
-// index order: its virtual NoC x | y << 16 (row r's owner is core r % num_cores).
+// index order: its virtual NoC x | y << 16 (a row's owner: topk_two_level::row_owner).
 enum Writer {
     output_address = 0,
     two_level_max_address = 1,

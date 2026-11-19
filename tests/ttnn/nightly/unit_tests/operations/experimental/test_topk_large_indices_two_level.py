@@ -397,9 +397,12 @@ def test_two_level_rejects_maxima_input_with_maxima_output(device, expect_error)
         )
 
 
-def test_two_level_cores_with_several_rows(device):
-    """Up to four rows per core, each tracked by its own byte of the owner's readiness count."""
-    rows, width, n = 100, 131_072, 120_000
+@pytest.mark.parametrize("rows", [100, 90])
+def test_two_level_cores_with_several_rows(device, rows):
+    """Up to four rows per core on 27 cores, each tracked by its own byte of the owner's readiness count. 100 rows: 19
+    left over after three rounds, too many to pair, so four whole rows on some cores. 90 rows: 9 split rows on 9
+    pairs, whose first cores wait on byte 3."""
+    width, n = 131_072, 120_000
     torch_input = generate("iid", rows, width, 17, n=n)
     out = ttnn.experimental.topk_large_indices(
         _dev(torch_input.reshape(1, 1, rows, width), device),

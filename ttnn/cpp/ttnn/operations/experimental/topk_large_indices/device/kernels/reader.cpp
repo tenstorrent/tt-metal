@@ -91,7 +91,7 @@ FORCE_INLINE void two_level_unit(
 // Stage 3's gather: the selected blocks table[0 .. 64 * num_chunks) of `row` into num_chunks 2048-key candidate
 // chunks. A row is one page in one bank, so its NoC address is resolved once and each block read is an offset from
 // it. Sentinel slots and keys past the search length are -inf.
-// Out of line: three call sites, and the kernel config buffer is tight.
+// Out of line: two call sites, and the kernel config buffer is tight.
 template <typename InputAccessor>
 __attribute__((noinline)) void two_level_gather(
     const Noc& noc,

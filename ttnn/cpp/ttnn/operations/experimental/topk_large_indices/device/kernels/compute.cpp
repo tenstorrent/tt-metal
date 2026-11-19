@@ -614,6 +614,8 @@ FORCE_INLINE uint32_t two_level_next_row(uint32_t input_cb, uint32_t total_units
             stage1.pop_front(stage1_batch);
             return code;
         }
+        // No settle after the split: two-level items never round-trip an accumulator through L1 (stage 2 and stage 3
+        // are at most 32 chunks, one segment), and the unit's tilize and reduce inits configure what they use.
         if (split_on) {
             topk_xl_split_end();
             split_on = false;
