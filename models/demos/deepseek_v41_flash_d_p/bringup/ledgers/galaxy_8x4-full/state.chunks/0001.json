@@ -6284,6 +6284,20 @@
   "status": "TODO",
   "waiting": null
  },
+ "P.82": {
+  "history": [
+   {
+    "by": "owner",
+    "status": "REJECTED",
+    "t": "2026-11-19T16:23:21"
+   }
+  ],
+  "last_run": "2026-11-19T16:23:21",
+  "reason": [
+   "OWNER 2026-11-19: the MoE block is heavily optimized; no agent identified a concrete flaw in the head (the 8.9 vs 1.6 ms gap was a roofline estimate, not a diagnosis). Dropped."
+  ],
+  "status": "REJECTED"
+ },
  "P.84": {
   "ab_pending": null,
   "agent": {
