@@ -195,7 +195,7 @@ def reference_attention_input(mpy, layer, x_in: torch.Tensor, pre_in: torch.Tens
 # ---- compressed layers (CSA2: ratio 2 sources 2 / 8 / 14 + their consumers; layer 20's ratio-1 KV) --------------------------------
 
 from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import TtHCACompressor  # noqa: E402
-from models.demos.deepseek_v3_d_p.tt.v4.attention.csa import TtCSA, TtCSAIndexer  # noqa: E402
+from models.demos.deepseek_v3_d_p.tt.v4.attention.csa import _RAGGED_FULL_CUT, TtCSA, TtCSAIndexer  # noqa: E402
 from models.demos.deepseek_v3_d_p.tt.v4.trace_island import copy_into  # noqa: E402
 
 
@@ -662,7 +662,11 @@ def _select_static_qtp(ix, q_latent, hidden_states, cos, sin, index_k, score_mas
     # this chip's rows of the score mask's [0, kv_len) columns: two copies either way; slice the bucket first while it is
     # under a quarter of the cache (512 x kv_len < 128 x cap), else partition the rows first (MEASURED, ws3_qtp_bench.py:
     # 1.80 vs 2.12 ms at the 65,536 bucket, 6.47 vs 7.36 at 294,912, 11.20 vs 13.50 at 524,288 -- whole index path)
-    if kv_len >= cap:
+    if int(score_mask.shape[2]) * ix.tp_factor == S_l:  # INDEX_QTP_MASK: the mask holds this chip's rows already
+        mask_p = (
+            score_mask if kv_len >= cap else ttnn.slice(score_mask, [0, 0, 0, 0], [1, 1, S_l // ix.tp_factor, kv_len])
+        )
+    elif kv_len >= cap:
         mask_p = ttnn.mesh_partition(score_mask, dim=2, cluster_axis=ix.tp_axis)
     elif 4 * kv_len > cap:
         part = ttnn.mesh_partition(score_mask, dim=2, cluster_axis=ix.tp_axis)
@@ -686,9 +690,100 @@ def _select_static_qtp(ix, q_latent, hidden_states, cos, sin, index_k, score_mas
     if keys is not index_k:
         ttnn.deallocate(keys)
     mask_rm = ttnn.to_layout(mask_p, ttnn.ROW_MAJOR_LAYOUT)
-    ttnn.deallocate(mask_p)
+    if mask_p is not score_mask:
+        ttnn.deallocate(mask_p)
     logits = ttnn.add(logits, mask_rm)
     return ttnn.experimental.topk_large_indices(logits, k=ix.topk, valid_length=kv_len)
+
+
+# V41_PREFILL_INDEX_QTP_MASK=1 (with INDEX_QTP): the slot's score mask itself holds only each chip's TP-quarter rows
+# ([1, 1, S_l / tp, cap] instead of every TP chip holding the same S_l rows), so the scorer's per-chunk slice + partition of
+# the 512-row mask becomes one slice of the 128-row mask. The glue writes the same zeros / cut values into those rows (the cut
+# constant is the TP quarter of the 512-row one, built before any capture), the reset copies a -inf constant of the same
+# shape, and prefix reuse opens columns with a zero block of the mask's own row count. Same mask values row for row.
+INDEX_QTP_MASK = INDEX_QTP and os.environ.get("V41_PREFILL_INDEX_QTP_MASK", "0") == "1"
+
+
+def _qtp_mask_on(self) -> bool:
+    return INDEX_QTP_MASK and self.tp_factor > 1
+
+
+_tt_csa_score_mask = TtCSA._score_mask
+_tt_csa_glue_chunk = TtCSA.glue_chunk
+_tt_csa_precreate_constants = TtCSA.precreate_constants
+
+
+def _score_mask_v41(self, state, S_l: int):
+    if state.score_mask is None and _qtp_mask_on(self):
+        return _tt_csa_score_mask(self, state, int(S_l) // self.tp_factor)
+    return _tt_csa_score_mask(self, state, S_l)
+
+
+def _cut_tile_part(self, S_l: int, n_cols: int):
+    """The TP quarter (this chip's rows) of the indexer's full-width TILE cut block, cached next to it."""
+    key = ("tile_qtp", int(S_l), int(n_cols))
+    cut = self.indexer._cut_masks.get(key)
+    if cut is None:
+        cut = self.indexer._cut_masks[key] = ttnn.mesh_partition(
+            self.indexer._chunk_cut_mask_tile(S_l, n_cols), dim=2, cluster_axis=self.tp_axis
+        )
+    return cut
+
+
+def _source_precreate_constants_v41(self, state, seq_local: int, real_len: int) -> None:
+    _tt_csa_precreate_constants(self, state, seq_local, real_len)
+    if _qtp_mask_on(self):
+        rate = self.compressor.compress_rate
+        self.indexer._zeros_block_tile(int(state.score_mask.shape[2]), real_len // rate)
+        _cut_tile_part(self, seq_local, real_len // rate)
+
+
+def _source_glue_chunk_v41(self, state, outs, real_len: int, export=None) -> None:
+    """TtCSA.glue_chunk with the score-mask writes on the mask's own (TP-quarter) rows under INDEX_QTP_MASK; else as is."""
+    if not _qtp_mask_on(self):
+        return _tt_csa_glue_chunk(self, state, outs, real_len, export)
+    q, q_latent, sliding_kv_g, next_carry, entries, keys, cos, sin, kv_rm, entries_rm, carry_rm = outs
+    rate = self.compressor.compress_rate
+    n_new = real_len // rate
+    seq_pad_global = sliding_kv_g.shape[2]
+    S_l = q.shape[2]
+    if state.entry_count + entries.shape[2] <= state.compressed_kv.shape[2]:  # DS4F-0295
+        ttnn.kv_cache.fill_cache_for_user_(state.compressed_kv, entries, 0, update_idx=state.entry_count)
+    ttnn.kv_cache.fill_cache_for_user_(state.index_k, keys, 0, update_idx=state.entry_count)
+    self._slab_write_rm(state, entries_rm, seq_pad_global + state.entry_count)
+    self._slab_write_rm(state, kv_rm, 0)
+    self._slab_write_rm(state, carry_rm, seq_pad_global + self._slab_cap)
+    mask = self._score_mask(state, S_l)
+    rows = int(mask.shape[2])
+    if state.entry_count > state.mask_zeroed_upto:
+        c0, n = state.mask_zeroed_upto, state.entry_count - state.mask_zeroed_upto
+        ttnn.experimental.slice_write(
+            self.indexer._zeros_block_tile(rows, n),
+            mask,
+            start=[0, 0, 0, c0],
+            end=[1, 1, rows, c0 + n],
+            step=[1, 1, 1, 1],
+        )
+        state.mask_zeroed_upto = state.entry_count
+    if n_new > 0:
+        n_cut = min(-(-n_new // ttnn.TILE_SIZE) * ttnn.TILE_SIZE, int(entries.shape[2]))
+        if _RAGGED_FULL_CUT:
+            n_cut = int(entries.shape[2])
+        if n_cut == int(entries.shape[2]):
+            cut, transient = _cut_tile_part(self, S_l, n_cut), None
+        else:
+            transient = self.indexer._chunk_cut_mask_tile(S_l, n_cut, cache=False)
+            cut = ttnn.mesh_partition(transient, dim=2, cluster_axis=self.tp_axis)
+        ttnn.experimental.slice_write(
+            cut,
+            mask,
+            start=[0, 0, 0, state.entry_count],
+            end=[1, 1, rows, state.entry_count + n_cut],
+            step=[1, 1, 1, 1],
+        )
+        if transient is not None:
+            ttnn.deallocate(cut)
+            ttnn.deallocate(transient)
 
 
 _tt_csa_sparse_core = TtCSA._sparse_core
@@ -1270,3 +1365,6 @@ V41CSA.kv_only = _kv_only
 for _cls in (V41CSA, V41CSAConsumer):
     _cls._sparse_core = _sparse_core_v41
     _cls._window_indices = _window_indices_v41
+V41CSA._score_mask = _score_mask_v41
+V41CSA.glue_chunk = _source_glue_chunk_v41
+V41CSA.precreate_constants = _source_precreate_constants_v41
