@@ -9,6 +9,7 @@
 #include "ckernel.h"
 #include "llk_assert.h"
 #include "llk_memory_checks.h"
+#include "scalar.h"
 #include "sync.h"
 #include "utils/gpr.h"
 #include "utils/validate.h"
@@ -21,6 +22,7 @@ inline constexpr std::uint8_t WordsPerLine              = 4;
 inline constexpr std::uint8_t CounterWidthMax           = 32;
 inline constexpr std::uint8_t FifoCapacityLog2Max       = 15;
 inline constexpr std::uint8_t FifoUpdateCapacityLog2Max = 14;
+inline constexpr std::uint8_t FifoWrapValMask           = 0xf; // ATINCGETPTR WrapVal field width, independent of the capacity limit.
 inline constexpr std::uint8_t IncrementLog2Max          = 15;
 inline constexpr std::uint8_t CompareSetValueLimit      = 16;
 inline constexpr std::uint8_t GprsPerQuad               = 4;
@@ -551,7 +553,7 @@ inline constexpr __attribute__((always_inline)) std::uint32_t encode(const FifoA
         L1MemoryEncoding,
         operation.probe_only,
         operation.increment_log2,
-        (operation.capacity_log2 + 1u) & detail::FifoCapacityLog2Max,
+        (operation.capacity_log2 + 1u) & detail::FifoWrapValMask,
         static_cast<std::uint32_t>(operation.pointer),
         operation.data.index,
         operation.address.index);
@@ -671,11 +673,8 @@ inline constexpr __attribute__((always_inline)) std::uint32_t MaskedWrite<Addres
 template <std::uint32_t AddressIndex>
 inline __attribute__((always_inline)) void set_address(const hal::Gpr<AddressIndex> address, const std::uint32_t l1_byte_address)
 {
-    LLK_ASSERT(detail::is_valid(address), "Atomic address GPR index must be in [0, 63]");
     LLK_ASSERT(l1_byte_address % 16u == 0u, "Atomic L1 byte address must be 16-byte aligned");
-    const std::uint32_t line_address = L1_ADDRESS(l1_byte_address) + 1u;
-    detail::issue(TT_OP_SETDMAREG(0 /*Payload_SigSelSize*/, line_address & 0xffffu, 0 /*SetSignalsMode*/, address.index * 2u));
-    detail::issue(TT_OP_SETDMAREG(0 /*Payload_SigSelSize*/, line_address >> 16, 0 /*SetSignalsMode*/, address.index * 2u + 1u));
+    scalar::set(address, L1_ADDRESS(l1_byte_address) + 1u);
 }
 
 namespace detail
