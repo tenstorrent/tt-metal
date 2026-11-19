@@ -213,8 +213,27 @@ sfpi_inline sfpi::vFloat _sfpu_round_to_nearest_int32_(sfpi::vFloat z, sfpi::vIn
 // a - j are both representable, so the only rounding before the polynomial is one multiply by
 // ln 2 on |a - j| <= 1/2. Passing a * ln2 to the base-e form instead rounds the argument,
 // and that relative error grows into the result in proportion to |a| (tens of ULP near 2^-126).
-template <bool unsafe = false, bool base_two = false>
-sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
+//
+// The base-e range-reduction constants (1/ln2, -ln2_hi, -ln2_lo) are typed arguments. None of
+// them is bf16- or fp16-exact, so each float literal of the one-argument form costs an upper and
+// lower SFPLOADI pair, six SFPLOADIs per row, as the eight LRegs cannot hold them across rows.
+// calculate_exponential passes the EXP_FP32_*_LREG slots instead, which exp_init programs.
+constexpr float EXP_FP32_LOG2E = 1.442695f;
+constexpr float EXP_FP32_NEG_LN2_HI = -6.93145752e-1f;
+constexpr float EXP_FP32_NEG_LN2_LO = -1.42860677e-6f;
+
+// The programmable-constant slots that hold those three constants for calculate_exponential's
+// fp32 path: exp_init writes, and calculate_exponential reads, each constant through its alias.
+constexpr auto EXP_FP32_LOG2E_LREG = sfpi::vConstFloatPrgm0;       // LREG12
+constexpr auto EXP_FP32_NEG_LN2_HI_LREG = sfpi::vConstFloatPrgm1;  // LREG13
+constexpr auto EXP_FP32_NEG_LN2_LO_LREG = sfpi::vConstFloatPrgm2;  // LREG14
+
+template <bool unsafe = false, bool base_two = false, typename K0 = float, typename K1 = float, typename K2 = float>
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(
+    sfpi::vFloat a,
+    K0 k_log2e = EXP_FP32_LOG2E,
+    K1 k_neg_ln2_hi = EXP_FP32_NEG_LN2_HI,
+    K2 k_neg_ln2_lo = EXP_FP32_NEG_LN2_LO) {
     sfpi::vInt i, e;
     sfpi::vFloat f, r, j, y;
     sfpi::vSMag16 sm;
@@ -228,14 +247,14 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     } else {
         // j = round(a / ln2)
         // interleaved with first coefficient of polynomial
-        j = 1.442695f * a;
+        j = k_log2e * a;
         r = 1.37805939e-3f;
         sm = sfpi::convert<sfpi::vSMag16>(j, sfpi::RoundMode::Nearest);
         j = sfpi::convert<sfpi::vFloat>(sm, sfpi::RoundMode::Nearest);
 
         // f = a - i*j (two-part cody-waite)
-        f = j * -6.93145752e-1f + a;
-        f = j * -1.42860677e-6f + f;
+        f = j * k_neg_ln2_hi + a;
+        f = j * k_neg_ln2_lo + f;
     }
 
     // approximate r = exp(f) on [-ln2/2, ln2/2]
@@ -293,10 +312,6 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_base2_(sfpi::vFloat x) {
     return _sfpu_exp_fp32_accurate_</*unsafe=*/false, /*base_two=*/true>(x);
 }
 
-constexpr auto bits = [](float x) constexpr { return __builtin_bit_cast(std::uint32_t, x); };
-constexpr auto lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) & 0xFFFFu); };
-constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) >> 16); };
-
 // Dest offset of row B, the SFPU row after row A, in the two-row _sfpu_exp_21f_bf16_tti_ body.
 constexpr std::uint32_t EXP_21F_TTI_ROW_B_DEST_OFFSET = 2;
 
@@ -324,8 +339,11 @@ inline void _sfpu_exp_21f_bf16_tti_configure_addrmod_() {
 
 // First part of a row pair of _sfpu_exp_21f_bf16_tti_, issued inline: loads, scale, range
 // reduction and both clamps. Row A lives in LREG0-2, row B in LREG4/5/7.
-template <bool SCALE_EN, bool CLAMP_NEGATIVE>
+template <bool SCALE_EN, bool CLAMP_NEGATIVE, bool BASE_TWO>
 sfpi_inline void _sfpu_exp_21f_bf16_tti_pair_head_(const std::uint16_t exp_base_scale_factor) {
+    // Without the lower-clamp SFPSWAPs, the BASE_TWO upper clamp would read LREG4 one cycle
+    // after the SFPMAD that writes it.
+    static_assert(!BASE_TWO || CLAMP_NEGATIVE, "BASE_TWO needs CLAMP_NEGATIVE");
     // val = sfpi::dst_reg[0] (row A) and sfpi::dst_reg[1] (row B)
     TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
     TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::DEFAULT, ADDR_MOD_3, EXP_21F_TTI_ROW_B_DEST_OFFSET);
@@ -336,9 +354,10 @@ sfpi_inline void _sfpu_exp_21f_bf16_tti_pair_head_(const std::uint16_t exp_base_
         TTI_SFPMULI(exp_base_scale_factor, p_sfpu::LREG4, 0);
     }
 
-    // xlog2 = val * (1/ln2) + 127.0f
-    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG12, p_sfpu::LREG3, p_sfpu::LREG0, 0);
-    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG12, p_sfpu::LREG3, p_sfpu::LREG4, 0);
+    // xlog2 = val * (1/ln2) + 127.0f; base 2 multiplies by LCONST_1 (x * 1 + 127 == x + 127 exactly)
+    constexpr std::uint32_t XLOG2_SCALE = BASE_TWO ? p_sfpu::LCONST_1 : p_sfpu::LREG12;
+    TTI_SFPMAD(p_sfpu::LREG0, XLOG2_SCALE, p_sfpu::LREG3, p_sfpu::LREG0, 0);
+    TTI_SFPMAD(p_sfpu::LREG4, XLOG2_SCALE, p_sfpu::LREG3, p_sfpu::LREG4, 0);
 
     // CLAMP_NEGATIVE is used for performance when callee guarantees
     // that xlog2 < 0.0 (i.e x < 0)
@@ -353,12 +372,19 @@ sfpi_inline void _sfpu_exp_21f_bf16_tti_pair_head_(const std::uint16_t exp_base_
         TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LCONST_0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
     }
 
-    // Upper clamp: xlog2 <- min(xlog2, 255). LREG1 / LREG5 hold 255 (both are
-    // dead at this point and get overwritten by SFPEXEXP right after).
-    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0x437f);
-    TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0x437f);
-    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG4, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+    if constexpr (BASE_TWO) {
+        // Upper clamp: xlog2 <- min(xlog2, 255) against LREG12 = 255 (exp2_init). SFPSWAP
+        // writes max(a, b) back only to an lreg_src_c below LREG8, so LREG12 keeps 255.
+        TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG4, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+    } else {
+        // Upper clamp: xlog2 <- min(xlog2, 255). LREG1 / LREG5 hold 255 (both are
+        // dead at this point and get overwritten by SFPEXEXP right after).
+        TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0x437f);
+        TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0x437f);
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG4, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+    }
 }
 
 // Middle of a row pair, the part _sfpu_exp_21f_bf16_tti_ records and replays: float-to-int split,
@@ -408,14 +434,14 @@ sfpi_inline void _sfpu_exp_21f_bf16_tti_pair_tail_() {
         TTI_SFP_STOCH_RND(
             sfpi::SFPSTOCHRND_RND_EVEN,
             0,
-            p_sfpu::LREG0,
+            p_sfpu::LCONST_0,
             p_sfpu::LREG0,
             p_sfpu::LREG0,
             sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
         TTI_SFP_STOCH_RND(
             sfpi::SFPSTOCHRND_RND_EVEN,
             0,
-            p_sfpu::LREG4,
+            p_sfpu::LCONST_0,
             p_sfpu::LREG4,
             p_sfpu::LREG4,
             sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
@@ -437,20 +463,24 @@ sfpi_inline void _sfpu_exp_21f_bf16_tti_pair_tail_() {
 // One row on its own, for the last row of an odd ITERATIONS: row A's registers and the constants
 // of the two-row body, in the one-row order, with an SFPNOP after each SFPMAD / SFPMULI whose
 // result the next instruction reads.
-template <bool SCALE_EN, bool is_fp32_dest_acc_en, bool CLAMP_NEGATIVE>
+template <bool SCALE_EN, bool is_fp32_dest_acc_en, bool CLAMP_NEGATIVE, bool BASE_TWO>
 sfpi_inline void _sfpu_exp_21f_bf16_tti_row_(const std::uint16_t exp_base_scale_factor) {
     TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
     if constexpr (SCALE_EN) {
         TTI_SFPMULI(exp_base_scale_factor, p_sfpu::LREG0, 0);
         TTI_SFPNOP;
     }
-    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG12, p_sfpu::LREG3, p_sfpu::LREG0, 0);
+    TTI_SFPMAD(p_sfpu::LREG0, BASE_TWO ? p_sfpu::LCONST_1 : p_sfpu::LREG12, p_sfpu::LREG3, p_sfpu::LREG0, 0);
     TTI_SFPNOP;
     if constexpr (CLAMP_NEGATIVE) {
         TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LCONST_0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
     }
-    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0x437f);
-    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+    if constexpr (BASE_TWO) {
+        TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+    } else {
+        TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0x437f);
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+    }
     TTI_SFPEXEXP(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
     TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
     TTI_SFPSHFT(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
@@ -466,7 +496,7 @@ sfpi_inline void _sfpu_exp_21f_bf16_tti_row_(const std::uint16_t exp_base_scale_
         TTI_SFP_STOCH_RND(
             sfpi::SFPSTOCHRND_RND_EVEN,
             0,
-            p_sfpu::LREG0,
+            p_sfpu::LCONST_0,
             p_sfpu::LREG0,
             p_sfpu::LREG0,
             sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
@@ -506,28 +536,36 @@ sfpi_inline void _sfpu_exp_21f_bf16_tti_row_(const std::uint16_t exp_base_scale_
  *     exp2_init again before this body runs; inits that program the same increment of 2
  *     (comparison, typecast, unary max/min, logaddexp) are compatible.
  *
- * exp2 runs the same body (exp2_init programs LREG12-14 and ADDR_MOD_6) with LREG12 = 1.0f
- * (x * 1 + 127 == x + 127 exactly) and FP32_C0 set, which loads c0 as the fp32
+ * exp2 runs the same body (exp2_init programs LREG12-14 and ADDR_MOD_6) with BASE_TWO set, which
+ * multiplies by LCONST_1 (x * 1 + 127 == x + 127 exactly) and takes the upper-clamp
+ * 255 from LREG12 instead of two SFPLOADIs per row pair, and FP32_C0 set, which loads c0 as the fp32
  * EXP_21F_BF16_C0 instead of its fp16 rounding: with that, each row evaluates
  * the sfpi _sfpu_exp2_bf16_ with the same algorithm and coefficients, and gives
  * the same output bits.
  */
-template <bool SCALE_EN, bool is_fp32_dest_acc_en, bool CLAMP_NEGATIVE, int ITERATIONS, bool FP32_C0 = false>
+template <
+    bool SCALE_EN,
+    bool is_fp32_dest_acc_en,
+    bool CLAMP_NEGATIVE,
+    int ITERATIONS,
+    bool FP32_C0 = false,
+    bool BASE_TWO = false>
 inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     // Iteration-invariant constants:
     //   LREG3 = 127.0f                      (bias term in z = x/ln2 + 127)
     //   LREG6 = 1.0017248f                  (poly coeff c0; fp16 0x3c02 = 1.001953125f unless FP32_C0)
-    //   LREG12 = 1/ln2                      (programmable, set in init; 1.0f for exp2)
+    //   LREG12 = 1/ln2                      (programmable, set in init; 255.0f for exp2 (BASE_TWO))
     //   LREG13 = 4.791750143340323e-15f     (poly coeff c2; programmable, set in init)
     //   LREG14 = 7.839635491371155e-08f     (poly coeff c1; programmable, set in init)
     //   LCONST_0 = 0.0f                     (hardware constant, read directly by SFPSWAP)
     // Per-row temporaries: row A LREG0 (x / z / y), LREG1 (exp, then frac), LREG2 (poly t);
     //                      row B LREG4,             LREG5,                  LREG7.
-    //   255.0f (upper clamp threshold) is loaded into LREG1 / LREG5 right before each upper clamp.
+    //   255.0f (upper clamp threshold) is loaded into LREG1 / LREG5 right before each upper clamp,
+    //   unless BASE_TWO, which reads it from LREG12.
     TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, 0x42fe);
     if constexpr (FP32_C0) {
-        TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, hi16(EXP_21F_BF16_C0));
-        TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, lo16(EXP_21F_BF16_C0));
+        TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, Converter::hi16(EXP_21F_BF16_C0));
+        TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, Converter::lo16(EXP_21F_BF16_C0));
     } else {
         TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATA, 0x3c02);
     }
@@ -550,20 +588,20 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     constexpr int PAIRS = ITERATIONS / 2;
     if constexpr (PAIRS > 0) {
         // The first pair records the body while executing it.
-        _sfpu_exp_21f_bf16_tti_pair_head_<SCALE_EN, CLAMP_NEGATIVE>(exp_base_scale_factor);
+        _sfpu_exp_21f_bf16_tti_pair_head_<SCALE_EN, CLAMP_NEGATIVE, BASE_TWO>(exp_base_scale_factor);
         TTI_REPLAY(0, EXP_21F_TTI_PAIR_BODY_LEN, 1, 1);
         _sfpu_exp_21f_bf16_tti_pair_body_();
         _sfpu_exp_21f_bf16_tti_pair_tail_<is_fp32_dest_acc_en>();
 
-#pragma GCC unroll 16
+#pragma GCC unroll 0
         for (int i = 1; i < PAIRS; i++) {
-            _sfpu_exp_21f_bf16_tti_pair_head_<SCALE_EN, CLAMP_NEGATIVE>(exp_base_scale_factor);
+            _sfpu_exp_21f_bf16_tti_pair_head_<SCALE_EN, CLAMP_NEGATIVE, BASE_TWO>(exp_base_scale_factor);
             TTI_REPLAY(0, EXP_21F_TTI_PAIR_BODY_LEN, 0, 0);
             _sfpu_exp_21f_bf16_tti_pair_tail_<is_fp32_dest_acc_en>();
         }
     }
     if constexpr (ITERATIONS % 2 != 0) {
-        _sfpu_exp_21f_bf16_tti_row_<SCALE_EN, is_fp32_dest_acc_en, CLAMP_NEGATIVE>(exp_base_scale_factor);
+        _sfpu_exp_21f_bf16_tti_row_<SCALE_EN, is_fp32_dest_acc_en, CLAMP_NEGATIVE, BASE_TWO>(exp_base_scale_factor);
     }
 }
 
@@ -606,13 +644,24 @@ sfpi_inline sfpi::vFloat _sfpu_exp_(sfpi::vFloat val) {
     return val;
 }
 
-template <bool SCALE_EN, bool is_fp32_dest_acc_en>
-sfpi_inline sfpi::vFloat _ckernel_sfpu_exp_accurate_(sfpi::vFloat val, const std::uint32_t exp_base_scale_factor) {
+// SCALE_EN multiplies the input by the bf16 scale before the exp. The fp32 path forwards k_log2e,
+// k_neg_ln2_hi and k_neg_ln2_lo to _sfpu_exp_fp32_accurate_ (float literals by default, or the
+// EXP_FP32_*_LREG slots); the bf16 path (_sfpu_exp_21f_bf16_) has its own constants and ignores them.
+template <bool SCALE_EN, bool is_fp32_dest_acc_en, typename K0 = float, typename K1 = float, typename K2 = float>
+sfpi_inline sfpi::vFloat _ckernel_sfpu_exp_accurate_(
+    sfpi::vFloat val,
+    const std::uint32_t exp_base_scale_factor,
+    [[maybe_unused]] K0 k_log2e = EXP_FP32_LOG2E,
+    [[maybe_unused]] K1 k_neg_ln2_hi = EXP_FP32_NEG_LN2_HI,
+    [[maybe_unused]] K2 k_neg_ln2_lo = EXP_FP32_NEG_LN2_LO) {
     if constexpr (SCALE_EN) {
         val = val * sfpi::sFloat16b(exp_base_scale_factor);
     }
-    sfpi::vFloat result = _sfpu_exp_accurate_<is_fp32_dest_acc_en>(val);
-    return result;
+    if constexpr (is_fp32_dest_acc_en) {
+        return _sfpu_exp_fp32_accurate_(val, k_log2e, k_neg_ln2_hi, k_neg_ln2_lo);
+    } else {
+        return _sfpu_exp_accurate_<false>(val);
+    }
 }
 
 template <
@@ -627,10 +676,16 @@ void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::k
             // bfloat16-accurate path: hand-tuned TTI exp_21f kernel.
             _sfpu_exp_21f_bf16_tti_<SCALE_EN, is_fp32_dest_acc_en, CLAMP_NEGATIVE, ITERATIONS>(exp_base_scale_factor);
         } else {
+            // The range-reduction constants come from LREG12..14 (programmed by exp_init), not from
+            // six SFPLOADIs per row.
             for (int d = 0; d < ITERATIONS; d++) {
                 sfpi::vFloat val = sfpi::dst_reg[0];
-                sfpi::dst_reg[0] =
-                    _ckernel_sfpu_exp_accurate_<SCALE_EN, is_fp32_dest_acc_en>(val, exp_base_scale_factor);
+                sfpi::dst_reg[0] = _ckernel_sfpu_exp_accurate_<SCALE_EN, is_fp32_dest_acc_en>(
+                    val,
+                    exp_base_scale_factor,
+                    EXP_FP32_LOG2E_LREG,
+                    EXP_FP32_NEG_LN2_HI_LREG,
+                    EXP_FP32_NEG_LN2_LO_LREG);
                 sfpi::dst_reg++;
             }
         }
@@ -642,7 +697,8 @@ void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::k
             TTI_SFPNOP;  // SFPMAD must not read LREG0 before the SFPSWAP result lands (SFPSWAP + SFPNOP costs no cycle)
             TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG0, 0);
             TTI_SFPNOP;  // no WH SFPU scoreboard: SFP_STOCH_RND must not read LREG0 the cycle after SFPMAD writes it
-            TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
+            TTI_SFP_STOCH_RND(
+                0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
             TTI_SFPSHFT(15, p_sfpu::LREG0, p_sfpu::LREG0, 1);
             TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
             sfpi::dst_reg++;
@@ -768,7 +824,8 @@ void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::k
             TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
             TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG0, 0);
             TTI_SFPNOP;  // no WH SFPU scoreboard: SFP_STOCH_RND must not read LREG0 the cycle after SFPMAD writes it
-            TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);
+            TTI_SFP_STOCH_RND(
+                0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);
             TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG1, 5);  // lreg[1] = lreg[0] << 15
             TTI_SFPSETSGN(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);  // lreg[0] preserves sign, copies e/m from lreg[1]
             TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
@@ -840,8 +897,9 @@ void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::k
 #endif
 }
 
+// Inlined into the init, which would otherwise call this cold callee off its straight path.
 template <bool APPROXIMATION_MODE, std::uint32_t scale, bool CLAMP_NEGATIVE, bool is_fp32_dest_acc_en>
-void exp_init() {
+inline __attribute__((always_inline)) void exp_init() {
     // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + counter reset), then the op-specific
     // exp setup below -- one self-contained init, no separate shared-common-init call. Same functionality as
     // _llk_math_eltwise_unary_sfpu_init_<exponential>() (exp uses only ADDR_MOD_7, no op-specific ADDR_MOD_6).
@@ -877,16 +935,16 @@ void exp_init() {
         constexpr float A_scaled = A * scale_fp32;
         constexpr float THRESHOLD_scaled = THRESHOLD / scale_fp32;
 
-        TTI_SFPLOADI(0, 0xA, lo16(THRESHOLD_scaled));
-        TTI_SFPLOADI(0, 0x8, hi16(THRESHOLD_scaled));
+        TTI_SFPLOADI(0, 0xA, Converter::lo16(THRESHOLD_scaled));
+        TTI_SFPLOADI(0, 0x8, Converter::hi16(THRESHOLD_scaled));
         TTI_SFPCONFIG(0, 14, 0);  // SFPCONFIG Dest 14 = LREG[14] =            -88.5               = 0xc2b10000
 
-        TTI_SFPLOADI(0, 0xA, lo16(A_scaled));
-        TTI_SFPLOADI(0, 0x8, hi16(A_scaled));
+        TTI_SFPLOADI(0, 0xA, Converter::lo16(A_scaled));
+        TTI_SFPLOADI(0, 0x8, Converter::hi16(A_scaled));
         TTI_SFPCONFIG(0, 12, 0);  // SFPCONFIG Dest 12 = LREG[12] = A     =    369.329925537109375 = 0x43b8aa3b
 
-        TTI_SFPLOADI(0, 0xA, lo16(B_minus_C));
-        TTI_SFPLOADI(0, 0x8, hi16(B_minus_C));
+        TTI_SFPLOADI(0, 0xA, Converter::lo16(B_minus_C));
+        TTI_SFPLOADI(0, 0x8, Converter::hi16(B_minus_C));
         TTI_SFPCONFIG(0, 13, 0);  // SFPCONFIG Dest 13 = LREG[13] = (B-C) =  32500.818359375       = 0x46fde9a3
 
 #ifndef DISABLE_SFPLOADMACRO
@@ -1053,13 +1111,13 @@ void exp_init() {
         constexpr float A_scaled = A * scale_fp32;
 
         // Load constant A into LREG[12]
-        TTI_SFPLOADI(0, 0xA, lo16(A_scaled));
-        TTI_SFPLOADI(0, 0x8, hi16(A_scaled));
+        TTI_SFPLOADI(0, 0xA, Converter::lo16(A_scaled));
+        TTI_SFPLOADI(0, 0x8, Converter::hi16(A_scaled));
         TTI_SFPCONFIG(0, 12, 0);
 
         // Load constant (B-C) into LREG[13]
-        TTI_SFPLOADI(0, 0xA, lo16(B_minus_C));
-        TTI_SFPLOADI(0, 0x8, hi16(B_minus_C));
+        TTI_SFPLOADI(0, 0xA, Converter::lo16(B_minus_C));
+        TTI_SFPLOADI(0, 0x8, Converter::hi16(B_minus_C));
         TTI_SFPCONFIG(0, 13, 0);
 
         // Load shift amount (15) into LREG[14] for SFPSHFT2
@@ -1174,10 +1232,11 @@ void exp_init() {
             sfpi::vConstFloatPrgm2 = EXP_21F_BF16_C1;
             _sfpu_exp_21f_bf16_tti_configure_addrmod_();
         } else {
-            // fp32 scalar path (_sfpu_exp_fp32_accurate_) — uses the scalar
-            // reciprocal LLK for negative inputs, so its constants must be
-            // primed here.
-            sfpu_reciprocal_init<false>();
+            // LREG12..14 = 1/ln2, -ln2_hi, -ln2_lo, the range-reduction constants calculate_exponential
+            // passes to _sfpu_exp_fp32_accurate_. The fp32 path contains no reciprocal.
+            EXP_FP32_LOG2E_LREG = EXP_FP32_LOG2E;
+            EXP_FP32_NEG_LN2_HI_LREG = EXP_FP32_NEG_LN2_HI;
+            EXP_FP32_NEG_LN2_LO_LREG = EXP_FP32_NEG_LN2_LO;
         }
     }
 }

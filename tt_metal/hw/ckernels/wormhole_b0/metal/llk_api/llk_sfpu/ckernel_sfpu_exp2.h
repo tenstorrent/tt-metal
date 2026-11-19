@@ -124,18 +124,19 @@ inline void calculate_exp2() {
             sfpi::dst_reg++;
         }
     } else {
-        // bf16: the raw-TTI replay body of exp, whose range reduction is x * LREG12 + 127 with
-        // LREG12 = vConstFloatPrgm0. exp2_init sets it to 1.0f, so fl(x * 1 + 127) == fl(x + 127):
-        // the same algorithm and coefficients as _sfpu_exp2_bf16_ (FP32_C0 loads c0 as the fp32
-        // EXP_21F_BF16_C0), so the output bits match it. The TTI body hoists its constants and
-        // pipelines two rows: a row pair takes 34 cycles (30 instructions and 4 SFPSWAP stalls)
+        // bf16: the raw-TTI replay body of exp. BASE_TWO makes its range reduction x * LCONST_1 + 127,
+        // and fl(x * 1 + 127) == fl(x + 127): the same algorithm and coefficients as _sfpu_exp2_bf16_
+        // (FP32_C0 loads c0 as the fp32 EXP_21F_BF16_C0), so the output bits match it. BASE_TWO also
+        // reads the upper-clamp 255 from LREG12 (exp2_init), so the body hoists all its constants and
+        // pipelines two rows: a row pair takes 32 cycles (28 instructions and 4 SFPSWAP stalls)
         // where the sfpi loop issued 24 slots per row.
         _sfpu_exp_21f_bf16_tti_<
             false /*SCALE_EN*/,
             false /*is_fp32_dest_acc_en*/,
             true /*CLAMP_NEGATIVE*/,
             ITERATIONS,
-            true /*FP32_C0*/>(0 /*exp_base_scale_factor*/);
+            true /*FP32_C0*/,
+            true /*BASE_TWO*/>(0 /*exp_base_scale_factor*/);
     }
 }
 
@@ -148,9 +149,9 @@ inline void exp2_init() {
         sfpi::vConstFloatPrgm1 = 0x1.ebfba0p-3f;
         sfpi::vConstFloatPrgm2 = 0x1.c6afd8p-5f;
     } else {
-        // LREG12 = x multiplier, LREG13 = c2 and LREG14 = c1 of _sfpu_exp_21f_bf16_tti_
-        // (exp_init loads 1/ln2 into LREG12).
-        sfpi::vConstFloatPrgm0 = 1.0f;
+        // LREG12 = the upper-clamp 255 of _sfpu_exp_21f_bf16_tti_<..., BASE_TWO> (exp_init loads
+        // 1/ln2 there), LREG13 = c2 and LREG14 = c1.
+        sfpi::vConstFloatPrgm0 = 255.0f;
         sfpi::vConstFloatPrgm1 = EXP_21F_BF16_C2;
         sfpi::vConstFloatPrgm2 = EXP_21F_BF16_C1;
         _sfpu_exp_21f_bf16_tti_configure_addrmod_();

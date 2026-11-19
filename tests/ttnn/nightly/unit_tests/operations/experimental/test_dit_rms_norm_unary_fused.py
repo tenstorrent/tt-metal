@@ -8,6 +8,11 @@ import ttnn
 
 from tt_py_test_utils_common.utility_functions import comp_pcc
 
+# Every test in this module takes the function-scoped `device` fixture without
+# parametrizing device_params, so the device is opened once per module rather than
+# once per test.
+pytestmark = pytest.mark.use_module_device
+
 
 def measure_quality(torch_output, tt_output, pcc_threshold=0.9995, rel_rmse_threshold=0.02):
     pcc_passed, pcc_val = comp_pcc(torch_output, tt_output)
@@ -281,3 +286,12 @@ def test_dit_rms_norm_unary_fused_sharded_weight_bias(
     assert (
         check_result["relative_rmse"] < 0.03
     ), f"[sharded/w={use_weight},b={use_bias}] Relative RMSE too high: {check_result['relative_rmse']}"
+
+
+@pytest.mark.parametrize("shape", [(1, 64, 0, 576), (0, 32, 64)], ids=["zero_seq", "zero_batch"])
+def test_dit_rms_norm_unary_fused_zero_volume(device, shape):
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = ttnn.experimental.dit_rms_norm_unary_fused(tt_input, epsilon=1e-5)
+    assert list(tt_output.shape) == list(shape)
+    assert ttnn.to_torch(tt_output).numel() == 0

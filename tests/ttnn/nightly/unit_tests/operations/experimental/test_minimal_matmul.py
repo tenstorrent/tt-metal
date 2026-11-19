@@ -7,13 +7,20 @@ import torch
 import ttnn
 from loguru import logger
 
-from tt_py_test_utils_common.utility_functions import comp_pcc
+from tt_py_test_utils_common.utility_functions import comp_pcc, is_blackhole, skip_with_llk_assert, skip_with_watcher
+from tests.ttnn.utils_for_testing import assert_program_cache_flat
 from models.tt_dit.utils.tensor import prepare_for_fused_swiglu
 
 from tracy.process_model_log import (
     get_latest_ops_log_filename,
     run_device_profiler,
 )
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program, require_realtime_profiler
+
+# Every test in this module takes the function-scoped `device` fixture without
+# parametrizing device_params, so the device is opened once per module rather than
+# once per test.
+pytestmark = pytest.mark.use_module_device
 
 
 def assert_quality(torch_output, tt_output):
@@ -166,6 +173,52 @@ def test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subbl
     )
     assert check_result["pcc"] > 0.999_500
     assert check_result["relative_rmse"] < 0.02
+
+
+# The row count is a runtime quantity: one program serves every MiniMax-H3 packed length at the DiT's
+# proj_out / audio_proj_out shapes (K=5376, N=96 / 32); a width change must miss.
+H3_PROJ_OUT_TILE_ROWS = (148, 74, 287, 427, 470)
+
+
+@pytest.mark.parametrize("K, N", [(5376, 96), (5376, 32)], ids=["proj_out", "audio_proj_out"])
+def test_linear_flat_cache_across_rows(device, K, N):
+    torch.manual_seed(0)
+    weights = {N: torch.randn((K, N), dtype=torch.float32), N + 32: torch.randn((K, N + 32), dtype=torch.float32)}
+    tt_weights = {
+        n: ttnn.from_torch(w, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT) for n, w in weights.items()
+    }
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    # get_matmul_config's generic fallback: 8x8x8 with N_block clipped to the subblock for N < 8 tiles.
+    matmul_config = ttnn.MinimalMatmulConfig(
+        M_block_size=8,
+        K_block_size=8,
+        N_block_size=2,
+        subblock_h=2,
+        subblock_w=2,
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+    )
+    pcc_by_rows = {}
+
+    def run(variant):
+        rows, n = variant
+        torch_input = torch.randn((rows, K), dtype=torch.float32)
+        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_output = ttnn.experimental.minimal_matmul(
+            tt_input, tt_weights[n], compute_kernel_config=compute_config, config=matmul_config
+        )
+        result = assert_quality(torch_input @ weights[n], ttnn.to_torch(tt_output))
+        assert result["pcc"] > 0.999_500, f"rows={rows} N={n}: PCC {result['pcc']}"
+        pcc_by_rows[(rows, n)] = result["pcc"]
+
+    variants = [(tile_rows * 32, N) for tile_rows in H3_PROJ_OUT_TILE_ROWS] + [(H3_PROJ_OUT_TILE_ROWS[0] * 32, N + 32)]
+    entries = assert_program_cache_flat(device, run, variants, warm_index=0, miss_indices=(len(variants) - 1,))
+    logger.debug(f"program cache entries after the sweep: {entries}; PCC per (rows, N): {pcc_by_rows}")
 
 
 # Correctness guard for the granular output-writer path (write_block_sync_granular): each row's
@@ -701,7 +754,10 @@ def _assert_cache_hit_repatches(device, dispatch, make_inputs, golden, label):
             "are patched once and then frozen instead of on every dispatch."
         )
 
-    device.disable_and_clear_program_cache()
+    # Clear the entries this helper added, but leave the cache ENABLED: that is the state a freshly
+    # opened device has, and with a module-scoped device, exiting disabled would silently disable it
+    # for every later test in the file - including the perf gate, whose warm-up would warm nothing.
+    device.clear_program_cache()
 
 
 def test_program_cache_hit_bias(device):
@@ -782,6 +838,36 @@ def test_program_cache_hit_fused_concat(device):
             return [torch.cat([x_a, x_b], dim=-1) @ weight]
 
     _assert_cache_hit_repatches(device, dispatch, make_inputs, golden, "fused_concat")
+
+
+def test_program_cache_hit_fused_concat_refuses_logical_row_mismatch(device, expect_error):
+    """The row-free hash drops both logical row counts, so a prefix and a suffix that only agree once padded
+    (255 and 225 rows, both eight tile rows) reach the cached program; the hit validator must refuse them as
+    the miss validator does, instead of feeding the suffix's padding to live activation rows."""
+    M, Ka, Kb, N = 256, 96, 160, 128
+    compute_config, matmul_config = _cache_hit_config(device, block_size=4, subblock=2)
+
+    def to_device(shape):
+        return ttnn.from_torch(torch.randn(shape), dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+    def dispatch(rows_a, rows_b):
+        return ttnn.experimental.minimal_matmul(
+            [to_device((rows_a, Ka)), to_device((rows_b, Kb))],
+            to_device((Ka + Kb, N)),
+            compute_kernel_config=compute_config,
+            config=matmul_config,
+        )
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+    dispatch(M, M)
+    assert device.num_program_cache_entries() == 1
+    with expect_error(
+        RuntimeError,
+        r"minimal_matmul fused concat: second-input rows \(225 logical, 256 folded\) must match the activation rows",
+    ):
+        dispatch(M - 1, M - 31)
+    device.clear_program_cache()
 
 
 @pytest.mark.parametrize("chunks", [2, 4])
@@ -868,6 +954,85 @@ def test_program_cache_hit_fused_ternary(device):
     _assert_cache_hit_repatches(device, dispatch, make_inputs, golden, "fused_ternary")
 
 
+@pytest.mark.parametrize(
+    "input_shape",
+    [(2, 1, 256, 512), (2, 256, 512), (8, 1, 32, 512)],
+    ids=["rank4_batch2", "rank3_batch2", "rank4_batch8_one_tile_row"],
+)
+@pytest.mark.parametrize("full_gate", [False, True], ids=["broadcast_gate", "full_gate"])
+def test_program_cache_hit_fused_ternary_batched(device, input_shape, full_gate):
+    """A batched activation folds its upper dims into the rows the kernels see; the row checks and the
+    gate's broadcast flag must fold the residual and the gate the same way, which a rank-2 case cannot
+    tell apart. One tile row per batch is the edge where an unfolded flag would broadcast a full gate."""
+    *batch, M, K = input_shape
+    N = 1024
+    scalar = 1.0
+    compute_config, matmul_config = _cache_hit_config(device, block_size=8, subblock=2)
+    gate_shape = (*batch, M, N) if full_gate else (1,) * len(batch) + (1, N)
+
+    def make_inputs():
+        torch_input = torch.randn((*batch, M, K), dtype=torch.float32)
+        weight_input = torch.randn((K, N), dtype=torch.float32)
+        addcmul_a = torch.randn((*batch, M, N), dtype=torch.float32)
+        addcmul_b = torch.randn(gate_shape, dtype=torch.float32)
+        return (
+            (
+                ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+                ttnn.from_torch(weight_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+                ttnn.from_torch(addcmul_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+                ttnn.from_torch(addcmul_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+            ),
+            (torch_input, weight_input, addcmul_a, addcmul_b),
+        )
+
+    def dispatch(tt_args):
+        tt_input, tt_weight, tt_addcmul_a, tt_addcmul_b = tt_args
+        return [
+            ttnn.to_torch(
+                ttnn.experimental.dit_minimal_matmul_addcmul_fused(
+                    tt_input,
+                    tt_weight,
+                    scalar,
+                    tt_addcmul_a,
+                    tt_addcmul_b,
+                    compute_kernel_config=compute_config,
+                    config=matmul_config,
+                )
+            )
+        ]
+
+    def golden(torch_args):
+        torch_input, weight_input, addcmul_a, addcmul_b = torch_args
+        with torch.no_grad():
+            return [torch.addcmul(addcmul_a, torch_input @ weight_input, addcmul_b, value=scalar)]
+
+    shape_id = "x".join(str(d) for d in input_shape)
+    gate_id = "full_gate" if full_gate else "broadcast_gate"
+    _assert_cache_hit_repatches(device, dispatch, make_inputs, golden, f"fused_ternary_batched_{shape_id}_{gate_id}")
+
+
+def test_fused_ternary_per_batch_gate_refused(device, expect_error):
+    """A [B, 1, 1, N] gate would be broadcast from its first batch only, so the op refuses it up front."""
+    B, M, K, N = 2, 256, 512, 1024
+    compute_config, matmul_config = _cache_hit_config(device, block_size=8, subblock=2)
+
+    def to_device(shape):
+        return ttnn.from_torch(torch.randn(shape), dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+    tt_input, tt_weight = to_device((B, 1, M, K)), to_device((K, N))
+    tt_addcmul_a, tt_addcmul_b = to_device((B, 1, M, N)), to_device((B, 1, 1, N))
+    with expect_error(RuntimeError, "fused_ternary_input_b broadcasts over the rows only when every upper dim is 1"):
+        ttnn.experimental.dit_minimal_matmul_addcmul_fused(
+            tt_input,
+            tt_weight,
+            1.0,
+            tt_addcmul_a,
+            tt_addcmul_b,
+            compute_kernel_config=compute_config,
+            config=matmul_config,
+        )
+
+
 def test_run_performance(device):
     core_grid = ttnn.CoreCoord(8, 8)
     M, K, N = 4096, 4096, 4096
@@ -879,25 +1044,67 @@ def test_run_performance(device):
     assert check_result["relative_rmse"] < 0.02
 
 
-def test_performance():
-    float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
-    cols = ["ATTRIBUTES"]
-    command = (
-        f"pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_minimal_matmul.py::test_run_performance"
+# The real-time profiler's D2H socket needs host IOMMU on Blackhole (no hugepage fallback), and
+# ETH-dispatch SKUs (N300) cannot supply records at all, so this gate runs on the BH viommu job.
+@pytest.mark.requires_host_iommu
+@pytest.mark.skipif(not is_blackhole(), reason="perf gate measured on Blackhole")
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+def test_performance(device):
+    # Measured in-process with the real-time profiler. Running this under the Tracy
+    # profiler instead costs a subprocess launch, its own device open and a CSV
+    # post-process - ~300s to time a matmul that takes microseconds.
+    require_realtime_profiler("minimal_matmul perf checks")
+    core_grid = ttnn.CoreCoord(8, 8)
+    core_count = core_grid.x * core_grid.y
+    M, K, N = 4096, 4096, 4096
+
+    torch_input = torch.randn((M, K), dtype=torch.float32)
+    weight_input = torch.randn((K, N), dtype=torch.float32)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight = ttnn.from_torch(weight_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    matmul_config = ttnn.MinimalMatmulConfig(
+        M_block_size=8,
+        K_block_size=8,
+        N_block_size=8,
+        subblock_h=2,
+        subblock_w=2,
+        compute_with_storage_grid_size=core_grid,
     )
 
-    run_device_profiler(command, "ttnn_minimal_matmul_performance", device_analysis_types=["device_kernel_duration"])
-    r = post_process_ops_log(
-        "ttnn_minimal_matmul_performance",
-        float_columns=float_cols,
-        columns=cols,
-        op_name="",
-        sum_vals=False,
-        has_signposts=False,
+    def run_matmul():
+        return ttnn.experimental.minimal_matmul(
+            tt_input,
+            tt_weight,
+            compute_kernel_config=compute_config,
+            config=matmul_config,
+        )
+
+    def warm_then_measure():
+        # The warm-up keeps kernel compilation out of the measured dispatch. It runs INSIDE the
+        # profiler window on purpose: its record is published asynchronously, so dispatching it
+        # before the callback is registered does not keep it out of the window, and the measured
+        # dispatch then has to be identified rather than assumed to be the only record.
+        run_matmul()
+        return run_matmul()
+
+    _, records = profile_realtime_program(device, warm_then_measure, collect_all=True)
+    assert len(records) == 2, (
+        f"expected the warm-up and the measured dispatch, got {len(records)} record(s): {records}. "
+        "An unattributed record set would grade whichever dispatch happened to land first."
     )
-    core_count = int(r["CORE COUNT"][0])
-    duration_ns = int(r["DEVICE KERNEL DURATION [ns]"].min())
-    expected_ns = perf_model(4096, 4096, 4096, core_count, 2)
+    # runtime_id increases with dispatch order, so the measured dispatch is the later of the two.
+    record = max(records, key=lambda record: record["runtime_id"])
+    duration_ns = record["duration_ns"]
+    expected_ns = perf_model(M, K, N, core_count, 2)
 
     util = expected_ns / duration_ns
     logger.info(f"Utilization: {util*100:.1f}%")

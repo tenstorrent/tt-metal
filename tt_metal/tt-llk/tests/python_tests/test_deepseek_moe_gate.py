@@ -14,7 +14,6 @@ DEST holds four tiles and the op only touches face 0 of each: tile 0 the payload
 tile 1 a 16-bit id, tile 2 the payload+bias sort key, tile 3 scratch.
 """
 
-import struct
 
 import torch
 from conftest import skip_for_quasar
@@ -38,6 +37,7 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     NUM_FACES,
     TILE_COUNT,
+    fp32_bits,
 )
 
 pytestmark = skip_for_quasar
@@ -52,11 +52,6 @@ SCORES, IDS, KEYS, INTERMEDIATE = 0, 1, 2, 3
 
 EPS = 0.5
 SCALE = 2.5
-
-
-def _fp32_bits(value):
-    """The fp32 bit pattern Converter::as_float expects."""
-    return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
 def _zeros():
@@ -300,7 +295,7 @@ def test_deepseek_moe_gate(seed, approx):
     regions = _regions(
         _config(
             DEEPSEEK_MOE_GATE(
-                dmg_mode=MODE_GATE, dmg_eps=_fp32_bits(EPS), dmg_scale=_fp32_bits(SCALE)
+                dmg_mode=MODE_GATE, dmg_eps=fp32_bits(EPS), dmg_scale=fp32_bits(SCALE)
             ),
             _gate_tiles(payload),
             src_b=bias,
@@ -325,8 +320,8 @@ def test_deepseek_moe_gate_sigmoid(seed):
             DEEPSEEK_MOE_GATE(
                 dmg_mode=MODE_GATE,
                 dmg_sigmoid=True,
-                dmg_eps=_fp32_bits(EPS),
-                dmg_scale=_fp32_bits(SCALE),
+                dmg_eps=fp32_bits(EPS),
+                dmg_scale=fp32_bits(SCALE),
             ),
             # Not _gate_tiles: this front-end does its transpose in transpose_tile on the raw L1
             # tile, so the payload goes up as-is and the golden transposes.
@@ -365,7 +360,7 @@ def test_deepseek_moe_gate_normalization(norm):
     regions = _regions(
         _config(
             DEEPSEEK_MOE_GATE(
-                dmg_mode=MODE_GATE, dmg_eps=_fp32_bits(eps), dmg_scale=_fp32_bits(scale)
+                dmg_mode=MODE_GATE, dmg_eps=fp32_bits(eps), dmg_scale=fp32_bits(scale)
             ),
             _gate_tiles(payload),
             src_b=bias,
@@ -387,7 +382,7 @@ def test_deepseek_moe_gate_shipping_config(dest_sync, num_faces):
     regions = _regions(
         _config(
             DEEPSEEK_MOE_GATE(
-                dmg_mode=MODE_GATE, dmg_eps=_fp32_bits(EPS), dmg_scale=_fp32_bits(SCALE)
+                dmg_mode=MODE_GATE, dmg_eps=fp32_bits(EPS), dmg_scale=fp32_bits(SCALE)
             ),
             _gate_tiles(payload),
             src_b=bias,
