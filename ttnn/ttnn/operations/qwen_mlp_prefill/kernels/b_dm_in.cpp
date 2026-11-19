@@ -3,7 +3,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "rect.hpp"
-
+#include "ring.hpp"
 #include "weights.hpp"
 
 void kernel_main() {
@@ -12,6 +12,8 @@ void kernel_main() {
     constexpr uint32_t i_tiles = CT_ARG("i_tiles");
     constexpr uint32_t b_tiles = CT_ARG("b_tiles_per_core");
     constexpr uint32_t chips = CT_ARG("chips");
+    constexpr uint32_t lag = CT_ARG("owner_lag");
+    constexpr uint32_t rows = CT_ARG("rows");
     constexpr uint32_t a_active = CT_ARG("a_active");
     const Rect a_grid = RECT("a_grid");
     const uint32_t chip = RT_ARG("chip");
@@ -27,24 +29,35 @@ void kernel_main() {
     load_resident_weights(
         noc, w_down, CT_ARG("cb_wd"), CT_ARG("tile_bytes_bfp4"), i_tiles, CT_ARG("h_tiles"), first_column, b_tiles);
 
-    for (uint32_t m = 0; m < CT_ARG("rows"); m++) {
-        const uint32_t slot = m & 1;
-        if (m % chips == chip) {
-            h_segment.reserve_back(b_tiles);
-            for (uint32_t t = 0; t < b_tiles; t++) {
-                noc.async_read(
-                    h,
-                    CoreLocalMem<uint32_t>(h_segment.get_write_ptr() + t * tile_bytes),
-                    tile_bytes,
-                    {.page_id = m * CT_ARG("h_tiles") + first_column + t},
-                    {});
+    for (uint32_t step = 0; step < rows + lag; step++) {
+        if (step < rows) {
+            const uint32_t slot = step & 1;
+            if (step % chips == chip) {
+                h_segment.reserve_back(b_tiles);
+                for (uint32_t t = 0; t < b_tiles; t++) {
+                    noc.async_read(
+                        h,
+                        CoreLocalMem<uint32_t>(h_segment.get_write_ptr() + t * tile_bytes),
+                        tile_bytes,
+                        {.page_id = step * CT_ARG("h_tiles") + first_column + t},
+                        {});
+                }
+                noc.async_read_barrier();
+                h_segment.push_back(b_tiles);
             }
-            noc.async_read_barrier();
-            h_segment.push_back(b_tiles);
+            a.reserve_back(i_tiles);
+            a_grid.signal(noc, a_free[slot], 1);
+            a_valid[slot].wait_min(a_active * (step / 2 + 1));
+            a.push_back(i_tiles);
         }
-        a.reserve_back(i_tiles);
-        a_grid.signal(noc, a_free[slot], 1);
-        a_valid[slot].wait_min(a_active * (m / 2 + 1));
-        a.push_back(i_tiles);
+        if (chips > 1 && step >= lag && (step - lag) % chips == chip) {
+            const uint32_t q = (step - lag) / chips;
+            for (uint32_t source = 0; source < chips - 1; source++) {
+                CircularBuffer landing(CT_ARG("cb_rs") + source);
+                landing.reserve_back(b_tiles);
+                Semaphore<>(CT_ARG("sem_rs_ready") + source).wait_min(q + 1);
+                landing.push_back(b_tiles);
+            }
+        }
     }
 }
