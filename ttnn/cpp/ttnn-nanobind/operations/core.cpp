@@ -141,7 +141,7 @@ void py_module(nb::module_& mod) {
             The output is a view of `tensor`: it shares the input's buffer and no data moves.
 
             Args:
-                tensor (ttnn.Tensor): the input tensor, of rank 4 or less.
+                tensor (ttnn.Tensor): the input tensor, of rank 4 or less. A TILE input of rank less than 4 must have 32x32 tiles, with the last two dimensions padded only up to the next multiple of 32.
 
             Returns:
                 ttnn.Tensor: the rank-4 output tensor, with the input's dtype, layout and memory configuration.
