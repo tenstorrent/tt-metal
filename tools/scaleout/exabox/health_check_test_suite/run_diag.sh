@@ -54,10 +54,10 @@ step of pre_reboot only. It runs when \`sys-triage\` is on PATH (same .deb) and 
 credentials are set; otherwise the phase reports SKIP with the reason. It never gates the run.
 
 The tray 12 V feed check (pre_reboot only, right after the snapshot) reads each tray's two
-hot-swap controllers (STATUS_WORD, STATUS_INPUT, STATUS_IOUT) and its CPLD power-good latch
-in-band through ipmitool. A latched VIN_UV_WARN, VIN_UV_FAULT, OFF, IOUT_OC or a CPLD 12 V
-loss FAILs that tray, naming its BDF range and HSC address: check the bus bar / tray 12 V
-feed. Reads only; nothing is written to the hot-swap controllers. It never gates the run.
+hot-swap controllers (STATUS_WORD, STATUS_INPUT, STATUS_IOUT) and its CPLD tray-alive register
+in-band through ipmitool. A latched VIN_UV_WARN, VIN_UV_FAULT, OFF or IOUT_OC FAILs that tray,
+naming its BDF range and HSC address: check the bus bar / tray 12 V feed. A tray that is down
+with clean latches is a WARN pointing at the chips or board. Reads only. It never gates the run.
 
 Forwarded options (see diag_runner.py --help for details):
   --dry-run              Print intended subprocess calls without executing destructive steps
