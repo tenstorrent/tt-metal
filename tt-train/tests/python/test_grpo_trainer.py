@@ -2085,6 +2085,7 @@ def test_async_remote_source_trains_every_batch_over_a_full_rollout_queue(
     source = AsyncRemoteRolloutBatchSource(
         client=client,
         num_batches=num_batches,
+        batch_prompts=1,
         num_generations=1,
         max_completion_length=4,
         weight_sync_every=weight_sync_every,
@@ -2126,6 +2127,7 @@ def _async_source(monkeypatch, client, num_batches, max_staleness, weight_sync_e
     return AsyncRemoteRolloutBatchSource(
         client=client,
         num_batches=num_batches,
+        batch_prompts=1,
         num_generations=2,
         max_completion_length=4,
         weight_sync_every=weight_sync_every,
@@ -2184,6 +2186,20 @@ def test_async_remote_source_pushes_version_0_when_no_batches_left(monkeypatch):
 def test_async_remote_source_raises_when_the_queue_closes(monkeypatch, expect_error):
     source = _async_source(monkeypatch, _FakeAsyncClient([]), num_batches=1, max_staleness=0)
     with expect_error(RuntimeError, "rollout rank closed the rollout queue"):
+        next(iter(source))
+
+
+def test_async_remote_source_rejects_a_batch_with_more_prompts_than_planned(expect_error):
+    source = AsyncRemoteRolloutBatchSource(
+        client=_FakeAsyncClient([0]),
+        num_batches=1,
+        batch_prompts=1,
+        num_generations=1,
+        max_completion_length=4,
+        weight_sync_every=1,
+        max_staleness=0,
+    )
+    with expect_error(RuntimeError, "expected 1 rows, got 2 prompts"):
         next(iter(source))
 
 

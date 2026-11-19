@@ -24,6 +24,7 @@ class AsyncRemoteRolloutBatchSource(RolloutBatchSource):
         *,
         client: AsyncRolloutClient,
         num_batches: int,
+        batch_prompts: int,
         num_generations: int,
         max_completion_length: int,
         weight_sync_every: int,
@@ -31,6 +32,7 @@ class AsyncRemoteRolloutBatchSource(RolloutBatchSource):
     ) -> None:
         self._client = client
         self._batches_left = int(num_batches)
+        self._batch_prompts = int(batch_prompts)
         self._num_generations = num_generations
         self._max_completion_length = max_completion_length
         self._weight_sync_every = int(weight_sync_every)
@@ -44,7 +46,7 @@ class AsyncRemoteRolloutBatchSource(RolloutBatchSource):
             self._batches_left -= 1
             validate_rollout_batch(
                 scored.rollout,
-                num_prompts=len(scored.rollout.prompts) // self._num_generations,
+                num_prompts=self._batch_prompts,
                 num_generations=self._num_generations,
                 max_completion_length=self._max_completion_length,
             )
