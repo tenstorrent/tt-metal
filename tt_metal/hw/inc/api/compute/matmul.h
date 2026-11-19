@@ -433,18 +433,46 @@ namespace ckernel {
 namespace ckernel {
 #endif
 
-// The output subblock width a kernel names as a compile-time arg (minimal_matmul: subblock_w), else 0. A one-tile-wide
-// subblock of 16-bit operands keeps the per-row unpack offsets: hoisting them measured slower there (minimal 224 2x1 bf16
-// LoFi +0.1 %, bfp8 -0.35 %).
-constexpr std::uint32_t matmul_fe_named_subblock_w() {
+// A block arg the kernel names at compile time (minimal_matmul: subblock_h, subblock_w, K_block_tiles), else 0
+constexpr std::uint32_t matmul_fe_named_block_arg(const char* name) {
 #ifdef KERNEL_COMPILE_TIME_ARG_MAP
     for (const auto& [arg_name, arg_value] : named_args_map) {
-        if (arg_name == std::string_view("subblock_w")) {
+        if (arg_name == std::string_view(name)) {
             return arg_value;
         }
     }
 #endif
     return 0;
+}
+
+// Hoisted unpack rows for the run-time calls. A kernel that names its subblock height (minimal_matmul) hoists only where
+// that measured faster: not for the one-row calls of a 1xN subblock (244 1x4 bfp8 LoFi +0.15 / +0.26 %), a 2x1
+// subblock only at LoFi (224 2x1 bfp8 HiFi2 +0.10 %), and not at LoFi with a 32-bit DEST over a block-float CB, K and M
+// blocks below 3 and 8 and no bias epilogue (424 2x2 bfp8 +0.22 %; a K block of 3 gains: tt_dit 1024x3072x1152 -0.5 %).
+constexpr bool matmul_fe_unkeyed_hoist() {
+#if !defined(UCK_CHLKC_UNPACK)
+    return true;
+#else
+    constexpr std::uint32_t sh = matmul_fe_named_block_arg("subblock_h");
+    constexpr std::uint32_t sw = matmul_fe_named_block_arg("subblock_w");
+    constexpr bool bfp = llk_matmul_kernel_has_bfp_cb();
+    if constexpr (sh == 0 || (sh == 1 && sw == 1)) {
+        // a one-tile-wide subblock of 16-bit operands keeps the per-row offsets (224 2x1 bf16 LoFi +0.1 %)
+        return sw != 1 || bfp;
+    } else if constexpr (sh == 1) {
+        return false;
+    } else if constexpr (sw == 1) {
+        return bfp && MATH_FIDELITY == MathFidelity::LoFi;
+    } else {
+#ifdef FUSE_BIAS
+        constexpr bool bias = true;
+#else
+        constexpr bool bias = false;
+#endif
+        return !(bfp && MATH_FIDELITY == MathFidelity::LoFi && DST_ACCUM_MODE && matmul_fe_named_block_arg("K_block_tiles") < 3 &&
+                 matmul_fe_named_block_arg("M_block_tiles") < 8 && !bias);
+    }
+#endif
 }
 
 #ifdef TRISC_MATH
@@ -679,7 +707,7 @@ ALWI void matmul_block_llk(
          form_out,
          llk_dir,
          stream_z,
-         matmul_fe_named_subblock_w() != 1 || llk_matmul_kernel_has_bfp_cb(),
+         matmul_fe_unkeyed_hoist(),
          one_tile_key > (in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim, held_a)));
 #ifdef TRISC_MATH
     if constexpr (matmul_fe_main_math<llk_dir, row_mop_on, kt_key, form_out, in1_order, row_end_fold, in0_format, in1_format, out_format, block_rt, block_ct>()) {
