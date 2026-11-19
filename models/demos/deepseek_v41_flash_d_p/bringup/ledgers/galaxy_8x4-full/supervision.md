@@ -567,3 +567,4 @@
   attention (~13.6 ms) -> X.10 host profile (decides the ~14 ms host lever; minutes) -> P.83 mHC (~6) -> P.82 MoE
   head (~4.8 on real text).
 - 12:03 UTC ttnn rebuilt after the P.84 revert (35 s). DEVICE OPENS (justified): P.81 attention: the runner restarts once for the new .so (1 open, layers 0-20); the agent's checks and the A/B sides through it (a C++/.so or kernel change by the agent costs one restart each); the accept gate's fresh full process once if accepted. RAM unaccounted 179.9 GiB.
+- 12:34 UTC P.81 attempt 1 stopped by me before its A/B: it measured and reported but built only a wq_b config (-0.3 ms) and called sparse_sdpa / wo_a / RoPE 'kernel redesign' out of scope. My brief's stop rule (within 30 % of floor / a design < 1 ms) invited that. Attempt 2 brief: build the kernels (sdpa query balance + direct bfp4 read, wo_a weight spread, fused RoPE). Agent rule added: kernel work is never a reason to stop (bringup-engineer.md).

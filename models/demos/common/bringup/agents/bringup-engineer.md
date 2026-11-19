@@ -247,3 +247,8 @@ You start with no memory of earlier steps. Everything you need is in the brief a
   fork's `tests/`, following `models/demos/common/bringup/skill/bringup-fork-tests/SKILL.md`.
 - **fix**: a scripted gate (ladder rung, contract, profile) failed. The brief carries the log. Find the component whose
   layer first broke the trail, fix it in its module, and re-run the gate.
+
+Owner rule (2026-11-19): a gap that needs a kernel change (a fork's kernel, a fused epilogue, a rebalanced program) is
+the work, not a reason to stop. "At its floor as a separate pass", "needs a kernel redesign" or "not a config" never
+end a perf step: build it in a fork (the bringup-fork-op skill), measure it, and revert only what measures below the
+brief's threshold.
