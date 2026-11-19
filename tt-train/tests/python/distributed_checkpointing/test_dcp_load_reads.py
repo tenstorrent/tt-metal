@@ -4,22 +4,27 @@
 
 """The load path's file reads, device-free. ``_read_chunk`` reads a chunk with one ``pread`` when the destination
 shards together need at least half of it (on one host they tile the whole tensor, so this is the usual case) and
-falls back to one read per contiguous run otherwise; both must put the same bytes in the same places."""
+falls back to one read per contiguous run otherwise; both must put the same bytes in the same places. A data file's
+data section starts where its 8-byte header length says."""
 
 import os
+import struct
+from types import SimpleNamespace
 
 import numpy as np
 from dcp_oracle import R, S, FakeCheckpoint, arange, assert_shards_equal, expected_shards, world
 
 from ttml.distributed_checkpointing import _load
-from ttml.distributed_checkpointing._errors import CheckpointError
+from ttml.distributed_checkpointing._errors import CheckpointError, IncompleteCheckpointError
 from ttml.distributed_checkpointing._layouts import Identity
 from ttml.distributed_checkpointing._load import _read_chunk
-from ttml.distributed_checkpointing._safetensors import ITEMSIZE
+from ttml.distributed_checkpointing._safetensors import ITEMSIZE, create_file
 
 TP2_COLS = world([R(), S(3)], (1, 2))  # a row-parallel weight: columns split over two devices
 FSDP4_ROWS = world([S(2), R()], (4, 1))  # rows split over four devices: every shard needs rows of both chunks
 TP4_COLS = world([R(), S(3)], (1, 4))  # columns split over four devices
+FSDP2_ROWS = world([S(2), R()], (2, 1))  # rows split over two devices
+ROWS4_COLS4 = world([S(2), S(3)], (4, 4))  # rows split over four devices and columns over four
 SHAPE = (1, 1, 8, 16)
 
 
@@ -124,6 +129,67 @@ def test_a_column_slice_of_a_chunk_is_read_row_by_row(tmp_path, monkeypatch):
             os.close(fd)
 
 
+def test_a_block_from_the_middle_of_a_chunk_reads_its_own_rows(tmp_path, monkeypatch):
+    """A destination needing rows 2-3 of a 4-row chunk and some of its columns reads two runs that start at chunk rows
+    2 and 3: the block's offset into the chunk counts on every dim before the run's, not just on the run's own."""
+    kplan, fds, src = _plan_and_files(tmp_path, saved=FSDP2_ROWS, loaded=ROWS4_COLS4)
+    reads = []
+    real_pread = _load.pread_all
+
+    def counting_pread(fd, nbytes, offset):
+        reads.append((nbytes, offset))
+        return real_pread(fd, nbytes, offset)
+
+    monkeypatch.setattr(_load, "pread_all", counting_pread)
+    try:
+        group = next(g for g, box in kplan.boxes.items() if tuple(box.offsets) == (0, 0, 2, 4))  # rows 2-3, cols 4-7
+        one = {group: np.zeros(kplan.boxes[group].sizes, np.float32)}
+        for items in _by_chunk(kplan).values():
+            mine = [i for i in items if i.group == group]
+            if mine:
+                _read_chunk(fds[items[0].file], 0, kplan, mine, ITEMSIZE["F32"], np.float32, one, "file")
+
+        np.testing.assert_array_equal(one[group], expected_shards(src, ROWS4_COLS4)[group])
+        # Chunk 0 holds rows 0-3; the block is columns 4-7 of its rows 2 and 3.
+        itemsize = ITEMSIZE["F32"]
+        run, start, row = 4 * itemsize, 4 * itemsize, SHAPE[3] * itemsize
+        assert sorted(reads) == [(run, 2 * row + start), (run, 3 * row + start)], reads
+    finally:
+        for fd in fds.values():
+            os.close(fd)
+
+
+def test_a_same_layout_chunk_is_read_into_its_destination(tmp_path, monkeypatch, expect_error):
+    """A chunk that is its one destination shard, as in a same-world load, is read into the shard's array itself, with
+    no intermediate bytes, and still checked against its CRC32."""
+    kplan, fds, src = _plan_and_files(tmp_path, saved=TP2_COLS, loaded=TP2_COLS)
+
+    def no_intermediate_copy(fd, nbytes, offset):
+        raise AssertionError("a same-layout chunk was read into intermediate bytes")
+
+    monkeypatch.setattr(_load, "pread_all", no_intermediate_copy)
+    try:
+        arrays = {group: np.zeros(box.sizes, np.float32) for group, box in kplan.boxes.items()}
+        chunks = _by_chunk(kplan)
+        for items in chunks.values():
+            assert len(items) == 1, "precondition: each chunk is one destination shard"
+            n = _read_chunk(fds[items[0].file], 0, kplan, items, ITEMSIZE["F32"], np.float32, arrays, "file")
+            assert n == src.nbytes // 2
+        assert_shards_equal(arrays, expected_shards(src, TP2_COLS))
+
+        items = chunks[max(chunks)]
+        with open(tmp_path / f"file{items[0].file}", "r+b") as f:  # one flipped bit; the descriptor sees it
+            f.seek(5)
+            byte = f.read(1)[0]
+            f.seek(5)
+            f.write(bytes([byte ^ 0x40]))
+        with expect_error(CheckpointError, r"w: chunk 1 \(.*\) in file fails its CRC32 check"):
+            _read_chunk(fds[items[0].file], 0, kplan, items, ITEMSIZE["F32"], np.float32, arrays, "file")
+    finally:
+        for fd in fds.values():
+            os.close(fd)
+
+
 def test_a_whole_chunk_read_checks_the_chunk_crc(tmp_path, expect_error):
     ckpt = FakeCheckpoint()
     src = arange(SHAPE)
@@ -145,3 +211,34 @@ def test_a_whole_chunk_read_checks_the_chunk_crc(tmp_path, expect_error):
     finally:
         for fd in fds.values():
             os.close(fd)
+
+
+def test_data_files_take_their_data_offset_from_the_header_length(tmp_path, expect_error):
+    """Load takes each data file's data offset from its 8-byte header length, without parsing the header, and refuses
+    a length that runs past the end of the file."""
+    body = b'{"__metadata__":{}}   '
+    header = struct.pack("<Q", len(body)) + body
+    good = create_file(str(tmp_path / "good.safetensors"), header, 64)
+    (tmp_path / "bad.safetensors").write_bytes(struct.pack("<Q", 1 << 20) + bytes(64))
+    index = SimpleNamespace(
+        files=[
+            SimpleNamespace(path="good.safetensors", nbytes=good + 64),
+            SimpleNamespace(path="bad.safetensors", nbytes=72),
+        ]
+    )
+
+    def plan(*files):
+        return SimpleNamespace(keys={"w": SimpleNamespace(reads=[SimpleNamespace(file=f) for f in files])})
+
+    data_files = _load._DataFiles()
+    try:
+        data_files.open(str(tmp_path), index, plan(0))
+        assert data_files.data_start == {0: len(header)}
+    finally:
+        data_files.close()
+    data_files = _load._DataFiles()
+    try:
+        with expect_error(IncompleteCheckpointError, r"bad.safetensors declares a 1048576-byte header but is 72 bytes"):
+            data_files.open(str(tmp_path), index, plan(1))
+    finally:
+        data_files.close()

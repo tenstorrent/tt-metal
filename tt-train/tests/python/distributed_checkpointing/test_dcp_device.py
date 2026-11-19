@@ -6,8 +6,8 @@
 
 Every parameter and optimizer moment must come back device for device, bit for bit, into a fresh model and
 optimizer; the header and the optimizer scalars must come back; the scheduler, the dataloader and every random
-generator must resume where the save left them; the FSDP gate must refuse a gathered module; a strict load must
-name what is missing. Cross-world loads live in ``test_dcp_cross_world.py``, which needs no open
+generator must resume where the save left them; a gathered FSDP module is resharded first; a strict load
+must name what is missing. Cross-world loads live in ``test_dcp_cross_world.py``, which needs no open
 device of its own.
 
 ``tp_mesh`` and ``fsdp_mesh`` are both module-scoped and each reopens the device with its own axis names, so the two
@@ -17,65 +17,28 @@ groups must not interleave: the TP tests come first, the FSDP test last.
 import json
 import os
 import random
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pytest
 import torch
 import ttnn
 from dcp_oracle import Loader, advance_generators
-from tp_block import TPBlock, device_slices, fresh_tp, make_adamw, train_step
+from dcp_shards import assert_same_shards, assert_some_differ, model_shards, optimizer_shards, tensor_shards
+from tp_block import TPBlock, fresh_tp, make_adamw, train_step
 
 import ttml
 import ttml.distributed_checkpointing as dcp
 from ttml.common.schedulers import CosineAnnealingScheduler
+from ttml.distributed_checkpointing import _load, _save
 from ttml.distributed_checkpointing._state_dict import collect_model
 from ttml.fsdp import _ShardedState
-from ttml.modules import AbstractModuleBase, Buffer, LinearLayer, Parameter
+from ttml.modules import AbstractModuleBase, Buffer, LinearLayer, ModuleList, Parameter
 
 pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(1800)]
 
 DIM = 64  # tile-aligned per device after a 2-way split (32 rows / cols per shard)
-NATIVE = ttml.autograd.PreferredPrecision.NATIVE
-
-
-def _shards(tensor):
-    return device_slices(tensor.get_value(NATIVE))
-
-
-def _model_shards(params):
-    return {name: _shards(t) for name, t in params.items()}
-
-
-def _state(optimizer):
-    """``(tensor shards by key, scalars by key)`` of an optimizer's state dict."""
-    shards, scalars = {}, {}
-
-    def walk(node, path):
-        if isinstance(node, ttml.NamedParameters):
-            for name, tensor in node.items():
-                shards["/".join(path) + ":" + name] = _shards(tensor)
-        elif isinstance(node, dict):
-            for key, child in node.items():
-                walk(child, path + (str(key),))
-        else:
-            scalars["/".join(path)] = node
-
-    walk(optimizer.get_state_dict(), ())
-    return shards, scalars
-
-
-def _assert_same_shards(actual: dict, expected: dict) -> None:
-    assert actual.keys() == expected.keys()
-    for key in expected:
-        assert len(actual[key]) == len(expected[key]), key
-        for device, (a, e) in enumerate(zip(actual[key], expected[key])):
-            assert np.array_equal(a, e), f"{key} differs on device {device}"
-
-
-def _assert_some_differ(actual: dict, expected: dict) -> None:
-    assert any(
-        not np.array_equal(a, e) for key in expected for a, e in zip(actual[key], expected[key])
-    ), "precondition: fresh state differs"
 
 
 class _Stack(AbstractModuleBase):
@@ -97,8 +60,8 @@ class _TPBlockPlus(TPBlock):
 def test_tp_round_trip_is_bit_exact_on_the_same_world(tp_mesh, tmp_path):
     model, params, opt = fresh_tp(DIM)
     train_step(model, opt, DIM)
-    before = _model_shards(params)
-    before_state, before_scalars = _state(opt)
+    before = model_shards(params)
+    before_state, before_scalars = optimizer_shards(opt)
     assert before_scalars, "the optimizer state dict carries scalars (steps, lr, ...)"
     path = str(tmp_path / dcp.step_dir_name(1))
 
@@ -108,11 +71,11 @@ def test_tp_round_trip_is_bit_exact_on_the_same_world(tp_mesh, tmp_path):
     assert result.keys == len(before) + len(before_state) and result.bytes_written > 0
     assert len(result.files) == 2, "one data file per device of the [1, 2] mesh"
     assert dcp.read_header(path) == {"step": 1, "note": "tp"}
-    assert _state(opt)[0].keys() == before_state.keys()
-    _assert_same_shards(_model_shards(params), before)  # the save left the live tensors alone
+    assert optimizer_shards(opt)[0].keys() == before_state.keys()
+    assert_same_shards(model_shards(params), before)  # the save left the live tensors alone
 
     model2, params2, opt2 = fresh_tp(DIM)
-    _assert_some_differ(_model_shards(params2), before)
+    assert_some_differ(model_shards(params2), before)
     loaded = dcp.load(path, model=model2, optimizer=opt2)
 
     assert loaded.header == {"step": 1, "note": "tp"}
@@ -120,9 +83,9 @@ def test_tp_round_trip_is_bit_exact_on_the_same_world(tp_mesh, tmp_path):
     assert set(loaded.fast_path_keys) == set(f"model/{n}" for n in before) | set(
         f"optimizer/{k.replace(':', '/')}" for k in before_state
     )
-    _assert_same_shards(_model_shards(params2), before)
-    after_state, after_scalars = _state(opt2)
-    _assert_same_shards(after_state, before_state)
+    assert_same_shards(model_shards(params2), before)
+    after_state, after_scalars = optimizer_shards(opt2)
+    assert_same_shards(after_state, before_state)
     assert after_scalars == before_scalars
 
 
@@ -136,34 +99,41 @@ def test_a_step_after_the_load_matches_the_uninterrupted_run(tp_mesh, tmp_path):
     path = str(tmp_path / dcp.step_dir_name(3))
     dcp.save(path, model=model, optimizer=opt, header={"step": 3})
     train_step(model, opt, DIM, input_scale=0.5)  # step 4 of the uninterrupted run, on a batch the resumed run repeats
-    expected = _model_shards(params)
-    expected_state, expected_scalars = _state(opt)
+    expected = model_shards(params)
+    expected_state, expected_scalars = optimizer_shards(opt)
 
     model2, params2, opt2 = fresh_tp(DIM)
     dcp.load(path, model=model2, optimizer=opt2)
     train_step(model2, opt2, DIM, input_scale=0.5)
-    _assert_same_shards(_model_shards(params2), expected)
-    _assert_same_shards(_state(opt2)[0], expected_state)
-    assert _state(opt2)[1] == expected_scalars
+    assert_same_shards(model_shards(params2), expected)
+    assert_same_shards(optimizer_shards(opt2)[0], expected_state)
+    assert optimizer_shards(opt2)[1] == expected_scalars
 
     model3, params3, opt3 = fresh_tp(DIM)
     # The parameters alone, strictly: a load without an optimizer does not count the optimizer entries as unexpected.
     assert dcp.load(path, model=model3).unexpected == []
     train_step(model3, opt3, DIM, input_scale=0.5)
-    _assert_some_differ(_model_shards(params3), expected)
-    _assert_some_differ(_state(opt3)[0], expected_state)
+    assert_some_differ(model_shards(params3), expected)
+    assert_some_differ(optimizer_shards(opt3)[0], expected_state)
+
+
+class _Bias(AbstractModuleBase):
+    def __init__(self, values: np.ndarray) -> None:
+        super().__init__()
+        self.bias = Buffer(ttml.autograd.Tensor.from_numpy(values, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16))
 
 
 class _WithBuffers(AbstractModuleBase):
     """A layer plus state a step updates outside the optimizer, like a MoE's load-balancing bias, reachable under two
-    names."""
+    names, and a second such buffer in a module a ModuleList holds, as a MoE's blocks are."""
 
     def __init__(self, dim: int, seed: int) -> None:
         super().__init__()
         self.linear = LinearLayer(dim, dim, has_bias=False)
-        values = np.random.default_rng(seed).standard_normal((1, 1, 1, dim)).astype(np.float32)
-        self.expert_bias = Buffer(ttml.autograd.Tensor.from_numpy(values, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16))
+        values = np.random.default_rng(seed).standard_normal((2, 1, 1, dim)).astype(np.float32)
+        self.expert_bias = Buffer(ttml.autograd.Tensor.from_numpy(values[:1], ttnn.Layout.TILE, ttnn.DataType.BFLOAT16))
         self.alias = self.expert_bias
+        self.blocks = ModuleList([_Bias(values[1:])])
 
     def forward(self, x):
         return self.linear(x)
@@ -173,15 +143,77 @@ def test_buffers_are_saved_and_loaded(tp_mesh, tmp_path):
     model = _WithBuffers(DIM, seed=1)
     path = str(tmp_path / "step_0000001")
     dcp.save(path, model=model)
-    entry = dcp.read_index(path).entries["model/_WithBuffers/expert_bias"]
+    entries = dcp.read_index(path).entries
+    entry = entries["model/_WithBuffers/expert_bias"]
     assert entry.role == "buffer" and entry.live_keys == ("model/_WithBuffers/alias", "model/_WithBuffers/expert_bias")
+    assert entries["model/_WithBuffers/blocks/0/bias"].role == "buffer", "a buffer under a ModuleList is saved"
+
+    def buffers(m):
+        return {"b": tensor_shards(m.expert_bias.tensor), "listed": tensor_shards(m.blocks[0].bias.tensor)}
 
     fresh = _WithBuffers(DIM, seed=2)
-    _assert_some_differ({"b": _shards(fresh.expert_bias.tensor)}, {"b": _shards(model.expert_bias.tensor)})
+    assert_some_differ({"b": tensor_shards(fresh.expert_bias.tensor)}, {"b": tensor_shards(model.expert_bias.tensor)})
+    assert_some_differ(
+        {"b": tensor_shards(fresh.blocks[0].bias.tensor)}, {"b": tensor_shards(model.blocks[0].bias.tensor)}
+    )
     loaded = dcp.load(path, model=fresh)
     assert loaded.missing == [] and loaded.unexpected == []
-    _assert_same_shards({"b": _shards(fresh.expert_bias.tensor)}, {"b": _shards(model.expert_bias.tensor)})
-    _assert_same_shards(_model_shards(fresh.parameters()), _model_shards(model.parameters()))
+    assert_same_shards(buffers(fresh), buffers(model))
+    assert_same_shards(model_shards(fresh.parameters()), model_shards(model.parameters()))
+
+
+def test_a_moment_laid_out_unlike_its_parameter_is_refused(tp_mesh, tmp_path, expect_error):
+    """A moment with its TP-sharded parameter's per-device shape but labelled replicated would be saved as one device's
+    piece and loaded onto every device; save refuses it by its global shape."""
+    model, params, opt = fresh_tp(DIM)
+    train_step(model, opt, DIM)
+    key = next(k for k in params if k.endswith("up/weight"))
+
+    def moments(node):
+        if isinstance(node, ttml.NamedParameters):
+            yield node
+        elif isinstance(node, dict):
+            for child in node.values():
+                yield from moments(child)
+
+    moment = next(m for m in moments(opt.get_state_dict()) if key in m)[key]
+    value = moment.get_value()
+    replicated = ttml.autograd.Tensor.from_numpy(
+        np.zeros(tuple(int(n) for n in value.shape), dtype=np.float32), ttnn.Layout.TILE, value.dtype
+    )
+    moment.set_value(replicated.get_value())
+    with expect_error(dcp.CheckpointError, r"over the mesh but its parameter .* it is not sharded as its parameter is"):
+        dcp.save(str(tmp_path / "step_0000001"), model=model, optimizer=opt)
+    assert not (tmp_path / "step_0000001").exists()
+
+
+def test_threads_sizes_the_writers_and_the_reader_pool(tp_mesh, tmp_path, monkeypatch):
+    """Save starts one writer thread per data file, or ``threads`` of them sharing the files; load reads with a pool of
+    ``threads`` (32 by default). Two devices write two files."""
+    model, params, opt = fresh_tp(DIM)
+    train_step(model, opt, DIM)
+    writers, pools = [], []
+    real_writer = _save._writer
+
+    def counting_writer(*args):
+        writers.append(threading.current_thread().name)
+        return real_writer(*args)
+
+    class CountingPool(ThreadPoolExecutor):
+        def __init__(self, max_workers=None, **kwargs):
+            pools.append(max_workers)
+            super().__init__(max_workers=max_workers, **kwargs)
+
+    monkeypatch.setattr(_save, "_writer", counting_writer)
+    monkeypatch.setattr(_load, "ThreadPoolExecutor", CountingPool)
+    for threads, expected in ((None, 2), (1, 1), (8, 2)):
+        writers.clear()
+        result = dcp.save(str(tmp_path / f"threads_{threads}"), model=model, optimizer=opt, threads=threads)
+        assert len(result.files) == 2 and len(writers) == expected, (threads, writers)
+    for threads, expected in ((None, 32), (3, 3)):
+        pools.clear()
+        dcp.load(str(tmp_path / "threads_1"), model=model, optimizer=opt, threads=threads)
+        assert pools == [expected], (threads, pools)
 
 
 def test_strict_load_names_the_mismatch(tp_mesh, tmp_path, expect_error):
@@ -250,7 +282,7 @@ class _LoraHeads(AbstractModuleBase):
         self.head = LoraLinear(head, LoraConfig(rank=8))
 
 
-def test_lora_declares_the_rows_it_adds_to(tp_mesh, expect_error):
+def test_lora_declares_the_rows_it_adds_to(tp_mesh, tmp_path, expect_error):
     from ttml.distributed_checkpointing._layouts import Pad, fused_segments
     from ttml.modules import ColumnParallelLinear
 
@@ -263,11 +295,15 @@ def test_lora_declares_the_rows_it_adds_to(tp_mesh, expect_error):
     for head in ("tp_head", "head"):
         assert infos[f"{head}/weight"].transform == Pad(2, 100, 128)
         assert infos[f"{head}/lora_B"].transform == Pad(2, 100, 128), head
-    # A segment that does not split evenly over the TP shards is refused when the layer is built, not at the first save.
-    with expect_error(dcp.LayoutError, "segment size 63 is not divisible by the 2 shards"):
-        ColumnParallelLinear(DIM, 96, has_bias=False, fused_segments=(63, 33))
-    with expect_error(dcp.LayoutError, r"fused_segments \(32, 32\) sum to 64 but the fused dim has 96 rows"):
-        ColumnParallelLinear(DIM, 96, has_bias=False, fused_segments=(32, 32))
+    # The layer only records its declaration; a bad one is refused by the first save, before anything is written.
+    for segments, message in (
+        ((63, 33), "segment size 63 is not divisible by the 2 shards"),
+        ((32, 32), r"fused_segments \(32, 32\) sum to 64 but the fused dim has 96 rows"),
+    ):
+        layer = ColumnParallelLinear(DIM, 96, has_bias=False, fused_segments=segments)
+        with expect_error(dcp.LayoutError, message):
+            dcp.save(str(tmp_path / "bad"), model=layer)
+        assert not (tmp_path / "bad").exists()
 
 
 def test_save_refuses_bad_state_before_writing_and_leaks_nothing(tp_mesh, tmp_path, monkeypatch, expect_error):
@@ -343,10 +379,10 @@ def test_truncated_data_file_is_refused_first(tp_mesh, tmp_path, expect_error):
     os.truncate(victim, os.path.getsize(victim) - 1)
 
     model2, params2, opt2 = fresh_tp(DIM)
-    before = _model_shards(params2)
+    before = model_shards(params2)
     with expect_error(dcp.IncompleteCheckpointError, "truncated or corrupt"):
         dcp.load(path, model=model2, optimizer=opt2)
-    _assert_same_shards(_model_shards(params2), before)
+    assert_same_shards(model_shards(params2), before)
 
 
 class _OddRows(AbstractModuleBase):
@@ -365,21 +401,21 @@ class _OddRows(AbstractModuleBase):
 
 def test_shards_that_end_inside_a_tile_round_trip_and_reshard(tp_mesh, tmp_path):
     sharded = _OddRows(sharded=True, seed=0)
-    saved = _model_shards(sharded.parameters())
+    saved = model_shards(sharded.parameters())
     (pieces,) = saved.values()
     assert [p.shape[2] for p in pieces] == [48, 48], "precondition: a tile and a half per device"
     path = str(tmp_path / "sharded")
     dcp.save(path, model=sharded)
 
     same = _OddRows(sharded=True, seed=1)
-    _assert_some_differ(_model_shards(same.parameters()), saved)
+    assert_some_differ(model_shards(same.parameters()), saved)
     assert dcp.load(path, model=same).fast_path_keys, "each device reads back its own chunk"
-    _assert_same_shards(_model_shards(same.parameters()), saved)
+    assert_same_shards(model_shards(same.parameters()), saved)
 
     # Onto a replicated weight: every device gets all 96 rows, put back together from the two 48-row chunks.
     replicated = _OddRows(sharded=False, seed=2)
     assert not dcp.load(path, model=replicated).fast_path_keys
-    (whole,) = _model_shards(replicated.parameters()).values()
+    (whole,) = model_shards(replicated.parameters()).values()
     assert all(np.array_equal(w, np.concatenate(pieces, axis=2)) for w in whole)
 
     # And back: the replicated weight's checkpoint cut into 48-row shards.
@@ -387,7 +423,7 @@ def test_shards_that_end_inside_a_tile_round_trip_and_reshard(tp_mesh, tmp_path)
     dcp.save(path, model=replicated)
     resharded = _OddRows(sharded=True, seed=3)
     assert not dcp.load(path, model=resharded).fast_path_keys
-    _assert_same_shards(_model_shards(resharded.parameters()), saved)
+    assert_same_shards(model_shards(resharded.parameters()), saved)
 
 
 def _cpp_llama():
@@ -401,15 +437,15 @@ def _cpp_llama():
 def test_cpp_model_round_trips_on_the_same_world(tp_mesh, tmp_path):
     """A C++ model round trips on the same world, with a warning that only this TP size can load it."""
     model = _cpp_llama()
-    saved = _model_shards(model.parameters())
+    saved = model_shards(model.parameters())
     path = str(tmp_path / "ckpt")
     with pytest.warns(UserWarning, match="restores correctly only onto the same TP size"):
         dcp.save(path, model=model)
     fresh = _cpp_llama()
-    _assert_some_differ(_model_shards(fresh.parameters()), saved)
+    assert_some_differ(model_shards(fresh.parameters()), saved)
     with pytest.warns(UserWarning, match="restores correctly only onto the same TP size"):
         dcp.load(path, model=fresh)
-    _assert_same_shards(_model_shards(fresh.parameters()), saved)
+    assert_same_shards(model_shards(fresh.parameters()), saved)
     # Its fused kv_linear is the one weight a load at another TP size would scramble, so load checks its TP split.
     with pytest.warns(UserWarning, match="restores correctly only onto the same TP size"):
         live = collect_model(fresh)
@@ -435,23 +471,23 @@ def test_undeclared_fused_weight_needs_same_row_order(tp_mesh, tmp_path, expect_
     with pytest.warns(UserWarning, match="declares no fused_segments"):
         dcp.save(path, model=model)
     assert dcp.read_index(path).entries["model/_Qkv/qkv_linear/weight"].tp_split == (1, 1, 2, 1)
-    saved = _model_shards(model.parameters())
+    saved = model_shards(model.parameters())
 
     same = _Qkv(DIM)
     with pytest.warns(UserWarning, match="declares no fused_segments"):
         dcp.load(path, model=same)  # the same TP size, undeclared on both sides: the rows copy as they are
-    _assert_same_shards(_model_shards(same.parameters()), saved)
+    assert_same_shards(model_shards(same.parameters()), saved)
 
     # Declaring the segments now would read TP2's per-shard rows as canonical ones: refused, nothing placed.
     declared = _Qkv(DIM, fused_segments=(DIM, DIM // 2, DIM // 2))
-    before = _model_shards(declared.parameters())
+    before = model_shards(declared.parameters())
     with expect_error(
         dcp.LayoutError,
         r"qkv_linear/weight: its name suggests a fused projection .*\[1, 1, 2, 1\] per dim undescribed and the live "
         r"model \[1, 1, 1, 1\]",
     ):
         dcp.load(path, model=declared)
-    _assert_same_shards(_model_shards(declared.parameters()), before)
+    assert_same_shards(model_shards(declared.parameters()), before)
 
 
 def _ttml_draw():
@@ -627,14 +663,14 @@ def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path, expect_er
     assert not [name for name in os.listdir(tmp_path) if name.startswith("not_json")], "nothing on disk"
 
 
-def test_fsdp_round_trip_and_the_sharded_state_gate(fsdp_mesh, tmp_path, expect_error):
+def test_fsdp_round_trip_and_a_gathered_module_resharded(fsdp_mesh, tmp_path):
     model = _Stack(DIM)
     ttml.fsdp.fully_shard(model)
     params = model.parameters()
     opt = make_adamw(params)
     train_step(model, opt, DIM)
-    before = _model_shards(params)
-    before_state, before_scalars = _state(opt)
+    before = model_shards(params)
+    before_state, before_scalars = optimizer_shards(opt)
     path = str(tmp_path / dcp.step_dir_name(1))
 
     dcp.save(path, model=model, optimizer=opt, header={"step": 1})
@@ -643,22 +679,22 @@ def test_fsdp_round_trip_and_the_sharded_state_gate(fsdp_mesh, tmp_path, expect_
     ttml.fsdp.fully_shard(model2)
     params2 = model2.parameters()
     opt2 = make_adamw(params2)
-    _assert_some_differ(_model_shards(params2), before)
+    assert_some_differ(model_shards(params2), before)
     loaded = dcp.load(path, model=model2, optimizer=opt2)
     assert loaded.header == {"step": 1} and loaded.fast_path_keys
-    _assert_same_shards(_model_shards(params2), before)
-    _assert_same_shards(_state(opt2)[0], before_state)
-    assert _state(opt2)[1] == before_scalars
+    assert_same_shards(model_shards(params2), before)
+    assert_same_shards(optimizer_shards(opt2)[0], before_state)
+    assert optimizer_shards(opt2)[1] == before_scalars
 
     # One more step from the checkpoint equals one more step of the run that never stopped: the sharded moments
     # and the step count feed the update kernel as they did before the save.
     train_step(model, opt, DIM, input_scale=0.5)
     train_step(model2, opt2, DIM, input_scale=0.5)
-    _assert_same_shards(_model_shards(params2), _model_shards(params))
-    _assert_same_shards(_state(opt2)[0], _state(opt)[0])
-    assert _state(opt2)[1] == _state(opt)[1]
+    assert_same_shards(model_shards(params2), model_shards(params))
+    assert_same_shards(optimizer_shards(opt2)[0], optimizer_shards(opt)[0])
+    assert optimizer_shards(opt2)[1] == optimizer_shards(opt)[1]
 
-    # A module left gathered by a forward with reshard_after_forward=False is refused unless resharded first.
+    # A module left gathered by a forward with reshard_after_forward=False is resharded first.
     model3 = _Stack(DIM)
     ttml.fsdp.fully_shard(model3, reshard_after_forward=False)
     params3 = model3.parameters()
@@ -669,15 +705,13 @@ def test_fsdp_round_trip_and_the_sharded_state_gate(fsdp_mesh, tmp_path, expect_
     )
     model3(x)  # leaves the module UNSHARDED
     assert model3._fsdp_state.sharded_state == _ShardedState.UNSHARDED, "precondition"
-    with expect_error(dcp.FSDPStateError, "is not in its sharded state; pass reshard_fsdp=True"):
-        dcp.save(str(tmp_path / "gathered"), model=model3, optimizer=opt3, reshard_fsdp=False)
     dcp.save(str(tmp_path / "resharded"), model=model3, optimizer=opt3)
     assert model3._fsdp_state.sharded_state == _ShardedState.SHARDED
     ttml.autograd.AutoContext.get_instance().reset_graph()
 
 
-def test_fsdp_load_refuses_gathered_or_early_optimizer(fsdp_mesh, tmp_path, expect_error):
-    """An FSDP load refuses a gathered module, and an optimizer built before sharding."""
+def test_fsdp_load_reshards_gathered_and_refuses_early_optimizer(fsdp_mesh, tmp_path, expect_error):
+    """An FSDP load reshards a gathered module first, and refuses an optimizer built before sharding."""
     model = _Stack(DIM)
     ttml.fsdp.fully_shard(model)
     opt = make_adamw(model.parameters())
@@ -685,7 +719,7 @@ def test_fsdp_load_refuses_gathered_or_early_optimizer(fsdp_mesh, tmp_path, expe
     path = str(tmp_path / "step_0000001")
     dcp.save(path, model=model, optimizer=opt)
 
-    # Loading into a module left gathered: refused with reshard_fsdp=False, resharded first by default.
+    # Loading into a module left gathered: resharded first.
     gathered = _Stack(DIM)
     ttml.fsdp.fully_shard(gathered, reshard_after_forward=False)
     gathered_opt = make_adamw(gathered.parameters())
@@ -696,11 +730,9 @@ def test_fsdp_load_refuses_gathered_or_early_optimizer(fsdp_mesh, tmp_path, expe
     gathered(x)
     ttml.autograd.AutoContext.get_instance().reset_graph()
     assert gathered._fsdp_state.sharded_state == _ShardedState.UNSHARDED, "precondition"
-    with expect_error(dcp.FSDPStateError, "is not in its sharded state; pass reshard_fsdp=True"):
-        dcp.load(path, model=gathered, optimizer=gathered_opt, reshard_fsdp=False)
     dcp.load(path, model=gathered, optimizer=gathered_opt)
     assert gathered._fsdp_state.sharded_state == _ShardedState.SHARDED
-    _assert_same_shards(_model_shards(gathered.parameters()), _model_shards(model.parameters()))
+    assert_same_shards(model_shards(gathered.parameters()), model_shards(model.parameters()))
 
     # An optimizer built before fully_shard holds full-size moments for sharded parameters.
     early = _Stack(DIM)

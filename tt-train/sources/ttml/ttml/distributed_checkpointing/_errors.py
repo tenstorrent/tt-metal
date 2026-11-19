@@ -52,9 +52,5 @@ class TopologyError(CheckpointError):
     """A tensor's topology label cannot be used as a layout, or changed when it must not."""
 
 
-class FSDPStateError(CheckpointError):
-    """An FSDP module is not in its sharded state."""
-
-
 class LazyParameterError(CheckpointError):
     """A parameter has not been materialized."""
