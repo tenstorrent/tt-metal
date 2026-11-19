@@ -4,7 +4,11 @@
 
 from helpers.llk_params import PerfRunType
 from helpers.perf.core import ALL_PERF_RUN_TYPES, create_test_or_perf_config
-from helpers.test_variant_parameters import LOOP_FACTOR, PERF_RUN_TYPE, TemplateParameter
+from helpers.test_variant_parameters import (
+    LOOP_FACTOR,
+    PERF_RUN_TYPE,
+    TemplateParameter,
+)
 
 PERF_LOOP_FACTOR = 32
 
