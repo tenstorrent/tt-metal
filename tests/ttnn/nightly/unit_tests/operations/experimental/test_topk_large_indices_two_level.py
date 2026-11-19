@@ -172,9 +172,10 @@ def test_two_level_tied_blocks(device):
     _check_rows(torch_input, _indices(out, rows), n, range(rows))
 
 
-@pytest.mark.parametrize("rows", [4, 160])
-def test_two_level_supplied_block_maxima(device, rows):
-    """The caller's maxima, with one row per core and with several."""
+@pytest.mark.parametrize("rows,columns", [(4, None), (160, 3)])
+def test_two_level_supplied_block_maxima(device, rows, columns):
+    """The caller's maxima: a few rows over the default grid, and 160 rows over 27 cores (six on some), past the
+    four rows per core that phase 1 allows."""
     width, n = 1_049_600, 700_000
     torch_input = generate("sinks", rows, width, 9, n=n)
     blocks = width // BLOCK
@@ -189,6 +190,7 @@ def test_two_level_supplied_block_maxima(device, rows):
         block_select=32,
         two_level_cutover=FORCE_TWO_LEVEL,
         block_max_tensor=_dev(maxima.to(torch.bfloat16).reshape(1, 1, rows, blocks), device),
+        sub_core_grids=_grid(device, columns),
     )
     _check_rows(torch_input, _indices(out, rows), n, range(rows))
 
@@ -353,7 +355,8 @@ def test_two_level_rejects_other_block_sizes(device, expect_error):
 def test_two_level_row_count_changes(device):
     """The program's own maxima tensor is sized by the row count, which keys the program: more rows at the same
     width get a program of their own."""
-    width, n = 131_072, 131_072
+    # A width no other test uses, so neither row count's program is cached already.
+    width, n = 99_360, 99_360
     entries = None
     for rows in (2, 3, 2):
         torch_input = generate("iid", rows, width, 18 + rows, n=n)
@@ -513,26 +516,29 @@ DEFAULT_CUTOVER = {12: 196_608, 11: 147_456}
 
 @pytest.mark.parametrize("columns", [12, 11])
 @pytest.mark.parametrize("offset", [-1, 0, 1])
-@pytest.mark.parametrize("bound", ["scalar", "metadata"])
-def test_two_level_default_cutover(device, columns, offset, bound):
-    """The default cutover on both top-k grids, with either bound form: rows run two-level from exactly the
-    cutover."""
+def test_two_level_default_cutover(device, columns, offset):
+    """The default cutover on both top-k grids: rows run two-level from exactly the cutover, and a scalar and a
+    metadata bound choose the same mode and the same ordered indices."""
     rows, width = 160, 262_144
     n = DEFAULT_CUTOVER[columns] + offset
-    torch_input = generate("iid", rows, width, 14, n=n)
-    mode = _scalar(device, 7)
-    length = {"valid_length": n} if bound == "scalar" else {"valid_length_tensor": _scalar(device, n)}
-    out = ttnn.experimental.topk_large_indices(
-        _dev(torch_input.reshape(1, 1, rows, width), device),
-        k=K,
-        **length,
-        block_select=32,
-        sub_core_grids=_grid(device, columns),
-        dram_read_noc=ttnn.NOC.NOC_0,
-        mode_output=mode,
-    )
-    assert _mode(mode) == (1 if offset >= 0 else 0)
-    _check_rows(torch_input, _indices(out, rows), n, (0, 98, 107, 108, 159))
+    torch_input = generate("ties64", rows, width, 14, n=n)
+    tt_input = _dev(torch_input.reshape(1, 1, rows, width), device)
+    results = []
+    for length in ({"valid_length": n}, {"valid_length_tensor": _scalar(device, n)}):
+        mode = _scalar(device, 7)
+        out = ttnn.experimental.topk_large_indices(
+            tt_input,
+            k=K,
+            **length,
+            block_select=32,
+            sub_core_grids=_grid(device, columns),
+            dram_read_noc=ttnn.NOC.NOC_0,
+            mode_output=mode,
+        )
+        assert _mode(mode) == (1 if offset >= 0 else 0)
+        results.append(_indices(out, rows))
+    assert torch.equal(results[0], results[1]), "scalar and metadata bounds returned different ordered indices"
+    _check_rows(torch_input, results[0], n, (0, 98, 107, 108, 159))
 
 
 @pytest.mark.parametrize("columns", [12, 11])

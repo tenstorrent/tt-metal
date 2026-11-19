@@ -191,7 +191,8 @@ def test_topk_large_indices_length_sweep_perf(device, host_inputs, kind, grid_id
     if path:
         with open(path, "a") as f:
             f.write(json.dumps(result) + "\n")
-    # tl_default runs two-level from 147,456 keys on the smaller grid (196,608 on the larger).
-    runs_two_level = mode == "tl_two" or (mode == "tl_default" and valid_length >= 147_456)
+    # tl_default runs two-level from the default cutover of its grid.
+    default_cutover = {"g108": 196_608, "g99": 147_456}[grid_id]
+    runs_two_level = mode == "tl_two" or (mode == "tl_default" and valid_length >= default_cutover)
     max_spread = 0.08 if runs_two_level else 0.02
     assert spread <= max_spread, f"run-to-run spread {spread:.3%} above {max_spread:.0%}: {durations}"

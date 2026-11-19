@@ -84,7 +84,8 @@ void bind_topk_large_indices(nb::module_& mod) {
                 single-level program. The program decides at run time, from the search length, whether to run
                 two-level. A two-level program takes at most 4 rows per core (unless block_max_tensor is given)
                 and, unless the caller supplies block_max_tensor or block_max_output, holds its own
-                [rows, ceil(n/32)] BFLOAT16 DRAM maxima tensor for as long as it is cached.
+                [rows, ceil(n/32)] BFLOAT16 DRAM maxima tensor for as long as it is cached (a captured trace
+                that runs it needs the program kept in the cache).
             two_level_cutover: search length from which a two-level program runs two-level (default: chosen from
                 the core count). 0 forces two-level; 0xFFFFFFFF forces single-level for every non-empty row (an
                 empty row always runs two-level, which returns sentinels).
