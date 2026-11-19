@@ -920,8 +920,12 @@ inline auto invoke_binary_ng_impl(
         (fast_div && !scalar_is_lhs) ||
             std::ranges::any_of(rhs_activations, operations::unary::utils::is_non_finite_at_zero));
 
-    // The output is packed the same way, so it is produced as BFLOAT16 and the typecast zeroes the padding first.
-    const bool divides_by_padding = is_div && ((requires { input_b.logical_shape(); }) || scalar_is_lhs);
+    // The output is packed the same way, so it is produced as BFLOAT16 (FLOAT32 for an FLOAT32 input) and the
+    // typecast zeroes the padding first.
+    // DIV_FLOOR / DIV_TRUNC also divide by b but are INT32 only.
+    const bool divides_by_rhs = is_div || binary_op_type == operations::binary::BinaryOpType::REMAINDER ||
+                                binary_op_type == operations::binary::BinaryOpType::FMOD;
+    const bool divides_by_padding = divides_by_rhs && ((requires { input_b.logical_shape(); }) || scalar_is_lhs);
     const bool non_finite_at_padding =
         divides_by_padding || std::ranges::any_of(lhs_activations, operations::unary::utils::is_non_finite_at_zero) ||
         std::ranges::any_of(rhs_activations, operations::unary::utils::is_non_finite_at_zero) ||
@@ -934,14 +938,27 @@ inline auto invoke_binary_ng_impl(
             return a_width;
         }
     }();
-    if (non_finite_at_padding && is_block_float(out_dtype) && out_width % tt::constants::FACE_WIDTH != 0) {
-        const auto intermediate_memory_config =
-            output.has_value() ? std::optional<MemoryConfig>{output->memory_config()} : memory_config;
-        auto result = dispatch(input_a, input_b, DataType::BFLOAT16, std::nullopt, intermediate_memory_config);
-        return ttnn::typecast(result, out_dtype, memory_config, output, cast_sub_core_grids);
-    }
-
-    auto result = dispatch(input_a, input_b, out_dtype, output, memory_config);
+    const auto result = [&] {
+        if (non_finite_at_padding && is_block_float(out_dtype) && out_width % tt::constants::FACE_WIDTH != 0) {
+            const auto intermediate_memory_config =
+                output.has_value() ? std::optional<MemoryConfig>{output->memory_config()} : memory_config;
+            const bool fp32_input = input_a.dtype() == DataType::FLOAT32 || [&] {
+                if constexpr (requires { input_b.dtype(); }) {
+                    return input_b.dtype() == DataType::FLOAT32;
+                } else {
+                    return false;
+                }
+            }();
+            const auto intermediate = dispatch(
+                input_a,
+                input_b,
+                fp32_input ? DataType::FLOAT32 : DataType::BFLOAT16,
+                std::nullopt,
+                intermediate_memory_config);
+            return ttnn::typecast(intermediate, out_dtype, memory_config, output, cast_sub_core_grids);
+        }
+        return dispatch(input_a, input_b, out_dtype, output, memory_config);
+    }();
 
     // if both inputs are in row major, convert the output to row major
     // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option

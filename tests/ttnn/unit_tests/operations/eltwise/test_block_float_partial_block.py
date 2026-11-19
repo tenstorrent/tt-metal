@@ -62,6 +62,22 @@ def test_div_block_float_partial_block_ignores_padding(device, width, dtype):
     _assert_real_lanes_kept(result, expected, dtype)
 
 
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["bfloat8_b", "bfloat4_b"])
+@pytest.mark.parametrize("width", [33, 50, 64], ids=lambda w: f"W={w}")
+@pytest.mark.parametrize("op_name", ["remainder", "fmod"])
+def test_mod_block_float_partial_block_ignores_padding(device, op_name, width, dtype):
+    torch.manual_seed(0)
+    a = _to_device(torch.empty(2, 32, width).uniform_(5.0, 9.0), dtype, device)
+    b = _to_device(torch.empty(2, 32, width).uniform_(2.0, 4.0), dtype, device)
+
+    result = ttnn.to_torch(getattr(ttnn, op_name)(a, b)).float()
+    expected = getattr(torch, op_name)(ttnn.to_torch(a).float(), ttnn.to_torch(b).float())
+
+    # A result can be exactly 0 here, so only the tolerance is checked.
+    atol, rtol = TOLERANCE[dtype]
+    torch.testing.assert_close(result, expected, atol=atol, rtol=rtol)
+
+
 @pytest.mark.parametrize("width", [33, 50], ids=lambda w: f"W={w}")
 def test_unary_block_float_partial_block_preallocated_output(device, width):
     torch.manual_seed(0)

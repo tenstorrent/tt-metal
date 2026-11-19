@@ -1210,7 +1210,8 @@ def test_reduce_int32_identity_scalar_is_not_lossy(device):
 
 # A BFLOAT8_B tile shares one exponent per 16-lane block of a row. The -inf / +inf Max / Min padding must not zero the
 # real lanes that share a block with it: at widths that are not a multiple of 16, and (for Min over W) in a partial tile
-# row. [32, 48] and [32, 64] have no tile padding and are the controls.
+# row. N / C reductions carry the same padding into their output. [32, 48] and [32, 64] have no tile padding and are
+# the controls.
 @pytest.mark.parametrize(
     "shape",
     [
@@ -1227,7 +1228,7 @@ def test_reduce_int32_identity_scalar_is_not_lossy(device):
     ],
     ids=lambda s: "x".join(map(str, s)),
 )
-@pytest.mark.parametrize("dim", [-1, -2])
+@pytest.mark.parametrize("dim", [-1, -2, 0])
 @pytest.mark.parametrize("op", ["max", "min"])
 def test_reduce_max_min_bfloat8_b_tile_padding(device, op, dim, shape):
     torch.manual_seed(0)
