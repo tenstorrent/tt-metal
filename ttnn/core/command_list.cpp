@@ -221,6 +221,12 @@ void throw_if_recording_command_list(std::string_view call_name) {
     TT_FATAL(t_recording == nullptr, "{} cannot run while a CommandListBuilder is recording on this thread", call_name);
 }
 
+void mark_command_list_recording_failed() {
+    if (t_recording != nullptr) {
+        t_recording->mark_failed();
+    }
+}
+
 bool has_active_cmd_list_binds() { return t_recording != nullptr && t_recording->has_binds(); }
 
 void record_to_command_list(
@@ -464,6 +470,8 @@ CommandListBuilder::~CommandListBuilder() {
 
 void CommandListBuilder::begin_recording() {
     TT_FATAL(!recording_, "CommandListBuilder is already recording");
+    TT_FATAL(
+        !failed_, "An error interrupted recording into this CommandListBuilder. Call clear() before recording again");
     TT_FATAL(t_recording == nullptr, "Another CommandListBuilder is recording on this thread");
     t_recording = this;
     recording_ = true;
@@ -483,11 +491,22 @@ bool CommandListBuilder::is_recording() const { return recording_; }
 
 ScopeGuard CommandListBuilder::record_scope() {
     begin_recording();
-    return make_guard([this]() { end_recording(); });
+    return make_guard([this, uncaught_exceptions = std::uncaught_exceptions()]() {
+        if (std::uncaught_exceptions() > uncaught_exceptions) {
+            mark_failed();
+        }
+        end_recording();
+    });
 }
+
+void CommandListBuilder::mark_failed() { failed_ = true; }
 
 CommandList CommandListBuilder::build(std::optional<QueueId> cq_id) const {
     ZoneScoped;
+    TT_FATAL(
+        !failed_,
+        "An error interrupted recording, so this CommandListBuilder may hold part of an operation. Call clear() and "
+        "record again");
     const QueueId queue = cq_id.value_or(get_current_command_queue_id_for_thread());
     return CommandList(
         metal_builder_.build(device().mesh_command_queue(queue.get())),
@@ -500,6 +519,7 @@ void CommandListBuilder::clear() {
     metal_builder_.clear();
     layout_.clear();
     op_owned_tensors_.clear();
+    failed_ = false;
 }
 
 void CommandListBuilder::deallocate() {

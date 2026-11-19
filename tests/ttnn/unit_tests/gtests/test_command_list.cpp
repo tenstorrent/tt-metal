@@ -156,14 +156,35 @@ TEST_F(CommandListTest, PadReplaysWithProgramCacheDisabled) {
 TEST_F(CommandListTest, LegacyOpIsRejected) {
     const Tensor input = make_input(std::vector<float>(32 * 64, 1.0f));
     CommandListBuilder builder(*device_);
-    auto recording = builder.record_scope();
-    try {
-        (void)ttnn::add(input, input);
-        FAIL() << "Recording a legacy-factory op should throw";
-    } catch (const std::exception& e) {
-        EXPECT_THAT(std::string(e.what()), ::testing::HasSubstr("cannot be recorded into a command list"));
+    {
+        auto recording = builder.record_scope();
+        try {
+            (void)ttnn::add(input, input);
+            FAIL() << "Recording a legacy-factory op should throw";
+        } catch (const std::exception& e) {
+            EXPECT_THAT(std::string(e.what()), ::testing::HasSubstr("cannot be recorded into a command list"));
+        }
+        EXPECT_TRUE(builder.is_recording());
     }
-    EXPECT_TRUE(builder.is_recording());
+    EXPECT_THAT(
+        [&] { (void)builder.build(); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("An error interrupted recording")));
+}
+
+TEST_F(CommandListTest, ExceptionLeavingRecordScopeRequiresClear) {
+    CommandListBuilder builder(*device_);
+    try {
+        auto recording = builder.record_scope();
+        throw std::runtime_error("user error");
+    } catch (const std::runtime_error&) {
+    }
+    EXPECT_THAT(
+        [&] { (void)builder.build(); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("An error interrupted recording")));
+    builder.clear();
+    EXPECT_THAT(
+        [&] { (void)builder.build(); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Cannot build an empty CommandList")));
 }
 
 TEST_F(CommandListTest, BuilderLifetimeErrors) {

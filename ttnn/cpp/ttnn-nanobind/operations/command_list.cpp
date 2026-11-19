@@ -71,9 +71,9 @@ void py_module_types(nb::module_& mod) {
         Only one builder may exist per mesh device, and no trace can be captured while a builder or command list
         exists.
 
-        An exception that leaves ``with builder:`` ends recording. Building from what was recorded before it is not
-        supported: call ``clear()`` and record again. An operation rejected for not being Metal 2.0 records nothing,
-        so catching that error inside the block and continuing to record is supported.
+        An error while recording can leave part of an operation recorded, such as the first steps of a composite op.
+        After any error raised by an operation inside ``with builder:``, even one caught inside the block, or any
+        exception that leaves the block, recording again and ``build()`` raise until ``clear()``.
 
         Args:
             mesh_device (ttnn.MeshDevice): Mesh device to record on.
@@ -88,7 +88,10 @@ void py_module_types(nb::module_& mod) {
             nb::rv_policy::reference)
         .def(
             "__exit__",
-            [](CommandListBuilder& self, nb::handle, nb::handle, nb::handle) {
+            [](CommandListBuilder& self, nb::handle exc_type, nb::handle, nb::handle) {
+                if (!exc_type.is_none()) {
+                    self.mark_failed();
+                }
                 self.end_recording();
                 return false;
             },

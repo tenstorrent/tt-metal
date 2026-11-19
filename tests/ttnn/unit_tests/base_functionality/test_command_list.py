@@ -188,9 +188,17 @@ def test_legacy_op_is_rejected(device, builder, command_lists, expect_error):
             ttnn.add(relu, relu)
         assert "cannot be recorded into a command list" in str(exc_info.value)
         assert builder.is_recording
-        out = ttnn.exp(relu)
 
-    # The rejected op left no trace: the list holds relu and exp.
+    with expect_error(RuntimeError, "An error interrupted recording"):
+        builder.build()
+    with expect_error(RuntimeError, "An error interrupted recording"):
+        with builder:
+            pass
+
+    builder.clear()
+    with builder:
+        relu = ttnn.relu(device_input)
+        out = ttnn.exp(relu)
     command_list = builder.build()
     command_lists.append(command_list)
     torch_input = torch.randn(SHAPE, dtype=torch.bfloat16)
@@ -206,6 +214,8 @@ def test_exception_ends_recording(device, builder, expect_error):
         with builder:
             raise ValueError("user error")
     assert not builder.is_recording
+    with expect_error(RuntimeError, "An error interrupted recording"):
+        builder.build()
 
     # Not recording: the op runs eagerly.
     torch_input = torch.randn(SHAPE, dtype=torch.bfloat16)

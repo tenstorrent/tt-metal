@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstddef>
+#include <exception>
 #include <functional>
 #include <memory>
 #include <span>
@@ -100,6 +101,26 @@ bool is_recording_command_list();
 // Throws while recording on the calling thread. For calls whose meaning depends on recorded work, so running them at
 // record time would be wrong.
 void throw_if_recording_command_list(std::string_view call_name);
+
+// Calls CommandListBuilder::mark_failed() on the builder recording on the calling thread, if any.
+void mark_command_list_recording_failed();
+
+// Marks the calling thread's recording failed if the enclosing scope exits by exception, even one the caller catches.
+// A composite op that fails partway has already recorded its earlier steps.
+class MarkCommandListRecordingFailedOnThrow {
+public:
+    MarkCommandListRecordingFailedOnThrow() = default;
+    MarkCommandListRecordingFailedOnThrow(const MarkCommandListRecordingFailedOnThrow&) = delete;
+    MarkCommandListRecordingFailedOnThrow& operator=(const MarkCommandListRecordingFailedOnThrow&) = delete;
+    ~MarkCommandListRecordingFailedOnThrow() {
+        if (std::uncaught_exceptions() > uncaught_exceptions_) {
+            mark_command_list_recording_failed();
+        }
+    }
+
+private:
+    int uncaught_exceptions_ = std::uncaught_exceptions();
+};
 
 // True while TTNN command-list parameter binds are pushed on the calling thread (ttnn/command_list_params.hpp).
 bool has_active_cmd_list_binds();

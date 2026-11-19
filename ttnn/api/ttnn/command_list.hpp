@@ -71,14 +71,19 @@ public:
     void end_recording();
     bool is_recording() const;
 
-    // begin_recording(), with end_recording() when the returned guard goes out of scope.
+    // begin_recording(), with end_recording() when the returned guard goes out of scope. Leaving the scope by
+    // exception calls mark_failed().
     [[nodiscard]] ScopeGuard record_scope();
+
+    // Marks the recording incomplete. An error while recording can leave part of an operation recorded, such as the
+    // first steps of a composite op. begin_recording() and build() then throw until clear().
+    void mark_failed();
 
     // Builds an independent command list bound to cq_id. Defaults to the calling thread's current command queue.
     // Repeatable; built lists outlive the builder.
     CommandList build(std::optional<QueueId> cq_id = std::nullopt) const;
 
-    // Drops everything recorded so far. Not allowed while recording.
+    // Drops everything recorded so far, and the mark_failed() mark. Not allowed while recording.
     void clear();
 
     // Releases the Metal reservation and invalidates the builder. Not allowed while recording.
@@ -116,6 +121,7 @@ private:
 
     tt::tt_metal::CommandListBuilder metal_builder_;
     bool recording_ = false;
+    bool failed_ = false;
     std::vector<BindScope> bind_scopes_;
     std::vector<ActiveBind> binds_;  // the binds of every scope in bind_scopes_, in push order
     detail::CmdListLayout layout_;
