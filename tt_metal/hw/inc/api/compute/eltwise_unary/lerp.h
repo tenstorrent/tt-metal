@@ -16,8 +16,9 @@ namespace ckernel {
 /**
  * Performs elementwise linear interpolation (lerp): out = input + weight * (end - input)
  *
- * On Blackhole, it is evaluated at half scale as 2 * (input / 2 + weight * (end / 2 - input / 2)), so for
- * weight in [0, 1] no intermediate overflows; values below 2^-125 are flushed to zero at the halved scale.
+ * On Blackhole, it is evaluated at half scale as 2 * (input / 2 + weight * (end / 2 - input / 2)), plus input
+ * where input / 2 is flushed, so for weight in [0, 1] no intermediate overflows; end - input and the result
+ * below 2^-125 are flushed at the halved scale.
  * With is_fp32_dest_acc_en == false the result is rounded for a 16-bit Dest store only, so Dest must not be
  * in 32-bit mode.
  *

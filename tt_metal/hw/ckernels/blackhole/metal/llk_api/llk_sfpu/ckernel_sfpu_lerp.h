@@ -43,39 +43,42 @@ inline void calculate_lerp(
     const auto off_in1 = dst_index_in1 * dst_tile_size_sfpi;
     const auto off_in2 = dst_index_in2 * dst_tile_size_sfpi;
     const auto off_out = dst_index_out * dst_tile_size_sfpi;
-    const sfpi::vFloat half = 0.5f;
+    const sfpi::vFloat two = 2.0f;
+    // 0.5 via SFPSETEXP, so the compiler does not turn input * half into SFPMOV + SFPMULI.
+    const sfpi::vFloat half = sfpi::setexp(two, 126);
     // RNE constant, loaded once per call. Unassigned unless rounding, which also gates its use.
     sfpi::vUInt rne_bias;
     if constexpr (!is_fp32_dest_acc_en) {
         rne_bias = 0x7fffU;
     }
     // lerp: out = input + weight * (end - input), evaluated at half scale as
-    // 2 * (input / 2 + weight * (end / 2 - input / 2)): for weight in [0, 1] no intermediate can
-    // overflow, and the power-of-two scalings are exact above the bottom binade, so the result is
-    // the same as the direct form wherever that one is finite.
+    // 2 * (input / 2 + weight * (end / 2 - input / 2)) + (input - 2 * (input / 2)): for weight in [0, 1] no
+    // intermediate can overflow, and the power-of-two scalings are exact above the bottom binade, so the
+    // result is the same as the direct form wherever that one is finite. The last term is 0 unless input / 2
+    // is flushed, and then it puts input back.
     //
     // One row per iteration, rotated: row d is formed while row d - 1 is scaled back and stored.
-    // In the loop no instruction reads the result of the SFPMAD/SFPMULI right before it.
     sfpi::vFloat half_res;
+    sfpi::vFloat corr;
     {
         const sfpi::vFloat in0 = sfpi::dst_reg[off_in0];
-        const sfpi::vFloat in0_half = in0 * 0.5f;
+        const sfpi::vFloat in0_half = in0 * half;
         const sfpi::vFloat in1 = sfpi::dst_reg[off_in1];
+        corr = in0 - in0_half * two;
         const sfpi::vFloat in2 = sfpi::dst_reg[off_in2];
         const sfpi::vFloat diff_half = in1 * half - in0_half;
         half_res = in2 * diff_half + in0_half;
     }
-    // Unroll 16 records a 16-instruction replay body for fp32, the SFPU's whole share of the replay
-    // buffer: check the disassembly when changing the loop.
-#pragma GCC unroll 16
+#pragma GCC unroll 8
     for (int d = 1; d < ITERATIONS - 1; d++) {
         const sfpi::vFloat in0 = sfpi::dst_reg[off_in0 + 1];
-        sfpi::vFloat prev = half_res * 2.0f;
-        const sfpi::vFloat in0_half = in0 * 0.5f;
+        sfpi::vFloat prev = half_res * two + corr;
+        const sfpi::vFloat in0_half = in0 * half;
         if constexpr (!is_fp32_dest_acc_en) {
             prev = _lerp_bf16_rne_for_16b_store_(prev, _lerp_bf16_rne_lsb_(prev), rne_bias);
         }
         const sfpi::vFloat in1 = sfpi::dst_reg[off_in1 + 1];
+        corr = in0 - in0_half * two;
         const sfpi::vFloat diff_half = in1 * half - in0_half;
         sfpi::dst_reg[off_out].mode(ADDR_MOD_5) = prev;
         // The store above advanced dest to row d.
@@ -83,25 +86,19 @@ inline void calculate_lerp(
         half_res = in2 * diff_half + in0_half;
     }
     {
-        // Last row: the store of the row before goes between the final scale back and its store, and
-        // for bf16 the last add of that row's rounding goes right after the last SFPMAD.
         const sfpi::vFloat in0 = sfpi::dst_reg[off_in0 + 1];
-        sfpi::vFloat prev = half_res * 2.0f;
-        const sfpi::vFloat in0_half = in0 * 0.5f;
-        sfpi::vUInt prev_lsb;
+        sfpi::vFloat prev = half_res * two + corr;
+        const sfpi::vFloat in0_half = in0 * half;
         if constexpr (!is_fp32_dest_acc_en) {
-            prev_lsb = _lerp_bf16_rne_lsb_(prev);
-            prev = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vUInt>(prev) + rne_bias);
+            prev = _lerp_bf16_rne_for_16b_store_(prev, _lerp_bf16_rne_lsb_(prev), rne_bias);
         }
         const sfpi::vFloat in1 = sfpi::dst_reg[off_in1 + 1];
+        const sfpi::vFloat last_corr = in0 - in0_half * two;
         const sfpi::vFloat diff_half = in1 * half - in0_half;
         const sfpi::vFloat in2 = sfpi::dst_reg[off_in2 + 1];
         const sfpi::vFloat last_half_res = in2 * diff_half + in0_half;
-        if constexpr (!is_fp32_dest_acc_en) {
-            prev = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vUInt>(prev) + prev_lsb);
-        }
-        sfpi::vFloat last = last_half_res * 2.0f;
         sfpi::dst_reg[off_out].mode(ADDR_MOD_5) = prev;
+        sfpi::vFloat last = last_half_res * two + last_corr;
         if constexpr (!is_fp32_dest_acc_en) {
             last = _lerp_bf16_rne_for_16b_store_(last, _lerp_bf16_rne_lsb_(last), rne_bias);
         }
