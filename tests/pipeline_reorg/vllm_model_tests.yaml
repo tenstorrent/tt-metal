@@ -779,7 +779,9 @@
   # built on its first run (mlperf write access); the permuted expert copies glm53_fused_experts_cache.
   tt-config: '{"fabric_config": "FABRIC_1D", "fabric_reliability_mode": "RELAXED_INIT", "trace_region_size": 3221225472, "l1_small_size": 32768, "worker_l1_size": 1280896, "sample_on_device_mode": "all", "prefill_chunk_alignment": 8192, "decode_interleave_enabled": false}'
   # No JSON-valued arguments here: the workflow embeds the matrix in a single-quoted bash literal, so quotes break it.
-  additional-server-args: "--max-model-len 131072 --max_num_seqs 16 --block_size 64 --max-num-batched-tokens 8208 --no-enable-prefix-caching --reasoning-parser glm45"
+  # No --reasoning-parser: the plugin's sampling suite reads message.content (bad_words, structured output with an
+  # 8-token cap), which a reasoning parser empties into reasoning_content; no other entry here runs one
+  additional-server-args: "--max-model-len 131072 --max_num_seqs 16 --block_size 64 --max-num-batched-tokens 8208 --no-enable-prefix-caching"
   # The serving class by the plugin's generic override (tt-inference-server's catalog does the same): the test runs on
   # the plugin's main, whose built-in model map registers GLM-5.3-Flash only once the stack registration PR lands.
   # TT_METAL_RUNTIME_ROOT: the JIT kernel include root (the e2e jobs set it to /work; without it the root is the installed
