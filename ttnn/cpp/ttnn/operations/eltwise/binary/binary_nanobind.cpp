@@ -85,7 +85,7 @@ constexpr auto kSubtractDtypeFootnote =
 constexpr auto kSameDtypeRequiredFootnote = R"doc(Operands must have the same dtype.)doc";
 constexpr auto kBitwiseScalarFootnote = R"doc(Operands must have the same dtype.
 
-            A scalar :attr:`input_b` must be in [-2147483648, 4294967295]. Scalars above 2147483647 are only supported for UINT32 inputs. Negative scalars are applied as their 32-bit two's-complement pattern. For UINT16 inputs, only the low 16 bits of the scalar are used.)doc";
+            The scalar :attr:`input_b` must be representable in the input dtype: [-2147483648, 2147483647] for INT32, [0, 4294967295] for UINT32, and [0, 65535] for UINT16.)doc";
 constexpr auto kInt32FloatScalarPromotionNote =
     R"doc(An INT32 tensor with a floating-point scalar is promoted to FLOAT32 before computation, including integral-valued floats such as `2.0`. The default output dtype is FLOAT32. Use an integer scalar (for example, `2` instead of `2.0`) to retain integer-scalar semantics.)doc";
 constexpr auto kIscloseMixedDtypeFootnote = R"doc(The only allowed mixed-dtype pair is FLOAT32 with BFLOAT16.)doc";

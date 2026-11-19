@@ -11,6 +11,7 @@
 >>>>>>> 8fcda9eede2 (#66106: Widen the scalar type in the bitwise_and/or/xor tensor- scalar)
 #include <cmath>
 #include <limits>
+#include <enchantum/enchantum.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 
@@ -448,6 +449,7 @@
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,                        \
         const std::optional<CoreRangeSet>& sub_core_grids,                                                 \
         const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {                                   \
+        ttnn::detail::validate_bitwise_scalar(operations::unary::UnaryOpType::OP_TYPE, lhs, rhs);          \
         /* Fast path: unary SFPU handles scalar bitwise/shift directly with no activations. */             \
         if (!sub_device_id.has_value() && post_activations.empty() && lhs_activations.empty() &&           \
             rhs_activations.empty()) {                                                                     \
@@ -470,57 +472,53 @@
             sub_device_id);                                                                                \
     }
 
-#define TTNN_BINARY_OP_TENSOR_UINT32_BITWISE_IMPL(NAME, OP_TYPE)                                 \
-    Tensor detail::NAME##_uint32_scalar(                                                         \
-        const Tensor& lhs,                                                                       \
-        uint32_t rhs,                                                                            \
-        const std::optional<MemoryConfig>& memory_config,                                        \
-        const std::optional<Tensor>& output,                                                     \
-        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,             \
-        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,              \
-        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,              \
-        const std::optional<CoreRangeSet>& sub_core_grids,                                       \
-        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {                         \
-        if (rhs <= static_cast<uint32_t>(std::numeric_limits<int32_t>::max())) {                 \
-            return ttnn::NAME(                                                                   \
-                lhs,                                                                             \
-                static_cast<int32_t>(rhs),                                                       \
-                memory_config,                                                                   \
-                output,                                                                          \
-                post_activations,                                                                \
-                lhs_activations,                                                                 \
-                rhs_activations,                                                                 \
-                sub_core_grids,                                                                  \
-                sub_device_id);                                                                  \
-        }                                                                                        \
-        TT_FATAL(                                                                                \
-            lhs.dtype() == DataType::UINT32,                                                     \
-            #NAME " with scalar {} (> INT32_MAX) requires a UINT32 input tensor, got {}",        \
-            rhs,                                                                                 \
-            lhs.dtype());                                                                        \
-        if (!sub_device_id.has_value() && post_activations.empty() && lhs_activations.empty() && \
-            rhs_activations.empty()) {                                                           \
-            return ttnn::unary_with_int32_param(                                                 \
-                operations::unary::UnaryOpType::OP_TYPE,                                         \
-                lhs,                                                                             \
-                std::bit_cast<int32_t>(rhs),                                                     \
-                memory_config,                                                                   \
-                output,                                                                          \
-                sub_core_grids);                                                                 \
-        }                                                                                        \
-        return ttnn::detail::invoke_binary_ng(                                                   \
-            lhs,                                                                                 \
-            rhs,                                                                                 \
-            operations::binary::BinaryOpType::OP_TYPE,                                           \
-            std::nullopt,                                                                        \
-            memory_config,                                                                       \
-            output,                                                                              \
-            post_activations,                                                                    \
-            lhs_activations,                                                                     \
-            rhs_activations,                                                                     \
-            /*fast_and_approximate_mode*/ false,                                                 \
-            sub_core_grids,                                                                      \
-            sub_device_id);                                                                      \
+#define TTNN_BINARY_OP_TENSOR_UINT32_BITWISE_IMPL(NAME, OP_TYPE)                                  \
+    Tensor detail::NAME##_uint32_scalar(                                                          \
+        const Tensor& lhs,                                                                        \
+        uint32_t rhs,                                                                             \
+        const std::optional<MemoryConfig>& memory_config,                                         \
+        const std::optional<Tensor>& output,                                                      \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,              \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,               \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,               \
+        const std::optional<CoreRangeSet>& sub_core_grids,                                        \
+        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {                          \
+        if (rhs <= static_cast<uint32_t>(std::numeric_limits<int32_t>::max())) {                  \
+            return ttnn::NAME(                                                                    \
+                lhs,                                                                              \
+                static_cast<int32_t>(rhs),                                                        \
+                memory_config,                                                                    \
+                output,                                                                           \
+                post_activations,                                                                 \
+                lhs_activations,                                                                  \
+                rhs_activations,                                                                  \
+                sub_core_grids,                                                                   \
+                sub_device_id);                                                                   \
+        }                                                                                         \
+        ttnn::detail::validate_bitwise_scalar(operations::unary::UnaryOpType::OP_TYPE, lhs, rhs); \
+        if (!sub_device_id.has_value() && post_activations.empty() && lhs_activations.empty() &&  \
+            rhs_activations.empty()) {                                                            \
+            return ttnn::unary_with_int32_param(                                                  \
+                operations::unary::UnaryOpType::OP_TYPE,                                          \
+                lhs,                                                                              \
+                std::bit_cast<int32_t>(rhs),                                                      \
+                memory_config,                                                                    \
+                output,                                                                           \
+                sub_core_grids);                                                                  \
+        }                                                                                         \
+        return ttnn::detail::invoke_binary_ng(                                                    \
+            lhs,                                                                                  \
+            rhs,                                                                                  \
+            operations::binary::BinaryOpType::OP_TYPE,                                            \
+            std::nullopt,                                                                         \
+            memory_config,                                                                        \
+            output,                                                                               \
+            post_activations,                                                                     \
+            lhs_activations,                                                                      \
+            rhs_activations,                                                                      \
+            /*fast_and_approximate_mode*/ false,                                                  \
+            sub_core_grids,                                                                       \
+            sub_device_id);                                                                       \
     }
 
 namespace ttnn::operations::binary::detail {
@@ -1168,6 +1166,38 @@ Tensor invoke_binary_ng_isclose(
         return operations::binary::detail::to_layout(result, Layout::ROW_MAJOR, sub_core_grids);
     }
     return result;
+}
+
+// The scalar of bitwise_and/or/xor must be representable in the input dtype; shift amounts are not checked here.
+static void validate_bitwise_scalar(operations::unary::UnaryOpType op_type, const Tensor& lhs, int64_t rhs) {
+    using operations::unary::UnaryOpType;
+    if (op_type != UnaryOpType::BITWISE_AND && op_type != UnaryOpType::BITWISE_OR &&
+        op_type != UnaryOpType::BITWISE_XOR) {
+        return;
+    }
+    if (lhs.dtype() == DataType::INT32) {
+        TT_FATAL(
+            rhs >= std::numeric_limits<int32_t>::min() && rhs <= std::numeric_limits<int32_t>::max(),
+            "{} on an INT32 tensor requires a scalar in [-2147483648, 2147483647], got {}. "
+            "To apply the same bit pattern, pass {}.",
+            enchantum::to_string(op_type),
+            rhs,
+            std::bit_cast<int32_t>(static_cast<uint32_t>(rhs)));
+    } else if (lhs.dtype() == DataType::UINT32) {
+        TT_FATAL(
+            rhs >= 0 && rhs <= std::numeric_limits<uint32_t>::max(),
+            "{} on a UINT32 tensor requires a scalar in [0, 4294967295], got {}. "
+            "To apply the same bit pattern, pass {}.",
+            enchantum::to_string(op_type),
+            rhs,
+            static_cast<uint32_t>(rhs));
+    } else if (lhs.dtype() == DataType::UINT16) {
+        TT_FATAL(
+            rhs >= 0 && rhs <= std::numeric_limits<uint16_t>::max(),
+            "{} on a UINT16 tensor requires a scalar in [0, 65535], got {}.",
+            enchantum::to_string(op_type),
+            rhs);
+    }
 }
 
 }  // namespace ttnn::detail

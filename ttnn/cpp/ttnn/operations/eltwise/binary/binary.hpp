@@ -183,7 +183,7 @@
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,                 \
         const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
-// Scalars above INT32_MAX are only valid for UINT32 inputs.
+// Scalars must be in the range of the input dtype.
 // The public overload only accepts exactly uint32_t so that other integer types (int64_t, long, ...) still resolve
 // unambiguously to the int32_t overload.
 #define TTNN_BINARY_OP_TENSOR_UINT32_BITWISE(NAME, OP_TYPE)                               \
