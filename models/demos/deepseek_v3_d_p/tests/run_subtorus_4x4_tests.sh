@@ -17,9 +17,9 @@
 set -uo pipefail
 
 # Row ids and test names of the 4x4 [RING, RING] rows: torus-xy-4x4-*, 4x4-torus-xy-*, *SP4xTP4-torus-xy*,
-# torusxy-mesh-4x4-sp1, the *-xy4-* rows (and test_sparse_kv_push_xy4) and the ring_ring_4x4 test. A bare "xy4" would
+# torusxy-mesh-4x4-sp1, the xy4-* and *-xy4-* rows (and test_sparse_kv_push_xy4) and the ring_ring_4x4 test. A bare "xy4" would
 # also match every "galaxy4x4" id, the TorusX stage rows among them.
-ROWS_SELECTOR="torus-xy-4x4 or 4x4-torus-xy or SP4xTP4-torus-xy or torusxy-mesh-4x4 or -xy4 or _xy4 or ring_ring_4x4"
+ROWS_SELECTOR="torus-xy-4x4 or 4x4-torus-xy or SP4xTP4-torus-xy or torusxy-mesh-4x4 or -xy4 or xy4- or _xy4 or ring_ring_4x4"
 
 expect=""
 allow_skip=""
