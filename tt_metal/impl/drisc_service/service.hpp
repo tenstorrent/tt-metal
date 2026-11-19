@@ -83,7 +83,7 @@ struct UnmapPages {
 // that cap, or seats that find no TLB free, issue through Shared.
 // Shared: through UMD's per-device register window, holding no TLB of its own.
 enum class IssuePath { Shared, Window };
-inline constexpr uint32_t max_windows_per_chip = 8;
+inline constexpr uint32_t max_windows_per_chip = 16;
 
 // One client's attachment to the service on one seat. Construction attaches, launching the kernel when none runs;
 // destruction detaches. If the process dies first, the KMD detaches on its behalf (ExitWrite) and the OS drops its
