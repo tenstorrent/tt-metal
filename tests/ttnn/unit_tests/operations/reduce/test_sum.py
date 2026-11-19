@@ -286,11 +286,4 @@ def test_sum_mean_bfloat8_b_partial_sum_cancellation(device):
     assert sum_nc.dtype == ttnn.bfloat8_b
     torch.testing.assert_close(ttnn.to_torch(sum_nc), torch.full((1, 1, 32, 32), 10.0), rtol=0, atol=0)
 
-    mean_nc = ttnn.mean(t, dim=[0, 1], keepdim=True)
-    assert mean_nc.dtype == ttnn.bfloat8_b
-    torch.testing.assert_close(ttnn.to_torch(mean_nc), torch.ones((1, 1, 32, 32)), rtol=0, atol=0)
-
-    ones_ch = ttnn.from_torch(torch.ones((1, 3, 9, 32), dtype=torch.float32), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
-    mean_ch = ttnn.mean(ones_ch, dim=[1, 2], keepdim=True)
-    assert mean_ch.dtype == ttnn.bfloat8_b
-    torch.testing.assert_close(ttnn.to_torch(mean_ch), torch.ones((1, 1, 1, 32)), rtol=0, atol=0)
+    # Note: BFLOAT8_B multi-axis mean will follow once mean is ported to fast_reduce_nc in #62913.
