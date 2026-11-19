@@ -1,0 +1,1 @@
+{"event":"test_run","status":"pass","test":"test_all_gather_rms_norm_ring[single_tile_rms_gammaTILE]","note":"first end-to-end: fabric relay into compute L1 + k=1 d=4 rms","ts":"2026-11-19T17:58:41+00:00"}

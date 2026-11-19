@@ -1,0 +1,791 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""all_gather_rms_norm MeshProgramDescriptor (op_design.md -> Blocking Model, regime R1 mirror_resident_gather).
+
+Per chip: one ProgramDescriptor. Roles:
+  * port cores (ports_union, one per (direction, link) per chip, placed next to the link's Ethernet core):
+      port_reader (NCRISC / NoC0) reads outgoing runs from the compute cores' cb_x (own slice after the own members
+      loaded it, relays after the upstream entry landed) into cb_port_stage and notifies the members of every
+      landed incoming entry; port_sender (BRISC / NoC1) runs the ready fence and sends every run to the SAME core
+      and cb_x offset on the neighbour (mirror layout), one fused arrival increment per entry.
+  * compute cores (worker grid - ports_union, row-major; row-group g = cores [g*k, g*k + k)): the base op's
+      reader / compute / writer, extended: own members read their slice of x from the input, remote members wait
+      for the landing; the k members of a row-group combine their per-row moments over the NoC (symmetric
+      all-gather), normalize their block and store it.
+
+Knobs (single source here, handed to the kernels as CT / RT args): w_split_cores k (select_split), core_row_tiles
+(the whole per-group assignment, one block), wave_row_groups (plan_waves), port_batch_chunks, chunk_pages (fabric
+payload), relay_lag_waves, out_depth / out_unit_tiles.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import math
+import struct
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import ttnn
+
+from .all_gather_rms_norm_fabric_plan import DIRS, OPP, plan_fabric, schedule
+
+KERNEL_DIR = Path(__file__).parent / "kernels"
+TILE = 32
+
+# ---- CB indices (must match kernels/all_gather_rms_norm_common.hpp) ----
+CB_X = 0  # FIRST descriptor: landing slot + resident member block (mirror address on every core of every chip)
+CB_STAGE = 1  # port cores: outgoing packet staging ring
+CB_GAMMA = 2
+CB_BETA = 3
+CB_ONES = 4  # 1.0 reduce scaler (bf16)
+CB_MASK = 5  # LN, W_local % 32 != 0: 0/1 row-0 mask of a slice-last tile (bf16)
+CB_MOMENT_A = 6  # rms: per tile-row DEST-accumulated sum x^2; ln: sum x (pass A)
+CB_MOMENT_B = 7  # ln: per tile-row (sum c', sum c'^2) (pass B)
+CB_KM = 8  # ln: member pivot K_m (bf16)
+CB_PARTIAL = 9  # this member's per-row moments (rms: sumsq; ln: mean_m, M2_m)
+CB_GATHERED = 10  # k > 1: every member's moments per row
+CB_ROWSTAT = 11  # rms: inv_rms; ln: inv_std
+CB_OUT = 12
+CB_MSTAT = 13  # ln: column-0 (D1, D2) per row
+CB_SHIFT = 14  # ln: -(mu - K_g) * inv_std
+CB_KG = 15  # ln: K_g = bf16(mu)
+CB_MU = 16  # ln: mu (fp32 scratch between the two combine windows)
+CB_AFFINE_STAGE = 17  # writer scratch: gamma / beta row-0 staging
+NUM_CBS = 32
+
+# ---- semaphores (program-local; declared BEFORE setup_fabric_connection takes its ids) ----
+SEM_LANDED = 0  # compute cores: landed entries covering this member (port reader -> member reader)
+SEM_PARTIALS = 1  # compute cores: partial exchange arrivals (base op)
+SEM_OWN_LOADED = 2  # port cores: own members that loaded their block (member reader -> port reader)
+
+# ---- knobs (op_design.md: catalog / example measurements) ----
+INC_EVERY = 8  # packets per fabric entry (fabric_all_gather: increment every 8 chunks)
+PORT_BATCH_CHUNKS = 4  # packets per reader barrier / sender flush; cb_port_stage holds 2 batches
+RELAY_LAG_WAVES = 1  # own entries lead relay entries by this many waves
+OUT_DEPTH = 2
+OUT_UNIT_CAP = 16
+COMBINE_TILE_COST = 3  # base op: per tile-row collapse + exchange + combine cost (x-tile equivalents)
+OCC_TILES_PER_MEMBER = 4  # base op occupancy floor
+K_SYM_MAX = 8  # symmetric partial all-gather cap (base op K_SYM_MAX_INTERLEAVED); owner combine is deferred here
+AFFINE_SLOT_BYTES = 128  # one staged gamma / beta "stick" (32 datums, fp32 at most)
+
+
+def _f32_bits(v: float) -> int:
+    return struct.unpack("<I", struct.pack("<f", float(v)))[0]
+
+
+def _div_up(a: int, b: int) -> int:
+    return (a + b - 1) // b
+
+
+def acc_dtype(fp32_dest_acc_en: bool):
+    return ttnn.float32 if fp32_dest_acc_en else ttnn.bfloat16
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Geometry
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+@dataclass
+class Geometry:
+    G: int
+    W_local: int
+    W: int
+    H: int
+    num_images: int
+    image_row_tiles: int
+    trt: int  # tensor tile-rows (leading dims folded)
+    sw: int  # slice width in tiles
+    v: int  # valid columns of a slice-last tile
+    out_w_tiles: int
+
+
+def derive_geometry(shape, G) -> Geometry:
+    shape = [int(d) for d in shape]
+    W_local, H = shape[-1], shape[-2]
+    num_images = math.prod(shape[:-2]) if len(shape) > 2 else 1
+    irt = _div_up(H, TILE)
+    sw = _div_up(W_local, TILE)
+    W = G * W_local
+    return Geometry(
+        G=G,
+        W_local=W_local,
+        W=W,
+        H=H,
+        num_images=num_images,
+        image_row_tiles=irt,
+        trt=num_images * irt,
+        sw=sw,
+        v=W_local - TILE * (sw - 1),
+        out_w_tiles=_div_up(W, TILE),
+    )
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Member mapping (source slice -> members): k = G * k_s (k_s members per slice) or k = G / d (d slices per member)
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+@dataclass
+class MemberSpec:
+    parts: list  # [(q, c0, n, off)]: slice q, slice-local tiles [c0, c0 + n) at row offset `off` of cb_x
+    core_w: int  # valid tiles per row
+    valid_cols: int  # valid datums per row (n_m)
+
+
+@dataclass
+class MemberMap:
+    k: int
+    pitch: int  # cb_x tiles per tile-row (uniform)
+    members: list
+
+
+def member_map(k: int, geo: Geometry) -> MemberMap:
+    G, sw, Wl = geo.G, geo.sw, geo.W_local
+    members = []
+    if k >= G:
+        ks = k // G
+        mwk = _div_up(sw, ks)
+        for q in range(G):
+            for i in range(ks):
+                c0 = i * mwk
+                n = min(mwk, sw - c0)
+                assert n >= 1
+                cols = min(TILE * (c0 + n), Wl) - TILE * c0
+                members.append(MemberSpec([(q, c0, n, 0)], n, cols))
+        pitch = mwk
+    else:
+        d = G // k
+        for m in range(k):
+            parts = [(m * d + j, 0, sw, j * sw) for j in range(d)]
+            members.append(MemberSpec(parts, d * sw, d * Wl))
+        pitch = d * sw
+    assert len(members) == k
+    return MemberMap(k, pitch, members)
+
+
+def _k_candidates(geo: Geometry, N: int):
+    G, sw = geo.G, geo.sw
+    cands = set()
+    for ks in range(1, sw + 1):
+        mwk = _div_up(sw, ks)
+        cands.add(G * _div_up(sw, mwk))  # normalized: every member owns >= 1 tile
+    for d in range(1, G + 1):
+        if G % d == 0:
+            cands.add(G // d)
+    return sorted(c for c in cands if c <= K_SYM_MAX and c <= N)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# CB plan (single source of truth for footprint() and the CB declarations; l1_ledger.md rows)
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Sizes:
+    T_in: int
+    T_out: int
+    T_g: int
+    T_acc: int
+    T_bf16: int
+    is_ln: bool
+    has_gamma: bool
+    has_beta: bool
+    mask: bool
+
+
+def make_sizes(x_dtype, g_dtype, fp32_dest, is_ln, has_gamma, has_beta, mask) -> Sizes:
+    return Sizes(
+        T_in=ttnn.tile_size(x_dtype),
+        T_out=ttnn.tile_size(x_dtype),
+        T_g=ttnn.tile_size(g_dtype) if has_gamma else 0,
+        T_acc=ttnn.tile_size(acc_dtype(fp32_dest)),
+        T_bf16=ttnn.tile_size(ttnn.bfloat16),
+        is_ln=is_ln,
+        has_gamma=has_gamma,
+        has_beta=has_beta,
+        mask=mask,
+    )
+
+
+def out_unit(pitch: int) -> int:
+    return min(pitch, OUT_UNIT_CAP)
+
+
+def cb_plan(sz: Sizes, k: int, pitch: int, rows: int, n_affine_slots: int) -> dict:
+    """{cb: (pages, page_bytes)} of the compute cores (cb_x included)."""
+    n_stat = 2 if sz.is_ln else 1
+    plan = {
+        CB_X: (rows * pitch, sz.T_in),
+        CB_ONES: (1, sz.T_bf16),
+        CB_MOMENT_A: (rows, sz.T_acc),
+        CB_PARTIAL: (n_stat * rows, sz.T_acc),
+        CB_ROWSTAT: (rows, sz.T_acc),
+        CB_OUT: (OUT_DEPTH * out_unit(pitch), sz.T_out),
+    }
+    if k > 1:
+        plan[CB_GATHERED] = (n_stat * k * rows, sz.T_acc)
+    if sz.has_gamma:
+        plan[CB_GAMMA] = (pitch, sz.T_g)
+        plan[CB_AFFINE_STAGE] = (n_affine_slots, AFFINE_SLOT_BYTES)
+    if sz.has_beta:
+        plan[CB_BETA] = (pitch, sz.T_g)
+    if sz.is_ln:
+        plan[CB_MOMENT_B] = (2 * rows, sz.T_acc)
+        plan[CB_KM] = (rows, sz.T_bf16)
+        plan[CB_MSTAT] = (2 * rows, sz.T_acc)
+        plan[CB_SHIFT] = (rows, sz.T_acc)
+        plan[CB_KG] = (rows, sz.T_bf16)
+        plan[CB_MU] = (1, sz.T_acc)
+        if sz.mask:
+            plan[CB_MASK] = (1, sz.T_bf16)
+    return plan
+
+
+def plan_bytes(plan: dict) -> int:
+    return sum(p * b for p, b in plan.values())
+
+
+def n_affine_slots(mm: MemberMap, geo: Geometry) -> int:
+    # sticks touched by one member: per part ceil + 1 (non-aligned shift spans one extra stick)
+    return max(sum(n + 1 for (_, _, n, _) in m.parts) for m in mm.members) + 1  # + 1: 64 B alignment slack
+
+
+def cb_l1_budget(device) -> int:
+    """Free L1 between the allocator base and the lowest allocated L1 buffer (base op)."""
+    try:
+        view = ttnn.get_memory_view(device, ttnn.BufferType.L1)
+        allocated = [int(b["address"]) for b in view.block_table if b["allocated"] == "yes"]
+        # block addresses are relative to the allocator base, where the CB region starts
+        return min(allocated) if allocated else int(view.total_bytes_per_bank)
+    except Exception:  # noqa: BLE001
+        return int(ttnn.get_max_worker_l1_unreserved_size()) - 80 * 1024
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Split selection (base op rule re-run on the fused grid)
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+@dataclass
+class Split:
+    k: int
+    mm: MemberMap
+    num_groups: int
+    group_rows: list
+    group_row_start: list
+    rows_max: int
+
+
+def select_split(geo: Geometry, N: int, fits_fn) -> Split:
+    """k = argmin over slice-aligned candidates of rows(k) * (member_w(k) + COMBINE_TILE_COST [k > 1]),
+    members keeping >= OCC_TILES_PER_MEMBER tiles (the smallest fitting candidate always admitted); narrow rows
+    (G * sw < 2 * OCC) take the smallest fitting candidate. Ties -> smaller k."""
+    trt = geo.trt
+    cands = _k_candidates(geo, N)
+
+    def groups(k):
+        return min(trt, N // k)
+
+    def rows(k):
+        return _div_up(trt, groups(k))
+
+    fitting = [k for k in cands if groups(k) >= 1 and fits_fn(k, rows(k))]
+    if not fitting:
+        raise RuntimeError("all_gather_rms_norm: no member split fits L1 (credited streaming regime is deferred)")
+    if geo.G * geo.sw < 2 * OCC_TILES_PER_MEMBER:
+        k = min(fitting)
+    else:
+        admitted = {min(fitting)} | {k for k in fitting if member_map(k, geo).pitch >= OCC_TILES_PER_MEMBER}
+
+        def cost(k):
+            return rows(k) * (member_map(k, geo).pitch + (COMBINE_TILE_COST if k > 1 else 0))
+
+        k = min(sorted(admitted), key=lambda kk: (cost(kk), kk))
+    ng = groups(k)
+    base, rem = divmod(trt, ng)
+    g_rows = [base + (1 if g < rem else 0) for g in range(ng)]
+    starts = [sum(g_rows[:g]) for g in range(ng)]
+    return Split(k, member_map(k, geo), ng, g_rows, starts, max(g_rows))
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Transport entries (waves x shards per port)
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+def member_runs(spec: MemberSpec, q: int, rows: int, pitch: int):
+    """cb_x tile runs of member `spec` holding slice q: [(tile_offset, ntiles)]."""
+    for qq, c0, n, off in spec.parts:
+        if qq != q:
+            continue
+        if n == pitch and off == 0:
+            return [(0, rows * pitch)]
+        return [(r * pitch + off, n) for r in range(rows)]
+    return []
+
+
+def wave_row_groups(split: Split, geo: Geometry, L: int, chunk_pages: int) -> int:
+    mp = 1
+    for spec in split.mm.members:
+        for q, _, _, _ in spec.parts:
+            runs = member_runs(spec, q, split.rows_max, split.mm.pitch)
+            mp = max(mp, sum(_div_up(n, chunk_pages) for _, n in runs))
+    return max(1, min(split.num_groups, 2 * L * _div_up(INC_EVERY, 2 * mp)))
+
+
+def build_entries(chips, ring, L, split: Split, geo: Geometry, compute_cores, vxy, wave_rg, chunk_pages):
+    """Per (coord, d, l): out entries [dict(q, w, wait, runs=[(xy, off, n)])] and in entries; expected landings and
+    own-member signalling. Entries with no runs are dropped."""
+    k = split.k
+    n_waves = _div_up(split.num_groups, wave_rg)
+
+    def runs_for(q, w, l, part):
+        runs = []
+        for g in range(w * wave_rg, min((w + 1) * wave_rg, split.num_groups)):
+            if g % L != l:
+                continue
+            if part == 1 and (g // L) % 2 != 0:
+                continue
+            if part == 2 and (g // L) % 2 != 1:
+                continue
+            for m, spec in enumerate(split.mm.members):
+                core = compute_cores[g * k + m]
+                for off, n in member_runs(spec, q, split.group_rows[g], split.mm.pitch):
+                    runs.append((vxy(core), off, n, (core.x, core.y)))
+        return runs
+
+    out = {}
+    for coord, ch in chips.items():
+        p, G = ch["p"], ch["G"]
+        fwd, bwd = schedule(p, G, ring, balance=True)
+        sched = {"fwd": fwd if ch["next"] is not None else [], "bwd": bwd if ch["prev"] is not None else []}
+        for d in DIRS:
+            for l in range(L):
+                if (d, l) not in ch["ports"]:
+                    continue
+                entries = []
+                for s in range(n_waves + RELAY_LAG_WAVES):
+                    for idx, (q, part) in enumerate(sched[d]):
+                        w = s if idx == 0 else s - RELAY_LAG_WAVES
+                        if w < 0 or w >= n_waves:
+                            continue
+                        runs = runs_for(q, w, l, part)
+                        if runs:
+                            entries.append(dict(q=q, w=w, own=(idx == 0), runs=runs))
+                out[(coord, d, l)] = entries
+    # incoming lists and relay wait thresholds
+    inc = {}
+    for coord, ch in chips.items():
+        for d in DIRS:
+            up = ch["prev"] if d == "fwd" else ch["next"]
+            for l in range(L):
+                if (d, l) not in ch["ports"]:
+                    continue
+                inc[(coord, d, l)] = out.get((up, d, l), []) if up is not None else []
+    for (coord, d, l), entries in out.items():
+        ins = inc[(coord, d, l)]
+        for e in entries:
+            if e["own"]:
+                e["wait"] = 0
+                continue
+            idx = next(i for i, ie in enumerate(ins) if ie["q"] == e["q"] and ie["w"] == e["w"])
+            have = {(r[1], r[3]) for r in ins[idx]["runs"]}
+            assert all((r[1], r[3]) in have for r in e["runs"]), "relay entry not covered by its incoming entry"
+            e["wait"] = idx + 1
+    return out, inc, n_waves
+
+
+def chunks_of(entries, chunk_pages):
+    return sum(_div_up(n, chunk_pages) for e in entries for (_, _, n, _) in e["runs"])
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Descriptor
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+def _cb(index, pages, page_size, dtype, core_ranges):
+    return ttnn.CBDescriptor(
+        total_size=pages * page_size,
+        core_ranges=core_ranges,
+        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=page_size)],
+    )
+
+
+def _crs(cores):
+    return ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores]).merge(ttnn.CoreRangeSet([]))
+
+
+def _xy(v):
+    return int(v.x) | (int(v.y) << 16)
+
+
+def _datum_bytes(dtype) -> int:
+    return {ttnn.float32: 4, ttnn.bfloat16: 2, ttnn.bfloat8_b: 1}[dtype]
+
+
+@dataclass
+class OpConfig:
+    cluster_axis: int
+    ring: bool
+    num_links: int
+    is_ln: bool
+    epsilon: float
+    compute_kernel_config: object
+
+
+def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg: OpConfig, sems, fabric):
+    mesh = input_tensor.device()
+    mesh_shape = tuple(mesh.shape)
+    G = mesh_shape[cfg.cluster_axis]
+    L = cfg.num_links
+    geo = derive_geometry(input_tensor.shape, G)
+    has_gamma, has_beta = gamma is not None, beta is not None
+    x_dtype = input_tensor.dtype
+    g_dtype = gamma.dtype if has_gamma else ttnn.bfloat16
+    fp32_dest = bool(cfg.compute_kernel_config.fp32_dest_acc_en)
+    mask = cfg.is_ln and geo.v < TILE
+    sz = make_sizes(x_dtype, g_dtype, fp32_dest, cfg.is_ln, has_gamma, has_beta, mask)
+
+    chips, ring, ports_union = fabric
+    grid = mesh.compute_with_storage_grid_size()
+    pu = set(ports_union)
+    compute_all = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in pu]
+    N = len(compute_all)
+
+    tile_bytes = sz.T_in
+    max_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes())
+    chunk_pages = max(1, max_payload // tile_bytes)
+    stage_pages = 2 * PORT_BATCH_CHUNKS * chunk_pages
+    budget = cb_l1_budget(mesh)
+
+    def fits(k, rows):
+        mm = member_map(k, geo)
+        cplan = cb_plan(sz, k, mm.pitch, rows, n_affine_slots(mm, geo))
+        port_bytes = rows * mm.pitch * sz.T_in + stage_pages * tile_bytes
+        return plan_bytes(cplan) <= budget and port_bytes <= budget
+
+    split = select_split(geo, N, fits)
+    k, mm, pitch, rows_max = split.k, split.mm, split.mm.pitch, split.rows_max
+    compute_used = compute_all[: split.num_groups * k]
+    vxy_cache = {}
+
+    def vxy(c):
+        key = (c.x, c.y)
+        if key not in vxy_cache:
+            vxy_cache[key] = mesh.worker_core_from_logical_core(c)
+        return vxy_cache[key]
+
+    wave_rg = wave_row_groups(split, geo, L, chunk_pages)
+    out_e, in_e, n_waves = build_entries(chips, ring, L, split, geo, compute_used, vxy, wave_rg, chunk_pages)
+
+    # ---- per-chip expected landings + own signalling ----
+    cplan = cb_plan(sz, k, pitch, rows_max, n_affine_slots(mm, geo))
+    n_stat = 2 if cfg.is_ln else 1
+    t_acc = acc_dtype(fp32_dest)
+    cb_dtype = {
+        CB_X: x_dtype,
+        CB_GAMMA: g_dtype,
+        CB_BETA: g_dtype,
+        CB_ONES: ttnn.bfloat16,
+        CB_MASK: ttnn.bfloat16,
+        CB_MOMENT_A: t_acc,
+        CB_MOMENT_B: t_acc,
+        CB_KM: ttnn.bfloat16,
+        CB_PARTIAL: t_acc,
+        CB_GATHERED: t_acc,
+        CB_ROWSTAT: t_acc,
+        CB_OUT: x_dtype,
+        CB_MSTAT: t_acc,
+        CB_SHIFT: t_acc,
+        CB_KG: ttnn.bfloat16,
+        CB_MU: t_acc,
+        CB_AFFINE_STAGE: ttnn.bfloat16,
+    }
+    port_cores = [ttnn.CoreCoord(x, y) for (x, y) in ports_union]
+    crs_compute = _crs(compute_used)
+    crs_ports = _crs(port_cores)
+    crs_x = _crs(compute_used + port_cores)
+
+    # ---- compute config (LN: copy-only CBs unpack straight to DEST in fp32) ----
+    ckc = cfg.compute_kernel_config
+    ccfg = ttnn.ComputeConfigDescriptor()
+    ccfg.math_fidelity = ckc.math_fidelity
+    ccfg.fp32_dest_acc_en = ckc.fp32_dest_acc_en
+    ccfg.math_approx_mode = ckc.math_approx_mode
+    try:
+        ccfg.dst_full_sync_en = ckc.dst_full_sync_en
+    except Exception:  # noqa: BLE001
+        pass
+    if cfg.is_ln and fp32_dest:
+        modes = [ttnn.UnpackToDestMode.Default] * 64
+        for cb in (CB_GATHERED if k > 1 else CB_PARTIAL, CB_MU, CB_MSTAT):
+            modes[cb] = ttnn.UnpackToDestMode.UnpackToDestFp32
+        if x_dtype == ttnn.float32:
+            modes[CB_X] = ttnn.UnpackToDestMode.UnpackToDestFp32
+        ccfg.unpack_to_dest_mode = modes
+
+    defines = []
+    if cfg.is_ln:
+        defines.append(("AGRMS_LN", "1"))
+    if has_gamma:
+        defines.append(("AGRMS_HAS_GAMMA", "1"))
+    if has_beta:
+        defines.append(("AGRMS_HAS_BETA", "1"))
+    if mask:
+        defines.append(("AGRMS_MASK", "1"))
+
+    x_acc = ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
+    o_acc = ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
+    g_acc = (ttnn.TensorAccessorArgs(gamma) if has_gamma else ttnn.TensorAccessorArgs()).get_compile_time_args()
+    b_acc = (ttnn.TensorAccessorArgs(beta) if has_beta else ttnn.TensorAccessorArgs()).get_compile_time_args()
+    x_elem = _datum_bytes(x_dtype)
+    g_elem = _datum_bytes(g_dtype)
+    g_is_tile = 1 if (has_gamma and gamma.layout == ttnn.TILE_LAYOUT) else 0
+    g_page = gamma.buffer_aligned_page_size() if has_gamma else 0
+    unit = out_unit(pitch)
+
+    reader_ct = [tile_bytes, pitch, geo.sw, geo.v, x_elem, SEM_LANDED, SEM_OWN_LOADED] + list(x_acc)
+    compute_ct = [k, pitch, n_stat]
+    writer_ct = [
+        sz.T_out,
+        pitch,
+        geo.out_w_tiles,
+        k,
+        unit,
+        OUT_DEPTH * unit,
+        n_stat,
+        SEM_PARTIALS,
+        sz.T_acc,
+        g_elem,
+        g_is_tile,
+        g_page,
+        sz.T_g,
+        AFFINE_SLOT_BYTES,
+    ]
+    writer_ct += list(o_acc)
+    writer_ct += list(g_acc)
+    writer_ct += list(b_acc)
+    port_reader_ct = [tile_bytes, chunk_pages, PORT_BATCH_CHUNKS, SEM_OWN_LOADED, SEM_LANDED]
+    port_sender_ct = [tile_bytes, chunk_pages, PORT_BATCH_CHUNKS]
+
+    inv_w_bits = _f32_bits(1.0 / geo.W)
+    eps_bits = _f32_bits(cfg.epsilon)
+    arrival_addr, ready_addr = (int(ttnn.get_global_semaphore_address(s)) for s in sems)
+    x_addr = input_tensor.buffer_address()
+    o_addr = output_tensor.buffer_address()
+    g_addr = gamma.buffer_address() if has_gamma else 0
+    b_addr = beta.buffer_address() if has_beta else 0
+    node = lambda coord: mesh.get_fabric_node_id(ttnn.MeshCoordinate(*coord))
+
+    hash_key = "|".join(
+        str(v)
+        for v in (
+            "all_gather_rms_norm",
+            tuple(input_tensor.shape),
+            x_dtype,
+            input_tensor.memory_config(),
+            output_tensor.memory_config(),
+            has_gamma and (gamma.dtype, gamma.layout),
+            has_beta,
+            cfg,
+            mesh_shape,
+            tuple(ports_union),
+            k,
+            wave_rg,
+            ckc.math_fidelity,
+            fp32_dest,
+            ckc.math_approx_mode,
+        )
+    )
+
+    mesh_desc = ttnn.MeshProgramDescriptor()
+    for coord, ch in chips.items():
+        p = ch["p"]
+        program = ttnn.ProgramDescriptor()
+        program.custom_program_hash = (
+            int.from_bytes(hashlib.sha1(f"{hash_key}|{coord}".encode()).digest()[:8], "little") >> 1
+        )
+        # semaphores first: setup_fabric_connection then takes the lowest free ids on the port cores
+        program.semaphores = [
+            ttnn.SemaphoreDescriptor(id=SEM_LANDED, core_ranges=crs_x, initial_value=0),
+            ttnn.SemaphoreDescriptor(id=SEM_PARTIALS, core_ranges=crs_x, initial_value=0),
+            ttnn.SemaphoreDescriptor(id=SEM_OWN_LOADED, core_ranges=crs_x, initial_value=0),
+        ]
+        # CBs: cb_x FIRST over compute_used + ports_union (identical on every chip -> one landing address)
+        cbs = [_cb(CB_X, cplan[CB_X][0], cplan[CB_X][1], x_dtype, crs_x)]
+        cbs.append(_cb(CB_STAGE, stage_pages, tile_bytes, x_dtype, crs_ports))
+        for idx in sorted(cplan):
+            if idx == CB_X:
+                continue
+            pages, pb = cplan[idx]
+            cbs.append(_cb(idx, pages, pb, cb_dtype[idx], crs_compute))
+        program.cbs = cbs
+
+        # ---- expected landings / own-loaded signalling on this chip ----
+        landings = {}
+        for d in DIRS:
+            for l in range(L):
+                if (d, l) not in ch["ports"]:
+                    continue
+                for e in in_e[(coord, d, l)]:
+                    for core_xy in sorted({r[3] for r in e["runs"]}):
+                        landings[core_xy] = landings.get(core_xy, 0) + 1
+        own_sig = {}  # member core -> [port vxy]
+        own_expected = {}
+        for d in DIRS:
+            for l in range(L):
+                if (d, l) not in ch["ports"]:
+                    continue
+                pc = ch["ports"][(d, l)]
+                own_cores = sorted({r[3] for e in out_e[(coord, d, l)] if e["own"] for r in e["runs"]})
+                own_expected[(d, l)] = len(own_cores)
+                for cxy in own_cores:
+                    own_sig.setdefault(cxy, []).append(_xy(vxy(pc)))
+
+        reader_rt, compute_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+        for g in range(split.num_groups):
+            rows = split.group_rows[g]
+            row_start = split.group_row_start[g]
+            members = compute_used[g * k : (g + 1) * k]
+            peer_xy = []
+            for c in members:
+                v = vxy(c)
+                peer_xy += [v.x, v.y]
+            for m, spec in enumerate(mm.members):
+                c = members[m]
+                own = [pt for pt in spec.parts if pt[0] == p]
+                own_n, own_c0, own_off = (own[0][2], own[0][1], own[0][3]) if own else (0, 0, 0)
+                tails = [off + n - 1 for (_, c0, n, off) in spec.parts if c0 + n == geo.sw] if geo.v < TILE else []
+                sig = own_sig.get((c.x, c.y), [])
+                reader_rt[c.x][c.y] = (
+                    [x_addr, row_start, rows, own_n, own_c0, own_off, landings.get((c.x, c.y), 0), len(sig)]
+                    + sig
+                    + [len(tails)]
+                    + tails
+                )
+                segs = []
+                for _, c0, n, _ in spec.parts:
+                    segs += [n, 1 if (mask and c0 + n == geo.sw) else 0]
+                n_m = [_f32_bits(s.valid_cols) for s in mm.members]
+                compute_rt[c.x][c.y] = (
+                    [rows, spec.core_w, m, inv_w_bits, eps_bits, _f32_bits(1.0 / spec.valid_cols), len(spec.parts)]
+                    + segs
+                    + n_m
+                )
+                q0, c00 = spec.parts[0][0], spec.parts[0][1]
+                out_col0 = q0 * geo.sw + c00
+                gparts = []
+                for q, c0, n, off in spec.parts:
+                    gparts += [q * geo.W_local + TILE * c0, geo.W_local - TILE * c0, n, off]
+                wr = [o_addr, row_start, rows, out_col0, spec.core_w, m, g_addr, b_addr, len(spec.parts)] + gparts
+                wr += [len(wr) + 1]  # index of the first peer (x, y) pair
+                writer_rt[c.x][c.y] = wr + peer_xy
+
+        # ---- port kernels on every ports_union core (idle ones get zero work) ----
+        pr_rt, ps_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+        port_of = {(pc.x, pc.y): key for key, pc in ch["ports"].items()}
+        for pc in port_cores:
+            key = port_of.get((pc.x, pc.y))
+            if key is None:
+                pr_rt[pc.x][pc.y] = [arrival_addr, 0, 0, 0]
+                ps_rt[pc.x][pc.y] = [arrival_addr, ready_addr, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+                continue
+            d, l = key
+            outs = out_e[(coord, d, l)]
+            ins = in_e[(coord, d, l)]
+            rd = [arrival_addr, own_expected[(d, l)], len(outs), len(ins)]
+            sd_entries = []
+            for e in outs:
+                runs = []
+                for v, off, n, _ in e["runs"]:
+                    runs += [_xy(v), off | (n << 16)]
+                rd += [e["wait"], len(e["runs"])] + runs
+                sd_entries += [len(e["runs"])] + runs
+            for e in ins:
+                cores = []
+                for v, _, _, cxy in e["runs"]:
+                    if not cores or cores[-1] != _xy(v):
+                        cores.append(_xy(v))
+                cores = list(dict.fromkeys(cores))
+                rd += [len(cores)] + cores
+            pr_rt[pc.x][pc.y] = rd
+            peer = ch["next"] if d == "fwd" else ch["prev"]
+            # ready: the peer's opposite-direction port sends into this chip; tell it this program started
+            peer_opp_sends = peer is not None and bool(out_e.get((peer, OPP[d], l)))
+            send_ready = 1 if peer_opp_sends else 0
+            rc = vxy(chips[peer]["ports"][(OPP[d], l)]) if send_ready else None
+            sd = [arrival_addr, ready_addr, send_ready, rc.x if rc else 0, rc.y if rc else 0]
+            has_conn = peer is not None and (bool(outs) or send_ready)
+            if has_conn:
+                pcv = vxy(chips[peer]["ports"][(d, l)]) if outs else ttnn.CoreCoord(0, 0)
+                pn = node(peer)
+                sd += [pcv.x, pcv.y, int(pn.mesh_id), int(pn.chip_id), 1, chunks_of(outs, chunk_pages), len(outs)]
+                sd += sd_entries
+                sd += list(ttnn.setup_fabric_connection(node(coord), pn, ch["links"][d][l], program, pc))
+            else:
+                sd += [0, 0, 0, 0, 0, 0, 0]
+            ps_rt[pc.x][pc.y] = sd
+
+        program.kernels = [
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "all_gather_rms_norm_reader.cpp"),
+                core_ranges=crs_compute,
+                compile_time_args=reader_ct,
+                defines=defines,
+                runtime_args=reader_rt,
+                config=ttnn.ReaderConfigDescriptor(),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "all_gather_rms_norm_writer.cpp"),
+                core_ranges=crs_compute,
+                compile_time_args=writer_ct,
+                defines=defines,
+                runtime_args=writer_rt,
+                config=ttnn.WriterConfigDescriptor(),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "all_gather_rms_norm_compute.cpp"),
+                core_ranges=crs_compute,
+                compile_time_args=compute_ct,
+                defines=defines,
+                runtime_args=compute_rt,
+                config=ccfg,
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "all_gather_rms_norm_port_reader.cpp"),
+                core_ranges=crs_ports,
+                compile_time_args=port_reader_ct,
+                runtime_args=pr_rt,
+                config=ttnn.DataMovementConfigDescriptor(
+                    processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.RISCV_0_default  # NoC0
+                ),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "all_gather_rms_norm_port_sender.cpp"),
+                core_ranges=crs_ports,
+                compile_time_args=port_sender_ct,
+                runtime_args=ps_rt,
+                config=ttnn.DataMovementConfigDescriptor(
+                    processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_1_default  # NoC1
+                ),
+            ),
+        ]
+        r, c = coord
+        mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = program
+    info = dict(
+        k=k,
+        num_groups=split.num_groups,
+        rows=rows_max,
+        pitch=pitch,
+        wave_rg=wave_rg,
+        n_waves=n_waves,
+        chunk_pages=chunk_pages,
+        ports_union=ports_union,
+        N=N,
+    )
+    return mesh_desc, info
