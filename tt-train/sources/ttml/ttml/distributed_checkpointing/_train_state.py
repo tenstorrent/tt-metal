@@ -193,6 +193,9 @@ def _decode_process_rng(state: dict) -> dict[str, Any]:
                 int(numpy_state["has_gauss"]),
                 float(numpy_state["cached_gaussian"]),
             )
+            # set_state takes any position, and the next draw then reads past the 624 words: zeros, or a crash.
+            if not 0 <= decoded["numpy"][2] <= _MT19937_WORDS:
+                raise ValueError(f"numpy's position {decoded['numpy'][2]} is outside [0, {_MT19937_WORDS}]")
             np.random.RandomState().set_state(decoded["numpy"])
         init_state = state.get("ttml_init")
         if init_state is not None:
@@ -202,13 +205,17 @@ def _decode_process_rng(state: dict) -> dict[str, Any]:
                 "has_uint32": int(init_state["has_uint32"]),
                 "uinteger": int(init_state["uinteger"]),
             }
+            # PCG64's state and increment are 128-bit; it would wrap a negative one rather than refuse it.
+            for name, value in decoded["ttml_init"]["state"].items():
+                if not 0 <= value < 2**128:
+                    raise ValueError(f"ttml.init's PCG64 {name} {value:#x} is not a 128-bit value")
             np.random.PCG64().state = decoded["ttml_init"]
         if state.get("torch") is not None:
             decoded["torch"] = np.frombuffer(bytes.fromhex(state["torch"]), dtype=np.uint8).copy()
             torch = sys.modules.get("torch")
             if torch is not None:
                 torch.Generator().set_state(torch.from_numpy(decoded["torch"]))
-    except (KeyError, TypeError, ValueError, IndexError, RuntimeError) as err:
+    except (KeyError, TypeError, ValueError, IndexError, OverflowError, RuntimeError) as err:
         raise CheckpointError(
             f"the stored RNG state is malformed ({type(err).__name__}: {err}); pass rng=False to load to restore "
             "everything else and keep the current generators"
