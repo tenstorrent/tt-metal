@@ -14,6 +14,7 @@ kernels have no such check, so the reference gets -1 there); nothing outside tho
 import pytest
 import torch
 import ttnn
+from tt_py_test_utils_common.utility_functions import skip_for_slow_dispatch
 
 TILE = 32
 NB = 4  # page-table blocks per user
@@ -174,6 +175,7 @@ def test_multi_row_program_cache(device):
     assert device.num_program_cache_entries() == entries
 
 
+@skip_for_slow_dispatch("trace capture needs fast dispatch")
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 1024 * 1024}], indirect=True)
 def test_multi_row_in_trace(device):
     """The verify's KV write inside a captured trace: the K and V rows are resharded from DRAM inside the trace, as the
