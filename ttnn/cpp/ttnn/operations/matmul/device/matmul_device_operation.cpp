@@ -228,6 +228,17 @@ void validate_matmul_optional_tensors(
     const auto output_tensor_spec = MatmulDeviceOperation::compute_output_specs(attributes, args).at(0);
     if (is_optional_output_tensor) {
         const auto& optional_output_tensor_c = optional_output_tensors.at(0);
+        TT_FATAL(
+            optional_output_tensor_c->buffer() != args.input_tensors.at(0).buffer(),
+            "matmul: optional_output_tensor must not alias input tensor a's buffer");
+        TT_FATAL(
+            optional_output_tensor_c->buffer() != args.input_tensors.at(1).buffer(),
+            "matmul: optional_output_tensor must not alias input tensor b's buffer");
+        if (optional_input_tensors.at(0).has_value()) {
+            TT_FATAL(
+                optional_output_tensor_c->buffer() != optional_input_tensors.at(0)->buffer(),
+                "matmul: optional_output_tensor must not alias the bias buffer");
+        }
         const auto& optional_output_tensor_shape = optional_output_tensor_c->logical_shape();
         const auto computed_shape = operations::matmul::utilities::compute_matmul_output_shape(
             args.input_tensors.at(0), args.input_tensors.at(1), attributes.transpose_a, attributes.transpose_b);
