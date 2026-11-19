@@ -103,10 +103,11 @@ Arguments:
 Lines:
 
 - End each line with ``\n``. The host writes a line only when its ``\n`` arrives, so one print can write several
-  lines and several prints can build one line. Text after a RISC's last ``\n`` is lost when the device closes.
-- ``\r`` ends a line but holds it back. Lines ending in ``\r`` are written together with the next line that ends
-  in ``\n``, so a multi-line block isn't interleaved with other RISCs' output. In the output each ``\r`` becomes a
-  line break, and every line of the block gets the prefix.
+  lines and several prints can build one line. A RISC's kernel and its firmware build their lines apart. Text after
+  the last ``\n`` of either is lost when the device closes.
+- ``\r`` ends a line but holds it back. Lines ending in ``\r`` are written together with the next line from the same
+  kernel or firmware that ends in ``\n``, so a multi-line block isn't interleaved with other output. In the output
+  each ``\r`` becomes a line break, and every line of the block gets the prefix.
 
 Format strings
 --------------
@@ -511,8 +512,8 @@ Best practices
 - **Use** ``CTSTR`` **for fixed strings.** A runtime ``const char*`` prints only its address.
 - **Use an unsigned type for hex.** ``{:x}`` on a negative signed value prints a minus sign: ``int32_t(-1)`` prints
   ``-1``, not ``ffffffff``.
-- **End every line with** ``\n``. A line without one isn't written until a later print ends it, and is lost if the
-  device closes first.
+- **End every line with** ``\n``. A line without one isn't written until a later kernel print on that RISC ends it,
+  and is lost if the device closes first.
 - **Keep arguments free of side effects.** They aren't evaluated when DPRINT is off.
 - **Print only what you need, and only from where you need it.** Narrow ``TT_METAL_DPRINT_CORES`` and
   ``TT_METAL_DPRINT_RISCVS``, and use the thread variants (``DPRINT_MATH`` and so on) in compute kernels. When a

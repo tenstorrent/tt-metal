@@ -209,8 +209,9 @@ The print regions that the memory map gives DPRINT:
 - `DevicePrintParser` (`dprint_parser.cpp`) reads the two sections from that ELF, parses the rewritten formats, reads
   enum names and call stacks from DWARF, and formats each value with fmt.
 - Per RISC, the server assembles lines, the kernel's and the firmware's apart, holds `\r` blocks until the next `\n`,
-  adds the prefix (and `[FW] ` ahead of it on a firmware line with `TT_METAL_DPRINT_TAG_FIRMWARE=1`, which the
-  DEVICE_PRINT tests turn on to check kernel lines only), and writes to stdout, a file or one file per RISC.
+  adds the prefix (and `[FW] ` ahead of it on a firmware line with `TT_METAL_DPRINT_TAG_FIRMWARE=1`, which
+  `DevicePrintFixture` turns on so that tests check kernel lines only), and writes to stdout, a file or one file per
+  RISC.
 
 ## 5. Library
 
@@ -339,8 +340,8 @@ Writing a test:
   fails on any implementation.
 - Expected text: tiles and typed arrays print what the golden generators in `test_print_tile.cpp` and
   `test_print_tensix_dest.cpp` produce, a `\r` test also checks that each block's lines stay adjacent, a call-stack
-  test compares frame names and the `...` marker, and Quasar tests drop the known per-launch firmware lines while they
-  exist.
+  test compares frame names and the `...` marker, and the checks in `debug_tools_test_utils.hpp` skip firmware lines,
+  which `DevicePrintFixture` has the server tag with `[FW] `.
 - Remote-chip volume tests print from the active ERISCs of a multi-chip Wormhole system, whose base firmware carries
   the host's reads and writes to the remote chips.
 - CI runs the DPRINT tests named in `tests/pipeline_reorg/*.yaml` and `tests/scripts/`, so new and renamed tests go

@@ -262,6 +262,7 @@ private:
         std::shared_ptr<DevicePrintParser> firmware_elf_parser;
         std::string kernel_elf_path;
         std::shared_ptr<DevicePrintParser> kernel_elf_parser;
+        // The kernel's and the firmware's unfinished lines, kept apart so that neither splits a line of the other.
         std::string message_buffer;
         std::string firmware_message_buffer;
         std::optional<std::string> line_prefix;
