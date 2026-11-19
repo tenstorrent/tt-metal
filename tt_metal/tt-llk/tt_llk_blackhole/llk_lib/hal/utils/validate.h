@@ -34,8 +34,8 @@ __attribute__((cold, always_inline)) inline void fail_assert([[maybe_unused]] co
 inline constexpr __attribute__((always_inline)) void require(const bool valid, const char* message)
 {
     // Test validity first: valid constants then fold away even in non-constant contexts,
-    // so TTI_INSN still receives an immediate. The hint keeps the failure off the fall-through path.
-    if (__builtin_expect(!valid, 0))
+    // so TTI_INSN still receives an immediate.
+    if (!valid)
     {
         if (__builtin_is_constant_evaluated())
         {
