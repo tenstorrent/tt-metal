@@ -18,6 +18,7 @@ env that cannot start the store shows up. Skipped on other platforms. Kept out o
 broad CI job does not install Mooncake.
 """
 
+import contextlib
 import dataclasses
 import hashlib
 import os
@@ -86,52 +87,57 @@ def _wait_until_healthy(master: subprocess.Popen, metrics_port: int, log) -> Non
         time.sleep(0.1)
 
 
+def _stop(master: subprocess.Popen) -> None:
+    master.terminate()
+    master.wait(timeout=30)
+
+
 @pytest.fixture(scope="module")
 def cluster(tmp_path_factory):
-    rpc, http, metrics = _free_port(), _free_port(), _free_port()
-    log = tmp_path_factory.mktemp("mooncake") / "master.log"
-    log_file = open(log, "w")
-    master = subprocess.Popen(
-        [
-            _master_binary(),
-            f"--rpc_port={rpc}",
-            "--enable_http_metadata_server=true",
-            f"--http_metadata_server_port={http}",
-            "--allow_evict_soft_pinned_objects=false",
-            f"--metrics_port={metrics}",
-        ],
-        stdout=log_file,
-        stderr=subprocess.STDOUT,
-    )
-    _wait_until_healthy(master, metrics, log)
-
-    def config(host: str, segment_bytes: int) -> MediaEmbeddingStoreConfig:
-        return MediaEmbeddingStoreConfig(
-            master=f"127.0.0.1:{rpc}",
-            segment=f"{host}:{_free_port(host)}",
-            segment_bytes=segment_bytes,
-            metadata=f"http://127.0.0.1:{http}/metadata",
-            protocol="tcp",
+    # Each resource's cleanup is registered as soon as it exists, so a setup step that fails (the master never gets
+    # healthy, a client can't join) still closes what was opened before it, in reverse order.
+    with contextlib.ExitStack() as cleanup:
+        rpc, http, metrics = _free_port(), _free_port(), _free_port()
+        log = tmp_path_factory.mktemp("mooncake") / "master.log"
+        log_file = cleanup.enter_context(open(log, "w"))
+        master = subprocess.Popen(
+            [
+                _master_binary(),
+                f"--rpc_port={rpc}",
+                "--enable_http_metadata_server=true",
+                f"--http_metadata_server_port={http}",
+                "--allow_evict_soft_pinned_objects=false",
+                f"--metrics_port={metrics}",
+            ],
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
         )
+        cleanup.callback(_stop, master)
+        _wait_until_healthy(master, metrics, log)
 
-    store = MooncakeEmbeddingReader.open(config("127.0.0.1", 64 << 20))
-    other = MooncakeEmbeddingReader.open(config("127.0.0.2", 64 << 20))
-    puller = MooncakeEmbeddingReader.open(config("127.0.0.4", 0))  # pull mode: no store on this host
-    plain_reader = MooncakeEmbeddingReader.open(dataclasses.replace(config("127.0.0.5", 0), key_transform="none"))
-    w = config("127.0.0.3", 0)
-    writer = mooncake_store.MooncakeDistributedStore()
-    assert writer.setup(w.segment, w.metadata, 0, 16 << 20, w.protocol, "", w.master) == 0
-    try:
+        def config(host: str, segment_bytes: int) -> MediaEmbeddingStoreConfig:
+            return MediaEmbeddingStoreConfig(
+                master=f"127.0.0.1:{rpc}",
+                segment=f"{host}:{_free_port(host)}",
+                segment_bytes=segment_bytes,
+                metadata=f"http://127.0.0.1:{http}/metadata",
+                protocol="tcp",
+            )
+
+        def open_reader(config: MediaEmbeddingStoreConfig) -> MooncakeEmbeddingReader:
+            reader = MooncakeEmbeddingReader.open(config)
+            cleanup.callback(reader.close)
+            return reader
+
+        store = open_reader(config("127.0.0.1", 64 << 20))
+        other = open_reader(config("127.0.0.2", 64 << 20))
+        puller = open_reader(config("127.0.0.4", 0))  # pull mode: no store on this host
+        plain_reader = open_reader(dataclasses.replace(config("127.0.0.5", 0), key_transform="none"))
+        w = config("127.0.0.3", 0)
+        writer = mooncake_store.MooncakeDistributedStore()
+        cleanup.callback(writer.close)
+        assert writer.setup(w.segment, w.metadata, 0, 16 << 20, w.protocol, "", w.master) == 0
         yield SimpleCluster(store, other, writer, metrics, puller, plain_reader)
-    finally:
-        writer.close()
-        plain_reader.close()
-        puller.close()
-        other.close()
-        store.close()
-        master.terminate()
-        master.wait(timeout=30)
-        log_file.close()
 
 
 class SimpleCluster:
