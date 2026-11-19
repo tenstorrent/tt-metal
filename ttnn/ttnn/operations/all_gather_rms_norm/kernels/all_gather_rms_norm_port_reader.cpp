@@ -68,6 +68,7 @@ void kernel_main() {
         }
     };
 
+    AGZ("pr_all");
     bool own_ready = own_expected == 0;
     uint32_t batch = 0, need = 0, pos = 0, wptr = 0;
     for (uint32_t e = 0; e < num_out; ++e) {

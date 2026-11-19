@@ -41,7 +41,9 @@ constexpr uint32_t slot_bytes = get_compile_time_arg_val(13);
 constexpr uint32_t sem_foreign_id = get_compile_time_arg_val(14);
 constexpr uint32_t max_fin = get_compile_time_arg_val(15);   // dense: foreign slots per tile-row (home side)
 constexpr uint32_t max_fout = get_compile_time_arg_val(16);  // dense: contribution tiles per tile-row (sender side)
-constexpr auto out_args = TensorAccessorArgs<17>();
+// slices tile-aligned (W_local % 32 == 0): every local gamma tile IS a dense gamma tile -> direct row-0 reads
+constexpr bool affine_aligned = get_compile_time_arg_val(17) != 0;
+constexpr auto out_args = TensorAccessorArgs<18>();
 constexpr auto gamma_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
@@ -70,57 +72,107 @@ FORCE_INLINE void put_elem(uint32_t dst, uint32_t src) {
     }
 }
 
-// load_affine_rows for one weight tensor (gamma or beta) into `cb`.
+// load_affine_rows for one weight tensor (gamma or beta) into `cb`, split in two so the DRAM reads are in flight
+// while the writer serves the partial exchange (base op gamma_after_send): issue() reserves and issues the reads,
+// finish() waits for them, completes the rows and pushes.
+//   aligned slices: page j = dense tile s = q * sw + c0 + j. TILE: faces 0/1 row 0 straight from DRAM (2 x 64 B);
+//     ROW_MAJOR bf16: the 64 B stick into face-0 rows 0..1, then one local copy of its upper half to face-1 row 0;
+//     ROW_MAJOR fp32: the two 64 B halves straight to face 0 / face 1 row 0 (a DRAM read keeps its offset mod 64 B).
+//   non-aligned slices (element shift s_q): stage the dense sticks, RISC-V scatter into the pages.
 template <typename Accessor>
-FORCE_INLINE void load_affine(const Accessor& acc, uint32_t cb, uint32_t stage, uint32_t parts_idx, uint32_t n_parts) {
-    cb_reserve_back(cb, pitch);
-    const uint32_t page_base = get_write_ptr(cb);
-    // 1) stage every dense stick the member's columns touch
-    uint32_t slot = 0;
-    for (uint32_t p = 0; p < n_parts; ++p) {
-        const uint32_t dc0 = arg(parts_idx + 4 * p);
-        const uint32_t rem = arg(parts_idx + 4 * p + 1);
-        const uint32_t n = arg(parts_idx + 4 * p + 2);
-        const uint32_t cols = rem < n * TILE_DIM ? rem : n * TILE_DIM;
-        const uint32_t s0 = dc0 / TILE_DIM, s1 = (dc0 + cols - 1) / TILE_DIM;
-        for (uint32_t s = s0; s <= s1; ++s, ++slot) {
-            const uint32_t dst = stage + slot * slot_bytes;
-            if constexpr (g_is_tile) {
-                noc_async_read(acc.get_noc_addr(s, 0), dst, READ_ALIGN);
-                noc_async_read(acc.get_noc_addr(s, g_face_bytes), dst + READ_ALIGN, READ_ALIGN);
+struct AffineLoad {
+    const Accessor& acc;
+    uint32_t cb;
+    uint32_t stage;
+    uint32_t parts_idx;
+    uint32_t n_parts;
+    uint32_t page_base = 0;
+
+    FORCE_INLINE void issue() {
+        cb_reserve_back(cb, pitch);
+        page_base = get_write_ptr(cb);
+        uint32_t slot = 0;
+        for (uint32_t p = 0; p < n_parts; ++p) {
+            const uint32_t dc0 = arg(parts_idx + 4 * p);
+            const uint32_t rem = arg(parts_idx + 4 * p + 1);
+            const uint32_t n = arg(parts_idx + 4 * p + 2);
+            const uint32_t off = arg(parts_idx + 4 * p + 3);
+            if constexpr (affine_aligned) {
+                const uint32_t s0 = dc0 / TILE_DIM;
+                for (uint32_t j = 0; j < n; ++j) {
+                    const uint32_t page = page_base + (off + j) * g_l1_page;
+                    if constexpr (g_is_tile) {
+                        noc_async_read(acc.get_noc_addr(s0 + j, 0), page, READ_ALIGN);
+                        noc_async_read(acc.get_noc_addr(s0 + j, g_face_bytes), page + g_face_bytes, READ_ALIGN);
+                    } else if constexpr (FACE_DIM * g_elem % READ_ALIGN == 0) {
+                        noc_async_read(acc.get_noc_addr(s0 + j, 0), page, FACE_DIM * g_elem);
+                        noc_async_read(
+                            acc.get_noc_addr(s0 + j, FACE_DIM * g_elem), page + g_face_bytes, FACE_DIM * g_elem);
+                    } else {
+                        noc_async_read(acc.get_noc_addr(s0 + j, 0), page, TILE_DIM * g_elem);
+                    }
+                }
             } else {
-                noc_async_read(acc.get_noc_addr(s, 0), dst, TILE_DIM * g_elem);
-            }
-        }
-    }
-    noc_async_read_barrier();
-    // 2) scatter into row 0 of faces 0/1 of each page
-    slot = 0;
-    for (uint32_t p = 0; p < n_parts; ++p) {
-        const uint32_t dc0 = arg(parts_idx + 4 * p);
-        const uint32_t rem = arg(parts_idx + 4 * p + 1);
-        const uint32_t n = arg(parts_idx + 4 * p + 2);
-        const uint32_t off = arg(parts_idx + 4 * p + 3);
-        const uint32_t cols = rem < n * TILE_DIM ? rem : n * TILE_DIM;
-        const uint32_t s0 = dc0 / TILE_DIM, s1 = (dc0 + cols - 1) / TILE_DIM;
-        for (uint32_t j = 0; j < n; ++j) {
-            const uint32_t page = page_base + (off + j) * g_l1_page;
-            for (uint32_t e = 0; e < TILE_DIM; ++e) {
-                const uint32_t c = j * TILE_DIM + e;  // column relative to the part start
-                const uint32_t dst = page + (e < FACE_DIM ? e * g_elem : g_face_bytes + (e - FACE_DIM) * g_elem);
-                if (c < cols) {
-                    const uint32_t dense = dc0 + c;
-                    const uint32_t sl = slot + dense / TILE_DIM - s0;
-                    put_elem(dst, staged_elem_addr(stage + sl * slot_bytes, dense % TILE_DIM));
-                } else {
-                    put_elem(dst, 0);
+                const uint32_t cols = rem < n * TILE_DIM ? rem : n * TILE_DIM;
+                const uint32_t s0 = dc0 / TILE_DIM, s1 = (dc0 + cols - 1) / TILE_DIM;
+                for (uint32_t s = s0; s <= s1; ++s, ++slot) {
+                    const uint32_t dst = stage + slot * slot_bytes;
+                    if constexpr (g_is_tile) {
+                        noc_async_read(acc.get_noc_addr(s, 0), dst, READ_ALIGN);
+                        noc_async_read(acc.get_noc_addr(s, g_face_bytes), dst + READ_ALIGN, READ_ALIGN);
+                    } else {
+                        noc_async_read(acc.get_noc_addr(s, 0), dst, TILE_DIM * g_elem);
+                    }
                 }
             }
         }
-        slot += s1 - s0 + 1;
     }
-    cb_push_back(cb, pitch);
-}
+
+    FORCE_INLINE void finish() {
+        noc_async_read_barrier();
+        if constexpr (affine_aligned) {
+            if constexpr (!g_is_tile && FACE_DIM * g_elem % READ_ALIGN != 0) {
+                // bf16 sticks: face-0 row 1 (the upper 16 datums) -> face-1 row 0, local NoC copies
+                for (uint32_t p = 0; p < n_parts; ++p) {
+                    const uint32_t n = arg(parts_idx + 4 * p + 2);
+                    const uint32_t off = arg(parts_idx + 4 * p + 3);
+                    for (uint32_t j = 0; j < n; ++j) {
+                        const uint32_t page = page_base + (off + j) * g_l1_page;
+                        noc_async_read(get_noc_addr(page + FACE_DIM * g_elem), page + g_face_bytes, FACE_DIM * g_elem);
+                    }
+                }
+                noc_async_read_barrier();
+            }
+        } else {
+            uint32_t slot = 0;
+            for (uint32_t p = 0; p < n_parts; ++p) {
+                const uint32_t dc0 = arg(parts_idx + 4 * p);
+                const uint32_t rem = arg(parts_idx + 4 * p + 1);
+                const uint32_t n = arg(parts_idx + 4 * p + 2);
+                const uint32_t off = arg(parts_idx + 4 * p + 3);
+                const uint32_t cols = rem < n * TILE_DIM ? rem : n * TILE_DIM;
+                const uint32_t s0 = dc0 / TILE_DIM, s1 = (dc0 + cols - 1) / TILE_DIM;
+                for (uint32_t j = 0; j < n; ++j) {
+                    const uint32_t page = page_base + (off + j) * g_l1_page;
+                    for (uint32_t e = 0; e < TILE_DIM; ++e) {
+                        const uint32_t c = j * TILE_DIM + e;  // column relative to the part start
+                        const uint32_t dst =
+                            page + (e < FACE_DIM ? e * g_elem : g_face_bytes + (e - FACE_DIM) * g_elem);
+                        if (c < cols) {
+                            const uint32_t dense = dc0 + c;
+                            const uint32_t sl = slot + dense / TILE_DIM - s0;
+                            put_elem(dst, staged_elem_addr(stage + sl * slot_bytes, dense % TILE_DIM));
+                        } else {
+                            put_elem(dst, 0);
+                        }
+                    }
+                }
+                slot += s1 - s0 + 1;
+            }
+        }
+        cb_push_back(cb, pitch);
+    }
+};
 #endif
 
 void kernel_main() {
@@ -137,19 +189,41 @@ void kernel_main() {
     const uint32_t peer_idx = arg(parts_idx + 4 * n_parts);
 
 #ifdef AGRMS_HAS_GAMMA
-    {
-        const uint32_t stage = (get_write_ptr(cb_affine_stage) + READ_ALIGN - 1) & ~(READ_ALIGN - 1);
-        const auto g_acc = TensorAccessor(gamma_args, gamma_addr, g_page_bytes);
-        load_affine(g_acc, cb_gamma, stage, parts_idx, n_parts);
+    // non-aligned: gamma and beta share the staging area -> beta is staged only after gamma's scatter
+    const uint32_t stage = (get_write_ptr(cb_affine_stage) + READ_ALIGN - 1) & ~(READ_ALIGN - 1);
+    const auto g_acc = TensorAccessor(gamma_args, gamma_addr, g_page_bytes);
+    AffineLoad<decltype(g_acc)> gamma_load{g_acc, cb_gamma, stage, parts_idx, n_parts};
 #ifdef AGRMS_HAS_BETA
-        const auto b_acc = TensorAccessor(beta_args, beta_addr, g_page_bytes);
-        load_affine(b_acc, cb_beta, stage, parts_idx, n_parts);
+    const auto b_acc = TensorAccessor(beta_args, beta_addr, g_page_bytes);
+    AffineLoad<decltype(b_acc)> beta_load{b_acc, cb_beta, stage, parts_idx, n_parts};
+#endif
+    auto finish_affine = [&]() {
+        AGZ("wr_gamma");
+        if constexpr (affine_aligned) {
+            gamma_load.finish();
+#ifdef AGRMS_HAS_BETA
+            beta_load.finish();
+#endif
+        } else {
+            gamma_load.issue();
+            gamma_load.finish();
+#ifdef AGRMS_HAS_BETA
+            beta_load.issue();
+            beta_load.finish();
+#endif
+        }
+    };
+    if constexpr (affine_aligned) {  // DRAM reads in flight while the partials are exchanged
+        gamma_load.issue();
+#ifdef AGRMS_HAS_BETA
+        beta_load.issue();
 #endif
     }
 #endif
 
     // ---- exchange_partials_block (k > 1) ----
     if constexpr (k > 1) {
+        AGZ("wr_xchg");
         const uint32_t sem_addr = get_semaphore(sem_partials_id);
         cb_wait_front(cb_partial, n_stat * rows);
         cb_reserve_back(cb_gathered, n_stat * k * rows);
@@ -176,6 +250,9 @@ void kernel_main() {
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), k);
         cb_push_back(cb_gathered, n_stat * k * rows);
     }
+#ifdef AGRMS_HAS_GAMMA
+    finish_affine();
+#endif
 
 #ifdef AGRMS_DENSE
     // ---- assemble_dense_block, foreign half: my contributions to peers' home output tiles go into their cb_foreign
@@ -220,6 +297,7 @@ void kernel_main() {
 #endif
 
     // ---- store_block ----
+    AGZ("wr_store");
     const auto out_acc = TensorAccessor(out_args, out_addr, out_tile_bytes);
     uint32_t ring_pos = 0;
     for (uint32_t r = 0; r < rows; ++r) {

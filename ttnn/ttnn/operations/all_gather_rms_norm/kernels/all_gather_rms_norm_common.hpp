@@ -5,6 +5,15 @@
 
 #include <cstdint>
 
+#include "tools/profiler/kernel_profiler.hpp"
+
+// Opt-in per-stage zones (host env AGRMS_ZONES=1 -> define AGRMS_ZONES); compiled out otherwise.
+#ifdef AGRMS_ZONES
+#define AGZ(name) DeviceZoneScopedN(name)
+#else
+#define AGZ(name)
+#endif
+
 // CB indices — must match all_gather_rms_norm_program_descriptor.py.
 namespace agrms_cb {
 constexpr uint32_t cb_x = 0;  // landing slot + resident member block (FIRST CB: same address on every core / chip)
@@ -29,4 +38,5 @@ constexpr uint32_t cb_norm = 18;
 constexpr uint32_t cb_shift_mats = 19;
 constexpr uint32_t cb_foreign = 20;
 constexpr uint32_t cb_contrib = 21;
+constexpr uint32_t cb_cent = 22;
 }  // namespace agrms_cb

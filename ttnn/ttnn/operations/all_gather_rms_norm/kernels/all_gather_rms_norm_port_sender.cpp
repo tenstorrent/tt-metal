@@ -72,18 +72,23 @@ void kernel_main() {
         route_one_hop(hdrs[h], dst_chip_id, dst_mesh_id);
     }
     conn.open();
-    if (send_ready) {
-        hdrs[0]->to_noc_unicast_atomic_inc(
-            NocUnicastAtomicIncCommandHeader{get_noc_addr(ready_x, ready_y, ready_addr), 1, true});
-        conn.wait_for_empty_write_slot();
-        conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdrs[0]), sizeof(PACKET_HEADER_TYPE));
+    {
+        AGZ("ps_fence");
+        if (send_ready) {
+            hdrs[0]->to_noc_unicast_atomic_inc(
+                NocUnicastAtomicIncCommandHeader{get_noc_addr(ready_x, ready_y, ready_addr), 1, true});
+            conn.wait_for_empty_write_slot();
+            conn.send_payload_flush_blocking_from_address(
+                reinterpret_cast<uint32_t>(hdrs[0]), sizeof(PACKET_HEADER_TYPE));
+        }
+        if (num_out > 0) {
+            volatile tt_l1_ptr uint32_t* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_addr);
+            noc_semaphore_wait_min(ready, 1);
+            noc_semaphore_inc(get_noc_addr(ready_addr), 0u - 1u);
+            noc_async_atomic_barrier();
+        }
     }
-    if (num_out > 0) {
-        volatile tt_l1_ptr uint32_t* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_addr);
-        noc_semaphore_wait_min(ready, 1);
-        noc_semaphore_inc(get_noc_addr(ready_addr), 0u - 1u);
-        noc_async_atomic_barrier();
-    }
+    AGZ("ps_send");
     const uint32_t x_base = get_write_ptr(cb_x);
     const uint64_t arrival_noc = get_noc_addr(peer_x, peer_y, arrival_addr);
     uint32_t h = 0, unflushed = 0;

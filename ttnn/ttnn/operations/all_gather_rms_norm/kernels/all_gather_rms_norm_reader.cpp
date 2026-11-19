@@ -105,6 +105,7 @@ void kernel_main() {
     };
 
     if (own_n > 0) {
+        AGZ("rd_own");
         const auto x_acc = TensorAccessor(x_args, x_addr, tile_bytes);
         for (uint32_t r = 0; r < rows; ++r) {
             const uint32_t first = (row_start + r) * sw + own_c0;
@@ -162,6 +163,7 @@ void kernel_main() {
 #endif
 
     if (expected_landings > 0) {
+        AGZ("rd_land");
         noc_semaphore_wait_min(
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_landed_id)), expected_landings);
         zero_tails(false);

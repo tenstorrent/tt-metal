@@ -172,6 +172,76 @@ ALWI void dense_assemble_block(uint32_t rows, uint32_t core_w, uint32_t d) {
 // ---------------------------------------------------------------------------------------------------------------
 // rms_norm (base op)
 // ---------------------------------------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------------------------------------------
+// shared block operations
+// ---------------------------------------------------------------------------------------------------------------
+
+// sum_j a[r][j]^2 accumulated in DEST (FPU ELWMUL acc-to-dest), one tile per tile-row of `in_cb` (row stride
+// `stride`), DEST_AUTO_LIMIT tile-rows per acquire -> out_cb (base op pass 1).
+template <uint32_t in_cb, uint32_t out_cb>
+ALWI void sum_squares_block(uint32_t rows, uint32_t core_w, uint32_t stride) {
+    constexpr uint32_t batch = compute_kernel_lib::DEST_AUTO_LIMIT;
+    reconfig_data_format(in_cb, in_cb);
+    pack_reconfig_data_format(out_cb);
+    mul_init(in_cb, in_cb, true);
+    for (uint32_t r0 = 0; r0 < rows; r0 += batch) {
+        const uint32_t n = (rows - r0) < batch ? (rows - r0) : batch;
+        cb_reserve_back(out_cb, n);
+        tile_regs_acquire();
+        for (uint32_t i = 0; i < n; ++i) {
+            const uint32_t base = (r0 + i) * stride;
+            for (uint32_t j = 0; j < core_w; ++j) {
+                mul_tiles(in_cb, in_cb, base + j, base + j, i);
+            }
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t i = 0; i < n; ++i) {
+            pack_tile(i, out_cb);
+        }
+        tile_regs_release();
+        cb_push_back(out_cb, n);
+    }
+}
+
+// DestReuseBcast: DEST[d] = DEST[d] (op) broadcast(cb tile), dest-reuse with a broadcast srcB operand.
+// Generalizes the base op's MulGammaRowBcast (compute_kernel_lib::DestReuseBinary has no BroadcastDim): ROW reads
+// row 0 of faces 0/1 (gamma / beta pages), COL reads column 0 (per-row statistics). Inherits every chain trait
+// (waits, srcB reconfig fold, tile addressing) from DestReuseBinary; init/exec replaced.
+template <EltwiseBinaryType Op, BroadcastType BT, InputSpec In>
+struct DestReuseBcast : DestReuseBinary<
+                            (Op == EltwiseBinaryType::ELWMUL ? BinaryFpuOp::Mul : BinaryFpuOp::Add),
+                            In,
+                            DestReuseType::DEST_TO_SRCA> {
+    using Base = DestReuseBinary<
+        (Op == EltwiseBinaryType::ELWMUL ? BinaryFpuOp::Mul : BinaryFpuOp::Add),
+        In,
+        DestReuseType::DEST_TO_SRCA>;
+    static constexpr uint32_t GCb = In.cb_id;
+    constexpr DestReuseBcast() noexcept = default;
+    constexpr explicit DestReuseBcast(uint32_t base) noexcept : Base(base) {}
+
+    static ALWI void init() {
+        state_configure(GCb, __builtin_LINE());
+        UNPACK((llk_unpack_A_init<BT, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0, 0, GCb)));
+        MATH((llk_math_eltwise_binary_init<Op, BT, MATH_FIDELITY, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+            GCb, GCb, 0)));
+    }
+
+    ALWI void exec(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
+        const uint32_t in_idx =
+            compute_kernel_lib::tile_base_value<Base::Addressing>(this->tile_base) +
+            compute_kernel_lib::detail::input_idx<Base::Mapping, Base::Wait, Base::Pop, Base::Addressing>(
+                i_flat, ht, wt, this->row_stride);
+        const uint32_t dst = to_u32(Base::DstSlot) + slot_offset;
+        UNPACK((llk_unpack_A<BT, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(GCb, in_idx)));
+        MATH((llk_math_eltwise_binary<Op, BT, DST_ACCUM_MODE, MATH_FIDELITY, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+            GCb, GCb, dst, true)));
+    }
+};
+template <InputSpec In>
+using MulGammaRowBcast = DestReuseBcast<EltwiseBinaryType::ELWMUL, BroadcastType::ROW, In>;
+
 #ifndef AGRMS_LN
 #ifdef TRISC_MATH
 sfpi_inline void finalize_col0_body(const uint32_t inv_w_bits, const uint32_t eps_bits) {
@@ -198,32 +268,6 @@ struct FinalizeInvRms {
         MATH((_llk_math_eltwise_unary_sfpu_params_(finalize_col0_body, dst, VectorMode::C, inv_w_bits, eps_bits)));
     }
 };
-
-// sum_j x[r][j]^2 accumulated in DEST, one tile per tile-row (DEST_AUTO_LIMIT tile-rows per acquire).
-ALWI void sum_squares_block(uint32_t rows, uint32_t core_w) {
-    constexpr uint32_t batch = compute_kernel_lib::DEST_AUTO_LIMIT;
-    reconfig_data_format(cb_x, cb_x);
-    pack_reconfig_data_format(cb_moment_a);
-    mul_init(cb_x, cb_x, true);
-    for (uint32_t r0 = 0; r0 < rows; r0 += batch) {
-        const uint32_t n = (rows - r0) < batch ? (rows - r0) : batch;
-        cb_reserve_back(cb_moment_a, n);
-        tile_regs_acquire();
-        for (uint32_t i = 0; i < n; ++i) {
-            const uint32_t base = (r0 + i) * pitch;
-            for (uint32_t j = 0; j < core_w; ++j) {
-                mul_tiles(cb_x, cb_x, base + j, base + j, i);
-            }
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t i = 0; i < n; ++i) {
-            pack_tile(i, cb_moment_a);
-        }
-        tile_regs_release();
-        cb_push_back(cb_moment_a, n);
-    }
-}
 
 template <uint32_t out_cb, typename PostOp>
 ALWI void collapse_block(uint32_t rows, PostOp post_op) {
@@ -258,42 +302,6 @@ ALWI void combine_block(uint32_t rows, FinalizeInvRms finalize) {
         finalize);
 }
 
-#ifdef AGRMS_HAS_GAMMA
-// MulGammaRowBcast (base op): DEST[d] *= row-broadcast(cb tile), dest-reuse with a ROW-broadcast srcB operand.
-template <InputSpec In>
-struct MulGammaRowBcast : DestReuseBinary<BinaryFpuOp::Mul, In, DestReuseType::DEST_TO_SRCA> {
-    using Base = DestReuseBinary<BinaryFpuOp::Mul, In, DestReuseType::DEST_TO_SRCA>;
-    static constexpr uint32_t GCb = In.cb_id;
-    constexpr MulGammaRowBcast() noexcept = default;
-    constexpr explicit MulGammaRowBcast(uint32_t base) noexcept : Base(base) {}
-
-    static ALWI void init() {
-        state_configure(GCb, __builtin_LINE());
-        UNPACK((llk_unpack_A_init<BroadcastType::ROW, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0, 0, GCb)));
-        MATH((llk_math_eltwise_binary_init<
-              EltwiseBinaryType::ELWMUL,
-              BroadcastType::ROW,
-              MATH_FIDELITY,
-              EltwiseBinaryReuseDestType::DEST_TO_SRCA>(GCb, GCb, 0)));
-    }
-
-    ALWI void exec(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
-        const uint32_t in_idx =
-            compute_kernel_lib::tile_base_value<Base::Addressing>(this->tile_base) +
-            compute_kernel_lib::detail::input_idx<Base::Mapping, Base::Wait, Base::Pop, Base::Addressing>(
-                i_flat, ht, wt, this->row_stride);
-        const uint32_t dst = to_u32(Base::DstSlot) + slot_offset;
-        UNPACK((llk_unpack_A<BroadcastType::ROW, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(GCb, in_idx)));
-        MATH((llk_math_eltwise_binary<
-              EltwiseBinaryType::ELWMUL,
-              BroadcastType::ROW,
-              DST_ACCUM_MODE,
-              MATH_FIDELITY,
-              EltwiseBinaryReuseDestType::DEST_TO_SRCA>(GCb, GCb, dst, true)));
-    }
-};
-#endif
-
 ALWI void normalize_block(uint32_t rows, uint32_t core_w) {
     constexpr auto x_in = input(
         cb_x,
@@ -324,19 +332,34 @@ void kernel_main() {
     const FinalizeInvRms finalize{arg(3), arg(4)};
 
     compute_kernel_hw_startup(cb_x, cb_x, cb_out);
-    cb_wait_front(cb_x, rows * pitch);
-    sum_squares_block(rows, core_w);
-    if constexpr (w_split_cores == 1) {
-        collapse_block<cb_rowstat>(rows, finalize);
-    } else {
-        collapse_block<cb_partial>(rows, NoOp{});
+    {
+        AGZ("c_waitx");
+        cb_wait_front(cb_x, rows * pitch);
+    }
+    {
+        AGZ("c_mom");
+        sum_squares_block<cb_x, cb_moment_a>(rows, core_w, pitch);
+        if constexpr (w_split_cores == 1) {
+            collapse_block<cb_rowstat>(rows, finalize);
+        } else {
+            collapse_block<cb_partial>(rows, NoOp{});
+        }
+    }
+    if constexpr (w_split_cores > 1) {
+        AGZ("c_comb");
         combine_block(rows, finalize);
     }
-    cb_wait_front(cb_rowstat, rows);
+    {
+        AGZ("c_waitg");
+        cb_wait_front(cb_rowstat, rows);
 #ifdef AGRMS_HAS_GAMMA
-    cb_wait_front(cb_gamma, pitch);
+        cb_wait_front(cb_gamma, pitch);
 #endif
-    normalize_block(rows, core_w);
+    }
+    {
+        AGZ("c_norm");
+        normalize_block(rows, core_w);
+    }
     cb_pop_front(cb_x, rows * pitch);
     cb_pop_front(cb_rowstat, rows);
 #ifdef AGRMS_HAS_GAMMA
@@ -473,8 +496,13 @@ ALWI void member_finalize_block(uint32_t rows, uint32_t inv_n_bits) {
     for (uint32_t r = 0; r < rows; ++r) {
         cb_reserve_back(cb_partial, 2);
         tile_regs_acquire();
+#ifdef AGRMS_LN_FPU
+        copy_to(cb_mstat, r, 0);         // D1 (D1 block, then D2 block)
+        copy_to(cb_mstat, rows + r, 1);  // D2
+#else
         copy_to(cb_mstat, 2 * r, 0);      // D1
         copy_to(cb_mstat, 2 * r + 1, 1);  // D2
+#endif
         copy_to(cb_km, r, 2);             // K_m
         copy_d(0, 3);                     // D1
         mul_s(0, inv_n_bits);             // t = D1 / n_m
@@ -503,28 +531,33 @@ ALWI void combine_block(uint32_t rows, uint32_t inv_w_bits, uint32_t eps_bits, u
         cb_reserve_back(cb_kg, 1);
         cb_reserve_back(cb_rowstat, 1);
         tile_regs_acquire();
-        for (uint32_t m = 0; m < k; ++m) {
-            const uint32_t t = (r * k + m) * 2;
-            copy_to(src_cb, t, m == 0 ? 0 : 1);
-            mul_s(m == 0 ? 0 : 1, arg(nm_idx + m));
-            if (m > 0) {
-                add_d(0, 1, 0);
+        if constexpr (k == 1) {  // one member holds the whole row: mu = mean_1, M2 = M2_1
+            copy_to(src_cb, 2 * r, 0);
+            copy_to(src_cb, 2 * r + 1, 2);
+        } else {
+            for (uint32_t m = 0; m < k; ++m) {
+                const uint32_t t = (r * k + m) * 2;
+                copy_to(src_cb, t, m == 0 ? 0 : 1);
+                mul_s(m == 0 ? 0 : 1, arg(nm_idx + m));
+                if (m > 0) {
+                    add_d(0, 1, 0);
+                }
             }
-        }
-        mul_s(0, inv_w_bits);  // mu
-        for (uint32_t m = 0; m < k; ++m) {
-            const uint32_t t = (r * k + m) * 2;
-            copy_to(src_cb, t, 1);
-            sub_d(1, 0, 1);
-            square_tile_init();
-            square_tile(1);
-            mul_s(1, arg(nm_idx + m));
-            copy_to(src_cb, t + 1, 3);
-            add_d(1, 3, 1);
-            if (m == 0) {
-                copy_d(1, 2);
-            } else {
-                add_d(2, 1, 2);
+            mul_s(0, inv_w_bits);  // mu
+            for (uint32_t m = 0; m < k; ++m) {
+                const uint32_t t = (r * k + m) * 2;
+                copy_to(src_cb, t, 1);
+                sub_d(1, 0, 1);
+                square_tile_init();
+                square_tile(1);
+                mul_s(1, arg(nm_idx + m));
+                copy_to(src_cb, t + 1, 3);
+                add_d(1, 3, 1);
+                if (m == 0) {
+                    copy_d(1, 2);
+                } else {
+                    add_d(2, 1, 2);
+                }
             }
         }
         mul_s(2, inv_w_bits);
@@ -566,6 +599,106 @@ ALWI void combine_block(uint32_t rows, uint32_t inv_w_bits, uint32_t eps_bits, u
     cb_pop_front(src_cb, 2 * k * rows);
 }
 
+#ifdef AGRMS_LN_FPU
+// ---- FPU fast path (tile-aligned bf16 / bfloat8_b input: x and the bf16 pivots are exact FPU operands, so
+// x - K is exact in DEST; no slice tail to mask). Same statistics as the SFPU path, a fraction of the inits. ----
+struct MulScalarPost {
+    uint32_t bits;
+    ALWI void operator()(uint32_t dst) const {
+        binop_with_scalar_tile_init();
+        mul_unary_tile(dst, bits);
+    }
+};
+
+// pass A: K_m = bf16(sum x / n_m) — one reduce over the resident block (row stride = pitch, x stays resident)
+ALWI void pivot_block_fpu(uint32_t rows, uint32_t core_w, uint32_t inv_n_bits) {
+    reduce<
+        PoolType::SUM,
+        ReduceDim::REDUCE_ROW,
+        cb_x,
+        cb_ones,
+        cb_km,
+        ReduceInputPolicy::NoWaitNoPop,
+        ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+        ReduceFp32Mode::Fast,
+        ReduceAlgorithm::ReduceTile>(
+        ReduceInputBlockShape::of(rows, core_w),
+        ReduceInputMemoryLayout::with_row_stride(pitch),
+        NoAccumulation{},
+        MulScalarPost{inv_n_bits});
+}
+
+// pass B: c' = x - K_m (FPU, bcast col) -> cb_cent (accumulator format); D1 = row-reduce(c') (block reduce),
+// D2 = row-reduce(sum_j c'_j^2) (DEST-accumulated squares) -> cb_mstat [D1 x rows, D2 x rows]
+ALWI void centered_moments_block_fpu(uint32_t rows, uint32_t core_w) {
+    constexpr auto x_in = input(
+        cb_x,
+        WaitPolicy::None,
+        PopPolicy::None,
+        InputTileMapping::Block,
+        DataFormatReconfig::Enabled,
+        TileAddressing::Strided);
+    constexpr auto km_in = input(cb_km, BroadcastDim::Col, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col);
+    eltwise_chain(
+        IterationShape::grid(rows, core_w),
+        BinaryFpu<BinaryFpuOp::Sub, x_in, km_in>{StridedTileRange{0, pitch}},
+        PackTile<output(cb_cent)>{});
+    reduce<
+        PoolType::SUM,
+        ReduceDim::REDUCE_ROW,
+        cb_cent,
+        cb_ones,
+        cb_mstat,
+        ReduceInputPolicy::WaitUpfrontNoPop,
+        ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+        ReduceFp32Mode::Fast,
+        ReduceAlgorithm::ReduceTile>(ReduceInputBlockShape::of(rows, core_w));
+    sum_squares_block<cb_cent, cb_moment_b>(rows, core_w, core_w);
+    reduce<
+        PoolType::SUM,
+        ReduceDim::REDUCE_ROW,
+        cb_moment_b,
+        cb_ones,
+        cb_mstat,
+        ReduceInputPolicy::BulkWaitBulkPop,
+        ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+        ReduceFp32Mode::Fast,
+        ReduceAlgorithm::ReduceTile>(ReduceInputBlockShape::of(rows, 1));
+    cb_pop_front(cb_cent, rows * core_w);
+}
+
+// normalize: (x - K_g) [FPU, exact] * inv_std (bcast col) + shift (bcast col) [* gamma] [+ beta] (dest reuse)
+ALWI void normalize_block(uint32_t rows, uint32_t core_w) {
+    constexpr auto x_in = input(
+        cb_x,
+        WaitPolicy::None,
+        PopPolicy::None,
+        InputTileMapping::Block,
+        DataFormatReconfig::Enabled,
+        TileAddressing::Strided);
+    constexpr auto kg_in = input(cb_kg, BroadcastDim::Col, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col);
+    constexpr auto inv_in = input(cb_rowstat, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col);
+    constexpr auto shift_in = input(cb_shift, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col);
+#ifdef AGRMS_HAS_GAMMA
+    constexpr auto gamma_in = input(cb_gamma, WaitPolicy::None, PopPolicy::None, InputTileMapping::Row);
+#endif
+#ifdef AGRMS_HAS_BETA
+    constexpr auto beta_in = input(cb_beta, WaitPolicy::None, PopPolicy::None, InputTileMapping::Row);
+#endif
+    eltwise_chain(
+        IterationShape::grid(rows, core_w),
+        BinaryFpu<BinaryFpuOp::Sub, x_in, kg_in>{StridedTileRange{0, pitch}},
+        DestReuseBcast<EltwiseBinaryType::ELWMUL, BroadcastType::COL, inv_in>{},
+        DestReuseBcast<EltwiseBinaryType::ELWADD, BroadcastType::COL, shift_in>{},
+#ifdef AGRMS_HAS_GAMMA
+        DestReuseBcast<EltwiseBinaryType::ELWMUL, BroadcastType::ROW, gamma_in>{},
+#endif
+#ifdef AGRMS_HAS_BETA
+        DestReuseBcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW, beta_in>{},
+#endif
+        PackTile<output(norm_out_cb)>{});
+}
+#else
 ALWI void normalize_block(uint32_t rows, uint32_t core_w) {
     constexpr auto x_in = input(
         cb_x,
@@ -602,6 +735,7 @@ ALWI void normalize_block(uint32_t rows, uint32_t core_w) {
 #endif
         PackTile<output(norm_out_cb), Dst::D0>{});
 }
+#endif  // AGRMS_LN_FPU
 
 struct MulScalar {
     uint32_t bits;
@@ -622,28 +756,49 @@ void kernel_main() {
     const uint32_t nm_idx = segs_idx + 2 * n_segs;
 
     compute_kernel_hw_startup(cb_x, cb_x, cb_out);
-    cb_wait_front(cb_x, rows * pitch);
-    // pass A -> pivot K_m
-    sum_x_block(rows, core_w);
-    row_reduce<cb_moment_a, cb_km>(rows, MulScalar{inv_n_bits});
-    cb_wait_front(cb_km, rows);
-    // pass B -> centered moments
-    centered_moments_block(rows, n_segs, segs_idx);
-    row_reduce<cb_moment_b, cb_mstat>(2 * rows, NoOp{});
-    member_finalize_block(rows, inv_n_bits);
-    if constexpr (w_split_cores > 1) {
-        combine_block<cb_gathered>(rows, inv_w_bits, eps_bits, nm_idx);
-    } else {
-        combine_block<cb_partial>(rows, inv_w_bits, eps_bits, nm_idx);
+    {
+        AGZ("c_waitx");
+        cb_wait_front(cb_x, rows * pitch);
     }
+    {
+        AGZ("c_mom");
+#ifdef AGRMS_LN_FPU
+        pivot_block_fpu(rows, core_w, inv_n_bits);
+        cb_wait_front(cb_km, rows);
+        centered_moments_block_fpu(rows, core_w);
+#else
+        // pass A -> pivot K_m
+        sum_x_block(rows, core_w);
+        row_reduce<cb_moment_a, cb_km>(rows, MulScalar{inv_n_bits});
+        cb_wait_front(cb_km, rows);
+        // pass B -> centered moments
+        centered_moments_block(rows, n_segs, segs_idx);
+        row_reduce<cb_moment_b, cb_mstat>(2 * rows, NoOp{});
+#endif
+        member_finalize_block(rows, inv_n_bits);
+    }
+    {
+        AGZ("c_comb");
+        if constexpr (w_split_cores > 1) {
+            combine_block<cb_gathered>(rows, inv_w_bits, eps_bits, nm_idx);
+        } else {
+            combine_block<cb_partial>(rows, inv_w_bits, eps_bits, nm_idx);
+        }
+    }
+    {
+        AGZ("c_waitg");
 #ifdef AGRMS_HAS_GAMMA
-    cb_wait_front(cb_gamma, pitch);
+        cb_wait_front(cb_gamma, pitch);
 #endif
 #ifdef AGRMS_HAS_BETA
-    cb_wait_front(cb_beta, pitch);
+        cb_wait_front(cb_beta, pitch);
 #endif
-    cb_wait_front(cb_shift, rows);
-    normalize_block(rows, core_w);
+        cb_wait_front(cb_shift, rows);
+    }
+    {
+        AGZ("c_norm");
+        normalize_block(rows, core_w);
+    }
     cb_pop_front(cb_x, rows * pitch);
     cb_pop_front(cb_kg, rows);
     cb_pop_front(cb_rowstat, rows);

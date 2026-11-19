@@ -23,8 +23,9 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import struct
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import ttnn
@@ -58,6 +59,7 @@ CB_NORM = 18  # normalized member block (slice-tile space), output dtype
 CB_SHIFT_MATS = 19  # 0/1 shift matrices (output dtype), built by the reader
 CB_FOREIGN = 20  # contributions of peer members to this member's home output tiles (lockstep slot address)
 CB_CONTRIB = 21  # this member's contributions to peers' home output tiles
+CB_CENT = 22  # ln FPU path: centered block c' = x - K_m (accumulator format)
 NUM_CBS = 32
 
 # ---- semaphores (program-local; declared BEFORE setup_fabric_connection takes its ids) ----
@@ -71,7 +73,7 @@ INC_EVERY = 8  # packets per fabric entry (fabric_all_gather: increment every 8 
 PORT_BATCH_CHUNKS = 4  # packets per reader barrier / sender flush; cb_port_stage holds 2 batches
 RELAY_LAG_WAVES = 1  # own entries lead relay entries by this many waves
 OUT_DEPTH = 2
-OUT_UNIT_CAP = 16
+OUT_UNIT_CAP = 4  # writer batch: small enough that the stores overlap the normalize of the same tile-row
 COMBINE_TILE_COST = 3  # base op: per tile-row collapse + exchange + combine cost (x-tile equivalents)
 OCC_TILES_PER_MEMBER = 4  # base op occupancy floor
 K_SYM_MAX = 8  # symmetric partial all-gather cap (base op K_SYM_MAX_INTERLEAVED); owner combine is deferred here
@@ -201,6 +203,7 @@ class Sizes:
     has_gamma: bool
     has_beta: bool
     mask: bool
+    ln_fpu: bool = False
 
 
 def make_sizes(x_dtype, g_dtype, fp32_dest, is_ln, has_gamma, has_beta, mask) -> Sizes:
@@ -258,6 +261,8 @@ def cb_plan(sz: Sizes, k: int, pitch: int, rows: int, n_affine_slots: int, dense
         plan[CB_MU] = (1, sz.T_acc)
         if sz.mask:
             plan[CB_MASK] = (1, sz.T_bf16)
+        if sz.ln_fpu:
+            plan[CB_CENT] = (rows * pitch, sz.T_acc)
     if dense is not None:
         plan[CB_NORM] = (rows * pitch, sz.T_out)
         plan[CB_SHIFT_MATS] = (max(1, dense.n_mats), sz.T_out)
@@ -555,7 +560,9 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
     fp32_dest = bool(cfg.compute_kernel_config.fp32_dest_acc_en)
     mask = cfg.is_ln and geo.v < TILE
     dense = geo.v < TILE  # slices land at non-tile-aligned output offsets: dense assembly regime
-    sz = make_sizes(x_dtype, g_dtype, fp32_dest, cfg.is_ln, has_gamma, has_beta, mask)
+    # LN FPU fast path: x and the bf16 pivots are exact FPU operands (bf16 / bfloat8_b) and no slice tail is masked
+    ln_fpu = cfg.is_ln and x_dtype != ttnn.float32 and geo.v == TILE
+    sz = replace(make_sizes(x_dtype, g_dtype, fp32_dest, cfg.is_ln, has_gamma, has_beta, mask), ln_fpu=ln_fpu)
 
     chips, ring, ports_union = fabric
     grid = mesh.compute_with_storage_grid_size()
@@ -628,6 +635,7 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
         CB_SHIFT_MATS: x_dtype,
         CB_FOREIGN: x_dtype,
         CB_CONTRIB: x_dtype,
+        CB_CENT: t_acc,
     }
     port_cores = [ttnn.CoreCoord(x, y) for (x, y) in ports_union]
     crs_compute = _crs(compute_used)
@@ -659,8 +667,12 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
         defines.append(("AGRMS_HAS_GAMMA", "1"))
     if has_beta:
         defines.append(("AGRMS_HAS_BETA", "1"))
+    zone_defines = [("AGRMS_ZONES", "1")] if os.environ.get("AGRMS_ZONES") else []  # perf probes only
+    defines += zone_defines
     if dense:
         defines.append(("AGRMS_DENSE", "1"))
+    if ln_fpu:
+        defines.append(("AGRMS_LN_FPU", "1"))
     if mask:
         defines.append(("AGRMS_MASK", "1"))
 
@@ -694,6 +706,7 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
         SEM_FOREIGN,
         dp.max_fin if dense else 0,
         dp.max_fout if dense else 0,
+        0 if dense else 1,  # affine_aligned
     ]
     writer_ct += list(o_acc)
     writer_ct += list(g_acc)
@@ -912,6 +925,7 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
                 kernel_source=str(KERNEL_DIR / "all_gather_rms_norm_port_reader.cpp"),
                 core_ranges=crs_ports,
                 compile_time_args=port_reader_ct,
+                defines=zone_defines,
                 runtime_args=pr_rt,
                 config=ttnn.DataMovementConfigDescriptor(
                     processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.RISCV_0_default  # NoC0
@@ -921,6 +935,7 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
                 kernel_source=str(KERNEL_DIR / "all_gather_rms_norm_port_sender.cpp"),
                 core_ranges=crs_ports,
                 compile_time_args=port_sender_ct,
+                defines=zone_defines,
                 runtime_args=ps_rt,
                 config=ttnn.DataMovementConfigDescriptor(
                     processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_1_default  # NoC1
