@@ -53,7 +53,8 @@ jobs:
           run:
             - echo "S0 arm=$S0_ARM probe cpu.max=$(cat /sys/fs/cgroup/cpu.max | tr ' ' '/')"
             - echo "S0 arm=$S0_ARM probe ninja=$(ninja --version) nproc=$(nproc) node_cpus=$(grep -c ^processor /proc/cpuinfo) j=${CMAKE_BUILD_PARALLEL_LEVEL-unset}"
-            - echo "S0 arm=$S0_ARM probe model=$(grep -m1 '^model name' /proc/cpuinfo | cut -d: -f2 | tr -s ' ' | tr ' ' '_')"
+            - >-
+              echo "S0 arm=$S0_ARM probe model=$(grep -m1 '^model name' /proc/cpuinfo | cut -d: -f2 | tr -s ' ' | tr ' ' '_')"
             - ninja -h 2>&1 | grep -i 'jobs in parallel' || true
             - cmake --version | head -1
             - cat /sys/fs/cgroup/memory.max || true
@@ -129,7 +130,8 @@ jobs:
           run:
             - echo "S0 arm=$S0_ARM probe cpu.max=$(cat /sys/fs/cgroup/cpu.max | tr ' ' '/')"
             - echo "S0 arm=$S0_ARM probe ninja=$(ninja --version) nproc=$(nproc) node_cpus=$(grep -c ^processor /proc/cpuinfo) j=${CMAKE_BUILD_PARALLEL_LEVEL-unset}"
-            - echo "S0 arm=$S0_ARM probe model=$(grep -m1 '^model name' /proc/cpuinfo | cut -d: -f2 | tr -s ' ' | tr ' ' '_')"
+            - >-
+              echo "S0 arm=$S0_ARM probe model=$(grep -m1 '^model name' /proc/cpuinfo | cut -d: -f2 | tr -s ' ' | tr ' ' '_')"
             - ninja -h 2>&1 | grep -i 'jobs in parallel' || true
             - cmake --version | head -1
             - cat /sys/fs/cgroup/memory.max || true
@@ -205,7 +207,8 @@ jobs:
           run:
             - echo "S0 arm=$S0_ARM probe cpu.max=$(cat /sys/fs/cgroup/cpu.max | tr ' ' '/')"
             - echo "S0 arm=$S0_ARM probe ninja=$(ninja --version) nproc=$(nproc) node_cpus=$(grep -c ^processor /proc/cpuinfo) j=${CMAKE_BUILD_PARALLEL_LEVEL-unset}"
-            - echo "S0 arm=$S0_ARM probe model=$(grep -m1 '^model name' /proc/cpuinfo | cut -d: -f2 | tr -s ' ' | tr ' ' '_')"
+            - >-
+              echo "S0 arm=$S0_ARM probe model=$(grep -m1 '^model name' /proc/cpuinfo | cut -d: -f2 | tr -s ' ' | tr ' ' '_')"
             - ninja -h 2>&1 | grep -i 'jobs in parallel' || true
             - cmake --version | head -1
             - cat /sys/fs/cgroup/memory.max || true
@@ -281,7 +284,8 @@ jobs:
           run:
             - echo "S0 arm=$S0_ARM probe cpu.max=$(cat /sys/fs/cgroup/cpu.max | tr ' ' '/')"
             - echo "S0 arm=$S0_ARM probe ninja=$(ninja --version) nproc=$(nproc) node_cpus=$(grep -c ^processor /proc/cpuinfo) j=${CMAKE_BUILD_PARALLEL_LEVEL-unset}"
-            - echo "S0 arm=$S0_ARM probe model=$(grep -m1 '^model name' /proc/cpuinfo | cut -d: -f2 | tr -s ' ' | tr ' ' '_')"
+            - >-
+              echo "S0 arm=$S0_ARM probe model=$(grep -m1 '^model name' /proc/cpuinfo | cut -d: -f2 | tr -s ' ' | tr ' ' '_')"
             - ninja -h 2>&1 | grep -i 'jobs in parallel' || true
             - cmake --version | head -1
             - cat /sys/fs/cgroup/memory.max || true
