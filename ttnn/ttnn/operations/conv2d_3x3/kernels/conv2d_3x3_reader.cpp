@@ -118,6 +118,15 @@
 // that push: its packs overwrite the input ring the copy reads, and it reads the gaps) and waits for compute's one-page
 // token on cb_src_table before it pops the slab.
 //
+// Slab-direct round 0 on NoC0 (the descriptor's SD_R0_NOC0: slab-direct with a fixed-sender weight multicast and no
+// weight servers): on the channel's sender this reader multicasts the first weight round, which its writer read from
+// DRAM at kernel entry and bias-split, to the channel's rectangles on NoC0, polled from the fill loops (r0_try). The
+// writers' NoC1 multicast of it ran beside, and slowed, the forward fill of the cores whose slab lies mostly in higher
+// shards (stem.conv1's last grid row: the 108-core split drifts past the 110 input shards), and those cores bound the
+// op. Its own handshake (receivers ack at their kernel start, a ready flag per receiver), so the channel's later rounds
+// keep theirs. Measured (Blackhole p150b, stem.conv1 512x1024x8 -> 64 s2, LoFi, bias + ReLU, unzoned, 3 alternating
+// pairs): 10.27 -> 9.83 us; the same round with no multicast at all (a diagnostic, stale weights) 9.80 us.
+//
 // Lanes C_in..C_in_p of a slab pixel are not data (DRAM page padding or tile padding) and may hold
 // NaN. The gather copies only the C_in real channels of each tap; the lanes of an im2col row are
 // zero either from a one-time zeroing of cb_im2col_rm (when every K-block has the same column
@@ -290,6 +299,54 @@ void kernel_main() {
     [[maybe_unused]] const bool split_here = tile_fill_split && get_arg_val<uint32_t>(split_flag_arg) != 0;
     // rt_valid: M-block m's slab rows (a whole number of untilize batches) at slab_rows_arg + m.
     constexpr uint32_t slab_rows_arg = split_flag_arg + 1;
+#ifdef SD_R0_NOC0
+    // Slab-direct round 0 on NoC0 (see the file comment). Args at SD_R0_ARG: 1 on the weight multicast's sender (0
+    // elsewhere), then the receivers' ack count, the round's bytes, the rectangles, and per rectangle its NoC0
+    // multicast start x, y, end x, y and destination count (the sender excluded). r0_try: go (this core's writer set
+    // SD_R0_LOCAL_SEM to 1: the round landed and its bias is split) and every receiver's ack in SD_R0_ACK_SEM, then the
+    // round and, linked behind it, SD_R0_READY_SEM = 1 to every rectangle; SD_R0_LOCAL_SEM = 2 once the source was
+    // read.
+    const bool r0_sender = get_arg_val<uint32_t>(SD_R0_ARG) != 0;
+    uint32_t r0_state = r0_sender ? 0 : 2;
+    auto r0_try = [&]() {
+        if (r0_state == 2) {
+            return;
+        }
+        volatile tt_l1_ptr uint32_t* r0_local =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SD_R0_LOCAL_SEM));
+        if (r0_state == 0) {
+            invalidate_l1_cache();
+            if (*r0_local != 1 || *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SD_R0_ACK_SEM)) <
+                                      get_arg_val<uint32_t>(SD_R0_ARG + 1)) {
+                return;
+            }
+            MaybeDeviceZoneScope("reader_r0_mcast");
+            const uint32_t src = get_write_ptr(SD_R0_CB_WEIGHTS);
+            const uint32_t bytes = get_arg_val<uint32_t>(SD_R0_ARG + 2);
+            const uint32_t ready = get_semaphore(SD_R0_READY_SEM);
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready) = 1;
+            for (uint32_t r = 0, a = SD_R0_ARG + 4; r < get_arg_val<uint32_t>(SD_R0_ARG + 3); ++r, a += 5) {
+                const uint32_t cnt = get_arg_val<uint32_t>(a + 4);
+                if (cnt == 0) {
+                    continue;
+                }
+                const uint32_t x0 = get_arg_val<uint32_t>(a);
+                const uint32_t y0 = get_arg_val<uint32_t>(a + 1);
+                const uint32_t x1 = get_arg_val<uint32_t>(a + 2);
+                const uint32_t y1 = get_arg_val<uint32_t>(a + 3);
+                noc_async_write_multicast(src, get_noc_multicast_addr(x0, y0, x1, y1, src), bytes, cnt, true);
+                noc_semaphore_set_multicast(ready, get_noc_multicast_addr(x0, y0, x1, y1, ready), cnt, false);
+            }
+            r0_state = 1;
+        }
+        if (r0_state == 1 && ncrisc_noc_nonposted_writes_sent(noc_index)) {
+            *r0_local = 2;
+            r0_state = 2;
+        }
+    };
+#else
+    auto r0_try = [&]() {};
+#endif
 
     constexpr uint32_t pixel_bytes = c_in_p * ELEM_BYTES;
     constexpr int32_t num_in_px = input_height * input_width;
@@ -911,6 +968,11 @@ void kernel_main() {
                 // Slab-direct: compute is the slab's reader, so it is free once compute popped the previous block.
                 {
                     MaybeDeviceZoneScope("reader_fill_reserve");
+                    // Polled: compute frees this slab only after the previous block's matmul, which needs round 0
+                    // (and the writer's round 1 waits for SD_R0_LOCAL_SEM 2), so round 0's multicast must keep moving.
+                    while (!cb_pages_reservable_at_back(cb_halo_slab, SD_SLAB_PX)) {
+                        r0_try();
+                    }
                     cb_reserve_back(cb_halo_slab, SD_SLAB_PX);
                 }
                 if constexpr (slab_split) {
@@ -938,6 +1000,7 @@ void kernel_main() {
                     uint32_t pushed = 0;
                     bool gaps_landed = false;
                     auto advance = [&]() {
+                        r0_try();
                         sd_stream.poll(reads.noc.get_noc_id());
                         uint32_t target = sd_stream.landed;
                         if (sd_stream.done()) {
@@ -964,6 +1027,7 @@ void kernel_main() {
                         read_rows(lo, hi, slab_l1 + px * pixel_bytes);
                     };
                     while (!sd_stream.issued()) {
+                        r0_try();
                         if (!sd_stream.issue_one(read_chunk)) {
                             advance();
                         }
@@ -981,11 +1045,16 @@ void kernel_main() {
                 reads.begin(1);
                 SdGeom::fill_pieces<band_last_tap>(
                     o_first, o_end, [&](uint32_t lo, uint32_t hi, uint32_t off) { read_rows(lo, hi, slab_l1 + off); });
+                while (!ncrisc_noc_read_with_transaction_id_flushed(reads.noc.get_noc_id(), 1)) {
+                    r0_try();
+                }
                 reads.wait(1);
                 reads.wait(2);  // the slot gaps (kernel start)
                 if constexpr (slab_split) {
                     MaybeDeviceZoneScope("reader_fill_fwd_wait");
-                    Semaphore<>(slab_fwd_done_sem_id).wait_min(m_block_idx + 1);
+                    while (Semaphore<>(slab_fwd_done_sem_id).value() < m_block_idx + 1) {
+                        r0_try();
+                    }
                 }
                 cb_push_back(cb_halo_slab, SD_SLAB_PX);
                 continue;
@@ -1695,6 +1764,12 @@ void kernel_main() {
         }
     }
     dataflow_kernel_lib::set_read_trid(reads.noc, 0);
+#ifdef SD_R0_NOC0
+    while (r0_state != 2) {
+        r0_try();
+    }
+    noc_async_write_barrier();
+#endif
     if constexpr (nslice_outer) {
         noc_async_atomic_barrier();
     }
