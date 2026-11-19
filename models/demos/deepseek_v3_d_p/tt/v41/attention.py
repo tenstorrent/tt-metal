@@ -621,6 +621,144 @@ def _source_prepare_chunk(self, state, real_len: int) -> None:
     self.compressor._push_scalar(self.compressor._entry_index[1], int(state.entry_count))  # == fwp // rate
 
 
+# WS3 (11-19 TTFT push, lever 1.6) V41_PREFILL_INDEX_QTP=1: the traced source's index path on each chip's OWN query rows.
+# The fused scorer keeps every head resident, so the four TP chips of an SP row used to score, mask and rank the same 512
+# query rows; the sparse core then kept only its TP quarter of the top-k (mesh_partition, the 16-heads-a-chip transpose).
+# Here q / w (computed as before, then partitioned) and the score mask's rows are partitioned over TP first, so each chip
+# scores, masks and ranks its 128 rows only and publishes the partitioned top-k, which its own and its consumers' sparse
+# cores take as is. Every op is per row, so the selections are the same bits (checked by the device-check digests).
+INDEX_QTP = os.environ.get("V41_PREFILL_INDEX_QTP", "0") == "1"
+
+
+def _select_static_qtp(ix, q_latent, hidden_states, cos, sin, index_k, score_mask, kv_bucket=None):
+    """``TtCSAIndexer.select_indices_static`` with the query rows partitioned over TP after the projections: ->
+    [1, 1, S_l / tp, topk] (this chip's quarter of its SP shard's rows)."""
+    S_l = q_latent.shape[2]
+    if ix._wq_b_all is None:
+        ix._wq_b_all = ix._to_tt_linear_weight(ix._host_q_b_proj_weight, tp_shard_dim=None, cache_name="wq_b_all")
+    q = ttnn.linear(q_latent, ix._wq_b_all, memory_config=ix.memory_config)
+    q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+        q, num_heads=ix.n_heads, num_kv_heads=0, transpose_k_heads=False, memory_config=ix.memory_config
+    )
+    nope_dim = ix.head_dim - ix.rope_head_dim
+    nope = ttnn.slice(q, [0, 0, 0, 0], [1, ix.n_heads, S_l, nope_dim])
+    rope = ttnn.slice(q, [0, 0, 0, nope_dim], [1, ix.n_heads, S_l, ix.head_dim])
+    rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, ix.trans_mat, is_decode_mode=False)
+    q = ttnn.concat([nope, rope], dim=-1)
+    if getattr(ix, "q_act_quant", None) is not None:  # V4.1 (DS41F-0048)
+        q = ix.q_act_quant(q)
+    w = ix.compressor._tp_all_reduce(ttnn.linear(hidden_states, ix.w_proj, memory_config=ix.memory_config))
+    w = ttnn.multiply(w, ix.scale)
+    q = ttnn.mesh_partition(q, dim=2, cluster_axis=ix.tp_axis)
+    w = ttnn.mesh_partition(w, dim=2, cluster_axis=ix.tp_axis)
+    cap = int(index_k.shape[2])
+    sp = ix.sp_factor
+    kv_len = (cap // 64) * 64
+    keys = index_k
+    if kv_bucket is not None and int(kv_bucket) < kv_len:
+        kv_len = int(kv_bucket)
+        assert kv_len % 64 == 0 and kv_len >= sp * S_l + ix.topk, (kv_len, sp, S_l)
+        keys = ttnn.slice(index_k, [0, 0, 0, 0], [1, 1, kv_len, int(index_k.shape[3])])
+    # this chip's rows of the score mask's [0, kv_len) columns: two copies either way; slice the bucket first while it is
+    # under a quarter of the cache (512 x kv_len < 128 x cap), else partition the rows first (MEASURED, ws3_qtp_bench.py:
+    # 1.80 vs 2.12 ms at the 65,536 bucket, 6.47 vs 7.36 at 294,912, 11.20 vs 13.50 at 524,288 -- whole index path)
+    if kv_len >= cap:
+        mask_p = ttnn.mesh_partition(score_mask, dim=2, cluster_axis=ix.tp_axis)
+    elif 4 * kv_len > cap:
+        part = ttnn.mesh_partition(score_mask, dim=2, cluster_axis=ix.tp_axis)
+        mask_p = ttnn.slice(part, [0, 0, 0, 0], [1, 1, S_l // ix.tp_factor, kv_len])
+        ttnn.deallocate(part)
+    else:
+        sl = ttnn.slice(score_mask, [0, 0, 0, 0], [1, 1, S_l, kv_len])
+        mask_p = ttnn.mesh_partition(sl, dim=2, cluster_axis=ix.tp_axis)
+        ttnn.deallocate(sl)
+    # flat device rank (sp_row * tp + tp_col) x S_l / tp = the same query offset as [SP] x S_l + tp_col x S_l / tp: the
+    # phantom window [kv_len - sp * S_l, kv_len) and every real column visible, as in the unpartitioned call
+    logits = ttnn.experimental.indexer_score_dsa(
+        q,
+        keys,
+        w,
+        chunk_start_idx=kv_len - sp * S_l,
+        kv_len=kv_len,
+        program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=64, head_group_size=0),
+        seq_shard_axes=[],
+    )  # [1, 1, S_l / tp, kv_len] bf16 ROW_MAJOR
+    if keys is not index_k:
+        ttnn.deallocate(keys)
+    mask_rm = ttnn.to_layout(mask_p, ttnn.ROW_MAJOR_LAYOUT)
+    ttnn.deallocate(mask_p)
+    logits = ttnn.add(logits, mask_rm)
+    return ttnn.experimental.topk_large_indices(logits, k=ix.topk, valid_length=kv_len)
+
+
+_tt_csa_sparse_core = TtCSA._sparse_core
+_tt_csa_window_indices = TtCSA._window_indices
+
+
+def _window_indices_v41(self, seq_local: int):
+    """TtCSA's window indices; under INDEX_QTP also their TP-partitioned copy, built with them (an eager warm-up, before
+    any capture: a persistent tensor allocated after a capture can sit on its intermediates, DS4F-0262)."""
+    dev = _tt_csa_window_indices(self, seq_local)
+    if INDEX_QTP and self.tp_factor > 1:
+        part = self.__dict__.setdefault("_window_idx_part", {})
+        if seq_local not in part:
+            part[seq_local] = ttnn.mesh_partition(dev, dim=2, cluster_axis=self.tp_axis)
+    return dev
+
+
+def _sparse_core_v41(self, q, topk_idx, cos, sin, slab_rm, *, seq_len: int, chunk0: bool = False):
+    """TtCSA._sparse_core, taking an INDEX_QTP top-k (already this chip's TP quarter of the rows) as is: the window
+    indices' matching quarter is concatenated and the TP partition of the index rows is skipped; the rest is unchanged.
+    """
+    batch, seq_local = q.shape[0], q.shape[2]
+    if not (INDEX_QTP and self.tp_factor > 1 and int(topk_idx.shape[2]) * self.tp_factor == seq_local):
+        return _tt_csa_sparse_core(self, q, topk_idx, cos, sin, slab_rm, seq_len=seq_len, chunk0=chunk0)
+    assert not chunk0, "INDEX_QTP: chunk 0 stays on the full-row path"
+    heads_local = self.num_heads // self.tp_factor
+    assert heads_local % ttnn.TILE_SIZE != 0, "INDEX_QTP assumes the head->seq transpose (V4.1: 16 heads a chip)"
+    ent = ttnn.typecast(topk_idx, ttnn.int32)
+    ent = ttnn.add(ent, seq_len)  # entries start at slab row S
+    ent = ttnn.typecast(ent, ttnn.uint32)
+    if ent.layout != ttnn.ROW_MAJOR_LAYOUT:
+        ent = ttnn.to_layout(ent, ttnn.ROW_MAJOR_LAYOUT)
+    self._window_indices(seq_local)
+    idx = ttnn.concat([self._window_idx_part[seq_local], ent], dim=3)  # [1, 1, S_l / tp, 128 + topk]
+    q = ttnn.experimental.all_to_all_async_generic(
+        q,
+        in_dim=1,
+        out_dim=2,
+        num_links=self.ccl_num_links,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        cluster_axis=self.tp_axis,
+    )
+    q_rm = ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT)
+    out = ttnn.transformer.sparse_sdpa(
+        q_rm,
+        slab_rm,
+        idx,
+        self.head_dim,
+        kv_format=ttnn.transformer.SparseKVFormat.BF16,
+        scale=self.scaling,
+        k_chunk_size=128,
+        cache_batch_idx=0,
+        attention_sink=self._sink_column(True),
+    )
+    out = ttnn.to_layout(out, ttnn.TILE_LAYOUT)
+    out = ttnn.experimental.all_to_all_async_generic(
+        out,
+        in_dim=2,
+        out_dim=1,
+        num_links=self.ccl_num_links,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        cluster_axis=self.tp_axis,
+    )
+    nope_dim = self.head_dim - self.rope_head_dim
+    nope = ttnn.slice(out, [0, 0, 0, 0], [batch, heads_local, seq_local, nope_dim])
+    rope = ttnn.slice(out, [0, 0, 0, nope_dim], [batch, heads_local, seq_local, self.head_dim])
+    rope = ttnn.experimental.rotary_embedding_llama(rope, cos, ttnn.neg(sin), self.trans_mat, is_decode_mode=False)
+    return ttnn.concat([nope, rope], dim=-1)
+
+
 def _source_forward_attn(
     self, hidden_states, outs, state, real_len: int, chunk0: bool = False, _t=None, kv_bucket=None
 ):
@@ -629,9 +767,15 @@ def _source_forward_attn(
     (A3_CHUNK0, DS41F-0073): the A2c0 variant -- the index rows repacked for chunk 0 (TtCSA._chunk0_pack)."""
     assert A3_CHUNK0 or not chunk0, "V4.1 runs chunk 0 eagerly (path B) unless PREFILL_V41_A3_CHUNK0"
     q, q_latent, sliding_kv_g, _nc, entries, keys, cos, sin = outs[:8]
-    idx = self.indexer.select_indices_static(
-        q_latent, hidden_states, cos, sin, state.index_k, state.score_mask, kv_bucket=kv_bucket
-    )
+    select = _select_static_qtp if (INDEX_QTP and not chunk0 and self.tp_factor > 1) else None
+    if select is not None:
+        idx = select(
+            self.indexer, q_latent, hidden_states, cos, sin, state.index_k, state.score_mask, kv_bucket=kv_bucket
+        )
+    else:
+        idx = self.indexer.select_indices_static(
+            q_latent, hidden_states, cos, sin, state.index_k, state.score_mask, kv_bucket=kv_bucket
+        )
     attn = self._sparse_core(q, idx, cos, sin, state.slab_rm, seq_len=sliding_kv_g.shape[2], chunk0=chunk0)
     return self._o_proj(attn), idx
 
@@ -1120,3 +1264,9 @@ def _kv_only(self, hidden_states, seq_len_actual=None, *, state, slab: bool = Fa
 
 
 V41CSA.kv_only = _kv_only
+
+
+# WS3 INDEX_QTP: the sources' and their consumers' sparse cores take a TP-partitioned top-k (identity when the flag is off)
+for _cls in (V41CSA, V41CSAConsumer):
+    _cls._sparse_core = _sparse_core_v41
+    _cls._window_indices = _window_indices_v41
