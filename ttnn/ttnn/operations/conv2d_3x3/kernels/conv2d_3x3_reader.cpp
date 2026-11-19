@@ -294,8 +294,16 @@ void kernel_main() {
     constexpr bool k_padded = tensor_kkh_tiles * TILE_DIM > tap_cols;
     // One K-block per kernel row: every K-block puts taps, lanes and K padding at the same row offsets.
     constexpr bool one_k_block_per_kh = block_k_tiles == tensor_kkh_tiles;
+    // Stride-2 taps from DEST (the descriptor's S2_TAPS, conv2d_3x3_s2_taps.hpp): compute builds every tap from the
+    // TILE slab this reader fills; there is no gather, no RM slab handshake and no unit ring.
+#ifdef CONV2D_3X3_S2_TAPS
+    constexpr bool s2_taps = true;
+#else
+    constexpr bool s2_taps = false;
+#endif
     // The tap-major gather copies whole slab pixels (lanes included) or zero runs: nothing of its im2col needs zeroing.
-    constexpr bool zero_im2col_once = !face_direct && !tap_major && one_k_block_per_kh && (lanes_padded || k_padded);
+    constexpr bool zero_im2col_once =
+        !face_direct && !tap_major && one_k_block_per_kh && (lanes_padded || k_padded) && !s2_taps;
     constexpr uint32_t c_in_tiles = c_in_p / TILE_DIM;
     static_assert(
         (tensor_kkh_tiles % block_k_tiles) == 0 || (face_direct && block_k_tiles % tensor_kkh_tiles == 0),
@@ -1221,7 +1229,7 @@ void kernel_main() {
                 push_one();
             }
         };
-        if constexpr (tile_row_outer) {
+        if constexpr (tile_row_outer && !s2_taps) {
             // N-slice-outer K split: tile-row outer, K-block inner, so compute's tilize lays in0 out row-major over
             // all of K ([bm, K], the one-K-block layout of the slice matmuls).
             // Padded slab: compute tilizes from the slab it untilized, with no reader handshake.
@@ -1339,7 +1347,7 @@ void kernel_main() {
                 }
             }
         }
-        for (uint32_t k_block_idx = 0; k_block_idx < (tile_row_outer ? 0 : num_k_blocks); ++k_block_idx) {
+        for (uint32_t k_block_idx = 0; k_block_idx < (tile_row_outer || s2_taps ? 0 : num_k_blocks); ++k_block_idx) {
             const uint32_t k_tile0 = k_block_idx * block_k_tiles;
             const int32_t kh = k_tile0 / tensor_kkh_tiles;
             const uint32_t col_lo = (k_tile0 - kh * tensor_kkh_tiles) * TILE_DIM;
@@ -1525,7 +1533,7 @@ void kernel_main() {
             MaybeDeviceZoneScope("reader_slab_dead_wait");
             cb_wait_front(cb_src_table, 1);
             cb_pop_front(cb_src_table, 1);
-        } else if constexpr (window_direct || (tap_direct && nslice_outer)) {
+        } else if constexpr ((window_direct && !s2_taps) || (tap_direct && nslice_outer)) {
             // Compute tilizes slab runs in place: the slab is dead only once compute popped every unit.
             cb_reserve_back(cb_im2col_rm, im2col_rm_depth_rows * block_k_tiles);
         } else if constexpr (kb_tap_direct && !tile_input) {
@@ -1536,7 +1544,7 @@ void kernel_main() {
                 cb_reserve_back(cb_src_table, tap_direct_fifo_units);
             }
         }
-        if constexpr (tile_input && !ring_slab) {
+        if constexpr (tile_input && !ring_slab && !s2_taps) {
             const uint32_t slab_pages = slab_rows_m * c_in_tiles;
             cb_wait_front(cb_halo_slab, slab_pages);
             cb_pop_front(cb_halo_slab, slab_pages);

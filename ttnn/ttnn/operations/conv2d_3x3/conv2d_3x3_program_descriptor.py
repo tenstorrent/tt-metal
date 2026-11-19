@@ -159,6 +159,20 @@ PADDED_SLAB = True
 # res5.0), which now gains too. False keeps the padded-slab untilize / tilize prelude.
 TAP_SHIFT = True
 
+# Stride-2 taps from DEST (kernels/conv2d_3x3_s2_taps.hpp, on the strided-window prelude: stride 2, p 1, d 1, TILE input,
+# W % 64 == 0): compute builds every tap tile straight from the input's TILE slab, one DEST section per output tile:
+# 4-row SrcB -> DEST moves into a pixel-contiguous buffer (kw = 1: the packer decimates it with interface mask 0101) and
+# one-row moves of the odd pixels into an O plane (kw = 2 and, one row earlier, kw = 0: 4-row windows), in input-row
+# order behind the fill. No untilize, no RM slab, no window gather, no strided tilize: the reader only fills. The input
+# ring holds the whole slab in its own L1 (not in0's) and in0 holds every K-block (the K-blocked walk's tilize hook does
+# nothing). Taken where those CBs fit the L1 the RM slab and the unit ring give back. Measured (Blackhole p150b, unzoned,
+# 2 alternating pairs, bit-identical): res3.0 @ LoFi 17.45 -> 13.41 us, res4.0 @ LoFi 15.02 -> 12.53 us; changelog
+# Perf 12 (stride2_dest_taps). False keeps the untilize / window gather / strided tilize prelude.
+S2_TAPS = True
+# S2_TAPS fill batches: at most this many input tile-rows per cb_input_tiles push (a divisor of the untilize batch), so
+# the tap build, which waits per run for the slab rows it reads, starts as the first rows land.
+S2_FILL_BATCH_ROWS = 4
+
 # Work-balanced BLOCK M split (balanced_block_ranges). On the N-slice ring walk a grid row's time is its prelude (fill-
 # paced untilize of its slab rows, gather-paced tilize of its tile-rows) plus its walk (in-image kernel rows of each ring
 # row group, after the kernel-row skip), so with dilation the rows whose output rows keep all three kernel rows in the
@@ -801,6 +815,19 @@ def strided_window_capable(g: Conv3x3Geometry):
     if g.output_width % TILE != 0:
         return g.padding >= 1 and 2 * (g.output_width - 1) + 2 - g.padding >= g.input_width
     return True
+
+
+def s2_taps_capable(g: Conv3x3Geometry):
+    """Geometry side of S2_TAPS: the stride-2 window's taps of an output tile are the even / odd pixels of two whole
+    input tiles of one image row (W % 64 == 0) plus the previous tile's last pixel (padding 1, dilation 1)."""
+    return (
+        S2_TAPS
+        and strided_window_capable(g)
+        and g.tile_input
+        and g.padding == 1
+        and g.input_width % (2 * TILE) == 0
+        and g.output_width * 2 == g.input_width
+    )
 
 
 def _strided_window(g: Conv3x3Geometry, bk):
@@ -1917,9 +1944,50 @@ def create_program_descriptor(
                     )
                 ],
             )
+    # Stride-2 taps from DEST (see S2_TAPS): the RM slab and the unit ring shrink to one page / unit (the shared
+    # slab / combine-slots region of the N-slice walk keeps its size), the input ring holds the whole slab in its own
+    # L1, and the K-blocked walk's in0 holds every K-block.
+    s2_taps = False
+    s2_in0_tiles = 0
+    if (
+        s2_taps_capable(g)
+        and _strided_window(g, bk)
+        and not kwf
+        and not face_direct
+        and not slab_direct
+        and not b.ring
+        and b.center_mode == CENTER_NONE
+    ):
+        in0_old = bm * (in0_k_tiles if b.nslice else bk * b.center_slot_blocks)
+        s2_in0_tiles = bm * (in0_k_tiles if b.nslice else bk * b.num_k_blocks)
+        input_old = (
+            0
+            if whole_slab_ring(in0_k_tiles)
+            else INPUT_TILE_DEPTH_BATCHES * b.untilize_batch_rows * g.c_in_tiles * g.in0_tile_bytes
+        )
+        old = (
+            (0 if b.shared_slab_bytes else slab_cb.total_size)
+            + b.im2col_rm_depth_rows * bk * TILE_BYTES_BF16
+            + in0_old * g.in0_tile_bytes
+            + input_old
+        )
+        new = (
+            (0 if b.shared_slab_bytes else TILE_BYTES_BF16)
+            + bk * TILE_BYTES_BF16
+            + s2_in0_tiles * g.in0_tile_bytes
+            + b.slab_tile_rows * g.c_in_tiles * g.in0_tile_bytes
+        )
+        s2_taps = new - old <= l1_cb_budget_bytes(resident) - b.footprint_bytes
+        if s2_taps and not b.shared_slab_bytes:
+            slab_cb = _cb(CB_HALO_SLAB, ttnn.bfloat16, TILE_BYTES_BF16, 1, cores)
+        if s2_taps:
+            ub0 = b.untilize_batch_rows
+            ub_s2 = max(d for d in range(1, max(1, S2_FILL_BATCH_ROWS) + 1) if ub0 % d == 0)
+            if ub_s2 != ub0:
+                b = replace(b, untilize_batch_rows=ub_s2)
     cbs = [slab_cb]
     if not face_direct:
-        im2col_rm_pages = (1 if padded_slab else b.im2col_rm_depth_rows) * bk
+        im2col_rm_pages = (1 if padded_slab or s2_taps else b.im2col_rm_depth_rows) * bk
         cbs.append(_cb(CB_IM2COL_RM, ttnn.bfloat16, TILE_BYTES_BF16, im2col_rm_pages, cores))
     cbs += [
         # Face-direct: the reader writes these tiles; it relies on every K-block starting at the CB base.
@@ -1927,7 +1995,11 @@ def create_program_descriptor(
             CB_IM2COL_TILES,
             input_tensor.dtype,
             g.in0_tile_bytes,
-            2 if slab_direct else bm * (in0_k_tiles if b.nslice else bk * b.center_slot_blocks),
+            (
+                2
+                if slab_direct
+                else (s2_in0_tiles if s2_taps else bm * (in0_k_tiles if b.nslice else bk * b.center_slot_blocks))
+            ),
             cores,
         ),
         _cb(
@@ -1966,8 +2038,8 @@ def create_program_descriptor(
     if has_bias:
         cbs.append(_cb(CB_BIAS, bias_tensor.dtype, g.weight_tile_bytes, ns, cores))
     input_ring_batches = INPUT_TILE_DEPTH_BATCHES
-    alias_ring = whole_slab_ring(in0_k_tiles)
-    if alias_ring:
+    alias_ring = whole_slab_ring(in0_k_tiles) and not s2_taps
+    if alias_ring or s2_taps:
         input_ring_batches = b.slab_tile_rows // b.untilize_batch_rows
     if alias_ring and not tap_shift:
         for i, cb in enumerate(cbs):
@@ -2398,7 +2470,7 @@ def create_program_descriptor(
     def writer_ct_args_for(slice_channels, split_core=None):
         args = list(writer_ct_args)
         args[writer_slice_arg] = slice_channels
-        args[writer_slice_arg + 2] = int(zero_im2col_once(slice_channels))
+        args[writer_slice_arg + 2] = int(zero_im2col_once(slice_channels) and not s2_taps)
         args[writer_zero_lanes_arg] = int(tap_major and slice_channels < g.c_in_p)
         if split_core is not None:
             args[writer_split_arg] = int(split_core)
@@ -2489,7 +2561,7 @@ def create_program_descriptor(
             if rt_valid:
                 for m in range(num_m_blocks_this_core):
                     compute_args += [min(bm, actual_m_tiles - m * bm), slab_rows_per_block[m]]
-        if slab_direct:
+        if slab_direct or s2_taps:
             compute_args += [m_tile_start, actual_m_tiles]
         if kwf or padded_slab:
             compute_args += [m_tile_start, actual_m_tiles]
@@ -2636,6 +2708,19 @@ def create_program_descriptor(
         [("RING_OWNER_MASK", f"{sum(1 << c for c in ring_owners)}u")] if ring_owners is not None else []
     )
     _wide_short_defines = [("RING_WIDE_SHORT_GROUP", "1")] if ct_group_rows else []
+    _s2_dm_defines = [("CONV2D_3X3_S2_TAPS", "1")] if s2_taps else []
+    _s2_compute_defines = (
+        [
+            ("CONV2D_3X3_S2_TAPS", "1"),
+            ("S2_IN_H", str(g.input_height)),
+            ("S2_IN_W", str(g.input_width)),
+            ("S2_OUT_W", str(g.output_width)),
+            ("S2_NUM_IN_PX", str(g.num_in_px)),
+            ("S2_NUM_OUT_PX", str(g.num_out_px)),
+        ]
+        if s2_taps
+        else []
+    )
     # N-slice walk: the writer reads the bias without a wait once the first weight round is issued and pushes it when it
     # lands, so the column weight stream starts at kernel start (with the spare groups that stream paces the walk:
     # res4.x 12022 -> 11607 ns; without them flat to -1.7%).
@@ -2646,7 +2731,7 @@ def create_program_descriptor(
             core_ranges=_core_range_set(reader_cores),
             compile_time_args=reader_ct_args(*slice_channels),
             runtime_args=reader_rt,
-            defines=_kwf_dm_defines + _pad_dm_defines + _ring_owner_defines + _sd_dm_defines,
+            defines=_kwf_dm_defines + _pad_dm_defines + _ring_owner_defines + _sd_dm_defines + _s2_dm_defines,
             config=ttnn.ReaderConfigDescriptor(),
         )
         for slice_channels, (reader_cores, reader_rt) in reader_groups.items()
@@ -2671,7 +2756,8 @@ def create_program_descriptor(
         + _pad_compute_defines
         + _ring_owner_defines
         + _sd_compute_defines
-        + _wide_short_defines,
+        + _wide_short_defines
+        + _s2_compute_defines,
         config=ttnn.ComputeConfigDescriptor(
             math_fidelity=compute_kernel_config.math_fidelity,
             math_approx_mode=compute_kernel_config.math_approx_mode,

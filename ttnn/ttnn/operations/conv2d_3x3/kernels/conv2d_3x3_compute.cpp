@@ -26,6 +26,11 @@
 // and no padded tilize; the taps are built on the FPU straight from the input ring, kernel-row major, as the fill
 // lands.
 //
+// Stride-2 taps (the descriptor's S2_TAPS, conv2d_3x3_s2_taps.hpp, on the strided-window path): no untilize and no
+// window tilize; every tap of the M-block is built from the input ring (the whole slab) into in0 before the walk, in
+// input-row order, as the fill lands (runtime args after the masks: the core's output range). On the K-blocked walk in0
+// holds every K-block and the tilize hook does nothing.
+//
 // N-slice kernel-row skip: the ring walk multiplies, per row group, only the range of kernel rows that is in the image
 // for some row of the group (runtime args 3..: the host's masks, see the ring walk). The others are all-zero K tiles of
 // in0.
@@ -76,6 +81,9 @@
 #endif
 #ifdef CONV2D_3X3_KW_FOLD
 #include "conv2d_3x3_kw_fold.hpp"
+#endif
+#ifdef CONV2D_3X3_S2_TAPS
+#include "conv2d_3x3_s2_taps.hpp"
 #endif
 
 namespace ckl = compute_kernel_lib;
@@ -645,7 +653,10 @@ struct TilizeIm2colKBlock {
             MaybeDeviceZoneScope("compute_tilize");
             if constexpr (strided_window) {
                 static_assert(block_k_tiles == 3 * c_in_tiles, "a window unit is one kernel row");
+#ifndef CONV2D_3X3_S2_TAPS
+                // (S2_TAPS: every K-block's taps were built before the walk.)
                 window_tilize<c_in_tiles, cb_im2col_rm, cb_im2col_tiles>(*rm, *tiles, block_m_tiles);
+#endif
             } else {
                 conv2d_3x3::lean_tilize::tilize<tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(
                     *rm, *tiles, block_m_tiles * (block_k_tiles / tilize_width_tiles));
@@ -895,6 +906,20 @@ void kernel_main() {
     constexpr uint32_t pad_out_w = 32, pad_num_out_px = 32, pad_slots_max = 1, cb_zero_src = 0;
 #endif
     static_assert(!padded_slab || (nslice_center && k_split && nslice_outer && tile_input && pad_p == pad_d));
+    // Stride-2 taps from DEST (the descriptor's S2_TAPS, conv2d_3x3_s2_taps.hpp).
+#ifdef CONV2D_3X3_S2_TAPS
+    constexpr bool s2_taps = true;
+    [[maybe_unused]] constexpr int32_t s2_in_h = S2_IN_H;
+    [[maybe_unused]] constexpr int32_t s2_in_w = S2_IN_W;
+    [[maybe_unused]] constexpr uint32_t s2_out_w = S2_OUT_W;
+    [[maybe_unused]] constexpr int32_t s2_num_in_px = S2_NUM_IN_PX;
+    [[maybe_unused]] constexpr uint32_t s2_num_out_px = S2_NUM_OUT_PX;
+#else
+    constexpr bool s2_taps = false;
+    [[maybe_unused]] constexpr int32_t s2_in_h = 1, s2_in_w = 64, s2_num_in_px = 64;
+    [[maybe_unused]] constexpr uint32_t s2_out_w = 32, s2_num_out_px = 32;
+#endif
+    static_assert(!s2_taps || (strided_window && tile_input && !face_direct && !ring_slab && center_mode == 0));
     // Slab-direct (the descriptor's SLAB_DIRECT): face-direct whole-K, in0 unpacked straight from the padded slab.
 #ifdef CONV2D_3X3_SLAB_DIRECT
     constexpr bool slab_direct = true;
@@ -1090,6 +1115,16 @@ void kernel_main() {
         UNPACK((pad_zero_l1 = get_local_cb_interface(get_operand_id(cb_zero_src)).fifo_rd_ptr << 4));
         PACK((pad_slab_l1 = (get_local_cb_interface(get_output_id(cb_halo_slab)).fifo_wr_ptr) << 4));
     }
+    // S2_TAPS: the core's output range (runtime args after the kernel-row masks and the rt_valid per-M-block args).
+    [[maybe_unused]] uint32_t s2_m_tile_start = 0;
+    [[maybe_unused]] uint32_t s2_actual_m_tiles = 0;
+    if constexpr (s2_taps) {
+        constexpr uint32_t kh_words =
+            (k_split && nslice_outer) ? ((block_m_tiles + slice_sb_h - 1) / slice_sb_h + 9) / 10 : 0;
+        constexpr uint32_t rt_words = rt_valid ? 2 : 0;
+        s2_m_tile_start = get_arg_val<uint32_t>(3 + num_m_blocks_this_core * (kh_words + rt_words));
+        s2_actual_m_tiles = get_arg_val<uint32_t>(4 + num_m_blocks_this_core * (kh_words + rt_words));
+    }
     [[maybe_unused]] conv2d_3x3::padded_slab::Plan pad_plan{};
     [[maybe_unused]] uint32_t pad_o_first = 0;
     [[maybe_unused]] uint32_t pad_o_end = 0;
@@ -1103,6 +1138,15 @@ void kernel_main() {
         [[maybe_unused]] const uint32_t slab_rows =
             rt_valid ? get_arg_val<uint32_t>(rt_arg_base + 2 * m_block_idx + 1) : slab_tile_rows;
         [[maybe_unused]] const uint32_t prelude_rows = rt_prelude ? valid_rows : block_m_tiles;
+        [[maybe_unused]] uint32_t s2_o_first = 0;
+        [[maybe_unused]] uint32_t s2_o_end = 0;
+        if constexpr (s2_taps) {
+            const uint32_t done = m_block_idx * block_m_tiles;
+            const uint32_t valid = s2_actual_m_tiles - done < block_m_tiles ? s2_actual_m_tiles - done : block_m_tiles;
+            s2_o_first = (s2_m_tile_start + done) * 32;
+            const uint32_t o_end_tiles = s2_o_first + valid * 32;
+            s2_o_end = o_end_tiles < s2_num_out_px ? o_end_tiles : s2_num_out_px;
+        }
         if constexpr (padded_slab) {
             const uint32_t done = m_block_idx * block_m_tiles;
             const uint32_t valid =
@@ -1117,8 +1161,12 @@ void kernel_main() {
             // untilize_footprint: the reader streams slab_tile_rows input tile-rows in slab order.
             MaybeDeviceZoneScope("compute_untilize");
             pack_reconfig_l1_acc(0);
+            if constexpr (s2_taps) {
+                // Stride-2 taps (conv2d_3x3_s2_taps.hpp): no untilize; the prelude builds every tap from the input
+                // ring.
+            } else
 #ifdef CONV2D_3X3_TAP_SHIFT
-            if constexpr (padded_slab) {
+                if constexpr (padded_slab) {
                 // Tap shift (conv2d_3x3_tap_shift.hpp): no untilize; the prelude builds every tap from the input ring.
             } else
 #endif
@@ -1222,8 +1270,30 @@ void kernel_main() {
             if constexpr (!face_direct) {
                 MaybeDeviceZoneScope("compute_tilize");
                 if constexpr (strided_window) {
+#ifdef CONV2D_3X3_S2_TAPS
+                    // Stride-2 taps (conv2d_3x3_s2_taps.hpp): in0 [rows, K] (unit (t, kh) at t * K + kh * 3 ct) built
+                    // from the input ring in input-row order; units of kernel rows the walk skips are not built. Then
+                    // the ring is popped. Raw LLK (capability), see the header: no helper decimates rows.
+                    im2col_tiles_dfb.reserve_back(prelude_rows * in0_k_tiles);
+                    conv2d_3x3::s2_taps::
+                        build<c_in_tiles, cb_input_tiles, cb_im2col_tiles, s2_out_w, s2_in_h, s2_in_w, s2_num_in_px>(
+                            input_tiles_dfb,
+                            s2_o_first,
+                            s2_o_end,
+                            [](uint32_t t, int32_t kh, uint32_t ch) {
+                                return t * in0_k_tiles + static_cast<uint32_t>(kh) * 3 * c_in_tiles + ch;
+                            },
+                            [&](uint32_t t, int32_t kh) {
+                                const uint32_t g = t / slice_sb_h;
+                                return kh < kh_lo[g] || kh >= kh_hi[g];
+                            });
+                    im2col_tiles_dfb.push_back(prelude_rows * in0_k_tiles);
+                    input_tiles_dfb.wait_front(slab_rows * c_in_tiles);
+                    input_tiles_dfb.pop_front(slab_rows * c_in_tiles);
+#else
                     window_tilize<c_in_tiles, cb_im2col_rm, cb_im2col_tiles>(
                         im2col_rm_dfb, im2col_tiles_dfb, prelude_rows * num_k_blocks);
+#endif
                 } else if constexpr (padded_slab) {
 #ifdef CONV2D_3X3_TAP_SHIFT
                     // Tap shift (the descriptor's TAP_SHIFT, conv2d_3x3_tap_shift.hpp): the input ring no longer shares
@@ -1812,6 +1882,30 @@ void kernel_main() {
             }
             weights.pop_front(block_k_tiles * block_n_tiles);
         } else {
+#ifdef CONV2D_3X3_S2_TAPS
+            {
+                // Stride-2 taps (conv2d_3x3_s2_taps.hpp): every K-block's in0 ([bm, bk] per kernel row, K-block
+                // major) built from the input ring in input-row order before the walk (behind the fill and the first
+                // weight round); then the ring is popped. The walk's tilize hook does nothing. Raw LLK (capability),
+                // see the header: no helper decimates rows.
+                MaybeDeviceZoneScope("compute_tilize");
+                static_assert(num_k_blocks == 3 && block_k_tiles == 3 * c_in_tiles);
+                pack_reconfig_l1_acc(0);
+                im2col_tiles_dfb.reserve_back(block_m_tiles * block_k_tiles * num_k_blocks);
+                conv2d_3x3::s2_taps::
+                    build<c_in_tiles, cb_input_tiles, cb_im2col_tiles, s2_out_w, s2_in_h, s2_in_w, s2_num_in_px>(
+                        input_tiles_dfb,
+                        s2_o_first,
+                        s2_o_end,
+                        [](uint32_t t, int32_t kh, uint32_t ch) {
+                            return static_cast<uint32_t>(kh) * block_m_tiles * block_k_tiles + t * block_k_tiles + ch;
+                        },
+                        [](uint32_t, int32_t) { return false; });
+                im2col_tiles_dfb.push_back(block_m_tiles * block_k_tiles * num_k_blocks);
+                input_tiles_dfb.wait_front(slab_rows * c_in_tiles);
+                input_tiles_dfb.pop_front(slab_rows * c_in_tiles);
+            }
+#endif
             MaybeDeviceZoneScope("compute_matmul_walk");
             ckl::matmul_block<
                 /*transpose=*/false,
