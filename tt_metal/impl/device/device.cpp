@@ -417,6 +417,11 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
         auto programmable_core_type = get_programmable_core_type(virtual_core);
         reset_launch_message_rd_ptr_virtual(virtual_core, programmable_core_type);
     };
+    // Under FDS every Tensix takes every go on the FDS wire. A core outside the compute grid (a worker-grid override)
+    // is in no sub-device, so it gets the unused go message, as SubDeviceManager maps it: with index 0 it would run
+    // sub-device 0's gos and its dones would count toward that sub-device's workers.
+    const bool fds_signalling = context_->get_dispatch_query_manager().fds_signalling_enabled();
+    const CoreCoord worker_grid = compute_with_storage_grid_size();
     auto reset_go_message_index = [&](const CoreCoord& logical_core, const CoreType& core_type) {
         CoreCoord virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(id_, logical_core, core_type);
         auto programmable_core_type = get_programmable_core_type(virtual_core);
@@ -430,9 +435,11 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
             tt_cxy_pair(id_, virtual_core),
             go_message_addr);
         cluster.l1_barrier(id_);
-        uint32_t zero = 0;
+        const bool in_worker_grid = logical_core.x < worker_grid.x && logical_core.y < worker_grid.y;
+        const uint32_t go_message_index =
+            (fds_signalling && !in_worker_grid) ? dev_msgs::go_message_num_entries - 1 : 0;
         uint64_t go_message_index_addr = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::GO_MSG_INDEX);
-        cluster.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_index_addr);
+        cluster.write_core(&go_message_index, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_index_addr);
     };
     std::optional<std::unique_lock<std::mutex>> watcher_lock;
     if (MetalEnvAccessor(*env_).impl().get_rtoptions().get_watcher_enabled() && context_->watcher_server()) {
