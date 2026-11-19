@@ -34,6 +34,17 @@ if ttnn.get_arch_name() != "blackhole":
     pytest.skip("the moe_compute port assumes the Blackhole DRAM ring and NoC burst", allow_module_level=True)
 
 SINGLE_CHIP = [pytest.param(1, {"fabric_config": ttnn.FabricConfig.DISABLED, "l1_small_size": 16384}, id="single-chip")]
+
+
+@pytest.fixture(autouse=True)
+def _shared_op_on_the_ring(monkeypatch):
+    """MoeComputeCustom ports the shared op's ring kernels, so every shared-op reference here is the ring program.
+    Since the expert rows path (tenstorrent/tt-metal#59945) a Blackhole call that path can run takes it by default,
+    and its activation table is not the ring's bit for bit; TT_METAL_MOE_COMPUTE_KERNEL=ring keeps the reference on
+    the ring (the variable is part of the op's path-choice key)."""
+    monkeypatch.setenv("TT_METAL_MOE_COMPUTE_KERNEL", "ring")
+
+
 H, N, K, GLOBAL_EXPERTS = 2816, 704, 8, 128
 HS = 4
 

@@ -728,6 +728,9 @@ int main(int argc, char **argv) {
                 ttml::core::apply_precision_config(yaml_config["training_config"], get_model_parameters(model))) {
             fmt::print("Master dtype: {}\n", *master_dtype);
         }
+        if (auto reduce_dtype = ttml::autograd::ctx().get_gradient_reduce_dtype()) {
+            fmt::print("Reduce dtype: {}\n", *reduce_dtype);
+        }
     }
 
     // Load model parameters if in eval mode and model path exists
