@@ -31,7 +31,7 @@
 #include "dispatch/device_command.hpp"
 #include "dispatch/device_command_calculator.hpp"
 #include "event/dispatch.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "mesh_config.hpp"
 #include "mesh_coord.hpp"
 #include "mesh_coord_utils.hpp"

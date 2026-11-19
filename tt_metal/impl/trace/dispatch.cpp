@@ -12,7 +12,7 @@
 #include "impl/context/metal_env_impl.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "llrt/hal.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "dispatch/launch_message_ring_buffer_state.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "dispatch/system_memory_manager.hpp"
