@@ -21,20 +21,18 @@ The tests and the demo load `phiyodr/bert-large-finetuned-squad2` from Hugging F
 ## Demo
 
 From the repository root, answer the questions in `demo/input_data.json`, replacing `BATCH_SIZE`
-with 7, 8 or 12:
+with 7, 8 or 12 (7 or 8 on Wormhole):
 
 ```sh
 pytest --disable-warnings models/demos/metal_BERT_large_11/demo/demo.py::test_demo -k BATCH_SIZE
 ```
 
-To answer other questions, pass a JSON file with at least `BATCH_SIZE` entries of the same form:
+To answer other questions, replace the entries of `demo/input_data.json`; the demo takes the first
+`BATCH_SIZE` of them.
 
-```sh
-pytest --disable-warnings "models/demos/metal_BERT_large_11/demo/demo.py::test_demo[address_to_your_json_file.json-1-BATCH_SIZE]"
-```
-
-`test_demo_squadv2` scores the model on SQuAD v2 questions, from a local copy of the dataset at
-`/mnt/MLPerf/tt_dnn-models/squad_v2`:
+`test_demo_squadv2` scores the model on SQuAD v2 questions. It reads the dataset with
+`datasets.load_from_disk` from `/mnt/MLPerf/tt_dnn-models/squad_v2`, a Tenstorrent-internal path
+(`models/datasets/dataset_squadv2.py`); its test in `test_demo.py` runs on Wormhole only for now:
 
 ```sh
 pytest --disable-warnings models/demos/metal_BERT_large_11/demo/demo.py::test_demo_squadv2 -k BATCH_SIZE
@@ -68,11 +66,18 @@ pytest --disable-warnings models/demos/metal_BERT_large_11/tests/test_bert_batch
 
 ### Reduced grid
 
-The matmul grids take one core row per image and up to 12 core columns, as many as the device has.
-When the grid has fewer rows than the batch, every matmul runs with the program config ttnn chooses.
-`BFLOAT8_B-SHARDED` needs 8 x `batch` cores, as rows and columns either way; without them the model
-runs the `BFLOAT8_B-DRAM` config. The L1 and mixed-precision configs keep their activations in DRAM
-on a grid of fewer than 8 x `batch` cores. The tests and the demo pass on two worker cores:
+The model checks each of its hand-sized plans against the device's grid (`tt/grid.py`):
+
+- The interleaved matmul program configs take one core row per image and 8 to 12 core columns. On
+  a grid with fewer rows than the batch, or fewer than 8 columns, ttnn chooses each matmul's
+  program config.
+- The L1 and mixed-precision configs keep their activations in L1 on a grid with a core row per
+  image and at least 11 columns, and in DRAM otherwise.
+- `BFLOAT8_B-SHARDED` needs a grid of at least 8 columns by `batch` rows, or `batch` columns by 8
+  rows. On a smaller grid the model runs the `BFLOAT8_B-DRAM` config instead; on Wormhole that
+  test is skipped.
+
+The tests and the demo pass on two worker cores:
 
 ```sh
 TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=1,0 pytest --disable-warnings models/demos/metal_BERT_large_11/tests/test_bert_batch_dram.py
@@ -83,7 +88,8 @@ The override is the inclusive end coordinate of the worker grid, so `1,0` is a 2
 ### Reduced layer count
 
 `BERT_NUM_LAYERS=N` (1 to 24) keeps the first `N` encoder layers, in the Hugging Face reference and
-in the TT model. The tests, the end-to-end perf test and the demo read it:
+in the TT model. The whole-model tests (`test_bert_batch_dram.py`, `test_bert.py`), the end-to-end
+perf test and the demo read it:
 
 ```sh
 BERT_NUM_LAYERS=1 pytest --disable-warnings models/demos/metal_BERT_large_11/tests/test_bert_batch_dram.py
