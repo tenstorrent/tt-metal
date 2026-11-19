@@ -41,7 +41,14 @@ def _check_spec_memory(eng, model, nb):
 
     tc = model.args.hf_config.get_text_config()
     want = spec_memory_costs(
-        tc, model.num_devices, eng.B, eng.K, block_size=eng.block_size, nb=nb, num_layers=len(model.layers)
+        tc,
+        model.num_devices,
+        eng.B,
+        eng.K,
+        block_size=eng.block_size,
+        nb=nb,
+        num_layers=len(model.layers),
+        rope_table_rows=model.rope_table_rows(),
     )
     got = eng.measured_spec_bytes()
     mib = lambda d: {k: round(v / (1 << 20), 3) for k, v in d.items()}

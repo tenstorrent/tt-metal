@@ -8,6 +8,7 @@ Qwen3.5-specific params (GDN, partial RoPE, layer types) come from HF text confi
 load_state_dict/weight_cache_path override the base meta-key (wq/wk/wv) scheme.
 """
 
+import math
 import os
 from pathlib import Path
 
@@ -287,13 +288,24 @@ class Qwen36ModelArgs(ModelArgs):
         # Input-projection 1D decode (DEFAULT): same idea for attn QKV+gate and GDN QKVZAB in-projections.
         # Weights load interleaved (prefill AGMM verified bit-identical); tuned grids per test_mlp_matmul_sweep.
         self.proj_1d_decode = True
-        self.attn_qkv_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
-            M, self.dim, self.attn_qkv_fused_dim_tp, num_cores=64
+        # TP=8 column-parallel outputs are half as wide as TP=4's and want more, wider grids: single-chip trace
+        # microbench on the 12x10 BH grid, BFP8 HiFi2, M=32 (us per matmul): attn qkv 5120x2048 64c 8-wide 39.6 ->
+        # 60c device-wide 30.2; GDN in 5120x2080 44c 31.7 -> 84c 30.9. K and in0_block_w are unchanged, so every
+        # output tile runs the same K loop. TP=4 keeps its tuned grids, and so does a TP=8 grid too narrow for 84
+        # cores (8 wide on Wormhole: 11 rows).
+        grid_rows = mesh_device.compute_with_storage_grid_size().y
+        tp8 = tp == 8 and math.ceil(84 / self.decode_grid_w) <= grid_rows
+        self.attn_qkv_decode_1d_progcfg = (
+            tpc.create_matmul_1d_decode_progcfg(
+                M, self.dim, self.attn_qkv_fused_dim_tp, num_cores=60, grid_w=self.decode_grid_w
+            )
+            if tp8
+            else tpc.create_matmul_1d_decode_progcfg(M, self.dim, self.attn_qkv_fused_dim_tp, num_cores=64)
         )
         # gdn_qkvz: num_cores=44 -> 11x4 on BH, the fastest measured config (wide1d_11x4c, ~59us, +22%
         # vs the old 8x5). On WH (decode_grid_w=8) this falls back to 8x6.
         self.gdn_qkvz_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
-            M, self.dim, self.gdn_qkvzab_dim_tp, num_cores=44, grid_w=self.decode_grid_w
+            M, self.dim, self.gdn_qkvzab_dim_tp, num_cores=84 if tp8 else 44, grid_w=self.decode_grid_w
         )
         # Output projections (attn wo, GDN o_proj): already interleaved+auto (no weight relayout, not in
         # the prefill AGMM fusion), so this just swaps ttnn-auto for a tuned ~32-core 1D decode grid.

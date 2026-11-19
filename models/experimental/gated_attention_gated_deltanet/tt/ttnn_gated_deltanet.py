@@ -144,10 +144,14 @@ def _causal_conv1d_fir(
     weight_taps=None,
     bias_dev=None,
     valid_len=None,
+    new_state_select=None,
 ):
     """Depthwise causal conv1d + SiLU via K shifted multiply-accumulate slices.
 
     x [B,T,D]; conv_state [B,K-1,D] or list of [B,1,D]; weight_taps/bias_dev optional.
+    new_state_select: a device tensor holding the one-hot that the valid_len path builds on the host
+    ([B, K-1, K-1+T], dtype of the padded input); the conv then needs no host write, so it can run in a
+    captured trace whose valid_len changes per replay. The caller owns it.
     Returns output [B,T,D], new_state [B,K-1,D].
     """
     mc = memory_config
@@ -173,7 +177,12 @@ def _causal_conv1d_fir(
 
     # new_state: last K-1 tokens; land in DRAM (carry alive across downstream kernel CBs).
     total_len = (kernel_size - 1) + T
-    if valid_len is None:
+    if new_state_select is not None:
+        if new_state_select.dtype != x_padded.dtype:
+            raise ValueError(f"new_state_select is {new_state_select.dtype}, the padded input {x_padded.dtype}")
+        xp = ttnn.to_layout(x_padded, ttnn.TILE_LAYOUT)
+        new_state = ttnn.matmul(new_state_select, xp, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    elif valid_len is None:
         new_state = x_padded[:, total_len - (kernel_size - 1) :, :]
         # to_layout then to_memory_config: slice keeps L1 if memory_config passed to to_layout
         new_state = ttnn.to_layout(new_state, ttnn.TILE_LAYOUT)

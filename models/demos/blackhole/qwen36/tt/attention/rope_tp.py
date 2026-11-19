@@ -306,25 +306,80 @@ def rot_mats_prefill(device, rope_dim, seq_len, theta, position_ids=None, mrope_
     return cos, sin
 
 
+# Exact row copy: at HiFi4 the product of a bf16 value and 1.0 is the value, and every other product is 0.
+_ROW_REPEAT_CFG = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_approx_mode=False,
+    fp32_dest_acc_en=True,
+    packer_l1_acc=False,
+)
+
+
+def rope_row_repeat_matrix(rows):
+    """bf16 [rows * TILE_SIZE, rows] of 0 and 1: row r * TILE_SIZE + h selects row r (rope_rows_to_row_view)."""
+    return torch.eye(rows, dtype=torch.bfloat16).repeat_interleave(ttnn.TILE_SIZE, dim=0)
+
+
+def rope_rows_to_row_view(t, repeat_mat):
+    """cos or sin [1, 1, rows, rope_dim] TILE -> [1, 1, rows * TILE_SIZE, rope_dim] DRAM, row r repeated over tile rows
+    r * TILE_SIZE .. r * TILE_SIZE + TILE_SIZE - 1: the layout the row view of apply_partial_rope_decode rotates in.
+    ``repeat_mat``: rope_row_repeat_matrix(rows) on the device. One matmul; every output row holds the bytes of its input
+    row, provided the tile padding rows of ``t`` are finite (0 * inf would be NaN)."""
+    return ttnn.matmul(repeat_mat, t, memory_config=ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config=_ROW_REPEAT_CFG)
+
+
+def _partial_rope_decode_row_view(x, cos_tt, sin_tt, n_heads, B, rope_dim):
+    """apply_partial_rope_decode on cos/sin [1, 1, B * TILE_SIZE, rope_dim] (rope_rows_to_row_view).
+
+    The rotary slice [1, B, n_heads, rope_dim] holds one tile per row of x, n_heads of its 32 rows valid. Viewed as
+    [1, 1, B * TILE_SIZE, rope_dim] (the same bytes, padding rows counted) it is a prefill-mode input whose tile row r
+    meets cos/sin tile row r, which holds row r's rotation in every row. rotary_embedding_hf is element-wise, so each
+    valid element gets the operands and the result of the transposed path, without the two transposes. The padding
+    rows go through the op too; only the valid rows reach the attention output and the KV cache."""
+    hd = x.shape[-1]
+    tile = ttnn.TILE_SIZE
+    flat = ttnn.Shape([1, 1, B * tile, rope_dim])
+    x_rope = ttnn.reshape(ttnn.slice(x, (0, 0, 0, 0), (1, B, n_heads, rope_dim)), flat, flat)
+    roped = ttnn.experimental.rotary_embedding_hf(
+        x_rope, cos_tt, sin_tt, is_decode_mode=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    ttnn.deallocate(x_rope)
+    roped = ttnn.reshape(roped, ttnn.Shape([1, B, n_heads, rope_dim]), ttnn.Shape([1, B, tile, rope_dim]))
+    if rope_dim == hd:
+        return roped
+    x_pass = ttnn.slice(x, (0, 0, 0, rope_dim), (1, B, n_heads, hd), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    result = ttnn.concat([roped, x_pass], dim=-1)
+    ttnn.deallocate(roped)
+    ttnn.deallocate(x_pass)
+    return result
+
+
 def apply_partial_rope_decode(x, cos_tt, sin_tt, n_heads, batch_size, rope_dim):
-    """x: [1, B, n_heads, HD]; cos/sin: [1, B, 1, rope_dim]; rotates first rope_dim dims.
+    """x: [1, B, n_heads, HD]; cos/sin: [1, B, 1, rope_dim], [1, 1, B, rope_dim] or [1, 1, B * TILE_SIZE, rope_dim];
+    rotates first rope_dim dims.
 
     Fused HF-convention rotate-half via ttnn.experimental.rotary_embedding_hf. The op's native
     decode mode (is_decode_mode=True) hard-requires HEIGHT_SHARDED input + cos/sin, but qwen36's
-    decode attention runs interleaved (q/k are sharded_to_interleaved right after head-split). To
-    avoid the reshards that sharding would add, transpose the interleaved tensor to a prefill-shaped
-    [1, n_heads, B, rope_dim] (batch plays the seq role) and use the interleaved-friendly prefill
-    mode (is_decode_mode=False), then transpose back. Partial: only the first rope_dim is rotated;
-    the tail passes through.
+    decode attention runs interleaved (q/k are sharded_to_interleaved right after head-split), so the
+    interleaved-friendly prefill mode (is_decode_mode=False) runs instead. cos/sin as
+    [1, 1, B * TILE_SIZE, rope_dim] (the MTP verify stages them so, rope_rows_to_row_view) take the row view
+    (_partial_rope_decode_row_view): no transpose. Otherwise transpose the tensor to a prefill-shaped
+    [1, n_heads, B, rope_dim] (batch plays the seq role) and back. Partial: only the first rope_dim is rotated;
+    the tail passes through. cos/sin given as [1, 1, B, rope_dim] are used as they are; [1, B, 1, rope_dim] costs one
+    device reshape each per call.
     """
     hd = x.shape[-1]
     B = batch_size
+    if tuple(cos_tt.shape) == (1, 1, B * ttnn.TILE_SIZE, rope_dim):
+        return _partial_rope_decode_row_view(x, cos_tt, sin_tt, n_heads, B, rope_dim)
     x_rope = ttnn.slice(x, (0, 0, 0, 0), (1, B, n_heads, rope_dim))
     x_rope_t = ttnn.transpose(x_rope, 1, 2)  # [1, n_heads, B, rope_dim]
     ttnn.deallocate(x_rope)
     # decode cos/sin [1, B, 1, rope_dim] -> prefill [1, 1, B, rope_dim] (broadcast over heads)
-    cos_p = ttnn.reshape(cos_tt, (1, 1, B, rope_dim))
-    sin_p = ttnn.reshape(sin_tt, (1, 1, B, rope_dim))
+    cos_p, sin_p = cos_tt, sin_tt
+    if tuple(cos_tt.shape) != (1, 1, B, rope_dim):
+        cos_p = ttnn.reshape(cos_tt, (1, 1, B, rope_dim))
+        sin_p = ttnn.reshape(sin_tt, (1, 1, B, rope_dim))
     roped_t = ttnn.experimental.rotary_embedding_hf(
         x_rope_t, cos_p, sin_p, is_decode_mode=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
@@ -333,7 +388,7 @@ def apply_partial_rope_decode(x, cos_tt, sin_tt, n_heads, batch_size, rope_dim):
     ttnn.deallocate(roped_t)
     if rope_dim == hd:
         return roped
-    x_pass = ttnn.to_memory_config(ttnn.slice(x, (0, 0, 0, rope_dim), (1, B, n_heads, hd)), ttnn.DRAM_MEMORY_CONFIG)
+    x_pass = ttnn.slice(x, (0, 0, 0, rope_dim), (1, B, n_heads, hd), memory_config=ttnn.DRAM_MEMORY_CONFIG)
     result = ttnn.concat([roped, x_pass], dim=-1)
     ttnn.deallocate(roped)
     ttnn.deallocate(x_pass)

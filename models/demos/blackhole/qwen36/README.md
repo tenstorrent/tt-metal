@@ -25,7 +25,9 @@ dense MLP path is byte-for-byte unchanged.
 - The **27B** variants (Qwen3.5-27B, Qwen3.6-27B and Qwen3.8-27B) run on a
   **P150x4** (a `(1, 4)` Blackhole mesh) using **4-way tensor parallelism (TP)**.
   The TP path needs `FABRIC_1D` for the cross-device collectives (all-reduce /
-  reduce-scatter) and a trace region for the captured chunk-outer prefill trace.
+  reduce-scatter) and a trace region for the captured prefill traces: the chunk-outer
+  trace and, in vLLM serving, one masked-bucket trace per prompt bucket (two for a
+  bucket that a KV block boundary falls inside).
 - **Qwen3.6-27B and Qwen3.8-27B also run at TP=8** on a `(1, 8)` mesh (`P150x8`),
   the Galaxy configuration. Because these checkpoints have only **4 KV heads**,
   TP=8 cannot give each device its own head: each head is instead **replicated

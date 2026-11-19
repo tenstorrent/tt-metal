@@ -104,6 +104,9 @@ def chunk_gated_delta_rule_fused_adapter(
     # None: the op's own dispatch — fused or phased depending on the cost model.
     wy_inverse=None,  # ttnn.ChunkGdnWyInverse.HORNER / FORWARD_SUBSTITUTION / AUTO: the WY-inverse arithmetic. None = the
     # op's AUTO (the forward-substitution solve on Blackhole at chunk 32, Horner elsewhere).
+    masks=None,  # (beta/g mask float32 [B,T,1], q/k/v mask [B,T,1] in q's dtype): device tensors holding the masks
+    # that valid_len builds on the host, applied with the same multiplies but no host write (a captured trace); the
+    # caller owns them
 ):
     global _logged_path
     if not _logged_path:
@@ -148,29 +151,7 @@ def chunk_gated_delta_rule_fused_adapter(
             q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
             k = ttnn.to_memory_config(k, ttnn.DRAM_MEMORY_CONFIG)
 
-    # valid_len: zero beta/g past pad so state updates are identity; final_state = state at valid_len.
-    # Scalar (one length for all rows) or a per-row list/tuple of B lengths (grouped batched prefill:
-    # each user its own real length within the shared bucket).
-    _is_per_row = isinstance(valid_len, (list, tuple))
-    if _is_per_row or (valid_len is not None and valid_len < T):
-        _dram = ttnn.DRAM_MEMORY_CONFIG  # op CBs clash with L1 inputs at small buckets
-        _mt = torch.zeros(B, T, 1, dtype=torch.float32)
-        if _is_per_row:
-            for _b in range(B):
-                _mt[_b, : int(valid_len[_b]), :] = 1.0
-        else:
-            _mt[:, :valid_len, :] = 1.0
-        _m = ttnn.from_torch(_mt, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-        beta = ttnn.multiply(beta, _m, memory_config=_dram)  # beta/g fp32 (op contract) — load-bearing
-        g = ttnn.multiply(g, _m, memory_config=_dram)
-        # Also mask q/k/v for bit-parity with seq (beta/g alone is enough for correctness).
-        _mq_t = _mt if len(q.shape) == 3 else _mt.reshape(B, T, 1, 1)
-        _mq = ttnn.from_torch(_mq_t, dtype=q.dtype, layout=ttnn.TILE_LAYOUT, device=device)
-        q = ttnn.multiply(q, _mq, memory_config=_dram)
-        k = ttnn.multiply(k, _mq, memory_config=_dram)
-        v = ttnn.multiply(v, _mq, memory_config=_dram)
-        ttnn.deallocate(_m)
-        ttnn.deallocate(_mq)
+    q, k, v, beta, g = mask_delta_inputs(q, k, v, beta, g, valid_len=valid_len, masks=masks, device=device)
 
     s0 = None
     if initial_state is not None:
@@ -217,3 +198,48 @@ def chunk_gated_delta_rule_fused_adapter(
         final_state = ttnn.typecast(final_state, ttnn.float32)
 
     return o, final_state
+
+
+def mask_delta_inputs(q, k, v, beta, g, valid_len=None, masks=None, device=None):
+    """(q, k, v, beta, g) as chunk_gated_delta_rule_fused_adapter hands them to the op: with ``masks`` or a
+    ``valid_len`` below T, every token past the real ones gets beta = g = 0 (an identity state update) and zero q / k / v;
+    otherwise the inputs as given. beta and g are [B, T, Nv]."""
+    B, T = q.shape[0], q.shape[1]
+    # valid_len: zero beta/g past pad so state updates are identity; final_state = state at valid_len.
+    # Scalar (one length for all rows) or a per-row list/tuple of B lengths (grouped batched prefill:
+    # each user its own real length within the shared bucket).
+    _is_per_row = isinstance(valid_len, (list, tuple))
+    if masks is not None:
+        _dram = ttnn.DRAM_MEMORY_CONFIG
+        _m, _mq = masks
+        if valid_len is not None or len(q.shape) != 3 or _mq.dtype != q.dtype:
+            raise ValueError(
+                f"device masks replace valid_len for flat q/k/v of their dtype (valid_len={valid_len}, "
+                f"q {tuple(q.shape)} {q.dtype}, q/k/v mask {_mq.dtype})"
+            )
+        beta = ttnn.multiply(beta, _m, memory_config=_dram)
+        g = ttnn.multiply(g, _m, memory_config=_dram)
+        q = ttnn.multiply(q, _mq, memory_config=_dram)
+        k = ttnn.multiply(k, _mq, memory_config=_dram)
+        v = ttnn.multiply(v, _mq, memory_config=_dram)
+    elif _is_per_row or (valid_len is not None and valid_len < T):
+        _dram = ttnn.DRAM_MEMORY_CONFIG  # op CBs clash with L1 inputs at small buckets
+        _mt = torch.zeros(B, T, 1, dtype=torch.float32)
+        if _is_per_row:
+            for _b in range(B):
+                _mt[_b, : int(valid_len[_b]), :] = 1.0
+        else:
+            _mt[:, :valid_len, :] = 1.0
+        _m = ttnn.from_torch(_mt, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        beta = ttnn.multiply(beta, _m, memory_config=_dram)  # beta/g fp32 (op contract) — load-bearing
+        g = ttnn.multiply(g, _m, memory_config=_dram)
+        # Also mask q/k/v for bit-parity with seq (beta/g alone is enough for correctness).
+        _mq_t = _mt if len(q.shape) == 3 else _mt.reshape(B, T, 1, 1)
+        _mq = ttnn.from_torch(_mq_t, dtype=q.dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        q = ttnn.multiply(q, _mq, memory_config=_dram)
+        k = ttnn.multiply(k, _mq, memory_config=_dram)
+        v = ttnn.multiply(v, _mq, memory_config=_dram)
+        ttnn.deallocate(_m)
+        ttnn.deallocate(_mq)
+
+    return q, k, v, beta, g

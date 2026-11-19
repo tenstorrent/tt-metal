@@ -1,16 +1,18 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""vLLM wrapper for Qwen3.5/3.6 on Blackhole — a thin tt_transformers Generator subclass.
+"""vLLM wrappers for Qwen3.5/3.6/3.8 on Blackhole: thin tt_transformers Generator subclasses.
 
-Hybrid model: 8 paged-KV attention + 24 GDN recurrent-state layers. GDN forbids token-padding and
-isn't position-general, so prefill is model-owned (masked-bucket for short prompts / chunk-outer
-trace for long, via prefill_dispatch) while Generator drives decode only. GDN + KV state is
-model-bound, so the kv_cache contract param is accepted but unused.
+Hybrid model: paged-KV attention + GDN recurrent-state layers. GDN forbids token-padding and isn't position-general,
+so prefill is model-owned (masked-bucket for short prompts / chunk-outer trace for long) while Generator drives decode
+only. Both classes keep the GDN state of each request in vLLM-owned KV cache blocks (MambaSpec groups,
+tt/gdn_block_state.py); Qwen36MTPContractForCausalLM adds speculative decoding with the MTP drafter head.
 """
 
+import functools
 import math
 import os
 from collections import defaultdict
+from collections.abc import Mapping as MappingABC
 from typing import Mapping, Optional
 
 import torch
@@ -24,35 +26,60 @@ from vllm.model_executor.models.qwen3_5 import (
 from vllm.multimodal import MULTIMODAL_REGISTRY
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.blackhole.qwen36.tt.common import create_tt_model
-from models.demos.blackhole.qwen36.tt.generator_interface import prefill_dispatch, warmup_decode_buckets
+from models.demos.blackhole.qwen36.tt.generator_interface import warmup_decode_buckets
+from models.demos.blackhole.qwen36.tt.spec_sample import SAMPLER_TOP_K, enables_logprobs, sampled_token_logprobs
 from models.tt_transformers.tt.generator import Generator
 
 _PREFILL_WARMUP_CHUNK = 2048
-_PREFILL_WARMUP_BUCKET = 4096
-_BLOCK_SIZE = 64
+# Compute cores gdn_spec_step uses for B rows of Nv value heads (one per row and head) on a Blackhole P150 / P300.
+_SPEC_STEP_CORES = 110
+# tt/vision/model.py pads a request's vision patches to (n // _VISION_BUCKET + 1) * _VISION_BUCKET.
+_VISION_BUCKET = 2048
+# Patches the vision warmup covers when vLLM's --mm-processor-kwargs sets no max_pixels: about a 2 MP image.
+_VISION_WARMUP_PATCHES = 8191
+# Fabric packet payload of the MTP class's mesh on Blackhole. Fewer, larger packets cut the per-packet cost of the decode
+# and verify all-reduces: TP=8 decode is faster at 8192 B than at the fabric default (4352 B) and at the Blackhole
+# maximum (15232 B).
+_FABRIC_PACKET_PAYLOAD_BYTES = 8192
+
+
+@functools.lru_cache(maxsize=None)
+def _fabric_router_config():
+    router = ttnn.FabricRouterConfig()
+    router.max_packet_payload_size_bytes = _FABRIC_PACKET_PAYLOAD_BYTES
+    return router
+
+
+class _BlackholeFabricConfig(MappingABC):
+    """The MTP class's model_capabilities["fabric_config"]: {"router_config": the 8192-byte payload} on Blackhole, empty
+    on any other architecture (8192 B is above the Wormhole maximum of 7616 B, which the fabric refuses). The
+    architecture is looked up when vllm-tt-plugin reads the entries, right before it opens the mesh, so importing the
+    class touches no device."""
+
+    def _entries(self):
+        return {"router_config": _fabric_router_config()} if is_blackhole() else {}
+
+    def __getitem__(self, key):
+        return self._entries()[key]
+
+    def __iter__(self):
+        return iter(self._entries())
+
+    def __len__(self):
+        return len(self._entries())
 
 
 class TT_Qwen3_5ProcessingInfo(Qwen3_5ProcessingInfo):
     def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
-        # Serve a single visual item per request (B=1, max_concurrency=1). Image and video are both
-        # supported, but only ONE modality per request: the model's vision splice keys off a single
-        # placeholder token id (image_token_id XOR video_token_id), so a mixed image+video prompt
-        # cannot be spliced correctly.
+        # At most one image and one video per request. A request with both splices each modality's vision rows at its
+        # own placeholder tokens (Qwen36Model.vision_rows).
         return {"image": 1, "video": 1}
 
 
-class TT_Qwen3_5SpecProcessingInfo(TT_Qwen3_5ProcessingInfo):
-    def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
-        # the spec engine's prefill is text-only: vLLM rejects visual items at admission (HTTP 400)
-        return {"image": 0, "video": 0}
-
-
-@MULTIMODAL_REGISTRY.register_processor(
-    Qwen3VLMultiModalProcessor, info=TT_Qwen3_5ProcessingInfo, dummy_inputs=Qwen3VLDummyInputsBuilder
-)
-class Qwen36ForCausalLM(Generator, SupportsMultiModal):
-    """vLLM-compatible wrapper for Qwen3.5-9B on Blackhole P150."""
+class _Qwen36Generator(Generator, SupportsMultiModal):
+    """Construction, KV budget, sampling checks and multimodal helpers shared by the Qwen3.6 vLLM classes."""
 
     # Decode bucketing keeps several traces live and refreshes the selected
     # bucket's inputs before replay, so their I/O buffers may safely overlap.
@@ -65,7 +92,11 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
     # supports_device_grammar=True: decode_forward defers to Generator, whose deferred payload and
     # sample_deferred_decode implement the plugin's device grammar contract; bucketed logits are
     # padded to the sampler width, so the full-batch mask applies to every bucket.
+    # supports_prefill_resume_inside_kv_block=False: Qwen36Model.prefill_traced_chunked continues a prefill only at a
+    # multiple of the KV block size, and gdn_block_state.prefill_segments raises for a prefill that resumes inside a
+    # block.
     model_capabilities = {
+        "supports_prefill_resume_inside_kv_block": False,
         "supports_prefix_caching": False,
         "supports_async_decode": False,
         "supports_sample_on_device": True,
@@ -159,158 +190,298 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         # No-op cost for text-only requests; get_image_features / get_video_features are only invoked
         # when a request actually carries pixel_values / pixel_values_videos.
         model.init_vision_model()
-        return cls([model], [args], mesh_device)
-
-    def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
-        """Allocate paged KV (8 attn layers) + external GDN state; returns the 8 KV pairs.
-
-        batch_size = max_batch_size (vLLM's max_num_seqs, threaded through initialize_vllm_model):
-        the paged KV blocks (kv_cache_shape) already cover all users, and this sizes the per-slot
-        GDN recurrent/conv state [B,...] + the decode kv grid. B==1 is the single-sequence path."""
-        batch_size = self.model[0].args.max_batch_size
-        return self.model[0].allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=batch_size)
+        inst = cls([model], [args], mesh_device)
+        inst._vision_warmup_patches = _vision_warmup_patches(model)
+        return inst
 
     @staticmethod
-    def _has_visual(kwargs, pixel_key):
-        """True only when the request carries REAL visual data for this modality. vLLM attaches an
-        empty pixel_values placeholder to text requests for a multimodal-registered model, so a
-        plain ``is not None`` check misclassifies text as multimodal. Mirrors the emptiness test in
-        _gather_user_visual (key absent / empty list / first item None => text-only)."""
-        v = kwargs.get(pixel_key)
-        return v is not None and len(v) > 0 and v[0] is not None
+    def _row_items(kwargs, key, row):
+        """vllm-tt-plugin's entries of the multimodal field ``key`` for prefill row ``row``: one per item of the row's
+        request, None for an item without the field (an item of the other modality). Empty for a text row."""
+        v = kwargs.get(key)
+        if v is None or len(v) <= row or v[row] is None:
+            return []
+        return list(v[row]) if isinstance(v[row], (list, tuple)) else [v[row]]
 
-    @staticmethod
-    def _gather_user_visual(kwargs, pixel_key, grid_key):
-        """Pull this (B=1) user's patches + (t,h,w) grids for one modality out of the vLLM kwargs.
-
-        Returns (pixel_values, grid_thw) or None when the request carries nothing for this modality.
-        Multiple items for the user arrive as lists; concat the patches and stack the grids (same
-        shape get_image_features / get_video_features expect: [num_patches, patch_dim] + [N, 3]).
-        """
-        if pixel_key not in kwargs or len(kwargs[pixel_key]) == 0 or kwargs[pixel_key][0] is None:
+    @classmethod
+    def _row_visual(cls, kwargs, pixel_key, grid_key, row):
+        """(pixel values [num_patches, patch_dim], grid_thw [n, 3]) of prefill row ``row``'s items of one modality, in
+        item order (the order of their placeholder tokens), or None when the row has none."""
+        items = [
+            (p, g)
+            for p, g in zip(cls._row_items(kwargs, pixel_key, row), cls._row_items(kwargs, grid_key, row))
+            if p is not None
+        ]
+        if not items:
             return None
-        pixel_values = kwargs[pixel_key][0]
-        grid_thw = kwargs[grid_key][0]
-        if isinstance(pixel_values, list) and len(pixel_values) > 0:
-            pixel_values = torch.concat(pixel_values, dim=0)
-            grid_thw = torch.stack([g.to(dtype=torch.int32) for g in grid_thw], dim=0)
-        return pixel_values, grid_thw
+        pixels = torch.concat([p for p, _ in items], dim=0)
+        return pixels, torch.concat([g.reshape(-1, 3).to(dtype=torch.int32) for _, g in items], dim=0)
 
-    def _compute_vision_tokens(self, model, kwargs):
-        """Run the vision tower for this (single-user, B=1) request, if it carries images or video.
+    @classmethod
+    def _row_has_visual(cls, kwargs, row):
+        """True when prefill row ``row`` carries pixels. vLLM attaches an empty placeholder to text requests of a
+        multimodal model, so the field's presence alone does not make a row multimodal."""
+        return any(
+            p is not None for key in ("pixel_values", "pixel_values_videos") for p in cls._row_items(kwargs, key, row)
+        )
 
-        Mirrors the Qwen3-VL generator's multimodal check: pull this user's pixels + grid out of
-        the vLLM kwargs and return the packed embeddings (ttnn [num_vision_tokens, H]) for prefill
-        to splice in. Returns None for a text-only request, so the whole multimodal path is skipped.
+    def _row_vision_rows(self, model, kwargs, row, row_tokens):
+        """Host vision rows of prefill row ``row`` whose tokens from position 0 are ``row_tokens``
+        (Qwen36Model.vision_rows over the row's images and videos), or None for a text row. The model keeps one
+        request's grids, so this runs right before the row's prefill. Raises ValueError for an item above the warmed
+        vision buckets (_check_vision_bucket)."""
+        image = self._row_visual(kwargs, "pixel_values", "image_grid_thw", row)
+        video = self._row_visual(kwargs, "pixel_values_videos", "video_grid_thw", row)
+        if image is None and video is None:
+            return None
+        for items in (image, video):
+            if items is not None:
+                self._check_vision_bucket(items[1])
+        return model.vision_rows(row_tokens, image=image, video=video)
 
-        Image and video share the vision tower; dispatching to get_video_features (vs
-        get_image_features) is what tells the model to splice into video_token_id placeholders and
-        build the video M-RoPE. A request carries at most one visual modality (see
-        get_supported_mm_limits); video takes precedence if both are somehow present.
-        """
-        video = self._gather_user_visual(kwargs, "pixel_values_videos", "video_grid_thw")
-        if video is not None:
-            return model.get_video_features(*video)
+    def warmup_vision(self):
+        """Run the vision tower once per patch bucket up to _vision_warmup_patches, before any trace is captured.
 
-        image = self._gather_user_visual(kwargs, "pixel_values", "image_grid_thw")
-        if image is not None:
-            return model.get_image_features(*image)
+        Every device op of the vision tower depends only on the padded patch bucket (get_*_features trim the valid
+        rows on the host), so one image per bucket creates every program a request in that bucket runs. A program
+        first created after the traces were captured can allocate device buffers that a later trace replay
+        overwrites: at TP=8 the composite all_gather and reduce_scatter of the vision tower own L1 global
+        semaphores, and the next vision call of that shape hangs in the CCL. An image of 32 x w patches lands in
+        bucket 32 * w + 1024."""
+        model = self.model[0]
+        top = getattr(self, "_vision_warmup_patches", None)
+        if getattr(model, "vision_model", None) is None or not top:
+            return
+        vc = model.vision_args.hf_config.vision_config
+        patch_dim = vc.in_channels * vc.temporal_patch_size * vc.patch_size**2
+        buckets = range(_VISION_BUCKET, (top // _VISION_BUCKET + 1) * _VISION_BUCKET + 1, _VISION_BUCKET)
+        for bucket in buckets:
+            w = bucket // 32 - 32
+            pixels = torch.zeros(32 * w, patch_dim, dtype=torch.float32)
+            ttnn.deallocate(model.get_image_features(pixels, torch.tensor([[1, 32, w]], dtype=torch.int32)))
+        model._req_image_grid_thw = None
+        model._req_video_grid_thw = None
+        ttnn.synchronize_device(self.mesh_device)
+        self._vision_warmed_bucket = buckets[-1]
+        logger.info(f"Vision tower warmed for patch buckets {list(buckets)}")
 
-        return None
+    def _check_vision_bucket(self, grid_thw):
+        """Refuse a visual input whose patch bucket warmup_vision did not compile.
+
+        Running it would create vision programs after trace capture, and a later request of the same size would hang
+        the device until a reset. Raising fails this request at once, with the cause in the log. No check when
+        warmup_vision did not run (tests, demos)."""
+        warmed = getattr(self, "_vision_warmed_bucket", None)
+        if not warmed:
+            return
+        n = int(torch.as_tensor(grid_thw).reshape(-1, 3).prod(dim=1).max())
+        bucket = (n // _VISION_BUCKET + 1) * _VISION_BUCKET
+        if bucket > warmed:
+            raise ValueError(
+                f"Vision input of {n} patches needs vision bucket {bucket}, above the largest bucket warmed before "
+                f"trace capture ({warmed} patches); running it would compile the vision tower after capture and can "
+                "hang the device. Launch vLLM with --mm-processor-kwargs '{\"max_pixels\": N}' (for example 1048576) "
+                "so that every accepted input fits a warmed bucket."
+            )
+
+
+@MULTIMODAL_REGISTRY.register_processor(
+    Qwen3VLMultiModalProcessor, info=TT_Qwen3_5ProcessingInfo, dummy_inputs=Qwen3VLDummyInputsBuilder
+)
+class Qwen36ForCausalLM(_Qwen36Generator):
+    """vLLM-compatible wrapper for Qwen3.5/3.6/3.8 on a Blackhole TP mesh (P150x4, P150x8).
+
+    vLLM owns the GDN state of every request: get_kv_cache_spec declares one MambaSpec per GDN layer, and each GDN
+    layer keeps a request's recurrent state and convolution history in the KV cache blocks that its MambaSpec group
+    gives the request (tt/gdn_block_state.py). A prefill starts from zero state or from the state of its start block
+    (a later prompt chunk, or a prefix-cache hit in mamba_cache_mode "align"), writes vLLM's prefill checkpoint on the
+    way, and copies its end state into the destination block; decode reads and writes the blocks with gdn_decode_step.
+    """
+
+    # supports_chunked_prefill: a prefill continues from its start block (prefill_forward). supports_prefix_caching:
+    # mamba_cache_mode "align" restores prefixes from the state blocks vLLM keeps; the plugin requires chunked prefill
+    # with it. supports_multimodal_prefill_resume False: prefill_forward builds a multimodal row's vision rows and
+    # M-RoPE positions from position 0 of the row, so the row starts at 0 with every image in it.
+    model_capabilities = {
+        **_Qwen36Generator.model_capabilities,
+        "supports_prefix_caching": True,
+        "supports_chunked_prefill": True,
+        "supports_multimodal_prefill_resume": False,
+    }
+    # Decode offsets the RoPE position of every row by rope.rope_delta, the M-RoPE delta of the last prefill, so a
+    # multimodal request needs max_num_seqs 1.
+    _PER_ROW_ROPE_DELTA = False
+
+    @classmethod
+    def get_kv_cache_spec(cls, vllm_config):
+        """vllm-tt-plugin hook: one FullAttentionSpec per attention layer and one MambaSpec per GDN layer, per device
+        at the MESH_DEVICE TP degree (tt/kv_cache_spec.py). The attention block size is the smallest one, at least
+        --block-size, whose K and V block holds one GDN state. Raises ValueError for an unsupported mesh."""
+        from models.demos.blackhole.qwen36.tt.kv_cache_spec import (
+            kv_cache_bf8_enabled,
+            mesh_tp_degree,
+            qwen36_kv_cache_spec,
+        )
+
+        tc = vllm_config.model_config.hf_config
+        tc = tc.get_text_config() if hasattr(tc, "get_text_config") else tc
+        cc = vllm_config.cache_config
+        specs = qwen36_kv_cache_spec(
+            tc,
+            mesh_tp_degree(),
+            kv_bf8=kv_cache_bf8_enabled(),
+            mamba_block_size=getattr(cc, "mamba_block_size", None) or vllm_config.model_config.max_model_len,
+            mamba_cache_mode=getattr(cc, "mamba_cache_mode", None) or "none",
+            min_block_size=getattr(cc, "block_size", None),
+            num_speculative_blocks=cls._num_speculative_blocks(vllm_config),
+        )
+        attn = next(spec for name, spec in specs.items() if name.endswith(".self_attn"))
+        logger.info(
+            f"Qwen GDN state in vLLM KV cache blocks: attention block size {attn.block_size} "
+            f"({attn.page_size_bytes} B per layer and block)"
+        )
+        return specs
+
+    @classmethod
+    def _num_speculative_blocks(cls, vllm_config):
+        """K of the MambaSpec groups: this class verifies no drafts."""
+        return 0
+
+    def _verify_tokens(self):
+        """T = 1 + K of a verify on the GDN state blocks; 0 without one."""
+        return 0
+
+    def allocate_kv_cache_per_layer(self, per_layer_specs):
+        """vllm-tt-plugin hook. One K and V buffer pair per attention layer; the GDN layers of the same layer slot
+        keep their request state inside it (gdn_block_state.GdnBlockState). The GDN layers keep only a batch-1
+        prefill workspace. Returns the attention [K, V] pairs."""
+        from models.demos.blackhole.qwen36.tt.gdn_block_state import GdnBlockState, is_mamba_entry
+
+        model = self.model[0]
+        if model.num_devices < 2:
+            raise ValueError("Qwen36ForCausalLM keeps the GDN state in KV cache blocks only on a TP mesh")
+        shapes = {tuple(int(d) for d in e[0]) for e in per_layer_specs if not is_mamba_entry(e)}
+        if len(shapes) != 1:
+            raise ValueError(f"the attention layers need one K / V cache shape, got {sorted(shapes)}")
+        kv_caches = model.allocate_kv_caches(shapes.pop(), ttnn.bfloat16, batch_size=1)
+        model.gdn_blocks = GdnBlockState(model, per_layer_specs, kv_caches, verify_tokens=self._verify_tokens())
+        return kv_caches
+
+    def zero_kv_cache_blocks(self, kv_cache=None, block_ids=()):
+        """vllm-tt-plugin hook: zero vLLM's new_block_ids_to_zero in every K and V buffer before the step."""
+        self.model[0].gdn_blocks.zero_blocks(block_ids)
 
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, **kwargs):
-        """All prefill is model-owned (Generator drives decode only)."""
+        """Prefill tokens [start_pos[u], prompt_lens[u]) of each row u on the GDN layers' batch-1 workspace, then copy
+        the row's end state into its destination blocks (mamba_state.windows). ``tokens`` holds each row's tokens from
+        position 0.
+
+        At start_pos 0 the row starts from zero state. Otherwise it continues from the full state of its start blocks
+        (mamba_state.start_blocks: a later chunk of the prompt, or a prefix-cache hit in mamba_cache_mode "align"),
+        attending over the KV cache that its page table holds for the earlier tokens; the start blocks are only read.
+        When the row has a prefill checkpoint after p tokens, the forward of the prefill's last chunk also computes
+        the state after p tokens when p is inside that chunk; otherwise the prefill stops after token p and continues
+        (gdn_block_state.prefill_segments). Either way the checkpoint blocks get that state. Returns host logits
+        [N, 1, vocab] at each row's last token."""
+        from models.demos.blackhole.qwen36.tt.gdn_block_state import row_blocks
+
         model = self.model[0]
-        if model.num_devices > 1 and model.args.max_batch_size > 1:
-            # Batched text prefill into decode slots (MM is B=1). Require real visual data, not a
-            # non-None empty pixel_values placeholder from vLLM on text requests.
-            assert not self._has_visual(kwargs, "pixel_values") and not self._has_visual(
-                kwargs, "pixel_values_videos"
-            ), (
-                "batched (max_num_seqs>1) serving is text-only; multimodal is single-sequence "
-                "(max_concurrency=1). Run the model at max_num_seqs=1 for image/video requests."
-            )
-            return self._prefill_forward_tp_batched(model, tokens, page_table, prompt_lens, kwargs.get("empty_slots"))
-        vision_tokens = self._compute_vision_tokens(model, kwargs)
-        if model.num_devices > 1:
-            return self._prefill_forward_tp(model, tokens, page_table, prompt_lens, vision_tokens=vision_tokens)
-        seq_len = int(prompt_lens[0]) if prompt_lens is not None else tokens.shape[1]
-        logger.info(f"Prefilling User 1 up to {seq_len} tokens")
-        # Multimodal works WITH the captured trace here: prefill_dispatch routes to the traced
-        # path, which splices the image/video rows via a fixed-shape ttnn.where over persistent
-        # buffers (compiled at warmup, updated per request by copy_host_to_device — no request-time
-        # compile).
-        logits = prefill_dispatch(
-            model,
-            tokens,
-            page_table,
-            prompt_lens,
-            use_trace=kwargs.get("enable_trace", False),
-            vision_tokens=vision_tokens,
-        )
-        logits = ttnn.to_torch(logits)
-        # The vLLM runner unpacks (logits, rope_deltas) because the HF config has mrope_section.
-        # Zero deltas are returned for all modalities: the multimodal M-RoPE delta is applied
-        # entirely model-side (build_request_rope stashes self.rope.rope_delta during prefill, and
-        # every decode path offsets the rope position by it), so the value handed back to vLLM is
-        # unused for device-side rope and stays zero.
-        rope_deltas = torch.zeros(logits.shape[0], dtype=torch.long)
-        logger.info(f"Finished prefill up to {seq_len} tokens, starting decode...")
-        return logits, rope_deltas
-
-    def _prefill_forward_tp(self, model, tokens, page_table, prompt_lens, vision_tokens=None):
-        """TP (B=1) paged prefill via the model-owned masked fixed-bucket path.
-
-        prefill_traced_chunked rounds the prompt up to a fixed bucket and masks the GDN to the
-        EXACT valid_len, so prefill runs one of a bounded, pre-warmed program set (the
-        compile-clobbers-trace fix) — for <=2048 prompts it is entirely the masked bucket (no
-        chunk trace needed). Longer prompts replay the chunk-outer trace (Milestone B). Returns
-        host logits [1, 1, vocab] gathered to a single replica."""
-        T = int(prompt_lens[0]) if prompt_lens is not None else tokens.shape[1]
-        if tokens.shape[1] > T:
-            tokens = tokens[:, :T]
-        logger.info(f"Prefilling User 1 up to {T} tokens (TP masked-bucket/chunked)")
-        # Multimodal is supported on TP too: prefill_traced_chunked splices the image/video rows via
-        # a fixed-shape ttnn.where over hidden-sharded persistent buffers (the vision rows are
-        # gathered to full hidden on host, placed along seq, then re-sharded), so no request-time
-        # compile clobbers the parked trace.
-        logits = model.prefill_traced_chunked(
-            tokens, page_table, actual_len=T, vision_tokens=vision_tokens
-        )  # [1,1,vocab] replicated
-        logits = (
-            ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(model.mesh_device, dim=0))
-            .reshape(-1, model.args.vocab_size)[:1]
-            .float()
-            .view(1, 1, -1)
-        )
-        logger.info(f"Finished prefill up to {T} tokens, starting decode...")
-        return logits, torch.zeros(1, dtype=torch.long)
-
-    def _prefill_forward_tp_batched(self, model, tokens, page_table, prompt_lens, empty_slots):
-        """TP batched (max_num_seqs>1) prefill: prefill each request in this step into its decode slot.
-
-        vLLM prefills new requests while other slots decode, so each user's B=1 state is written into
-        row empty_slots[u] of the batched GDN buffers without disturbing the live rows (model-owned,
-        via prefill_paged_slots). Attention fills each request's blocks via its page-table row.
-
-        tokens:      torch [N, max_T] (rows are the N requests scheduled this prefill step).
-        page_table:  torch [N, max_blocks] — row u = request u's blocks.
-        prompt_lens: per-request real lengths (row u trimmed to prompt_lens[u]).
-        empty_slots: per-request decode slot; defaults to range(N) (mirrors Generator.prefill_forward_text).
-        Returns ([N, 1, vocab] host logits, [N] zero rope_deltas — text M-RoPE delta is 0, applied model-side).
-        """
+        mamba_state = kwargs.get("mamba_state")
+        if mamba_state is None:
+            raise ValueError("Qwen36ForCausalLM keeps the GDN state in vLLM KV cache blocks and needs mamba_state")
         N = tokens.shape[0]
-        plens = [int(prompt_lens[u]) for u in range(N)] if prompt_lens is not None else [tokens.shape[1]] * N
-        if empty_slots is None:
-            empty_slots = list(range(N))
-        empty_slots = [int(s) for s in empty_slots]
-        token_ids_list = [tokens[u : u + 1, : plens[u]].to(torch.int32) for u in range(N)]
+        if model.args.max_batch_size > 1 and not self._PER_ROW_ROPE_DELTA:
+            if any(self._row_has_visual(kwargs, u) for u in range(N)):
+                raise ValueError(
+                    f"{type(self).__name__} serves image and video requests only at max_num_seqs 1: its decode "
+                    "offsets every row's RoPE position by the M-RoPE delta of the last prefill"
+                )
+        start_pos = kwargs.get("start_pos")
         pt = page_table if isinstance(page_table, torch.Tensor) else ttnn.to_torch(page_table)
-        logger.info(f"Prefilling {N} user(s) into slots {empty_slots} (TP batched masked-bucket)")
-        host_logits = model.prefill_paged_slots(token_ids_list, pt, empty_slots, valid_lens=plens)
-        logits = torch.cat([hl.reshape(1, 1, -1) for hl in host_logits], dim=0)  # [N, 1, vocab]
-        logger.info(f"Finished batched prefill of {N} user(s), starting decode...")
-        return logits, torch.zeros(N, dtype=torch.long)
+        blocks = model.gdn_blocks
+        reads = []
+        done = None
+        # The rows enqueue back to back and their logits are read after the last row: the host builds row u + 1 while
+        # the device runs row u. The device runs the same commands in the same order as with a wait per row; the host
+        # tensors that a copy may still read are kept until the wait below.
+        model.hold_masked_trace_inputs(True)
+        blocks.hold_replaced_tables(True)
+        try:
+            for u in range(N):
+                T = int(prompt_lens[u]) if prompt_lens is not None else tokens.shape[1]
+                rb = row_blocks(mamba_state, u)
+                segments = self._prefill_segments(int(start_pos[u]) if start_pos is not None else 0, T, rb)
+                logger.info(f"Prefilling row {u}: tokens [{segments[0][0]}, {T})")
+                # Read to the host once, before any segment's trace replay can overwrite the device rows
+                # (vision_rows_host).
+                vision_tokens = self._row_vision_rows(model, kwargs, u, tokens[u, :T])
+                if segments[0][0] > 0:
+                    blocks.restore(mamba_state, rb.start)
+                on_chunk = self._prefill_chunk_hook(u, tokens[u, :T], pt[u : u + 1], mamba_state, kwargs)
+                extra = {} if on_chunk is None else {"on_chunk": on_chunk}
+                if vision_tokens is not None:
+                    # An image's M-RoPE positions need all of its tokens, and a checkpoint can split an image.
+                    extra["rope_token_ids"] = tokens[u : u + 1, :T]
+                logits = None
+                for a, b, checkpoint_pos in segments:
+                    if logits is not None:
+                        ttnn.deallocate(logits)
+                        blocks.write_state(mamba_state, rb.checkpoint)
+                    # Short prompts run one masked-bucket forward; longer ones replay the chunk trace, then the masked
+                    # tail.
+                    logits = model.prefill_traced_chunked(
+                        tokens[u : u + 1, :b],
+                        pt[u : u + 1],
+                        actual_len=b,
+                        vision_tokens=vision_tokens,
+                        start_pos=a,
+                        **extra,
+                        **({"checkpoint_pos": checkpoint_pos} if checkpoint_pos else {}),
+                    )
+                # The read is enqueued, and the logits freed, before the block writes: a write can replay a captured
+                # trace, which may overwrite a buffer allocated after its capture, such as these logits.
+                reads.append(_replica_read(logits))
+                ttnn.deallocate(logits)
+                if u == N - 1:
+                    done = ttnn.record_event(model.mesh_device, 0)
+                if segments[-1][2]:  # prefill_segments computes a checkpoint in a forward only in a one-part plan
+                    blocks.write_checkpoint(mamba_state, rb.checkpoint)
+                blocks.write_state(mamba_state, rb.dest)
+        except BaseException:
+            if reads:
+                ttnn.synchronize_device(model.mesh_device)  # the enqueued reads still write into their host tensors
+            raise
+        finally:
+            model.hold_masked_trace_inputs(False)
+            blocks.hold_replaced_tables(False)
+        # Every kept host tensor was staged before the event; the last row's two block writes after it may still run.
+        ttnn.event_synchronize(done)
+        model.release_masked_trace_inputs()
+        blocks.release_held_tables()
+        rows = [ttnn.to_torch(r).reshape(-1, model.args.vocab_size)[:1].float() for r in reads]
+        # Zero rope deltas: the multimodal M-RoPE delta is applied model-side (rope.rope_delta).
+        return torch.stack(rows).reshape(N, 1, -1), torch.zeros(N, dtype=torch.long)
+
+    def _prefill_chunk_hook(self, row, row_tokens, page_table_row, mamba_state, kwargs):
+        """on_chunk of Qwen36Model.prefill_traced_chunked for prefill row ``row`` (tokens [0, end) in ``row_tokens``),
+        or None. The ordinary model reads nothing from the prefill's hidden states."""
+        return None
+
+    def _prefill_segments(self, start, end, rb):
+        """gdn_block_state.prefill_segments for a row that vLLM schedules from ``start`` to ``end`` with the state
+        blocks ``rb``. The row must start on a KV block boundary, and prefill_segments raises otherwise: vllm-tt-plugin
+        ends the non-final prefill chunks of a MambaSpec model there and rejects a prefix_match_unit below the block
+        size, so vLLM's prefix hits end there too. A multimodal row starts at 0 with every image in it, or, after a
+        preemption, continues on a block boundary after its last image; its segments take their M-RoPE positions from
+        the whole row (prefill_forward), so a checkpoint can also fall inside an image."""
+        from models.demos.blackhole.qwen36.tt.gdn_block_state import prefill_segments
+
+        block_size = self.model[0].gdn_blocks.layout.block_size
+        if (start == 0 and any(rb.start)) or (start > 0 and min(rb.start) <= 0):
+            raise ValueError(f"a prefill row at start_pos {start} has the start blocks {rb.start}")
+        if rb.checkpoint_pos and rb.checkpoint_pos <= start:
+            raise ValueError(f"this prefill row cannot write the prefill checkpoint after {rb.checkpoint_pos} tokens")
+        return prefill_segments(start, end, rb.checkpoint_pos, block_size, self.model[0].prefill_chunk_size)
 
     def decode_forward(self, *args, **kwargs):
         args = list(args)
@@ -326,20 +497,16 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             elif pos < len(args):
                 args[pos] = val
 
-        # Traced decode (single-device and TP): trace captured at pos 0 in warmup, replayed here.
-        # Valid for TP — GDN state is in fixed in-place buffers, and prefill only replays pre-warmed programs.
+        # Traced decode: trace captured in warmup, replayed here. The GDN layers read the state of each row from the
+        # blocks that their persistent page index names, so the index is set before the replay.
         if not getattr(self, "_decode_logged", False):
             self._decode_logged = True
             logger.info("Decode trace replay active (Qwen)")
-        model = self.model[0]
-        # Batched serving: apply vLLM's condense slot_remap to the per-slot GDN recurrent/conv state
-        # BEFORE the decode trace reads it. The plugin remaps its own buffers (and the seed RNG via
-        # super().decode_forward), but GDN state is model-internal, so mirror the same reindex here.
-        # slot_remap is passed through unchanged so the seed-RNG remap inside super() still runs.
-        if model.num_devices > 1 and model.args.max_batch_size > 1:
-            slot_remap = _read("slot_remap", 9)
-            if slot_remap is not None:
-                model._remap_gdn_slots(slot_remap)
+        mamba_state = kwargs.pop("mamba_state", None)
+        if mamba_state is not None:
+            # A row that vLLM moved (slot_remap) or gave to another request keeps reading its request's blocks: moving
+            # a row rewrites the page index and moves no state.
+            self.model[0].gdn_blocks.set_decode_blocks(mamba_state)
         # Decode bucketing (default on; TT_DECODE_BUCKETING=0 off): slice host inputs to the
         # smallest power-of-2 width >= active prefix [0:num_active) before the base forward.
         # No runner edit / output re-pad — plugin reads unpadded_batch_size in slot order.
@@ -351,8 +518,8 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             num_active = int((start_pos != -1).sum()) if start_pos is not None else width
             num_active = max(1, min(num_active, width))
             bucket = min(width, 1 << max(0, (num_active - 1).bit_length()))  # smallest pow2 >= num_active
-            # Keep full width when slot_remap is set: remap indexes the full slot space (tokens /
-            # GDN). Rare (row moves only); bucketing resumes next step. Check kw + positional #9.
+            # Keep full width when slot_remap is set: the sampler's per-slot state remap indexes the full slot
+            # space. Rare (row moves only); bucketing resumes next step. Check kw + positional #9.
             if _read("slot_remap", 9) is not None:
                 bucket = width
             if bucket < width:
@@ -389,36 +556,31 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         # The eager call (enable_trace=False) allocates and compiles everything; the traced call only
         # records, so nothing persistent is allocated once a trace is live (#56474).
         model = self.model[0]
-        if enable_trace and model._chunked_trace_id is not None:
+        if enable_trace and model._chunked_trace_id is not None and model._masked_traces_recorded:
             return
-        # Size the chunk-trace page table to the full KV cache (not a hardcoded 4096) so served ISL
-        # isn't capped; still captures one chunk — just a bigger page-table tensor.
-        if kv_cache:
-            # Round to a multiple of 32: paged/chunked SDPA needs the page-table stick % 32 == 0.
-            num_blocks = math.ceil(int(kv_cache[0][0].shape[0]) / 32) * 32
-        else:
-            num_blocks = math.ceil(_PREFILL_WARMUP_BUCKET / _BLOCK_SIZE)
+        # Size the chunk-trace page table to the full KV cache so served ISL isn't capped; round to a multiple of 32:
+        # paged/chunked SDPA needs the page-table stick % 32 == 0.
+        num_blocks = math.ceil(int(kv_cache[0][0].shape[0]) / 32) * 32
         page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
-        # Batched serving (max_num_seqs>1): the decode buffers are [B,...], but prefill runs B=1. Bind
-        # the PERSISTENT B=1 GDN prefill scratch and capture the chunk trace against IT, so long prompts
-        # (>chunk_size) replay the traced chunk-outer path per user instead of the slower eager fallback.
-        # The scratch is not freed (prefill_paged_slots rebinds it per request); the batched decode
-        # buffers are restored before the decode-trace warmup captures at [B,...].
-        batched = model.num_devices > 1 and model.args.max_batch_size > 1
+        # A visual request runs at max_batch_size 1, or at any max_batch_size on a class with per-row M-RoPE deltas
+        # (prefill_forward refuses it otherwise), so only those launches compile the vision tower before trace capture.
+        # The tower runs one prefill row at a time, so the buckets do not depend on max_batch_size.
+        if not enable_trace and (model.args.max_batch_size == 1 or self._PER_ROW_ROPE_DELTA):
+            self.warmup_vision()
         logger.info(
             f"Qwen prefill warmup ({'record' if enable_trace else 'prepare'}): chunk={_PREFILL_WARMUP_CHUNK}, "
-            f"page_table_blocks={num_blocks}{', batched B=1 scratch' if batched else ''}"
+            f"page_table_blocks={num_blocks}"
         )
-        prev = model._bind_gdn_prefill_scratch() if batched else None
-        try:
-            model.prepare_prefill_trace_chunked(self.mesh_device, page_table, chunk_size=_PREFILL_WARMUP_CHUNK)
-            if enable_trace:
+        model.prepare_prefill_trace_chunked(self.mesh_device, page_table, chunk_size=_PREFILL_WARMUP_CHUNK)
+        # The partial last chunk of every prefill (the whole of a prompt up to one chunk) replays a trace per bucket.
+        model.prepare_prefill_traces_masked()
+        if enable_trace:
+            if model._chunked_trace_id is None:
                 model.record_prefill_trace_chunked(self.mesh_device)
-        finally:
-            if prev is not None:
-                model._unbind_gdn_prefill_scratch(prev)
-        if batched:
-            model.warmup_gdn_slot_ops()
+            model.record_prefill_traces_masked()
+        model.gdn_blocks.warmup()
+        if enable_trace:
+            model.gdn_blocks.record_traces()
 
     def warmup_model_decode(self, *args, **kwargs):
         # Defer to WarmupForwardMixin, which warms the paged-SDPA + GDN decode path at pos 0.
@@ -428,48 +590,102 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         return warmup_decode_buckets(self, super().warmup_model_decode, *args, **kwargs)
 
 
-_MESH_TP = {"N150": 1, "N300": 2, "P150x4": 4, "N150x4": 4, "T3K": 8}
+def _replica_read(logits):
+    """Non-blocking read of device 0's replica of the prefill logits: a host tensor that holds the row once the device
+    has passed the read. Every device holds the same [1, 1, vocab] row (the LM head all-gathers its vocabulary shards,
+    or runs on a replicated weight), so one replica is the whole row and moves 1 / num_devices of the bytes of reading
+    every replica."""
+    return ttnn.from_device(ttnn.get_device_tensors(logits)[0], blocking=False)
+
+
+def _vision_warmup_patches(model):
+    """The most vision patches an accepted image can have, or None when the launch accepts no image or video.
+
+    Read from the current vLLM config, as vLLM's processor resizes images to at most
+    --mm-processor-kwargs max_pixels; _VISION_WARMUP_PATCHES without it. Video is not bounded."""
+    try:
+        from vllm.config import get_current_vllm_config
+
+        mc = get_current_vllm_config().model_config
+        if not mc.supports_multimodal_inputs:
+            return None
+        kw = getattr(getattr(mc, "multimodal_config", None), "mm_processor_kwargs", None) or {}
+        max_pixels = kw.get("max_pixels")
+    except Exception:
+        max_pixels = None
+    if max_pixels is None:
+        return _VISION_WARMUP_PATCHES
+    patch = model.vision_args.hf_config.vision_config.patch_size
+    return -(-int(max_pixels) // patch**2)
 
 
 def _mesh_tp(default=4):
-    """Tensor-parallel degree from MESH_DEVICE ("P150x4" -> 4, "(1, 4)" -> 4)."""
-    s = os.environ.get("MESH_DEVICE")
-    if not s:
-        return default
-    if s in _MESH_TP:
-        return _MESH_TP[s]
+    """Tensor-parallel degree of this engine's mesh (kv_cache_spec.mesh_tp_degree); ``default`` when MESH_DEVICE is
+    unset or names no mesh."""
+    from models.demos.blackhole.qwen36.tt.kv_cache_spec import mesh_tp_degree
+
     try:
-        dims = [int(x) for x in s.strip("() ").replace("x", ",").split(",") if x.strip()]
-        return math.prod(dims) if dims else default
+        return mesh_tp_degree()
     except ValueError:
         return default
 
 
-@MULTIMODAL_REGISTRY.register_processor(
-    Qwen3VLMultiModalProcessor, info=TT_Qwen3_5SpecProcessingInfo, dummy_inputs=Qwen3VLDummyInputsBuilder
-)
 class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
-    """Plugin spec-decode contract adapter (B * (K+1) <= 32) over the MTP engine in tt/spec_engine.py."""
+    """Qwen36ForCausalLM with speculative decoding over the MTP drafter head (tt/spec_engine.py MTPBlockEngine), for the
+    plugin's spec-decode contract (B * (K+1) <= 32), synchronous scheduling and host acceptance.
+    On a step the plugin samples on the device (sample_on_device_mode), a sampled row's ids are the device sampler's
+    draws, one per verify column (spec_ids_are_sampled, spec_sample.VerifySampler), which the host id walk accepts as
+    exact rejection sampling. An argmax_ids verify also runs the same walk and the drafter on the device when the next
+    propose is decided before the verify (MTPBlockEngine one-enqueue steps); propose_draft_tokens then returns those
+    drafts once the runner's commit matches the device's.
+
+    vLLM owns the GDN state as for Qwen36ForCausalLM; its MambaSpec groups declare num_speculative_blocks = K, so a
+    verify row gets 1 + K state blocks per group (mamba_state.windows). Every decode step is a verify: it reads each
+    row's full state from mamba_state.start_blocks and writes the full state after query token t, recurrent state and
+    convolution history, into windows[:, t] (gdn_spec_step on the blocks), and the runner points the next step's
+    start_blocks at the block of the count its accept walk committed. An ordinary [B, 1] decode runs as a verify
+    without drafts. Prefill, prefix caching, chunked prefill and the multimodal processor are Qwen36ForCausalLM's; the
+    drafter's KV cache is model-owned and indexed by the attention block ids (Qwen36Model._allocate_mtp_kv_cache).
+    Image and video requests run at any max_num_seqs: the engine keeps the M-RoPE delta of each state slot's request
+    and offsets the RoPE positions of the slot's verify and drafter rows by it."""
 
     _ENABLE_MTP = True
+    _PER_ROW_ROPE_DELTA = True
     _SPEC_K = int(os.environ.get("QWEN36_SPEC_K", "3"))  # vLLM warmup does not carry K
     _SUPPORTED_K = (3, 7, 11)
-    # decode_forward is overridden and does not execute the reload commands (DECODE_RELOAD_CONTRACT legacy mode)
-    decode_input_update_contract = 0
+    # decode_forward takes the reload commands: it stages every input of every step from the host, so it accepts only
+    # reload_inputs=True. The plugin sends nothing else: a verify always reloads, and an ordinary decode returns host
+    # ids (read inside the call), which makes the next ordinary decode a reload too.
+    decode_input_update_contract = 1
 
-    # verify answers argmax_ids (greedy) or logits ([B, 1+K, V] for host acceptance);
-    # the first token after prefill is host-sampled
+    # verify answers argmax_ids (greedy, or the device sampler's draws on a device-sampled step) or logits
+    # ([B, 1+K, V] for host acceptance)
     model_capabilities = {
         **Qwen36ForCausalLM.model_capabilities,
         "supports_spec_decode": True,
         "spec_requirements": ("device_propose", "hidden_feed"),
         "spec_hidden_handoff": ("on_device",),
-        "supports_async_decode": False,
-        "supports_async_spec_decode": False,
+        # An argmax_ids verify returns unread (read_from_device=False): read_decode_output waits on its event. An
+        # ordinary decode returns host ids.
+        "supports_async_decode": True,
+        "supports_async_spec_decode": True,
+        # A verify submitted over the unread one before it builds its rows on the device (spec_chain): greedy rows, and
+        # on a device-sampled step sampled rows, which draw with the seeds of the positions the device computes. Row i
+        # continues the unread verify's row slot_remap[i], so a row the runner moved keeps chaining.
+        "supports_chained_spec_verify": True,
+        # A prefill may run while one verify it returned unread awaits its read and propose: prefill_forward first
+        # settles what that propose needs from the device (MTPBlockEngine.prefill_over_pending).
+        "supports_prefill_over_pending_spec": True,
         "output_tokens_per_step": 1,
-        "supports_sample_on_device": False,
-        # Device grammar masks the device sampler, which the spec path does not use.
+        "supports_sample_on_device": True,
+        "spec_ids_are_sampled": True,
+        "max_device_top_k": SAMPLER_TOP_K,
+        # The verify sampler applies no penalties and no grammar mask: such a step is sampled on the host.
+        "supports_device_penalties": False,
         "supports_device_grammar": False,
+        # vllm-tt-plugin adds these to its ttnn.set_fabric_config arguments before it opens the mesh. No "config" key:
+        # the fabric type stays the plugin's hardware default or the launch's override_tt_config fabric_config.
+        "fabric_config": _BlackholeFabricConfig(),
     }
 
     @classmethod
@@ -488,28 +704,39 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             )
         if requested_k < k:
             return SpecReject(reason=f"requested_k={requested_k} < engine K={k}", supported_k=(k,))
-        bs = getattr(getattr(vllm_config, "cache_config", None), "block_size", None)
-        if bs is not None and int(bs) != _BLOCK_SIZE:
-            return SpecReject(
-                reason=f"block_size={bs} unsupported; the engine's page tables use {_BLOCK_SIZE}", supported_k=()
-            )
         try:
             from models.demos.blackhole.qwen36.tt.spec_engine import spec_memory_costs
+            from models.demos.blackhole.qwen36.tt.spec_step import rope_table_rows
 
             mc = vllm_config.model_config
             tc = mc.hf_config
             tc = tc.get_text_config() if hasattr(tc, "get_text_config") else tc
             if int(getattr(tc, "mtp_num_hidden_layers", 0) or 0) < 1:
                 return SpecReject(reason="checkpoint has no MTP weights (mtp_num_hidden_layers < 1)", supported_k=())
-            costs = spec_memory_costs(tc, _mesh_tp(), max_num_seqs, k, max_seq_len=mc.max_model_len)
+            tp = _mesh_tp()
+            nv = int(getattr(tc, "linear_num_value_heads")) // tp
+            if max_num_seqs * nv > _SPEC_STEP_CORES:
+                return SpecReject(
+                    reason=f"max_num_seqs={max_num_seqs} x {nv} GDN value heads per device exceed the "
+                    f"{_SPEC_STEP_CORES} cores gdn_spec_step uses (one per row and head) at TP={tp}",
+                    supported_k=(),
+                )
+            costs = spec_memory_costs(
+                tc,
+                tp,
+                max_num_seqs,
+                k,
+                max_seq_len=mc.max_model_len,
+                gdn_state_in_blocks=True,
+                rope_table_rows=rope_table_rows(mc.max_model_len),
+            )
             # costs are for the whole batch: per_seq scales with B, fixed is shared
             per_seq = math.ceil((costs["per_seq"]["total"] + costs["fixed"]["total"]) / max_num_seqs)
             per_token = int(costs["per_token"]["total"])
             mib = 1 << 20
             logger.info(
                 f"[spec] B={max_num_seqs} cost/seq {per_seq / mib:.1f} MiB (batch: per_seq "
-                f"{costs['per_seq']['total'] / mib:.1f}: gdn_ring {costs['per_seq']['gdn_ring'] / mib:.1f}, "
-                f"conv {costs['per_seq']['gdn_conv_windows'] / mib:.1f}; fixed {costs['fixed']['total'] / mib:.1f}), "
+                f"{costs['per_seq']['total'] / mib:.1f}; fixed {costs['fixed']['total'] / mib:.1f}), "
                 f"per_token {per_token} B"
             )
         except Exception as e:
@@ -525,22 +752,45 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         )
 
     @classmethod
+    def _num_speculative_blocks(cls, vllm_config):
+        """K = QWEN36_SPEC_K, which the platform publishes as num_speculative_tokens (SpecPlan.effective_k)."""
+        sc = getattr(vllm_config, "speculative_config", None)
+        k = int(getattr(sc, "num_speculative_tokens", 0) or 0) if sc is not None else 0
+        if k != cls._SPEC_K:
+            raise ValueError(
+                f"Qwen36MTPContractForCausalLM verifies K = QWEN36_SPEC_K = {cls._SPEC_K} drafts per step, and its GDN "
+                f"state needs K + 1 blocks per verify row, but the launch speculates {k} tokens; launch with "
+                f"num_speculative_tokens {cls._SPEC_K}"
+            )
+        return k
+
+    def _verify_tokens(self):
+        return self._SPEC_K + 1
+
+    @classmethod
     def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, max_seq_len, *args, **kwargs):
         self = super().initialize_vllm_model(hf_config, mesh_device, max_batch_size, max_seq_len, *args, **kwargs)
-        model = self.model[0]
-        assert model.mtp is not None, "MTP head not built (checkpoint has no MTP weights?)"
-        model.set_gdn_fused_decode(True)
+        assert self.model[0].mtp is not None, "MTP head not built (checkpoint has no MTP weights?)"
         return self
 
-    def _engine(self):
-        from models.demos.blackhole.qwen36.tt.spec_engine import get_spec_engine
+    def allocate_kv_cache_per_layer(self, per_layer_specs):
+        """Qwen36ForCausalLM's allocation plus the drafter's KV cache (one block past the pool, the drafter's scratch),
+        which the drafter runs at the full decode width."""
+        kv_caches = super().allocate_kv_cache_per_layer(per_layer_specs)
+        model = self.model[0]
+        model.mtp.attention.B = model.args.max_batch_size
+        return kv_caches
 
-        return get_spec_engine(self.model[0], self.model[0].args.max_batch_size, self._SPEC_K)
+    def _engine(self):
+        from models.demos.blackhole.qwen36.tt.spec_engine import MTPBlockEngine, get_spec_engine
+
+        return get_spec_engine(self.model[0], self.model[0].args.max_batch_size, self._SPEC_K, MTPBlockEngine)
 
     def _table_width(self):
         from models.demos.blackhole.qwen36.tt.spec_engine import spec_table_width
 
-        return spec_table_width(self.model[0].args.max_seq_len, self._SPEC_K, _BLOCK_SIZE)
+        model = self.model[0]
+        return spec_table_width(model.args.max_seq_len, self._SPEC_K, model.gdn_blocks.layout.block_size)
 
     def _table(self, pt):
         """Zero-pad (or trim) a vLLM page table [rows, w] to the engine width; block 0 is vLLM's null block."""
@@ -553,10 +803,12 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         return out
 
     def warmup_model_prefill(self, kv_cache, enable_trace, *args, **kwargs):
+        """Qwen36ForCausalLM's prefill warmup (chunk trace, block programs), then the engine's buffers and drafter
+        prompt programs before any trace is captured."""
+        super().warmup_model_prefill(kv_cache, enable_trace, *args, **kwargs)
         eng = self._engine()
         if enable_trace:
-            if not eng.prefill_recorded:
-                eng.record_prefill()
+            eng.record_prefill()
             return
         if eng.prefill_prepared:
             return
@@ -566,11 +818,9 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             f"vLLM KV pool too small: {pool} blocks < table width {w} (max_model_len + K + 1 = "
             f"{self.model[0].args.max_seq_len} + {self._SPEC_K} + 1 tokens)"
         )
-        # stay below the pool size: the last block is the MTP scratch block
-        # (row u starts at a distinct block: the verify's KV-collision check at warm position 0)
+        # rows start at distinct blocks: the verify's KV-collision check at warm position 0
         B = self.model[0].args.max_batch_size
-        scratch = torch.stack([(torch.arange(w) * B + u) % max(1, pool - 1) for u in range(B)]).to(torch.int32)
-        eng.prepare_prefill(scratch)
+        eng.prepare_prefill(torch.stack([(torch.arange(w) * B + u) % pool for u in range(B)]).to(torch.int32))
 
     def warmup_model_decode(self, kv_cache=None, enable_trace=False, *args, **kwargs):
         # Plain decode traces are never used: every step is a verify (narrow steps run as 1-column verifies).
@@ -579,6 +829,8 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             if not eng.captured:
                 eng.capture_decode()
         elif not eng.prepared:
+            # A device-sampling launch also prepares the verify sampler (spec_sample.VerifySampler).
+            eng.sample_on_device = bool(kwargs.get("can_sample_on_device", False))
             eng.prepare_decode()
 
     def _ensure_ready(self, kv_cache=None):
@@ -586,31 +838,44 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         if eng.prefill_recorded and eng.captured:
             return eng
         logger.warning("Qwen36 MTP engine not warmed up (enable_model_warmup=False?); warming lazily")
+        kv_cache = kv_cache if kv_cache is not None else self.model[0]._paged_kv_caches
         # plugin warmup order: allocate and compile everything before any trace is recorded
         if not eng.prefill_prepared:
             self.warmup_model_prefill(kv_cache, False)
         if not eng.prepared:
             eng.prepare_decode()
         if not eng.prefill_recorded:
-            eng.record_prefill()
+            self.warmup_model_prefill(kv_cache, True)
         if not eng.captured:
             eng.capture_decode()
         return eng
 
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, **kwargs):
-        N = tokens.shape[0]
-        start_pos = kwargs.get("start_pos")
-        assert start_pos is None or all(int(s) == 0 for s in start_pos), "no chunked prefill / prefix caching"
-        if self._has_visual(kwargs, "pixel_values") or self._has_visual(kwargs, "pixel_values_videos"):
-            raise ValueError("Qwen36MTPContractForCausalLM is text-only; image/video requests are not supported")
         eng = self._ensure_ready(kv_cache)
+        N = tokens.shape[0]
         slots = [int(x) for x in kwargs.get("empty_slots") or range(N)]
-        table = self._table(page_table[:N])
-        rows = []
-        for i in range(N):
-            L = int(prompt_lens[i]) if prompt_lens is not None else tokens.shape[1]
-            rows.append(eng.prefill(slots[i], tokens[i, :L], table[i : i + 1]).float().reshape(-1))
-        return torch.stack(rows).reshape(N, 1, -1), torch.zeros(N, dtype=torch.long)
+        eng.prefill_over_pending(slots)
+        out = super().prefill_forward(tokens, page_table, kv_cache, prompt_lens, **kwargs)
+        for u in range(N):
+            end = int(prompt_lens[u]) if prompt_lens is not None else tokens.shape[1]
+            eng.finish_prefill(slots[u], end, self._row_ends_prompt(kwargs.get("mamba_state"), u))
+        return out
+
+    @staticmethod
+    def _row_ends_prompt(mamba_state, row):
+        """True when prefill row ``row`` ends its request's prefill (MambaStepState.intermediate_prefill_mask False, or
+        no mask: a whole-prompt prefill). Only then does the step sample a token, and the row decode next."""
+        mask = getattr(mamba_state, "intermediate_prefill_mask", None)
+        return mask is None or not bool(mask[row])
+
+    def _prefill_chunk_hook(self, row, row_tokens, page_table_row, mamba_state, kwargs):
+        """The drafter's prompt KV over the row's chunks, and the feed row of its last token when the row ends its
+        prompt (MTPBlockEngine.prefill_hook)."""
+        slots = kwargs.get("empty_slots")
+        slot = int(slots[row]) if slots else row
+        return self._engine().prefill_hook(
+            slot, row_tokens, self._table(page_table_row), self._row_ends_prompt(mamba_state, row)
+        )
 
     def decode_forward(self, *args, **kwargs):
         from vllm_tt_plugin.spec_decode import VerifyOutput, check_spec_side_tensors
@@ -620,14 +885,31 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
 
         tokens, start_pos, page_table = _read("tokens", 0), _read("start_pos", 1), _read("page_table", 2)
         remap = _read("slot_remap", 9)
-        narrow = "spec_mode" not in kwargs
-        if narrow:
-            return self._decode_narrow(tokens, start_pos, page_table, kwargs, remap)
+        # page_tables_per_layer is not read: the attention layers form one group whose table is page_table, and the
+        # GDN layers read their blocks from mamba_state.
+        mamba_state = kwargs.pop("mamba_state", None)
+        if mamba_state is None:
+            raise ValueError(
+                "Qwen36MTPContractForCausalLM keeps the GDN state in vLLM KV cache blocks and needs mamba_state"
+            )
+        if kwargs.get("reload_inputs", True) is not True or kwargs.get("reload_page_table", False):
+            raise ValueError(
+                f"Qwen36MTPContractForCausalLM stages every input from the host: reload_inputs="
+                f"{kwargs.get('reload_inputs')}, reload_page_table={kwargs.get('reload_page_table')}"
+            )
+        if "spec_mode" not in kwargs:
+            return self._decode_narrow(tokens, start_pos, page_table, kwargs, remap, mamba_state)
+        defer = not kwargs.get("read_from_device", True)
         num_valid_drafts = kwargs.pop("num_valid_drafts")
         accepted_counts = kwargs.pop("accepted_counts")
         spec_mode = kwargs.pop("spec_mode")
         check_spec_side_tensors(num_valid_drafts, accepted_counts, int(tokens.shape[0]), self._SPEC_K)
-        assert kwargs.get("page_tables_per_layer") is None, "per-layer page tables unsupported"
+        predecessor = kwargs.pop("spec_predecessor", None)
+        if predecessor is not None:
+            # A chained verify (supports_chained_spec_verify): the engine builds its rows from the unread verify.
+            if not isinstance(predecessor, VerifyOutput):
+                raise ValueError(f"spec_predecessor must be a VerifyOutput, got {type(predecessor).__name__}")
+            predecessor = predecessor.argmax_ids
         eng = self._ensure_ready()
         res = eng.decode_forward(
             tokens,
@@ -637,15 +919,38 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             page_table=self._table(page_table),
             spec_mode=spec_mode,
             slot_remap=remap,
+            mamba_state=mamba_state,
+            sampling=kwargs.get("sampling_params"),
+            defer=defer,
+            predecessor=predecessor,
         )
         logits = res.logits if spec_mode == "logits" else None
         return VerifyOutput(spec_mode=res.spec_mode, argmax_ids=res.argmax_ids, hidden=None, logits=logits)
 
-    def _decode_narrow(self, tokens, start_pos, page_table, kwargs, remap=None):
-        """Ordinary [B, 1] decode step (no drafts) run as a 1-column verify; ``accepted_counts`` resolves a
-        previous multi-token commit.
-        Returns host float logits [B, 1, V]: the runner host-samples ``tt_out[rows, -1, :]``
-        (model_runner.py:3276; async_decode.py:103 accepts a torch tensor as host output)."""
+    def read_decode_output(self, tt_out, async_read=False, **kwargs):
+        """A deferred verify's ids (PendingVerify): with ``async_read``, the handle and its read event, which
+        process_decode_output_host turns into host ids; else the host ids. Host outputs (an ordinary decode, a logits
+        verify) pass through with no event."""
+        from models.demos.blackhole.qwen36.tt.spec_engine import PendingVerify
+
+        if isinstance(tt_out, PendingVerify):
+            return (tt_out, [tt_out.event]) if async_read else tt_out.result()
+        return (tt_out, []) if async_read else tt_out
+
+    def process_decode_output_host(self, tt_out, is_tokens=False, **kwargs):
+        """The host ids [B, 1+K] int32 of a deferred verify (columns past a row's valid drafts -1)."""
+        from models.demos.blackhole.qwen36.tt.spec_engine import PendingVerify
+
+        return tt_out.result() if isinstance(tt_out, PendingVerify) else tt_out
+
+    def _decode_narrow(self, tokens, start_pos, page_table, kwargs, remap, mamba_state):
+        """Ordinary [B, 1] decode step (no drafts) run as a verify whose drafts are all padding: column 0's state goes
+        to windows[:, 0], as the plugin expects of an ordinary decode, and the drafter gets the verify's feed rows.
+        ``accepted_counts`` (a previous multi-token commit) is checked; the start state is start_blocks.
+        Host-sampled step: returns host float logits [B, 1, V], and the runner samples ``tt_out[rows, -1, :]``.
+        Device-sampled step (``sampling_params``): returns the tokens [B, 1] int32, column 0's device draw for a
+        sampled row and its argmax otherwise; with logprobs enabled, also the sampled tokens' raw logprobs and ranks
+        from the step's logits (``sampled_token_logprobs``)."""
         nv, ac = kwargs.get("num_valid_drafts"), kwargs.get("accepted_counts")
         B = int(tokens.shape[0])
         if nv is not None and bool(torch.as_tensor(nv).any()):
@@ -654,14 +959,14 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             from vllm_tt_plugin.spec_decode import check_spec_side_tensors
 
             check_spec_side_tensors(torch.zeros(B, dtype=torch.int32), ac, B, self._SPEC_K, call="decode")
-        # Contract 4d: an ordinary step after a multi-token commit carries the count; it picks the state slot.
         acc = torch.ones(B, dtype=torch.int32) if ac is None else torch.as_tensor(ac).reshape(B).to(torch.int32)
-        assert kwargs.get("page_tables_per_layer") is None, "per-layer page tables unsupported"
         K = self._SPEC_K
         tok = torch.full((B, K + 1), -1, dtype=torch.int32)
         tok[:, 0] = torch.as_tensor(tokens).reshape(B).to(torch.int32)
         pos = torch.full((B, K + 1), -1, dtype=torch.int32)
         pos[:, 0] = torch.as_tensor(start_pos).reshape(B).to(torch.int32)
+        sampling = kwargs.get("sampling_params")
+        logprobs = sampling is not None and enables_logprobs(sampling)
         eng = self._ensure_ready()
         res = eng.decode_forward(
             tok,
@@ -669,10 +974,18 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             num_valid_drafts=torch.zeros(B, dtype=torch.int32),
             accepted_counts=acc,
             page_table=self._table(page_table),
-            spec_mode="logits",
+            spec_mode="logits" if sampling is None or logprobs else "argmax_ids",
             slot_remap=remap,
+            mamba_state=mamba_state,
+            sampling=sampling,
+            one_enqueue=False,
         )
-        return res.logits[:, :1].float()
+        if sampling is None:
+            return res.logits[:, :1].float()
+        tokens = res.argmax_ids[:, :1].to(torch.int32)
+        if not logprobs:
+            return tokens
+        return tokens, sampled_token_logprobs(res.logits[:, 0], tokens[:, 0])
 
     def propose_draft_tokens(self, num_drafts, committed_tokens, committed_positions, accepted_counts, hidden=None):
         from vllm_tt_plugin.spec_decode import DraftOutput, check_spec_side_tensors
@@ -688,7 +1001,8 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         self._engine().release(int(slot))
 
     def note_state_slots_moved(self, moves):
-        """State moved with slot_remap in decode_forward; nothing to do."""
+        """The drafter's per-slot state and the slots' M-RoPE deltas moved with slot_remap in decode_forward (the same
+        move); nothing to do."""
 
     def release_persistent_capture(self):
         logger.info("[spec] release_persistent_capture: start")
