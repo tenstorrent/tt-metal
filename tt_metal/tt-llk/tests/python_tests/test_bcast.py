@@ -40,6 +40,7 @@ from helpers.test_variant_parameters import (
     NUM_TILES_IN_BLOCK,
     TEST_FACE_DIMS,
     TILE_COUNT,
+    generate_input_dim,
 )
 from helpers.tile_constants import get_tile_params
 from helpers.tile_shape import construct_tile_shape
@@ -198,6 +199,11 @@ def _run_unpack_bcast_test(
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
             NUM_BLOCKS(num_blocks),
             LOOP_FACTOR(loop_factor),
+            generate_input_dim(
+                input_dimensions,
+                input_dimensions,
+                tile_dimensions=tile_dimensions,
+            ),
         ],
         "variant_stimuli": StimuliConfig(
             src_A,

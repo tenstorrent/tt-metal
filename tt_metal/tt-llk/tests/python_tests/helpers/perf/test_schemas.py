@@ -15,8 +15,10 @@ from this catalog.
 
 PERF_TEST_SCHEMAS = {
     "perf_bcast": {
-        "version": 1,
+        "version": 2,
         "columns": [
+            "block_ct_dim",
+            "block_rt_dim",
             "broadcast_type",
             "dest_acc",
             "dest_sync",
@@ -29,6 +31,8 @@ PERF_TEST_SCHEMAS = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
+            "full_ct_dim",
+            "full_rt_dim",
             "input_num_blocks",
             "input_num_tiles_in_block",
             "loop_factor",
