@@ -1264,3 +1264,28 @@ def test_reshape_docstring_supported_inputs(dtype, layout, buffer_type, device):
     assert output.layout == layout
     assert output.memory_config().buffer_type == buffer_type
     assert_exact(ttnn.to_torch(input_tensor).reshape(1, 1, 100, 64), ttnn.to_torch(output))
+
+
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [
+        ((4,), (1, 1, 2, 2)),
+        ((1, 1, 2, 2), (4,)),
+        ((1, 3, 5, 7), (7, 5, 3)),
+        ((2, 32, 17), (2, 17, 32)),
+        ((1, 256, 1024), (1, 256, 16, 64)),
+        ((16, 33, 1), (176, 3, 1)),
+    ],
+)
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+def test_reshape_uint8(device, input_shape, output_shape, layout, memory_config):
+    torch_input = full_range_input(input_shape, ttnn.uint8)
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.uint8, layout=layout, device=device, memory_config=memory_config
+    )
+    output = ttnn.reshape(input_tensor, output_shape)
+
+    assert output.dtype == ttnn.uint8
+    assert output.layout == layout
+    assert_exact(torch_input.reshape(output_shape), ttnn.to_torch(output))

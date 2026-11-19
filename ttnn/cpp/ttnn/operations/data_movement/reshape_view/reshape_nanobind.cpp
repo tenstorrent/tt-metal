@@ -71,7 +71,7 @@ void bind_reshape_view_operation(nb::module_& mod) {
 
                    * - Dtypes
                      - Layouts
-                   * - BFLOAT16, FLOAT32, INT32, UINT32
+                   * - BFLOAT16, FLOAT32, INT32, UINT32, UINT8
                      - TILE, ROW_MAJOR
                    * - BFLOAT8_B, BFLOAT4_B
                      - TILE
