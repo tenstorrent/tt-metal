@@ -42,6 +42,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3 import k31_stage
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import TRACE_K31, resolve_trace
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import BLOCK_SIZE
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
+from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_mesh_params
 
 FIRST_LAYER, NUM_LAYERS = 0, 4
 # The runner's single 10K request (sc1): 10240 tokens.
@@ -52,9 +53,13 @@ ADAPTER = get_adapter(MODEL)
 
 
 def _device_params(profile):
+    # (the runner's mesh open: raised to the MoE block's payload and L1_SMALL when the block is the model's MoE)
+    payload, l1_small = moe_block_mesh_params(
+        ADAPTER.model_config, ADAPTER.fabric_payload_size(), ADAPTER.l1_small_size
+    )
     return profile(
-        fabric_payload_size=ADAPTER.fabric_payload_size(),
-        l1_small_size=ADAPTER.l1_small_size,
+        fabric_payload_size=payload,
+        l1_small_size=l1_small,
         trace_region_size=k31_stage.TRACE_REGION_SIZE,
     )
 
