@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from helpers.constraints import get_valid_eltwise_binary_math_fidelities
+from helpers.constraints import get_valid_math_fidelities
 from helpers.llk_params import DestAccumulation, DestSync, Transpose
 from helpers.param_config import parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES
@@ -29,10 +29,8 @@ PERF_LOOP_FACTOR = 32
     unpack_to_dest=[False],
     formats=get_base_perf_formats,
     broadcast_type=ELTWISE_BINARY_BROADCAST_TYPES,
-    math_op=lambda formats: get_eltwise_binary_math_ops(formats, is_perf=True),
-    math_fidelity=lambda formats, math_op: get_valid_eltwise_binary_math_fidelities(
-        formats, math_op
-    ),
+    mathop=lambda formats: get_eltwise_binary_math_ops(formats, is_perf=True),
+    math_fidelity=lambda formats, mathop: get_valid_math_fidelities(formats, mathop),
     transpose_srca=get_eltwise_binary_transpose,
     tile_dimensions=get_eltwise_binary_perf_tile_dimensions,
     input_dimensions=get_eltwise_binary_perf_input_dimensions,
@@ -48,7 +46,7 @@ def test_perf_eltwise_binary_broadcast(
     unpack_to_dest,
     formats,
     broadcast_type,
-    math_op,
+    mathop,
     math_fidelity,
     transpose_srca,
     tile_dimensions,
@@ -64,7 +62,7 @@ def test_perf_eltwise_binary_broadcast(
         unpack_to_dest,
         formats,
         broadcast_type,
-        math_op,
+        mathop,
         math_fidelity,
         transpose_srca,
         input_dimensions,
@@ -84,10 +82,8 @@ def test_perf_eltwise_binary_broadcast(
     unpack_to_dest=[False],
     formats=lambda: get_bfp4_formats(),
     broadcast_type=ELTWISE_BINARY_BROADCAST_TYPES,
-    math_op=BFP4_PERF_MATH_OPS,
-    math_fidelity=lambda formats, math_op: get_valid_eltwise_binary_math_fidelities(
-        formats, math_op
-    ),
+    mathop=BFP4_PERF_MATH_OPS,
+    math_fidelity=lambda formats, mathop: get_valid_math_fidelities(formats, mathop),
     transpose_srca=[Transpose.No],
     tile_dimensions=get_eltwise_binary_perf_tile_dimensions,
     input_dimensions=get_eltwise_binary_perf_input_dimensions,
@@ -103,7 +99,7 @@ def test_perf_eltwise_binary_bfp4_b_broadcast(
     unpack_to_dest,
     formats,
     broadcast_type,
-    math_op,
+    mathop,
     math_fidelity,
     transpose_srca,
     tile_dimensions,
@@ -119,7 +115,7 @@ def test_perf_eltwise_binary_bfp4_b_broadcast(
         unpack_to_dest,
         formats,
         broadcast_type,
-        math_op,
+        mathop,
         math_fidelity,
         transpose_srca,
         input_dimensions,

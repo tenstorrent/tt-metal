@@ -61,7 +61,8 @@ def _mla_cache_complete(cache_path: Path, prefix: str, layer_idx: int, model_cfg
 
     ``ttMLA.check_cache_complete`` is not enough here: it always wants ``mla.wkv_b1``, but a sparse layer at TP > 1
     loads wkv_b1 replicated and a runner-built cache holds only ``mla_repl.wkv_b1`` (test-built caches hold both);
-    and it checks no indexer files, which a ``full``-indexer layer needs (a ``shared`` one owns none).
+    and it checks no indexer files, which a ``full``-indexer layer needs (a ``shared`` one owns none). A replicated
+    layer whose cache holds only the TP-sharded ``mla.wkv_b1`` is complete too: ttMLA gathers the shards at load.
     """
     from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
     from models.demos.deepseek_v3_d_p.tt.mla.indexer import TtIndexer, indexer_layer_is_reused, resolve_has_indexer
@@ -73,8 +74,10 @@ def _mla_cache_complete(cache_path: Path, prefix: str, layer_idx: int, model_cfg
     owns_indexer = sparse and not indexer_layer_is_reused(hf_config, layer_idx)
     replicated = sparse and ttMLA.replicates_wkv_b1(hf_config, tp_factor, sparse)
     for name in ttMLA.weight_names(bool(getattr(model_cfg, "USE_OUTPUT_GATE", False))):
-        stem = f"{prefix}.mla_repl.{name}" if replicated and name == "wkv_b1" else f"{prefix}.mla.{name}"
-        if not pattern_exists(f"{stem}*.tensorbin", "MLA"):
+        stems = [f"{prefix}.mla.{name}"]
+        if replicated and name == "wkv_b1":
+            stems.insert(0, f"{prefix}.mla_repl.{name}")
+        if not any(pattern_exists(f"{stem}*.tensorbin", "MLA") for stem in stems):
             return False
     return not owns_indexer or TtIndexer.check_cache_complete(cache_path, f"{prefix}.mla")
 
