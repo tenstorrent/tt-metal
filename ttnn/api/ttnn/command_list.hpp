@@ -53,6 +53,7 @@ using CmdListOpOwnedTensors = std::vector<std::shared_ptr<const std::vector<tt::
 // Records TTNN device operations into a command list instead of launching them.
 // Only Metal 2.0 (ProgramSpec) programs can be recorded. Nothing needs to run before recording: recording compiles
 // each workload and uploads its kernel binaries.
+// Any error while recording invalidates the recording: call clear() and record again.
 // Not movable: the recording thread holds a pointer to it.
 class CommandListBuilder {
 public:
@@ -75,8 +76,8 @@ public:
     // exception calls mark_failed().
     [[nodiscard]] ScopeGuard record_scope();
 
-    // Marks the recording incomplete. An error while recording can leave part of an operation recorded, such as the
-    // first steps of a composite op. begin_recording() and build() then throw until clear().
+    // Marks the recording invalid after an error while recording, which can leave part of an operation recorded, such
+    // as the first steps of a composite op. begin_recording() and build() then throw until clear().
     void mark_failed();
 
     // Builds an independent command list bound to cq_id. Defaults to the calling thread's current command queue.

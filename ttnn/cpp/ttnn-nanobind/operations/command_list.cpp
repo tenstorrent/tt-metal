@@ -71,9 +71,10 @@ void py_module_types(nb::module_& mod) {
         Only one builder may exist per mesh device, and no trace can be captured while a builder or command list
         exists.
 
-        An error while recording can leave part of an operation recorded, such as the first steps of a composite op.
-        After any error raised by an operation inside ``with builder:``, even one caught inside the block, or any
-        exception that leaves the block, recording again and ``build()`` raise until ``clear()``.
+        Any error while recording invalidates the recording, including a rejected operation: a composite op may have
+        recorded some of its steps before failing. Do not catch an error and keep recording; call ``clear()`` and
+        record again. After an operation fails or an exception leaves ``with builder:``, recording again and
+        ``build()`` raise until ``clear()``.
 
         Args:
             mesh_device (ttnn.MeshDevice): Mesh device to record on.
