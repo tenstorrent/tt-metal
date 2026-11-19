@@ -240,8 +240,11 @@ def main() -> None:
             res.append(run_prompt("R2", "X", "off"))
             res.append(run_prompt("R2", name, "off", digest=True))
     if "P" in PHASES:
+        # PREFIX_CHECK_P_DIGEST=1 (WS4 whole-chunk trace gate): digest the long prompts too (export + model rows + slab +
+        # Engram over [0, S)), so a build's long-prompt digests compare byte for byte with another build's
+        p_digest = os.environ.get("PREFIX_CHECK_P_DIGEST", "0") == "1"
         for name in PROFILE_NAMES:
-            res.append(run_prompt("P", name, "off", timeout_s=7200.0))
+            res.append(run_prompt("P", name, "off", digest=p_digest, timeout_s=7200.0))
     if "S2" in PHASES:
         log(f"S2 expected per-chunk patterns at chunk {CHUNK} (s2_plan dry run): {list(zip(S2, EXPECT_S2))}")
         res.append(run_prompt("S2", "X", "clear"))  # the store emptied, X computed (and stored)
