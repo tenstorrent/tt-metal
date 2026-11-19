@@ -73,6 +73,20 @@ def _seed_rng():
 
 _CPP_SOURCE = "sources/quasar/eltwise_binary_sfpu_quasar_test.cpp"
 
+# The Int32 members share the BinaryOp enumerator of their float counterpart; the kernel picks the
+# integer path from the math format.
+_INT32_BINARY_OP = {
+    MathOperation.SfpuMulInt32: "MUL",
+    MathOperation.SfpuMaxInt32: "MAX",
+    MathOperation.SfpuMinInt32: "MIN",
+}
+
+
+def _binary_op(mathop):
+    """The ckernel::BinaryOp enumerator the Quasar kernel dispatches ``mathop`` to."""
+    return _INT32_BINARY_OP.get(mathop, mathop.cpp_enum_value)
+
+
 # Shared (src0_idx, src1_idx, dst_idx) tile-index variants exercised by every
 # binary SFPU family
 _TILE_INDEX_VARIANTS = [(0, 1, 0), (2, 3, 0)]
@@ -335,7 +349,7 @@ def _prepare_int_stimuli(
 _INT31_MAX = 2**31 - 1
 
 _INT_CLAMP = {
-    MathOperation.SfpuElwmulInt: 1000,
+    MathOperation.SfpuMulInt32: 1000,
     MathOperation.SfpuGcd: _INT31_MAX,
 }
 
@@ -345,7 +359,7 @@ INT_SWEEP = dict(
     dest_acc=[DestAccumulation.Yes],
     mathop=[
         MathOperation.SfpuElwadd,
-        MathOperation.SfpuElwmulInt,
+        MathOperation.SfpuMulInt32,
         MathOperation.SfpuElwGt,
         MathOperation.SfpuElwLt,
         MathOperation.SfpuElwLe,
@@ -380,7 +394,7 @@ def test_eltwise_binary_sfpu_int_quasar(
     perf_report=None,
 ):
     """Binary SFPU integer ops (add, mul, gt, lt, le, ge, copy_dest, gcd, lcm), Int32."""
-    binary_op = mathop.cpp_enum_value
+    binary_op = _binary_op(mathop)
     # GCD excludes INT_MIN: SFPABS saturates it.
     clamp_inputs = _INT_CLAMP.get(mathop)
     _run_sfpu_binary_llk_golden(
@@ -1053,36 +1067,42 @@ def prepare_binary_max_min_inputs(src_A, src_B, input_format, output_format):
     return in0, in1
 
 
-MAX_MIN_FLAT_NAMES = ("formats", "dest_acc", "is_max_op", "input_dimensions")
+MAX_MIN_FLAT_NAMES = ("formats", "dest_acc", "mathop", "input_dimensions")
 _MAX_MIN_INPUT_DIMENSIONS = [[32, 32]]
 
 
-def _generate_max_min_combinations(formats_list: List[InputOutputFormat]):
-    """Generate (formats, dest_acc, is_max_op, input_dimensions) for each resolved max/min route."""
+def _generate_max_min_combinations(formats_list: List[InputOutputFormat], mathops):
+    """Generate (formats, dest_acc, mathop, input_dimensions) for each resolved max/min route."""
     return [
-        (variant.formats, variant.dest_acc, is_max_op, input_dimensions)
+        (variant.formats, variant.dest_acc, mathop, input_dimensions)
         for variant in generate_quasar_sfpu_format_variants(
             MathOperation.SfpuBinaryMax, formats_list
         )
-        for is_max_op in [True, False]
+        for mathop in mathops
         for input_dimensions in _MAX_MIN_INPUT_DIMENSIONS
     ]
 
 
 MAX_MIN_FLOAT_SWEEP = flat_axes(
     MAX_MIN_FLAT_NAMES,
-    _generate_max_min_combinations(SFPU_BINARY_MAX_MIN_FLOAT_FORMATS),
+    _generate_max_min_combinations(
+        SFPU_BINARY_MAX_MIN_FLOAT_FORMATS,
+        [MathOperation.SfpuBinaryMax, MathOperation.SfpuBinaryMin],
+    ),
 )
 MAX_MIN_INT32_SWEEP = flat_axes(
     MAX_MIN_FLAT_NAMES,
-    _generate_max_min_combinations(SFPU_BINARY_MAX_MIN_INT32_FORMATS),
+    _generate_max_min_combinations(
+        SFPU_BINARY_MAX_MIN_INT32_FORMATS,
+        [MathOperation.SfpuMaxInt32, MathOperation.SfpuMinInt32],
+    ),
 )
 
 
 def _run_max_min(
     formats,
     dest_acc,
-    is_max_op,
+    mathop,
     input_dimensions,
     spec,
     tile_indices,
@@ -1099,7 +1119,8 @@ def _run_max_min(
     assert (
         format_variant is not None
     ), f"no Quasar SFPU route for {formats} dest_acc={dest_acc}"
-    binary_op = "MAX" if is_max_op else "MIN"
+    binary_op = _binary_op(mathop)
+    is_max_op = mathop in (MathOperation.SfpuBinaryMax, MathOperation.SfpuMaxInt32)
     src0_idx, src1_idx, dst_idx = tile_indices
     num_faces = MAX_NUM_FACES
 
@@ -1211,7 +1232,7 @@ def _run_max_min(
     assert len(res_from_L1) == len(golden_tensor)
     res_tensor = torch.tensor(res_from_L1, dtype=output_torch_fmt)
     assert passed_test(golden_tensor, res_tensor, formats.output_format), (
-        f"max/min failed for is_max_op={is_max_op}, "
+        f"max/min failed for {mathop.name}, "
         f"format={formats.input_format}->{formats.output_format}, dest_acc={dest_acc}"
     )
 
@@ -1224,7 +1245,7 @@ def _run_max_min(
 def test_eltwise_binary_sfpu_max_min_float_quasar(
     formats,
     dest_acc,
-    is_max_op,
+    mathop,
     input_dimensions,
     tile_indices,
     *,
@@ -1238,7 +1259,7 @@ def test_eltwise_binary_sfpu_max_min_float_quasar(
     _run_max_min(
         formats,
         dest_acc,
-        is_max_op,
+        mathop,
         input_dimensions,
         spec,
         tile_indices,
@@ -1258,7 +1279,7 @@ def test_eltwise_binary_sfpu_max_min_float_quasar(
 def test_eltwise_binary_sfpu_max_min_int32_quasar(
     formats,
     dest_acc,
-    is_max_op,
+    mathop,
     input_dimensions,
     tile_indices,
     *,
@@ -1273,7 +1294,7 @@ def test_eltwise_binary_sfpu_max_min_int32_quasar(
     _run_max_min(
         formats,
         dest_acc,
-        is_max_op,
+        mathop,
         input_dimensions,
         spec,
         tile_indices,
