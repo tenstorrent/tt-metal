@@ -44,14 +44,18 @@ HF_HOME=/localdev/ctr-mdukic/hf_data HF_HUB_OFFLINE=1 python_env/bin/python \
 - **sampled:** the official sampler with seed 0, using upstream defaults (temperature 0.6, top-p 0.98,
   256 new tokens, 10 Euler steps). Its CoT, cut at the anchor by `make_forced_cot`, is
   `<NOMINAL>\n<|traj_future_start|>`, which is 6 tokens.
-- **long_forced:** a 128-token CoT forced through the same official path by a logits processor. It is
-  127 tokens of fixed driving text plus the anchor. It checks decode positions and expert attention over
-  a long CoT.
+- **long_forced:** `forced_cot.driving_text_cot(cfg)` forced through the same official path by a logits
+  processor. It is 128 tokens: 127 tokens of fixed driving text plus the anchor. It checks decode
+  positions and expert attention over a long CoT. The TT decode, expert and e2e tests import the same
+  CoT from `forced_cot.py`.
 
 `compare` teacher-forces each CoT through `ReferenceModel.decode`. It runs the expert on the official
 noise, and on each official Euler-step input for the per-step velocities. Inputs must match bitwise.
-Each tensor must have PCC ≥ 0.99999. The script also reports max-abs error and max-rel error, which is
-max-abs divided by the official tensor's max magnitude. The two stacks are not bitwise equal because they
+Each tensor must have PCC ≥ 0.99999 and max-rel error ≤ 1e-3. Max-rel error is max-abs divided by the
+official tensor's max magnitude; it catches the global scale or offset errors that PCC cannot see. The
+script also reports max-abs error. `compare` fails if the dump lacks either case or the layer 0 / 27
+K/V, if the long_forced CoT differs from `driving_text_cot`, or if it runs other than the expected 26
+tensor checks. The two stacks are not bitwise equal because they
 order ops differently: the reference uses eager matmul attention and the official stack uses SDPA.
 
 ## Results

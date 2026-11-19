@@ -36,14 +36,13 @@ from models.experimental.alpamayo2_edge.reference.inputs import synthetic_sample
 SAMPLE_SEED = 0
 # Seeds torch's global RNG (CoT sampling) and the diffusion generator, as `alpamayo2_edge.inference.predict` does.
 OFFICIAL_SEED = 0
-# Text tokens of a teacher-forced CoT before its anchor: the fallback when the official sample has no anchor, and
-# the long forced case.
-FORCED_COT_TEXT_TOKENS = 127
-LONG_COT_TEXT = (
-    "The ego vehicle keeps its lane and continues straight at a steady speed, since the road ahead is clear and "
-    "no other agents are close. "
-)
 PCC_MIN = 0.99999
+# PCC is blind to a global scale or offset; measured max_rel is <= 1.1e-5.
+MAX_REL = 1e-3
+MISSING_ANCHOR = "No <traj_future_start> token found"
+CASES = ("sampled", "long_forced")
+# Two vision checks, then per case: prefill logits, 2 CoT logits, K/V of 2 layers, 2 velocities, actions, xyz, rot.
+EXPECTED_CHECKS = 2 + 12 * len(CASES)
 DUMP_FILE = "official.pt"
 
 
@@ -180,6 +179,8 @@ def _run_official(model, prepared: dict, forced: torch.Tensor | None, kv_layers:
         rec.update(xyz=xyz.detach().clone(), rot=rot.detach().clone(), error=None)
     except ValueError as exc:
         # A sampled CoT without the anchor fails after generation; the sequences are already recorded.
+        if MISSING_ANCHOR not in str(exc) or "sequences" not in rec:
+            raise
         rec["error"] = str(exc)
     finally:
         for hook in hooks:
@@ -194,7 +195,8 @@ def dump(out_dir: Path) -> None:
     from alpamayo2_edge.helper import prepare_model_inputs
     from alpamayo2_edge.models.utils import fuse_traj_tokens
 
-    from models.experimental.alpamayo2_edge.reference.config import resolve_model_dir
+    from models.experimental.alpamayo2_edge.reference.config import load_config, resolve_model_dir
+    from models.experimental.alpamayo2_edge.reference.forced_cot import DRIVING_COT_TEXT_TOKENS, driving_text_cot
     from models.experimental.alpamayo2_edge.reference.model import make_forced_cot
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -263,14 +265,12 @@ def dump(out_dir: Path) -> None:
         if sampled["error"] is None:
             cases["sampled"] = (sampled, make_forced_cot(sampled_cot, anchor), "official sampled CoT up to its anchor")
         else:
-            forced = make_forced_cot(sampled_cot[:FORCED_COT_TEXT_TOKENS], anchor)
-            source = f"official sampled CoT had no anchor; its first {FORCED_COT_TEXT_TOKENS} tokens + anchor"
+            forced = make_forced_cot(sampled_cot[:DRIVING_COT_TEXT_TOKENS], anchor)
+            source = f"official sampled CoT had no anchor; its first {DRIVING_COT_TEXT_TOKENS} tokens + anchor"
             cases["sampled"] = (run_case("sampled CoT, truncated + anchor", forced), forced, source)
 
-        # A long teacher-forced CoT checks decode positions and expert attention over many CoT rows.
-        text_ids = model.tokenizer(LONG_COT_TEXT * 8, add_special_tokens=False, return_tensors="pt").input_ids[0]
-        forced = make_forced_cot(text_ids[:FORCED_COT_TEXT_TOKENS], anchor)
-        source = f"teacher-forced: {FORCED_COT_TEXT_TOKENS} tokens of fixed driving text + anchor"
+        forced = driving_text_cot(load_config(model_dir))
+        source = f"teacher-forced driving_text_cot: {forced.shape[0] - 1} text tokens + anchor"
         cases["long_forced"] = (run_case("long forced CoT", forced), forced, source)
 
         result = {
@@ -347,6 +347,9 @@ def check_case(name, case, model, inp, prompt_cache, check, failures, beat) -> N
     check(f"[{name}] forced-CoT logits ({steps} steps)", cot.logits[0], official_logits)
     worst = min(range(steps), key=lambda i: tensor_stats(cot.logits[0, i], official_logits[i])["pcc"])
     check(f"[{name}] forced-CoT logits, worst step {worst}", cot.logits[0, worst], official_logits[worst])
+    last = model.cfg.text.layers - 1
+    if set(case["kv"]) != {0, last}:
+        failures.append(f"[{name}] dump has K/V of layers {sorted(case['kv'])}, expected [0, {last}]")
     for layer, (k, v) in case["kv"].items():
         check(f"[{name}] K layer {layer} ({k.shape[2]} rows)", cache.k[layer], k)
         check(f"[{name}] V layer {layer} ({v.shape[2]} rows)", cache.v[layer], v)
@@ -370,6 +373,7 @@ def check_case(name, case, model, inp, prompt_cache, check, failures, beat) -> N
 
 def compare(dump_dir: Path) -> None:
     from models.experimental.alpamayo2_edge.reference.config import load_config, num_layers_override, resolve_model_dir
+    from models.experimental.alpamayo2_edge.reference.forced_cot import driving_text_cot
     from models.experimental.alpamayo2_edge.reference.inputs import prepare_sample_inputs
     from models.experimental.alpamayo2_edge.reference.model import ReferenceModel
 
@@ -414,10 +418,12 @@ def compare(dump_dir: Path) -> None:
 
         def check(name: str, ours: torch.Tensor, official: torch.Tensor) -> None:
             stats = tensor_stats(ours, official)
-            ok = stats["pcc"] >= PCC_MIN
+            ok = stats["pcc"] >= PCC_MIN and stats["max_rel"] <= MAX_REL
             rows.append({"name": name, "shape": list(ours.shape), **stats, "pass": ok})
-            if not ok:
+            if stats["pcc"] < PCC_MIN:
                 failures.append(f"{name}: PCC {stats['pcc']:.7f} < {PCC_MIN}")
+            if stats["max_rel"] > MAX_REL:
+                failures.append(f"{name}: max_rel {stats['max_rel']:.3e} > {MAX_REL}")
             log(
                 f"{name:<48} 1 - pcc {1 - stats['pcc']:.1e}  max_abs {stats['max_abs']:.3e}  "
                 f"max_rel {stats['max_rel']:.3e}  {'ok' if ok else 'FAIL'}"
@@ -438,6 +444,11 @@ def compare(dump_dir: Path) -> None:
         beat.stage = "reference prefill"
         log(beat.stage)
         logits, prompt_cache = model.prefill(inp)
+        if tuple(off["cases"]) != CASES:
+            failures.append(f"dump has cases {list(off['cases'])}, expected {list(CASES)}")
+        long_cot = off["cases"].get("long_forced", {}).get("forced_cot")
+        if long_cot is None or not torch.equal(long_cot, driving_text_cot(cfg)):
+            failures.append("the dump's long_forced CoT is not driving_text_cot(cfg)")
         for name, case in off["cases"].items():
             check(f"[{name}] prefill last logits", logits, case["step_logits"][:1])
             check_case(name, case, model, inp, prompt_cache, check, failures, beat)
@@ -446,10 +457,12 @@ def compare(dump_dir: Path) -> None:
     report["cases"] = {name: case["cot_source"] for name, case in off["cases"].items()}
     (dump_dir / "compare.json").write_text(json.dumps(report, indent=2) + "\n")
     log(f"wrote {dump_dir / 'compare.json'}")
+    if len(rows) != EXPECTED_CHECKS:
+        failures.append(f"ran {len(rows)} tensor checks, expected {EXPECTED_CHECKS}")
     if failures:
         log("FAILED:\n  " + "\n  ".join(failures))
         sys.exit(1)
-    log(f"PASSED: inputs bitwise equal, every tensor PCC >= {PCC_MIN}")
+    log(f"PASSED: inputs bitwise equal, {len(rows)} tensors with PCC >= {PCC_MIN} and max_rel <= {MAX_REL}")
 
 
 def main() -> None:
