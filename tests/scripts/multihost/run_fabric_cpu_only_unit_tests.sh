@@ -13,7 +13,7 @@
 #     Runs one group only (same as a single CI matrix job).
 #     Groups: unit, phys-grouping, control-plane, t3k, wh-galaxy,
 #       bh-6u, bh-single-galaxy, bh-dual-galaxy,
-#       bh-subtorus, bh-subtorus-sc16, bh-subtorus-sc20, bh-fsd-reliability, bh-sp4-glx, bh-blitz-decode, bh-pod-pipeline, bh-ring-stress, bh-heterogeneous, pipeline-placement, bh-misc,
+#       bh-subtorus, bh-subtorus-sc16, bh-subtorus-sc20, bh-fsd-reliability, bh-sp4-glx, bh-blitz-decode, bh-pod-pipeline, bh-ring-stress, bh-heterogeneous, pipeline-placement, bh-misc, fabric-builder,
 #       teardown-sanity-mpi
 #   Parallel (all groups at once):
 #     ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --parallel
@@ -311,7 +311,7 @@ done
 
 CURRENT_GROUP="$GROUP"
 
-VALID_GROUPS="all unit phys-grouping control-plane t3k wh-galaxy bh-6u bh-single-galaxy bh-dual-galaxy bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-fsd-reliability bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-heterogeneous pipeline-placement bh-misc teardown-sanity-mpi"
+VALID_GROUPS="all unit phys-grouping control-plane t3k wh-galaxy bh-6u bh-single-galaxy bh-dual-galaxy bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-fsd-reliability bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-heterogeneous pipeline-placement bh-misc fabric-builder teardown-sanity-mpi"
 if ! echo "$VALID_GROUPS" | tr ' ' '\n' | grep -qx "$GROUP"; then
   echo "Invalid --group value '$GROUP'. Valid groups: $VALID_GROUPS" >&2; exit 1
 fi
@@ -323,7 +323,7 @@ if [[ "$GROUP" == "all" && "$PARALLEL" -eq 1 ]]; then
   GROUPS=(
     unit phys-grouping control-plane t3k wh-galaxy
     bh-6u bh-single-galaxy bh-dual-galaxy
-    bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-fsd-reliability bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-heterogeneous pipeline-placement bh-misc
+    bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-fsd-reliability bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-heterogeneous pipeline-placement bh-misc fabric-builder
     teardown-sanity-mpi )
   tmpdir=$(mktemp -d)
   trap 'rm -rf "$tmpdir"' EXIT
@@ -368,6 +368,8 @@ run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Strea
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricStaticSizedChannelsAllocatorTest.*"
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/blackhole/p100_cluster_desc/p100_cluster_desc.yaml ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricStaticSizedChannelsAllocatorTest.*"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricSlotAllocatorTest.*:FabricTridAllocatorTest.*"
+# Per-router channel layouts and the fabric graph (host-only; the mock builds are in fabric-builder).
+run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="RouterChannelLayoutsTest.*:FabricLaunchGateTest.*:FabricGraph*"
 
 # LogicalToPhysicalConversionFixture used to be run here. Its file,
 # fabric_router/test_control_plane_logical_to_physical.cpp, is in no sources.cmake and does not
@@ -1202,5 +1204,13 @@ TT_FABRIC_TEST_TIMEOUT=2000s run_test python3 -m pytest tests/tt_metal/distribut
 run_test python3 -m pytest tests/ttnn/distributed/test_ttrun.py::TestJobOwnership -v -p no:cacheprovider -p no:benchmark
 
 fi # teardown-sanity-mpi
+
+# Fabric builder: routers built (kernels compiled) on a QuietBox 2 mock, graph builder and stock
+######################################
+if run_group "fabric-builder"; then
+
+run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/blackhole/bh_qb2_p300_cluster_desc/bh_qb2_p300_cluster_desc.yaml ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="RouterLayoutMockTest.*:*GraphFabricMock*"
+
+fi # fabric-builder
 
 print_failure_summary

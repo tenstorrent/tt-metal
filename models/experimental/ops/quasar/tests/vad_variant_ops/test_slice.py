@@ -41,6 +41,8 @@ CASES = [
 @pytest.mark.parametrize("shape, begins, ends, layout, dt, mem", CASES)
 def test_slice(ttnn_mesh_device, reset_seeds, shape, begins, ends, layout, dt, mem):
     mesh = ttnn_mesh_device
+    if U.is_quasar() and dt == "bfp8":
+        dt = "bf16"  # Quasar has no block-float DFB formats (its set is MX)
     x_torch = U.torch_rand(shape, dtype=torch.float32 if dt == "fp32" else torch.bfloat16)
     x = U.to_tt_mem(x_torch, mesh, mem, dtype=U.DTYPES[dt], layout=layout)
     src = U.seen(x, x_torch, mesh)

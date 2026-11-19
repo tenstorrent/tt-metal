@@ -184,10 +184,6 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreBlockInter
 
     uint32_t total_num_rows = a.logical_shape()[-2];
 
-    if (output.padded_shape()[-2] > tt::round_up(total_num_rows, tile_height)) {
-        total_num_rows = output.padded_shape()[-2];
-    }
-
     // One reader and one writer per buffer set, each over that set's cores and bound to that set's
     // buffers. A set's cores are exactly the cores whose block width its buffers are sized for, so
     // every instance's raw block write lands in a buffer that is an exact multiple of it. The set's
@@ -308,6 +304,11 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreBlockInter
             ComputeHardwareConfig compute_cfg_gen2;
             compute_cfg_gen2.enable_32_bit_dest = compute_cfg.enable_32_bit_dest;
             compute_cfg_gen2.unpack_modes = compute_cfg.unpack_modes;  // TODO(#52269): copied from WH/BH
+            // Quasar unpacks Int32 only into DEST.
+            if (a.dtype() == DataType::INT32) {
+                compute_cfg_gen2.enable_32_bit_dest = true;
+                compute_cfg_gen2.unpack_modes.insert({in_dfb_of(set), UnpackMode::UnpackToDest});
+            }
             compute_hw = compute_cfg_gen2;
         }
 
