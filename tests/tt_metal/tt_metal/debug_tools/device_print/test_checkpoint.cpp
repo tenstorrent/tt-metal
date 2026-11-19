@@ -41,6 +41,13 @@ constexpr uint32_t NUM_CORES = 2;
 // Fixture: DevicePrintFixture with checkpoint enabled
 class DevicePrintCheckpointTest : public DevicePrintFixture {
 protected:
+    void SetUp() override {
+        DevicePrintFixture::SetUp();
+        if (this->arch_ == tt::ARCH::QUASAR) {
+            GTEST_SKIP() << "Quasar: this test builds its kernels with CreateKernel(), which Quasar rejects; it needs "
+                            "porting to experimental::ProgramSpec";
+        }
+    }
     void ExtraSetUp() override {
         auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
         checkpoint_previous_ = rtoptions.get_checkpoint_enabled();

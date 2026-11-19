@@ -206,7 +206,16 @@ uint32_t run_once_sfpu(
 
 }  // namespace
 
-class CbHashTest : public DevicePrintFixture {};
+class CbHashTest : public DevicePrintFixture {
+protected:
+    void SetUp() override {
+        DevicePrintFixture::SetUp();
+        if (this->arch_ == tt::ARCH::QUASAR) {
+            GTEST_SKIP() << "Quasar: this test builds its kernels with CreateKernel(), which Quasar rejects; it needs "
+                            "porting to experimental::ProgramSpec";
+        }
+    }
+};
 
 // ---------- hash_cb_trisc: scalar FNV-1a-32 ----------
 

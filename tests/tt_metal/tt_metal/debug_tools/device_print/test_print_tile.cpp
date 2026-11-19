@@ -175,7 +175,16 @@ struct TestParams {
 };
 
 class DevicePrintTileFixture : public DevicePrintSeparateFilesFixture,
-                               public ::testing::WithParamInterface<TestParams> {};
+                               public ::testing::WithParamInterface<TestParams> {
+protected:
+    void SetUp() override {
+        DevicePrintSeparateFilesFixture::SetUp();
+        if (this->arch_ == tt::ARCH::QUASAR) {
+            GTEST_SKIP() << "Quasar: this test builds its kernels with CreateKernel(), which Quasar rejects; it needs "
+                            "porting to experimental::ProgramSpec";
+        }
+    }
+};
 
 INSTANTIATE_TEST_SUITE_P(
     DevicePrintTileTests,
