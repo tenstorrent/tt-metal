@@ -81,7 +81,7 @@ constexpr uint32_t kWriterKernelIndex = 1;
 constexpr uint32_t kComputeKernelIndex = 2;
 // Q blocks a core may hold in L1 at once (the kernels' per-block state is a 32-bit bitmask).
 constexpr uint32_t kResidentMaxSlots = 32;
-// CBs start above the cores' persistent L1 (e.g. global semaphores), which the L1 capacity does not subtract.
+// CBs start above persistent L1 (e.g. global semaphores), which available_program_l1_capacity does not count.
 constexpr uint64_t kPersistentL1Reserve = 16 * 1024;
 
 // The all-gather appends reader-forward, writer-forward, reader-backward, writer-backward after the three SDPA kernels.
@@ -928,7 +928,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
                                         : std::numeric_limits<uint32_t>::max();  // inactive
         return l;
     };
-    // Each CB is placed at the DRAM alignment, so it takes its padding too.
+    // CBs are placed at the DRAM alignment.
     const uint64_t cb_alignment = mesh_device->allocator()->get_alignment(tt::tt_metal::BufferType::DRAM);
     const auto cb_bytes_for_slots = [&](uint32_t slots, uint32_t kv_pages, bool pairs) -> uint64_t {
         uint64_t bytes = 0;

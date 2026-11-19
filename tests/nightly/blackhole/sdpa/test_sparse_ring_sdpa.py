@@ -754,21 +754,20 @@ def test_heads_differ(runtime):
 
 
 def test_tight_l1(runtime):
-    """With L1 filled until the op only just fits, its CBs (placed above persistent L1, each at the DRAM alignment)
-    stay clear of the lowest L1 buffer."""
+    """With L1 filled until the op only just fits, its CBs still clear the lowest L1 buffer."""
     case = Case(runtime, RAGGED["r1184k256"])
     mask = make_mask(case.geo, case.S, case.H, density=0.2, seed=5)
     q, k, v = case.inputs(5)
     dev = runtime.mesh_device
     grid = dev.compute_with_storage_grid_size()
-    row_bytes = 32  # one uint32 row-major page of 8 values
+    row_bytes = 32
 
     def run_with_l1_filled(bytes_per_bank, **kwargs):
         rows = max(1, bytes_per_bank // row_bytes) * grid.x * grid.y
         filler = ttnn.allocate_tensor_on_device(
             ttnn.Shape((1, 1, rows, row_bytes // 4)), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, dev, ttnn.L1_MEMORY_CONFIG
         )
-        dev.disable_and_clear_program_cache()  # a cached program keeps the CB depths of the call that built it
+        dev.disable_and_clear_program_cache()  # the CB depths are not in the program hash
         dev.enable_program_cache()
         try:
             return case.run(q, k, v, mask, want_dense=False, **kwargs)
