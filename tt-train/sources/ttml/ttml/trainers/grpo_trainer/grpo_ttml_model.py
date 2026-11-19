@@ -4,9 +4,10 @@
 
 """Setup and weight export for the ttml Llama and Qwen3 models that GRPO trains.
 
-:func:`setup_ttml_model` opens the device and builds the model and tokenizer from
-a HuggingFace ID or local directory. :class:`GRPOTrainer` calls it and owns the
-result; rollout samplers receive the model and tokenizer from the trainer.
+:func:`setup_ttml_model` builds the model and tokenizer from a HuggingFace ID or
+local directory, opening the device unless the caller already did. :class:`GRPOTrainer`
+calls it and owns the result; rollout samplers receive the model and tokenizer from
+the trainer.
 
 :func:`weights_ref_hf_dict` exports a ttml model's parameters as an HF-keyed dict of
 on-device ``ttnn.Tensor`` handles, the wire format consumed by tt-transformers'
@@ -107,14 +108,24 @@ def load_hf_state_dict(model_source: str) -> dict:
 
 
 def setup_ttml_model(
-    transformer_config: TransformerConfig, device_config: DeviceConfig, model_source: str
+    transformer_config: TransformerConfig,
+    device_config: DeviceConfig,
+    model_source: str,
+    *,
+    device: Optional[Any] = None,
 ) -> Tuple[Any, Any]:
-    """Open the device and build the ttml model and tokenizer.
+    """Build the ttml model and tokenizer, opening the device unless one is given.
 
     The model family comes from ``transformer_config.model_type`` (``"llama"`` or
     ``"qwen3"``). Both take the architecture from the HF config of ``model_source``;
     ``transformer_config`` sets ``max_sequence_length``, ``runner_type`` and, for
     Llama, ``dropout_prob``.
+
+    ``device`` is a ``ttnn.MeshDevice`` the caller already opened. Fabric starts
+    disabled, so the default path enables it once inside :func:`open_device`. A
+    2-rank job pins fabric on both ranks before either opens a device; that caller
+    opens the device itself and passes it here, and this function does not touch
+    the fabric config.
 
     Returns:
         ``(model, tokenizer)``.
@@ -124,7 +135,8 @@ def setup_ttml_model(
         raise ValueError(f"setup_ttml_model: model_type must be one of {_SUPPORTED_KINDS}, got {model_kind!r}")
 
     _reject_old_checkpoint_format(model_source)
-    open_device(model_kind, device_config)
+    if device is None:
+        open_device(model_kind, device_config)
     if model_kind == "llama":
         return _build_llama(transformer_config, device_config, model_source)
     return _build_qwen3(transformer_config, device_config, model_source)
@@ -137,11 +149,12 @@ def open_device(model_kind: str, device_config: DeviceConfig) -> Any:
     so an ``"fsdp"`` axis exists. Tests may override this to reuse an
     already-open device.
 
-    Llama leaves an already-set fabric config alone: in a 2-rank job both ranks
-    pin it before opening devices, and setting it again on one rank deadlocks.
+    A multi-device Llama mesh enables fabric here. Fabric starts disabled, and a
+    caller that already configured it opens the device itself and passes it to
+    :func:`setup_ttml_model`.
     """
     if model_kind == "llama":
-        if device_config.total_devices() > 1 and ttnn.get_fabric_config() == ttnn.FabricConfig.DISABLED:
+        if device_config.total_devices() > 1:
             ttml.core.distributed.enable_fabric(device_config.total_devices())
         autograd_ctx = ttml.autograd.AutoContext.get_instance()
         autograd_ctx.open_device(device_config.mesh_shape, device_config.device_ids)

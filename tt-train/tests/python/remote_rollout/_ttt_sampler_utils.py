@@ -40,32 +40,8 @@ def load_device_config(device_config_rel: str = TTML_DEVICE_CONFIG_REL):
     return DeviceConfig(raw), raw
 
 
-def open_device(device_config) -> Any:
-    """Open the ttml ``AutoContext`` mesh (enabling fabric when multi-device);
-    return the ``ttnn.MeshDevice``. Pair with :func:`close_device`.
-
-    Only enables fabric when it isn't already configured. Under tt-run the
-    remote_rollout ``conftest.py`` ``_set_fabric_2d`` fixture, which must
-    be requested via ``pytest.mark.usefixtures``, sets FABRIC_2D
-    on every rank before the test body runs; calling ``enable_fabric`` again from just
-    this rank (asymmetrically with the peer rank, which reaches the same
-    ControlPlane through ``ttnn.open_mesh_device``) triggers the non-idempotent
-    ``SetFabricConfig`` reinit branch in ``MetalEnvImpl::set_fabric_config``.
-    That branch calls ``initialize_control_plane_impl`` → new ``ControlPlane``
-    → ``run_physical_system_discovery`` (extra ``MPI_Barrier``), which the peer
-    rank never makes, and hangs ``init_control_plane``. The proper fix is to
-    make ``SetFabricConfig(same_value)`` idempotent upstream in metal_env.cpp;
-    this guard keeps the tests working in the meantime.
-    """
-    if device_config.total_devices() > 1 and ttnn.get_fabric_config() == ttnn.FabricConfig.DISABLED:
-        ttml.core.distributed.enable_fabric(device_config.total_devices())
-    autograd_ctx = ttml.autograd.AutoContext.get_instance()
-    autograd_ctx.open_device(device_config.mesh_shape, device_config.device_ids)
-    return autograd_ctx.get_device()
-
-
 def close_device() -> None:
-    """Close the ``AutoContext`` device opened by :func:`open_device`."""
+    """Close the ttml ``AutoContext`` device."""
     ttml.autograd.AutoContext.get_instance().close_device()
 
 
