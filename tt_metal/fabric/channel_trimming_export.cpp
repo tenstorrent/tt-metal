@@ -237,9 +237,11 @@ void export_channel_trimming_capture(tt::tt_metal::MetalEnvImpl& env) {
 
             emitter << YAML::Key << fmt::format("chip_{}", chip_id) << YAML::Value << YAML::BeginMap;
 
-            const auto& soc_desc = umd_cluster.get_soc_descriptor(chip_id);
+            // The channels are those of Metal's descriptor of the chip, which UMD's may number otherwise.
+            const auto& soc_desc = cluster.get_soc_desc(chip_id);
             for (const auto& [channel_id, direction] : active_channels) {
-                tt::umd::CoreCoord eth_core = soc_desc.get_eth_core_for_channel(channel_id, tt::CoordSystem::LOGICAL);
+                tt::umd::CoreCoord eth_core =
+                    soc_desc.get_eth_core_for_channel(channel_id, tt::CoordSystem::TRANSLATED);
 
                 std::vector<std::byte> buffer(capture_size);
                 umd_cluster.read_from_device(buffer.data(), chip_id, eth_core, capture_addr, capture_size);
