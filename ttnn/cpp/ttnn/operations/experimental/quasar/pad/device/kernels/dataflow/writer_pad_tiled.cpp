@@ -19,6 +19,10 @@
 #include "api/tensor/noc_traits.h"
 #include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
+#if !defined(ARCH_QUASAR)
+// ckernel.h is unusable from a Quasar DM build and Quasar has no load_blocking.
+#include "ckernel.h"
+#endif
 
 // This kernel keeps track of which page (tile) we are on from a logical tensor perspective, and fills
 // the output with either the input or padding respectively.
@@ -59,6 +63,14 @@ void kernel_main() {
             pad_val_page[i * element_size + b] = pad_val[b];
         }
     }
+    // The NoC writes below source the words just stored, so the stores must reach L1 first.
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    flush_l2_cache_range(static_cast<uintptr_t>(l1_write_addr), static_cast<size_t>(num_elements * element_size));
+#else
+    (void)ckernel::load_blocking(
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_addr) +
+        (num_elements * element_size + sizeof(uint32_t) - 1) / sizeof(uint32_t) - 1);
+#endif
     cb_pad_val.push_back(1);
 
     bool within_input_region;

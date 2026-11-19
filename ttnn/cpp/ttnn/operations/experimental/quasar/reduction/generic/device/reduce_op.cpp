@@ -49,21 +49,8 @@ Tensor reduce_min(
     const tt::tt_metal::MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt) {
-    Tensor input = input_tensor;
-    if (input.layout() == tt::tt_metal::Layout::ROW_MAJOR && input.storage_type() == ttnn::StorageType::DEVICE) {
-        // Changing layout to TILE with +inf padding
-        auto pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(input.padded_shape());
-        input = ttnn::operations::experimental::quasar::tilize_with_val_padding(
-            input,
-            pad_shape,
-            std::numeric_limits<float>::infinity(),
-            output_mem_config,
-            std::nullopt,
-            true,
-            sub_core_grids);
-    }
     return detail::reduce(
-        input,
+        input_tensor,
         tt::tt_metal::ReduceOpMath::MAX,
         reduce_dim,
         scaler,
@@ -92,7 +79,22 @@ Tensor reduce(
     // prim::qsr::reduce rejects negate on every path (the fused-negate compute kernel needs the negative_tile
     // LLK, which is unported on Quasar), so compute -reduce(MAX, -x) with the regular reduce kernel instead.
     if (negate) {
-        Tensor neg_input = ttnn::neg(input_tensor, std::nullopt, std::nullopt, sub_core_grids);
+        // A ROW_MAJOR input is tilized before ttnn::neg, which would otherwise pad it with 0. MAX of -x needs its
+        // padding at -inf, so x is padded with +inf.
+        Tensor input = input_tensor;
+        if (input.layout() == tt::tt_metal::Layout::ROW_MAJOR && input.storage_type() == ttnn::StorageType::DEVICE) {
+            const float negated_pad_value =
+                reduce_math == tt::tt_metal::ReduceOpMath::MAX ? std::numeric_limits<float>::infinity() : 0.0f;
+            input = ttnn::operations::experimental::quasar::tilize_with_val_padding(
+                input,
+                ttnn::operations::data_movement::pad_to_tile_shape(input.padded_shape()),
+                negated_pad_value,
+                input.memory_config(),
+                std::nullopt,
+                true,
+                sub_core_grids);
+        }
+        Tensor neg_input = ttnn::neg(input, std::nullopt, std::nullopt, sub_core_grids);
         Tensor neg_output = reduce(
             neg_input,
             reduce_math,

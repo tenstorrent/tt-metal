@@ -29,6 +29,7 @@
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/experimental/quasar/reduction/generic/generic_reductions.hpp"
+#include "ttnn/operations/experimental/quasar/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/reduction/accumulation/cumprod/cumprod.hpp"
 #include "ttnn/operations/reduction/accumulation/cumsum/cumsum.hpp"
 #include "ttnn/operations/reduction/accumulation/ema/ema.hpp"
@@ -221,6 +222,38 @@ TEST_F(ReductionSmoke, QuasarMinReduceAllDims) {
     const auto out_hw = qsr::min(input, ttsl::SmallVector<int>{-2, -1}, true).to_vector<bfloat16>();
     ASSERT_EQ(out_hw.size(), 1u);
     ASSERT_EQ(static_cast<float>(out_hw[0]), static_cast<float>(offset));
+}
+
+// Quasar detail::reduce(MAX, negate=true) on a ROW_MAJOR input with tile padding: the padding must not reach the
+// result. All values are positive, so a 0-padded -x would make every row's result 0.
+TEST_F(ReductionSmoke, QuasarNegatedMaxRowMajorPadding) {
+    auto& device = *device_;
+    constexpr int h = 37, w = 50;
+    std::vector<float> data(static_cast<size_t>(h) * w);
+    for (int i = 0; i < h; i++) {
+        for (int j = 0; j < w; j++) {
+            data[static_cast<size_t>(i) * w + j] = static_cast<float>(1 + i + j);
+        }
+    }
+    const auto input =
+        detail::make_device_tensor(device, ttnn::Shape{1, 1, h, w}, data, DataType::BFLOAT16, Layout::ROW_MAJOR);
+
+    const auto out = ttnn::operations::experimental::quasar::generic::detail::reduce(
+                         input,
+                         tt::tt_metal::ReduceOpMath::MAX,
+                         tt::tt_metal::ReduceOpDim::W,
+                         1.0f,
+                         tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+                         std::nullopt,
+                         std::nullopt,
+                         std::nullopt,
+                         /*negate=*/true)
+                         .to_vector<bfloat16>();
+    ASSERT_EQ(out.size() % h, 0u);
+    const size_t row_stride = out.size() / h;
+    for (int i = 0; i < h; i++) {
+        ASSERT_EQ(static_cast<float>(out[i * row_stride]), static_cast<float>(1 + i)) << "row " << i;
+    }
 }
 
 // ---------------------------------------------------------------------------

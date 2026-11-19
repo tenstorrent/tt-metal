@@ -16,6 +16,10 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#if !defined(ARCH_QUASAR)
+// ckernel.h is unusable from a Quasar DM build and Quasar has no load_blocking.
+#include "ckernel.h"
+#endif
 
 #define u16_l1_ptr volatile tt_l1_ptr uint16_t*
 #define u32_l1_ptr volatile tt_l1_ptr uint32_t*
@@ -59,6 +63,14 @@ void kernel_main() {
 
     fill_dfb_with_padding_value<padding_value_num_bytes, padded_stick_bytes>(cb_padding_value, padding_value_as_u32);
     uint32_t padding_value_base_addr = cb_padding_value.get_read_ptr();
+    // The NoC writes below source the words just stored, so the stores must reach L1 first.
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    flush_l2_cache_range(static_cast<uintptr_t>(padding_value_base_addr), static_cast<size_t>(padded_stick_bytes));
+#else
+    (void)ckernel::load_blocking(
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(padding_value_base_addr) +
+        (padded_stick_bytes + sizeof(uint32_t) - 1) / sizeof(uint32_t) - 1);
+#endif
 
     CoreLocalMem<uint32_t> pad_src(padding_value_base_addr);
     uint32_t output_stick_addr = output_shard_base_addr;
