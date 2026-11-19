@@ -472,6 +472,8 @@ private:
 
     // There is an entry for every device that can be targeted (MMIO and remote)
     std::unordered_map<ChipId, metal_SocDescriptor> sdesc_per_chip_;
+    // The cluster descriptor's chip_soc_descs as open_driver() read it on Mock and EmuAxi; empty otherwise.
+    std::map<ChipId, std::string> chip_soc_desc_paths_;
 
     // Data Structures Tracking Virtual Coordinates
     std::unordered_map<tt_cxy_pair, tt_cxy_pair> virtual_to_umd_coord_mapping_;
