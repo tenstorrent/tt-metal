@@ -202,6 +202,7 @@ def test_two_level_supplied_block_maxima(device, rows, columns):
         )
         entries.append(device.num_program_cache_entries())
         _check_rows(torch_input, _indices(out, rows), n, range(rows))
+    assert entries[0] > 0, "the program cache must be on"
     assert entries[1] == entries[0], "the second call must reuse the cached program"
     (first_input, first_maxima), (second_input, second_maxima) = kept
     assert first_input.buffer_address() != second_input.buffer_address()
