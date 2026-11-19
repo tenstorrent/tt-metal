@@ -758,10 +758,9 @@ TEST_F(LaunchOperation2x4Test, ProgramCacheKeySeparatesTensorAliasingPatterns) {
             .preallocated_output = std::nullopt};
     };
     const auto key = [&](const SamplingOp::tensor_args_t& tensor_args) {
-        return std::pair{
-            SamplingAdapter::compute_mesh_workload_hash(mesh_device, attrs, tensor_args),
-            SamplingAdapter::compute_mesh_workload_canonical_key(
-                mesh_device, ttsl::get_type_name<SamplingOp>(), attrs, tensor_args)};
+        auto cache_key = SamplingAdapter::compute_mesh_workload_cache_key(
+            mesh_device, ttsl::get_type_name<SamplingOp>(), attrs, tensor_args);
+        return std::pair{cache_key.hash, std::move(cache_key.canonical)};
     };
 
     // Calls without aliasing share one entry, keyed exactly as before the signature existed.
@@ -800,7 +799,7 @@ struct CustomHashSpecOp {
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<ProgramSpecFactory>;
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&) { return 0; }
 };
 using CustomHashSpecAdapter = device_operation::MeshDeviceOperationAdapter<CustomHashSpecOp>;
 static_assert(CustomHashSpecAdapter::keys_on_tensor_aliasing);
@@ -817,8 +816,9 @@ TEST_F(LaunchOperation2x4Test, CanonicalKeySeparatesTensorAliasingPatternsWithCu
 
     const auto op_name = ttsl::get_type_name<CustomHashSpecOp>();
     const auto key = [&](const Tensor& first, const Tensor& second) {
-        return CustomHashSpecAdapter::compute_mesh_workload_canonical_key(
-            mesh_device, op_name, OperationAttributes{}, TwoTensorArgs{.first = first, .second = second});
+        return CustomHashSpecAdapter::compute_mesh_workload_cache_key(
+                   mesh_device, op_name, OperationAttributes{}, TwoTensorArgs{.first = first, .second = second})
+            .canonical;
     };
 
     // Calls without aliasing keep the op-identity key they had before the signature existed.

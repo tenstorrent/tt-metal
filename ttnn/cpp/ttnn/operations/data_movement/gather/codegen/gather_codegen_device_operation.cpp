@@ -47,8 +47,8 @@ GatherCodegenDeviceOperation::program_factory_t GatherCodegenDeviceOperation::se
 // op's own L1 output included -- that create_descriptor() will.
 //
 // Cost: defining compute_program_hash at all opts this op out of the canonical program-cache key
-// (mesh_device_operation_adapter.hpp::compute_mesh_workload_canonical_key returns only the
-// op-identity prefix and alias signature once a custom hash exists), so a 64-bit collision
+// (mesh_device_operation_adapter.hpp::compute_mesh_workload_cache_key keys only the op-identity
+// prefix and alias signature once a custom hash exists), so a 64-bit collision
 // between two distinct gather specs resolves to a wrong hit rather than a rebuild. Exposing the
 // plan as an attribute instead would keep that guarantee, but cannot: the plan depends on an own
 // output that is not allocated yet when the attributes are built.

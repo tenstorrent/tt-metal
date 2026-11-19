@@ -12,7 +12,7 @@ program hash covers only storage type and spec (ttnn/api/ttnn/tensor/tensor.hpp)
 without more, a later call with distinct but same-spec tensors would hit that cache entry
 and replay its slot indices -- silently feeding one tensor to both parameters.  The
 program-cache key of such ops therefore also covers which tensor_args slots alias
-(compute_mesh_workload_hash), so the aliased and the distinct call patterns never share an entry.
+(compute_mesh_workload_cache_key), so the aliased and the distinct call patterns never share an entry.
 
 batch_norm is used here because running_mean and running_var are separate
 TensorParameters of identical shape, so aliasing them is legal, and eval-mode

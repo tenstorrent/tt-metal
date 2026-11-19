@@ -82,7 +82,7 @@ std::vector<tt::tt_metal::distributed::MeshCoordinate> extract_tensor_coordinate
  * vector when no two tensors share a MeshTensor, so the common case allocates nothing.
  *
  * MeshTensor identity is what the spec-factory adapters bind tensors by, so two calls with equal
- * signatures can share a cache entry's recorded tensor bindings (see compute_mesh_workload_hash).
+ * signatures can share a cache entry's recorded tensor bindings (see compute_mesh_workload_cache_key).
  */
 std::vector<std::uint32_t> compute_tensor_alias_signature(
     const std::vector<std::reference_wrapper<const ttnn::Tensor>>& tensors);

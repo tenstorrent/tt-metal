@@ -11,7 +11,7 @@ Regression tests for two program-cache hazards in the Metal 2.0 concat program f
    both inputs at position 0. If concat([x, x]) and concat([a, b]) shared one entry, the later
    concat([a, b]) would replay that table, read `a` twice and never touch `b` -- wrong data, no error.
    The program-cache key of every spec-factory op folds in a tensor-aliasing signature (for each
-   tensor, the index of the first tensor backed by the same MeshTensor; see compute_mesh_workload_hash
+   tensor, the index of the first tensor backed by the same MeshTensor; see compute_mesh_workload_cache_key
    in ttnn/api/ttnn/mesh_device_operation_adapter.hpp), so aliased and distinct call patterns land in
    SEPARATE cache entries. The regression guard below is therefore: a call whose aliasing pattern
    differs from the one that primed the entry must be a cache MISS that builds its own entry and

@@ -1180,8 +1180,9 @@ public:
         //
         // When several slots hold the same MeshTensor, pointer identity cannot tell which of them a
         // TensorArgument came from (ProgramRunArgs::tensor_args is a Table with no promised order).
-        // Any of them is correct: compute_mesh_workload_hash keys spec ops by which tensor_args slots
-        // alias (compute_tensor_alias_signature), so every hit of this entry repeats the miss's aliasing.
+        // Any of them is correct: compute_mesh_workload_cache_key keys spec ops by which tensor_args
+        // slots alias (compute_tensor_alias_signature), so every hit of this entry repeats the miss's
+        // aliasing.
         //
         // NOTE on host perf: the index-based binding scheme is what makes a fast cache-hit path
         // possible, but the current straightforward implementation isn't there yet -- the
@@ -1774,56 +1775,42 @@ public:
         }
     }
 
-    static ttsl::hash::hash_t compute_mesh_workload_hash(
-        tt::tt_metal::distributed::MeshDevice* mesh_device,
-        const operation_attributes_t& attrs,
-        const tensor_args_t& tensor_args) {
-        ttsl::hash::hash_t hash = compute_program_hash(attrs, tensor_args);
-        const auto tensors = mesh_device_operation_utils::collect_tensors(tensor_args);
-        const auto coords = detail::extract_tensor_coordinates_impl(tensors, mesh_device);
-        std::for_each(
-            coords.begin(), coords.end(), [&](const auto& coord) { hash = ttsl::hash::hash_objects(hash, coord); });
-        if (const auto alias_signature = tensor_alias_signature(tensors); !alias_signature.empty()) {
-            hash = ttsl::hash::hash_objects(hash, alias_signature);
-        }
-        return hash;
-    }
-
-    // Exact, collision-free companion to compute_mesh_workload_hash: the cache compares this on a
-    // hash hit so a 64-bit collision is resolved to a correct (rebuild) miss instead of a wrong
-    // hit (issue #45821). It must mirror the SAME inputs the hash combines.
+    // The program cache key: a 64-bit hash plus an exact, collision-free canonical encoding. The
+    // cache compares the canonical part on a hash hit so a 64-bit collision is resolved to a
+    // correct (rebuild) miss instead of a wrong hit (issue #45821), so it must mirror the SAME
+    // inputs the hash combines.
     //
-    // The key is prefixed with op_type_name (the DeviceOperation's type name) so distinct ops can
-    // never alias on a hash collision.
+    // The canonical key is prefixed with op_type_name (the DeviceOperation's type name) so distinct
+    // ops can never alias on a hash collision.
     // For ops with a custom compute_program_hash we can't infer which fields it keyed on (it may
-    // deliberately exclude some, e.g. an RNG seed), so we return only the op-identity prefix plus
-    // the tensor alias signature, which this adapter rather than the op folds into the hash --
-    // opting that op out of attribute-level collision resolution. The default reflection-hash
-    // path is mirrored exactly.
-    static std::string compute_mesh_workload_canonical_key(
-        [[maybe_unused]] tt::tt_metal::distributed::MeshDevice* mesh_device,
+    // deliberately exclude some, e.g. an RNG seed), so the canonical key holds only the op-identity
+    // prefix plus the tensor alias signature, which this adapter rather than the op folds into the
+    // hash -- opting that op out of attribute-level collision resolution. The default
+    // reflection-hash path is mirrored exactly.
+    static tt::tt_metal::program_cache::detail::ProgramCacheKey compute_mesh_workload_cache_key(
+        tt::tt_metal::distributed::MeshDevice* mesh_device,
         std::string_view op_type_name,
         const operation_attributes_t& attrs,
         const tensor_args_t& tensor_args) {
-        std::string key{op_type_name};
-        if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
-            if (const auto alias_signature =
-                    tensor_alias_signature(mesh_device_operation_utils::collect_tensors(tensor_args));
-                !alias_signature.empty()) {
-                key += ttsl::hash::canonical_key(alias_signature);
-            }
-            return key;
-        } else {
-            key += ttsl::hash::canonical_key(attrs, tensor_args);
-            const auto tensors = mesh_device_operation_utils::collect_tensors(tensor_args);
-            const auto coords = detail::extract_tensor_coordinates_impl(tensors, mesh_device);
-            std::for_each(
-                coords.begin(), coords.end(), [&](const auto& coord) { key += ttsl::hash::canonical_key(coord); });
-            if (const auto alias_signature = tensor_alias_signature(tensors); !alias_signature.empty()) {
-                key += ttsl::hash::canonical_key(alias_signature);
-            }
-            return key;
+        const auto tensors = mesh_device_operation_utils::collect_tensors(tensor_args);
+        const auto coords = detail::extract_tensor_coordinates_impl(tensors, mesh_device);
+        const auto alias_signature = tensor_alias_signature(tensors);
+
+        ttsl::hash::hash_t hash = compute_program_hash(attrs, tensor_args);
+        std::string canonical{op_type_name};
+        std::for_each(
+            coords.begin(), coords.end(), [&](const auto& coord) { hash = ttsl::hash::hash_objects(hash, coord); });
+        if constexpr (!requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
+            canonical += ttsl::hash::canonical_key(attrs, tensor_args);
+            std::for_each(coords.begin(), coords.end(), [&](const auto& coord) {
+                canonical += ttsl::hash::canonical_key(coord);
+            });
         }
+        if (!alias_signature.empty()) {
+            hash = ttsl::hash::hash_objects(hash, alias_signature);
+            canonical += ttsl::hash::canonical_key(alias_signature);
+        }
+        return {hash, std::move(canonical)};
     }
 
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
