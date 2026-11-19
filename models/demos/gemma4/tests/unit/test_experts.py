@@ -18,6 +18,7 @@ import torch
 import ttnn
 from models.common.utility_functions import comp_pcc, is_blackhole
 from models.demos.gemma4.config import MeshConfig, ModeConfig
+from models.demos.gemma4.custom_ops.local_routed_gather import LocalRoutedGather
 from models.demos.gemma4.tests.test_factory import (
     TestFactory,
     lanes_fabric_config,
@@ -61,6 +62,7 @@ def test_experts_dispatch(seq_len, mesh_device, reset_seeds, request, monkeypatc
     """Token-dispatch prefill (DeepSeek dispatch/combine + fused GeGLU experts) vs the HF reference; 4224 tokens
     exercise a partial second dispatch chunk."""
     monkeypatch.setenv("GEMMA4_MOE_DISPATCH_PREFILL", "1")
+    monkeypatch.setenv("GEMMA4_MOE_LOCAL_ROUTED_PREFILL", "0")  # the dispatch path itself (local is the (4,1) default)
     monkeypatch.setenv("GEMMA4_MOE_DISPATCH_MIN_TOKENS", "128")
     run_experts(1, seq_len, mesh_device, request)
 
@@ -82,6 +84,7 @@ def test_experts_dispatch(seq_len, mesh_device, reset_seeds, request, monkeypatc
 def test_experts_dispatch_fit(seq_len, sparse, mesh_device, reset_seeds, request, monkeypatch):
     """Token-dispatch prefill on a chunk fitted to the call (and the sparse routing input) vs the HF reference."""
     monkeypatch.setenv("GEMMA4_MOE_DISPATCH_PREFILL", "1")
+    monkeypatch.setenv("GEMMA4_MOE_LOCAL_ROUTED_PREFILL", "0")  # the dispatch path itself (local is the (4,1) default)
     monkeypatch.setenv("GEMMA4_MOE_DISPATCH_MIN_TOKENS", "128")
     monkeypatch.setenv("GEMMA4_MOE_DISPATCH_FIT_CHUNK", "1")
     run_experts(1, seq_len, mesh_device, request, sparse_routing=sparse)
@@ -526,30 +529,55 @@ def test_single_owner_prefill_every_lane_engine_layout(mesh_device, reset_seeds,
     mesh_config._g4_single_lane_prefill_owner = None
 
 
-# ===== merged from tests/unit/test_experts_local_routed.py: Local token-sorted routed-expert prefill (GEMMA4_MOE_LOCAL_ROUTED_PREFILL=1, tt/experts/local_routed_prefill.py)
+# ===== merged from tests/unit/test_experts_local_routed.py: the local routed prefill (tt/experts/local_routed_prefill.py:
+# custom_ops/local_routed_gather + the GeGLU op on the decode copy + custom_ops/local_routed_untilize + the row-indexed
+# post_combine_reduce, no fabric inside the experts); the default on the (4,1) line, GEMMA4_MOE_LOCAL_ROUTED_PREFILL=1
+# elsewhere on a whole-expert tp-only line
 _BH_ONLY = pytest.mark.skipif(not is_blackhole(), reason="the GeGLU routed-expert kernel runs on Blackhole only")
 
 
+def _count_local_calls(monkeypatch):
+    """Count the local path's forward calls (the experts must not fall through to another path silently)."""
+    from models.demos.gemma4.tt.experts import local_routed_prefill as lrp
+
+    calls = []
+    orig = lrp.Gemma4LocalRoutedExperts.forward
+
+    def spy(self, hidden, routing):
+        calls.append(int(hidden.shape[2]))
+        return orig(self, hidden, routing)
+
+    monkeypatch.setattr(lrp.Gemma4LocalRoutedExperts, "forward", spy)
+    return calls
+
+
 @skip_if_not_moe
 @_BH_ONLY
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 4), (1, 8)])
-@pytest.mark.parametrize("seq_len", [128, 1024, 4096 + 128], ids=["prefill_128", "prefill_1024", "prefill_4224"])
-def test_experts_local_routed(seq_len, mesh_device, reset_seeds, request, monkeypatch):
-    """Dense routing matrix in (the experts top-k it on device); uniform random routing; vs the HF experts."""
+@parametrize_mesh_with_fabric(mesh_shapes=[(4, 1), (1, 4)])
+@pytest.mark.parametrize(
+    "seq_len, sparse",
+    [(2048, True), (2048 + 32, True), (4096, False)],
+    ids=["prefill_2048_sparse", "prefill_2080_sparse", "prefill_4096_dense"],
+)
+def test_experts_local_routed(seq_len, sparse, mesh_device, reset_seeds, request, monkeypatch):
+    """Uniform random routing vs the HF experts: the router's sparse (values, ids) or the dense matrix (top-k on
+    device); 2080 rows is not a multiple of 64 (the first path needed one for masked_bincount)."""
     monkeypatch.setenv("GEMMA4_MOE_LOCAL_ROUTED_PREFILL", "1")
-    monkeypatch.setenv("GEMMA4_MOE_LOCAL_ROUTED_MIN_TOKENS", "128")
-    run_experts(1, seq_len, mesh_device, request)
+    calls = _count_local_calls(monkeypatch)
+    run_experts(1, seq_len, mesh_device, request, sparse_routing=sparse)
+    assert calls == [seq_len], f"the local path did not take the {seq_len}-row call: {calls}"
 
 
 @skip_if_not_moe
 @_BH_ONLY
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 4)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(4, 1)])
 def test_experts_local_routed_chunked(mesh_device, reset_seeds, request, monkeypatch):
-    """4224 rows through 2048-row chunks (2048 + 2048 + 128): the chunk loop and a non-power-of-two tail."""
+    """4200 rows through 2048-row chunks (2048 + 2048 + 104): the chunk loop and a non-tile-aligned tail."""
     monkeypatch.setenv("GEMMA4_MOE_LOCAL_ROUTED_PREFILL", "1")
-    monkeypatch.setenv("GEMMA4_MOE_LOCAL_ROUTED_MIN_TOKENS", "128")
     monkeypatch.setenv("GEMMA4_MOE_LOCAL_ROUTED_CHUNK", "2048")
-    run_experts(1, 4096 + 128, mesh_device, request)
+    calls = _count_local_calls(monkeypatch)
+    run_experts(1, 4096 + 104, mesh_device, request)
+    assert calls == [4096 + 104], calls
 
 
 def _build_experts_local_routed(mesh_device):
@@ -582,25 +610,29 @@ def _build_experts_local_routed(mesh_device):
 
 @skip_if_not_moe
 @_BH_ONLY
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 4)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(4, 1)])
 def test_experts_local_routed_skewed(mesh_device, reset_seeds, request, monkeypatch):
-    """Router-style (values, indices) in; 90% of the tokens route to chip 1's first 8 experts (regions up to
-    0.9 * S rows, empty experts elsewhere); vs the HF experts and, per chip, vs the routed golden of the index
-    algebra (chip 1 sees the hot regions, chip 0 only the random tail)."""
+    """Router-style (values, ids) in, 4096 tokens, real-router skew: 90% of the tokens on chip 1's first 8 experts
+    (regions of 3686+ rows, empty experts elsewhere; the real router puts up to 98% of a 2K prompt on one expert, and
+    the first local path's fp32-matmul region offsets went wrong from 2048 rows per expert), run twice (the second on fresh buffers: the program-cache hit). Checks, per chip: the
+    gather's counts / region offsets / row index / weights / buffer rows against ``LocalRoutedGather.golden``; the
+    partial (gather + GeGLU on the decode copy + untilize + combine) against the routed golden; and the full path
+    (TP all-reduce included) against the HF experts."""
     monkeypatch.setenv("GEMMA4_MOE_LOCAL_ROUTED_PREFILL", "1")
-    monkeypatch.setenv("GEMMA4_MOE_LOCAL_ROUTED_MIN_TOKENS", "128")
-    seq_len = 512
+    seq_len = 4096
     tt_experts, hf_experts, hf_config, state_dict = _build_experts_local_routed(mesh_device)
     E, K, H = hf_config.num_experts, hf_config.top_k_experts, hf_config.hidden_size
     E_loc = tt_experts.num_local_experts
-    assert tt_experts.local_routed is not None
+    lr = tt_experts.local_routed
+    assert lr is not None, "the local path was not built"
 
     g = torch.Generator().manual_seed(1)
     indices = torch.stack([torch.randperm(E, generator=g)[:K] for _ in range(seq_len)])
-    indices[: int(0.9 * seq_len)] = torch.arange(K) + E_loc  # chip 1's first K experts
+    indices[: int(0.9 * seq_len)] = torch.arange(K) + E_loc  # chip 1's first K experts: > 3686 rows each
     weights = torch.rand(seq_len, K, generator=g) + 0.1
     weights = (weights / weights.sum(-1, keepdim=True)).to(torch.bfloat16)
     x = torch.randn(1, 1, seq_len, H, dtype=torch.bfloat16)
+    assert all(len(set(r.tolist())) == K for r in indices), "top-k ids are distinct per token"
 
     with torch.no_grad():
         ref_output = hf_experts(x.reshape(-1, H).float(), indices, weights.float())
@@ -621,21 +653,45 @@ def test_experts_local_routed_skewed(mesh_device, reset_seeds, request, monkeypa
         dtype=ttnn.uint16,
         mesh_mapper=replicate,
     )
-    # per-chip partials (before the TP all-reduce) vs the routed golden of the index algebra
-    partial = tt_experts.local_routed.forward(x_tt, (values_tt, idx_tt))
+    # the gather op alone, every chip vs its golden
+    plan = lr._plan(seq_len)
+    x_rm = ttnn.to_layout(x_tt, ttnn.ROW_MAJOR_LAYOUT)
+    buffer, counts, offsets, row_index, wts = plan.gather.op(x_rm, idx_tt, values_tt, lr.idx_table)
+    tables = [ttnn.to_torch(t).reshape(-1).long().tolist() for t in ttnn.get_device_tensors(lr.idx_table)]
+    per_chip = [ttnn.get_device_tensors(t) for t in (buffer, counts, offsets, row_index, wts)]
+    x_rows = x.reshape(seq_len, H)
+    for chip, idx_list in enumerate(tables):
+        rows, c_ref, o_ref, ri_ref, w_ref = LocalRoutedGather.golden(x_rows, indices, weights, idx_list, E)
+        buf, c, o, ri, w = (ttnn.to_torch(t[chip]) for t in per_chip)
+        assert torch.equal(c.reshape(-1)[:E].long(), c_ref), f"chip {chip} counts"
+        assert torch.equal(o.reshape(-1)[:E].long(), o_ref), f"chip {chip} region offsets"
+        ri = ri.reshape(seq_len, K).long() & 0xFFFFFFFF
+        assert torch.equal(ri, ri_ref), f"chip {chip} row index"
+        assert torch.equal(w.reshape(seq_len, K), w_ref), f"chip {chip} slot weights"
+        buf = buf.reshape(-1, H)
+        got_rows = torch.tensor(list(rows.keys()), dtype=torch.long)
+        want = x_rows[torch.tensor(list(rows.values()), dtype=torch.long)]
+        assert torch.equal(buf[got_rows], want), f"chip {chip} buffer rows"
+        print(f"[skewed] chip {chip}: {len(rows)} pairs, max count {int(c_ref.max())}: gather exact")
+    for t in (x_rm, buffer, counts, offsets, row_index, wts):
+        ttnn.deallocate(t)
+
     gate_up = state_dict["gate_up_proj"]  # [E, 2I, H], gate rows first
     down = state_dict["down_proj"]  # [E, H, I]
     I = gate_up.shape[1] // 2
-    chips = ttnn.get_device_tensors(partial)
-    for chip, t in enumerate(chips):
-        base = chip * E_loc
-        gate = [gate_up[base + e, :I, :].T for e in range(E_loc)]
-        up = [gate_up[base + e, I:, :].T for e in range(E_loc)]
-        dn = [down[base + e].T for e in range(E_loc)]
-        golden = local_routed_golden(x.reshape(-1, H), weights, indices, base, E_loc, gate, up, dn)
-        got = ttnn.to_torch(t).reshape(-1, H).float()[:seq_len]
-        passing, pcc = comp_pcc(golden, got, 0.99)
-        assert passing, f"chip {chip} partial vs routed golden: {pcc}"
+    for rep in range(2):
+        partial = lr.forward(x_tt, (values_tt, idx_tt))
+        for chip, t in enumerate(ttnn.get_device_tensors(partial)):
+            base = tables[chip][0]
+            gate = [gate_up[base + e, :I, :].T for e in range(E_loc)]
+            up = [gate_up[base + e, I:, :].T for e in range(E_loc)]
+            dn = [down[base + e].T for e in range(E_loc)]
+            golden = local_routed_golden(x.reshape(-1, H), weights, indices, base, E_loc, gate, up, dn)
+            got = ttnn.to_torch(t).reshape(-1, H).float()[:seq_len]
+            passing, pcc = comp_pcc(golden, got, 0.99)
+            print(f"[skewed rep {rep}] chip {chip} partial vs routed golden: {pcc}")
+            assert passing, f"chip {chip} partial vs routed golden: {pcc}"
+        ttnn.deallocate(partial)
     # the full path (TP all-reduce included) vs the HF experts
     tt_output = tt_experts(x_tt, (values_tt, idx_tt))
     tt_out_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_output)[0]).reshape(-1, H).float()[:seq_len]
@@ -645,33 +701,38 @@ def test_experts_local_routed_skewed(mesh_device, reset_seeds, request, monkeypa
 
 @skip_if_not_moe
 @_BH_ONLY
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 4)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(4, 1)])
 def test_experts_local_routed_threshold(mesh_device, reset_seeds, request, monkeypatch):
-    """Calls below GEMMA4_MOE_LOCAL_ROUTED_MIN_TOKENS (and the decode frame) keep the sparse_matmul path."""
-    monkeypatch.setenv("GEMMA4_MOE_LOCAL_ROUTED_PREFILL", "1")
-    monkeypatch.setenv("GEMMA4_MOE_LOCAL_ROUTED_MIN_TOKENS", "256")
+    """The default on the (4,1) line: prefill calls the small-row path does not take (> 128 rows) go local and ask
+    the router for its sparse output; 128-row calls keep the small-row path, decode frames sparse_matmul;
+    GEMMA4_MOE_LOCAL_ROUTED_PREFILL=0 builds no local path (the dispatch path takes the long calls again)."""
+    monkeypatch.delenv("GEMMA4_MOE_LOCAL_ROUTED_PREFILL", raising=False)
+    monkeypatch.delenv("GEMMA4_MOE_LOCAL_ROUTED_MIN_TOKENS", raising=False)
+    monkeypatch.setenv("GEMMA4_SMALL_ROW_EXPERTS", "1")
     tt_experts, _, hf_config, _ = _build_experts_local_routed(mesh_device)
     H = hf_config.hidden_size
-    short = ttnn.from_torch(
-        torch.zeros(1, 1, 128, H, dtype=torch.bfloat16),
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-    assert not tt_experts._use_local_routed(short)
-    assert not tt_experts.wants_sparse_routing(short)
-    long = ttnn.from_torch(
-        torch.zeros(1, 1, 256, H, dtype=torch.bfloat16),
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-    assert tt_experts._use_local_routed(long)
-    assert tt_experts.wants_sparse_routing(long)
-    run_experts(1, 128, mesh_device, request)  # the sparse_matmul path, unchanged
-    assert os.environ.get("GEMMA4_MOE_LOCAL_ROUTED_PREFILL") == "1"
+    assert tt_experts.local_routed is not None and tt_experts.dispatch_experts is not None
+
+    def rows(n):
+        return ttnn.from_torch(
+            torch.zeros(1, 1, n, H, dtype=torch.bfloat16),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+    for n, local in ((32, False), (128, False), (160, True), (4096, True)):
+        h = rows(n)
+        assert tt_experts._use_local_routed(h) == local, n
+        assert tt_experts.wants_sparse_routing(h) == local, n
+        ttnn.deallocate(h)
+    monkeypatch.setenv("GEMMA4_MOE_LOCAL_ROUTED_PREFILL", "0")
+    off, _, _, _ = _build_experts_local_routed(mesh_device)
+    assert off.local_routed is None and off._use_dispatch(rows(4096))
+    calls = _count_local_calls(monkeypatch)
+    run_experts(1, 128, mesh_device, request)  # the small-row path, unchanged
+    assert calls == []
 
 
 # ===== merged from tests/unit/test_experts_small_rows.py: The small-row expert path (GEMMA4_SMALL_ROW_EXPERTS=1: custom_ops/expert_gather_small + the GeGLU op + W @ out +
@@ -705,6 +766,7 @@ def _build_experts_small_rows(mesh_device, state_dict, hf_config):
 @pytest.mark.parametrize("seq_len", [128, 256, 1024], ids=lambda s: f"seq{s}")
 def test_experts_small_rows_vs_dispatch(seq_len, mesh_device, reset_seeds, request, monkeypatch):
     monkeypatch.setenv("GEMMA4_MOE_DISPATCH_PREFILL", "1")
+    monkeypatch.setenv("GEMMA4_MOE_LOCAL_ROUTED_PREFILL", "0")  # the dispatch path itself (local is the (4,1) default)
     monkeypatch.setenv("GEMMA4_MOE_DISPATCH_MIN_TOKENS", "128")
     monkeypatch.setenv("GEMMA4_MOE_DISPATCH_FIT_CHUNK", "1")
     monkeypatch.setenv("GEMMA4_SMALL_ROW_MAX_TOKENS", "256" if seq_len == 256 else "128")

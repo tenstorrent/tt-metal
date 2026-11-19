@@ -11,6 +11,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.gemma4.tt.decode_matmul import (
     DRAM_SHARDED_PIPELINE_ROWS,
     MIN_PIPELINE_GRID_CORES,
@@ -18,7 +19,15 @@ from models.demos.gemma4.tt.decode_matmul import (
     dram_sharded_pipeline_row,
     model_tag,
 )
-from models.demos.gemma4.tt.dram_sharded import TILE_SIZE, DramShardedLinear, can_dram_shard
+from models.demos.gemma4.tt.dram_sharded import (
+    PREFILL_WIDE_GRID_ENV,
+    TILE_SIZE,
+    DramShardedLinear,
+    can_dram_shard,
+    prefill_progcfg,
+    prefill_wide_grid_default,
+    prefill_wide_progcfg,
+)
 
 SINGLE_CHIP = [pytest.param(1, {"fabric_config": ttnn.FabricConfig.DISABLED}, id="single-chip")]
 
@@ -342,3 +351,156 @@ def test_prefill_fp32_acc_fits_l1(mesh_device, device_params, K, N, M):
     print(f"[K{K} N{N} M{M}] fp32-acc prefill slab {slab} rows, pcc vs torch {pcc:.6f}")
     assert torch.isfinite(got).all()
     assert pcc > 0.9995, f"pcc vs torch {pcc}"
+
+
+# ===== GEMMA4_PREFILL_WIDE_GRID: the wide short-row 2D config (grid width over
+# the exact divisors of the N tiles up to the device grid, in0_block_w up to 8 within the L1 budget) against the
+# narrow one (<= 8 columns, in0 <= 4): the same accuracy against torch (HiFi2 + fp32 Dest in both) on the 12B TP=4
+# shapes, from the 4 row tiles of a 128-token prompt to the slab and the chunked 4096-row form; the traced time of
+# both is printed (RESULT lines) for the perf verdict.
+_WIDE_12B_TP4 = [(3840, 2048), (1024, 3840), (3840, 7680), (3840, 3840)]
+_WIDE_12B_IDS = ["wqkv12b_tp4", "oproj12b_tp4", "gateup12b_tp4", "down12b_tp4"]
+# the 26B's sliding-layer QKV and o_proj at TP4 (hidden 2816 = 88 N tiles, an 11-column split on the wide grid)
+_WIDE_26B_TP4 = [(2816, 2048), (1024, 2816)]
+_WIDE_26B_IDS = ["wqkv26b_tp4", "oproj26b_tp4"]
+_WIDE_CASES = [
+    pytest.param(k, n, m, id=f"{name}-m{m}")
+    for (k, n), name in zip(_WIDE_12B_TP4, _WIDE_12B_IDS)
+    for m in (128, 256, 1024, 2560, 4096)
+] + [
+    pytest.param(k, n, m, id=f"{name}-m{m}") for (k, n), name in zip(_WIDE_26B_TP4, _WIDE_26B_IDS) for m in (128, 4096)
+]
+
+
+@pytest.mark.skipif(
+    not is_blackhole(),
+    reason="GEMMA4_PREFILL_WIDE_GRID defaults on for Blackhole (1,4) / (1,8) lines only; Wormhole keeps the narrow grid (test_prefill_wide_progcfg_host)",
+)
+@pytest.mark.parametrize("K, N, M", _WIDE_CASES)
+@pytest.mark.parametrize("mesh_device, device_params", SINGLE_CHIP, indirect=True)
+def test_prefill_wide_grid_matches_narrow(mesh_device, device_params, K, N, M, monkeypatch):
+    from models.demos.gemma4.tt.compute_config import prefill_linear_compute_kernel_config
+
+    if not can_dram_shard(K, N, dtype=ttnn.bfloat8_b):
+        pytest.skip(f"[{K}, {N}] has no DRAM-sharded config on this grid")
+    torch.manual_seed(0)
+    w = (torch.randn(1, 1, K, N) * 0.02).to(torch.bfloat16)
+    x = (torch.randn(1, 1, M, K) * 2).to(torch.bfloat16)
+    golden = (x.float() @ w.float().reshape(K, N)).reshape(1, 1, M, N)
+    ckc = prefill_linear_compute_kernel_config(mesh_device)
+    tx = ttnn.from_torch(x, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    res = {}
+    outs = {}
+    for name, knob in (("narrow", "0"), ("wide", "1")):
+        monkeypatch.setenv(PREFILL_WIDE_GRID_ENV, knob)
+        lin = DramShardedLinear(w, mesh_device, None, k=K, n=N, dtype=ttnn.bfloat8_b, cache_file_name=None)
+        assert lin._prefill_wide is (knob == "1")
+        pc = lin._prefill_pc(min(M, lin._slab_rows_by_acc[True]), fp32_acc=True)
+        out = lin(tx, compute_kernel_config=ckc, prefill=True)
+        got = ttnn.to_torch(out).float()
+        assert list(out.shape) == [1, 1, M, N], out.shape
+        assert torch.isfinite(got).all()
+        us = _traced_us(mesh_device, lambda lin=lin: lin(tx, compute_kernel_config=ckc, prefill=True))
+        res[name] = (_pcc(got, golden), float((got - golden).abs().max()), us, pc)
+        outs[name] = got
+        lin.weight.deallocate(True)
+    diff = float((outs["wide"] - outs["narrow"]).abs().max())
+    print(
+        f"RESULT wide_grid K={K} N={N} M={M} "
+        + " ".join(
+            f"{n}=cols{v[3].compute_with_storage_grid_size.x}x{v[3].compute_with_storage_grid_size.y}"
+            f"/in0_{v[3].in0_block_w}/pcN{v[3].per_core_N}/pcM{v[3].per_core_M}/sub{v[3].out_subblock_w}"
+            f":pcc={v[0]:.6f}:err={v[1]:.5f}:us={v[2]:.1f}"
+            for n, v in res.items()
+        )
+        + f" wide_vs_narrow_maxdiff={diff:.5f} speedup={res['narrow'][2] / res['wide'][2]:.3f}"
+    )
+    for name, (pcc, _err, _us, _pc) in res.items():
+        assert pcc > 0.9995, f"{name}: pcc vs torch {pcc}"
+    assert res["wide"][0] >= res["narrow"][0] - 1e-5, (res["wide"][0], res["narrow"][0])
+
+
+def test_prefill_wide_progcfg_host(monkeypatch):
+    """Host: the wide config's grid for the 12B TP=4 shapes (exact divisors of the N tiles only, in0 within the
+    budget), the 31B shapes staying at or below 8 columns, and the policy's gates."""
+    budget = 1_572_864 - 64 * 1024
+    cfg = {}
+    for (k, n), name in zip(_WIDE_12B_TP4, _WIDE_12B_IDS):
+        pc = prefill_wide_progcfg(
+            128, k, n, max_cols=11, in0_cap=8, weight_tile_bytes=1088, fp32_acc=True, budget=budget
+        )
+        cfg[name] = (pc.compute_with_storage_grid_size.x, pc.in0_block_w, pc.per_core_N, pc.out_subblock_w)
+    assert cfg["gateup12b_tp4"] == (10, 8, 24, 4)
+    assert cfg["down12b_tp4"] == (10, 8, 12, 4)
+    assert cfg["oproj12b_tp4"] == (10, 8, 12, 4)
+    assert cfg["wqkv12b_tp4"] == (8, 8, 8, 4)  # 64 N tiles: 8 is the widest exact divisor
+    for k, n in [(5376, 4096), (2048, 5376), (5376, 10752), (5376, 5376)]:  # 31B TP=4: never past 8 columns
+        pc = prefill_wide_progcfg(
+            128, k, n, max_cols=11, in0_cap=8, weight_tile_bytes=1088, fp32_acc=True, budget=budget
+        )
+        assert pc.compute_with_storage_grid_size.x <= 8
+        assert (pc.in0_block_w * TILE_SIZE) and (k // TILE_SIZE) % pc.in0_block_w == 0
+    # the slab's row tiles: in0 shrinks to what fits (never a config past the budget); None when nothing fits
+    pc = prefill_wide_progcfg(
+        2560, 3840, 7680, max_cols=11, in0_cap=8, weight_tile_bytes=2048, fp32_acc=True, budget=budget
+    )
+    assert pc is None or pc.in0_block_w <= 8
+    assert (
+        prefill_wide_progcfg(2560, 3840, 7680, max_cols=11, in0_cap=8, weight_tile_bytes=2048, fp32_acc=True, budget=1)
+        is None
+    )
+    # the narrow config is what the knob-off path keeps
+    narrow = prefill_progcfg(128, 3840, 7680, max_cols=8)
+    assert narrow.compute_with_storage_grid_size.x == 6 and narrow.in0_block_w == 4
+    # policy: env override, else the (mesh shape -> hidden sizes) table
+    from models.demos.gemma4.tt import dram_sharded as ds
+
+    mesh = type("M", (), {"shape": (1, 4)})()
+    monkeypatch.delenv(PREFILL_WIDE_GRID_ENV, raising=False)
+    assert ds.PREFILL_WIDE_GRID_DEFAULT == {(1, 4): (3840, 2816), (1, 8): (3840,)}  # the shipped table
+    monkeypatch.setattr(ds, "PREFILL_WIDE_GRID_DEFAULT", {(1, 4): (3840,), (1, 8): (3840, 5376)})
+    monkeypatch.setattr(ds, "is_blackhole", lambda: True)
+    from models.demos.gemma4.tt import mesh_orientation as mo
+
+    monkeypatch.setattr(mo, "cluster_type_name", lambda: mo.BLACKHOLE_GALAXY_CLUSTER)  # the (1,8) entry's hardware
+    assert prefill_wide_grid_default(mesh, 3840, 7680) is True
+    assert prefill_wide_grid_default(mesh, 1024, 3840) is True
+    assert prefill_wide_grid_default(mesh, 5376, 10752) is False
+    galaxy_engine = type("M", (), {"shape": (1, 8)})()
+    assert prefill_wide_grid_default(galaxy_engine, 3840, 7680) is True
+    assert prefill_wide_grid_default(galaxy_engine, 5376, 10752) is True
+    assert prefill_wide_grid_default(type("M", (), {"shape": (8, 4)})(), 3840, 7680) is False
+    monkeypatch.setattr(mo, "cluster_type_name", lambda: "P150_X8")  # a P150x8 line: unmeasured, (1,8) off
+    assert prefill_wide_grid_default(galaxy_engine, 3840, 7680) is False
+    assert prefill_wide_grid_default(mesh, 3840, 7680) is True
+    monkeypatch.setattr(mo, "cluster_type_name", lambda: mo.BLACKHOLE_GALAXY_CLUSTER)
+    monkeypatch.setattr(ds, "is_blackhole", lambda: False)  # Wormhole (T3K is (1,8) too)
+    assert prefill_wide_grid_default(mesh, 3840, 7680) is False
+    assert prefill_wide_grid_default(galaxy_engine, 3840, 7680) is False
+    monkeypatch.setattr(ds, "is_blackhole", lambda: True)
+    monkeypatch.setenv(PREFILL_WIDE_GRID_ENV, "0")
+    assert prefill_wide_grid_default(mesh, 3840, 7680) is False
+    # GEMMA4_PREFILL_MM_PLAN (tt/prefill_matmul.py): the planned 4096-row configs of the 12B / 26B TP=4 linears on
+    # the 12x10 Galaxy grid are the measured fastest ones (2026-11-18 sweep), every one within the L1 budget, N split
+    # exactly for the DRAM-width-sharded weights
+    from models.demos.gemma4.tt import prefill_matmul as pm
+
+    measured = {  # (k, n, weight tile bytes, exact N): (slab rows, cols, rows, in0_block_w)
+        (3840, 7680, 1088, True): (2048, 12, 10, 6),  # 12B gate_up
+        (3840, 3840, 1088, True): (2048, 12, 10, 15),  # 12B down
+        (3840, 2048, 1088, True): (4096, 8, 10, 10),  # 12B wqkv (sliding)
+        (1024, 3840, 1088, True): (2048, 12, 10, 16),  # 12B o_proj (sliding)
+        (2816, 2048, 2048, False): (4096, 11, 10, 11),  # 26B wqkv (sliding)
+        (2816, 1088, 2048, False): (4096, 12, 10, 11),  # 26B shared gate_up
+        (544, 2816, 2048, False): (2048, 11, 10, 17),  # 26B shared down
+    }
+    for (k, n, wtb, exact), want in measured.items():
+        p = pm.plan(4096, k, n, (12, 10), wtb, True, budget, exact)
+        assert p[:4] == want, (k, n, p)
+        slab, cols, rows, kb, h, w, pM, pN, _ = p
+        assert pm.cb_bytes(pM, pN, kb, wtb, True) <= budget and pN % w == 0 and h == 1
+        assert (not exact) or (n // TILE_SIZE) % cols == 0
+    kw = dict(grid=(12, 10), weight_tile_bytes=1088, fp32_acc=True, budget=budget, exact_n=True)
+    assert pm.planned_linear(None, None, 512, 3840, 7680, compute_kernel_config=None, memory_config=None, **kw) is None
+    monkeypatch.setenv(PREFILL_WIDE_GRID_ENV, "1")
+    assert prefill_wide_grid_default(mesh, 5376, 10752) is True

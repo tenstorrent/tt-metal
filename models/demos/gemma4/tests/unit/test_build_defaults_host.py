@@ -8,7 +8,9 @@ profile the modules keep the old paths. No device, no ttnn import.
 """
 from __future__ import annotations
 
+import json
 import math
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -20,6 +22,7 @@ import models.common.utility_functions as uf
 import ttnn
 from models.demos.gemma4.tt import ccl as ccl_mod
 from models.demos.gemma4.tt import mesh_orientation as mo
+from models.demos.gemma4.tt import precision as precision_mod
 from models.demos.gemma4.tt.attention.operations import (
     PREFILL_SDPA_HARD_MAX,
     PREFILL_SDPA_MAX_SEQ,
@@ -35,8 +38,19 @@ from models.demos.gemma4.tt.generator_trace import (
     normalize_gemma4_model_key,
     resolve_gemma4_demo_long_context,
 )
+from models.demos.gemma4.tt.mesh_orientation import clear_decode_fusion_profile
+from models.demos.gemma4.tt.model import apply_build_profile
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 from models.demos.gemma4.tt.precision import Gemma4Precision
+from models.demos.gemma4.utils.substate import substate
+
+
+@pytest.fixture(autouse=True)
+def _galaxy_cluster(monkeypatch):
+    """The (1,8) defaults and the 31B ``1x8@BLACKHOLE_GALAXY`` precision entry read the cluster type
+    (``mo.cluster_type_name``): pinned here to the Blackhole Galaxy those entries were measured on, so no host test
+    reads the real cluster; a test of another machine (the P150x8 LoudBox, a T3K) sets its own."""
+    monkeypatch.setattr(mo, "cluster_type_name", lambda: mo.BLACKHOLE_GALAXY_CLUSTER)
 
 
 @pytest.fixture()
@@ -125,10 +139,31 @@ def test_profile_and_env_override(monkeypatch):
 
 
 @pytest.mark.usefixtures("_clean")
-def test_four_chip_blackhole_dense_runs_the_combined_dense_configuration():
+def test_four_chip_blackhole_dense_runs_the_combined_dense_configuration(monkeypatch):
     """The 4-chip meshes and the (1,8) Galaxy DP line (TP=8, the same plain-TP DramShardedLinear build) run the
-    combined dense configuration; the fractured TP-8 meshes, the (8,1) column line, one chip and Wormhole do not."""
+    combined dense configuration; the fractured TP-8 meshes, the (8,1) column line, one chip, Wormhole and a (1,8)
+    line outside a Blackhole Galaxy (the P150x8 LoudBox: unmeasured, the cluster type mocked) do not."""
     assert mo.DENSE_FUSED_SHAPES == ((1, 4), (4, 1), (1, 8))
+    assert mo.GALAXY_ONLY_SHAPES == ((1, 8),)
+    # the cluster type gates the Galaxy-only line alone: a P150x8 LoudBox keeps the old (1,8) defaults, the 4-chip
+    # meshes keep theirs on any cluster; an explicit ``galaxy`` wins over the cluster type
+    for name in ("P150_X8", "T3K", None):
+        monkeypatch.setattr(mo, "cluster_type_name", lambda name=name: name)
+        assert not mo.blackhole_galaxy_cluster()
+        assert not mo.dense_fused_decode_build((1, 8), blackhole=True, moe=False)
+        assert mo.decode_fusion_defaults((1, 8), blackhole=True, moe=False) == mo.DECODE_FUSION_OFF
+        assert mo.decode_fusion_defaults((1, 8), blackhole=True, moe=False, kv_pairs=True) == mo.DECODE_FUSION_OFF
+        assert mo.decode_fusion_defaults((1, 8), blackhole=True, moe=False, galaxy=True) == mo.DENSE_DECODE_FUSION_ON
+        for shape in ((1, 4), (4, 1)):
+            assert mo.dense_fused_decode_build(shape, blackhole=True, moe=False)
+    reads = []
+    monkeypatch.setattr(mo, "cluster_type_name", lambda: reads.append(1) or mo.BLACKHOLE_GALAXY_CLUSTER)
+    assert mo.decode_fusion_defaults((1, 8), blackhole=True, moe=False, galaxy=False) == mo.DECODE_FUSION_OFF
+    for shape in ((1, 4), (4, 1), (1, 1), (8, 4)):  # the cluster type is read for the Galaxy-only line only
+        mo.decode_fusion_defaults(shape, blackhole=True, moe=False)
+    assert mo.measured_shape_default((1, 4), ((1, 4), (1, 8))) and not reads
+    assert mo.measured_shape_default((1, 8), ((1, 4), (1, 8))) and len(reads) == 1
+    assert not mo.measured_shape_default((1, 8), ((1, 4),)) and len(reads) == 1
     for shape in ((1, 4), (4, 1), (1, 8)):
         assert mo.dense_fused_decode_build(shape, blackhole=True, moe=False)
         assert not mo.fused_decode_build(shape, blackhole=True, moe=False)
@@ -512,6 +547,17 @@ SNAPSHOT_PATH = (
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_precision_env():
+    """The precision tests read the shipped table: no GEMMA4_PRECISION_* / GEMMA4_BFP8_MAX_CONTEXT from the shell (a run
+    with GEMMA4_PRECISION_LM_HEAD=bfp8 exported resolved the unknown model to {lm_head: bfp8}). Its own MonkeyPatch, so a
+    test's ``monkeypatch.undo()`` does not bring the shell's values back."""
+    with pytest.MonkeyPatch.context() as mp:
+        for name in [k for k in os.environ if k.startswith("GEMMA4_PRECISION_")] + ["GEMMA4_BFP8_MAX_CONTEXT"]:
+            mp.delenv(name, raising=False)
+        yield
+
+
 def test_repo_id_resolves_overrides():
     p = Gemma4Precision.load("google/gemma-4-31B-it", (1, 4))
     assert p.get("shared_mlp") == ttnn.bfloat8_b
@@ -537,25 +583,68 @@ def test_unknown_model_still_empty():
     assert p.get("shared_mlp", ttnn.bfloat16) == ttnn.bfloat16
 
 
-def test_the_bfp8_ceiling_applies_on_the_mesh_it_was_measured_on():
-    """31B/tp=8 at 262k degenerates with shared_mlp in bfp8, so it downgrades."""
+def test_the_31b_line_entry_applies_on_the_blackhole_galaxy_only(monkeypatch):
+    """The 31B (1,8) entry is scoped to the hardware it was measured on ("1x8@BLACKHOLE_GALAXY", the cluster type
+    mocked): on the Blackhole Galaxy the lm_head is bfp8 and there is no bfp8 ceiling, so the shared MLP stays bfp8 at
+    262k (re-measured 2026-11-10 on the Galaxy DP4 entry: 248K needles on every row, a 255K verbatim echo and 247K
+    free generation coherent); on another 1x8 machine (a P150x8 line, a T3K: unmeasured) the lm_head stays bf16 and
+    the 131072 shared-MLP ceiling holds. GEMMA4_BFP8_MAX_CONTEXT still sets the ceiling everywhere."""
+    monkeypatch.delenv("GEMMA4_BFP8_MAX_CONTEXT", raising=False)
+    o = Gemma4Precision.load("/x/gemma-4-31B-it", (1, 8), max_seq_len=262144)
+    # "default" (shared_mlp, attention) merged with the Galaxy (1,8) entry (lm_head, 2K prose gate neutral)
+    assert o._overrides == {"shared_mlp": ttnn.bfloat8_b, "attention": ttnn.bfloat8_b, "lm_head": ttnn.bfloat8_b}
+    assert Gemma4Precision.load("/x/gemma-4-31B-it", (8, 1), max_seq_len=262144)._overrides == o._overrides
+    for other in ("P150_X8", "T3K", None):
+        monkeypatch.setattr(mo, "cluster_type_name", lambda other=other: other)
+        for shape in ((1, 8), (8, 1)):
+            o = Gemma4Precision.load("/x/gemma-4-31B-it", shape, max_seq_len=262144)
+            assert o._overrides == {"shared_mlp": ttnn.bfloat16, "attention": ttnn.bfloat8_b}, (other, shape)
+            o = Gemma4Precision.load("/x/gemma-4-31B-it", shape, max_seq_len=131072)
+            assert o._overrides == {"shared_mlp": ttnn.bfloat8_b, "attention": ttnn.bfloat8_b}, (other, shape)
+    # the 4-chip meshes never read the cluster type (no cluster-scoped key names them)
+    monkeypatch.setattr(mo, "cluster_type_name", lambda: pytest.fail("the cluster type was read for (1,4)"))
+    o = Gemma4Precision.load("/x/gemma-4-31B-it", (1, 4), max_seq_len=262144)
+    assert o._overrides == {"shared_mlp": ttnn.bfloat8_b, "attention": ttnn.bfloat8_b}
+    monkeypatch.setattr(mo, "cluster_type_name", lambda: mo.BLACKHOLE_GALAXY_CLUSTER)
+    monkeypatch.setenv("GEMMA4_BFP8_MAX_CONTEXT", "131072")
     o = Gemma4Precision.load("/x/gemma-4-31B-it", (1, 8), max_seq_len=262144)
     assert o.get("shared_mlp") == ttnn.bfloat16
 
 
-def test_the_bfp8_ceiling_does_not_apply_on_a_mesh_where_bf16_will_not_fit():
+def _ceiling_table(tmp_path, monkeypatch):
+    """A table whose 31B entry declares the mesh-scoped ceiling form for every machine of the shape (the shipped one
+    exempts the Blackhole Galaxy)."""
+    table = {
+        "gemma-4-31B-it": {
+            "default": {"shared_mlp": "bfp8", "attention": "bfp8"},
+            "bfp8_max_context": {"1x8": {"shared_mlp": 131072}},
+        }
+    }
+    path = tmp_path / "precision_overrides.json"
+    path.write_text(json.dumps(table))
+    monkeypatch.setattr(precision_mod, "_PATH", str(path))
+    monkeypatch.delenv("GEMMA4_BFP8_MAX_CONTEXT", raising=False)
+
+
+def test_the_bfp8_ceiling_does_not_apply_on_a_mesh_where_bf16_will_not_fit(tmp_path, monkeypatch):
     """The downgrade DOUBLES those weights, so it may only be declared where
     bf16 fits. Applying it to every mesh hung Gemma4-31B on bh_quietbox_2
     (1x4) in model init -- 31B shared_mlp in bf16 at 262144 does not fit on
-    four chips, and the leg passed on main, which had no ceiling at all. A mesh
-    with no entry keeps bfp8, i.e. main's behaviour."""
+    four chips. A mesh-scoped ceiling applies on its mesh (and the transpose) only;
+    a mesh with no entry keeps bfp8."""
+    _ceiling_table(tmp_path, monkeypatch)
+    assert Gemma4Precision.load("/x/gemma-4-31B-it", (1, 8), max_seq_len=262144).get("shared_mlp") == ttnn.bfloat16
+    assert Gemma4Precision.load("/x/gemma-4-31B-it", (8, 1), max_seq_len=262144).get("shared_mlp") == ttnn.bfloat16
     o = Gemma4Precision.load("/x/gemma-4-31B-it", (1, 4), max_seq_len=262144)
-    assert o.get("shared_mlp") == ttnn.bfloat8_b
+    assert o.get("shared_mlp") == ttnn.bfloat8_b and o.get("attention") == ttnn.bfloat8_b
 
 
-def test_below_the_ceiling_bfp8_is_kept_on_the_measured_mesh():
-    o = Gemma4Precision.load("/x/gemma-4-31B-it", (1, 8), max_seq_len=131072)
-    assert o.get("shared_mlp") == ttnn.bfloat8_b
+def test_below_the_ceiling_bfp8_is_kept_on_the_measured_mesh(tmp_path, monkeypatch):
+    _ceiling_table(tmp_path, monkeypatch)
+    assert Gemma4Precision.load("/x/gemma-4-31B-it", (1, 8), max_seq_len=131072).get("shared_mlp") == ttnn.bfloat8_b
+    # the shipped table: the 4-chip meshes keep the bf16 lm_head (the bfp8 lm_head is the (1,8) entry only)
+    monkeypatch.undo()
+    assert Gemma4Precision.load("/x/gemma-4-31B-it", (1, 4)).get("lm_head", ttnn.bfloat16) == ttnn.bfloat16
 
 
 def test_column_mesh_takes_the_transposed_entry():
@@ -582,10 +671,46 @@ def test_expert_partition_keys_the_cache_layout():
     assert ep4["weight_layout"] == "fractured-tp_axis0"
 
 
-def test_single_device_layout_has_the_trivial_partition():
+def test_single_device_layout_has_the_trivial_partition(monkeypatch):
+    """The trivial partition off a mesh; and the build profile create_tt_model records before keying the layout puts
+    the (1,8) line's pair-split copies in it for the 31B (env unset), not for GEMMA4_SDPA_PAIR_SPLIT=0."""
     layout = gemma4_cache_layout(SimpleNamespace(), None)
     assert layout["expert_partition"] == "ep1tp1_tp_axis1"
     assert layout["weight_layout"] == "tp"
+    gemma31 = SimpleNamespace(
+        num_hidden_layers=6,
+        layer_types=["sliding_attention"] * 5 + ["full_attention"],
+        hidden_size=5376,
+        num_attention_heads=32,
+        rms_norm_eps=1e-6,
+        enable_moe_block=False,
+        attention_k_eq_v=True,
+        num_key_value_heads=16,
+        head_dim=256,
+        sliding_window=1024,
+        rope_theta=1e4,
+        num_global_key_value_heads=4,
+        global_head_dim=512,
+        global_rope_theta=1e6,
+        partial_rotary_factor=0.25,
+    )
+    line = SimpleNamespace(shape=(1, 8))
+    monkeypatch.delenv("GEMMA4_SDPA_PAIR_SPLIT", raising=False)
+    try:
+        apply_build_profile((1, 8), gemma31, blackhole=True)
+        assert gemma4_cache_layout(line, None)["sdpa_pair_split"] == "v1"
+        monkeypatch.setenv("GEMMA4_SDPA_PAIR_SPLIT", "0")
+        assert "sdpa_pair_split" not in gemma4_cache_layout(line, None)
+        # GEMMA4_SDPA_GROUP_SPLIT (off in every profile): its copies key the line meshes only when set
+        monkeypatch.delenv("GEMMA4_SDPA_GROUP_SPLIT", raising=False)
+        for shape in ((1, 4), (4, 1), (1, 8)):
+            assert "sdpa_group_split" not in gemma4_cache_layout(SimpleNamespace(shape=shape), None)
+        monkeypatch.setenv("GEMMA4_SDPA_GROUP_SPLIT", "1")
+        for shape in ((1, 4), (4, 1), (1, 8)):
+            assert gemma4_cache_layout(SimpleNamespace(shape=shape), None)["sdpa_group_split"] == "v1"
+        assert "sdpa_group_split" not in gemma4_cache_layout(SimpleNamespace(shape=(2, 4)), None)
+    finally:
+        clear_decode_fusion_profile()
 
 
 # ===== merged from tests/unit/test_served_weights_dir.py: The loaders read the served checkpoint (MODEL_WEIGHTS_DIR / HF_MODEL) when the path vLLM
@@ -645,8 +770,11 @@ def test_real_state_dict_never_refused(tmp_path):
 
 
 def test_placeholder_refused_when_tensorbin_missing(tmp_path, expect_error):
+    # The experts get substate(state_dict, "experts") (moe.py): the marker must survive it.
+    experts = substate(_Placeholder({"experts.gate_up_proj": torch.empty(1)}), "experts")
+    assert getattr(experts, "is_placeholder", False)
     with expect_error(RuntimeError, "cache miss"):
-        _refuse_placeholder_on_cache_miss(_Placeholder(), [str(tmp_path / "gate_up_proj_x")], ttnn.bfloat8_b)
+        _refuse_placeholder_on_cache_miss(experts, [str(tmp_path / "gate_up_proj_x")], ttnn.bfloat8_b)
 
 
 def test_placeholder_refused_without_cache_path(expect_error):
@@ -662,10 +790,34 @@ def test_placeholder_accepted_when_all_tensorbins_present(tmp_path):
 
 
 def test_placeholder_refused_when_one_tensorbin_missing(tmp_path, expect_error):
+    """Both warm-cache placeholder guards refuse a cache that misses one tensorbin. The decode experts' guard names
+    the missing prefix. The dispatch prefill's per-expert copy (experts/dispatch_prefill.py
+    ``_refuse_placeholder_cache_miss``, GEMMA4_MOE_DISPATCH_SHARED_WEIGHTS=0): no cache path is a no-op, every
+    ``local_{j}_{gate,up,down}`` tensorbin present passes, one missing refuses and names it, and another dtype's
+    names count as missing."""
     prefixes = [str(tmp_path / "gate_up_proj_x"), str(tmp_path / "down_proj_x")]
     open(_tensorbin(prefixes[0]), "wb").close()
     with expect_error(RuntimeError, "down_proj_x"):
         _refuse_placeholder_on_cache_miss(_Placeholder(), prefixes, ttnn.bfloat8_b)
+
+    from models.demos.gemma4.tt.experts.dispatch_prefill import _refuse_placeholder_cache_miss as refuse
+
+    cache, prefix, per_chip = tmp_path / "dispatch", "layers.3.experts", 2
+    cache.mkdir()
+
+    def tensorbin(j, proj, dtype=ttnn.bfloat8_b):
+        return cache / f"{prefix}.local_{j}_{proj}_dtype_{dtype.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin"
+
+    refuse(None, prefix, per_chip, ttnn.bfloat8_b)  # no cache: nothing would be persisted
+    for j in range(per_chip):
+        for proj in ("gate", "up", "down"):
+            tensorbin(j, proj).touch()
+    refuse(str(cache), prefix, per_chip, ttnn.bfloat8_b)
+    tensorbin(1, "down").unlink()
+    with expect_error(RuntimeError, r"\(1 files, first .*local_1_down_dtype"):
+        refuse(str(cache), prefix, per_chip, ttnn.bfloat8_b)
+    with expect_error(RuntimeError, r"\(6 files, first .*local_0_gate_dtype_BFLOAT16"):
+        refuse(str(cache), prefix, per_chip, ttnn.bfloat16)
 
 
 # ===== merged from tests/unit/test_long_context_policy.py: Pin GEMMA4_LONG_CONTEXT_POLICY cutovers used by text_demo / text_demo_v2 / vLLM.
@@ -883,3 +1035,26 @@ def test_hatch_env_off_keeps_guard(monkeypatch):
     monkeypatch.setattr(uf, "is_blackhole", lambda: False)
     monkeypatch.setenv("G4_FORCE_BATCH_PREFILL", "0")
     assert Gemma4ModelArgs().disable_batched_prefill is True
+
+
+def test_galaxy_line_pair_profile():
+    """A dense build on the (1,8) line whose global KV heads sit on chip pairs takes the dense set plus the pair-split
+    decode attention, the prefix-LSE verify and the prefill sequence-parallel / divisor-slab pair; without kv_pairs,
+    on (1,4) or for the MoE build it does not."""
+    assert mo.DECODE_FUSION_OFF[mo.SDPA_PAIR_SPLIT_ENV] == mo.DECODE_FUSION_OFF[mo.VERIFY_PREFIX_LSE_ENV] == "0"
+    line = mo.decode_fusion_defaults((1, 8), blackhole=True, moe=False, kv_pairs=True)
+    assert (
+        line
+        == mo.GALAXY_LINE_PAIR_ON
+        == {
+            **mo.DENSE_DECODE_FUSION_ON,
+            mo.SDPA_PAIR_SPLIT_ENV: "1",
+            mo.VERIFY_PREFIX_LSE_ENV: "1",
+            mo.PREFILL_SEQ_PARALLEL_ENV: "1",
+            mo.PREFILL_DIVISOR_SLAB_ENV: "1",
+        }
+    )
+    assert mo.decode_fusion_defaults((1, 8), blackhole=True, moe=False) == mo.DENSE_DECODE_FUSION_ON
+    assert mo.decode_fusion_defaults((1, 4), blackhole=True, moe=False, kv_pairs=True) == mo.DENSE_DECODE_FUSION_ON
+    assert mo.decode_fusion_defaults((1, 8), blackhole=True, moe=True, kv_pairs=True) == mo.DECODE_FUSION_OFF
+    assert mo.decode_fusion_defaults((1, 8), blackhole=False, moe=False, kv_pairs=True) == mo.DECODE_FUSION_OFF

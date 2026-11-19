@@ -648,12 +648,14 @@
     # The SigLIP vision-tower unit tests (test_vision_*.py) load the real HF
     # vision weights, so they cannot run on the checked-in config.json; the
     # weight-backed e2e jobs run them. The unified (encoder-free) embedder and
-    # multimodal-merge tests are weight-free and stay here.
+    # multimodal-merge tests are weight-free and stay here. The sdpa_decode_lse device subset runs once, in the 12B
+    # entry below (its global-layer shape).
     pytest --timeout 900 \
       --ignore-glob='*/tests/unit/test_vision_*.py' \
       --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace.py \
       --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
+      --ignore=models/demos/gemma4/tests/unit/custom_ops/test_sdpa_decode_lse.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
       models/demos/gemma4/tests/unit/
@@ -684,10 +686,13 @@
     # The 12B-specific paths: attention / layer / single-layer-model at the
     # 12B dims (16 query heads, 8 KV heads: the configs the 31B's 32/16 does not
     # exercise) and the unified (encoder-free) image / audio embedders with the
-    # soft-token merge. The generic host suite runs once, on the 31B config.
+    # soft-token merge. The generic host suite runs once, on the 31B config. The sdpa_decode_lse CI subset (the
+    # global decode attention + row statistics: single chip B=1 / B=4 at 4K, the refusals, the (1,4) group split at
+    # 32K; the rest of the file is gated by GEMMA4_SDPA_LSE_TEST) runs here only.
     pytest --timeout 900 \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
+      models/demos/gemma4/tests/unit/custom_ops/test_sdpa_decode_lse.py \
       models/demos/gemma4/tests/unit/test_attention.py \
       models/demos/gemma4/tests/unit/test_layer.py \
       models/demos/gemma4/tests/unit/test_model.py \

@@ -7,6 +7,8 @@ Every chip of the mesh holds its own local experts (``TtRoutedExpert``'s placeme
 ``dispatch_prefill.py`` shards it), its own dispatched buffer, counts and region offsets; the outputs are compared
 per chip over the expert regions. Weights are bf4 and activations bf8 as in the model, so the golden is computed on
 the bf4-rounded weights and the rounded input (the kernel's own LoFi / bf16-accumulator error is what remains).
+The 26B-shape case also runs the op on the same experts in the decode copy's stacked layout
+(``GegluRoutedExpert.from_stacked``, the dispatch prefill's weights on the (4,1) column mesh).
 """
 
 import os
@@ -141,6 +143,31 @@ class _Fixture:
             max_tokens=self.max_tokens,
         )
 
+    def stacked_op(self):
+        """The op on the same experts in the routed experts' decode-copy layout (tt/experts/weights.py): per chip
+        ``[1, E, emb, 2*hidden]`` ordered ``[up | gate]`` on the last dim and ``[1, E, hidden, emb]``, DRAM-interleaved
+        TILE, slot e = global expert ``idx_per_chip[d][e]`` (GegluRoutedExpert.from_stacked)."""
+
+        def stack(fn):
+            return torch.stack([torch.stack([fn(self.torch_weights[g]) for g in ids]) for ids in self.idx_per_chip])
+
+        gate_up = stack(lambda w: torch.cat([w["up_proj"].T, w["gate_proj"].T], dim=-1))  # [D, E, emb, 2*hidden]
+        down = stack(lambda w: w["down_proj"].T)  # [D, E, hidden, emb]
+        self.stacked = [
+            ttnn.from_torch(
+                t.contiguous(),
+                dtype=self.weights_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+            )
+            for t in (gate_up, down)
+        ]
+        return GegluRoutedExpert.from_stacked(
+            self.mesh_device, *self.stacked, self.global_idx, max_tokens=self.max_tokens
+        )
+
     def run_custom(self, op):
         output = None
         if self.tt_x.layout == ttnn.TILE_LAYOUT:  # keep x pristine (the op would write in place)
@@ -204,7 +231,8 @@ def test_geglu_routed_expert_gemma_shapes(mesh_device, device_params, x_layout):
     skip_unless_supported(mesh_device)
     """The 26B-A4B dispatch-prefill shapes (hidden 2816, intermediate 704, 4 local experts, 4096 max tokens): a
     full region, a multi-chunk tail (1500 rows = 46 full + 1 partial tile rows), one partial tile (37 rows) and an
-    empty expert, rotated per chip; then the warm per-call time of the op."""
+    empty expert, rotated per chip; then the warm per-call time of the op. The same experts in the stacked
+    decode-copy layout (from_stacked: page-addressed, interleaved) against the same golden, timed beside it."""
     D = mesh_device.get_num_devices()
     pattern = [4096, 1500, 37, 0]
     counts = [pattern[d % 4 :] + pattern[: d % 4] for d in range(D)]
@@ -219,11 +247,14 @@ def test_geglu_routed_expert_gemma_shapes(mesh_device, device_params, x_layout):
         f"CB bytes {plan['cb_bytes']} of {plan['l1_budget']}"
     )
     _check(fx, custom, f"gemma/{x_layout}")
+    op_stacked = fx.stacked_op()
+    _check(fx, fx.per_chip(fx.run_custom(op_stacked)), f"gemma-stacked/{x_layout}")
     iters = int(os.environ.get("GEMMA4_GEGLU_TIMING_ITERS", "5"))
     t_custom = _time_ms(mesh_device, lambda: fx.run_custom(op), iters)
+    t_stacked = _time_ms(mesh_device, lambda: fx.run_custom(op_stacked), iters)
     logger.info(
         f"[gemma/{x_layout}] warm per-call wall time over {iters} iterations ({D} chips, sum of counts "
-        f"{sum(pattern)} rows/chip): {t_custom:.3f} ms"
+        f"{sum(pattern)} rows/chip): {t_custom:.3f} ms per-expert weights, {t_stacked:.3f} ms stacked (decode copy)"
     )
     if os.environ.get("TT_METAL_DEVICE_PROFILER") == "1":
         ttnn.ReadDeviceProfiler(mesh_device)

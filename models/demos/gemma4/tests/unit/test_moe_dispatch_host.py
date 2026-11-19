@@ -15,6 +15,7 @@ import torch.nn.functional as F
 
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import compute_constants
 from models.demos.gemma4.custom_ops.expert_gather_small import ExpertGatherSmall
+from models.demos.gemma4.custom_ops.local_routed_gather import LocalRoutedGather
 from models.demos.gemma4.custom_ops.router_topk import RouterTopk
 from models.demos.gemma4.tt.experts import dispatch_prefill as dp
 from models.demos.gemma4.tt.experts import local_routed_prefill as lrp
@@ -31,12 +32,7 @@ from models.demos.gemma4.tt.experts.dispatch_prefill import (
     ring_token_bytes,
     ring_transport_reason,
 )
-from models.demos.gemma4.tt.experts.local_routed_index import (
-    aligned_layout,
-    index_pipeline,
-    local_expert_mask,
-    local_routed_golden,
-)
+from models.demos.gemma4.tt.experts.local_routed_index import index_pipeline, local_routed_golden
 from models.demos.gemma4.tt.experts.moe_decode import kernel_decode_frame, moe_compute_impl, tile_tail_enabled
 from models.demos.gemma4.tt.moe import MoEBlock
 
@@ -44,6 +40,11 @@ from models.demos.gemma4.tt.moe import MoEBlock
 @pytest.fixture()
 def _clean_env(monkeypatch):
     monkeypatch.delenv(dp.FIT_CHUNK_ENV, raising=False)
+    monkeypatch.delenv(dp.SHARED_WEIGHTS_ENV, raising=False)
+
+
+# the 26B-A4B decode copy on the (4,1) column mesh: whole experts, tp 4 over the rows, 32 experts per chip
+_SHARED_26B = dict(ep=1, tp=4, tp_axis=0, num_local_experts=32, num_experts=128)
 
 
 @pytest.mark.usefixtures("_clean_env")
@@ -56,6 +57,16 @@ def test_fit_chunk_default_follows_the_dispatch_default():
     assert not fit_chunk_default((8, 4), blackhole=True)
     assert dp.fit_chunk_tokens(128, 4, 4096, fit=False) == 4096
     assert dp.fit_chunk_tokens(4096, 4, 4096, fit=True) == 4096
+    # the dispatch experts read the decode copy exactly where its whole-expert partition is the dispatch layout
+    reason = lambda shape, **kw: dp.shared_weights_reason(shape, **{**_SHARED_26B, **kw})  # noqa: E731
+    assert reason((4, 1)) is None  # the column mesh: one dispatch group = the tp group, chip c owns [32c, 32c+32)
+    assert reason((1, 4), tp_axis=1) is None  # the ring transport's row: the same placement along the columns
+    assert "tp group" in reason((4, 1), tp_axis=1)
+    assert "dispatch groups" in reason((2, 4), tp=4, tp_axis=1, ep=2, num_local_experts=16)
+    assert "dispatch groups" in reason((8, 4), tp=8, tp_axis=0, ep=4, num_local_experts=4)
+    assert "lanes" in reason((4, 1), ep=2)
+    assert "experts per chip" in reason((4, 1), num_local_experts=128)
+    assert "interleaved" in reason((4, 1), interleaved=False)
 
 
 @pytest.mark.usefixtures("_clean_env")
@@ -67,6 +78,11 @@ def test_fit_chunk_env_overrides_the_default(monkeypatch):
     monkeypatch.setenv(dp.FIT_CHUNK_ENV, "1")
     assert fit_chunk_default((1, 4), blackhole=True)
     assert fit_chunk_default((8, 4), blackhole=False)
+    # GEMMA4_MOE_DISPATCH_SHARED_WEIGHTS=0 brings the per-expert copy back on the shape that shares by default
+    monkeypatch.setenv(dp.SHARED_WEIGHTS_ENV, "0")
+    assert dp.shared_weights_reason((4, 1), **_SHARED_26B) == f"{dp.SHARED_WEIGHTS_ENV}=0"
+    monkeypatch.setenv(dp.SHARED_WEIGHTS_ENV, "1")
+    assert dp.shared_weights_reason((4, 1), **_SHARED_26B) is None
 
 
 @pytest.mark.usefixtures("_clean_env")
@@ -236,58 +252,64 @@ def _routing(S, E, K, seed=0, skew=None):
     return values.to(torch.bfloat16), indices.to(torch.int64)
 
 
-def test_index_pipeline_properties():
-    S, E, K = 256, 128, 8
-    _, indices = _routing(S, E, K)
-    pos, counts, offsets, inv = index_pipeline(indices, E)
-    N = S * K
-    gid = indices.reshape(-1)
-    assert pos.shape == (N,) and inv.shape == (N,)
-    # sorted by expert id, ties by pair index (stable)
-    sorted_gid = gid[pos]
-    assert torch.all(sorted_gid[1:] >= sorted_gid[:-1])
-    same = sorted_gid[1:] == sorted_gid[:-1]
-    assert torch.all(pos[1:][same] > pos[:-1][same])
-    # counts / exclusive offsets delimit every expert's region in the sorted order
-    assert int(counts.sum()) == N
-    assert torch.equal(offsets, torch.cumsum(counts, 0) - counts)
-    for g_ in (0, 5, E - 1):
-        s, n = int(offsets[g_]), int(counts[g_])
-        assert torch.all(sorted_gid[s : s + n] == g_)
-    # inverse permutation: every pair's buffer row lies inside its expert's region
-    assert torch.equal(inv[pos], torch.arange(N))
-    rows = inv  # row of pair p = t*K + k
-    assert torch.all(rows >= offsets[gid]) and torch.all(rows < offsets[gid] + counts[gid])
-
-
-def test_aligned_layout_regions():
+def test_local_routed_gather_golden_layout():
+    """``LocalRoutedGather.golden`` (the gather kernel's layout): tile-aligned regions of this chip's experts in
+    local order, each holding its tokens ascending; every local (token, slot) has its own row inside its expert's
+    region with the router's weight, every other slot SKIP_ROW with weight 0; nothing else is placed."""
     S, E, K = 256, 128, 8
     for seed, skew in ((0, None), (1, 40)):
-        _, indices = _routing(S, E, K, seed=seed, skew=skew)
-        pos, counts, _, _ = index_pipeline(indices, E)
-        aligned_offsets, dest, M = aligned_layout(indices, E)
-        gid = indices.reshape(-1).to(torch.int64)
-        assert M == S * K + 32 * E
-        # every region starts on a tile row, holds its expert's rows contiguously and ends inside the buffer
-        assert torch.all(aligned_offsets % 32 == 0)
-        assert int(aligned_offsets[-1] + counts[-1]) <= M
-        assert torch.unique(dest).numel() == dest.numel()
-        for g in (0, 40, 41, E - 1):
-            s, n = int(aligned_offsets[g]), int(counts[g])
-            rows = dest[gid[pos] == g]
-            assert torch.equal(rows, torch.arange(s, s + n))
-        # the buffer row of pair p is dest[inv[p]]
-        inv = torch.empty_like(pos)
-        inv[pos] = torch.arange(pos.numel())
-        rows_of_pair = dest[inv]
-        assert torch.all(rows_of_pair >= aligned_offsets[gid])
-        assert torch.all(rows_of_pair < aligned_offsets[gid] + counts[gid])
+        values, indices = _routing(S, E, K, seed=seed, skew=skew)
+        x = torch.arange(S).reshape(S, 1).float()
+        for base in (0, 32, 96):
+            idx = list(range(base, base + 32))
+            rows, counts, offsets, row_index, weights = LocalRoutedGather.golden(x, indices, values, idx, E)
+            local = (indices >= base) & (indices < base + 32)
+            assert int(counts.sum()) == int(local.sum()) == len(rows)
+            assert torch.all(counts[:base] == 0) and torch.all(counts[base + 32 :] == 0)
+            run = 0
+            for g in idx:
+                assert int(offsets[g]) == run and run % 32 == 0
+                toks = [rows[r] for r in range(run, run + int(counts[g]))]
+                assert toks == sorted(toks) and toks == [t for t in range(S) if g in indices[t].tolist()]
+                run += (int(counts[g]) + 31) // 32 * 32
+            assert run <= LocalRoutedGather.capacity(S, K, 32)
+            assert torch.all(row_index[~local] == LocalRoutedGather.SKIP_ROW) and torch.all(weights[~local] == 0)
+            for t, k in local.nonzero().tolist():
+                r, g = int(row_index[t, k]), int(indices[t, k])
+                assert rows[r] == t and offsets[g] <= r < offsets[g] + counts[g] and weights[t, k] == values[t, k]
+            if skew is not None and base == 32:
+                assert int(counts[40]) >= int(0.9 * S)  # the hot regions land on this chip
 
 
-def test_local_expert_mask():
-    m = local_expert_mask(128, 64, 32)
-    assert m.shape == (129,) and m.dtype == torch.int32
-    assert torch.all(m[64:96] == 0) and torch.all(m[:64] == -1) and torch.all(m[96:] == -1)
+def test_local_routed_gather_plan_units():
+    """``LocalRoutedGather.plan_units``: the T / 32 token units dealt contiguously over min(units, grid, 64) cores,
+    differing by at most one, covering every unit once (13x10 / 11x10 / 8x8 grids, 128 .. 4096 tokens)."""
+    for grid in (130, 110, 64, 8):
+        for T in (128, 2048, 2080, 4096):
+            n, starts, counts = LocalRoutedGather.plan_units(T, grid)
+            assert n == min(T // 32, grid, LocalRoutedGather.MAX_CORES)
+            assert sum(counts) == T // 32 and max(counts) - min(counts) <= 1 and min(counts) >= 1
+            assert starts == [sum(counts[:i]) for i in range(n)]
+    assert LocalRoutedGather.capacity(4096, 8, 32) == 4096 * 8 + 32 * 32
+    assert [lrp.row_bucket(r) for r in (104, 160, 256, 2065, 2080, 4096)] == [256, 256, 256, 2304, 2304, 4096]
+
+
+def test_local_routed_reason():
+    """``local_routed_reason``: the whole-expert tp-only line takes the path in either orientation; lanes, expert
+    parallelism, a tp group short of the mesh, a non-partitioning expert count or a non-interleaved copy do not."""
+    from models.demos.gemma4.tt.experts.local_routed_prefill import chip_expert_bases, local_routed_reason
+
+    ok = dict(ep=1, tp=4, num_local_experts=32, num_experts=128, top_k=8, hidden=2816)
+    assert local_routed_reason((4, 1), tp_axis=0, **ok) is None
+    assert local_routed_reason((1, 4), tp_axis=1, **ok) is None
+    assert local_routed_reason((4, 1), tp_axis=0, lane_sharded=True, **ok) is not None
+    assert local_routed_reason((4, 1), tp_axis=0, interleaved=False, **ok) is not None
+    assert local_routed_reason((1, 1), tp_axis=1, **{**ok, "tp": 1, "num_local_experts": 128}) is not None
+    assert local_routed_reason((2, 4), tp_axis=1, **{**ok, "ep": 2, "num_local_experts": 16}) is not None
+    assert local_routed_reason((2, 4), tp_axis=1, **ok) is not None  # tp 4 of an 8-chip mesh
+    assert local_routed_reason((4, 1), tp_axis=0, **{**ok, "num_local_experts": 16}) is not None
+    assert chip_expert_bases((4, 1), 0, 32) == [[0], [32], [64], [96]]
+    assert chip_expert_bases((1, 4), 1, 32) == [[0, 32, 64, 96]]
 
 
 def _dense_reference(x, values, indices, base, num_local, gate, up, down):
@@ -485,69 +507,45 @@ def test_tile_tail_only_on_decode_frames(batch_per_device):
     assert tile_tail_enabled(True, True, True, 8) is False  # a partial row tile per chip
 
 
-# ===== the local routed prefill's shared expert-output buffer (``local_routed_prefill._out_buffer``, the ``output`` of the
-# GeGLU routed-expert generic op): keyed by the mesh's own id and owned by the module cache. The 2026-10-25 CI flake
-# (test_experts_local_routed_chunked after test_experts_local_routed[prefill_128], both on the 5120-row buffer): the
-# key was ``id(mesh_device)``, the reopened mesh reused the closed one's Python address, and the op was enqueued on a
-# buffer whose mesh was gone ("Can't get device from mesh buffer, already deallocated").
+# ===== the local routed prefill's defaults and its warm-cache contract
 
 
-class _Mesh:
-    """A stand-in MeshDevice: only ``id()`` (the process-wide mesh id) matters to the cache."""
+def test_local_routed_prefill_default(monkeypatch):
+    """``local_routed_prefill_default``: on wherever the dispatch path is the default (the Blackhole (4,1) column
+    mesh), the env var wins both ways (0 returns to the dispatch path, 1 asks for it on the (1,4) row mesh)."""
+    from models.demos.gemma4.tt.mesh_orientation import LOCAL_ROUTED_ENV, local_routed_prefill_default
 
-    def __init__(self, mesh_id):
-        self._mesh_id = mesh_id
-
-    def id(self):
-        return self._mesh_id
-
-
-@pytest.fixture
-def out_buffer_cache(monkeypatch):
-    """``_out_buffer`` with its device calls stubbed: zeros / typecast hand out tagged objects, deallocate marks them;
-    the entries the test adds are dropped afterwards."""
-    made = []
-
-    class _Buf:
-        def __init__(self, tag):
-            self.tag, self.alive = tag, True
-
-    monkeypatch.setattr(lrp.ttnn, "zeros", lambda *a, **k: _Buf("bf16"))
-    monkeypatch.setattr(lrp.ttnn, "typecast", lambda t, dtype: made.append(_Buf("bf8")) or made[-1])
-    monkeypatch.setattr(lrp.ttnn, "deallocate", lambda t: setattr(t, "alive", False))
-    keys_before = set(lrp._OUT_BUFFERS)
-    yield made
-    for k in set(lrp._OUT_BUFFERS) - keys_before:
-        lrp._OUT_BUFFERS.pop(k, None)
+    monkeypatch.delenv(LOCAL_ROUTED_ENV, raising=False)
+    monkeypatch.delenv("GEMMA4_MOE_DISPATCH_PREFILL", raising=False)
+    assert local_routed_prefill_default((4, 1), blackhole=True)
+    assert not local_routed_prefill_default((1, 4), blackhole=True)
+    assert not local_routed_prefill_default((4, 1), blackhole=False)
+    monkeypatch.setenv(LOCAL_ROUTED_ENV, "0")
+    assert not local_routed_prefill_default((4, 1), blackhole=True)
+    monkeypatch.setenv(LOCAL_ROUTED_ENV, "1")
+    assert local_routed_prefill_default((1, 4), blackhole=True)
 
 
-def _experts_on(mesh, hidden=2816):
-    inst = object.__new__(lrp.Gemma4LocalRoutedExperts)
-    inst.mesh_device, inst.H = mesh, hidden
-    return inst
+def test_local_routed_cache_identity_and_knobs(monkeypatch):
+    """The local path reads the decode copy and writes no cache file of its own: the warm-cache identity's
+    ``moe_local_routed_prefill`` key is the same for every setting of the knob (no forced cold load, no marker
+    certifying files that do not exist), and the chunk / threshold knobs parse as documented."""
+    from models.demos.gemma4.tt.common import gemma4_cache_layout
 
-
-def test_local_routed_out_buffer_key_is_the_mesh_id():
-    """Equal mesh ids share a key whatever the Python objects are; a new mesh id, row count or width is a new key."""
-    key = lrp._out_buffer_key
-    assert key(_Mesh(7), 5120, 2816) == key(_Mesh(7), 5120, 2816) == (7, 5120, 2816)
-    assert key(_Mesh(7), 5120, 2816) != key(_Mesh(8), 5120, 2816)
-    assert key(_Mesh(7), 5120, 2816) != key(_Mesh(7), 20480, 2816)
-    assert key(_Mesh(7), 5120, 2816) != key(_Mesh(7), 5120, 2560)
-
-
-def test_local_routed_out_buffer_owned_per_mesh(out_buffer_cache):
-    """Layers on one mesh share the buffer; a reopened mesh (new mesh id, the same or any Python address) gets its
-    own; the cache keeps every buffer it handed out alive (only the bf16 seed is freed)."""
-    made = out_buffer_cache
-    old = _Mesh(100)
-    layer0, layer1 = _experts_on(old), _experts_on(old)
-    first = layer0._out_buffer(5120)
-    assert layer1._out_buffer(5120) is first and len(made) == 1
-    del old, layer0, layer1  # the previous test case closes and frees its mesh ...
-    new = _Mesh(101)  # ... and the next one opens a new mesh (same shape, possibly the same Python address)
-    second = _experts_on(new)._out_buffer(5120)
-    assert second is not first and len(made) == 2
-    assert _experts_on(new)._out_buffer(20480) is not second and len(made) == 3
-    assert all(b.alive for b in made), "the cache owns the buffers it handed to the op"
-    assert lrp._OUT_BUFFERS[lrp._out_buffer_key(_Mesh(100), 5120, 2816)] is first
+    mesh, cfg = SimpleNamespace(shape=(4, 1)), SimpleNamespace(tp=4, ep=1, tp_axis=0, weight_fracture=False)
+    layouts = []
+    for v in (None, "0", "1"):
+        if v is None:
+            monkeypatch.delenv(lrp.LOCAL_ROUTED_ENV, raising=False)
+        else:
+            monkeypatch.setenv(lrp.LOCAL_ROUTED_ENV, v)
+        layouts.append(gemma4_cache_layout(mesh, cfg))
+    assert layouts[0] == layouts[1] == layouts[2] and layouts[0]["moe_local_routed_prefill"] == "0"
+    monkeypatch.delenv(lrp.LOCAL_ROUTED_CHUNK_ENV, raising=False)
+    assert lrp.local_routed_chunk() == 4096
+    monkeypatch.setenv(lrp.LOCAL_ROUTED_CHUNK_ENV, "2048")
+    assert lrp.local_routed_chunk() == 2048
+    monkeypatch.delenv(lrp.LOCAL_ROUTED_MIN_TOKENS_ENV, raising=False)
+    assert lrp.local_routed_min_tokens(128) == 128
+    monkeypatch.setenv(lrp.LOCAL_ROUTED_MIN_TOKENS_ENV, "512")
+    assert lrp.local_routed_min_tokens(128) == 512
