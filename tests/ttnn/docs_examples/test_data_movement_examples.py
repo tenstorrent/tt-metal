@@ -27,8 +27,8 @@ def test_nonzero(device):
     count_tensor, indices_tensor = ttnn.nonzero(input_tensor_ttnn)
     count = int(ttnn.to_torch(count_tensor)[0, 0, 0, 0])
     indices = ttnn.to_torch(indices_tensor)[0, 0, 0, : 4 * count].reshape(count, 4)
-    logger.info(f"Non-zero count: {count}")  # 3
-    logger.info(f"Non-zero indices: {indices.tolist()}")  # [[0, 0, 0, 3], [0, 0, 0, 10], [0, 0, 0, 20]]
+    logger.debug(f"Non-zero count: {count}")  # 3
+    logger.debug(f"Non-zero indices: {indices.tolist()}")  # [[0, 0, 0, 3], [0, 0, 0, 10], [0, 0, 0, 20]]
 
 
 def test_pad(device):
@@ -220,7 +220,7 @@ def test_indexed_fill(device):
 
     # Perform indexed fill
     output_tensor = ttnn.indexed_fill(batch_id_ttnn, input_tensor_a, input_tensor_b)
-    logger.info("Indexed Fill Output Tensor Shape:", output_tensor.shape)
+    logger.debug("Indexed Fill Output Tensor Shape:", output_tensor.shape)
 
 
 def test_gather(device):
