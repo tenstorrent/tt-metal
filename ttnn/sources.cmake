@@ -201,6 +201,7 @@ set(TTNNCPP_API_HEADERS
     api/ttnn/common/constants.hpp
     api/ttnn/common/guard.hpp
     api/ttnn/common/queue_id.hpp
+    api/ttnn/compiled_program.hpp
     api/ttnn/config.hpp
     api/ttnn/core.hpp
     api/ttnn/device.hpp
