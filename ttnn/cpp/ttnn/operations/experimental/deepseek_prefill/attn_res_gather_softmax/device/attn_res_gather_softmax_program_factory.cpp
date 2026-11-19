@@ -16,6 +16,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
@@ -66,9 +67,12 @@ enum WriterCommonArg : uint32_t {
     kWriterGatherX,
     kWriterGatherY,
 };
-// Where the gather kernel's statistics-tensor address and semaphore address sit.
+// Where the gather kernel's statistics-tensor address, rank and semaphore address sit.
 constexpr uint32_t kGatherStatsAddrIdx = 0;
+constexpr uint32_t kGatherRankIdx = 1;
 constexpr uint32_t kGatherSemAddrIdx = 2;
+// The gather args from here on (the release multicasts, fabric connections and peers) are per chip.
+constexpr uint32_t kGatherRoutesIdx = 3;
 
 }  // namespace
 
@@ -177,7 +181,7 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     ////////////////////////////////////////////////////////////////////////////
     //                            Core Assignment
     ////////////////////////////////////////////////////////////////////////////
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*mesh_device);
     const auto grid = mesh_device->compute_with_storage_grid_size();
 
     // One split for both passes (see `kernels/attn_res_core_runs.hpp`): a unit is a run of
@@ -487,7 +491,7 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
             continue;
         }
         const auto peer_node = fabric_node_ids.at(p);
-        const auto direction = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, peer_node);
+        const auto direction = tt::tt_fabric::get_eth_forwarding_direction(*mesh_device, src_fabric_node_id, peer_node);
         TT_FATAL(
             direction.has_value(),
             "No 2D fabric forwarding direction from attn_res_gather_softmax source {} to peer {}",
@@ -545,12 +549,64 @@ AttnResGatherSoftmaxMeshWorkloadFactory::create_mesh_workload(
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    for (const auto& mesh_coord_range : tensor_coords.ranges()) {
-        for (const auto& mesh_coord : mesh_coord_range) {
-            const ttnn::MeshCoordinateRange single_coord_range{mesh_coord, mesh_coord};
-            auto cached_program = create_at(operation_attributes, mesh_coord, tensor_args, tensor_return_value);
-            shared_variables[single_coord_range] = cached_program.shared_variables;
-            mesh_workload.add_program(single_coord_range, std::move(cached_program.program));
+    for (const auto& range : tensor_coords.ranges()) {
+        std::vector<cached_program_t> chip_programs;
+        for (const auto& mesh_coord : range) {
+            chip_programs.push_back(create_at(operation_attributes, mesh_coord, tensor_args, tensor_return_value));
+        }
+        // Per chip: the rank (the writer's common arg and a gather arg) and the gather core's routes. Everything else
+        // is the same on every chip, so a range runs one program with these as per-device runtime args, as long as
+        // the chips open the same number of fabric connections (each one adds the same semaphores to the program).
+        const auto& first_vars = chip_programs.front().shared_variables;
+        std::vector<std::vector<uint32_t>> chip_gather_args;
+        std::vector<uint32_t> chip_ranks;
+        for (auto& chip : chip_programs) {
+            const auto& vars = chip.shared_variables;
+            const auto& gather_args =
+                tt::tt_metal::GetRuntimeArgs(chip.program, vars.gather_kernel_id, vars.gather_core);
+            chip_gather_args.emplace_back(gather_args.data(), gather_args.data() + gather_args.size());
+            chip_ranks.push_back(tt::tt_metal::GetCommonRuntimeArgs(chip.program, vars.writer_kernel_id)[kWriterRank]);
+        }
+        const bool merge =
+            chip_programs.size() > 1 &&
+            tt::tt_metal::distributed::ArePerDeviceRuntimeArgsSupported(*tensor_args.partial.device(), range) &&
+            std::all_of(chip_gather_args.begin(), chip_gather_args.end(), [&](const auto& args) {
+                return args.size() == chip_gather_args.front().size();
+            });
+        if (!merge) {
+            auto chip_program = chip_programs.begin();
+            for (const auto& mesh_coord : range) {
+                const ttnn::MeshCoordinateRange single_coord_range{mesh_coord, mesh_coord};
+                shared_variables[single_coord_range] = chip_program->shared_variables;
+                mesh_workload.add_program(single_coord_range, std::move(chip_program->program));
+                ++chip_program;
+            }
+            continue;
+        }
+        shared_variables[range] = first_vars;
+        mesh_workload.add_program(range, std::move(chip_programs.front().program));
+        // The fields leave out the words override_runtime_arguments patches on the program (the statistics and
+        // semaphore addresses): inside a field the per-device values would win over the patch.
+        const uint32_t routes_words = static_cast<uint32_t>(chip_gather_args.front().size()) - kGatherRoutesIdx;
+        std::vector<uint32_t> gather_ranks;
+        std::vector<uint32_t> gather_routes;
+        for (const auto& args : chip_gather_args) {
+            gather_ranks.push_back(args[kGatherRankIdx]);
+            gather_routes.insert(gather_routes.end(), args.begin() + kGatherRoutesIdx, args.end());
+        }
+        tt::tt_metal::distributed::SetRuntimeArgsPerDevice(
+            mesh_workload, range, first_vars.writer_kernel_id, std::nullopt, kWriterRank, 1, chip_ranks);
+        tt::tt_metal::distributed::SetRuntimeArgsPerDevice(
+            mesh_workload, range, first_vars.gather_kernel_id, first_vars.gather_core, kGatherRankIdx, 1, gather_ranks);
+        if (routes_words > 0) {
+            tt::tt_metal::distributed::SetRuntimeArgsPerDevice(
+                mesh_workload,
+                range,
+                first_vars.gather_kernel_id,
+                first_vars.gather_core,
+                kGatherRoutesIdx,
+                routes_words,
+                gather_routes);
         }
     }
 

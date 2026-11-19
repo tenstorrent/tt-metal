@@ -31,7 +31,12 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     generate_input_dim,
 )
+from helpers.tile_constants import get_tile_params
 from helpers.utils import passed_test, result_tensor
+
+# Tile shapes the unpack_tilize tests sweep: full 32x32 tiles and two-face 16x32 tiles. Shared with
+# the perf module so the two sweeps stay aligned.
+UNPACK_TILIZE_TILE_DIMENSIONS = [[32, 32], [16, 32]]
 
 
 def _get_block_config(formats, dest_acc, unpack_to_dest, tile_count):
@@ -60,11 +65,11 @@ def _get_block_config(formats, dest_acc, unpack_to_dest, tile_count):
             DataFormat.Fp8_e4m3,
         ]
     ),
-    num_faces=[2, 4],
+    tile_dimensions=UNPACK_TILIZE_TILE_DIMENSIONS,
 )
 def test_unpack_tilize_float(
     formats,
-    num_faces,
+    tile_dimensions,
 ):
     if (
         formats.input_format == DataFormat.Fp8_e4m3
@@ -77,55 +82,55 @@ def test_unpack_tilize_float(
     if formats.input_format == DataFormat.Bfp8_b:
         pytest.skip("Unpack Tilize does not support Bfp8_b input format")
 
-    if formats.output_format == DataFormat.Bfp8_b and num_faces != FACES_PER_TILE:
-        pytest.skip("Bfp8_b output format only works with num_faces=4")
+    if formats.output_format == DataFormat.Bfp8_b and tile_dimensions != [32, 32]:
+        pytest.skip("Bfp8_b output format only works with 32x32 tiles (num_faces=4)")
 
-    unpack_tilize(formats, num_faces=num_faces)
+    unpack_tilize(formats, tile_dimensions=tile_dimensions)
 
 
 @parametrize(
     formats=input_output_formats([DataFormat.Float32], same=True),
     dest_acc=[DestAccumulation.Yes],
-    num_faces=[2, 4],
+    tile_dimensions=UNPACK_TILIZE_TILE_DIMENSIONS,
 )
 def test_unpack_tilize_float32_lossless(
     formats,
     dest_acc,
-    num_faces,
+    tile_dimensions,
 ):
     unpack_tilize(
         formats,
         unpack_to_dest=True,
         validate_lossless=True,
         dest_acc=dest_acc,
-        num_faces=num_faces,
+        tile_dimensions=tile_dimensions,
     )
 
 
 @parametrize(
     formats=input_output_formats([DataFormat.Int32]),
-    num_faces=[2, 4],
+    tile_dimensions=UNPACK_TILIZE_TILE_DIMENSIONS,
 )
 def test_unpack_tilize_int(
     formats,
-    num_faces,
+    tile_dimensions,
 ):
-    unpack_tilize(formats, unpack_to_dest=True, num_faces=num_faces)
+    unpack_tilize(formats, unpack_to_dest=True, tile_dimensions=tile_dimensions)
 
 
 @parametrize(
     formats=input_output_formats([DataFormat.Int8]),
-    num_faces=[2, 4],
+    tile_dimensions=UNPACK_TILIZE_TILE_DIMENSIONS,
 )
 def test_unpack_tilize_int8(
     formats,
-    num_faces,
+    tile_dimensions,
 ):
     unpack_tilize(
         formats,
         unpack_to_dest=False,
         dest_acc=DestAccumulation.Yes,
-        num_faces=num_faces,
+        tile_dimensions=tile_dimensions,
     )
 
 
@@ -142,7 +147,7 @@ def unpack_tilize(
     unpack_to_dest=False,
     validate_lossless=False,
     dest_acc=None,
-    num_faces=4,
+    tile_dimensions=None,
     input_dimensions=None,
     *,
     is_perf=False,
@@ -151,6 +156,11 @@ def unpack_tilize(
     loop_factor=1,
 ):
     input_dimensions = input_dimensions or [64, 64]
+    # 32x32 is four faces; 16x32 is two (face_r_dim stays 16). num_faces follows the tile shape.
+    tile_dimensions = list(tile_dimensions or [32, 32])
+    face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
+    assert face_r_dim == 16, "unpack_tilize runs full-face tiles only"
+    num_faces = num_faces_r_dim * num_faces_c_dim
     if is_perf:
         src_A = src_B = None
         tile_cnt_A = tile_cnt_B = (input_dimensions[0] * input_dimensions[1]) // (
