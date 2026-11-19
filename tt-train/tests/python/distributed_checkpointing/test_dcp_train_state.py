@@ -16,6 +16,7 @@ import sys
 import numpy as np
 import pytest
 import torch
+import ttnn
 
 from dcp_oracle import MISREAD_RNG, WRONG_LENGTH_RNG, Loader, advance_generators, host_draws
 
@@ -92,10 +93,18 @@ def test_generator_without_stored_state_warns(monkeypatch):
     assert restored == ["rng.ttml", "rng.python", "rng.numpy", "rng.ttml_init"]
 
 
-def test_capture_and_restore_default_to_this_process_world_rank():
-    state = capture_rng()  # one process: world rank 0
-    assert list(state["ranks"]) == [str(this_world_rank())] == ["0"]
+def test_capture_and_restore_default_to_this_process_world_rank(monkeypatch):
+    """Without a world_rank, both take this process's rank in the MPI world: 0 without a distributed context, here
+    3 under a faked one, so a default hard-coded to 0 fails."""
+    assert this_world_rank() == 0 and list(capture_rng()["ranks"]) == ["0"]
+    for name, value in (("distributed_context_is_initialized", True), ("distributed_context_world_rank", 3)):
+        monkeypatch.setattr(ttnn, name, lambda value=value: value, raising=False)
+    assert this_world_rank() == 3
+    state = capture_rng()
+    assert list(state["ranks"]) == ["3"]
     assert restore_rng(state)[0] == "rng.ttml"
+    with pytest.warns(UserWarning, match="no RNG state for world rank 3"):
+        assert restore_rng(capture_rng(world_rank=0)) == []
 
 
 def test_a_rank_restores_only_its_own_entry():
