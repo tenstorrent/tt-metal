@@ -128,8 +128,8 @@ __attribute__((noinline)) void two_level_gather(
     const uint32_t num_blocks = div_up(search_len, block_keys);
     const uint32_t last_block = num_blocks - 1;
     const uint32_t last_block_live = search_len - last_block * block_keys;
-    // 2 KB spans while at least one block in 8 is selected (up to about 512K keys), 1 KB on sparser rows: past that a 2
-    // KB span rarely holds two selected blocks, and the wider range reads cost more than the reads they save.
+    // 2 KB spans for rows of at most 8 blocks per selected slot (up to about 512K keys), 1 KB for longer rows, where
+    // the wider range reads measured slower than the reads they save.
     const uint32_t span_shift = num_blocks > 8 * selected_blocks ? 4 : 5;
     const uint8_t noc_id = noc.get_noc_id();
     const uint64_t row_noc_addr = input.get_noc_addr(row, 0, noc_id);
@@ -199,7 +199,7 @@ __attribute__((noinline)) void two_level_gather(
                     ++slot;
                     continue;
                 }
-                // Slots staged back to back (consecutive blocks inside a group) move in one copy.
+                // Slots whose staged sources are contiguous (consecutive members, or adjacent groups) move in one copy.
                 uint32_t count = 1;
                 while (slot + count < blocks_per_chunk && copy_from[slot + count] == from + count * block_bytes) {
                     copy_from[slot + count] = 0;
