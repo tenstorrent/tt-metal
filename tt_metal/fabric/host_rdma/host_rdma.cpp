@@ -17,6 +17,7 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include <tt-umd/driver_atomics.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -30,6 +31,8 @@
 #include "impl/context/metal_context.hpp"
 #include "llrt/hal.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
+#include "tt_metal/distributed/core_writer.hpp"
+#include "tt_metal/distributed/noc_pinned_buffer.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
@@ -100,38 +103,31 @@ uint32_t UmdDmaDeviceWriter::read_word(ChipId chip, const tt_metal::CoreCoord& v
 PinnedHostMemoryTarget::PinnedHostMemoryTarget(tt_metal::distributed::MeshDevice& mesh_device, size_t num_words) :
     num_words_(num_words) {
     TT_FATAL(num_words > 0, "A host memory target needs at least one word");
+    TT_FATAL(mesh_device.get_devices().size() == 1, "A host memory target is mapped for a unit mesh (one chip)");
+    chip_ = mesh_device.get_devices().front()->id();
     constexpr size_t page_bytes = 4096;
-    alloc_bytes_ = ((num_words * kHostWordStrideBytes) + page_bytes - 1) / page_bytes * page_bytes;
-    void* p = mmap(nullptr, alloc_bytes_, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    TT_FATAL(p != MAP_FAILED, "Failed to allocate {} B of host memory for a host memory target", alloc_bytes_);
-    std::memset(p, 0, alloc_bytes_);
-    words_ = static_cast<uint32_t*>(p);
+    const size_t alloc_bytes = ((num_words * kHostWordStrideBytes) + page_bytes - 1) / page_bytes * page_bytes;
+    void* p = mmap(nullptr, alloc_bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    TT_FATAL(p != MAP_FAILED, "Failed to allocate {} B of host memory for a host memory target", alloc_bytes);
+    std::memset(p, 0, alloc_bytes);
+    words_ =
+        std::shared_ptr<uint32_t[]>(static_cast<uint32_t*>(p), [alloc_bytes](uint32_t* w) { munmap(w, alloc_bytes); });
 
-    // The mapping outlives the pin: the pin holds no ownership (the destructor unmaps after releasing it).
-    tt::tt_metal::HostBuffer host_buffer(
-        ttsl::Span<uint32_t>(words_, alloc_bytes_ / sizeof(uint32_t)),
-        tt::tt_metal::MemoryPin(std::shared_ptr<uint32_t[]>(words_, [](uint32_t*) {})));
-    const tt_metal::distributed::MeshCoordinateRangeSet range(
-        tt_metal::distributed::MeshCoordinateRange(mesh_device.shape()));
-    pinned_ = tt_metal::experimental::PinnedMemory::Create(mesh_device, range, host_buffer, /*map_to_noc=*/true);
-}
-
-PinnedHostMemoryTarget::~PinnedHostMemoryTarget() {
-    pinned_.reset();
-    if (words_ != nullptr) {
-        munmap(words_, alloc_bytes_);
-    }
+    auto pinned = tt_metal::distributed::pin_host_memory_for_noc(
+        mesh_device,
+        tt_metal::distributed::MeshCoordinateRangeSet(tt_metal::distributed::MeshCoordinateRange(mesh_device.shape())),
+        words_,
+        alloc_bytes / sizeof(uint32_t),
+        chip_,
+        "host_rdma host memory target");
+    pinned_ = std::move(pinned.pinned_memory);
+    base_ = DeviceVisibleAddress{.noc_xy = pinned.pcie_xy_enc, .addr = pinned.addr};
 }
 
 DeviceVisibleAddress PinnedHostMemoryTarget::device_address(ChipId chip, size_t index) const {
     TT_FATAL(index < num_words_, "Word {} is past the target's {} words", index, num_words_);
-    const auto noc_addr = pinned_->get_noc_addr(chip);
-    TT_FATAL(
-        noc_addr.has_value() && noc_addr->device_id == chip,
-        "The pinned host memory is not mapped to the NoC of chip {} (the chip must be PCIe-attached and own the "
-        "pinned mapping)",
-        chip);
-    return DeviceVisibleAddress{.noc_xy = noc_addr->pcie_xy_enc, .addr = noc_addr->addr + index * kHostWordStrideBytes};
+    TT_FATAL(chip == chip_, "The host memory target is mapped for chip {}, not chip {}", chip_, chip);
+    return DeviceVisibleAddress{.noc_xy = base_.noc_xy, .addr = base_.addr + index * kHostWordStrideBytes};
 }
 
 uint32_t PinnedHostMemoryTarget::read(size_t index) const {
@@ -651,7 +647,12 @@ HostRdmaService::HostRdmaService(
     std::memset(static_cast<void*>(layout.get()), 0, sizeof(sabi::Layout));
     layout->header.staging_addr = staging_addr;
     layout->header.staging_stride = staging_stride;
-    cluster_.write_core(layout.get(), sizeof(sabi::Layout), tt_cxy_pair(chip_, core_), layout_addr_);
+    // Requests, counts and flags go through a window onto the core where one is free (#64622: strict MMIO writes
+    // into Tensix L1 cost about a microsecond each). The layout goes first and is flushed before the kernel starts.
+    writer_ = std::make_unique<tt_metal::distributed::CoreWriter>(
+        cluster_, chip_, core_, staging_addr, /*l1_offset=*/0, "host_rdma service");
+    writer_->write(layout.get(), sizeof(sabi::Layout), layout_addr_);
+    tt_driver_atomics::sfence();
     cluster_.l1_barrier(chip_, {core_});
 
     tt_metal::Program program = tt_metal::CreateProgram();
@@ -696,7 +697,11 @@ uint32_t HostRdmaService::read_word(uint32_t addr) const {
 }
 
 void HostRdmaService::write_word(uint32_t addr, uint32_t value) {
-    cluster_.write_reg(&value, tt_cxy_pair(chip_, core_), addr);
+    // A word publishes what the host wrote before it (a produced count, an active flag): the earlier writes leave
+    // the host first, and on the writer's one static VC they reach the core first.
+    tt_driver_atomics::sfence();
+    writer_->write(&value, sizeof(value), addr);
+    tt_driver_atomics::sfence();
 }
 
 size_t HostRdmaService::channel_toward(FabricNodeId dst) {
@@ -805,15 +810,14 @@ void HostRdmaService::post(Channel& ch, std::span<const sabi::Request> requests)
                     describe());
             }
         }
-        // As many as fit, up to the queue's end: one block write, then (ordered after it: both are strict MMIO
-        // writes) one produced count covering them all.
+        // As many as fit, up to the queue's end: one block write, then (fenced after it) one produced count covering
+        // them all.
         const uint32_t slot = ch.produced % sabi::QUEUE_DEPTH;
         const uint32_t count =
             static_cast<uint32_t>(std::min<size_t>({requests.size() - done, room, sabi::QUEUE_DEPTH - slot}));
-        cluster_.write_core(
+        writer_->write(
             requests.data() + done,
             count * sizeof(sabi::Request),
-            tt_cxy_pair(chip_, core_),
             channel_addr(ch.entry) + offsetof(sabi::Channel, queue) +
                 slot * static_cast<uint32_t>(sizeof(sabi::Request)));
         ch.produced += count;

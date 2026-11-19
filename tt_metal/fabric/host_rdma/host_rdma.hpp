@@ -44,6 +44,7 @@ class Cluster;
 namespace tt::tt_metal {
 class Hal;
 namespace distributed {
+class CoreWriter;
 class MeshDevice;
 }
 namespace experimental {
@@ -124,7 +125,6 @@ class PinnedHostMemoryTarget final : public HostMemoryTarget {
 public:
     // `num_words` words of pinned memory, zeroed, mapped for the unit mesh `mesh_device`.
     PinnedHostMemoryTarget(tt_metal::distributed::MeshDevice& mesh_device, size_t num_words);
-    ~PinnedHostMemoryTarget() override;
 
     size_t num_words() const override { return num_words_; }
     DeviceVisibleAddress device_address(ChipId chip, size_t index) const override;
@@ -133,9 +133,10 @@ public:
 
 private:
     size_t num_words_;
-    size_t alloc_bytes_;
-    uint32_t* words_ = nullptr;
+    std::shared_ptr<uint32_t[]> words_;  // page-aligned, unmapped once the pin (which shares it) is released
     std::shared_ptr<tt_metal::experimental::PinnedMemory> pinned_;
+    ChipId chip_ = 0;
+    DeviceVisibleAddress base_{};  // word 0, as chip_ addresses it
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -396,6 +397,7 @@ private:
     void write_word(uint32_t addr, uint32_t value);
 
     std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device_;
+    std::unique_ptr<tt_metal::distributed::CoreWriter> writer_;  // every host write to the service core
     const tt::Cluster& cluster_;
     ChipId chip_ = 0;
     FabricNodeId node_{MeshId{0}, 0};
