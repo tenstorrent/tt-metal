@@ -566,3 +566,4 @@
 - Owner: biggest opportunities first; the expert weight stream is not a target (highly optimized). Order: P.81
   attention (~13.6 ms) -> X.10 host profile (decides the ~14 ms host lever; minutes) -> P.83 mHC (~6) -> P.82 MoE
   head (~4.8 on real text).
+- 12:03 UTC ttnn rebuilt after the P.84 revert (35 s). DEVICE OPENS (justified): P.81 attention: the runner restarts once for the new .so (1 open, layers 0-20); the agent's checks and the A/B sides through it (a C++/.so or kernel change by the agent costs one restart each); the accept gate's fresh full process once if accepted. RAM unaccounted 179.9 GiB.
