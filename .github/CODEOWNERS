@@ -442,6 +442,8 @@ ttnn/cpp/ttnn/operations/experimental/deepseek/**/CMakeLists.txt @tenstorrent/cs
 ttnn/cpp/ttnn/operations/experimental/experimental_nanobind.cpp @mbezuljTT @ppetrovicTT @pavlepopovic @tenstorrent/metalium-developers-ops-leads
 ttnn/cpp/ttnn/operations/experimental/fused_msda/ @ctr-mmicic @ctr-ikasic @ctr-mdukic
 ttnn/cpp/ttnn/operations/experimental/fused_msda/**/CMakeLists.txt @ctr-mmicic @ctr-ikasic @ctr-mdukic @tenstorrent/metalium-developers-infra
+ttnn/cpp/ttnn/operations/experimental/gdn/ @tenstorrent/metalium-developers-gdn
+ttnn/cpp/ttnn/operations/experimental/gdn/**/CMakeLists.txt @tenstorrent/metalium-developers-gdn @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/gemma4/ @svuckovicTT @amilovanovicTT @sdjordjevicTT @kmabeeTT
 ttnn/cpp/ttnn/operations/experimental/gemma4/**/CMakeLists.txt @svuckovicTT @amilovanovicTT @sdjordjevicTT @kmabeeTT @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/high_bw_all_gather/ @tenstorrent/metalium-developers-sdpa
@@ -582,6 +584,7 @@ tests/ttnn/**/operations/experimental/test_fused_msda*.py @ctr-mmicic @ctr-ikasi
 tests/ttnn/**/operations/experimental/test_modulated_deform_conv2d*.py @ctr-mmicic @ctr-ikasic @ctr-mdukic
 tests/ttnn/nightly/unit_tests/operations/experimental/quasar/ @tenstorrent/metalium-developers-mmfusedreduce
 tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/ @tenstorrent/metalium-developers-sdpa
+tests/ttnn/nightly/unit_tests/operations/experimental/gdn/ @tenstorrent/metalium-developers-gdn
 tests/ttnn/nightly/unit_tests/operations/experimental/kda/ @tenstorrent/metalium-developers-sdpa
 tests/ttnn/nightly/unit_tests/operations/experimental/nomic_embed_text_v2_moe/ @avelickovTT @kgrujcic-tt @mbezuljTT
 tests/ttnn/nightly/unit_tests/operations/experimental/test_rgb_to_yuv.py @cglagovichTT @jonathansuTT
