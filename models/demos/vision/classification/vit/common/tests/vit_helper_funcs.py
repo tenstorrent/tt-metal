@@ -3,6 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import re
+import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -62,10 +65,29 @@ def card_type():
     return paths[0].read_text().strip() if paths else None
 
 
-def card_target(targets):
-    """The value of targets, keyed by card type prefix, for this machine's card, or None."""
+def card_target(targets, grid_x):
+    """The value of targets, keyed by (card type prefix, device grid width), for this machine, or None."""
     card = card_type()
-    return next((value for prefix, value in targets.items() if card and card.startswith(prefix)), None)
+    return next(
+        (value for (prefix, width), value in targets.items() if card and card.startswith(prefix) and width == grid_x),
+        None,
+    )
+
+
+def device_grid_width():
+    """The worker grid width of device 0.
+
+    Read in a child process because opening the device here keeps the cluster open in this process, and a
+    profiled run started from the same process then waits on the device forever.
+    """
+    script = (
+        "import ttnn\n"
+        "device = ttnn.open_device(device_id=0)\n"
+        "print(f'grid_x={device.compute_with_storage_grid_size().x}')\n"
+        "ttnn.close_device(device)\n"
+    )
+    output = subprocess.run([sys.executable, "-c", script], check=True, capture_output=True, text=True).stdout
+    return int(re.search(r"^grid_x=(\d+)$", output, re.MULTILINE).group(1))
 
 
 def available_iterations(batch_size, iterations=None):

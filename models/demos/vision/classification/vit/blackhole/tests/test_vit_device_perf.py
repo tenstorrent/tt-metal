@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.vision.classification.vit.common.tests.vit_helper_funcs import card_target
+from models.demos.vision.classification.vit.common.tests.vit_helper_funcs import card_target, device_grid_width
 from models.demos.vision.classification.vit.common.tests.vit_test_infra import create_test_infra
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 
@@ -18,11 +18,14 @@ except ModuleNotFoundError:
     use_signpost = False
 
 
-# Device kernel throughput at batch 10 by card type prefix. The model's grid width is the largest divisor of
-# 12 that fits the card, so P100's 11-wide grid runs on 6 core columns and P150's on 12.
+# Device kernel throughput at batch 10 by card type prefix and device grid width. The model's grid width is
+# the largest divisor of 12 that fits the device grid, so an 11-wide grid (P100, or P150 with two Tensix
+# columns disabled) runs on 6 core columns and a 12- or 13-wide one on 12.
 EXPECTED_KERNEL_SAMPLES_PER_SEC = {
-    "p100": 3135,
-    "p150": 4500,
+    ("p100", 11): 3135,
+    ("p150", 11): 3135,
+    ("p150", 12): 4500,
+    ("p150", 13): 4500,
 }
 
 
@@ -51,18 +54,15 @@ def test_vit_device_ops(
     ttnn.synchronize_device(device)
 
 
-@pytest.mark.skip(
-    reason="CI's P150 exposes an 11-column grid, on which the model runs on 6 columns and misses the "
-    "12-column target; skipped as on main (github issue #38877)"
-)
 @pytest.mark.parametrize("batch_size", [10])
 @pytest.mark.models_device_performance_bare_metal
 # Three profiled runs of the model take close to the default 300 s.
 @pytest.mark.timeout(600)
 def test_vit_perf_device(batch_size):
-    expected_kernel_samples_per_sec = card_target(EXPECTED_KERNEL_SAMPLES_PER_SEC)
+    grid_x = device_grid_width()
+    expected_kernel_samples_per_sec = card_target(EXPECTED_KERNEL_SAMPLES_PER_SEC, grid_x)
     if expected_kernel_samples_per_sec is None:
-        pytest.skip("No device kernel throughput target for this card")
+        pytest.skip(f"No device kernel throughput target for this card on a {grid_x}-wide grid")
 
     command = f"pytest models/demos/vision/classification/vit/blackhole/tests/test_vit_device_perf.py::test_vit_device_ops[{batch_size}-device_params0]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]

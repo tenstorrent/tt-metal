@@ -12,11 +12,13 @@ from models.demos.vision.classification.vit.common.tests.vit_helper_funcs import
 from models.demos.vision.classification.vit.common.tests.vit_test_infra import create_test_infra
 from models.perf.perf_utils import prep_perf_report
 
-# Trace + 2CQ throughput at batch 10 by card type prefix. The model's grid width is the largest divisor of 12
-# that fits the card, so P100's 11-wide grid runs on 6 core columns and P150's on 12.
+# Trace + 2CQ throughput at batch 10 by card type prefix and device grid width. The model's grid width is the
+# largest divisor of 12 that fits the device grid, so an 11-wide grid runs on 6 core columns and a 12-wide one
+# on 12. On the same grid P150 is faster than P100 end to end, though not in device kernel time.
 EXPECTED_SAMPLES_PER_SEC = {
-    "p100": 2897,
-    "p150": 3700,
+    ("p100", 11): 2897,
+    ("p150", 11): 3015,
+    ("p150", 12): 4110,
 }
 
 try:
@@ -131,9 +133,10 @@ def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measureme
 )
 @pytest.mark.parametrize("batch_size", [10])
 def test_vit(device, batch_size):
-    expected_samples_per_sec = card_target(EXPECTED_SAMPLES_PER_SEC)
+    grid_x = device.compute_with_storage_grid_size().x
+    expected_samples_per_sec = card_target(EXPECTED_SAMPLES_PER_SEC, grid_x)
     if expected_samples_per_sec is None:
-        pytest.skip("No end-to-end throughput target for this card")
+        pytest.skip(f"No end-to-end throughput target for this card on a {grid_x}-wide grid")
     torch.manual_seed(0)
 
     profiler.clear()
