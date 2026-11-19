@@ -8,9 +8,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn {
-
-namespace operations::experimental::quasar::upsample {
+namespace ttnn::operations::experimental::quasar::upsample {
 
 ttnn::Tensor upsample(
     const ttnn::Tensor& input_tensor,
@@ -19,6 +17,4 @@ ttnn::Tensor upsample(
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 
-}  // namespace operations::experimental::quasar::upsample
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::experimental::quasar::upsample

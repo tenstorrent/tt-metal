@@ -8,9 +8,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn {
-
-namespace operations::experimental::quasar::grid_sample {
+namespace ttnn::operations::experimental::quasar::grid_sample {
 
 /**
  * Grid sample operation for spatial sampling with bilinear interpolation.
@@ -46,8 +44,4 @@ ttnn::Tensor grid_sample(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 
-}  // namespace operations::experimental::quasar::grid_sample
-
-// Import functions to main ttnn namespace
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::experimental::quasar::grid_sample
