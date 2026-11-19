@@ -8,7 +8,6 @@
 
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch_settings.hpp"
-#include "hal.hpp"
 #include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {

@@ -20,12 +20,18 @@ void kernel_main() {
     constexpr auto dfb_lhs_id = tt::CBIndex::c_0;
     constexpr auto dfb_rhs_id = tt::CBIndex::c_1;
     constexpr auto dfb_out_id = tt::CBIndex::c_16;
+    DataflowBuffer dfb_lhs(dfb_lhs_id);
+    DataflowBuffer dfb_rhs(dfb_rhs_id);
+    DataflowBuffer dfb_out(dfb_out_id);
 
     compute_kernel_hw_startup(dfb_lhs_id, dfb_rhs_id, dfb_out_id);
 
 #ifdef BCAST_SCALAR
+    // The scalar is a single tile reused by every iteration, so it is waited once up front
+    // rather than per tile. AtEnd pops the same count that Upfront waited, which leaves the
+    // buffer balanced without popping the tile while later iterations still read it.
     constexpr auto rhs_wait = ckl::WaitPolicy::Upfront;
-    constexpr auto rhs_pop = ckl::PopPolicy::None;
+    constexpr auto rhs_pop = ckl::PopPolicy::AtEnd;
 #else
     constexpr auto rhs_wait = ckl::WaitPolicy::PerTile;
     constexpr auto rhs_pop = ckl::PopPolicy::PerTile;
@@ -37,7 +43,9 @@ void kernel_main() {
             CHAIN_BCAST_OP,
             ckl::input(
                 dfb_lhs_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-            ckl::input(dfb_rhs_id, CHAIN_BCAST_DIM, rhs_wait, rhs_pop, ckl::DataFormatReconfig::Disabled)>{},
+            ckl::input(dfb_rhs_id, CHAIN_BCAST_DIM, rhs_wait, rhs_pop, ckl::DataFormatReconfig::Disabled)>{
+            dfb_lhs, dfb_rhs},
         ckl::PackTile<ckl::output(
-            dfb_out_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
+            dfb_out_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{
+            dfb_out});
 }

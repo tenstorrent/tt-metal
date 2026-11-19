@@ -9,7 +9,7 @@ import ttnn
 from pathlib import Path
 from loguru import logger
 import torch
-from models.tt_transformers.tt.common import (
+from models.ttt_compat.tt.common import (
     precompute_freqs,
     freqs_to_rotation_matrix,
     num_to_core_range_set,
@@ -26,6 +26,7 @@ from typing import Tuple
 from models.common.utility_functions import nearest_32, is_blackhole
 from pathlib import Path
 from models.demos.llama3_70b_galaxy.tt.load_checkpoints import (
+    check_checkpoint_index,
     load_hf_state_dict,
     convert_hf_to_meta,
     standardize_hf_keys,
@@ -170,7 +171,7 @@ class TtQwenModelArgs(TtModelArgs):
     }
 
     LOCAL_HF_PARAMS = {
-        "Qwen3-32B": "models/tt_transformers/model_params/Qwen3-32B",
+        "Qwen3-32B": "models/ttt_compat/model_params/Qwen3-32B",
     }
 
     def __init__(
@@ -1977,6 +1978,7 @@ class TtQwenModelArgs(TtModelArgs):
         elif self.from_hf_url:
             from transformers import AutoModelForCausalLM
 
+            check_checkpoint_index(self.CKPT_DIR)
             model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
             state_dict = model.state_dict()
         else:

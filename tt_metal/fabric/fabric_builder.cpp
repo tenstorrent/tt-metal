@@ -15,7 +15,6 @@
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/fmt.hpp>
 #include <set>
-#include <string>
 
 namespace tt::tt_fabric {
 
@@ -123,10 +122,7 @@ void FabricBuilder::create_routers() {
 
             cluster.register_sim_fabric_endpoint_direction(
                 device_->id(), eth_chan, control_plane.routing_direction_to_eth_direction(direction));
-
-            auto router_builder = FabricRouterBuilder::create(
-                fabric_context_, dispatch_core_type_, device_, program_, local_node_, location, chip_facts_);
-            routers_.insert({eth_chan, std::move(router_builder)});
+            routers_.insert({eth_chan, make_router(location)});
         }
     }
 
@@ -137,12 +133,23 @@ void FabricBuilder::create_routers() {
         }
     }
 
+    for (const auto& [eth_chan, router] : routers_) {
+        if (auto layout = router->get_channel_layout()) {
+            builder_context_.publish_router_channel_layout(local_node_, eth_chan, *layout);
+        }
+    }
+
     // Record build state
     builder_context_.set_num_fabric_initialized_routers(device_->id(), routers_.size());
     if (!routers_.empty()) {
         master_router_chan_ = routers_.begin()->first;
         builder_context_.set_fabric_master_router_chan(device_->id(), master_router_chan_);
     }
+}
+
+std::unique_ptr<FabricRouterBuilder> FabricBuilder::make_router(const RouterLocation& location) {
+    return FabricRouterBuilder::create(
+        fabric_context_, dispatch_core_type_, device_, program_, local_node_, location, chip_facts_);
 }
 
 std::vector<FabricBuilder::RouterConnectionPair> FabricBuilder::get_router_connection_pairs() const {
@@ -292,6 +299,18 @@ void FabricBuilder::create_kernels() {
     for (auto& [eth_chan, router_builder] : routers_) {
         router_builder->create_kernel(program_, ctx);
     }
+}
+
+std::unique_ptr<FabricBuilder> FabricBuildSession::make_device_builder(
+    tt::tt_metal::IDevice* device,
+    tt::tt_metal::Program& program,
+    FabricContext& fabric_context,
+    CoreType dispatch_core_type) const {
+    return std::make_unique<FabricBuilder>(device, program, fabric_context, dispatch_core_type);
+}
+
+std::unique_ptr<FabricBuildSession> create_fabric_build_session(FabricContext& /*fabric_context*/) {
+    return std::make_unique<FabricBuildSession>();
 }
 
 }  // namespace tt::tt_fabric

@@ -27,6 +27,7 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_dump_mode
 
 
 class TtParallelEmbedding(LightweightModule):
@@ -102,6 +103,7 @@ class TtParallelEmbedding(LightweightModule):
             dtype=dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if device else None,
             cache_file_name=cache_file_name,
+            cache_dump_mode=weight_cache_dump_mode(),
         )
         if device is not None:
             ttnn.synchronize_device(device)

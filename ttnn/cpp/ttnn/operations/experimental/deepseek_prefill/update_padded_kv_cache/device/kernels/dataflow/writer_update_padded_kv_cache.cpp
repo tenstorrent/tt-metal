@@ -7,7 +7,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/device/kernels/dataflow/cache_dataflow_helpers.hpp"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/pack_scaled_fp8_kv_cache/packed_kv_layout.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/pack_scaled_fp8_kv_cache/shared_with_host/packed_kv_layout.hpp"
 
 namespace packed = ttnn::operations::experimental::deepseek_prefill::pack_scaled_fp8_kv_cache;
 
@@ -58,7 +58,7 @@ static void run_writer() {
 
     // Common runtime args (same for all cores on this chip). Indices 0-7 are structural; index 8 (and
     // 9, scalar path) carry the per-request values resolved below.
-    const uint32_t my_sp_coord = get_common_arg_val<uint32_t>(0);
+    const uint32_t my_sp_coord = kv_cache_dataflow::linear_coord_from_chip_table();
     const uint32_t sp_factor = get_common_arg_val<uint32_t>(1);
     const uint32_t chunk_local_t = get_common_arg_val<uint32_t>(2);
     const uint32_t layer_idx = get_common_arg_val<uint32_t>(3);

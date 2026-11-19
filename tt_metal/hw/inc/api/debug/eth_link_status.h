@@ -16,7 +16,7 @@ void hang_on_down_link() {
 
     // Update launch msg to show that we've exited. This is required so that the next run doesn't think there's a kernel
     // still running and try to make it exit.
-    volatile tt_l1_ptr go_msg_t* go_message_ptr = GET_MAILBOX_ADDRESS_DEV(go_messages[0]);
+    volatile tt_l1_ptr go_msg_t* go_message_ptr = GET_MAILBOX_ADDRESS_DEV(go_messages[0].slot[0]);
     go_message_ptr->signal = RUN_MSG_DONE;
 
     // This exits to base FW

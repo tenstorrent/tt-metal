@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <vector>
 
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include "command_queue_common.hpp"
 #include "dispatch_core_common.hpp"
 #include "dispatch_settings.hpp"
@@ -46,6 +46,14 @@ public:
     uint32_t prefetch_q_entries() const;
 
     uint32_t prefetch_q_entry_size_bytes() const;
+
+    // True on Quasar when the prefetcher polls fetch queue entries through its cache. Entries then carry a per-lap
+    // phase bit and are never cleared, and the prefetcher invalidates queue lines itself to see new host writes.
+    // Only enabled on the RTL simulator so far, so ttsim and silicon poll uncached.
+    bool prefetch_q_cached() const;
+
+    // DM core cache line size. No line of the cached fetch queue may hold other data.
+    static constexpr uint32_t PREFETCH_Q_CACHE_LINE_BYTES = 64;
 
     uint32_t prefetch_q_size() const;
 
@@ -107,17 +115,27 @@ public:
     // WORKER_COMPLETION_SEMAPHORES L1 region.
     uint32_t get_completion_counter_offset(uint8_t cq_id) const;
 
+    // L1 above every CQ zone on the dispatch core, which fast dispatch's CQ kernels do not use. On a
+    // dispatch engine serving one CQ, the Tensor prefetcher kernels take it
+    // (dispatch_engine_hosts_tensor_prefetcher, layout: impl/buffers/tensor_prefetcher_fifo.hpp).
+    uint32_t unused_l1_base() const;
+    uint32_t unused_l1_size() const;
+
 private:
     uint32_t cmddat_q_base_ = 0;
     uint32_t scratch_db_base_ = 0;
     uint32_t dispatch_buffer_base_ = 0;
     uint32_t dispatch_s_device_print_l1_cache_size_ = 0;
     uint32_t dispatch_s_buffer_end_ = 0;
+    uint32_t unused_l1_base_ = 0;
+    uint32_t unused_l1_size_ = 0;
 
     uint32_t dispatch_buffer_block_size_pages_ = 0;
     std::vector<uint32_t> device_cq_addrs_;
 
     DispatchSettings settings;
+
+    bool prefetch_q_cached_ = false;
 
     uint32_t num_cqs_per_core_ = 0;
     uint32_t cq_zone_stride_ = 0;

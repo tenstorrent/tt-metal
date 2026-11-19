@@ -6,7 +6,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include "moe_expert_token_remap_device_operation.hpp"
@@ -207,7 +207,7 @@ ProgramDescriptor MoeExpertTokenRemapDeviceOperation::Multicore::create_descript
     writer_desc.config = WriterConfigDescriptor{};
 
     // split work over metadata pages (batch*seq)
-    const auto num_metadata_pages = metadata_tensor.buffer()->num_pages();
+    const auto num_metadata_pages = metadata_tensor.mesh_buffer().num_pages();
 
     const auto [core_page_increments, all_cores] =
         split_work_to_cores_even_multiples(grid, num_metadata_pages, reduction_size);

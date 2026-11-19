@@ -38,7 +38,7 @@ import ttnn
 from conftest import is_galaxy
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import moe_fabric_payload, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import TtDFlashDrafter
 from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_to_halfsplit_perm
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
@@ -50,7 +50,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     extract_tt_state_dict,
     load_and_compute_layer_by_layer,
 )
-from tests.ttnn.utils_for_testing import comp_pcc
+from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
 PCC_THRESHOLD = 0.999
 SEQ_LEN_5K = 5120  # matches test_prefill_transformer's "5k" config; 5120 / sp_factor(8) = 640 tok/chip
@@ -75,7 +75,7 @@ MAX_RANDOM_LAYERS = 12
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=KimiK27Config.FABRIC_PAYLOAD_SIZE),
+            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(KimiK27Config)),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",

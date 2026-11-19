@@ -7,13 +7,12 @@ import torch
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params, torus_xy_device_params
-from models.demos.deepseek_v3_d_p.tt.kda.recurrence import _AffineTransform, _distributed_prefix
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
     make_actual_start,
 )
+from models.demos.deepseek_v3_d_p.tests.kda.utils import distributed_prefix, kda_device_params
 
 pytestmark = run_for_blackhole()
 
@@ -24,13 +23,13 @@ def _meshes(**overrides):
     return [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(**overrides),
+            kda_device_params((8, 4), **overrides),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4",
         ),
         pytest.param(
             (2, 4),
-            fabric_1d_device_params(**overrides),
+            kda_device_params((2, 4), **overrides),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="SP2xTP4",
         ),
@@ -52,15 +51,6 @@ def test_chain_affine_transforms_matches_reference(mesh_device, start):
     initial = 0.1 * torch.randn(_HEADS, _KEY, _VALUE, generator=generator)
     mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=(sp_size, tp_size))
 
-    def per_rank(host):
-        return ttnn.from_torch(
-            host.reshape((-1,) + host.shape[2:]),
-            dtype=ttnn.float32,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=mapper,
-        )
-
     def replicated(host, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG):
         return ttnn.from_torch(
             host,
@@ -74,8 +64,14 @@ def test_chain_affine_transforms_matches_reference(mesh_device, start):
     compute_config = ttnn.init_device_compute_kernel_config(
         mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, packer_l1_acc=False
     )
-    entry, final = _distributed_prefix(
-        _AffineTransform(per_rank(a), per_rank(b)),
+    # The prefix chains each rank's complement form [E | B], E = A - I, packed in BF16 as the packed summary head
+    # publishes it.
+    packed_host = torch.cat([a - torch.eye(_KEY), b], dim=-1).bfloat16()
+    packed = ttnn.from_torch(
+        packed_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=mapper
+    )
+    entry, final = distributed_prefix(
+        packed,
         replicated(initial, ttnn.float32),
         sequence_parallel_axis=0,
         compute_config=compute_config,
@@ -84,19 +80,26 @@ def test_chain_affine_transforms_matches_reference(mesh_device, start):
     )
 
     first_rank = (start // _ROWS) % sp_size
-    # The op-by-op chain the kernel replaced: per rank a BF16 -> FP32 typecast, an FP32 matmul and an FP32 add.
+    # The op-by-op chain the kernel replaced: per rank a BF16 -> FP32 typecast of the packed E and B, an FP32 matmul
+    # and the FP32 adds carry + (E @ carry + B).
     working = ttnn.L1_MEMORY_CONFIG
     op_by_op_carry = replicated(initial.reshape(1, _HEADS, _KEY, _VALUE), ttnn.float32, working)
     op_by_op_entries = {}
     for step in range(sp_size):
         rank = (first_rank + step) % sp_size
         op_by_op_entries[rank] = op_by_op_carry
-        transform_a = ttnn.typecast(replicated(a[rank : rank + 1], ttnn.bfloat16, working), ttnn.float32)
-        transform_b = ttnn.typecast(replicated(b[rank : rank + 1], ttnn.bfloat16, working), ttnn.float32)
-        product = ttnn.matmul(
-            transform_a, op_by_op_carry, memory_config=working, dtype=ttnn.float32, compute_kernel_config=compute_config
+        transform_e = ttnn.typecast(
+            replicated(packed_host[rank][None, :, :, :_KEY], ttnn.bfloat16, working), ttnn.float32
         )
-        op_by_op_carry = ttnn.add(product, transform_b, memory_config=working)
+        transform_b = ttnn.typecast(
+            replicated(packed_host[rank][None, :, :, _KEY:], ttnn.bfloat16, working), ttnn.float32
+        )
+        product = ttnn.matmul(
+            transform_e, op_by_op_carry, memory_config=working, dtype=ttnn.float32, compute_kernel_config=compute_config
+        )
+        op_by_op_carry = ttnn.add(
+            op_by_op_carry, ttnn.add(product, transform_b, memory_config=working), memory_config=working
+        )
 
     carry = initial
     entries = {}
@@ -108,8 +111,10 @@ def test_chain_affine_transforms_matches_reference(mesh_device, start):
         zip(ttnn.get_device_tensors(entry), ttnn.get_device_tensors(final), strict=True)
     ):
         rank, tp = divmod(index, tp_size)
-        assert_accurate(entries[rank], ttnn.to_torch(local_entry), name=f"entry rank={rank} tp={tp}")
-        assert_accurate(carry, ttnn.to_torch(local_final), name=f"final rank={rank} tp={tp}")
+        assert_accurate(
+            entries[rank], ttnn.to_torch(local_entry), name=f"entry rank={rank} tp={tp}", nrmse_threshold=0.025
+        )
+        assert_accurate(carry, ttnn.to_torch(local_final), name=f"final rank={rank} tp={tp}", nrmse_threshold=0.03)
         # Same arithmetic as the op-by-op chain, so the states match it bit for bit.
         assert_bit_identical(
             ttnn.to_torch(ttnn.get_device_tensors(op_by_op_entries[rank])[index]).reshape(_HEADS, _KEY, _VALUE),

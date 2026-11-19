@@ -4,14 +4,13 @@
 
 #pragma once
 
-#include <stdint.h>
+#include <cstdint>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include "hal_types.hpp"
-#include "tt_align.hpp"
+#include <tt-metalium/math.hpp>
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 
 namespace tt::tt_metal {

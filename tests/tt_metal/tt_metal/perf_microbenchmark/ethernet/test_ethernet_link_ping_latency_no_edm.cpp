@@ -32,12 +32,13 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
 #include "tt_metal/impl/kernels/kernel.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -93,8 +94,8 @@ struct ChipSenderReceiverEthCore {
 };
 
 std::tuple<tt_metal::Program, tt_metal::Program> build(
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& /*device0*/,
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& /*device1*/,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device0,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device1,
     tt::tt_metal::CoreCoord eth_sender_core,
     tt::tt_metal::CoreCoord eth_receiver_core,
     std::size_t num_samples,
@@ -102,8 +103,8 @@ std::tuple<tt_metal::Program, tt_metal::Program> build(
     std::size_t num_channels,
     tt_metal::KernelHandle& local_kernel,
     tt_metal::KernelHandle& remote_kernel) {
-    tt_metal::Program program0;
-    tt_metal::Program program1;
+    tt_metal::Program program0 = tt_metal::CreateProgram(*device0);
+    tt_metal::Program program1 = tt_metal::CreateProgram(*device1);
 
     std::vector<uint32_t> const& ct_args = {num_channels};
 
@@ -242,7 +243,7 @@ int main(int argc, char** argv) {
     std::cout << "done setting up test fixture" << std::endl;
 
     const auto& device_0 = test_fixture.devices_.at(0);
-    const auto& active_eth_cores = device_0->get_devices()[0]->get_active_ethernet_cores(true);
+    const auto& active_eth_cores = device_0->impl().get_devices()[0]->get_active_ethernet_cores(true);
     auto eth_sender_core_iter = active_eth_cores.begin();
     auto eth_sender_core_iter_end = active_eth_cores.end();
     ChipId device_id = std::numeric_limits<ChipId>::max();
@@ -253,14 +254,14 @@ int main(int argc, char** argv) {
         TT_FATAL(eth_sender_core_iter != eth_sender_core_iter_end, "No active ethernet core found for device 0");
         if (cluster.is_ethernet_link_up(device_0->get_device_ids()[0], *eth_sender_core_iter)) {
             std::tie(device_id, eth_receiver_core) =
-                device_0->get_devices()[0]->get_connected_ethernet_core(*eth_sender_core_iter);
+                device_0->impl().get_devices()[0]->get_connected_ethernet_core(*eth_sender_core_iter);
             eth_sender_core = *eth_sender_core_iter;
         }
         eth_sender_core_iter++;
     } while (device_id == std::numeric_limits<ChipId>::max() ||
-             !test_fixture.devices_.at(device_id)->get_devices()[0]->is_mmio_capable());
+             !test_fixture.devices_.at(device_id)->impl().get_devices()[0]->is_mmio_capable());
     TT_FATAL(device_id != std::numeric_limits<ChipId>::max(), "No valid receiver device found to connect to");
-    auto* receiver_device = test_fixture.devices_.at(device_id)->get_devices()[0];
+    auto* receiver_device = test_fixture.devices_.at(device_id)->impl().get_devices()[0];
     TT_FATAL(receiver_device->is_mmio_capable(), "Receiver device is not mmio capable");
     const auto& device_1 = test_fixture.devices_.at(device_id);
 

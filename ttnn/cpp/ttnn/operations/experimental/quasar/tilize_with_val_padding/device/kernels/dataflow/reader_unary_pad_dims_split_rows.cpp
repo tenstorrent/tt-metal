@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/debug/assert.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
@@ -31,6 +32,8 @@ void kernel_main() {
     const uint32_t block_row_size = get_arg(args::block_row_size);
     const uint32_t block_row_leftover_size = get_arg(args::block_row_leftover_size);
 
+    ASSERT(block_row_size % 4 == 0);  // whole tile rows; the padding loops store words
+
     // TODO(agrebenisan): This isn't good... here we are assuming
     // that the stick size dictates tiles c, but stick size
     // doesn't necessarily need to be divisible by tiles c...
@@ -50,7 +53,7 @@ void kernel_main() {
             cb_in0.reserve_back(num_tiles_block_c);
             uint32_t l1_write_addr = cb_in0.get_write_ptr();
             // pad the tile by reading values from zero buffer in L1
-            volatile tt_l1_ptr std::uint32_t* dst = (volatile tt_l1_ptr uint32_t*)(l1_write_addr);
+            volatile tt_l1_ptr std::uint32_t* dst = (volatile tt_l1_ptr uint32_t*)(uintptr_t)(l1_write_addr);
             // 8 = tile_height / 4
             for (uint32_t z = 0; z < block_row_size * 8; z++) {
                 dst[z] = pad_value;
@@ -72,9 +75,16 @@ void kernel_main() {
                 {.offset_bytes = k * block_row_size});
 
             if (block_row_size > block_size) {
-                volatile tt_l1_ptr std::uint32_t* dst = (volatile tt_l1_ptr uint32_t*)(l1_write_addr + block_size);
-                for (uint32_t z = 0; z < (block_row_size - block_size) / 4; z++) {
-                    dst[z] = pad_value;
+                // Unaligned word stores fault on Quasar: pad bytes up to a word boundary, then words.
+                // pad_value repeats the element, so the byte at offset i is its byte i & 3.
+                volatile tt_l1_ptr uint8_t* row_bytes = (volatile tt_l1_ptr uint8_t*)(uintptr_t)l1_write_addr;
+                volatile tt_l1_ptr uint32_t* row_words = (volatile tt_l1_ptr uint32_t*)(uintptr_t)l1_write_addr;
+                uint32_t i = block_size;
+                for (; i & 3; i++) {
+                    row_bytes[i] = pad_value >> (8 * (i & 3));
+                }
+                for (; i < block_row_size; i += 4) {
+                    row_words[i / 4] = pad_value;
                 }
             }
 
@@ -83,7 +93,7 @@ void kernel_main() {
             l1_write_addr += block_row_size;
         }
         if (num_rows < tile_height) {
-            volatile tt_l1_ptr std::uint32_t* dst = (volatile tt_l1_ptr uint32_t*)(l1_write_addr);
+            volatile tt_l1_ptr std::uint32_t* dst = (volatile tt_l1_ptr uint32_t*)(uintptr_t)(l1_write_addr);
 
             for (uint32_t z = 0; z < (block_row_size) / 4 * (tile_height - num_rows); z++) {
                 dst[z] = pad_value;

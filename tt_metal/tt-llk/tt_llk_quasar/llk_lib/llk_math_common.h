@@ -12,7 +12,11 @@ using namespace ckernel;
 using namespace ckernel::trisc;
 using namespace ckernel::math;
 
+#ifdef ENV_LLK_INFRA
 static DataFormatConfigSet data_format_config_set = DataFormatConfigSet::UNCONFIGURED;
+#else
+extern thread_local DataFormatConfigSet data_format_config_set;
+#endif
 
 // Bitmask helper: maps a DataFormat enum value to its corresponding bit in a 64-bit set
 inline constexpr std::uint64_t df_bit(DataFormat df)
@@ -20,15 +24,26 @@ inline constexpr std::uint64_t df_bit(DataFormat df)
     return 1ULL << to_underlying(df);
 }
 
+inline constexpr bool _is_mxfp4x2_src_fmt_(const DataFormat fmt)
+{
+    return fmt == DataFormat::MxFp4_2x_A || fmt == DataFormat::MxFp4_2x_B;
+}
+
 // Set of Source register DataFormats compatible with Float32 Dest register format
 inline constexpr std::uint64_t kFp32DestCompatibleMask = df_bit(DataFormat::Float16_b) | df_bit(DataFormat::Float16) | df_bit(DataFormat::Tf32) |
-                                                         df_bit(DataFormat::Float32) | df_bit(DataFormat::MxFp4_2x_A) | df_bit(DataFormat::MxFp4_2x_B);
+                                                         df_bit(DataFormat::Float32) |
+                                                         (HAS_MXFP4_2X_SRC_FORMAT ? df_bit(DataFormat::MxFp4_2x_A) | df_bit(DataFormat::MxFp4_2x_B) : 0);
+
+inline constexpr bool _is_int8x2_src_fmt_(const DataFormat fmt)
+{
+    return fmt == DataFormat::Int8_2x || fmt == DataFormat::UInt8_2x;
+}
 
 // Set of Source register DataFormats compatible with Int32 Dest register format
 // Int16 is absent from the list because, for the FPU, it is supported only for MOV ops and is
 // not compatible with 32bit Dest register mode.
-inline constexpr std::uint64_t kInt32DestCompatibleMask =
-    df_bit(DataFormat::Int8) | df_bit(DataFormat::UInt8) | df_bit(DataFormat::Int32) | df_bit(DataFormat::Int8_2x) | df_bit(DataFormat::UInt8_2x);
+inline constexpr std::uint64_t kInt32DestCompatibleMask = df_bit(DataFormat::Int8) | df_bit(DataFormat::UInt8) | df_bit(DataFormat::Int32) |
+                                                          (HAS_INT8_2X_SRC_FORMAT ? df_bit(DataFormat::Int8_2x) | df_bit(DataFormat::UInt8_2x) : 0);
 
 /**
  * @brief Determines whether the source register format and Float32 destination register format are a supported combination
@@ -58,12 +73,11 @@ inline bool _is_src_fmt_int32_dest_compatible_(const DataFormat src_reg_fmt)
 
 /**
  * @brief Sets up ALU formats
- * @tparam EN_IMPLIED_MATH_FORMAT: If set to true, will imply math dest format
- * from SrcA reg format
+ *
  * @tparam EN_32BIT_DEST: Set to true to use math dest in 32bit mode
- * @param srcA_format: Input srcA format, used to set ALU configs if not implied math format
+ * @param srcA_format: Input srcA format, used to set ALU configs
  * values = Dataformat enum, ex: <Float16/Float16_b/Tf32/Int8/Int16/UInt8>
- * @param srcB_format: Input srcB format, used to set ALU configs if not implied math format
+ * @param srcB_format: Input srcB format, used to set ALU configs
  * values = Dataformat enum, ex: <Float16/Float16_b/Tf32/Int8/Int16/UInt8>
  * @param en_int32_dest_format: Set to true to use destination register in Int32 format
  * @param dest_acc_override_fmt: Dest format to force via ALU_FORMAT_SPEC_REG_Dstacc_override
@@ -74,24 +88,24 @@ inline bool _is_src_fmt_int32_dest_compatible_(const DataFormat src_reg_fmt)
  * keep the saved/implied DEST format, so a new DEST-reading MOV path cannot silently omit the override and
  * reproduce the stale-format hi16 corruption.
  */
-template <bool EN_IMPLIED_MATH_FORMAT, bool EN_32BIT_DEST>
+template <bool EN_32BIT_DEST>
 inline void _configure_alu_formats_(DataFormat srcA_format, DataFormat srcB_format, bool en_int32_dest_format, DataFormat dest_acc_override_fmt)
 {
-    TTI_STALLWAIT(p_stall::STALL_CFG, 0, p_stall::WAIT_SFPU, p_stall::MATH);
-
-    cfg[DISABLE_IMPLIED_SRCA_FMT_SEC0_Base_ADDR32 + TRISC_ID] = !EN_IMPLIED_MATH_FORMAT;
-    cfg[DISABLE_IMPLIED_SRCB_FMT_SEC0_Base_ADDR32 + TRISC_ID] = !EN_IMPLIED_MATH_FORMAT;
+    LLK_ASSERT(
+        HAS_INT8_2X_SRC_FORMAT || (!_is_int8x2_src_fmt_(srcA_format) && !_is_int8x2_src_fmt_(srcB_format)),
+        "Int8_2x/UInt8_2x Source register formats exist only on the 4-row Quasar variant");
+    LLK_ASSERT(
+        HAS_MXFP4_2X_SRC_FORMAT || (!_is_mxfp4x2_src_fmt_(srcA_format) && !_is_mxfp4x2_src_fmt_(srcB_format)),
+        "MxFp4_2x_A/B Source register formats exist only on base Quasar");
 
     alu_config_u alu_config               = {0};
     const std::uint8_t SRCA_FORMAT_MASKED = masked_data_format(to_underlying(srcA_format));
     const std::uint8_t SRCB_FORMAT_MASKED = masked_data_format(to_underlying(srcB_format));
 
-    // Set the Src formats even when they are implied: the FPU then takes the unpackers' formats instead, but these are
-    // the only configuration that says whether a 16-bit Dest holds Float16 or Float16_b.
     alu_config.f.ALU_FORMAT_SPEC_REG_SrcA_val      = SRCA_FORMAT_MASKED;
-    alu_config.f.ALU_FORMAT_SPEC_REG_SrcA_override = !EN_IMPLIED_MATH_FORMAT;
+    alu_config.f.ALU_FORMAT_SPEC_REG_SrcA_override = 1;
     alu_config.f.ALU_FORMAT_SPEC_REG_SrcB_val      = SRCB_FORMAT_MASKED;
-    alu_config.f.ALU_FORMAT_SPEC_REG_SrcB_override = !EN_IMPLIED_MATH_FORMAT;
+    alu_config.f.ALU_FORMAT_SPEC_REG_SrcB_override = 1;
     alu_config.f.ALU_FORMAT_SPEC_REG0_SrcA         = SRCA_FORMAT_MASKED;
     alu_config.f.ALU_FORMAT_SPEC_REG1_SrcB         = SRCB_FORMAT_MASKED;
 
@@ -121,23 +135,29 @@ inline void _configure_alu_formats_(DataFormat srcA_format, DataFormat srcB_form
 
 /**
  * @brief Configures math hardware by setting ALU formats
- * @tparam EN_IMPLIED_MATH_FORMAT: If set to true, will imply math dest format
- * from SrcA reg format
+ *
  * @tparam EN_32BIT_DEST: Set to true to use math dest in 32bit mode (Float32/Int32)
- * @param srcA_format: Input srcA format, used to set ALU configs if not implied math format
+ * @param srcA_format: Input srcA format, used to set ALU configs
  * values = Dataformat enum, ex: <Float16/Float16_b/Tf32/Int8/Int16/UInt8>
- * @param srcB_format: Input srcB format, used to set ALU configs if not implied math format
+ * @param srcB_format: Input srcB format, used to set ALU configs
  * values = Dataformat enum, ex: <Float16/Float16_b/Tf32/Int8/Int16/UInt8>
+ * @note Implied SrcA/SrcB formats are always disabled: the ALU reads ALU_FORMAT_SPEC_REG0/1. Implied DEST format is
+ *       always enabled - DEST follows SrcA, and Dstacc_override is set only by the MOV-ops path.
  */
-template <bool EN_IMPLIED_MATH_FORMAT, bool EN_32BIT_DEST>
+template <bool EN_32BIT_DEST>
 inline void _llk_math_srcAB_hw_configure_(DataFormat srcA_format, DataFormat srcB_format)
 {
     // Turn on automatic Tensix-TRISC synchronization
     // RT: This is turned on by default by HW, this should be removed
     set_ttsync_enables<TRACK_ALL>(TRISC_ID);
 
+    TTI_STALLWAIT(p_stall::STALL_CFG, 0, p_stall::WAIT_SFPU, p_stall::MATH);
+
+    cfg[DISABLE_IMPLIED_SRCA_FMT_SEC0_Base_ADDR32 + TRISC_ID] = 1;
+    cfg[DISABLE_IMPLIED_SRCB_FMT_SEC0_Base_ADDR32 + TRISC_ID] = 1;
+
     const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(srcA_format) && _is_src_fmt_int32_dest_compatible_(srcB_format) && EN_32BIT_DEST;
-    _configure_alu_formats_<EN_IMPLIED_MATH_FORMAT, EN_32BIT_DEST>(srcA_format, srcB_format, en_int32_dest_format, DataFormat::Invalid);
+    _configure_alu_formats_<EN_32BIT_DEST>(srcA_format, srcB_format, en_int32_dest_format, DataFormat::Invalid);
 
     data_format_config_set = DataFormatConfigSet::DEFAULT;
 }
@@ -145,19 +165,17 @@ inline void _llk_math_srcAB_hw_configure_(DataFormat srcA_format, DataFormat src
 /**
  * @brief Sets up default ALU data format state
  *
- * @tparam EN_IMPLIED_MATH_FORMAT: If set to true, will imply math dest format
- * from SrcA reg format
  * @tparam EN_32BIT_DEST: Set to true to use 32bit math dest in Float32 or Int32 format
- * @param srcA_format: Input srcA format, used to set ALU configs if not implied math format
+ * @param srcA_format: Input srcA format, used to set ALU configs
  * values = Dataformat enum, ex: <Float16/Float16_b/Tf32/Int8/Int16/UInt8>
- * @param srcB_format: Input srcB format, used to set ALU configs if not implied math format
+ * @param srcB_format: Input srcB format, used to set ALU configs
  * values = Dataformat enum, ex: <Float16/Float16_b/Tf32/Int8/Int16/UInt8>
  *
  * Default ALU data format config state used for all operations which are not proven to need special handling.
- * Implied math format can be enabled or disabled. en_int32_dest_format is set to true if 32bit Dest register mode is enabled
- * and the source register formats are integers compatible with Int32 Dest register format.
+ * en_int32_dest_format is set to true if 32bit Dest register mode is enabled and the source register formats are
+ * integers compatible with Int32 Dest register format.
  */
-template <bool EN_IMPLIED_MATH_FORMAT, bool EN_32BIT_DEST>
+template <bool EN_32BIT_DEST>
 inline void _configure_default_alu_data_format_state_(DataFormat srcA_format, DataFormat srcB_format)
 {
     if (data_format_config_set == DataFormatConfigSet::DEFAULT)
@@ -167,7 +185,7 @@ inline void _configure_default_alu_data_format_state_(DataFormat srcA_format, Da
 
     const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(srcA_format) && _is_src_fmt_int32_dest_compatible_(srcB_format) && EN_32BIT_DEST;
     // Regular compute path: keep the saved/implied DEST format — no dest-format override.
-    _configure_alu_formats_<EN_IMPLIED_MATH_FORMAT, EN_32BIT_DEST>(srcA_format, srcB_format, en_int32_dest_format, DataFormat::Invalid);
+    _configure_alu_formats_<EN_32BIT_DEST>(srcA_format, srcB_format, en_int32_dest_format, DataFormat::Invalid);
 
     data_format_config_set = DataFormatConfigSet::DEFAULT;
 }
@@ -175,7 +193,7 @@ inline void _configure_default_alu_data_format_state_(DataFormat srcA_format, Da
 /**
  * @brief Sets up MOV OPS EXPLICIT FMT ALU data format state
  *
- * Used for transpose dest operations, which require implied math format to be disabled.
+ * Used for transpose dest operations.
  * Int32 dest requires opposite settings that what is usually set for Int32 dest.
  * Float32 and Int32 can be set as the srcA and srcB formats.
  * @param srcA_format: Input srcA format, used to set ALU configs
@@ -184,7 +202,7 @@ inline void _configure_default_alu_data_format_state_(DataFormat srcA_format, Da
  * values = Dataformat enum, ex: <Float16/Float16_b/Tf32/Float32/Int8/Int16/UInt8/Int32>
  *
  * Special ALU data format config state used for: transpose dest and unary broadcast with unpack_to_dest=true.
- * Disables implied math format due to MOV op quirks. Sets en_int32_dest_format = false because ALU_ACC_CTRL_INT8_math_enabled
+ * Sets en_int32_dest_format = false because ALU_ACC_CTRL_INT8_math_enabled
  * does not work with MOVD2A/B. When unpacking Int32 or Fp32 to dest, the ALU_FORMAT_SPEC SrcA/B cfg registers are set to Tf32.
  * @note For EN_32BIT_DEST, this forces the dest-format override (ALU_FORMAT_SPEC_REG_Dstacc_override -> Float32) so MOVD2B/MOVB2D
  * read DEST via the current 32b path instead of a stale saved dest format (e.g. Int32 left by a prior compute), which would
@@ -204,7 +222,7 @@ inline void _configure_mov_ops_explicit_alu_data_format_state_(DataFormat srcA_f
     // For 32-bit dest, force the dest-format override to Float32 so the transpose MOVD2B/MOVB2D read
     // the DEST via the current Float32 32b path instead of a stale saved dest format (e.g. Int32 left
     // by a prior compute), which otherwise selects the wrong hi16 datum mux.
-    _configure_alu_formats_<false /* EN_IMPLIED_MATH_FORMAT */, EN_32BIT_DEST>(
+    _configure_alu_formats_<EN_32BIT_DEST>(
         mov_srcA_format, mov_srcB_format, false /* en_int32_dest_format */, EN_32BIT_DEST ? DataFormat::Float32 : DataFormat::Invalid);
 
     data_format_config_set = DataFormatConfigSet::MOV_OPS_EXPLICIT_FMT;

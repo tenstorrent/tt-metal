@@ -15,6 +15,10 @@ struct ProgramDescriptor;
 class CircularBuffer;
 class Program;
 
+namespace distributed {
+class MeshDevice;
+}  // namespace distributed
+
 namespace detail {
 class ProgramImpl;
 }  // namespace detail
@@ -27,6 +31,10 @@ public:
 
     // Alternative "ProgramDescriptor" API, created for TTNN generic op
     explicit Program(const ProgramDescriptor& descriptor);
+
+    // Same, but binds the Program to the MetalEnv that owns `mesh_device` (see CreateProgram(MeshDevice&)).
+    // Transitional: goes away together with the ProgramDescriptor path.
+    Program(distributed::MeshDevice& mesh_device, const ProgramDescriptor& descriptor);
 
     // Internal: construct from an already-built ProgramImpl.
     explicit Program(std::shared_ptr<detail::ProgramImpl> impl);
@@ -59,17 +67,11 @@ public:
     const detail::ProgramImpl& impl() const { return *internal_; }
 
 private:
+    // Shared by both descriptor constructors; `internal_` must already be set.
+    void populate_from_descriptor(const ProgramDescriptor& descriptor);
+
     // The internal ProgramImpl may outlive the Program object if it's in-use by a command queue.
     std::shared_ptr<detail::ProgramImpl> internal_;
 };
-
-// Only Used in op_profiler, we might want to expose this via a tooling interface instead of through here.
-class IDevice;
-namespace detail {
-struct KernelMeta;
-// Collects the meta data of kernels in a program, and the metadata of the binaries within the kernel if device is non-null
-// Note: device is nullable
-std::vector<detail::KernelMeta> collect_kernel_meta(Program const& program, IDevice* device);
-}; //namespace detail
 
 }  // namespace tt::tt_metal

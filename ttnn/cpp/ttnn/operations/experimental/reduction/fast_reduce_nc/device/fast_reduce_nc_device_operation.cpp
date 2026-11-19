@@ -50,15 +50,14 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
     const auto& input = tensor_args.input;
     const auto& preallocated_output = tensor_args.preallocated_output;
 
-    // FLOAT32 is allowed so multi-stage Sum chains can carry FP32 between stages.
     operations::check_tensor(
-        input, "FastReduceNC", "input", {DataType::BFLOAT16, DataType::BFLOAT8_B, DataType::FLOAT32});
+        input, "FastReduceNC", "input", {DataType::BFLOAT16, DataType::BFLOAT8_B, DataType::FLOAT32, DataType::INT32});
     if (preallocated_output.has_value()) {
         operations::check_tensor(
             preallocated_output.value(),
             "FastReduceNC",
             "output",
-            {DataType::BFLOAT16, DataType::BFLOAT8_B, DataType::FLOAT32});
+            {DataType::BFLOAT16, DataType::BFLOAT8_B, DataType::FLOAT32, DataType::INT32});
         TT_FATAL(
             preallocated_output.value().logical_shape().rank() == input.logical_shape().rank(),
             "FastReduceNC preallocated output rank {} must match input rank {}",
@@ -66,15 +65,44 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
             input.logical_shape().rank());
     }
 
+    const bool is_int32 = input.dtype() == DataType::INT32;
+    if (is_int32 || args.use_sfpu_reduce) {
+        const auto arch = input.device()->arch();
+        TT_FATAL(
+            !args.use_sfpu_reduce || input.dtype() == DataType::FLOAT32,
+            "FastReduceNC use_sfpu_reduce requires FLOAT32 input, got {}",
+            input.dtype());
+        TT_FATAL(
+            !args.use_sfpu_reduce || arch != tt::ARCH::QUASAR,
+            "FastReduceNC accurate FLOAT32 accumulation is not supported on Quasar");
+        TT_FATAL(
+            std::get<2>(ttnn::get_compute_kernel_config_args(arch, args.compute_kernel_config)),
+            "FastReduceNC {} accumulation on the SFPU requires fp32_dest_acc_en",
+            input.dtype());
+        TT_FATAL(!args.split_output_width.has_value(), "Split reduction does not support SFPU accumulation");
+    }
+    if (is_int32) {
+        const auto output_dtype = preallocated_output.has_value() ? preallocated_output->dtype()
+                                                                  : args.output_dtype.value_or(DataType::INT32);
+        TT_FATAL(
+            output_dtype == DataType::INT32, "FastReduceNC INT32 input requires an INT32 output, got {}", output_dtype);
+        TT_FATAL(
+            args.post_mul_scaler == 1.0f,
+            "FastReduceNC INT32 input does not support post_mul_scaler, got {}",
+            args.post_mul_scaler);
+    }
+
     CMAKE_UNIQUE_NAMESPACE::validate_split_output(args, tensor_args);
 
     // validate input dim
     const auto input_rank = input.logical_shape().rank();
+    TT_FATAL(input_rank > 2, "FastReduceNC input rank must be greater than 2, but has {}", input_rank);
+    // The program factory treats shape[dim] as a count of whole H*W tile planes, so H and W cannot be reduced here.
     TT_FATAL(
-        (args.dim >= 0 && args.dim <= ttnn::MAX_NUM_DIMENSIONS - 2),
-        "dim must be between 0 and {}.",
-        ttnn::MAX_NUM_DIMENSIONS - 2);
-    TT_FATAL((args.dim < input_rank), "dim must be smaller than input tensor rank {}.", input_rank);
+        args.dim >= 0 && args.dim <= static_cast<int32_t>(input_rank) - 3,
+        "FastReduceNC reduces only outer dims: dim must be between 0 and {}, but has {}",
+        static_cast<int32_t>(input_rank) - 3,
+        args.dim);
     TT_FATAL(
         input_rank <= ttnn::MAX_NUM_DIMENSIONS,
         "FastReduceNC input rank {} exceeds maximum {}",
@@ -107,6 +135,26 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
     if (preallocated_output.has_value()) {
         ttnn::prim::validate_reduce_op_tensor(preallocated_output.value(), "FastReduceNC", "preallocated_output");
     }
+}
+
+ttsl::hash::hash_t FastReduceNCDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // Tripwire: adding a FastReduceNCParams field must be a deliberate choice — hash it below, or
+    // exclude it like post_mul_scaler, which the compute kernels read as a runtime arg.
+    static_assert(
+        reflect::size<operation_attributes_t>() == 8,
+        "FastReduceNCParams gained or lost a field: add it to compute_program_hash or document why it is "
+        "excluded, then update this count.");
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<FastReduceNCDeviceOperation>,
+        operation_attributes.dim,
+        operation_attributes.output_mem_config,
+        operation_attributes.compute_kernel_config,
+        operation_attributes.sub_core_grids,
+        operation_attributes.output_dtype,
+        operation_attributes.split_output_width,
+        operation_attributes.use_sfpu_reduce,
+        tensor_args);
 }
 
 FastReduceNCDeviceOperation::spec_return_value_t FastReduceNCDeviceOperation::compute_output_specs(
@@ -159,7 +207,9 @@ Tensor fast_reduce_nc(
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<DataType>& output_dtype) {
+    const std::optional<DataType>& output_dtype,
+    bool use_sfpu_reduce,
+    float post_mul_scaler) {
     using OperationType = ttnn::experimental::prim::FastReduceNCDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -167,7 +217,9 @@ Tensor fast_reduce_nc(
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
         .sub_core_grids = sub_core_grids,
-        .output_dtype = output_dtype};
+        .output_dtype = output_dtype,
+        .use_sfpu_reduce = use_sfpu_reduce,
+        .post_mul_scaler = post_mul_scaler};
     auto tensor_args = OperationType::tensor_args_t{.input = input, .preallocated_output = output};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args).front();

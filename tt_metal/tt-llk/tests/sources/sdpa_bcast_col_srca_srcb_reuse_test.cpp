@@ -39,9 +39,6 @@
 //      then _llk_math_sdpa_bcast_col_srca_srcb_reuse_ runs the SRCB_BCAST_COL MOP over DEST[DST_ROW]. The execute
 //      clears SrcA+SrcB (SETRWC CLR_AB) at the end — this variant has NO separate postamble.
 //
-// The math thread posts semaphore::FPU_SFPU with no SFPU consumer; a bare post does not block (mirrors the sibling
-// srcb_reuse test), so no fake SFPU handshake is needed and there is no MATH-waits-on-SFPU deadlock.
-//
 // Signalling-only divergence vs the demo fork this test was first written against: the promoted execute drops
 // `bool fused_signalling` (template position 8), making the output_granularity loop unconditional, and the promoted
 // init gains a trailing defaulted `bool skip_addrmod=false`. Neither touches numerics; the call below is already on
@@ -50,7 +47,10 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
+#include "perf.h"
+#include "profiler.h"
 
 using namespace ckernel;
 
@@ -61,7 +61,9 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 static constexpr DstSync DST_SYNC = DstSync::SyncHalf;
 
-static constexpr std::uint32_t NUM_TILES = 1;
+// Each seed datacopy publishes paired SrcA and zero-SrcB valids per face; the SDPA helper then publishes SrcB before SrcA.
+static constexpr std::uint32_t NUM_TILES           = 1;
+static constexpr std::uint32_t NUM_SEED_DATACOPIES = 2;
 
 // DEST tile indices for the two A2D seed datacopies (set_dst_write_addr scales these by 64 rows for Tile32x32):
 //   tile 0 holds the operand X that the op scales in place, tile 1 holds the column source P.
@@ -75,8 +77,7 @@ static constexpr std::uint32_t DST_ROW = DST_TILE * 64;
 static constexpr std::uint32_t SRC_ROW = SRC_TILE * 64;
 
 // output_granularity gates how many tiles run between FPU_SFPU posts. Pin 1 to preserve per-tile FPU_SFPU cadence
-// (matches the demo behavior). The golden ignores signalling cadence — this only affects when the (unconsumed) posts
-// fire.
+// (matches the demo behavior). Pack drains each post so repeated perf iterations preserve the production handshake.
 static constexpr std::uint32_t OUTPUT_GRANULARITY = 1;
 
 // The face count MUST be a compile-time constant on the math thread: sdpa_bcast_col_srca_srcb_reuse_configure_addrmod
@@ -117,36 +118,58 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const Operand& buffer_A         = params.buffer_A;
+    const Operand& buffer_B         = params.buffer_B;
+#endif
     // One 16x16 face per tile: the op's 8x32 logical tile is packed into a single 16-row DEST face (see the banner).
     const ckernel::TensorShape tensor_shape = {
         static_cast<std::uint8_t>(FACE_R_DIM), static_cast<std::uint8_t>(FACE_C_DIM), 1 /* num_faces_r_dim */, 1 /* num_faces_c_dim */};
 
-    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src,
-        formats.unpack_B_src,
-        formats.unpack_A_dst,
-        formats.unpack_B_dst,
-        FACE_R_DIM,
-        FACE_R_DIM,
-        num_faces /* unpA_num_faces */,
-        num_faces /* unpB_num_faces */);
+    {
+        START_PERF_MEASURE("INIT")
+        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+            formats.unpack_A_src,
+            formats.unpack_B_src,
+            formats.unpack_A_dst,
+            formats.unpack_B_dst,
+            FACE_R_DIM,
+            FACE_R_DIM,
+            num_faces /* unpA_num_faces */,
+            num_faces /* unpB_num_faces */);
 
-    // Step 1: unpack the two DEST seeds. buffer_A carries X (the operand the op scales in place) and buffer_B carries
-    // P (the column source); the MATH thread A2D-datacopies them into DEST[DST_TILE] and DEST[SRC_TILE].
-    //
-    // There is deliberately NO operand unpack into SrcA and no _llk_unpack_A_sdpa_init_ here: the MOP refills SrcA
-    // from DEST with MOVD2A before every ELWMUL, so an unpacked SrcA tile would be discarded. The demo agrees --
-    // sdpa_bcast_col_srca_srcb_reuse_tiles_init() touches the MATH thread only (sdpa.h:75-78).
-    _llk_unpack_A_init_<BroadcastType::NONE>(
-        0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
-    _llk_unpack_A_<BroadcastType::NONE>(L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src, formats.unpack_A_dst);
-    _llk_unpack_A_<BroadcastType::NONE>(L1_ADDRESS(params.buffer_B[0]), formats.unpack_A_src, formats.unpack_A_dst);
-
-    // Step 2: satisfy the preamble's STALLWAIT(WAIT_SFPU | SRCA_VLD | SRCB_VLD) without pretending SrcA carries an
-    // operand. This is the SrcA+SrcB helper (3 instructions), not the SrcB-only _llk_unpack_A_sdpa_set_srcb_dummy_valid_
-    // (2 instructions) -- this variant's preamble waits on SRCA_VLD too, so the SrcB-only helper would leave MATH
-    // stalled. The demo calls the same helper here (sdpa.h:82).
-    _llk_unpack_A_sdpa_set_srca_srcb_dummy_valid_();
+        // The op refills SrcA from DEST, so unpack only configures the two seed datacopies.
+        _llk_unpack_A_init_<BroadcastType::NONE>(
+            0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                _perf_unpack_stream_set_valid<true, true, PERF_RUN_TYPE>(NUM_SEED_DATACOPIES * num_faces);
+                _perf_unpack_stream_set_valid<false, true, PERF_RUN_TYPE>(1);
+                _perf_unpack_stream_set_valid<true, false, PERF_RUN_TYPE>(1);
+            }
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                _llk_unpack_A_<BroadcastType::NONE>(L1_ADDRESS(buffer_A[0]), formats.unpack_A_src, formats.unpack_A_dst);
+                _llk_unpack_A_<BroadcastType::NONE>(L1_ADDRESS(buffer_B[0]), formats.unpack_A_src, formats.unpack_A_dst);
+                // The preamble waits on both valids even though neither carries an operand stream.
+                _llk_unpack_A_sdpa_set_srca_srcb_dummy_valid_();
+            }
+        }
+        PROFILER_SYNC();
+    }
 }
 
 #endif
@@ -170,43 +193,62 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
-    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-
-    _llk_math_wait_for_dest_available_<DST_SYNC>();
-
-    // Step 1: copy the two seeds (unpacked into SrcA by unpack step 1, in this order) into DEST. X goes to
-    // DEST[DST_TILE] (the op scales it in place) and the column source P to DEST[SRC_TILE].
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(num_faces, formats.math);
-    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(DST_TILE, formats.math, formats.math, num_faces);
-    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(SRC_TILE, formats.math, formats.math, num_faces);
-
-    // Step 2: SDPA column-broadcast SrcA+SrcB-reuse eltwise.
-    //   init     -> program addr_mods + the [MOVD2A, MOVD2A, ELWMUL] SRCB_BCAST_COL MOP.
-    //   preamble -> STALLWAIT(WAIT_SFPU|SRCA_VLD|SRCB_VLD) on the unpacker's dummy SrcA+SrcB valids, point DEST at
-    //               SRC_ROW, then MOVD2B DEST[SRC_ROW] rows 0-7 -> SrcB rows 0-7 (the per-row column scale).
-    //   execute  -> for each of two 8-row chunks of DEST[DST_ROW]: MOVD2A those rows into SrcA, then accumulate
-    //               SrcA * broadcast_col(SrcB) back onto them. Net effect
-    //                   DEST[DST_ROW] = X + X * broadcast_col(P)   with X the seed at DST_ROW, P the seed at SRC_ROW.
-    //               clear_dest stays false: X in DEST is an INPUT here, not stale state to be cleared.
-    //               The trailing SETRWC CLR_AB releases SrcA/SrcB (this variant has no separate postamble).
-    //
-    // The promoted execute runs the output_granularity loop unconditionally; the demo copy gated it behind a
-    // `fused_signalling` template arg in position 8, which is gone here. OUTPUT_GRANULARITY == 1 keeps the per-tile
-    // FPU_SFPU cadence either way, and the golden ignores signalling cadence.
-    _llk_math_sdpa_bcast_col_srca_srcb_reuse_init_<SDPA_OP, NUM_TILES, MATH_FIDELITY>(MATH_MOP_NUM_FACES, 0 /* acc_to_dest */);
-    _llk_math_sdpa_bcast_col_srca_srcb_reuse_preamble_<DST_SYNC, is_fp32_dest_acc_en, false /* clear_dest */>(SRC_ROW);
-    _llk_math_sdpa_bcast_col_srca_srcb_reuse_<
-        SDPA_OP,
-        NUM_TILES,
-        DST_SYNC,
-        is_fp32_dest_acc_en,
-        MATH_FIDELITY,
-        false /* clear_dest */,
-        false /* skip_signalling */,
-        OUTPUT_GRANULARITY>(DST_ROW);
-
-    _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces);
+    {
+        START_PERF_MEASURE("INIT")
+        _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
+        _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+        t6_semaphore_init(semaphore::FPU_SFPU, 0 /* min_value */, NUM_TILES / OUTPUT_GRANULARITY /* max_value */);
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                _perf_math_stream_clear_valid<true, true, PERF_RUN_TYPE>(NUM_SEED_DATACOPIES * num_faces);
+                _perf_math_stream_clear_valid<false, true, PERF_RUN_TYPE>(1);
+                _perf_math_stream_clear_valid<true, false, PERF_RUN_TYPE>(1);
+            }
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_math_wait_for_dest_available_<DST_SYNC>();
+                }
+                _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(tensor_shape, formats.math);
+                _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(DST_TILE, formats.math, formats.math, tensor_shape);
+                _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(SRC_TILE, formats.math, formats.math, tensor_shape);
+                _llk_math_sdpa_bcast_col_srca_srcb_reuse_init_<SDPA_OP, NUM_TILES, MATH_FIDELITY>(MATH_MOP_NUM_FACES, 0 /* acc_to_dest */);
+                t6_semaphore_wait_on_max<p_stall::STALL_MATH>(semaphore::FPU_SFPU);
+                _llk_math_sdpa_bcast_col_srca_srcb_reuse_preamble_<DST_SYNC, is_fp32_dest_acc_en, false /* clear_dest */>(SRC_ROW);
+                _llk_math_sdpa_bcast_col_srca_srcb_reuse_<
+                    SDPA_OP,
+                    NUM_TILES,
+                    DST_SYNC,
+                    is_fp32_dest_acc_en,
+                    MATH_FIDELITY,
+                    false /* clear_dest */,
+                    false /* skip_signalling */,
+                    OUTPUT_GRANULARITY>(DST_ROW);
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
 }
 
 #endif
@@ -222,21 +264,56 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    // The output is the single 16x16 DEST face the op writes (num_faces == 1, tile == one face), so the
-    // geometry has to be passed explicitly: the wrappers default to a full four-face 32x32 tile, and the Default-mode
-    // pack MOP loops MOP_OUTER_LOOP == num_faces * num_tiles, so the default would retire 4 faces per _llk_pack_ and
-    // write 4 * 512 B into the 512 B buffer_Res slot (faces 1-3 being whatever else is in DEST). Matches the
-    // sibling tests, which pass (face_r_dim, tile_c_dim, num_faces) through as well.
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
-        formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK, FACE_R_DIM, FACE_C_DIM /* tile_c_dim: one face wide */, num_faces);
-    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, FACE_C_DIM, num_faces);
-    _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
-    _llk_packer_wait_for_math_done_();
-    for (std::uint32_t i = 0; i < params.TILE_CNT; i++)
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR    = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT       = params.TILE_CNT;
+    const std::uint32_t TILE_SIZE_PACK = params.TILE_SIZE_PACK;
+    const Operand& buffer_Res          = params.buffer_Res;
+#endif
     {
-        _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(params.buffer_Res[i]));
+        START_PERF_MEASURE("INIT")
+        // The one-face output needs explicit geometry; the wrapper defaults to a full tile.
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
+            formats.pack_src, formats.pack_dst, TILE_SIZE_PACK, FACE_R_DIM, FACE_C_DIM, num_faces);
+        _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, FACE_C_DIM, num_faces);
+        _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
+        PROFILER_SYNC();
     }
-    _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                // Preserve the production FPU_SFPU handshake while pack otherwise stands in for the absent consumer.
+                t6_semaphore_wait_on_zero<p_stall::STALL_PACK>(semaphore::FPU_SFPU);
+                t6_semaphore_get<p_stall::PACK>(semaphore::FPU_SFPU);
+            }
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_packer_wait_for_math_done_();
+                    t6_semaphore_get<p_stall::PACK>(semaphore::FPU_SFPU);
+                }
+                for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+                {
+                    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(buffer_Res[i]));
+                }
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
 }
 
 #endif

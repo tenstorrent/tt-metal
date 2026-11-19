@@ -31,12 +31,17 @@ void kernel_main() {
     constexpr uint32_t mode = get_compile_time_arg_val(1);
     static_assert(mode < 2);
 
+    DataflowBuffer cb_a_obj(cb_a);
+    DataflowBuffer cb_b_obj(cb_b);
+    DataflowBuffer cb_out_obj(cb_out);
+
     compute_kernel_hw_startup(cb_a, cb_b, cb_out);
 
     using namespace compute_kernel_lib;
     if constexpr (mode == 0) {
-        unary<TestBinary, input(cb_a), output(cb_out)>(IterationShape::tiles(total_tiles));
+        unary<TestBinary, input(cb_a), output(cb_out)>(IterationShape::tiles(total_tiles), cb_a_obj, cb_out_obj);
     } else {
-        binary_sfpu<TestUnary, input(cb_a), input(cb_b), output(cb_out)>(IterationShape::tiles(total_tiles));
+        binary_sfpu<TestUnary, input(cb_a), input(cb_b), output(cb_out)>(
+            IterationShape::tiles(total_tiles), cb_a_obj, cb_b_obj, cb_out_obj);
     }
 }

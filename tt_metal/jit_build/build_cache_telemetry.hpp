@@ -7,6 +7,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -21,6 +22,9 @@
 namespace tt::tt_metal {
 
 class BuildCacheTelemetry;
+
+// (label, value) rows of the logged telemetry summary.
+using SummaryRows = std::vector<std::pair<std::string, std::string>>;
 
 struct TelemetryTokenData {
     uint32_t count{0};
@@ -104,6 +108,19 @@ public:
     // whereas the window is what a wall clock next to the process would show. A workload that
     // compiles lazily in bursts folds the idle gaps between bursts into the span.
     void note_build_window(std::chrono::steady_clock::time_point start, std::chrono::steady_clock::time_point end);
+    // Open and close one interval on the busy clock named `clock`; closing passes the interval's start
+    // and end. The clock's metric (same name) gets one sample per busy stretch, a run of intervals with
+    // at least one open: the wall time from their earliest start to their latest end. Overlapping
+    // intervals count once and idle gaps are not counted.
+    void note_busy_start(std::string_view clock);
+    void note_busy_end(
+        std::string_view clock, std::chrono::steady_clock::time_point start, std::chrono::steady_clock::time_point end);
+
+    // Keep the program with the least kernel config buffer headroom per core type (bytes left of
+    // `limit`) for the summary section. `breakdown` returns its rows and runs only when `headroom` is a
+    // new minimum.
+    void note_program_headroom(
+        std::string_view core_type, uint32_t headroom, uint32_t limit, const std::function<SummaryRows()>& breakdown);
 
     void log_compile_summary() const;
 
@@ -136,9 +153,10 @@ private:
     // warns once instead of once per build. Guarded by owned_tokens_mutex_.
     std::unordered_set<std::string> unit_conflict_warned_;
     std::mutex owned_tokens_mutex_;
-    // Registered in the constructor so the const dump_metrics() can record the window span
-    // without registering a metric during teardown.
+    // Registered in the constructor so the const dump_metrics() can record them without
+    // registering a metric during teardown.
     TelemetryToken* build_window_token_{nullptr};
+    TelemetryToken* build_peak_in_flight_token_{nullptr};
 };
 
 // Times the scope it lives in: takes a steady_clock timestamp on construction and records the
@@ -163,6 +181,31 @@ private:
     std::chrono::steady_clock::time_point start_;
 };
 
+// Busy clock names (see BuildCacheTelemetry::note_busy_start).
+// Local JIT builds: JitBuildState::build calls, the same scopes the build window spans.
+inline constexpr std::string_view kJitBuildBusy = "jit_build_busy";
+// Host time building Programs from ProgramDescriptors: kernels, circular buffers and runtime args.
+inline constexpr std::string_view kProgramBuildBusy = "program_build_busy";
+// Host time inside ProgramImpl::compile: the builds plus hashing, cache checks and binary loading.
+inline constexpr std::string_view kProgramCompileBusy = "program_compile_busy";
+
+// Times the scope it lives in on the busy clock named `clock`. Pass one of the constants above: the name is
+// read again when the scope ends, so it must outlive the scope.
+class ScopedBusyClock {
+public:
+    explicit ScopedBusyClock(std::string_view clock);
+    ~ScopedBusyClock();
+
+    ScopedBusyClock(const ScopedBusyClock&) = delete;
+    ScopedBusyClock& operator=(const ScopedBusyClock&) = delete;
+    ScopedBusyClock(ScopedBusyClock&&) = delete;
+    ScopedBusyClock& operator=(ScopedBusyClock&&) = delete;
+
+private:
+    std::string_view clock_;
+    std::chrono::steady_clock::time_point start_;
+};
+
 // Folds the scope it lives in into the process-wide JIT build window (see
 // BuildCacheTelemetry::note_build_window). Deliberately not a ScopedTelemetryTimer with static
 // storage: such a timer would only record at process exit, so every test, inference, or idle
@@ -183,6 +226,8 @@ public:
 
 private:
     std::chrono::steady_clock::time_point start_;
+    // The scope is also busy time on kJitBuildBusy.
+    ScopedBusyClock busy_{kJitBuildBusy};
 };
 
 // Invokes `fn(args...)` and records how long it took (in ms) in `token`, forwarding both the

@@ -16,26 +16,22 @@ namespace tt::tt_metal {
 // Forward declarations
 class Allocator;
 class BankManager;
-class Buffer;
 enum class BufferType;
 
 /**
  * @brief Represents the complete allocation state across all buffer types
  *
- * This class captures allocation states for all buffer types (DRAM, L1, L1_SMALL, TRACE)
- * and tracks all buffer pointers. It can be extracted from one or more allocators,
- * merged with other states, and applied to target allocators.
+ * This class captures allocation states for all buffer types (DRAM, L1, L1_SMALL, TRACE).
+ * It can be extracted from one or more allocators, merged with other states, and applied
+ * to target allocators.
  */
 class AllocatorState {
 public:
     struct BufferTypeState;
 
     AllocatorState() = default;
-    AllocatorState(
-        std::unordered_map<BufferType, BufferTypeState> states_per_buffer_type,
-        std::vector<Buffer*> all_allocated_buffers) :
-        states_per_buffer_type_(std::move(states_per_buffer_type)),
-        all_allocated_buffers_(std::move(all_allocated_buffers)) {}
+    explicit AllocatorState(std::unordered_map<BufferType, BufferTypeState> states_per_buffer_type) :
+        states_per_buffer_type_(std::move(states_per_buffer_type)) {}
 
     /**
      * @brief Merge another allocator state into this one
@@ -57,27 +53,12 @@ public:
     DeviceAddr total_allocated_size() const;
 
     /**
-     * @brief Check if state exists for a given buffer type
-     *
-     * @param buffer_type The buffer type to check
-     * @return true if state exists for this buffer type
-     */
-    bool has_buffer_type(BufferType buffer_type) const;
-
-    /**
      * @brief Get allocated regions for a specific buffer type
      *
      * @param buffer_type The buffer type to query
      * @return Vector of (start_addr, end_addr) pairs, empty if buffer type not present
      */
     const std::vector<std::pair<DeviceAddr, DeviceAddr>>& get_allocated_regions(BufferType buffer_type) const;
-
-    /**
-     * @brief Get all buffer pointers from merged allocators
-     *
-     * @return Vector of buffer pointers
-     */
-    const std::vector<Buffer*>& get_all_allocated_buffers() const { return all_allocated_buffers_; }
 
     /**
      * @brief Get states per buffer type
@@ -113,14 +94,6 @@ public:
         std::vector<std::pair<DeviceAddr, DeviceAddr>> allocated_regions;
 
         /**
-         * @brief Optional: tracks which source allocator each region came from
-         *
-         * Useful for debugging and auditing. Same length as allocated_regions.
-         * If empty, source tracking is disabled.
-         */
-        std::vector<uint32_t> region_source_allocator_ids;
-
-        /**
          * @brief Merge another buffer type state into this one
          *
          * @param other The state to merge
@@ -152,13 +125,6 @@ public:
 private:
     // Map from buffer type to its allocation state
     std::unordered_map<BufferType, BufferTypeState> states_per_buffer_type_;
-
-    // All buffer pointers from merged allocators
-    std::vector<Buffer*> all_allocated_buffers_;
-
-    // Helper to get or create buffer type state
-    BufferTypeState& get_or_create_buffer_type_state(BufferType buffer_type);
-    const BufferTypeState* get_buffer_type_state(BufferType buffer_type) const;
 };
 
 }  // namespace tt::tt_metal

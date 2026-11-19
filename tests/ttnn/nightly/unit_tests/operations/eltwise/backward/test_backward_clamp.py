@@ -101,3 +101,30 @@ def test_unary_bw_clamp_ttnn(input_shapes, min_val, max_val, device):
         golden_tensor = golden_function(grad_data, in_data, min, max)
         comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
         assert comp_pass
+
+
+# clamp_bw used to zero out-of-range gradients with a mask multiply, and in float32 0 * inf and 0 * nan
+# are NaN. torch selects, so a clamped position gets an exact 0 whatever grad holds.
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16], ids=["float32", "bfloat16"])
+@pytest.mark.parametrize("grad_value", [float("inf"), float("nan")], ids=["inf", "nan"])
+@pytest.mark.parametrize("bounds", ["scalar", "tensor"])
+@pytest.mark.parametrize(
+    "min_val, max_val, input_value",
+    [(-2.0, 2.0, 5.0), (-2.0, None, -5.0), (None, 2.0, 5.0)],
+    ids=["both_above_max", "min_only_below", "max_only_above"],
+)
+def test_clamp_bw_non_finite_grad_out_of_range(device, dtype, grad_value, bounds, min_val, max_val, input_value):
+    shape = torch.Size([1, 1, 32, 32])
+
+    def to_device(value):
+        return ttnn.from_torch(torch.full(shape, value), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    if bounds == "tensor":
+        min_arg = None if min_val is None else to_device(min_val)
+        max_arg = None if max_val is None else to_device(max_val)
+    else:
+        min_arg, max_arg = min_val, max_val
+
+    output = ttnn.to_torch(ttnn.clamp_bw(to_device(grad_value), to_device(input_value), min_arg, max_arg)[0]).float()
+
+    assert torch.equal(output, torch.zeros(shape)), f"expected 0, got {output[0, 0, 0, 0].item()}"

@@ -18,26 +18,30 @@ void kernel_main() {
     constexpr bool enabled = get_compile_time_arg_val(2) != 0;
     static_assert(scenario < 3);
 
+    DataflowBuffer cb_in_obj(cb_in);
+    DataflowBuffer cb_out_obj(cb_out);
+
     using namespace compute_kernel_lib;
     compute_kernel_hw_startup(cb_in, cb_out);
     if constexpr (scenario == 0) {
         eltwise_chain(
             IterationShape::tiles(n),
-            CopyTile<input(cb_in)>{},
+            CopyTile<input(cb_in)>{cb_in_obj},
             Optional<enabled, Negative<Dst::D0>>{},
-            PackTile<output(cb_out)>{});
+            PackTile<output(cb_out)>{cb_out_obj});
     } else if constexpr (scenario == 1) {
         constexpr uint32_t cb_out_2 = tt::CBIndex::c_17;
+        DataflowBuffer cb_out_2_obj(cb_out_2);
         eltwise_chain(
             IterationShape::tiles(n),
-            CopyTile<input(cb_in)>{},
-            PackTile<output(cb_out)>{},
-            Optional<enabled, PackTile<output(cb_out_2)>>{});
+            CopyTile<input(cb_in)>{cb_in_obj},
+            PackTile<output(cb_out)>{cb_out_obj},
+            Optional<enabled, PackTile<output(cb_out_2)>>{cb_out_2_obj});
     } else {
         const uint32_t mode = get_arg_val<uint32_t>(0);
         eltwise_chain(
             IterationShape::tiles(n),
-            CopyTile<input(cb_in)>{},
+            CopyTile<input(cb_in)>{cb_in_obj},
             runtime_if(mode == 0, Negative<Dst::D0>{})
                 .else_if(mode == 1, Square<Dst::D0>{}, Negative<Dst::D0>{})
                 .otherwise(CopyDest<Dst::D0, Dst::D0, DataFormat::Float16_b>{}),
@@ -45,6 +49,6 @@ void kernel_main() {
             runtime_if(mode == 3, Negative<Dst::D0>{}, Abs<Dst::D0>{}),
             runtime_if(mode == 4, Square<Dst::D0>{}),
             runtime_if(mode == 5, Square<Dst::D0>{}).else_if(mode == 6, Negative<Dst::D0>{}),
-            PackTile<output(cb_out)>{});
+            PackTile<output(cb_out)>{cb_out_obj});
     }
 }

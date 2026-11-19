@@ -14,13 +14,15 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt-metalium/program_cache.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include <cstdint>
 
 #include "ttnn/distributed/types.hpp"
 
 namespace ttnn::device_operation {
+
+struct RangeRunArgs;  // ttnn/metal_v2_artifacts.hpp
 
 template <typename T>
 concept ProgramFactoryConcept = requires {
@@ -73,11 +75,11 @@ template <typename T>
 concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } || WorkloadDescriptorConcept<T>) &&
                                           !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T>;
 
-// Metal 2.0 op-porting stepping-stone factory concept: factories that return
+// Metal 2.0 factory concept: factories that return
 // ProgramArtifacts (a ProgramSpec + ProgramRunArgs + any op-owned tensors) from
 // create_program_artifacts. The framework adapter maps that same ProgramSpec onto
-// tensor_coords via experimental::MakeMeshWorkloadFromSpecs on cache miss, and
-// patches every TensorArg (io and op-owned alike) via experimental::UpdateTensorArgs
+// tensor_coords via tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs on cache miss, and
+// patches every TensorArg (io and op-owned alike) via tt::tt_metal::experimental::UpdateTensorArgs
 // on cache hit.
 //
 // NOTE: Each TensorArgument in ProgramRunArgs MUST reference a MeshTensor reachable from
@@ -86,9 +88,8 @@ concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } |
 // matches by pointer identity. Referencing a copy or any other MeshTensor will TT_FATAL
 // at runtime.
 //
-// NOTE: This is a stepping-stone concept for incremental migration of operations to
-// Metal 2.0. It is not designed for production use — the cache-hit fast path re-patches
-// op-owned tensors redundantly rather than skipping them.
+// NOTE: On cache hit, the adapter also re-patches op-owned tensors, although their
+// addresses do not change.
 //
 namespace detail {
 template <typename F>
@@ -111,7 +112,17 @@ template <typename T>
 concept HasSpecRuntimeArgsOverride = requires {
     requires std::same_as<
         typename static_fn_return<decltype(&T::override_runtime_arguments)>::type,
-        tt::tt_metal::experimental::ProgramRunArgs>;
+        tt::tt_metal::ProgramRunArgs>;
+};
+
+// True iff T has a single static override_runtime_arguments returning RangeRunArgs: the cache-hit form of a
+// MeshWorkloadSpecFactoryConcept factory with per-device run args. Kept apart from HasSpecRuntimeArgsOverride, which
+// also routes SPMD spec factories, so a mis-typed SPMD factory cannot land in the mesh adapter.
+template <typename T>
+concept HasRangeRunArgsOverride = requires {
+    requires std::same_as<
+        typename static_fn_return<decltype(&T::override_runtime_arguments)>::type,
+        ttnn::device_operation::RangeRunArgs>;
 };
 }  // namespace detail
 
@@ -126,14 +137,22 @@ concept HasSpecRuntimeArgsOverride = requires {
 //       const ttnn::MeshCoordinateRange& range);
 // One Program backs a whole range, so the override is called once per range and takes the range
 // rather than a coordinate: what it returns applies to every device the range covers.
+// A factory whose devices differ only in a few named kernel run args declares
+//   static constexpr bool uses_per_device_run_args = true;
+// returns per-device values in PerCoordProgram::per_device_run_params, and overrides with
+//   static RangeRunArgs override_runtime_arguments(..., const ttnn::MeshCoordinateRange& range);
+// or, if its per-device values depend only on the coordinate and the hashed attributes, opts out of the override with
+//   static constexpr bool fixed_per_device_run_args = true;
+// (see MeshWorkloadSpecFactoryAdapter).
 template <typename T>
 concept MeshWorkloadSpecFactoryConcept = requires {
     &T::create_mesh_workload_artifacts;
 } && !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T> && !ProgramDescriptorFactoryConcept<T>;
 
-// Base spec factory: cache hit refreshes only tensor bindings. SPMD-shaped -- one ProgramSpec,
-// replicated across the mesh. A factory whose programs differ per device is a
-// MeshWorkloadSpecFactoryConcept instead.
+// Base spec factory: cache hit refreshes only tensor and PrefetcherPipe bindings. SPMD-shaped -- one
+// ProgramSpec, replicated across the mesh. A factory whose programs differ per device is a
+// MeshWorkloadSpecFactoryConcept instead. Every spec factory's PrefetcherPipeArguments must name pipes
+// in operation_attributes_t::prefetcher_pipes, which the cache hit rebinds them from.
 template <typename T>
 concept ProgramSpecFactoryConcept =
     requires { &T::create_program_artifacts; } && !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T> &&

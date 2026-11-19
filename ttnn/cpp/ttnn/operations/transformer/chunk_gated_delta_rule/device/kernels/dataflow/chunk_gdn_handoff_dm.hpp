@@ -23,6 +23,13 @@ FORCE_INLINE void credit_inc(const Noc& noc, uint32_t noc_x, uint32_t noc_y, uin
     noc_semaphore_inc(dst, 1, noc.get_noc_id());
 }
 
+// One read of the local word, the L1 cache invalidated first (the poll body of wait_word, for callers that
+// inspect each sample).
+FORCE_INLINE uint32_t read_word(const CoreLocalMem<volatile uint32_t>& word) {
+    invalidate_l1_cache();
+    return *word;
+}
+
 // Spin until the local word equals value, invalidating the L1 cache before every read.
 FORCE_INLINE void wait_word(const CoreLocalMem<volatile uint32_t>& word, uint32_t value) {
     do {

@@ -14,6 +14,7 @@
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 #include "experimental/kernel_args.h"
+#include "internal/local_mem/address_access.h"
 using tt::data_movement::common::tt_memmove;
 
 void kernel_main() {
@@ -38,7 +39,8 @@ void kernel_main() {
     DataflowBuffer dfb_in0(dfb::in);
     Scratchpad<uint8_t> staging(scratch::staging);
 
-    uint32_t temp_addr_raw = staging.get_base_address();
+    // Raw L1 address needed: rounded up to dram_alignment below and fed to fill_l1_range / tt_memmove arithmetic.
+    uint32_t temp_addr_raw = static_cast<uint32_t>(local_mem::detail::AddressAccess::address(staging.local_mem()));
     uint32_t temp_addr = (temp_addr_raw + dram_alignment - 1) & ~(dram_alignment - 1);
 
     auto read_block = [&](uint32_t num_rows,
@@ -47,28 +49,43 @@ void kernel_main() {
                           uint32_t width_size,
                           uint32_t size_2d,
                           uint32_t single_block_size) {
-        uint32_t padding_rows = num_rows == 32 ? 0 : 32 - num_rows;
-        bool has_rows = (num_rows + padding_rows) > 0;
+        const uint32_t padding_rows = tile_height - num_rows;
 
-        dfb_in0.reserve_back(single_block_size * has_rows);
+        dfb_in0.reserve_back(single_block_size);
         uint32_t l1_write_addr = dfb_in0.get_write_ptr();
 
         for (uint32_t k = start_row_id; k < start_row_id + num_rows; k++) {
+            // Bytes of this row the source still holds past start_column_id. A sub-block that starts in
+            // the padding region (wide column padding splits into several sub-blocks) reads nothing and
+            // is filled with pad_value; a partial one reads only what the row has, never past the page.
+            const uint32_t this_block_size =
+                (start_column_id < unpadded_X_size)
+                    ? ((unpadded_X_size - start_column_id < width_size) ? unpadded_X_size - start_column_id
+                                                                        : width_size)
+                    : 0;
+            const uint32_t to_pad = width_size - this_block_size;
+            if (this_block_size == 0) {
+                dataflow_kernel_lib::fill_l1_range<element_size>(l1_write_addr, width_size, pad_value);
+                l1_write_addr += width_size;
+                continue;
+            }
+
             uint64_t src_noc_addr = s.get_noc_addr(size_2d + k);
             if (((src_noc_addr + (uint64_t)start_column_id) & dram_align_offset) ==
                 ((uint64_t)l1_write_addr & dram_align_offset)) {
                 // Read from DRAM to tmp buffer
                 CoreLocalMem<uint32_t> dst(l1_write_addr);
                 noc.async_read(
-                    s, dst, width_size, {.page_id = size_2d + k, .offset_bytes = start_column_id}, {.offset_bytes = 0});
+                    s,
+                    dst,
+                    this_block_size,
+                    {.page_id = size_2d + k, .offset_bytes = start_column_id},
+                    {.offset_bytes = 0});
 
                 // Block before copying data from tmp to the input buffer
                 noc.async_read_barrier();
 
-                uint32_t prev_size = start_column_id;
-                uint32_t this_block_size = unpadded_X_size - prev_size;
-                if (this_block_size < width_size) {
-                    uint32_t to_pad = width_size - this_block_size;
+                if (to_pad > 0) {
                     dataflow_kernel_lib::fill_l1_range<element_size>(
                         l1_write_addr + this_block_size, to_pad, pad_value);
                 }
@@ -81,17 +98,14 @@ void kernel_main() {
                 noc.async_read(
                     PrecomposedUnicastEndpoint{},
                     temp_dst,
-                    width_size + dram_alignment,
+                    this_block_size + dram_alignment,
                     {.noc_addr = aligned_src_noc_addr},
                     {.offset_bytes = 0});
 
                 // Block before copying data from tmp to the input buffer
                 noc.async_read_barrier();
 
-                uint32_t prev_size = start_column_id;
-                uint32_t this_block_size = unpadded_X_size - prev_size;
-                if (this_block_size < width_size) {
-                    uint32_t to_pad = width_size - this_block_size;
+                if (to_pad > 0) {
                     uint32_t fill_addr =
                         temp_addr + ((src_noc_addr + (uint64_t)start_column_id) & dram_align_offset) + this_block_size;
                     // fill_l1_range CPU-writes the pad tail into the `staging` Scratchpad; scoped_lock flushes
@@ -115,7 +129,7 @@ void kernel_main() {
         dataflow_kernel_lib::fill_l1_range<element_size>(l1_write_addr, row_pad_bytes, pad_value);
         l1_write_addr += row_pad_bytes;
 
-        dfb_in0.push_back(single_block_size * has_rows);
+        dfb_in0.push_back(single_block_size);
     };
 
     const uint32_t width_size = get_arg(args::width_size);
@@ -130,21 +144,21 @@ void kernel_main() {
         uint32_t single_sub_block_size_row_arg = get_arg(args::single_sub_block_size_row_arg);
 
         for (uint32_t b = 0; b < single_block_size_col_arg; b++) {
-            uint32_t this_block_num_rows = tile_height;
-            if (start_row_id + tile_height > total_num_rows) {
-                this_block_num_rows = total_num_rows - start_row_id;
+            // Compute consumes a block for every output tile-row, including those past the source height.
+            uint32_t this_block_num_rows = 0;
+            if (start_row_id < total_num_rows) {
+                this_block_num_rows =
+                    (total_num_rows - start_row_id < tile_height) ? total_num_rows - start_row_id : tile_height;
             }
-            if (this_block_num_rows > 0) {
-                for (uint32_t m = 0; m < width_size; m += sub_block_width_size) {
-                    uint32_t start_column_id_u = start_column_id + m;
-                    read_block(
-                        this_block_num_rows,
-                        start_row_id,
-                        start_column_id_u,
-                        sub_block_width_size,
-                        size_2d,
-                        single_sub_block_size_row_arg);
-                }
+            for (uint32_t m = 0; m < width_size; m += sub_block_width_size) {
+                uint32_t start_column_id_u = start_column_id + m;
+                read_block(
+                    this_block_num_rows,
+                    start_row_id,
+                    start_column_id_u,
+                    sub_block_width_size,
+                    size_2d,
+                    single_sub_block_size_row_arg);
             }
             start_row_id += tile_height;
         }

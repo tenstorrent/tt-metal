@@ -1,0 +1,397 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""The SP relay must leave every rank the entry state the gather + chain gives it, and the final state on the first
+and last chronological ranks, call after call and bit-identically: on torus and unwrapped 2D fabrics, with
+Kimi-K3's per-chip workload (640 rows of 24 heads) and fabric payload, and within its device-time reference.
+"""
+
+import pytest
+import torch
+
+import ttnn
+from models.common.utility_functions import run_for_blackhole
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import assert_accurate, make_actual_start
+from models.demos.deepseek_v3_d_p.tests.kda.utils import (
+    DeviceMismatch,
+    assert_device_time,
+    closed_form_tensor,
+    distributed_prefix,
+    kda_mesh_param,
+    median_device_us,
+    pack_complement,
+)
+from models.demos.deepseek_v3_d_p.tt.kda.config import kimi_k3_program_config
+from models.demos.deepseek_v3_d_p.tt.kda.recurrence import _RelayFinalCarry, _sp_links
+from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import RelayAffinePrefix, reset_persistent_semaphores
+from tt_py_test_utils_common.realtime_profiler_utils import require_realtime_profiler
+
+pytestmark = run_for_blackhole()
+
+_ROWS, _HEADS, _KEY = 640, 24, 128
+# The model's relay runs at the affine prefix's fidelity.
+_MATH_FIDELITY = kimi_k3_program_config(
+    active_seq_len_local=_ROWS, tp_ccl_topology=ttnn.Topology.Linear
+).recurrence.affine_prefix_math_fidelity
+
+
+# SP takes mesh axis 0.
+_MESH = pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [
+        kda_mesh_param((8, 4), "mesh-8x4", "SP8xTP4"),
+        kda_mesh_param(
+            (8, 4),
+            "mesh-8x4",
+            "SP8xTP4-fabric-2d",
+            fabric2d_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
+        ),
+        kda_mesh_param((8, 1), "ring", "loudbox-SP8xTP1-ring"),
+        kda_mesh_param((4, 2), "mesh-4x2", "loudbox-SP4xTP2-fabric-2d"),
+        kda_mesh_param((2, 4), "mesh-2x4", "loudbox-SP2xTP4-fabric-2d"),
+        kda_mesh_param((4, 1), "ring", "quietbox-SP4xTP1-ring"),
+    ],
+    indirect=True,
+)
+
+
+class _Transforms:
+    """One transform per rank, its packed complement form [E | B] (E = A - I) on device, and the FP64 reference of the
+    relay around the ring."""
+
+    def __init__(self, mesh_device, seed: int | None):
+        """Random transforms from ``seed``, or closed-form ones (for the determinism check) without one."""
+        self.sp_size, self.tp_size = tuple(mesh_device.shape)
+        if seed is None:
+            shape = (self.sp_size, _HEADS, _KEY, _KEY)
+            a, b = closed_form_tensor(*shape, offset=-0.125), closed_form_tensor(*shape, offset=0.0625)
+            self.initial = closed_form_tensor(_HEADS, _KEY, _KEY, offset=0.03)
+        else:
+            generator = torch.Generator().manual_seed(seed)
+            a = 0.1 * torch.randn(self.sp_size, _HEADS, _KEY, _KEY, generator=generator)
+            b = 0.1 * torch.randn(self.sp_size, _HEADS, _KEY, _KEY, generator=generator)
+            self.initial = 0.1 * torch.randn(_HEADS, _KEY, _KEY, generator=generator)
+        # A BF16-representable E and B make the BF16 transport exact for both paths; A = E + I exactly.
+        e, self.b = (a - torch.eye(_KEY)).bfloat16().float(), b.bfloat16().float()
+        self.a = e + torch.eye(_KEY)
+        self.packed = _pack(mesh_device, self.a, self.b)
+        self.initial_tt = ttnn.from_torch(
+            self.initial,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        self.compute_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(), math_fidelity=_MATH_FIDELITY, fp32_dest_acc_en=True, packer_l1_acc=False
+        )
+
+    def final_ranks(self, start: int) -> set[int]:
+        """The ranks the relay leaves the final state on: the last chronological rank and the first."""
+        first_rank = (start // _ROWS) % self.sp_size
+        return {first_rank, (first_rank + self.sp_size - 1) % self.sp_size}
+
+    def reference(self, start: int):
+        """Each rank's entry state, the final carry and the ranks the relay leaves the carry on."""
+        first_rank = (start // _ROWS) % self.sp_size
+        carry = self.initial.double()
+        entries = {}
+        for step in range(self.sp_size):
+            rank = (first_rank + step) % self.sp_size
+            entries[rank] = carry.float()
+            carry = self.a[rank].double() @ carry + self.b[rank].double()
+        return entries, carry.float(), self.final_ranks(start)
+
+    def assert_matches_gather_and_chain(self, entry, final, actual_start, start: int):
+        chained_entry, chained_final = distributed_prefix(
+            self.packed,
+            self.initial_tt,
+            sequence_parallel_axis=0,
+            compute_config=self.compute_config,
+            actual_start=actual_start,
+            local_rows=_ROWS,
+        )
+        entries, carry, final_ranks = self.reference(start)
+
+        def assert_matches_chain(got, chained, expected, name):
+            # The same products at the same fidelity in another accumulation order (the relay accumulates the K-sum
+            # E S on top of S + B in DST, the chain adds S and B to E S after the matmul): the relay must be no
+            # further from the FP64 reference than the gather + chain.
+            expected = expected.double()
+            relay_error = torch.linalg.vector_norm(got.double() - expected).item()
+            chain_error = torch.linalg.vector_norm(chained.double() - expected).item()
+            assert relay_error <= 1.01 * chain_error, f"{name}: relay error {relay_error} > chain error {chain_error}"
+
+        devices = zip(
+            ttnn.get_device_tensors(entry),
+            ttnn.get_device_tensors(final),
+            ttnn.get_device_tensors(chained_entry),
+            ttnn.get_device_tensors(chained_final),
+            strict=True,
+        )
+        for index, (local_entry, local_final, local_chained_entry, local_chained_final) in enumerate(devices):
+            rank, tp = divmod(index, self.tp_size)
+            name = f"start={start} rank={rank} tp={tp}"
+            got_entry = ttnn.to_torch(local_entry)
+            assert_accurate(entries[rank], got_entry, name=f"entry {name}", nrmse_threshold=0.025)
+            assert_matches_chain(got_entry, ttnn.to_torch(local_chained_entry), entries[rank], f"entry {name}")
+            if rank in final_ranks:
+                got_final = ttnn.to_torch(local_final)
+                assert_accurate(carry, got_final, name=f"final {name}", nrmse_threshold=0.03)
+                assert_matches_chain(got_final, ttnn.to_torch(local_chained_final), carry, f"final {name}")
+
+
+def _pack(mesh_device, a: torch.Tensor, b: torch.Tensor) -> ttnn.Tensor:
+    """Each rank's [sp_size, heads, K, K] A and B as its BF16 [1, heads, K, 2K] rows of [E | B], replicated over TP."""
+    sp_size, tp_size = tuple(mesh_device.shape)
+    return pack_complement(
+        a, b, mesh_device, ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=(sp_size, tp_size))
+    )
+
+
+def _relay(mesh_device) -> RelayAffinePrefix:
+    return RelayAffinePrefix(
+        mesh_device,
+        sequence_parallel_axis=0,
+        batch_heads=_HEADS,
+        key_dim=_KEY,
+        value_dim=_KEY,
+        num_links=_sp_links(mesh_device, 0),
+        local_rows=_ROWS,
+        math_fidelity=_MATH_FIDELITY,
+    )
+
+
+# Only the rank holding the first token orders the relay; "split" checks that an offset within that rank is ignored.
+_STARTS = {"aligned": 0, "rotated": 640, "split": 672, "late-split": 3232, "last-rank": 4480}
+
+
+@_MESH
+@pytest.mark.parametrize("start", list(_STARTS.values()), ids=list(_STARTS))
+def test_relay_affine_prefix_matches_gather_and_chain(mesh_device, start):
+    transforms = _Transforms(mesh_device, seed=start)
+    actual_start = make_actual_start(mesh_device, start)
+    entry, final = _relay(mesh_device)(transforms.packed, transforms.initial_tt, actual_start)
+    transforms.assert_matches_gather_and_chain(entry, final, actual_start, start)
+
+
+@_MESH
+def test_relay_affine_prefix_applies_the_complement_form(mesh_device):
+    """Hand-checkable relay of the complement form: rank r carries A = I / 2 (E = -I / 2) and B = (r + 1) I, except
+    rank 3, which carries the identity map, (0, 0) as an empty rank's summary publishes it. From S = 10 I every entry
+    state is a small dyadic multiple of I, exact in FP32 and in the matmul's source registers, so the relay must
+    match the hand values bit for bit. A relay that read E as A would send -4 I from rank 0, and 0 from rank 3."""
+    sp_size, _ = tuple(mesh_device.shape)
+    eye = torch.eye(_KEY)
+    scales = [(0.0, 0.0) if rank == 3 else (-0.5, rank + 1.0) for rank in range(sp_size)]
+    e = torch.stack([torch.stack([e_scale * eye] * _HEADS) for e_scale, _ in scales])
+    b = torch.stack([torch.stack([b_scale * eye] * _HEADS) for _, b_scale in scales])
+    initial = ttnn.from_torch(
+        10 * eye.expand(_HEADS, _KEY, _KEY).contiguous(),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    # From rank 0: 10, 6, 5, 5.5, 5.5 (identity), 7.75, 9.875, 11.9375 for 8 ranks; the hand recurrence below.
+    entries, carry = [], 10.0
+    for e_scale, b_scale in scales:
+        entries.append(carry)
+        carry = carry + e_scale * carry + b_scale
+    if sp_size == 8:
+        assert entries == [10.0, 6.0, 5.0, 5.5, 5.5, 7.75, 9.875, 11.9375] and carry == 13.96875
+    actual_start = make_actual_start(mesh_device, 0)
+    entry, final = _relay(mesh_device)(_pack(mesh_device, e + eye, b), initial, actual_start)
+    tp_size = tuple(mesh_device.shape)[1]
+    for index, (local_entry, local_final) in enumerate(
+        zip(ttnn.get_device_tensors(entry), ttnn.get_device_tensors(final), strict=True)
+    ):
+        rank = index // tp_size
+        expected = entries[rank] * eye.expand(_HEADS, _KEY, _KEY)
+        torch.testing.assert_close(ttnn.to_torch(local_entry), expected, rtol=0, atol=0, msg=f"entry rank={rank}")
+        if rank in (0, sp_size - 1):
+            torch.testing.assert_close(
+                ttnn.to_torch(local_final),
+                carry * eye.expand(_HEADS, _KEY, _KEY),
+                rtol=0,
+                atol=0,
+                msg=f"final rank={rank}",
+            )
+
+
+@_MESH
+def test_relay_affine_prefix_adds_the_entry_state_and_b_in_fp32(mesh_device):
+    """With E = 0 each hop is S + B: random FP32 entry states and BF16 B with full mantissas must come out as their
+    FP32 sum hop after hop, to FP32 rounding. A source register would truncate the entry state to TF32, and B in
+    srcB to 6 mantissa bits at HiFi2: either is an error of order 1e-4 here, against the 1e-6 allowed."""
+    sp_size, tp_size = tuple(mesh_device.shape)
+    generator = torch.Generator().manual_seed(17)
+    b = (0.1 * torch.randn(sp_size, _HEADS, _KEY, _KEY, generator=generator)).bfloat16().float()
+    initial = 0.1 * torch.randn(_HEADS, _KEY, _KEY, generator=generator)
+    initial_tt = ttnn.from_torch(
+        initial,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    entries, carry = [], initial
+    for rank in range(sp_size):
+        entries.append(carry)
+        carry = carry + b[rank]
+    actual_start = make_actual_start(mesh_device, 0)
+    entry, final = _relay(mesh_device)(_pack(mesh_device, torch.eye(_KEY).expand_as(b), b), initial_tt, actual_start)
+    for index, (local_entry, local_final) in enumerate(
+        zip(ttnn.get_device_tensors(entry), ttnn.get_device_tensors(final), strict=True)
+    ):
+        rank = index // tp_size
+        torch.testing.assert_close(
+            ttnn.to_torch(local_entry), entries[rank], rtol=0, atol=1e-6, msg=f"entry rank={rank}"
+        )
+        if rank in (0, sp_size - 1):
+            torch.testing.assert_close(ttnn.to_torch(local_final), carry, rtol=0, atol=1e-6, msg=f"final rank={rank}")
+
+
+@_MESH
+def test_relay_affine_prefix_rejects_lofi(mesh_device, expect_error):
+    """B enters the hop as I @ B, exact only from HiFi2 on: LoFi is refused."""
+    transforms = _Transforms(mesh_device, seed=0)
+    relay = RelayAffinePrefix(
+        mesh_device,
+        sequence_parallel_axis=0,
+        batch_heads=_HEADS,
+        key_dim=_KEY,
+        value_dim=_KEY,
+        num_links=_sp_links(mesh_device, 0),
+        local_rows=_ROWS,
+        math_fidelity=ttnn.MathFidelity.LoFi,
+    )
+    with expect_error(RuntimeError, "LoFi is unsupported"):
+        relay(transforms.packed, transforms.initial_tt, make_actual_start(mesh_device, 0))
+
+
+@_MESH
+def test_relay_affine_prefix_back_to_back(mesh_device):
+    """Two relay calls separated by the SP-line barrier the model runs between layers (the relay's final carry): the
+    second call must be as exact as the first, from the landing buffers and arrival counters the first left."""
+    # Rank-aligned starts, the second rotated: without a split tail the carry is the prefix's final state.
+    starts = (0, 640)
+    transforms = _Transforms(mesh_device, seed=starts[0])
+    relay = _relay(mesh_device)
+    final_carry = _RelayFinalCarry.shared(mesh_device, 0, relay.num_links)
+    results = []
+    for start in starts:
+        actual_start = make_actual_start(mesh_device, start)
+        entry, final = relay(transforms.packed, transforms.initial_tt, actual_start)
+        # Every rank enters the carry only after its relay call: a line barrier before the next call. Without a split
+        # tail the carry takes the prefix's final state; rank_final only has to be a distinct tensor.
+        rank_final = ttnn.clone(final)
+        carry = final_carry(rank_final, final, actual_start, None, _ROWS)
+        ttnn.deallocate(rank_final)
+        results.append((start, actual_start, entry, final, carry))
+    for start, actual_start, entry, final, carry in results:
+        transforms.assert_matches_gather_and_chain(entry, final, actual_start, start)
+        # The carry leaves every rank the final state of the chronologically last rank.
+        _, expected_carry, _ = transforms.reference(start)
+        for index, local_carry in enumerate(ttnn.get_device_tensors(carry)):
+            rank, tp = divmod(index, transforms.tp_size)
+            assert_accurate(
+                expected_carry,
+                ttnn.to_torch(local_carry),
+                name=f"carry start={start} rank={rank} tp={tp}",
+                nrmse_threshold=0.03,
+            )
+
+
+@_MESH
+def test_relay_affine_prefix_after_counter_reset(mesh_device):
+    """Counts an aborted call left on the persistent counters are zeroed by reset_persistent_semaphores, and the next
+    call is exact."""
+    start = 640
+    transforms = _Transforms(mesh_device, seed=start)
+    relay = _relay(mesh_device)
+    for semaphore in relay.semaphores:
+        ttnn.reset_global_semaphore_value(semaphore, 3)
+    reset_persistent_semaphores(mesh_device)
+    actual_start = make_actual_start(mesh_device, start)
+    entry, final = relay(transforms.packed, transforms.initial_tt, actual_start)
+    transforms.assert_matches_gather_and_chain(entry, final, actual_start, start)
+
+
+_DETERMINISM_CALLS = 3
+
+
+@_MESH
+def test_relay_affine_prefix_determinism(mesh_device):
+    """Every start's calls return bit-identical entry states, and final states where the relay leaves them. A device
+    synchronize separates the calls, the barrier consecutive calls need."""
+    transforms = _Transforms(mesh_device, seed=None)
+    relay = _relay(mesh_device)
+    mismatch = DeviceMismatch(mesh_device)
+    for name, start in _STARTS.items():
+        actual_start = make_actual_start(mesh_device, start)
+        first = None
+        for _ in range(_DETERMINISM_CALLS):
+            entry, final = relay(transforms.packed, transforms.initial_tt, actual_start)
+            ttnn.synchronize_device(mesh_device)
+            if first is None:
+                first = (entry, final)
+                continue
+            mismatch.compare(first[0], entry, f"{name} entry")
+            mismatch.compare(first[1], final, f"{name} final", ranks=transforms.final_ranks(start))
+            for tensor in (entry, final):
+                ttnn.deallocate(tensor)
+        for tensor in (*first, actual_start):
+            ttnn.deallocate(tensor)
+    mismatch.assert_none()
+
+
+# Device time of one relay call: its program's slowest chip under the realtime profiler, the median over single calls,
+# each after a discarded first and never back to back (a device synchronize separates them, the barrier consecutive
+# calls need). A few single calls run slow while the ring waits on its predecessors; the median of 15 does not.
+_PERF_SAMPLES = 15
+# A full chunk that starts 320 rows into the second rank, as the layer gates place it: the relay starts mid-ring.
+_PERF_START = _ROWS + 320
+_PERF_KERNEL = "relay_affine_prefix"
+
+
+def _perf_case(shape: tuple[int, int], topology: str, case_id: str, reference_us: float, margin: float):
+    """A mesh case with its device-time reference and margin."""
+    case = kda_mesh_param(shape, topology, case_id)
+    return pytest.param(*case.values, reference_us, margin, marks=case.marks, id=case_id)
+
+
+# Device-time references in us, with K3's payload: Galaxy on TorusXY, LoudBox and QuietBox on TorusY. Galaxy runs
+# one program for all 32 chips, so they start a call together (119-124 us over repeated runs); LoudBox's span
+# 99-100 us.
+_PERF_CASES = [
+    _perf_case((8, 4), "mesh-8x4", "SP8xTP4", 123.0, 0.10),
+    _perf_case((8, 1), "ring", "loudbox-SP8xTP1-ring", 99.5, 0.12),
+    _perf_case((4, 1), "ring", "quietbox-SP4xTP1-ring", 75.5, 0.05),
+]
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params,reference_us,margin", _PERF_CASES, indirect=["mesh_device", "device_params"]
+)
+def test_relay_affine_prefix_kimi_k3_perf(mesh_device, reference_us, margin):
+    """The model's relay: 24 heads per chip, the model's fidelity, entry states in L1 for the entry correction."""
+    require_realtime_profiler("the relay_affine_prefix device-time gate")
+    layout = "SP{}xTP{}".format(*tuple(mesh_device.shape))
+    transforms = _Transforms(mesh_device, seed=_PERF_START)
+    actual_start = make_actual_start(mesh_device, _PERF_START)
+    relay = _relay(mesh_device)
+
+    def call():
+        outputs = relay(transforms.packed, transforms.initial_tt, actual_start)
+        ttnn.synchronize_device(mesh_device)
+        return outputs
+
+    entry, final = call()
+    transforms.assert_matches_gather_and_chain(entry, final, actual_start, _PERF_START)
+    for tensor in (entry, final):
+        ttnn.deallocate(tensor)
+
+    median_us = median_device_us(mesh_device, call, _PERF_KERNEL, _PERF_SAMPLES)
+    assert_device_time(median_us, reference_us, margin, f"relay_affine_prefix Kimi-K3 {layout}")

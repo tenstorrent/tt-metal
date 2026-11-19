@@ -184,13 +184,17 @@ def write_chunk_metadata(
 
 
 def _llama4_scale_geometry(hf_config: PretrainedConfig, mesh_device: ttnn.MeshDevice, sp_axis: int):
-    """(heads_local, width, shard_dims) for the query-scale buffer.
+    """(heads, width, shard_dims) for the query-scale buffer.
 
     The allocator and the per-chunk writer below must agree exactly -- a mismatch surfaces only as a
     copy_host_to_device_tensor failure at runtime -- so the shape contract is stated once.
+
+    The buffer is [1, 1, S, q_lora_rank]: ttMLA applies the scale to the q_a latent after its norm,
+    not to Q (see ttMLA._q_stem), so it has one head and the latent's width, which is TP-replicated.
     """
-    heads_local = hf_config.num_attention_heads // mesh_device.shape[1 - sp_axis]
-    width = hf_config.kv_lora_rank + hf_config.qk_rope_head_dim
+    del mesh_device  # the q_a latent is TP-replicated, so no dimension depends on the TP split
+    heads_local = 1
+    width = hf_config.q_lora_rank
     shard_dims = [None, None]
     shard_dims[sp_axis] = 2
     return heads_local, width, shard_dims
@@ -256,6 +260,41 @@ def refresh_llama4_scale(
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape),
     )
     ttnn.copy_host_to_device_tensor(host, buf)
+
+
+def identity_rope_tensors_indexed(
+    mesh_device: ttnn.MeshDevice, *, sp_axis: int, chunk_size_global: int, rope_dim: int
+) -> dict[str, ttnn.Tensor]:
+    """cos = 1 / sin = 0 tables over one chunk slab: ``rotary_embedding_indexed`` then only does its fused concat
+    and row-major write (exact for normal values at HiFi2+). Every position has the same rotation, so one slab
+    serves every chunk: call it with kv_actual_global = 0 and no metadata."""
+    sp = mesh_device.shape[sp_axis]
+    tp = mesh_device.shape[1 - sp_axis]
+    assert chunk_size_global % (ttnn.TILE_SIZE * sp * tp) == 0, (
+        f"chunk_size_global ({chunk_size_global}) must be a multiple of TILE_SIZE * sp * tp "
+        f"({ttnn.TILE_SIZE * sp * tp})"
+    )
+    shard_dims = [None, None]
+    shard_dims[sp_axis] = 2
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
+
+    def table(value: float) -> ttnn.Tensor:
+        return ttnn.from_torch(
+            torch.full((1, 1, chunk_size_global, rope_dim), value, dtype=torch.bfloat16),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=mapper,
+        )
+
+    trans_matrix = ttnn.from_torch(
+        get_rot_transformation_mat(),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    return {"cos_matrix": table(1.0), "sin_matrix": table(0.0), "trans_matrix": trans_matrix}
 
 
 class RotarySetup:

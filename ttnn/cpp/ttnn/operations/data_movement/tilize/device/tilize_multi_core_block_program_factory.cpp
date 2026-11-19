@@ -13,12 +13,11 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
@@ -71,7 +70,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
     const auto& [ncores, all_cores, core_range, cliff_row_core_range, cliff_col_core_range, cliff_col_row_core_range, nblocks_per_core, single_block_size, single_block_size_cliff_row, single_block_size_cliff_col, has_cliff_row, has_cliff_col, full_cores_per_row, full_cores_per_col, single_sub_block_size] =
         plan.split;
 
-    IDevice* device = a.device();
+    auto* device = a.device();
     // Same grid `make_block_plan` split over -- the runtime-arg loop below walks it in core order.
     const CoreCoord grid_size = device->compute_with_storage_grid_size();
     const CoreRangeSet available_grid = operation_attributes.sub_core_grids.has_value()
@@ -87,7 +86,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
 
     uint32_t row_size_bytes = a.padded_shape()[-1] * a.element_size();  // Assuming bfloat16 dataformat
 
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     const DFBSpecName IN_FULL{"in_full"};
     const ScratchpadSpecName STAGING_FULL{"staging_full"};
@@ -303,6 +302,11 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
             ComputeHardwareConfig compute_cfg_gen2;
             compute_cfg_gen2.enable_32_bit_dest = compute_cfg.enable_32_bit_dest;
             compute_cfg_gen2.unpack_modes = compute_cfg.unpack_modes;  // TODO(#52269): copied from WH/BH
+            // Quasar unpacks Int32 only into DEST.
+            if (a.dtype() == DataType::INT32) {
+                compute_cfg_gen2.enable_32_bit_dest = true;
+                compute_cfg_gen2.unpack_modes.insert({in_dfb_of(set), UnpackMode::UnpackToDest});
+            }
             compute_hw = compute_cfg_gen2;
         }
 
@@ -487,7 +491,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-tt::tt_metal::experimental::ProgramRunArgs TilizeMultiCoreBlockProgramFactory::override_runtime_arguments(
+ProgramRunArgs TilizeMultiCoreBlockProgramFactory::override_runtime_arguments(
     const TilizeParams& /*operation_attributes*/,
     const TilizeInputs& tensor_args,
     Tensor& tensor_return_value,

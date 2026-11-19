@@ -1,4 +1,5 @@
 set(IMPL_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/sram_arena/sram_arena.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/core_subset_write/mesh_command_queue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/core_subset_write/tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/internal/disaggregation/kv_chunk_address_table.cpp
@@ -12,6 +13,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/context/metal_context.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/context/metal_env.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/context/simulator_termination.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/threading/thread_pool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/firmware/firmware_initializer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/firmware/fabric_firmware_initializer.cpp
@@ -42,6 +44,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/drisc_l1_arena.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/dram_sender_topology.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/tensor_prefetcher_manager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/buffers/tensor_prefetcher_manager_dispatch_engine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_circular_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/cross_node_dfb.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/prefetcher_pipe.cpp
@@ -80,6 +83,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/program_spec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/resource/dfb.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/resource/prefetcher_pipe.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/resource/sram_arena.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/resource/resource.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/resource/scratchpad.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/resource/semaphore.cpp
@@ -94,16 +98,21 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/construction/resource/tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/construction/processor_assignment/processor_assignment.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_run_args.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/sram_arena_support.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/tensor_spec_relaxations.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel_types.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/address_ranges.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/free_list_opt.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/size_class_index.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/allocator/allocation_request.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/allocator_state.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/bank_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/l1_banking_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/trace_allocation_tracker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/program/program_allocation_support.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/slow_dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/kernel_compile_utils.cpp
@@ -131,12 +140,15 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_core_common.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_engine_kernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/internal/cluster_noc_helpers.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/internal/mesh_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/internal/service/service_core_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/simple_trace_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_core_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/command_queue_common.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_mem_map.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_telemetry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/operation_timeout.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/aux_region_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/system_memory_cq_interface.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/system_memory_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/hardware_command_queue.cpp
@@ -144,6 +156,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/worker_config_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/data_collection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/data_collector.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/host_transfer_stats.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/realtime_profiler_tracy_handler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/ringbuffer_cache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/topology.cpp
@@ -152,6 +165,8 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/dispatch_s.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/relay_mux.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/tensor_prefetcher.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/tensor_prefetcher_kernels.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/util/dispatch_settings.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/dprint_server.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/data.cpp
@@ -160,9 +175,11 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/rpc_server_controller.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/noc_logging.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/noc_debugging.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/debug/l1_ecc_halt.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/watcher_server.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/watcher_device_reader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/trace/trace_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/trace/trace_capture_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/trace/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/event/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/base_types_from_flatbuffer.cpp
@@ -183,6 +200,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/layout/layout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/layout/page_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/layout/tensor_layout.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/layout/tensor_layout_apis_with_custom_alignment.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/memory_config/memory_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/topology/distributed_tensor_configs.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/topology/tensor_topology.cpp
@@ -197,6 +215,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_serialization_support.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/host_tensor_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_live_ranges.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/per_core_allocation/allocator_state.cpp
 )
 
 if(TT_METAL_USE_EMULE)

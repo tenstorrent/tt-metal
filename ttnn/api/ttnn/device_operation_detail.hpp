@@ -18,8 +18,13 @@ namespace ttnn {
 class Tensor;
 }  // namespace ttnn
 
+namespace tt::tt_metal {
+class TensorTopology;
+}  // namespace tt::tt_metal
+
 namespace tt::tt_metal::distributed {
 class MeshDevice;
+class MeshWorkload;
 }  // namespace tt::tt_metal::distributed
 
 namespace ttnn::device_operation::detail {
@@ -37,6 +42,21 @@ std::pair<
     ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
     tt::tt_metal::distributed::MeshShape>
 compute_output_placements_and_shape(const std::vector<std::reference_wrapper<const ttnn::Tensor>>& tensors);
+
+/**
+ * The same union over TensorTopology labels instead of tensors. The tensor overload above is this function
+ * applied to each tensor's tensor_topology(); it exists so a device operation that knows what one of its
+ * operands WILL be labelled (a collective's result feeding a fused matmul) can take the union of that label
+ * with the labels of its other operands, rather than re-implementing the rule. Semantics: among the labels of
+ * the highest distribution rank, the first Shard seen on a mesh axis wins and a tensor dim already claimed by
+ * another axis reads Replicate; the distribution shape is the per-axis maximum; lower-rank sharded labels are
+ * dropped; fully-replicated labels only decide the rank when nothing is sharded.
+ */
+std::pair<
+    ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
+    tt::tt_metal::distributed::MeshShape>
+compute_output_placements_and_shape(
+    const std::vector<std::reference_wrapper<const tt::tt_metal::TensorTopology>>& topologies);
 
 /**
  * Non-template implementation of tensor coordinate extraction.
@@ -64,5 +84,18 @@ std::vector<tt::tt_metal::distributed::MeshCoordinate> extract_tensor_coordinate
  * therefore still drop the per-core bit unnoticed; tracked in #51482.
  */
 void validate_no_per_core_allocation(const ttnn::Tensor& tensor, std::string_view operation_name, size_t input_index);
+
+// True while a ttnn::experimental::CommandListBuilder records on the calling thread (ttnn/command_list.hpp).
+bool is_recording_command_list();
+
+// Throws while recording on the calling thread. For calls whose meaning depends on recorded work, so running them at
+// record time would be wrong.
+void throw_if_recording_command_list(std::string_view call_name);
+
+// Adds `workload` to the CommandListBuilder recording on the calling thread instead of enqueueing it.
+void record_to_command_list(
+    std::string_view operation_name,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    tt::tt_metal::distributed::MeshWorkload& workload);
 
 }  // namespace ttnn::device_operation::detail

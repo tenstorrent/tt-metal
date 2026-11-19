@@ -10,17 +10,12 @@
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_operand.h"
+#include "ckernel_sfpu_operand.h"
 
 namespace ckernel {
 namespace sfpu {
 
-/**
- * @brief WHERE on independently located floating-point operands: output = condition ? true_input : false_input.
- *
- * Advances explicit indices only; the caller owns setup and synchronization. Each input range must
- * coincide with the output or be disjoint.
- */
+/** @brief output = condition != 0 ? true_input : false_input. */
 template <int ITERATIONS, typename Condition, typename TrueInput, typename FalseInput, typename Output>
 sfpi_inline void calculate_where_operands(
     const Condition& condition, const TrueInput& true_input, const FalseInput& false_input, const Output& output) {
@@ -91,7 +86,7 @@ inline void calculate_where(
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        calculate_where_operands<1>(
+        calculate_where_operands<1 /*ITERATIONS*/>(
             Operand{static_cast<int>(dst_index_in0 * dst_tile_size_sfpi)},
             Operand{static_cast<int>(dst_index_in1 * dst_tile_size_sfpi)},
             Operand{static_cast<int>(dst_index_in2 * dst_tile_size_sfpi)},

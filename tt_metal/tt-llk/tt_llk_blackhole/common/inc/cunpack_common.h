@@ -18,7 +18,7 @@ constexpr std::uint32_t CONFIG_SIZE    = 2; // Unpacker configuration size in dw
 constexpr std::uint32_t NUM_UNPACKERS  = 2; // Number of unpackers
 
 // Unpack tile descriptor
-typedef struct
+struct unpack_tile_descriptor_t
 {
     // word 0
     std::uint32_t in_data_format : DATA_FORMAT_BIT_COUNT;
@@ -37,18 +37,18 @@ typedef struct
     std::uint32_t blobs_y_start_hi : 16;
     std::uint32_t digest_type      : 8; // Not used
     std::uint32_t digest_size      : 8; // Not used
-} unpack_tile_descriptor_t;             // Unpack configuration
+}; // Unpack configuration
 
 static_assert(sizeof(unpack_tile_descriptor_t) == (sizeof(std::uint32_t) * 4));
 
-typedef union
+union unpack_tile_descriptor_u
 {
     std::uint32_t val[4];
     unpack_tile_descriptor_t f;
-} unpack_tile_descriptor_u;
+};
 
 // Unpack config
-typedef struct
+struct unpack_config_t
 {
     // word 0
     std::uint32_t out_data_format : DATA_FORMAT_BIT_COUNT;
@@ -76,18 +76,18 @@ typedef struct
     // word 3
     std::uint32_t fifo_size  : 17;
     std::uint32_t reserved_5 : 15;
-} unpack_config_t;
+};
 
 static_assert(sizeof(unpack_config_t) == (sizeof(std::uint32_t) * 4));
 
-typedef union
+union unpack_config_u
 {
     std::uint32_t val[4];
     unpack_config_t f;
-} unpack_config_u;
+};
 
 // ALU config
-typedef struct
+struct alu_config_t
 {
     std::uint32_t ALU_ROUNDING_MODE_Fpu_srnd_en     : 1;
     std::uint32_t ALU_ROUNDING_MODE_Gasket_srnd_en  : 1;
@@ -103,15 +103,15 @@ typedef struct
     std::uint32_t ALU_ACC_CTRL_Fp32_enabled         : 1;
     std::uint32_t ALU_ACC_CTRL_SFPU_Fp32_enabled    : 1;
     std::uint32_t ALU_ACC_CTRL_INT8_math_enabled    : 1;
-} alu_config_t;
+};
 
 static_assert(sizeof(alu_config_t) == sizeof(std::uint32_t));
 
-typedef union
+union alu_config_u
 {
     std::uint32_t val;
     alu_config_t f;
-} alu_config_u;
+};
 
 // Set unpacker offsets to 0, except for unpacker 0, channel 1, X, which is the tile X dimension
 inline void unpacker_addr_counter_init()
@@ -223,9 +223,9 @@ inline constexpr std::uint32_t canonical_unpA_x_stride(const std::uint32_t unpac
 // Canonical srcA channel-1 Y stride: face row step (one face row = FACE_R_DIM datums).
 //
 // This is the value programmed by configure_unpack_AB and the srca data-format reconfig,
-// so it serves as the documented baseline that operations which mutate Y-stride
-// (e.g. tilizeA_B) must restore on uninit. It does not depend on the operand's face_r_dim;
-// FACE_R_DIM is the constant face row count (matches set_packer_strides and unpack_untilize).
+// and the one per-op inits and uninits that touch the Y stride (e.g. tilizeA_B) set and
+// re-assert. It does not depend on the operand's face_r_dim;
+// FACE_R_DIM is the constant face row count (matches set_packer_strides).
 inline constexpr std::uint32_t canonical_unpA_y_stride(const std::uint32_t unpack_dst_format)
 {
     return FACE_R_DIM * canonical_unpA_x_stride(unpack_dst_format);
@@ -811,8 +811,8 @@ inline void configure_unpack_AB(
         (0 << UNP1_ADDR_CTRL_ZW_REG_1_Wstride_SHAMT) |
         (unpB_ch1_z_stride << UNP1_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT); // Z and W(not used) stride for dest address (ch1)
 
-    // Establish the canonical Y-stride baseline for srcA (ch1) here, so per-op inits that
-    // mutate Y-stride (e.g. tilizeA_B) can deterministically restore this baseline on uninit
+    // Establish the canonical Y-stride baseline for srcA (ch1) here, so per-op inits and
+    // uninits that touch the Y stride (e.g. tilizeA_B) set and re-assert this baseline
     // rather than snapshotting the previous register value into a GPR.
     cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32, UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT, UNP0_ADDR_CTRL_XY_REG_1_Ystride_MASK>(
         canonical_unpA_y_stride(unpA_dst_format_masked));
@@ -847,8 +847,8 @@ inline void configure_unpack_AB(
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, alu_mask>(alu_payload.val);
 
     // Set FP8 E4M3 mode, bit is accessible by unpacker/packer
-    cfg_reg_rmw_tensix<THCON_SEC0_REG1_Unp_LF8_4b_exp_RMW>(((unpA_src_format & 0x1F) == (std::uint32_t)DataFormat::Fp8_e4m3) ? 1 : 0);
-    cfg_reg_rmw_tensix<THCON_SEC1_REG1_Unp_LF8_4b_exp_RMW>(((unpB_src_format & 0x1F) == (std::uint32_t)DataFormat::Fp8_e4m3) ? 1 : 0);
+    cfg_reg_rmw_tensix<THCON_SEC0_REG1_Unp_LF8_4b_exp_RMW>(((unpA_src_format & 0x1F) == static_cast<std::uint32_t>(DataFormat::Fp8_e4m3)) ? 1 : 0);
+    cfg_reg_rmw_tensix<THCON_SEC1_REG1_Unp_LF8_4b_exp_RMW>(((unpB_src_format & 0x1F) == static_cast<std::uint32_t>(DataFormat::Fp8_e4m3)) ? 1 : 0);
 
     t6_mutex_release(mutex::REG_RMW);
 
@@ -919,7 +919,6 @@ inline void configure_unpack_AB(
     cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32] = face_dim | (face_dim << 16);
 
     constexpr std::uint32_t face_dim_16x16 = FACE_R_DIM * FACE_C_DIM;
-    regfile[p_gpr_unpack::FACE_DIM_16x16]  = (face_dim_16x16 / 1) | ((face_dim_16x16 / 1) << 16);
     regfile[p_gpr_unpack::FACE_DIM_8x16]   = (face_dim_16x16 / 2) | ((face_dim_16x16 / 2) << 16);
     regfile[p_gpr_unpack::FACE_DIM_4x16]   = (face_dim_16x16 / 4) | ((face_dim_16x16 / 4) << 16);
     regfile[p_gpr_unpack::FACE_DIM_2x16]   = (face_dim_16x16 / 8) | ((face_dim_16x16 / 8) << 16);

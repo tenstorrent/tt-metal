@@ -126,7 +126,7 @@ inline void sfpu_rope_face(const std::uint32_t x_addr)
  * cos/sin pair is loaded once rather than per tile.
  *
  * x_stride is 64 when x came from copy_tile (Tile32x32 slots) and 32 when it is
- * a custom_mm<dense_packing> result still sitting in DEST.
+ * a Dense-layout custom_mm result still sitting in DEST.
  *
  * scale_fp32 is required rather than defaulted: under has_scale a missing value
  * would scale cos/sin by zero and silently zero every output. Callers with
@@ -189,7 +189,7 @@ inline void sfpu_rope_all_rows(const std::uint32_t scale_fp32)
  * x and fused phases, independently of their original input memory format.
  *
  * x_stride is 64 when x came from copy_tile (Tile32x32 slots) and 32 when it is
- * a custom_mm<dense_packing> result still sitting in DEST.
+ * a Dense-layout custom_mm result still sitting in DEST.
  */
 template <
     std::uint32_t Ht,

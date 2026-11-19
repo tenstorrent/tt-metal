@@ -47,7 +47,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # Number of columns folded into one reduced row. sdpa.h: one tile is "8x32", so each logical row
 # spans 32 columns.
@@ -70,16 +70,16 @@ FILL_CONSTANTS = (1.5, 12.0)
         same=True,
     ),
     dest_acc=[DestAccumulation.No],  # Only Float16_b / non-fp32 dest is supported
-    reduce_pool=[ReducePool.Max, ReducePool.Sum],
+    pool_type=[ReducePool.Max, ReducePool.Sum],
     fill_constant=list(FILL_CONSTANTS),
 )
 def test_sdpa_reduce_row(
     formats,
     dest_acc,
-    reduce_pool,
+    pool_type,
     fill_constant,
 ):
-    if reduce_pool == ReducePool.Sum:
+    if pool_type == ReducePool.Sum:
         # The Sum-pool golden (fill_constant * ROW_WIDTH) passed pre-promotion but mismatches
         # the device after the #53295 SDPA-header reconciliation on main; Max pool still
         # passes. TODO: re-derive the Sum golden against the reconciled
@@ -111,7 +111,7 @@ def test_sdpa_reduce_row(
     # *******************************************************
     # Per-row reduction over ROW_WIDTH equal values:
     #   MAX -> C, SUM -> ROW_WIDTH * C.
-    if reduce_pool == ReducePool.Max:
+    if pool_type == ReducePool.Max:
         reduced_value = float(fill_constant)
     else:
         reduced_value = float(fill_constant) * ROW_WIDTH
@@ -125,7 +125,7 @@ def test_sdpa_reduce_row(
         "sources/sdpa_reduce_row_test.cpp",
         formats,
         templates=[
-            SDPA_REDUCE_ROW_POOL(reduce_pool=reduce_pool),
+            SDPA_REDUCE_ROW_POOL(reduce_pool=pool_type),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),
@@ -145,7 +145,7 @@ def test_sdpa_reduce_row(
     )
     res_from_L1 = configuration.run().result
 
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tensor = untilize_block(res_tensor, formats.output_format, input_dimensions)
 
     # Validate ONLY column 0 (the op's defined output lane). Every other lane is undefined.

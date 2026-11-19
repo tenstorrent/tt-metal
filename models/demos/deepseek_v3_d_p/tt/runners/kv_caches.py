@@ -29,11 +29,13 @@ class MlaKvCaches(KvCaches):
 
 @dataclass
 class KimiK3KvCaches(MlaKvCaches):
-    """Kimi-K3's caches: the MLA kvpe cache plus the contract copy of every KDA layer's state.
+    """Kimi-K3's caches: the MLA kvpe cache plus the store of every KDA layer's state; on Kimi-K3.1 also
+    the DSA ``index`` cache.
 
-    ``kda_states`` is migration stage 1 (recurrent) and 2 (convolution) next to kvpe at 0. It is None
-    only on a rank that holds no KDA layer. The runtime binds it to the model's working carries at
-    ``compile()``; the engine owns it like every other cache here.
+    ``kda_states`` is migration stage 1 (recurrent) and 2 (convolution) next to kvpe at 0, or 2 and 3 after
+    K3.1's index cache at 1. It is None
+    only on a rank that holds no KDA layer. The runtime hands it to the model at ``compile()``; the
+    engine owns it like every other cache here.
     """
 
     kda_states: Optional[KdaStates] = None

@@ -10,7 +10,7 @@ namespace ttml::core {
 class TTProfiler {
 public:
     TTProfiler();
-    ~TTProfiler();
+    ~TTProfiler() = default;
 
     TTProfiler(const TTProfiler&) = delete;
     TTProfiler& operator=(const TTProfiler&) = delete;

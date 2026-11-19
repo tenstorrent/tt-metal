@@ -28,9 +28,10 @@ namespace ttnn::operations::data_movement::untilize_codegen {
 // via get_max_l1_space().
 uint32_t usable_l1_bytes(const tt::tt_metal::distributed::MeshDevice& device);
 
-// Correctness-only: true iff the codegen build_untilize_tile path can produce a bit-exact
-// result for this (input, output_mem_config) case. Consulted by the free function's forced
-// "codegen" branch and by prim::untilize_codegen's validate -- never gated on performance.
+// Correctness-only: true iff a codegen builder (build_untilize_tile's variants or
+// build_with_unpadding) can produce a bit-exact result for this (input, output_mem_config) case.
+// Consulted by the free function's forced "codegen" branch and by prim::untilize_codegen's
+// validate -- never gated on performance.
 //
 // MUST stay a pure function of static tensor/memory-config properties (layout, dtype, shape,
 // sharding, and static device geometry). It is evaluated independently at three call sites --
@@ -66,9 +67,9 @@ bool codegen_cb_plan_fits_live_l1(const Tensor& input, const tt::tt_metal::Memor
 // the codegen prim carries no such fields, so its validate has nothing to check.
 bool supported_execution_controls(bool use_multicore, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
 
-// Perf-only: true for the enumerated set of in-scope cases where codegen is correct but does
-// not beat native on device. Consulted ONLY by ttnn::untilize's routing, alongside
-// supported_by_codegen(); never by validate, and never by untilize_force_codegen.
+// Perf-only: true for in-scope cases where codegen is correct but does not beat native on device.
+// Consulted ONLY by ttnn::untilize's routing, alongside supported_by_codegen(); never by validate,
+// and never by untilize_force_codegen.
 bool is_demoted(const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config);
 
 }  // namespace ttnn::operations::data_movement::untilize_codegen

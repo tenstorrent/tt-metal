@@ -3,6 +3,7 @@
 
 from itertools import product
 
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.llk_params import (
     DestAccumulation,
@@ -60,18 +61,46 @@ def generate_valid_formats(
 
 def get_valid_dest_acc(
     formats: tuple[DataFormat, DataFormat, DataFormat, DataFormat],
-) -> bool:
-    return (
-        [DestAccumulation.Yes]
-        if any(f.is_integer() for f in formats)
-        else [DestAccumulation.No, DestAccumulation.Yes]
+) -> list[DestAccumulation]:
+    # The 16/32-bit integer formats need the 32-bit Dest. Int8/UInt8 also pack from a 16-bit Dest,
+    # where the Dest-read control selects the raw 8-bit integer read (PCK_DEST_RD_CTRL_Read_int8);
+    # cover both Dest modes for a reconfig onto or away from them so the dumped control compares
+    # the reconfig against the full configure in both directions. The Round_10b_mant rows are
+    # 32-bit Dest only (the bit is set only when an fp32 Dest packs from Float16).
+    if any(f.is_integer() and f not in _INT8_FORMATS for f in formats):
+        return [DestAccumulation.Yes]
+    if formats in ROUND_10B_MANT_FORMATS:
+        return [DestAccumulation.Yes]
+    return [DestAccumulation.No, DestAccumulation.Yes]
+
+
+# Float16 is out of the sweep below, but PCK_DEST_RD_CTRL_Round_10b_mant is set only when an fp32
+# dest packs from Float16, and no functional test can see a 10-bit-mantissa rounding difference.
+# These rows keep the reconfig RMW of that bit covered, so they only run with dest_acc=Yes.
+ROUND_10B_MANT_FORMATS = [
+    (
+        DataFormat.Float16,
+        DataFormat.Float16,
+        DataFormat.Float16_b,
+        DataFormat.Float16_b,
+    ),  # clears the bit
+]
+# Sets the bit. Blackhole only: Wormhole infers pack_src Float32 for a Float16 output, so the bit
+# would stay clear there.
+if get_chip_architecture() != ChipArchitecture.WORMHOLE:
+    ROUND_10B_MANT_FORMATS.append(
+        (
+            DataFormat.Float16_b,
+            DataFormat.Float16_b,
+            DataFormat.Float16,
+            DataFormat.Float16,
+        )
     )
 
 
 @parametrize(
     formats=generate_valid_formats(
         [
-            DataFormat.Float16,
             DataFormat.Float16_b,
             DataFormat.Bfp8,
             DataFormat.Bfp8_b,
@@ -83,7 +112,8 @@ def get_valid_dest_acc(
             DataFormat.Int8,
             DataFormat.UInt8,
         ]
-    ),
+    )
+    + ROUND_10B_MANT_FORMATS,
     dest_acc=lambda formats: get_valid_dest_acc(formats),
 )
 def test_pack_reconfig(
@@ -102,6 +132,15 @@ def test_pack_reconfig(
         ],
         dest_acc=dest_acc,
     )
+    if dest_acc == DestAccumulation.No and (
+        prev_src in _INT8_FORMATS or next_src in _INT8_FORMATS
+    ):
+        # With a 16-bit Dest the format inference keeps pack_src at the previous (unpack) format,
+        # which would give both runs the same Dest-read control (and an unsupported Int8 -> float
+        # pack in run 0). Pack the next format's own register representation so the control
+        # changes between the previous and the next format.
+        for fmt_config in configuration.formats_config:
+            fmt_config.pack_src = next_src
 
     configuration.run()
     expected = TensixState.fetch(TestConfig.TENSIX_LOCATION)

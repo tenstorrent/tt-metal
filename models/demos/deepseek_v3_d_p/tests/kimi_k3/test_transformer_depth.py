@@ -30,22 +30,30 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, is_blackhole
+from models.demos.common.prefill.runners.runner_utils import MTP_PAD_TOKEN_ID
 
 # Aliased: the local `attn_res` in this module is the TtAttnRes instance, and the collision is
 # silent until the reference is called and LightweightModule.__call__ looks for a `forward`.
 from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import attn_res as attn_res_reference
 from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import fold_query
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
 from models.demos.deepseek_v3_d_p.tests.attn_res.checkpoint_utils import load_attn_res_state_dict
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_x_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_model_root
+from models.demos.deepseek_v3_d_p.tests.kimi_k3 import k31_stage
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import (
     TRACE_1M,
     TRACE_100K,
+    TRACE_K31,
+    TRACE_K31_128K,
     load_checkpoint_tensors,
     resolve_checkpoint,
     resolve_trace,
 )
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import CACHE_LEN, cache_rows, compose
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import TtAttnResWalk
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import load_attn_res_weights
@@ -54,11 +62,9 @@ from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transfor
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs, gather_cache_tp0, unrotate_cache_layer
 
-SP_AXIS, TP_AXIS = 0, 1
 SEQ_LEN = 5120
 
 # Per-layer, against the model itself. The package's chunked per-layer bar is 0.88 at depth 61-78;
@@ -98,18 +104,31 @@ KV_CACHE_PCC = 0.96
 PLACEMENTS = [
     pytest.param(
         (8, 4),
-        # 4096, between the AttnRes suite's 1152 and the 24576 the rest of the package uses. Both ends
-        # are wrong here. At depth 24 the sealed set has two blocks for the first time and
-        # `inter_block`'s statistics collective needs 16 B per bank more than 1152 provides, so 1152
-        # fails outright. But L1_SMALL comes out of the same L1 the circular buffers use, and at
-        # 24576 MLA's chunked attention then fails to place its CBs ("statically allocated circular
-        # buffers ... clash with L1 buffers") once there is a second chunk to attend over. 4096
-        # clears AttnRes with margin while leaving MLA its working space.
-        {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": KimiK3Config.L1_SMALL_SIZE},
+        fabric2d_device_params(
+            fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE, l1_small_size=KimiK3Config.L1_SMALL_SIZE
+        ),
+        0,
+        1,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="fabric2d-8x4",
-    )
+    ),
+    # One 4x4 prefill stage (a Galaxy tray half): SP=4 on the axis-1 ring, TP=4 on the axis-0 line.
+    # L12 here is exactly one stage of the 8-stage layout. Needs the Galaxy narrowed to one tray half
+    # (TT_VISIBLE_DEVICES and the 4x4 descriptor, set by tests/run_4x4_stage_tests.sh); unnarrowed, the
+    # system mesh is 8x4 and requires_mesh_topology skips it.
+    pytest.param(
+        (4, 4),
+        torus_x_device_params(
+            fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE, l1_small_size=KimiK3Config.L1_SMALL_SIZE
+        ),
+        1,
+        0,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+        id="4x4-sp1",
+    ),
 ]
+# The full-Galaxy row alone, for the tests that reuse this file's helpers on 8x4 only.
+PLACEMENTS_8X4 = [p for p in PLACEMENTS if p.id == "fabric2d-8x4"]
 
 
 def _model_state_dict(checkpoint: Path, num_layers: int, root: str, cache: Path | None = None) -> dict:
@@ -128,13 +147,13 @@ def _model_state_dict(checkpoint: Path, num_layers: int, root: str, cache: Path 
     return {"embed_weight": model["embed_weight"].float(), "norm_weight": model["norm_weight"], "layers": layers}
 
 
-def _compose(mesh_device, tensor):
+def _compose(mesh_device, tensor, sp_axis, tp_axis, seq_len=SEQ_LEN):
     dims = [0, 0]
-    dims[SP_AXIS], dims[TP_AXIS] = 2, 3
+    dims[sp_axis], dims[tp_axis] = 2, 3
     return ttnn.to_torch(
         tensor,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=tuple(dims), mesh_shape=tuple(mesh_device.shape)),
-    ).reshape(-1, KimiK3Config.EMB_SIZE)[:SEQ_LEN]
+    ).reshape(-1, KimiK3Config.EMB_SIZE)[:seq_len]
 
 
 # Almost all of this is reading routed experts out of the TTNN cache, which is a fixed cost per
@@ -142,9 +161,11 @@ def _compose(mesh_device, tensor):
 # work have no headroom left, so give the ladder its own budget rather than let L12 and L24 die
 # on a timeout that has nothing to do with what they measure.
 @pytest.mark.timeout(4800)
-@pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, sp_axis, tp_axis", PLACEMENTS, indirect=["mesh_device", "device_params"]
+)
 @pytest.mark.parametrize("num_layers", DEPTHS, ids=[f"L{n}" for n in DEPTHS])
-def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
+def test_depth_ladder_matches_golden(mesh_device, device_params, sp_axis, tp_axis, num_layers):
     checkpoint = resolve_checkpoint()
     trace = resolve_trace(TRACE_1M if num_layers >= DEEP_TRACE_FROM else TRACE_100K)
     if checkpoint is None or trace is None:
@@ -156,23 +177,21 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
     # `$TT_KIMI_K3_PREFILL_TTNN_CACHE` turns the checkpoint read into a one-time cost per depth.
     # Every component already writes its tensorbins when handed a `weight_cache_path`; the markers
     # below record which layers finished, so a later run skips the 59 GB per MoE layer entirely.
-    cache = cache_root(checkpoint, tuple(mesh_device.shape), TP_AXIS)
+    cache = cache_root(checkpoint, tuple(mesh_device.shape), tp_axis)
     state_dict = _model_state_dict(checkpoint, num_layers, root, cache)
 
     attn_res = TtAttnRes(
         mesh_device,
         hidden_size=KimiK3Config.EMB_SIZE,
         eps=KimiK3Config.RMS_NORM_EPS,
-        tp_axis=TP_AXIS,
-        # Same pools the KDA layers cycle. AttnRes's private fallback set is only safe while nothing
-        # else has a collective in flight on this axis, which is not true inside a K3 layer stack.
-        tt_ccl=get_tt_ccl(mesh_device),
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
         weights=load_attn_res_weights(
             mesh_device,
             load_attn_res_state_dict(checkpoint, num_layers, root),
             None,
             num_layers=num_layers,
-            tensor_parallel_axis=TP_AXIS,
+            tensor_parallel_axis=tp_axis,
             prefix=root,
         ),
     )
@@ -197,12 +216,13 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
         num_layers=num_layers,
         seq_len=SEQ_LEN,
         residual_factory=residual_factory,
-        sp_axis=SP_AXIS,
-        tp_axis=TP_AXIS,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
         max_seq_len=SEQ_LEN,
         weight_cache_path=cache,
     )
 
+    slabs = attach_kda_states(mesh_device, model, sp_axis=sp_axis, tp_axis=tp_axis)
     # One KV slot per FULL-ATTENTION layer, not per layer. Depths 1 and 2 hold none — layers 0 and 1
     # are both KDA — so there is nothing to allocate and `kvpe_cache=None` is the honest argument.
     kvpe = None
@@ -212,7 +232,7 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
             hf_config=config,
             max_seq_len=SEQ_LEN,
             mesh_shape=tuple(mesh_device.shape),
-            sp_axis=SP_AXIS,
+            sp_axis=sp_axis,
             num_layers=model.schedule.num_mla_layers,
             num_users=1,
         )
@@ -224,17 +244,17 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
     tokens_tt = prepare_prefill_input_tensor(
         trace.token_ids(SEQ_LEN)[0].tolist(),
         mesh_device,
-        tuple(mesh_device.shape)[SP_AXIS],
+        tuple(mesh_device.shape)[sp_axis],
         False,
         tuple(mesh_device.shape),
-        SP_AXIS,
+        sp_axis,
     )
 
     per_layer = {}
     inner = {}
 
     def tap(local_idx, hidden):
-        per_layer[local_idx] = _compose(mesh_device, hidden)
+        per_layer[local_idx] = _compose(mesh_device, hidden, sp_axis, tp_axis)
 
     # Wrap each layer's two norms so their outputs are recorded without adding debug plumbing to the
     # block. The FFN norm's output is the model's own `moe_input_layer_i`, and the attention norm's
@@ -243,7 +263,7 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
     def _record(layer, name, fn):
         def wrapped(x):
             out = fn(x)
-            inner[(layer, name)] = _compose(mesh_device, out)
+            inner[(layer, name)] = _compose(mesh_device, out, sp_axis, tp_axis)
             return out
 
         return wrapped
@@ -262,7 +282,7 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
 
         def _attn(normed, ctx, _idx=local_idx, _fn=inner_fn):
             out = _fn(normed, ctx)
-            inner[(_idx, "attn_out")] = _compose(mesh_device, out)
+            inner[(_idx, "attn_out")] = _compose(mesh_device, out, sp_axis, tp_axis)
             return out
 
         attention.forward = _attn
@@ -273,8 +293,8 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
         # rather than lazy.
         model.forward(tokens_tt, kvpe_cache=kvpe, layer_tap=tap)
     finally:
-        if model.kda_states is not None:
-            model.kda_states.deallocate()
+        if slabs is not None:
+            slabs.deallocate()
 
     # Report the inner taps first: when a layer's output is wrong, these say which half.
     for local_idx in range(num_layers):
@@ -340,8 +360,8 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
         # The device cache is indexed by rank-local MLA SLOT; the golden by MODEL layer. The
         # schedule is the only thing that knows the mapping, which is exactly why the block never
         # calls `KimiK3Config.mla_kv_slot`.
-        cache = gather_cache_tp0(kvpe.storage, mesh_device)
-        positions = blockcyclic_positions(tuple(mesh_device.shape)[SP_AXIS], SEQ_LEN, SEQ_LEN)
+        cache = gather_cache_tp0(kvpe.storage, mesh_device, sp_axis)
+        positions = blockcyclic_positions(tuple(mesh_device.shape)[sp_axis], SEQ_LEN, SEQ_LEN)
         for slot, model_layer in enumerate(model.schedule.mla_layer_ids[: model.schedule.num_mla_layers]):
             device_rows = unrotate_cache_layer(cache[slot], positions, SEQ_LEN)
             golden_rows = trace.kv_cache(model_layer, 0, SEQ_LEN)
@@ -382,3 +402,279 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
     # bad KV slot and a bad residual layer look identical from one assertion, and which of the two
     # moved is the whole diagnosis. The residual stream is the model; the cache is what it wrote.
     assert not kv_failures, "KV cache diverged: " + "; ".join(kv_failures)
+
+
+# --- Kimi-K3.1 on real weights against its vLLM trace -------------------------------------------------------
+#
+# K3's ladder above, scored the same way (every layer's live residual against `decoder_output_layer_i`, the
+# same depth-aware bars, every full-attention layer's kvpe against `kv_post_transform_layer_i` by halves at
+# KV_CACHE_PCC) against `TRACE_K31`, which records all 93 layers. Two differences, both from what the K3.1
+# trace and weights are:
+#
+# * The stack is the runner's PP4 rank 0 (`k31_stage.first_stage_params`: K3.1 TTNN weight cache, scaled-FP8
+#   kvpe, bf8 indexer key cache, the K3 manifest's knobs), run eager so the tap can read every layer. The model
+#   is too large for one galaxy, so the ladder covers PP4 stage 0, layers 0-23.
+# * The prompt is the trace's 8192 prompt ids then its 2048 decoded ids, teacher-forced:
+#   two chunks, so chunk 1's DSA layers read chunk 0's KV and its KDA layers continue chunk 0's carry. The bar
+#   is held per chunk on prompt rows (chunk 0 [0, 5120), chunk 1 [5120, 8192)), as the chunked K3 test holds it
+#   per chunk; rows past the prompt (vLLM's decode steps) feed the model but are not scored.
+#
+# The bar is K3's, per layer by depth: SHALLOW_LAYER_PCC through layer 11, DEEP_LAYER_PCC through layer 23 (K3's
+# depth-24 bar, set for the second seal). KV: KV_CACHE_PCC at every DSA layer. Measured at 10K:
+# worst 0.9966 (layers 0-11), 0.9869 (12-23).
+#
+# The DSA indexer, per DSA layer, as GLM-5.3's runner gate and the package's indexer tests measure it:
+#
+# * Key cache: the trace's `indexer/indexer_k_layer_i` is the post-LayerNorm key in
+#   the natural basis (its own fp8 cache dequantizes to it at PCC 0.9996). K3.1's decode reads its cache in that
+#   basis, so the device key is compared as stored (`index_hadamard=False`): a
+#   Hadamard-rotated cache reads PCC -0.22..0.17 and fails. PCC on the prompt rows, as the producer's index check does.
+#   Bar KV_CACHE_PCC, the KV cache's (the producer holds the index cache to the same threshold as the kvpe).
+# * Top-k: each DSA layer's device top-2048 against `dsa/dsa_topk_indices_layer_i`,
+#   scored as set recall |device ∩ trace| / |trace| per query row (test_ttnn_csa*.py's measure), averaged
+#   over the prompt rows at positions >= INDEX_TOPK. Rows before that select every causal key on both sides
+#   (recall 1 by construction, checked). Bar K31_TOPK_RECALL, per golden (below).
+#
+#     scripts/run_safe_pytest.sh \
+#         "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_transformer_depth.py::test_k31_depth_ladder_matches_golden[blackhole-torus-xy-8x4]"
+def k31_layer_pcc(layer: int) -> float:
+    """K3's per-layer bar for a layer of PP4 stage 0 (see above)."""
+    assert layer < 2 * KimiK3Config.ATTN_RES_BLOCK_SIZE, f"layer {layer}: K3 sets no bar past depth 24"
+    return SHALLOW_LAYER_PCC if layer < KimiK3Config.ATTN_RES_BLOCK_SIZE else DEEP_LAYER_PCC
+
+
+# The package's indexer overlap floor (test_ttnn_csa_indexer._assert_topk_overlap). Measured at 10K:
+# mean recall 0.913 (layer 51) .. 0.971. The trace's cut is crowded (~150 of 2048
+# selected keys within 1% of the row's score spread above it), and through layer 47 >= 98% of the trace keys the
+# device misses rank >= 1500 of 2048 by trace score: near-ties a bf8 key/query moves across the cut. From layer 55
+# on, 6-11% of misses come from the trace's top half, in rows owned mostly by newline/','/'.' tokens: the
+# frequent-token hidden-state error that sets in at layers 48-59, not the indexer
+# (its key cache stays >= 0.992 there). 0.95, the CSA chunked floor, would fail layers 3, 7, 51 and 63-92 on that.
+#
+# Near-tie recall falls with the number of candidates, so one floor cannot serve both goldens: at 128K the cut holds
+# ~300-380 keys within 1% of the spread (twice 10K's) and recall falls smoothly with position, at every layer. Layers
+# 11-23 keep the 10K signature (>= 94% of misses rank >= 1500, median margin 0.3-0.6% of the spread): mean 0.928-0.941 at LoFi.
+# Layers 3 and 7 carry ~3x the later layers' per-key score error at both lengths (miss margin p50 ~1.2%, p90 ~3.4% of
+# the spread, unchanged from 10K), so the crowding costs them more. The first layers' larger score error and the
+# trend toward 1M are not fully explained; the largest device step in that error, the score matmul's LoFi, is now
+# HiFi2 (``index_score_math_fidelity``): layers 3 / 7 0.867 / 0.875 at 128K (0.834 / 0.837 at
+# LoFi), 0.944 / 0.952 at 10K (0.929 / 0.936). The 128K floor is 0.85, ~1.7 points under them, as 0.9 sits ~1.3
+# under the 10K minimum (layer 51, LoFi-measured; HiFi2 raised every measured layer); a fallback to LoFi fails it.
+# Unlike 0.9, 0.85 comes from this measurement alone, not from an external reference (the LoFi-era floor was 0.8).
+K31_TOPK_RECALL = {TRACE_K31: 0.9, TRACE_K31_128K: 0.85}
+
+
+def k31_topk_rows(mesh_device, indices, rows: int, sp_axis: int, tp_axis: int) -> torch.Tensor:
+    """A DSA layer's top-k `[1, 1, rows/sp(/tp), k]` (one chunk's query rows over SP, TP-split or TP-replicated)
+    as host int64 `[rows, k]` in token order; the uint32 no-key sentinel reads 0xFFFFFFFF."""
+    sp, tp = mesh_device.shape[sp_axis], mesh_device.shape[tp_axis]
+    dims = [0, 0]
+    dims[sp_axis], dims[tp_axis] = 2, 1
+    host = (
+        ttnn.to_torch(
+            indices,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=tuple(dims), mesh_shape=tuple(mesh_device.shape)),
+        ).to(torch.int64)
+        & 0xFFFFFFFF
+    )  # [1, tp, sp * local, k]
+    local = host.shape[2] // sp
+    if local * sp == rows:
+        return host[0, 0]
+    assert local * sp * tp == rows, f"top-k rows {host.shape} do not tile a {rows}-row chunk on {sp}x{tp}"
+    return torch.cat([host[0, t, s * local : (s + 1) * local] for s in range(sp) for t in range(tp)])
+
+
+def topk_recall(got: torch.Tensor, want: torch.Tensor) -> torch.Tensor:
+    """Per row the fraction of `want`'s valid (>= 0) keys that occur in `got`, i.e. |got ∩ want| / |want| as sets
+    (a key `got` holds twice counts once). Both `[rows, k]` int64; `got`'s 0xFFFFFFFF sentinel matches nothing.
+    Rows with no valid `want` entry read NaN."""
+    rows = torch.arange(want.shape[0]).unsqueeze(1) << 32
+    valid = want >= 0
+    return (torch.isin(rows + want, rows + got) & valid).sum(dim=1) / valid.sum(dim=1)
+
+
+def test_topk_recall_counts_each_trace_key_once():
+    """Hand-checked: a duplicated device index does not stand in for a missed key, keys never match across rows,
+    and the no-key sentinel matches nothing."""
+    none = 0xFFFFFFFF
+    got = torch.tensor([[0, 0, 2], [0, 1, 2], [3, 4, 5], [0, none, none]])
+    want = torch.tensor([[0, 1, 2], [0, 1, 2], [0, 1, 2], [0, -1, -1]])
+    assert topk_recall(got, want).tolist() == pytest.approx([2 / 3, 1.0, 0.0, 1.0])
+
+
+# rung -> golden; both run all of PP4 stage 0. "L24-128k" is K3's long-context check (test_chunked_prefill.py's L24:
+# layers 0-23 over every chunk) on the 128K trace. Both rungs run in one test on one build of the stage, sized for the
+# longer golden, each from fresh caches: the weight load, not the chunks, is most of a rung's time.
+K31_RUNGS = {"L24": TRACE_K31, "L24-128k": TRACE_K31_128K}
+
+
+def _k31_sequence(trace) -> tuple[list[int], int]:
+    """The trace's whole teacher-forced sequence (prompt, then the ids vLLM decoded): (ids, prompt length)."""
+    ids = trace.metadata["token_ids"] + trace.metadata["completion_token_ids"]
+    return ids, len(trace.metadata["token_ids"])
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="Kimi-K3.1 runs on Blackhole only")
+@pytest.mark.timeout(0)
+@pytest.mark.parametrize("mesh_device, device_params", k31_stage.PLACEMENT, indirect=True)
+def test_k31_depth_ladder_matches_golden(mesh_device, device_params):
+    traces = {rung: resolve_trace(path) for rung, path in K31_RUNGS.items()}
+    missing = [f"{rung} ({K31_RUNGS[rung]})" for rung, trace in traces.items() if trace is None]
+    assert not missing, f"no K3.1 golden for {', '.join(missing)}"
+    longest = max(len(_k31_sequence(trace)[0]) for trace in traces.values())
+    hf_config, params = k31_stage.first_stage_params(max_seq_len=-(-longest // CACHE_LEN) * CACHE_LEN)
+    runtime = k31_stage.ADAPTER.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
+    failures = {}
+    try:
+        for rung, trace in traces.items():
+            failures[rung] = _k31_rung(rung, trace, mesh_device, hf_config, params, runtime)
+    finally:
+        runtime.release_trace()  # the sub-device managers, before the fixture closes the mesh
+    failed = {rung: f for rung, f in failures.items() if f}
+    assert not failed, "; ".join(f"{rung}: " + "; ".join(f) for rung, f in failed.items())
+
+
+def _k31_rung(rung, trace, mesh_device, hf_config, params, runtime) -> list[str]:
+    """One golden through PP4 stage 0 from fresh caches; the failed checks, empty when it passes."""
+    golden_path = K31_RUNGS[rung]
+    chunk = k31_stage.CHUNK
+    ids, prompt_len = _k31_sequence(trace)
+    real_len = len(ids)
+    num_chunks = -(-real_len // chunk)
+    prompt = ids + [MTP_PAD_TOKEN_ID] * (num_chunks * chunk - real_len)
+    first, num_layers = params.first_layer_idx, params.num_layers
+    kv_caches = k31_stage.ADAPTER.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
+    runtime.compile(kv_caches)
+
+    def pcc(want, got):
+        return float(str(comp_pcc(want, got)[1]).split()[-1])
+
+    # Scored chunk by chunk on the prompt rows, so host memory holds one chunk's taps.
+    scores = {}  # (global layer, chunk) -> PCC
+
+    def score(c, taps):
+        lo = c * chunk
+        hi = min(lo + chunk, prompt_len)
+        if hi <= lo:
+            return
+        for layer, got in sorted(taps.items()):
+            golden = trace.decoder_output(layer, lo, hi)
+            scores[(layer, c)] = pcc(golden, got[: hi - lo].float())
+
+    # Per DSA layer, the top-k recall of every prompt row, filled chunk by chunk (the indices are not kept).
+    recall = {}  # global layer -> [prompt rows] float
+    topk_miscounted = []
+
+    def score_topk(c, topk):
+        lo = c * chunk
+        if lo >= prompt_len:
+            return
+        for layer, got in sorted(topk.items()):
+            want = trace.rows("dsa", f"dsa_topk_indices_layer_{layer}", lo, min(lo + chunk, prompt_len)).long()
+            n = want.shape[0]
+            got = got[:n]
+            # Every device row selects min(position + 1, top-k) keys, as every trace row does.
+            want_count = torch.clamp(torch.arange(lo, lo + n) + 1, max=want.shape[1])
+            miscounted = int(((got < 2**31).sum(dim=1) != want_count).sum())
+            if miscounted:
+                topk_miscounted.append(f"layer {layer} chunk {c}: {miscounted} rows")
+            recall.setdefault(layer, torch.full((prompt_len,), float("nan")))[lo : lo + n] = topk_recall(got, want)
+
+    topk = {}
+    dsa_mlas = {
+        first + local: layer.attention.mla
+        for local, layer in enumerate(runtime.model.layers)
+        if runtime.model.schedule.is_mla(first + local)
+    }
+
+    def with_topk(layer, mla_forward):
+        def forward_returning_topk(*args, **kwargs):
+            out, indices = mla_forward(*args, return_indexer_indices=True, **kwargs)
+            topk[layer] = k31_topk_rows(mesh_device, indices, chunk, params.sp_axis, params.tp_axis)
+            return out
+
+        return forward_returning_topk
+
+    for layer, mla in dsa_mlas.items():
+        mla.forward = with_topk(layer, mla.forward)
+
+    taps = {}
+    forward = runtime.model.forward
+
+    def tapped(*args, **kwargs):
+        tap = lambda idx, h: taps.__setitem__(first + idx, compose(mesh_device, h, chunk))
+        return forward(*args, layer_tap=tap, **kwargs)
+
+    runtime.model.forward = tapped
+    try:
+        for c in range(num_chunks):
+            chunk_input = runtime.make_chunk_input(prompt[c * chunk : (c + 1) * chunk])
+            out = runtime.prefill_chunk(
+                chunk_input, kv_caches, slot_id=0, actual_start=c * chunk, actual_end=min((c + 1) * chunk, real_len)
+            )
+            ttnn.synchronize_device(mesh_device)
+            logger.info(f"K31 {rung} chunk {c}/{num_chunks} done: layers [{first}, {first + num_layers})")
+            if out is not None:
+                ttnn.deallocate(out)
+            score(c, taps)
+            taps.clear()
+            score_topk(c, topk)
+            topk.clear()
+        slots = {
+            slot: runtime.model.schedule.global_index(local)
+            for local, slot in enumerate(runtime.model.schedule.kv_slot_of_local)
+            if slot is not None
+        }
+        kv = {
+            name: cache_rows(mesh_device, cache, chunk, prompt_len)
+            for name, cache in (("kvpe", kv_caches.kvpe), ("index", kv_caches.index))
+            if cache is not None
+        }
+    finally:
+        runtime.model.forward = forward
+        for mla in dsa_mlas.values():
+            del mla.forward  # the instance attribute; the class's forward shows through again
+        if kv_caches.kda_states is not None:
+            kv_caches.kda_states.deallocate()
+        ttnn.deallocate(kv_caches.kvpe.storage)
+        if kv_caches.index is not None:
+            ttnn.deallocate(kv_caches.index)
+
+    kv_failures = []
+    for slot, layer in sorted(slots.items()):
+        lora, rope = cache_half_pccs(
+            trace.kv_cache(layer, 0, prompt_len), kv["kvpe"][slot], KimiK3Config.KV_LORA_RANK, pe_interleave=False
+        )
+        index = pcc(trace.rows("indexer", f"indexer_k_layer_{layer}", 0, prompt_len), kv["index"][slot])
+        if min(lora, rope) < KV_CACHE_PCC:
+            kv_failures.append(f"slot {slot} (layer {layer}): lora={lora:.6f} rope={rope:.6f}")
+        if index < KV_CACHE_PCC:
+            kv_failures.append(f"slot {slot} (layer {layer}): index key={index:.6f}")
+
+    # Top-k recall per DSA layer: gated on the prompt rows past the first top-k; the rows before it are checked
+    # for completeness.
+    topk_k = KimiK31Config.INDEX_TOPK
+    topk_failures = []
+    for layer, per_row in sorted(recall.items()):
+        full, gated = per_row[:topk_k], per_row[topk_k:]
+        if gated.mean() < K31_TOPK_RECALL[golden_path] or full.min() < 1:
+            topk_failures.append(f"layer {layer}: {gated.mean():.6f} (rows < {topk_k}: min {full.min():.4f})")
+
+    worst = min(scores, key=lambda k: scores[k] - k31_layer_pcc(k[0]))
+    logger.info(
+        f"K31 {rung} worst layer vs its bar: {worst[0]} chunk {worst[1]}: {scores[worst]:.7f} (bar {k31_layer_pcc(worst[0])})"
+    )
+    below = {k: v for k, v in scores.items() if v < k31_layer_pcc(k[0])}
+    failures = []
+    if below:
+        failures.append(
+            "layers below their bar: "
+            + ", ".join(f"{l}/chunk{c}:{v:.6f}<{k31_layer_pcc(l)}" for (l, c), v in sorted(below.items()))
+        )
+    if kv_failures:
+        failures.append("KV cache diverged: " + "; ".join(kv_failures))
+    if topk_miscounted:
+        failures.append("device top-k selects a different number of keys: " + "; ".join(topk_miscounted))
+    if topk_failures:
+        failures.append(f"top-k recall below {K31_TOPK_RECALL[golden_path]}: " + "; ".join(topk_failures))
+    return failures

@@ -106,7 +106,7 @@ jobs:
           cat "$out"/* 2>/dev/null
 
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
         with:
           # build_metal.sh cannot configure without these.
           submodules: recursive
@@ -142,8 +142,10 @@ jobs:
         # The secrets context belongs to this job: Actions in a validation run,
         # Agents in a Copilot session. It does not identify the runtime's env.
         # Referenced at step level: job-level env resolves empty for agent runs.
+        # The access key ID is not secret, so it is an org variable, as in the
+        # other workflows that use Garage.
         env:
-          GARAGE_S3_ACCESS_KEY: ${{ secrets.GARAGE_S3_ACCESS_KEY }}
+          GARAGE_S3_ACCESS_KEY: ${{ vars.GARAGE_S3_ACCESS_KEY_ID }}
           GARAGE_S3_SECRET_KEY: ${{ secrets.GARAGE_S3_SECRET_KEY }}
         run: |
           # Both halves are required: copilot-build.sh enables the remote cache
@@ -165,8 +167,8 @@ jobs:
         # issue-monster, pr-sous-chef) were compiled with, or `gh aw compile` in an
         # agent session silently rewrites them to a different version's pins — which
         # for v0.86.2 would drop the enforced `required-labels` on
-        # resolve-pull-request-review-thread again. The six older lock files
-        # (ci-failure-triage, both skills reviewers, repo-assist, silencer,
+        # resolve-pull-request-review-thread again. The five older lock files
+        # (ci-failure-triage, mattpocock-skills-reviewer, repo-assist, silencer,
         # test-command) are still compiled with v0.86.2: recompile workflows by
         # NAME (`gh aw compile <name>`), never unscoped, or they get upgraded too.
         uses: github/gh-aw-actions/setup-cli@924af5fdc64061cfbf66fb584c8b07e2ac230c60 # v0.89.21

@@ -20,6 +20,7 @@
 #include <tt_stl/assert.hpp>
 #include "debug_tools_fixture.hpp"
 #include "hal_types.hpp"
+#include "internal/tt-2xx/quasar/tensix_neo_reg.h"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -31,7 +32,8 @@
 #include "impl/debug/debug_helpers.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "host_api/temp_quasar_api.hpp"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include "distributed/mesh_device_impl.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher asserts.
@@ -62,8 +64,8 @@ static void RunTest(
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    Program program = Program();
-    auto* device = mesh_device->get_devices()[0];
+    Program program = CreateProgram(*mesh_device);
+    auto* device = mesh_device->impl().get_devices()[0];
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     bool is_quasar = hal.get_arch() == tt::ARCH::QUASAR;
     // TENSIX cores use the Metal 2.0 host API and the *_2_0.cpp kernel; ETH/DRAM cores remain on the legacy
@@ -76,7 +78,7 @@ static void RunTest(
     CoreCoord logical_core, virtual_core;
     // Set up the kernel on the correct risc
     KernelHandle assert_kernel = 0;
-    const experimental::KernelSpecName ASSERT_KERNEL_NAME{"assert_kernel"};
+    const KernelSpecName ASSERT_KERNEL_NAME{"assert_kernel"};
     auto processor_idx =
         hal.get_processor_index(processor.core_type, processor.processor_class, processor.processor_type);
     std::string risc = hal.get_processor_class_name(processor.core_type, processor_idx, false);
@@ -84,7 +86,7 @@ static void RunTest(
         case HalProgrammableCoreType::TENSIX: {
             logical_core = {0, 0};
             virtual_core = mesh_device->worker_core_from_logical_core(logical_core);
-            experimental::KernelSpec assert_kernel_spec{
+            KernelSpec assert_kernel_spec{
                 .unique_id = ASSERT_KERNEL_NAME,
                 .source = kernel,
                 .runtime_arg_schema = {.runtime_arg_names = {"a", "b", "assert_type", "hw_assert_cause"}},
@@ -109,12 +111,12 @@ static void RunTest(
                         uint32_t target_thread_id = static_cast<uint32_t>(processor.processor_type) - kFirstUserDm;
                         assert_kernel_spec.num_threads = 6;
                         assert_kernel_spec.compile_time_args = {{"target_thread_id", target_thread_id}};
-                        assert_kernel_spec.hw_config = experimental::DataMovementHardwareConfig{};
+                        assert_kernel_spec.hw_config = DataMovementHardwareConfig{};
                     } else {
                         assert_kernel_spec.num_threads = 1;
-                        assert_kernel_spec.hw_config = experimental::DataMovementHardwareConfig{
+                        assert_kernel_spec.hw_config = DataMovementHardwareConfig{
                             .config_1xx =
-                                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                                DataMovementHardwareConfig::DataMovement1XXConfig{
                                     .processor = gen1_processor,
                                     .noc = gen1_noc,
                                 },
@@ -130,22 +132,22 @@ static void RunTest(
                     // Bind trisc_id so the kernel can early-return on TRISCs that aren't the target
                     // of a Quasar compute HW-fault test.
                     assert_kernel_spec.compile_time_args = {{"trisc_id", trisc_id}};
-                    assert_kernel_spec.hw_config = experimental::ComputeHardwareConfig{};
+                    assert_kernel_spec.hw_config = ComputeHardwareConfig{};
                     break;
                 }
                 default: TT_THROW("Unsupported processor class type for TENSIX");
             }
-            experimental::WorkUnitSpec wu{
+            WorkUnitSpec wu{
                 .name = "main",
                 .kernels = {ASSERT_KERNEL_NAME},
-                .target_nodes = experimental::NodeCoord{logical_core},
+                .target_nodes = NodeCoord{logical_core},
             };
-            experimental::ProgramSpec spec{
+            ProgramSpec spec{
                 .name = "watcher_assert",
                 .kernels = {assert_kernel_spec},
                 .work_units = {wu},
             };
-            program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+            program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
             break;
         }
         case HalProgrammableCoreType::ACTIVE_ETH:
@@ -218,11 +220,11 @@ static void RunTest(
         if (use_legacy_api) {
             SetRuntimeArgs(prog, assert_kernel, logical_core, args);
         } else {
-            experimental::ProgramRunArgs params;
-            params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+            ProgramRunArgs params;
+            params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
                 .kernel = ASSERT_KERNEL_NAME,
-                .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
-                    experimental::NodeCoord{logical_core},
+                .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+                    NodeCoord{logical_core},
                     {
                         {"a", args[0]},
                         {"b", args[1]},
@@ -230,7 +232,7 @@ static void RunTest(
                         {"hw_assert_cause", args[3]},
                     }),
             }};
-            experimental::SetProgramRunArgs(prog, params);
+            tt_metal::experimental::SetProgramRunArgs(prog, params);
         }
     };
 
@@ -267,6 +269,17 @@ static void RunTest(
     ASSERT_FALSE(exception.empty()) << "Timeout (" << timeout.count() << "ms) waiting for watcher exception.\n"
                                     << "Expected assert type: " << static_cast<int>(assert_type) << " on " << risc;
 
+    // The semaphore fault leaves the unsafe SEMPOST/SEMGET chicken bit set on NEO 0, and nothing resets it.
+    // TRISC0 is parked in its fault handler by now, so clearing it cannot race the faulting SEMGET.
+    if (processor.processor_class == HalProcessorClassType::COMPUTE && hw_assert_cause == 9) {
+        const auto& cluster = MetalContext::instance().get_cluster();
+        const tt_cxy_pair target(device_id, virtual_core);
+        uint32_t chicken_bits = 0;
+        cluster.read_reg(&chicken_bits, target, NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_CHICKEN_BITS_REG_ADDR);
+        chicken_bits &= ~T6_DEBUG_REGS_CHICKEN_BITS_ALLOW_UNSAFE_SEMPOST_SEMGET_MASK;
+        cluster.write_reg(&chicken_bits, target, NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_CHICKEN_BITS_REG_ADDR);
+    }
+
     // We should be able to find the expected watcher error in the log as well,
     // expected error message depends on the risc we're running on and the assert type.
     // TODO: replace below code snippet with helper after unifying all tests + watcher_device_reader
@@ -302,7 +315,7 @@ static void RunTest(
             // Neo level, so the same code on every TRISC.
             case 9:
                 hw_assert_cause = (static_cast<uint32_t>(TriscErrors::NEO_SEMAPHORES) << 8) |
-                                  static_cast<uint32_t>(SemaphoreErrors::GET_ON_UNINITIALIZED);
+                                  static_cast<uint32_t>(SemaphoreErrors::GET_UNDERFLOW);
                 break;
             default: hw_assert_cause = 0; break;
         }

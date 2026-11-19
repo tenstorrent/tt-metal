@@ -26,7 +26,12 @@ set_target_properties(
 # device/*_factory.cpp via canonical paths
 # `ttnn/cpp/ttnn/operations/experimental/fft/device/kernels/...`.
 # See device/kernels/README.md for the full file → backend mapping.
-file(GLOB_RECURSE kernels device/kernels/*)
+file(
+    GLOB_RECURSE kernels
+    device/kernels/*.cpp
+    device/kernels/*.h
+    device/kernels/*.hpp
+)
 
 target_sources(
     ttnn_op_experimental_fft

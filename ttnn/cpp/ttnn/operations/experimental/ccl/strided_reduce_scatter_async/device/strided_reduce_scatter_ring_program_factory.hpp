@@ -10,6 +10,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail {
 
@@ -39,9 +40,15 @@ struct RingStridedReduceScatterMeshWorkloadFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
+}  // namespace ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail
+
+// Defined in namespace ttnn (strided_reduce_scatter_async_program.cpp). The detail factory calls these.
+namespace ttnn {
+
 // Builder function for ring topology - creates program artifacts
-StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_program_artifacts(
-    tt::tt_metal::Program& program,
+operations::experimental::ccl::strided_reduce_scatter_async::detail::StridedReduceScatterProgramArtifacts
+build_ring_strided_reduce_scatter_async_program_artifacts(
+    tt::tt_metal::ProgramDescriptor& program,
     const Tensor& input_tensor,
     const Tensor& intermediate_tensor,
     const MeshCoordinate& sender_device_coord,
@@ -83,24 +90,19 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     // Caller-owned scratch for the per-MM-core progress counters (fused MM->RS signaling only): uint32
     const std::optional<const Tensor>& mm_progress_counters = std::nullopt);
 
-// Override runtime arguments helper for ring topology
+// Cache-hit refresh (ring): rewrites the three kernels' common runtime args, nothing per core.
+// slice_Ht is the reduce-scattered height in tiles (the activations', not the windowed MM output's).
 void ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
     tt::tt_metal::Program& program,
-    tt::tt_metal::KernelHandle reader_kernel_id,
-    tt::tt_metal::KernelHandle writer_kernel_id,
-    const std::vector<tt::tt_metal::CoreCoord>& all_cores,
-    uint32_t num_links,
-    uint32_t num_directions_per_link,
-    uint32_t num_workers_per_direction,
-    uint32_t num_mux_cores_per_direction_per_link,
-    uint32_t num_cores_per_link,
+    const operations::experimental::ccl::strided_reduce_scatter_async::detail::StridedReduceScatterProgramArtifacts& artifacts,
     const std::optional<tt::tt_metal::GlobalSemaphore>& barrier_semaphore,
     const std::vector<tt::tt_metal::GlobalSemaphore>& semaphore,
+    uint32_t slice_Ht,
     const Tensor& input,
     const Tensor& intermed,
     const Tensor& output,
-    uint32_t reader_addcmul_rt_arg_offset = 0,
+    std::optional<float> fused_ternary_scalar = std::nullopt,
     const std::optional<const Tensor>& addcmul_a = std::nullopt,
     const std::optional<const Tensor>& addcmul_b = std::nullopt);
 
-}  // namespace ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail
+}  // namespace ttnn

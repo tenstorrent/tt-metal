@@ -10,6 +10,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"  // for roofline calculation
 
 #include <tt-metalium/host_api.hpp>
@@ -19,23 +20,24 @@ void AllReduceAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& buffer_tensor = tensor_args.buffer_tensor;
-    const auto& page_size = input_tensor.buffer()->page_size();
+    const auto& page_size = input_tensor.mesh_buffer().page_size();
 
     TT_FATAL(
-        (tt::tt_metal::hal::get_arch_name() != "blackhole") ||
+        (input_tensor.device()->arch() != tt::ARCH::BLACKHOLE) ||
             (input_tensor.memory_config().buffer_type() != BufferType::DRAM),
         "This kernel does not support blackhole dram as it does not use an accessor to get the noc address as needed "
         "by the fabric api");
-    TT_FATAL(page_size % input_tensor.buffer()->alignment() == 0, "AllReduceAsync currently requires aligned pages");
+    TT_FATAL(
+        page_size % input_tensor.mesh_buffer().alignment() == 0, "AllReduceAsync currently requires aligned pages");
     TT_FATAL(
         args.ring_size % 2 == 0,
         "AllReduceAsync currently only supports even number of blocks in the reduction kernel.");
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_reduce need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_reduce need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to all_reduce need to be allocated in buffers on device!");
 
     TT_FATAL(buffer_tensor.storage_type() == StorageType::DEVICE, "Operands to all_reduce need to be on device!");
-    TT_FATAL(buffer_tensor.buffer() != nullptr, "Operands to all_reduce need to be allocated in buffers on device!");
+    TT_FATAL(buffer_tensor.is_allocated(), "Operands to all_reduce need to be allocated in buffers on device!");
 
     TT_FATAL(args.num_links > 0, "Error, num_links should be more than 0 but has {}", args.num_links);
     TT_FATAL(
@@ -90,16 +92,15 @@ AllReduceAsyncDeviceOperation::tensor_return_value_t AllReduceAsyncDeviceOperati
 
 AllReduceAsyncDeviceOperation::topology_return_value_t AllReduceAsyncDeviceOperation::compute_output_topologies(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // after all_reduce, the output is fully replicated across all devices on `cluster_axis`.
-    const auto& input_topology = tensor_args.input_tensor.tensor_topology();
-    auto output_placements = input_topology.placements();
-
-    if (args.cluster_axis < output_placements.size()) {
-        output_placements[args.cluster_axis] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-    }
-
-    return {tt::tt_metal::TensorTopology(
-        input_topology.distribution_shape(), std::move(output_placements), input_topology.mesh_coords())};
+    // After all_reduce every device on `cluster_axis` holds the same bytes: Replicate on that axis, the other mesh
+    // axes inherited from the input. The helper expands a collapsed 1-D label to one placement per mesh axis first,
+    // so the edit lands on `cluster_axis` rather than index 0. No honest label (nullopt, already reported): the
+    // output keeps the input's label. Returning {} would instead hand the framework the union over the input and
+    // `buffer_tensor`.
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto output_topology = ttnn::operations::ccl::common::all_reduce_output_topology(
+        input_tensor, std::optional<uint32_t>(args.cluster_axis));
+    return {output_topology.value_or(input_tensor.tensor_topology())};
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<AllReduceAsyncDeviceOperation::tensor_return_value_t>
@@ -193,10 +194,10 @@ AllReduceAsyncDeviceOperation::create_op_performance_model(
     // Read and write can overlap (different NOC channels), so we take
     // max(read_bw, write_bw) rather than summing.
     // =========================================================================
-    const bool input_is_dram = input_tensor.buffer()->buffer_type() == BufferType::DRAM;
-    const bool output_is_dram = output_tensors.buffer()->buffer_type() == BufferType::DRAM;
-    const uint32_t read_page_size = input_tensor.buffer()->page_size();
-    const uint32_t write_page_size = output_tensors.buffer()->page_size();
+    const bool input_is_dram = input_tensor.memory_config().buffer_type() == BufferType::DRAM;
+    const bool output_is_dram = output_tensors.memory_config().buffer_type() == BufferType::DRAM;
+    const uint32_t read_page_size = input_tensor.mesh_buffer().page_size();
+    const uint32_t write_page_size = output_tensors.mesh_buffer().page_size();
     const uint32_t device_rows = input_tensor.device()->compute_with_storage_grid_size().x;
     const uint32_t device_cols = input_tensor.device()->compute_with_storage_grid_size().y;
     const uint32_t num_cores = device_rows * device_cols;

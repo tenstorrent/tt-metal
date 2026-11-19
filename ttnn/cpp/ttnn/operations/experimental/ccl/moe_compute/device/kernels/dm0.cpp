@@ -237,6 +237,13 @@ void kernel_main() {
     // noc_async_read_barrier_with_trid are the trid-pipelined state-machine API used to
     // drive a triple-buffered DRAM read pipeline; Device 2.0 Noc wrapper does not yet expose
     // typed equivalents for the set_state / with_state / with_trid family
+    //
+    // The reads keep the command-buffer ready check (skip_cmdbuf_chk = false): the two reads
+    // of a block are issued back to back, and under NoC-0 back-pressure the buffer can still
+    // be busy with the first when the second arrives; a command written into a busy buffer
+    // corrupts the per-trid outstanding count and noc_async_read_barrier_with_trid then
+    // never returns.
+    //
     // This ring core's slice position inside every (layer, expert) stream: the bank piece it starts in and
     // the page offset inside that piece.
     const uint32_t w0_w1_core_first_stream_page = w0_w1_block_offset_lut[ring_core_id] * w0_w1_tiles_per_block;
@@ -311,7 +318,7 @@ void kernel_main() {
                     }
                     noc_async_read_one_packet_with_state_with_trid<
                         /*skip_ptr_update=*/false,
-                        /*skip_cmdbuf_chk=*/true>(
+                        /*skip_cmdbuf_chk=*/false>(
                         get_noc_addr_from_bank_id<true>(bank_id, 0),
                         in_bank_byte_offset,
                         slot_addr[slot_to_issue],
@@ -335,7 +342,7 @@ void kernel_main() {
                     }
                     noc_async_read_one_packet_with_state_with_trid<
                         /*skip_ptr_update=*/false,
-                        /*skip_cmdbuf_chk=*/true>(
+                        /*skip_cmdbuf_chk=*/false>(
                         get_noc_addr_from_bank_id<true>(bank_id, 0),
                         in_bank_byte_offset,
                         slot_addr[slot_to_issue] + w0_w1_bytes_per_txn,
@@ -387,7 +394,7 @@ void kernel_main() {
                     }
                     noc_async_read_one_packet_with_state_with_trid<
                         /*skip_ptr_update=*/false,
-                        /*skip_cmdbuf_chk=*/true>(
+                        /*skip_cmdbuf_chk=*/false>(
                         get_noc_addr_from_bank_id<true>(bank_id, 0),
                         in_bank_byte_offset,
                         slot_addr[slot_to_issue],
@@ -407,7 +414,7 @@ void kernel_main() {
                     }
                     noc_async_read_one_packet_with_state_with_trid<
                         /*skip_ptr_update=*/false,
-                        /*skip_cmdbuf_chk=*/true>(
+                        /*skip_cmdbuf_chk=*/false>(
                         get_noc_addr_from_bank_id<true>(bank_id, 0),
                         in_bank_byte_offset,
                         slot_addr[slot_to_issue] + w2_bytes_per_txn,

@@ -7,7 +7,6 @@
 #include <cstdint>
 
 #include "ckernel_ops.h"
-#include "ckernel_sfpu_sigmoid.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 #include "sfpi.h"

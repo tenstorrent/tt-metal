@@ -68,8 +68,9 @@ void bind_assign(nb::module_& mod) {
     Output tensor will have BFLOAT16 data type.
 
     Args:
-        input_tensor_a (ttnn.Tensor): Tensor assign is applied to. Tensor of shape [W, Z, Y, X].
-        input_tensor_b (ttnn.Tensor): Input tensor. Tensor of shape [W, Z, Y, X]. Only if performing assign to from tensor_a.
+        input_tensor (ttnn.Tensor): Tensor assign is applied to. Tensor of shape [W, Z, Y, X]. Used by the overload that takes ``memory_config`` (keyword-only, required), ``dtype`` and ``output_tensor``.
+        input_a (ttnn.Tensor): Tensor to copy from. Tensor of shape [W, Z, Y, X]. Used by the overload that copies ``input_a`` to ``input_b``.
+        input_b (ttnn.Tensor): Tensor to copy to. Tensor of shape [W, Z, Y, X]. Only if performing assign from ``input_a``.
 
     )doc";
 

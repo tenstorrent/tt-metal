@@ -9,15 +9,21 @@ KV chunk address table that carries the MLA kvpe cache, as two extra configs:
 | 1 | `"01"` | KDA recurrent state | synthetic, `chunk_n_tokens = 96` | `[128, 32]` FP32 V-band, 16384 B |
 | 2 | `"02"` | KDA convolution tail | synthetic, `chunk_n_tokens = 64` | `[3, 64]` BF16 rectangle, 384 B |
 
+Kimi-K3.1 publishes four: its Gated DSA layers add the indexer key cache as `"01"` (tokens, 32 per chunk,
+`[32, 128]` bfp8, 4352 B, on the same layer rows and slabs as kvpe, whose chunk is scaled FP8, 32 x 704 B),
+and the two KDA configs move to `"02"` and `"03"` unchanged. Consumers find a config by the adapter's
+`cache_kind`, never by its number. `tests/test_kv_cache_table.py::test_kimi_k3_kv_cache_table` publishes
+both tables from device caches through the runner's `setup_kv_chunk_table` and reads every chunk back.
+
 Every config is published on the model's layer axis (rows 3, 7, 11, ... for kvpe; every other row
-for KDA). A KDA config has no token axis, so it uses the synthetic axis of the K3 disaggregation
-contract (`k3_disagg_contract.md`, tt-blaze #3634): one version of both states spans a window of
+for KDA). A KDA config has no token axis, so it uses the synthetic axis it shares with decode
+(tt-blaze `blaze/models/kimi_k3/cache_migration.py`, tt-blaze #6203): both states span one window of
 `W = lcm(384, 576) * 32 = 36864` positions, global segment `i` sits at `i * 96` (recurrent) or `i * 64`
-(convolution) inside it, and the table repeats each segment in all 8 windows (`v * W + i * stride`,
-`max_sequence_length = 8 * W`) because decode keeps 8 versions and every window aliases the one
-prefill state (`kda_position` in `utils/kv_cache_utils.py`). The KV Manager needs this: it requires
-equal `chunk_n_tokens` on both sides and walks one position range for every config of a layer, so
-both states must fill the same window. The runtime declares the three caches as migration stages in
+(convolution) inside it, and `max_sequence_length = W` (`kda_position` in `utils/kv_cache_utils.py`).
+Both configs are tagged `Snapshot`: the KV Manager moves a layer's whole window whatever range
+/migrate names, and refuses a migration unless both sides tag `Snapshot` with equal extents and
+`chunk_n_tokens`. Decode keeps one KDA state per user and publishes the same single window
+(tt-blaze #6203). The runtime declares the three caches as migration stages in
 this order (`TtKimiK3Runtime.kv_migration_stages`), numbered in compacted slot space; the adapter
 maps configs back to layers with `cache_kind` / `cache_layer_rows`.
 
@@ -26,12 +32,15 @@ maps configs back to layers with `cache_kind` / `cache_layer_rows`.
 `ttKDA` reads and writes the native form and accepts nothing else:
 
 * `recurrent`: `[1, H_local, D, D]` FP32 TILE, interleaved DRAM, stored `[k, v]`
-* `convolution`: `[1, K-1, 3 * H_local * D]` BF16 ROW_MAJOR, interleaved DRAM, channels
-  `[q_local | k_local | v_local]`, `D` channels per head inside a branch
+* `convolution`: `[1, SEG, (K-1) * 64]` BF16 ROW_MAJOR, interleaved DRAM, channel-paged with one
+  64-channel segment per page (`KDAProgramConfig.convolution_page_channels` = `KDA_CONVOLUTION_PAGE_CHANNELS`,
+  `tt/kda/state_contract.py`): page `c`
+  holds the `K-1` history rows of channels `[64c, 64c + 64)`, history row `r` at element `64r`; channels run
+  `[q_local | k_local | v_local]`, `D` per head inside a branch, `SEG = 3 * H_local * D / 64`
 
 with `H_local = 96 / TP`, `D = 128`, `K - 1 = 3`. Heads are TP-sharded; every SP row holds a replica.
 
-The contract form is a second copy the engine owns (`KdaStates`, allocated by
+The contract form is the carries' only store, owned by the engine (`KdaStates`, allocated by
 `KimiK3Adapter.allocate_kv_cache`, one consolidated slab per state kind so a `KvCacheStage` can name
 it by one base address):
 
@@ -41,10 +50,9 @@ it by one base address):
 
 where `L` is the rank's KDA layer count and the leading index is `slot * L + layer_position`
 (user-major, as the kvpe cache). The convolution slab's 384-byte page `row0[64c:64c+64] |
-row1[...] | row2[...]` is byte-identical to the ND `[1, K-1, 64]` shard, and an interleaved page `p`
+row1[...] | row2[...]` is byte-identical to the ND `[1, 1, (K-1) * 64]` shard, and an interleaved page `p`
 sits at bank `p % N`, offset `(p // N) * 384`, where ND shard `s = p` would sit; the two forms are
-interchangeable for the table. The interleaved form is used because `slice_write` can write whole
-rows into it per layer, while no op writes a row-major sub-region into an ND-sharded tensor.
+interchangeable for the table. The native convolution tail uses the same `[SEG, (K-1) * 64]` rows.
 
 ## Segment numbering
 
@@ -63,17 +71,20 @@ replicas     one device group per TP column g // H_local, spanning every SP row
 The convolution order is the golden's `[all q | all k | all v]`. The recurrent golden is stored
 `[heads, v, k]`, the transpose of the device's `[k, v]`.
 
-`models/demos/deepseek_v3_d_p/tt/kda/state_adapter.py` owns the geometry, the maps, the per-layer
-export (`fill_cache_for_user_` for recurrent, reshape/permute/`slice_write` for convolution), the
-import (`slice` back to a native carry) and the host decoders (`recurrent_segment_to_torch`,
-`convolution_segment_to_torch`, `assemble_*`). `KdaStateCache.commit` exports every committed layer
-inside the captured region, so the state a reader sees is the one after the last committed chunk, and
-it lands before any later MLA layer acks that chunk. `reset(slot)` zeroes the slot's regions too.
+`models/demos/deepseek_v3_d_p/tt/kda/state_adapter.py` owns the geometry, the maps, the slabs and the
+host decoders (`recurrent_segment_to_torch`, `convolution_segment_to_torch`, `assemble_*`). Every K3 KDA
+layer (`ttKDA.forward` on `KdaStates.entry`) runs on the slabs directly: the convolution, the SP relay
+and the final carry read batch `slot * L + layer_position` (slot read on device) and write the
+replacement back in place inside the captured region, so the state a reader sees is the one after the
+last committed chunk, and it lands before any later MLA layer acks that chunk, and before the KDA
+layer's own ack. Nothing clears a slot: on a request's head chunk (`actual_start == 0`, evaluated on
+device) the ops start from zeros, so from the head until a layer's first store its regions still hold
+the previous request's state, and the slabs start uninitialized.
 
 ## Reading it back
 
 `models/demos/deepseek_v3_d_p/tt/runners/kda_state_readback.py` opens a published table and device
-map, walks configs 1 and 2 by model layer, reads every segment with `read_dram_umd`, reassembles the
+map, walks the KDA configs (the adapter's `cache_kind`: 1 and 2 on K3, 2 and 3 on K3.1; `--model`) by model layer, reads every segment with `read_dram_umd`, reassembles the
 per-layer state and scores it against the head/tail golden
 (`k3_vllm_code_debug_1M_head_tail/kda/kda_{recurrent,conv}_state_layer_N`, 1024-token period; the
 state after `real_len` tokens is row `real_len / 1024 - 1`). A rank's host only reaches its own
@@ -81,25 +92,13 @@ devices, so run it once per host of a multi-rank run.
 
 ## For the decode side
 
-* A KDA config is whole-state: a KDA layer run migrates one whole window, not `[0, real_len)`. With
-  `v = (real_len - 1) % 8`, the version decode reads next, the call is `[v * W, (v + 1) * W)` on both
-  sides (contract section 5), or source `[0, W)` to destination `[v * W, (v + 1) * W)` where the
-  caller can pass separate ranges. MLA and KDA layers need separate calls.
-  `KimiK3Adapter.layer_position_range` gives the in-repo migration driver these ranges: one call per
-  run of same-kind layers, and the byte verify walks the window it requested.
+* A KDA config is a whole-state `Snapshot`: a KDA layer run migrates the one window `[0, W)`, not
+  `[0, real_len)`, and the KV Manager moves that window whatever range the call names. Both sides must
+  tag configs 1 and 2 `Snapshot` and span one window, so decode runs one KDA state per user
+  (`TT_K3_KDA_STATE_SLOTS=1`). `KimiK3Adapter.layer_position_range` gives the in-repo migration driver
+  `[0, W)`: one call per run of consecutive layers with equal ranges, and the byte verify walks each
+  layer's own range. At `real_len == W` that range equals the MLA layers' `[0, real_len)`, so every
+  layer goes in one call; the Snapshot configs still move whole.
 * The state is a fold over the prefix, not position-addressed: decode must resume at exactly the
   prefilled length; replaying a chunk advances it twice.
 * Only the final state after the last chunk is meaningful; per-chunk copies are valid but wasted.
-
-## Measured cost (PR #56443, 8 Blackhole devices, real layer-1 weights, T = 5120)
-
-Whole-tensor round trip native -> contract -> native, bit-identical on every layout:
-
-| layout | layer (ms) | export + import (us) | of layer |
-|---|---:|---:|---:|
-| SP1xTP8 | 9.63 | 29.6 | 0.31% |
-| SP2xTP4 | 9.56 | 36.6 | 0.38% |
-| SP4xTP2 | 9.98 | 56.5 | 0.57% |
-
-The row-major page redistribution in the copy op was parallelised across aligned page units for this
-(`copy_default_row_major_program_factory.cpp`), which is what brought the convolution half down.

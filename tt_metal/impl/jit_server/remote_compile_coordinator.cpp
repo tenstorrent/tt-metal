@@ -10,6 +10,7 @@
 
 #include <tt_stl/assert.hpp>
 
+#include "impl/context/metal_context.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "jit_build/jit_build_utils.hpp"
@@ -161,7 +162,8 @@ const jit_server::UploadFirmwareRequest& RemoteCompileCoordinator::get_firmware_
     std::lock_guard lock(s_fw_gate_mutex_);
     auto it = s_fw_cache_.find(build_key_);
     if (it == s_fw_cache_.end()) {
-        const auto& dev_env = BuildEnvManager::get_instance(context_id_).get_device_build_env(device_build_id_);
+        const auto& dev_env =
+            MetalContext::instance(context_id_).build_env_manager().get_device_build_env(device_build_id_);
 
         jit_server::UploadFirmwareRequest req;
         req.build_key = build_key_;

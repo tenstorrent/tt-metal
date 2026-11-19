@@ -19,11 +19,14 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import mesh_shard_dims
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import COMPUTE_KERNEL_CONFIG_HIFI2
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.mtp_config import MTPConfig
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import eh_proj_to_tt_layout
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TopologyArg, TtPrefillBlock
+from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_dump_mode
 
 
 class TtFusedMTP(LightweightModule):
@@ -46,6 +49,7 @@ class TtFusedMTP(LightweightModule):
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_HIFI2,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: str = "mtp_0",
+        use_fused_rmsnorm: bool = False,
     ):
         """Build both norms and upload eh_proj.
 
@@ -53,11 +57,6 @@ class TtFusedMTP(LightweightModule):
         it may be None only when the weights are loaded from ``weight_cache_path``.
         """
         super().__init__()
-        assert tp_axis == 1, (
-            f"tp_axis={tp_axis} unsupported: TtDistributedRmsNorm shards its weight with a hard-coded "
-            "dims=(None, 2) mapper (tt_distributed_rms_norm.py:_convert_and_cache_weight), so enorm/hnorm "
-            "shard over mesh columns whatever cluster_axis says. tp_axis=0 needs that fixed first."
-        )
         self.mesh_device = mesh_device
         self.mtp_config = mtp_config
         self.hidden_size = mtp_config.hidden_size
@@ -82,6 +81,7 @@ class TtFusedMTP(LightweightModule):
             num_links=num_links,
             topology=self.topology,
             weight_cache_path=weight_cache_path,
+            use_fused=use_fused_rmsnorm,
         )
         sd = state_dict or {}
         self.enorm = TtDistributedRmsNorm(
@@ -121,7 +121,7 @@ class TtFusedMTP(LightweightModule):
         With ``device=None`` this only writes cache files.
         """
         h = hidden_size
-        dims = (None, -2) if tp_axis == 1 else (-2, None)
+        dims = mesh_shard_dims(-2, tp_axis)
 
         def _to_ttnn(tensor: torch.Tensor, name: str) -> ttnn.Tensor:
             mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=dims)
@@ -136,6 +136,7 @@ class TtFusedMTP(LightweightModule):
                 dtype=weights_dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG if device else None,
                 cache_file_name=cache_file_name,
+                cache_dump_mode=weight_cache_dump_mode(),
             )
 
         if eh_proj_weight is not None:
@@ -172,7 +173,12 @@ class TtFusedMTP(LightweightModule):
         """Build the fused-MTP weight cache without copying anything to the device."""
         for name in ("enorm", "hnorm"):
             TtDistributedRmsNorm.build_ttnn_cache(
-                state_dict[name], mtp_config.hidden_size, mesh_device, cache_path, f"{cache_name_prefix}.{name}"
+                state_dict[name],
+                mtp_config.hidden_size,
+                mesh_device,
+                cache_path,
+                f"{cache_name_prefix}.{name}",
+                cluster_axis=tp_axis,
             )
         TtFusedMTP._convert_and_cache_eh_proj(
             state_dict["eh_proj"],
@@ -242,6 +248,14 @@ class TtMTPModule(LightweightModule):
         self.mtp_config = mtp_config or MTPConfig.from_hf_config(config)
         self.layer_idx = self.mtp_config.mtp_layer_idx if layer_idx is None else layer_idx
         self.mesh_device = mesh_device
+        # Same fused-norm rule as the trunk's TtPrefillBlock.
+        use_fused_rmsnorm = block_kwargs.get("use_fused_rmsnorm")
+        if use_fused_rmsnorm is None:
+            use_fused_rmsnorm = (
+                getattr(model_cfg, "USE_FUSED_PREFILL_RMSNORM", False)
+                and is_blackhole()
+                and block_kwargs.get("is_chunked", False)
+            )
 
         mtp_weights = state_dict["mtp"]
         self.fused = TtFusedMTP(
@@ -254,6 +268,7 @@ class TtMTPModule(LightweightModule):
             weights_dtype=weights_dtype,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=cache_name_prefix,
+            use_fused_rmsnorm=use_fused_rmsnorm,
         )
 
         self.layer = TtPrefillBlock(
@@ -280,6 +295,7 @@ class TtMTPModule(LightweightModule):
             topology=self.fused.topology,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"{cache_name_prefix}.shared_head_norm",
+            use_fused=use_fused_rmsnorm,
         )
 
     @staticmethod
@@ -320,6 +336,7 @@ _RESERVED_FWD_KWARGS = (
     "return_kv_cache",
     "return_kv_intermediates",
     "ack_layer_idx",
+    "ack_alias_layer_ids",
     "force_kv_only",
 )
 
@@ -352,6 +369,7 @@ class TtMTPPredictor(LightweightModule):
         *,
         seq_len: int,
         num_levels: Optional[int] = None,
+        decode_levels: Optional[int] = None,
         layer_idx: Optional[int] = None,
         first_cache_slot: int = 0,
         index_share: Optional[bool] = None,
@@ -361,12 +379,17 @@ class TtMTPPredictor(LightweightModule):
         """Build the one shared module and fix the replay policy.
 
         ``first_cache_slot`` is the KV slot level 1 writes and level k writes the k-th slot after it, so
-        the caller's KVPE cache must be allocated with at least that many slots.
+        the caller's KVPE cache must be allocated with at least that many slots. ``decode_levels`` (default
+        ``num_levels``) past ``num_levels`` reuse level 1's KV on decode, so level 1 acks them too.
         """
         super().__init__()
         self.mtp_config = mtp_config or MTPConfig.from_hf_config(config)
         self.num_levels = int(self.mtp_config.num_levels if num_levels is None else num_levels)
         assert self.num_levels >= 1, f"num_levels must be >= 1, got {self.num_levels}"
+        self.decode_levels = self.num_levels if decode_levels is None else int(decode_levels)
+        assert self.decode_levels == self.num_levels or (
+            self.num_levels == 1 and self.decode_levels > 1
+        ), f"decode_levels={self.decode_levels} can only extend num_levels=1, got num_levels={self.num_levels}"
         self.first_cache_slot = int(first_cache_slot)
         self.index_share = self.mtp_config.index_share_for_mtp_iteration if index_share is None else bool(index_share)
         self.kv_only_last_level = bool(kv_only_last_level)
@@ -405,7 +428,7 @@ class TtMTPPredictor(LightweightModule):
         """Run every level, chaining each level's normed output into the next.
 
         ``get_embed(k, hidden)`` supplies level k's embedding lazily. ``layer_ack_base`` numbers level
-        k's migration ack ``base + k``.
+        k's migration ack ``base + k``; level 1 also acks ``base + num_levels .. base + decode_levels - 1``.
         """
         for name in _RESERVED_FWD_KWARGS:
             if name in fwd_kwargs:
@@ -425,6 +448,10 @@ class TtMTPPredictor(LightweightModule):
             kwargs["cache_layer_idx"] = self.first_cache_slot + k
             if layer_ack_base is not None:
                 kwargs["ack_layer_idx"] = layer_ack_base + k
+                if k == 0:
+                    kwargs["ack_alias_layer_ids"] = tuple(
+                        range(layer_ack_base + self.num_levels, layer_ack_base + self.decode_levels)
+                    )
             if share and k > 0:
                 kwargs["indexer_indices"] = shared_indices
             if want_indices:

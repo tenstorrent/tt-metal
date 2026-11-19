@@ -29,6 +29,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import PrefillModelAdapter, PrefillRunParams
 from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import mesh_cache_key
 
 # NOTE: the heavy model stack (TtPrefillRuntime / TtPrefillTransformer, the MoE gate, transformers'
 # AutoConfig) is imported lazily inside the methods that need it. This keeps `import ...adapters` cheap
@@ -57,6 +58,15 @@ def unwrap_multimodal_config(cfg):
 class MLAPrefillAdapter(PrefillModelAdapter):
     """DeepSeek-V3-family prefill adapter (MLA + MoE over TtPrefillRuntime)."""
 
+    # Missing TTNN cache pieces are converted from the HF checkpoint (PREFILL_HF_MODEL) at start-up, which needs the
+    # DeepSeek-V3 HF key layout (see tt/runners/weight_categories.py). A model whose checkpoint differs sets False.
+    builds_missing_weight_cache = True
+
+    def fabric_payload_size(self) -> int:
+        from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import moe_fabric_payload_size
+
+        return moe_fabric_payload_size(self.model_config)
+
     # ------------------------------------------------------------------
     # HF config
     # ------------------------------------------------------------------
@@ -71,18 +81,18 @@ class MLAPrefillAdapter(PrefillModelAdapter):
     # ------------------------------------------------------------------
     # Weight cache
     # ------------------------------------------------------------------
-    def weight_cache_path(self, mesh_shape: tuple) -> Optional[Path]:
+    def weight_cache_path(self, mesh_shape: tuple, sp_axis: int = 0) -> Optional[Path]:
         """Mirror the pytest weight_cache_path layout so the runner reads the same
         files the cache-populate run wrote:
-          $PREFILL_TTNN_CACHE / {name}_{arch}_{N}dev / {sp}x{tp}
+          $PREFILL_TTNN_CACHE / {name}_{arch}_{N}dev / {rows}x{cols}[_sp1]
+        ``mesh_shape`` is (axis 0, axis 1); see ``mesh_cache_key`` for the SP-axis suffix.
         Defaults to ``ttnn_cache_default``; None only if explicitly empty."""
         env_cache = os.environ.get("PREFILL_TTNN_CACHE", self.ttnn_cache_default)
         if not env_cache:
             return None
         arch = "bh" if is_blackhole() else "wh"
         num_devices = ttnn.get_num_devices()
-        sp, tp = mesh_shape
-        path = Path(env_cache) / f"{self.name}_{arch}_{num_devices}dev" / f"{sp}x{tp}"
+        path = Path(env_cache) / f"{self.name}_{arch}_{num_devices}dev" / mesh_cache_key(mesh_shape, sp_axis)
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -92,7 +102,8 @@ class MLAPrefillAdapter(PrefillModelAdapter):
     def allocate_kv_cache(self, *, mesh_device, hf_config, params: PrefillRunParams) -> MlaKvCaches:
         """Allocate the MLA kvpe KV cache (qk_rope_head_dim + kv_lora_rank per token; one shared cache of
         num_users * num_layers user-major slots). Dense MLA has no indexer cache, so ``index`` stays None.
-        The engine owns the returned cache and passes it into every runtime call."""
+        ``params.tp_shard_kv`` stripes it over SP*TP instead of TP-replicating it. The engine owns the
+        returned cache and passes it into every runtime call."""
         from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
 
         return MlaKvCaches(
@@ -104,8 +115,17 @@ class MLAPrefillAdapter(PrefillModelAdapter):
                 sp_axis=params.sp_axis,
                 num_layers=params.num_layers,
                 num_users=params.num_users,
+                tp_axis=params.tp_axis if self._dense_tp_shard_kv(params) else None,
+                bank_aligned=True,
             )
         )
+
+    def _dense_tp_shard_kv(self, params: PrefillRunParams) -> bool:
+        """The one predicate both the cache allocation and the model's reader key on."""
+        assert (
+            not params.tp_shard_kv or self.supports_tp_shard_kv
+        ), f"tp_shard_kv requested but model {self.name!r} does not support it (supports_tp_shard_kv=False)"
+        return params.tp_shard_kv
 
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
         """Construct the MLA model and return the runtime. The runtime (TtPrefillRuntime)
@@ -142,10 +162,16 @@ class MLAPrefillAdapter(PrefillModelAdapter):
             dflash_enabled=params.dflash_enabled,
             dflash_checkpoint_path=params.dflash_checkpoint_path,
             mtp_levels=params.mtp_levels,
+            mtp_decode_levels=params.mtp_decode_levels,
             routing_use_l1_small_for_semaphores=self.routing_use_l1_small_for_semaphores,
             sparse_kv_cache_format=self.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format),
             use_trace=params.use_trace,
             overlap_shared_expert_with_dispatch=params.overlap_shared_expert_with_dispatch,
+            tp_shard_kv=True if self._dense_tp_shard_kv(params) else None,
+            build_missing_cache=self.builds_missing_weight_cache,
+            hf_model_path=os.environ.get("PREFILL_HF_MODEL")
+            or os.environ.get(self.env_var, "")
+            or self.hf_model_default,
         )
         return TtPrefillRuntime(
             mesh_device=mesh_device,

@@ -4,17 +4,15 @@
 
 // Repeat-local reader for HIGHER-DIM replication on RM interleaved tensors.
 //
-// This mirrors the shared reader_repeat_higherdim_rm.cpp mapping, with
-// compile-time shortcuts for size-1 repeated dimensions. Tiny repeat cases often
-// broadcast a singleton dim; avoiding the full generic div/mod map keeps those
-// cases from losing to TTNN's collapsed RM path.
+// Geometry is compile-time so SEQ_REPEAT's per-stick div/mod strength-reduces.
 //
-// CT args: xfer_size, l1_stride, TensorAccessorArgs(in_t),
-//          cb_id, NUM_REPEATS, LOWER_PAGES, REP_DIM_PAGES, BATCH
+// CT args: xfer_size, l1_stride, cb_id, NUM_REPEATS, LOWER_PAGES, REP_DIM_PAGES, BATCH,
+//          TensorAccessorArgs(in_t)
 // RT args: src_addr, num_out_pages, out_start_page
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/operations/data_movement/common/kernels/codegen/sequencers.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -23,22 +21,19 @@ void kernel_main() {
 
     constexpr uint32_t xfer_size = get_compile_time_arg_val(0);
     constexpr uint32_t l1_stride = get_compile_time_arg_val(1);
-    constexpr auto src_args = TensorAccessorArgs<2>();
-    constexpr uint32_t cb_id = get_compile_time_arg_val(src_args.next_compile_time_args_offset());
-    constexpr uint32_t NUM_REPEATS = get_compile_time_arg_val(src_args.next_compile_time_args_offset() + 1);
-    constexpr uint32_t LOWER_PAGES = get_compile_time_arg_val(src_args.next_compile_time_args_offset() + 2);
-    constexpr uint32_t REP_DIM_PAGES = get_compile_time_arg_val(src_args.next_compile_time_args_offset() + 3);
-    constexpr uint32_t BATCH = get_compile_time_arg_val(src_args.next_compile_time_args_offset() + 4);
+    constexpr uint32_t cb_id = get_compile_time_arg_val(2);
+    constexpr uint32_t NUM_REPEATS = get_compile_time_arg_val(3);
+    constexpr uint32_t LOWER_PAGES = get_compile_time_arg_val(4);
+    constexpr uint32_t REP_DIM_PAGES = get_compile_time_arg_val(5);
+    constexpr uint32_t BATCH = get_compile_time_arg_val(6);
+    constexpr auto src_args = TensorAccessorArgs<7>();
 
     const auto s = TensorAccessor(src_args, src_addr);
 
     Noc noc;
     CircularBuffer cb_in(cb_id);
 
-    constexpr uint32_t SRC_LOWER = REP_DIM_PAGES * LOWER_PAGES;
-    constexpr uint32_t DST_LOWER = NUM_REPEATS * SRC_LOWER;
-
-    uint32_t out_page = out_start_page;
+    SeqRepeatState seq = seq_repeat_init(out_start_page, NUM_REPEATS, LOWER_PAGES, REP_DIM_PAGES);
     uint32_t pages_left = num_out_pages;
 
     while (pages_left > 0) {
@@ -47,24 +42,9 @@ void kernel_main() {
         uint32_t l1_offset = 0;
 
         for (uint32_t t = 0; t < batch; t++) {
-            uint32_t src_page;
-
-            if constexpr (REP_DIM_PAGES == 1 && LOWER_PAGES == 1) {
-                src_page = out_page / NUM_REPEATS;
-            } else if constexpr (REP_DIM_PAGES == 1) {
-                uint32_t block = out_page / (NUM_REPEATS * LOWER_PAGES);
-                uint32_t within = out_page % (NUM_REPEATS * LOWER_PAGES);
-                src_page = block * LOWER_PAGES + (within % LOWER_PAGES);
-            } else {
-                uint32_t block = out_page / DST_LOWER;
-                uint32_t within = out_page % DST_LOWER;
-                uint32_t lower_in_rep = within % SRC_LOWER;
-                src_page = block * SRC_LOWER + lower_in_rep;
-            }
-
+            const uint32_t src_page = seq_repeat_next(seq);
             noc.async_read(s, cb_in, xfer_size, {.page_id = src_page, .offset_bytes = 0}, {.offset_bytes = l1_offset});
             l1_offset += l1_stride;
-            out_page++;
         }
         noc.async_read_barrier();
         cb_in.push_back(batch);

@@ -13,4 +13,5 @@ Put a test elsewhere when:
 | Directory | Test Category |
 |---|---|
 | `resource_bindings/` | Resource binding emissions |
-| `kernel_args/` | Compile-time varargs, and 1st world kernel arguments |
+| `kernel_args/` | Compile-time varargs, array arguments, and 1st world kernel arguments |
+| `fabric/` | Fabric kernel defines on data-movement kernels |

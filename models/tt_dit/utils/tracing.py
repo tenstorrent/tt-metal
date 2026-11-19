@@ -337,6 +337,19 @@ class Tracer:
             Tracer._traces_live[d.id()] -= 1
             ttnn.release_trace(d, trace_id)
 
+    def release_inputs(self) -> None:
+        """Drop the references to the last call's inputs, freeing the device memory they hold.
+
+        Only meaningful before a trace has been captured: afterwards the stored inputs are the
+        trace's own input buffers, which every execution writes through.
+        """
+        if self._trace_ids is not None:
+            msg = "inputs cannot be released once the trace has been captured"
+            raise RuntimeError(msg)
+
+        self._args = ()
+        self._kwargs = {}
+
     def release_function(self) -> None:
         """Drop the reference to the wrapped function.
 
@@ -429,7 +442,7 @@ def _clone_tensor(value: Any, *, path_label: str) -> Any:
 def _tree_map(f: Callable[..., Any], x: Any, /, *xs: Any, path_label: str) -> Any:
     """Apply a function to leaves of nested data structures.
 
-    Recursively traverses nested structures (tuples, lists, dicts) and applies
+    Recursively traverses nested structures (tuples, named ones included, lists, dicts) and applies
     the given function to corresponding leaf elements across all input structures.
 
     Args:
@@ -461,9 +474,10 @@ def _tree_map(f: Callable[..., Any], x: Any, /, *xs: Any, path_label: str) -> An
                 msg = f"tuple lengths of '{path_label}' should be the same: {len(x)} != {len(y)}"
                 raise ValueError(msg)
 
-        return tuple(
+        items = [
             _tree_map(f, *elts, path_label=f"{path_label}[{i}]") for i, elts in enumerate(zip(x, *xs, strict=True))
-        )
+        ]
+        return type(x)(*items) if hasattr(type(x), "_fields") else tuple(items)
 
     if isinstance(x, list) and all(isinstance(y, list) for y in xs):
         for y in xs:
