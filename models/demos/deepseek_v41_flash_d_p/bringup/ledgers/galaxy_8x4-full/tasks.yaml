@@ -1742,7 +1742,10 @@ tasks:
       && BRINGUP_TASK=P.10 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
       && BRINGUP_TASK=P.10 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
       && BRINGUP_TASK=P.10 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_smoke.py
-      && BRINGUP_TASK=P.10 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && BRINGUP_TASK=P.10 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    # F283 (overseer 2026-11-19, option b): the profile unit runs at the other units' engram table mode (mmap, the test
+    # value) so the gate is one model load; FIX.13 judges accuracy, not the wall; rows are bit-identical between modes
+    # (tests/test_engram_table_modes.py). X.3's own gate and the resident default are unchanged.
     metrics:
       contract_checks_failed: == 0
       acks_early: == 0

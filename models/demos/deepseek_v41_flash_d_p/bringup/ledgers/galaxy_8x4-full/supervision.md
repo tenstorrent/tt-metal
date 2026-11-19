@@ -393,3 +393,52 @@
   350.2 GiB - 200.2 GiB expected load = 149.9 < 150. The node needs its reboot before P.84 (owner asked).
 - One-load validate: FIX.11 fixed (one configuration = one group even with a non-shared unit between); FIX.13: its
   profile unit runs with the units' mmap engram table (rows bit-identical between modes), one load.
+
+## 2026-11-19 07:50 UTC: resident runner: server, code-change awareness, layers 0-20 (F281 / F282)
+- `python -m models.demos.common.bringup.resident start|status|submit|stop --spec S`: one device process under the safe
+  runner (locks, hang triage, reset) holds the mesh and the model and serves batch-plan requests from a spool dir
+  (<art>/runs/galaxy_8x4-full/resident). Each reply carries: received -> model ready -> first chunk -> done, plus the
+  accounting (device opens, loads, layers, unaccounted RAM before/after). Any other safe-runner run makes it step aside.
+- A model python change: the model is rebuilt in the same process. The routed-expert files stay on the device
+  (registry under moe_block_v2/main load_tensor: 42 files, 149.5 GiB for layers 0-20). The dense weights are
+  uploaded again. If the old model's device memory did not come back, the runner restarts. A .so change, a kernel
+  source change, ttnn python or the runner's own code: a new process.
+- Layers: the position tests and the census load only layers 0-20 under decode (hooks.run_layers).
+  BRINGUP_RUN_LAYERS=all loads all 40.
+
+## 2026-11-19 07:50 UTC: resident runner: device demo (1 device open, 1 load)
+- 07:15-07:26 UTC. One device open, one load of layers 0-20 in 134.9 s (40 layers took ~240 s).
+- request -> first chunk / done: census prose 136.7 s / 186.4 s (includes the load); census agentic 1.6 s / 6.4 s;
+  wall prose 1.2 s / 13.9 s; wall agentic 1.2 s / 17.3 s.
+- Census vs X.9: prose tiles 2608.2 (X.9 2608.2), experts 22.59 ms (22.52), routing counts bit-identical to X.9's side
+  record. Agentic tiles 1749.2 (1749.2), experts 18.38 ms (18.35).
+- Walls vs X.9: prose steady 86.3 ms (86.3), resumed 88.4 (87.0); agentic steady 81.1 (81.9), resumed 80.6 (81.2).
+- Unaccounted host RAM: 162.7 GiB before the open, 164.3 GiB with the model loaded, 163.4 GiB after stop.
+  MemAvailable after stop: 350 GiB. The server is stopped.
+- Not demonstrated: the in-place rebuild after a model edit. The runner's own files changed after it started, so a
+  further request would have opened the device again. It is demonstrated inside P.84's single start after the reboot.
+
+## 2026-11-19 07:50 UTC: resident runner: gate integration, one load a gate, RAM reserve (F281 / F283 / F284)
+- core/batch.drive submits every batch plan (gate units, shared groups, multigate, A/B sides) to the runner when one
+  serves the spec. A plan with the determinism check is a fresh-process request: once per gate that has it. While the
+  runner serves, A/B sides skip the determinism item and leave it to the accept gate.
+- One load a gate (tests.one_load): the gate is refused before any device work, and `validate` fails a queued task,
+  when its shared-model units need more than one load. A second model inside a gate's plan fails the run instead of a
+  fresh process. DS41 DECODER_SKIP off/exact/decode is a per-run switch: the held model is switched with
+  use_decoder_skip; replay128 stays a load-time switch. Units of one configuration share a process even with other
+  units between them (fixed FIX.11). FIX.13's profile unit now runs at mmap (option b). `validate` says valid.
+- RAM reserve before any device open (core/hostmem preflight): MemAvailable - 215 GB must leave 150 GiB, else refused
+  with "REBOOT" named. Now: 350.2 - 200.2 = 149.9 GiB, so opens are refused until the reboot.
+- Rule (2), layers 21-39 never loaded, per check:
+  - Position tests / census: done (0-20).
+  - Ladder: already handles a subset (per-layer err_layer_L*, states). Its final hidden, logits and top5 / top1
+    exist only when the stack ends at layer 39. A ladder on 0-20 loses the gated top5_overlap / err_final_hidden, and
+    its last chunk runs the decoder (layers 20-39 in full).
+  - Determinism: compares every chunk's hidden (final norm only at layer 39) and every layer's served state. On 0-20
+    under decode it compares the hidden after layer 20 (a Skipped marker on non-last chunks: needs a change to compare
+    layer 19's output instead) and the served states of layers 0-20.
+  - Contract / adapter acks / runner contract: the serving adapter hands the engine every layer's window KV and
+    asserts no deep skip. On 0-20 it can check only layers 0-20's caches. The engine contract (every layer's cache
+    served) cannot be met without 21-39.
+  - Outside history: not inspected.
+  Need an owner decision: which gated metrics replace top5 / final hidden, and whether the contract runs on 0-20.
