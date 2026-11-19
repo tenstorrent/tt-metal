@@ -44,6 +44,7 @@ RESTORE_SYNC = os.environ.get("V41_PREFILL_RESTORE_SYNC", "1") == "1"
 # burst's last chunk checks (decoder_cone.py). An unmarked header (an engine that does not mark) runs the decoder
 # (V41_PREFILL_DECODER=1's behaviour), so a misconfigured pair is slow, never inexact.
 DECODER_MARKED = DECODER and os.environ.get("V41_PREFILL_DECODER_MARKED", "0") == "1"
+IDS_COL0 = os.environ.get("V41_PREFILL_IDS_COL0", "0") == "1"  # prefill TTFT plan 1.4 (WS1): ids from TP column 0 only
 DECODER_CONE = int(os.environ.get("V41_PREFILL_DECODER_CONE", str(CONE)))
 
 
@@ -206,11 +207,32 @@ class V41PrefillRuntime:
 
     def _token_ids_from_device(self, input_tensor) -> list:
         """Request mode: the chunk's ids arrive over H2D as [sp, 1, S / sp] uint32 per mesh (SP-sharded, TP-replicated)."""
+        if IDS_COL0:
+            return self._token_ids_col0(input_tensor)
         full = ttnn.to_torch(
             input_tensor,
             mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, mesh_shape=self.mesh_shape, dims=(0, 1)),
         )
         return full[:, 0, :].reshape(-1).to(torch.int64).tolist()
+
+    def _token_ids_col0(self, input_tensor) -> list:
+        """V41_PREFILL_IDS_COL0 (prefill TTFT plan 1.4, WS1): read the ids from the SP column at TP index 0 only (8 shards, not
+        all 32 TP replicas): the composed read above keeps exactly that column ([:, 0, :]). The first chunk also runs the
+        composed read and requires both to be equal."""
+        sp, tp = int(self.mesh_shape[0]), int(self.mesh_shape[1])
+        devs = ttnn.get_device_tensors(input_tensor)
+        rows = [ttnn.to_torch(devs[r * tp]).reshape(-1) for r in range(sp)]
+        ids = torch.cat(rows).to(torch.int64).tolist()
+        if not getattr(self, "_ids_col0_checked", False):
+            full = ttnn.to_torch(
+                input_tensor,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, mesh_shape=self.mesh_shape, dims=(0, 1)),
+            )
+            ref = full[:, 0, :].reshape(-1).to(torch.int64).tolist()
+            assert ids == ref, "V41_PREFILL_IDS_COL0: the TP-column-0 ids differ from the composed read"
+            self._ids_col0_checked = True
+            logger.info(f"[v41 runtime] V41_PREFILL_IDS_COL0: ids read from {sp} of {sp * tp} chips (== composed read)")
+        return ids
 
     def prefill_chunk(self, input_tensor, kv_caches, *, metadata_msg=None, **kwargs):
         """Main's runner hands each chunk's metadata tensor to the runtime; this single untraced rank never forwards it, so it
