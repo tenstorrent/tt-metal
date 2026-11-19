@@ -103,7 +103,7 @@ static bool run_test_integrity_dram_dist(
             .program = programs[mesh_device],
             .mesh_device = mesh_device,
             .core = core,
-            .iter_l1_addr = progress_counter,
+            .iter_l1_addr = 0,  // TODO progress_counter,
             .expected_count = dram_end_addr,
         },
     };
