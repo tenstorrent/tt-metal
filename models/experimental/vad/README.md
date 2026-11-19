@@ -93,8 +93,9 @@ width sharded with the full grid's channel blocks, since the block width decides
 partial sums are rounded. The fused multi-scale deformable attention takes the per-query counts from
 a device tensor rather than its runtime arguments.
 
-Two grids are supported: the full grid and 2x1. With a cold kernel cache the end-to-end test on 2x1
-takes about 20 minutes on a Blackhole P100, with stretches of several minutes without output:
+Three grids are supported: the full grid, 8x8 (Wormhole N150's full grid, `7,7` on Blackhole) and 2x1.
+With a cold kernel cache the end-to-end test on 2x1 takes about 20 minutes on a Blackhole P100, with
+stretches of several minutes without output:
 
 ```sh
 TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=1,0 pytest --disable-warnings models/experimental/vad/tests/pcc/test_tt_vad.py
@@ -108,10 +109,10 @@ Other grids fail before the first frame:
 | 1x1 | A layer4 conv run from DRAM finds no height slice that fits one core's L1. |
 | 2x2 | An FPN conv's circular buffers clash with live L1 buffers. |
 | 4x2, 4x4 | Layer4's strided 3x3 conv fits the activation budget, but its circular buffers outgrow L1. |
-| 8x4, 8x8 | A backbone 1x1 conv's circular buffers clash with live L1 buffers. |
+| 8x4 | A backbone 1x1 conv's circular buffers clash with live L1 buffers. |
 
-On these grids the memory plan budgets a conv's input and output, not its own circular buffers or
-the tensors already in L1.
+The memory plan counts a conv's input, output and own circular buffers, but not the tensors other
+modules keep in L1.
 
 ### Reduced layer count
 
