@@ -148,7 +148,7 @@ def test_entry_correction_matches_reference(mesh_device, interval):
             expected[:, reset:] = from_tail[:, reset:]
         seed = tail if reset else entry
         expected_final = seed + (final_e @ seed + final_b)
-        got = ttnn.to_torch(local_output).float()
+        got = ttnn.to_torch(local_output).float().reshape(expected.shape)
         assert_accurate(
             expected[:, :valid], got[:, :valid], name=f"output rank={rank}", pcc_threshold=0.9999, nrmse_threshold=0.01
         )
@@ -208,7 +208,7 @@ def test_entry_correction_determinism(mesh_device):
         for rank, (chunks, _) in _rank_chunks(sp_size, start, end).items():
             valid[rank * tp_size * _HEADS : (rank + 1) * tp_size * _HEADS, :chunks] = 1
         valid = ttnn.from_torch(
-            valid,
+            valid.flatten(1, 2),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
