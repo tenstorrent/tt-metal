@@ -174,25 +174,27 @@ def test_two_level_tied_blocks(device):
 
 @pytest.mark.parametrize("rows,columns", [(4, None), (160, 3)])
 def test_two_level_supplied_block_maxima(device, rows, columns):
-    """The caller's maxima: a few rows over the default grid, and 160 rows over 27 cores (six on some), past the
-    four rows per core that phase 1 allows."""
+    """The caller's maxima: a few rows over the default grid, and 160 rows over 27 cores (six on most), past the
+    four rows per core that phase 1 allows. The second call hits the cache with new input and maxima tensors, whose
+    addresses the program must take up."""
     width, n = 1_049_600, 700_000
-    torch_input = generate("sinks", rows, width, 9, n=n)
     blocks = width // BLOCK
-    maxima = torch.full((rows, blocks), float("-inf"))
-    for row in range(rows):
-        nb = (n + BLOCK - 1) // BLOCK
-        maxima[row, :nb] = _block_maxima(torch_input[row], n)
-    out = ttnn.experimental.topk_large_indices(
-        _dev(torch_input.reshape(1, 1, rows, width), device),
-        k=K,
-        valid_length=n,
-        block_select=32,
-        two_level_cutover=FORCE_TWO_LEVEL,
-        block_max_tensor=_dev(maxima.to(torch.bfloat16).reshape(1, 1, rows, blocks), device),
-        sub_core_grids=_grid(device, columns),
-    )
-    _check_rows(torch_input, _indices(out, rows), n, range(rows))
+    for seed, kind in ((9, "sinks"), (19, "iid")):
+        torch_input = generate(kind, rows, width, seed, n=n)
+        maxima = torch.full((rows, blocks), float("-inf"))
+        for row in range(rows):
+            nb = (n + BLOCK - 1) // BLOCK
+            maxima[row, :nb] = _block_maxima(torch_input[row], n)
+        out = ttnn.experimental.topk_large_indices(
+            _dev(torch_input.reshape(1, 1, rows, width), device),
+            k=K,
+            valid_length=n,
+            block_select=32,
+            two_level_cutover=FORCE_TWO_LEVEL,
+            block_max_tensor=_dev(maxima.to(torch.bfloat16).reshape(1, 1, rows, blocks), device),
+            sub_core_grids=_grid(device, columns),
+        )
+        _check_rows(torch_input, _indices(out, rows), n, range(rows))
 
 
 @pytest.mark.parametrize("n,cutover,expected_mode", [(200_000, 200_001, 0), (200_001, 200_001, 1), (5_000, 0, 1)])
@@ -510,7 +512,7 @@ def test_two_level_winning_block_count_at_the_limit(device, winning_blocks):
     _check_rows(torch_input, _indices(out, rows), width, range(rows))
 
 
-# The default cutover per top-k grid: 12 columns are 108 cores, 11 are 99.
+# The default cutover per top-k grid (two_level_default_cutover): 12 columns are 108 cores, 11 are 99.
 DEFAULT_CUTOVER = {12: 196_608, 11: 147_456}
 
 

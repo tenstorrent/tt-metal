@@ -166,8 +166,8 @@ void set_two_level_common_args(
     const uint32_t blocks = tt::div_up(input.logical_shape()[-1], two_level_block_keys);
     const uint32_t num_cores = static_cast<uint32_t>(shared.cores.size());
     // The maxima stage 2 reads: the caller's, else the caller's maxima output, else the program's own. The row count
-    // and width are in the program hash, so the program's own is allocated once and keeps its address (a captured
-    // trace holds it).
+    // and width are in the program hash, so the program's own is allocated once and keeps its address for as long as
+    // the program is cached (a captured trace that runs the program needs it cached).
     const bool own_maxima = !tensor_args.block_max_tensor.has_value() && !tensor_args.block_max_output.has_value();
     if (own_maxima && !shared.two_level_maxima.has_value()) {
         shared.two_level_maxima = create_device_tensor(
