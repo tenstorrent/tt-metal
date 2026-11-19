@@ -298,7 +298,7 @@ class Module(ABC):
         layout, bit-identically.
 
         The module counts as unloaded while sharded.
-        
+
         When calling 'shard' the module (and it's children) call their eviction hooks.
 
         Every slice is cut before any full weight is freed, so the slices pack together instead of each one filling
@@ -392,7 +392,7 @@ class Module(ABC):
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
         # only walk the current module's params, not the full tree! Sub-modules should check
-        # their own parameters when they get called. 
+        # their own parameters when they get called.
         if any(p.is_transiently_sharded() for _, p in self.named_parameters()):
             msg = f"{type(self).__name__} has weights with a transient split; gather it first"
             raise RuntimeError(msg)
@@ -537,8 +537,8 @@ class Parameter:
 
         # This sets the durable/frozen layout, which is how the parameter tensor will always be loaded, saved and cached.
         # The Module which owns this Parameter expects it to be in the durable_mesh_axes layout when calling forward or __call__.
-        self.durable_mesh_axes = mesh_axes 
-        
+        self.durable_mesh_axes = mesh_axes
+
         # self.mesh_axes is the current layout, which can be changed via `shard` and `gather`.
         self.mesh_axes = mesh_axes
         self.on_host = on_host
