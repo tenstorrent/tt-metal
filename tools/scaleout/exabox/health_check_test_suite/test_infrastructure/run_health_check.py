@@ -100,6 +100,7 @@ def parse_args() -> argparse.Namespace:
         "--tier",
         default="daily",
         choices=[
+            "flash",
             "daily",
             "weekly",
             "full",

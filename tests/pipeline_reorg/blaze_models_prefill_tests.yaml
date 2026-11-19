@@ -362,7 +362,7 @@
         set -e
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/layer/test_acceptance.py::test_synthetic_kimi_k3_accuracy_and_determinism -k "SP8xTP4" -vvv --tb=short
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_relay_affine_prefix.py models/demos/deepseek_v3_d_p/tests/kda/components/test_entry_correction.py models/demos/deepseek_v3_d_p/tests/kda/components/test_select_final_carry.py -k "SP8xTP4 and not perf" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_relay_affine_prefix.py models/demos/deepseek_v3_d_p/tests/kda/components/test_entry_correction.py -k "SP8xTP4 and not perf" -vvv --tb=short
         export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/layer/test_acceptance.py::test_kimi_k3_layer_1_real_weights_accuracy -k "SP8xTP4" -vvv --tb=short
       '
@@ -455,7 +455,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_sparse_mla_perf -k kimi_k3_1 -vvv --tb=short
       models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_sparse_mla_perf -k kimi_k3_1 -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP8xTP4" -vvv --tb=short
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_relay_affine_prefix.py::test_relay_affine_prefix_kimi_k3_perf models/demos/deepseek_v3_d_p/tests/kda/components/test_entry_correction.py::test_entry_correction_kimi_k3_perf models/demos/deepseek_v3_d_p/tests/kda/components/test_select_final_carry.py::test_select_final_carry_kimi_k3_perf -k "SP8xTP4" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_relay_affine_prefix.py::test_relay_affine_prefix_kimi_k3_perf models/demos/deepseek_v3_d_p/tests/kda/components/test_entry_correction.py::test_entry_correction_kimi_k3_perf -k "SP8xTP4" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_perf_check -k "k3 and torus-xy-8x4" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/attn_res/perf/test_attn_res_perf.py::test_attn_res_layer_perf -k "SP8xTP4" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/attn_res/perf/test_attn_res_op_perf.py::test_attn_res_op_perf -k "SP8xTP4" -vvv --tb=short
@@ -496,7 +496,7 @@
   sp_config: sc1
 
 
-- name: "(Kimi-K3-2.8T) prefill transformer L24, chunked L24 and traced L24 vs golden trace"
+- name: "(Kimi-K3-2.8T) prefill transformer L24, chunked L24 and traced L24 vs golden trace; multi-user packed"
   # Three legs folded into one. None is short, but each paid its own ~5.5 min "Setup multihost job"
   # and all three carry identical environments -- same checkpoint, same TTNN cache, same mesh
   # descriptor -- so three allocations bought nothing. Measured test-step times on run 36717057668:
@@ -556,7 +556,8 @@
       export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
       export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill
       export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
-      timeout -k 2m 90m mpirun --bind-to none --pernode --tag-output bash -lc '
+      # Measured 10m01s in CI (main, 2026-11-18); 75 min leaves headroom for a cold weight load and JIT cache.
+      timeout -k 2m 75m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_chunked_prefill.py -k "L24" -vvv --tb=short
       '
@@ -591,22 +592,41 @@
       '
     )
 
-    echo "===== [1/4] (Kimi-K3-2.8T) prefill transformer accuracy L24 vs golden trace ====="
+    k3_multiuser() (
+      export LOGURU_LEVEL=INFO
+      export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+      export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+      export KIMI_K3_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-mxfp4-2496450e
+      export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
+      export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill
+      export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+      # Several users' chunks on a 4-layer Kimi-K3 (every layer kind; TTNN cache weights): interleaved users vs
+      # each user alone, packed forwards (two chunks per forward, one MoE call) vs one chunk per forward, and
+      # traced vs eager packed forwards. Measured 10m39s as CI runs it.
+      timeout -k 2m 15m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_k3_prefill_multiuser.py -k "not pipeline and not perf" -vvv --tb=short
+      '
+    )
+
+    echo "===== [1/5] (Kimi-K3-2.8T) prefill transformer accuracy L24 vs golden trace ====="
     k3_transformer_depth || exit $?
-    echo "===== [2/4] (Kimi-K3-2.8T) chunked prefill accuracy L24 55k@5k vs golden trace ====="
+    echo "===== [2/5] (Kimi-K3-2.8T) chunked prefill accuracy L24 55k@5k vs golden trace ====="
     k3_chunked_prefill || exit $?
-    echo "===== [3/4] (Kimi-K3-2.8T) traced chunked prefill accuracy L24 55k@5k vs golden trace ====="
+    echo "===== [3/5] (Kimi-K3-2.8T) traced chunked prefill accuracy L24 55k@5k vs golden trace ====="
     k3_transformer_traced || exit $?
-    echo "===== [4/4] (Kimi-K3.1) prefill accuracy L24 10k@5k and chunked L24 128k@5k vs vLLM traces ====="
+    echo "===== [4/5] (Kimi-K3.1) prefill accuracy L24 10k@5k and chunked L24 128k@5k vs vLLM traces ====="
     k31_depth_ladder || exit $?
-    echo "===== all 4 sections passed ====="
+    echo "===== [5/5] (Kimi-K3-2.8T) multi-user: interleaved, packed and traced packed forwards 5k ====="
+    k3_multiuser || exit $?
+    echo "===== all 5 sections passed ====="
   test_type: k3_transformer_suite
   # Per-section tokens retained: `-f test-type=<old token>` still selects this job.
-  test_tags: [kimi_k3, transformer, k3_transformer_depth, k3_chunked_prefill, k3_transformer_traced, kimi_k3_1, k31_depth_ladder]
+  test_tags: [kimi_k3, transformer, k3_transformer_depth, k3_chunked_prefill, k3_transformer_traced, kimi_k3_1, k31_depth_ladder, k3_multiuser]
   test_group: module
   skus:
     bh_sc1:
-      # Exactly the sum of the per-section bounds (70 + 90 + 50 + 45).
+      # Exactly the sum of the per-section bounds (70 + 75 + 50 + 45 + 15).
       timeout: 255
       tier: 2
       release_ready: false

@@ -254,13 +254,29 @@ def test_packed_forward_refusals():
     # Without prefill_forward the runner runs chunks one by one, which is not traced.
     (reason,) = packed_forward_refusals(4, supports_packed_forward=False, use_trace=True, traced_forward=True)
     assert "USE_TRACE" in reason
+    # Indices between ranks: lifted only by a prefill_forward that carries every chunk's (GLM-5.3).
+    assert packed_forward_refusals(4, indexer_indices=True, forward_indexer_indices=True, **lifted) == []
+    (reason,) = packed_forward_refusals(4, supports_packed_forward=True, indexer_indices=True)
+    assert "indexer indices" in reason
+    (reason,) = packed_forward_refusals(
+        4, supports_packed_forward=False, indexer_indices=True, forward_indexer_indices=True
+    )
+    assert "indexer indices" in reason
 
 
 def test_packed_forward_capabilities_name_every_flag():
     adapter = SimpleNamespace(
-        supports_packed_forward=True, supports_packed_forward_trace=True, supports_packed_forward_d2h_acks=False
+        supports_packed_forward=True,
+        supports_packed_forward_trace=True,
+        supports_packed_forward_d2h_acks=False,
+        supports_packed_forward_indexer_indices=True,
     )
     caps = packed_forward_capabilities(adapter)
-    assert caps == {"supports_packed_forward": True, "traced_forward": True, "forward_d2h_acks": False}
-    (reason,) = packed_forward_refusals(4, use_trace=True, d2h_acks=True, **caps)
+    assert caps == {
+        "supports_packed_forward": True,
+        "traced_forward": True,
+        "forward_d2h_acks": False,
+        "forward_indexer_indices": True,
+    }
+    (reason,) = packed_forward_refusals(4, use_trace=True, d2h_acks=True, indexer_indices=True, **caps)
     assert "LAYER_ACK_D2H" in reason

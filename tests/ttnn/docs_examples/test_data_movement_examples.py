@@ -46,7 +46,7 @@ def test_permute(device):
 
     # Permute the tensor dimensions
     permuted_tensor = ttnn.permute(input_tensor, (0, 1, 3, 2))
-    logger.info(f"Permuted Tensor Shape: {permuted_tensor.shape}")  # Shape([1, 1, 32, 64])
+    logger.debug(f"Permuted Tensor Shape: {permuted_tensor.shape}")  # Shape([1, 1, 32, 64])
 
 
 def test_reshape(device):
@@ -56,7 +56,7 @@ def test_reshape(device):
 
     # Reshape the tensor
     reshaped_tensor = ttnn.reshape(input_tensor_tt, (1, 1, 2, 2))
-    logger.info(f"Reshaped Tensor Shape: {reshaped_tensor.shape}")  # Shape([1, 1, 2, 2])
+    logger.debug(f"Reshaped Tensor Shape: {reshaped_tensor.shape}")  # Shape([1, 1, 2, 2])
 
 
 def test_scatter(device):
@@ -139,8 +139,8 @@ def test_tilize_with_val_padding(device):
 
     # Tilize the tensor, padding its last dimension to 64 with zeros
     tilized_tensor = ttnn.tilize_with_val_padding(input_tensor, output_tensor_shape=[1, 1, 64, 64], pad_value=0.0)
-    logger.info(f"Tilized Tensor Shape: {tilized_tensor.shape}")  # Shape([1, 1, 64, 32])
-    logger.info(f"Tilized Tensor Padded Shape: {tilized_tensor.padded_shape}")  # Shape([1, 1, 64, 64])
+    logger.debug(f"Tilized Tensor Shape: {tilized_tensor.shape}")  # Shape([1, 1, 64, 32])
+    logger.debug(f"Tilized Tensor Padded Shape: {tilized_tensor.padded_shape}")  # Shape([1, 1, 64, 64])
 
 
 def test_fill_rm(device):
@@ -202,7 +202,7 @@ def test_untilize_with_unpadding(device):
 
     # Untilize the tensor and keep its first 32 columns; output_tensor_end holds inclusive end indices
     untilized_tensor = ttnn.untilize_with_unpadding(tilized_tensor, output_tensor_end=(0, 0, 63, 31))
-    logger.info(f"Untilized Tensor with Unpadding Shape: {untilized_tensor.shape}")  # Shape([1, 1, 64, 32])
+    logger.debug(f"Untilized Tensor with Unpadding Shape: {untilized_tensor.shape}")  # Shape([1, 1, 64, 32])
 
 
 def test_indexed_fill(device):
