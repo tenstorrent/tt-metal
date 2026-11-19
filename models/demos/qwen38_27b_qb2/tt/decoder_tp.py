@@ -26,12 +26,12 @@ def validate_qb2_mesh(mesh_device):
     mesh_shape = tuple(mesh_device.shape)
     if (
         arch != ttnn.Arch.BLACKHOLE
-        or cluster_type != ttnn.cluster.ClusterType.P300_X2
+        or cluster_type not in (ttnn.cluster.ClusterType.P300_X2, ttnn.cluster.ClusterType.P150_X4)
         or num_devices != 4
         or mesh_shape != (1, 4)
     ):
         raise ValueError(
-            "Qwen3.8-27B requires a Blackhole P300_X2 QB2 with four devices in a (1, 4) mesh; "
+            "Qwen3.8-27B requires a Blackhole P300_X2 QB2 (or four P150s with a 2x2 ring submesh) with four devices in a (1, 4) mesh; "
             f"got arch={arch}, cluster_type={cluster_type}, num_devices={num_devices}, mesh_shape={mesh_shape}"
         )
 

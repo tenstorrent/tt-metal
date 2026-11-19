@@ -26,7 +26,11 @@ if a.profile and a.full:
     p.error("Full-stack profiling is prohibited; use the reduced stack")
 torch.set_num_threads(8)
 configure_fabric()
-mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=200000000)
+# This machine is 8 P150 boards in a 2x4 mesh, so a 1x4 slice is a line, not a ring.
+# Run with TT_VISIBLE_DEVICES=0,1,4,5 so only a physical 2x2 (a 4-chip ring) is
+# visible, open it as 2x2, and reshape it to 1x4 in ring order.
+mesh = ttnn.open_mesh_device(ttnn.MeshShape(2, 2), trace_region_size=200000000)
+mesh.reshape(ttnn.MeshShape(1, 4))
 gen = None
 try:
     begin = time.perf_counter()
