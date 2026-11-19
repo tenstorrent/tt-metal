@@ -21,7 +21,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include <tt-umd/types/core_coordinates.hpp>
@@ -162,7 +163,7 @@ void RunTest(
                 .target_nodes = NodeCoord{logical_core},
             };
             ProgramSpec spec{.name = "watcher_ringbuf", .kernels = {kernel_spec}, .work_units = {wu}};
-            program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
+            program = tt_metal::Program(*mesh_device, spec);
             break;
         }
         case HalProgrammableCoreType::ACTIVE_ETH:
@@ -340,7 +341,7 @@ void RunMultiWriterTest(
 
     WorkUnitSpec wu{.name = "main", .kernels = names, .target_nodes = NodeCoord{logical_core}};
     ProgramSpec spec{.name = "watcher_ringbuf_multi", .kernels = specs, .work_units = {wu}};
-    workload.add_program(device_range, tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec));
+    workload.add_program(device_range, tt_metal::Program(*mesh_device, spec));
 
     const int dumps_before_run = MetalContext::instance().watcher_server()->dump_count();
     fixture->RunProgram(mesh_device, workload, true);

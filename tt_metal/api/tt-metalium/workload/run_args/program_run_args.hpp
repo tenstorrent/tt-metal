@@ -11,9 +11,9 @@
 #include <span>
 #include <string>
 #include <utility>
-#include <variant>
 
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
+#include <tt-metalium/workload/run_args/validation_mode.hpp>
 #include <tt-metalium/workload/utils/arg_value.hpp>
 #include <tt-metalium/workload/specification/kernel_spec.hpp>
 #include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
@@ -58,12 +58,12 @@ struct ProgramRunArgs {
         // Arguments are keyed by argument name and then by node:
         //   runtime_arg_values[name][node] = value.
         //
-        // When calling SetProgramRunArgs:
+        // When calling Program::set_program_run_args:
         //  Every argument in this kernel's RuntimeArgSchema::runtime_arg_names must be
         //  set, for every node the kernel runs on.
         //  Missing arguments or superfluous arguments will trigger validation errors.
         //
-        // When calling UpdateProgramRunArgs (arbitrary partial args update):
+        // When calling Program::update_program_run_args (arbitrary partial args update):
         //  Any subset of Program arguments may be supplied; any omitted ones retain their prior value.
         //  A supplied runtime argument may target any subset of the kernel's nodes.
         //
@@ -75,11 +75,11 @@ struct ProgramRunArgs {
 
         // Common runtime argument values (broadcast to every node).
         //
-        // When calling SetProgramRunArgs:
+        // When calling Program::set_program_run_args:
         //  Every argument in this kernel's RuntimeArgSchema::common_runtime_arg_names
         //  must be set.
         //
-        // When calling UpdateProgramRunArgs (arbitrary partial update):
+        // When calling Program::update_program_run_args (arbitrary partial update):
         //  Any subset of common runtime arguments may be supplied; omitted ones retain their prior value.
         //
         using CommonRuntimeArgValues = Table<std::string, ArgValue>;
@@ -90,11 +90,11 @@ struct ProgramRunArgs {
         //   runtime_array_arg_values[name][node] = {v0, v1, ...};
         // Each value must have exactly the length declared in the array's ArrayArgDecl.
         //
-        // When calling SetProgramRunArgs:
+        // When calling Program::set_program_run_args:
         //  Every array in this kernel's RuntimeArgSchema::runtime_array_args must be set,
         //  for every node the kernel runs on.
         //
-        // When calling UpdateProgramRunArgs (arbitrary partial args update):
+        // When calling Program::update_program_run_args (arbitrary partial args update):
         //  Any subset of arrays may be supplied, for any subset of the kernel's nodes.
         //  A supplied value replaces the whole array on that node (there is no per-element update).
         using RuntimeArrayArgValues = Table<std::string, Table<NodeCoord, ArrayArgValue>>;
@@ -103,10 +103,10 @@ struct ProgramRunArgs {
         // Common runtime array argument values (broadcast to every node).
         // Each value must have exactly the length declared in the array's ArrayArgDecl.
         //
-        // When calling SetProgramRunArgs:
+        // When calling Program::set_program_run_args:
         //  Every array in this kernel's RuntimeArgSchema::common_runtime_array_args must be set.
         //
-        // When calling UpdateProgramRunArgs (arbitrary partial update):
+        // When calling Program::update_program_run_args (arbitrary partial update):
         //  Any subset of common runtime arrays may be supplied; a supplied value replaces the whole array.
         using CommonRuntimeArrayArgValues = Table<std::string, ArrayArgValue>;
         CommonRuntimeArrayArgValues common_runtime_array_arg_values;
@@ -116,26 +116,25 @@ struct ProgramRunArgs {
         // positional vararg values.
         experimental::AdvancedKernelRunArgs advanced_options;
     };
-    // For SetProgramRunArgs, a KernelRunArgs must be specified for ALL kernels in the ProgramSpec
+    // For Program::set_program_run_args, a KernelRunArgs must be specified for ALL kernels in the ProgramSpec
     //  (except for kernels that have no runtime or common runtime arguments, scalar or array).
-    // For UpdateProgramRunArgs, any kernel may be omitted (its arguments retain their prior values).
+    // For Program::update_program_run_args, any kernel may be omitted (its arguments retain their prior values).
     Group<KernelRunArgs> kernel_run_args;
 
     ////////////////////////////////////////////////////////////////////////
     // Tensor arguments
     ////////////////////////////////////////////////////////////////////////
 
-    // The actual MeshTensor argument
-    // (Non-owning reference. Will also permit MeshTensorView when it becomes available.)
-    using TensorArgument = std::variant<std::reference_wrapper<const MeshTensor>>;
+    // The actual MeshTensor argument (see tensor_parameter.hpp)
+    using TensorArgument = tt::tt_metal::TensorArgument;
 
     // A TensorArgument must be specified:
-    //  For EVERY TensorParameter in the ProgramSpec, when calling SetProgramRunArgs.
-    //  For any SUBSET of TensorParameters, when calling UpdateProgramRunArgs. (For advanced users only.)
+    //  For EVERY TensorParameter in the ProgramSpec, when calling Program::set_program_run_args.
+    //  For any SUBSET of TensorParameters, when calling Program::update_program_run_args. (For advanced users only.)
     //
     // CAUTION: MeshTensor is an RAII object. The user is responsible for ensuring that the MeshTensor
     //          object remains alive until the last Program execution that uses it has completed on the
-    //          device. Use extreme caution if you use UpdateProgramRunArgs with an incomplete set of
+    //          device. Use extreme caution if you use Program::update_program_run_args with an incomplete set of
     //          TensorArguments. A stale binding to a destroyed MeshTensor will produce undefined behavior.
     //
     // The argument's TensorSpec MUST match the TensorParameter's TensorSpec (shape, layout, data type).
@@ -150,15 +149,15 @@ struct ProgramRunArgs {
     using GlobalSemaphoreArgument = std::reference_wrapper<const GlobalSemaphore>;
 
     // A GlobalSemaphoreArgument must be specified:
-    //  For EVERY GlobalSemaphoreParameter in the ProgramSpec, when calling SetProgramRunArgs.
-    //  For any SUBSET of GlobalSemaphoreParameters, when calling UpdateProgramRunArgs.
+    //  For EVERY GlobalSemaphoreParameter in the ProgramSpec, when calling Program::set_program_run_args.
+    //  For any SUBSET of GlobalSemaphoreParameters, when calling Program::update_program_run_args.
     //
     // The supplied GlobalSemaphore MUST live on the MeshDevice the Program was built for.
     //
     // CAUTION: GlobalSemaphore is an RAII object; copies share the same L1 allocation. The user is
     //          responsible for keeping it (or a copy of it) alive until the last Program execution that
     //          uses it has completed on the device. A stale binding to a destroyed GlobalSemaphore
-    //          (e.g. one retained by an UpdateProgramRunArgs call that omits it) will produce undefined
+    //          (e.g. one retained by a Program::update_program_run_args call that omits it) will produce undefined
     //          behavior.
     Table<GlobalSemaphoreParamName, GlobalSemaphoreArgument> global_semaphore_args;
 
@@ -178,7 +177,7 @@ struct ProgramRunArgs {
         // NOTE: Certain DFBs take their backing SRAM address from the user-managed object
         // in the following cases:
         //  - Borrowed from a TensorParameter: if you update the DFB's size from an
-        //    UpdateProgramRunArgs call (i.e. partial args update; advanced users only),
+        //    Program::update_program_run_args call (i.e. partial args update; advanced users only),
         //    you must ALSO supply its backing tensor_arg.
         //  - Custom allocation from an SRAMArenaParameter: the DFB may be resized without re-supplying
         //    its SRAMArena. The allocation offset plus the resized DFB's storage must still fit
@@ -204,7 +203,6 @@ struct ProgramRunArgs {
 
 using KernelRunArgs = ProgramRunArgs::KernelRunArgs;
 using DFBRunOverrides = ProgramRunArgs::DFBRunOverrides;
-using TensorArgument = ProgramRunArgs::TensorArgument;
 using GlobalSemaphoreArgument = ProgramRunArgs::GlobalSemaphoreArgument;
 
 //-----------------------------------------------------
@@ -220,8 +218,15 @@ inline const MeshTensor& mesh_tensor_of(const TensorArgument& arg) {
 // Helper function to merge two or more ProgramRunArgs objects into one.
 // Validates that the provided ProgramRunArgs objects specify mutually disjoint arguments.
 ProgramRunArgs MergeProgramRunArgs(
-    ProgramRunArgs base, std::span<const ProgramRunArgs> rest, bool skip_validation = false);
+    ProgramRunArgs base, std::span<const ProgramRunArgs> rest, ValidationMode validation = ValidationMode::FULL);
 // Invocation: auto full = MergeProgramRunArgs(std::move(base_run_args), {appended_run_args});
+
+// Helper function to merge two or more ProgramRunArgs objects into one.
+// Same as the ValidationMode overload, with skip_validation == true meaning ValidationMode::SKIP.
+[[deprecated(
+    "Use the MergeProgramRunArgs overload that takes a ValidationMode instead. This overload will be removed after "
+    "2026-12-17.")]]
+ProgramRunArgs MergeProgramRunArgs(ProgramRunArgs base, std::span<const ProgramRunArgs> rest, bool skip_validation);
 
 //-----------------------------------------------------
 // Helper function for per-node runtime argument values

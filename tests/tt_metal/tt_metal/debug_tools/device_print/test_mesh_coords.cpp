@@ -103,8 +103,7 @@ distributed::MeshWorkload BuildMeshCoordWorkload(const std::shared_ptr<distribut
             .work_units = {WorkUnitSpec{.name = "main", .kernels = {kKernel}, .target_nodes = kNode}},
         };
 
-        workload.add_program(
-            distributed::MeshCoordinateRange(coord, coord), experimental::MakeProgramFromSpec(*mesh_device, spec));
+        workload.add_program(distributed::MeshCoordinateRange(coord, coord), Program(*mesh_device, spec));
     }
     return workload;
 }

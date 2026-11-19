@@ -50,7 +50,7 @@ std::optional<FabricDeviceBuild> build_fabric_routers(
     build.program = std::make_unique<tt::tt_metal::Program>(
         std::make_shared<tt::tt_metal::detail::ProgramImpl>(tt::tt_metal::extract_context_id(device)));
 
-    // The launch's session picks the builder: the registered plugin's, or the default FabricBuilder.
+    // The launch's session picks the builder: the graph's, or the default FabricBuilder.
     build.builder = session.make_device_builder(
         device, *build.program, fabric_context, tt::tt_metal::get_core_type_from_config(dispatch_core_config));
     TT_FATAL(build.builder != nullptr, "Fabric build session returned a null FabricBuilder");

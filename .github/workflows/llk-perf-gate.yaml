@@ -332,7 +332,9 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         timeout-minutes: 20
         with:
-          sparse-checkout: tt_metal/tt-llk/perf
+          sparse-checkout: |
+            tt_metal/tt-llk/perf
+            tt_metal/tt-llk/tests/python_tests/helpers/perf
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
           python-version: '3.10'

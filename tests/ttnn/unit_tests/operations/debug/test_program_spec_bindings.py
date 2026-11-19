@@ -20,10 +20,12 @@ E = ttnn.experimental
 
 TENSOR_SPEC = ttnn.TensorSpec(ttnn.Shape([1, 1, 32, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT)
 
-# Every class and the fields Python binds. A field Metal adds to one of these types fails the ttnn build
+# Every class and the fields Python binds. A field added to one of these types fails the ttnn build
 # (program_spec.cpp counts each type's fields) until it is bound here or noted as C++ only, except for
 # DFBAdvancedOptions, which Python binds only in part.
 FIELDS = {
+    E.MeshProgramSpec: {"programs"},
+    E.MeshProgramRunArgs: {"programs"},
     E.TensorSpecRelaxations: {
         "match_padded_shape_only",
         "dynamic_tensor_shape",
@@ -558,7 +560,7 @@ def test_reader_and_writer_configs():
     assert writer.config_2xx.disable_dfb_implicit_sync_for_all
 
 
-def test_program_spec_from_the_design_example():
+def test_program_spec_of_an_exp_program():
     kernels = ["reader", "writer", "compute"]
     spec = E.ProgramSpec(
         name="exp",

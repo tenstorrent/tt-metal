@@ -78,6 +78,7 @@ set(TTNNCPP_SRCS
     cpp/ttnn/operations/generic/generic_op.cpp
     cpp/ttnn/operations/generic/device/generic_op_program_factory.cpp
     cpp/ttnn/operations/generic/device/generic_op_device_operation.cpp
+    cpp/ttnn/operations/generic/device/generic_program_spec_device_operation.cpp
     cpp/ttnn/operations/experimental/fusion/device/fusion_dispatch_op_device_operation.cpp
     cpp/ttnn/operations/data_movement/reshape_view/reshape_common.cpp
     cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_device_operation.cpp
@@ -195,6 +196,7 @@ set(TTNNCPP_API_HEADERS
     api/ttnn/async_runtime.hpp
     api/ttnn/cluster.hpp
     api/ttnn/command_list.hpp
+    api/ttnn/command_list_params.hpp
     api/ttnn/common/constants.hpp
     api/ttnn/common/guard.hpp
     api/ttnn/common/queue_id.hpp

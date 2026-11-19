@@ -7,7 +7,8 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <gtest/gtest.h>
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
@@ -150,7 +151,7 @@ void RunOneTest(
         .kernels = kernel_specs,
         .work_units = {wu},
     };
-    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     // Idle-ETH cores: invoke the original (legacy) kernel via the legacy host API.
     if (!is_quasar) {

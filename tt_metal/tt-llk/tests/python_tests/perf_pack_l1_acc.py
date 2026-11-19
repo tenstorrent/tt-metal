@@ -4,16 +4,16 @@
 import pytest
 from helpers.param_config import parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES
-from test_pack_dest_bank import PACK_DEST_BANK_SWEEP, _run_pack_dest_bank_test
+from test_pack_l1_acc import PACK_L1_ACC_SWEEP, _run_pack_l1_acc_test
 
 
 @pytest.mark.perf
 @parametrize(
-    **PACK_DEST_BANK_SWEEP,
+    **PACK_L1_ACC_SWEEP,
     run_types=[ALL_PERF_RUN_TYPES],
     loop_factor=[32],
 )
-def test_perf_pack_dest_bank(
+def test_perf_pack_l1_acc(
     perf_report,
     formats,
     dest_acc,
@@ -25,7 +25,7 @@ def test_perf_pack_dest_bank(
     run_types,
     loop_factor,
 ):
-    _run_pack_dest_bank_test(
+    _run_pack_l1_acc_test(
         formats,
         dest_acc,
         l1_acc,

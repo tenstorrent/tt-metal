@@ -12,6 +12,8 @@ set(UNIT_TESTS_TTNN_SMOKE_SOURCES
     conv/test_conv2d.cpp
     test_multi_cq_multi_dev.cpp
     test_multiprod_queue.cpp
+    test_command_queue_id_stack.cpp
+    test_command_queue_selection.cpp
 )
 
 set(UNIT_TESTS_TTNN_BASIC_SOURCES
@@ -28,6 +30,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_gelu_bw_main_ulp.cpp
     test_generic_op.cpp
     test_generic_op_hashing.cpp
+    test_generic_op_program_spec.cpp
     test_per_device_program_merge.cpp
     test_spec_per_device_run_args.cpp
     test_graph_add.cpp
