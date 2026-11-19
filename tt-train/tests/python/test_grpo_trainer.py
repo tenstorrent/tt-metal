@@ -36,6 +36,7 @@ import contextlib
 import json
 import os
 import queue
+import signal
 import threading
 import time
 from types import SimpleNamespace
@@ -1611,6 +1612,104 @@ def test_trace_capture_lock_is_released_when_begin_raises(monkeypatch, expect_er
     with expect_error(RuntimeError, "begin failed"):
         threaded_weight_bridge._begin_trace_capture_locked("mesh", cq_id=0)
     assert not threaded_weight_bridge._capture_lock.locked()
+
+
+def _wait_for_waiters(lock, count):
+    deadline = time.monotonic() + 10
+    while len(lock._waiters) < count:
+        assert time.monotonic() < deadline, f"{count} threads did not wait for the lock in 10 s"
+        time.sleep(0.01)
+
+
+class _Interrupted(BaseException):
+    pass
+
+
+@contextlib.contextmanager
+def _interrupt_main_thread_when(ready, action=lambda: None):
+    """Sends SIGUSR1 to the main thread once ready() is true; its handler calls action() and raises _Interrupted.
+
+    _thread.interrupt_main() does not wake a thread that is blocked in Lock.acquire(); a real signal does.
+    """
+
+    def handler(signum, frame):
+        action()
+        raise _Interrupted("interrupted")
+
+    def send():
+        deadline = time.monotonic() + 10
+        while not ready() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        if ready():
+            signal.pthread_kill(threading.main_thread().ident, signal.SIGUSR1)
+
+    sender = threading.Thread(target=send, daemon=True)
+    previous = signal.signal(signal.SIGUSR1, handler)
+    try:
+        sender.start()
+        yield
+    finally:
+        sender.join(10)
+        signal.signal(signal.SIGUSR1, previous)
+
+
+def test_fifo_lock_gives_the_lock_in_request_order():
+    lock = threaded_weight_bridge._FifoLock()
+    order = []
+
+    def take(name):
+        with lock:
+            order.append(name)
+
+    lock.acquire()
+    threads = []
+    for count, name in enumerate(("B", "C"), start=1):
+        threads.append(threading.Thread(target=take, args=(name,), daemon=True))
+        threads[-1].start()
+        _wait_for_waiters(lock, count)
+    lock.release()
+    take("A")
+    for thread in threads:
+        thread.join(10)
+        assert not thread.is_alive()
+    assert order == ["B", "C", "A"]
+    assert not lock.locked()
+
+
+def test_fifo_lock_interrupted_wait_leaves_the_queue(expect_error):
+    lock = threaded_weight_bridge._FifoLock()
+    lock.acquire()
+    with _interrupt_main_thread_when(lambda: len(lock._waiters) == 1), expect_error(_Interrupted, "interrupted"):
+        lock.acquire()
+    assert len(lock._waiters) == 0 and lock.locked()
+    lock.release()
+    assert not lock.locked()
+
+
+def test_fifo_lock_interrupted_wait_passes_on_the_lock_it_was_given(expect_error):
+    lock = threaded_weight_bridge._FifoLock()
+    taken = []
+
+    def take_after_the_main_thread():
+        _wait_for_waiters(lock, 1)
+        with lock:
+            taken.append(True)
+
+    lock.acquire()
+    other = threading.Thread(target=take_after_the_main_thread, daemon=True)
+    other.start()
+    # The handler's release() gives the lock to the main thread's waiter just before the interrupt.
+    with _interrupt_main_thread_when(lambda: len(lock._waiters) == 2, action=lock.release):
+        with expect_error(_Interrupted, "interrupted"):
+            lock.acquire()
+    other.join(10)
+    assert taken == [True]
+    assert not lock.locked() and len(lock._waiters) == 0
+
+
+def test_fifo_lock_release_when_unlocked_raises(expect_error):
+    with expect_error(RuntimeError, "release unlocked lock"):
+        threaded_weight_bridge._FifoLock().release()
 
 
 def test_threaded_weight_bridge_receiver_locks_trace_capture_until_close(monkeypatch):

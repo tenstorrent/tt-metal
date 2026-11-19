@@ -5,10 +5,11 @@
 
 from __future__ import annotations
 
+import collections
 import json
 import threading
 from contextlib import contextmanager
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Deque, Dict, Iterator, List, Optional, Tuple
 
 import ttnn
 
@@ -19,10 +20,60 @@ from .weight_bridge import _manifest_entries, _torch_load_bytes, _torch_save_byt
 # Tags are matched only within this bridge's own communicator, so they cannot collide with other MPI traffic.
 _TAG_MANIFEST_LEN, _TAG_MANIFEST_BODY, _TAG_WEIGHT_LEN, _TAG_WEIGHT_BODY = 0, 1, 2, 3
 
+
+class _FifoLock:
+    """A lock that threads get in the order that they ask for it."""
+
+    def __init__(self) -> None:
+        self._mutex = threading.Lock()
+        self._waiters: Deque[threading.Lock] = collections.deque()
+        self._owner: Optional[threading.Lock] = None
+
+    def acquire(self) -> bool:
+        waiter = threading.Lock()
+        waiter.acquire()
+        try:
+            with self._mutex:
+                if self._owner is None:
+                    self._owner = waiter
+                    return True
+                self._waiters.append(waiter)
+            waiter.acquire()
+            return True
+        except BaseException:
+            with self._mutex:
+                if waiter in self._waiters:
+                    self._waiters.remove(waiter)
+            if self._owner is waiter:
+                self.release()
+            raise
+
+    def release(self) -> None:
+        with self._mutex:
+            if self._owner is None:
+                raise RuntimeError("release unlocked lock")
+            if self._waiters:
+                # No call between choosing the next owner and waking it, so KeyboardInterrupt cannot fall in between.
+                self._owner = self._waiters[0]
+                del self._waiters[0]
+                self._owner.release()
+            else:
+                self._owner = None
+
+    def locked(self) -> bool:
+        return self._owner is not None
+
+    def __enter__(self) -> bool:
+        return self.acquire()
+
+    def __exit__(self, *exc: Any) -> None:
+        self.release()
+
+
 # Race: while thread 0 captures a trace on CQ0, any command that thread 1 sends on CQ1 goes into the trace
 # instead of to the device (https://github.com/tenstorrent/tt-metal/issues/65971). The capture holds this lock;
 # the receiver thread takes it around each device call.
-_capture_lock = threading.Lock()
+_capture_lock = _FifoLock()
 _begin_trace_capture, _end_trace_capture = ttnn.begin_trace_capture, ttnn.end_trace_capture
 
 
