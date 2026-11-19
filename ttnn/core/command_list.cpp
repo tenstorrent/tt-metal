@@ -610,7 +610,12 @@ bool CommandListBuilder::has_binds() const { return !binds_.empty(); }
 
 CommandList::CommandList(
     metal::CommandList metal_list, detail::CmdListLayout layout, detail::CmdListOpOwnedTensors op_owned_tensors) :
-    op_owned_tensors_(std::move(op_owned_tensors)), metal_list_(std::move(metal_list)), layout_(std::move(layout)) {}
+    metal_list_(std::move(metal_list)), layout_(std::move(layout)), op_owned_tensors_(std::move(op_owned_tensors)) {}
+
+CommandList::~CommandList() {
+    // Destroying the Metal list drains its replays; do it while op_owned_tensors_ still holds what they read.
+    [[maybe_unused]] const auto drained = std::move(metal_list_);
+}
 
 void CommandList::enqueue(bool blocking, bool check_dram_overlap) {
     ZoneScoped;
