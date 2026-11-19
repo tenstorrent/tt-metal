@@ -536,16 +536,20 @@ def import_tracy_op_logs(
             df = pd.read_csv(tracyOpTimesLog)
         except pd.errors.ParserError:
             # tracy-csvexport does not quote zone names: a host zone named with a comma (e.g. the MoE block's
-            # "moe_tail: override (hit, engine)") splits its name. The name is the first column; fold the extra
-            # leading fields back into it.
-            with open(tracyOpTimesLog, newline="") as f:
-                rows = list(csv.reader(f))
-            header, width = rows[0], len(rows[0])
-            fixed = [
-                r if len(r) <= width else [",".join(r[: len(r) - width + 1])] + r[len(r) - width + 1 :]
-                for r in rows[1:]
-            ]
-            df = pd.DataFrame(fixed, columns=header).apply(pd.to_numeric, errors="ignore")
+            # "moe_tail: override (hit, engine)") splits its name. The name is the first column: stream the file
+            # (tens of GB on a large mesh) into a copy with the extra leading fields folded back into it and quoted.
+            fixedLog = tracyOpTimesLog + ".fixed.csv"
+            with open(tracyOpTimesLog, newline="") as src, open(fixedLog, "w", newline="") as dst:
+                reader, writer = csv.reader(src), csv.writer(dst)
+                header = next(reader)
+                width = len(header)
+                writer.writerow(header)
+                for r in reader:
+                    writer.writerow(
+                        r if len(r) <= width else [",".join(r[: len(r) - width + 1])] + r[len(r) - width + 1 :]
+                    )
+            df = pd.read_csv(fixedLog)
+            os.remove(fixedLog)
 
     # Filter and update host_time for TT_DNN/TT_METAL ops
     # Ensure name is string type before using .str accessor
