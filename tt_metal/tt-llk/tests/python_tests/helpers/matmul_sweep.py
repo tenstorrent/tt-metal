@@ -46,9 +46,7 @@ class FaceLayoutConfig:
     num_faces_in0: int
     num_faces_in1: int
     num_faces: int
-    # partial_face_in0/in1/math become PARTIAL_FACE_A/B/MATH, which no C++ source reads (the matmul
-    # LLK derives partial faces from the tile shapes). Perf-schema-only: kept for the perf_math_matmul
-    # partial_a/partial_b/partial_face_math columns.
+    # partial_face_in0/in1/math only feed the perf_math_matmul columns; no C++ source reads them.
     partial_face_in0: bool
     partial_face_in1: bool
     partial_face_math: bool
@@ -430,12 +428,7 @@ def generate_face_layout_config_sweep(math_matmul: bool) -> List[FaceLayoutConfi
 
 
 def _is_invalid_fp16b_to_fp16(fmt: FormatConfig, dest_acc: DestAccumulation) -> bool:
-    """Float16_b in -> Float16 out without dest_acc: skip it.
-
-    Float16_b has an 8-bit exponent and Float16 a 5-bit one, so the math needs Float32 in dest
-    (dest_acc on). test_config.py turns dest_acc on when compiling this combo, which then hits
-    LLK_ASSERTs in the math_matmul and unpack_matmul tests.
-    """
+    """Float16_b in -> Float16 out without dest_acc: skip it."""
     return (
         dest_acc == DestAccumulation.No
         and fmt.input_format == DataFormat.Float16_b
@@ -619,10 +612,8 @@ def sweep_tiny_tiles_matmul(
     return combinations
 
 
-# (in0 tile, in1 tile) shape pairs, as (rows, cols), that the two sweeps above do not cover:
-# - in1 32x16, used by TTNN tiny-tile matmuls for a 16-wide output (in0 1/2/4/8/16/32 x 32);
-# - K = 16: in0 32x16 or 16x16 by in1 16x32.
-# Pairs that _llk_math_matmul_init_ rejects (see matmul_supports_tensor_shapes) are not listed.
+# (in0, in1) tile shapes as (rows, cols) the sweeps above miss: in1 32x16 (TTNN tiny-tile) and K = 16 (in1 16x32).
+# Pairs that _llk_math_matmul_init_ rejects are not listed.
 MATMUL_TILE_SHAPE_PAIRS = [((r, 32), (32, 16)) for r in (1, 2, 4, 8, 16, 32)] + [
     ((32, 16), (16, 32)),
     ((16, 16), (16, 32)),
