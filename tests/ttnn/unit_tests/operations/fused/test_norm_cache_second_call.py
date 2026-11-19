@@ -9,8 +9,8 @@ address (#49159, #43204) makes the second call read or write the buffer of the f
 entries does not see this, so each test runs the op twice and checks the second output:
 
 1. run the op on tensors A: a cache miss that compiles and caches the program;
-2. allocate a spacer tensor and build new tensors B from new data: the first tensors are still alive,
-   so B lands at other addresses;
+2. allocate a spacer tensor and build new tensors B from new data: the first inputs and the first output
+   are still alive, so B and the second output land at other addresses;
 3. run the op on B: the program cache must not grow;
 4. compare the output with torch, and bit for bit with a cold-cache rerun of the same data.
 
@@ -75,7 +75,7 @@ def test_norm_second_call_new_weight_bias_residual(device, isolate_program_cache
             )
         else:
             tt_output = ttnn.rms_norm(tt_input, epsilon=EPS, weight=tt_weight, residual_input_tensor=tt_residual)
-        return ttnn.to_torch(tt_output).float()
+        return tt_output
 
     check_second_call_through_cache(device, build, run)
 
@@ -139,6 +139,6 @@ def test_group_norm_height_sharded_second_call(device, isolate_program_cache):
             core_grid=grid_size,
             use_welford=True,
         )
-        return ttnn.to_torch(ttnn.from_device(ttnn.to_memory_config(tt_output, ttnn.DRAM_MEMORY_CONFIG))).float()
+        return tt_output
 
     check_second_call_through_cache(device, build, run)

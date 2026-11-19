@@ -199,6 +199,10 @@ def create_ttnn_tilized_tensor(torch_tensor, device, dtype, pad_value=float("nan
     return ttnn.from_torch(torch_tensor, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, pad_value=pad_value)
 
 
+def _to_float32_torch(tensor):
+    return ttnn.to_torch(ttnn.to_memory_config(tensor, ttnn.DRAM_MEMORY_CONFIG)).float()
+
+
 def check_second_call_through_cache(device, build, run):
     """Run an op on tensors A, then on new tensors B at other addresses, and check the second output.
 
@@ -209,25 +213,28 @@ def check_second_call_through_cache(device, build, run):
     build(seed, second_call) allocates fresh device tensors from seeded data. It returns the inputs for
     run() and the torch reference for them. second_call is False for the first run and True for the
     others, so a test can change how the operands alias between the two calls.
-    run(inputs) runs the op and returns its output as a float32 torch tensor.
+    run(inputs) runs the op and returns its output as a device tensor; the helper reads it back.
     """
-    # first_inputs and the spacer stay referenced until return, so the new tensors cannot reuse their addresses.
+    # The first inputs, the first output and the spacer stay referenced until return, so the second call's
+    # tensors, its output included, cannot reuse their addresses.
     first_inputs, _ = build(0, second_call=False)
-    run(first_inputs)
+    first_output = run(first_inputs)
 
     spacer = ttnn.from_torch(torch.zeros(1, 1, 32, 32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
     second_inputs, golden = build(1, second_call=True)
 
     entries_before = device.num_program_cache_entries()
     assert entries_before > 0, "first call did not populate the program cache"
-    output = run(second_inputs)
+    second_output = run(second_inputs)
     assert device.num_program_cache_entries() == entries_before, "second call missed the program cache"
 
+    # Read back only after the cache-entry check: a sharded output is converted with an op, which adds a cache entry.
+    output = _to_float32_torch(second_output)
     # Loose on purpose: a stale address gives garbage, and the exact check is the cold-cache comparison.
     assert_with_pcc(golden, output, 0.99)
 
     device.disable_and_clear_program_cache()
     device.enable_program_cache()
     cold_inputs, _ = build(1, second_call=True)
-    cold_output = run(cold_inputs)
+    cold_output = _to_float32_torch(run(cold_inputs))
     assert torch.equal(output, cold_output), "cached second call differs from the same call on a cold cache"

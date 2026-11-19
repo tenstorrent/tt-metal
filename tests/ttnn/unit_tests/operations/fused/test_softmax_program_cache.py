@@ -169,7 +169,7 @@ def test_softmax_in_place_cache_hit_on_new_buffers(device, isolate_program_cache
             tt_output = ttnn.scale_mask_softmax_in_place(tt_input, scale, tt_mask)
         else:
             tt_output = ttnn.softmax_in_place(tt_input)
-        return ttnn.to_torch(tt_output).float()
+        return tt_output
 
     check_second_call_through_cache(device, build, run)
 
