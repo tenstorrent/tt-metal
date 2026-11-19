@@ -10,6 +10,7 @@
 #include "ckernel.h"
 #include "llk_assert.h"
 #include "lltt.h"
+#include "utils/validate.h"
 
 namespace hal::replay
 {
@@ -52,16 +53,6 @@ constexpr lltt::ExecBool exec_while_recording(const RecordBehavior behavior)
 constexpr std::uint32_t get_operation(const BufferRange range)
 {
     return TT_OP_REPLAY(range.start, range.count, false, false);
-}
-
-inline __attribute__((always_inline)) void assert_valid(const BufferRange range)
-{
-    LLK_ASSERT(is_valid(range), "Replay range requires count >= 1 and start + count <= 32");
-}
-
-// Not constexpr: reaching it during constant evaluation makes an invalid range a compile error.
-inline void invalid_range_in_constant_expression()
-{
 }
 
 template <BufferRange Range, RecordBehavior Behavior>
@@ -195,18 +186,7 @@ constexpr std::uint32_t get_operation()
  */
 constexpr __attribute__((always_inline)) std::uint32_t get_operation(const BufferRange range)
 {
-    if (__builtin_is_constant_evaluated())
-    {
-        if (!detail::is_valid(range))
-        {
-            detail::invalid_range_in_constant_expression();
-        }
-    }
-    else
-    {
-        detail::assert_valid(range);
-    }
-
+    hal::detail::require(detail::is_valid(range), "Replay range requires count >= 1 and start + count <= 32");
     return detail::get_operation(range);
 }
 
