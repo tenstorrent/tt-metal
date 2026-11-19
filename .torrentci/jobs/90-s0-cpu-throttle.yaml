@@ -1,0 +1,310 @@
+---
+# torrentci#3196 S0 measurement (evaluation only, scratch branch): what a
+# 16-CPU limit costs a correctly sized cold ASan compile. Copied from
+# asan-build: same image and memory, ccache off, no package/publish. The CPM
+# cache restores but never saves (the last step empties the save path).
+jobs:
+  - id: s0-cpu-a
+    description: "torrentci#3196 S0 arm a: request 16, no limit, -j16"
+    timeout: 4h
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: ci-build}
+        resources:
+          requests: {cpu: '16', memory: 24Gi, ephemeral-storage: 100Gi}
+          limits: {memory: 32Gi, ephemeral-storage: 150Gi}
+    env:
+      - {name: S0_ARM, value: 'a'}
+      - {name: CMAKE_BUILD_PARALLEL_LEVEL, value: '16'}
+      - {name: CCACHE_DISABLE, value: '1'}
+      - {name: TRACY_NO_INVARIANT_CHECK, value: '1'}
+      - {name: TRACY_NO_ISA_EXTENSIONS, value: '1'}
+      - {name: CPM_SOURCE_CACHE, value: /workspace/.cpmcache}
+    cache:
+      key: 'cpm-v1-${ref_name}-${commit_sha}'
+      restore-keys: ['cpm-v1-${ref_name}-', cpm-v1-]
+      save-paths: [.cpmcache]
+    steps:
+      - id: submodules
+        kind: shell
+        shell:
+          run:
+            - git submodule sync --recursive
+            - git submodule update --init --recursive --depth 1 --jobs 4
+      - id: cpm-cache
+        kind: shell
+        shell:
+          run:
+            - >-
+              cat cmake/CPM.cmake third_party/CMakeLists.txt tt_metal/third_party/CMakeLists.txt
+              tt_metal/third_party/umd/third_party/CMakeLists.txt tt-train/cmake/dependencies.cmake
+              .gitmodules | sha256sum | cut -d' ' -f1 > /tmp/cpm-deps.sha256
+            - >-
+              if [ ! -f .cpmcache/.deps.sha256 ]; then echo "CPM cache: miss";
+              elif cmp -s .cpmcache/.deps.sha256 /tmp/cpm-deps.sha256; then
+              echo "CPM cache: hit, $(du -sh .cpmcache | cut -f1)";
+              else echo "CPM cache: dependencies changed, dropping it"; rm -rf .cpmcache; fi
+            - mkdir -p .cpmcache && cp /tmp/cpm-deps.sha256 .cpmcache/.deps.sha256
+      - id: probe
+        kind: shell
+        shell:
+          run:
+            - echo "S0 arm=$S0_ARM probe cpu.max=$(cat /sys/fs/cgroup/cpu.max | tr ' ' '/')"
+            - echo "S0 arm=$S0_ARM probe ninja=$(ninja --version) nproc=$(nproc) node_cpus=$(grep -c ^processor /proc/cpuinfo) j=${CMAKE_BUILD_PARALLEL_LEVEL-unset}"
+            - echo "S0 arm=$S0_ARM probe model=$(grep -m1 '^model name' /proc/cpuinfo | cut -d: -f2 | tr -s ' ' | tr ' ' '_')"
+            - ninja -h 2>&1 | grep -i 'jobs in parallel' || true
+            - cmake --version | head -1
+            - cat /sys/fs/cgroup/memory.max || true
+      - id: configure
+        kind: shell
+        shell:
+          run:
+            - >-
+              scripts/torrentci-s0-phase.sh configure
+              ./build_metal.sh --build-dir build --build-type ASan
+              --toolchain-path cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
+              --build-all --configure-only
+              --use-system-sfpi --disable-profiler
+      - id: compile
+        kind: shell
+        shell:
+          run:
+            - scripts/torrentci-s0-phase.sh library cmake --build build --target ttnn
+            - scripts/torrentci-s0-phase.sh rest cmake --build build --target install
+            - echo "S0 arm=$S0_ARM memory.peak=$(cat /sys/fs/cgroup/memory.peak 2>/dev/null) oom=$(grep oom_kill /sys/fs/cgroup/memory.events 2>/dev/null | tr ' ' '=')"
+      - id: drop-cpm-cache
+        kind: shell
+        shell:
+          run:
+            # Restore only: an empty save path publishes nothing (skipped_empty).
+            - rm -rf .cpmcache
+  - id: s0-cpu-b
+    description: "torrentci#3196 S0 arm b: request 16, limit 16, -j16"
+    timeout: 4h
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: ci-build}
+        resources:
+          requests: {cpu: '16', memory: 24Gi, ephemeral-storage: 100Gi}
+          limits: {cpu: '16', memory: 32Gi, ephemeral-storage: 150Gi}
+    env:
+      - {name: S0_ARM, value: 'b'}
+      - {name: CMAKE_BUILD_PARALLEL_LEVEL, value: '16'}
+      - {name: CCACHE_DISABLE, value: '1'}
+      - {name: TRACY_NO_INVARIANT_CHECK, value: '1'}
+      - {name: TRACY_NO_ISA_EXTENSIONS, value: '1'}
+      - {name: CPM_SOURCE_CACHE, value: /workspace/.cpmcache}
+    cache:
+      key: 'cpm-v1-${ref_name}-${commit_sha}'
+      restore-keys: ['cpm-v1-${ref_name}-', cpm-v1-]
+      save-paths: [.cpmcache]
+    steps:
+      - id: submodules
+        kind: shell
+        shell:
+          run:
+            - git submodule sync --recursive
+            - git submodule update --init --recursive --depth 1 --jobs 4
+      - id: cpm-cache
+        kind: shell
+        shell:
+          run:
+            - >-
+              cat cmake/CPM.cmake third_party/CMakeLists.txt tt_metal/third_party/CMakeLists.txt
+              tt_metal/third_party/umd/third_party/CMakeLists.txt tt-train/cmake/dependencies.cmake
+              .gitmodules | sha256sum | cut -d' ' -f1 > /tmp/cpm-deps.sha256
+            - >-
+              if [ ! -f .cpmcache/.deps.sha256 ]; then echo "CPM cache: miss";
+              elif cmp -s .cpmcache/.deps.sha256 /tmp/cpm-deps.sha256; then
+              echo "CPM cache: hit, $(du -sh .cpmcache | cut -f1)";
+              else echo "CPM cache: dependencies changed, dropping it"; rm -rf .cpmcache; fi
+            - mkdir -p .cpmcache && cp /tmp/cpm-deps.sha256 .cpmcache/.deps.sha256
+      - id: probe
+        kind: shell
+        shell:
+          run:
+            - echo "S0 arm=$S0_ARM probe cpu.max=$(cat /sys/fs/cgroup/cpu.max | tr ' ' '/')"
+            - echo "S0 arm=$S0_ARM probe ninja=$(ninja --version) nproc=$(nproc) node_cpus=$(grep -c ^processor /proc/cpuinfo) j=${CMAKE_BUILD_PARALLEL_LEVEL-unset}"
+            - echo "S0 arm=$S0_ARM probe model=$(grep -m1 '^model name' /proc/cpuinfo | cut -d: -f2 | tr -s ' ' | tr ' ' '_')"
+            - ninja -h 2>&1 | grep -i 'jobs in parallel' || true
+            - cmake --version | head -1
+            - cat /sys/fs/cgroup/memory.max || true
+      - id: configure
+        kind: shell
+        shell:
+          run:
+            - >-
+              scripts/torrentci-s0-phase.sh configure
+              ./build_metal.sh --build-dir build --build-type ASan
+              --toolchain-path cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
+              --build-all --configure-only
+              --use-system-sfpi --disable-profiler
+      - id: compile
+        kind: shell
+        shell:
+          run:
+            - scripts/torrentci-s0-phase.sh library cmake --build build --target ttnn
+            - scripts/torrentci-s0-phase.sh rest cmake --build build --target install
+            - echo "S0 arm=$S0_ARM memory.peak=$(cat /sys/fs/cgroup/memory.peak 2>/dev/null) oom=$(grep oom_kill /sys/fs/cgroup/memory.events 2>/dev/null | tr ' ' '=')"
+      - id: drop-cpm-cache
+        kind: shell
+        shell:
+          run:
+            # Restore only: an empty save path publishes nothing (skipped_empty).
+            - rm -rf .cpmcache
+  - id: s0-cpu-d
+    description: "torrentci#3196 S0 arm d: request 16, limit 20, -j16"
+    timeout: 4h
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: ci-build}
+        resources:
+          requests: {cpu: '16', memory: 24Gi, ephemeral-storage: 100Gi}
+          limits: {cpu: '20', memory: 32Gi, ephemeral-storage: 150Gi}
+    env:
+      - {name: S0_ARM, value: 'd'}
+      - {name: CMAKE_BUILD_PARALLEL_LEVEL, value: '16'}
+      - {name: CCACHE_DISABLE, value: '1'}
+      - {name: TRACY_NO_INVARIANT_CHECK, value: '1'}
+      - {name: TRACY_NO_ISA_EXTENSIONS, value: '1'}
+      - {name: CPM_SOURCE_CACHE, value: /workspace/.cpmcache}
+    cache:
+      key: 'cpm-v1-${ref_name}-${commit_sha}'
+      restore-keys: ['cpm-v1-${ref_name}-', cpm-v1-]
+      save-paths: [.cpmcache]
+    steps:
+      - id: submodules
+        kind: shell
+        shell:
+          run:
+            - git submodule sync --recursive
+            - git submodule update --init --recursive --depth 1 --jobs 4
+      - id: cpm-cache
+        kind: shell
+        shell:
+          run:
+            - >-
+              cat cmake/CPM.cmake third_party/CMakeLists.txt tt_metal/third_party/CMakeLists.txt
+              tt_metal/third_party/umd/third_party/CMakeLists.txt tt-train/cmake/dependencies.cmake
+              .gitmodules | sha256sum | cut -d' ' -f1 > /tmp/cpm-deps.sha256
+            - >-
+              if [ ! -f .cpmcache/.deps.sha256 ]; then echo "CPM cache: miss";
+              elif cmp -s .cpmcache/.deps.sha256 /tmp/cpm-deps.sha256; then
+              echo "CPM cache: hit, $(du -sh .cpmcache | cut -f1)";
+              else echo "CPM cache: dependencies changed, dropping it"; rm -rf .cpmcache; fi
+            - mkdir -p .cpmcache && cp /tmp/cpm-deps.sha256 .cpmcache/.deps.sha256
+      - id: probe
+        kind: shell
+        shell:
+          run:
+            - echo "S0 arm=$S0_ARM probe cpu.max=$(cat /sys/fs/cgroup/cpu.max | tr ' ' '/')"
+            - echo "S0 arm=$S0_ARM probe ninja=$(ninja --version) nproc=$(nproc) node_cpus=$(grep -c ^processor /proc/cpuinfo) j=${CMAKE_BUILD_PARALLEL_LEVEL-unset}"
+            - echo "S0 arm=$S0_ARM probe model=$(grep -m1 '^model name' /proc/cpuinfo | cut -d: -f2 | tr -s ' ' | tr ' ' '_')"
+            - ninja -h 2>&1 | grep -i 'jobs in parallel' || true
+            - cmake --version | head -1
+            - cat /sys/fs/cgroup/memory.max || true
+      - id: configure
+        kind: shell
+        shell:
+          run:
+            - >-
+              scripts/torrentci-s0-phase.sh configure
+              ./build_metal.sh --build-dir build --build-type ASan
+              --toolchain-path cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
+              --build-all --configure-only
+              --use-system-sfpi --disable-profiler
+      - id: compile
+        kind: shell
+        shell:
+          run:
+            - scripts/torrentci-s0-phase.sh library cmake --build build --target ttnn
+            - scripts/torrentci-s0-phase.sh rest cmake --build build --target install
+            - echo "S0 arm=$S0_ARM memory.peak=$(cat /sys/fs/cgroup/memory.peak 2>/dev/null) oom=$(grep oom_kill /sys/fs/cgroup/memory.events 2>/dev/null | tr ' ' '=')"
+      - id: drop-cpm-cache
+        kind: shell
+        shell:
+          run:
+            # Restore only: an empty save path publishes nothing (skipped_empty).
+            - rm -rf .cpmcache
+  - id: s0-cpu-c
+    description: "torrentci#3196 S0 arm c: request 16, limit 16, -j32"
+    timeout: 4h
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: ci-build}
+        resources:
+          requests: {cpu: '16', memory: 24Gi, ephemeral-storage: 100Gi}
+          limits: {cpu: '16', memory: 32Gi, ephemeral-storage: 150Gi}
+    env:
+      - {name: S0_ARM, value: 'c'}
+      - {name: CMAKE_BUILD_PARALLEL_LEVEL, value: '32'}
+      - {name: CCACHE_DISABLE, value: '1'}
+      - {name: TRACY_NO_INVARIANT_CHECK, value: '1'}
+      - {name: TRACY_NO_ISA_EXTENSIONS, value: '1'}
+      - {name: CPM_SOURCE_CACHE, value: /workspace/.cpmcache}
+    cache:
+      key: 'cpm-v1-${ref_name}-${commit_sha}'
+      restore-keys: ['cpm-v1-${ref_name}-', cpm-v1-]
+      save-paths: [.cpmcache]
+    steps:
+      - id: submodules
+        kind: shell
+        shell:
+          run:
+            - git submodule sync --recursive
+            - git submodule update --init --recursive --depth 1 --jobs 4
+      - id: cpm-cache
+        kind: shell
+        shell:
+          run:
+            - >-
+              cat cmake/CPM.cmake third_party/CMakeLists.txt tt_metal/third_party/CMakeLists.txt
+              tt_metal/third_party/umd/third_party/CMakeLists.txt tt-train/cmake/dependencies.cmake
+              .gitmodules | sha256sum | cut -d' ' -f1 > /tmp/cpm-deps.sha256
+            - >-
+              if [ ! -f .cpmcache/.deps.sha256 ]; then echo "CPM cache: miss";
+              elif cmp -s .cpmcache/.deps.sha256 /tmp/cpm-deps.sha256; then
+              echo "CPM cache: hit, $(du -sh .cpmcache | cut -f1)";
+              else echo "CPM cache: dependencies changed, dropping it"; rm -rf .cpmcache; fi
+            - mkdir -p .cpmcache && cp /tmp/cpm-deps.sha256 .cpmcache/.deps.sha256
+      - id: probe
+        kind: shell
+        shell:
+          run:
+            - echo "S0 arm=$S0_ARM probe cpu.max=$(cat /sys/fs/cgroup/cpu.max | tr ' ' '/')"
+            - echo "S0 arm=$S0_ARM probe ninja=$(ninja --version) nproc=$(nproc) node_cpus=$(grep -c ^processor /proc/cpuinfo) j=${CMAKE_BUILD_PARALLEL_LEVEL-unset}"
+            - echo "S0 arm=$S0_ARM probe model=$(grep -m1 '^model name' /proc/cpuinfo | cut -d: -f2 | tr -s ' ' | tr ' ' '_')"
+            - ninja -h 2>&1 | grep -i 'jobs in parallel' || true
+            - cmake --version | head -1
+            - cat /sys/fs/cgroup/memory.max || true
+      - id: configure
+        kind: shell
+        shell:
+          run:
+            - >-
+              scripts/torrentci-s0-phase.sh configure
+              ./build_metal.sh --build-dir build --build-type ASan
+              --toolchain-path cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
+              --build-all --configure-only
+              --use-system-sfpi --disable-profiler
+      - id: compile
+        kind: shell
+        shell:
+          run:
+            - scripts/torrentci-s0-phase.sh library cmake --build build --target ttnn
+            - scripts/torrentci-s0-phase.sh rest cmake --build build --target install
+            - echo "S0 arm=$S0_ARM memory.peak=$(cat /sys/fs/cgroup/memory.peak 2>/dev/null) oom=$(grep oom_kill /sys/fs/cgroup/memory.events 2>/dev/null | tr ' ' '=')"
+      - id: drop-cpm-cache
+        kind: shell
+        shell:
+          run:
+            # Restore only: an empty save path publishes nothing (skipped_empty).
+            - rm -rf .cpmcache
