@@ -229,8 +229,8 @@ tt_metal/jit_build/**/CMakeLists.txt @abhullar-tt @nathan-TT @jbaumanTT @ruizhan
 tt_metal/llrt/ @abhullar-tt @jbaumanTT @ruizhangTT @arikTT @tt-asaigal @tt-aho
 tt_metal/llrt/observability_event_meta.* @mo-tenstorrent @yusufbashiTT
 tt_metal/llrt/**/CMakeLists.txt @abhullar-tt @jbaumanTT @ruizhangTT @arikTT @tt-asaigal @tt-aho @tenstorrent/metalium-developers-infra
-tt_metal/llrt/rtoptions.cpp @tenstorrent/metalium-api-owners @jbaumanTT @abhullar-tt
-tt_metal/llrt/rtoptions.hpp @tenstorrent/metalium-api-owners
+tt_metal/llrt/rtoptions.cpp @msudumbrekar-TT @jbaumanTT @abhullar-tt
+tt_metal/llrt/rtoptions.hpp @msudumbrekar-TT @jbaumanTT @abhullar-tt
 tt_metal/logging/ @abhullar-tt @jbaumanTT
 tt_metal/logging/**/CMakeLists.txt @abhullar-tt @jbaumanTT @tenstorrent/metalium-developers-infra
 tt_metal/programming_examples/ @tt-asaigal @afuller-TT @ncvetkovicTT @lpremovicTT @rtawfik01 @nvelickovicTT @tenstorrent/metalium-api-owners

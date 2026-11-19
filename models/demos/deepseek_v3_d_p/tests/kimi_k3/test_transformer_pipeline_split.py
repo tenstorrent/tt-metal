@@ -34,7 +34,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_x_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_model_root
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import TRACE_1M, resolve_checkpoint, resolve_trace
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
@@ -71,7 +71,9 @@ RECOVERY_FROM = 22
 PLACEMENTS = [
     pytest.param(
         (8, 4),
-        {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": KimiK3Config.L1_SMALL_SIZE},
+        fabric2d_device_params(
+            fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE, l1_small_size=KimiK3Config.L1_SMALL_SIZE
+        ),
         0,
         1,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
@@ -83,7 +85,9 @@ PLACEMENTS = [
     # tests/run_4x4_stage_tests.sh); unnarrowed, the system mesh is 8x4 and requires_mesh_topology skips it.
     pytest.param(
         (4, 4),
-        torus_x_device_params(l1_small_size=KimiK3Config.L1_SMALL_SIZE),
+        torus_x_device_params(
+            fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE, l1_small_size=KimiK3Config.L1_SMALL_SIZE
+        ),
         1,
         0,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),

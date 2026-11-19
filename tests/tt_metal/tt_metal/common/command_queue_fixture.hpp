@@ -79,7 +79,6 @@ protected:
 
     distributed::MeshCoordinate zero_coord_ = distributed::MeshCoordinate::zero_coordinate(2);
     distributed::MeshCoordinateRange device_range_ = distributed::MeshCoordinateRange(zero_coord_, zero_coord_);
-    std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
 };
 
 class UnitMeshCQEventFixture : public UnitMeshCQFixture {};
@@ -181,7 +180,6 @@ protected:
         }
     }
 
-    std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
     std::map<int, std::shared_ptr<distributed::MeshDevice>> reserved_devices_;
     distributed::MeshCoordinate zero_coord_ = distributed::MeshCoordinate::zero_coordinate(2);
     distributed::MeshCoordinateRange device_range_ = distributed::MeshCoordinateRange(zero_coord_, zero_coord_);
@@ -247,7 +245,6 @@ protected:
         }
     }
 
-    std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
     distributed::MeshCoordinate zero_coord_ = distributed::MeshCoordinate::zero_coordinate(2);
     distributed::MeshCoordinateRange device_range_ = distributed::MeshCoordinateRange(zero_coord_, zero_coord_);
 
@@ -360,7 +357,6 @@ protected:
         }
     }
 
-    std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
     size_t num_devices_{};
     distributed::MeshCoordinate zero_coord_ = distributed::MeshCoordinate::zero_coordinate(2);
     distributed::MeshCoordinateRange device_range_ = distributed::MeshCoordinateRange(zero_coord_, zero_coord_);
