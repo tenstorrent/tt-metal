@@ -11,7 +11,11 @@
 // the issue loop. With ND-sharded weights (conv2d_3x3.weight_memory_config: shards of shard_rows tile-rows x
 // shard_cols columns, round-robin over the DRAM banks) every run of slot tiles that is contiguous both in the slot and
 // in one shard is one read (page runs): a shard's tiles sit at consecutive aligned-page addresses in its bank. On
-// res3.x a 52 KB round is 12 reads of 4 tiles instead of 48 one-tile reads (2.1 -> 1.3-1.5 us).
+// res3.x a 52 KB round is 12 reads of 4 tiles instead of 48 one-tile reads (2.1 -> 1.3-1.5 us). A round 0 of at most
+// one NoC burst (kw-fold whole-K: res2, center_head.1) is latency-bound and gates compute's first matmul: all its
+// chunks' reads go out at once, so it lands together and the writer sends it as one chain (res2 unzoned,
+// leave-one-out: 10.50 us without it, 10.27 us with). Larger rounds keep the pipelined issue: on sem dec res3 fc0's
+// 120-tile rounds the extra issue in front of chunk 0 delayed round 0 by ~0.35 us.
 
 #include <cstdint>
 
@@ -47,6 +51,7 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_weights);
     const auto weights = TensorAccessor(weight_args, weight_addr, tile_bytes);
     conv2d_3x3::TaggedReads<false> reads;
+    const bool small_round = round_tiles * tile_bytes <= NOC_MAX_BURST_SIZE;
 
     for (uint32_t r = 0; r < num_rounds; ++r) {
         cb_reserve_back(cb_weights, round_tiles);
@@ -97,15 +102,16 @@ void kernel_main() {
                 t += len;
             }
         };
-        // Issue chunk c, then hand over chunk c - 1.
-        for (uint32_t c = 0; c <= num_chunks; ++c) {
+        // Issue chunk c, then hand over chunk c - 1; a small round 0 issues every chunk first.
+        const uint32_t ahead = r == 0 && small_round ? num_chunks : 1;
+        for (uint32_t c = 0; c < num_chunks + ahead; ++c) {
             if (c < num_chunks) {
                 reads.begin(1 + c);
                 read_tiles(c * chunk_tiles, (c + 1) * chunk_tiles);
                 dataflow_kernel_lib::set_read_trid(reads.noc, 0);
             }
-            if (c > 0) {
-                reads.wait(c);
+            if (c >= ahead) {
+                reads.wait(1 + c - ahead);
                 cb_push_back(cb_weights, chunk_tiles);
             }
         }

@@ -1,0 +1,225 @@
+diff -ruN a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp	2026-11-19 10:58:55.676181706 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp	2026-11-19 10:58:55.678181735 +0000
+@@ -477,9 +477,16 @@
+         reads.noc.write_zeros_l1_barrier();
+     }
+ 
+-    // Tap-major zero-fills read a 32-pixel zero block, so an out-of-image run is one read.
++    // Tap-major zero-fills read a 32-pixel zero block, so an out-of-image run is one read. kw-fold has no gather and no
++    // center taps, so nothing reads it there, and its write barrier (~0.27 us) sat in front of the slab fill
++    // (center_head.1 unzoned: 9.89 us with the zeroing, 9.47 us without).
+     [[maybe_unused]] uint64_t zero_src_noc = 0;
+-    if constexpr (tap_major) {
++#ifdef CONV2D_3X3_KW_FOLD
++    constexpr bool zero_block = false;
++#else
++    constexpr bool zero_block = tap_major;
++#endif
++    if constexpr (zero_block) {
+         reads.noc.async_write_zeros(CircularBuffer(cb_zero_src), TILE_DIM * pixel_bytes);
+         reads.noc.write_zeros_l1_barrier();
+         zero_src_noc = get_noc_addr(get_write_ptr(cb_zero_src));
+@@ -662,6 +669,10 @@
+             if constexpr (nslice_center) {
+                 center_plan = plan;
+             }
++            // Split fill: the slab rows the writer reads (the higher-index shards' input tile-rows).
++            [[maybe_unused]] const conv2d_3x3::SlabSuffix writer_sfx =
++                tile_fill_split ? conv2d_3x3::slab_rows_from(plan, (my_shard + 1) * input_shard_rows)
++                                : conv2d_3x3::SlabSuffix{0, 0};
+             const uint32_t num_segs = plan.num_segs;
+             const uint32_t(&seg_first)[3] = plan.seg_first;
+             const uint32_t(&seg_count)[3] = plan.seg_count;
+@@ -696,8 +707,8 @@
+                     if constexpr (tile_fill_split) {
+                         uint32_t handed = 0;
+                         for (uint32_t b = 0; b < num_batches; ++b) {
+-                            writer_rows_of[b] = split_here && conv2d_3x3::tile_batch_has_rows_from<untilize_batch_rows>(
+-                                                                  plan, b, (my_shard + 1) * input_shard_rows);
++                            writer_rows_of[b] =
++                                split_here && conv2d_3x3::batch_has_rows_from<untilize_batch_rows>(writer_sfx, b);
+                             handed += writer_rows_of[b] ? 1 : 0;
+                         }
+                         if (handed > 0) {
+@@ -728,8 +739,7 @@
+                         }
+                         if constexpr (tile_fill_split) {
+                             const bool writer_rows =
+-                                split_here && conv2d_3x3::tile_batch_has_rows_from<untilize_batch_rows>(
+-                                                  plan, batch, (my_shard + 1) * input_shard_rows);
++                                split_here && conv2d_3x3::batch_has_rows_from<untilize_batch_rows>(writer_sfx, batch);
+                             writer_rows_of[batch % fill_window] = writer_rows;
+                             if (writer_rows) {
+                                 Semaphore<>(slab_free_sem_id).up(1);
+diff -ruN a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_slab_dataflow.hpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_slab_dataflow.hpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_slab_dataflow.hpp	2026-11-19 10:58:55.695181978 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_slab_dataflow.hpp	2026-11-19 10:58:55.697182006 +0000
+@@ -181,13 +181,32 @@
+     }
+ }
+ 
+-// Split TILE fill: does the batch hold an input tile-row at or past hi_row (a higher-index owner shard's)?
++// Split TILE fill: the slab rows holding input tile-rows at or past hi_row (the higher-index owner shards') are a
++// suffix of the plan, [first, rows): the plan's segments hold strictly increasing input tile-rows in slab order (band
++// kh + 1 starts at or past band kh's rows, and a band that shares rows adds only those past the previous band's end).
++// One O(segments) pass per plan replaces a walk of every batch's pieces, which cost the reader ~0.4 us of hand-over on
++// res2 (7 batches) and the writer ~0.5 us of planning between that hand-over and its first read.
++struct SlabSuffix {
++    uint32_t first;  // first slab row holding an input tile-row >= hi_row (== rows when there is none)
++    uint32_t rows;   // slab rows the plan reads
++};
++
++FORCE_INLINE SlabSuffix slab_rows_from(const TileSlabPlan& plan, uint32_t hi_row) {
++    uint32_t seg_lo = 0;
++    uint32_t first = 0xFFFFFFFF;
++    for (uint32_t s = 0; s < plan.num_segs; ++s) {
++        if (first == 0xFFFFFFFF && plan.seg_first[s] + plan.seg_count[s] > hi_row) {
++            first = seg_lo + (hi_row > plan.seg_first[s] ? hi_row - plan.seg_first[s] : 0);
++        }
++        seg_lo += plan.seg_count[s];
++    }
++    return {first < seg_lo ? first : seg_lo, seg_lo};
++}
++
++// Does the batch hold an input tile-row at or past hi_row (a slab row of the suffix)?
+ template <uint32_t batch_rows>
+-FORCE_INLINE bool tile_batch_has_rows_from(const TileSlabPlan& plan, uint32_t batch, uint32_t hi_row) {
+-    bool any = false;
+-    tile_batch_rows<batch_rows>(
+-        plan, batch, [&](uint32_t row0, uint32_t rows, uint32_t) { any = any || row0 + rows > hi_row; });
+-    return any;
++FORCE_INLINE bool batch_has_rows_from(const SlabSuffix& sfx, uint32_t batch) {
++    return batch * batch_rows < sfx.rows && (batch + 1) * batch_rows > sfx.first;
+ }
+ 
+ }  // namespace conv2d_3x3
+diff -ruN a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_reader.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_reader.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_reader.cpp	2026-11-19 10:58:55.713182235 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_reader.cpp	2026-11-19 10:58:55.715182263 +0000
+@@ -8,7 +8,10 @@
+ // multicast of round r. Each round is read in num_chunks chunks, each under its own transaction id and pushed as soon
+ // as it landed while the next chunk's reads are in flight, so the multicast of a round starts before its last read.
+ // One reader issuing one-tile reads is bound by the NIU's outstanding reads (~34 GB/s at 1088 B tiles), not by
+-// the issue loop.
++// the issue loop. A round 0 of at most one NoC burst (kw-fold whole-K: res2, center_head.1) is latency-bound and
++// gates compute's first matmul: all its chunks' reads go out at once, so it lands together and the writer sends it as
++// one chain (res2 unzoned, leave-one-out: 10.50 us without it, 10.27 us with). Larger rounds keep the pipelined issue:
++// on sem dec res3 fc0's 120-tile rounds the extra issue in front of chunk 0 delayed round 0 by ~0.35 us.
+ 
+ #include <cstdint>
+ 
+@@ -36,6 +39,7 @@
+     const uint32_t tile_bytes = get_tile_size(cb_weights);
+     const auto weights = TensorAccessor(weight_args, weight_addr, tile_bytes);
+     conv2d_3x3::TaggedReads<false> reads;
++    const bool small_round = round_tiles * tile_bytes <= NOC_MAX_BURST_SIZE;
+ 
+     for (uint32_t r = 0; r < num_rounds; ++r) {
+         cb_reserve_back(cb_weights, round_tiles);
+@@ -59,8 +63,9 @@
+                 return page0 + t;
+             }
+         };
+-        // Issue chunk c, then hand over chunk c - 1.
+-        for (uint32_t c = 0; c <= num_chunks; ++c) {
++        // Issue chunk c, then hand over chunk c - 1; a small round 0 issues every chunk first.
++        const uint32_t ahead = r == 0 && small_round ? num_chunks : 1;
++        for (uint32_t c = 0; c < num_chunks + ahead; ++c) {
+             if (c < num_chunks) {
+                 reads.begin(1 + c);
+                 for (uint32_t t = c * chunk_tiles; t < (c + 1) * chunk_tiles; ++t) {
+@@ -68,8 +73,8 @@
+                 }
+                 dataflow_kernel_lib::set_read_trid(reads.noc, 0);
+             }
+-            if (c > 0) {
+-                reads.wait(c);
++            if (c >= ahead) {
++                reads.wait(1 + c - ahead);
+                 cb_push_back(cb_weights, chunk_tiles);
+             }
+         }
+diff -ruN a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp	2026-11-19 10:58:55.730182478 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp	2026-11-19 10:58:55.733182520 +0000
+@@ -15,7 +15,10 @@
+ // With a bias the server also reads it once (NoC1, at kernel start) and multicasts it into every receiver's cb_bias
+ // (same index and size, so the same L1 address) before round 0, then sets the receivers' bias flag (the semaphore
+ // after the slot flags). HEIGHT: every receiver takes all of C_out. ~100 receivers reading the same bias pages from
+-// DRAM themselves landed it at ~7 us, behind kw-fold's ~6 us bias decode in front of the final pass.
++// DRAM themselves landed it at ~7 us, behind kw-fold's ~6 us bias decode in front of the final pass. A round 0 of at
++// most one NoC burst gates compute's first matmul on a short multicast, so the bias goes out after it instead (res2
++// unzoned, leave-one-out: 10.87 us with the bias first, 10.27 us after); larger rounds keep it first (res3.x: a later
++// bias pushed the reader's ~1.3 us-per-tile decode past the final pass, +1.9%).
+ 
+ #include <cstdint>
+ 
+@@ -45,6 +48,11 @@
+     const uint32_t ey = get_arg_val<uint32_t>(5);
+     const uint32_t tile_bytes = get_tile_size(cb_weights);
+     volatile tt_l1_ptr uint32_t* ack = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ack_sem_id));
++    // The round whose ack wait the bias multicast follows. Round 1 only with two or more slots: its ack wait then needs
++    // only the kernel-start acks, while a non-kw-fold receiver blocks on the bias right after round 0 (with one slot,
++    // round 1 would wait for that receiver's reuse ack).
++    const uint32_t bias_round =
++        round_tiles * tile_bytes <= NOC_MAX_BURST_SIZE && num_rounds > 1 && weight_depth >= 2 ? 1 : 0;
+ 
+     [[maybe_unused]] uint32_t bias_l1 = 0;
+     if constexpr (has_bias) {
+@@ -68,7 +76,7 @@
+             noc_semaphore_wait_min(ack, acks * num_receivers);
+         }
+         if constexpr (has_bias) {
+-            if (r == 0) {
++            if (r == bias_round) {
+                 MaybeDeviceZoneScope("server_send_bias");
+                 noc_async_read_barrier();
+                 const uint32_t bias_bytes = bias_tiles * get_tile_size(cb_bias);
+diff -ruN a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp	2026-11-19 10:58:55.766182992 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp	2026-11-19 10:58:55.769183035 +0000
+@@ -269,6 +269,7 @@
+     [[maybe_unused]] uint32_t fill_plan_m = 0xFFFFFFFF;
+     [[maybe_unused]] uint32_t fill_served = 0;
+     [[maybe_unused]] conv2d_3x3::TileSlabPlan fill_plan;
++    [[maybe_unused]] conv2d_3x3::SlabSuffix fill_sfx{0, 0};  // the cursor block's slab rows this writer reads
+     // Ring slab: the cursor block's first streamed row, its row end and batch count, the kernel batches before it, and
+     // the previous block's window end.
+     [[maybe_unused]] uint32_t ring_push_lo = 0;
+@@ -342,9 +343,10 @@
+                         first, end_tiles < num_out_px ? end_tiles : num_out_px),
+                     unused_x_base,
+                     fill_plan);
++                fill_sfx = conv2d_3x3::slab_rows_from(fill_plan, fill_hi_row);
+                 fill_plan_m = fill_m;
+             }
+-            if (conv2d_3x3::tile_batch_has_rows_from<untilize_batch_rows>(fill_plan, fill_b, fill_hi_row)) {
++            if (conv2d_3x3::batch_has_rows_from<untilize_batch_rows>(fill_sfx, fill_b)) {
+                 return true;
+             }
+             if (++fill_b == fill_batches_per_block) {
+@@ -511,6 +513,23 @@
+         }
+     };
+ 
++    // ---- Split TILE fill, first block: plan it and issue its hand-overs before the rest of the start-up. Whole-slab
++    // ring only: the reader then reserves the block's whole slab at once (the ring is empty at kernel start) and hands
++    // every batch over at its fill start, which waits on nothing of this writer, so the spin below ends. With a smaller
++    // ring its first writer batch can wait for compute to free slots, i.e. for this writer's weights. Issued after the
++    // hand-over in the weight-round wait instead, the reads went out ~0.5 us later and ran beside round 0's multicast
++    // on this core's NoC1 port (res2: 10.77 -> 10.47 us unzoned, with the cheaper hand-over above).
++    if constexpr (tile_fill_split && !ring_slab && input_tile_depth_batches >= fill_batches_per_block) {
++        if (split_here) {
++            MaybeDeviceZoneScope("writer_fill_early");
++            if (fill_next()) {
++                while (Semaphore<>(slab_free_sem_id).value() == 0) {
++                }
++                serve_fill();
++            }
++        }
++    }
++
+     // ---- stream_weight_blocks: K-block tiles k-major, n-fastest (matmul in1 layout).
+     const uint32_t total_k_blocks = num_m_blocks_this_core * num_k_blocks;
+     uint32_t k_blocks_issued = 0;

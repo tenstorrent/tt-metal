@@ -477,9 +477,16 @@ void kernel_main() {
         reads.noc.write_zeros_l1_barrier();
     }
 
-    // Tap-major zero-fills read a 32-pixel zero block, so an out-of-image run is one read.
+    // Tap-major zero-fills read a 32-pixel zero block, so an out-of-image run is one read. kw-fold has no gather and no
+    // center taps, so nothing reads it there, and its write barrier (~0.27 us) sat in front of the slab fill
+    // (center_head.1 unzoned: 9.89 us with the zeroing, 9.47 us without).
     [[maybe_unused]] uint64_t zero_src_noc = 0;
-    if constexpr (tap_major) {
+#ifdef CONV2D_3X3_KW_FOLD
+    constexpr bool zero_block = false;
+#else
+    constexpr bool zero_block = tap_major;
+#endif
+    if constexpr (zero_block) {
         reads.noc.async_write_zeros(CircularBuffer(cb_zero_src), TILE_DIM * pixel_bytes);
         reads.noc.write_zeros_l1_barrier();
         zero_src_noc = get_noc_addr(get_write_ptr(cb_zero_src));
@@ -662,6 +669,10 @@ void kernel_main() {
             if constexpr (nslice_center) {
                 center_plan = plan;
             }
+            // Split fill: the slab rows the writer reads (the higher-index shards' input tile-rows).
+            [[maybe_unused]] const conv2d_3x3::SlabSuffix writer_sfx =
+                tile_fill_split ? conv2d_3x3::slab_rows_from(plan, (my_shard + 1) * input_shard_rows)
+                                : conv2d_3x3::SlabSuffix{0, 0};
             const uint32_t num_segs = plan.num_segs;
             const uint32_t(&seg_first)[3] = plan.seg_first;
             const uint32_t(&seg_count)[3] = plan.seg_count;
@@ -696,8 +707,8 @@ void kernel_main() {
                     if constexpr (tile_fill_split) {
                         uint32_t handed = 0;
                         for (uint32_t b = 0; b < num_batches; ++b) {
-                            writer_rows_of[b] = split_here && conv2d_3x3::tile_batch_has_rows_from<untilize_batch_rows>(
-                                                                  plan, b, (my_shard + 1) * input_shard_rows);
+                            writer_rows_of[b] =
+                                split_here && conv2d_3x3::batch_has_rows_from<untilize_batch_rows>(writer_sfx, b);
                             handed += writer_rows_of[b] ? 1 : 0;
                         }
                         if (handed > 0) {
@@ -728,8 +739,7 @@ void kernel_main() {
                         }
                         if constexpr (tile_fill_split) {
                             const bool writer_rows =
-                                split_here && conv2d_3x3::tile_batch_has_rows_from<untilize_batch_rows>(
-                                                  plan, batch, (my_shard + 1) * input_shard_rows);
+                                split_here && conv2d_3x3::batch_has_rows_from<untilize_batch_rows>(writer_sfx, batch);
                             writer_rows_of[batch % fill_window] = writer_rows;
                             if (writer_rows) {
                                 Semaphore<>(slab_free_sem_id).up(1);

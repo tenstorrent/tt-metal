@@ -181,13 +181,32 @@ FORCE_INLINE void tile_batch_rows(const TileSlabPlan& plan, uint32_t batch, Fn&&
     }
 }
 
-// Split TILE fill: does the batch hold an input tile-row at or past hi_row (a higher-index owner shard's)?
+// Split TILE fill: the slab rows holding input tile-rows at or past hi_row (the higher-index owner shards') are a
+// suffix of the plan, [first, rows): the plan's segments hold strictly increasing input tile-rows in slab order (band
+// kh + 1 starts at or past band kh's rows, and a band that shares rows adds only those past the previous band's end).
+// One O(segments) pass per plan replaces a walk of every batch's pieces, which cost the reader ~0.4 us of hand-over on
+// res2 (7 batches) and the writer ~0.5 us of planning between that hand-over and its first read.
+struct SlabSuffix {
+    uint32_t first;  // first slab row holding an input tile-row >= hi_row (== rows when there is none)
+    uint32_t rows;   // slab rows the plan reads
+};
+
+FORCE_INLINE SlabSuffix slab_rows_from(const TileSlabPlan& plan, uint32_t hi_row) {
+    uint32_t seg_lo = 0;
+    uint32_t first = 0xFFFFFFFF;
+    for (uint32_t s = 0; s < plan.num_segs; ++s) {
+        if (first == 0xFFFFFFFF && plan.seg_first[s] + plan.seg_count[s] > hi_row) {
+            first = seg_lo + (hi_row > plan.seg_first[s] ? hi_row - plan.seg_first[s] : 0);
+        }
+        seg_lo += plan.seg_count[s];
+    }
+    return {first < seg_lo ? first : seg_lo, seg_lo};
+}
+
+// Does the batch hold an input tile-row at or past hi_row (a slab row of the suffix)?
 template <uint32_t batch_rows>
-FORCE_INLINE bool tile_batch_has_rows_from(const TileSlabPlan& plan, uint32_t batch, uint32_t hi_row) {
-    bool any = false;
-    tile_batch_rows<batch_rows>(
-        plan, batch, [&](uint32_t row0, uint32_t rows, uint32_t) { any = any || row0 + rows > hi_row; });
-    return any;
+FORCE_INLINE bool batch_has_rows_from(const SlabSuffix& sfx, uint32_t batch) {
+    return batch * batch_rows < sfx.rows && (batch + 1) * batch_rows > sfx.first;
 }
 
 }  // namespace conv2d_3x3

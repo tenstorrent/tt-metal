@@ -269,6 +269,7 @@ void kernel_main() {
     [[maybe_unused]] uint32_t fill_plan_m = 0xFFFFFFFF;
     [[maybe_unused]] uint32_t fill_served = 0;
     [[maybe_unused]] conv2d_3x3::TileSlabPlan fill_plan;
+    [[maybe_unused]] conv2d_3x3::SlabSuffix fill_sfx{0, 0};  // the cursor block's slab rows this writer reads
     // Ring slab: the cursor block's first streamed row, its row end and batch count, the kernel batches before it, and
     // the previous block's window end.
     [[maybe_unused]] uint32_t ring_push_lo = 0;
@@ -342,9 +343,10 @@ void kernel_main() {
                         first, end_tiles < num_out_px ? end_tiles : num_out_px),
                     unused_x_base,
                     fill_plan);
+                fill_sfx = conv2d_3x3::slab_rows_from(fill_plan, fill_hi_row);
                 fill_plan_m = fill_m;
             }
-            if (conv2d_3x3::tile_batch_has_rows_from<untilize_batch_rows>(fill_plan, fill_b, fill_hi_row)) {
+            if (conv2d_3x3::batch_has_rows_from<untilize_batch_rows>(fill_sfx, fill_b)) {
                 return true;
             }
             if (++fill_b == fill_batches_per_block) {
@@ -510,6 +512,23 @@ void kernel_main() {
             }
         }
     };
+
+    // ---- Split TILE fill, first block: plan it and issue its hand-overs before the rest of the start-up. Whole-slab
+    // ring only: the reader then reserves the block's whole slab at once (the ring is empty at kernel start) and hands
+    // every batch over at its fill start, which waits on nothing of this writer, so the spin below ends. With a smaller
+    // ring its first writer batch can wait for compute to free slots, i.e. for this writer's weights. Issued after the
+    // hand-over in the weight-round wait instead, the reads went out ~0.5 us later and ran beside round 0's multicast
+    // on this core's NoC1 port (res2: 10.77 -> 10.47 us unzoned, with the cheaper hand-over above).
+    if constexpr (tile_fill_split && !ring_slab && input_tile_depth_batches >= fill_batches_per_block) {
+        if (split_here) {
+            MaybeDeviceZoneScope("writer_fill_early");
+            if (fill_next()) {
+                while (Semaphore<>(slab_free_sem_id).value() == 0) {
+                }
+                serve_fill();
+            }
+        }
+    }
 
     // ---- stream_weight_blocks: K-block tiles k-major, n-fastest (matmul in1 layout).
     const uint32_t total_k_blocks = num_m_blocks_this_core * num_k_blocks;

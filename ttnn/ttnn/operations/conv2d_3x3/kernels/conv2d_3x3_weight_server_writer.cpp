@@ -15,7 +15,10 @@
 // With a bias the server also reads it once (NoC1, at kernel start) and multicasts it into every receiver's cb_bias
 // (same index and size, so the same L1 address) before round 0, then sets the receivers' bias flag (the semaphore
 // after the slot flags). HEIGHT: every receiver takes all of C_out. ~100 receivers reading the same bias pages from
-// DRAM themselves landed it at ~7 us, behind kw-fold's ~6 us bias decode in front of the final pass.
+// DRAM themselves landed it at ~7 us, behind kw-fold's ~6 us bias decode in front of the final pass. A round 0 of at
+// most one NoC burst gates compute's first matmul on a short multicast, so the bias goes out after it instead (res2
+// unzoned, leave-one-out: 10.87 us with the bias first, 10.27 us after); larger rounds keep it first (res3.x: a later
+// bias pushed the reader's ~1.3 us-per-tile decode past the final pass, +1.9%).
 
 #include <cstdint>
 
@@ -45,6 +48,11 @@ void kernel_main() {
     const uint32_t ey = get_arg_val<uint32_t>(5);
     const uint32_t tile_bytes = get_tile_size(cb_weights);
     volatile tt_l1_ptr uint32_t* ack = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ack_sem_id));
+    // The round whose ack wait the bias multicast follows. Round 1 only with two or more slots: its ack wait then needs
+    // only the kernel-start acks, while a non-kw-fold receiver blocks on the bias right after round 0 (with one slot,
+    // round 1 would wait for that receiver's reuse ack).
+    const uint32_t bias_round =
+        round_tiles * tile_bytes <= NOC_MAX_BURST_SIZE && num_rounds > 1 && weight_depth >= 2 ? 1 : 0;
 
     [[maybe_unused]] uint32_t bias_l1 = 0;
     if constexpr (has_bias) {
@@ -68,7 +76,7 @@ void kernel_main() {
             noc_semaphore_wait_min(ack, acks * num_receivers);
         }
         if constexpr (has_bias) {
-            if (r == 0) {
+            if (r == bias_round) {
                 MaybeDeviceZoneScope("server_send_bias");
                 noc_async_read_barrier();
                 const uint32_t bias_bytes = bias_tiles * get_tile_size(cb_bias);

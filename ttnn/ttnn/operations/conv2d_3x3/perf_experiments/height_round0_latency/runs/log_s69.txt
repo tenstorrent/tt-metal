@@ -1,0 +1,151 @@
+SAFE_PYTEST: Waiting for device lock...
+[2026-11-19 09:33:22] SAFE_PYTEST: waiting for device (20s) — holder pid=2448798 cmd="/bin/bash scripts/run_safe_pytest.sh --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/fpu_tap_shift/test_bench.py --import-mode=prepend -s " parent pid=2448797 cmd="timeout 900 scripts/run_safe_pytest.sh --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/fpu_tap_shift/test_bench.py --import-mode=prepend -s"
+[2026-11-19 09:33:43] SAFE_PYTEST: waiting for device (40s) — holder pid=2462084 cmd="/bin/bash scripts/run_safe_pytest.sh --run-all --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_weight_rate/test_hwr_unit_height_sharded.py ttnn/ttnn/operations/conv2d_3x3" parent pid=2462080 cmd="timeout 3000 scripts/run_safe_pytest.sh --run-all --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_weight_rate/test_hwr_u"
+[2026-11-19 09:34:06] SAFE_PYTEST: waiting for device (60s) — holder pid=2462191 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/nslice_ring_nonowners/test_nrn.py --import-mode=prepend " parent pid=2462180 cmd="bash ./run.sh z1 "
+[2026-11-19 09:34:28] SAFE_PYTEST: waiting for device (80s) — holder pid=2467989 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/stem1_slab_tilize/test_sd.py --import-mode=prepend -q " parent pid=2467984 cmd="bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/stem1_slab_tilize/run.sh first1 "
+[2026-11-19 09:34:50] SAFE_PYTEST: waiting for device (100s) — holder pid=2484685 cmd="/bin/bash scripts/run_safe_pytest.sh --run-all --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_weight_rate/test_hwr_precision.py " parent pid=2484681 cmd="timeout 3000 scripts/run_safe_pytest.sh --run-all --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_weight_rate/test_hwr_p"
+[2026-11-19 09:35:12] SAFE_PYTEST: waiting for device (120s) — holder pid=2476030 cmd="/bin/bash scripts/run_safe_pytest.sh --dev --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/fpu_tap_shift/test_bench.py --import-mode=prepend -s " parent pid=2476011 cmd="timeout 900 scripts/run_safe_pytest.sh --dev --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/fpu_tap_shift/test_bench.py --import-mode=prep"
+[2026-11-19 09:35:33] SAFE_PYTEST: waiting for device (140s) — holder pid=2496357 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_weight_rate/test_hwr_op.py::test_conv2d_3x3_perf_focus[res3_{1,2," parent pid=2496356 cmd="timeout 2400 scripts/run_safe_pytest.sh --profile --run-all --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_weight_rate/"
+[2026-11-19 09:35:55] SAFE_PYTEST: waiting for device (160s) — holder pid=2498329 cmd="/bin/bash scripts/run_safe_pytest.sh --dev --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/fpu_tap_shift/test_bench.py --import-mode=prepend -s " parent pid=2498328 cmd="timeout 900 scripts/run_safe_pytest.sh --dev --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/fpu_tap_shift/test_bench.py --import-mode=prep"
+[2026-11-19 09:36:17] SAFE_PYTEST: waiting for device (180s) — holder pid=2499160 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/stem1_slab_tilize/test_sd.py --import-mode=prepend -q " parent pid=2499148 cmd="bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/stem1_slab_tilize/run.sh zmm1 "
+[2026-11-19 09:36:39] SAFE_PYTEST: waiting for device (200s) — holder pid=2461132 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_perf.py::test_conv2d_3x3_perf_focus[res3_" parent pid=2461131 cmd="timeout 1800 scripts/run_safe_pytest.sh --profile --run-all --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_roun"
+[2026-11-19 09:37:01] SAFE_PYTEST: waiting for device (220s) — holder pid=2501756 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_weight_rate/test_hwr_op.py::test_conv2d_3x3_perf_focus[res3_{1,2," parent pid=2501755 cmd="timeout 2400 scripts/run_safe_pytest.sh --profile --run-all --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_weight_rate/"
+[2026-11-19 09:37:23] SAFE_PYTEST: waiting for device (240s) — holder pid=2513419 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_perf.py::test_conv2d_3x3_perf_focus[res3_" parent pid=2513418 cmd="timeout 1800 scripts/run_safe_pytest.sh --profile --run-all --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_roun"
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: off (narrow) — kernels compile on demand
+SAFE_PYTEST: python -m tracy -r -m pytest --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_round0_latency/test_hrl_op.py::test_conv2d_3x3_perf_focus\[res2_\{0\,1\,2\}_conv2\]
+========================================
+2026-11-19 09:37:39.869 | INFO     | __main__:main:381 - Using port 8086
+2026-11-19 09:37:39.869 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-11-19 09:37:39.916 | INFO     | __main__:run_workload:416 - Test process started
+2026-11-19 09:37:42.352 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/workspaces/opgen
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, anyio-4.16.0, benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, cov-7.0.0, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_round0_latency/test_hrl_op.py::test_conv2d_3x3_perf_focus[res2_{0,1,2}_conv2] <- tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_perf.py 2026-11-19 09:37:47.546 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-19 09:37:47.546 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-19 09:37:47.549 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-19 09:37:47.549 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-19 09:37:47.572 | info     |             UMD | Established firmware bundle version: 19.16.1 (topology_discovery.cpp:700)
+2026-11-19 09:37:47.573 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-19 09:37:47.847 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:174)
+2026-11-19 09:37:47.848 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-19 09:37:47.848 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-19 09:37:47.848 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-19 09:37:47.855 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-19 09:37:48.304 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-19 09:37:48.466 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-19 09:37:48.466 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-19 09:37:48.650 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-19 09:37:48.669 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+Building ncrisc, compile step:
+/localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/workspaces/opgen/ -I/localdev/pmilojevic/workspaces/opgen/ttnn -I/localdev/pmilojevic/workspaces/opgen/ttnn/cpp -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/workspaces/opgen/tt_metal/api/ -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_round0_latency/op_copy/kernels -include /localdev/pmilojevic/tt-metal-cache/tt-metal-cache/pch/842cea1ec115824b/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DHRL_FAST_FILL=1 -DHRL_ZONES=1 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="conv2d_3x3_weight_server_reader/5665678909581859239/" -DKERNEL_COMPILE_TIME_ARGS=3,2,6,3,3,1,2,2,1088 -c -o /localdev/pmilojevic/tt-metal-cache/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_weight_server_reader/5665678909581859239/ncrisc/ncrisck.8756723052426496567_2520488.o /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/pmilojevic/tt-metal-cache/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_weight_server_reader/5665678909581859239/ncrisc/ncrisck.8756723052426496567_2520488.d
+In file included from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,645,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:645:5: note: in expansion of macro 'SrcLocNameToHash'
+  645 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_round0_latency/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: server_read,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_round0_latency/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,43,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_round0_latency/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:43:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   43 |         MaybeDeviceZoneScope("server_read");
+      |         ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: hrl_s_chunk_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_round0_latency/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,91,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_round0_latency/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:91:31: note: in expansion of macro 'MaybeDeviceZoneScope'
+   91 |                 if (r == 0) { MaybeDeviceZoneScope("hrl_s_chunk_wait"); reads.wait(c); }
+      |                               ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: NCRISC-KERNEL,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1067:5: note: in expansion of macro 'DO_PRAGMA'
+ 1067 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+PASSED2026-11-19 09:37:49.951 | info     |           Metal | Device kernel duration perf summary (device=0): count=1, min=11627ns, avg=11627.0ns, max=11627ns (profiler_analysis.cpp:729)
+2026-11-19 09:37:49.951 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=100ns, range=[11600..12600), underflow(<11600ns)=0, overflow(>=12600ns)=0) (profiler_analysis.cpp:772)
+2026-11-19 09:37:49.951 | info     |           Metal |   [       11600 ..        11700) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-19 09:37:49.951 | info     |           Metal |   [       11700 ..        11800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-19 09:37:49.951 | info     |           Metal |   [       11800 ..        11900) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-19 09:37:49.951 | info     |           Metal |   [       11900 ..        12000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-19 09:37:49.951 | info     |           Metal |   [       12000 ..        12100) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-19 09:37:49.951 | info     |           Metal |   [       12100 ..        12200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-19 09:37:49.951 | info     |           Metal |   [       12200 ..        12300) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-19 09:37:49.951 | info     |           Metal |   [       12300 ..        12400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-19 09:37:49.951 | info     |           Metal |   [       12400 ..        12500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-19 09:37:49.951 | info     |           Metal |   [       12500 ..        12600) |                                        |        0 (profiler_analysis.cpp:777)
+
+
+- generated xml file: /localdev/pmilojevic/workspaces/opgen/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+1.84s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_round0_latency/test_hrl_op.py::test_conv2d_3x3_perf_focus[res2_{0,1,2}_conv2]
+0.51s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_round0_latency/test_hrl_op.py::test_conv2d_3x3_perf_focus[res2_{0,1,2}_conv2]
+0.07s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_round0_latency/test_hrl_op.py::test_conv2d_3x3_perf_focus[res2_{0,1,2}_conv2]
+============================== 1 passed in 3.23s ===============================
+2026-11-19 09:37:51.856 | info     |    BuildKernels | JIT cache stats: 25/26 hits (96.2%) [25 cached, 70 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-19 09:37:51.856 | info     |    BuildKernels | JIT telemetry: 40 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-19 09:37:51.905 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:605)
+2026-11-19 09:37:51.905 | info     |             UMD | Closing devices in cluster (cluster.cpp:1496)
+2026-11-19 09:37:52.331 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1506)
+2026-11-19 09:37:52.331 | info     |             UMD | Cluster destructor started. (cluster.cpp:1227)
+2026-11-19 09:37:52.331 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1240)
+2026-11-19 09:37:52.641 | INFO     | __main__:main:490 - Copying /localdev/pmilojevic/workspaces/opgen/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/pmilojevic/workspaces/opgen/build/profiler/build_wasm/traces/test_hrl_op_2026_11_19_09_37_52.tracy
+2026-11-19 09:37:52.643 | INFO     | __main__:main:493 - Copied /localdev/pmilojevic/workspaces/opgen/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/pmilojevic/workspaces/opgen/build/profiler/build_wasm/traces/test_hrl_op_2026_11_19_09_37_52.tracy
+2026-11-19 09:37:52.644 | INFO     | __main__:main:502 - embed.tracy -> traces/test_hrl_op_2026_11_19_09_37_52.tracy
+2026-11-19 09:37:52.644 | INFO     | tracy.serve_wasm:launch_server_subprocess:310 - Launching tracy web app GUI server subprocess...
+2026-11-19 09:37:52.644 | INFO     | tracy.serve_wasm:launch_server_subprocess:313 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-11-19 09:37:52.644 | INFO     | tracy.serve_wasm:launch_server_subprocess:320 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-11-19 09:37:53.606 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /localdev/pmilojevic/workspaces/opgen/generated/profiler/.logs/tracy_ops_times.csv
+2026-11-19 09:37:53.654 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /localdev/pmilojevic/workspaces/opgen/generated/profiler/.logs/tracy_ops_data.csv
+2026-11-19 09:37:53.654 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:430 - Importing ops logs
+/localdev/pmilojevic/workspaces/opgen/tools/tracy/process_ops_logs.py:535: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-11-19 09:37:55.179 | INFO     | tracy.perf_counter_analysis:get_device_op_data:420 - Getting device ops
+2026-11-19 09:37:55.179 | INFO     | tracy.process_ops_logs:append_device_data:995 - Appending device data
+2026-11-19 09:37:55.211 | INFO     | tracy.process_ops_logs:generate_reports:1323 - OPs' perf analysis is finished! Generating reports ...
+2026-11-19 09:37:55.211 | INFO     | tracy.process_ops_logs:generate_reports:1343 - Copying runtime artifacts
+2026-11-19 09:37:55.238 | INFO     | tracy.process_ops_logs:generate_reports:1352 - Generating OPs CSV
+2026-11-19 09:37:55.240 | INFO     | tracy.process_ops_logs:generate_reports:1814 - OPs csv generated at: /localdev/pmilojevic/workspaces/opgen/generated/profiler/reports/2026_11_19_09_37_55/ops_perf_results_2026_11_19_09_37_55.csv
+========================================
+SAFE_PYTEST: PROFILER CSV: /localdev/pmilojevic/workspaces/opgen/generated/profiler/reports/2026_11_19_09_37_55/ops_perf_results_2026_11_19_09_37_55.csv
+SAFE_PYTEST_RESULT: PASS
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 0m18s (18s total, device-lock-acquired -> exit)
