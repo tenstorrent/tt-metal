@@ -1852,7 +1852,7 @@ class MiniMaxH3Pipeline:
             get_torch_state_dict=lambda: state,
         )
         if self.park_vae_decoder and module is self._vae.decoder:
-            # Shard and gather once at each host load, so the slice and gather programs compile with the load (the
+            # Shard and gather once at each host load, so the shard and gather programs compile with the load (the
             # warmup) rather than at the first request's decode.
             module.shard(self.sp_axis)
             module.gather(self.ccl_manager)

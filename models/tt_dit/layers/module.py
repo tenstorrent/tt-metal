@@ -292,13 +292,20 @@ class Module(ABC):
         self._set_evicted()
 
     def shard(self, mesh_axis: int) -> None:
-        """Shard the module's parameters along the mesh_axis. This is a transient sharding; you cannot save
-        or run the __call__/forward functions on a transiently_sharded module. You need to call gather first. 
+        """Shard the module's parameters along the mesh_axis. This is a transient sharding; you cannot save the
+        module, call it, or read a sharded parameter's data until you call gather. Note that calling `forward`
+        directly skips the check in `__call__`, so it is only caught if that forward reads a sharded parameter's data.
 
         The module counts as unloaded while sharded.
-        
-        When calling 'shard' the module (and it's children) call their eviction hooks. If a module overrides
-        `deallocate_weights`, we cannot safely shard, so for now we will raise in that situation. TODO: fix.
+
+        We defer freeing the full weights until every parameter's sharded tensor is allocated, to avoid fragmenting
+        DRAM. If we freed each full weight right after allocating its sharded tensor, the next sharded tensor would
+        land in the hole it left, and the sharded tensors would end up scattered with gaps between them. `gather`
+        does the same in reverse, freeing all the sharded tensors at the end.
+
+        When calling `shard` the module (and its children) call their eviction hooks. If a module overrides
+        `deallocate_weights`, we cannot safely shard, so for now we will raise in that situation. TODO: move the
+        extra state those overrides free into eviction hooks, then remove this check.
         """
         modules = list(self._all_modules())
         for module in modules:
@@ -321,7 +328,7 @@ class Module(ABC):
             module._set_evicted()  # noqa: SLF001
 
     def gather(self, ccl_manager: Any) -> None:  # noqa: ANN401
-        """Undo `shard`: all-gather every sliced parameter; the module is loaded again."""
+        """Undo `shard`: all-gather every transiently sharded parameter; the module is loaded again."""
         defer_free: list[ttnn.Tensor] = []
         for parameter in self._all_parameters():
             parameter.gather(ccl_manager, defer_free=defer_free)
@@ -526,8 +533,9 @@ class Parameter:
         self.memory_config = memory_config
         self.pad_value = pad_value
 
-        # This sets the durable/frozen layout, which is how the parameter tensor will always be loaded, saved and cached.
-        # The Module which owns this Parameter expects it to be in the durable_mesh_axes layout when calling forward or __call__.
+        # This sets the durable layout, which is how the parameter tensor will always be loaded, saved and cached.
+        # The Module which owns this Parameter expects it to be in the durable_mesh_axes layout when calling
+        # forward or __call__.
         self.durable_mesh_axes = mesh_axes
 
         # self.mesh_axes is the current layout, which can be changed via `shard` and `gather`.
@@ -621,12 +629,17 @@ class Parameter:
 
     def shard(self, mesh_axis: int, /, *, defer_free: list[ttnn.Tensor] | None = None) -> None:
         """Shard data along the mesh_axis. This sharding is transient, meaning the Parameter cannot be used
-        in compute/save and must be `gather`d before use. Attempting to use a transiently sharded parameter 
+        in compute/save and must be gathered before use. Attempting to use a transiently sharded parameter
         will result in an error.
-        
-        The full tensor it replaces is either deallocated immediately or appended to `defer_free` (if not None).
-        Defer free is used to allow a caller sharding many parameters to call `free` at the end to reduce memory 
-        fragmentation.
+
+        We pick the first dim that is not already sharded and splits evenly over the mesh_axis (in whole tiles, for
+        the last two dims of a tiled tensor). If no dim splits evenly, the parameter stays whole and is not sharded;
+        the same happens if it has no device data or the mesh_axis has only one device. If the mesh_axis is already
+        part of the durable layout, or the parameter is already transiently sharded over it, we raise a ValueError.
+
+        After sharding, the parameter holds the new sharded tensor instead of the full tensor. The full tensor is
+        either deallocated immediately or appended to `defer_free` (if not None). Defer free is used to allow a
+        caller sharding many parameters to deallocate them all at the end to reduce memory fragmentation.
         """
         self.check_shard_axis(mesh_axis)
         if self._data is None or self.on_host:
@@ -648,9 +661,11 @@ class Parameter:
         self._free(full, defer_free)
 
     def gather(self, ccl_manager: Any, /, *, defer_free: list[ttnn.Tensor] | None = None) -> None:  # noqa: ANN401
-        """Undo `shard`: all-gather every transiently split dim, back to the durable layout (defined by self.durable_mesh_axes)
+        """Undo `shard`: all-gather every transiently split dim, back to the durable layout (defined by
+        self.durable_mesh_axes).
 
-        If defer_free is provided, the sharded ref is given to the caller to dealloc, else it gets dealloc'd immediately.
+        After gathering, the parameter holds the full tensor again instead of the sharded tensor. If defer_free is
+        provided, the sharded tensor is given to the caller to deallocate, else it gets deallocated immediately.
         """
         dims = self.transient_dims()
         if not dims or self._data is None:
