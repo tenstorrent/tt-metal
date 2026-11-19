@@ -69,6 +69,7 @@ class ActionConfig:
     v_lambda: float
     v_ridge: float
     slip_gradient: float
+    expert_non_causal_attention: bool
     action_dim: int = 2
     steps: int = 10
 
@@ -153,11 +154,31 @@ def _action_config(raw: dict) -> ActionConfig:
         int_method=expert["diffusion_cfg"]["int_method"],
         inference_guidance_weight=expert["diffusion_cfg"]["inference_guidance_weight"],
         use_classifier_free_guidance=expert["diffusion_cfg"]["use_classifier_free_guidance"],
+        # Upstream's default when the checkpoint leaves it out.
+        expert_non_causal_attention=expert.get("expert_non_causal_attention", True),
         **space,
     )
 
 
+def validate_supported(cfg: Alpamayo2EdgeConfig) -> None:
+    """Rejects checkpoint settings that neither the reference nor the TT path implements.
+
+    Raises:
+        ValueError: The flow is guided or not Euler, the expert attends causally, or the expert cannot read the LM's
+            KV cache layer for layer.
+    """
+    acfg = cfg.action
+    if acfg.use_classifier_free_guidance or acfg.int_method != "euler":
+        raise ValueError("Alpamayo2Edge inference is unguided Euler flow matching")
+    if not acfg.expert_non_causal_attention:
+        raise ValueError("only the non-causal action expert is implemented")
+    for name in ("layers", "kv_heads", "head_dim"):
+        if getattr(cfg.text, name) != getattr(cfg.expert, name):
+            raise ValueError(f"LM and expert must share KV-cache geometry ({name})")
+
+
 def load_config(model_dir: Path) -> Alpamayo2EdgeConfig:
+    """The checkpoint's config with the `ALPAMAYO_NUM_LAYERS` override, checked by `validate_supported`."""
     model_dir = Path(model_dir)
     with open(model_dir / "config.json") as f:
         raw = json.load(f)
@@ -178,7 +199,7 @@ def load_config(model_dir: Path) -> Alpamayo2EdgeConfig:
     # The expert's llm_config is overridden by expert_update_cfg for the fields it lists.
     expert_raw = {**expert["llm_config"], **{k: v for k, v in expert_dims.items() if k != "num_hidden_layers"}}
 
-    return Alpamayo2EdgeConfig(
+    cfg = Alpamayo2EdgeConfig(
         vision=VisionConfig(
             hidden=vis["hidden_size"],
             layers=vision_layers,
@@ -213,3 +234,5 @@ def load_config(model_dir: Path) -> Alpamayo2EdgeConfig:
         ),
         model_dir=model_dir,
     )
+    validate_supported(cfg)
+    return cfg

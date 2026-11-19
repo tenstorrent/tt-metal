@@ -17,7 +17,12 @@ import torch
 
 import ttnn
 from models.experimental.alpamayo2_edge.reference.action import action_to_traj
-from models.experimental.alpamayo2_edge.reference.config import Alpamayo2EdgeConfig, load_config, resolve_model_dir
+from models.experimental.alpamayo2_edge.reference.config import (
+    Alpamayo2EdgeConfig,
+    load_config,
+    resolve_model_dir,
+    validate_supported,
+)
 from models.experimental.alpamayo2_edge.reference.inputs import ModelInputs
 from models.experimental.alpamayo2_edge.reference.model import Prediction
 from models.experimental.alpamayo2_edge.reference.vision import vision_cu_seqlens
@@ -54,6 +59,7 @@ class Alpamayo2EdgeTT:
         action_in_proj: TtActionInProj,
         action_out_proj: TtActionOutProj,
     ) -> None:
+        validate_supported(cfg)
         self.cfg = cfg
         self.mesh_device = lm.device
         self.vision = vision

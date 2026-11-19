@@ -37,7 +37,7 @@ from models.experimental.alpamayo2_edge.reference.action import (
     expert_mask,
     expert_position_ids,
 )
-from models.experimental.alpamayo2_edge.reference.config import Alpamayo2EdgeConfig, TokenIds
+from models.experimental.alpamayo2_edge.reference.config import Alpamayo2EdgeConfig, TokenIds, validate_supported
 from models.experimental.alpamayo2_edge.reference.inputs import ModelInputs
 from models.experimental.alpamayo2_edge.reference.text import KVCache, LanguageModel, TextModel
 from models.experimental.alpamayo2_edge.reference.vision import VisionTower
@@ -127,12 +127,7 @@ class ReferenceModel:
         action_in_proj: ActionInProj,
         action_out_proj: nn.Linear,
     ):
-        acfg = cfg.action
-        if acfg.use_classifier_free_guidance or acfg.int_method != "euler":
-            raise ValueError("Alpamayo2Edge inference is unguided Euler flow matching")
-        for field in ("layers", "kv_heads", "head_dim"):
-            if getattr(cfg.text, field) != getattr(cfg.expert, field):
-                raise ValueError(f"LM and expert must share KV-cache geometry ({field})")
+        validate_supported(cfg)
         self.cfg = cfg
         self.vision = vision
         self.lm = lm
