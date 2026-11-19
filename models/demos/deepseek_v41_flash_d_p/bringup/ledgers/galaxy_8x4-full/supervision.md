@@ -506,3 +506,7 @@
   (routing_planner.hpp division by zero); on side = the runner refused the MOE_REPLICAS=on model instead of restarting
   (framework bug, to the runner agent). P.84 reset to TODO for another attempt with note OV-50 (tree kept); it
   starts when the runner fix lands.
+- 10:04 UTC runner fix 49c6fb14b7c (a request's differing load-time switch restarts the runner, not a
+  refusal). DEVICE OPENS (justified): P.84 attempt 2: the agent's checks through the runner with both MOE_REPLICAS
+  values, then the A/B: expected <= 4 opens / loads of 0-20 (one per configuration change), + the fresh full process
+  if accepted. RAM unaccounted before: 168.4 GiB.
