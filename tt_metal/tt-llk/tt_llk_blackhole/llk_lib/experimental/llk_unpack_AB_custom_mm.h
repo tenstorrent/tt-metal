@@ -105,7 +105,7 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
     // (block_increment == inner_increment then, so no final reuse is needed).
     //
     // The ct_dim - 1 reuses split over the template slots, each slot a replay range:
-    //   the first slot starts at the buffer beginning (offset by post1) and holds the full unpack plus some reuses,
+    //   the first slot starts at the buffer beginning and holds the full unpack plus some reuses,
     //   the last slot counts backwards from the buffer end so it always ends in the final reuse,
     //   any slots between replay reuse blocks from the start of the reuse range, since all reuses but the last
     //   are the same instructions.
