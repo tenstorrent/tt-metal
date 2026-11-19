@@ -104,7 +104,7 @@ def run_softmax(device, tensor_shape, op) -> list:
 
     atol = rtol = 0.1
 
-    allclose = (torch.allclose(torch_result, ttnn_result, atol=atol, rtol=rtol, equal_nan=True),)
+    allclose = torch.allclose(torch_result, ttnn_result, atol=atol, rtol=rtol, equal_nan=True)
     if not allclose:
         return [(False, f"mismatch in allclose: torch: {torch_result}, ttnn: {ttnn_result}"), e2e_perf]
     # TODO: Verify that the sum of the output tensor is equal to 1.0 over the specified dimension

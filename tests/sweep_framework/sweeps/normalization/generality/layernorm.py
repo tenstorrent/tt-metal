@@ -110,7 +110,7 @@ def run_normalization(device, tensor_shape, op) -> tuple:
 
     atol = rtol = 0.1
 
-    allclose = (torch.allclose(torch_result, ttnn_result, atol=atol, rtol=rtol, equal_nan=True),)
+    allclose = torch.allclose(torch_result, ttnn_result, atol=atol, rtol=rtol, equal_nan=True)
     if not allclose:
         return [(False, f"mismatch in allclose: torch: {torch_result}, ttnn: {ttnn_result}"), e2e_perf]
 
