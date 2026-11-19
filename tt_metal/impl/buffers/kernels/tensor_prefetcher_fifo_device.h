@@ -18,20 +18,28 @@
 
 #include <stdint.h>
 
+#include "api/dataflow/dataflow_api.h"
 #include "api/debug/assert.h"
 #include "api/debug/waypoint.h"
 #include "internal/prefetcher_pipe_init.h"
 #include "internal/risc_attribs.h"
 #include "tt_metal/impl/buffers/tensor_prefetcher_fifo.hpp"
 #include "tt_metal/impl/buffers/tensor_prefetcher_request.hpp"
+#include "tt_metal/impl/dispatch/kernels/dispatch_noc_trids.hpp"
 
 namespace tensor_prefetcher {
 
 namespace fifo = tt::tt_metal::tensor_prefetcher_fifo;
+
 using tt::tt_metal::TensorPrefetcherEntry;
 using tt::tt_metal::TensorPrefetcherLayoutMode;
 using tt::tt_metal::TensorPrefetcherRequestHeader;
 using tt::tt_metal::TensorPrefetcherTensorLayout;
+
+// This kernel's NoC transaction id, from its range in dispatch_noc_trids.hpp. Its reads and writes carry it, so it
+// waits on its own transactions instead of every untagged transaction on the dispatch engine, which includes the
+// command queues' traffic.
+inline constexpr uint32_t kTrid = dispatch_noc_trids::tensor_prefetcher_trid(TENSOR_PREFETCHER_KERNEL_INDEX);
 
 // Every word in the region is shared with the host, the other kernels or the NoC, none of which snoop
 // this core's data cache, so it is always accessed through the uncached L1 alias.
@@ -110,7 +118,7 @@ class LanePage {
 public:
     FORCE_INLINE LanePage(volatile tt_l1_ptr fifo::SlotHeader* slot, uint32_t lane) :
         bytes_(
-            reinterpret_cast<volatile tt_l1_ptr uint8_t*>(slot) + fifo::kSlotHeaderBytes +
+            reinterpret_cast<volatile tt_l1_ptr uint8_t*>(slot) + fifo::kSlotPagesOffset +
             lane * fifo::kLanePageBytes) {}
 
     FORCE_INLINE volatile tt_l1_ptr TensorPrefetcherRequestHeader* header() const {
@@ -132,6 +140,34 @@ private:
     volatile tt_l1_ptr uint8_t* bytes_;
 };
 
+// The first kernel in tensor_prefetcher_kernels() plans each tensor of a PREFETCH slot: it reads the tensor's
+// source and decides how many blocks each receiver gets, which it publishes in the slot's plan. Every later
+// kernel follows that plan (wait_for_tensor_blocks) rather than derive it, so a group selector is read once.
+inline constexpr bool kPlansBlocks = TENSOR_PREFETCHER_KERNEL_INDEX == 0;
+
+// The word of `slot`'s plan that says how many blocks each receiver gets of tensor `e`.
+FORCE_INLINE volatile tt_l1_ptr uint32_t* tensor_blocks(volatile tt_l1_ptr fifo::SlotHeader* slot, uint32_t e) {
+    ASSERT(e < fifo::kMaxSlotTensors);
+    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+               reinterpret_cast<volatile tt_l1_ptr uint8_t*>(slot) + fifo::kSlotHeaderBytes) +
+           e;
+}
+
+// Waits for the kernel that reads tensor `e` of `slot` from its source to plan how many blocks each receiver
+// gets of it, and returns that count in `blocks`. False if termination was requested first.
+FORCE_INLINE bool wait_for_tensor_blocks(
+    const FifoConsumer& requests, volatile tt_l1_ptr fifo::SlotHeader* slot, uint32_t e, uint32_t& blocks) {
+    volatile tt_l1_ptr uint32_t* planned = tensor_blocks(slot, e);
+    WAYPOINT("TBW");
+    while ((blocks = *planned) == fifo::kTensorBlocksUnplanned) {
+        if (requests.terminate_requested()) {
+            return false;
+        }
+    }
+    WAYPOINT("TBD");
+    return true;
+}
+
 // Waits until the signal slot a WAIT_SIGNAL page names reaches its count. The slots only grow and may wrap, so
 // their difference is compared. False if termination was requested first.
 FORCE_INLINE bool wait_for_signal(
@@ -149,12 +185,22 @@ FORCE_INLINE bool wait_for_signal(
     return true;
 }
 
+// Puts this kernel's NoC command buffers back on id 0, as a command buffer's id must be 0 at kernel exit. Each
+// keeps the last id given to it: the read command buffer the one serve_requests sets, the write command buffer
+// the one the pusher's tagged writes carry.
+FORCE_INLINE void clear_noc_trids() {
+    noc_async_read_set_trid(0);
+    noc_async_write_set_trid(0);
+}
+
 // Retires every slot the host writes, as this kernel's FIFO consumer, until termination is requested.
 // `serve_request(requests, slot)` handles a PREFETCH or DRAIN request slot and returns false if termination
 // was requested before it finished. Every kernel waits out a WAIT_SIGNAL slot here, so no kernel reads or
 // sends anything the requests after it name until the signal arrives.
 template <typename ServeRequest>
 FORCE_INLINE void serve_requests(ServeRequest&& serve_request) {
+    // Every read this kernel issues carries its id, which the read command buffer keeps.
+    noc_async_read_set_trid(kTrid);
     FifoConsumer requests;
     while (volatile tt_l1_ptr fifo::SlotHeader* slot = requests.wait_for_slot()) {
         ASSERT(slot->num_lanes <= region.layout.lanes);
@@ -167,6 +213,7 @@ FORCE_INLINE void serve_requests(ServeRequest&& serve_request) {
                                         ? wait_for_signal(requests, header)
                                         : serve_request(requests, slot);
                 if (!served) {
+                    clear_noc_trids();
                     return;
                 }
                 break;
@@ -175,6 +222,7 @@ FORCE_INLINE void serve_requests(ServeRequest&& serve_request) {
         }
         requests.retire_slot();
     }
+    clear_noc_trids();
 }
 
 // How one tensor of a PREFETCH slot streams: every receiver of every lane, numbered in lane order. The
@@ -182,6 +230,7 @@ FORCE_INLINE void serve_requests(ServeRequest&& serve_request) {
 struct TensorStream {
     uint32_t num_receivers = 0;
     uint32_t block_bytes = 0;
+    // Blocks of each of the tensor's groups per receiver; a group selector decides how many groups arrive.
     uint32_t block_count = 0;
     // Bytes of each stage slot, set by the receiver count alone (fifo::stage_slot_bytes).
     uint32_t slot_bytes = 0;
@@ -203,11 +252,10 @@ FORCE_INLINE void plan_tensor(volatile tt_l1_ptr fifo::SlotHeader* slot, uint32_
         const LanePage page(slot, l);
         volatile tt_l1_ptr TensorPrefetcherEntry* entry = page.entry(e);
         volatile tt_l1_ptr TensorPrefetcherTensorLayout* layout = page.layout_of(entry);
-        // Receiver-contiguous, batched, ungrouped and unselected: the host rejects the rest for
-        // this placement.
+        // Receiver-contiguous and batched: the host rejects the rest for this placement.
         ASSERT(
             layout->layout_mode == static_cast<uint32_t>(TensorPrefetcherLayoutMode::ReceiverContiguous) &&
-            layout->streaming == 0 && entry->num_groups == 1);
+            layout->streaming == 0);
         const uint32_t block_bytes = layout->page_bytes_per_recv;
         const uint32_t block_count = layout->block_count;
         if (l == 0) {

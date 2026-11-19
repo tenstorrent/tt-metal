@@ -73,6 +73,10 @@ DB_SCHEMA = [
     Column("formats.sfpu_dst", "string", True, "formats"),
     # flags
     Column("dest_acc", "string", True, "flags"),
+    Column("sdpa_op", "string", True, "configuration"),
+    Column("softplus_beta_bits", "int64", True, "configuration"),
+    Column("softplus_beta_reciprocal_bits", "int64", True, "configuration"),
+    Column("softplus_threshold_bits", "int64", True, "configuration"),
     Column("speed_of_light", "bool", True, "flags"),
     Column("unpack_to_dest", "string", True, "flags"),
     # key
@@ -149,7 +153,6 @@ DB_SCHEMA = [
     Column("pool_type", "string", True, "configuration"),
     Column("r_dimm", "int64", True, "configuration"),
     Column("reduce_block_ct_dim", "int64", True, "configuration"),
-    Column("reduce_pool_type", "string", True, "configuration"),
     Column("reinit_mode", "int64", True, "configuration"),
     Column("relu_config", "int64", True, "configuration"),
     Column("relu_type", "string", True, "configuration"),
@@ -168,7 +171,6 @@ DB_SCHEMA = [
     Column("srca_reuse_count", "int64", True, "configuration"),
     Column("sfploadmacro", "string", True, "configuration"),
     Column("stable_sort", "string", True, "configuration"),
-    Column("ternary_mathop", "string", True, "configuration"),
     Column("ternary_scalar_bits", "int64", True, "configuration"),
     Column("throttle_level", "int64", True, "configuration"),
     Column("tilize", "string", True, "configuration"),

@@ -563,6 +563,34 @@ PERF_TEST_SCHEMAS = {
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
         "test_name_aliases": {"perf_fast_tilize_full": "perf_fast_tilize_full"},
     },
+    "perf_fast_tilize_metal_api": {
+        "version": 1,
+        "columns": [
+            "block_ct_dim",
+            "block_rt_dim",
+            "dest_acc",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "full_ct_dim",
+            "full_rt_dim",
+            "loop_factor",
+            "marker",
+            "num_faces",
+            "num_faces_A",
+            "num_faces_B",
+            "tile_cnt",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {
+            "perf_fast_tilize_metal_api": "perf_fast_tilize_metal_api"
+        },
+    },
     "perf_fast_untilize": {
         "version": 5,
         "columns": [
@@ -739,6 +767,32 @@ PERF_TEST_SCHEMAS = {
         ],
         "aliases": {},
         "test_name_aliases": {"perf_sdpa_weighted_reduce": "perf_sdpa_weighted_reduce"},
+    },
+    "perf_sfpu_sdpa": {
+        "version": 1,
+        "columns": [
+            "approx_mode",
+            "dest_acc",
+            "dest_sync",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "loop_factor",
+            "marker",
+            "scale_bf16",
+            "sdpa_op",
+            "softplus_beta_bits",
+            "softplus_beta_reciprocal_bits",
+            "softplus_threshold_bits",
+            "tile_cnt",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {"perf_sfpu_sdpa": "perf_sfpu_sdpa"},
     },
     "perf_sum_reduce_scalar": {
         "version": 1,
@@ -960,8 +1014,8 @@ PERF_TEST_SCHEMAS = {
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
         "test_name_aliases": {"perf_matmul": "perf_matmul"},
     },
-    "perf_pack_dest_bank": {
-        "version": 5,
+    "perf_pack_l1_acc": {
+        "version": 6,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -993,7 +1047,10 @@ PERF_TEST_SCHEMAS = {
             "unpack_to_dest",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
-        "test_name_aliases": {"perf_pack_dest_bank": "perf_pack_dest_bank"},
+        "test_name_aliases": {
+            "perf_pack_dest_bank": "perf_pack_l1_acc",
+            "perf_pack_l1_acc": "perf_pack_l1_acc",
+        },
     },
     "perf_pack": {
         "version": 3,
@@ -1294,7 +1351,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_sfpu_reduce": "perf_sfpu_reduce"},
     },
     "perf_sfpu_reduce_sdpa": {
-        "version": 4,
+        "version": 5,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -1311,11 +1368,14 @@ PERF_TEST_SCHEMAS = {
             "loop_factor",
             "marker",
             "mathop",
-            "reduce_pool_type",
+            "pool_type",
             "tile_cnt",
             "unpack_to_dest",
         ],
-        "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "aliases": {
+            "formats.sfpu_math": "formats.sfpu_src",
+            "reduce_pool_type": "pool_type",
+        },
         "test_name_aliases": {"perf_sfpu_reduce_sdpa": "perf_sfpu_reduce_sdpa"},
     },
     "perf_sfpu_sdpa_fw": {
@@ -1341,7 +1401,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_sfpu_sdpa_fw": "perf_sfpu_sdpa_fw"},
     },
     "perf_sfpu_ternary": {
-        "version": 5,
+        "version": 6,
         "columns": [
             "approx_mode",
             "clobber_lregs",
@@ -1357,10 +1417,10 @@ PERF_TEST_SCHEMAS = {
             "iterations",
             "loop_factor",
             "marker",
+            "mathop",
             "num_faces",
             "num_faces_A",
             "num_faces_B",
-            "ternary_mathop",
             "ternary_scalar_bits",
             "tile_cnt",
             "unpack_to_dest",
@@ -1370,7 +1430,7 @@ PERF_TEST_SCHEMAS = {
         ],
         "aliases": {
             "formats.sfpu_math": "formats.sfpu_src",
-            "mathop": "ternary_mathop",
+            "ternary_mathop": "mathop",
             "value_bits": "ternary_scalar_bits",
         },
         "test_name_aliases": {"perf_sfpu_ternary": "perf_sfpu_ternary"},

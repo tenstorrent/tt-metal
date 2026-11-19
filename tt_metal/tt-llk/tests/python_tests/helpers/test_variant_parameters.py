@@ -16,6 +16,7 @@ from .llk_params import (
     FPU_BINARY_OPERATIONS,
     REDUCE_OPERATIONS,
     SFPU_BINARY_OPERATIONS,
+    SFPU_TERNARY_OPERATIONS,
     SFPU_UNARY_OPERATIONS,
     ApproximationMode,
     BroadcastType,
@@ -233,6 +234,10 @@ def _generate_operation_constants(mathop: MathOperation) -> list[str]:
         constants.append(
             f"constexpr auto SFPU_BINARY_OPERATION = ckernel::BinaryOp::{mathop.cpp_enum_value};"
         )
+    elif mathop in SFPU_TERNARY_OPERATIONS:
+        constants.append(
+            f"constexpr auto SFPU_TERNARY_OPERATION = SfpuType::{mathop.cpp_enum_value};"
+        )
     elif mathop in FPU_BINARY_OPERATIONS:
         constants.append(
             f"constexpr auto ELTWISE_BINARY_OP = ckernel::EltwiseBinaryType::{mathop.cpp_enum_value};"
@@ -258,10 +263,12 @@ class MATH_OP(TemplateParameter):
                 temp_header.append(
                     f"constexpr auto REDUCE_DIM = ckernel::ReduceDim::{self.mathop.cpp_enum_value};"
                 )
-                if self.pool_type:
-                    temp_header.append(
-                        f"constexpr auto POOL_TYPE = ckernel::PoolType::{self.pool_type.value};"
-                    )
+
+        # The pool applies to reduce ops, but kernels that take no mathop (multidim reduce) read it too.
+        if self.pool_type:
+            temp_header.append(
+                f"constexpr auto POOL_TYPE = ckernel::PoolType::{self.pool_type.value};"
+            )
 
         # Optional extra unary operation (used when both a binary and unary op
         # need to be present in the same kernel, e.g. binary-eltwise followed by
@@ -278,21 +285,6 @@ class MATH_OP(TemplateParameter):
             )
 
         return "\n".join(temp_header)
-
-
-@dataclass
-class SFPU_TERNARY_OP(TemplateParameter):
-    """Select the ternary SFPU op at compile time.
-
-    Emits ``constexpr auto SFPU_TERNARY_OPERATION = SfpuType::<op>;`` consumed by
-    ``sfpu_operations.h``. ``ternary_mathop.cpp_enum_value`` must match the
-    ``SfpuType`` enumerator name (e.g. ``addcmul``/``addcdiv``).
-    """
-
-    ternary_mathop: MathOperation = None
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr auto SFPU_TERNARY_OPERATION = SfpuType::{self.ternary_mathop.cpp_enum_value};"
 
 
 @dataclass
@@ -1136,14 +1128,6 @@ class PERF_RUN_TYPE(TemplateParameter):
         return (
             f"\nconstexpr auto PERF_RUN_TYPE = PerfRunType::{self.perf_run_type.name};"
         )
-
-
-@dataclass
-class REDUCE_POOL_TYPE(TemplateParameter):
-    reduce_pool_type: ReducePool
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr auto POOL_TYPE = ckernel::PoolType::{self.reduce_pool_type.value};"
 
 
 @dataclass

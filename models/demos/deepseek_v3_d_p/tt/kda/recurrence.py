@@ -319,9 +319,7 @@ def _scan_local_grouped_chunks(
         actual_end=actual_end,
         sequence_parallel_axis=sequence_parallel_axis,
     )
-    output = ttnn.reshape(
-        scan.output, (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, geometry.value_dim)
-    )
+    output = ttnn.reshape(scan.output, (geometry.batch_heads, geometry.local_rows, geometry.value_dim))
     return RecurrenceResult(output, _last_group_state(scan.final_state, geometry, groups))
 
 
@@ -600,13 +598,12 @@ class KDARecurrence:
 
     @staticmethod
     def _finish(scan: RecurrenceResult, geometry: _RecurrenceGeometry, slab: bool) -> RecurrenceResult:
-        output = ttnn.reshape(scan.output, (geometry.batch_heads, geometry.local_rows, geometry.value_dim))
         if slab:
-            return RecurrenceResult(output, scan.final_state)
+            return scan
         final_state = ttnn.reshape(
             scan.final_state, (geometry.batch, geometry.heads, geometry.key_dim, geometry.value_dim)
         )
-        return RecurrenceResult(output, final_state)
+        return RecurrenceResult(scan.output, final_state)
 
     def __call__(
         self,
@@ -691,8 +688,8 @@ class KDARecurrence:
 
     def reserve_affine_relay(self) -> None:
         """Allocate the SP relay's L1 landing buffer for the next call (RelayAffinePrefix.reserve): a layer calls it
-        before its first program, since the predecessor's relay may write into it while this rank is still ahead
-        of its own. Without the relay, a no-op."""
+        before an SP barrier that precedes the recurrence, since the predecessor's relay may write into it while this
+        rank is still ahead of its own. Without the relay, a no-op."""
         if self._affine_relay is not None:
             self._affine_relay.reserve()
 
