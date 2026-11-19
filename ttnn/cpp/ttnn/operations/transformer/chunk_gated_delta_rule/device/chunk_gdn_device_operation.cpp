@@ -24,7 +24,7 @@ namespace {
 void check_gdn_tensor(const Tensor& t, const char* name, DataType dt) {
     TT_FATAL(t.layout() == Layout::TILE, "chunk_gdn: {} must be TILE layout", name);
     TT_FATAL(t.dtype() == dt, "chunk_gdn: {} has wrong dtype", name);
-    TT_FATAL(t.buffer() != nullptr, "chunk_gdn: {} must be on device", name);
+    TT_FATAL(t.is_allocated(), "chunk_gdn: {} must be on device", name);
 }
 
 // A gate, g or beta: the token-major [B, T, HV] tensor the model produces, fp32 or bf16, TILE, with B * HV == rows
@@ -34,7 +34,7 @@ void check_gdn_gate(
     TT_FATAL(t.layout() == Layout::TILE, "chunk_gdn: {} must be TILE layout", name);
     TT_FATAL(
         t.dtype() == DataType::FLOAT32 || t.dtype() == DataType::BFLOAT16, "chunk_gdn: {} must be fp32 or bf16", name);
-    TT_FATAL(t.buffer() != nullptr, "chunk_gdn: {} must be on device", name);
+    TT_FATAL(t.is_allocated(), "chunk_gdn: {} must be on device", name);
     const auto& s = t.logical_shape();
     TT_FATAL(s.rank() == 3, "chunk_gdn: {} must be [B, T, HV] (got rank {})", name, s.rank());
     TT_FATAL(HV > 0 && s[2] == HV, "chunk_gdn: {} has {} heads per row, expected HV = {}", name, s[2], HV);
@@ -505,7 +505,7 @@ bool fused_pool_feasible(uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t
 FusedPlacement fused_placement(
     uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t NV, uint32_t NP, uint32_t placement) {
     const uint32_t n_cores = grid_x * grid_y;
-    TT_FATAL(NV <= grid_x, "chunk_gdn_fused: nv={} exceeds the grid width {}", NV, grid_x);
+    TT_FATAL(NV >= 1 && NV <= grid_x, "chunk_gdn_fused: nv={} must be in [1, grid width {}]", NV, grid_x);
     const uint32_t HPR = grid_x / NV;  // heads per receiver row (placement 0)
     const uint32_t R = BH * NV;        // receiver cores
     // Placement 2: NP is the pool size, NPH of it per head are home producers, the rest extras.

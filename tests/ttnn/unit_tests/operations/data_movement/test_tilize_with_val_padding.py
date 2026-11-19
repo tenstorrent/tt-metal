@@ -92,6 +92,27 @@ params += [
     )
 ]
 
+# Column padding wider than one sub-block of the block-interleaved factory: every sub-block after
+# the one holding the source's last column starts inside the padding region, so the reader must
+# fill it without reading past the source row (the reader used to underflow the remaining width
+# and read `width_size` bytes from a 64-byte row). The 100-wide input also exercises the
+# misaligned (staging) path.
+params += [
+    pytest.param(
+        [[1, 1, 32, in_w]],
+        {
+            "dtype": [ttnn.bfloat16],
+            "layout": [ttnn.ROW_MAJOR_LAYOUT],
+            "input_mem_config": [ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)],
+            "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            "output_tensor_shape": [1, 1, 32, out_w],
+            "pad_value": 7.0,
+        },
+        id=f"wide_col_pad-{in_w}-{out_w}",
+    )
+    for in_w, out_w in [(32, 5120), (2048, 5120), (100, 8448)]
+]
+
 
 @pytest.mark.parametrize("input_shapes, tilize_with_val_padding_args", params)
 def test_run_tilize_with_val_padding_test(input_shapes, tilize_with_val_padding_args, device, function_level_defaults):

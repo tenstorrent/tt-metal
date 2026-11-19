@@ -29,14 +29,14 @@ template <
 inline void calculate_sfpu_binary_bitwise(
     const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     static_assert(
-        INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::LO16,
-        "INSTRUCTION_MODE must be one of: INT32, LO16.");
+        INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::UINT16,
+        "INSTRUCTION_MODE must be one of: INT32, UINT16.");
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
-    // LO16 uses unsigned 16-bit (U16) layout, INT32 uses two's-complement 32-bit (I32) layout.
+    // UINT16 uses unsigned 16-bit (U16) layout, INT32 uses two's-complement 32-bit (I32) layout.
     constexpr auto layout =
-        (INSTRUCTION_MODE == InstrModLoadStore::LO16) ? sfpi::DataLayout::U16 : sfpi::DataLayout::I32;
-    using vType = std::conditional_t<INSTRUCTION_MODE == InstrModLoadStore::LO16, vUInt, vInt>;
+        (INSTRUCTION_MODE == InstrModLoadStore::UINT16) ? sfpi::DataLayout::U16 : sfpi::DataLayout::I32;
+    using vType = std::conditional_t<INSTRUCTION_MODE == InstrModLoadStore::UINT16, vUInt, vInt>;
     auto apply = [](vType a, vType b) -> vType {
         if constexpr (BITWISE_OP == BinaryBitwiseOp::AND) {
             return a & b;
