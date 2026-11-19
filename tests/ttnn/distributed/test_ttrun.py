@@ -932,7 +932,13 @@ class TestPhase1CacheArtifacts:
         rb.write_text("x")
         rf.write_text("y")
         assert not phase1_outputs_ready(run_dir, mock_mode=True)
-        (run_dir / PHASE2_MOCK_MAPPING_FILENAME).write_text("m: 1\n")
+        desc = run_dir / "mock_cluster_desc" / "host0.yaml"
+        (run_dir / PHASE2_MOCK_MAPPING_FILENAME).write_text(f"rank_to_cluster_mock_cluster_desc:\n  0: {desc}\n")
+        assert not phase1_outputs_ready(run_dir, mock_mode=True)
+        desc.parent.mkdir()
+        desc.write_text("")
+        assert not phase1_outputs_ready(run_dir, mock_mode=True)
+        desc.write_text("chips: {}\n")
         assert phase1_outputs_ready(run_dir, mock_mode=True)
 
     def test_phase1_cache_hit_valid_requires_key_file(self, temp_dir):

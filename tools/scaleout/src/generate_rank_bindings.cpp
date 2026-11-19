@@ -270,9 +270,15 @@ TopologyMappingParts run_topology_mapping(
  * within this output). `binding.mesh_host_rank` always reflects the MGD/MeshGraph value for `(local mesh id, chip)`.
  *
  * `mapping_result` already uses this MeshGraph's local MeshIds.
+ *
+ * `offline`: the PSD comes from the FSD and only the first host's descriptor is open, so other hosts' chips
+ * may be unknown to the cluster. Every chip in a generated descriptor is its own MMIO device.
  */
 std::vector<RankBindingConfig> extract_rank_bindings(
-    const PhysicalSystemDescriptor& psd, const TopologyMappingResult& mapping_result, const MeshGraph& mesh_graph) {
+    const PhysicalSystemDescriptor& psd,
+    const TopologyMappingResult& mapping_result,
+    const MeshGraph& mesh_graph,
+    bool offline) {
     struct AsicGrouping {
         std::vector<tt::tt_metal::experimental::PhysicalNodeId> physical_node_ids;
         std::vector<tt::ChipId> chip_ids;
@@ -380,8 +386,7 @@ std::vector<RankBindingConfig> extract_rank_bindings(
         const auto& cluster = MetalContext::instance().get_cluster();
         std::set<tt::ChipId> mmio_device_ids;
         for (tt::ChipId chip_id : chip_ids) {
-            tt::ChipId mmio_id = cluster.get_associated_mmio_device(chip_id);
-            mmio_device_ids.insert(mmio_id);
+            mmio_device_ids.insert(offline ? chip_id : cluster.get_associated_mmio_device(chip_id));
         }
         std::string visible_devices;
         for (auto it = mmio_device_ids.begin(); it != mmio_device_ids.end(); ++it) {
@@ -803,8 +808,8 @@ int main(int argc, char** argv) {
                     }
                     ++emitted;
 
-                    std::vector<RankBindingConfig> rank_bindings =
-                        extract_rank_bindings(psd, parts.front(), mesh_graphs_for_extract.front());
+                    std::vector<RankBindingConfig> rank_bindings = extract_rank_bindings(
+                        psd, parts.front(), mesh_graphs_for_extract.front(), args.offline_fsd.has_value());
 
                     const std::set<std::string> hosts = solution_host_set(rank_bindings);
                     if (args.distinct_host_sets && !seen_host_sets.insert(hosts).second) {
@@ -946,8 +951,8 @@ int main(int argc, char** argv) {
                             tt::LogFabric, "Sub-context {}: no local mapping part from the enumerator", subctx_id);
                         return 1;
                     }
-                    std::vector<RankBindingConfig> rank_bindings =
-                        extract_rank_bindings(psd, topology.parts[mgi], mesh_graphs_for_extract[mgi]);
+                    std::vector<RankBindingConfig> rank_bindings = extract_rank_bindings(
+                        psd, topology.parts[mgi], mesh_graphs_for_extract[mgi], args.offline_fsd.has_value());
 
                     if (rank_bindings.empty()) {
                         if (multi_mgd) {

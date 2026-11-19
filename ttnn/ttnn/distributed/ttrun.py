@@ -672,6 +672,12 @@ def phase1_outputs_ready(run_dir: Path, mock_mode: bool) -> bool:
         p2 = run_dir / PHASE2_MOCK_MAPPING_FILENAME
         if not p2.is_file() or p2.stat().st_size == 0:
             return False
+        try:
+            descriptors = load_mock_rank_to_descriptors(p2)
+            if not descriptors or any(path.stat().st_size == 0 for path in descriptors.values()):
+                return False
+        except (OSError, ValueError, yaml.YAMLError):
+            return False
     return True
 
 
