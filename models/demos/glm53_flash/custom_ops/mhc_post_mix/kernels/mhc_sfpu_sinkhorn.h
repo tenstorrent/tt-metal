@@ -11,8 +11,9 @@
 // both subvector rotate-adds (SFPSHFT2 ROR1 moves lane c to lane c+1, cyclic over the 8 lanes), no matmul, no
 // pack. Reciprocals: SFPARECIP + two Newton steps y <- y (2 - x y). Only the bands of the live rows are touched
 // (pad rows are ignored downstream); the right face is never read or written.
-// Register use: L0 even data, L1 odd data, L2 sums / reciprocal, L3 and L5 scratch, L4 the odd-lane mask (1.0 on
-// lanes 1, 3, 5, 7), L6 -1.0, L7 eps. Dependent instructions sit >= 2 issue slots apart (SFPNOP).
+// Register use: L0 even data, L1 odd data, L2 sums / reciprocal, L3 and L5 scratch, L4 the odd-lane mask (all ones
+// on lanes 1, 3, 5, 7: the LLK lane-mask contract of mhc_sfpu_x8.h, applied with SFPAND), L6 -1.0, L7 eps.
+// Dependent instructions sit >= 2 issue slots apart (SFPNOP).
 #pragma once
 #include "mhc_sfpu_x8.h"
 
@@ -60,7 +61,7 @@ FORCE_INLINE void sk_row_normalize(uint32_t e, bool use_eps, bool eps_out) {
     TTI_SFPNOP;
     TTI_SFPADD(L2, C1, L3, L2, 0);  // odd lanes: the row's sum over its 4 entries
     TTI_SFPNOP;
-    TTI_SFPMUL(L2, L4, C0, L2, 0);  // even lanes <- 0
+    TTI_SFPAND(0, L4, L2, 0);  // even lanes <- 0 (bitwise mask)
     TTI_SFPNOP;
     sk_ror(L2, L3, 7);              // L3[c] = L2[c+1]: even lane 2i gets the sum from lane 2i+1
     TTI_SFPADD(L2, C1, L3, L2, 0);  // every lane holds its row's sum
@@ -105,18 +106,18 @@ FORCE_INLINE void sk_col_normalize(uint32_t a) {
 // the sinkhorn_reference / mhc_split_sinkhorn sequence, in place.
 FORCE_INLINE void sinkhorn_bands(
     uint32_t m, uint32_t /*unused*/, uint32_t /*unused2*/, uint32_t nb, uint32_t iters, uint32_t eps_bits) {
-    // constants: L4 = 1.0 on the odd lanes (lane-0 mask rotated to 1, 3, 5, 7), L6 = -1.0, L7 = eps
-    sfpu::_build_lane_mask_col0_();  // L6 <- the lane-0 mask (clobbers L2)
+    // constants: L4 = all ones on the odd lanes (lane-0 mask rotated to 1, 3, 5, 7, OR-ed), L6 = -1.0, L7 = eps
+    sfpu::_build_lane_mask_col0_();  // L6 <- the lane-0 mask (all ones in lane 0; clobbers L2)
     TTI_SFPNOP;
     sk_ror(L6, L4, 1);
     sk_ror(L4, L3, 2);
-    TTI_SFPADD(L4, C1, L3, L4, 0);
+    TTI_SFPOR(0, L3, L4, 0);  // L4 |= L3 (bitwise: the mask words are not floats)
     TTI_SFPNOP;
     sk_ror(L3, L3, 2);
-    TTI_SFPADD(L4, C1, L3, L4, 0);
+    TTI_SFPOR(0, L3, L4, 0);
     TTI_SFPNOP;
     sk_ror(L3, L3, 2);
-    TTI_SFPADD(L4, C1, L3, L4, 0);
+    TTI_SFPOR(0, L3, L4, 0);
     TTI_SFPNOP;
     TTI_SFPMOV(0, C0, L6, 0);
     TTI_SFPMOV(0, C0, L7, 0);

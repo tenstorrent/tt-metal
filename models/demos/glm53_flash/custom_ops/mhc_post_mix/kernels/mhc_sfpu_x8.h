@@ -22,9 +22,14 @@
 //                              slot at its group. Two chains interleave.
 //   stream_mix                 out (+)= sum_k coef_k[row] * x_k, 5 SFPMADs per slot, accumulators in LREGs.
 //
-// Every operation is an exact fp32 multiply by 1.0/0.0, an add of 0.0, a lane rotate, or an fp32 FMA, so the
-// results are bit-exact (expansion) / within fp32 rounding (mix). Dependent SFPU instructions are kept >= 2
-// issue slots apart (2-cycle result latency); the comments mark the producers.
+// The register lane masks (make_lane_masks here, sinkhorn_bands in mhc_sfpu_sinkhorn.h) follow the LLK's
+// `_build_lane_mask_col0_` contract (ckernel_sfpu_binary_bcast.h, tt-metal #61043): all ones (0xFFFFFFFF) in the
+// kept lane, 0 elsewhere, applied with a bitwise SFPAND (combined with SFPOR), never an SFPMUL -- the all-ones
+// word is a NaN as a float. (Before #61043 the helper built a 1.0f mask that these routines multiplied by.)
+//
+// Every operation is a bitwise lane mask, an add of 0.0, a lane rotate, or an fp32 FMA, so the results are
+// bit-exact (expansion) / within fp32 rounding (mix). Dependent SFPU instructions are kept >= 2 issue slots apart
+// (2-cycle result latency); the comments mark the producers.
 
 #pragma once
 
@@ -52,9 +57,10 @@ FORCE_INLINE uint32_t group_off(uint32_t m) { return (m >> 1) * RIGHT + (m & 1) 
 FORCE_INLINE uint32_t coef_slot(uint32_t k) { return (k & 1) * ODD; }
 FORCE_INLINE uint32_t coef_lane(uint32_t k) { return k >> 1; }
 
-// LREG4+k <- 1.0 in lane lanes[k] of every 8-lane subvector, 0.0 elsewhere (k < count <= 4). Clobbers LREG2.
+// LREG4+k <- all ones in lane lanes[k] of every 8-lane subvector, 0 elsewhere (k < count <= 4): an SFPAND mask.
+// Clobbers LREG2.
 FORCE_INLINE void make_lane_masks(const uint32_t* lanes, uint32_t count) {
-    sfpu::_build_lane_mask_col0_();  // LREG6 <- the lane-0 mask
+    sfpu::_build_lane_mask_col0_();  // LREG6 <- the lane-0 mask (all ones in lane 0)
     for (uint32_t k = 0; k < count; ++k) {
         if (L4 + k != L6) {
             TT_SFPMOV(0, L6, L4 + k, 0);
@@ -75,8 +81,8 @@ FORCE_INLINE void bcast_pair(
     uint32_t srcA, uint32_t maskA, uint32_t dstA, uint32_t srcB, uint32_t maskB, uint32_t dstB) {
     TT_SFPLOAD(L0, IM, ADDR_MOD_7, srcA);
     TT_SFPLOAD(L1, IM, ADDR_MOD_7, srcB);
-    TT_SFPMUL(L0, maskA, C0, L0, 0);  // keep lane k
-    TT_SFPMUL(L1, maskB, C0, L1, 0);
+    TT_SFPAND(0, maskA, L0, 0);  // keep lane k (bitwise: the other lanes become +0.0)
+    TT_SFPAND(0, maskB, L1, 0);
     TTI_SFPSHFT2(0, L0, L2, ROR1);  // stage 1: lanes {k, k+1}
     TTI_SFPSHFT2(0, L1, L3, ROR1);
     TTI_SFPADD(L0, C1, L2, L0, 0);
@@ -303,7 +309,7 @@ FORCE_INLINE void rowsum_sq_into(
         band_rowsum_sq(first, count, off);
         const uint32_t o = out * DT + off + group_off(group);
         TT_SFPLOAD(L0, IM, ADDR_MOD_7, o);
-        TTI_SFPMUL(L1, L4, C0, L1, 0);  // keep the statistic's lane only
+        TTI_SFPAND(0, L4, L1, 0);  // keep the statistic's lane only (bitwise mask)
         TTI_SFPNOP;
         TTI_SFPADD(L0, C1, L1, L0, 0);
         TTI_SFPNOP;

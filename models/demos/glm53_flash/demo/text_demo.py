@@ -246,3 +246,12 @@ def test_text_demo(mesh_device, input_prompts, users_per_row, max_seq_len, max_g
     logger.info(f"metrics written to {out_dir / (tag + '.json')}")
     ttnn.release_trace(mesh_device, trace_id)
     assert all(len(g) > 1 for g in gen[:users_per_row]), "no tokens generated"
+    # degenerate output must fail: non-finite logits argmax to id 0 on every step (a NaN/inf residual printed "!!!..."),
+    # and a broken model loops on one id. Neither happens in real text; near-tie flips between runs do not trip these.
+    firsts = [g[0] for g in gen[:users_per_row]]
+    assert any(t != 0 for t in firsts), f"degenerate output: every user's first generated token is id 0 ({firsts})"
+    for u, g in enumerate(gen):
+        body = [t for t in g if t not in stop]
+        assert (
+            len(body) < 4 or len(set(body)) > 1
+        ), f"degenerate output: user slot {u} generated only token id {body[0]} ({len(body)} times)"
