@@ -450,3 +450,17 @@
   only; accuracy is judged on the accept gate.
 - Framework: a per-unit layer set routes the units (runner agent, CPU work now; the device stays closed until the
   reboot).
+
+## 2026-11-19 08:20 UTC: resident runner: accuracy loads the whole model, performance does not (F285, owner)
+- Rule: accuracy units (ladder, determinism, contract, outside history, decoder-skip test: every test not declared
+  otherwise) run on all 40 layers, all together in the accept gate's ONE fresh process with the determinism check.
+  The determinism check takes the configuration of the gate's accuracy units. Performance units (walls, census, idle
+  map, profiles, positions: `BATCH_LAYERS = "executed"` or the framework's list) run on the executed layers (DS41
+  decode: 0-20) in the resident runner.
+- Changed: gate_groups never mixes the two classes. The gate runs the performance group first (the runner's 0-20
+  model, no load when held), then the full process. The one-load rule allows one full and one executed load a gate.
+  In the runner, a performance run never uses another plan's full model. A/B sides on the runner measure timing only
+  (accuracy tests and ladders dropped, limits to what was measured); the A/B table says so.
+- Loads per queued task after the change (full + executed): P.84 1 + 1 (5 + 2 units), X.10 1 + 1 (1 + 2),
+  P.81 / P.82 / P.83 1 + 1 (5 + 3 each), FIX.11 1 + 0 (9 units; 3 contract tests outside the shared model keep their
+  own processes), FIX.13 1 + 1 (7 + 1; 6 own processes). `validate`: valid.
