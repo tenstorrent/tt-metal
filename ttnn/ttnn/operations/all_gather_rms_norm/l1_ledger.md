@@ -1,0 +1,87 @@
+# L1 Ledger: all_gather_rms_norm (regime R1 mirror_resident_gather)
+
+Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes (from `op_design.md`):
+**row** (`core_row_tiles`), **member W** (`member_w_tiles`), **source slice** (G, mapped onto members),
+**wave** (transport order of row-groups), **link / direction** (port identity). Group is per chip and never
+appears in a buffer. `rows = core_row_tiles_max`, `mw = member_w_tiles_max`, `n_stat` = 1 (rms) / 2 (ln).
+
+## Compute cores
+
+| CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
+|----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
+| `cb_x` | `rows · mw` | `rows · mw` (whole block: landing slot, resident across all passes, read by ports for relays) | {row: spans → rows, member W: spans → mw, source slice: spans the member's slice(s), wave: n/a (one block per core), link/dir: n/a} | input dtype (raw slices; never through DEST) | reader | compute | call | none: it is the landing target and the relay source for the whole call — no other buffer is live-disjoint from it |
+| `cb_gamma` | `mw` | `mw` | {row: absent (gamma is one row), member W: spans → mw, slice: spans, wave: n/a, link/dir: n/a} | gamma dtype, compact row-0 page | reader | compute | call | `cb_beta`: both live through normalize (concurrent) |
+| `cb_beta` (ln ∧ beta) | `mw` | `mw` | as `cb_gamma` | gamma dtype | reader | compute | call | `cb_gamma`: concurrent |
+| `cb_ones` | 1 | 1 (constant) | {row: n/a, member W: n/a, slice: n/a, wave: n/a, link/dir: n/a} | Float16_b (scaler format of the reduce API) | reader | compute | call | constant read by every collapse; not aliasable with a stream that is live at the same time |
+| `cb_tail_mask` (ln ∧ W_local % 32 ≠ 0) | 1 | 1 (constant) | all axes n/a | T_acc (multiplies DEST-width centered values) | reader | compute | call | constant |
+| `cb_moment_a` | `rows` | `rows` | {row: spans → rows, member W: reduced away, slice: reduced, wave: n/a, link/dir: n/a} | T_acc | compute | compute | pass → collapse | `cb_moment_b`: alias candidate (pass A done before pass B packs) — not aliased because the ln pass-A collapse output (mean_m → pivot) is produced while `cb_moment_a` is popped by the same reduce; kept separate for clarity, 1 block of column-0 tiles (≤ 4 KB/row) |
+| `cb_moment_b` (ln) | `2 · rows` | `2 · rows` | {row: spans, member W: reduced, others n/a} | T_acc | compute | compute | pass B → member finalize | see `cb_moment_a` |
+| `cb_pivot` (ln) | `rows` | `rows` | {row: spans, others n/a} | Float16_b (the rounding to bf16 **is** the pivot; must be bf16-exact for the FPU subtraction) | compute | compute | pass B (K_m), then normalize (K_g) | holds K_m then K_g — disjoint lifetimes already folded into one CB |
+| `cb_partial` | `n_stat · rows` | `n_stat · rows` | {row: spans, member W: reduced, slice: reduced, others n/a} | T_acc | compute | writer | moments → exchange | k = 1: the combine is skipped and `combine_finalize` reads it directly; not aliased with `cb_gathered` (both live during the exchange) |
+| `cb_gathered` (k > 1) | `n_stat · k · rows` (owner combine k > 8: the base op's owner sizing `n_stat · ceil(rows/k)·k` row-gather tiles) | same | {row: spans, member: spans → k, member W: reduced, others n/a} | T_acc | writer | compute | exchange → combine | peers write into it without credit (lockstep, single block): no sharing |
+| `cb_rowstat` | `n_rowstat · rows` (rms 1, ln 2: inv_std, shift) | same | {row: spans, others n/a} | T_acc | compute | compute | finalize → end of normalize | — concurrent with cb_x / gamma through normalize |
+| `cb_out` aligned | `out_depth · out_unit_tiles` = `2 · min(mw, 16)` | `out_unit_tiles` + one unit in flight | {row: streams, member W: streams (unit window), others n/a} | output dtype | compute | writer | per unit | capacity > live set by the double buffer (overlap) |
+| `cb_out` dense (`w_non_aligned`) | `rows · mw` | `rows · mw` (assembly reads source tiles i−1, i of every row) | {row: spans, member W: spans} | output dtype | compute | compute | normalize → assembly | could alias `cb_x` (cb_x is popped after normalize) — **not** aliased: a relay read of cb_x by a port may still be in flight when normalize ends (relays of late waves), and the ports read cb_x by raw address |
+| `cb_shift_mats` (dense) | `n_shift_mats` ≤ 4 | same (constant) | all n/a | Float16_b (0/1, exact) | reader | compute | call | constant |
+| `cb_foreign` (dense) | `rows · max_foreign_in` | same | {row: spans, others n/a} | output dtype | writer (peer member, lockstep slot) | compute | assembly | peers write without credit: no sharing |
+| `cb_contrib` (dense) | `rows · max_foreign_out` | same | {row: spans} | output dtype | compute | writer | assembly | concurrent with `cb_foreign` |
+| `cb_out_dense` (dense) | `2 · min(home_out_tiles, 16)` | one unit + one in flight | {row: streams, output column: streams} | output dtype | compute | writer | per unit | replaces the aligned `cb_out` stream role; double buffer |
+
+Port cores additionally hold `cb_x` (allocated, unused — the address-identity requirement) and:
+
+| CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
+|----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
+| `cb_port_stage` | `2 · port_batch_chunks · chunk_pages` | `port_batch_chunks · chunk_pages` + one batch in flight | {row: streams, member W: streams, slice: streams, wave: streams, link/dir: one port = one (d, l)} | input dtype (raw bytes; never through DEST) | port_reader | port_sender | per batch | double buffer of the example (reader fills b+1 while the sender drains b) |
+
+## Symbol table
+
+| Symbol | Bound | Predicate establishing it |
+|---|---|---|
+| `rows` = `core_row_tiles_max` | `ceil(trt / num_row_groups)` | `select_split()`; R1 predicate `resident_fits(k)` |
+| `mw` = `member_w_tiles_max` | `ceil(sw / k_s)` or `d · sw` | `select_split()` slice-aligned candidates |
+| `k` | ≤ `K_CAP` (base op) and ≤ N | `select_split()` |
+| `n_stat` | ≤ 2 | norm_type |
+| `max_foreign_in`, `max_foreign_out` | ≤ `ceil(32 / W_local) + 1` | `plan_assembly()` (dense only) |
+| `n_shift_mats` | ≤ 4 per member | distinct (shift, valid width) pairs of the member's slices |
+| `chunk_pages` | `max_payload // T_in` (bf16 7, fp32 3, bf8b 13 at 14,336 B) | fabric config |
+| `port_batch_chunks` | 4 | constant (example-measured) |
+| `out_unit_tiles` | ≤ 16 (`OUT_UNIT_CAP`, base op) | constant cap |
+| `cb_l1_budget(device)` | free L1 between the allocator base and the lowest L1 buffer | base op's function |
+
+## Footprint (per compute core)
+
+```
+footprint(k, rows) =  rows·mw·T_in                                   # cb_x            (row × member W)
+                    + (1 + has_beta)·mw·G_page                      # gamma / beta    (member W)
+                    + 2048 + [ln∧tail]·T_acc + n_shift_mats·2048    # constants
+                    + rows·T_acc·(1 + 2·ln) + rows·2048·ln          # moments, pivot  (row)
+                    + n_stat·rows·T_acc·(1 + [k>1]·k)               # partial, gathered (row × k)
+                    + n_rowstat·rows·T_acc                          # row stats       (row)
+                    + (aligned ? 2·min(mw,16)·T_out : rows·mw·T_out + rows·(max_in+max_out)·T_out + 2·16·T_out)
+```
+
+Terms scaling with the knobs: `rows · mw` (cb_x, and cb_out in the dense regime) dominates; `rows · k` (gathered)
+grows with the W split; everything else is ≤ a few tiles per tile-row. `resident_fits(k) := footprint(k, rows(k)) ≤
+cb_l1_budget(device)`; for port cores the footprint is `rows·mw·T_in + 2·port_batch_chunks·chunk_pages·T_in`.
+
+Focus case (640×384 bf16, k = 4, rows = 1, mw = 12, fp32 DEST, gamma RM bf16): cb_x 24 KB + gamma ≈ 2 KB +
+constants 2 KB + moments 4 KB + partial 4 KB + gathered 16 KB + rowstat 4 KB + out 2·12·2 KB = 48 KB → ≈ 104 KB per
+compute core. Port: 24 KB + 2·4·7·2 KB = 136 KB.
+
+## Data-movement budget (focus case: G = 4 ring, 2 links, S = 640·384·2 B = 491,520 B per slice)
+
+| Tensor | DRAM crossings | Why that many | Cross-core traffic added |
+|--------|----------------|---------------|--------------------------|
+| x (own slice) | 1 (read S by the own members) | resident in cb_x for every pass; the ports read it from L1, not DRAM | ports read it from L1 twice (fwd and bwd port): 2·S local NoC |
+| x (remote slices) | 0 | land in compute L1 from the fabric; the far slice is relayed out of the middle chip's L1 | relay reads: 0.5·S per relay port (far half), notifications |
+| fabric | busiest link direction 1.5·S over 2 links (= roofline) | balanced ring schedule (example) | — |
+| output | 1 (write G·S) | each member writes its block once | — |
+| gamma (RM sticks) | per member: its `mw` sticks (64 B each) | reuse-shared over rows, no broadcast (deferred) | — |
+| partials | 0 | intra-chip only | k²·rows·(faces 0/2: 2 KB) per row-group = 20·16·2 KB = 640 KB per chip |
+
+Totals per chip: DRAM S + G·S = 5·S ≈ 2.46 MB (the roofline's DRAM term); fabric 1.5·S per busiest link direction; local
+NoC ≈ 3·S + 0.64 MB.
+
+> Cheapest-traffic split considered: R1 itself (raw slices into compute L1, mirror layout, relay) — it is at the minimum
+> on the DRAM and fabric tiers. Implemented: R1. The alternatives (normalize-then-gather, gather-to-DRAM) move the same
+> or more bytes and add a fabric round or 2·G·S of DRAM; they are `rejected` rows in the regime table.
