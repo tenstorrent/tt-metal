@@ -72,6 +72,10 @@ class StoreSystem(T.System):
         parts = [(s, min(S, s + C)) for s in range(0, S, C)]
         parts = parts[:cut] if cut else parts
         did = []
+        p0 = len(self.acks)
+        # V41_PREFILL_RESTORE_PAIR may defer ONE restored chunk's acks to the next chunk (tt-d-gen's prefill FIFO does not wait
+        # for acks): after chunk k the prompt has k or k + 1 chunks acked, every prompt ends fully acked, acks stay in order
+        pair = os.environ.get(PR.ENV_RESTORE_PAIR, "0") == "1"
         for k, (s, e) in enumerate(parts):
             word = slot | ((MARKED | (LAST if k == len(parts) - 1 else 0)) if marks else 0)
             n0, a0 = len(F.SYS.trace), len(self.acks)
@@ -84,12 +88,20 @@ class StoreSystem(T.System):
                 request_id=self.request,
             )
             self.request += 1
-            assert len(self.acks) - a0 == CFG.n_layers, "every chunk acks every contract layer"
+            got = len(self.acks) - p0
+            if got != (k + 1) * CFG.n_layers:
+                assert pair and got == k * CFG.n_layers and k < len(parts) - 1, (
+                    f"every chunk acks every contract layer (a paired restore may defer one chunk's to the next): chunk {k} of "
+                    f"{len(parts)}, {got} acks"
+                )
             n = sum(1 for op in F.SYS.trace[n0:] if op[0] == "pf._chunk")
             if n == 0:
                 did.append("R" if self.rt._prefix is not None and self.rt._prefix.last_restored else "S")
             else:
                 did.append("C" if n == 1 else f"C+{n - 1}silent")
+        assert len(self.acks) - p0 == len(parts) * CFG.n_layers, "the prompt ends fully acked"
+        rids = [r for r, _layer in self.acks[p0:]]
+        assert rids == sorted(rids), "acks in chunk order"
         self.last_did = did
         return did
 
@@ -313,7 +325,7 @@ def test_failed_restore_invalidates_the_device_retention_not_the_store(monkeypat
         s = StoreSystem(flag=True)
         s.prompt(A)
         s.prompt(U)
-        real = PR.export_entry_rows
+        real = getattr(PR, _export_writer())
         calls = [0]
 
         def flaky(*a, **k):
@@ -322,11 +334,11 @@ def test_failed_restore_invalidates_the_device_retention_not_the_store(monkeypat
                 raise RuntimeError("device fault")
             return real(*a, **k)
 
-        monkeypatch.setattr(PR, "export_entry_rows", flaky)
+        monkeypatch.setattr(PR, _export_writer(), flaky)
         with pytest.raises(RuntimeError):  # allow-pytest.raises: no ttnn conftest
             s.prompt(A2)
         assert s.rt._prefix.ret[0].length == 0 and len(s.store().entries) > 0
-        monkeypatch.setattr(PR, "export_entry_rows", real)
+        monkeypatch.setattr(PR, _export_writer(), real)
         assert s.prompt(A2) == ["R", "R", "R", "C", "C", "C"]
         check(s, layout, A2, what="A2 after a failed restore")
 
@@ -354,23 +366,29 @@ def _no_slab(fn):
 
 
 def _no_zero_on_restore(real):
-    def wrapped(self, slot, parts, ids, start):
+    def wrapped(self, slot, *a, **k):
         z = self.exp.zero_slot
         self.exp.zero_slot = lambda s: None
         try:
-            return real(self, slot, parts, ids, start)
+            return real(self, slot, *a, **k)
         finally:
             self.exp.zero_slot = z
 
     return wrapped
 
 
+def _export_writer() -> str:
+    """The export-rows writer a restore calls: ``export_entry_rows``, or ``_write_entry_rows`` with V41_PREFILL_RESTORE_FAST
+    (which feeds it the uploaded rows) -- a fault / mutation injected into the other one is never reached."""
+    return "_write_entry_rows" if os.environ.get("V41_PREFILL_RESTORE_FAST", "0") == "1" else "export_entry_rows"
+
+
 MUTATIONS = {
-    "export rows not repacked on restore": (PR, "export_entry_rows", lambda real: (lambda *a, **k: None)),
+    "export rows not repacked on restore": (PR, _export_writer(), lambda real: (lambda *a, **k: None)),
     "path-A slab not written on restore": (PR, "entry_sources", _no_slab),
     "Engram history not advanced on restore": (F.FakeEngram, "hash_ids", lambda real: (lambda self, *a, **k: None)),
     "host carries not loaded": (PR.V41PrefixReuse, "_load_carries", lambda real: (lambda self, *a, **k: None)),
-    "no export clear at a chunk-0 restore": (PR.V41PrefixReuse, "_restore_rows", _no_zero_on_restore),
+    "no export clear at a chunk-0 restore": (PR.V41PrefixReuse, "_restore_rows_n", _no_zero_on_restore),
 }
 
 

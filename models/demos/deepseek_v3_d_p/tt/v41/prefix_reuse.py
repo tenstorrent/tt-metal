@@ -101,6 +101,13 @@ ENV_RESERVE_GB = "V41_PREFILL_PREFIX_HOST_RESERVE_GB"
 ENV_SPILL_TIPS = "V41_PREFILL_PREFIX_SPILL_TIPS"
 # restore uploads sharded over mesh axis 0 + all_gather instead of replicated (module docstring; unset / 0 = replicated)
 ENV_RESTORE_GATHER = "V41_PREFILL_RESTORE_GATHER"
+# tt-blaze DS41F-0163 (TTFT): V41_PREFILL_RESTORE_PAIR=1 restores two consecutive host-store chunks [2j C, (2j + 2) C) with ONE set of
+# writes (the uploads / gathers / fills / slab / export rows of a 2-chunk block: per-call cost dominates a restore -- host 40,
+# 7.2 ms for one chunk's upload + gather + fill, 5.6 ms for two). The even chunk's restore and acks are DEFERRED until the next
+# chunk: paired when it is the next restore, else flushed alone first (every other device callback, a computed or skipped chunk,
+# an empty chunk). tt-d-gen keeps sending chunks without waiting for acks (prefill FIFO 8, DS41F-0163) and acks stay in order.
+# Only an explicitly NOT-last chunk (mark_last_chunk headers) is deferred; needs V41_PREFILL_RESTORE_FAST. Default off.
+ENV_RESTORE_PAIR = "V41_PREFILL_RESTORE_PAIR"
 TAG = "v41-prefix"
 
 
@@ -252,6 +259,16 @@ class V41PrefixReuse:
         self.last_restored = False  # the last begin_chunk restored its chunk from the host store (H2)
         self.replayed = False  # the last begin_chunk ran silent chunks (island replays) before its chunk
         self.last_silent = 0  # how many (tt-blaze DS41F-0152: runtime's reuse count drops them)
+        # V41_PREFILL_RESTORE_PAIR: one deferred even-chunk restore per slot (parts, ids, start) and its deferred ack thunks
+        self.pair = (
+            os.environ.get(ENV_RESTORE_PAIR, "0") == "1" and os.environ.get("V41_PREFILL_RESTORE_FAST", "0") == "1"
+        )
+        self._pend = {s: None for s in range(runtime.num_users)}
+        self._pend_acks = {s: [] for s in range(runtime.num_users)}
+        self.deferred = (
+            False  # the last begin_chunk deferred its chunk's restore: the runtime defers its acks (defer_acks)
+        )
+        self._cur_last = None
         self.stores = self._build_stores(runtime) if store_gb() > 0 else {}  # H2; {} = off
         self.spill_tips = int(os.environ.get(ENV_SPILL_TIPS, "2"))
         self.gather_rows = self._gather_rows() if self.stores else 0  # 0 = replicated restore uploads
@@ -259,9 +276,9 @@ class V41PrefixReuse:
             s: (
                 dict(
                     store=self.stores[s],
-                    restore_rows=partial(self._restore_rows, s),
-                    spill=partial(self._spill, s),
-                    load_carries=partial(self._load_carries, s),
+                    restore_rows=partial(self._restore_rows_paired, s),
+                    spill=self._flushing(s, partial(self._spill, s)),
+                    load_carries=self._flushing(s, partial(self._load_carries, s)),
                     spill_tips=self.spill_tips,
                     chain_seed=f"dsv41-prefill-chain-v1 chunk {self.chunk}".encode(),
                 )
@@ -274,12 +291,12 @@ class V41PrefixReuse:
             s: PrefixRetention(
                 chunk=self.chunk,
                 n_ckpts=self.n_ckpts,
-                save=partial(self._save, s),
-                restore=partial(self._restore, s),
-                export_carries=partial(self._export_carries, s),
-                set_next_start=partial(self._set_next_start, s),
-                compute_silent=partial(self._compute_silent, s),
-                on_resume=partial(self._on_resume, s),
+                save=self._flushing(s, partial(self._save, s)),
+                restore=self._flushing(s, partial(self._restore, s)),
+                export_carries=self._flushing(s, partial(self._export_carries, s)),
+                set_next_start=self._flushing(s, partial(self._set_next_start, s)),
+                compute_silent=self._flushing(s, partial(self._compute_silent, s)),
+                on_resume=self._flushing(s, partial(self._on_resume, s)),
                 log=logger.info,
                 tag=f"{TAG} slot {s}",
                 # a partial last chunk is computed, never skipped: see the module docstring (device check 11-11, S.17)
@@ -350,6 +367,7 @@ class V41PrefixReuse:
         """The device states / export changed outside the retention's view (warm-ups): forget everything. The export is
         zero after the warm-ups (compile's zero_all, _warm_ragged's zero_slot)."""
         for s, pr in self.ret.items():
+            assert self._pend[s] is None and not self._pend_acks[s], f"slot {s}: a deferred restore at reset ({why})"
             pr.reset(why)
             self.hwm[s] = 0
             self.bypass[s] = False
@@ -361,6 +379,11 @@ class V41PrefixReuse:
         self.last_restored = False
         self.replayed = False  # the resume below ran chunks through the model (silent rebuild): runtime._ids_stale
         self.last_silent = 0
+        self.deferred = False
+        self._cur_last = last
+        p = self._pend[slot]
+        if p is not None and int(start) != p[2] + self.chunk:
+            self.flush(slot)  # not the next chunk of the deferred one (another prompt / a jump): restore it alone now
         if start == 0:
             self.bypass[slot] = False
             rss = f"; runner RSS {_rss_gib():.1f} GiB" if pr.store is not None else ""
@@ -378,10 +401,13 @@ class V41PrefixReuse:
             skipped = pr.begin_chunk(
                 torch.tensor([int(t) for t in ids], dtype=torch.int32), start, end, last, force_compute=bool(force)
             )
+            if not self.deferred:
+                self.flush(slot)  # a computed / skipped / unpaired chunk: the deferred restore and its acks go first
             self.replayed = pr.stats.silent_chunks > silent0
             self.last_silent = pr.stats.silent_chunks - silent0
             assert not (image and skipped), "an image-span chunk was skipped / restored"
         except BaseException:
+            self._drop_pending(slot)
             pr.invalidate("begin_chunk failed")
             raise
         if image:
@@ -444,11 +470,65 @@ class V41PrefixReuse:
         self.hwm[slot] = max(self.hwm[slot], min(int(start) + self.chunk, self.max_seq))
 
     def invalidate(self, slot: int, why: str) -> None:
+        self._drop_pending(slot)
         self.ret[slot].invalidate(why)
+
+    def _drop_pending(self, slot: int) -> None:
+        """A failed chunk ends its burst: a deferred restore is not written and its acks are not sent (as an unpaired failed
+        restore's chunk is never acked)."""
+        self._pend[slot] = None
+        self._pend_acks[slot] = []
+
+    # ---- V41_PREFILL_RESTORE_PAIR -------------------------------------------------------------------------------------
+    def _flushing(self, slot: int, fn):
+        """``fn`` with any deferred restore of ``slot`` written (and acked) first: every device callback goes through this."""
+
+        def wrapped(*a, **k):
+            self.flush(slot)
+            return fn(*a, **k)
+
+        return wrapped
+
+    def defer_acks(self, slot: int, thunk) -> None:
+        """The runtime's acks of the chunk whose restore was just deferred: run by ``flush`` / the paired restore, in order."""
+        self._pend_acks[slot].append(thunk)
+
+    def flush(self, slot: int) -> None:
+        """Write the deferred restore of ``slot`` (if any) alone, synchronize, then run its deferred acks (DS41F-0164)."""
+        p, self._pend[slot] = self._pend[slot], None
+        if p is not None:
+            self._restore_rows_n(slot, [p])
+        self._ack_pending(slot)
+
+    def _ack_pending(self, slot: int) -> None:
+        acks, self._pend_acks[slot] = self._pend_acks[slot], []
+        if acks:
+            ttnn.synchronize_device(self.rt.mesh_device)  # the writes land before the KV Manager may read them
+            for thunk in acks:
+                thunk()
+
+    def _restore_rows_paired(self, slot: int, parts: list, ids: torch.Tensor, start: int) -> None:
+        """PrefixRetention's ``restore_rows``: alone (pairing off), deferred (an even, explicitly not-last chunk), or paired
+        with the deferred previous chunk."""
+        start = int(start)
+        if self.pair:
+            p = self._pend[slot]
+            if p is not None and start == p[2] + self.chunk:
+                self._pend[slot] = None
+                self._restore_rows_n(slot, [p, (parts, ids, start)])
+                self._ack_pending(slot)  # the even chunk's acks, before the runtime acks this one
+                return
+            self.flush(slot)
+            if self._cur_last is False and (start // self.chunk) % 2 == 0 and start + 2 * self.chunk <= self.max_seq:
+                self._pend[slot] = (parts, ids, start)
+                self.deferred = True
+                return
+        self._restore_rows_n(slot, [(parts, ids, start)])
 
     def note_empty(self, slot: int) -> None:
         """An EMPTY chunk (tt-d-gen prefill_wait_for_arm_us: a request declined before compute) ended a request: nothing on
         the device changed, so the retained prefix and checkpoints stay; only the in-flight prompt's match ends."""
+        self.flush(slot)
         self.ret[slot].note_empty()
 
     # ---- PrefixRetention callbacks (all act on the slot the runtime selected with use_slot) ----------------------------
@@ -531,6 +611,8 @@ class V41PrefixReuse:
             n = self.chunk // ratio
             for src in (st.compressed_kv, st.index_k):
                 blocks.add((n, int(src.shape[3]), src.dtype))
+                if self.pair:  # V41_PREFILL_RESTORE_PAIR's two-chunk blocks too
+                    blocks.add((2 * n, int(src.shape[3]), src.dtype))
         for n, W, dtype in sorted(blocks, key=str):
             ttnn.deallocate(self._upload_rows(torch.zeros(n, W, dtype=torch.bfloat16), dtype))
         ttnn.synchronize_device(mesh)
@@ -575,11 +657,17 @@ class V41PrefixReuse:
         )
 
     def _restore_rows(self, slot: int, parts: list, ids: torch.Tensor, start: int) -> None:
-        """A stored chunk [start, start + C) back into the device through the writers a computed chunk uses (module
-        docstring): the model's entry / key rows (+ the path-A slab), the export's rows from them, the Engram history.
+        self._restore_rows_n(slot, [(parts, ids, start)])
+
+    def _restore_rows_n(self, slot: int, items: list) -> None:
+        """Stored chunks back into the device through the writers a computed chunk uses (module docstring): the model's entry /
+        key rows (+ the path-A slab), the export's rows from them, the Engram history. ``items``: [(parts, ids, start)] of
+        CONSECUTIVE full chunks (V41_PREFILL_RESTORE_PAIR: two, written as one block per tensor); one = a plain restore.
         """
         assert self.pf.slot == slot, (self.pf.slot, slot)
-        start = int(start)
+        start = int(items[0][2])
+        k = len(items)
+        assert all(int(it[2]) == start + j * self.chunk for j, it in enumerate(items)), [int(it[2]) for it in items]
         # V41_PREFILL_RESTORE_TIMING=1 (measurement only): synchronize the mesh after each phase, so the log line's split is
         # device-complete time per phase (model rows / export rows / Engram), not dispatch time. Off = the path as before.
         timing = os.environ.get("V41_PREFILL_RESTORE_TIMING", "0") == "1"
@@ -588,6 +676,7 @@ class V41PrefixReuse:
         # from the rows this restore just uploaded (no slice back out of the states), and the Engram history written straight
         # into the slot's NgramHashState cache (hash_ids' only lasting effect; its hashes are discarded here). Off = as before.
         fast = os.environ.get("V41_PREFILL_RESTORE_FAST", "0") == "1"
+        assert fast or k == 1, "a multi-chunk restore needs V41_PREFILL_RESTORE_FAST"
         sync()
         t0 = time.perf_counter()
         if start == 0:  # what a cold chunk 0 does first: the export holds another prompt
@@ -595,11 +684,15 @@ class V41PrefixReuse:
             self.exp.zero_slot(slot)
             self.hwm[slot] = 0
         srcs = entry_sources(self.pf)
-        assert len(parts) == 2 * len(srcs), (len(parts), len(srcs))
+        assert all(len(it[0]) == 2 * len(srcs) for it in items), ([len(it[0]) for it in items], len(srcs))
+
+        def cat(j):
+            return items[0][0][j] if k == 1 else torch.cat([it[0][j] for it in items], dim=0)
+
         for i, (_L, attn, st, ratio, blk) in enumerate(srcs):
             e0 = start // ratio
-            rows = self._upload_rows(parts[2 * i], st.compressed_kv.dtype)
-            keys = self._upload_rows(parts[2 * i + 1], st.index_k.dtype)
+            rows = self._upload_rows(cat(2 * i), st.compressed_kv.dtype)
+            keys = self._upload_rows(cat(2 * i + 1), st.index_k.dtype)
             ttnn.kv_cache.fill_cache_for_user_(st.compressed_kv, rows, 0, update_idx=e0)
             ttnn.kv_cache.fill_cache_for_user_(st.index_k, keys, 0, update_idx=e0)
             if blk and getattr(attn, "sparse_path", False):
@@ -607,7 +700,7 @@ class V41PrefixReuse:
                 # kv_only writes no slab
                 attn._slab_write(st, rows, self.chunk + e0)
             if fast:
-                # export_entry_rows' _export_entries for this source, fed the uploaded rows: a full chunk's n = C / ratio rows
+                # export_entry_rows' _export_entries for this source, fed the uploaded rows: k full chunks' n = k C / ratio rows
                 # at e0 (MAXSEQ % C == 0, so the capacity clip never applies), keys typecast to bfp8 as a computed chunk's are
                 k8 = ttnn.typecast(keys, ttnn.bfloat8_b)
                 ent, idx = (self.exp.ent2, self.exp.idx2) if ratio == 2 else (self.exp.ent1, self.exp.idx1)
@@ -616,7 +709,7 @@ class V41PrefixReuse:
                     attn,
                     self.exp.ent_batch(slot, _L),
                     e0,
-                    self.chunk // ratio,
+                    k * self.chunk // ratio,
                     rows,
                     k8,
                     ratio=ratio,
@@ -630,24 +723,25 @@ class V41PrefixReuse:
         t1 = time.perf_counter()
         if not fast:
             export_entry_rows(self.exp, self.pf, slot, start, start + self.chunk)
-        self.note_export(slot, start)
+        for it in items:
+            self.note_export(slot, int(it[2]))
         sync()
         t2 = time.perf_counter()
         if getattr(self.pf, "engrams", None) and self.rt.engram is not None:
-            if fast and self._history_only(slot, ids, start):
-                pass
-            else:
-                self.rt.engram.hash_ids(
-                    slot, [int(v) for v in ids.tolist()], start
-                )  # the n-gram history (host, per position)
+            for _parts, ids, st0 in items:  # the n-gram history, in position order (host, per position)
+                if fast and self._history_only(slot, ids, int(st0)):
+                    continue
+                self.rt.engram.hash_ids(slot, [int(v) for v in ids.tolist()], int(st0))
+        span = f"[{start}, {start + k * self.chunk})"
+        blk_note = f" ({k} chunks, one block)" if k > 1 else ""
         if timing:
             logger.info(
-                f"[{TAG}] slot {slot} restored [{start}, {start + self.chunk}) from the host store (synced): model rows "
+                f"[{TAG}] slot {slot} restored {span} from the host store{blk_note} (synced): model rows "
                 f"{t1 - t0:.4f} s, export rows {t2 - t1:.4f} s, Engram {time.perf_counter() - t2:.4f} s"
             )
             return
         logger.info(
-            f"[{TAG}] slot {slot} restored [{start}, {start + self.chunk}) from the host store: model rows {t1 - t0:.3f} s, "
+            f"[{TAG}] slot {slot} restored {span} from the host store{blk_note}: model rows {t1 - t0:.3f} s, "
             f"export rows + Engram {time.perf_counter() - t1:.3f} s (dispatch)"
         )
 

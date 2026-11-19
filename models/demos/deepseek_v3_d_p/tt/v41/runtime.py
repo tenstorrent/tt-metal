@@ -425,6 +425,27 @@ class V41PrefillRuntime:
         written back from the host store instead (the export's rows included)."""
         self._request_id = int(request_id)
         self._reused[slot_id] += int(end) - int(start)
+        reuse = self._prefix
+        if restored and reuse is not None and getattr(reuse, "deferred", False):
+            # V41_PREFILL_RESTORE_PAIR: this chunk's restore is deferred (paired with the next chunk, or flushed alone before
+            # anything else touches the device); its acks run then, after that write's synchronize, in chunk order
+            self._publish_reuse(slot_id)
+            rid = self._request_id
+
+            def _deferred_acks(rid=rid):
+                saved, self._request_id = self._request_id, rid
+                try:
+                    if self._ack is not None:
+                        for L in range(self.num_layers):
+                            self._ack(L)
+                finally:
+                    self._request_id = saved
+
+            reuse.defer_acks(slot_id, _deferred_acks)
+            logger.info(
+                f"[v41 runtime] chunk [{start}, {end}) slot {slot_id} RESTORED (host store, deferred) in {time.time() - t0:.3f} s"
+            )
+            return
         if restored and RESTORE_SYNC:
             # tt-blaze DS41F-0164: the restore's writes (rows, slab, EXPORT rows) were only dispatched; the acks are host-side
             # and, with tt-d-gen row streaming (TT_KVM_ROW_STREAM_TOKENS > 0, the prefill worker's default since 11-17), make the
