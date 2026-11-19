@@ -117,8 +117,12 @@ def test_transpose_docstring_supported_inputs(dtype, layout, buffer_type, dims, 
     assert output.memory_config() == memory_config
     assert_exact(expected, ttnn.to_torch(output), signed_zeros=not last_dim_bfloat16)
 
-    output = ttnn.transpose(input_tensor, dims[1] - 4, dims[0] - 4, memory_config=memory_config)
-    assert output.memory_config() == memory_config
+    # A given memory_config sets the output's: here the other interleaved buffer type.
+    other_memory_config = interleaved_memory_config(
+        ttnn.BufferType.L1 if buffer_type == ttnn.BufferType.DRAM else ttnn.BufferType.DRAM
+    )
+    output = ttnn.transpose(input_tensor, dims[1] - 4, dims[0] - 4, memory_config=other_memory_config)
+    assert output.memory_config() == other_memory_config
     assert_exact(expected, ttnn.to_torch(output), signed_zeros=not last_dim_bfloat16)
 
     if (dims[0] >= 2) != (dims[1] >= 2):
