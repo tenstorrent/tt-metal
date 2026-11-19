@@ -82,6 +82,32 @@ def test_ttrun_hang_timeout():
     clean(r)
 
 
+@pytest.mark.xfail(
+    reason="P1 (tt-metal #66367): a rank leaving on an error runs atexit -> MPI_Finalize, which is collective and "
+    "deadlocks the peers waiting in a different collective, so the whole job hangs until the --timeout wall clock "
+    "(exit 241) instead of failing fast. The fix is abort-on-error in MPIContext (call MPI_Abort on an error exit, "
+    "MPI_Finalize only on a clean one) and lives in a LOWER layer than tt-run — PR2 / tt-metal #64546. Remove this "
+    "xfail when that lands.",
+    strict=False,
+)
+def test_ttrun_error_exit_fails_fast_not_hang():
+    """A rank exits on an error (victim_exit1). The contract: the job ends FAST with a truthful non-zero code and
+    leaves nothing — a rank's error must never deadlock its peers in MPI_Finalize. A PRRTE --timeout bounds the run
+    so this test can never hang the suite; today the job rides that wall clock to 241 (the P1 hang), which is the
+    known error PR2 fixes. xfail until abort-on-error lands in MPIContext."""
+    r = run_case(
+        "ttrun_error_exit_hang",
+        {**NP, "PROBE_SCENARIO": "victim_exit1"},
+        DEADLINE_END,
+        cmd=ttrun_mpi_cmd("--timeout 20 --report-state-on-timeout"),
+    )
+    ended(r)
+    nonzero(r)
+    clean(r)
+    # The real contract (what PR2 delivers): a fast abort, NOT riding the --timeout wall clock to 241.
+    assert r.exit != 241, f"P1: the error-exit deadlocked and the job rode the --timeout wall clock (241): {r}"
+
+
 def test_ttrun_no_shm_leak():
     """A rank dies under tt-run. Because tt-run builds the mpirun line with --mca btl self,tcp, no shared-memory
     segment is ever mapped, so even a failed job leaves nothing in /dev/shm (P11)."""
