@@ -26,7 +26,8 @@ namespace compute_kernel_lib {
 namespace detail {
 
 // SFPU MAX fold
-// UInt32 folds do not exist on Quasar.
+// UInt32 folds do not exist on Quasar but ARCH_QUASAR guards are needed since the compiler
+// checks for them even in a branch that is not taken.
 template <DataFormat format>
 ALWI void sfpu_reduce_max_fold_init() {
     if constexpr (format == DataFormat::Int32) {
@@ -34,6 +35,8 @@ ALWI void sfpu_reduce_max_fold_init() {
     } else if constexpr (is_uint32_format(format)) {
 #ifndef ARCH_QUASAR
         binary_max_uint32_tile_init();
+#else
+        static_assert(!is_uint32_format(format), "UInt32 SFPU reduce is not supported on Quasar");
 #endif
     } else {
         binary_max_tile_init();
@@ -47,6 +50,8 @@ ALWI void sfpu_reduce_max_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
     } else if constexpr (is_uint32_format(format)) {
 #ifndef ARCH_QUASAR
         binary_max_uint32_tile(a, b, out);
+#else
+        static_assert(!is_uint32_format(format), "UInt32 SFPU reduce is not supported on Quasar");
 #endif
     } else {
         binary_max_tile(a, b, out);
@@ -61,6 +66,8 @@ ALWI void sfpu_reduce_min_fold_init() {
     } else if constexpr (is_uint32_format(format)) {
 #ifndef ARCH_QUASAR
         binary_min_uint32_tile_init();
+#else
+        static_assert(!is_uint32_format(format), "UInt32 SFPU reduce is not supported on Quasar");
 #endif
     } else {
         binary_min_tile_init();
@@ -74,6 +81,8 @@ ALWI void sfpu_reduce_min_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
     } else if constexpr (is_uint32_format(format)) {
 #ifndef ARCH_QUASAR
         binary_min_uint32_tile(a, b, out);
+#else
+        static_assert(!is_uint32_format(format), "UInt32 SFPU reduce is not supported on Quasar");
 #endif
     } else {
         binary_min_tile(a, b, out);
