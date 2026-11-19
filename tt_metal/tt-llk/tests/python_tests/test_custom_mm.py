@@ -129,10 +129,10 @@ class CUSTOM_MM_TRANSPOSE(TemplateParameter):
 class CUSTOM_MM_READ_TRANSPOSED(TemplateParameter):
     """in1 tiles are stored c-major / k-minor and the unpacker walks them column by column."""
 
-    read_transposed: bool = False
+    in1_read_transposed: bool = False
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr bool CUSTOM_MM_READ_TRANSPOSED = {str(self.read_transposed).lower()};"
+        return f"constexpr bool CUSTOM_MM_READ_TRANSPOSED = {str(self.in1_read_transposed).lower()};"
 
 
 class CustomMMStimuliConfig(StimuliConfig):

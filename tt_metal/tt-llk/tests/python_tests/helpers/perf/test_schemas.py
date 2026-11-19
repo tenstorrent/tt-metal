@@ -1906,7 +1906,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_unpack_transpose": "perf_unpack_transpose"},
     },
     "perf_custom_mm": {
-        "version": 2,
+        "version": 3,
         "columns": [
             "c_dimm",
             "dest_acc",
@@ -1923,6 +1923,7 @@ PERF_TEST_SCHEMAS = {
             "in0_face_r_dim",
             "in1_face_c_dim",
             "in1_face_r_dim",
+            "in1_read_transposed",
             "k_dimm",
             "loop_factor",
             "marker",
