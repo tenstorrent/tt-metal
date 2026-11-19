@@ -25,4 +25,8 @@ constexpr uint32_t cb_shift = 14;
 constexpr uint32_t cb_kg = 15;
 constexpr uint32_t cb_mu = 16;
 constexpr uint32_t cb_affine_stage = 17;
+constexpr uint32_t cb_norm = 18;
+constexpr uint32_t cb_shift_mats = 19;
+constexpr uint32_t cb_foreign = 20;
+constexpr uint32_t cb_contrib = 21;
 }  // namespace agrms_cb

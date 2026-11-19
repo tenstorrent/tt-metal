@@ -53,12 +53,18 @@ CB_SHIFT = 14  # ln: -(mu - K_g) * inv_std
 CB_KG = 15  # ln: K_g = bf16(mu)
 CB_MU = 16  # ln: mu (fp32 scratch between the two combine windows)
 CB_AFFINE_STAGE = 17  # writer scratch: gamma / beta row-0 staging
+# dense assembly (W_local % 32 != 0): output tiles straddle slices -> 0/1 shift-matmul into the dense layout
+CB_NORM = 18  # normalized member block (slice-tile space), output dtype
+CB_SHIFT_MATS = 19  # 0/1 shift matrices (output dtype), built by the reader
+CB_FOREIGN = 20  # contributions of peer members to this member's home output tiles (lockstep slot address)
+CB_CONTRIB = 21  # this member's contributions to peers' home output tiles
 NUM_CBS = 32
 
 # ---- semaphores (program-local; declared BEFORE setup_fabric_connection takes its ids) ----
 SEM_LANDED = 0  # compute cores: landed entries covering this member (port reader -> member reader)
 SEM_PARTIALS = 1  # compute cores: partial exchange arrivals (base op)
 SEM_OWN_LOADED = 2  # port cores: own members that loaded their block (member reader -> port reader)
+SEM_FOREIGN = 3  # compute cores: contributors that delivered their foreign tiles (dense assembly)
 
 # ---- knobs (op_design.md: catalog / example measurements) ----
 INC_EVERY = 8  # packets per fabric entry (fabric_all_gather: increment every 8 chunks)
@@ -215,7 +221,7 @@ def out_unit(pitch: int) -> int:
     return min(pitch, OUT_UNIT_CAP)
 
 
-def cb_plan(sz: Sizes, k: int, pitch: int, rows: int, n_affine_slots: int) -> dict:
+def cb_plan(sz: Sizes, k: int, pitch: int, rows: int, n_affine_slots: int, dense=None) -> dict:
     """{cb: (pages, page_bytes)} of the compute cores (cb_x included)."""
     n_stat = 2 if sz.is_ln else 1
     plan = {
@@ -242,6 +248,13 @@ def cb_plan(sz: Sizes, k: int, pitch: int, rows: int, n_affine_slots: int) -> di
         plan[CB_MU] = (1, sz.T_acc)
         if sz.mask:
             plan[CB_MASK] = (1, sz.T_bf16)
+    if dense is not None:
+        plan[CB_NORM] = (rows * pitch, sz.T_out)
+        plan[CB_SHIFT_MATS] = (max(1, dense.n_mats), sz.T_out)
+        if dense.max_fin:
+            plan[CB_FOREIGN] = (rows * dense.max_fin, sz.T_out)
+        if dense.max_fout:
+            plan[CB_CONTRIB] = (rows * dense.max_fout, sz.T_out)
     return plan
 
 
@@ -399,6 +412,85 @@ def build_entries(chips, ring, L, split: Split, geo: Geometry, compute_cores, vx
     return out, inc, n_waves
 
 
+# ---------------------------------------------------------------------------------------------------------------------
+# Dense assembly plan (w_non_aligned): output tile j of every tile-row = sum over source runs of (member tile) x S,
+# S a 0/1 shift matrix (S[e][e + delta] = 1 for e in [e0, e1)); home member of j = owner of dense column 32 j;
+# other members' runs reach the home as one partial tile each (foreign contributions, added with S = identity).
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+@dataclass
+class DensePlan:
+    n_mats: int
+    max_fin: int
+    max_fout: int
+    members: list  # per member: dict(mats, j0, home=[(srcs, foreign_slots)], fout=[(home_m, slot, srcs)], n_contrib, homes)
+
+
+def dense_plan(geo: Geometry, mm: MemberMap) -> DensePlan:
+    G, Wl, W, k = geo.G, geo.W_local, geo.W, mm.k
+
+    def owner(c):
+        q, cl = divmod(c, Wl)
+        i = cl // TILE
+        for m, spec in enumerate(mm.members):
+            for qq, c0, n, off in spec.parts:
+                if qq == q and c0 <= i < c0 + n:
+                    # local tile index inside the member's row (cb_norm walks core_w tiles per row in part order)
+                    lj = sum(pn for (_, _, pn, _) in spec.parts[: spec.parts.index((qq, c0, n, off))]) + (i - c0)
+                    return m, lj, cl % TILE
+        raise AssertionError(c)
+
+    per_tile = []  # j -> (home, [(m, lj, (e0, e1, delta))])
+    for j in range(geo.out_w_tiles):
+        runs = []
+        c = TILE * j
+        end = min(TILE * (j + 1), W)
+        while c < end:
+            m, lj, e = owner(c)
+            n = min(TILE - e, end - c)
+            # stop the run at the slice end
+            q = c // Wl
+            n = min(n, (q + 1) * Wl - c)
+            runs.append((m, lj, (e, e + n, (c - TILE * j) - e)))
+            c += n
+        per_tile.append((owner(TILE * j)[0], runs))
+    members = [dict(mats=[], home=[], fout=[], contrib_from=set(), homes_to=[]) for _ in range(k)]
+
+    def mat_idx(m, mat):
+        if mat not in members[m]["mats"]:
+            members[m]["mats"].append(mat)
+        return members[m]["mats"].index(mat)
+
+    slots = [0] * k
+    for j, (h, runs) in enumerate(per_tile):
+        own = [(lj, mat_idx(h, mat)) for (m, lj, mat) in runs if m == h]
+        foreign = []
+        for m in sorted({m for (m, _, _) in runs if m != h}):
+            srcs = [(lj, mat_idx(m, mat)) for (mm_, lj, mat) in runs if mm_ == m]
+            members[m]["fout"].append((h, slots[h], srcs))
+            members[h]["contrib_from"].add(m)
+            foreign.append(slots[h])
+            slots[h] += 1
+        members[h]["home"].append((j, own, foreign))
+    for m in range(k):
+        if members[m]["contrib_from"]:
+            mat_idx(m, (0, TILE, 0))  # identity for the foreign tiles
+        members[m]["homes_to"] = sorted({h for (h, _, _) in members[m]["fout"]})
+    return DensePlan(
+        n_mats=max(len(x["mats"]) for x in members),
+        max_fin=max(slots),
+        max_fout=max(len(x["fout"]) for x in members),
+        members=members,
+    )
+
+
+def q0_out(spec: MemberSpec, geo: Geometry) -> int:
+    """First output tile column of an aligned member's block (slices are tile-aligned: contiguous)."""
+    q0, c0 = spec.parts[0][0], spec.parts[0][1]
+    return q0 * geo.sw + c0
+
+
 def chunks_of(entries, chunk_pages):
     return sum(_div_up(n, chunk_pages) for e in entries for (_, _, n, _) in e["runs"])
 
@@ -449,6 +541,7 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
     g_dtype = gamma.dtype if has_gamma else ttnn.bfloat16
     fp32_dest = bool(cfg.compute_kernel_config.fp32_dest_acc_en)
     mask = cfg.is_ln and geo.v < TILE
+    dense = geo.v < TILE  # slices land at non-tile-aligned output offsets: dense assembly regime
     sz = make_sizes(x_dtype, g_dtype, fp32_dest, cfg.is_ln, has_gamma, has_beta, mask)
 
     chips, ring, ports_union = fabric
@@ -465,7 +558,7 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
 
     def fits(k, rows):
         mm = member_map(k, geo)
-        cplan = cb_plan(sz, k, mm.pitch, rows, n_affine_slots(mm, geo))
+        cplan = cb_plan(sz, k, mm.pitch, rows, n_affine_slots(mm, geo), dense_plan(geo, mm) if dense else None)
         port_bytes = rows * mm.pitch * sz.T_in + stage_pages * tile_bytes
         return plan_bytes(cplan) <= budget and port_bytes <= budget
 
@@ -484,7 +577,8 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
     out_e, in_e, n_waves = build_entries(chips, ring, L, split, geo, compute_used, vxy, wave_rg, chunk_pages)
 
     # ---- per-chip expected landings + own signalling ----
-    cplan = cb_plan(sz, k, pitch, rows_max, n_affine_slots(mm, geo))
+    dp = dense_plan(geo, mm) if dense else None
+    cplan = cb_plan(sz, k, pitch, rows_max, n_affine_slots(mm, geo), dp)
     n_stat = 2 if cfg.is_ln else 1
     t_acc = acc_dtype(fp32_dest)
     cb_dtype = {
@@ -505,6 +599,10 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
         CB_KG: ttnn.bfloat16,
         CB_MU: t_acc,
         CB_AFFINE_STAGE: ttnn.bfloat16,
+        CB_NORM: x_dtype,
+        CB_SHIFT_MATS: x_dtype,
+        CB_FOREIGN: x_dtype,
+        CB_CONTRIB: x_dtype,
     }
     port_cores = [ttnn.CoreCoord(x, y) for (x, y) in ports_union]
     crs_compute = _crs(compute_used)
@@ -536,6 +634,8 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
         defines.append(("AGRMS_HAS_GAMMA", "1"))
     if has_beta:
         defines.append(("AGRMS_HAS_BETA", "1"))
+    if dense:
+        defines.append(("AGRMS_DENSE", "1"))
     if mask:
         defines.append(("AGRMS_MASK", "1"))
 
@@ -550,7 +650,8 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
     unit = out_unit(pitch)
 
     reader_ct = [tile_bytes, pitch, geo.sw, geo.v, x_elem, SEM_LANDED, SEM_OWN_LOADED] + list(x_acc)
-    compute_ct = [k, pitch, n_stat]
+
+    compute_ct = [k, pitch, n_stat, dp.max_fin if dense else 0, dp.max_fout if dense else 0]
     writer_ct = [
         sz.T_out,
         pitch,
@@ -566,6 +667,9 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
         g_page,
         sz.T_g,
         AFFINE_SLOT_BYTES,
+        SEM_FOREIGN,
+        dp.max_fin if dense else 0,
+        dp.max_fout if dense else 0,
     ]
     writer_ct += list(o_acc)
     writer_ct += list(g_acc)
@@ -615,6 +719,7 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
             ttnn.SemaphoreDescriptor(id=SEM_LANDED, core_ranges=crs_x, initial_value=0),
             ttnn.SemaphoreDescriptor(id=SEM_PARTIALS, core_ranges=crs_x, initial_value=0),
             ttnn.SemaphoreDescriptor(id=SEM_OWN_LOADED, core_ranges=crs_x, initial_value=0),
+            ttnn.SemaphoreDescriptor(id=SEM_FOREIGN, core_ranges=crs_x, initial_value=0),
         ]
         # CBs: cb_x FIRST over compute_used + ports_union (identical on every chip -> one landing address)
         cbs = [_cb(CB_X, cplan[CB_X][0], cplan[CB_X][1], x_dtype, crs_x)]
@@ -662,7 +767,7 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
                 own_n, own_c0, own_off = (own[0][2], own[0][1], own[0][3]) if own else (0, 0, 0)
                 tails = [off + n - 1 for (_, c0, n, off) in spec.parts if c0 + n == geo.sw] if geo.v < TILE else []
                 sig = own_sig.get((c.x, c.y), [])
-                reader_rt[c.x][c.y] = (
+                rd_args = (
                     [x_addr, row_start, rows, own_n, own_c0, own_off, landings.get((c.x, c.y), 0), len(sig)]
                     + sig
                     + [len(tails)]
@@ -672,19 +777,42 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
                 for _, c0, n, _ in spec.parts:
                     segs += [n, 1 if (mask and c0 + n == geo.sw) else 0]
                 n_m = [_f32_bits(s.valid_cols) for s in mm.members]
+                dense_c, dense_w, dense_r = [], [], []
+                store_col0, store_w = q0_out(spec, geo), spec.core_w
+                if dense:
+                    dm = dp.members[m]
+                    for e0, e1, delta in dm["mats"]:
+                        dense_r.append(e0 | (e1 << 8) | ((delta + 64) << 16))
+                    dense_c += [len(dm["mats"]), dm["mats"].index((0, TILE, 0)) if dm["contrib_from"] else 0]
+                    dense_c.append(len(dm["home"]))
+                    for _, srcs, slots in dm["home"]:
+                        dense_c.append(len(srcs) | (len(slots) << 8))
+                        dense_c += [lj | (mi << 16) for lj, mi in srcs]
+                        dense_c += slots
+                    dense_c.append(len(dm["fout"]))
+                    for _, _, srcs in dm["fout"]:
+                        dense_c.append(len(srcs))
+                        dense_c += [lj | (mi << 16) for lj, mi in srcs]
+                    store_col0 = dm["home"][0][0] if dm["home"] else 0
+                    store_w = len(dm["home"])
+                    dense_w = [len(dm["fout"])]
+                    for h, slot, _ in dm["fout"]:
+                        dense_w += [h, slot]
+                    dense_w += [len(dm["contrib_from"]), len(dm["homes_to"])] + dm["homes_to"]
+                    rd_args = rd_args + [len(dense_r)] + dense_r
+                reader_rt[c.x][c.y] = rd_args
                 compute_rt[c.x][c.y] = (
                     [rows, spec.core_w, m, inv_w_bits, eps_bits, _f32_bits(1.0 / spec.valid_cols), len(spec.parts)]
                     + segs
                     + n_m
+                    + dense_c
                 )
-                q0, c00 = spec.parts[0][0], spec.parts[0][1]
-                out_col0 = q0 * geo.sw + c00
                 gparts = []
                 for q, c0, n, off in spec.parts:
                     gparts += [q * geo.W_local + TILE * c0, geo.W_local - TILE * c0, n, off]
-                wr = [o_addr, row_start, rows, out_col0, spec.core_w, m, g_addr, b_addr, len(spec.parts)] + gparts
+                wr = [o_addr, row_start, rows, store_col0, store_w, m, g_addr, b_addr, len(spec.parts)] + gparts
                 wr += [len(wr) + 1]  # index of the first peer (x, y) pair
-                writer_rt[c.x][c.y] = wr + peer_xy
+                writer_rt[c.x][c.y] = wr + peer_xy + dense_w
 
         # ---- port kernels on every ports_union core (idle ones get zero work) ----
         pr_rt, ps_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()

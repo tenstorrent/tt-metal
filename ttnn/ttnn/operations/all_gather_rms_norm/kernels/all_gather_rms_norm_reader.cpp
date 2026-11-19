@@ -128,6 +128,39 @@ void kernel_main() {
     dataflow_kernel_lib::prepare_reduce_mask<cb_mask, ckernel::ReduceDim::REDUCE_ROW>(v);
 #endif
 
+#ifdef AGRMS_DENSE
+    // 0/1 shift matrices of the dense assembly: S[e][e + delta] = 1 for e in [e0, e1) (output dtype). Zeroed through
+    // the NoC zero engine, then only the <= 32 ones are stored.
+    {
+        const uint32_t d_idx = tails_idx + n_tails;
+        const uint32_t n_mats = arg(d_idx);
+        CircularBuffer cbm(cb_shift_mats);
+        cb_reserve_back(cb_shift_mats, n_mats);
+        const uint32_t mbase = get_write_ptr(cb_shift_mats);
+        for (uint32_t i = 0; i < n_mats; ++i) {
+            noc.async_write_zeros(cbm, tile_bytes, {.offset_bytes = i * tile_bytes});
+        }
+        noc.write_zeros_l1_barrier();
+        for (uint32_t i = 0; i < n_mats; ++i) {
+            const uint32_t w = arg(d_idx + 1 + i);
+            const uint32_t e0 = w & 0xFF, e1 = (w >> 8) & 0xFF;
+            const int32_t delta = static_cast<int32_t>(w >> 16) - 64;
+            for (uint32_t e = e0; e < e1; ++e) {
+                const uint32_t c = static_cast<uint32_t>(static_cast<int32_t>(e) + delta);
+                const uint32_t idx = ((e / FACE_DIM) * 2 + c / FACE_DIM) * (FACE_DIM * FACE_DIM) +
+                                     (e % FACE_DIM) * FACE_DIM + (c % FACE_DIM);
+                const uint32_t addr = mbase + i * tile_bytes + idx * elem_bytes;
+                if constexpr (elem_bytes == 4) {
+                    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr) = 0x3F800000u;
+                } else {
+                    *reinterpret_cast<volatile tt_l1_ptr uint16_t*>(addr) = 0x3F80u;
+                }
+            }
+        }
+        cb_push_back(cb_shift_mats, n_mats);
+    }
+#endif
+
     if (expected_landings > 0) {
         noc_semaphore_wait_min(
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_landed_id)), expected_landings);

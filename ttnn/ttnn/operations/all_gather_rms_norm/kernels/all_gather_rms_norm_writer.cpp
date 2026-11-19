@@ -38,7 +38,10 @@ constexpr bool g_is_tile = get_compile_time_arg_val(10) != 0;
 constexpr uint32_t g_page_bytes = get_compile_time_arg_val(11);  // gamma tensor page (TILE: tile, RM: stick)
 constexpr uint32_t g_l1_page = get_compile_time_arg_val(12);     // cb_gamma page (a gamma-dtype tile)
 constexpr uint32_t slot_bytes = get_compile_time_arg_val(13);
-constexpr auto out_args = TensorAccessorArgs<14>();
+constexpr uint32_t sem_foreign_id = get_compile_time_arg_val(14);
+constexpr uint32_t max_fin = get_compile_time_arg_val(15);   // dense: foreign slots per tile-row (home side)
+constexpr uint32_t max_fout = get_compile_time_arg_val(16);  // dense: contribution tiles per tile-row (sender side)
+constexpr auto out_args = TensorAccessorArgs<17>();
 constexpr auto gamma_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
@@ -173,6 +176,48 @@ void kernel_main() {
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), k);
         cb_push_back(cb_gathered, n_stat * k * rows);
     }
+
+#ifdef AGRMS_DENSE
+    // ---- assemble_dense_block, foreign half: my contributions to peers' home output tiles go into their cb_foreign
+    // slot (r * max_fin + slot) (lockstep address = my own cb_foreign write pointer), one SEM_FOREIGN increment per
+    // home; then wait for every contributor to my home tiles.
+    {
+        const uint32_t d_idx = peer_idx + 2 * k;
+        const uint32_t n_fout = arg(d_idx);
+        const uint32_t n_contrib = arg(d_idx + 1 + 2 * n_fout);
+        const uint32_t n_homes = arg(d_idx + 2 + 2 * n_fout);
+        const uint32_t homes_idx = d_idx + 3 + 2 * n_fout;
+        const uint32_t sem_addr = get_semaphore(sem_foreign_id);
+        if (n_fout > 0) {
+            cb_wait_front(cb_contrib, rows * n_fout);
+            const uint32_t src = get_read_ptr(cb_contrib);
+            const uint32_t fbase = get_write_ptr(cb_foreign);
+            for (uint32_t r = 0; r < rows; ++r) {
+                for (uint32_t f = 0; f < n_fout; ++f) {
+                    const uint32_t h = arg(d_idx + 1 + 2 * f), slot = arg(d_idx + 2 + 2 * f);
+                    noc_async_write(
+                        src + (r * n_fout + f) * out_tile_bytes,
+                        get_noc_addr(
+                            arg(peer_idx + 2 * h),
+                            arg(peer_idx + 2 * h + 1),
+                            fbase + (r * max_fin + slot) * out_tile_bytes),
+                        out_tile_bytes);
+                }
+            }
+            noc_async_writes_flushed();
+            for (uint32_t i = 0; i < n_homes; ++i) {
+                const uint32_t h = arg(homes_idx + i);
+                noc_semaphore_inc(get_noc_addr(arg(peer_idx + 2 * h), arg(peer_idx + 2 * h + 1), sem_addr), 1);
+            }
+            cb_pop_front(cb_contrib, rows * n_fout);
+        }
+        if (n_contrib > 0) {
+            cb_reserve_back(cb_foreign, rows * max_fin);
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), n_contrib);
+            cb_push_back(cb_foreign, rows * max_fin);
+        }
+    }
+#endif
 
     // ---- store_block ----
     const auto out_acc = TensorAccessor(out_args, out_addr, out_tile_bytes);

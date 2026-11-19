@@ -1,2 +1,3 @@
 {"event":"test_run","status":"pass","test":"test_all_gather_rms_norm_ring[single_tile_rms_gammaTILE]","note":"first end-to-end: fabric relay into compute L1 + k=1 d=4 rms","ts":"2026-11-19T17:58:41+00:00"}
 {"event":"test_run","status":"pass","test":"test_all_gather_rms_norm.py -k not w_non_aligned","note":"17/17 pass non-dev; --dev mesh reopen hits watcher eth teardown timeout (env)","ts":"2026-11-19T18:21:14+00:00"}
+{"event":"test_run","status":"pass","test":"test_all_gather_rms_norm.py (19/19)","note":"dense assembly (shift-matmul + foreign contributions) for w_non_aligned","ts":"2026-11-19T18:27:46+00:00"}

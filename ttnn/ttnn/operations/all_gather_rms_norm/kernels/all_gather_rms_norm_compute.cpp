@@ -59,8 +59,115 @@ using namespace agrms_cb;
 constexpr uint32_t w_split_cores = get_compile_time_arg_val(0);
 constexpr uint32_t pitch = get_compile_time_arg_val(1);
 constexpr uint32_t n_stat = get_compile_time_arg_val(2);
+constexpr uint32_t max_fin = get_compile_time_arg_val(3);  // dense: foreign slots per tile-row
+#ifdef AGRMS_DENSE
+#include "api/compute/matmul.h"
+constexpr uint32_t norm_out_cb = cb_norm;  // the member block is assembled into dense output tiles afterwards
+#else
+constexpr uint32_t norm_out_cb = cb_out;
+#endif
 
 FORCE_INLINE uint32_t arg(uint32_t i) { return get_arg_val<uint32_t>(i); }
+
+#ifdef AGRMS_DENSE
+// assemble_dense_block (w_non_aligned): output tile j of a tile-row = sum over its source runs of
+// (normalized member tile) x S (0/1 shift matrix, S[e][e + delta] = 1) [+ peers' partial tiles x identity].
+// Raw matmul_tiles (documented helper bypass): matmul_block would multiply all member tiles by a dense K, while an
+// output tile needs <= 2-3 banded sources; one DEST tile accumulates them.
+// RT layout at d: n_mats, id_mat, n_home, per home: (n_src | n_for << 8), src (lj | mat << 16)..., slot...;
+//                 n_fout, per contribution: n_src, src...
+ALWI void mm_src(uint32_t in0_cb, uint32_t in0_tile, uint32_t mat) {
+    reconfig_data_format(cb_shift_mats, in0_cb);  // matmul: in1 -> srcA, in0 -> srcB
+    matmul_init(in0_cb, cb_shift_mats);
+    matmul_tiles(in0_cb, cb_shift_mats, in0_tile, mat, 0);
+}
+
+ALWI void dense_assemble_block(uint32_t rows, uint32_t core_w, uint32_t d) {
+    const uint32_t n_mats = arg(d);
+    const uint32_t id_mat = arg(d + 1);
+    const uint32_t n_home = arg(d + 2);
+    uint32_t fo = d + 3;  // first word after the home list
+    for (uint32_t h = 0; h < n_home; ++h) {
+        const uint32_t hdr = arg(fo);
+        fo += 1 + (hdr & 0xFF) + (hdr >> 8);
+    }
+    const uint32_t n_fout = arg(fo);
+    cb_wait_front(cb_norm, rows * core_w);
+    cb_wait_front(cb_shift_mats, n_mats);
+    // contributions to peers' home tiles
+    if (n_fout > 0) {
+        pack_reconfig_data_format(cb_contrib);
+        for (uint32_t r = 0; r < rows; ++r) {
+            uint32_t a = fo + 1;
+            for (uint32_t f = 0; f < n_fout; ++f) {
+                const uint32_t n_src = arg(a);
+                cb_reserve_back(cb_contrib, 1);
+                tile_regs_acquire();
+                for (uint32_t i = 0; i < n_src; ++i) {
+                    const uint32_t w = arg(a + 1 + i);
+                    mm_src(cb_norm, r * core_w + (w & 0xFFFF), w >> 16);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(0, cb_contrib);
+                tile_regs_release();
+                cb_push_back(cb_contrib, 1);
+                a += 1 + n_src;
+            }
+        }
+    }
+    // home tiles
+    if constexpr (max_fin > 0) {
+        bool any_foreign = false;
+        uint32_t a = d + 3;
+        for (uint32_t h = 0; h < n_home; ++h) {
+            const uint32_t hdr = arg(a);
+            any_foreign |= (hdr >> 8) != 0;
+            a += 1 + (hdr & 0xFF) + (hdr >> 8);
+        }
+        if (any_foreign) {
+            cb_wait_front(cb_foreign, rows * max_fin);
+        }
+    }
+    pack_reconfig_data_format(cb_out);
+    for (uint32_t r = 0; r < rows; ++r) {
+        uint32_t a = d + 3;
+        for (uint32_t h = 0; h < n_home; ++h) {
+            const uint32_t hdr = arg(a);
+            const uint32_t n_src = hdr & 0xFF, n_for = hdr >> 8;
+            cb_reserve_back(cb_out, 1);
+            tile_regs_acquire();
+            for (uint32_t i = 0; i < n_src; ++i) {
+                const uint32_t w = arg(a + 1 + i);
+                mm_src(cb_norm, r * core_w + (w & 0xFFFF), w >> 16);
+            }
+            for (uint32_t i = 0; i < n_for; ++i) {
+                mm_src(cb_foreign, r * max_fin + arg(a + 1 + n_src + i), id_mat);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, cb_out);
+            tile_regs_release();
+            cb_push_back(cb_out, 1);
+            a += 1 + n_src + n_for;
+        }
+    }
+    cb_pop_front(cb_norm, rows * core_w);
+    cb_pop_front(cb_shift_mats, n_mats);
+    if constexpr (max_fin > 0) {
+        bool any_foreign = false;
+        uint32_t a = d + 3;
+        for (uint32_t h = 0; h < n_home; ++h) {
+            const uint32_t hdr = arg(a);
+            any_foreign |= (hdr >> 8) != 0;
+            a += 1 + (hdr & 0xFF) + (hdr >> 8);
+        }
+        if (any_foreign) {
+            cb_pop_front(cb_foreign, rows * max_fin);
+        }
+    }
+}
+#endif
 
 // ---------------------------------------------------------------------------------------------------------------
 // rms_norm (base op)
@@ -204,10 +311,10 @@ ALWI void normalize_block(uint32_t rows, uint32_t core_w) {
         IterationShape::grid(rows, core_w),
         XTimesInv{StridedTileRange{0, pitch}},
         MulGammaRowBcast<gamma_in>{},
-        PackTile<output(cb_out)>{});
+        PackTile<output(norm_out_cb)>{});
 #else
     eltwise_chain(
-        IterationShape::grid(rows, core_w), XTimesInv{StridedTileRange{0, pitch}}, PackTile<output(cb_out)>{});
+        IterationShape::grid(rows, core_w), XTimesInv{StridedTileRange{0, pitch}}, PackTile<output(norm_out_cb)>{});
 #endif
 }
 
@@ -234,6 +341,9 @@ void kernel_main() {
     cb_pop_front(cb_rowstat, rows);
 #ifdef AGRMS_HAS_GAMMA
     cb_pop_front(cb_gamma, pitch);
+#endif
+#ifdef AGRMS_DENSE
+    dense_assemble_block(rows, core_w, 7 + 2 * arg(6) + w_split_cores);
 #endif
 }
 
@@ -490,7 +600,7 @@ ALWI void normalize_block(uint32_t rows, uint32_t core_w) {
         UnaryBcast<BroadcastDim::Row, beta_in, Dst::D1>{},
         AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
 #endif
-        PackTile<output(cb_out), Dst::D0>{});
+        PackTile<output(norm_out_cb), Dst::D0>{});
 }
 
 struct MulScalar {
@@ -543,6 +653,9 @@ void kernel_main() {
 #endif
 #ifdef AGRMS_HAS_BETA
     cb_pop_front(cb_beta, pitch);
+#endif
+#ifdef AGRMS_DENSE
+    dense_assemble_block(rows, core_w, nm_idx + w_split_cores);
 #endif
 }
 #endif
