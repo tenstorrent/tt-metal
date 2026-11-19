@@ -58,6 +58,17 @@ def test_config_needs_segment_and_metadata(expect_error):
         MediaEmbeddingStoreConfig.from_env({"PREFILL_MEDIA_STORE_MASTER": "10.0.0.9:50051"})
 
 
+@pytest.mark.parametrize("master", ["10.0.0.9", "10.0.0.9:", ":50051", "10.0.0.9:port", "10.0.0.9:0", "10.0.0.9:70000"])
+def test_master_must_be_host_and_port(master, expect_error):
+    env = {
+        "PREFILL_MEDIA_STORE_MASTER": master,
+        "PREFILL_MEDIA_STORE_SEGMENT": ME,
+        "PREFILL_MEDIA_STORE_METADATA": "http://10.0.0.9:9000/metadata",
+    }
+    with expect_error(ValueError, "want host:port"):
+        MediaEmbeddingStoreConfig.from_env(env)
+
+
 def test_key_transform_from_env(expect_error):
     assert key_transform_from_env({}) == key_transform_from_env({KEY_TRANSFORM_ENV: " "}) == "hex"
     assert key_transform_from_env({KEY_TRANSFORM_ENV: "hex"}) == "hex"

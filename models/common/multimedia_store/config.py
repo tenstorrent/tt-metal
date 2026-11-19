@@ -76,7 +76,8 @@ class MediaEmbeddingStoreConfig:
         master = get("MASTER")
         if master is None:
             return None
-        if ":" not in master:
+        host, _, port = master.rpartition(":")
+        if not host or not (port.isascii() and port.isdigit()) or not 0 < int(port) < 65536:
             raise ValueError(f"{ENV_PREFIX}MASTER={master!r}: want host:port")
         missing = [ENV_PREFIX + n for n in ("SEGMENT", "METADATA") if get(n) is None]
         if missing:

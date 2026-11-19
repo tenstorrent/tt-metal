@@ -24,6 +24,7 @@ Media keys are bytes, stored under their lowercase hex, or with MEDIA_STORE_KEY_
 """
 
 import atexit
+import contextlib
 import ctypes
 import threading
 import time
@@ -111,14 +112,24 @@ def _view_at(address: int, nbytes: int) -> memoryview:
     return memoryview((ctypes.c_uint8 * nbytes).from_address(address)).cast("B").toreadonly()
 
 
+def _close_client(client) -> None:
+    """Closes a Mooncake client that failed to start, logging rather than raising, so the caller's error is the one
+    reported."""
+    try:
+        client.close()
+    except Exception as e:
+        logger.warning(f"[media_embedding_reader] closing a client that failed to start raised {e!r}")
+
+
 class MooncakeEmbeddingReader:
     """EmbeddingReader (reader.py) over this host's Mooncake store.
 
     ``open(config)`` starts the client and mounts the segment; tests may pass an already set up client to the
     constructor. Not tied to a model: values are opaque bytes.
 
-    Not thread-safe: use a reader from one thread at a time. Reads share the read buffer, and close() must not run
-    while a read is in progress."""
+    Reads and close() take a lock, so close() (including the one registered to run at exit) waits for a read in
+    progress. Still use a reader from one thread at a time: a view into the read buffer is overwritten by the next
+    fetch, whichever thread makes it."""
 
     def __init__(self, client, segment: str, key_transform: str = "hex"):
         self._client = client
@@ -129,6 +140,7 @@ class MooncakeEmbeddingReader:
         self.stats = MediaEmbeddingReaderStats()
         self._read_buffer = np.empty(0, dtype=np.uint8)  # registered on the first read from another host
         self._closed = False
+        self._lock = threading.Lock()  # held by each read and by close()
 
     @classmethod
     def open(cls, config: MediaEmbeddingStoreConfig) -> "MooncakeEmbeddingReader":
@@ -140,17 +152,18 @@ class MooncakeEmbeddingReader:
             config.segment, config.metadata, config.segment_bytes, 0, config.protocol, config.device, config.master
         )
         if rc != 0:
+            _close_client(client)  # setup can fail partway, after starting threads or binding the segment's port
             raise StoreUnavailable(
                 f"Mooncake setup failed ({rc}): segment {config.segment}, master {config.master}, "
                 f"metadata {config.metadata}, {config.segment_bytes} B over {config.protocol}. RDMA registration locks "
                 "the whole segment, so it must fit under `ulimit -l`."
             )
         if client.health_check() != 0:
-            client.close()
+            _close_client(client)
             raise StoreUnavailable(f"Mooncake master {config.master} is unreachable")
         segment = client.get_hostname()
         reader = cls(client, segment, config.key_transform)
-        atexit.register(reader.close)
+        atexit.register(reader.close)  # close() unregisters it, so a closed reader isn't kept alive until exit
         mode = "push" if config.segment_bytes else "pull"
         logger.info(
             f"[media_embedding_reader] {mode} mode: segment={segment} master={config.master} "
@@ -159,14 +172,38 @@ class MooncakeEmbeddingReader:
         )
         return reader
 
-    def close(self) -> None:
-        """Leaves the store. Views of values in this host's segment are invalid afterwards: Mooncake unmounts the
-        segment they point into."""
-        if self._closed:
+    def close(self, timeout_s: float = 30.0) -> None:
+        """Leaves the store, once a read in progress on another thread finishes. Views of values in this host's
+        segment are invalid afterwards: Mooncake unmounts the segment they point into. If a read holds the reader for
+        more than timeout_s, close() logs that and leaves the store open rather than unmount it under the read."""
+        if not self._lock.acquire(timeout=timeout_s):
+            logger.warning(
+                f"[media_embedding_reader] not closing segment {self.segment}: a read is still in progress after "
+                f"{timeout_s} s"
+            )
             return
-        self._closed = True
-        logger.info(f"[media_embedding_reader] closing segment {self.segment}: {self.stats.snapshot()}")
-        self._client.close()
+        try:
+            if self._closed:
+                return
+            self._closed = True
+            atexit.unregister(self.close)
+            logger.info(f"[media_embedding_reader] closing segment {self.segment}: {self.stats.snapshot()}")
+            self._client.close()
+            self._read_buffer = np.empty(0, dtype=np.uint8)  # views a caller still holds keep the old one alive
+            self.stats.read_buffer_bytes = 0
+        finally:
+            self._lock.release()
+
+    @contextlib.contextmanager
+    def _store_errors(self, what: str):
+        """Mooncake reports most failures in its results, which the reader turns into Missing or StoreUnavailable. Its
+        binding can also raise, e.g. on a result it can't build; that is a store failure too."""
+        try:
+            yield
+        except (Missing, StoreUnavailable):
+            raise
+        except Exception as e:
+            raise StoreUnavailable(f"{what} on segment {self.segment}: Mooncake raised {e!r}") from e
 
     def fetch(self, media_key: bytes) -> memoryview:
         """The whole value stored under media_key, as fetch_batch returns it. Raises Missing or StoreUnavailable."""
@@ -175,7 +212,8 @@ class MooncakeEmbeddingReader:
     def size(self, media_key: bytes) -> int:
         """Bytes stored under media_key. Raises Missing or StoreUnavailable."""
         key = _store_key(media_key, self.key_transform)
-        return self._locate([key])[key].size
+        with self._lock:
+            return self._locate([key])[key].size
 
     def fetch_batch(self, requests: Sequence[FetchRequest]) -> list[memoryview]:
         """The bytes of each (media_key, offset, length) request, in order. Raises Missing or StoreUnavailable for the
@@ -191,9 +229,13 @@ class MooncakeEmbeddingReader:
         fetch on this reader overwrites it. Callers copy the rows out (to device staging) before fetching again."""
         if not requests:
             return []
-        t0 = time.perf_counter()
         requests = [FetchRequest(*r) for r in requests]
         keys = [_store_key(r.media_key, self.key_transform) for r in requests]
+        with self._lock:
+            return self._fetch_batch(requests, keys)
+
+    def _fetch_batch(self, requests: list[FetchRequest], keys: list[str]) -> list[memoryview]:
+        t0 = time.perf_counter()
         try:
             located = self._locate(list(dict.fromkeys(keys)))
             results: list[Optional[memoryview]] = [None] * len(requests)
@@ -223,26 +265,27 @@ class MooncakeEmbeddingReader:
         first key that has no readable value."""
         if self._closed:
             raise StoreUnavailable(f"the store on segment {self.segment} is closed")
-        # Mooncake reports failures in its results, not by raising: an unreachable master leaves keys out of the
-        # lookup and gives transfers a negative code.
-        found = self._client.batch_get_replica_desc(keys)
-        out = {}
-        for key in keys:
-            replicas = found.get(key, [])
-            if not replicas:
-                # A key the lookup leaves out is missing, or the master is unreachable. health_check() reads the
-                # client's own connection state, so telling them apart costs no second round trip.
-                if self._client.health_check() == 0:
-                    raise Missing(key)
-                raise StoreUnavailable(f"{key}: Mooncake master is unreachable")
-            if len(replicas) != 1:  # writers store one replica; replicated values are not supported yet
-                raise StoreUnavailable(f"{key}: {len(replicas)} replicas, expected 1")
-            (replica,) = replicas
-            if not replica.is_memory_replica() or replica.status.name != "COMPLETE":
-                raise Missing(f"{key}: not a complete memory replica ({replica.status.name})")
-            d = replica.get_memory_descriptor().buffer_descriptor
-            out[key] = _Value(d.size, d.buffer_address if d.transport_endpoint == self.segment else None)
-        return out
+        # Mooncake reports most failures in its results: an unreachable master leaves keys out of the lookup and gives
+        # transfers a negative code. _store_errors covers the binding raising instead.
+        with self._store_errors("lookup"):
+            found = self._client.batch_get_replica_desc(keys)
+            out = {}
+            for key in keys:
+                replicas = found.get(key, [])
+                if not replicas:
+                    # A key the lookup leaves out is missing, or the master is unreachable. health_check() reads the
+                    # client's own connection state, so telling them apart costs no second round trip.
+                    if self._client.health_check() == 0:
+                        raise Missing(key)
+                    raise StoreUnavailable(f"{key}: Mooncake master is unreachable")
+                if len(replicas) != 1:  # writers store one replica; replicated values are not supported yet
+                    raise StoreUnavailable(f"{key}: {len(replicas)} replicas, expected 1")
+                (replica,) = replicas
+                if not replica.is_memory_replica() or replica.status.name != "COMPLETE":
+                    raise Missing(f"{key}: not a complete memory replica ({replica.status.name})")
+                d = replica.get_memory_descriptor().buffer_descriptor
+                out[key] = _Value(d.size, d.buffer_address if d.transport_endpoint == self.segment else None)
+            return out
 
     def _grow_read_buffer(self, nbytes: int) -> None:
         """Make the read buffer at least nbytes, doubling it; it never shrinks, so a long run registers a new buffer
@@ -278,22 +321,23 @@ class MooncakeEmbeddingReader:
             dst += length
         if not by_key:
             return
-        self._grow_read_buffer(dst)
-        keys = list(by_key)
-        snapshot = self._client.prepare_get_into_ranges_snapshot(keys)
-        got = self._client.get_into_ranges_from_snapshot(
-            snapshot,
-            [self._read_buffer.ctypes.data],
-            [keys],
-            [[[d for _, d, _, _ in by_key[k]] for k in keys]],
-            [[[o for _, _, o, _ in by_key[k]] for k in keys]],
-            [[[n for _, _, _, n in by_key[k]] for k in keys]],
-        )[0]
-        # One code per range, as requested: a key Mooncake can't read gets its error in every range.
-        for key, rcs in zip(keys, got, strict=True):
-            for rc, (i, d, offset, length) in zip(rcs, by_key[key], strict=True):
-                if rc == OBJECT_NOT_FOUND:
-                    raise Missing(key)
-                if rc != length:
-                    raise StoreUnavailable(f"{key}: read {rc} of {length} B at {offset}")
-                results[i] = memoryview(self._read_buffer[d : d + length]).toreadonly()
+        with self._store_errors("read"):
+            self._grow_read_buffer(dst)
+            keys = list(by_key)
+            snapshot = self._client.prepare_get_into_ranges_snapshot(keys)
+            got = self._client.get_into_ranges_from_snapshot(
+                snapshot,
+                [self._read_buffer.ctypes.data],
+                [keys],
+                [[[d for _, d, _, _ in by_key[k]] for k in keys]],
+                [[[o for _, _, o, _ in by_key[k]] for k in keys]],
+                [[[n for _, _, _, n in by_key[k]] for k in keys]],
+            )[0]
+            # One code per range, as requested: a key Mooncake can't read gets its error in every range.
+            for key, rcs in zip(keys, got, strict=True):
+                for rc, (i, d, offset, length) in zip(rcs, by_key[key], strict=True):
+                    if rc == OBJECT_NOT_FOUND:
+                        raise Missing(key)
+                    if rc != length:
+                        raise StoreUnavailable(f"{key}: read {rc} of {length} B at {offset}")
+                    results[i] = memoryview(self._read_buffer[d : d + length]).toreadonly()

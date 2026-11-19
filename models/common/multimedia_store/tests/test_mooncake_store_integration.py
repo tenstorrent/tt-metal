@@ -3,14 +3,16 @@
 
 """The prefill runner's media embedding reader against a real Mooncake master on this host, over TCP.
 
-Three clients join a local master started the way the encoder service starts its own (HTTP metadata server,
+Four clients join a local master started the way the encoder service starts its own (HTTP metadata server,
 allow_evict_soft_pinned_objects=false):
 
 - ``store``: this runner's store (MooncakeEmbeddingReader.open, segment 127.0.0.1:<port>);
 - ``other``: another prefill host's store (segment 127.0.0.2:<port>, a second loopback address);
-- ``puller``: a host in pull mode, with no store (segment 127.0.0.4:<port>);
-- ``plain_reader``: a pull-mode host whose media keys are their own store keys (MEDIA_STORE_KEY_TRANSFORM=none);
+- ``puller``: a host in pull mode, with no store (segment 127.0.0.4:<port>), whose media keys are their own store keys
+  (MEDIA_STORE_KEY_TRANSFORM=none); ``store`` covers the default hex keys;
 - ``writer``: the encoder service stand-in, with no segment, writing with put_from, a soft pin and preferred_segment.
+
+Each Mooncake client takes about a second to close, so the fixture keeps to these four.
 
 Runs on Linux, after ``uv pip install -r models/common/multimedia_store/requirements.txt`` (the CI job does this);
 127.0.0.2 is a Linux loopback address. There a missing Mooncake client fails the test instead of skipping it, so an
@@ -19,7 +21,6 @@ broad CI job does not install Mooncake.
 """
 
 import contextlib
-import dataclasses
 import hashlib
 import os
 import re
@@ -34,7 +35,7 @@ import numpy as np
 import pytest
 
 from models.common.multimedia_store.config import MediaEmbeddingStoreConfig
-from models.common.multimedia_store.reader import FetchRequest, Missing
+from models.common.multimedia_store.reader import FetchRequest, Missing, StoreUnavailable
 
 if not sys.platform.startswith("linux"):
     pytest.skip("Mooncake and the 127.0.0.2 loopback address are Linux only", allow_module_level=True)
@@ -50,7 +51,13 @@ except ImportError as e:  # a broken env, so it fails rather than skips
 IMAGE_BYTES = 64 + 576 * 6144 * 2
 
 
+# Attempts at starting the master, or a client, on ports _free_port picked.
+START_ATTEMPTS = 3
+
+
 def _free_port(host: str = "127.0.0.1") -> int:
+    """A port free on host now. The master or a client binds it later, so another process can take it in between;
+    callers retry on fresh ports (START_ATTEMPTS)."""
     with socket.socket() as s:
         s.bind((host, 0))
         return s.getsockname()[1]
@@ -69,21 +76,27 @@ def _master_binary() -> str:
     pytest.fail(f"mooncake_master not found in {candidates}")
 
 
-def _wait_until_healthy(master: subprocess.Popen, metrics_port: int, log) -> None:
+# How long the master gets to come up. The CI job's per-test timeout (pytest --timeout 60) also covers the fixture,
+# so this stays well under it, and a master that never starts fails here, pointing at its log.
+MASTER_START_S = 30
+
+
+def _wait_until_healthy(master: subprocess.Popen, metrics_port: int, log) -> bool:
     """Mooncake has no readiness callback; its master serves GET /health on the metrics port once it is up. Wait for
-    that, failing at once if the master exits; the deadline only turns a master that never starts into a failure."""
-    deadline = time.monotonic() + 60
+    that. False if the master exits first (e.g. a port it was given is taken); the deadline only turns a master that
+    never starts into a failure."""
+    deadline = time.monotonic() + MASTER_START_S
     while True:
         try:
             with urllib.request.urlopen(f"http://127.0.0.1:{metrics_port}/health", timeout=1) as r:
                 if r.status == 200:
-                    return
+                    return True
         except OSError:
             pass
         if master.poll() is not None:
-            pytest.fail(f"mooncake_master exited with {master.returncode}; see {log}")
+            return False
         if time.monotonic() > deadline:
-            pytest.fail(f"mooncake_master is not healthy after 60 s; see {log}")
+            pytest.fail(f"mooncake_master is not healthy after {MASTER_START_S} s; see {log}")
         time.sleep(0.1)
 
 
@@ -92,13 +105,12 @@ def _stop(master: subprocess.Popen) -> None:
     master.wait(timeout=30)
 
 
-@pytest.fixture(scope="module")
-def cluster(tmp_path_factory):
-    # Each resource's cleanup is registered as soon as it exists, so a setup step that fails (the master never gets
-    # healthy, a client can't join) still closes what was opened before it, in reverse order.
-    with contextlib.ExitStack() as cleanup:
+def _start_master(cleanup: contextlib.ExitStack, log_dir) -> tuple[int, int, int]:
+    """Starts mooncake_master on fresh ports, registering its cleanup, and returns (rpc, http, metrics) ports. A master
+    that exits while starting is retried on new ports."""
+    for attempt in range(START_ATTEMPTS):
         rpc, http, metrics = _free_port(), _free_port(), _free_port()
-        log = tmp_path_factory.mktemp("mooncake") / "master.log"
+        log = log_dir / f"master-{attempt}.log"
         log_file = cleanup.enter_context(open(log, "w"))
         master = subprocess.Popen(
             [
@@ -113,36 +125,59 @@ def cluster(tmp_path_factory):
             stderr=subprocess.STDOUT,
         )
         cleanup.callback(_stop, master)
-        _wait_until_healthy(master, metrics, log)
+        if _wait_until_healthy(master, metrics, log):
+            return rpc, http, metrics
+    pytest.fail(f"mooncake_master exited while starting, {START_ATTEMPTS} times; see {log_dir}")
 
-        def config(host: str, segment_bytes: int) -> MediaEmbeddingStoreConfig:
+
+@pytest.fixture(scope="module")
+def cluster(tmp_path_factory):
+    # Each resource's cleanup is registered as soon as it exists, so a setup step that fails (the master never gets
+    # healthy, a client can't join) still closes what was opened before it, in reverse order.
+    with contextlib.ExitStack() as cleanup:
+        rpc, http, metrics = _start_master(cleanup, tmp_path_factory.mktemp("mooncake"))
+
+        def config(host: str, segment_bytes: int, key_transform: str = "hex") -> MediaEmbeddingStoreConfig:
             return MediaEmbeddingStoreConfig(
                 master=f"127.0.0.1:{rpc}",
                 segment=f"{host}:{_free_port(host)}",
                 segment_bytes=segment_bytes,
                 metadata=f"http://127.0.0.1:{http}/metadata",
                 protocol="tcp",
+                key_transform=key_transform,
             )
 
-        def open_reader(config: MediaEmbeddingStoreConfig) -> MooncakeEmbeddingReader:
-            reader = MooncakeEmbeddingReader.open(config)
-            cleanup.callback(reader.close)
-            return reader
+        def open_reader(host: str, segment_bytes: int, key_transform: str = "hex") -> MooncakeEmbeddingReader:
+            """A reader on a fresh port of host, retried on new ports if setup fails (open() closes a failed client)."""
+            for attempt in range(START_ATTEMPTS):
+                try:
+                    reader = MooncakeEmbeddingReader.open(config(host, segment_bytes, key_transform))
+                except StoreUnavailable:
+                    if attempt == START_ATTEMPTS - 1:
+                        raise
+                    continue
+                cleanup.callback(reader.close)
+                return reader
 
-        store = open_reader(config("127.0.0.1", 64 << 20))
-        other = open_reader(config("127.0.0.2", 64 << 20))
-        puller = open_reader(config("127.0.0.4", 0))  # pull mode: no store on this host
-        plain_reader = open_reader(dataclasses.replace(config("127.0.0.5", 0), key_transform="none"))
-        w = config("127.0.0.3", 0)
-        writer = mooncake_store.MooncakeDistributedStore()
-        cleanup.callback(writer.close)
-        assert writer.setup(w.segment, w.metadata, 0, 16 << 20, w.protocol, "", w.master) == 0
-        yield SimpleCluster(store, other, writer, metrics, puller, plain_reader)
+        def open_writer(host: str) -> "mooncake_store.MooncakeDistributedStore":
+            for _ in range(START_ATTEMPTS):
+                w = config(host, 0)
+                writer = mooncake_store.MooncakeDistributedStore()
+                cleanup.callback(writer.close)
+                if writer.setup(w.segment, w.metadata, 0, 16 << 20, w.protocol, "", w.master) == 0:
+                    return writer
+            pytest.fail(f"the writer could not join the master, {START_ATTEMPTS} times")
+
+        store = open_reader("127.0.0.1", 64 << 20)
+        other = open_reader("127.0.0.2", 64 << 20)
+        puller = open_reader("127.0.0.4", 0, key_transform="none")  # pull mode: no store on this host
+        writer = open_writer("127.0.0.3")
+        yield SimpleCluster(store, other, writer, metrics, puller)
 
 
 class SimpleCluster:
-    def __init__(self, store, other, writer, metrics_port, puller, plain_reader):
-        self.store, self.other, self.writer, self.puller, self.plain_reader = store, other, writer, puller, plain_reader
+    def __init__(self, store, other, writer, metrics_port, puller):
+        self.store, self.other, self.writer, self.puller = store, other, writer, puller
         self.metrics_port = metrics_port
         self._buffers = []
         self._n = 0
@@ -287,8 +322,8 @@ def test_value_read_in_place_is_leased(cluster):
 
 def test_pull_mode_reads_everything_from_the_host_that_holds_it(cluster):
     """A host with no store (PREFILL_MEDIA_STORE_BYTES=0) reads each value, and its ranges, from the host holding it,
-    here standing in for the encoder's store."""
-    media_key, value = cluster.put(cluster.other.segment)
+    here standing in for the encoder's store. The puller's media keys are their own store keys."""
+    media_key, value = cluster.put(cluster.other.segment, store_key="test-pull-mode-value")
     before = cluster.puller.stats.snapshot()
     assert bytes(cluster.puller.fetch(media_key)) == value.tobytes()
     (rows,) = cluster.puller.fetch_batch([FetchRequest(media_key, 64, 4096)])
@@ -302,4 +337,4 @@ def test_untransformed_non_ascii_media_key(cluster):
     Mooncake's batched lookup decodes."""
     media_key, value = cluster.put(cluster.other.segment, store_key="test-media-é-中")
     assert media_key == "test-media-é-中".encode()
-    assert bytes(cluster.plain_reader.fetch(media_key)) == value.tobytes()
+    assert bytes(cluster.puller.fetch(media_key)) == value.tobytes()

@@ -6,18 +6,23 @@ wheel (models/common/multimedia_store/requirements.txt); the same paths against 
 test_mooncake_store_integration.py."""
 
 import ctypes
+import gc
 import hashlib
 import sys
+import threading
+import weakref
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
+from models.common.multimedia_store.config import MediaEmbeddingStoreConfig
 from models.common.multimedia_store.reader import FetchRequest, Missing, StoreUnavailable
 
 if not sys.platform.startswith("linux"):
     pytest.skip("Mooncake publishes Linux wheels only", allow_module_level=True)
 try:
+    import models.common.multimedia_store.mooncake_store as mooncake_store
     from models.common.multimedia_store.mooncake_store import OBJECT_NOT_FOUND, MooncakeEmbeddingReader
 except ImportError as e:  # a broken env, so it fails rather than skips
     pytest.fail(f"no Mooncake client ({e}): uv pip install -r models/common/multimedia_store/requirements.txt", False)
@@ -42,12 +47,20 @@ class FakeClient:
     """Objects keyed like Mooncake: {key: (segment, bytes, status, replica count)}. Local objects live in this process.
     Counts the round trips to the master and the registered buffers."""
 
-    def __init__(self):
+    def __init__(self, setup_rc: int = 0):
         self.objects = {}
         self.master_up = True
         self.lookups = 0
         self.registered = {}
         self.registrable = 1 << 40  # bytes register_buffer accepts in one buffer
+        self.setup_rc = setup_rc
+        self.closed = False
+
+    def setup(self, segment, metadata, segment_bytes, local_buffer_bytes, protocol, device, master):
+        return self.setup_rc
+
+    def get_hostname(self):
+        return ME
 
     def put(self, key, segment: str, data: np.ndarray, status: str = "COMPLETE", replicas: int = 1):
         """Stores under the store key; a bytes media key is written under its lowercase hex, as the encoder does."""
@@ -92,7 +105,11 @@ class FakeClient:
         return [out]
 
     def close(self):
+        self.closed = True
         return 0
+
+
+CONFIG = MediaEmbeddingStoreConfig(master="10.0.0.9:50051", segment=ME, segment_bytes=1 << 20, metadata="http://m/x")
 
 
 def _key(i: int) -> bytes:
@@ -279,3 +296,78 @@ def test_failed_remote_read_is_unavailable(setup, rc, expect_error):
     client.get_into_ranges_from_snapshot = lambda *args: [[[rc]]]
     with expect_error(StoreUnavailable, f"read {rc} of"):
         reader.fetch_batch([FetchRequest(_key(1), 0, 8), FetchRequest(_key(2), 0, 8)])
+
+
+def test_mooncake_raising_is_unavailable(setup, expect_error):
+    """Mooncake reports most failures in its results, but its binding can raise too; that is a store failure, counted
+    as an error, not an exception the caller doesn't expect."""
+    client, reader, _, _ = setup
+
+    def raises(*args):
+        raise RuntimeError("binding failed")
+
+    client.batch_get_replica_desc = raises
+    with expect_error(StoreUnavailable, "lookup on segment .* Mooncake raised RuntimeError"):
+        reader.fetch(_key(1))
+    with expect_error(StoreUnavailable, "lookup on segment"):
+        reader.size(_key(1))
+    del client.batch_get_replica_desc
+    client.prepare_get_into_ranges_snapshot = raises
+    with expect_error(StoreUnavailable, "read on segment .* Mooncake raised RuntimeError"):
+        reader.fetch(_key(2))
+    assert reader.stats.snapshot()["errors"] == 2  # the two fetches; size() is a lookup, not a fetch
+
+
+def test_failed_setup_closes_the_client(monkeypatch, expect_error):
+    """Setup can fail partway, after starting threads or binding a port, so open() closes the client it made."""
+    client = FakeClient(setup_rc=-1)
+    monkeypatch.setattr(mooncake_store, "MooncakeDistributedStore", lambda: client)
+    with expect_error(StoreUnavailable, "Mooncake setup failed"):
+        MooncakeEmbeddingReader.open(CONFIG)
+    assert client.closed
+
+
+def test_closed_reader_is_freed(monkeypatch):
+    """open() registers close() to run at exit, and close() removes it again, so a reader closed and replaced (with its
+    read buffer) is not kept alive until the process exits."""
+    client = FakeClient()
+    monkeypatch.setattr(mooncake_store, "MooncakeDistributedStore", lambda: client)
+    reader = MooncakeEmbeddingReader.open(CONFIG)
+    client.put(_key(2), OTHER, np.zeros(4096, dtype=np.uint8))
+    reader.fetch(_key(2))
+    assert client.registered and reader.stats.snapshot()["read_buffer_bytes"] == 4096
+    gone = weakref.ref(reader)
+    reader.close()
+    assert client.closed and reader.stats.snapshot()["read_buffer_bytes"] == 0
+    del reader
+    gc.collect()
+    assert gone() is None
+
+
+def test_close_waits_for_a_read_in_progress(setup):
+    """close(), e.g. the one that runs at exit, does not unmount the store under a read on another thread: it waits for
+    the read, or past its timeout leaves the store open."""
+    client, reader, local, _ = setup
+    in_lookup, release = threading.Event(), threading.Event()
+    lookup = client.batch_get_replica_desc
+
+    def slow_lookup(keys):
+        in_lookup.set()
+        release.wait(10)
+        return lookup(keys)
+
+    client.batch_get_replica_desc = slow_lookup
+    got = []
+    read = threading.Thread(target=lambda: got.append(bytes(reader.fetch(_key(1)))))
+    read.start()
+    assert in_lookup.wait(10)
+    reader.close(timeout_s=0.05)  # the read still holds the reader: left open
+    assert not client.closed
+    closing = threading.Thread(target=reader.close)
+    closing.start()
+    closing.join(0.2)
+    assert closing.is_alive() and not client.closed  # waits for the read
+    release.set()
+    read.join(10)
+    closing.join(10)
+    assert got == [local.tobytes()] and client.closed

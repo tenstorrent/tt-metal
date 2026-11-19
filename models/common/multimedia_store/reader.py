@@ -30,3 +30,10 @@ class EmbeddingReader(Protocol):
     def fetch_batch(self, requests: Sequence[FetchRequest]) -> list[memoryview]:
         """The requested bytes for each request, in order, for a forward that holds several requests' media. Raises
         Missing or StoreUnavailable for the first request that fails, failing the whole batch."""
+
+    def size(self, media_key: bytes) -> int:
+        """Bytes stored under media_key, e.g. to size a staging buffer before fetching. Raises Missing or
+        StoreUnavailable."""
+
+    def close(self) -> None:
+        """Leaves the store; later reads raise StoreUnavailable. Views a fetch returned may be invalid afterwards."""
