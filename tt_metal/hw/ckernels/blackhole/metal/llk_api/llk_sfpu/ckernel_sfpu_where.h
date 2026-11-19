@@ -32,8 +32,9 @@ inline void _calculate_where_(
         data_format == DataFormat::Float16_b ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
 
     // Only Float32 is unpacked directly to Dest (unpack_to_dest=true), preserving IEEE-754 -0.0 (0x80000000).
-    // Int32/UInt32 have no signed zero; floating-point formats (Float32 and Float16_b) clear -0.0's sign bit.
+    // Int32/UInt32 have no signed zero; Float32 clears bit 31 (<< 1), Float16_b (LO16 zero-extended) clears bit 15 (<< 17).
     constexpr bool is_fp = (data_format == DataFormat::Float32) || (data_format == DataFormat::Float16_b);
+    constexpr int sign_clear_shift = (data_format == DataFormat::Float16_b) ? 17 : 1;
 
 #ifdef DISABLE_SFPLOADMACRO
     int offset3 = (dst_index_out * 32) << 1;
@@ -47,8 +48,8 @@ inline void _calculate_where_(
         TT_SFPLOAD(p_sfpu::LREG0, mod0, ADDR_MOD_7, offset0);
         TT_SFPLOAD(p_sfpu::LREG1, mod0, ADDR_MOD_7, offset1);
         if constexpr (is_fp) {
-            // Drop the IEEE-754 sign bit so that -0.0 evaluates to 0 (false)
-            TTI_SFPSHFT(1, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+            // Drop the sign bit so that -0.0 evaluates to 0 (false)
+            TTI_SFPSHFT(sign_clear_shift, p_sfpu::LREG0, p_sfpu::LREG0, 1);
         }
         TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
         TT_SFPLOAD(p_sfpu::LREG1, mod0, ADDR_MOD_7, offset2);
@@ -77,7 +78,7 @@ inline void _calculate_where_(
         load_replay_buf(0, replay_len, [offset0, offset1, offset2] {
             if constexpr (is_fp) {
                 TT_SFPLOADMACRO((3 << 2), mod0, ADDR_MOD_7, offset0);
-                TTI_SFPSHFT(1, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+                TTI_SFPSHFT(sign_clear_shift, p_sfpu::LREG0, p_sfpu::LREG0, 1);
             } else {
                 TT_SFPLOADMACRO((0 << 2), mod0, ADDR_MOD_7, offset0);
             }
@@ -111,7 +112,7 @@ inline void _calculate_where_(
         load_replay_buf(0, replay_len, [offset0, offset1, offset2, offset3] {
             TT_SFPLOADMACRO((1 << 2), mod0, ADDR_MOD_7, offset0);
             if constexpr (is_fp) {
-                TTI_SFPSHFT(1, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+                TTI_SFPSHFT(sign_clear_shift, p_sfpu::LREG0, p_sfpu::LREG0, 1);
             }
             TT_SFPLOADMACRO((2 << 2), mod0, ADDR_MOD_7, offset1);
             TT_SFPLOAD(0, mod0, ADDR_MOD_7, offset2);
