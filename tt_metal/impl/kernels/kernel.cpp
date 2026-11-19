@@ -130,6 +130,12 @@ BuildEnvManager& build_env_manager_for(const IDevice& device) {
 const DeviceBuildEnv& device_build_env_for(const IDevice& device) {
     return build_env_manager_for(device).get_device_build_env(device.build_id());
 }
+
+// Empty at the config's default level, so hashes (and cached binaries) of default-level kernels are unchanged.
+template <typename Config>
+std::string opt_level_suffix(const Config& config) {
+    return config.opt_level == Config{}.opt_level ? "" : fmt::format("_{}", enchantum::to_string(config.opt_level));
+}
 }  // namespace
 
 KernelSource::KernelSource(std::string source, SourceType source_type, fs::path path) :
@@ -661,22 +667,26 @@ uint32_t ComputeKernel::get_kernel_processor_type(int index) const {
 
 std::string DataMovementKernel::config_hash() const {
     return fmt::format(
-        "{}_{}_{}",
+        "{}_{}_{}{}",
         enchantum::to_string(this->config_.processor),
         enchantum::to_string(this->config_.noc),
-        enchantum::to_string(this->config_.noc_mode));
+        enchantum::to_string(this->config_.noc_mode),
+        opt_level_suffix(this->config_));
 }
 
-std::string DramKernel::config_hash() const { return fmt::format("dram_{}", enchantum::to_string(this->config_.noc)); }
+std::string DramKernel::config_hash() const {
+    return fmt::format("dram_{}{}", enchantum::to_string(this->config_.noc), opt_level_suffix(this->config_));
+}
 
 // Add "eth_" to the hash to differentiate between erisc and brisc.
 std::string EthernetKernel::config_hash() const {
     return fmt::format(
-        "eth_{}_{}_{}_{}",
+        "eth_{}_{}_{}_{}{}",
         enchantum::to_string(this->config_.processor),
         enchantum::to_string(this->config_.noc),
         enchantum::to_string(this->config_.noc_mode),
-        enchantum::to_string(this->config_.eth_mode));
+        enchantum::to_string(this->config_.eth_mode),
+        opt_level_suffix(this->config_));
 }
 
 std::string ComputeKernel::config_hash() const {
@@ -702,6 +712,7 @@ std::string ComputeKernel::config_hash() const {
     if (this->config_.enable_trisc2_rvv) {
         hash += "_rvv";
     }
+    hash += opt_level_suffix(this->config_);
     return hash;
 }
 
@@ -1732,7 +1743,7 @@ std::string QuasarDataMovementKernel::config_hash() const {
     // DataMovementProcessor values must be sorted to ensure consistent ordering for hash generation
     TT_ASSERT(std::is_sorted(this->dm_processors_.begin(), this->dm_processors_.end()));
     const char* suffix = config_.is_legacy_kernel ? "_legacy" : "_shared";
-    return fmt::format("{}{}", fmt::join(this->dm_processors_, "_"), suffix);
+    return fmt::format("{}{}{}", fmt::join(this->dm_processors_, "_"), suffix, opt_level_suffix(config_));
 }
 
 uint8_t QuasarDataMovementKernel::expected_num_binaries() const {
@@ -1876,6 +1887,7 @@ std::string QuasarComputeKernel::config_hash() const {
     if (config_.enable_trisc0_rvv) {
         hash += "_rvv";
     }
+    hash += opt_level_suffix(config_);
     return hash;
 }
 
