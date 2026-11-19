@@ -62,7 +62,7 @@ def run(
 
     alpha = torch.tensor(1, dtype=torch.bfloat16).uniform_(0.01, 10).item()
 
-    intermediate_result = torch.nn.functional.elu(torch_input_tensor_a, alpha=alpha)
+    intermediate_result = torch.nn.functional.celu(torch_input_tensor_a, alpha=alpha)
     intermediate_result.backward(gradient=torch_grad_tensor)
     torch_output_tensor = torch_input_tensor_a.grad
 
@@ -83,7 +83,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.elu_bw(grad_tensor, input_tensor_a, alpha=alpha, memory_config=output_memory_config)[0]
+    output_tensor = ttnn.celu_bw(grad_tensor, input_tensor_a, alpha=alpha, memory_config=output_memory_config)[0]
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
