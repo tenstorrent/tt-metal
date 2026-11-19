@@ -386,8 +386,9 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
             dtype_b);
     }
 
-    if (attributes.binary_op_type == BinaryOpType::SUB &&
-        (input_tensor_a.dtype() == DataType::UINT8 || input_tensor_a.dtype() == DataType::INT8)) {
+    const bool is_8bit_sub = attributes.binary_op_type == BinaryOpType::SUB &&
+                             (input_tensor_a.dtype() == DataType::UINT8 || input_tensor_a.dtype() == DataType::INT8);
+    if (is_8bit_sub) {
         const auto output_dtype =
             output_tensor.has_value() ? output_tensor->dtype() : attributes.dtype.value_or(input_tensor_a.dtype());
         TT_FATAL(
@@ -409,7 +410,8 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
     if (input_tensor_b.has_value()) {
         validate_activations(attributes.rhs_activations, input_tensor_b->dtype());
     }
-    validate_activations(attributes.post_activations, attributes.dtype.value_or(input_tensor_a.dtype()));
+    validate_activations(
+        attributes.post_activations, is_8bit_sub ? DataType::INT32 : attributes.dtype.value_or(input_tensor_a.dtype()));
 
     if (attributes.dtype.has_value() && output_tensor.has_value()) {
         TT_FATAL(
