@@ -23,6 +23,7 @@ plane now picks its direction from the forwarding table rather than from rank or
 arms are green upstream and this is a choice rather than a constraint.
 """
 
+import math
 from pathlib import Path
 
 import pytest
@@ -54,6 +55,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import (
 )
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import CACHE_LEN, cache_rows, compose
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_transformer_pipeline_split import RECOVERY_FROM, RECOVERY_PCC
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import TtAttnResWalk
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import load_attn_res_weights
@@ -411,17 +413,36 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, sp_axis, tp_axi
 # KV_CACHE_PCC) against `TRACE_K31`, which records all 93 layers. Two differences, both from what the K3.1
 # trace and weights are:
 #
-# * The stack is the runner's PP4 rank 0 (`k31_stage.first_stage_params`: K3.1 TTNN weight cache, scaled-FP8
-#   kvpe, bf8 indexer key cache, the K3 manifest's knobs), run eager so the tap can read every layer. The model
-#   is too large for one galaxy, so the ladder covers PP4 stage 0, layers 0-23.
-# * The prompt is the trace's 8192 prompt ids then its 2048 decoded ids, teacher-forced:
-#   two chunks, so chunk 1's DSA layers read chunk 0's KV and its KDA layers continue chunk 0's carry. The bar
-#   is held per chunk on prompt rows (chunk 0 [0, 5120), chunk 1 [5120, 8192)), as the chunked K3 test holds it
-#   per chunk; rows past the prompt (vLLM's decode steps) feed the model but are not scored.
+# * The stack is the runner's (`k31_stage.stage_params`: K3.1 TTNN weight cache, scaled-FP8 kvpe, bf8 indexer
+#   key cache, the K3 manifest's knobs), run eager so the tap can read every layer. The model is too large for
+#   one galaxy, so the ladder covers layers 0-23 as the layout deploys them (`K31_DEPTH`):
+#   - 8x4: PP4 rank 0, one stage.
+#   - 4x4-sp1: 4x4 stages 0 and 1, two runtimes on one tray half. Per chunk, rank 0's output activation
+#     (eager, the tensor the runner sends over D2D) goes straight into rank 1, as a lossless bf16 handoff.
+#     This is the K3.1 pipeline split on real weights. The cut at layer 12 is the runner's stage boundary,
+#     and the oracle is the trace. Layers 12-23 read the sealed block that crossed the cut, so a split ladder
+#     also holds K3's split check (test_transformer_pipeline_split.py): layers RECOVERY_FROM+ recover to
+#     RECOVERY_PCC on 5120-row windows, which an inherited set that never arrived would not.
+#   - 4x4-sp1-undivided: layers 0-23 as one 4x4 stack on one tray half (not a deployed stage; K3 keeps the
+#     same row), the baseline that tells the cut's effect from 4x4 numerics.
+# * The prompt is the trace's 8192 prompt ids then its 2048 decoded ids, teacher-forced: two 5120-token chunks
+#   on 8x4 and four 2560-token chunks on 4x4. Each chunk's DSA layers read the earlier chunks' KV, and its KDA
+#   layers continue their carry. The bar is held per chunk on prompt rows (on 8x4, chunk 0 is [0, 5120) and
+#   chunk 1 is [5120, 8192)), as the chunked K3 test holds it per chunk. Rows past the prompt (vLLM's decode
+#   steps) feed the model but are not scored.
 #
 # The bar is K3's, per layer by depth: SHALLOW_LAYER_PCC through layer 11, DEEP_LAYER_PCC through layer 23 (K3's
 # depth-24 bar, set for the second seal). KV: KV_CACHE_PCC at every DSA layer. Measured at 10K:
 # worst 0.9966 (layers 0-11), 0.9869 (12-23).
+# Re-measured on 4x4-sp1, stages 0 and 1 on one tray half, at the same bars (a Blackhole Galaxy, 2026-11-18,
+# 8x4 alongside it): 10K worst 0.99661 (layer 3) / 0.98533 (layer 23, chunk 3: prompt rows 7680-8191), 8x4
+# 0.99665 / 0.98708 (layer 19); 128K worst 0.99623 (layer 4) / 0.98630 (layer 19), 8x4 0.99633 / 0.98652. Every
+# other layer is within 0.0006 of 8x4, except layer 23 (10K 0.98533 vs 0.99170; 128K 0.98772 vs 0.99089), and the
+# caches and top-k recall agree to 1e-3 or better. Layer 23's per-chunk gap is mostly the scoring window: 4x4's last
+# 10K chunk scores 512 prompt rows. On the 8x4 chunk grid (5120-row windows) 4x4 equals 8x4 within 4e-4 at 10K (layer
+# 23: 0.99135 vs 0.99170). Undivided, 4x4 equals the split to ~1e-5, so the cut adds nothing. One residual is observed,
+# not understood: at 128K layer 23 on rows 20480-25599 reads 0.98959 on 4x4 against 0.99089 on 8x4. That is the only
+# layer-23 window below 0.99. The recovery check gates the 10K rung only, as K3 applies it (K31_RECOVERY_GATED).
 #
 # The DSA indexer, per DSA layer, as GLM-5.3's runner gate and the package's indexer tests measure it:
 #
@@ -437,9 +458,17 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, sp_axis, tp_axi
 #
 #     scripts/run_safe_pytest.sh \
 #         "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_transformer_depth.py::test_k31_depth_ladder_matches_golden[blackhole-torus-xy-8x4]"
+#     models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- \
+#         "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_transformer_depth.py::test_k31_depth_ladder_matches_golden[blackhole-4x4-sp1]"
+#     (and [blackhole-4x4-sp1-undivided])
+#
+# The ladder's depth: K3 sets per-layer bars through layer 23 only.
+K31_DEPTH = 2 * KimiK3Config.ATTN_RES_BLOCK_SIZE
+
+
 def k31_layer_pcc(layer: int) -> float:
-    """K3's per-layer bar for a layer of PP4 stage 0 (see above)."""
-    assert layer < 2 * KimiK3Config.ATTN_RES_BLOCK_SIZE, f"layer {layer}: K3 sets no bar past depth 24"
+    """K3's per-layer bar for a layer of the ladder (see above)."""
+    assert layer < K31_DEPTH, f"layer {layer}: K3 sets no bar past depth {K31_DEPTH}"
     return SHALLOW_LAYER_PCC if layer < KimiK3Config.ATTN_RES_BLOCK_SIZE else DEEP_LAYER_PCC
 
 
@@ -502,10 +531,53 @@ def test_topk_recall_counts_each_trace_key_once():
     assert topk_recall(got, want).tolist() == pytest.approx([2 / 3, 1.0, 0.0, 1.0])
 
 
-# rung -> golden; both run all of PP4 stage 0. "L24-128k" is K3's long-context check (test_chunked_prefill.py's L24:
-# layers 0-23 over every chunk) on the 128K trace. Both rungs run in one test on one build of the stage, sized for the
+class PooledPcc:
+    """comp_pcc's pooled Pearson correlation over every element added so far, from float64 sums, so one window can
+    span several chunks. Unlike comp_pcc it does not zero non-finite values: a window holding one fails `value()`."""
+
+    def __init__(self):
+        self._sums = [0.0] * 6  # n, sx, sy, sxx, syy, sxy
+
+    def add(self, want: torch.Tensor, got: torch.Tensor) -> None:
+        x, y = want.double().flatten(), got.double().flatten()
+        for i, v in enumerate((x.numel(), x.sum(), y.sum(), (x * x).sum(), (y * y).sum(), (x * y).sum())):
+            self._sums[i] += float(v)
+
+    def value(self) -> float:
+        assert all(math.isfinite(v) for v in self._sums), "non-finite values in a pooled-PCC window"
+        n, sx, sy, sxx, syy, sxy = self._sums
+        return (sxy - sx * sy / n) / ((sxx - sx * sx / n) * (syy - sy * sy / n)) ** 0.5
+
+
+def test_pooled_pcc_spans_chunks(expect_error):
+    """Hand-checked: x = 1 2 3 4, y = 1 3 2 4 has deviations (-1.5 -.5 .5 1.5) and (-1.5 .5 -.5 1.5), so
+    r = 4 / sqrt(5 * 5) = 0.8, whether the rows arrive in one chunk or two. A NaN in a window fails closed."""
+    x, y = torch.tensor([[1.0], [2.0], [3.0], [4.0]]), torch.tensor([[1.0], [3.0], [2.0], [4.0]])
+    whole, split = PooledPcc(), PooledPcc()
+    whole.add(x, y)
+    split.add(x[:2], y[:2])
+    split.add(x[2:], y[2:])
+    assert whole.value() == pytest.approx(0.8) and split.value() == pytest.approx(0.8)
+    split.add(x[:1], torch.tensor([[float("nan")]]))
+    with expect_error(AssertionError, "non-finite"):
+        split.value()
+
+
+# rung -> golden; both run all of layers 0-23. "L24-128k" is K3's long-context check (test_chunked_prefill.py's L24:
+# layers 0-23 over every chunk) on the 128K trace. Both rungs run in one test on one build of the stages, sized for the
 # longer golden, each from fresh caches: the weight load, not the chunks, is most of a rung's time.
 K31_RUNGS = {"L24": TRACE_K31, "L24-128k": TRACE_K31_128K}
+# The rungs a split ladder holds to K3's recovery check: K3 applies it to one 5120-token sequence and has no
+# long-context recovery check, so it gates the 10K rung; at 128K the per-layer floors gate and recovery is logged.
+K31_RECOVERY_GATED = {"L24"}
+
+
+# (mesh_device, device_params, undivided): each layout's deployed stages, and 4x4's layers 0-23 undivided.
+K31_LADDERS = [pytest.param(*p.values, False, marks=p.marks, id=p.id) for p in k31_stage.PLACEMENT] + [
+    pytest.param(*p.values, True, marks=p.marks, id=f"{p.id}-undivided")
+    for p in k31_stage.PLACEMENT
+    if p.values[0] == k31_stage.MESH_4X4
+]
 
 
 def _k31_sequence(trace) -> tuple[list[int], int]:
@@ -516,41 +588,72 @@ def _k31_sequence(trace) -> tuple[list[int], int]:
 
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi-K3.1 runs on Blackhole only")
 @pytest.mark.timeout(0)
-@pytest.mark.parametrize("mesh_device, device_params", k31_stage.PLACEMENT, indirect=True)
-def test_k31_depth_ladder_matches_golden(mesh_device, device_params):
+@pytest.mark.parametrize(
+    "mesh_device, device_params, undivided", K31_LADDERS, indirect=["mesh_device", "device_params"]
+)
+def test_k31_depth_ladder_matches_golden(mesh_device, device_params, undivided):
     traces = {rung: resolve_trace(path) for rung, path in K31_RUNGS.items()}
     missing = [f"{rung} ({K31_RUNGS[rung]})" for rung, trace in traces.items() if trace is None]
     assert not missing, f"no K3.1 golden for {', '.join(missing)}"
     longest = max(len(_k31_sequence(trace)[0]) for trace in traces.values())
-    hf_config, params = k31_stage.first_stage_params(max_seq_len=-(-longest // CACHE_LEN) * CACHE_LEN)
-    runtime = k31_stage.ADAPTER.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
+    max_seq_len = -(-longest // CACHE_LEN) * CACHE_LEN
+    mesh_shape = tuple(mesh_device.shape)
+    # The layout's stages that hold layers [0, K31_DEPTH): PP4 rank 0 on 8x4, stages 0 and 1 on 4x4.
+    layout = k31_stage.STAGE_LAYOUTS[mesh_shape]
+    stage_ids = [s for s, (first, _) in enumerate(layout.stages) if first < K31_DEPTH]
+    last_first, last_count = layout.stages[stage_ids[-1]]
+    assert last_first + last_count == K31_DEPTH, f"{mesh_shape} stages {layout.stages} do not end at {K31_DEPTH}"
+    if undivided:
+        assert len(stage_ids) > 1, f"{mesh_shape}: layers [0, {K31_DEPTH}) are one stage already"
+        windows = [
+            k31_stage.window_params(mesh_shape, 0, K31_DEPTH, max_seq_len, is_first_rank=True, is_last_rank=False)
+        ]
+    else:
+        windows = [k31_stage.stage_params(mesh_shape, s, max_seq_len) for s in stage_ids]
+
+    stages = []  # (params, runtime), rank order
     failures = {}
     try:
+        for hf_config, params in windows:
+            runtime = k31_stage.ADAPTER.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
+            stages.append((params, runtime))
         for rung, trace in traces.items():
-            failures[rung] = _k31_rung(rung, trace, mesh_device, hf_config, params, runtime)
+            failures[rung] = _k31_rung(rung, trace, mesh_device, hf_config, stages)
     finally:
-        runtime.release_trace()  # the sub-device managers, before the fixture closes the mesh
+        for _, runtime in stages:
+            runtime.release_trace()  # the sub-device managers, before the fixture closes the mesh
     failed = {rung: f for rung, f in failures.items() if f}
     assert not failed, "; ".join(f"{rung}: " + "; ".join(f) for rung, f in failed.items())
 
 
-def _k31_rung(rung, trace, mesh_device, hf_config, params, runtime) -> list[str]:
-    """One golden through PP4 stage 0 from fresh caches; the failed checks, empty when it passes."""
+def _k31_rung(rung, trace, mesh_device, hf_config, stages) -> list[str]:
+    """One golden through the ladder's stages, in rank order and from fresh caches; the failed checks, empty when
+    it passes. Each chunk's output activation of a stage is the next stage's input."""
     golden_path = K31_RUNGS[rung]
-    chunk = k31_stage.CHUNK
+    chunk = stages[0][0].chunk_size
     ids, prompt_len = _k31_sequence(trace)
     real_len = len(ids)
     num_chunks = -(-real_len // chunk)
     prompt = ids + [MTP_PAD_TOKEN_ID] * (num_chunks * chunk - real_len)
-    first, num_layers = params.first_layer_idx, params.num_layers
-    kv_caches = k31_stage.ADAPTER.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
-    runtime.compile(kv_caches)
+    layers = f"layers [{stages[0][0].first_layer_idx}, {stages[-1][0].first_layer_idx + stages[-1][0].num_layers})"
+    kv_caches = []  # per stage
+    for params, runtime in stages:
+        kv_caches.append(
+            k31_stage.ADAPTER.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
+        )
+        runtime.compile(kv_caches[-1])
 
     def pcc(want, got):
         return float(str(comp_pcc(want, got)[1]).split()[-1])
 
     # Scored chunk by chunk on the prompt rows, so host memory holds one chunk's taps.
     scores = {}  # (global layer, chunk) -> PCC
+
+    # Every layer's pooled PCC over the 8x4 chunk grid (`k31_stage.CHUNK` = 5120 rows), so 4x4's 2560-token chunks
+    # are compared with 8x4 on the same rows. It is what the split check below gates (see there).
+    grid = k31_stage.CHUNK
+    assert grid % chunk == 0, f"chunk {chunk} does not tile the {grid}-row grid"
+    grid_pcc = {}  # (global layer, window) -> PooledPcc
 
     def score(c, taps):
         lo = c * chunk
@@ -560,6 +663,7 @@ def _k31_rung(rung, trace, mesh_device, hf_config, params, runtime) -> list[str]
         for layer, got in sorted(taps.items()):
             golden = trace.decoder_output(layer, lo, hi)
             scores[(layer, c)] = pcc(golden, got[: hi - lo].float())
+            grid_pcc.setdefault((layer, lo // grid), PooledPcc()).add(golden, got[: hi - lo])
 
     # Per DSA layer, the top-k recall of every prompt row, filled chunk by chunk (the indices are not kept).
     recall = {}  # global layer -> [prompt rows] float
@@ -580,14 +684,9 @@ def _k31_rung(rung, trace, mesh_device, hf_config, params, runtime) -> list[str]
                 topk_miscounted.append(f"layer {layer} chunk {c}: {miscounted} rows")
             recall.setdefault(layer, torch.full((prompt_len,), float("nan")))[lo : lo + n] = topk_recall(got, want)
 
-    topk = {}
-    dsa_mlas = {
-        first + local: layer.attention.mla
-        for local, layer in enumerate(runtime.model.layers)
-        if runtime.model.schedule.is_mla(first + local)
-    }
+    topk, taps = {}, {}  # global layer -> this chunk's top-k rows / live residual, over every stage
 
-    def with_topk(layer, mla_forward):
+    def with_topk(layer, mla_forward, params):
         def forward_returning_topk(*args, **kwargs):
             out, indices = mla_forward(*args, return_indexer_indices=True, **kwargs)
             topk[layer] = k31_topk_rows(mesh_device, indices, chunk, params.sp_axis, params.tp_axis)
@@ -595,61 +694,72 @@ def _k31_rung(rung, trace, mesh_device, hf_config, params, runtime) -> list[str]
 
         return forward_returning_topk
 
-    for layer, mla in dsa_mlas.items():
-        mla.forward = with_topk(layer, mla.forward)
+    def tapped(forward, first):
+        def forward_with_tap(*args, **kwargs):
+            tap = lambda idx, h: taps.__setitem__(first + idx, compose(mesh_device, h, chunk))
+            return forward(*args, layer_tap=tap, **kwargs)
 
-    taps = {}
-    forward = runtime.model.forward
+        return forward_with_tap
 
-    def tapped(*args, **kwargs):
-        tap = lambda idx, h: taps.__setitem__(first + idx, compose(mesh_device, h, chunk))
-        return forward(*args, layer_tap=tap, **kwargs)
-
-    runtime.model.forward = tapped
+    dsa_mlas = {}  # global layer -> its MLA, over every stage
+    forwards = []  # each stage's model forward, restored after the rung
+    for params, runtime in stages:
+        first = params.first_layer_idx
+        for local, layer in enumerate(runtime.model.layers):
+            if runtime.model.schedule.is_mla(first + local):
+                dsa_mlas[first + local] = layer.attention.mla
+                layer.attention.mla.forward = with_topk(first + local, layer.attention.mla.forward, params)
+        forwards.append(runtime.model.forward)
+        runtime.model.forward = tapped(runtime.model.forward, first)
     try:
         for c in range(num_chunks):
-            chunk_input = runtime.make_chunk_input(prompt[c * chunk : (c + 1) * chunk])
-            out = runtime.prefill_chunk(
-                chunk_input, kv_caches, slot_id=0, actual_start=c * chunk, actual_end=min((c + 1) * chunk, real_len)
-            )
+            activation = stages[0][1].make_chunk_input(prompt[c * chunk : (c + 1) * chunk])
+            for (_, runtime), kv in zip(stages, kv_caches):
+                # Deallocates its input; on a rank that is not the last it returns the activation for the next.
+                activation = runtime.prefill_chunk(
+                    activation, kv, slot_id=0, actual_start=c * chunk, actual_end=min((c + 1) * chunk, real_len)
+                )
             ttnn.synchronize_device(mesh_device)
-            logger.info(f"K31 {rung} chunk {c}/{num_chunks} done: layers [{first}, {first + num_layers})")
-            if out is not None:
-                ttnn.deallocate(out)
+            logger.info(f"K31 {rung} chunk {c}/{num_chunks} done: {layers}")
+            if activation is not None:
+                ttnn.deallocate(activation)
             score(c, taps)
             taps.clear()
             score_topk(c, topk)
             topk.clear()
-        slots = {
-            slot: runtime.model.schedule.global_index(local)
-            for local, slot in enumerate(runtime.model.schedule.kv_slot_of_local)
-            if slot is not None
-        }
-        kv = {
-            name: cache_rows(mesh_device, cache, chunk, prompt_len)
-            for name, cache in (("kvpe", kv_caches.kvpe), ("index", kv_caches.index))
-            if cache is not None
-        }
+        kv = {}  # (name, global layer) -> logical rows
+        for (_, runtime), caches in zip(stages, kv_caches):
+            schedule = runtime.model.schedule
+            for name, cache in (("kvpe", caches.kvpe), ("index", caches.index)):
+                if cache is None:
+                    continue
+                rows = cache_rows(mesh_device, cache, chunk, prompt_len)
+                for local, slot in enumerate(schedule.kv_slot_of_local):
+                    if slot is not None:
+                        kv[(name, schedule.global_index(local))] = rows[slot]
     finally:
-        runtime.model.forward = forward
+        for (_, runtime), forward in zip(stages, forwards):
+            runtime.model.forward = forward
         for mla in dsa_mlas.values():
             del mla.forward  # the instance attribute; the class's forward shows through again
-        if kv_caches.kda_states is not None:
-            kv_caches.kda_states.deallocate()
-        ttnn.deallocate(kv_caches.kvpe.storage)
-        if kv_caches.index is not None:
-            ttnn.deallocate(kv_caches.index)
+        for caches in kv_caches:
+            if caches.kda_states is not None:
+                caches.kda_states.deallocate()
+            ttnn.deallocate(caches.kvpe.storage)
+            if caches.index is not None:
+                ttnn.deallocate(caches.index)
 
     kv_failures = []
-    for slot, layer in sorted(slots.items()):
+    for layer in sorted(dsa_mlas):
         lora, rope = cache_half_pccs(
-            trace.kv_cache(layer, 0, prompt_len), kv["kvpe"][slot], KimiK3Config.KV_LORA_RANK, pe_interleave=False
+            trace.kv_cache(layer, 0, prompt_len), kv[("kvpe", layer)], KimiK3Config.KV_LORA_RANK, pe_interleave=False
         )
-        index = pcc(trace.rows("indexer", f"indexer_k_layer_{layer}", 0, prompt_len), kv["index"][slot])
+        index = pcc(trace.rows("indexer", f"indexer_k_layer_{layer}", 0, prompt_len), kv[("index", layer)])
+        logger.info(f"K31 {rung} layer {layer} caches: lora={lora:.6f} rope={rope:.6f} index key={index:.6f}")
         if min(lora, rope) < KV_CACHE_PCC:
-            kv_failures.append(f"slot {slot} (layer {layer}): lora={lora:.6f} rope={rope:.6f}")
+            kv_failures.append(f"layer {layer}: lora={lora:.6f} rope={rope:.6f}")
         if index < KV_CACHE_PCC:
-            kv_failures.append(f"slot {slot} (layer {layer}): index key={index:.6f}")
+            kv_failures.append(f"layer {layer}: index key={index:.6f}")
 
     # Top-k recall per DSA layer: gated on the prompt rows past the first top-k; the rows before it are checked
     # for completeness.
@@ -657,9 +767,21 @@ def _k31_rung(rung, trace, mesh_device, hf_config, params, runtime) -> list[str]
     topk_failures = []
     for layer, per_row in sorted(recall.items()):
         full, gated = per_row[:topk_k], per_row[topk_k:]
+        logger.info(
+            f"K31 {rung} layer {layer} top-k recall: {gated.mean():.6f} (rows < {topk_k}: min {full.min():.4f})"
+        )
         if gated.mean() < K31_TOPK_RECALL[golden_path] or full.min() < 1:
             topk_failures.append(f"layer {layer}: {gated.mean():.6f} (rows < {topk_k}: min {full.min():.4f})")
 
+    for layer in sorted({l for l, _ in grid_pcc}):
+        windows = [pcc.value() for (l, _), pcc in sorted(grid_pcc.items()) if l == layer]
+        logger.info(f"K31 {rung} layer {layer} on {grid}-row windows: " + " ".join(f"{v:.7f}" for v in windows))
+    for layer in sorted({l for l, _ in scores}):
+        worst_chunk = min((c for l, c in scores if l == layer), key=lambda c: scores[(layer, c)])
+        logger.info(
+            f"K31 {rung} layer {layer}: worst chunk {worst_chunk} {scores[(layer, worst_chunk)]:.7f} "
+            f"(bar {k31_layer_pcc(layer)})"
+        )
     worst = min(scores, key=lambda k: scores[k] - k31_layer_pcc(k[0]))
     logger.info(
         f"K31 {rung} worst layer vs its bar: {worst[0]} chunk {worst[1]}: {scores[worst]:.7f} (bar {k31_layer_pcc(worst[0])})"
@@ -677,4 +799,18 @@ def _k31_rung(rung, trace, mesh_device, hf_config, params, runtime) -> list[str]
         failures.append("device top-k selects a different number of keys: " + "; ".join(topk_miscounted))
     if topk_failures:
         failures.append(f"top-k recall below {K31_TOPK_RECALL[golden_path]}: " + "; ".join(topk_failures))
+    if len(stages) > 1:
+        # The ladder crosses a stage boundary: K3's split check (test_transformer_pipeline_split.py), on what K3 scores,
+        # one 5120-token sequence: the 5120-row grid windows, on either layout, gated on K31_RECOVERY_GATED. Not per
+        # 2560-row 4x4 chunk: on equal windows 4x4 equals 8x4 within 4e-4 at 10K, while the last 10K chunk's 512 prompt
+        # rows read layer 23 at 0.985. A rank whose inherited sealed set never arrived degrades through its block
+        # instead of recovering by its end.
+        tail = min(pcc.value() for (l, _), pcc in grid_pcc.items() if l >= RECOVERY_FROM)
+        gated = rung in K31_RECOVERY_GATED
+        logger.info(
+            f"K31 {rung} recovery: min PCC over layers {RECOVERY_FROM}+ on {grid}-row windows {tail:.7f} "
+            + (f"(bar {RECOVERY_PCC})" if gated else "(logged, not gated)")
+        )
+        if gated and tail < RECOVERY_PCC:
+            failures.append(f"no recovery by layer {RECOVERY_FROM}+ ({tail:.6f} < {RECOVERY_PCC})")
     return failures
