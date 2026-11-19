@@ -182,8 +182,20 @@ void kernel_main() {
     // cb_zero (row-major x only): one K-block window of zeros that fills the padding sticks of a partial
     // tile-row (see the x read loop).
     constexpr uint32_t cb_zero = get_compile_time_arg_val(36);
+    // Weight page addressing. Per-expert tensors (w_stacked = 0): expert e's weights are their own buffers, tile
+    // (k, n) at page k * N + n, so GU_ROW_STRIDE = N_gate_tiles_full and the column offsets are 0. Stacked tensors
+    // (GegluRoutedExpert.from_stacked: the decode copy, [1, E, K, 2N] fused [up | gate] and [1, E, N, K],
+    // DRAM-interleaved): every expert's base address is the stacked buffer's and expert e's tiles start at tile-row
+    // e * K (gate/up) / e * K_down_tiles (down); a gate/up K-row is GU_ROW_STRIDE = 2N tiles wide, gate at column
+    // GATE_COL_OFF = N, up at UP_COL_OFF = 0. Interleaved only: the runs stay one tile, so an offset column never
+    // has to line up with a shard edge.
+    constexpr bool w_stacked = get_compile_time_arg_val(37) != 0;
+    constexpr uint32_t GU_ROW_STRIDE = get_compile_time_arg_val(38);
+    constexpr uint32_t GATE_COL_OFF = get_compile_time_arg_val(39);
+    constexpr uint32_t UP_COL_OFF = get_compile_time_arg_val(40);
+    static_assert(!w_stacked || (GU_SHARD_W == 0 && D_SHARD_W == 0), "stacked weights must be DRAM-interleaved");
 
-    constexpr uint32_t x_accessor_offset = 37;
+    constexpr uint32_t x_accessor_offset = 41;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
     const auto x_acc = TensorAccessor(x_args, x_addr, get_tile_size(cb_in0_x));
     // Row-major x accessor (x_is_row_major): x is a ROW_MAJOR bf16 buffer whose
@@ -410,6 +422,9 @@ void kernel_main() {
         const auto gate_acc = TensorAccessor(gate_args, gate_addr_e, gate_tile_bytes);
         const auto up_acc = TensorAccessor(up_args, up_addr_e, up_tile_bytes);
         const auto down_acc = TensorAccessor(down_args, down_addr_e, down_tile_bytes);
+        // This expert's first weight tile-row inside the stacked tensors (0 for per-expert tensors).
+        const uint32_t gu_row_base = w_stacked ? local_expert_id * K_gate_tiles : 0;
+        const uint32_t d_row_base = w_stacked ? local_expert_id * K_down_tiles : 0;
 
         const uint32_t global_expert_id = idx_ptr[local_expert_id];
         // Hybrid dispatch: experts outside this op's band belong to the other routed-expert
@@ -668,13 +683,15 @@ void kernel_main() {
                     const uint32_t gate_col_end =
                         (gate_col0 + per_core_N_gu < N_gate_tiles_full) ? gate_col0 + per_core_N_gu : N_gate_tiles_full;
                     for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
+                        // Page (gu_row_base + K-row) * GU_ROW_STRIDE + GATE_COL_OFF + col: the expert's own
+                        // k * N + col for per-expert tensors (see the weight page addressing args).
                         GuRuns::read(
                             noc_read,
                             gate_acc,
-                            kb * in0_block_w_gu + k,
-                            N_gate_tiles_full,
-                            gate_col0,
-                            gate_col_end,
+                            gu_row_base + kb * in0_block_w_gu + k,
+                            GU_ROW_STRIDE,
+                            GATE_COL_OFF + gate_col0,
+                            GATE_COL_OFF + gate_col_end,
                             l1_w_gate,
                             gate_tile_bytes);
                         l1_w_gate += per_core_N_gu * gate_tile_bytes;
@@ -694,10 +711,10 @@ void kernel_main() {
                             GuRuns::read(
                                 noc_read,
                                 up_acc,
-                                kb * in0_block_w_gu + k,
-                                N_gate_tiles_full,
-                                gate_col0,
-                                gate_col_end,
+                                gu_row_base + kb * in0_block_w_gu + k,
+                                GU_ROW_STRIDE,
+                                UP_COL_OFF + gate_col0,
+                                UP_COL_OFF + gate_col_end,
                                 l1_w_up,
                                 up_tile_bytes);
                             l1_w_up += per_core_N_gu * up_tile_bytes;
@@ -882,7 +899,7 @@ void kernel_main() {
                             DRuns::read(
                                 noc_read,
                                 down_acc,
-                                row,
+                                d_row_base + row,
                                 N_down_tiles_full,
                                 down_col0,
                                 down_col_end,

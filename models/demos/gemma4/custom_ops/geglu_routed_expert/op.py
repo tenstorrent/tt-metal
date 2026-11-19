@@ -25,6 +25,11 @@ Contract (per device of the mesh; the same program runs on every chip with its o
 | ``down_projs`` | ``E`` x ``[H, K]`` | |
 | output | ``[M_buf, K]`` TILE bf8 (fresh for ROW_MAJOR x, ``x`` itself in place for TILE x unless ``output`` is given) | expert outputs at the expert regions; other rows untouched |
 
+``GegluRoutedExpert.from_stacked`` takes the routed experts' STACKED tensors instead of the per-expert lists: the
+decode copy of ``tt/experts/weights.py`` (``gate_up`` ``[1, E, K, 2H]`` ordered ``[up | gate]`` on the last dim,
+``down`` ``[1, E, H, K]``, DRAM-interleaved TILE). The kernels then address expert ``e``'s tiles by page id inside
+those two buffers, so the prefill experts need no copy of their own (see ``from_stacked``).
+
 ``golden`` is the torch reference on the same (count, offset, index) contract.
 """
 
@@ -145,17 +150,10 @@ class GegluRoutedExpert:
         min_active_tokens: int = 0,
         max_active_tokens: int = U32_MAX,
     ):
-        reason = self.unsupported_reason(mesh_device)
-        assert reason is None, reason
-        self.per_core_m_max, self.in0_block_w_request = self.PER_CORE_M_MAX, self.IN0_BLOCK_W_GU_REQUEST
+        self._init_common(mesh_device, idx_table, max_tokens, min_active_tokens, max_active_tokens)
         assert len(gate_projs) == len(up_projs) == len(down_projs) > 0, "one gate/up/down tensor per local expert"
-        self.device = mesh_device
         self.gate_projs, self.up_projs, self.down_projs = list(gate_projs), list(up_projs), list(down_projs)
-        self.idx_table = idx_table
         self.E = len(self.gate_projs)
-        self.m_tiles = _ceil_div(max_tokens, TILE)
-        self.min_active_tokens, self.max_active_tokens = min_active_tokens, max_active_tokens
-        self.writer_mcasts_in1 = self.WRITER_MCASTS_IN1
         g0, u0, d0 = self.gate_projs[0], self.up_projs[0], self.down_projs[0]
         for e in range(self.E):
             for name, w, ref in (
@@ -168,7 +166,91 @@ class GegluRoutedExpert:
                 assert w.memory_config() == ref.memory_config(), f"{name}[{e}] placement differs from expert 0"
         assert g0.padded_shape[-1] == u0.padded_shape[-1] == d0.padded_shape[-2], "gate/up N must equal down K"
         assert d0.padded_shape[-1] == g0.padded_shape[-2], "down N must equal gate K"
+        # Weight geometry the kernels address the tiles with: one [K, H] / [H, K] tensor per expert, tile (k, n) at
+        # page k * N + n of the expert's own buffer (from_stacked: the stacked decode copy instead).
+        self.stacked = False
+        self._w_gate, self._w_up, self._w_down = g0, u0, d0
+        self.n_gate_tiles, self.k_gate_tiles = g0.padded_shape[-1] // TILE, g0.padded_shape[-2] // TILE
+        self.k_down_tiles, self.n_down_tiles = d0.padded_shape[-2] // TILE, d0.padded_shape[-1] // TILE
+        self.gu_row_stride, self.gate_col_off, self.up_col_off = self.n_gate_tiles, 0, 0
+        self._weight_io = self.gate_projs + self.up_projs + self.down_projs
         self._plans: dict = {}
+
+    def _init_common(self, mesh_device, idx_table, max_tokens, min_active_tokens, max_active_tokens):
+        """The members both constructors share (grid check, index table, capacity, active band)."""
+        reason = self.unsupported_reason(mesh_device)
+        assert reason is None, reason
+        self.per_core_m_max, self.in0_block_w_request = self.PER_CORE_M_MAX, self.IN0_BLOCK_W_GU_REQUEST
+        self.device = mesh_device
+        self.idx_table = idx_table
+        self.m_tiles = _ceil_div(max_tokens, TILE)
+        self.min_active_tokens, self.max_active_tokens = min_active_tokens, max_active_tokens
+        self.writer_mcasts_in1 = self.WRITER_MCASTS_IN1
+
+    @classmethod
+    def from_stacked(
+        cls,
+        mesh_device,
+        gate_up: ttnn.Tensor,
+        down: ttnn.Tensor,
+        idx_table: ttnn.Tensor,
+        max_tokens: int,
+        min_active_tokens: int = 0,
+        max_active_tokens: int = U32_MAX,
+    ) -> "GegluRoutedExpert":
+        """The op on the routed experts' STACKED tensors, so one device copy serves this op and decode's
+        ``sparse_matmul``.
+
+        ``gate_up`` ``[1, E, K, 2H]``: expert ``e``'s up projection in columns ``[0, H)``, its gate projection in
+        ``[H, 2H)`` (``tt/experts/weights.py``'s fused ``[up | gate]``); ``down`` ``[1, E, H, K]``; both TILE,
+        tile-aligned and DRAM-interleaved, local slot ``e`` holding global expert ``idx_table[e]`` (the decode copy's
+        placement on the whole-expert tp-only shapes, which the caller checks: ``dispatch_prefill.
+        shared_weights_reason``). A TILE tensor's pages run over the flattened leading dims, so expert ``e``'s gate
+        tile ``(k, n)`` is page ``(e*K_t + k) * 2H_t + H_t + n`` of ``gate_up``, its up tile page
+        ``(e*K_t + k) * 2H_t + n`` and its down tile ``(k, n)`` page ``(e*H_t + k) * K_t + n`` of ``down``. The
+        kernels take the stacked buffer as every expert's base address and add the expert's tile-row base
+        (``e*K_t`` / ``e*H_t``), the row stride ``2H_t`` and the gate / up column offsets (``H_t`` / 0) to the page
+        ids of the per-expert walk, which is otherwise unchanged. Interleaved pages rotate over the DRAM banks one
+        tile at a time, so a core's K-row slice is read tile by tile (``WeightRuns<0>``) where the ND-sharded
+        per-expert copy reads it as one NoC transaction."""
+        op = cls.__new__(cls)
+        op._init_common(mesh_device, idx_table, max_tokens, min_active_tokens, max_active_tokens)
+        gu_shape, d_shape = [int(d) for d in gate_up.padded_shape], [int(d) for d in down.padded_shape]
+        assert len(gu_shape) >= 3 and len(d_shape) >= 3, f"stacked weights must be [.., E, K, N]: {gu_shape} {d_shape}"
+        assert all(d == 1 for d in gu_shape[:-3] + d_shape[:-3]), f"leading dims must be 1: {gu_shape} {d_shape}"
+        E = gu_shape[-3]
+        assert E > 0 and d_shape[-3] == E, f"gate_up holds {E} experts, down {d_shape[-3]}"
+        for name, w, shape in (("gate_up", gate_up, gu_shape), ("down", down, d_shape)):
+            assert w.layout == ttnn.TILE_LAYOUT, f"{name} must be TILE"
+            assert [int(d) for d in w.shape] == shape, f"{name} must be tile-aligned (no padding): {list(w.shape)}"
+            mc = w.memory_config()
+            assert (
+                mc.buffer_type == ttnn.BufferType.DRAM
+                and mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+                and _nd_shard_n_tiles(w) == 0
+            ), f"{name} must be DRAM-interleaved (the kernels address its tiles by page id), got {mc}"
+        assert gu_shape[-1] % (2 * TILE) == 0, f"gate_up N {gu_shape[-1]} must split into two tile-aligned halves"
+        n_t = gu_shape[-1] // (2 * TILE)  # per-expert gate / up N = down K, in tiles
+        k_t = gu_shape[-2] // TILE  # per-expert gate / up K = down N
+        assert d_shape[-2] // TILE == n_t and d_shape[-1] // TILE == k_t, f"down {d_shape} must be [.., E, H, K]"
+        op.stacked = True
+        op.E = E
+        op.gate_up, op.down = gate_up, down
+        op._w_gate, op._w_up, op._w_down = gate_up, gate_up, down
+        op.n_gate_tiles, op.k_gate_tiles = n_t, k_t
+        op.k_down_tiles, op.n_down_tiles = n_t, k_t
+        op.gu_row_stride, op.gate_col_off, op.up_col_off = 2 * n_t, n_t, 0
+        op._weight_io = [gate_up, down]
+        op._plans = {}
+        return op
+
+    def _weight_addresses(self):
+        """(gate, up, down) base-address lists, one entry per local expert (the kernels' common-arg blocks)."""
+        if self.stacked:
+            gu, d = self.gate_up.buffer_address(), self.down.buffer_address()
+            return [gu] * self.E, [gu] * self.E, [d] * self.E
+        addr = lambda t: t.buffer_address()  # noqa: E731
+        return tuple([addr(w) for w in ws] for ws in (self.gate_projs, self.up_projs, self.down_projs))
 
     # ------------------------------------------------------------------------------------------------ golden
     @staticmethod
@@ -208,7 +290,7 @@ class GegluRoutedExpert:
         assert list(output.padded_shape)[-1] == list(x.padded_shape)[-1], "output N must match x K"
         plan = self._plan_for(x, counts, region_offsets, output)
         program = self._program(plan, x, counts, region_offsets, output)
-        io = [x, counts, self.idx_table, region_offsets] + self.gate_projs + self.up_projs + self.down_projs
+        io = [x, counts, self.idx_table, region_offsets] + self._weight_io
         if output is not x:
             io.append(output)
         else:
@@ -253,13 +335,13 @@ class GegluRoutedExpert:
         compile-time args and the per-core runtime args (everything but the buffer addresses)."""
         GRID_X, GRID_Y = self.GRID_X, self.GRID_Y
         x_is_row_major = x.layout == ttnn.ROW_MAJOR_LAYOUT
-        g0, u0, d0 = self.gate_projs[0], self.up_projs[0], self.down_projs[0]
+        g0, u0, d0 = self._w_gate, self._w_up, self._w_down  # layout / dtype / placement of the weight tensors
         M_tiles_full = self.m_tiles
         K_gate_tiles = list(x.padded_shape)[-1] // TILE
-        N_gate_tiles_full = list(g0.padded_shape)[-1] // TILE
-        K_down_tiles = list(d0.padded_shape)[-2] // TILE
-        N_down_tiles_full = list(d0.padded_shape)[-1] // TILE
-        assert list(g0.padded_shape)[-2] // TILE == K_gate_tiles, "gate K must equal x K"
+        N_gate_tiles_full = self.n_gate_tiles  # one expert's gate / up N (from_stacked: half the fused width)
+        K_down_tiles = self.k_down_tiles
+        N_down_tiles_full = self.n_down_tiles
+        assert self.k_gate_tiles == K_gate_tiles, "gate K must equal x K"
         assert M_tiles_full <= list(x.padded_shape)[-2] // TILE, "max_tokens exceeds the buffer"
         gx, gy = compute_grid(self.device)  # the rectangle lives at the grid origin; the cap may shrink the grid
         assert gx >= GRID_X and gy >= GRID_Y, self.grid_reason(gx, gy, True)
@@ -283,6 +365,8 @@ class GegluRoutedExpert:
                 0,
                 per_core_n,
             ), f"{name}: ND shard width must be per_core_N ({per_core_n} tiles), got {shard_w}"
+        # Stacked weights are page-addressed with column offsets, which only interleaved runs (one tile each) allow.
+        assert not self.stacked or gu_shard_w == d_shard_w == 0, "stacked weights must be DRAM-interleaved"
 
         # Subblocks: 1 x (largest divisor of per_core_N within the 8-tile dst). A down subblock narrower than 3 tiles
         # goes unpack-bound, so below that the down grid takes a ragged last subblock instead.
@@ -441,8 +525,10 @@ class GegluRoutedExpert:
             self.CB_START_SCRATCH_READER, int(x_is_row_major), self.CB_X_RM, TILE, 2,  # 28 TILE_HEIGHT, 29 bf16 bytes
             down_split_k, int(self.writer_mcasts_in1), self.min_active_tokens, self.max_active_tokens,
             gu_shard_w, d_shard_w, self.CB_ZERO,
+            # 37-40 weight page addressing (from_stacked; per-expert tensors: 0, N_gate_tiles_full, 0, 0)
+            int(self.stacked), self.gu_row_stride, self.gate_col_off, self.up_col_off,
         ]  # fmt: skip
-        assert len(reader_ct) == 37
+        assert len(reader_ct) == 41
         writer_ct = [
             self.CB_OUT, per_core_M, per_core_N_gu, per_core_N_d, d_out_subblock_h, d_out_subblock_w,
             N_gate_tiles_full, N_down_tiles_full, num_chunks, chunk_M_tiles,
@@ -451,8 +537,9 @@ class GegluRoutedExpert:
             self.CB_IN1_DOWN, in0_block_w_d, K_down_tiles, d_num_blocks, d_in1_block_num_tiles, down_split_k,
             self.CB_IN1_GATE, int(self.writer_mcasts_in1), self.min_active_tokens, self.max_active_tokens,
             gu_shard_w, d_shard_w, d_out_subblock_w_tail,
+            int(self.stacked), self.gu_row_stride, self.up_col_off,  # 33-35 weight page addressing (as the reader)
         ]  # fmt: skip
-        assert len(writer_ct) == 33
+        assert len(writer_ct) == 36
         compute_ct = [
             in0_block_w_gu, gu_in0_num_subblocks, gu_in0_block_num_tiles, gu_in0_subblock_num_tiles,
             gu_in1_num_subblocks, gu_in1_block_num_tiles, per_core_N_gu, gu_num_blocks,  # gate
@@ -570,7 +657,7 @@ class GegluRoutedExpert:
                 args[gx][gy] = [int(v) for v in values]
             return args
 
-        g0, u0, d0 = self.gate_projs[0], self.up_projs[0], self.down_projs[0]
+        g0, u0, d0 = self._w_gate, self._w_up, self._w_down
         reader_ct = list(plan["reader_ct"])
         for t in (x, g0, u0, d0, counts, self.idx_table, start):
             reader_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
@@ -611,7 +698,7 @@ class GegluRoutedExpert:
 
     def _program(self, plan, x, counts, start, out) -> ttnn.ProgramDescriptor:
         addr = lambda t: t.buffer_address()  # noqa: E731
-        gate_a, up_a, down_a = ([addr(w) for w in ws] for ws in (self.gate_projs, self.up_projs, self.down_projs))
+        gate_a, up_a, down_a = self._weight_addresses()
         reader, writer, compute = plan["kernel_descriptors"]
         # Reader: x, counts, index table, region offsets, gate/up/down weights. Writer: output, region offsets,
         # up/down weights (the order the kernels' get_common_arg_val indexes).
