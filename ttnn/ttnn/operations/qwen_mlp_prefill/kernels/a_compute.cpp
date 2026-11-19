@@ -26,6 +26,7 @@ void kernel_main() {
 
     for (uint32_t m = 0; m < CT_ARG("rows"); m++) {
         n.wait_front(k_tiles);
+
         a_out.reserve_back(columns / 2);
         tile_regs_acquire();
         for (uint32_t k = 0; k < k_tiles; k++) {
@@ -44,6 +45,7 @@ void kernel_main() {
         }
         tile_regs_release();
         a_out.push_back(columns / 2);
+
         n.pop_front(k_tiles);
     }
 }

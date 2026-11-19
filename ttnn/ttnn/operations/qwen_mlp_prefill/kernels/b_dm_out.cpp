@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "flags.hpp"
 #include "relay_port.hpp"
 
 void kernel_main() {
@@ -11,6 +12,7 @@ void kernel_main() {
     constexpr uint32_t segment_bytes = b_tiles * tile_bytes;
     constexpr uint32_t chips = CT_ARG("chips");
     constexpr uint32_t lag = CT_ARG("owner_lag");
+    constexpr uint32_t reduce_lag = CT_ARG("reduce_lag");
     constexpr uint32_t rows = CT_ARG("rows");
     constexpr uint32_t depth = CT_ARG("ring_depth");
     const uint32_t chip = RT_ARG("chip");
@@ -19,7 +21,15 @@ void kernel_main() {
     const uint32_t self_y = RT_ARG("self_y");
     const uint32_t first_column = core * b_tiles;
     const auto y = TensorAccessor(TensorAccessorArgs<CT_ARG("ta_y")>(), RT_ARG("y_addr"), tile_bytes);
+    constexpr uint32_t k_groups = CT_ARG("k_groups");
+    constexpr uint32_t kred_depth = CT_ARG("kred_depth");
+    const uint32_t k_group = core % k_groups;
+    const uint32_t n_group = core / k_groups;
     CircularBuffer send(CT_ARG("cb_send"));
+    CircularBuffer slabs(CT_ARG("cb_kout"));
+    FlagBoard flags{arena_base(CT_ARG("cb_flags")), 8, 0};
+    const uint32_t kred_landing[k_groups - 1] = {
+        arena_base(CT_ARG("cb_kred")), arena_base(CT_ARG("cb_kred") + 1), arena_base(CT_ARG("cb_kred") + 2)};
     CircularBuffer y_segment(CT_ARG("cb_y"));
 
     const uint32_t relay_slots = arena_base(CT_ARG("cb_a")) + (core >> 1) * 2 * CT_ARG("relay_slot_bytes");
@@ -59,9 +69,29 @@ void kernel_main() {
         ports[route.relay].push(noc, kind, route.hops, payload, payload_bytes, self_x, self_y, dst_address, semaphore);
     };
 
-    for (uint32_t step = 0; step < rows + lag; step++) {
-        if (chips > 1 && step < rows && step % chips != chip) {
-            const uint32_t m = step;
+    for (uint32_t step = 0; step < rows + reduce_lag + lag; step++) {
+        if (step < rows) {
+            slabs.wait_front((k_groups - 1) * b_tiles);
+            for (uint32_t outgoing = 0; outgoing < k_groups - 1; outgoing++) {
+                const uint32_t group = outgoing < k_group ? outgoing : outgoing + 1;
+                const uint32_t peer_x = CT_ARG("b_grid_x_start") + group;
+                const uint32_t peer_y = CT_ARG("b_grid_y_start") + n_group;
+                flags.wait_min(FlagBoard::credit + peer_index(group, k_group), step + 1);
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(slabs.get_read_ptr() + outgoing * segment_bytes),
+                    UnicastEndpoint{},
+                    segment_bytes,
+                    {},
+                    {.noc_x = peer_x,
+                     .noc_y = peer_y,
+                     .addr = kred_landing[peer_index(k_group, group)] + (step % kred_depth) * segment_bytes});
+                flags.post(noc, peer_x, peer_y, FlagBoard::ready + peer_index(k_group, group), step + 1);
+            }
+            noc.async_writes_flushed();
+            slabs.pop_front((k_groups - 1) * b_tiles);
+        }
+        if (chips > 1 && step >= reduce_lag && step - reduce_lag < rows && (step - reduce_lag) % chips != chip) {
+            const uint32_t m = step - reduce_lag;
             const uint32_t owner = m % chips;
             const uint32_t q = m / chips;
             const uint32_t me = peer_index(chip, owner);
@@ -79,8 +109,8 @@ void kernel_main() {
                 semaphore_address(CT_ARG("sem_rs_ready"), me));
             send.pop_front(b_tiles);
         }
-        if (step >= lag) {
-            const uint32_t m = step - lag;
+        if (step >= reduce_lag + lag) {
+            const uint32_t m = step - reduce_lag - lag;
             const uint32_t owner = m % chips;
             const uint32_t q = m / chips;
             if (owner == chip) {

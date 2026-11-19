@@ -16,6 +16,7 @@ void load_resident_weights(
     uint32_t tile_bytes,
     uint32_t k_tiles,
     uint32_t row_tiles,
+    uint32_t first_row,
     uint32_t first_column,
     uint32_t columns) {
     CircularBuffer cb(cb_id);
@@ -27,7 +28,7 @@ void load_resident_weights(
                 weights,
                 CoreLocalMem<uint32_t>(base + (k * columns + j) * tile_bytes),
                 tile_bytes,
-                {.page_id = k * row_tiles + first_column + j},
+                {.page_id = (first_row + k) * row_tiles + first_column + j},
                 {});
         }
     }

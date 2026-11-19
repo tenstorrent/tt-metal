@@ -21,7 +21,7 @@ def _cb(index, data_format, page_bytes, tiles, cores):
 
 
 def _role_cbs(chips):
-    bf16, bfp4, fp32 = ttnn.bfloat16, ttnn.bfloat4_b, ttnn.float32
+    bf16, bfp4, fp32, act = ttnn.bfloat16, ttnn.bfloat4_b, ttnn.float32, ttnn.bfloat8_b
     t, c = L.HIDDEN_TILES, L.NORM_CHUNK_TILES
     norm, a, b = L.NORM_GRID.core_range_set(), L.a_active_cores(), L.B_GRID.core_range_set()
     relay = L.RELAY_GRID.core_range_set()
@@ -34,13 +34,13 @@ def _role_cbs(chips):
         _cb(L.CB_NORM_RSTD, bf16, L.BF16_TILE_BYTES, 1, norm),
         _cb(L.CB_NORM_SCALED, bf16, L.BF16_TILE_BYTES, c, norm),
         _cb(L.CB_NORM_WEIGHT, bf16, L.BF16_TILE_BYTES, t, norm),
-        _cb(L.CB_NORM_IN, bf16, L.BF16_TILE_BYTES, t, norm),
-        _cb(L.CB_NORM_OUT, bf16, L.BF16_TILE_BYTES, t, norm),
-        _cb(L.CB_N, bf16, L.BF16_TILE_BYTES, 2 * t, a),
+        _cb(L.CB_NORM_IN, bf16, L.BF16_TILE_BYTES, 2 * t, norm),
+        _cb(L.CB_NORM_OUT, act, L.ACT_TILE_BYTES, 2 * t, norm),
+        _cb(L.CB_N, act, L.ACT_TILE_BYTES, L.N_DEPTH * t, a),
         _cb(L.CB_WG, bfp4, L.BFP4_TILE_BYTES, t * 2 * L.A_TILES_PER_CORE, a),
-        _cb(L.CB_A_OUT, bf16, L.BF16_TILE_BYTES, 4 * L.A_TILES_PER_CORE, a),
-        _cb(L.CB_A, bf16, L.BF16_TILE_BYTES, 2 * L.INTERMEDIATE_TILES, b),
-        _cb(L.CB_WD, bfp4, L.BFP4_TILE_BYTES, L.INTERMEDIATE_TILES * L.B_TILES_PER_CORE, b),
+        _cb(L.CB_A_OUT, act, L.ACT_TILE_BYTES, 4 * L.A_TILES_PER_CORE, a),
+        _cb(L.CB_A, act, L.ACT_TILE_BYTES, 2 * L.K_TILES_PER_B, b),
+        _cb(L.CB_WD, bfp4, L.BFP4_TILE_BYTES, L.K_TILES_PER_B * L.N_TILES_PER_B, b),
         _cb(L.CB_PARTIAL_OWN, bf16, L.BF16_TILE_BYTES, (L.OWNER_LAG + 1) * L.B_TILES_PER_CORE, b),
         _cb(L.CB_H, bf16, L.BF16_TILE_BYTES, 4 * L.B_TILES_PER_CORE, b),
         _cb(L.CB_Y, bf16, L.BF16_TILE_BYTES, 4 * L.B_TILES_PER_CORE, b),
@@ -48,6 +48,10 @@ def _role_cbs(chips):
         *[_cb(L.CB_RS + i, bf16, L.BF16_TILE_BYTES, L.RING_DEPTH * seg, b) for i in range(L.CHIPS - 1)],
         _cb(L.CB_AG, bf16, L.BF16_TILE_BYTES, (L.CHIPS - 1) * L.RING_DEPTH * seg, b),
         _cb(L.CB_MESSAGE, ttnn.uint32, 64, 1, b),
+        _cb(L.CB_KOWN, bf16, L.BF16_TILE_BYTES, 2 * seg, b),
+        _cb(L.CB_KOUT, bf16, L.BF16_TILE_BYTES, 2 * (L.K_GROUPS - 1) * seg, b),
+        *[_cb(L.CB_KRED + i, bf16, L.BF16_TILE_BYTES, L.KRED_DEPTH * seg, b) for i in range(L.K_GROUPS - 1)],
+        _cb(L.CB_FLAGS, ttnn.uint32, 16 * L.FLAG_BYTES, 1, b),
         _cb(L.CB_RELAY_SLOTS, ttnn.uint32, L.RELAY_SLOT_BYTES, 2 * L.RELAY_SOURCES, relay),
     ]
 
@@ -63,8 +67,8 @@ def _packed(entries):
 
 def _semaphores(chips):
     roles = [
-        (L.NORM_GRID.core_range_set(), 2),
-        (L.a_active_cores(), 4),
+        (L.NORM_GRID.core_range_set(), L.N_DEPTH),
+        (L.a_active_cores(), L.N_DEPTH + 2),
         (L.B_GRID.core_range_set(), 16),
     ]
     return [
@@ -106,12 +110,15 @@ def create_program_descriptor(h, w_norm, w_gate_up, w_down, y, chip, chips, node
         "rows": rows,
         "chips": chips,
         "owner_lag": owner_lag,
+        "reduce_lag": L.REDUCE_LAG,
         "ring_depth": L.RING_DEPTH,
+        "n_depth": L.N_DEPTH,
         "h_tiles": L.HIDDEN_TILES,
         "i_tiles": L.INTERMEDIATE_TILES,
         "gate_up_tiles": L.GATE_UP_TILES,
         "tile_bytes_bf16": L.BF16_TILE_BYTES,
         "tile_bytes_bfp4": L.BFP4_TILE_BYTES,
+        "tile_bytes_act": L.ACT_TILE_BYTES,
         "norm_cores": L.NORM_CORES,
         "norm_chunk_tiles": L.NORM_CHUNK_TILES,
         "norm_dest_tiles": L.NORM_DEST_TILES,
@@ -124,6 +131,14 @@ def create_program_descriptor(h, w_norm, w_gate_up, w_down, y, chip, chips, node
         "b_cores": L.B_CORES,
         "b_width": L.B_COLUMNS,
         "b_tiles_per_core": L.B_TILES_PER_CORE,
+        "k_groups": L.K_GROUPS,
+        "k_tiles_per_b": L.K_TILES_PER_B,
+        "n_tiles_per_b": L.N_TILES_PER_B,
+        "a_per_k_group": L.A_PER_K_GROUP,
+        "kred_depth": L.KRED_DEPTH,
+        "flag_bytes": L.FLAG_BYTES,
+        "b_rows": L.B_ROWS,
+        "a_rows": L.A_ROWS,
         "relay_slot_bytes": L.RELAY_SLOT_BYTES,
         "relay_sources": L.RELAY_SOURCES,
         "sem_n_valid": L.SEM_N_VALID,
@@ -164,6 +179,10 @@ def create_program_descriptor(h, w_norm, w_gate_up, w_down, y, chip, chips, node
         "cb_ag": L.CB_AG,
         "cb_relay_slots": L.CB_RELAY_SLOTS,
         "cb_message": L.CB_MESSAGE,
+        "cb_kown": L.CB_KOWN,
+        "cb_kout": L.CB_KOUT,
+        "cb_kred": L.CB_KRED,
+        "cb_flags": L.CB_FLAGS,
     }
     addresses = {f"{name}_addr": tensor.buffer_address() for name, tensor in tensors.items()}
 
@@ -209,7 +228,11 @@ def create_program_descriptor(h, w_norm, w_gate_up, w_down, y, chip, chips, node
             L.NORM_GRID.core_range_set(),
             L.NORM_GRID.logical,
             L.NORM_CORES,
-            [("norm_dm.cpp", data_movement(risc0)), ("norm_compute.cpp", compute(False))],
+            [
+                ("norm_in.cpp", data_movement(risc1)),
+                ("norm_out.cpp", data_movement(risc0)),
+                ("norm_compute.cpp", compute(False)),
+            ],
         ),
         *role_kernels(
             L.a_active_cores(),
