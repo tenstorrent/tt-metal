@@ -35,6 +35,7 @@ void MorehNormOperation::validate_inputs(
     check_tensor(input, "moreh_norm", "input");
     check_tensor(output, "moreh_norm", "output");
     validate_input_tensor_with_dim(input, dim);
+    TT_FATAL(input.logical_volume() > 0, "moreh_norm: input must be non-empty, got shape {}", input.logical_shape());
     if (output.has_value()) {
         validate_output_with_keepdim(input, output.value(), dim, operation_attributes.keepdim);
     }
