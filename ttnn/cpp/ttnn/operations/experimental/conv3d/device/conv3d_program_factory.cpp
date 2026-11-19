@@ -1123,10 +1123,6 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         operation_attributes.output_pad_w,
         cb_weight_lo_tiled_id,
         (uint32_t)operand_split,
-        operation_attributes.output_depth_to_space[0],
-        operation_attributes.output_depth_to_space[1],
-        operation_attributes.output_depth_to_space[2],
-        operation_attributes.output_trim_t_front,
         (uint32_t)use_residual,
         cb_residual_rm_id};
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
