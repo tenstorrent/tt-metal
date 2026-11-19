@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+"""Stands in for a Google Benchmark binary in unit tests.
+
+$FAKE_BENCH_PLAN names a JSON file: {"metric": {...decl...}, "runs": [{case: value, ...}, ...]}. Each invocation
+consumes the next entry of "runs", so a test can give the retry different values from the first run. An entry of
+"crash" makes that invocation exit with an error, a case value of None errors every repetition, and a case value of
+[value, "error_last"] errors only the last repetition.
+"""
+
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+args = dict(arg.split("=", 1) for arg in sys.argv[1:] if arg.startswith("--") and "=" in arg)
+plan_path = Path(os.environ["FAKE_BENCH_PLAN"])
+plan = json.loads(plan_path.read_text())
+call_path = plan_path.with_suffix(".calls")
+calls = json.loads(call_path.read_text()) if call_path.exists() else []
+values = plan["runs"][min(len(calls), len(plan["runs"]) - 1)]
+calls.append(sys.argv[1:])
+call_path.write_text(json.dumps(calls))
+if values == "crash":
+    sys.exit(3)
+
+# "ignore_repetitions" mimics a binary that does not honor --benchmark_repetitions.
+repetitions = 1 if plan.get("ignore_repetitions") else int(args.get("--benchmark_repetitions", 1))
+case_filter = args.get("--benchmark_filter")
+metric = plan["metric"]
+rows = []
+for case, value in values.items():
+    if case_filter and not re.search(case_filter, case):
+        continue
+    if value is None:
+        rows.append(
+            {"name": case, "run_name": case, "run_type": "iteration", "error_occurred": True, "error_message": "boom"}
+        )
+        continue
+    # A [value, "error_last"] pair succeeds on every repetition but the last, which reports an error.
+    error_last = isinstance(value, list)
+    if error_last:
+        value = value[0]
+    for rep in range(repetitions):
+        if error_last and rep == repetitions - 1:
+            rows.append({"name": case, "run_name": case, "run_type": "iteration", "error_occurred": True})
+            continue
+        rows.append(
+            {
+                "name": case,
+                "run_name": case,
+                "run_type": "iteration",
+                "repetitions": repetitions,
+                "repetition_index": rep,
+                metric["name"]: value * (1 + 0.001 * rep),
+                "ctx_aiclk_mhz": 1000,
+            }
+        )
+document = {
+    "context": {f"perf.metric.{metric['name']}": metric["decl"], "perf.context.iommu": "on"},
+    "benchmarks": rows,
+}
+# Lets a test declare a metric that no row reports.
+if "unreported_metric" in plan:
+    document["context"][f"perf.metric.{plan['unreported_metric']}"] = metric["decl"]
+# Lets a test see the environment the benchmark ran with.
+for name in plan.get("echo_env", []):
+    document["context"][f"perf.context.env_{name}"] = os.environ.get(name, "unset")
+Path(args["--benchmark_out"]).write_text(json.dumps(document))
