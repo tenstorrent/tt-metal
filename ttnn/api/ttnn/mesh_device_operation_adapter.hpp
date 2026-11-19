@@ -1433,7 +1433,10 @@ public:
     // MeshTensor in several slots, that match could have picked any of them (#57248), so such ops
     // key the cache on which tensor_args slots alias: an entry is then only reused by calls whose
     // aliased slots again hold one tensor, where every pick is right. Outputs need no entry in the
-    // signature: one aliases an input only via a tensor_args slot or by construction of the op.
+    // signature: the cache is keyed on tensor_args only, a new output aliases nothing, and an output
+    // that aliases an input (e.g. a preallocated one) is passed in a tensor_args slot. Whether an op
+    // returns one of its inputs outside of tensor_args is part of the op and must not vary per call:
+    // a hit would replay the slot the miss matched.
     static constexpr bool keys_on_tensor_aliasing =
         []<typename... Factories>(std::type_identity<std::variant<Factories...>>) {
             return (
@@ -1474,7 +1477,8 @@ public:
     // The key is prefixed with op_type_name (the DeviceOperation's type name) so distinct ops can
     // never alias on a hash collision.
     // For ops with a custom compute_program_hash we can't infer which fields it keyed on (it may
-    // deliberately exclude some, e.g. an RNG seed), so we return only the op-identity prefix --
+    // deliberately exclude some, e.g. an RNG seed), so we return only the op-identity prefix plus
+    // the tensor alias signature, which this adapter rather than the op folds into the hash --
     // opting that op out of attribute-level collision resolution. The default reflection-hash
     // path is mirrored exactly.
     static std::string compute_mesh_workload_canonical_key(
@@ -1484,7 +1488,12 @@ public:
         const tensor_args_t& tensor_args) {
         std::string key{op_type_name};
         if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
-            return key;  // custom hash -> opt out beyond the op-identity prefix
+            if (const auto alias_signature =
+                    tensor_alias_signature(mesh_device_operation_utils::collect_tensors(tensor_args));
+                !alias_signature.empty()) {
+                key += ttsl::hash::canonical_key(alias_signature);
+            }
+            return key;
         } else {
             key += ttsl::hash::canonical_key(attrs, tensor_args);
             const auto tensors = mesh_device_operation_utils::collect_tensors(tensor_args);

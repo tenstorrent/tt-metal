@@ -695,13 +695,12 @@ TEST_F(LaunchOperation2x4Test, TensorAliasSignature) {
     EXPECT_THAT(compute_tensor_alias_signature(TensorRefs{a, b, a}), ElementsAre(0u, 1u, 0u));
     EXPECT_THAT(compute_tensor_alias_signature(TensorRefs{a, b, b, a, c}), ElementsAre(0u, 1u, 1u, 0u, 4u));
 
-    // A copied handle shares its MeshTensor, and so does a storage re-wrapping it in new TensorAttributes.
-    const Tensor& a_copy = a;
+    // A storage re-wrapping a's MeshTensor in new TensorAttributes still aliases a.
     const auto a_coords = a.device_storage().get_coords();
     const Tensor a_rewrapped{
         ttnn::DeviceStorage(a.device_storage(), std::vector<ttnn::MeshCoordinate>(a_coords.begin(), a_coords.end()))};
     ASSERT_NE(a_rewrapped.tensor_attributes, a.tensor_attributes);
-    EXPECT_THAT(compute_tensor_alias_signature(TensorRefs{b, a, a_copy, a_rewrapped}), ElementsAre(0u, 1u, 1u, 1u));
+    EXPECT_THAT(compute_tensor_alias_signature(TensorRefs{b, a, a_rewrapped}), ElementsAre(0u, 1u, 1u));
 
     std::vector<Tensor> distinct_tensors;
     distinct_tensors.reserve(20);
@@ -786,6 +785,50 @@ TEST_F(LaunchOperation2x4Test, ProgramCacheKeySeparatesTensorAliasingPatterns) {
     EXPECT_NE(k_is_p.first, p_is_temp.first);
     EXPECT_NE(k_is_p.second, p_is_temp.second);
     EXPECT_NE(k_is_p.first, distinct.first);
+}
+
+// A spec op with its own compute_program_hash: its canonical key carries no attributes, so the
+// aliasing the adapter folds into its hash has to be in the key too, or a collision is a wrong hit.
+struct TwoTensorArgs {
+    Tensor first;
+    Tensor second;
+};
+
+struct CustomHashSpecOp {
+    using operation_attributes_t = OperationAttributes;
+    using tensor_args_t = TwoTensorArgs;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
+    using tensor_return_value_t = Tensor;
+    using program_factory_t = std::variant<ProgramSpecFactory>;
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+};
+using CustomHashSpecAdapter = device_operation::MeshDeviceOperationAdapter<CustomHashSpecOp>;
+static_assert(CustomHashSpecAdapter::keys_on_tensor_aliasing);
+
+TEST_F(LaunchOperation2x4Test, CanonicalKeySeparatesTensorAliasingPatternsWithCustomHash) {
+    auto* mesh_device = mesh_device_.get();
+    const tt::tt_metal::TensorSpec spec(
+        ttnn::Shape{1, 1, 32, 32}, tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    const auto make_tensor = [&]() { return ttnn::create_device_tensor(spec, mesh_device); };
+    const auto a = make_tensor();
+    const auto b = make_tensor();
+    const auto x = make_tensor();
+    const auto y = make_tensor();
+
+    const auto op_name = ttsl::get_type_name<CustomHashSpecOp>();
+    const auto key = [&](const Tensor& first, const Tensor& second) {
+        return CustomHashSpecAdapter::compute_mesh_workload_canonical_key(
+            mesh_device, op_name, OperationAttributes{}, TwoTensorArgs{.first = first, .second = second});
+    };
+
+    // Calls without aliasing keep the op-identity key they had before the signature existed.
+    EXPECT_EQ(key(a, b), op_name);
+
+    // An aliased call has its own key, which another call with the same aliasing shares.
+    const auto aliased = key(x, x);
+    EXPECT_NE(aliased, op_name);
+    EXPECT_EQ(key(y, y), aliased);
 }
 
 }  // namespace
