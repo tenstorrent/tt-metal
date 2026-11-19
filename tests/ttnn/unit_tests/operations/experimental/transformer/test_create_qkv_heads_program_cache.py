@@ -23,7 +23,7 @@ import pytest
 import torch
 
 import ttnn
-from tt_py_test_utils_common.utility_functions import comp_pcc, skip_for_blackhole, tt2torch_tensor
+from tt_py_test_utils_common.utility_functions import comp_pcc, tt2torch_tensor
 
 
 def run_cqkv(device, batch, seq_len, num_q_heads, num_kv_heads, head_dim, cores_h, cores_w, transpose_k, dtype):
@@ -79,7 +79,6 @@ def isolate_program_cache(device):
     device.disable_and_clear_program_cache()
 
 
-@skip_for_blackhole("L1 and Circular buffers are crashing on BH, see #12349")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 def test_cqkv_cache_reuse_same_config(device, isolate_program_cache):
     """Same config run twice -> 1 entry."""
@@ -88,7 +87,6 @@ def test_cqkv_cache_reuse_same_config(device, isolate_program_cache):
     assert device.cache_entries_counter.total == 1
 
 
-@skip_for_blackhole("L1 and Circular buffers are crashing on BH, see #12349")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 def test_cqkv_cache_miss_transpose_k(device, isolate_program_cache):
     """transpose_k_heads toggled (hashed attribute, same input) -> 2 entries."""
@@ -97,7 +95,6 @@ def test_cqkv_cache_miss_transpose_k(device, isolate_program_cache):
     assert device.cache_entries_counter.total == 2
 
 
-@skip_for_blackhole("L1 and Circular buffers are crashing on BH, see #12349")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 def test_cqkv_cache_miss_different_shape(device, isolate_program_cache):
     """Different input shape (seq_len), output attributes held constant -> 2 entries.

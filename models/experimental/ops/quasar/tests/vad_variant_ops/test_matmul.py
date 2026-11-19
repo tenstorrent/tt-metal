@@ -90,7 +90,8 @@ def test_matmul_bfp8_weights(ttnn_mesh_device, reset_seeds, a_shape, b_shape, a_
     a_torch = U.torch_rand(a_shape)
     b_torch = U.torch_rand(b_shape, std=b_shape[0] ** -0.5)
     a = U.to_tt_mem(a_torch, mesh, a_mem)
-    b = U.to_tt(b_torch, mesh, dtype=ttnn.bfloat8_b)
+    # Quasar has no block-float DFB formats (its set is MX), so the model's bfloat8_b weights run as bf16 there.
+    b = U.to_tt(b_torch, mesh, dtype=ttnn.bfloat16 if U.is_quasar() else ttnn.bfloat8_b)
     out = ttnn.matmul(
         a,
         b,

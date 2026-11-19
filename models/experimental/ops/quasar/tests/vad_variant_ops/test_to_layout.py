@@ -75,6 +75,8 @@ def test_to_layout_tile(ttnn_mesh_device, reset_seeds, shape, dt, in_mem, out_me
 @pytest.mark.parametrize("shape, dt, in_mem, out_mem", UNTILIZE_CASES)
 def test_to_layout_row_major(ttnn_mesh_device, reset_seeds, shape, dt, in_mem, out_mem):
     mesh = ttnn_mesh_device
+    if U.is_quasar() and dt == "bfp8":
+        dt = "bf16"  # Quasar has no block-float DFB formats (its set is MX)
     x_torch = U.torch_rand(shape, dtype=torch.float32 if dt == "fp32" else torch.bfloat16)
     x = U.to_tt_mem(x_torch, mesh, in_mem, dtype=U.DTYPES[dt])
     ref = U.seen(x, x_torch, mesh)  # bfp8 sources: the quantized values are what must survive

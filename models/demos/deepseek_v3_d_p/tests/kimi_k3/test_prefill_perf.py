@@ -67,7 +67,9 @@ ITERATIONS = 5
 PLACEMENTS = DEPTH_PLACEMENTS + [
     pytest.param(
         (8, 4),
-        torus_xy_device_params(l1_small_size=KimiK3Config.L1_SMALL_SIZE),
+        torus_xy_device_params(
+            fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE, l1_small_size=KimiK3Config.L1_SMALL_SIZE
+        ),
         0,
         1,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
