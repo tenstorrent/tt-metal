@@ -66,34 +66,30 @@ inline void push_norm_weights(
     cb_weight.push_back(tiles);
 }
 
-// One tile row of a K block per push.
 template <typename HAccessor>
-void read_h_block_rows(
+void read_h_row(
     const Noc& noc,
     const HAccessor& h,
     uint32_t cb_id,
-    uint32_t m_tile,
-    uint32_t rows,
+    uint32_t tile_row,
     uint32_t M_logical,
     uint32_t row_tiles,
     uint32_t k_tile,
-    uint32_t block_tiles,
+    uint32_t tiles,
     uint32_t tile_bytes) {
     CircularBuffer cb(cb_id);
-    for (uint32_t row = 0; row < rows; row++) {
-        cb.reserve_back(block_tiles);
+    cb.reserve_back(tiles);
+    if (tile_row < M_logical) {
         const uint32_t base = cb.get_write_ptr();
-        if (m_tile + row < M_logical) {
-            for (uint32_t t = 0; t < block_tiles; t++) {
-                noc.async_read(
-                    h,
-                    CoreLocalMem<uint32_t>(base + t * tile_bytes),
-                    tile_bytes,
-                    {.page_id = (m_tile + row) * row_tiles + k_tile + t},
-                    {});
-            }
-            noc.async_read_barrier();
+        for (uint32_t t = 0; t < tiles; t++) {
+            noc.async_read(
+                h,
+                CoreLocalMem<uint32_t>(base + t * tile_bytes),
+                tile_bytes,
+                {.page_id = tile_row * row_tiles + k_tile + t},
+                {});
         }
-        cb.push_back(block_tiles);
+        noc.async_read_barrier();
     }
+    cb.push_back(tiles);
 }

@@ -43,56 +43,59 @@ struct RmsnormShape {
     uint32_t eps_bits;
 };
 
-// Sum of squares of every row of the own K blocks, accumulated in fp32 and handed over as bf16 partial sums.
-ALWI void rmsnorm_partial_sums(const RmsnormCbs& cb, const RmsnormShape& s, uint32_t own_blocks) {
+// Sum of squares of one tile row of an own K block, accumulated in fp32 over the own blocks.
+ALWI void rmsnorm_stats_row(const RmsnormCbs& cb, const RmsnormShape& s, uint32_t block, uint32_t row) {
     CircularBuffer in(cb.in);
     CircularBuffer squares(cb.squares);
     CircularBuffer sum(cb.sum);
+
+    if (block == 0 && row == 0) {
+        sum.reserve_back(s.rows);
+    }
+    in.wait_front(s.block_tiles);
+    squares.reserve_back(s.block_tiles);
+    reconfig_data_format(cb.in, cb.in);
+    pack_reconfig_data_format(cb.squares);
+    mul_init(cb.in, cb.in);
+    for (uint32_t first = 0; first < s.block_tiles; first += s.dest_tiles) {
+        tile_regs_acquire();
+        for (uint32_t i = 0; i < s.dest_tiles; i++) {
+            mul_tiles(cb.in, cb.in, first + i, first + i, i);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t i = 0; i < s.dest_tiles; i++) {
+            pack_tile(i, cb.squares);
+        }
+        tile_regs_release();
+    }
+    squares.push_back(s.block_tiles);
+    in.pop_front(s.block_tiles);
+
+    squares.wait_front(s.block_tiles);
+    reconfig_data_format(cb.scaler, cb.squares);
+    pack_reconfig_data_format(cb.sum);
+    reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb.squares, cb.scaler, cb.sum);
+    tile_regs_acquire();
+    for (uint32_t i = 0; i < s.block_tiles; i++) {
+        reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb.squares, cb.scaler, i, 0, 0);
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_reconfig_l1_acc(block > 0);
+    pack_tile<true>(0, cb.sum, row);
+    pack_reconfig_l1_acc(0);
+    tile_regs_release();
+    reduce_uninit(cb.squares);
+    squares.pop_front(s.block_tiles);
+}
+
+// Hands the partial sums over as bf16.
+ALWI void rmsnorm_stats_finalize(const RmsnormCbs& cb, const RmsnormShape& s) {
+    CircularBuffer sum(cb.sum);
     CircularBuffer stats_out(cb.stats_out);
 
-    sum.reserve_back(s.rows);
-    for (uint32_t b = 0; b < own_blocks; b++) {
-        for (uint32_t row = 0; row < s.rows; row++) {
-            in.wait_front(s.block_tiles);
-            squares.reserve_back(s.block_tiles);
-            reconfig_data_format(cb.in, cb.in);
-            pack_reconfig_data_format(cb.squares);
-            mul_init(cb.in, cb.in);
-            for (uint32_t first = 0; first < s.block_tiles; first += s.dest_tiles) {
-                tile_regs_acquire();
-                for (uint32_t i = 0; i < s.dest_tiles; i++) {
-                    mul_tiles(cb.in, cb.in, first + i, first + i, i);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t i = 0; i < s.dest_tiles; i++) {
-                    pack_tile(i, cb.squares);
-                }
-                tile_regs_release();
-            }
-            squares.push_back(s.block_tiles);
-            in.pop_front(s.block_tiles);
-
-            squares.wait_front(s.block_tiles);
-            reconfig_data_format(cb.scaler, cb.squares);
-            pack_reconfig_data_format(cb.sum);
-            reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb.squares, cb.scaler, cb.sum);
-            tile_regs_acquire();
-            for (uint32_t i = 0; i < s.block_tiles; i++) {
-                reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb.squares, cb.scaler, i, 0, 0);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_reconfig_l1_acc(b > 0);
-            pack_tile<true>(0, cb.sum, row);
-            pack_reconfig_l1_acc(0);
-            tile_regs_release();
-            reduce_uninit(cb.squares);
-            squares.pop_front(s.block_tiles);
-        }
-    }
     sum.push_back(s.rows);
-
     sum.wait_front(s.rows);
     stats_out.reserve_back(s.rows);
     reconfig_data_format_srca(cb.sum);
@@ -143,59 +146,62 @@ ALWI void rmsnorm_row_scales(const RmsnormCbs& cb, const RmsnormShape& s, uint32
     stats_in.pop_front(sources * s.rows);
 }
 
-// Normalises the own K blocks into the block-sized slots of the out CB, one K block per push.
-ALWI void rmsnorm_apply(const RmsnormCbs& cb, const RmsnormShape& s, uint32_t own_blocks) {
+// Normalises one tile row of an own K block into the block-sized slot of the out CB, one K block per push.
+ALWI void rmsnorm_apply_row(
+    const RmsnormCbs& cb, const RmsnormShape& s, uint32_t row, bool last_in_block, bool last_overall) {
     CircularBuffer in(cb.in);
     CircularBuffer weight(cb.weight);
     CircularBuffer rstd(cb.rstd);
     CircularBuffer scaled(cb.scaled);
     CircularBuffer out(cb.out);
 
-    rstd.wait_front(s.rows);
-    for (uint32_t b = 0; b < own_blocks; b++) {
+    if (row == 0) {
+        rstd.wait_front(s.rows);
         weight.wait_front(s.block_tiles);
         out.reserve_back(s.rows * s.block_tiles);
-        for (uint32_t row = 0; row < s.rows; row++) {
-            in.wait_front(s.block_tiles);
-            scaled.reserve_back(s.block_tiles);
-            reconfig_data_format(cb.in, cb.rstd);
-            pack_reconfig_data_format(cb.scaled);
-            mul_bcast_cols_init(cb.in, cb.rstd);
-            for (uint32_t first = 0; first < s.block_tiles; first += s.dest_tiles) {
-                tile_regs_acquire();
-                for (uint32_t i = 0; i < s.dest_tiles; i++) {
-                    mul_tiles_bcast_cols(cb.in, cb.rstd, first + i, row, i);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t i = 0; i < s.dest_tiles; i++) {
-                    pack_tile(i, cb.scaled);
-                }
-                tile_regs_release();
-            }
-            scaled.push_back(s.block_tiles);
-            in.pop_front(s.block_tiles);
-
-            scaled.wait_front(s.block_tiles);
-            reconfig_data_format(cb.scaled, cb.weight);
-            pack_reconfig_data_format(cb.out);
-            mul_bcast_rows_init(cb.scaled, cb.weight);
-            for (uint32_t first = 0; first < s.block_tiles; first += s.dest_tiles) {
-                tile_regs_acquire();
-                for (uint32_t i = 0; i < s.dest_tiles; i++) {
-                    mul_tiles_bcast_rows(cb.scaled, cb.weight, first + i, first + i, i);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t i = 0; i < s.dest_tiles; i++) {
-                    pack_tile<true>(i, cb.out, row * s.block_tiles + first + i);
-                }
-                tile_regs_release();
-            }
-            scaled.pop_front(s.block_tiles);
+    }
+    in.wait_front(s.block_tiles);
+    scaled.reserve_back(s.block_tiles);
+    reconfig_data_format(cb.in, cb.rstd);
+    pack_reconfig_data_format(cb.scaled);
+    mul_bcast_cols_init(cb.in, cb.rstd);
+    for (uint32_t first = 0; first < s.block_tiles; first += s.dest_tiles) {
+        tile_regs_acquire();
+        for (uint32_t i = 0; i < s.dest_tiles; i++) {
+            mul_tiles_bcast_cols(cb.in, cb.rstd, first + i, row, i);
         }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t i = 0; i < s.dest_tiles; i++) {
+            pack_tile(i, cb.scaled);
+        }
+        tile_regs_release();
+    }
+    scaled.push_back(s.block_tiles);
+    in.pop_front(s.block_tiles);
+
+    scaled.wait_front(s.block_tiles);
+    reconfig_data_format(cb.scaled, cb.weight);
+    pack_reconfig_data_format(cb.out);
+    mul_bcast_rows_init(cb.scaled, cb.weight);
+    for (uint32_t first = 0; first < s.block_tiles; first += s.dest_tiles) {
+        tile_regs_acquire();
+        for (uint32_t i = 0; i < s.dest_tiles; i++) {
+            mul_tiles_bcast_rows(cb.scaled, cb.weight, first + i, first + i, i);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t i = 0; i < s.dest_tiles; i++) {
+            pack_tile<true>(i, cb.out, row * s.block_tiles + first + i);
+        }
+        tile_regs_release();
+    }
+    scaled.pop_front(s.block_tiles);
+    if (last_in_block) {
         out.push_back(s.rows * s.block_tiles);
         weight.pop_front(s.block_tiles);
     }
-    rstd.pop_front(s.rows);
+    if (last_overall) {
+        rstd.pop_front(s.rows);
+    }
 }

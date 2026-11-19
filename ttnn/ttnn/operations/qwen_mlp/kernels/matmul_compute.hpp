@@ -95,7 +95,9 @@ ALWI void matmul_block_to_out(const MatmulShape& s, bool add_partials) {
     }
 }
 
-ALWI void matmul_phase(const MatmulShape& s) {
+// hook(step) runs between the K blocks and returns whether it did work that needs the matmul state restored.
+template <typename Hook>
+ALWI void matmul_phase(const MatmulShape& s, Hook hook) {
     CircularBuffer in0(s.cb_in0);
     CircularBuffer in1(s.cb_in1);
     CircularBuffer out(s.cb_out);
@@ -109,6 +111,7 @@ ALWI void matmul_phase(const MatmulShape& s) {
         PACK((swiglu_tile_init()));
     }
     matmul_init(s.cb_in0, s.cb_in1);
+    uint32_t step = 0;
 
     for (uint32_t m_block = 0; m_block < s.M_blocks; m_block++) {
         bool reuse_in0 = false;
@@ -142,6 +145,12 @@ ALWI void matmul_phase(const MatmulShape& s) {
                 }
                 in1.pop_front(in1_block_tiles);
                 if (k_block == 0) {
+                    pack_reconfig_l1_acc(1);
+                }
+                if (hook(step++) && k_block < s.K_blocks - 1) {
+                    reconfig_data_format(s.cb_in1, s.cb_in0);
+                    pack_reconfig_data_format(s.cb_partial);
+                    matmul_block_init(s.cb_in0, s.cb_in1, false, s.sub_w, s.sub_h, s.K_block);
                     pack_reconfig_l1_acc(1);
                 }
             }

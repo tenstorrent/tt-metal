@@ -16,8 +16,9 @@ GRID_Y = 9
 FIRST_Y = 1
 
 RING_BLOCKS = 2
-NORM_IN_ROWS = 4
+IN1_RING_BLOCKS = 3
 NORM_DEST_TILES = 4
+NORM_IN_UNITS = 4
 
 BF16_TILE_BYTES = 2048
 BFP4_TILE_BYTES = 576
@@ -196,6 +197,7 @@ def create_program_descriptor(h, w_norm, w_gate_up, w_down, y):
     block_tiles = M_block * K_block
     own_blocks = [len(range(row, gate_up.K_blocks, GRID_Y)) for row in range(GRID_Y)]
     max_own_blocks = max(own_blocks)
+    assert min(own_blocks) * M_block > NORM_IN_UNITS
 
     cores = ttnn.CoreRangeSet(
         [ttnn.CoreRange(ttnn.CoreCoord(0, FIRST_Y), ttnn.CoreCoord(GRID_X - 1, FIRST_Y + GRID_Y - 1))]
@@ -203,11 +205,11 @@ def create_program_descriptor(h, w_norm, w_gate_up, w_down, y):
     bf16, bfp4, fp32 = ttnn.bfloat16, ttnn.bfloat4_b, ttnn.float32
     cbs = [
         _cb(CB_IN0, bf16, BF16_TILE_BYTES, RING_BLOCKS * block_tiles, cores),
-        _cb(CB_IN1, bfp4, BFP4_TILE_BYTES, RING_BLOCKS * in1_slot_tiles, cores),
+        _cb(CB_IN1, bfp4, BFP4_TILE_BYTES, IN1_RING_BLOCKS * in1_slot_tiles, cores),
         _cb(CB_ACTIVATED, bf16, BF16_TILE_BYTES, activated_blocks * block_tiles, cores),
         _cb(CB_PARTIAL, fp32, FP32_TILE_BYTES, partial_slot_tiles, cores),
-        _cb(CB_NORM_IN, bf16, BF16_TILE_BYTES, NORM_IN_ROWS * K_block, cores),
-        _cb(CB_NORM_WEIGHT, bf16, BF16_TILE_BYTES, K_block, cores),
+        _cb(CB_NORM_IN, bf16, BF16_TILE_BYTES, NORM_IN_UNITS * K_block, cores),
+        _cb(CB_NORM_WEIGHT, bf16, BF16_TILE_BYTES, 2 * K_block, cores),
         _cb(CB_NORM_SCALER, bf16, BF16_TILE_BYTES, 1, cores),
         _cb(CB_NORM_SQUARES, bf16, BF16_TILE_BYTES, K_block, cores),
         _cb(CB_NORM_SUM, fp32, FP32_TILE_BYTES, M_block, cores),
@@ -250,6 +252,7 @@ def create_program_descriptor(h, w_norm, w_gate_up, w_down, y):
         "tile_bytes_bfp4": BFP4_TILE_BYTES,
         "group_size": GRID_Y,
         "norm_dest_tiles": NORM_DEST_TILES,
+        "norm_in_units": NORM_IN_UNITS,
         "M_blocks": M_core // M_block,
         "max_own_blocks": max_own_blocks,
         "sem_stats_arrival": FIRST_STATS_SEMAPHORE,
