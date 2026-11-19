@@ -510,6 +510,24 @@ constexpr bool matmul_prod_dims_unseen = true;
 constexpr bool matmul_prod_dims_unseen = false;
 #endif
 // a run-time direction call runs the tile MOP whatever direction it resolves to (matmul_block: llk_dir 3)
+#if defined(MATMUL_PACK_TILES)
+// minimal_matmul's plain call (matmul_block_llk): main's math (the tile MOP) where matmul_fe_tile_mop holds (HiFi2 with a named M block
+// below 4, else not the plain row form), switching to the row form from matmul_fe_rowform_min_kt (LoFi kt 3; HiFi2 half sync 32-bit DEST
+// in a kernel naming an M block of 4 or more, kt 2); otherwise the plain row form. MATMUL_PK_M_BLOCK: the key's production M_block_tiles
+#ifndef MATMUL_PK_M_BLOCK
+#define MATMUL_PK_M_BLOCK 0
+#endif
+constexpr bool matmul_prod_fe_tile =
+    (MATH_FIDELITY == ckernel::MathFidelity::HiFi2 && MATMUL_PK_M_BLOCK != 0 && MATMUL_PK_M_BLOCK < 4) ||
+    !matmul_plain_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en>(matmul_prod_may_pack_32bit);
+constexpr std::uint32_t matmul_prod_rowform_min_kt =
+    dest_sync != ckernel::DstSync::SyncHalf ? 0
+    : MATH_FIDELITY == ckernel::MathFidelity::LoFi ? 3
+    : (matmul_hifi2_half_wide(MATH_FIDELITY, true, is_fp32_dest_acc_en, matmul_prod_may_pack_32bit) && MATMUL_PK_M_BLOCK >= 4) ? 2
+                                                                                                                              : 0;
+constexpr bool matmul_tile_mop = (matmul_prod_fe_tile && !(matmul_prod_rowform_min_kt != 0 && MATMUL_PK_KT >= matmul_prod_rowform_min_kt)) ||
+                                 MATMUL_PROD_RUNTIME_DIR;
+#else
 constexpr bool matmul_tile_mop =
     MATMUL_FE_FORM_KT == 0
         ? (!matmul_plain_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en>(matmul_prod_may_pack_32bit) &&
@@ -520,6 +538,7 @@ constexpr bool matmul_tile_mop =
            !(MATH_FIDELITY == ckernel::MathFidelity::LoFi && dest_sync == ckernel::DstSync::SyncHalf && matmul_prod_dims_unseen && MATMUL_PK_KT >= 3)) ||
               MATMUL_PROD_RUNTIME_DIR
         : !matmul_math_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_FE_FORM_KT, MATMUL_FE_FORM_OUT>();
+#endif
 #else
 constexpr bool matmul_tile_mop = false;
 #endif
@@ -590,7 +609,8 @@ constexpr ckernel::MathFidelity matmul_prod_fidelity = MATH_FIDELITY;
 #endif
 // llk_math_matmul_init_impl: the block keys of a call whose ct and rt are constant (the test's pack keys; none at run-time dims), with
 // them the end fold at full sync and no bias write; tiny 16-row tiles unless half sync with a 32-bit DEST
-#ifdef MATMUL_PACK_KEYS
+// minimal_matmul (MATMUL_PACK_TILES) passes run-time ct and rt: production's init takes no block keys (0, 0, bias write)
+#if defined(MATMUL_PACK_KEYS) && !defined(MATMUL_PACK_TILES)
 constexpr std::uint32_t matmul_prod_key_ct = MATMUL_PK_CT, matmul_prod_key_rt = MATMUL_PK_RT;
 #else
 constexpr std::uint32_t matmul_prod_key_ct = 0, matmul_prod_key_rt = 0;
