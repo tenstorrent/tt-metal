@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""eval/golden_tests/conv2d_3x3/test_golden.py, unchanged, retargeted at this experiment's op copy (op_copy/, or
+SD_UNIT_PKG): the golden helpers and the axis-tagging wrapper call the copy's conv2d_3x3 / prepare_* (both dispatches).
+
+    scripts/run_safe_pytest.sh --run-all --precompile --import-mode=prepend -k "stem or H32_W32_Ci8_ or H16_W16_Ci16_" \
+        ttnn/ttnn/operations/conv2d_3x3/perf_experiments/stem1_slab_tilize/test_sd_golden.py
+"""
+
+import importlib
+import os
+
+_op = importlib.import_module(
+    "ttnn.operations.conv2d_3x3.perf_experiments.stem1_slab_tilize." + os.environ.get("SD_UNIT_PKG", "op_copy")
+)
+_real = importlib.import_module("ttnn.operations.conv2d_3x3")
+_by_id = {id(getattr(_real, n)): getattr(_op, n) for n in _real.__all__}
+for _name in (
+    "eval.golden_tests.conv2d_3x3.axes",
+    "eval.golden_tests.conv2d_3x3.helpers",
+    "eval.golden_tests.conv2d_3x3.test_golden",
+):
+    _m = importlib.import_module(_name)
+    for _attr, _value in list(vars(_m).items()):
+        if id(_value) in _by_id and not _attr.startswith("__"):
+            setattr(_m, _attr, _by_id[id(_value)])
+
+from eval.golden_tests.conv2d_3x3.test_golden import test_op, test_op_loose  # noqa: E402,F401

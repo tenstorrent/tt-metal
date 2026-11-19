@@ -89,6 +89,7 @@
 #include "conv2d_3x3_slab_dataflow.hpp"
 #include "conv2d_3x3_gather_dataflow.hpp"
 #include "conv2d_3x3_nslice_order.hpp"
+#include "conv2d_3x3_slab_direct.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_weights = get_compile_time_arg_val(0);
@@ -218,7 +219,15 @@ void kernel_main() {
         noc_semaphore_inc(server_ack_noc, 1);
     }
 
-    constexpr uint32_t weight_k_block_tiles = block_k_tiles * block_n_tiles;
+#ifdef SD_BIAS_IN_WEIGHTS
+    // Slab-direct fused bias without weight servers: every weight round carries the core's bias tiles after its
+    // K-block (read and rewritten once by the round's DRAM reader, the multicast sender), so no core reads the bias
+    // pages from DRAM by itself (~100 cores reading them at once slowed the fill and the weight round).
+    constexpr uint32_t sd_bias_round_tiles = block_n_tiles;
+#else
+    constexpr uint32_t sd_bias_round_tiles = 0;
+#endif
+    constexpr uint32_t weight_k_block_tiles = block_k_tiles * block_n_tiles + sd_bias_round_tiles;
     constexpr uint32_t row_group_tiles = out_subblock_h * block_n_tiles;
     constexpr uint32_t row_groups_per_block = block_m_tiles / out_subblock_h;
     const uint32_t weight_tile_bytes = get_tile_size(cb_weights);
@@ -249,7 +258,12 @@ void kernel_main() {
     constexpr bool kw_fold = false;
 #endif
     // With the polling split TILE fill the bias reads are issued later, serving the first block's hand-overs.
-    if constexpr (!slab_split && !tile_fill_split && !weight_servers && !kw_fold) {
+#ifdef SD_BIAS_IN_WEIGHTS
+    constexpr bool sd_bias_in_weights = true;  // the bias comes with the weight rounds
+#else
+    constexpr bool sd_bias_in_weights = false;
+#endif
+    if constexpr (!slab_split && !tile_fill_split && !weight_servers && !kw_fold && !sd_bias_in_weights) {
         prefetch_bias();
     }
 
@@ -442,8 +456,22 @@ void kernel_main() {
     // TRID_WFILL_BASE + j % fill_writer_window.
     constexpr uint32_t TRID_WFILL_BASE = 8;
     [[maybe_unused]] uint32_t fill_issued = 0;
+#ifdef CONV2D_3X3_SLAB_DIRECT
+    constexpr bool slab_direct = true;
+#else
+    constexpr bool slab_direct = false;
+#endif
+    // Slab-direct: this block's forward slab reads (transaction id 9) are in flight; slab_fwd_done goes up as soon as
+    // they landed, from every wait that serves the fill (the weight-round waits included).
+    [[maybe_unused]] bool sd_slab_pending = false;
     // Every batch the reader has handed over so far (windowed: retire the landed ones, issue up to the window).
     [[maybe_unused]] auto serve_fill = [&]() {
+        if constexpr (slab_direct) {
+            if (sd_slab_pending && ncrisc_noc_read_with_transaction_id_flushed(noc_index, 9)) {
+                Semaphore<>(slab_fwd_done_sem_id).up(1);
+                sd_slab_pending = false;
+            }
+        }
         if constexpr (tile_fill_split) {
             if constexpr (!ring_slab) {
                 while (fill_served < fill_issued &&
@@ -587,7 +615,29 @@ void kernel_main() {
             }
         }
 #endif
+#ifdef SD_BIAS_IN_WEIGHTS
+        // The round's tail: the bias tiles (same format and page size as the weights), rewritten after they landed.
+        const uint32_t sd_bias_l1 = l1;
+        {
+            const auto bias = TensorAccessor(bias_args, bias_addr, weight_tile_bytes);
+            for (uint32_t n = 0; n < sd_bias_round_tiles; ++n, l1 += weight_tile_bytes) {
+                if (n < out_valid_tiles) {
+                    noc_async_read_page(out_n_tile_start + n, bias, l1);
+                }
+            }
+        }
+#endif
         noc_async_read_barrier();
+#if defined(SD_BIAS_IN_WEIGHTS) && defined(SD_BIAS_SPLIT)
+        invalidate_l1_cache();
+        for (uint32_t n = 0; n < out_valid_tiles; ++n) {
+#if SD_BIAS_BF16
+            conv2d_3x3::slab_direct::split_bias_tile_bf16(sd_bias_l1 + n * weight_tile_bytes);
+#else
+            conv2d_3x3::slab_direct::split_bias_tile_bf8(sd_bias_l1 + n * weight_tile_bytes);
+#endif
+        }
+#endif
     };
 
     Noc noc;
@@ -601,7 +651,7 @@ void kernel_main() {
     [[maybe_unused]] auto receive_serving = [&](auto& wm, uint32_t round) {
         using WM = std::decay_t<decltype(wm)>;
         // Dependent on WM, so a kernel without the split never instantiates the sender-coordinate reads.
-        if constexpr (WM::active && tile_fill_split) {
+        if constexpr (WM::active && (tile_fill_split || slab_direct)) {
             static_assert(WM::transfer_mode == dataflow_kernel_lib::TransferMode::Multicast && !WM::rotating);
             constexpr uint32_t ct_base = get_named_compile_time_arg_val("weight_mcast_ct_offset");
             Semaphore<> data_ready(
@@ -784,7 +834,7 @@ void kernel_main() {
         return ncrisc_noc_read_with_transaction_id_flushed(late_bias_reads.noc.get_noc_id(), TRID_BIAS_LATE);
     };
     [[maybe_unused]] auto issue_late_bias = [&]() {
-        if constexpr (weight_servers && has_bias && !slab_split) {
+        if constexpr (weight_servers && has_bias && (!slab_split || slab_direct)) {
             late_bias_issued = true;
             if (server_receiver) {
                 cb_reserve_back(cb_bias, out_n_tiles);
@@ -808,9 +858,24 @@ void kernel_main() {
     }
     // kw-fold: push the late bias as soon as it landed, from inside the weight waits (the reader decodes it into the
     // final pass's fp32 rows at ~1.3 us per tile, so it must not wait for the block's last round).
+    // Slab-direct fused bias at LoFi: the landed bias is rewritten for the fused K-step before it is pushed.
+    [[maybe_unused]] auto sd_split_landed_bias = [&]() {
+#ifdef SD_BIAS_SPLIT
+        invalidate_l1_cache();
+        for (uint32_t n = 0; n < out_valid_tiles; ++n) {
+            const uint32_t t = get_write_ptr(cb_bias) + n * get_tile_size(cb_bias);
+#if SD_BIAS_BF16
+            conv2d_3x3::slab_direct::split_bias_tile_bf16(t);
+#else
+            conv2d_3x3::slab_direct::split_bias_tile_bf8(t);
+#endif
+        }
+#endif
+    };
     [[maybe_unused]] auto try_finish_late_bias = [&]() {
         if (late_bias_pending && late_bias_landed()) {
             late_bias_reads.wait(TRID_BIAS_LATE);
+            sd_split_landed_bias();
             cb_push_back(cb_bias, out_n_tiles);
             late_bias_pending = false;
         }
@@ -823,6 +888,7 @@ void kernel_main() {
                 khx_poll();
             }
             late_bias_reads.wait(TRID_BIAS_LATE);
+            sd_split_landed_bias();
             cb_push_back(cb_bias, out_n_tiles);
             late_bias_pending = false;
         }
@@ -887,7 +953,7 @@ void kernel_main() {
             read_weight_k_block(l1);
             weight_sender->send(l1, l1, weight_k_block_tiles * weight_tile_bytes);
         } else if (weight_receiver) {
-            if constexpr (tile_fill_split) {
+            if constexpr (tile_fill_split || slab_direct) {
                 receive_serving(weight_mcast, k_blocks_issued);
             } else {
                 weight_receiver->receive(k_blocks_issued);
@@ -1168,6 +1234,38 @@ void kernel_main() {
         o_first = (m_tile_start + block_tiles_done) * 32;
         const uint32_t o_end_tiles = o_first + block_valid_tiles * 32;
         o_end = o_end_tiles < num_out_px ? o_end_tiles : num_out_px;
+#ifdef CONV2D_3X3_SLAB_DIRECT
+        // Slab-direct: the padded slab layout (conv2d_3x3_slab_direct.hpp), the higher shards' pieces, under their
+        // own transaction id (see the M-block loop).
+        Noc sd_fill_noc;
+        dataflow_kernel_lib::set_read_trid(sd_fill_noc, 9);
+        conv2d_3x3::slab_direct::Geom<
+            input_height,
+            input_width,
+            output_width,
+            stride,
+            padding,
+            dilation,
+            SD_GAP,
+            SD_PITCH,
+            input_page_bytes,
+            SD_HALF_BYTES>::fill_pieces<band_last_tap>(o_first, o_end, [&](uint32_t lo, uint32_t hi, uint32_t off) {
+            uint32_t l1 = slab_l1 + off;
+            for (uint32_t page = lo; page < hi;) {
+                const uint32_t run = input.num_contiguous_pages(page, hi);
+                if (page / shard_rows > my_shard) {
+                    noc_async_read(input.get_noc_addr(page), l1, run * input_page_bytes);
+                }
+                page += run;
+                l1 += run * input_page_bytes;
+            }
+        });
+        dataflow_kernel_lib::set_read_trid(sd_fill_noc, 0);
+        if (true) {
+            // slab_fwd_done follows the block's weight round (see the M-block loop).
+            return;
+        }
+#endif
         conv2d_3x3::slab_bands<input_width, input_height * input_width, dilation, band_stride_px>(
             conv2d_3x3::block_footprint<output_width, input_width, stride, padding, dilation, band_last_tap>(
                 o_first, o_end),
@@ -1307,10 +1405,73 @@ void kernel_main() {
 
     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
         if constexpr (slab_split) {
+#ifdef CONV2D_3X3_SLAB_DIRECT
+            // Slab-direct: compute multiplies as soon as the slab and the weights are in. The forward slab reads go
+            // out first (transaction id 9), then the block's weight round (a DRAM read + multicast, or the multicast
+            // wait, which polls the slab reads); slab_fwd_done goes up as soon as they landed. The fused bias comes
+            // with the weight rounds (SD_BIAS_IN_WEIGHTS) or from the weight server; otherwise (the bias-add pass) the
+            // bias reads (block 0, id 7) go out only once this core's slab landed: issued with the fill, ~100 cores
+            // reading the same bias pages slowed the high-index cores' forward fill erratically (256x512x8 s2, 103
+            // cores: 10-18 us against 8 us).
+            fill_forward_slab(m_block_idx);
+            [[maybe_unused]] auto sd_issue_bias = [&]() {
+                if constexpr (has_bias) {
+                    cb_reserve_back(cb_bias, out_n_tiles);
+                    const uint32_t bias_tile_bytes = get_tile_size(cb_bias);
+                    const auto bias = TensorAccessor(bias_args, bias_addr, bias_tile_bytes);
+                    uint32_t l1 = get_write_ptr(cb_bias);
+                    Noc bias_noc;
+                    dataflow_kernel_lib::set_read_trid(bias_noc, 7);
+                    for (uint32_t n = 0; n < out_valid_tiles; ++n, l1 += bias_tile_bytes) {
+                        noc_async_read(bias.get_noc_addr(out_n_tile_start + n), l1, bias_tile_bytes);
+                    }
+                    dataflow_kernel_lib::set_read_trid(bias_noc, 0);
+                }
+            };
+            sd_slab_pending = true;
+            while (k_blocks_issued < (m_block_idx + 1) * num_k_blocks) {
+                issue_weight_k_block();
+            }
+            {
+                MaybeDeviceZoneScope("writer_slab_bias_wait");
+                bool slab_done = !sd_slab_pending;
+                // Block 0 reads the bias (and pushes cb_bias even if the core owns no valid output column), unless it
+                // comes with the weight rounds (SD_BIAS_IN_WEIGHTS) or from a weight server (the late bias above).
+#ifdef SD_BIAS_IN_WEIGHTS
+                constexpr bool own_bias = false;
+#else
+                constexpr bool own_bias = has_bias && !weight_servers;
+#endif
+                const bool bias_block = own_bias && m_block_idx == 0;
+                bool bias_issued = !bias_block;
+                uint32_t bias_left = bias_block ? out_valid_tiles : 0;
+                while (!slab_done || !bias_issued || bias_left > 0) {
+                    if (!slab_done && ncrisc_noc_read_with_transaction_id_flushed(noc_index, 9)) {
+                        Semaphore<>(slab_fwd_done_sem_id).up(1);
+                        slab_done = true;
+                        sd_slab_pending = false;
+                    }
+                    if (slab_done && !bias_issued) {
+                        sd_issue_bias();
+                        bias_issued = true;
+                        if (bias_left == 0) {
+                            cb_push_back(cb_bias, out_n_tiles);  // no valid output column: nothing was read
+                        }
+                    }
+                    if constexpr (own_bias) {
+                        if (bias_issued && bias_left > 0 && ncrisc_noc_read_with_transaction_id_flushed(noc_index, 7)) {
+                            bias_left = 0;
+                            cb_push_back(cb_bias, out_n_tiles);
+                        }
+                    }
+                }
+            }
+#else
             fill_forward_slab(m_block_idx);
             if (m_block_idx == 0) {
                 prefetch_bias();
             }
+#endif
         }
         const uint32_t m_seq_end = (m_block_idx + 1) * Units::per_block;
         if constexpr (nslice_outer) {

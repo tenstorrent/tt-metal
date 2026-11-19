@@ -1,0 +1,1052 @@
+diff -ruN a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py	2026-11-19 11:33:08.087525167 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py	2026-11-19 11:33:08.091525224 +0000
+@@ -207,6 +207,16 @@
+ # while the reader gathers the rest, since the gather is bound by read issue. Applies with the split slab fill (the
+ # writer then holds the slab plan) and in0 streaming. False keeps the whole gather on the reader.
+ GATHER_SPLIT_RISCS = True
++# Slab-direct face im2col (kernels/conv2d_3x3_slab_direct.hpp): on face-direct whole-K shapes whose output rows are
++# whole tile-rows, compute unpacks every in0 tile straight from a padded slab (one zero gap of `padding` pixels in front
++# of every input row) as two contiguous 1 KB runs, so neither data-movement RISC gathers anything. False keeps the
++# face-direct gather.
++SLAB_DIRECT = True
++# Slab-direct with a bias: add it as one more matmul K-step (ones block x the bias tile split into two parts of at most
++# 5 significant bits, exact under LoFi), so the matmul packs the final values and no bias pass runs. False keeps the
++# fp32 partials + bias-add pass.
++SD_FUSED_BIAS = True
++
+ 
+ # N-slice-outer K split (R4, the default when its resident in0 fits L1): the core tilizes its whole K of in0 once,
+ # then multiplies one owner N-slice at a time over the whole K (one DEST accumulation) and the row reduce-scatters the
+@@ -646,6 +656,43 @@
+     return g.face_direct_capable and bk % g.tensor_kkh_tiles == 0 and (not g.k_split or bk == g.tensor_k_tiles)
+ 
+ 
++def slab_direct_capable(g: Conv3x3Geometry, bk):
++    """Slab-direct (see SLAB_DIRECT): face-direct with one K-block (no K split), every tile-row inside one output
++    row."""
++    return (
++        SLAB_DIRECT
++        and face_direct_im2col(g, bk)
++        and bk == g.tensor_k_tiles
++        and not g.k_split
++        and g.output_width % TILE == 0
++    )
++
++
++def slab_direct_band_last_tap(g: Conv3x3Geometry):
++    """The fill also lands the pixel the K-padding run of the last K-tile reads (C_in 16: tap 3)."""
++    return 3
++
++
++def slab_direct_layout(g: Conv3x3Geometry, core_m_tiles, block_m_tiles):
++    """(gap, pitch, zone, slots_max, slab pixels): slot r = image row ih_lo + r behind `gap` zero pixels, `pitch`
++    pixels per slot, and one more gap after the last slot. The gap covers both the left padding of its row and what
++    the last im2col runs of the previous row read past that row's end (its right padding, and the K-padding run's
++    pixels against zero weight rows), so no gap pixel is an image pixel: zone == gap."""
++    over = g.stride * (g.output_width - 1) - g.padding + 3 * g.dilation - (g.input_width - 1)
++    gap = max(g.padding, over, 0)
++    pitch = g.input_width + gap
++    zone = gap
++    slots_max = 0
++    for start, actual in core_m_ranges(g, core_m_tiles):
++        for block_start in range(0, actual, block_m_tiles):
++            tiles = min(block_m_tiles, actual - block_start)
++            o_first = (start + block_start) * TILE
++            o_last = min((start + block_start + tiles) * TILE, g.num_out_px) - 1
++            ho0, ho1 = o_first // g.output_width, o_last // g.output_width
++            slots_max = max(slots_max, g.stride * (ho1 - ho0) + 2 * g.dilation + 1)
++    return gap, pitch, zone, slots_max, slots_max * pitch + zone
++
++
+ def _in0_stream_rows(g: Conv3x3Geometry, bm, bk, sb_h):
+     """Tile-rows per in0 push and matmul call: whole matmul subblocks, at most IN0_STREAM_TILE_ROWS; the last group
+     of a block may be shorter. Only face-direct with one K-block per M-block streams (the reader produces in0, and
+@@ -1617,6 +1664,10 @@
+             cores,
+         )
+     face_direct = face_direct_im2col(g, bk)
++    slab_direct = slab_direct_capable(g, bk) and not kwf
++    if slab_direct:
++        sd_gap, sd_pitch, sd_zone, sd_slots, sd_slab_px = slab_direct_layout(g, b.core_m_tiles, bm)
++        slab_cb = _cb(CB_HALO_SLAB, ttnn.bfloat16, pixel_bytes, sd_slab_px, cores)
+ 
+     # Whole-slab input ring: where every core runs one M-block, cb_input_tiles shares cb_im2col_tiles' L1 (compute
+     # tilizes in0 only after its untilize consumed every input batch, and no reader write lands in in0 before then: no
+@@ -1669,7 +1720,7 @@
+             CB_IM2COL_TILES,
+             input_tensor.dtype,
+             g.in0_tile_bytes,
+-            bm * (in0_k_tiles if b.nslice else bk * b.center_slot_blocks),
++            2 if slab_direct else bm * (in0_k_tiles if b.nslice else bk * b.center_slot_blocks),
+             cores,
+         ),
+         _cb(
+@@ -1840,7 +1891,9 @@
+     tilize_width = g.c_in_tiles if tap_major else bk
+ 
+     stream_rows = b.in0_stream_rows
+-    gather_split = GATHER_SPLIT_RISCS and face_direct and slab_split and _div_up(bm, stream_rows) >= 2
++    gather_split = (
++        GATHER_SPLIT_RISCS and face_direct and not slab_direct and slab_split and _div_up(bm, stream_rows) >= 2
++    )
+     # Semaphore ids: the R4 combine's four, then the split slab fill's two and the split gather's two; the weight
+     # channel attaches after.
+     sem_ids = (SEM_COMBINE_CREDIT, SEM_COMBINE_ARRIVAL, SEM_COMBINE_SEND_GO, SEM_COMBINE_SEND_DONE) if g.k_split else ()
+@@ -1859,7 +1912,15 @@
+     # Weight servers: the server's ack counter, one data-ready flag per cb_weights slot, then the bias flag (the server
+     # multicasts the bias wherever the receivers take it from cb_bias: not under the split slab fill).
+     server_sem_ids = (len(sem_ids), len(sem_ids) + 1) if weight_servers is not None else (0, 0)
+-    server_bias = weight_servers is not None and has_bias and not slab_split
++    # Slab-direct multiplies the bias as soon as the slab is in, so a server multicasts it there too (no core reads it).
++    server_bias = weight_servers is not None and has_bias and (not slab_split or slab_direct)
++    # Slab-direct fused bias without servers: every weight round carries the bias tiles after its K-block (the round's
++    # DRAM reader reads and rewrites them once), so no core reads the bias pages by itself.
++    sd_bias_in_weights = slab_direct and SD_FUSED_BIAS and has_bias and weight_servers is None
++    if sd_bias_in_weights:
++        for i, cb in enumerate(cbs):
++            if cb.format_descriptors[0].buffer_index == CB_WEIGHTS:
++                cbs[i] = _cb(CB_WEIGHTS, weight_tensor.dtype, g.weight_tile_bytes, b.weight_depth * (bk + 1) * bn, cores)
+     sem_ids += tuple(range(len(sem_ids), len(sem_ids) + 2 + b.weight_depth)) if weight_servers is not None else ()
+     # kw-fold halo exchange: rows-landed counters from the upper and from the lower neighbour.
+     kwf_xchg = kwf and kw_fold_halo_exchange(b)
+@@ -1933,7 +1994,7 @@
+             SEM_COMBINE_SEND_DONE,
+             int(tap_major),
+             int(face_direct),
+-            g.band_last_tap,
++            slab_direct_band_last_tap(g) if slab_direct else g.band_last_tap,
+             CB_IM2COL_TILES,
+             int(slab_split),
+             *slab_sem_ids,
+@@ -2069,7 +2130,7 @@
+         g.stride,
+         g.dilation,
+         b.band_stride_px,
+-        g.band_last_tap,
++        slab_direct_band_last_tap(g) if slab_direct else g.band_last_tap,
+         input_page_bytes,
+         input_shard_rows,
+         *slab_sem_ids,
+@@ -2204,6 +2265,8 @@
+             if rt_valid:
+                 for m in range(num_m_blocks_this_core):
+                     compute_args += [min(bm, actual_m_tiles - m * bm), slab_rows_per_block[m]]
++        if slab_direct:
++            compute_args += [m_tile_start, actual_m_tiles]
+         if kwf or padded_slab:
+             compute_args += [m_tile_start, actual_m_tiles]
+             compute_args += _kwf_xchg_flags(g, m_tile_start, actual_m_tiles) if kwf_xchg else [0, 0]
+@@ -2299,13 +2362,45 @@
+             ("PAD_SLAB_SLOTS_MAX", str(pad_slots_max)),
+             ("PAD_SLAB_CB_ZERO", str(CB_ZERO_SRC)),
+         ]
++    _sd_dm_defines, _sd_compute_defines = [], []
++    if slab_direct:
++        _sd_dm_defines = [
++            ("CONV2D_3X3_SLAB_DIRECT", "1"),
++            ("SD_GAP", str(sd_gap)),
++            ("SD_PITCH", str(sd_pitch)),
++            ("SD_ZONE", str(sd_zone)),
++            ("SD_SLOTS", str(sd_slots)),
++            ("SD_SLAB_PX", str(sd_slab_px)),
++            ("SD_HALF_BYTES", str(g.face_taps * g.dilation * pixel_bytes)),
++        ]
++        if sd_bias_in_weights:
++            _sd_dm_defines += [("SD_BIAS_IN_WEIGHTS", "1")]
++        if SD_FUSED_BIAS and has_bias:
++            _sd_dm_defines += [("SD_FUSED_BIAS", "1")]
++            if compute_kernel_config.math_fidelity == ttnn.MathFidelity.LoFi:
++                # LoFi multiplies 5 significant bits of in1: the writer splits the bias into two exact parts. HiFi2 and
++                # up multiply 9: the prepared tile (row 0 the bias, its zero padding elsewhere) is used as is.
++                _sd_dm_defines += [
++                    ("SD_BIAS_SPLIT", "1"),
++                    ("SD_BIAS_BF16", str(int(bias_tensor.dtype == ttnn.bfloat16))),
++                ]
++        _sd_compute_defines = _sd_dm_defines + [
++            ("SD_IN_H", str(g.input_height)),
++            ("SD_IN_W", str(g.input_width)),
++            ("SD_OUT_W", str(g.output_width)),
++            ("SD_STRIDE", str(g.stride)),
++            ("SD_PAD", str(g.padding)),
++            ("SD_DIL", str(g.dilation)),
++            ("SD_PIXEL_BYTES", str(pixel_bytes)),
++            ("SD_KKH", str(g.tensor_kkh_tiles)),
++        ]
+     readers = [
+         ttnn.KernelDescriptor(
+             kernel_source=str(KERNEL_DIR / "conv2d_3x3_reader.cpp"),
+             core_ranges=_core_range_set(reader_cores),
+             compile_time_args=reader_ct_args(*slice_channels),
+             runtime_args=reader_rt,
+-            defines=_kwf_dm_defines + _pad_dm_defines,
++            defines=_kwf_dm_defines + _pad_dm_defines + _sd_dm_defines,
+             config=ttnn.ReaderConfigDescriptor(),
+         )
+         for slice_channels, (reader_cores, reader_rt) in reader_groups.items()
+@@ -2316,7 +2411,7 @@
+             core_ranges=_core_range_set(writer_cores),
+             compile_time_args=writer_ct_args_for(*slice_channels),
+             runtime_args=writer_rt,
+-            defines=_kwf_dm_defines,
++            defines=_kwf_dm_defines + _sd_dm_defines,
+             config=ttnn.WriterConfigDescriptor(),
+         )
+         for slice_channels, (writer_cores, writer_rt) in writer_groups.items()
+@@ -2326,7 +2421,7 @@
+         core_ranges=cores,
+         compile_time_args=compute_ct_args,
+         runtime_args=compute_rt,
+-        defines=_kwf_compute_defines + _pad_compute_defines,
++        defines=_kwf_compute_defines + _pad_compute_defines + _sd_compute_defines,
+         config=ttnn.ComputeConfigDescriptor(
+             math_fidelity=compute_kernel_config.math_fidelity,
+             math_approx_mode=compute_kernel_config.math_approx_mode,
+diff -ruN a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp	2026-11-19 11:33:08.121525654 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp	2026-11-19 11:33:08.123525682 +0000
+@@ -66,6 +66,7 @@
+ #include "conv2d_3x3_wide_untilize.hpp"
+ #include "conv2d_3x3_lean_tilize.hpp"
+ #include "conv2d_3x3_padded_slab.hpp"
++#include "conv2d_3x3_slab_direct.hpp"
+ #ifdef CONV2D_3X3_KW_FOLD
+ #include "conv2d_3x3_kw_fold.hpp"
+ #endif
+@@ -664,6 +665,107 @@
+     }
+ };
+ 
++#ifdef CONV2D_3X3_SLAB_DIRECT
++// Slab-direct in0 (conv2d_3x3_slab_direct.hpp): every in0 tile is unpacked straight from the padded slab as two
++// 2-face runs, K columns [0, 16) of its 32 rows at a and K columns [16, 32) at a + SD_HALF_BYTES. Each run lands in
++// SrcB as 32 rows, so SrcB holds the tile's faces in column order (m0 k0, m1 k0, m0 k1, m1 k1) instead of row order
++// (m0 k0, m0 k1, m1 k0, m1 k1), and the matmul MOP's two SrcB face jumps become +16 rows (B0 -> B2's slot) and
++// +16 rows (B2 -> B1's slot) instead of +32 and +48: the same products in the same order (bit-identical to the
++// face-direct gather's in0).
++// Raw LLK (capability): ckernel::matmul_block / compute_kernel_lib::matmul_block unpack in0 from a CB read pointer at
++// a tile stride, one 4-face read per tile; nothing exposes a per-tile L1 source or a two-run in0 tile. Bypassed:
++// compute_kernel_lib::matmul_block (and its tilize hook) on this path; the bias is one more K-step (ones block x the
++// bias tile, conv2d_3x3_slab_direct.hpp) instead of compute_kernel_lib::add_bias_bcast_rows, so the matmul packs the
++// final values. Measured (stem.conv1, Blackhole p150b, LoFi, unzoned, median of 3): 22787 ns (face-direct gather on
++// the reader and writer) -> 11153 ns; 14041 ns keeping the helper bias pass.
++namespace slab_direct {
++#ifdef TRISC_UNPACK
++// Saved at the first init: the SrcB tile descriptor's x_dim and the SrcB (ch1) Z stride of one face.
++static uint32_t saved_xdim = 0;
++static uint32_t saved_zstride = 0;
++
++// After matmul_block_init: in0 reads of 512 datums (2 faces), the second one Z = 1 step further, i.e. x_dim
++// (SD_HALF_BYTES) further in L1 and two faces further in SrcB.
++inline void unpack_init() {
++    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
++    volatile uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
++    if (saved_xdim == 0) {
++        saved_xdim = cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32] >> 16;
++        saved_zstride = cfg[UNP1_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] & 0xffff;
++    }
++    cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 16, 0xffff0000>(SD_HALF_BYTES / 2);
++    cfg_reg_rmw_tensix<UNP1_ADDR_CTRL_ZW_REG_1_Zstride_RMW>(2 * saved_zstride);
++    TTI_SETADCXX(p_setadc::UNP_B, 2 * FACE_R_DIM * FACE_C_DIM - 1, 0x0);
++}
++
++inline void unpack_uninit() {
++    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
++    cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 16, 0xffff0000>(saved_xdim);
++    cfg_reg_rmw_tensix<UNP1_ADDR_CTRL_ZW_REG_1_Zstride_RMW>(saved_zstride);
++}
++
++// One k-step of an (rt x ct) subblock, ct >= rt (in0 reused across the ct in1 tiles, the LLK's reuse_a order):
++// a[t] = in0 tile t's first run, b = in1's first tile (16 B units, minus 1). Mirrors _llk_unpack_AB_matmul_.
++template <uint32_t ct_dim, uint32_t rt_dim>
++inline void unpack_k_step(const uint32_t* a, uint32_t b) {
++    static_assert(ct_dim >= rt_dim);
++    volatile uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
++    for (uint32_t t = 0; t < rt_dim; ++t) {
++        wait_for_next_context(2);
++        _llk_unpack_configure_addresses_(b, a[t], cfg);
++        semaphore_post(semaphore::UNPACK_SYNC);
++        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
++        TTI_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
++        TTI_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
++        TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0101);
++        TT_MOP(0, ct_dim - 1, unp_cfg_context == 0 ? 0 : 0xff);
++        t6_semaphore_get(semaphore::UNPACK_SYNC);
++        switch_config_context(unp_cfg_context);
++    }
++}
++#endif
++
++#ifdef TRISC_MATH
++// matmul_configure_addrmod's full-tile, non-transposed ADDR_MOD_2 / ADDR_MOD_4 with the column-order SrcB jumps.
++inline void math_patch_addrmods() {
++    addr_mod_t{
++        .srca = {.incr = 0, .clr = 0, .cr = 1},
++        .srcb = {.incr = 16, .clr = 0, .cr = 1},
++        .dest = {.incr = 8, .clr = 0, .cr = 0},
++    }
++        .set(ADDR_MOD_2);
++    addr_mod_t{
++        .srca = {.incr = 32, .clr = 0, .cr = 1},
++        .srcb = {.incr = 16, .clr = 0, .cr = 1},
++        .dest = {.incr = 0, .clr = 0, .cr = 1},
++    }
++        .set(ADDR_MOD_4);
++}
++
++// matmul_block's math half (with its dynamic throttle), re-patching the address mods after every MOP re-init.
++template <uint32_t cb_in0, uint32_t cb_in1, uint32_t ct_dim, uint32_t rt_dim>
++inline void math_k_step(uint32_t idst) {
++    volatile uint32_t mm_throttle_en = *(ckernel::throttle_ptr) % 2;
++    if (mm_throttle_en) {
++        if (ckernel::throttled_mop_status != 1) {
++            llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE_MAX>(cb_in0, cb_in1, 0, ct_dim, rt_dim);
++            math_patch_addrmods();
++            ckernel::throttled_mop_status = 1;
++        }
++        llk_math_matmul<MATH_FIDELITY, MM_THROTTLE_MAX>(idst, ct_dim, rt_dim);
++    } else {
++        if (ckernel::throttled_mop_status != 0) {
++            llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(cb_in0, cb_in1, 0, ct_dim, rt_dim);
++            math_patch_addrmods();
++            ckernel::throttled_mop_status = 0;
++        }
++        llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, ct_dim, rt_dim);
++    }
++}
++#endif
++}  // namespace slab_direct
++#endif
++
+ }  // namespace
+ 
+ void kernel_main() {
+@@ -785,6 +887,13 @@
+     constexpr uint32_t pad_out_w = 32, pad_num_out_px = 32, pad_slots_max = 1, cb_zero_src = 0;
+ #endif
+     static_assert(!padded_slab || (nslice_center && k_split && nslice_outer && tile_input && pad_p == pad_d));
++    // Slab-direct (the descriptor's SLAB_DIRECT): face-direct whole-K, in0 unpacked straight from the padded slab.
++#ifdef CONV2D_3X3_SLAB_DIRECT
++    constexpr bool slab_direct = true;
++#else
++    constexpr bool slab_direct = false;
++#endif
++    static_assert(!slab_direct || (face_direct && num_k_blocks == 1 && !k_split && !tile_input));
+     static_assert(!tap_direct || (!face_direct && !strided_window));
+     static_assert(kb_tap_direct == (tap_direct && !(k_split && nslice_outer)));
+     static_assert(!ring_slab || (tile_input && !k_split && !face_direct && c_in_tiles > 1));
+@@ -1395,6 +1504,156 @@
+             if (owns_output_columns) {
+                 combine_block();
+             }
++        } else if constexpr (slab_direct) {
++#ifdef CONV2D_3X3_SLAB_DIRECT
++            // Row groups of in0_stream_rows tile-rows, the bias added once per bias_stream_groups groups (as the
++            // face-direct stream below); every in0 tile unpacked from the slab (slab_direct:: above).
++            MaybeDeviceZoneScope("compute_matmul_stream");
++            using SdGeom = conv2d_3x3::slab_direct::Geom<
++                SD_IN_H,
++                SD_IN_W,
++                SD_OUT_W,
++                SD_STRIDE,
++                SD_PAD,
++                SD_DIL,
++                SD_GAP,
++                SD_PITCH,
++                SD_PIXEL_BYTES,
++                SD_HALF_BYTES>;
++            constexpr uint32_t kkh = SD_KKH;
++            constexpr uint32_t sb_h = out_subblock_h;
++            constexpr uint32_t sb_w = out_subblock_w;
++            // in0 is always the reused operand (the LLK's reuse_a order): a subblock taller than wide runs one row per
++            // k-step call.
++            constexpr uint32_t mm_rt = sb_w >= sb_h ? sb_h : 1;
++#ifdef SD_FUSED_BIAS
++            // The bias is one more K-step (conv2d_3x3_slab_direct.hpp): the matmul packs the final values.
++            constexpr bool fused_bias = has_bias;
++#else
++            constexpr bool fused_bias = false;
++#endif
++            constexpr bool relu_on_mm_pack = apply_relu && (fused_bias || !has_bias);
++            constexpr uint32_t target_cb = (has_bias && !fused_bias) ? cb_matmul_partials : cb_output_tiles;
++            CircularBuffer target(target_cb);
++            CircularBuffer slab(cb_halo_slab);
++            const uint32_t done = m_block_idx * block_m_tiles;
++            const uint32_t sd_m_tile_start = get_arg_val<uint32_t>(3);
++            const uint32_t sd_actual = get_arg_val<uint32_t>(4);
++            const uint32_t valid_m = sd_actual - done < block_m_tiles ? sd_actual - done : block_m_tiles;
++            const uint32_t o_first = (sd_m_tile_start + done) * 32;
++            [[maybe_unused]] const int32_t ih_lo = SdGeom::row_lo(o_first);
++            {
++                MaybeDeviceZoneScope("compute_slab_wait");
++                slab.wait_front(SD_SLAB_PX);
++            }
++#ifdef SD_BIAS_IN_WEIGHTS
++            // The bias tiles ride at the tail of the weight round (the writer's SD_BIAS_IN_WEIGHTS).
++            constexpr uint32_t round_tiles = (block_k_tiles + 1) * block_n_tiles;
++            constexpr bool bias_in_weights = true;
++#else
++            constexpr uint32_t round_tiles = block_k_tiles * block_n_tiles;
++            constexpr bool bias_in_weights = false;
++#endif
++            weights.wait_front(round_tiles);
++            [[maybe_unused]] uint32_t slab_l1 = 0, zero_l1 = 0, w_base = 0, w_tile = 0;
++            UNPACK((slab_l1 = get_local_cb_interface(get_operand_id(cb_halo_slab)).fifo_rd_ptr << 4));
++            UNPACK((zero_l1 = get_local_cb_interface(get_operand_id(cb_im2col_tiles)).fifo_rd_ptr << 4));
++            UNPACK((w_base = get_local_cb_interface(get_operand_id(cb_weights)).fifo_rd_ptr - 1));
++            UNPACK((w_tile = get_local_cb_interface(get_operand_id(cb_weights)).fifo_page_size));
++            [[maybe_unused]] uint32_t ones_a[sb_h] = {}, b_base = 0;
++            if constexpr (fused_bias) {
++                UNPACK(({
++                    const uint32_t ones = zero_l1 + (get_local_cb_interface(get_operand_id(cb_im2col_tiles)).fifo_page_size << 4);
++                    for (uint32_t t = 0; t < sb_h; ++t) {
++                        ones_a[t] = (ones >> 4) - 1;
++                    }
++                }));
++            }
++            // Fused bias: the bias is waited for at its first K-step (the weight K-steps of the first subblock need
++            // only the slab and the weights); it stays fronted until the kernel end.
++            bool bias_waited = bias_in_weights;
++            if constexpr (bias_in_weights) {
++                UNPACK((b_base = w_base + w_tile * block_k_tiles * block_n_tiles));
++            }
++            bool need_init = true;
++            for (uint32_t group = 0; group < in0_groups; ++group) {
++                const uint32_t row0 = group * in0_stream_rows;
++                const uint32_t group_end = row0 + in0_stream_rows < block_m_tiles ? row0 + in0_stream_rows : block_m_tiles;
++                if (need_init) {
++                    reconfig_data_format(cb_weights, cb_im2col_tiles);
++                    pack_reconfig_data_format(target_cb);
++                    ckernel::matmul_block_init(cb_im2col_tiles, cb_weights, 0, sb_w, mm_rt, block_k_tiles);
++                    UNPACK((slab_direct::unpack_init()));
++                    MATH((slab_direct::math_patch_addrmods()));
++                    pack_reconfig_l1_acc(0);
++                    if constexpr (relu_on_mm_pack) {
++                        pack_relu_config(ReluConfig::zero());
++                    }
++                    need_init = false;
++                }
++                for (uint32_t r = row0; r < group_end; r += sb_h) {
++                    target.reserve_back(sb_h * block_n_tiles);
++                    // in0 tile of row r + t, K-tile k: its first run's L1 address (16 B units, minus 1).
++                    [[maybe_unused]] uint32_t a[block_k_tiles][sb_h];
++                    UNPACK(({
++                        for (uint32_t t = 0; t < sb_h; ++t) {
++                            const uint32_t o = o_first + (r + t) * 32;
++                            for (uint32_t k = 0; k < block_k_tiles; ++k) {
++                                const uint32_t addr =
++                                    r + t < valid_m
++                                        ? SdGeom::in0_addr(slab_l1, zero_l1, ih_lo, o, static_cast<int32_t>(k / kkh), k % kkh)
++                                        : zero_l1;
++                                a[k][t] = (addr >> 4) - 1;
++                            }
++                        }
++                    }));
++                    for (uint32_t c = 0; c < block_n_tiles; c += sb_w) {
++                        tile_regs_acquire();
++                        for (uint32_t t0 = 0; t0 < sb_h; t0 += mm_rt) {
++                            for (uint32_t k = 0; k < block_k_tiles; ++k) {
++                                UNPACK((slab_direct::unpack_k_step<sb_w, mm_rt>(
++                                    &a[k][t0], w_base + w_tile * (k * block_n_tiles + c))));
++                                MATH((slab_direct::math_k_step<cb_im2col_tiles, cb_weights, sb_w, mm_rt>(t0 * sb_w)));
++                            }
++                            if constexpr (fused_bias) {
++                                if (!bias_waited) {
++                                    MaybeDeviceZoneScope("compute_bias_wait");
++                                    bias.wait_front(out_n_tiles);
++                                    UNPACK((b_base = get_local_cb_interface(get_operand_id(cb_bias)).fifo_rd_ptr - 1));
++                                    bias_waited = true;
++                                }
++                                UNPACK((slab_direct::unpack_k_step<sb_w, mm_rt>(ones_a, b_base + w_tile * c)));
++                                MATH((slab_direct::math_k_step<cb_im2col_tiles, cb_weights, sb_w, mm_rt>(t0 * sb_w)));
++                            }
++                        }
++                        tile_regs_commit();
++                        tile_regs_wait();
++                        ckl::pack_subblock_row_strided(0, target_cb, c, block_n_tiles, sb_h, sb_w);
++                        tile_regs_release();
++                    }
++                    target.push_back(sb_h * block_n_tiles);
++                }
++                if constexpr (has_bias && !fused_bias) {
++                    const uint32_t groups_done = group + 1;
++                    if (groups_done % bias_stream_groups == 0 || groups_done == in0_groups) {
++                        UNPACK((slab_direct::unpack_uninit()));
++                        const uint32_t chunk_rows =
++                            group_end - (group / bias_stream_groups) * bias_stream_groups * in0_stream_rows;
++                        add_bias(ckl::BiasAddShape::of(
++                            chunk_rows / out_subblock_h, in1_num_subblocks, out_subblock_h, out_subblock_w, block_n_tiles));
++                        if constexpr (apply_relu) {
++                            pack_relu_config(ReluConfig::none());
++                        }
++                        need_init = true;
++                    }
++                }
++            }
++            if (!need_init) {
++                UNPACK((slab_direct::unpack_uninit()));
++            }
++            weights.pop_front(round_tiles);
++            slab.pop_front(SD_SLAB_PX);
++#endif
+         } else if constexpr (in0_groups > 1) {
+             // Matmul and bias calls interleave with the streamed in0 groups; one zone for the whole block.
+             MaybeDeviceZoneScope("compute_matmul_stream");
+@@ -1472,7 +1731,7 @@
+                 CenterTapIn0<center_mode, cb_center_tiles>{});
+         }
+ 
+-        if constexpr (has_bias && !k_split && in0_groups == 1) {
++        if constexpr (has_bias && !k_split && in0_groups == 1 && !slab_direct) {
+             add_bias(bias_shape);
+         }
+         if constexpr (apply_relu) {
+@@ -1480,7 +1739,12 @@
+         }
+     }
+ 
+-    if constexpr (has_bias) {
++#ifdef SD_BIAS_IN_WEIGHTS
++    constexpr bool bias_cb_used = false;  // the bias came with the weight rounds
++#else
++    constexpr bool bias_cb_used = has_bias;
++#endif
++    if constexpr (bias_cb_used) {
+         // A core that owns no output columns never waited for it.
+         bias.wait_front(out_n_tiles);
+         bias.pop_front(out_n_tiles);
+diff -ruN a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp	2026-11-19 11:33:08.099525339 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp	2026-11-19 11:33:08.102525382 +0000
+@@ -130,6 +130,7 @@
+ #include "conv2d_3x3_slab_dataflow.hpp"
+ #include "conv2d_3x3_gather_dataflow.hpp"
+ #include "conv2d_3x3_nslice_order.hpp"
++#include "conv2d_3x3_slab_direct.hpp"
+ 
+ namespace {
+ 
+@@ -252,6 +253,13 @@
+     constexpr bool padded_slab = false;
+     constexpr uint32_t pad_slots_max = 0;
+ #endif
++    // Slab-direct (the descriptor's SLAB_DIRECT, conv2d_3x3_slab_direct.hpp): the fill writes the padded slab and
++    // pushes it to compute, which unpacks in0 straight from it; no gather.
++#ifdef CONV2D_3X3_SLAB_DIRECT
++    constexpr bool slab_direct = true;
++#else
++    constexpr bool slab_direct = false;
++#endif
+     // Work-balanced M split (the descriptor's balanced_block_ranges): the N-slice prelude (center copy, gather) and the
+     // ring forwarding run over the M-block's valid tile-rows only, and the TILE fill streams a host-given slab row
+     // count per M-block (runtime args from slab_rows_arg), so a grid row's prelude and walk scale with its own
+@@ -472,10 +480,47 @@
+         reads.noc.async_write_zeros(CircularBuffer(cb_halo_slab), lane_zero_rows * pixel_bytes);
+         reads.noc.write_zeros_l1_barrier();
+     }
+-    if constexpr (padding_only_faces) {
++    if constexpr (padding_only_faces && !slab_direct) {
+         reads.noc.async_write_zeros(CircularBuffer(cb_im2col_tiles), block_m_tiles * block_k_tiles * in0_tile_bytes);
+         reads.noc.write_zeros_l1_barrier();
+     }
++#ifdef CONV2D_3X3_SLAB_DIRECT
++    using SdGeom = conv2d_3x3::slab_direct::Geom<
++        input_height,
++        input_width,
++        output_width,
++        stride,
++        padding,
++        dilation,
++        SD_GAP,
++        SD_PITCH,
++        pixel_bytes,
++        SD_HALF_BYTES>;
++    {
++        // The zero block (cb_im2col_tiles page 0) and every slot's leading zero zone, once: the fill never writes
++        // them. Compute reads them only after the first slab push.
++        reads.noc.async_write_zeros(CircularBuffer(cb_im2col_tiles), 2 * in0_tile_bytes);
++        reads.noc.write_zeros_l1_barrier();
++#ifdef SD_FUSED_BIAS
++        {
++            // The ones block (page 1): bf16 1.0 in K columns 0 and 1 of every 16-element row (fused bias K-step).
++            // Zeroed above with the zero block (the CB's two pages); one word per 32 B row, for the rows the two runs
++            // read (32 + SD_HALF_BYTES / 32).
++            volatile uint32_t* ones = reinterpret_cast<volatile uint32_t*>(get_write_ptr(cb_im2col_tiles) + in0_tile_bytes);
++            for (uint32_t i = 0; i < 8 * (32 + SD_HALF_BYTES / 32); i += 8) {
++                ones[i] = 0x3F803F80u;
++            }
++        }
++#endif
++        // The gaps: NoC reads of the zero region (each gap is one read). No gap pixel is an image pixel, so the fill
++        // (the writer's forward half included) never races them; they land before the first slab push.
++        static_assert(SD_ZONE == SD_GAP, "the zero zone of a slot is exactly its gap");
++        reads.begin(2);
++        for (uint32_t r = 0; r <= SD_SLOTS; ++r) {
++            reads.read(reads.zeros_noc, slab_l1 + r * SD_PITCH * pixel_bytes, SD_ZONE * pixel_bytes);
++        }
++    }
++#endif
+ 
+     // Tap-major zero-fills read a 32-pixel zero block, so an out-of-image run is one read.
+     [[maybe_unused]] uint64_t zero_src_noc = 0;
+@@ -764,6 +809,32 @@
+             // ---- fill_halo_slab (ROW_MAJOR): band kh tagged trid kh + 1; overlapping bands read only their
+             // new tail.
+             MaybeDeviceZoneScope("reader_fill");
++#ifdef CONV2D_3X3_SLAB_DIRECT
++            {
++                // Slab-direct: compute is the slab's reader, so it is free once compute popped the previous block.
++                {
++                    MaybeDeviceZoneScope("reader_fill_reserve");
++                    cb_reserve_back(cb_halo_slab, SD_SLAB_PX);
++                }
++                if constexpr (slab_split) {
++                    if (m_block_idx > 0) {
++                        Semaphore<>(slab_free_sem_id).up(1);
++                    }
++                }
++                reads.begin(1);
++                SdGeom::fill_pieces<band_last_tap>(o_first, o_end, [&](uint32_t lo, uint32_t hi, uint32_t off) {
++                    read_rows(lo, hi, slab_l1 + off);
++                });
++                reads.wait(1);
++                reads.wait(2);  // the slot gaps (kernel start)
++                if constexpr (slab_split) {
++                    MaybeDeviceZoneScope("reader_fill_fwd_wait");
++                    Semaphore<>(slab_fwd_done_sem_id).wait_min(m_block_idx + 1);
++                }
++                cb_push_back(cb_halo_slab, SD_SLAB_PX);
++                continue;
++            }
++#endif
+             if constexpr (slab_split) {
+                 if (m_block_idx > 0) {
+                     // The writer refills the slab only after this block's gather no longer reads it.
+diff -ruN a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_slab_direct.hpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_slab_direct.hpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_slab_direct.hpp	1970-01-01 00:00:00.000000000 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_slab_direct.hpp	2026-11-19 11:33:08.126525725 +0000
+@@ -0,0 +1,155 @@
++// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
++// SPDX-License-Identifier: Apache-2.0
++
++// Slab-direct face im2col (the descriptor's SLAB_DIRECT; face-direct shapes, stride * C_in_p == 16, whole-K, W_out a
++// multiple of 32). Pure integer arithmetic shared by the reader / writer (the padded fill) and compute (in0 addresses);
++// no dataflow or compute API.
++//
++// A face-direct im2col row of kernel row kh is one contiguous run of the input row (the K padding of C_in 8 reads the
++// next pixel, against zero weight rows), and one output pixel steps it by exactly one 16-element face row. So the
++// 32 rows of K columns [16 h, 16 h + 16) of a tile-row (32 output pixels of one output row) are ONE contiguous 1 KB
++// run of the input row, and columns [16 h + 16, 16 h + 32) the same run HALF_BYTES further. Compute unpacks every
++// in0 tile straight from the slab as those two runs (conv2d_3x3_compute.cpp, slab_direct): nothing is gathered.
++//
++// The slab is padded: slot r holds image row ih_lo + r behind GAP zero pixels, PITCH = GAP + W pixels per slot, and
++// one more gap follows the last slot. GAP = max(padding, overreach): a gap is both its row's left padding and what the
++// previous row's last im2col runs read past that row's end (its right padding, and the K-padding run's pixels against
++// zero weight rows), so no gap pixel is an image pixel. The reader zeroes the gaps once at kernel start (the fill never
++// writes them, so they never race it); a kernel row outside the image reads the zero block instead.
++//
++// Measured (Blackhole p150b, stem.conv1 512x1024x8 -> 64 s2, LoFi, bf8_b weights, bias + ReLU, unzoned, median of 3):
++// 22787 ns with the face-direct gather -> 11153 ns (14041 ns with the bias-add pass instead of the fused bias K-step).
++
++#pragma once
++
++#include <cstdint>
++
++namespace conv2d_3x3::slab_direct {
++
++template <
++    int32_t in_h,
++    int32_t in_w,
++    uint32_t out_w,
++    int32_t stride,
++    int32_t padding,
++    int32_t dilation,
++    int32_t gap,
++    int32_t pitch,
++    uint32_t pixel_bytes,
++    uint32_t half_bytes>
++struct Geom {
++    // Image row of slot 0 for the M-block whose first output pixel is o_first.
++    static inline __attribute__((always_inline)) int32_t row_lo(uint32_t o_first) {
++        return stride * static_cast<int32_t>(o_first / out_w) - padding;
++    }
++
++    // In-image pixels of the block's three bands (kernel row kh: from tap (kh, 0) of o_first to tap
++    // (kh, band_last_tap) of o_end - 1), each once, split at image rows: fn(page_lo, page_hi, slab_byte_offset).
++    // Only rows of the block's slots [ih_lo, ih_last]: a band's flat range also reaches into the row before the
++    // first slot (the left padding tap of o_first) and the row after the last (the taps past a row's end), which in
++    // the padded layout are gap pixels, not image pixels.
++    template <int32_t band_last_tap, typename Fn>
++    static inline __attribute__((always_inline)) void fill_pieces(uint32_t o_first, uint32_t o_end, Fn&& fn) {
++        const int32_t ho_first = o_first / out_w;
++        const int32_t wo_first = o_first % out_w;
++        const int32_t ho_last = (o_end - 1) / out_w;
++        const int32_t wo_last = (o_end - 1) % out_w;
++        const int32_t f = (ho_first * stride - padding) * in_w + wo_first * stride - padding;
++        const int32_t band_len =
++            (ho_last - ho_first) * stride * in_w + (wo_last - wo_first) * stride + band_last_tap * dilation + 1;
++        const int32_t ih_lo = ho_first * stride - padding;
++        const int32_t ih_last = ho_last * stride - padding + 2 * dilation;
++        const int32_t slot_lo = (ih_lo > 0 ? ih_lo : 0) * in_w;
++        const int32_t slot_hi = (ih_last + 1 < in_h ? ih_last + 1 : in_h) * in_w;
++        int32_t prev_end = -0x7FFFFFFF;
++        for (int32_t kh = 0; kh < 3; ++kh) {
++            int32_t lo = f + kh * dilation * in_w;
++            const int32_t hi_raw = lo + band_len;
++            lo = lo > prev_end ? lo : prev_end;
++            prev_end = hi_raw > prev_end ? hi_raw : prev_end;
++            lo = lo > slot_lo ? lo : slot_lo;
++            const int32_t hi = hi_raw < slot_hi ? hi_raw : slot_hi;
++            for (int32_t v = lo; v < hi;) {
++                const int32_t ih = v / in_w;
++                const int32_t row_end = (ih + 1) * in_w;
++                const int32_t e = hi < row_end ? hi : row_end;
++                fn(static_cast<uint32_t>(v),
++                   static_cast<uint32_t>(e),
++                   static_cast<uint32_t>(((ih - ih_lo) * pitch + gap + (v - ih * in_w)) * pixel_bytes));
++                v = e;
++            }
++        }
++    }
++
++    // L1 byte address of the first run (K columns [32 j, 32 j + 16)) of in0 K-tile j of kernel row kh for the tile-row
++    // whose first output pixel is o; the second run is half_bytes further. zero: the zero block.
++    static inline __attribute__((always_inline)) uint32_t in0_addr(
++        uint32_t slab, uint32_t zero, int32_t ih_lo, uint32_t o, int32_t kh, uint32_t j) {
++        const int32_t oh = o / out_w;
++        const int32_t ow0 = o % out_w;
++        const int32_t ih = stride * oh + kh * dilation - padding;
++        if (ih < 0 || ih >= in_h) {
++            return zero;
++        }
++        return slab + static_cast<uint32_t>(((ih - ih_lo) * pitch + gap + stride * ow0 - padding) * pixel_bytes) +
++               j * 2 * half_bytes;
++    }
++};
++
++// Fused bias (SD_FUSED_BIAS): compute adds the bias as one more K-step, in0 = the ones block (1.0 in K columns 0 and 1
++// of every row) times in1 = the core's prepared bias tile (row 0 = b, every other row its zero padding). From HiFi2 on
++// the multiplier takes 9 significant bits of in1, so 1.0 x b is exact. LoFi takes 5 (the hidden bit + 4 MSBs,
++// truncated): 1.0 x b gives b_hi = b truncated to 5 significant bits, so the writer stores the rest, b_lo = b - b_hi
++// (at most 2 significant bits on bf8_b, 3 on bf16, exact in 5), in row 1 (SD_BIAS_SPLIT) and DEST receives exactly
++// b_hi + b_lo = b. Rows 16 and 17, which the ones block's second run reads, stay the tile's zero padding.
++// bf8_b tile: 64 exponent bytes (face f row r at 16 f + r), then 1024 sign-magnitude bytes, face-major, value
++// (-1)^s (m & 127) 2^(e - 133). bf16 tile: faces of 256 bf16.
++
++// Four sign-magnitude bytes at once: a magnitude with its leading one at bit 6 (5) keeps its low 2 (1) bits in lo.
++inline __attribute__((always_inline)) uint32_t lo_bf8x4(uint32_t v) {
++    const uint32_t b6 = (v >> 6) & 0x01010101u;
++    const uint32_t b5 = (v >> 5) & 0x01010101u;
++    const uint32_t lomask = b6 | (b6 << 1) | (b5 & ~b6);
++    const uint32_t lo_mag = v & lomask;
++    const uint32_t nz = (lo_mag | (lo_mag >> 1)) & 0x01010101u;
++    return lo_mag | (v & (nz << 7));
++}
++
++// Row 1 of faces 0 and 1 = b_lo, with row 0's shared exponent.
++inline __attribute__((always_inline)) void split_bias_tile_bf8(uint32_t tile) {
++    volatile uint32_t* w = reinterpret_cast<volatile uint32_t*>(tile);
++    for (uint32_t f = 0; f < 2; ++f) {
++        volatile uint32_t* row0 = w + (64 + 256 * f) / 4;
++        for (uint32_t q = 0; q < 4; ++q) {
++            row0[4 + q] = lo_bf8x4(row0[q]);
++        }
++        const uint32_t e = w[4 * f];
++        w[4 * f] = (e & 0xffff00ffu) | ((e & 0xffu) << 8);
++    }
++}
++
++// bf16: b_lo = the low 3 explicit mantissa bits, renormalized (0 if they are 0, for a zero / denormal / inf / NaN b,
++// or if b_lo would be denormal). lead[bits] = position of the leading one of the low 3 bits.
++inline __attribute__((always_inline)) uint32_t lo_bf16(uint32_t b) {
++    const uint32_t bits = b & 7;
++    const uint32_t e = (b >> 7) & 0xff;
++    const uint32_t lead = (0xAA50u >> (2 * bits)) & 3;  // {0, 0, 1, 1, 2, 2, 2, 2}
++    const int32_t le = static_cast<int32_t>(e) - 7 + static_cast<int32_t>(lead);
++    if (bits == 0 || e == 0 || e == 0xff || le < 1) {
++        return 0;
++    }
++    return (b & 0x8000) | (static_cast<uint32_t>(le) << 7) | ((bits << (7 - lead)) & 0x7f);
++}
++
++inline __attribute__((always_inline)) void split_bias_tile_bf16(uint32_t tile) {
++    volatile uint32_t* w = reinterpret_cast<volatile uint32_t*>(tile);
++    for (uint32_t f = 0; f < 2; ++f) {
++        volatile uint32_t* row0 = w + 128 * f;  // face f row 0: 16 bf16 = 8 words; row 1 at +8
++        for (uint32_t q = 0; q < 8; ++q) {
++            const uint32_t v = row0[q];
++            row0[8 + q] = lo_bf16(v & 0xffff) | (lo_bf16(v >> 16) << 16);
++        }
++    }
++}
++
++}  // namespace conv2d_3x3::slab_direct
+diff -ruN a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp	2026-11-19 11:33:08.110525496 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp	2026-11-19 11:33:08.113525539 +0000
+@@ -89,6 +89,7 @@
+ #include "conv2d_3x3_slab_dataflow.hpp"
+ #include "conv2d_3x3_gather_dataflow.hpp"
+ #include "conv2d_3x3_nslice_order.hpp"
++#include "conv2d_3x3_slab_direct.hpp"
+ 
+ void kernel_main() {
+     constexpr uint32_t cb_weights = get_compile_time_arg_val(0);
+@@ -218,7 +219,15 @@
+         noc_semaphore_inc(server_ack_noc, 1);
+     }
+ 
+-    constexpr uint32_t weight_k_block_tiles = block_k_tiles * block_n_tiles;
++#ifdef SD_BIAS_IN_WEIGHTS
++    // Slab-direct fused bias without weight servers: every weight round carries the core's bias tiles after its
++    // K-block (read and rewritten once by the round's DRAM reader, the multicast sender), so no core reads the bias
++    // pages from DRAM by itself (~100 cores reading them at once slowed the fill and the weight round).
++    constexpr uint32_t sd_bias_round_tiles = block_n_tiles;
++#else
++    constexpr uint32_t sd_bias_round_tiles = 0;
++#endif
++    constexpr uint32_t weight_k_block_tiles = block_k_tiles * block_n_tiles + sd_bias_round_tiles;
+     constexpr uint32_t row_group_tiles = out_subblock_h * block_n_tiles;
+     constexpr uint32_t row_groups_per_block = block_m_tiles / out_subblock_h;
+     const uint32_t weight_tile_bytes = get_tile_size(cb_weights);
+@@ -249,7 +258,12 @@
+     constexpr bool kw_fold = false;
+ #endif
+     // With the polling split TILE fill the bias reads are issued later, serving the first block's hand-overs.
+-    if constexpr (!slab_split && !tile_fill_split && !weight_servers && !kw_fold) {
++#ifdef SD_BIAS_IN_WEIGHTS
++    constexpr bool sd_bias_in_weights = true;  // the bias comes with the weight rounds
++#else
++    constexpr bool sd_bias_in_weights = false;
++#endif
++    if constexpr (!slab_split && !tile_fill_split && !weight_servers && !kw_fold && !sd_bias_in_weights) {
+         prefetch_bias();
+     }
+ 
+@@ -440,8 +454,22 @@
+     // TRID_WFILL_BASE + j % fill_writer_window.
+     constexpr uint32_t TRID_WFILL_BASE = 8;
+     [[maybe_unused]] uint32_t fill_issued = 0;
++#ifdef CONV2D_3X3_SLAB_DIRECT
++    constexpr bool slab_direct = true;
++#else
++    constexpr bool slab_direct = false;
++#endif
++    // Slab-direct: this block's forward slab reads (transaction id 9) are in flight; slab_fwd_done goes up as soon as
++    // they landed, from every wait that serves the fill (the weight-round waits included).
++    [[maybe_unused]] bool sd_slab_pending = false;
+     // Every batch the reader has handed over so far (windowed: retire the landed ones, issue up to the window).
+     [[maybe_unused]] auto serve_fill = [&]() {
++        if constexpr (slab_direct) {
++            if (sd_slab_pending && ncrisc_noc_read_with_transaction_id_flushed(noc_index, 9)) {
++                Semaphore<>(slab_fwd_done_sem_id).up(1);
++                sd_slab_pending = false;
++            }
++        }
+         if constexpr (tile_fill_split) {
+             if constexpr (!ring_slab) {
+                 while (fill_served < fill_issued &&
+@@ -543,7 +571,29 @@
+             }
+         }
+ #endif
++#ifdef SD_BIAS_IN_WEIGHTS
++        // The round's tail: the bias tiles (same format and page size as the weights), rewritten after they landed.
++        const uint32_t sd_bias_l1 = l1;
++        {
++            const auto bias = TensorAccessor(bias_args, bias_addr, weight_tile_bytes);
++            for (uint32_t n = 0; n < sd_bias_round_tiles; ++n, l1 += weight_tile_bytes) {
++                if (n < out_valid_tiles) {
++                    noc_async_read_page(out_n_tile_start + n, bias, l1);
++                }
++            }
++        }
++#endif
+         noc_async_read_barrier();
++#if defined(SD_BIAS_IN_WEIGHTS) && defined(SD_BIAS_SPLIT)
++        invalidate_l1_cache();
++        for (uint32_t n = 0; n < out_valid_tiles; ++n) {
++#if SD_BIAS_BF16
++            conv2d_3x3::slab_direct::split_bias_tile_bf16(sd_bias_l1 + n * weight_tile_bytes);
++#else
++            conv2d_3x3::slab_direct::split_bias_tile_bf8(sd_bias_l1 + n * weight_tile_bytes);
++#endif
++        }
++#endif
+     };
+ 
+     Noc noc;
+@@ -557,7 +607,7 @@
+     [[maybe_unused]] auto receive_serving = [&](auto& wm, uint32_t round) {
+         using WM = std::decay_t<decltype(wm)>;
+         // Dependent on WM, so a kernel without the split never instantiates the sender-coordinate reads.
+-        if constexpr (WM::active && tile_fill_split) {
++        if constexpr (WM::active && (tile_fill_split || slab_direct)) {
+             static_assert(WM::transfer_mode == dataflow_kernel_lib::TransferMode::Multicast && !WM::rotating);
+             constexpr uint32_t ct_base = get_named_compile_time_arg_val("weight_mcast_ct_offset");
+             Semaphore<> data_ready(
+@@ -740,7 +790,7 @@
+         return ncrisc_noc_read_with_transaction_id_flushed(late_bias_reads.noc.get_noc_id(), TRID_BIAS_LATE);
+     };
+     [[maybe_unused]] auto issue_late_bias = [&]() {
+-        if constexpr (weight_servers && has_bias && !slab_split) {
++        if constexpr (weight_servers && has_bias && (!slab_split || slab_direct)) {
+             late_bias_issued = true;
+             if (server_receiver) {
+                 cb_reserve_back(cb_bias, out_n_tiles);
+@@ -764,9 +814,24 @@
+     }
+     // kw-fold: push the late bias as soon as it landed, from inside the weight waits (the reader decodes it into the
+     // final pass's fp32 rows at ~1.3 us per tile, so it must not wait for the block's last round).
++    // Slab-direct fused bias at LoFi: the landed bias is rewritten for the fused K-step before it is pushed.
++    [[maybe_unused]] auto sd_split_landed_bias = [&]() {
++#ifdef SD_BIAS_SPLIT
++        invalidate_l1_cache();
++        for (uint32_t n = 0; n < out_valid_tiles; ++n) {
++            const uint32_t t = get_write_ptr(cb_bias) + n * get_tile_size(cb_bias);
++#if SD_BIAS_BF16
++            conv2d_3x3::slab_direct::split_bias_tile_bf16(t);
++#else
++            conv2d_3x3::slab_direct::split_bias_tile_bf8(t);
++#endif
++        }
++#endif
++    };
+     [[maybe_unused]] auto try_finish_late_bias = [&]() {
+         if (late_bias_pending && late_bias_landed()) {
+             late_bias_reads.wait(TRID_BIAS_LATE);
++            sd_split_landed_bias();
+             cb_push_back(cb_bias, out_n_tiles);
+             late_bias_pending = false;
+         }
+@@ -779,6 +844,7 @@
+                 khx_poll();
+             }
+             late_bias_reads.wait(TRID_BIAS_LATE);
++            sd_split_landed_bias();
+             cb_push_back(cb_bias, out_n_tiles);
+             late_bias_pending = false;
+         }
+@@ -843,7 +909,7 @@
+             read_weight_k_block(l1);
+             weight_sender->send(l1, l1, weight_k_block_tiles * weight_tile_bytes);
+         } else if (weight_receiver) {
+-            if constexpr (tile_fill_split) {
++            if constexpr (tile_fill_split || slab_direct) {
+                 receive_serving(weight_mcast, k_blocks_issued);
+             } else {
+                 weight_receiver->receive(k_blocks_issued);
+@@ -1124,6 +1190,38 @@
+         o_first = (m_tile_start + block_tiles_done) * 32;
+         const uint32_t o_end_tiles = o_first + block_valid_tiles * 32;
+         o_end = o_end_tiles < num_out_px ? o_end_tiles : num_out_px;
++#ifdef CONV2D_3X3_SLAB_DIRECT
++        // Slab-direct: the padded slab layout (conv2d_3x3_slab_direct.hpp), the higher shards' pieces, under their
++        // own transaction id (see the M-block loop).
++        Noc sd_fill_noc;
++        dataflow_kernel_lib::set_read_trid(sd_fill_noc, 9);
++        conv2d_3x3::slab_direct::Geom<
++            input_height,
++            input_width,
++            output_width,
++            stride,
++            padding,
++            dilation,
++            SD_GAP,
++            SD_PITCH,
++            input_page_bytes,
++            SD_HALF_BYTES>::fill_pieces<band_last_tap>(o_first, o_end, [&](uint32_t lo, uint32_t hi, uint32_t off) {
++            uint32_t l1 = slab_l1 + off;
++            for (uint32_t page = lo; page < hi;) {
++                const uint32_t run = input.num_contiguous_pages(page, hi);
++                if (page / shard_rows > my_shard) {
++                    noc_async_read(input.get_noc_addr(page), l1, run * input_page_bytes);
++                }
++                page += run;
++                l1 += run * input_page_bytes;
++            }
++        });
++        dataflow_kernel_lib::set_read_trid(sd_fill_noc, 0);
++        if (true) {
++            // slab_fwd_done follows the block's weight round (see the M-block loop).
++            return;
++        }
++#endif
+         conv2d_3x3::slab_bands<input_width, input_height * input_width, dilation, band_stride_px>(
+             conv2d_3x3::block_footprint<output_width, input_width, stride, padding, dilation, band_last_tap>(
+                 o_first, o_end),
+@@ -1263,10 +1361,74 @@
+ 
+     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
+         if constexpr (slab_split) {
++#ifdef CONV2D_3X3_SLAB_DIRECT
++            // Slab-direct: compute multiplies as soon as the slab and the weights are in. The forward slab reads go
++            // out first (transaction id 9), then the block's weight round (a DRAM read + multicast, or the multicast
++            // wait, which polls the slab reads); slab_fwd_done goes up as soon as they landed. The fused bias comes
++            // with the weight rounds (SD_BIAS_IN_WEIGHTS) or from the weight server; otherwise (the bias-add pass) the
++            // bias reads (block 0, id 7) go out only once this core's slab landed: issued with the fill, ~100 cores
++            // reading the same bias pages slowed the high-index cores' forward fill erratically (256x512x8 s2, 103
++            // cores: 10-18 us against 8 us).
++            fill_forward_slab(m_block_idx);
++            [[maybe_unused]] auto sd_issue_bias = [&]() {
++                if constexpr (has_bias) {
++                    cb_reserve_back(cb_bias, out_n_tiles);
++                    const uint32_t bias_tile_bytes = get_tile_size(cb_bias);
++                    const auto bias = TensorAccessor(bias_args, bias_addr, bias_tile_bytes);
++                    uint32_t l1 = get_write_ptr(cb_bias);
++                    Noc bias_noc;
++                    dataflow_kernel_lib::set_read_trid(bias_noc, 7);
++                    for (uint32_t n = 0; n < out_valid_tiles; ++n, l1 += bias_tile_bytes) {
++                        noc_async_read(bias.get_noc_addr(out_n_tile_start + n), l1, bias_tile_bytes);
++                    }
++                    dataflow_kernel_lib::set_read_trid(bias_noc, 0);
++                }
++            };
++            sd_slab_pending = true;
++            while (k_blocks_issued < (m_block_idx + 1) * num_k_blocks) {
++                issue_weight_k_block();
++            }
++            {
++                MaybeDeviceZoneScope("writer_slab_bias_wait");
++                bool slab_done = !sd_slab_pending;
++                // Block 0 reads the bias (and pushes cb_bias even if the core owns no valid output column), unless it
++                // comes with the weight rounds (SD_BIAS_IN_WEIGHTS) or from a weight server (the late bias above).
++#ifdef SD_BIAS_IN_WEIGHTS
++                constexpr bool own_bias = false;
++#else
++                constexpr bool own_bias = has_bias && !weight_servers;
++#endif
++                const bool bias_block = own_bias && m_block_idx == 0;
++                bool bias_issued = !bias_block;
++                uint32_t bias_left = bias_block ? out_valid_tiles : 0;
++                while (!slab_done || !bias_issued || bias_left > 0) {
++                    if (!slab_done && ncrisc_noc_read_with_transaction_id_flushed(noc_index, 9)) {
++                        Semaphore<>(slab_fwd_done_sem_id).up(1);
++                        slab_done = true;
++                        sd_slab_pending = false;
++                    }
++                    if (slab_done && !bias_issued) {
++                        sd_issue_bias();
++                        bias_issued = true;
++                        if (bias_left == 0) {
++                            cb_push_back(cb_bias, out_n_tiles);  // no valid output column: nothing was read
++                        }
++                    }
++                    if constexpr (own_bias) {
++                        if (bias_issued && bias_left > 0 &&
++                            ncrisc_noc_read_with_transaction_id_flushed(noc_index, 7)) {
++                            bias_left = 0;
++                            cb_push_back(cb_bias, out_n_tiles);
++                        }
++                    }
++                }
++            }
++#else
+             fill_forward_slab(m_block_idx);
+             if (m_block_idx == 0) {
+                 prefetch_bias();
+             }
++#endif
+         }
+         const uint32_t m_seq_end = (m_block_idx + 1) * Units::per_block;
+         if constexpr (nslice_outer) {

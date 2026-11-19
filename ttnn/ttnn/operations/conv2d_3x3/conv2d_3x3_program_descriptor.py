@@ -224,6 +224,16 @@ BIAS_STREAM_GROUPS = 5
 # while the reader gathers the rest, since the gather is bound by read issue. Applies with the split slab fill (the
 # writer then holds the slab plan) and in0 streaming. False keeps the whole gather on the reader.
 GATHER_SPLIT_RISCS = True
+# Slab-direct face im2col (kernels/conv2d_3x3_slab_direct.hpp): on face-direct whole-K shapes whose output rows are
+# whole tile-rows, compute unpacks every in0 tile straight from a padded slab (one zero gap of `padding` pixels in front
+# of every input row) as two contiguous 1 KB runs, so neither data-movement RISC gathers anything. False keeps the
+# face-direct gather.
+SLAB_DIRECT = True
+# Slab-direct with a bias: add it as one more matmul K-step (ones block x the bias tile split into two parts of at most
+# 5 significant bits, exact under LoFi), so the matmul packs the final values and no bias pass runs. False keeps the
+# fp32 partials + bias-add pass.
+SD_FUSED_BIAS = True
+
 
 # N-slice-outer K split (R4, the default when its resident in0 fits L1): the core tilizes its whole K of in0 once,
 # then multiplies one owner N-slice at a time over the whole K (one DEST accumulation) and the row reduce-scatters the
@@ -677,6 +687,43 @@ def face_direct_im2col(g: Conv3x3Geometry, bk):
     K split the matmul's L1-accumulating packs to the caller-owned partials are ordered only by the tilize's own
     pack between K-blocks, so without a tilize the K walk must be one K-block."""
     return g.face_direct_capable and bk % g.tensor_kkh_tiles == 0 and (not g.k_split or bk == g.tensor_k_tiles)
+
+
+def slab_direct_capable(g: Conv3x3Geometry, bk):
+    """Slab-direct (see SLAB_DIRECT): face-direct with one K-block (no K split), every tile-row inside one output
+    row."""
+    return (
+        SLAB_DIRECT
+        and face_direct_im2col(g, bk)
+        and bk == g.tensor_k_tiles
+        and not g.k_split
+        and g.output_width % TILE == 0
+    )
+
+
+def slab_direct_band_last_tap(g: Conv3x3Geometry):
+    """The fill also lands the pixel the K-padding run of the last K-tile reads (C_in 16: tap 3)."""
+    return 3
+
+
+def slab_direct_layout(g: Conv3x3Geometry, core_m_tiles, block_m_tiles):
+    """(gap, pitch, zone, slots_max, slab pixels): slot r = image row ih_lo + r behind `gap` zero pixels, `pitch`
+    pixels per slot, and one more gap after the last slot. The gap covers both the left padding of its row and what
+    the last im2col runs of the previous row read past that row's end (its right padding, and the K-padding run's
+    pixels against zero weight rows), so no gap pixel is an image pixel: zone == gap."""
+    over = g.stride * (g.output_width - 1) - g.padding + 3 * g.dilation - (g.input_width - 1)
+    gap = max(g.padding, over, 0)
+    pitch = g.input_width + gap
+    zone = gap
+    slots_max = 0
+    for start, actual in core_m_ranges(g, core_m_tiles):
+        for block_start in range(0, actual, block_m_tiles):
+            tiles = min(block_m_tiles, actual - block_start)
+            o_first = (start + block_start) * TILE
+            o_last = min((start + block_start + tiles) * TILE, g.num_out_px) - 1
+            ho0, ho1 = o_first // g.output_width, o_last // g.output_width
+            slots_max = max(slots_max, g.stride * (ho1 - ho0) + 2 * g.dilation + 1)
+    return gap, pitch, zone, slots_max, slots_max * pitch + zone
 
 
 def _in0_stream_rows(g: Conv3x3Geometry, bm, bk, sb_h):
@@ -1685,6 +1732,10 @@ def create_program_descriptor(
             cores,
         )
     face_direct = face_direct_im2col(g, bk)
+    slab_direct = slab_direct_capable(g, bk) and not kwf
+    if slab_direct:
+        sd_gap, sd_pitch, sd_zone, sd_slots, sd_slab_px = slab_direct_layout(g, b.core_m_tiles, bm)
+        slab_cb = _cb(CB_HALO_SLAB, ttnn.bfloat16, pixel_bytes, sd_slab_px, cores)
 
     # Whole-slab input ring: where every core runs one M-block, cb_input_tiles shares cb_im2col_tiles' L1 (compute
     # tilizes in0 only after its untilize consumed every input batch, and no reader write lands in in0 before then: no
@@ -1760,7 +1811,7 @@ def create_program_descriptor(
             CB_IM2COL_TILES,
             input_tensor.dtype,
             g.in0_tile_bytes,
-            bm * (in0_k_tiles if b.nslice else bk * b.center_slot_blocks),
+            2 if slab_direct else bm * (in0_k_tiles if b.nslice else bk * b.center_slot_blocks),
             cores,
         ),
         _cb(
@@ -1931,7 +1982,9 @@ def create_program_descriptor(
     tilize_width = g.c_in_tiles if tap_major else bk
 
     stream_rows = b.in0_stream_rows
-    gather_split = GATHER_SPLIT_RISCS and face_direct and slab_split and _div_up(bm, stream_rows) >= 2
+    gather_split = (
+        GATHER_SPLIT_RISCS and face_direct and not slab_direct and slab_split and _div_up(bm, stream_rows) >= 2
+    )
     # Semaphore ids: the R4 combine's four, then the split slab fill's two and the split gather's two; the weight
     # channel attaches after.
     sem_ids = (SEM_COMBINE_CREDIT, SEM_COMBINE_ARRIVAL, SEM_COMBINE_SEND_GO, SEM_COMBINE_SEND_DONE) if g.k_split else ()
@@ -1950,7 +2003,17 @@ def create_program_descriptor(
     # Weight servers: the server's ack counter, one data-ready flag per cb_weights slot, then the bias flag (the server
     # multicasts the bias wherever the receivers take it from cb_bias: not under the split slab fill).
     server_sem_ids = (len(sem_ids), len(sem_ids) + 1) if weight_servers is not None else (0, 0)
-    server_bias = weight_servers is not None and has_bias and not slab_split
+    # Slab-direct multiplies the bias as soon as the slab is in, so a server multicasts it there too (no core reads it).
+    server_bias = weight_servers is not None and has_bias and (not slab_split or slab_direct)
+    # Slab-direct fused bias without servers: every weight round carries the bias tiles after its K-block (the round's
+    # DRAM reader reads and rewrites them once), so no core reads the bias pages by itself.
+    sd_bias_in_weights = slab_direct and SD_FUSED_BIAS and has_bias and weight_servers is None
+    if sd_bias_in_weights:
+        for i, cb in enumerate(cbs):
+            if cb.format_descriptors[0].buffer_index == CB_WEIGHTS:
+                cbs[i] = _cb(
+                    CB_WEIGHTS, weight_tensor.dtype, g.weight_tile_bytes, b.weight_depth * (bk + 1) * bn, cores
+                )
     sem_ids += tuple(range(len(sem_ids), len(sem_ids) + 2 + b.weight_depth)) if weight_servers is not None else ()
     # kw-fold halo exchange: rows-landed counters from the upper and from the lower neighbour.
     kwf_xchg = kwf and kw_fold_halo_exchange(b)
@@ -2024,7 +2087,7 @@ def create_program_descriptor(
             SEM_COMBINE_SEND_DONE,
             int(tap_major),
             int(face_direct),
-            g.band_last_tap,
+            slab_direct_band_last_tap(g) if slab_direct else g.band_last_tap,
             CB_IM2COL_TILES,
             int(slab_split),
             *slab_sem_ids,
@@ -2160,7 +2223,7 @@ def create_program_descriptor(
         g.stride,
         g.dilation,
         b.band_stride_px,
-        g.band_last_tap,
+        slab_direct_band_last_tap(g) if slab_direct else g.band_last_tap,
         input_page_bytes,
         input_shard_rows,
         *slab_sem_ids,
@@ -2297,6 +2360,8 @@ def create_program_descriptor(
             if rt_valid:
                 for m in range(num_m_blocks_this_core):
                     compute_args += [min(bm, actual_m_tiles - m * bm), slab_rows_per_block[m]]
+        if slab_direct:
+            compute_args += [m_tile_start, actual_m_tiles]
         if kwf or padded_slab:
             compute_args += [m_tile_start, actual_m_tiles]
             compute_args += _kwf_xchg_flags(g, m_tile_start, actual_m_tiles) if kwf_xchg else [0, 0]
@@ -2397,6 +2462,38 @@ def create_program_descriptor(
             ("PAD_SLAB_CB_ZERO", str(CB_ZERO_SRC)),
             *([("CONV2D_3X3_TAP_SHIFT", "1")] if tap_shift else []),
         ]
+    _sd_dm_defines, _sd_compute_defines = [], []
+    if slab_direct:
+        _sd_dm_defines = [
+            ("CONV2D_3X3_SLAB_DIRECT", "1"),
+            ("SD_GAP", str(sd_gap)),
+            ("SD_PITCH", str(sd_pitch)),
+            ("SD_ZONE", str(sd_zone)),
+            ("SD_SLOTS", str(sd_slots)),
+            ("SD_SLAB_PX", str(sd_slab_px)),
+            ("SD_HALF_BYTES", str(g.face_taps * g.dilation * pixel_bytes)),
+        ]
+        if sd_bias_in_weights:
+            _sd_dm_defines += [("SD_BIAS_IN_WEIGHTS", "1")]
+        if SD_FUSED_BIAS and has_bias:
+            _sd_dm_defines += [("SD_FUSED_BIAS", "1")]
+            if compute_kernel_config.math_fidelity == ttnn.MathFidelity.LoFi:
+                # LoFi multiplies 5 significant bits of in1: the writer splits the bias into two exact parts. HiFi2 and
+                # up multiply 9: the prepared tile (row 0 the bias, its zero padding elsewhere) is used as is.
+                _sd_dm_defines += [
+                    ("SD_BIAS_SPLIT", "1"),
+                    ("SD_BIAS_BF16", str(int(bias_tensor.dtype == ttnn.bfloat16))),
+                ]
+        _sd_compute_defines = _sd_dm_defines + [
+            ("SD_IN_H", str(g.input_height)),
+            ("SD_IN_W", str(g.input_width)),
+            ("SD_OUT_W", str(g.output_width)),
+            ("SD_STRIDE", str(g.stride)),
+            ("SD_PAD", str(g.padding)),
+            ("SD_DIL", str(g.dilation)),
+            ("SD_PIXEL_BYTES", str(pixel_bytes)),
+            ("SD_KKH", str(g.tensor_kkh_tiles)),
+        ]
     # Spread N-slice ring owners (ring_owner_cols): the owning columns' mask, for the ring order of all three kernels.
     _ring_owner_defines = (
         [("RING_OWNER_MASK", f"{sum(1 << c for c in ring_owners)}u")] if ring_owners is not None else []
@@ -2407,7 +2504,7 @@ def create_program_descriptor(
             core_ranges=_core_range_set(reader_cores),
             compile_time_args=reader_ct_args(*slice_channels),
             runtime_args=reader_rt,
-            defines=_kwf_dm_defines + _pad_dm_defines + _ring_owner_defines,
+            defines=_kwf_dm_defines + _pad_dm_defines + _ring_owner_defines + _sd_dm_defines,
             config=ttnn.ReaderConfigDescriptor(),
         )
         for slice_channels, (reader_cores, reader_rt) in reader_groups.items()
@@ -2418,7 +2515,7 @@ def create_program_descriptor(
             core_ranges=_core_range_set(writer_cores),
             compile_time_args=writer_ct_args_for(*slice_channels),
             runtime_args=writer_rt,
-            defines=_kwf_dm_defines + _ring_owner_defines,
+            defines=_kwf_dm_defines + _ring_owner_defines + _sd_dm_defines,
             config=ttnn.WriterConfigDescriptor(),
         )
         for slice_channels, (writer_cores, writer_rt) in writer_groups.items()
@@ -2428,7 +2525,7 @@ def create_program_descriptor(
         core_ranges=cores,
         compile_time_args=compute_ct_args,
         runtime_args=compute_rt,
-        defines=_kwf_compute_defines + _pad_compute_defines + _ring_owner_defines,
+        defines=_kwf_compute_defines + _pad_compute_defines + _ring_owner_defines + _sd_compute_defines,
         config=ttnn.ComputeConfigDescriptor(
             math_fidelity=compute_kernel_config.math_fidelity,
             math_approx_mode=compute_kernel_config.math_approx_mode,

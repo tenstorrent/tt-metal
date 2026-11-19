@@ -70,6 +70,7 @@
 #include "conv2d_3x3_wide_untilize.hpp"
 #include "conv2d_3x3_lean_tilize.hpp"
 #include "conv2d_3x3_padded_slab.hpp"
+#include "conv2d_3x3_slab_direct.hpp"
 #ifdef CONV2D_3X3_TAP_SHIFT
 #include "conv2d_3x3_tap_shift.hpp"
 #endif
@@ -671,6 +672,107 @@ struct CenterTapIn0 {
     }
 };
 
+#ifdef CONV2D_3X3_SLAB_DIRECT
+// Slab-direct in0 (conv2d_3x3_slab_direct.hpp): every in0 tile is unpacked straight from the padded slab as two
+// 2-face runs, K columns [0, 16) of its 32 rows at a and K columns [16, 32) at a + SD_HALF_BYTES. Each run lands in
+// SrcB as 32 rows, so SrcB holds the tile's faces in column order (m0 k0, m1 k0, m0 k1, m1 k1) instead of row order
+// (m0 k0, m0 k1, m1 k0, m1 k1), and the matmul MOP's two SrcB face jumps become +16 rows (B0 -> B2's slot) and
+// +16 rows (B2 -> B1's slot) instead of +32 and +48: the same products in the same order (bit-identical to the
+// face-direct gather's in0).
+// Raw LLK (capability): ckernel::matmul_block / compute_kernel_lib::matmul_block unpack in0 from a CB read pointer at
+// a tile stride, one 4-face read per tile; nothing exposes a per-tile L1 source or a two-run in0 tile. Bypassed:
+// compute_kernel_lib::matmul_block (and its tilize hook) on this path; the bias is one more K-step (ones block x the
+// bias tile, conv2d_3x3_slab_direct.hpp) instead of compute_kernel_lib::add_bias_bcast_rows, so the matmul packs the
+// final values. Measured (stem.conv1, Blackhole p150b, LoFi, unzoned, median of 3): 22787 ns (face-direct gather on
+// the reader and writer) -> 11153 ns; 14041 ns keeping the helper bias pass.
+namespace slab_direct {
+#ifdef TRISC_UNPACK
+// Saved at the first init: the SrcB tile descriptor's x_dim and the SrcB (ch1) Z stride of one face.
+static uint32_t saved_xdim = 0;
+static uint32_t saved_zstride = 0;
+
+// After matmul_block_init: in0 reads of 512 datums (2 faces), the second one Z = 1 step further, i.e. x_dim
+// (SD_HALF_BYTES) further in L1 and two faces further in SrcB.
+inline void unpack_init() {
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
+    volatile uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
+    if (saved_xdim == 0) {
+        saved_xdim = cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32] >> 16;
+        saved_zstride = cfg[UNP1_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] & 0xffff;
+    }
+    cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 16, 0xffff0000>(SD_HALF_BYTES / 2);
+    cfg_reg_rmw_tensix<UNP1_ADDR_CTRL_ZW_REG_1_Zstride_RMW>(2 * saved_zstride);
+    TTI_SETADCXX(p_setadc::UNP_B, 2 * FACE_R_DIM * FACE_C_DIM - 1, 0x0);
+}
+
+inline void unpack_uninit() {
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
+    cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 16, 0xffff0000>(saved_xdim);
+    cfg_reg_rmw_tensix<UNP1_ADDR_CTRL_ZW_REG_1_Zstride_RMW>(saved_zstride);
+}
+
+// One k-step of an (rt x ct) subblock, ct >= rt (in0 reused across the ct in1 tiles, the LLK's reuse_a order):
+// a[t] = in0 tile t's first run, b = in1's first tile (16 B units, minus 1). Mirrors _llk_unpack_AB_matmul_.
+template <uint32_t ct_dim, uint32_t rt_dim>
+inline void unpack_k_step(const uint32_t* a, uint32_t b) {
+    static_assert(ct_dim >= rt_dim);
+    volatile uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
+    for (uint32_t t = 0; t < rt_dim; ++t) {
+        wait_for_next_context(2);
+        _llk_unpack_configure_addresses_(b, a[t], cfg);
+        semaphore_post(semaphore::UNPACK_SYNC);
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+        TTI_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        TTI_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0101);
+        TT_MOP(0, ct_dim - 1, unp_cfg_context == 0 ? 0 : 0xff);
+        t6_semaphore_get(semaphore::UNPACK_SYNC);
+        switch_config_context(unp_cfg_context);
+    }
+}
+#endif
+
+#ifdef TRISC_MATH
+// matmul_configure_addrmod's full-tile, non-transposed ADDR_MOD_2 / ADDR_MOD_4 with the column-order SrcB jumps.
+inline void math_patch_addrmods() {
+    addr_mod_t{
+        .srca = {.incr = 0, .clr = 0, .cr = 1},
+        .srcb = {.incr = 16, .clr = 0, .cr = 1},
+        .dest = {.incr = 8, .clr = 0, .cr = 0},
+    }
+        .set(ADDR_MOD_2);
+    addr_mod_t{
+        .srca = {.incr = 32, .clr = 0, .cr = 1},
+        .srcb = {.incr = 16, .clr = 0, .cr = 1},
+        .dest = {.incr = 0, .clr = 0, .cr = 1},
+    }
+        .set(ADDR_MOD_4);
+}
+
+// matmul_block's math half (with its dynamic throttle), re-patching the address mods after every MOP re-init.
+template <uint32_t cb_in0, uint32_t cb_in1, uint32_t ct_dim, uint32_t rt_dim>
+inline void math_k_step(uint32_t idst) {
+    volatile uint32_t mm_throttle_en = *(ckernel::throttle_ptr) % 2;
+    if (mm_throttle_en) {
+        if (ckernel::throttled_mop_status != 1) {
+            llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE_MAX>(cb_in0, cb_in1, 0, ct_dim, rt_dim);
+            math_patch_addrmods();
+            ckernel::throttled_mop_status = 1;
+        }
+        llk_math_matmul<MATH_FIDELITY, MM_THROTTLE_MAX>(idst, ct_dim, rt_dim);
+    } else {
+        if (ckernel::throttled_mop_status != 0) {
+            llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(cb_in0, cb_in1, 0, ct_dim, rt_dim);
+            math_patch_addrmods();
+            ckernel::throttled_mop_status = 0;
+        }
+        llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, ct_dim, rt_dim);
+    }
+}
+#endif
+}  // namespace slab_direct
+#endif
+
 }  // namespace
 
 void kernel_main() {
@@ -793,6 +895,13 @@ void kernel_main() {
     constexpr uint32_t pad_out_w = 32, pad_num_out_px = 32, pad_slots_max = 1, cb_zero_src = 0;
 #endif
     static_assert(!padded_slab || (nslice_center && k_split && nslice_outer && tile_input && pad_p == pad_d));
+    // Slab-direct (the descriptor's SLAB_DIRECT): face-direct whole-K, in0 unpacked straight from the padded slab.
+#ifdef CONV2D_3X3_SLAB_DIRECT
+    constexpr bool slab_direct = true;
+#else
+    constexpr bool slab_direct = false;
+#endif
+    static_assert(!slab_direct || (face_direct && num_k_blocks == 1 && !k_split && !tile_input));
     static_assert(!tap_direct || (!face_direct && !strided_window));
     static_assert(kb_tap_direct == (tap_direct && !(k_split && nslice_outer)));
     static_assert(!ring_slab || (tile_input && !k_split && !face_direct && c_in_tiles > 1));
@@ -1441,6 +1550,163 @@ void kernel_main() {
             if (owns_output_columns) {
                 combine_block();
             }
+        } else if constexpr (slab_direct) {
+#ifdef CONV2D_3X3_SLAB_DIRECT
+            // Row groups of in0_stream_rows tile-rows, the bias added once per bias_stream_groups groups (as the
+            // face-direct stream below); every in0 tile unpacked from the slab (slab_direct:: above).
+            MaybeDeviceZoneScope("compute_matmul_stream");
+            using SdGeom = conv2d_3x3::slab_direct::Geom<
+                SD_IN_H,
+                SD_IN_W,
+                SD_OUT_W,
+                SD_STRIDE,
+                SD_PAD,
+                SD_DIL,
+                SD_GAP,
+                SD_PITCH,
+                SD_PIXEL_BYTES,
+                SD_HALF_BYTES>;
+            constexpr uint32_t kkh = SD_KKH;
+            constexpr uint32_t sb_h = out_subblock_h;
+            constexpr uint32_t sb_w = out_subblock_w;
+            // in0 is always the reused operand (the LLK's reuse_a order): a subblock taller than wide runs one row per
+            // k-step call.
+            constexpr uint32_t mm_rt = sb_w >= sb_h ? sb_h : 1;
+#ifdef SD_FUSED_BIAS
+            // The bias is one more K-step (conv2d_3x3_slab_direct.hpp): the matmul packs the final values.
+            constexpr bool fused_bias = has_bias;
+#else
+            constexpr bool fused_bias = false;
+#endif
+            constexpr bool relu_on_mm_pack = apply_relu && (fused_bias || !has_bias);
+            constexpr uint32_t target_cb = (has_bias && !fused_bias) ? cb_matmul_partials : cb_output_tiles;
+            CircularBuffer target(target_cb);
+            CircularBuffer slab(cb_halo_slab);
+            const uint32_t done = m_block_idx * block_m_tiles;
+            const uint32_t sd_m_tile_start = get_arg_val<uint32_t>(3);
+            const uint32_t sd_actual = get_arg_val<uint32_t>(4);
+            const uint32_t valid_m = sd_actual - done < block_m_tiles ? sd_actual - done : block_m_tiles;
+            const uint32_t o_first = (sd_m_tile_start + done) * 32;
+            [[maybe_unused]] const int32_t ih_lo = SdGeom::row_lo(o_first);
+            {
+                MaybeDeviceZoneScope("compute_slab_wait");
+                slab.wait_front(SD_SLAB_PX);
+            }
+#ifdef SD_BIAS_IN_WEIGHTS
+            // The bias tiles ride at the tail of the weight round (the writer's SD_BIAS_IN_WEIGHTS).
+            constexpr uint32_t round_tiles = (block_k_tiles + 1) * block_n_tiles;
+            constexpr bool bias_in_weights = true;
+#else
+            constexpr uint32_t round_tiles = block_k_tiles * block_n_tiles;
+            constexpr bool bias_in_weights = false;
+#endif
+            weights.wait_front(round_tiles);
+            [[maybe_unused]] uint32_t slab_l1 = 0, zero_l1 = 0, w_base = 0, w_tile = 0;
+            UNPACK((slab_l1 = get_local_cb_interface(get_operand_id(cb_halo_slab)).fifo_rd_ptr << 4));
+            UNPACK((zero_l1 = get_local_cb_interface(get_operand_id(cb_im2col_tiles)).fifo_rd_ptr << 4));
+            UNPACK((w_base = get_local_cb_interface(get_operand_id(cb_weights)).fifo_rd_ptr - 1));
+            UNPACK((w_tile = get_local_cb_interface(get_operand_id(cb_weights)).fifo_page_size));
+            [[maybe_unused]] uint32_t ones_a[sb_h] = {}, b_base = 0;
+            if constexpr (fused_bias) {
+                UNPACK(({
+                    const uint32_t ones =
+                        zero_l1 + (get_local_cb_interface(get_operand_id(cb_im2col_tiles)).fifo_page_size << 4);
+                    for (uint32_t t = 0; t < sb_h; ++t) {
+                        ones_a[t] = (ones >> 4) - 1;
+                    }
+                }));
+            }
+            // Fused bias: the bias is waited for at its first K-step (the weight K-steps of the first subblock need
+            // only the slab and the weights); it stays fronted until the kernel end.
+            bool bias_waited = bias_in_weights;
+            if constexpr (bias_in_weights) {
+                UNPACK((b_base = w_base + w_tile * block_k_tiles * block_n_tiles));
+            }
+            bool need_init = true;
+            for (uint32_t group = 0; group < in0_groups; ++group) {
+                const uint32_t row0 = group * in0_stream_rows;
+                const uint32_t group_end =
+                    row0 + in0_stream_rows < block_m_tiles ? row0 + in0_stream_rows : block_m_tiles;
+                if (need_init) {
+                    reconfig_data_format(cb_weights, cb_im2col_tiles);
+                    pack_reconfig_data_format(target_cb);
+                    ckernel::matmul_block_init(cb_im2col_tiles, cb_weights, 0, sb_w, mm_rt, block_k_tiles);
+                    UNPACK((slab_direct::unpack_init()));
+                    MATH((slab_direct::math_patch_addrmods()));
+                    pack_reconfig_l1_acc(0);
+                    if constexpr (relu_on_mm_pack) {
+                        pack_relu_config(ReluConfig::zero());
+                    }
+                    need_init = false;
+                }
+                for (uint32_t r = row0; r < group_end; r += sb_h) {
+                    target.reserve_back(sb_h * block_n_tiles);
+                    // in0 tile of row r + t, K-tile k: its first run's L1 address (16 B units, minus 1).
+                    [[maybe_unused]] uint32_t a[block_k_tiles][sb_h];
+                    UNPACK(({
+                        for (uint32_t t = 0; t < sb_h; ++t) {
+                            const uint32_t o = o_first + (r + t) * 32;
+                            for (uint32_t k = 0; k < block_k_tiles; ++k) {
+                                const uint32_t addr =
+                                    r + t < valid_m
+                                        ? SdGeom::in0_addr(
+                                              slab_l1, zero_l1, ih_lo, o, static_cast<int32_t>(k / kkh), k % kkh)
+                                        : zero_l1;
+                                a[k][t] = (addr >> 4) - 1;
+                            }
+                        }
+                    }));
+                    for (uint32_t c = 0; c < block_n_tiles; c += sb_w) {
+                        tile_regs_acquire();
+                        for (uint32_t t0 = 0; t0 < sb_h; t0 += mm_rt) {
+                            for (uint32_t k = 0; k < block_k_tiles; ++k) {
+                                UNPACK((slab_direct::unpack_k_step<sb_w, mm_rt>(
+                                    &a[k][t0], w_base + w_tile * (k * block_n_tiles + c))));
+                                MATH((slab_direct::math_k_step<cb_im2col_tiles, cb_weights, sb_w, mm_rt>(t0 * sb_w)));
+                            }
+                            if constexpr (fused_bias) {
+                                if (!bias_waited) {
+                                    MaybeDeviceZoneScope("compute_bias_wait");
+                                    bias.wait_front(out_n_tiles);
+                                    UNPACK((b_base = get_local_cb_interface(get_operand_id(cb_bias)).fifo_rd_ptr - 1));
+                                    bias_waited = true;
+                                }
+                                UNPACK((slab_direct::unpack_k_step<sb_w, mm_rt>(ones_a, b_base + w_tile * c)));
+                                MATH((slab_direct::math_k_step<cb_im2col_tiles, cb_weights, sb_w, mm_rt>(t0 * sb_w)));
+                            }
+                        }
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        ckl::pack_subblock_row_strided(0, target_cb, c, block_n_tiles, sb_h, sb_w);
+                        tile_regs_release();
+                    }
+                    target.push_back(sb_h * block_n_tiles);
+                }
+                if constexpr (has_bias && !fused_bias) {
+                    const uint32_t groups_done = group + 1;
+                    if (groups_done % bias_stream_groups == 0 || groups_done == in0_groups) {
+                        UNPACK((slab_direct::unpack_uninit()));
+                        const uint32_t chunk_rows =
+                            group_end - (group / bias_stream_groups) * bias_stream_groups * in0_stream_rows;
+                        add_bias(ckl::BiasAddShape::of(
+                            chunk_rows / out_subblock_h,
+                            in1_num_subblocks,
+                            out_subblock_h,
+                            out_subblock_w,
+                            block_n_tiles));
+                        if constexpr (apply_relu) {
+                            pack_relu_config(ReluConfig::none());
+                        }
+                        need_init = true;
+                    }
+                }
+            }
+            if (!need_init) {
+                UNPACK((slab_direct::unpack_uninit()));
+            }
+            weights.pop_front(round_tiles);
+            slab.pop_front(SD_SLAB_PX);
+#endif
         } else if constexpr (in0_groups > 1) {
             // Matmul and bias calls interleave with the streamed in0 groups; one zone for the whole block.
             MaybeDeviceZoneScope("compute_matmul_stream");
@@ -1518,7 +1784,7 @@ void kernel_main() {
                 CenterTapIn0<center_mode, cb_center_tiles>{});
         }
 
-        if constexpr (has_bias && !k_split && in0_groups == 1) {
+        if constexpr (has_bias && !k_split && in0_groups == 1 && !slab_direct) {
             add_bias(bias_shape);
         }
         if constexpr (apply_relu) {
@@ -1526,7 +1792,12 @@ void kernel_main() {
         }
     }
 
-    if constexpr (has_bias) {
+#ifdef SD_BIAS_IN_WEIGHTS
+    constexpr bool bias_cb_used = false;  // the bias came with the weight rounds
+#else
+    constexpr bool bias_cb_used = has_bias;
+#endif
+    if constexpr (bias_cb_used) {
         // A core that owns no output columns never waited for it.
         bias.wait_front(out_n_tiles);
         bias.pop_front(out_n_tiles);

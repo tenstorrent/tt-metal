@@ -130,6 +130,7 @@
 #include "conv2d_3x3_slab_dataflow.hpp"
 #include "conv2d_3x3_gather_dataflow.hpp"
 #include "conv2d_3x3_nslice_order.hpp"
+#include "conv2d_3x3_slab_direct.hpp"
 
 namespace {
 
@@ -251,6 +252,13 @@ void kernel_main() {
 #else
     constexpr bool padded_slab = false;
     constexpr uint32_t pad_slots_max = 0;
+#endif
+    // Slab-direct (the descriptor's SLAB_DIRECT, conv2d_3x3_slab_direct.hpp): the fill writes the padded slab and
+    // pushes it to compute, which unpacks in0 straight from it; no gather.
+#ifdef CONV2D_3X3_SLAB_DIRECT
+    constexpr bool slab_direct = true;
+#else
+    constexpr bool slab_direct = false;
 #endif
     // Work-balanced M split (the descriptor's balanced_block_ranges): the N-slice prelude (center copy, gather) and the
     // ring forwarding run over the M-block's valid tile-rows only, and the TILE fill streams a host-given slab row
@@ -472,10 +480,48 @@ void kernel_main() {
         reads.noc.async_write_zeros(CircularBuffer(cb_halo_slab), lane_zero_rows * pixel_bytes);
         reads.noc.write_zeros_l1_barrier();
     }
-    if constexpr (padding_only_faces) {
+    if constexpr (padding_only_faces && !slab_direct) {
         reads.noc.async_write_zeros(CircularBuffer(cb_im2col_tiles), block_m_tiles * block_k_tiles * in0_tile_bytes);
         reads.noc.write_zeros_l1_barrier();
     }
+#ifdef CONV2D_3X3_SLAB_DIRECT
+    using SdGeom = conv2d_3x3::slab_direct::Geom<
+        input_height,
+        input_width,
+        output_width,
+        stride,
+        padding,
+        dilation,
+        SD_GAP,
+        SD_PITCH,
+        pixel_bytes,
+        SD_HALF_BYTES>;
+    {
+        // The zero block (cb_im2col_tiles page 0) and every slot's leading zero zone, once: the fill never writes
+        // them. Compute reads them only after the first slab push.
+        reads.noc.async_write_zeros(CircularBuffer(cb_im2col_tiles), 2 * in0_tile_bytes);
+        reads.noc.write_zeros_l1_barrier();
+#ifdef SD_FUSED_BIAS
+        {
+            // The ones block (page 1): bf16 1.0 in K columns 0 and 1 of every 16-element row (fused bias K-step).
+            // Zeroed above with the zero block (the CB's two pages); one word per 32 B row, for the rows the two runs
+            // read (32 + SD_HALF_BYTES / 32).
+            volatile uint32_t* ones =
+                reinterpret_cast<volatile uint32_t*>(get_write_ptr(cb_im2col_tiles) + in0_tile_bytes);
+            for (uint32_t i = 0; i < 8 * (32 + SD_HALF_BYTES / 32); i += 8) {
+                ones[i] = 0x3F803F80u;
+            }
+        }
+#endif
+        // The gaps: NoC reads of the zero region (each gap is one read). No gap pixel is an image pixel, so the fill
+        // (the writer's forward half included) never races them; they land before the first slab push.
+        static_assert(SD_ZONE == SD_GAP, "the zero zone of a slot is exactly its gap");
+        reads.begin(2);
+        for (uint32_t r = 0; r <= SD_SLOTS; ++r) {
+            reads.read(reads.zeros_noc, slab_l1 + r * SD_PITCH * pixel_bytes, SD_ZONE * pixel_bytes);
+        }
+    }
+#endif
 
     // Tap-major zero-fills read a 32-pixel zero block, so an out-of-image run is one read. kw-fold has no gather and no
     // center taps, so nothing reads it there, and its write barrier (~0.27 us) sat in front of the slab fill
@@ -774,6 +820,31 @@ void kernel_main() {
             // ---- fill_halo_slab (ROW_MAJOR): band kh tagged trid kh + 1; overlapping bands read only their
             // new tail.
             MaybeDeviceZoneScope("reader_fill");
+#ifdef CONV2D_3X3_SLAB_DIRECT
+            {
+                // Slab-direct: compute is the slab's reader, so it is free once compute popped the previous block.
+                {
+                    MaybeDeviceZoneScope("reader_fill_reserve");
+                    cb_reserve_back(cb_halo_slab, SD_SLAB_PX);
+                }
+                if constexpr (slab_split) {
+                    if (m_block_idx > 0) {
+                        Semaphore<>(slab_free_sem_id).up(1);
+                    }
+                }
+                reads.begin(1);
+                SdGeom::fill_pieces<band_last_tap>(
+                    o_first, o_end, [&](uint32_t lo, uint32_t hi, uint32_t off) { read_rows(lo, hi, slab_l1 + off); });
+                reads.wait(1);
+                reads.wait(2);  // the slot gaps (kernel start)
+                if constexpr (slab_split) {
+                    MaybeDeviceZoneScope("reader_fill_fwd_wait");
+                    Semaphore<>(slab_fwd_done_sem_id).wait_min(m_block_idx + 1);
+                }
+                cb_push_back(cb_halo_slab, SD_SLAB_PX);
+                continue;
+            }
+#endif
             if constexpr (slab_split) {
                 if (m_block_idx > 0) {
                     // The writer refills the slab only after this block's gather no longer reads it.
