@@ -12,6 +12,30 @@
       "introduced_by_pr": 51559,
       "grace": "4w",
       "owners": ["riverwuTT"]
+    },
+    {
+      "id": "ttnn-sigmoid-accurate",
+      "description": "ttnn.sigmoid_accurate (Python) and ttnn::sigmoid_accurate (C++) are deprecated in favor of ttnn.sigmoid / ttnn::sigmoid; callers that passed fast_and_approximate_mode=True use mode=ttnn.SigmoidMode.AccurateWithFastExp (SigmoidMode::ACCURATE_FAST_EXP). The Python binding warns with FutureWarning through the shared helper and forwards to the [[deprecated]] C++ function. #37186 first marked it deprecated with a docstring note only, so per the TTNN Python deprecation policy the grace period starts when #65989 merges. The cleanup PR deletes the C++ declaration and definition, the binding and its forwarding wrapper, and the golden-function registration in ttnn/ttnn/operations/unary.py.",
+      "files": [
+        "ttnn/cpp/ttnn/operations/eltwise/unary/unary.hpp",
+        "ttnn/cpp/ttnn/operations/eltwise/unary/unary.cpp",
+        "ttnn/cpp/ttnn/operations/eltwise/unary/unary_nanobind.cpp",
+        "ttnn/ttnn/operations/unary.py"
+      ],
+      "introduced_by_pr": 65989,
+      "grace": "4w",
+      "owners": ["mateusznowakTT", "aliaksei-sala"]
+    },
+    {
+      "id": "ttnn-graph-extract-resource-usage-per-core-interleaved-storage-cores",
+      "description": "The interleaved_storage_cores argument of ttnn.graph.extract_resource_usage_per_core is deprecated; callers use a call without interleaved_storage_cores (the argument has been ignored since tt-metal#43069). First deprecated in #43069 with a DeprecationWarning; tt-metal#65989 moved it to the shared helper (FutureWarning) without restarting the grace period. The cleanup PR deletes the argument from the binding and the compatibility test test_extract_resource_usage_per_core_deprecated_kwarg.",
+      "files": [
+        "ttnn/core/graph/graph_nanobind.cpp",
+        "tests/ttnn/unit_tests/base_functionality/test_graph_trace_utils.py"
+      ],
+      "introduced_by_pr": 43069,
+      "grace": "4w",
+      "owners": ["bmalesevicTT", "aliaksei-sala"]
     }
   ]
 }
