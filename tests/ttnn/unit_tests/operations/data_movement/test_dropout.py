@@ -186,3 +186,76 @@ def test_dropout_mask_differs_across_cores(device, use_per_device_seed):
     device.clear_program_cache()
     assert torch.equal(hit_new_seed, run(4321)), "a cache hit with a new seed must match a fresh build"
     device.disable_and_clear_program_cache()
+
+
+@pytest.mark.parametrize(
+    "memory_layout, shard_shape",
+    [
+        (ttnn.TensorMemoryLayout.INTERLEAVED, None),
+        (ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [16, 64]),
+        (ttnn.TensorMemoryLayout.WIDTH_SHARDED, [64, 16]),
+        (ttnn.TensorMemoryLayout.BLOCK_SHARDED, [32, 32]),
+    ],
+)
+@pytest.mark.parametrize("use_preallocated_output", [False, True])
+def test_dropout_rejects_row_major_layout(device, expect_error, memory_layout, shard_shape, use_preallocated_output):
+    shape = (1, 1, 64, 64)
+    if memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
+        mem_config = ttnn.L1_MEMORY_CONFIG
+    elif memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+        mem_config = ttnn.MemoryConfig(
+            memory_layout, ttnn.BufferType.L1, ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        )
+    else:
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+        mem_config = ttnn.MemoryConfig(
+            memory_layout, ttnn.BufferType.L1, ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        )
+
+    input_tensor = ttnn.from_torch(
+        torch.ones(shape, dtype=torch.bfloat16),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=mem_config,
+    )
+    kwargs = {"memory_config": mem_config}
+    if use_preallocated_output:
+        output_tensor = ttnn.from_torch(
+            torch.zeros(shape, dtype=torch.bfloat16),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=mem_config,
+        )
+        kwargs = {"output_tensor": output_tensor}
+
+    with expect_error(RuntimeError, "Dropout operation requires tensor to be in Tile layout"):
+        ttnn.experimental.dropout(input_tensor, probability=0.0, scale=0.5, seed=0, **kwargs)
+
+
+def test_dropout_rejects_row_major_preallocated_output_with_tiled_sharded_input(device, expect_error):
+    shape = (1, 1, 64, 64)
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+    mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [32, 64], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    input_tensor = ttnn.from_torch(
+        torch.ones(shape, dtype=torch.bfloat16),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=mem_config,
+    )
+    output_tensor = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=mem_config,
+    )
+    with expect_error(RuntimeError, "Dropout operation requires output tensor to be in Tile layout"):
+        ttnn.experimental.dropout(input_tensor, probability=0.0, scale=0.5, seed=0, output_tensor=output_tensor)
