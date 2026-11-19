@@ -29,14 +29,48 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "command_queue_fixture.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
+#include "metal2_host_api/test_helpers/scratchpad_override.hpp"
+
 namespace tt::tt_metal {
 namespace {
+
+namespace sp_test = tt::tt_metal::test_helpers;
+using ScratchpadOverrideFastTest = sp_test::ScratchpadPlacementFixture<UnitMeshCQSingleCardFixture>;
+
+TEST_F(ScratchpadOverrideFastTest, ScratchpadPlacementOverrideGuardedAccess) {
+    // Kernels write only on selected nodes and leave memory on the excluded node untouched.
+    distributed::MeshDevice& fixture_device = this->fixture_device();
+    auto spec = sp_test::MakeGuardedScratchpadSpecForTest();
+    distributed::MeshWorkload workload(fixture_device, spec);
+    Program& program = workload.get_programs().begin()->second;
+    sp_test::InitializeScratchpadReportsForTest(fixture_device, program);
+    program.set_program_run_args(sp_test::MakeGuardedScratchpadArgsForTest(0xC0DE0000u));
+    sp_test::EnqueueScratchpadOverrideForTest(fixture_device, workload, true);
+    EXPECT_EQ(
+        sp_test::ReadScratchpadResultsForTest(fixture_device, program),
+        sp_test::ExpectedScratchpadResultsForTest(sp_test::ScratchpadAddressForTest(program), 0xC0DE0000u));
+}
+
+TEST_F(ScratchpadOverrideFastTest, ScratchpadPlacementOverrideRepeatedEnqueue) {
+    // Repeated enqueue supplies each new pattern to both scratchpad bindings.
+    distributed::MeshDevice& fixture_device = this->fixture_device();
+    distributed::MeshWorkload workload(fixture_device, sp_test::MakeGuardedScratchpadSpecForTest());
+    Program& program = workload.get_programs().begin()->second;
+    sp_test::InitializeScratchpadReportsForTest(fixture_device, program);
+    program.set_program_run_args(sp_test::MakeGuardedScratchpadArgsForTest(0x100u));
+    sp_test::EnqueueScratchpadOverrideForTest(fixture_device, workload, true);
+    program.set_program_run_args(sp_test::MakeGuardedScratchpadArgsForTest(0x200u));
+    sp_test::EnqueueScratchpadOverrideForTest(fixture_device, workload, true);
+    EXPECT_EQ(
+        sp_test::ReadScratchpadResultsForTest(fixture_device, program),
+        sp_test::ExpectedScratchpadResultsForTest(sp_test::ScratchpadAddressForTest(program), 0x200u));
+}
 
 // What this proves end-to-end:
 //   (a) the scratchpad is real, writable, node-local L1, and
@@ -52,6 +86,7 @@ namespace {
 //   This closes the loop on both (a) and (b): the host both learns where the framework put the
 //   scratchpad AND confirms the kernel's writes actually landed there. A 0/stale base address, or a
 //   non-L1-backed scratchpad, would fail the compare.
+
 TEST_F(UnitMeshCQSingleCardFixture, ScratchpadWriteReadback) {
     auto mesh_device = devices_.at(0);
 
@@ -103,7 +138,7 @@ TEST_F(UnitMeshCQSingleCardFixture, ScratchpadWriteReadback) {
         }},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     // -------------------------------------------------------
     // Runtime args: the host-known report L1 address.
@@ -113,7 +148,7 @@ TEST_F(UnitMeshCQSingleCardFixture, ScratchpadWriteReadback) {
         .kernel = KernelSpecName{"scratch_kernel"},
         .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"report_addr", kReportAddr}}),
     }};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     // Pre-zero the report location so a kernel that never wrote it would be caught (the readback
     // base address would be 0, which is not a valid scratchpad L1 address → the pattern check fails).
@@ -232,7 +267,7 @@ TEST_F(UnitMeshCQSingleCardFixture, ScratchpadNocEndpoints) {
         }},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
@@ -245,7 +280,7 @@ TEST_F(UnitMeshCQSingleCardFixture, ScratchpadNocEndpoints) {
              {"dst_addr", kDstAddr},
              {"report_addr", kReportAddr}}),
     }};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     // -------------------------------------------------------
     // Seed the remote core: pattern at kSrcAddr, zeros at kDstAddr.

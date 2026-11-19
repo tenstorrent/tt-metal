@@ -17,11 +17,11 @@ from quasar.test_matmul_quasar import test_matmul as run_matmul
 DIRECT_INDEXING_KT_DIMS = (1, 2)
 
 
-def matmul_direct_indexing_tile_dimensions(dest_acc, dest_sync_mode):
+def matmul_direct_indexing_tile_dimensions(dest_acc, dest_sync):
     shapes = {(1, 1)} | {
         (ct_dim, rt_dim)
         for ct_dim, rt_dim, _ in matmul_tile_dimensions(
-            dest_acc, dest_sync_mode, exact_dest_fill=True
+            dest_acc, dest_sync, exact_dest_fill=True
         )
     }
     return [
@@ -37,7 +37,7 @@ def matmul_direct_indexing_tile_dimensions(dest_acc, dest_sync_mode):
     input_tile_dimensions=runtime(FULL_MATMUL_SHAPES),
     format=NON_MX_MATMUL_FORMATS,
     math_fidelity=lambda format: get_valid_math_fidelities(format),
-    dest_sync_mode=lambda: quasar_dest_sync_modes(),
+    dest_sync=lambda: quasar_dest_sync_modes(),
     dest_acc=matmul_dest_acc_modes,
     matmul_tile_dims=runtime(matmul_direct_indexing_tile_dimensions),
     register_format_hint=[None],
@@ -47,7 +47,7 @@ def test_matmul_direct_indexing(
     input_tile_dimensions,
     matmul_tile_dims,
     math_fidelity,
-    dest_sync_mode,
+    dest_sync,
     dest_acc,
     format,
     register_format_hint,
@@ -57,12 +57,12 @@ def test_matmul_direct_indexing(
         input_tile_dimensions,
         matmul_tile_dims,
         math_fidelity,
-        dest_sync_mode,
+        dest_sync,
         dest_acc,
         format,
         register_format_hint,
         enable_direct_indexing=True,
         transpose=transpose,
         run_types=[PerfRunType.L1_TO_L1],
-        loop_factor=2 if dest_sync_mode == DestSync.Half else 1,
+        loop_factor=2 if dest_sync == DestSync.Half else 1,
     )
