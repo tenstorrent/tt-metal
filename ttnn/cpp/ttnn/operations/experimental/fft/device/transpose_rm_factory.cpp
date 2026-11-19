@@ -17,8 +17,8 @@
 
 #include <cstdint>
 
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "stockham_host.hpp"  // pick_batch_grid, max_cores_for_grid, batch_logical_core
@@ -26,7 +26,6 @@
 namespace ttnn::experimental::prim {
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace {
 

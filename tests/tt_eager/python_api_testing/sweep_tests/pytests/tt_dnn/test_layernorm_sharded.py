@@ -115,20 +115,10 @@ def test_layernorm_sharded_rm(test_id, device, grid_size, seq_len, per_core_k, t
         beta = torch.rand(in0_shape[3]) * 2.0 - 1.1
 
     gamma = gamma.reshape(1, 1, -1, 32)
-    gamma_t = ttnn.Tensor(
-        gamma.reshape(-1).tolist(),
-        gamma.shape,
-        cb_dtype,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ).to(device, gamma_beta_mem_config)
+    gamma_t = ttnn.from_torch(gamma, dtype=cb_dtype, layout=ttnn.ROW_MAJOR_LAYOUT).to(device, gamma_beta_mem_config)
 
     beta = beta.reshape(1, 1, -1, 32)
-    beta_t = ttnn.Tensor(
-        beta.reshape(-1).tolist(),
-        beta.shape,
-        cb_dtype,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ).to(device, gamma_beta_mem_config)
+    beta_t = ttnn.from_torch(beta, dtype=cb_dtype, layout=ttnn.ROW_MAJOR_LAYOUT).to(device, gamma_beta_mem_config)
 
     program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=grid_size,
@@ -268,20 +258,10 @@ def test_layernorm_sharded_mix_precision_rm(test_id, device, grid_size, seq_len,
         beta = torch.rand(in0_shape[3]) * 2.0 - 1.1
 
     gamma = gamma.reshape(1, 1, -1, 32)
-    gamma_t = ttnn.Tensor(
-        gamma.reshape(-1).tolist(),
-        gamma.shape,
-        cb_dtype,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ).to(device, gamma_beta_mem_config)
+    gamma_t = ttnn.from_torch(gamma, dtype=cb_dtype, layout=ttnn.ROW_MAJOR_LAYOUT).to(device, gamma_beta_mem_config)
 
     beta = beta.reshape(1, 1, -1, 32)
-    beta_t = ttnn.Tensor(
-        beta.reshape(-1).tolist(),
-        beta.shape,
-        cb_dtype,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ).to(device, gamma_beta_mem_config)
+    beta_t = ttnn.from_torch(beta, dtype=cb_dtype, layout=ttnn.ROW_MAJOR_LAYOUT).to(device, gamma_beta_mem_config)
 
     program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=grid_size,

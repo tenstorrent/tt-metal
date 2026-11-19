@@ -48,8 +48,16 @@ inline __attribute__((always_inline)) uint32_t fast_udiv_80(uint32_t n) {
     return (((uint64_t)n * 0xCCCCCCCD) >> 32) >> 6;
 }
 
+inline __attribute__((always_inline)) uint32_t fast_udiv_84(uint32_t n) {
+    return (((uint64_t)n * 0xC30C30C4) >> 32) >> 6;
+}
+
 inline __attribute__((always_inline)) uint32_t fast_udiv_94(uint32_t n) {
     return (((uint64_t)n * 0xAE4C415D) >> 32) >> 6;
+}
+
+inline __attribute__((always_inline)) uint32_t fast_udiv_96(uint32_t n) {
+    return (((uint64_t)n * 0xAAAAAAAB) >> 32) >> 6;
 }
 
 inline __attribute__((always_inline)) uint32_t fast_udiv_108(uint32_t n) {
@@ -112,9 +120,13 @@ inline __attribute__((always_inline)) uint32_t udivsi3_const_divisor(uint32_t n)
         return fast_udiv_72(n);
     } else if constexpr (d == 80) {
         return fast_udiv_80(n);
+    } else if constexpr (d == 84) {
+        return fast_udiv_84(n);
     } else if constexpr (d == 94) {
         // fast divide for 94 divisor. Handles Banked L1 address generation for E75
         return fast_udiv_94(n);
+    } else if constexpr (d == 96) {
+        return fast_udiv_96(n);
     } else if constexpr (d == 108) {
         return fast_udiv_108(n);
     } else if constexpr (d == 110) {

@@ -163,5 +163,22 @@ inline void calculate_signbit() {
 #endif
 }
 
+// Compute API entry points (signbit_tile*, as named on Blackhole / Wormhole). The format is a
+// template argument of the kernel above; any float width in Dest is passed as Float32.
+
+inline void signbit_init() { init_signbit(); }
+
+inline void signbit_int32_init() { init_signbit(); }
+
+template <bool APPROXIMATION_MODE, int ITERATIONS = SFPU_ITERATIONS>
+inline void calculate_signbit() {
+    calculate_signbit<APPROXIMATION_MODE, DataFormat::Float32, ITERATIONS>();
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS = SFPU_ITERATIONS>
+inline void calculate_signbit_int32() {
+    calculate_signbit<APPROXIMATION_MODE, DataFormat::Int32, ITERATIONS>();
+}
+
 }  // namespace sfpu
 }  // namespace ckernel

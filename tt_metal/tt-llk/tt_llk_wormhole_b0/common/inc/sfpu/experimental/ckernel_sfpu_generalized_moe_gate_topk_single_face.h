@@ -27,10 +27,20 @@ constexpr std::uint32_t indices_offset  = scores_offset + dst_tile_offset;
 constexpr std::uint32_t bias_offset     = indices_offset + dst_tile_offset;
 constexpr std::uint32_t interm_offset   = bias_offset + dst_tile_offset;
 
+// Counterpart of _init_sfpu_config_reg(): set LaneConfig.ENABLE_DEST_INDEX so an SFPSWAP on LREG0-3 also swaps
+// the companion lanes in LREG4-7 (the idx|score concat follows the bias keys). _init_sfpu_config_reg() (the
+// LLK-level SFPU init) clears it again; op-level inits do not, hence the explicit clears in the tails.
+// SFPCONFIG with instr_mod1 = 1 writes imm16_math itself (not an LREG) to config_dest; 0xF is LaneConfig and
+// bit 2 of it is ENABLE_DEST_INDEX.
+inline void _gmg_enable_index_tracking()
+{
+    TTI_SFPCONFIG(0x4 /*imm16_math*/, 0xF /*config_dest*/, 1 /*instr_mod1*/);
+}
+
 // The Prgm2 (LREG14) seed that sfpu_reciprocal_init<APPROXIMATION_MODE>() programs (its round_to_bf16=false seed;
 // ckernel_sfpu_recip.h). _init_generalized_moe_gate_topk programs all three seeds once per op; the gate's broadcast
-// SFPCONFIGs clobber only LREG14, so the normalization tails re-program just this one. Keep in sync with recip.h.
-constexpr float gmg_recip_seed_prgm2 = 2.121212482452392578125f;
+// SFPCONFIGs clobber only LREG14, so the normalization tails re-program just this one.
+constexpr float gmg_recip_seed_prgm2 = RECIPROCAL_SEED_K2;
 
 template <bool is_fp32_dest_acc_en, std::uint32_t offset = 0>
 inline void bitonic_topk_load16_concat_indices_single_face()
@@ -164,7 +174,7 @@ template <bool dir, bool end_transpose>
 inline void bitonic_top8_ph3_st4_to_1()
 {
     // TODO: Use replay buffer for these instructions
-    if constexpr (dir == (bool)SortDir::ArgMax)
+    if constexpr (dir == static_cast<bool>(SortDir::ArgMax))
     {
         // Step 4
         TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
@@ -255,7 +265,7 @@ inline void _generalized_moe_gate_sum_top2()
     constexpr bool idir = false; // Sort descending order
 
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    TTI_SFPCONFIG(0x4, 0xF, 1);
+    _gmg_enable_index_tracking();
 
     // Phase 0-3 Even Columns
     bitonic_topk_load16_concat_indices_single_face<is_fp32_dest_acc_en, 0>();
@@ -290,6 +300,7 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void _generalized_moe_gate_sort_top4_groups()
 {
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    _gmg_enable_index_tracking();
     // Sort top4
     // Load the top2 sums and concat indices
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
@@ -329,6 +340,7 @@ inline void _gmg_merge4_runs_raw()
     // Even Columns sorted Top8 in LREG0 and LREG1. `base` selects which 4-run block to read
     // (0 = groups in cols +0/+2/+4/+6; 8 = the next block at +8/+10/+12/+14, if step1 filled it).
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    _gmg_enable_index_tracking();
 
     // Reverse order of sort for top8 values in odd columns
     TTI_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_3, bias_offset + base + 6);
@@ -354,12 +366,12 @@ inline void _gmg_merge4_runs_raw()
     TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG3, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG2, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     // There is a hardware bug that affects operations on LREG4-7 while this is enabled
-    TTI_SFPCONFIG(0, 0xF, 1);
+    _init_sfpu_config_reg();
     TTI_SFPSHFT2(0, p_sfpu::LREG4, p_sfpu::LREG7, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG6, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
 
     // Re-enable index tracking
-    TTI_SFPCONFIG(0x4, 0xF, 1);
+    _gmg_enable_index_tracking();
     reverse_sort_order();
     bitonic_topk_load8_even_cols_concatted_indices_single_face<is_fp32_dest_acc_en>();
 
@@ -380,7 +392,7 @@ inline void _generalized_moe_gate_top8(std::uint32_t eps, std::uint32_t scale, s
 
     // ---- normalization tail: 1/(sum+eps)*scale, broadcast-multiply the top-8 scores ----
     // Re-set the one reciprocal seed the broadcast clobbered (LREG14) while LREG0-3 are still free.
-    TTI_SFPCONFIG(0, 0xF, 1);
+    _init_sfpu_config_reg();
     sfpi::vConstFloatPrgm2 = gmg_recip_seed_prgm2;
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, scores_offset + 0);
     TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, scores_offset + 4);
@@ -439,13 +451,16 @@ inline void _generalized_moe_gate_top8(std::uint32_t eps, std::uint32_t scale, s
  * @note Resets the Dst RWC counter at entry (TTI_SETRWC SET_D): a preceding FPU MOP (e.g. copy4rows) leaves
  *       it advanced by +64/tile, which would bias the SFPLOAD offsets — so run this after any such MOP.
  *       Reads bias(mode 0)/indices(LO16)/scores(HI16) at the read columns and writes the same convention at
- *       the store columns; clobbers LREG0-7. @ref _gmg_merge16_to_run is the full-16 (two-run) variant.
+ *       the store columns; clobbers LREG0-7. Enables SFPU index tracking at entry (_init_sfpu_config_reg() clears it,
+ *       and the idx|score concat in LREG4-7 follows the bias swaps only while it is on) and leaves it on at
+ *       exit. @ref _gmg_merge16_to_run is the full-16 (two-run) variant.
  */
 template <bool is_fp32_dest_acc_en, std::uint32_t read_base, std::uint32_t store_lo, std::uint32_t store_hi>
 inline void _gmg_merge4_top8()
 {
     constexpr bool idir = false; // descending
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    _gmg_enable_index_tracking();
 
     // Odd columns (read_base+6, read_base+2), reversed to form a bitonic sequence.
     TTI_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_3, bias_offset + read_base + 6);
@@ -470,10 +485,10 @@ inline void _gmg_merge4_top8()
     // _generalized_moe_gate_top8 lines for the second merge stage).
     TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG3, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG2, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPCONFIG(0, 0xF, 1);
+    _init_sfpu_config_reg();
     TTI_SFPSHFT2(0, p_sfpu::LREG4, p_sfpu::LREG7, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG6, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPCONFIG(0x4, 0xF, 1);
+    _gmg_enable_index_tracking();
     reverse_sort_order();
     bitonic_topk_load8_even_cols_concatted_indices_single_face<is_fp32_dest_acc_en>();
     TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
@@ -516,7 +531,6 @@ inline void _gmg_copy_topk_run()
     TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + from_hi);
     TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + from_lo);
     TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + from_hi);
-    TTI_SFPNOP;
     TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, bias_offset + to_lo);
     TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_3, bias_offset + to_hi);
     TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + to_lo);
@@ -533,14 +547,15 @@ inline void _gmg_copy_topk_run()
 template <std::uint32_t field, std::uint32_t src_lo, std::uint32_t src_hi, std::uint32_t dst_lo, std::uint32_t dst_hi>
 inline void _gmg_place_field_from_interm()
 {
-    constexpr std::uint32_t mode = (field == 0) ? 0 : (field == 1) ? (std::uint32_t)InstrModLoadStore::LO16_ONLY : (std::uint32_t)InstrModLoadStore::HI16_ONLY;
+    constexpr std::uint32_t mode   = (field == 0)   ? 0
+                                     : (field == 1) ? static_cast<std::uint32_t>(InstrModLoadStore::LO16_ONLY)
+                                                    : static_cast<std::uint32_t>(InstrModLoadStore::HI16_ONLY);
     constexpr std::uint32_t region = (field == 0) ? bias_offset : (field == 1) ? indices_offset : scores_offset;
     // Reset Dst RWC: the copy_tile (FPU) that filled intermediate leaves it advanced; without this the
     // SFPLOAD/SFPSTORE offsets below are biased and hit the wrong rows.
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     TTI_SFPLOAD(p_sfpu::LREG0, mode, ADDR_MOD_3, interm_offset + src_lo);
     TTI_SFPLOAD(p_sfpu::LREG1, mode, ADDR_MOD_3, interm_offset + src_hi);
-    TTI_SFPNOP;
     TTI_SFPSTORE(p_sfpu::LREG0, mode, ADDR_MOD_3, region + dst_lo);
     TTI_SFPSTORE(p_sfpu::LREG1, mode, ADDR_MOD_3, region + dst_hi);
 }
@@ -558,7 +573,7 @@ inline void _gmg_merge16_core()
 {
     constexpr bool idir = false; // descending -> top-8
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    TTI_SFPCONFIG(0x4, 0xF, 1); // enable index tracking (idx|score in LREG4-7 follow the bias swaps)
+    _gmg_enable_index_tracking();
 
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, bias_offset + 0);
     TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, bias_offset + 2);
@@ -726,9 +741,14 @@ inline void _generalized_moe_gate_finalize_ungrouped(std::uint32_t eps, std::uin
         // addr 8 and left scores+4 untouched -> full top-8). Reset Dst RWC first so the dst_reg base
         // lines up with the TTI ADDR_MOD_3 base. Zero the dropped slots' idx too (matches the topk<=4
         // path), same read-modify-write the scores use: load the row, zero the dropped lanes in-register,
-        // store all lanes back (kept lanes round-trip exactly). NOTE: the idx row must be read/written as
-        // vFloat (the default mod-0 SrcB raw-bit passthrough), NOT vUInt -- a vUInt dst_reg store here
-        // simply did not land. The mod-0 passthrough preserves the kept ids (e.g. 337/75) bit-for-bit.
+        // store all lanes back. The idx row holds RAW uint16 ids and must move through a 16-bit integer
+        // layout (DataLayout::U16 = SFPLOAD/SFPSTORE UINT16: the Dst16b word zero-extended on load, its low
+        // 16 bits on store), the same raw transfer the LO16_ONLY stores above use. The mod-0 float path is
+        // NOT a passthrough: the load reads the word's low byte as a bf16 exponent and the store flushes an
+        // exponent of zero to zero, so an id whose low byte is 0 -- 256, 512, ... (the >256-expert path
+        // carries global ids b*256+i) -- comes back as 0 and the token is routed to expert 0. A Default-
+        // layout vUInt store (INT32, Dst32b-addressed) does not land in this row, which is why the integer
+        // path has to name its 16-bit layout explicitly.
         constexpr int drop_thr = 16 * (static_cast<int>(topk) - 4); // tileid >= drop_thr -> rank >= topk
         constexpr int sc4_dreg = (scores_offset + 4) / 2;           // scores+4 (TTI addr 4)  -> dst_reg 2
         constexpr int ix4_dreg = (indices_offset + 4) / 2;          // indices+4 (TTI addr 68) -> dst_reg 34
@@ -740,17 +760,17 @@ inline void _generalized_moe_gate_finalize_ungrouped(std::uint32_t eps, std::uin
         }
         v_endif;
         sfpi::dst_reg[sc4_dreg] = sc;
-        sfpi::vFloat ix         = sfpi::dst_reg[ix4_dreg];
+        sfpi::vUInt ix          = sfpi::dst_reg[ix4_dreg].mode<sfpi::DataLayout::U16>();
         v_if (sfpi::vConstTileId >= drop_thr)
         {
-            ix = 0.0f;
+            ix = 0;
         }
         v_endif;
-        sfpi::dst_reg[ix4_dreg] = ix;
+        sfpi::dst_reg[ix4_dreg].mode<sfpi::DataLayout::U16>() = ix;
     }
 
     // ---- normalization tail (same as _generalized_moe_gate_top8) ----
-    TTI_SFPCONFIG(0, 0xF, 1);
+    _init_sfpu_config_reg();
     sfpi::vConstFloatPrgm2 = gmg_recip_seed_prgm2;
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, scores_offset + 0);
     TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, scores_offset + 4);

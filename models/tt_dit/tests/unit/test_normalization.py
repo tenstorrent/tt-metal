@@ -16,6 +16,7 @@ from ...layers.normalization import (
     GroupNorm,
     LayerNorm,
     RMSNorm,
+    dram_group_norm_core_grid,
 )
 from ...parallel.manager import CCLManager
 from ...utils.check import assert_quality
@@ -389,6 +390,8 @@ def test_distributed_layernorm(
         (32, (1, 256, 512, 512)),
         (32, (1, 256, 1024, 1024)),
         (8, (1, 64, 1024, 1024)),
+        (32, (1, 512, 169, 96)),  # Ht = 507: the 8x8 grid is not valid, a smaller one is picked
+        (32, (2, 256, 35, 96)),  # 2 batches, Ht = 210: the virtual rows must split evenly per batch
     ],
 )
 def test_group_norm(
@@ -437,6 +440,67 @@ def test_group_norm(
     tt_torch = tt_torch.permute(0, 3, 1, 2)
 
     assert_quality(torch_output, tt_torch, pcc=0.999_300)
+
+
+# Ideogram 4 VAE decoder norms at TP4 (8 groups per device): Ht = ceil(H * W / 32) per stage.
+@pytest.mark.parametrize(
+    ("max_grid", "num_channels", "ht", "expected"),
+    [
+        ((8, 8), 128, 512, (8, 8)),  # 1024x1024 mid block: 8x8 stays when valid
+        ((8, 8), 128, 507, (4, 3)),  # 1248x832 mid block: 8x8 would need 16 | 507
+        ((8, 8), 128, 2028, (8, 6)),  # 1248x832 up_blocks[1]
+        ((8, 8), 64, 8112, (8, 6)),  # 1248x832 up_blocks[2]
+        ((8, 8), 128, 450, (8, 5)),  # 1280x720 mid block
+        ((8, 8), 128, 486, (8, 3)),  # 1152x864 mid block
+        ((12, 10), 128, 450, (12, 10)),  # 1280x720 mid block on the full Blackhole grid
+        ((12, 10), 128, 512, (8, 8)),  # 12 columns give 3 rows per y, which never divides 2^k
+    ],
+)
+def test_dram_group_norm_core_grid(
+    max_grid: tuple[int, int], num_channels: int, ht: int, expected: tuple[int, int]
+) -> None:
+    num_groups = 8
+    bound = ttnn.CoreGrid(x=max_grid[0], y=max_grid[1])
+    nvc = ttnn.operations.normalization.dram_group_norm_virtual_columns(bound, num_channels, num_groups)
+
+    grid = dram_group_norm_core_grid(
+        bound, num_channels=num_channels, num_groups=num_groups, num_virtual_cols=nvc, nhw=ht * ttnn.TILE_SIZE
+    )
+
+    assert (grid.x, grid.y) == expected
+    assert ttnn.operations.normalization.dram_group_norm_virtual_columns(grid, num_channels, num_groups) == nvc
+
+
+# 256 channels, 8 groups: 8 virtual columns, so only 8-wide grids and one virtual row per grid row.
+@pytest.mark.parametrize(
+    ("ht", "num_batches", "expected"),
+    [
+        (210, 1, (8, 7)),
+        (210, 2, (8, 6)),  # 7 virtual rows would split the 2 batches unevenly
+        (420, 4, (8, 4)),
+        (420, 1, (8, 7)),
+    ],
+)
+def test_dram_group_norm_core_grid_batches(ht: int, num_batches: int, expected: tuple[int, int]) -> None:
+    grid = dram_group_norm_core_grid(
+        ttnn.CoreGrid(x=8, y=8),
+        num_channels=256,
+        num_groups=8,
+        num_virtual_cols=8,
+        nhw=ht * ttnn.TILE_SIZE,
+        num_batches=num_batches,
+    )
+
+    assert (grid.x, grid.y) == expected
+
+
+def test_dram_group_norm_core_grid_none() -> None:
+    # The weight layout needs 8 virtual columns, but no grid at most 4 wide has them.
+    grid = dram_group_norm_core_grid(
+        ttnn.CoreGrid(x=4, y=8), num_channels=256, num_groups=8, num_virtual_cols=8, nhw=512 * ttnn.TILE_SIZE
+    )
+
+    assert grid is None
 
 
 @pytest.mark.parametrize(
