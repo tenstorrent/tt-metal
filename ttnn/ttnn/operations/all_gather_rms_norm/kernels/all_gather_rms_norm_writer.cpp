@@ -14,6 +14,16 @@
 // exchange_partials_block (base op, symmetric all-gather, k <= 8): member m writes its n_stat * rows column-0
 //   partial tiles (faces 0/2 only) into slot ((r * k + m) * n_stat + s) of EVERY member's cb_gathered (lockstep slot
 //   address = this core's own write pointer), flushes, bumps each member's SEM_PARTIALS once, waits for k arrivals.
+// exchange_partials_block, owner topology (k > 8; base op R3 / Perf 2 row partial, unicast return): row r of the
+//   block is owned by member o = r % k (owned-row index j = r / k). Compute hands the member's partial of every
+//   row in ROW form (its 32 row values in row 0: face 0 row 0 + face 1 row 0); they ship as two 16-datum face-row
+//   writes into row m % 32 of gather tile m / 32 of stat s of slot j at the owner (cb_gathered page
+//   (j * n_stat + s) * gather_pages + m / 32; lockstep slot base), one SEM_PARTIALS increment per owned row. The
+//   owner zero-fills the rows no member writes (k % 32 .. 31 of each slot's last gather tile), waits for k * owned
+//   arrivals and hands the slots to compute; compute returns the combined COLUMN-form statistics (rms: inv_rms;
+//   ln: inv_std, shift + K_g) which the owner writes (faces 0/2) into slot r of every member's cb_rowstat
+//   (+ cb_shift, cb_kg), one SEM_INV increment per returned row. Every member pushes those CBs once all rows
+//   arrived (the writer is their only producer on this path).
 // store_block: aligned output — the member's tile-row r goes to output tiles t * out_w_tiles + out_col0 + j,
 //   in units of <= out_unit_tiles per wait / flush / pop (clamped at the cb_out ring end).
 
@@ -43,7 +53,9 @@ constexpr uint32_t max_fin = get_compile_time_arg_val(15);   // dense: foreign s
 constexpr uint32_t max_fout = get_compile_time_arg_val(16);  // dense: contribution tiles per tile-row (sender side)
 // slices tile-aligned (W_local % 32 == 0): every local gamma tile IS a dense gamma tile -> direct row-0 reads
 constexpr bool affine_aligned = get_compile_time_arg_val(17) != 0;
-constexpr auto out_args = TensorAccessorArgs<18>();
+constexpr uint32_t gather_pages = get_compile_time_arg_val(18);  // owner combine: gather tiles per owned row
+constexpr uint32_t sem_inv_id = get_compile_time_arg_val(19);
+constexpr auto out_args = TensorAccessorArgs<20>();
 constexpr auto gamma_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
@@ -222,6 +234,110 @@ void kernel_main() {
 #endif
 
     // ---- exchange_partials_block (k > 1) ----
+#ifdef AGRMS_OWNER
+    {
+        AGZ("wr_xchg");
+        using agrms_owner::ROW_GATHER;
+        constexpr uint32_t face_bytes = acc_tile_bytes / 4;
+        constexpr uint32_t frow = acc_tile_bytes / 64;  // one 16-datum face row
+        const uint32_t sem_addr = get_semaphore(sem_partials_id);
+        const uint32_t owned = agrms_owner::owned_rows(rows, member_idx, k);
+        const uint32_t slot_base = get_write_ptr(cb_gathered);
+        const uint32_t mi = member_idx % ROW_GATHER;
+        const uint32_t row_off =
+            (member_idx / ROW_GATHER) * acc_tile_bytes + (mi < 16 ? mi * frow : 2 * face_bytes + (mi - 16) * frow);
+        if (owned > 0) {
+            cb_reserve_back(cb_gathered, owned * n_stat * gather_pages);
+            // rows k % 32 .. 31 of each slot's last gather tile are written by no member: zero them (disjoint from
+            // every member's write -> no race), local reads of the hardware zeros region
+            constexpr uint32_t unused0 = k % ROW_GATHER;
+            if constexpr (unused0 != 0) {
+                const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
+                auto zero_range = [&](uint32_t a, uint32_t end) {
+                    for (; a < end; a += MEM_ZEROS_SIZE) {
+                        noc_async_read(zeros, a, (end - a) < MEM_ZEROS_SIZE ? (end - a) : MEM_ZEROS_SIZE);
+                    }
+                };
+                for (uint32_t t = 0; t < owned * n_stat; ++t) {
+                    const uint32_t tile = slot_base + (t * gather_pages + gather_pages - 1) * acc_tile_bytes;
+                    if constexpr (unused0 < 16) {
+                        zero_range(tile + unused0 * frow, tile + face_bytes);
+                        zero_range(tile + face_bytes + unused0 * frow, tile + 2 * face_bytes);
+                        zero_range(tile + 2 * face_bytes, tile + 4 * face_bytes);
+                    } else {
+                        zero_range(tile + 2 * face_bytes + (unused0 - 16) * frow, tile + 3 * face_bytes);
+                        zero_range(tile + 3 * face_bytes + (unused0 - 16) * frow, tile + 4 * face_bytes);
+                    }
+                }
+            }
+        }
+        cb_wait_front(cb_partial, n_stat * rows);
+        const uint32_t src = get_read_ptr(cb_partial);
+        for (uint32_t r = 0; r < rows; ++r) {
+            const uint32_t o = r % k, j = r / k;
+            const uint32_t px = arg(peer_idx + 2 * o), py = arg(peer_idx + 2 * o + 1);
+            for (uint32_t s = 0; s < n_stat; ++s) {
+                const uint32_t from = src + (r * n_stat + s) * acc_tile_bytes;
+                const uint64_t to =
+                    get_noc_addr(px, py, slot_base + (j * n_stat + s) * gather_pages * acc_tile_bytes + row_off);
+                noc_async_write(from, to, frow);                            // face 0 row 0
+                noc_async_write(from + face_bytes, to + face_bytes, frow);  // face 1 row 0
+            }
+        }
+        noc_async_writes_flushed();
+        const uint32_t n_owners = rows < k ? rows : k;
+        for (uint32_t o = 0; o < n_owners; ++o) {
+            noc_semaphore_inc(
+                get_noc_addr(arg(peer_idx + 2 * o), arg(peer_idx + 2 * o + 1), sem_addr),
+                agrms_owner::owned_rows(rows, o, k));
+        }
+        cb_pop_front(cb_partial, n_stat * rows);
+        if (owned > 0) {
+            noc_async_read_barrier();  // zero-filled pad rows (the gamma reads in flight are waited on too: tiny)
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), k * owned);
+            cb_push_back(cb_gathered, owned * n_stat * gather_pages);
+            // return: column-form statistics of each owned row into slot r of every member
+            const uint32_t rs_base = get_write_ptr(cb_rowstat);
+#ifdef AGRMS_LN
+            const uint32_t sh_base = get_write_ptr(cb_shift);
+            const uint32_t kg_base = get_write_ptr(cb_kg);
+            constexpr uint32_t kg_tile_bytes = 2048;  // bf16
+#endif
+            for (uint32_t jj = 0; jj < owned; ++jj) {
+                const uint32_t r = member_idx + jj * k;
+                cb_wait_front(cb_own_ret, n_stat);
+                const uint32_t ret = get_read_ptr(cb_own_ret);
+#ifdef AGRMS_LN
+                cb_wait_front(cb_own_kg, 1);
+                const uint32_t kgs = get_read_ptr(cb_own_kg);
+#endif
+                for (uint32_t m = 0; m < k; ++m) {
+                    const uint32_t px = arg(peer_idx + 2 * m), py = arg(peer_idx + 2 * m + 1);
+                    const uint64_t to = get_noc_addr(px, py, rs_base + r * acc_tile_bytes);
+                    noc_async_write(ret, to, face_bytes);
+                    noc_async_write(ret + 2 * face_bytes, to + 2 * face_bytes, face_bytes);
+#ifdef AGRMS_LN
+                    const uint64_t tos = get_noc_addr(px, py, sh_base + r * acc_tile_bytes);
+                    noc_async_write(ret + acc_tile_bytes, tos, face_bytes);
+                    noc_async_write(ret + acc_tile_bytes + 2 * face_bytes, tos + 2 * face_bytes, face_bytes);
+                    const uint64_t tok = get_noc_addr(px, py, kg_base + r * kg_tile_bytes);
+                    noc_async_write(kgs, tok, kg_tile_bytes / 4);
+                    noc_async_write(kgs + kg_tile_bytes / 2, tok + kg_tile_bytes / 2, kg_tile_bytes / 4);
+#endif
+                }
+                noc_async_writes_flushed();
+                cb_pop_front(cb_own_ret, n_stat);
+#ifdef AGRMS_LN
+                cb_pop_front(cb_own_kg, 1);
+#endif
+            }
+            const uint32_t sem_inv = get_semaphore(sem_inv_id);
+            for (uint32_t m = 0; m < k; ++m) {
+                noc_semaphore_inc(get_noc_addr(arg(peer_idx + 2 * m), arg(peer_idx + 2 * m + 1), sem_inv), owned);
+            }
+        }
+    }
+#else
     if constexpr (k > 1) {
         AGZ("wr_xchg");
         const uint32_t sem_addr = get_semaphore(sem_partials_id);
@@ -250,8 +366,25 @@ void kernel_main() {
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), k);
         cb_push_back(cb_gathered, n_stat * k * rows);
     }
+#endif
 #ifdef AGRMS_HAS_GAMMA
     finish_affine();
+#endif
+#ifdef AGRMS_OWNER
+    {
+        AGZ("wr_wait_inv");
+        cb_reserve_back(cb_rowstat, rows);
+#ifdef AGRMS_LN
+        cb_reserve_back(cb_shift, rows);
+        cb_reserve_back(cb_kg, rows);
+#endif
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_inv_id)), rows);
+        cb_push_back(cb_rowstat, rows);
+#ifdef AGRMS_LN
+        cb_push_back(cb_shift, rows);
+        cb_push_back(cb_kg, rows);
+#endif
+    }
 #endif
 
 #ifdef AGRMS_DENSE

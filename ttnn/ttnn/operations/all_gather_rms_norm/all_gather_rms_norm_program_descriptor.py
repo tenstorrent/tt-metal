@@ -60,6 +60,11 @@ CB_SHIFT_MATS = 19  # 0/1 shift matrices (output dtype), built by the reader
 CB_FOREIGN = 20  # contributions of peer members to this member's home output tiles (lockstep slot address)
 CB_CONTRIB = 21  # this member's contributions to peers' home output tiles
 CB_CENT = 22  # ln FPU path: centered block c' = x - K_m (accumulator format)
+# owner combine (k > K_SYM_MAX, base op R3 row-partial topology): row r of a block is owned by member r % k
+CB_OWN_RET = 23  # owner -> writer: combined row statistics of the owned rows (rms: inv_rms; ln: inv_std, shift)
+CB_OWN_KG = 24  # ln owner -> writer: K_g = bf16(mu) of the owned rows (bf16)
+CB_DEV = 25  # ln owner scratch: per gather tile (n_m d_m, M2_m + n_m d_m^2) in row form
+CB_WCOL = 26  # ln owner: member weights n_m, column 0 of row m % 32 of gather tile m // 32 (accumulator format)
 NUM_CBS = 32
 
 # ---- semaphores (program-local; declared BEFORE setup_fabric_connection takes its ids) ----
@@ -67,17 +72,56 @@ SEM_LANDED = 0  # compute cores: landed entries covering this member (port reade
 SEM_PARTIALS = 1  # compute cores: partial exchange arrivals (base op)
 SEM_OWN_LOADED = 2  # port cores: own members that loaded their block (member reader -> port reader)
 SEM_FOREIGN = 3  # compute cores: contributors that delivered their foreign tiles (dense assembly)
+SEM_INV = 4  # compute cores, owner combine: returned row statistics (one increment per returned row)
 
 # ---- knobs (op_design.md: catalog / example measurements) ----
 INC_EVERY = 8  # packets per fabric entry (fabric_all_gather: increment every 8 chunks)
-PORT_BATCH_CHUNKS = 4  # packets per reader barrier / sender flush; cb_port_stage holds 2 batches
+PORT_BATCH_CHUNKS = 4  # cap: packets per reader barrier / sender flush; cb_port_stage holds 2 batches (halved
+# under L1 pressure: port_batch_candidates)
 RELAY_LAG_WAVES = 1  # own entries lead relay entries by this many waves
 OUT_DEPTH = 2
 OUT_UNIT_CAP = 4  # writer batch: small enough that the stores overlap the normalize of the same tile-row
 COMBINE_TILE_COST = 3  # base op: per tile-row collapse + exchange + combine cost (x-tile equivalents)
 OCC_TILES_PER_MEMBER = 4  # base op occupancy floor
-K_SYM_MAX = 8  # symmetric partial all-gather cap (base op K_SYM_MAX_INTERLEAVED); owner combine is deferred here
+K_SYM_MAX = 8  # symmetric partial all-gather cap (base op K_SYM_MAX_INTERLEAVED); owner combine beyond
+# owner combine (base op R3 / Perf 2 row_partial): a member's per-row partial travels in ROW form (two 16-datum face
+# rows) into row m % 32 of gather tile m // 32 of the row's owner -> ceil(k / 32) gather tiles per owned row, not k.
+OWNER_MEMBER_COST = 0.4  # base op: per gathered partial on the owner (combine + return), x-tile equivalents
+ROW_GATHER = 32  # members per gather tile (one 32-datum row each)
+# k cap: the writer carries one (x, y) pair per member as runtime args (max_runtime_args = 341 per kernel)
+K_CAP_MAX = 128
+FORCE_K = None  # tests / perf probes only: pin the member count (must be a fitting slice-aligned candidate)
+LAST_INFO = None  # tests / probes: the split of the last built descriptor (k, owner, batches, ...)
 AFFINE_SLOT_BYTES = 128  # one staged gamma / beta "stick" (32 datums, fp32 at most)
+
+
+# Compact cb_gamma / cb_beta pages (base op Perf 2 "Gamma residency", ported): compute reads gamma / beta only
+# ROW-broadcast (row 0 of faces 0 / 1; the unpacker addresses face 1 at page + face_bytes, a format constant), so the
+# page STRIDE can be the smallest multiple of 64 B (DRAM reads keep their source offset mod 64 B) whose per-page
+# write footprint [0, 64) u [F, F + 64) is disjoint across pages: 192 B for bf16 / fp32 (vs 2048 / 4096 B). The last
+# page's unpacker read runs 2F - S bytes past its stride: `tail` extra pages keep it inside the CB.
+GAMMA_READ_ALIGN = 64
+
+
+def gamma_page_layout(g_dtype):
+    """(cb_gamma page stride bytes, tail pages) for a gamma / beta of `g_dtype` (fp32 / bf16)."""
+    face = (TILE * TILE * _datum_bytes(g_dtype)) // 4
+    full = 2 * face
+    foot = [(0, GAMMA_READ_ALIGN), (face, GAMMA_READ_ALIGN)]  # bytes one page's loader may write
+
+    def disjoint(s):
+        for j in range(1, full // s + 2):
+            for o1, l1 in foot:
+                for o2, l2 in foot:
+                    a, b = o2 + j * s, o2 + j * s + l2
+                    if a < o1 + l1 and o1 < b:
+                        return False
+        return True
+
+    for s in range(GAMMA_READ_ALIGN, full, GAMMA_READ_ALIGN):
+        if disjoint(s):
+            return s, _div_up(full - s, s)
+    return full, 0
 
 
 def _f32_bits(v: float) -> int:
@@ -184,7 +228,17 @@ def _k_candidates(geo: Geometry, N: int):
     for d in range(1, G + 1):
         if G % d == 0:
             cands.add(G // d)
-    return sorted(c for c in cands if c <= K_SYM_MAX and c <= N)
+    return sorted(c for c in cands if c <= min(K_CAP_MAX, N))
+
+
+def is_owner(k: int) -> bool:
+    """Combine topology: symmetric all-gather up to K_SYM_MAX members, per-row owner beyond (base op R3)."""
+    return k > K_SYM_MAX
+
+
+def gather_tiles(k: int) -> int:
+    """Owner combine: row-form gather tiles per owned row (32 members per tile)."""
+    return _div_up(k, ROW_GATHER)
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -204,13 +258,16 @@ class Sizes:
     has_beta: bool
     mask: bool
     ln_fpu: bool = False
+    g_tail: int = 0  # compact gamma: extra pages covering the last page's unpacker read extent
 
 
 def make_sizes(x_dtype, g_dtype, fp32_dest, is_ln, has_gamma, has_beta, mask) -> Sizes:
+    g_stride, g_tail = gamma_page_layout(g_dtype) if has_gamma else (0, 0)
     return Sizes(
         T_in=ttnn.tile_size(x_dtype),
         T_out=ttnn.tile_size(x_dtype),
-        T_g=ttnn.tile_size(g_dtype) if has_gamma else 0,
+        T_g=g_stride,  # compact page stride (not a whole tile)
+        g_tail=g_tail,
         T_acc=ttnn.tile_size(acc_dtype(fp32_dest)),
         T_bf16=ttnn.tile_size(ttnn.bfloat16),
         is_ln=is_ln,
@@ -222,6 +279,20 @@ def make_sizes(x_dtype, g_dtype, fp32_dest, is_ln, has_gamma, has_beta, mask) ->
 
 def out_unit(pitch: int) -> int:
     return min(pitch, OUT_UNIT_CAP)
+
+
+def port_batch_candidates():
+    """Port packets per batch from the cap down (cb_port_stage = 2 batches): the largest that fits L1 is used."""
+    pb = PORT_BATCH_CHUNKS
+    while True:
+        yield pb
+        if pb == 1:
+            return
+        pb = max(1, pb // 2)
+
+
+def stage_pages(batch: int, chunk_pages: int) -> int:
+    return 2 * batch * chunk_pages
 
 
 def out_unit_candidates(pitch: int):
@@ -250,20 +321,31 @@ def cb_plan(sz: Sizes, k: int, pitch: int, rows: int, n_affine_slots: int, dense
     }
     if not sz.ln_fpu:  # rms: sum x^2 tiles; ln SFPU path: sum x tiles (the LN FPU path reduces cb_x straight to cb_km)
         plan[CB_MOMENT_A] = (rows, sz.T_acc)
-    if k > 1:
+    if k > 1 and not is_owner(k):
         plan[CB_GATHERED] = (n_stat * k * rows, sz.T_acc)
+    if is_owner(k):
+        # uniform over members (lockstep slot base); owned rows of member m: r = m, m + k, ...
+        owned = _div_up(rows, k)
+        gp = gather_tiles(k)
+        plan[CB_GATHERED] = (owned * n_stat * gp, sz.T_acc)
+        plan[CB_OWN_RET] = (owned * n_stat, sz.T_acc)  # rms: inv_rms; ln: (inv_std, shift) per owned row
+        if sz.is_ln:
+            plan[CB_OWN_KG] = (owned, sz.T_bf16)
+            plan[CB_DEV] = (2 * gp, sz.T_acc)
+            plan[CB_WCOL] = (gp, sz.T_acc)
     if sz.has_gamma:
-        plan[CB_GAMMA] = (pitch, sz.T_g)
+        plan[CB_GAMMA] = (pitch + sz.g_tail, sz.T_g)  # compact row-0 pages (gamma_page_layout)
         plan[CB_AFFINE_STAGE] = (n_affine_slots, AFFINE_SLOT_BYTES)
     if sz.has_beta:
-        plan[CB_BETA] = (pitch, sz.T_g)
+        plan[CB_BETA] = (pitch + sz.g_tail, sz.T_g)
     if sz.is_ln:
         plan[CB_MOMENT_B] = ((1 if sz.ln_fpu else 2) * rows, sz.T_acc)  # FPU: D2 tiles; SFPU: (D1, D2) pairs
-        plan[CB_KM] = (rows, sz.T_bf16)
+        # owner: cb_km also carries the owner's pivot K and K_g = bf16(mu) after the member pivots are popped
+        plan[CB_KM] = (max(rows, 2) if is_owner(k) else rows, sz.T_bf16)
         plan[CB_MSTAT] = (2 * rows, sz.T_acc)
         plan[CB_SHIFT] = (rows, sz.T_acc)
         plan[CB_KG] = (rows, sz.T_bf16)
-        plan[CB_MU] = (1, sz.T_acc)
+        plan[CB_MU] = (2 if is_owner(k) else 1, sz.T_acc)  # owner: (mu, inv_std) between its two windows
         if sz.mask:
             plan[CB_MASK] = (1, sz.T_bf16)
         if sz.ln_fpu:
@@ -329,17 +411,23 @@ def select_split(geo: Geometry, N: int, fits_fn) -> Split:
     fitting = [k for k in cands if groups(k) >= 1 and fits_fn(k, rows(k))]
     if not fitting:
         raise RuntimeError(
-            f"all_gather_rms_norm: OOM: no member split fits L1 (k > {K_SYM_MAX} owner combine and the credited "
-            f"streaming regime are deferred): candidates "
+            f"all_gather_rms_norm: OOM: no member split fits L1 (the credited streaming regime is deferred): "
+            f"candidates "
             f"{cands}, {getattr(fits_fn, 'report', lambda: '')()}"
         )
-    if geo.G * geo.sw < 2 * OCC_TILES_PER_MEMBER:
+    if FORCE_K is not None:
+        assert FORCE_K in fitting, f"FORCE_K={FORCE_K} not in fitting candidates {fitting}"
+        k = FORCE_K
+    elif geo.G * geo.sw < 2 * OCC_TILES_PER_MEMBER:
         k = min(fitting)
     else:
         admitted = {min(fitting)} | {k for k in fitting if member_map(k, geo).pitch >= OCC_TILES_PER_MEMBER}
 
         def cost(k):
-            return rows(k) * (member_map(k, geo).pitch + (COMBINE_TILE_COST if k > 1 else 0))
+            c = rows(k) * (member_map(k, geo).pitch + (COMBINE_TILE_COST if k > 1 else 0))
+            if is_owner(k):  # the busiest owner gathers k partials for each of its ceil(rows / k) rows
+                c += _div_up(rows(k), k) * k * OWNER_MEMBER_COST
+            return c
 
         k = min(sorted(admitted), key=lambda kk: (cost(kk), kk))
     ng = groups(k)
@@ -579,20 +667,29 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
     tile_bytes = sz.T_in
     max_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes())
     chunk_pages = max(1, max_payload // tile_bytes)
-    stage_pages = 2 * PORT_BATCH_CHUNKS * chunk_pages
     budget = cb_l1_budget(mesh)
 
     fit_log = []
     fit_unit = {}
+    fit_batch = {}
 
     def fits(k, rows):
         mm = member_map(k, geo)
         dpk = dense_plan(geo, mm) if dense else None
-        port_bytes = rows * mm.pitch * sz.T_in + stage_pages * tile_bytes
+        # port cores: cb_x (mirror of the member block) + cb_port_stage; the batch halves under L1 pressure
+        port_bytes = None
+        for pb in port_batch_candidates():
+            port_bytes = rows * mm.pitch * sz.T_in + stage_pages(pb, chunk_pages) * tile_bytes
+            if port_bytes <= budget:
+                break
+        if port_bytes > budget:
+            fit_log.append((k, rows, None, port_bytes))
+            return False
         for u in out_unit_candidates(mm.pitch):
             cbytes = plan_bytes(cb_plan(sz, k, mm.pitch, rows, n_affine_slots(mm, geo), dpk, u))
-            if cbytes <= budget and port_bytes <= budget:
+            if cbytes <= budget:
                 fit_unit[k] = u
+                fit_batch[k] = pb
                 return True
         fit_log.append((k, rows, cbytes, port_bytes))
         return False
@@ -616,6 +713,9 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
     # ---- per-chip expected landings + own signalling ----
     dp = dense_plan(geo, mm) if dense else None
     unit = fit_unit[k]
+    port_batch = fit_batch[k]
+    owner = is_owner(k)
+    gp = gather_tiles(k) if owner else 1
     cplan = cb_plan(sz, k, pitch, rows_max, n_affine_slots(mm, geo), dp, unit)
     n_stat = 2 if cfg.is_ln else 1
     t_acc = acc_dtype(fp32_dest)
@@ -642,6 +742,10 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
         CB_FOREIGN: x_dtype,
         CB_CONTRIB: x_dtype,
         CB_CENT: t_acc,
+        CB_OWN_RET: t_acc,
+        CB_OWN_KG: ttnn.bfloat16,
+        CB_DEV: t_acc,
+        CB_WCOL: t_acc,
     }
     port_cores = [ttnn.CoreCoord(x, y) for (x, y) in ports_union]
     crs_compute = _crs(compute_used)
@@ -681,6 +785,8 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
         defines.append(("AGRMS_LN_FPU", "1"))
     if mask:
         defines.append(("AGRMS_MASK", "1"))
+    if owner:
+        defines.append(("AGRMS_OWNER", "1"))
 
     x_acc = ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
     o_acc = ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
@@ -693,7 +799,7 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
 
     reader_ct = [tile_bytes, pitch, geo.sw, geo.v, x_elem, SEM_LANDED, SEM_OWN_LOADED] + list(x_acc)
 
-    compute_ct = [k, pitch, n_stat, dp.max_fin if dense else 0, dp.max_fout if dense else 0]
+    compute_ct = [k, pitch, n_stat, dp.max_fin if dense else 0, dp.max_fout if dense else 0, gp]
     writer_ct = [
         sz.T_out,
         pitch,
@@ -713,12 +819,14 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
         dp.max_fin if dense else 0,
         dp.max_fout if dense else 0,
         0 if dense else 1,  # affine_aligned
+        gp,  # owner combine: gather tiles per owned row
+        SEM_INV,
     ]
     writer_ct += list(o_acc)
     writer_ct += list(g_acc)
     writer_ct += list(b_acc)
-    port_reader_ct = [tile_bytes, chunk_pages, PORT_BATCH_CHUNKS, SEM_OWN_LOADED, SEM_LANDED]
-    port_sender_ct = [tile_bytes, chunk_pages, PORT_BATCH_CHUNKS]
+    port_reader_ct = [tile_bytes, chunk_pages, port_batch, SEM_OWN_LOADED, SEM_LANDED]
+    port_sender_ct = [tile_bytes, chunk_pages, port_batch]
 
     inv_w_bits = _f32_bits(1.0 / geo.W)
     eps_bits = _f32_bits(cfg.epsilon)
@@ -744,6 +852,8 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
             tuple(ports_union),
             k,
             wave_rg,
+            unit,
+            port_batch,
             ckc.math_fidelity,
             fp32_dest,
             ckc.math_approx_mode,
@@ -763,10 +873,11 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
             ttnn.SemaphoreDescriptor(id=SEM_PARTIALS, core_ranges=crs_x, initial_value=0),
             ttnn.SemaphoreDescriptor(id=SEM_OWN_LOADED, core_ranges=crs_x, initial_value=0),
             ttnn.SemaphoreDescriptor(id=SEM_FOREIGN, core_ranges=crs_x, initial_value=0),
+            ttnn.SemaphoreDescriptor(id=SEM_INV, core_ranges=crs_x, initial_value=0),
         ]
         # CBs: cb_x FIRST over compute_used + ports_union (identical on every chip -> one landing address)
         cbs = [_cb(CB_X, cplan[CB_X][0], cplan[CB_X][1], x_dtype, crs_x)]
-        cbs.append(_cb(CB_STAGE, stage_pages, tile_bytes, x_dtype, crs_ports))
+        cbs.append(_cb(CB_STAGE, stage_pages(port_batch, chunk_pages), tile_bytes, x_dtype, crs_ports))
         for idx in sorted(cplan):
             if idx == CB_X:
                 continue
@@ -843,6 +954,8 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
                         dense_w += [h, slot]
                     dense_w += [len(dm["contrib_from"]), len(dm["homes_to"])] + dm["homes_to"]
                     rd_args = rd_args + [len(dense_r)] + dense_r
+                if owner and cfg.is_ln:
+                    rd_args = rd_args + [k] + n_m  # cb_wcol: member weights n_m (fp32 bits)
                 reader_rt[c.x][c.y] = rd_args
                 compute_rt[c.x][c.y] = (
                     [rows, spec.core_w, m, inv_w_bits, eps_bits, _f32_bits(1.0 / spec.valid_cols), len(spec.parts)]
@@ -952,6 +1065,9 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
         mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = program
     info = dict(
         k=k,
+        owner=owner,
+        port_batch=port_batch,
+        out_unit=unit,
         num_groups=split.num_groups,
         rows=rows_max,
         pitch=pitch,
@@ -960,5 +1076,8 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
         chunk_pages=chunk_pages,
         ports_union=ports_union,
         N=N,
+        budget=budget,
     )
+    global LAST_INFO
+    LAST_INFO = info
     return mesh_desc, info

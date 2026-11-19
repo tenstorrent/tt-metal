@@ -24,6 +24,13 @@
 //    (DestReuseBinary has no BroadcastDim).
 //  * FinalizeInvRms (rms): base op's column-0-scoped SFPU finalize through the reduce() post_reduce_op hook.
 //  * rms pass 1: base op's DEST-accumulated x*x (FPU) per tile-row.
+//  * owner combine (k > 8, base op R3 / Perf 2 row partial): the partials travel in ROW form, which no helper
+//    produces or consumes — compute_kernel_lib::reduce has no row-form output and its post-op cannot transpose
+//    (transpose_dest reprograms the math MOP / address mods), and there is no "column-reduce gather tiles, transpose,
+//    finalize" combine helper. rms: member collapse = matmul ones-row x sumsq^T (unpacker transpose; base op
+//    collapse_rows_to_row0), owner = reduce_tile COL over the gather tiles + transpose_dest + finalize (base op
+//    combine_rows_block). ln: member finalize transposes (mean_m, M2_m) in DEST before the pack; the owner's Chan
+//    combine is the raw SFPU loop of the symmetric path plus a ones-row matmul for the sums over members.
 //  * ln pass A / pass B / member finalize / Chan combine: eltwise_chain keeps no SFPU accumulator in DEST across the
 //    tiles of a walk (DestAccumulation is FPU-only), and the FPU path would truncate fp32 x to tf32 before the
 //    pivot subtraction (big-offset precision). These are short raw loops of copy_tile / unary_bcast /
@@ -48,6 +55,11 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "all_gather_rms_norm_common.hpp"
+#ifdef AGRMS_OWNER
+#include "api/compute/reduce.h"
+#include "api/compute/transpose_dest.h"
+#include "api/compute/matmul.h"
+#endif
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_sqrt.h"
 #include "sfpu/ckernel_sfpu_converter.h"
@@ -71,6 +83,7 @@ constexpr uint32_t w_split_cores = get_compile_time_arg_val(0);
 constexpr uint32_t pitch = get_compile_time_arg_val(1);
 constexpr uint32_t n_stat = get_compile_time_arg_val(2);
 constexpr uint32_t max_fin = get_compile_time_arg_val(3);  // dense: foreign slots per tile-row
+constexpr uint32_t gather_pages = get_compile_time_arg_val(5);  // owner combine: gather tiles per owned row
 #ifdef AGRMS_DENSE
 #include "api/compute/matmul.h"
 constexpr uint32_t norm_out_cb = cb_norm;  // the member block is assembled into dense output tiles afterwards
@@ -325,6 +338,62 @@ ALWI void combine_block(uint32_t rows, FinalizeInvRms finalize) {
         finalize);
 }
 
+#ifdef AGRMS_OWNER
+// collapse_rows_to_row0 (base op): per tile-row, DST row 0 = ones-row x sumsq^T (in1 transposed by the unpacker) =
+// the 32 row sums in ROW form (face 0 row 0 + face 1 row 0) -> cb_partial
+ALWI void collapse_rows_to_row0(uint32_t rows) {
+    constexpr uint32_t batch = compute_kernel_lib::DEST_AUTO_LIMIT;
+    cb_wait_front(cb_ones, 1);
+    for (uint32_t r0 = 0; r0 < rows; r0 += batch) {
+        const uint32_t n = (rows - r0) < batch ? (rows - r0) : batch;
+        cb_wait_front(cb_moment_a, n);
+        cb_reserve_back(cb_partial, n);
+        reconfig_data_format(cb_moment_a, cb_ones);  // srcA = in1 (sumsq), srcB = in0 (ones)
+        pack_reconfig_data_format(cb_partial);
+        matmul_init(cb_ones, cb_moment_a, 1 /*transpose in1*/);
+        tile_regs_acquire();
+        for (uint32_t i = 0; i < n; ++i) {
+            matmul_tiles(cb_ones, cb_moment_a, 0, i, i);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t i = 0; i < n; ++i) {
+            pack_tile(i, cb_partial);
+        }
+        tile_regs_release();
+        cb_push_back(cb_partial, n);
+        cb_pop_front(cb_moment_a, n);
+    }
+}
+
+// combine_rows_block (base op): per owned row, column-reduce its gather tiles (1.0 scaler: row 0 = sum over the
+// members), transpose row 0 -> column 0 in DEST, finalize column 0 -> cb_own_ret (the writer returns it)
+ALWI void combine_rows_block(uint32_t owned, FinalizeInvRms finalize) {
+    cb_wait_front(cb_gathered, owned * gather_pages);
+    cb_wait_front(cb_ones, 1);
+    for (uint32_t j = 0; j < owned; ++j) {
+        cb_reserve_back(cb_own_ret, 1);
+        reconfig_data_format(cb_gathered, cb_ones);  // REDUCE_COL: data -> srcA, scaler -> srcB
+        pack_reconfig_data_format(cb_own_ret);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_COL>(cb_gathered, cb_ones, cb_own_ret);
+        tile_regs_acquire();
+        for (uint32_t g = 0; g < gather_pages; ++g) {
+            reduce_tile<PoolType::SUM, ReduceDim::REDUCE_COL>(cb_gathered, cb_ones, j * gather_pages + g, 0, 0);
+        }
+        reduce_uninit();
+        transpose_dest_init<DST_ACCUM_MODE>();
+        transpose_dest<DST_ACCUM_MODE>(0);
+        finalize(0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, cb_own_ret);
+        tile_regs_release();
+        cb_push_back(cb_own_ret, 1);
+    }
+    cb_pop_front(cb_gathered, owned * gather_pages);
+}
+#endif
+
 ALWI void normalize_block(uint32_t rows, uint32_t core_w) {
     constexpr auto x_in = input(
         cb_x,
@@ -362,16 +431,30 @@ void kernel_main() {
     {
         AGZ("c_mom");
         sum_squares_block<cb_x, cb_moment_a>(rows, core_w, pitch);
+#ifdef AGRMS_OWNER
+        collapse_rows_to_row0(rows);
+#else
         if constexpr (w_split_cores == 1) {
             collapse_block<cb_rowstat>(rows, finalize);
         } else {
             collapse_block<cb_partial>(rows, NoOp{});
         }
+#endif
     }
+#ifdef AGRMS_OWNER
+    {
+        AGZ("c_comb");
+        const uint32_t owned = agrms_owner::owned_rows(rows, arg(2), w_split_cores);
+        if (owned > 0) {
+            combine_rows_block(owned, finalize);
+        }
+    }
+#else
     if constexpr (w_split_cores > 1) {
         AGZ("c_comb");
         combine_block(rows, finalize);
     }
+#endif
     {
         AGZ("c_waitg");
         cb_wait_front(cb_rowstat, rows);
@@ -541,6 +624,12 @@ ALWI void member_finalize_block(uint32_t rows, uint32_t inv_n_bits) {
         mul_d(3, 0, 3);                   // D1^2 / n_m
         sub_d(1, 3, 1);                   // M2_m
         add_d(2, 0, 2);                   // mean_m
+#ifdef AGRMS_OWNER
+        // owner combine: the partials travel in ROW form (column 0 -> row 0)
+        transpose_dest_init<DST_ACCUM_MODE>();
+        transpose_dest<DST_ACCUM_MODE>(2);
+        transpose_dest<DST_ACCUM_MODE>(1);
+#endif
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(2, cb_partial);
@@ -630,6 +719,126 @@ ALWI void combine_block(uint32_t rows, uint32_t inv_w_bits, uint32_t eps_bits, u
     }
     cb_pop_front(src_cb, 2 * k * rows);
 }
+
+#ifdef AGRMS_OWNER
+ALWI void bcast_row_to(uint32_t cb, uint32_t tile, uint32_t dst) {
+    reconfig_data_format_srcb(cb);
+    unary_bcast_init<BroadcastType::ROW>(cb);
+    unary_bcast<BroadcastType::ROW>(cb, tile, dst);
+}
+
+// Owner Chan combine in ROW form (k > 8). Per owned row j, gather tile g of stat s = page (j * 2 + s) * gp + g holds
+// member m = 32 g + rho's (mean_m, M2_m) in row rho (32 columns = the block's 32 rows of tile-row r; unused rows
+// zero). Pivot K = bf16(mean of member 0) (row 0 of gather tile 0; the pack to bf16 cb_km IS the rounding), so every
+// FPU operand is centered:
+//   W1 (per g): d = mean - K (SFPU, fp32), a = n_m d, b = M2_m + n_m d^2 -> cb_dev        (n_m: cb_wcol bcast COL)
+//   W2: S1 = sum_m a, S2 = sum_m b (ones-row matmul, row 0); delta = S1 / W, M2 = S2 - S1 delta,
+//       inv_std = rsqrt(M2 / W + eps), mu = K + delta; transposed to column form -> cb_mu (mu, inv_std),
+//       K_g = bf16(mu) -> cb_km
+//   W3: shift = (K_g - mu) inv_std -> cb_own_ret (inv_std, shift), K_g -> cb_own_kg (the writer returns them)
+ALWI void owner_combine_ln(uint32_t owned, uint32_t inv_w_bits, uint32_t eps_bits) {
+    constexpr uint32_t gp = gather_pages;
+    cb_wait_front(cb_gathered, owned * 2 * gp);
+    cb_wait_front(cb_wcol, gp);
+    cb_wait_front(cb_ones, 1);
+    for (uint32_t j = 0; j < owned; ++j) {
+        const uint32_t mean0 = (j * 2) * gp, m2_0 = (j * 2 + 1) * gp;
+        // W0: pivot K = bf16(member 0's means)
+        cb_reserve_back(cb_km, 1);
+        tile_regs_acquire();
+        copy_to(cb_gathered, mean0, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_reconfig_data_format(cb_km);
+        pack_tile(0, cb_km);
+        tile_regs_release();
+        cb_push_back(cb_km, 1);
+        cb_wait_front(cb_km, 1);
+        // W1: centered, weighted member terms -> cb_dev
+        pack_reconfig_data_format(cb_dev);
+        for (uint32_t g = 0; g < gp; ++g) {
+            cb_reserve_back(cb_dev, 2);
+            tile_regs_acquire();
+            copy_to(cb_gathered, mean0 + g, 0);
+            bcast_row_to(cb_km, 0, 1);
+            sub_d(0, 1, 0);  // d = mean_m - K
+            bcast_col_to(cb_wcol, g, 1);
+            mul_d(0, 1, 2);  // a = n_m d
+            mul_d(0, 2, 0);  // n_m d^2
+            copy_to(cb_gathered, m2_0 + g, 1);
+            add_d(0, 1, 0);  // b = M2_m + n_m d^2
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(2, cb_dev);
+            pack_tile(0, cb_dev);
+            tile_regs_release();
+            cb_push_back(cb_dev, 2);
+        }
+        // W2: sums over the members (row 0), finalize, transpose to column form
+        cb_wait_front(cb_dev, 2 * gp);
+        cb_reserve_back(cb_mu, 2);
+        cb_reserve_back(cb_km, 1);
+        reconfig_data_format(cb_dev, cb_ones);  // srcA = in1 (dev), srcB = in0 (ones)
+        matmul_init(cb_ones, cb_dev, 0);
+        tile_regs_acquire();
+        for (uint32_t g = 0; g < gp; ++g) {
+            matmul_tiles(cb_ones, cb_dev, 0, 2 * g, 0);      // S1
+            matmul_tiles(cb_ones, cb_dev, 0, 2 * g + 1, 1);  // S2
+        }
+        copy_d(0, 2);
+        mul_s(2, inv_w_bits);  // delta = S1 / W
+        mul_d(0, 2, 0);        // S1 delta
+        sub_d(1, 0, 1);        // M2
+        mul_s(1, inv_w_bits);
+        binop_with_scalar_tile_init();
+        add_unary_tile(1, eps_bits);
+        rsqrt_tile_init();
+        rsqrt_tile(1);  // inv_std
+        bcast_row_to(cb_km, 0, 0);
+        add_d(0, 2, 0);  // mu = K + delta
+        transpose_dest_init<DST_ACCUM_MODE>();
+        transpose_dest<DST_ACCUM_MODE>(0);
+        transpose_dest<DST_ACCUM_MODE>(1);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_reconfig_data_format(cb_mu);
+        pack_tile(0, cb_mu);
+        pack_tile(1, cb_mu);
+        pack_reconfig_data_format(cb_km);
+        pack_tile(0, cb_km);
+        tile_regs_release();
+        cb_push_back(cb_mu, 2);
+        cb_push_back(cb_km, 1);
+        cb_pop_front(cb_dev, 2 * gp);
+        cb_pop_front(cb_km, 1);  // K
+        // W3: shift = (K_g - mu) * inv_std; return (inv_std, shift) + K_g
+        cb_wait_front(cb_mu, 2);
+        cb_wait_front(cb_km, 1);
+        cb_reserve_back(cb_own_ret, 2);
+        cb_reserve_back(cb_own_kg, 1);
+        tile_regs_acquire();
+        copy_to(cb_mu, 0, 0);  // mu
+        copy_to(cb_km, 0, 1);  // K_g
+        copy_to(cb_mu, 1, 2);  // inv_std
+        copy_d(1, 3);
+        sub_d(1, 0, 1);
+        mul_d(1, 2, 1);  // shift
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_reconfig_data_format(cb_own_ret);
+        pack_tile(2, cb_own_ret);
+        pack_tile(1, cb_own_ret);
+        pack_reconfig_data_format(cb_own_kg);
+        pack_tile(3, cb_own_kg);
+        tile_regs_release();
+        cb_push_back(cb_own_ret, 2);
+        cb_push_back(cb_own_kg, 1);
+        cb_pop_front(cb_mu, 2);
+        cb_pop_front(cb_km, 1);
+    }
+    cb_pop_front(cb_gathered, owned * 2 * gp);
+}
+#endif
 
 #ifdef AGRMS_LN_FPU
 // ---- FPU fast path (tile-aligned bf16 / bfloat8_b input: x and the bf16 pivots are exact FPU operands, so
@@ -800,11 +1009,18 @@ void kernel_main() {
     }
     {
         AGZ("c_comb");
+#ifdef AGRMS_OWNER
+        const uint32_t owned = agrms_owner::owned_rows(rows, arg(2), w_split_cores);
+        if (owned > 0) {
+            owner_combine_ln(owned, inv_w_bits, eps_bits);
+        }
+#else
         if constexpr (w_split_cores > 1) {
             combine_block<cb_gathered>(rows, inv_w_bits, eps_bits, nm_idx);
         } else {
             combine_block<cb_partial>(rows, inv_w_bits, eps_bits, nm_idx);
         }
+#endif
     }
     {
         AGZ("c_waitg");
@@ -815,6 +1031,10 @@ void kernel_main() {
         cb_wait_front(cb_beta, pitch);
 #endif
         cb_wait_front(cb_shift, rows);
+#ifdef AGRMS_OWNER
+        cb_wait_front(cb_kg, rows);  // returned by the row owners (writer)
+        cb_wait_front(cb_rowstat, rows);
+#endif
     }
     {
         AGZ("c_norm");

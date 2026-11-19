@@ -162,6 +162,40 @@ void kernel_main() {
     }
 #endif
 
+#if defined(AGRMS_OWNER) && defined(AGRMS_LN)
+    // owner combine weights: n_m at column 0 of row m % 32 of tile m / 32 (accumulator format), zero elsewhere —
+    // zeroed through the NoC zero engine, then only the k weights are stored.
+    {
+        uint32_t w_idx = tails_idx + n_tails;
+#ifdef AGRMS_DENSE
+        w_idx += 1 + arg(w_idx);
+#endif
+        const uint32_t k = arg(w_idx);
+        const uint32_t gp = (k + agrms_owner::ROW_GATHER - 1) / agrms_owner::ROW_GATHER;
+        const uint32_t acc_tile = get_tile_size(cb_wcol);
+        CircularBuffer cbw(cb_wcol);
+        cb_reserve_back(cb_wcol, gp);
+        const uint32_t wbase = get_write_ptr(cb_wcol);
+        for (uint32_t g = 0; g < gp; ++g) {
+            noc.async_write_zeros(cbw, acc_tile, {.offset_bytes = g * acc_tile});
+        }
+        noc.write_zeros_l1_barrier();
+        for (uint32_t m = 0; m < k; ++m) {
+            const uint32_t rho = m % agrms_owner::ROW_GATHER;
+            const uint32_t idx = (rho < FACE_DIM ? 0 : 2 * FACE_DIM * FACE_DIM) + (rho % FACE_DIM) * FACE_DIM;
+            const uint32_t bits = arg(w_idx + 1 + m);
+            const uint32_t tile = wbase + (m / agrms_owner::ROW_GATHER) * acc_tile;
+            if (acc_tile == 4096) {
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile + idx * 4) = bits;
+            } else {  // bf16 accumulator: round to nearest even
+                const uint32_t rounded = bits + 0x7FFFu + ((bits >> 16) & 1u);
+                *reinterpret_cast<volatile tt_l1_ptr uint16_t*>(tile + idx * 2) = static_cast<uint16_t>(rounded >> 16);
+            }
+        }
+        cb_push_back(cb_wcol, gp);
+    }
+#endif
+
     if (expected_landings > 0) {
         AGZ("rd_land");
         noc_semaphore_wait_min(
