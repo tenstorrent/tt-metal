@@ -133,6 +133,8 @@ def test_shard_and_gather(mesh_device: ttnn.MeshDevice, expect_error) -> None:
     assert params["tensor_parallel"].mesh_axes == (1, 0)
     assert params["tensor_parallel"].durable_mesh_axes == (None, 0)
     assert not params["small"].is_transiently_sharded()  # no dim splits into whole tiles
+    with expect_error(ValueError, "cannot be split"):
+        params["small"].shard(1, defer_free=[])  # sharded directly, it raises instead of staying whole
     assert_layout_matches_data()
     with expect_error(RuntimeError, "gather it first"):
         params["replicated"].data
@@ -177,7 +179,7 @@ def test_shard_and_gather(mesh_device: ttnn.MeshDevice, expect_error) -> None:
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-def test_shard_without_a_split_keeps_the_module_loaded(mesh_device: ttnn.MeshDevice) -> None:
+def test_shard_without_a_split_keeps_the_module_loaded(mesh_device: ttnn.MeshDevice, expect_error) -> None:
     model = ShardableModule(device=mesh_device)
     model.load_torch_state_dict(
         {
@@ -193,6 +195,8 @@ def test_shard_without_a_split_keeps_the_module_loaded(mesh_device: ttnn.MeshDev
 
     assert model.is_loaded() and not model.is_transiently_sharded() and not evictions
     model()
+    with expect_error(ValueError, "cannot be split"):
+        model.replicated.shard(1, defer_free=[])
 
 
 class FreesExtraState(ShardableModule):

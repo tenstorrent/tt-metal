@@ -296,8 +296,9 @@ class Module(ABC):
         module, call it, or read a sharded parameter's data until you call gather. Note that calling `forward`
         directly skips the check in `__call__`, so it is only caught if that forward reads a sharded parameter's data.
 
-        The module counts as unloaded while sharded. If no parameter can be split (for example, when the mesh_axis
-        has only one device), we leave the module as it is: it stays loaded and its eviction hooks do not run.
+        Parameters that cannot be split (see `Parameter.shard_dim`) stay whole. The module counts as unloaded while
+        sharded. If no parameter can be split (for example, when the mesh_axis has only one device), we leave the
+        module as it is: it stays loaded and its eviction hooks do not run.
 
         We defer freeing the full weights until every parameter's sharded tensor is allocated, to avoid fragmenting
         DRAM. If we freed each full weight right after allocating its sharded tensor, the next sharded tensor would
@@ -322,7 +323,8 @@ class Module(ABC):
 
         defer_free: list[ttnn.Tensor] = []
         for parameter in parameters:
-            parameter.shard(mesh_axis, defer_free=defer_free)
+            if parameter.shard_dim(mesh_axis) is not None:
+                parameter.shard(mesh_axis, defer_free=defer_free)
         if not defer_free:
             return
         for t in defer_free:
@@ -635,20 +637,20 @@ class Parameter:
     def shard(self, mesh_axis: int, /, *, defer_free: list[ttnn.Tensor]) -> None:
         """Shard this parameter's data along the mesh_axis; see `Module.shard`.
 
-        We pick the first dim that is not already sharded and splits evenly over the mesh_axis (in whole tiles, for
-        the last two dims of a tiled tensor). The parameter stays whole if no dim splits evenly, if its rank is above
-        4, if it has no device data, or if the mesh_axis has only one device.
+        We split the dim `shard_dim` picks. If the parameter cannot be split (`shard_dim` returns None), we raise a
+        ValueError instead of leaving it whole, so a caller that shards one parameter always knows whether it was split.
 
         After sharding, the parameter holds the sharded tensor, and the full tensor is appended to `defer_free` for
         the caller to deallocate.
         """
         self.check_shard_axis(mesh_axis)
-        if self._data is None or self.on_host:
-            return
-        n = self.device.shape[mesh_axis]
-        dim = self._shard_dim(n) if n > 1 and len(self.total_shape) <= 4 else None
+        dim = self.shard_dim(mesh_axis)
         if dim is None:
-            return
+            msg = (
+                f"parameter of shape {list(self.total_shape)} cannot be split over mesh axis {mesh_axis}: it needs "
+                "device data, a rank of at most 4, more than one device on the axis and a dim that splits evenly"
+            )
+            raise ValueError(msg)
         full = self._data
         offset = 4 - len(self.total_shape)
         piece = ttnn.mesh_partition(
@@ -679,9 +681,19 @@ class Parameter:
         self.data = gathered
         defer_free.append(sharded)
 
-    def _shard_dim(self, n: int) -> int | None:
-        """The first unsplit dim that splits n ways: whole tiles for the last two dims of a tiled tensor, never the
-        last dim of a row-major one."""
+    def shard_dim(self, mesh_axis: int) -> int | None:
+        """The dim `shard` would split over the mesh_axis, or None if this parameter cannot be split.
+
+        We pick the first dim that is not already sharded and splits evenly over the mesh_axis: in whole tiles for
+        the last two dims of a tiled tensor, and never the last dim of a row-major one. A parameter cannot be split if
+        it has no device data, if its rank is above 4, if the mesh_axis has only one device, or if no dim splits
+        evenly.
+        """
+        if self._data is None or self.on_host or len(self.total_shape) > 4:
+            return None
+        n = self.device.shape[mesh_axis]
+        if n == 1:
+            return None
         rank = len(self.total_shape)
         tiled = self.layout == ttnn.Layout.TILE
         for d, (size, axis) in enumerate(zip(self.local_shape, self.mesh_axes, strict=True)):
