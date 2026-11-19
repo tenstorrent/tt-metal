@@ -67,6 +67,12 @@ SHARED_TESTS = (
 )
 # FIX.29: a model test file that takes the batch's model declares it with this line (module level)
 SHARED_MARK = re.compile(r"^BATCH_SHARED\s*=\s*True\b", re.M)
+# F285 (OWNER 2026-11-19: "accuracy loads the whole model; performance does not"): a shared-model test is an accuracy
+# check ("full": every layer, in the accept gate's one fresh process with the determinism check) or a performance
+# measurement ("executed": the layers it executes, testing/batch.run_layers, in the resident runner). A model test file
+# declares ``BATCH_LAYERS = "executed"``; the framework's own: EXECUTED_TESTS; anything else is "full".
+LAYERS_MARK = re.compile(r"^BATCH_LAYERS\s*=\s*[\"'](full|executed)[\"']", re.M)
+EXECUTED_TESTS = ("test_profile.py", "test_positions.py")
 LOADS_METRIC = "model_loads"  # each process: the model loads it made (testing/batch.shared_model)
 GATE_LOADS_METRIC = "gate_model_loads"  # a gate run: the model loads of all its processes (core/gate.run_units)
 _REPO = Path(__file__).resolve().parents[5]
@@ -115,6 +121,26 @@ def shareable(test: str, repo: Path | None = None) -> bool:
         return bool(SHARED_MARK.search(f.read_text(errors="replace")))
     except OSError:
         return False
+
+
+def layer_class(test: str, repo: Path | None = None) -> str:
+    """F285: "executed" (a performance measurement) or "full" (an accuracy check) of a test file (or ::nodeid)."""
+    path = test.split("::")[0]
+    if path.startswith(TESTS_DIR):
+        return "executed" if path.rsplit("/", 1)[-1] in EXECUTED_TESTS else "full"
+    try:
+        m = LAYERS_MARK.search(((repo or _REPO) / path).read_text(errors="replace"))
+    except OSError:
+        return "full"
+    return m.group(1) if m else "full"
+
+
+def unit_class(runs: list[dict] | None) -> str | None:
+    """F285: a unit's layer class: "executed" when every run is a performance measurement, else "full"; None for a
+    unit that does not take the shared model."""
+    if not runs:
+        return None
+    return "executed" if all(layer_class(t) == "executed" for r in runs for t in r["args"]) else "full"
 
 
 def declared_item_vars(test: str, repo: Path | None = None) -> set:
@@ -376,8 +402,9 @@ def gate_groups(units: list[tuple[str, str]], env: dict) -> list[list[tuple[str,
         runs = parsed[u]
         key = None
         if runs:
-            ks = {model_key({**env, **r["env"]}, names) for r in runs}
-            key = ks.pop() if len(ks) == 1 else None
+            ks = {model_key({**env, **_with_config(r, units, parsed)["env"]}, names) for r in runs}
+            # F285: accuracy units ("full") and performance units ("executed") are never one process
+            key = f"{unit_class(runs)}:{ks.pop()}" if len(ks) == 1 else None
         if key is not None and key in keys:  # F283: the gate's group of that model, wherever it started
             out[keys.index(key)].append((u, forms[u]))
         else:
@@ -386,13 +413,31 @@ def gate_groups(units: list[tuple[str, str]], env: dict) -> list[list[tuple[str,
     return [g if len(g) > 1 else [(g[0][0], dict(units)[g[0][0]])] for g in out]
 
 
+def _config_of(units: list[tuple[str, str]], parsed: dict | None = None) -> dict:
+    """F285: the model configuration variables (not per-run) of the gate's first accuracy unit that is not the
+    determinism check: the configuration the determinism check runs at (it checks the model the gate tests)."""
+    for u, c in units:
+        runs = parsed[u] if parsed is not None else parse_all(launch_form(c)[0])
+        if runs and not _determinism_only(runs) and unit_class(runs) == "full":
+            item = ITEM_VARS | DECLARED_ITEM_VARS | call_vars(runs[0]["env"])
+            return {k: v for k, v in runs[0]["env"].items() if k not in item}
+    return {}
+
+
+def _with_config(run: dict, units, parsed=None) -> dict:
+    """The run, a determinism run with no switches of its own taking the gate's accuracy configuration (F285)."""
+    if phase(run) != -1 or run["env"].keys() - ITEM_VARS:
+        return run
+    return dict(run, env={**_config_of(units, parsed), **run["env"]})
+
+
 def gate_entries(group: list[tuple[str, str]], env: dict, unit_env: dict, logs: dict) -> list[dict]:
     """FIX.29: the batch entries of one process group of gate units: each unit's runs (its `&&` segments) in a group
     of their own (a failed run skips the rest of its unit), the unit's own log and per-run variables (``unit_env``:
     {unit: {BRINGUP_TASK: ...}}), the determinism runs first (FIX.25: the first sequence after the load is the cold
     one), else the gate's order; the plan stops at the first failure (the gate stops there too). ``logs``: {unit:
     log path}."""
-    parsed = [(u, parse_all(c)) for u, c in group]
+    parsed = [(u, [_with_config(r, group) for r in parse_all(c)]) for u, c in group]  # F285
     names = {k for _, runs in parsed for r in runs for k in r["env"]}
     entries = []
     for u, runs in parsed:
@@ -416,32 +461,43 @@ def _determinism_only(runs: list[dict]) -> bool:
     return bool(runs) and all(phase(r) == -1 for r in runs)
 
 
+def group_class(group: list[tuple[str, str]]) -> str | None:
+    """F285: the layer class of a process group (gate_groups never mixes them), None when not a shared-model one."""
+    runs = [parse_all(launch_form(c)[0]) for _, c in group]
+    if not all(runs):
+        return None
+    return unit_class([r for rs in runs for r in rs])
+
+
 def one_load_errors(units: list[tuple[str, str]], env: dict) -> list[str]:
-    """F283 (OWNER 2026-11-19: "a task may load the model at most once per gate; a plan that needs more loads is
-    refused before it runs"): the gate's units (unit, command) as gate_groups puts them in processes; every group of
-    runs that take the shared model is one model load, the model determinism check alone in its group aside (the one
-    cold run a gate may add). More than one: why, naming the groups' units and the variables they differ in."""
+    """F283 / F285 (OWNER 2026-11-19: "a task may load the model at most once per gate"; "accuracy loads the whole
+    model; performance does not"): the gate's units (unit, command) as gate_groups puts them in processes. Allowed:
+    one group of accuracy units ("full": the fresh full-model process with the determinism check) and one group of
+    performance units ("executed": the resident runner's model of the executed layers, no load when it holds it).
+    More: why, naming the groups' units and the variables they differ in."""
     groups = gate_groups(units, env)
-    loads = []
+    loads, by = [], {}
     for g in groups:
-        runs = [parse_all(launch_form(c)[0]) for _, c in g]
-        if not all(runs):
+        cls = group_class(g)
+        if cls is None:
             continue  # not a shared-model process (a component test, a CPU check): no model of the gate's
-        flat = [r for rs in runs for r in rs]
-        if _determinism_only(flat):
-            continue
-        loads.append((g, flat))
-    if len(loads) <= 1:
+        runs = [parse_all(launch_form(c)[0]) for _, c in g]
+        loads.append((g, [r for rs in runs for r in rs]))
+        by.setdefault(cls, []).append(loads[-1])
+    over = [cls for cls, gs in by.items() if len(gs) > 1]
+    if not over:
         return []
+    loads = by[over[0]]
     names = {k for _, flat in loads for r in flat for k in r["env"]}
     keys = [json.loads(model_key({**env, **flat[0]["env"]}, names)) for _, flat in loads]
     diff = sorted(k for k in set().union(*keys) if len({json.dumps(x.get(k)) for x in keys}) > 1)
     parts = [f"[{', '.join(u for u, _ in g)}]" for g, _ in loads]
     why = f"they differ in {', '.join(diff)}" if diff else "their runs differ within a unit"
     return [
-        f"the gate needs {len(loads)} model loads, one per process group {' '.join(parts)}: {why}. Owner rule "
-        "(2026-11-19, spec tests.one_load): one model load per gate (the cold determinism run aside); make the "
-        "units share one model configuration"
+        f"the gate needs {len(loads)} {over[0]}-layer model loads, one per process group {' '.join(parts)}: {why}. "
+        "Owner rule (2026-11-19, spec tests.one_load): one full-model load for the accuracy units (with the "
+        "determinism check) and one executed-layers load for the performance units per gate; make the units of a "
+        "class share one model configuration"
     ]
 
 

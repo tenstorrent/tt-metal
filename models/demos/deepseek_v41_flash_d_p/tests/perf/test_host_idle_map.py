@@ -37,7 +37,8 @@ from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
 
 S = spec()
 BATCH_SHARED = True
-BATCH_ITEM_VARS = ("IDLE_POS", "IDLE_RUNS", "IDLE_SWEEP")  # F279: per-run, not the model's configuration
+BATCH_ITEM_VARS = ("IDLE_POS", "IDLE_RUNS", "IDLE_SWEEP")
+BATCH_LAYERS = "executed"  # F285: a performance measurement: the layers it executes, in the resident runner  # F279: per-run, not the model's configuration
 
 
 class Marks:
@@ -174,7 +175,7 @@ def test_host_idle_map(mesh_device, monkeypatch):
     chunk = int(S.get("target.chunk"))
     p = int(os.environ.get("IDLE_POS", "145408"))
     n_runs = int(os.environ.get("IDLE_RUNS", "7"))
-    layers = list(S.layers())
+    layers = batch.run_layers(S, list(S.layers()), last_chunk=False)  # F282: every chunk here is last=False
     want = max(p + chunk, int(S.data["target"]["seq"]))
     monkeypatch.setitem(S.data["target"], "seq", want)
     model = batch.device_model(S, mesh_device, layers, lm_head=False)

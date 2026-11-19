@@ -170,9 +170,12 @@ def run_layers(s, layers, last_chunk: bool | None = None) -> list:
 
 def _serves_layers(held: list, want: list) -> bool:
     """F282: the held model's layers serve ``want``: the same list, or ``want`` is a run_layers subset and the held
-    model's layers lie between it and the full list it came from."""
+    model's layers lie between it and the full list it came from. F285: in the resident runner a performance
+    measurement never runs on a full model an earlier plan loaded (an accuracy load): it gets its own."""
     if held == want:
         return True
+    if os.environ.get(RESIDENT_ENV) and _MODELS.get("plan") is not _RUN.get("plan"):
+        return False
     full = _SUBSETS.get(tuple(want))
     return full is not None and set(want) <= set(held) <= set(full)
 

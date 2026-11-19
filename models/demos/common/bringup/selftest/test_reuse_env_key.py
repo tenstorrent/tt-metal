@@ -23,6 +23,9 @@ KNOB_TEST = 'import os\nPOS = os.environ.get("SKIP_POS", "51200")\n'
 def _sandbox(sandbox, monkeypatch, tmp_path):
     """The fake safe runner, the ladder test reading a SKIP_POS knob, the model's code (src/) and its settings."""
     calls = _setup(sandbox, monkeypatch, tmp_path)
+    # (F285: these gates' determinism check now joins the ladder's process; reuse is what is tested here, one process a
+    # unit keeps each ladder a call of its own)
+    sandbox.write_spec(tests={**(sandbox.spec_data.get("tests") or {}), "one_process": False})
     (sandbox.repo / LADDER_T).parent.mkdir(parents=True, exist_ok=True)
     (sandbox.repo / LADDER_T).write_text(KNOB_TEST)
     (sandbox.repo / "src/tt").mkdir(parents=True)

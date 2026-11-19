@@ -77,7 +77,8 @@ from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
 
 S = spec()
 BATCH_SHARED = True  # FIX.29: takes the model of a bring-up batch process (core/batch.shareable)
-BATCH_ITEM_VARS = ("SKIP_POS",)  # F279: per-run (the points measured), not the model's configuration
+BATCH_ITEM_VARS = ("SKIP_POS",)
+BATCH_LAYERS = "executed"  # F285: a performance measurement: the layers it executes, in the resident runner  # F279: per-run (the points measured), not the model's configuration
 POINTS = (51200, 128000, 256000, 512000, 768000, 1024000)
 REPLAY = 128  # the encoder replay rows of a resumed request (DeepSeek's Encoder SWA Bounded Replay, n_win 128)
 GIB = float(1 << 30)

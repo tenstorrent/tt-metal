@@ -93,15 +93,49 @@ def test_for_env_serves_a_healthy_runner_restarts_a_yielded_one_and_never_a_stop
 
 # ---------------------------------------------------------------- F283: one model load a gate
 def test_one_load_a_gate_counts_process_groups_of_shared_model_runs(call_hooks):
+    """F283 / F285: one full-model load (the accuracy units with the determinism check) and one executed-layers load
+    (the performance units) a gate."""
     ok = [("t#test_determinism", DET), ("t#a", LADDER), ("t#b", f"X_SKIP=decode {PROFILE}")]
-    assert B.one_load_errors(ok, {}) == []  # a per-run switch does not split the load
-    assert B.one_load_errors([("t#test_determinism", DET), ("t#b", f"X_LOAD=1 {PROFILE}")], {}) == []  # (cold run)
-    two = [("t#a", LADDER), ("t#b", f"X_SKIP=tail {PROFILE}")]  # a load-time value of the same switch
+    assert B.one_load_errors(ok, {}) == []
+    assert [[u for u, _ in g] for g in B.gate_groups(ok, {})] == [["t#test_determinism", "t#a"], ["t#b"]]
+    assert [B.group_class(g) for g in B.gate_groups(ok, {})] == ["full", "executed"]
+    # the determinism check runs at the configuration of the gate's accuracy units: one process with them
+    det = [("t#test_determinism", DET), ("t#a", f"X_LOAD=1 {LADDER}")]
+    assert [[u for u, _ in g] for g in B.gate_groups(det, {})] == [["t#test_determinism", "t#a"]]
+    entries = B.gate_entries(det, {}, {}, {"t#test_determinism": "d.log", "t#a": "a.log"})
+    assert entries[0]["env"] == {"X_LOAD": "1"}
+    two = [("t#a", LADDER), ("t#b", f"X_LOAD=1 {LADDER}")]  # two accuracy configurations
     err = B.one_load_errors(two, {})
-    assert len(err) == 1 and "2 model loads" in err[0] and "[t#a] [t#b]" in err[0] and "X_SKIP" in err[0]
+    assert len(err) == 1 and "2 full-layer model loads" in err[0] and "[t#a] [t#b]" in err[0] and "X_LOAD" in err[0]
+    perf = [("t#a", PROFILE), ("t#b", f"X_SKIP=tail {PROFILE}")]  # a load-time value of the per-run switch
+    assert "2 executed-layer model loads" in B.one_load_errors(perf, {})[0]
     other = [("t#a", LADDER), ("t#c", f"{R} models/x/tests/test_own_process.py"), ("t#b", LADDER)]
     assert B.one_load_errors(other, {}) == []  # a unit of its own between them: the group still loads once
     assert [[u for u, _ in g] for g in B.gate_groups(other, {})] == [["t#a", "t#b"], ["t#c"]]
+
+
+def test_layer_classes(tmp_path):
+    assert B.layer_class(f"{T}test_profile.py") == "executed" and B.layer_class(f"{T}test_ladder.py") == "full"
+    t = tmp_path / "models/x/tests/test_p.py"
+    t.parent.mkdir(parents=True)
+    t.write_text('BATCH_SHARED = True\nBATCH_LAYERS = "executed"\n')
+    assert B.layer_class("models/x/tests/test_p.py", tmp_path) == "executed"
+    t.write_text("BATCH_SHARED = True\n")
+    assert B.layer_class("models/x/tests/test_p.py", tmp_path) == "full"
+
+
+def test_in_the_runner_a_performance_run_never_takes_another_plans_full_model(monkeypatch):
+    monkeypatch.setenv(TB.RESIDENT_ENV, "/tmp/r")
+    TB._SUBSETS[(0, 1)] = (0, 1, 2)
+    TB._MODELS["plan"] = object()
+    TB._RUN["plan"] = object()
+    try:
+        assert not TB._serves_layers([0, 1, 2], [0, 1])
+        TB._RUN["plan"] = TB._MODELS["plan"]  # the same plan (the accept gate's fresh process)
+        assert TB._serves_layers([0, 1, 2], [0, 1])
+    finally:
+        TB._MODELS.clear()
+        TB._SUBSETS.clear()
 
 
 def test_per_run_switches_never_split_a_process(call_hooks):
@@ -142,8 +176,24 @@ def test_the_gate_refuses_and_validate_fails_a_task_needing_two_loads(sandbox, c
 
     spec = sandbox.spec
     spec.data.setdefault("tests", {})["one_process"] = True
-    task = {"id": "P.9", "gate": {"cmd": f"{LADDER} && X_SKIP=tail {PROFILE}"}}
+    task = {"id": "P.9", "gate": {"cmd": f"{LADDER} && X_LOAD=1 {LADDER}"}}
     assert G.one_load_errors(spec, task, {"P.9": task})
     assert G.one_load(spec) and B.ONE_LOAD_ENV not in G.gate_env(spec, sandbox.ledger, "P.9")  # (the plan says it)
     spec.data["tests"]["one_load"] = False
     assert G.one_load_errors(spec, task, {"P.9": task}) == []
+
+
+def test_an_accept_gate_runs_its_performance_units_first_then_one_full_process(sandbox, monkeypatch, tmp_path):
+    """F285: the performance units' process (the runner's executed-layers model) runs before the accuracy units'
+    fresh full-model process with the determinism check, so the runner's model is not evicted for a second load."""
+    from models.demos.common.bringup.core.gate import run_gate
+    from models.demos.common.bringup.selftest import test_gate_one_process as TG
+
+    calls = TG._setup(sandbox, monkeypatch, tmp_path)
+    sandbox.write_spec(tests={"one_process": True})
+    task = TG._gate(f"{TG.LADDER} && {TG.CONTRACT} && BRINGUP_PROFILE_WALL=1 {R} {T}test_profile.py")
+    task["gate"]["metrics"].pop("gate_model_loads")
+    led = sandbox.tasks(task)
+    res = run_gate(sandbox.spec, led, "A.1")
+    lines = calls.read_text().splitlines()
+    assert len(lines) == 2 and "test_profile" in lines[0] and "test_determinism" in lines[1], (lines, res.summary())

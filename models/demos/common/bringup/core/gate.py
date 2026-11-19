@@ -951,17 +951,28 @@ def run_units(
         return _lookup(spec, store, u, cmd, st, sid, uenv, tasks, limits, len(plan) == 1) is None
 
     # FIX.29: the units that run, grouped into processes (core/batch.gate_groups): {unit: its group}
-    groups = {}
+    groups, early = {}, []
     if spec.get("tests.one_process"):
         todo = [(u, c) for u, c, _, sid in plan if would_run(u, c, sid)]
-        for g in batch.gate_groups(todo, env):
-            if len(g) > 1:
+        gg = batch.gate_groups(todo, env)
+        has_full = any(batch.group_class(g) == "full" for g in gg)
+        for g in gg:
+            # F285: the performance units' group runs first (on the resident runner's executed-layers model, no load
+            # when it holds it), then the accuracy units' group (one fresh full-model process with the determinism
+            # check): the other order would evict the runner's model for a second load
+            if has_full and batch.group_class(g) == "executed":
+                g = [(u, batch.launch_form(c)[0]) for u, c in g]
+                early.append(g)
+            if len(g) > 1 or g in early:
                 for u, _ in g:
                     groups[u] = g
     shared: dict[str, dict] = dict(pre or {})  # unit -> its result in a group's batch process (rc, metrics, files, ...)
     loads = {"n": 0, "seen": False}  # FIX.29: model loads of this gate's processes (gate_model_loads)
     with open(log, "a" if only else "w") as f:
         f.write(f"$ {gate_command(task, tasks)}\n")
+        for g in early:  # F285
+            f.write(f"# F285: the performance units {', '.join(u for u, _ in g)} first (executed layers)\n")
+            shared.update(_run_group(spec, g, env, log, results, tid, f, lambda x: {M.TASK_ENV: unit_base(x)}))
         for k, (u, cmd, st, sid) in enumerate(plan, 1):
             if only is not None and u not in only:
                 continue

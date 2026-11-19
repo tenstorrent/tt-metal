@@ -49,7 +49,8 @@ from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
 
 S = spec()
 BATCH_SHARED = True  # FIX.29
-BATCH_ITEM_VARS = ("CENSUS_POS", "CENSUS_CHUNKS", "CENSUS_OUT")  # F279: per-run, not the model's configuration
+BATCH_ITEM_VARS = ("CENSUS_POS", "CENSUS_CHUNKS", "CENSUS_OUT")
+BATCH_LAYERS = "executed"  # F285: a performance measurement: the layers it executes, in the resident runner  # F279: per-run, not the model's configuration
 FIT_US = (205.0, 6.77)  # DS41-299: routed_experts_combine us a layer = a + b x the busiest chip's 32-row tiles
 HOT = 8
 

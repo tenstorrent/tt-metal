@@ -437,6 +437,8 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
         g = Golden.for_rung(s, rung_name)
     metrics.record("scaled_run", int(getattr(s, "scaled", False)))  # F64: the reduced model of a scaled run
     layers = [i for i in s.layers() if i in g.layers]
+    if pos is not None:  # F282 / F285: a position run loads the layers it executes (a non-last chunk under decode)
+        layers = batch.run_layers(s, layers, last_chunk=chunk_last() is not False)
     chunk = rung["chunk"]
     start = rung["seq"] - chunk
     model = batch.device_model(s, mesh, layers, lm_head=False)

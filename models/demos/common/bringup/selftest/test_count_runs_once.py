@@ -112,6 +112,7 @@ def test_a_runner_record_is_reused_however_the_run_was_launched(sandbox, monkeyp
 
 def test_never_a_failed_run_nor_an_older_pass_behind_it(sandbox, monkeypatch, tmp_path):
     calls = _setup(sandbox, monkeypatch, tmp_path)
+    sandbox.write_spec(tests={**(sandbox.spec_data.get("tests") or {}), "one_process": False})  # (a ladder call each)
     led = sandbox.tasks(_ladder_task())
     env = {"DS41_ENGRAM_TABLE": "resident", "BRINGUP_RUNG": "s1"}
     _runner_run(sandbox, monkeypatch, [LADDER_T], 0, env, {"ladder_failed": 0})

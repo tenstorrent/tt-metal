@@ -1885,7 +1885,7 @@ class Orchestrator:
             quick = f"BRINGUP_QUICK=1 BRINGUP_PROFILE_WALL=1 scripts/run_safe_pytest.sh --no-precompile --run-all {PROFILE_TEST}"
             if not any(DETERMINISM_IN.search(c) for _, c in gate_units(task)):  # not a model-level device gate
                 det = []
-            return det + [("quick", "quick", quick, {})] + self.ab_position_items(task)
+            return self.ab_timing_only(det + [("quick", "quick", quick, {})] + self.ab_position_items(task))
         segs = [x.strip() for x in gate_command(task).split("&&") if x.strip()]
         tests = [x for x in segs if "test_profile.py" not in x and "test_ladder.py" not in x]
         if any(B.DETERMINISM_TEST in x for x in tests):  # the gate's own (injected) check: the determinism item
@@ -1899,7 +1899,22 @@ class Orchestrator:
         ladder = f"scripts/run_safe_pytest.sh --no-precompile --run-all {LADDER_TEST}"
         items += [(r, "ladder", ladder, {"BRINGUP_RUNG": r}) for r in self.ab_rungs(task)]
         prof = " && ".join(re.sub(r"\bBRINGUP_PROFILE_OPS=\S+\s*", "", x) for x in segs if "test_profile.py" in x)
-        return items + ([("profile", "profile", prof, {})] if prof else []) + self.ab_position_items(task)
+        items += ([("profile", "profile", prof, {})] if prof else []) + self.ab_position_items(task)
+        return self.ab_timing_only(items)
+
+    def ab_timing_only(self, items: list) -> list:
+        """F285 (OWNER 2026-11-19: "accuracy loads the whole model; performance does not"): while a resident runner
+        serves the spec, an A/B side measures timing only (profiles, positions, the gate's performance tests: the
+        executed layers, in the runner); accuracy (ladders, accuracy tests, determinism) is judged once, by the accept
+        gate's fresh full-model process on the change-on side."""
+        if not self.resident_serves():
+            return items
+        return [
+            x
+            for x in items
+            if x[1] in ("profile", "position", "quick")
+            or (x[1] == "test" and B.unit_class(B.parse_all(B.launch_form(x[2])[0])) == "executed")
+        ]
 
     def resident_serves(self) -> bool:
         """F281: a resident runner serves this spec (up, or stepped aside for another device run: core/batch.drive
@@ -2151,6 +2166,15 @@ class Orchestrator:
         limits = gate_limits(task, self.led.tasks())  # FIX.25: with determinism_max_abs_diff == 0
         if not any(k == "determinism" for _, k, _, _ in self.ab_items(task)):  # F281: the accept gate checks it
             limits = {k: v for k, v in limits.items() if not k.startswith("determinism")}
+        if self.resident_serves():  # F285: timing sides; the accept gate's full-model process judges accuracy
+            from models.demos.common.bringup.core.gate import measured_only
+
+            got = {}
+            for n in [n for n, k, _, _ in self.ab_items(task) if k != "determinism"]:
+                got.update(M.load(task["id"], d / "new" / n))
+            ok, lines = check_metrics(measured_only(limits, got), got)
+            failing = [x.strip() for x in lines if "FAIL" in x]
+            return {"ok": ok and not failing, "failing": failing, "partial": True}
         det = self.ab_determinism_failing(task, rec, d)
         if rec.get("quick"):  # F122: the thresholds the quick run measured; the full gate runs before the final task
             from models.demos.common.bringup.core.gate import measured_only
@@ -2246,6 +2270,12 @@ class Orchestrator:
         ]
         if rec["note"]:
             out += ["", f"Note: {rec['note']}"]
+        if self.resident_serves():  # F285
+            out += [
+                "",
+                "Timing only (both sides on the resident runner, the executed layers): accuracy is judged once, by the "
+                "accept gate's fresh full-model process on the change-on side.",
+            ]
         if rec.get("quick"):  # F122
             out += ["", "## Quick A/B: the last chunk after the golden prefix, one process a side", ""]
             out += ["| | on | off |", "|---|---|---|"]
