@@ -244,8 +244,10 @@ class ReferenceModel:
             elif len(tokens) < forced.shape[1]:
                 next_ids = forced[:, len(tokens)].long()
             else:
+                rows = (~found).nonzero(as_tuple=True)[0].tolist()
                 raise ValueError(
-                    f"forced CoT ran out after {len(tokens)} tokens before every row emitted <traj_future_start>"
+                    f"No <traj_future_start> token found in generated rows {rows}: "
+                    f"the forced CoT ran out after {len(tokens)} tokens."
                 )
             tokens.append(next_ids)
             logits.append(step_logits)

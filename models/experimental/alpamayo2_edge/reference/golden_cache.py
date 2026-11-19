@@ -13,7 +13,7 @@ from typing import Any, Callable
 
 import torch
 
-from models.experimental.alpamayo2_edge.reference.config import num_layers_override
+from models.experimental.alpamayo2_edge.reference.config import Alpamayo2EdgeConfig
 
 DEFAULT_CACHE_DIR = "/localdev/ctr-mdukic/alpamayo_cache"
 _REFERENCE_DIR = Path(__file__).parent
@@ -31,15 +31,38 @@ def _reference_source_hash() -> str:
     return digest.hexdigest()
 
 
-def cached(name: str, key: dict, fn: Callable[[], Any]) -> Any:
-    """Return `fn()`, stored under `name` and keyed on `key`, the reference sources and ALPAMAYO_NUM_LAYERS.
+def _canonical(value: Any) -> Any:
+    """JSON-able exact form of a key value; tensors are hashed by dtype, shape and bytes."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, torch.Tensor):
+        tensor = value.detach().cpu().contiguous()
+        digest = hashlib.sha256(tensor.reshape(-1).view(torch.uint8).numpy().tobytes()).hexdigest()
+        return {"tensor": [str(tensor.dtype), list(tensor.shape), digest]}
+    if isinstance(value, (list, tuple)):
+        return [_canonical(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _canonical(v) for k, v in value.items()}
+    raise TypeError(
+        f"golden_cache cannot key on a {type(value).__name__}; pass tensors, numbers, strings or containers"
+    )
 
-    Any edit to a file in `reference/` invalidates every entry; stale files are left behind, not deleted.
+
+def cached(name: str, key: dict, fn: Callable[[], Any], *, cfg: Alpamayo2EdgeConfig) -> Any:
+    """Return `fn()`, stored under `name` and keyed on `key`, the model `cfg` that `fn` runs and the reference sources.
+
+    `cfg` contributes the checkpoint snapshot and the vision, LM and expert depths. Any edit to a file in `reference/`
+    invalidates every entry; stale files are left behind, not deleted.
     """
     if not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
         raise ValueError(f"cache name must be a plain file stem, got {name!r}")
-    full_key = {"key": key, "num_layers": num_layers_override(), "source": _reference_source_hash()}
-    digest = hashlib.sha256(json.dumps(full_key, sort_keys=True, default=str).encode()).hexdigest()[:16]
+    full_key = {
+        "key": _canonical(key),
+        "snapshot": Path(cfg.model_dir).name,
+        "layers": [cfg.vision.layers, cfg.text.layers, cfg.expert.layers],
+        "source": _reference_source_hash(),
+    }
+    digest = hashlib.sha256(json.dumps(full_key, sort_keys=True).encode()).hexdigest()[:16]
     path = cache_dir() / f"{name}-{digest}.pt"
     if path.exists():
         return torch.load(path, weights_only=False)

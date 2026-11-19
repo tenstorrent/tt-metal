@@ -480,6 +480,12 @@ def test_no_anchor_raises(model, inputs, prefilled, expect_error):
         model.decode(inputs, _fresh(prefilled[1]), forced=TEXT[None, :4], seed=0, max_new_tokens=4)
 
 
+def test_forced_cot_without_anchor_raises_like_upstream(model, inputs, prefilled, expect_error):
+    # Forced tokens running out before max_new_tokens is the same failure: a row never reached its anchor.
+    with expect_error(ValueError, r"No <traj_future_start> token found in generated rows \[0\]"):
+        model.decode(inputs, _fresh(prefilled[1]), forced=TEXT[None, :4], seed=0, max_new_tokens=256)
+
+
 def test_sampled_decode_replays_under_teacher_forcing(cfg, model, inputs, prefilled, monkeypatch):
     tok = cfg.tokens
     anchor, prompt_len = tok.future_start, inputs.input_ids.shape[1]
@@ -592,7 +598,7 @@ def test_infer_pipeline(cfg, model, inputs, prefilled):
     assert torch.equal(xyz, pred.xyz) and torch.equal(rot, pred.rot)
 
 
-def test_golden_cache(tmp_path, monkeypatch):
+def test_golden_cache(cfg, tmp_path, monkeypatch, expect_error):
     monkeypatch.setenv("ALPAMAYO_CACHE_DIR", str(tmp_path))
     calls = []
 
@@ -600,9 +606,30 @@ def test_golden_cache(tmp_path, monkeypatch):
         calls.append(None)
         return {"value": torch.arange(3)}
 
-    first = golden_cache.cached("probe", {"seed": 0}, compute)
-    second = golden_cache.cached("probe", {"seed": 0}, compute)
-    assert len(calls) == 1 and torch.equal(first["value"], second["value"])
-    golden_cache.cached("probe", {"seed": 1}, compute)
-    assert len(calls) == 2
-    assert len(list(tmp_path.glob("probe-*.pt"))) == 2
+    def run(key, run_cfg=cfg):
+        before = len(calls)
+        golden_cache.cached("probe", key, compute, cfg=run_cfg)
+        return len(calls) > before
+
+    noise = torch.zeros(2000)
+    assert run({"seed": 0, "noise": noise})
+    assert not run({"seed": 0, "noise": noise.clone()}), "an identical key must hit the cache"
+    assert torch.equal(
+        golden_cache.cached("probe", {"seed": 0, "noise": noise}, compute, cfg=cfg)["value"], torch.arange(3)
+    )
+
+    # Every input that changes the result must change the key.
+    assert run({"seed": 1, "noise": noise})
+    nudged = noise.clone()
+    nudged[1000] = 1e-7  # invisible in a tensor's printed form
+    assert run({"seed": 0, "noise": nudged})
+    assert run({"seed": 0, "noise": noise.double()})
+    assert run({"seed": 0, "noise": noise.reshape(2, 1000)})
+    assert run({"seed": 0, "noise": noise}, replace(cfg, model_dir=cfg.model_dir.parent / "other-snapshot"))
+    for part in ("vision", "text", "expert"):
+        deeper = replace(cfg, **{part: replace(getattr(cfg, part), layers=getattr(cfg, part).layers + 1)})
+        assert run({"seed": 0, "noise": noise}, deeper), part
+    assert len(list(tmp_path.glob("probe-*.pt"))) == len(calls)
+
+    with expect_error(TypeError, "cannot key"):
+        golden_cache.cached("probe", {"path": object()}, compute, cfg=cfg)
