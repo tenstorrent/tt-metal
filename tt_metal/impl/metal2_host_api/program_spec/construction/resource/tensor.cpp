@@ -25,7 +25,7 @@
 #include "impl/metal2_host_api/llk_metadata.hpp"
 #include <tt-metalium/math.hpp>
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 namespace {
 
@@ -90,7 +90,7 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
                           spec.layout() == Layout::ROW_MAJOR;
     // dynamic_tensor_shape's runtime accessor fields would have no reader: a per-node binding builds only a
     // LocalTensorAccessor, which reads just its base address.
-    const bool is_per_node = per_core_allocation::is_per_core_allocation(memory_config);
+    const bool is_per_node = experimental::per_core_allocation::is_per_core_allocation(memory_config);
     TT_FATAL(
         !is_per_node || !tensor_parameter.relaxations.dynamic_tensor_shape,
         "TensorParameter '{}' is per-node allocated, which does not support dynamic_tensor_shape",
@@ -224,7 +224,7 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
 //  4. Record the resulting CRTA buffer layout (the three section sizes) on the output, so
 //     the headergen and runtime can consult it directly instead of re-summing the bindings.
 //
-// (SetProgramRunArgs will fill the address slots and runtime field slots at enqueue
+// (Program::set_program_run_args will fill the address slots and runtime field slots at enqueue
 // time, extracting info from the TensorArgs.)
 TensorBindingsForKernel ResolveTensorBindingsForKernel(
     const KernelSpec& kernel,
@@ -287,7 +287,7 @@ std::unordered_map<TensorParamName, ResolvedTensorParameter> RegisterTensorParam
     //   - Static layout (rank, shape, bank coords, ...) flows through the kernel's positional
     //     CTA buffer, after any user CTA-vararg prefix (KernelAdvancedOptions::compile_time_varargs).
     //   - Per-enqueue base address flows through a reserved-prefix named CRTA, appended to
-    //     the kernel's user-named CRTAs and filled by SetProgramRunArgs from the
+    //     the kernel's user-named CRTAs and filled by Program::set_program_run_args from the
     //     corresponding TensorArgument entry. TensorParameters that opt into a dynamic accessor
     //     field (currently: dynamic_tensor_shape, sharded only) carry additional CRTA words
     //     immediately after the address slot, also filled at enqueue time.
@@ -306,4 +306,4 @@ std::unordered_map<TensorParamName, ResolvedTensorParameter> RegisterTensorParam
     return resolved_tensor_parameters;
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

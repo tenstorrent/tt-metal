@@ -10,12 +10,12 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -23,26 +23,25 @@
 namespace ttnn::prim::qsr {
 
 using namespace tt::tt_metal;
-namespace m2 = tt::tt_metal::experimental;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-const m2::KernelSpecName READER{"reader"};
-const m2::KernelSpecName COMPUTE{"compute"};
-const m2::KernelSpecName WRITER{"writer"};
+const KernelSpecName READER{"reader"};
+const KernelSpecName COMPUTE{"compute"};
+const KernelSpecName WRITER{"writer"};
 
-const m2::TensorParamName INPUT{"input"};
-const m2::TensorParamName OUTPUT{"output"};
+const TensorParamName INPUT{"input"};
+const TensorParamName OUTPUT{"output"};
 
-const m2::DFBSpecName IN{"in"};          // reader -> compute, the row streamed once per pass
-const m2::DFBSpecName SCALER{"scaler"};  // reader -> compute, one reduce-scaler tile per NEO (explicit sync)
-const m2::DFBSpecName ROWMAX{"rowmax"};  // compute self-loop: per-row max, column 0
-const m2::DFBSpecName EXPS{"exps"};      // compute self-loop: exp(x - max) block
-const m2::DFBSpecName PSUM{"psum"};      // compute self-loop: row-sum of one block, column 0
-const m2::DFBSpecName ROWSUM{"rowsum"};  // compute self-loop: running row-sum, column 0
-const m2::DFBSpecName RSUM{"rsum"};      // compute self-loop: 1 / row-sum, column 0
-const m2::DFBSpecName OUT{"out"};        // compute -> writer
+const DFBSpecName IN{"in"};          // reader -> compute, the row streamed once per pass
+const DFBSpecName SCALER{"scaler"};  // reader -> compute, one reduce-scaler tile per NEO (explicit sync)
+const DFBSpecName ROWMAX{"rowmax"};  // compute self-loop: per-row max, column 0
+const DFBSpecName EXPS{"exps"};      // compute self-loop: exp(x - max) block
+const DFBSpecName PSUM{"psum"};      // compute self-loop: row-sum of one block, column 0
+const DFBSpecName ROWSUM{"rowsum"};  // compute self-loop: running row-sum, column 0
+const DFBSpecName RSUM{"rsum"};      // compute self-loop: 1 / row-sum, column 0
+const DFBSpecName OUT{"out"};        // compute -> writer
 
 constexpr const char* KERNEL_DIR = "ttnn/cpp/ttnn/operations/experimental/quasar/softmax/device/kernels/";
 
@@ -109,16 +108,16 @@ ttnn::device_operation::ProgramArtifacts SoftmaxProgramFactory::create_program_a
         split_work_to_cores(full_grid, num_tile_rows, true);
 
     // ---- ProgramSpec ----
-    m2::ProgramSpec spec;
+    ProgramSpec spec;
     spec.name = "quasar_softmax";
 
-    spec.tensor_parameters.push_back(m2::TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()});
-    spec.tensor_parameters.push_back(m2::TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()});
+    spec.tensor_parameters.push_back(TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()});
+    spec.tensor_parameters.push_back(TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()});
 
     // num_entries = per-thread capacity x NEOs: STRIDED rings slice into one sub-ring per consumer NEO;
     // compute self-loops are per-NEO intra rings.
-    auto dfb = [&](const m2::DFBSpecName& name, tt::DataFormat df, uint32_t capacity_per_thread) {
-        return m2::DataflowBufferSpec{
+    auto dfb = [&](const DFBSpecName& name, tt::DataFormat df, uint32_t capacity_per_thread) {
+        return DataflowBufferSpec{
             .unique_id = name,
             .entry_size = tile_bytes(df),
             .num_entries = capacity_per_thread * C,
@@ -135,22 +134,22 @@ ttnn::device_operation::ProgramArtifacts SoftmaxProgramFactory::create_program_a
     spec.dataflow_buffers.push_back(dfb(RSUM, stats_df, 1));
     spec.dataflow_buffers.push_back(dfb(OUT, out_df, cb_length));
 
-    m2::KernelSpec::CompilerOptions::Defines defines;
+    KernelSpec::CompilerOptions::Defines defines;
     if (operation_attributes.numeric_stable) {
         defines.emplace("NUMERIC_STABLE", "1");
     }
 
     // Reader: implicit sync on dfb::in; the scaler tile is RISC-filled and pushed explicitly.
     auto reader_hw = ttnn::create_reader_datamovement_config();
-    reader_hw.config_2xx = m2::DataMovementHardwareConfig::DataMovement2XXConfig{
-        .disable_dfb_implicit_sync_for = m2::Group<m2::DFBSpecName>{SCALER}};
-    m2::KernelSpec reader{
+    reader_hw.config_2xx =
+        DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for = Group<DFBSpecName>{SCALER}};
+    KernelSpec reader{
         .unique_id = READER,
         .source = std::string(KERNEL_DIR) + "dataflow/reader_softmax.cpp",
         .num_threads = R,
         .compiler_options = {.defines = defines},
-        .dfb_bindings = {m2::ProducerOf(IN, "in"), m2::ProducerOf(SCALER, "scaler")},
-        .tensor_bindings = {m2::TensorBinding{INPUT, "input"}},
+        .dfb_bindings = {ProducerOf(IN, "in"), ProducerOf(SCALER, "scaler")},
+        .tensor_bindings = {TensorBinding{INPUT, "input"}},
         .compile_time_args = {{"Wt", Wt}, {"compute_threads", C}},
         .runtime_arg_schema = {.runtime_arg_names = {"row_start", "NCHt"}},
         .hw_config = reader_hw,
@@ -163,54 +162,54 @@ ttnn::device_operation::ProgramArtifacts SoftmaxProgramFactory::create_program_a
             compute_hw.unpack_modes.emplace(name, UnpackMode::UnpackToSrc);
         }
     }
-    m2::KernelSpec compute{
+    KernelSpec compute{
         .unique_id = COMPUTE,
         .source = std::string(KERNEL_DIR) + "compute/softmax.cpp",
         .num_threads = C,
         .compiler_options = {.defines = defines},
         .dfb_bindings =
-            {m2::ConsumerOf(IN, "in"),
-             m2::ConsumerOf(SCALER, "scaler"),
-             m2::ProducerOf(ROWMAX, "rowmax"),
-             m2::ConsumerOf(ROWMAX, "rowmax"),
-             m2::ProducerOf(EXPS, "exps"),
-             m2::ConsumerOf(EXPS, "exps"),
-             m2::ProducerOf(PSUM, "psum"),
-             m2::ConsumerOf(PSUM, "psum"),
-             m2::ProducerOf(ROWSUM, "rowsum"),
-             m2::ConsumerOf(ROWSUM, "rowsum"),
-             m2::ProducerOf(RSUM, "rsum"),
-             m2::ConsumerOf(RSUM, "rsum"),
-             m2::ProducerOf(OUT, "out")},
+            {ConsumerOf(IN, "in"),
+             ConsumerOf(SCALER, "scaler"),
+             ProducerOf(ROWMAX, "rowmax"),
+             ConsumerOf(ROWMAX, "rowmax"),
+             ProducerOf(EXPS, "exps"),
+             ConsumerOf(EXPS, "exps"),
+             ProducerOf(PSUM, "psum"),
+             ConsumerOf(PSUM, "psum"),
+             ProducerOf(ROWSUM, "rowsum"),
+             ConsumerOf(ROWSUM, "rowsum"),
+             ProducerOf(RSUM, "rsum"),
+             ConsumerOf(RSUM, "rsum"),
+             ProducerOf(OUT, "out")},
         .compile_time_args = {{"Wt", Wt}, {"block_size", block_size}, {"compute_threads", C}},
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt"}},
         .hw_config = compute_hw,
     };
 
     // Writer: hart w drains NEOs w, w+Wr, ... in rotation (STRIDED out ring, C producers / Wr consumers).
-    m2::KernelSpec writer{
+    KernelSpec writer{
         .unique_id = WRITER,
         .source = std::string(KERNEL_DIR) + "dataflow/writer_softmax.cpp",
         .num_threads = Wr,
-        .dfb_bindings = {m2::ConsumerOf(OUT, "out")},
-        .tensor_bindings = {m2::TensorBinding{OUTPUT, "output"}},
+        .dfb_bindings = {ConsumerOf(OUT, "out")},
+        .tensor_bindings = {TensorBinding{OUTPUT, "output"}},
         .compile_time_args = {{"Wt", Wt}, {"compute_threads", C}},
         .runtime_arg_schema = {.runtime_arg_names = {"row_start", "NCHt"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     spec.kernels = {reader, compute, writer};
-    spec.work_units.push_back(m2::WorkUnitSpec{
+    spec.work_units.push_back(WorkUnitSpec{
         .name = "wu",
         .kernels = {READER, COMPUTE, WRITER},
         .target_nodes = all_cores,
     });
 
     // ---- ProgramRunArgs ----
-    m2::ProgramRunArgs run_args;
-    m2::KernelRunArgs reader_run_args{.kernel = READER};
-    m2::KernelRunArgs compute_run_args{.kernel = COMPUTE};
-    m2::KernelRunArgs writer_run_args{.kernel = WRITER};
+    ProgramRunArgs run_args;
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs compute_run_args{.kernel = COMPUTE};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
 
     uint32_t curr_row = 0;
     for (const auto& core : corerange_to_cores(all_cores, std::nullopt, true)) {
@@ -222,9 +221,9 @@ ttnn::device_operation::ProgramArtifacts SoftmaxProgramFactory::create_program_a
         } else {
             TT_THROW("softmax: core ({}, {}) is not in either work group", core.x, core.y);
         }
-        m2::AddRuntimeArgsForNode(reader_run_args.runtime_arg_values, core, {{"row_start", curr_row}, {"NCHt", rows}});
-        m2::AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, core, {{"NCHt", rows}});
-        m2::AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, core, {{"row_start", curr_row}, {"NCHt", rows}});
+        AddRuntimeArgsForNode(reader_run_args.runtime_arg_values, core, {{"row_start", curr_row}, {"NCHt", rows}});
+        AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, core, {{"NCHt", rows}});
+        AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, core, {{"row_start", curr_row}, {"NCHt", rows}});
         curr_row += rows;
     }
     run_args.kernel_run_args = {std::move(reader_run_args), std::move(compute_run_args), std::move(writer_run_args)};

@@ -3,6 +3,7 @@
 
 #include "relay_affine_prefix_device_operation.hpp"
 
+#include <algorithm>
 #include <array>
 #include <set>
 #include <span>
@@ -28,9 +29,15 @@ void RelayAffinePrefixOperation::validate_on_program_cache_hit(const operation_a
         {&in.packed, "packed"},
         {&in.initial_state, "initial_state"},
         {&in.actual_start, "actual_start"},
-        {&in.landing, "landing"}};
+        {&in.landing, "landing"},
+        {&in.final_e, "final_e"},
+        {&in.final_b, "final_b"},
+        {in.slab_index ? &*in.slab_index : nullptr, "slab_index"}};
     kda_factory_detail::check_allocated_on_device(in.packed, tensors, operation_name);
     kda_factory_detail::check_distinct_buffers(tensors, operation_name);
+    // actual_end may share a buffer with actual_start, so it is only checked for allocation and device.
+    kda_factory_detail::check_allocated_on_device(
+        in.packed, {{in.actual_end ? &*in.actual_end : nullptr, "actual_end"}}, operation_name);
 }
 
 void RelayAffinePrefixOperation::validate_on_program_cache_miss(
@@ -49,29 +56,41 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
     kda_factory_detail::check_allocated_device_tensor(in.initial_state, operation_name, "initial_state");
     kda_factory_detail::check_layout(in.initial_state, tt::tt_metal::Layout::TILE, operation_name, "initial_state");
     kda_factory_detail::check_dtype(in.initial_state, tt::tt_metal::DataType::FLOAT32, operation_name, "initial_state");
-    kda_factory_detail::check_interleaved(in.initial_state, operation_name, "initial_state");
     kda_factory_detail::check_same_device(in.packed, in.initial_state, operation_name, "initial_state");
     const auto& state = in.initial_state.logical_shape();
-    TT_FATAL(state.rank() == 3 && state[1] == state[2], "{}: initial_state must be [B*H, K, K]", operation_name);
+    if (in.slab_index) {
+        TT_FATAL(state.rank() == 4 && state[2] == state[3], "{}: slab must be [entries, H, K, K]", operation_name);
+        kda_factory_detail::check_slab_index(
+            in.packed,
+            in.initial_state,
+            *in.slab_index,
+            attrs.slab_index_scale,
+            attrs.slab_index_offset,
+            operation_name);
+    } else {
+        kda_factory_detail::check_interleaved(in.initial_state, operation_name, "initial_state");
+        TT_FATAL(state.rank() == 3 && state[1] == state[2], "{}: initial_state must be [B*H, K, K]", operation_name);
+    }
+    const auto [heads, key_dim] = relay_state_geometry(in);
     TT_FATAL(
-        state[0] > 0 && state[1] > 0 && state[1] % tt::constants::TILE_WIDTH == 0,
+        heads > 0 && key_dim > 0 && key_dim % tt::constants::TILE_WIDTH == 0,
         "{}: B*H must be positive and K positive and tile aligned",
         operation_name);
-    const uint32_t heads = state[0];
-    const uint32_t key_dim = state[1];
     const uint32_t key_tiles = key_dim / tt::constants::TILE_WIDTH;
-    // The reader indexes packed as B*H x K tile rows of [A | B].
+    // The reader indexes packed as B*H x K tile rows of the complement form [E | B], E = A - I.
     TT_FATAL(
         in.packed.padded_shape()[-1] == 2 * key_dim && in.packed.physical_volume() == heads * key_dim * 2 * key_dim,
-        "{}: packed must be [B*H, K, 2K] rows of [A | B]",
+        "{}: packed must be [B*H, K, 2K] rows of [E | B]",
         operation_name);
 
     const auto* mesh = in.packed.device();
     TT_FATAL(attrs.sequence_parallel_axis < mesh->shape().dims(), "{}: invalid sequence_parallel_axis", operation_name);
     TT_FATAL(mesh->shape()[attrs.sequence_parallel_axis] >= 2, "{}: needs at least two SP ranks", operation_name);
+    // The relay's sender per link, then the final carry's second.
+    const uint32_t senders = 2 * attrs.num_links;
     TT_FATAL(
-        attrs.num_links > 0 && attrs.cores.size() >= heads + attrs.num_links,
-        "{}: needs a core per head, then a sender per link",
+        attrs.num_links > 0 && attrs.cores.size() >= heads + senders,
+        "{}: needs a core per head, then two senders per link",
         operation_name);
     TT_FATAL(
         (heads + attrs.num_links - 1) / attrs.num_links <= relay_affine_prefix_max_heads_per_link,
@@ -81,7 +100,7 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
         attrs.num_links,
         (heads + attrs.num_links - 1) / attrs.num_links,
         relay_affine_prefix_max_heads_per_link);
-    const std::span<const CoreCoord> used_cores(attrs.cores.data(), heads + attrs.num_links);
+    const std::span<const CoreCoord> used_cores(attrs.cores.data(), heads + senders);
     TT_FATAL(
         std::set<CoreCoord>(used_cores.begin(), used_cores.end()).size() == used_cores.size(),
         "{}: the head and sender cores must be distinct",
@@ -97,8 +116,8 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
             grid.y);
     }
     TT_FATAL(
-        attrs.semaphore_addresses[0] != 0 && attrs.semaphore_addresses[1] != 0,
-        "{}: needs two global semaphores",
+        std::ranges::all_of(attrs.semaphore_addresses, [](uint32_t address) { return address != 0; }),
+        "{}: needs three global semaphores",
         operation_name);
     TT_FATAL(
         tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() >= tt::constants::TILE_HW * sizeof(float),
@@ -137,15 +156,45 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
         {{&in.packed, "packed"},
          {&in.initial_state, "initial_state"},
          {&in.actual_start, "actual_start"},
-         {&in.landing, "landing"}},
+         {&in.landing, "landing"},
+         {in.slab_index ? &*in.slab_index : nullptr, "slab_index"}},
         operation_name);
+    for (const auto& [tensor, name] : {std::pair{&in.final_e, "final_e"}, std::pair{&in.final_b, "final_b"}}) {
+        kda_factory_detail::check_allocated_device_tensor(*tensor, operation_name, name);
+        kda_factory_detail::check_layout(*tensor, tt::tt_metal::Layout::TILE, operation_name, name);
+        kda_factory_detail::check_dtype(*tensor, tt::tt_metal::DataType::FLOAT32, operation_name, name);
+        kda_factory_detail::check_interleaved(*tensor, operation_name, name);
+        kda_factory_detail::check_same_device(in.packed, *tensor, operation_name, name);
+        TT_FATAL(
+            tensor->logical_shape() == tt::tt_metal::Shape({heads, key_dim, key_dim}),
+            "{}: {} must be [B*H, K, K]",
+            operation_name,
+            name);
+    }
+    if (in.actual_end) {
+        kda_factory_detail::check_actual_start(in.packed, *in.actual_end, operation_name);
+    }
+    // A sender reuses the relay's packet headers for the carry, a write per tile of a column and the arrival
+    // increment, and reads the next column into a second stage slot.
+    const uint32_t slots = relay_affine_prefix_sender_slots(key_tiles, mesh->arch());
+    TT_FATAL(
+        slots * relay_affine_prefix_column_packets(key_tiles) >= key_tiles + 1 && slots >= 2,
+        "{}: the final carry needs {} packet headers and two stage slots per sender",
+        operation_name,
+        key_tiles + 1);
     kda_factory_detail::check_output_interleaved(attrs.entry_mem_config, operation_name);
     kda_factory_detail::check_compute_config(attrs.compute_kernel_config, operation_name);
-    // Compute packs a K-tile column of the next state out of DST.
+    kda_factory_detail::check_fp32_dest_acc(
+        attrs.compute_kernel_config, operation_name, "the hop adds the FP32 entry state and B exactly in DST");
+    TT_FATAL(
+        attrs.compute_kernel_config.math_fidelity != tt::tt_metal::MathFidelity::LoFi,
+        "{}: LoFi is unsupported because B enters the hop as I @ B, exact only from HiFi2 on",
+        operation_name);
+    // Compute forms a K-tile column of the next state in one DST pass.
     const uint32_t dst_tiles = ttnn::get_dest_reg_count(attrs.compute_kernel_config);
     TT_FATAL(
         key_tiles <= dst_tiles,
-        "{}: K = {} tiles exceeds the {} DST tiles a column packs from",
+        "{}: K = {} tiles exceeds the {} DST tiles a column is formed in",
         operation_name,
         key_tiles,
         dst_tiles);
@@ -154,20 +203,27 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
 RelayAffinePrefixOperation::spec_return_value_t RelayAffinePrefixOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     const auto spec = [&](const tt::tt_metal::MemoryConfig& memory) {
+        const auto [heads, key_dim] = relay_state_geometry(in);
         return tt::tt_metal::TensorSpec(
-            in.initial_state.logical_shape(),
+            tt::tt_metal::Shape({heads, key_dim, key_dim}),
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::FLOAT32, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), memory));
     };
-    return {spec(attrs.entry_mem_config), spec(ttnn::DRAM_MEMORY_CONFIG)};
+    // With a slab, the final carry is written into the slab's entry, in place.
+    return {
+        spec(attrs.entry_mem_config),
+        spec(ttnn::DRAM_MEMORY_CONFIG),
+        in.slab_index ? in.initial_state.tensor_spec() : spec(ttnn::DRAM_MEMORY_CONFIG)};
 }
 
 RelayAffinePrefixOperation::tensor_return_value_t RelayAffinePrefixOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
+    const auto specs = compute_output_specs(attrs, in);
     tensor_return_value_t outputs;
-    for (const auto& spec : compute_output_specs(attrs, in)) {
-        outputs.push_back(create_device_tensor(spec, in.packed.device()));
+    for (uint32_t i = 0; i < 2; ++i) {
+        outputs.push_back(create_device_tensor(specs[i], in.packed.device()));
     }
+    outputs.push_back(in.slab_index ? in.initial_state : create_device_tensor(specs[2], in.packed.device()));
     return outputs;
 }
 
@@ -175,10 +231,10 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<RelayAffinePrefixOperation::t
 RelayAffinePrefixOperation::create_op_performance_model(
     const operation_attributes_t& attrs, const tensor_args_t& in, tensor_return_value_t& outputs) {
     using namespace kda_performance_model;
-    const auto& state = in.initial_state.logical_shape();
-    const double heads = state[0];
-    const double key_dim = state[1];
-    // One hop per rank: E_out = A E_in + B per head.
+    const auto geometry = relay_state_geometry(in);
+    const double heads = geometry.heads;
+    const double key_dim = geometry.key_dim;
+    // One hop per rank: S_out = S_in + E S_in + B per head (E = A - I).
     const KdaFpuWork work{
         .fpu_matrix_flops = heads * 2.0 * key_dim * key_dim * key_dim,
         .fpu_add_ops = heads * key_dim * key_dim,
@@ -187,18 +243,24 @@ RelayAffinePrefixOperation::create_op_performance_model(
     return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
 }
 
-std::tuple<Tensor, Tensor> relay_affine_prefix(
+std::tuple<Tensor, Tensor, Tensor> relay_affine_prefix(
     const Tensor& packed,
     const Tensor& initial_state,
+    const Tensor& final_e,
+    const Tensor& final_b,
     const Tensor& actual_start,
+    const std::optional<Tensor>& actual_end,
     const Tensor& landing,
     const tt::tt_metal::MemoryConfig& entry_memory_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    const std::array<uint32_t, 2>& semaphore_addresses,
+    const std::array<uint32_t, 3>& semaphore_addresses,
     uint32_t sequence_parallel_axis,
     uint32_t local_rows,
     uint32_t num_links,
-    const std::vector<tt::tt_metal::CoreCoord>& cores) {
+    const std::vector<tt::tt_metal::CoreCoord>& cores,
+    const std::optional<Tensor>& slab_index,
+    uint32_t slab_index_scale,
+    uint32_t slab_index_offset) {
     auto outputs = ttnn::device_operation::launch<RelayAffinePrefixOperation>(
         RelayAffinePrefixParams{
             .sequence_parallel_axis = sequence_parallel_axis,
@@ -207,10 +269,19 @@ std::tuple<Tensor, Tensor> relay_affine_prefix(
             .cores = cores,
             .entry_mem_config = entry_memory_config,
             .compute_kernel_config = compute_kernel_config,
-            .semaphore_addresses = semaphore_addresses},
+            .semaphore_addresses = semaphore_addresses,
+            .slab_index_scale = slab_index_scale,
+            .slab_index_offset = slab_index_offset},
         RelayAffinePrefixInputs{
-            .packed = packed, .initial_state = initial_state, .actual_start = actual_start, .landing = landing});
-    return {outputs[0], outputs[1]};
+            .packed = packed,
+            .initial_state = initial_state,
+            .actual_start = actual_start,
+            .landing = landing,
+            .final_e = final_e,
+            .final_b = final_b,
+            .actual_end = actual_end,
+            .slab_index = slab_index});
+    return {outputs[0], outputs[1], outputs[2]};
 }
 
 }  // namespace ttnn::experimental::prim
