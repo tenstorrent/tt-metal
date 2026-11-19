@@ -45,6 +45,7 @@ CI_SUBSET = {
     "test_without_block0[r1024k256-band-kept_only]",
     "test_frame_mask[256-window]",
     "test_heads_differ",
+    "test_tight_l1",
 }
 
 
@@ -750,6 +751,47 @@ def test_heads_differ(runtime):
     mask[:, -1] = make_mask(case.geo, case.S, 1, density=0.0, band=0)[:, 0]
     r = case.run(*case.inputs(4), mask)
     _check("heads differ", r, _density(mask, case.geo, case.S), dense_min=None, ref_min=0.999)
+
+
+def test_tight_l1(runtime):
+    """With L1 filled until the op only just fits, its CBs (placed above persistent L1, each at the DRAM alignment)
+    stay clear of the lowest L1 buffer."""
+    case = Case(runtime, RAGGED["r1184k256"])
+    mask = make_mask(case.geo, case.S, case.H, density=0.2, seed=5)
+    q, k, v = case.inputs(5)
+    dev = runtime.mesh_device
+    grid = dev.compute_with_storage_grid_size()
+    row_bytes = 32  # one uint32 row-major page of 8 values
+
+    def run_with_l1_filled(bytes_per_bank, **kwargs):
+        rows = max(1, bytes_per_bank // row_bytes) * grid.x * grid.y
+        filler = ttnn.allocate_tensor_on_device(
+            ttnn.Shape((1, 1, rows, row_bytes // 4)), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, dev, ttnn.L1_MEMORY_CONFIG
+        )
+        dev.disable_and_clear_program_cache()  # a cached program keeps the CB depths of the call that built it
+        dev.enable_program_cache()
+        try:
+            return case.run(q, k, v, mask, want_dense=False, **kwargs)
+        finally:
+            filler.deallocate(force=True)
+
+    def fits(bytes_per_bank):
+        try:
+            run_with_l1_filled(bytes_per_bank, want_ref=False)
+            return True
+        except RuntimeError as e:
+            if "clash with L1 buffers" in str(e):
+                raise
+            return False
+
+    lo, hi = 0, 2 * 1024 * 1024
+    assert fits(lo)
+    while hi - lo > row_bytes:
+        mid = (lo + hi) // 2 // row_bytes * row_bytes
+        lo, hi = (mid, hi) if fits(mid) else (lo, mid)
+    logger.info(f"op fits with {lo} B per L1 bank taken")
+    r = run_with_l1_filled(lo)
+    _check("tight l1", r, _density(mask, case.geo, case.S), dense_min=None, ref_min=0.999)
 
 
 def _empty_rows(mask, geo, S):
