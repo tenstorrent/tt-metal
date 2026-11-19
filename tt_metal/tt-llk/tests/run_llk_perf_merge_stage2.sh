@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 # Merge gate stage 2, in a leg after stage 1: re-measure this leg's regressions on both commits at 5 code positions.
-# Usage: CHIP_ARCH=<arch> THRESHOLD=<x> [MODULE_THRESHOLDS=<m=x,...>] LLK_STAGE2_DEADLINE=<epoch s>
+# Usage: CHIP_ARCH=<arch> THRESHOLD=<x> [MIN_CYCLES=<n>] [MODULE_THRESHOLDS=<m=x,...>] LLK_STAGE2_DEADLINE=<epoch s>
 #        [LLK_STAGE2_BASE_REF=<sha>] run_llk_perf_merge_stage2.sh <baseline dir> <out dir>
 set -euo pipefail
 
@@ -25,7 +25,7 @@ python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("commit_sha
 # candidates, which stage 2 does not reproduce.
 BASE_SHA="${LLK_STAGE2_BASE_REF:-$(cat "$OUT/stage2.base")}"
 
-COMPARE=(--threshold "${THRESHOLD:?}" --min-cycles 30 --module-threshold "${MODULE_THRESHOLDS:-}")
+COMPARE=(--threshold "${THRESHOLD:?}" --min-cycles "${MIN_CYCLES:-30}" --module-threshold "${MODULE_THRESHOLDS:-}")
 
 python3 "$LLK/perf/regression_compare.py" "${COMPARE[@]}" \
   --current "$LLK/perf_data/runs/**/*.csv" --baseline "$BASELINE/**/*.csv" \

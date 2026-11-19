@@ -89,10 +89,10 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         timeout-minutes: 20
         with:
-          sparse-checkout: .github/llk-perf-policy.json
+          sparse-checkout: tt_metal/tt-llk/perf/gate_policy.json
           sparse-checkout-cone-mode: false
       - id: policy
-        run: echo "nightly_sol=$(python3 -c 'import json; print(json.dumps(json.load(open(".github/llk-perf-policy.json"))["nightly_sol"]))')" >> "$GITHUB_OUTPUT"
+        run: echo "nightly_sol=$(python3 -c 'import json; print(json.dumps(json.load(open("tt_metal/tt-llk/perf/gate_policy.json"))["nightly_sol"]))')" >> "$GITHUB_OUTPUT"
 
   gate:
     name: "Gate ${{ matrix.arch }} (speed of light)"

@@ -147,12 +147,12 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         timeout-minutes: 20
         with:
-          sparse-checkout: .github/llk-perf-policy.json
+          sparse-checkout: tt_metal/tt-llk/perf/gate_policy.json
           sparse-checkout-cone-mode: false
       - id: policy
         run: |
           for GATE in pr nightly; do
-            echo "$GATE=$(python3 -c 'import json,sys; print(json.dumps(json.load(open(".github/llk-perf-policy.json"))[sys.argv[1]]))' "$GATE")" >> "$GITHUB_OUTPUT"
+            echo "$GATE=$(python3 -c 'import json,sys; print(json.dumps(json.load(open("tt_metal/tt-llk/perf/gate_policy.json"))[sys.argv[1]]))' "$GATE")" >> "$GITHUB_OUTPUT"
           done
 
   llk-perf-gate:
@@ -385,6 +385,7 @@ jobs:
           ARCH: ${{ matrix.arch }}
           THRESHOLD: ${{ fromJSON(needs.gate-policy.outputs.pr)[matrix.arch].threshold }}
           MIN_CYCLES: ${{ fromJSON(needs.gate-policy.outputs.pr)[matrix.arch].min_cycles }}
+          MODULE_THRESHOLDS: ${{ fromJSON(needs.gate-policy.outputs.pr)[matrix.arch].module_thresholds }}
           HEAD_RESULT: ${{ needs.placement-measure-head.result }}
           BASE_RESULT: ${{ needs.placement-measure-base.result }}
           SOURCE_RUN: ${{ needs.placement-plan.outputs.run }}
@@ -395,6 +396,7 @@ jobs:
             --candidates stage1/perf_gate_report.regressions.csv \
             --baseline baseline --current current \
             --threshold "$THRESHOLD" --min-cycles "$MIN_CYCLES" \
+            --module-threshold "$MODULE_THRESHOLDS" \
             --over-cap nodes/nodes.over --limit-note "$LIMIT_NOTE" \
             --arch "$ARCH" --report stage2.md || true
           if [ "$HEAD_RESULT" != success ] || [ "$BASE_RESULT" != success ]; then
