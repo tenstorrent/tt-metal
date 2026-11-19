@@ -699,11 +699,13 @@ def _split_jobs(jobs: list[Job], n: int, compiled: set[tuple[Kind, Config]]) -> 
     same to set up (its inputs and a profiler read) however few configs it times.
     """
     share_of: dict[tuple[Kind, Config], int] = {}
+    dealt = 0  # carried across kinds, so that no share takes every kind's leftover
     for kind in sorted({j.kind for j in jobs}):
         new = sorted(
             {c for j in jobs if j.kind == kind for c in j.configs if (kind, c) not in compiled}, key=Config.as_tuple
         )
-        share_of.update({(kind, c): i % n for i, c in enumerate(new)})
+        share_of.update({(kind, c): (dealt + i) % n for i, c in enumerate(new)})
+        dealt += len(new)
     shares: list[list[Job]] = [[] for _ in range(n)]
     sizes = [0] * n
     for j in jobs:
@@ -1351,6 +1353,8 @@ def search(spec_path: Path, db: Path, metric: str, top: int, devices: list[int])
         selection = select(spec, results, metric)
         selected = {(m.kind, selection.configs[m.name]) for m in spec.matmuls}
         print(f"worst {selection.worst:.1%}, mean {selection.mean:.1%}", flush=True)
+        if round_ == MAX_SELECTION_ROUNDS:
+            break  # no round left to use the neighbours in
 
         # The selected configs' neighbours, at the sampled rows, to see whether any ranks among the
         # finalists next round.
