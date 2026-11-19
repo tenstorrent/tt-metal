@@ -65,7 +65,7 @@ Program make_worker_print_program(distributed::MeshDevice& mesh_device, const st
         spec.work_units.push_back(
             WorkUnitSpec{.name = "wu_" + std::to_string(i), .kernels = {name}, .target_nodes = nodes[i]});
     }
-    return tt_metal::experimental::MakeProgramFromSpec(mesh_device, spec);
+    return tt_metal::Program(mesh_device, spec);
 }
 
 EthernetConfig make_active_eth_config() {
