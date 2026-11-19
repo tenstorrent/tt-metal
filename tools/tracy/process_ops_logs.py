@@ -532,7 +532,22 @@ def import_tracy_op_logs(
     try:
         df = pd.read_csv(tracyOpTimesLog, engine="pyarrow")
     except (ImportError, ValueError):
-        df = pd.read_csv(tracyOpTimesLog)
+        try:
+            df = pd.read_csv(tracyOpTimesLog)
+        except pd.errors.ParserError:
+            # tracy-csvexport does not quote zone names: a host zone named with a comma (e.g. the MoE block's
+            # "moe_tail: override (hit, engine)") splits its name. The name is the first column; fold the extra
+            # leading fields back into it.
+            import csv
+
+            with open(tracyOpTimesLog, newline="") as f:
+                rows = list(csv.reader(f))
+            header, width = rows[0], len(rows[0])
+            fixed = [
+                r if len(r) <= width else [",".join(r[: len(r) - width + 1])] + r[len(r) - width + 1 :]
+                for r in rows[1:]
+            ]
+            df = pd.DataFrame(fixed, columns=header).apply(pd.to_numeric, errors="ignore")
 
     # Filter and update host_time for TT_DNN/TT_METAL ops
     # Ensure name is string type before using .str accessor
