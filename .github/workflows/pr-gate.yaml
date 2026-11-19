@@ -311,7 +311,7 @@ jobs:
   build-runtime-smoke-image:
     needs: [asan-build, build-docker-images, find-changed-files]
     if: ${{
-      github.ref_name == 'main' ||
+      (github.ref_name == 'main' || github.event_name == 'workflow_dispatch') ||
       needs.find-changed-files.outputs.cmake-changed == 'true' ||
       needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
       needs.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
@@ -336,7 +336,7 @@ jobs:
     # workflow-status counts a skipped optional job as success, so skipping here
     # would take hardware coverage out of the gate without failing it.
     if: ${{ !cancelled() && needs.asan-build.result == 'success' && (
-      github.ref_name == 'main' ||
+      (github.ref_name == 'main' || github.event_name == 'workflow_dispatch') ||
       needs.find-changed-files.outputs.cmake-changed == 'true' ||
       needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
       needs.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed == 'true')
@@ -362,7 +362,7 @@ jobs:
   build-ttnn-smoke-image:
     needs: [asan-build, build-docker-images, find-changed-files]
     if: ${{
-      github.ref_name == 'main' ||
+      (github.ref_name == 'main' || github.event_name == 'workflow_dispatch') ||
       needs.find-changed-files.outputs.cmake-changed == 'true' ||
       needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
       needs.find-changed-files.outputs.tt-nn-changed == 'true' ||
@@ -388,7 +388,7 @@ jobs:
     # workflow-status counts a skipped optional job as success, so skipping here
     # would take hardware coverage out of the gate without failing it.
     if: ${{ !cancelled() && needs.asan-build.result == 'success' && (
-      github.ref_name == 'main' ||
+      (github.ref_name == 'main' || github.event_name == 'workflow_dispatch') ||
       needs.find-changed-files.outputs.cmake-changed == 'true' ||
       needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
       needs.find-changed-files.outputs.tt-nn-changed == 'true' ||
@@ -423,7 +423,7 @@ jobs:
   build-runtime-examples-image:
     needs: [ asan-build, build-docker-images, find-changed-files ]
     if: ${{
-        github.ref_name == 'main' ||
+        (github.ref_name == 'main' || github.event_name == 'workflow_dispatch') ||
         needs.find-changed-files.outputs.cmake-changed == 'true' ||
         needs.find-changed-files.outputs.tt-metalium-changed == 'true'
       }}
@@ -446,7 +446,7 @@ jobs:
     needs: [ asan-build, find-changed-files, build-docker-images, build-runtime-examples-image ]
     # Not !failure(): a failed image build must still let examples use the artifact.
     if: ${{ !cancelled() && needs.asan-build.result == 'success' && (
-        github.ref_name == 'main' ||
+        (github.ref_name == 'main' || github.event_name == 'workflow_dispatch') ||
         needs.find-changed-files.outputs.cmake-changed == 'true' ||
         needs.find-changed-files.outputs.tt-metalium-changed == 'true')
       }}
@@ -464,7 +464,7 @@ jobs:
   build-ttnn-examples-image:
     needs: [ asan-build, build-docker-images, find-changed-files ]
     if: ${{
-        github.ref_name == 'main' ||
+        (github.ref_name == 'main' || github.event_name == 'workflow_dispatch') ||
         needs.find-changed-files.outputs.cmake-changed == 'true' ||
         needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
         needs.find-changed-files.outputs.tt-nn-changed == 'true'
@@ -488,7 +488,7 @@ jobs:
     needs: [ asan-build, find-changed-files, build-docker-images, build-ttnn-examples-image ]
     # Not !failure(): a failed image build must still let examples use the artifact.
     if: ${{ !cancelled() && needs.asan-build.result == 'success' && (
-        github.ref_name == 'main' ||
+        (github.ref_name == 'main' || github.event_name == 'workflow_dispatch') ||
         needs.find-changed-files.outputs.cmake-changed == 'true' ||
         needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
         needs.find-changed-files.outputs.tt-nn-changed == 'true')
@@ -507,7 +507,7 @@ jobs:
   build-train-smoke-image:
     needs: [asan-build, build-docker-images, find-changed-files]
     if: ${{
-      github.ref_name == 'main' ||
+      (github.ref_name == 'main' || github.event_name == 'workflow_dispatch') ||
       needs.find-changed-files.outputs.tt-train-changed == 'true'
       }}
     uses: ./.github/workflows/build-prebuilt-tests-image.yaml
@@ -527,7 +527,7 @@ jobs:
     needs: [asan-build, find-changed-files, build-train-smoke-image]
     # Do not use !failure() or success() since a failed image build must still let train smoke use the artifact.
     if: ${{ !cancelled() && needs.asan-build.result == 'success' && (
-      github.ref_name == 'main' ||
+      (github.ref_name == 'main' || github.event_name == 'workflow_dispatch') ||
       needs.find-changed-files.outputs.tt-train-changed == 'true')
       }}
     uses: ./.github/workflows/tt-train-tests.yaml
@@ -673,7 +673,7 @@ jobs:
     if: ${{
         github.event.action != 'destroyed' &&
         (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
-        (github.ref_name == 'main' ||
+        ((github.ref_name == 'main' || github.event_name == 'workflow_dispatch') ||
          needs.find-changed-files.outputs.llk-wormhole-changed == 'true' ||
          needs.find-changed-files.outputs.llk-blackhole-changed == 'true' ||
          needs.find-changed-files.outputs.llk-common-changed == 'true' ||
@@ -689,7 +689,7 @@ jobs:
       enabled-skus: ALL_SKUS_IN_TESTS
       # "*" = no allowlist filter; empty = skip all; else CSV of logical SKUs.
       sku-allowlist: ${{
-          (github.ref_name == 'main'
+          ((github.ref_name == 'main' || github.event_name == 'workflow_dispatch')
            || needs.find-changed-files.outputs.llk-common-changed == 'true'
            || needs.find-changed-files.outputs.llk-sfpi-changed == 'true'
            || needs.find-changed-files.outputs.llk-tests-changed == 'true'
@@ -713,7 +713,7 @@ jobs:
         github.event.action != 'destroyed' &&
         github.event_name != 'merge_group' &&
         (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
-        (github.ref_name == 'main' ||
+        ((github.ref_name == 'main' || github.event_name == 'workflow_dispatch') ||
          needs.find-changed-files.outputs.llk-quasar-changed == 'true' ||
          needs.find-changed-files.outputs.llk-common-changed == 'true' ||
          needs.find-changed-files.outputs.llk-sfpi-changed == 'true' ||
@@ -735,7 +735,7 @@ jobs:
     if: ${{
         github.event.action != 'destroyed' &&
         (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
-        (github.ref_name == 'main' ||
+        ((github.ref_name == 'main' || github.event_name == 'workflow_dispatch') ||
          needs.find-changed-files.outputs.llk-wormhole-changed == 'true' ||
          needs.find-changed-files.outputs.llk-blackhole-changed == 'true' ||
          needs.find-changed-files.outputs.llk-common-changed == 'true' ||

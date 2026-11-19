@@ -166,7 +166,7 @@ jobs:
             release=build asan=build-asan tsan=build-tsan sweeps=build-sweeps
 
   build:
-    if: ${{ github.ref_name == 'main' ||
+    if: ${{ (github.ref_name == 'main' || github.event_name == 'workflow_dispatch') ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
             needs.find-changes.outputs.any-code-changed == 'true' ||
             needs.find-changes.outputs.docs-changed == 'true' ||
@@ -201,7 +201,7 @@ jobs:
       use-artifacts-from-run: ${{ needs.find-queue-builds.outputs.release }}
 
   build-tsan:
-    if: ${{ github.ref_name == 'main' ||
+    if: ${{ (github.ref_name == 'main' || github.event_name == 'workflow_dispatch') ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
             needs.find-changes.outputs.any-code-changed == 'true' ||
             needs.find-changes.outputs.build-workflows-changed == 'true'
@@ -234,7 +234,7 @@ jobs:
       use-artifacts-from-run: ${{ needs.find-queue-builds.outputs.tsan }}
 
   build-asan:
-    if: ${{ github.ref_name == 'main' ||
+    if: ${{ (github.ref_name == 'main' || github.event_name == 'workflow_dispatch') ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
             needs.find-changes.outputs.any-code-changed == 'true' ||
             needs.find-changes.outputs.build-workflows-changed == 'true'
@@ -270,7 +270,7 @@ jobs:
   # commit passed it, a push run does not build it again.
   build-sweeps:
     if: ${{ needs.find-queue-builds.outputs.sweeps == '' && (
-            github.ref_name == 'main' ||
+            (github.ref_name == 'main' || github.event_name == 'workflow_dispatch') ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
             needs.find-changes.outputs.any-code-changed == 'true')
         }}
@@ -325,7 +325,7 @@ jobs:
 
   build-runtime-smoke-image:
     needs: [find-changes, docker-images, build-tsan]
-    if: ${{ github.ref_name == 'main' ||
+    if: ${{ (github.ref_name == 'main' || github.event_name == 'workflow_dispatch') ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
@@ -345,7 +345,7 @@ jobs:
 
   runtime-smoke-tests:
     needs: [find-changes, resolve-docker-pull-refs-tsan, build-tsan, check-harbor, docker-images, build-runtime-smoke-image]
-    if: ${{ !cancelled() && needs.build-tsan.result == 'success' && (github.ref_name == 'main' ||
+    if: ${{ !cancelled() && needs.build-tsan.result == 'success' && ((github.ref_name == 'main' || github.event_name == 'workflow_dispatch') ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
@@ -365,7 +365,7 @@ jobs:
 
   build-runtime-basic-image:
     if: ${{
-        github.ref_name == 'main' ||
+        (github.ref_name == 'main' || github.event_name == 'workflow_dispatch') ||
         needs.find-changes.outputs.cmake-changed == 'true' ||
         needs.find-changes.outputs.tt-metalium-changed == 'true' ||
         needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
@@ -387,7 +387,7 @@ jobs:
   runtime-basic-tests:
     # Not !failure(): a failed image build must still let basic use the artifact.
     if: ${{ !cancelled() && needs.build-asan.result == 'success' && (
-        github.ref_name == 'main' ||
+        (github.ref_name == 'main' || github.event_name == 'workflow_dispatch') ||
         needs.find-changes.outputs.cmake-changed == 'true' ||
         needs.find-changes.outputs.tt-metalium-changed == 'true' ||
         needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true')
@@ -428,7 +428,7 @@ jobs:
 
   build-ttnn-smoke-image:
     needs: [find-changes, docker-images, build-tsan]
-    if: ${{ github.ref_name == 'main' ||
+    if: ${{ (github.ref_name == 'main' || github.event_name == 'workflow_dispatch') ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-changed == 'true' ||
             needs.find-changes.outputs.tt-nn-changed == 'true' ||
@@ -449,7 +449,7 @@ jobs:
 
   ttnn-smoke-tests:
     needs: [find-changes, resolve-docker-pull-refs-tsan, build-tsan, check-harbor, docker-images, build-ttnn-smoke-image]
-    if: ${{ !cancelled() && needs.build-tsan.result == 'success' && (github.ref_name == 'main' ||
+    if: ${{ !cancelled() && needs.build-tsan.result == 'success' && ((github.ref_name == 'main' || github.event_name == 'workflow_dispatch') ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-changed == 'true' ||
             needs.find-changes.outputs.tt-nn-changed == 'true' ||
@@ -467,7 +467,7 @@ jobs:
 
   build-ttnn-basic-image:
     needs: [build-asan, docker-images, find-changes]
-    if: ${{ github.ref_name == 'main' ||
+    if: ${{ (github.ref_name == 'main' || github.event_name == 'workflow_dispatch') ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-changed == 'true' ||
             needs.find-changes.outputs.tt-nn-changed == 'true' ||
@@ -489,7 +489,7 @@ jobs:
   ttnn-basic-tests:
     needs: [build-asan, resolve-docker-pull-refs-asan, find-changes, check-harbor, docker-images, build-ttnn-basic-image]
     # Not !failure(): a failed image build must still let basic use the artifact.
-    if: ${{ !cancelled() && needs.build-asan.result == 'success' && (github.ref_name == 'main' ||
+    if: ${{ !cancelled() && needs.build-asan.result == 'success' && ((github.ref_name == 'main' || github.event_name == 'workflow_dispatch') ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-changed == 'true' ||
             needs.find-changes.outputs.tt-nn-changed == 'true' ||
@@ -506,7 +506,7 @@ jobs:
 
   ttnn-merge-gate-tests:
     needs: [build, find-changes, check-harbor]
-    if: ${{ github.ref_name == 'main' ||
+    if: ${{ (github.ref_name == 'main' || github.event_name == 'workflow_dispatch') ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-changed == 'true' ||
             needs.find-changes.outputs.tt-nn-changed == 'true' ||
@@ -526,7 +526,7 @@ jobs:
 
   models-smoke-tests:
     needs: [build, resolve-docker-pull-refs, find-changes, check-harbor]
-    if: ${{ github.ref_name == 'main' ||
+    if: ${{ (github.ref_name == 'main' || github.event_name == 'workflow_dispatch') ||
              needs.find-changes.outputs.cmake-changed == 'true' ||
              needs.find-changes.outputs.models-changed == 'true' ||
              needs.find-changes.outputs.tt-nn-changed == 'true' ||
@@ -549,7 +549,7 @@ jobs:
   train-merge-gate-tests:
     needs: [build, find-changes, check-harbor]
     if: ${{ github.event_name == 'workflow_dispatch' ||
-            github.ref_name == 'main' ||
+            (github.ref_name == 'main' || github.event_name == 'workflow_dispatch') ||
             needs.find-changes.outputs.tt-train-changed == 'true' ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-changed == 'true' ||
@@ -572,7 +572,7 @@ jobs:
 
   scaleout-unit-tests:
     needs: [build, resolve-docker-pull-refs, find-changes, check-harbor]
-    if: ${{ github.ref_name == 'main' ||
+    if: ${{ (github.ref_name == 'main' || github.event_name == 'workflow_dispatch') ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-changed == 'true' ||
             needs.find-changes.outputs.tt-nn-changed == 'true' ||
@@ -624,7 +624,7 @@ jobs:
     if: ${{
         github.event.action != 'destroyed' &&
         github.event_name != 'pull_request' &&
-        (github.ref_name == 'main' ||
+        ((github.ref_name == 'main' || github.event_name == 'workflow_dispatch') ||
          needs.find-changes.outputs.llk-quasar-changed == 'true' ||
          needs.find-changes.outputs.llk-common-changed == 'true' ||
          needs.find-changes.outputs.llk-sfpi-changed == 'true' ||
@@ -642,7 +642,7 @@ jobs:
     if: ${{
         github.event.action != 'destroyed' &&
         github.event_name != 'pull_request' &&
-        (github.ref_name == 'main' ||
+        ((github.ref_name == 'main' || github.event_name == 'workflow_dispatch') ||
          needs.find-changes.outputs.llk-wormhole-changed == 'true' ||
          needs.find-changes.outputs.llk-blackhole-changed == 'true' ||
          needs.find-changes.outputs.llk-common-changed == 'true' ||
@@ -659,7 +659,7 @@ jobs:
       enabled-skus: ALL_SKUS_IN_TESTS
       # "*" = no allowlist filter; empty = skip all; else CSV of logical SKUs.
       sku-allowlist: ${{
-          (github.ref_name == 'main'
+          ((github.ref_name == 'main' || github.event_name == 'workflow_dispatch')
            || needs.find-changes.outputs.llk-common-changed == 'true'
            || needs.find-changes.outputs.llk-sfpi-changed == 'true'
            || needs.find-changes.outputs.llk-unit-tests-changed == 'true'
@@ -868,7 +868,7 @@ jobs:
   ttsim-quasar-merge-gate-tests:
     needs: [build, find-changes]
     if: ${{ !cancelled() && needs.build.result == 'success' && (
-            github.ref_name == 'main' ||
+            (github.ref_name == 'main' || github.event_name == 'workflow_dispatch') ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-changed == 'true' ||
             needs.find-changes.outputs.llk-quasar-changed == 'true' ||
