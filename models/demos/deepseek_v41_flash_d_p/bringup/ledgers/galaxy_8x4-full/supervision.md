@@ -1913,3 +1913,14 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
 - Open: test_profile's clean wall reads ~155 ms at 142k vs the steady 106.5 ms (not cProfile: that runs after the
   timed runs); walls come from test_skip_positions until explained.
 - RAM unaccounted after X.7: 94.9 GiB.
+
+## 2026-11-19 00:45 UTC: chunk-size sweep done (X.8 PASS 5f44e06b36f)
+
+- Steady chunk at ~142k, 8x4, decoder skip: 2048 70.7 ms (29.0k tok/s), 3072 79.7 (38.5k), 5120 108.3 (47.3k),
+  8192 149.3-150.2 (54.5k, +15 %; roofline said ~+20 %: indexer x1.87 and host +7 ms a chunk grow with the chunk).
+  Determinism at 8192 0.0. 1536 / 2560 do not load on 32 chips (DS41-297: chunk % 1024); gate units dropped, 2048 /
+  3072 measured by hand. Serving chunk stays 5120 (a larger one is an owner decision with tt-d-gen).
+- Framework gap (noted, not fixed yet): a measurement task (no code change, no `ab`) whose first check fails gets a
+  perf attempt and then stops at "apply or not?"; closed by gate --continue.
+- RAM unaccounted after X.8: 104.6 GiB (94.9 after X.7).
+- Next: P.78 (hide the host time).
