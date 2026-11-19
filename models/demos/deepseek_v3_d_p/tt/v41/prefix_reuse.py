@@ -580,6 +580,11 @@ class V41PrefixReuse:
         """
         assert self.pf.slot == slot, (self.pf.slot, slot)
         start = int(start)
+        # V41_PREFILL_RESTORE_TIMING=1 (measurement only): synchronize the mesh after each phase, so the log line's split is
+        # device-complete time per phase (model rows / export rows / Engram), not dispatch time. Off = the path as before.
+        timing = os.environ.get("V41_PREFILL_RESTORE_TIMING", "0") == "1"
+        sync = (lambda: ttnn.synchronize_device(self.rt.mesh_device)) if timing else (lambda: None)
+        sync()
         t0 = time.perf_counter()
         if start == 0:  # what a cold chunk 0 does first: the export holds another prompt
             self.pf.reset()
@@ -599,13 +604,22 @@ class V41PrefixReuse:
                 attn._slab_write(st, rows, self.chunk + e0)
             ttnn.deallocate(rows)
             ttnn.deallocate(keys)
+        sync()
         t1 = time.perf_counter()
         export_entry_rows(self.exp, self.pf, slot, start, start + self.chunk)
         self.note_export(slot, start)
+        sync()
+        t2 = time.perf_counter()
         if getattr(self.pf, "engrams", None) and self.rt.engram is not None:
             self.rt.engram.hash_ids(
                 slot, [int(v) for v in ids.tolist()], start
             )  # the n-gram history (host, per position)
+        if timing:
+            logger.info(
+                f"[{TAG}] slot {slot} restored [{start}, {start + self.chunk}) from the host store (synced): model rows "
+                f"{t1 - t0:.4f} s, export rows {t2 - t1:.4f} s, Engram {time.perf_counter() - t2:.4f} s"
+            )
+            return
         logger.info(
             f"[{TAG}] slot {slot} restored [{start}, {start + self.chunk}) from the host store: model rows {t1 - t0:.3f} s, "
             f"export rows + Engram {time.perf_counter() - t1:.3f} s (dispatch)"

@@ -85,6 +85,8 @@ EOF
 if [ -n "${STORE_GB:-}" ]; then  # H2 (run_device_check_h2.sh): the host chunk store on top of H1
   echo "export V41_PREFILL_PREFIX_STORE_GB=$STORE_GB V41_PREFILL_PREFIX_HOST_RESERVE_GB=${RESERVE_GB:-32} V41_PREFILL_PREFIX_SPILL_TIPS=${SPILL_TIPS:-2}${STORE_TIP_GB:+ V41_PREFILL_PREFIX_STORE_TIP_GB=$STORE_TIP_GB}" >> "$OUT/env.sh"
 fi
+# EXTRA_ENV="VAR=v VAR2=w": extra runner env (e.g. the 1M stack's V41_PREFILL_RESTORE_GATHER=1, V41_PREFILL_RESTORE_TIMING=1)
+if [ -n "${EXTRA_ENV:-}" ]; then echo "export $EXTRA_ENV" >> "$OUT/env.sh"; fi
 rsync -a "$OUT/env.sh" $P:$RUN/env.sh || exit 1
 log "runner harness on $H (chunk $CHUNK, MAXSEQ $MAXSEQ, CP2 positions $MAXPOS, $CKPTS checkpoints, phases $PHASES)"
 R $P "rm -f /dev/shm/*${SERVICE}*; source $RUN/env.sh && echo 'reuse -' > $RUN/ctl && (setsid nohup timeout 10800 python $DST/models/demos/deepseek_v3_d_p/tests/v41_prefix_reuse/device_check/runner_harness.py > $RUN/runner.log 2>&1 < /dev/null & echo \$! > $RUN/runner.pid); sleep 2; cat $RUN/runner.pid" | sed 's/^/  runner pid /' | tee -a "$OUT/check.log"
