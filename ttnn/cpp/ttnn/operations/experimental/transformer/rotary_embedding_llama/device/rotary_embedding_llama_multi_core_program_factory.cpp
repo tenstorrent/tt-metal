@@ -331,11 +331,11 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
 
     // Omit only cores whose batch/sequence loops are empty; the partition is unchanged, so cores with work
     // still zero-fill rows beyond rotary_Ht.
+    const auto has_work = [](const CoreArgs& a) { return a.start_batch < a.end_batch && a.start_seq < a.end_seq; };
     std::set<CoreRange> active_ranges;
     if (operation_attributes.active_cores_only) {
         for (uint32_t i = 0; i < cores.size(); ++i) {
-            const auto& a = per_core_args[i];
-            if (a.start_batch < a.end_batch && a.start_seq < a.end_seq) {
+            if (has_work(per_core_args[i])) {
                 active_ranges.emplace(cores[i], cores[i]);
             }
         }
@@ -349,7 +349,7 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
     KernelRunArgs compute_run{.kernel = COMPUTE};
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const auto& a = per_core_args[i];
-        if (operation_attributes.active_cores_only && (a.start_batch >= a.end_batch || a.start_seq >= a.end_seq)) {
+        if (operation_attributes.active_cores_only && !has_work(a)) {
             continue;
         }
         const NodeCoord node = cores[i];

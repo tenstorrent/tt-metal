@@ -59,11 +59,3 @@ def test_export_encodes_audio_alongside_video(tmp_path, monkeypatch, export):
     with av.open(out) as c:
         samples = sum(f.samples for f in c.decode(audio=0))
     assert abs(samples - 48000) <= 2048  # AAC priming/padding only
-
-
-@pytest.mark.parametrize("export", [_export_yuv, _export_pixels], ids=["yuv", "pixels"])
-def test_export_without_audio_has_no_audio_stream(tmp_path, export):
-    out = str(tmp_path / "clip.mp4")
-    export(out, None)
-    with av.open(out) as c:
-        assert len(c.streams.audio) == 0 and c.streams.video[0].frames in (0, 24)

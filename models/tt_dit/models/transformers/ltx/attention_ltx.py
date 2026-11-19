@@ -727,7 +727,6 @@ class LTXAttention(Module):
         # Cross-attn K/V must be full-seq for SDPA; gather across SP only when genuinely sharded.
         is_cross = prompt_1BLP is not None
         sp_factor = self.parallel_config.sequence_parallel.factor
-        _k_cos_pe = k_rope_cos if k_rope_cos is not None else rope_cos
         # V2A cross: K/V stay SP-sharded (caller passes the sharded K-rope and kv_logical_n) so the
         # ring SDPA fuses the gather instead of an explicit K/V all-gather + local SDPA.
         use_ring_cross = is_cross and sp_factor > 1 and not kv_replicated and kv_logical_n is not None
@@ -735,8 +734,8 @@ class LTXAttention(Module):
             sp_axis = self.parallel_config.sequence_parallel.mesh_axis
             if kv_replicated:
                 need_gather = False
-            elif _k_cos_pe is not None:
-                need_gather = k_BHNE.shape[2] < _k_cos_pe.shape[2]
+            elif k_cos is not None:
+                need_gather = k_BHNE.shape[2] < k_cos.shape[2]
             else:
                 # Unknown sharded context with no rope reference: gather conservatively.
                 need_gather = True
@@ -745,15 +744,13 @@ class LTXAttention(Module):
                 v_BHNE = self.ccl_manager.all_gather_persistent_buffer(v_BHNE, dim=2, mesh_axis=sp_axis)
 
         if rope_cos is not None and not fuse_qk_rope:
-            _k_cos = _k_cos_pe
-            _k_sin = k_rope_sin if k_rope_sin is not None else rope_sin
             # The op supports skipping idle cores only for interleaved batch-1 prefill.
             active_cores_only = (
                 q_BHNE.shape[0] == 1
                 and k_BHNE.shape[0] == 1
                 and all(
                     t.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
-                    for t in (q_BHNE, k_BHNE, rope_cos, rope_sin, _k_cos, _k_sin, trans_mat)
+                    for t in (q_BHNE, k_BHNE, rope_cos, rope_sin, k_cos, k_sin, trans_mat)
                 )
             )
             q_BHNE = ttnn.experimental.rotary_embedding_llama(
@@ -766,8 +763,8 @@ class LTXAttention(Module):
             )
             k_BHNE = ttnn.experimental.rotary_embedding_llama(
                 k_BHNE,
-                _k_cos,
-                _k_sin,
+                k_cos,
+                k_sin,
                 trans_mat,
                 compute_kernel_config=self.rope_compute_kernel_config,
                 active_cores_only=active_cores_only,
