@@ -363,7 +363,7 @@ Tensor ring_distributed_sdpa(
         .program_config = program_config,
         .compute_kernel_config = compute_kernel_config,
         .chunk_start_idx = chunk_start_idx,
-        .precision = precision,
+        .precision = precision.value_or(ttnn::operations::transformer::SDPAPrecision::STANDARD),
     };
 
     auto tensor_args = OperationType::tensor_args_t{
@@ -372,9 +372,7 @@ Tensor ring_distributed_sdpa(
         .v = input_tensor_v,
         .page_table = page_table,
     };
-    if (precision) {
-        ttnn::operations::transformer::sdpa::detail::resolve_ring_distributed_recipe(operation_attributes, tensor_args);
-    }
+    ttnn::operations::transformer::sdpa::detail::resolve_ring_distributed_recipe(operation_attributes, tensor_args);
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

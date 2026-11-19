@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cmath>
+#include <mutex>
 #include <utility>
 
 #include "ttnn/operations/transformer/sdpa/sdpa.hpp"
@@ -24,6 +25,32 @@ namespace {
 // zero-length dummy joints don't create duplicate input Buffer*s -> resolve_bindings() bails and the
 // WorkloadDescriptor cache-hit path freezes stale addresses (#45452 / #45391). L=0 either way, so
 // numerically identical.
+// Prefill SDPA numerics come from `precision` (SDPAPrecision, STANDARD by default). compute_kernel_config and the
+// program config's numerics / tuning fields are accepted for one release and ignored; warn once per process.
+void warn_ignored_prefill_arguments(
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config) {
+    static std::once_flag compute_once, program_once;
+    if (compute_kernel_config.has_value()) {
+        std::call_once(compute_once, [] {
+            log_warning(
+                tt::LogOp,
+                "Prefill SDPA ignores compute_kernel_config (deprecated): the numerics come from precision= "
+                "(ttnn.SDPAPrecision, STANDARD by default; ACCURATE for FP32 accumulation).");
+        });
+    }
+    if (program_config.has_value() &&
+        (program_config->exp_approx_mode.has_value() || program_config->min_blocked_pack_tiles.has_value() ||
+         program_config->matmul_math_fidelity.has_value() || program_config->sub_core_grids.has_value())) {
+        std::call_once(program_once, [] {
+            log_warning(
+                tt::LogOp,
+                "Prefill SDPA ignores SDPAProgramConfig exp_approx_mode, min_blocked_pack_tiles, matmul_math_fidelity "
+                "and sub_core_grids (deprecated): it keeps the grid and the optional chunk sizes.");
+        });
+    }
+}
+
 std::optional<ttnn::Tensor> drop_if_empty(const std::optional<ttnn::Tensor>& t) {
     if (t.has_value() && t->logical_shape().volume() == 0) {
         return std::nullopt;
@@ -50,6 +77,7 @@ ttnn::Tensor scaled_dot_product_attention(
     bool output_concat_heads,
     const std::optional<ttnn::Tensor>& attn_mask_block_map,
     std::optional<SDPAPrecision> precision) {
+    warn_ignored_prefill_arguments(compute_kernel_config, program_config);
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -118,6 +146,7 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     std::optional<uint32_t> sliding_window_size,
     const std::optional<ttnn::Tensor>& attention_sink,
     std::optional<SDPAPrecision> precision) {
+    warn_ignored_prefill_arguments(compute_kernel_config, program_config);
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -162,6 +191,7 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     std::optional<uint32_t> sliding_window_size,
     const std::optional<ttnn::Tensor>& attention_sink,
     std::optional<SDPAPrecision> precision) {
+    warn_ignored_prefill_arguments(compute_kernel_config, program_config);
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -203,6 +233,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<SDPAPrecision> precision) {
+    warn_ignored_prefill_arguments(compute_kernel_config, program_config);
     auto output_tensors = ttnn::prim::joint_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_k,
@@ -487,6 +518,7 @@ ttnn::Tensor flash_mla_prefill(
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<SDPAPrecision> precision) {
+    warn_ignored_prefill_arguments(compute_kernel_config, program_config);
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -527,6 +559,7 @@ ttnn::Tensor chunked_flash_mla_prefill(
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<SDPAPrecision> precision) {
+    warn_ignored_prefill_arguments(compute_kernel_config, program_config);
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -570,6 +603,7 @@ ttnn::Tensor ring_distributed_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& page_table,
     std::optional<int64_t> chunk_start_idx,
     std::optional<SDPAPrecision> precision) {
+    warn_ignored_prefill_arguments(compute_kernel_config, program_config);
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 

@@ -259,7 +259,7 @@ JointSDPAResult joint_scaled_dot_product_attention(
 
     auto operation_attributes = OperationType::operation_attributes_t{
         joint_strategy, scale_val, tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG, program_config, kernel_config_val};
-    operation_attributes.precision = precision;
+    operation_attributes.precision = precision.value_or(ttnn::operations::transformer::SDPAPrecision::STANDARD);
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,
@@ -269,9 +269,7 @@ JointSDPAResult joint_scaled_dot_product_attention(
         .joint_k = joint_tensor_k,
         .joint_v = joint_tensor_v};
 
-    if (precision) {
-        ttnn::operations::transformer::sdpa::detail::resolve_joint_recipe(operation_attributes, tensor_args);
-    }
+    ttnn::operations::transformer::sdpa::detail::resolve_joint_recipe(operation_attributes, tensor_args);
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
