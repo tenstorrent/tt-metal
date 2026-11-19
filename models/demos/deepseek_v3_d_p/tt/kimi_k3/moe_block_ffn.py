@@ -168,16 +168,27 @@ def block_order_perm(mesh, epc, sp_axis: int = 0) -> torch.Tensor:
     return torch.tensor(perm, dtype=torch.long)
 
 
-def _k3_checkpoint() -> Path:
-    """Kimi-K3's checkpoint: $KIMI_K3_CKPT, else the prefill runner's $PREFILL_HF_MODEL (its K3 runs set only that)."""
+def _k3_checkpoint(model_name: str = "KimiK3Config") -> Path:
+    """The latent model's checkpoint.
+    Kimi-K3: $KIMI_K3_CKPT, else the prefill runner's $PREFILL_HF_MODEL (its K3 runs set only that).
+    Kimi-K3.1: $KIMI_K31_HF_MODEL, else $PREFILL_HF_MODEL, else its adapter's default - the K3.1 runner sets no
+    checkpoint variable, and a $KIMI_K3_CKPT left in the environment must not give K3.1 K3's router and shared expert.
+    """
+    if model_name == "KimiK31Config":
+        from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3_1 import KimiK31Adapter
+
+        return Path(
+            os.environ.get("KIMI_K31_HF_MODEL") or os.environ.get("PREFILL_HF_MODEL") or KimiK31Adapter.hf_model_default
+        )
     return Path(os.environ.get("KIMI_K3_CKPT") or os.environ.get("PREFILL_HF_MODEL") or "")
 
 
-def _cache_dir(mesh, sp_axis: int = 0):
+def _cache_dir(mesh, sp_axis: int = 0, ckpt: Optional[Path] = None):
+    """K3's TtMoe cache on Weka, for a caller that gives no cache_path (K3 only: a K3.1 block always gets its own)."""
     from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import _checkpoint_identity
 
     R, C = tuple(mesh.shape)
-    ckpt = _k3_checkpoint()
+    ckpt = ckpt if ckpt is not None else _k3_checkpoint()
     root = Path(os.environ.get("K3_BLOCK_WEKA_CACHE") or os.environ.get("TT_KIMI_K3_PREFILL_TTNN_CACHE") or _WEKA_CACHE)
     return root / f"kimi_k3_bh_{R * C}dev" / _checkpoint_identity(ckpt) / f"mesh{R}x{C}.tpaxis{1 - sp_axis}"
 
@@ -204,7 +215,7 @@ def _glm_nonrouted(layer_idx: int, hf_config):
     return dequantize_state_dict(t, hf_config, dtype=torch.float32), p
 
 
-def host_weights(mesh, dims, layer_idx: int, hf_config=None, sp_axis: int = 0):
+def host_weights(mesh, dims, layer_idx: int, hf_config=None, sp_axis: int = 0, ckpt: Optional[Path] = None):
     """The layer's non-routed weights in the block's expert order: dict of float32 torch tensors (router weight / bias,
     shared gate / up / down, K3: latent down / up / norm)."""
     from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import (
@@ -227,7 +238,7 @@ def host_weights(mesh, dims, layer_idx: int, hf_config=None, sp_axis: int = 0):
             "up": t[sp + "up_proj.weight"].float(),
             "down": t[sp + "down_proj.weight"].float(),
         }
-    ckpt = _k3_checkpoint()
+    ckpt = ckpt if ckpt is not None else _k3_checkpoint()
     assert (ckpt / "model.safetensors.index.json").is_file(), f"K3 MoE block: no checkpoint at {ckpt}"
     p = layer_prefix(ckpt, layer_idx)
     keys = {f"g.{k}": p + v for k, v in GATE_KEYS.items()}
@@ -311,6 +322,8 @@ class TtK3MoEBlockFfn:
         self.host_sd = state_dict if state_dict and state_dict.get("routed_expert_weights") is not None else None
         self.dims, self.act = block_dims(model_cfg)
         self.model_name = model_cfg if isinstance(model_cfg, str) else getattr(model_cfg, "__name__", "")
+        # (a latent model's checkpoint - K3 or K3.1 - for the router, shared expert and latent pair; GLM reads its own)
+        self.ckpt = _k3_checkpoint(self.model_name) if self.dims.latent_dim is not None else None
         # (this layer's weights in the ops' layouts, made at the first call that needs them: each part kept by what its
         # layout depends on - _packing - so a block with another plan gets weights laid out for it)
         self._heads: dict = {}  # head packing key -> MoEHeadWeights
@@ -459,7 +472,9 @@ class TtK3MoEBlockFfn:
         if sources is not None:
             cache = "host weights"  # (the log's label: no TtMoe cache, no checkpoint looked up)
         else:
-            cache = self.cache if self.cache is not None else _cache_dir(self.mesh, self.options.sp_axis)
+            if self.cache is None and self.model_name != "KimiK3Config":
+                raise ValueError(f"MoE block ({self.model_name}): no cache_path for the routed experts' TtMoe cache")
+            cache = self.cache if self.cache is not None else _cache_dir(self.mesh, self.options.sp_axis, self.ckpt)
         for n in dst:
             pages = (int(dst[n].shape[-2]) // 32) * (int(dst[n].shape[-1]) // 32)
             got = sum(int(sub[n][0].numel()) for _, _, sub in batches)
@@ -575,7 +590,9 @@ class TtK3MoEBlockFfn:
             from concurrent.futures import ThreadPoolExecutor
 
             pool = ThreadPoolExecutor(max_workers=1)
-            fut = pool.submit(host_weights, self.mesh, self.dims, self.layer_idx, self.hf_config, self.options.sp_axis)
+            fut = pool.submit(
+                host_weights, self.mesh, self.dims, self.layer_idx, self.hf_config, self.options.sp_axis, self.ckpt
+            )
         routed = self._routed_w.get(routed_key)
         if routed is None:
             routed = (
@@ -631,7 +648,9 @@ class TtK3MoEBlockFfn:
         fit = moe_block_utils.plan_moe_head(block.resources, block.dtypes, block.accumulators)
         lay = fit.planned[0].layout if fit.ok and len(fit.planned) else None
         ckpt = (
-            os.environ.get("KIMI_K3_CKPT") or os.environ.get("PREFILL_HF_MODEL") or os.environ.get("GLM53_HF_MODEL", "")
+            str(self.ckpt)
+            if self.ckpt is not None
+            else (os.environ.get("GLM53_HF_MODEL") or os.environ.get("PREFILL_HF_MODEL", ""))
         )
         key = repr(
             (

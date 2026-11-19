@@ -3,10 +3,11 @@
 
 """Which MoE a prefill block builds: TtMoe or the MoE block's C++ ops (ttnn.experimental.moe_block).
 
-GLM-5.3 and Kimi-K3 default to the MoE block (tt/kimi_k3/moe_block_ffn.py): the gate / shared expert (K3: and the
+GLM-5.3 and Kimi-K3 (and Kimi-K3.1, a KimiK3Config subclass) default to the MoE block (tt/kimi_k3/moe_block_ffn.py): the gate / shared expert (K3: and the
 latent pair) from the checkpoint, the routed experts from the TtMoe tensorbin cache. Every other model stays on TtMoe.
-Order: the caller's ``moe_impl`` ("block" / "ttmoe"), then $MOE_IMPL (Kimi-K3: $K3_MOE_IMPL first), then the model's
-default.
+Order: the caller's ``moe_impl`` ("block" / "ttmoe"), then $MOE_IMPL (Kimi-K3 and K3.1: $K3_MOE_IMPL first), then the
+model's default. A model config class takes the per-model entries below from the nearest class in its MRO that has one,
+so Kimi-K3.1 inherits Kimi-K3's unless it lists its own.
 
 A mesh that runs the block needs room for its persistent words and semaphores in L1_SMALL (moe_block_l1_small: the
 words' slab, on top of the model's own L1_SMALL use) and a fabric payload that holds one combine row
@@ -42,6 +43,10 @@ _BLOCK_DEFAULT = ("GLM53Config", "KimiK3Config")  # model config classes whose M
 # Every other model: its l1_small_size.
 _MODEL_L1_SMALL = {
     "KimiK3Config": 3328,
+    # - Kimi-K3.1: 4880 B (measured on the sc1 runner, 2x[4,4], 96 users, traced, bh-glx-110-c10u20, Nov 19): 3840 B
+    #   (K3's 3328 + K3.1's 512 B rise of L1_SMALL_SIZE) ran out of L1_SMALL in the DSA layers' early-Q all-to-all
+    #   during the traced warmup (5632 B a bank in all); 4880 B (6656 B a bank) passes. Not bisected below that.
+    "KimiK31Config": 4880,
     "GLM53Config": 3328,
 }
 _L1_SMALL_ALIGN = 64  # (the allocator's alignment of the slab and of the model's last buffer)
@@ -62,10 +67,24 @@ def _model_name(model_cfg) -> Optional[str]:
     return model_cfg if isinstance(model_cfg, str) else getattr(model_cfg, "__name__", None)
 
 
+def _model_names(model_cfg) -> tuple:
+    """The config class's name and its bases' names, nearest first (a name alone: just it)."""
+    if model_cfg is None:
+        return ()
+    if isinstance(model_cfg, str):
+        return (model_cfg,)
+    return tuple(c.__name__ for c in getattr(model_cfg, "__mro__", (model_cfg,)))
+
+
+def _per_model(table: dict, model_cfg, default):
+    """The table's entry for the nearest class in model_cfg's MRO that has one, else default."""
+    return next((table[n] for n in _model_names(model_cfg) if n in table), default)
+
+
 def moe_block_words_slab(model_cfg=None) -> int:
     """The MoE block's persistent words' slab a core for this model (MoEBlockConfig.words_slab_bytes by default)."""
     default = int(moe_block_utils.MoEBlockConfig().words_slab_bytes)
-    return _MODEL_WORDS_SLAB.get(_model_name(model_cfg), default)
+    return _per_model(_MODEL_WORDS_SLAB, model_cfg, default)
 
 
 def moe_block_l1_small(model_cfg=None) -> int:
@@ -77,20 +96,20 @@ def moe_block_l1_small(model_cfg=None) -> int:
 def model_l1_small_with_block(model_cfg, l1_small_size: int) -> int:
     """L1_SMALL a mesh of this model opens with when the MoE block is its MoE: the model's own use (its l1_small_size,
     or the measured figure where that is not one) plus the block's, at least l1_small_size."""
-    own = _MODEL_L1_SMALL.get(_model_name(model_cfg), l1_small_size)
+    own = _per_model(_MODEL_L1_SMALL, model_cfg, l1_small_size)
     return max(l1_small_size, own + moe_block_l1_small(model_cfg))
 
 
 def moe_impl_of(model_cfg=None, moe_impl: Optional[str] = None) -> str:
     """ "block" or "ttmoe" for a model config class (or its name)."""
-    name = model_cfg if isinstance(model_cfg, str) else getattr(model_cfg, "__name__", None)
+    names = _model_names(model_cfg)
     choice = (
-        moe_impl or (os.environ.get("K3_MOE_IMPL") if name == "KimiK3Config" else None) or os.environ.get("MOE_IMPL")
+        moe_impl or (os.environ.get("K3_MOE_IMPL") if "KimiK3Config" in names else None) or os.environ.get("MOE_IMPL")
     )
     if choice:
         assert choice in (BLOCK, TTMOE), f"MOE_IMPL / moe_impl must be '{BLOCK}' or '{TTMOE}', got {choice!r}"
         return choice
-    return BLOCK if name in _BLOCK_DEFAULT else TTMOE
+    return BLOCK if any(n in _BLOCK_DEFAULT for n in names) else TTMOE
 
 
 def moe_block_enabled(model_cfg=None, moe_impl: Optional[str] = None) -> bool:
