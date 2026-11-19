@@ -332,8 +332,6 @@ void Conv3dDeviceOperation::validate_on_program_cache_hit(
         // The writer reads residual rows with the output's page index and channel offset, and compute
         // adds them as bf16 pages after the untilize.
         const auto& residual = tensor_args.residual_tensor.value();
-        TT_FATAL(residual.storage_type() == StorageType::DEVICE, "Residual tensor must be on device");
-        TT_FATAL(residual.buffer() != nullptr, "Residual tensor must be allocated in a buffer on device");
         TT_FATAL(residual.layout() == Layout::ROW_MAJOR, "Residual tensor must be row-major");
         TT_FATAL(
             residual.dtype() == DataType::BFLOAT16 && input_tensor_a.dtype() == DataType::BFLOAT16 &&

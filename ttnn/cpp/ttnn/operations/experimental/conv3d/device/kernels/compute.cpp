@@ -505,8 +505,6 @@ void kernel_main() {
     constexpr uint32_t cb_x_lo_tiled = get_compile_time_arg_val(32);
     constexpr uint32_t cb_weight_lo_tiled = get_compile_time_arg_val(33);
     constexpr bool operand_split = get_compile_time_arg_val(34) == 1;
-    // Residual epilogue: untilize into cb_untilized_rm, then add the residual the writer staged in
-    // cb_residual_rm into cb_matmul_result_rm.
     constexpr bool use_residual = get_compile_time_arg_val(35) == 1;
     constexpr uint32_t cb_residual_rm = get_compile_time_arg_val(36);
     constexpr uint32_t cb_untilized_rm = get_compile_time_arg_val(37);
