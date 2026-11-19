@@ -92,6 +92,20 @@ def decode_compute_kernel_config(mesh_device):
     )
 
 
+def _plan_rows(x) -> bool:
+    """A ``[1, 1, M > 32, K]`` interleaved prefill activation with tile-aligned M and K (the planned prefill config)."""
+    shape = x.shape
+    return (
+        len(shape) == 4
+        and int(shape[0]) == 1
+        and int(shape[1]) == 1
+        and int(shape[2]) > TILE
+        and int(shape[2]) % TILE == 0
+        and int(shape[3]) % TILE == 0
+        and not x.is_sharded()
+    )
+
+
 class DecodeLinear:
     """``ttnn.linear`` on an interleaved weight with the 1D decode config for one-tile activations and the
     op default for everything else (prefill rows, batched leading dims)."""
@@ -102,9 +116,46 @@ class DecodeLinear:
         self.n = n
         self.program_config = decode_1d_progcfg(mesh_device, k, n, max_block_w) if enabled else None
         self.compute_kernel_config = decode_compute_kernel_config(mesh_device) if enabled else None
+        try:
+            g = mesh_device.compute_with_storage_grid_size()
+            self._grid = (int(g.x), int(g.y))
+        except Exception:  # noqa: BLE001 - host-only stand-ins
+            self._grid = None
 
     def __call__(self, x, memory_config=None, compute_kernel_config=None, prefill=False):
         """``prefill``: a tile-sized prefill (a 32-token prompt) takes the op default, not the 1D decode config."""
+        if prefill and compute_kernel_config is not None and self._grid is not None and _plan_rows(x):
+            # GEMMA4_PREFILL_MM_PLAN (+ _KB=free): the planned 2D config of a prefill chunk (tt/prefill_matmul.py)
+            from models.demos.gemma4.tt.dram_sharded import (
+                _L1_BYTES,
+                _PREFILL_L1_HEADROOM,
+                fp32_dest_acc,
+                weight_tile_bytes,
+            )
+            from models.demos.gemma4.tt.prefill_matmul import (
+                planned_linear,
+                prefill_mm_plan_enabled,
+                prefill_mm_plan_keep_kb,
+            )
+
+            # the op's own config here picks its K block itself: only the free mode plans this call
+            if prefill_mm_plan_enabled(self.k, self.n) and not prefill_mm_plan_keep_kb():
+                out = planned_linear(
+                    x,
+                    self.weight,
+                    int(x.shape[-2]),
+                    self.k,
+                    self.n,
+                    grid=self._grid,
+                    weight_tile_bytes=weight_tile_bytes(self.weight.dtype),
+                    fp32_acc=fp32_dest_acc(compute_kernel_config),
+                    budget=_L1_BYTES - max(0, _PREFILL_L1_HEADROOM),
+                    exact_n=False,
+                    compute_kernel_config=compute_kernel_config,
+                    memory_config=memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG,
+                )
+                if out is not None:
+                    return out
         kwargs = {}
         if memory_config is not None:
             kwargs["memory_config"] = memory_config
