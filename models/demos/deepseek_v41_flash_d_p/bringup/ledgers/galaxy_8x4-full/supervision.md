@@ -510,3 +510,16 @@
   refusal). DEVICE OPENS (justified): P.84 attempt 2: the agent's checks through the runner with both MOE_REPLICAS
   values, then the A/B: expected <= 4 opens / loads of 0-20 (one per configuration change), + the fresh full process
   if accepted. RAM unaccounted before: 168.4 GiB.
+
+## 2026-11-19 10:25 UTC: OWNER: replica pick on representative agentic text (queued after P.84)
+- Data: /data/dnijemcevic/bringup/agent_texts_20261119 (nvidia/Open-SWE-Traces, CC-BY-4.0; owner-provided, no
+  download): Claude Code harness (Qwen-written, python), OpenHands DeepSeek-V4-Flash (python), OpenHands
+  DeepSeek-V4-Flash (go / python / ts / js).
+- F287 (CPU, now): texts agentic_cc, agentic_ds, agentic_ds_ml (+ slices _s1, _s2: ~1.1M tokens each), every session
+  rendered with the checkpoint's own chat template (system prompt, tool schemas converted to function schemas, tool
+  calls with parsed arguments, tool results, reasoning), tokenized, cached with sha + per-session repo / offsets.
+- After P.84 closes: ONE runner load (0-20): census at a spread of in-session positions over enough sessions
+  (split by repo: pick = half the repos of cc + ds; held-out = the other repos, all of ds_ml, the old bring-up
+  sessions); offline pick of 32 / layer; compare held-out vs no replicas and vs P.84's table; ship if better (A/B of
+  the two tables on the runner, timing only). Note: the census's history is zeros apart from the real previous chunk,
+  so a position deep in a session changes only the tables' sizes, not the routing inputs much.
