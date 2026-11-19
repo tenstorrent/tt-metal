@@ -1368,3 +1368,31 @@ for _cls in (V41CSA, V41CSAConsumer):
 V41CSA._score_mask = _score_mask_v41
 V41CSA.glue_chunk = _source_glue_chunk_v41
 V41CSA.precreate_constants = _source_precreate_constants_v41
+
+
+# WS3 V41_PREFILL_INDEX_FUSED_BOUND=1: the EAGER fused scorer (select_indices_fused: the last-chunk decoder's ratio-1 index
+# sources, layer 20 and the Reindex layers 24 / 28 / 32 / 36) took the WHOLE index-key cache as the op's key operand, so its
+# output and its work spanned the cache (1,052,800 columns at MAXSEQ 1M) whatever the context. Here the cache is sliced to a
+# ladder step (V41_PREFILL_INDEX_FUSED_LADDER columns, default 32768) at or above the scored length kv_len: the scored columns
+# are the same per column, the top-k still ranks the first E (valid_length) -- the same bits (ws3_fused_bench.py).
+INDEX_FUSED_BOUND = os.environ.get("V41_PREFILL_INDEX_FUSED_BOUND", "0") == "1"
+FUSED_LADDER = int(os.environ.get("V41_PREFILL_INDEX_FUSED_LADDER", "32768"))
+_tt_select_indices_fused = TtCSAIndexer.select_indices_fused
+
+
+def _select_indices_fused_bounded(
+    self, q_latent, hidden_states, cos, sin, index_k, entry_count: int, n_new: int, n_new_max: int
+):
+    E_tiles = -(-(int(entry_count) + int(n_new)) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+    kv_len = -(-(E_tiles + self.sp_factor * int(q_latent.shape[2])) // 64) * 64
+    cap = int(index_k.shape[2])
+    width = min(cap, -(-kv_len // FUSED_LADDER) * FUSED_LADDER)
+    if not INDEX_FUSED_BOUND or width >= cap:
+        return _tt_select_indices_fused(self, q_latent, hidden_states, cos, sin, index_k, entry_count, n_new, n_new_max)
+    keys = ttnn.slice(index_k, [0, 0, 0, 0], [1, 1, width, int(index_k.shape[3])])
+    idx = _tt_select_indices_fused(self, q_latent, hidden_states, cos, sin, keys, entry_count, n_new, n_new_max)
+    ttnn.deallocate(keys)
+    return idx
+
+
+TtCSAIndexer.select_indices_fused = _select_indices_fused_bounded
