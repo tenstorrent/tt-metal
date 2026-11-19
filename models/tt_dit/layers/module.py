@@ -292,22 +292,13 @@ class Module(ABC):
         self._set_evicted()
 
     def shard(self, mesh_axis: int) -> None:
-        """Evict to 1/n of the weights, n being the device count along `mesh_axis`: each parameter keeps only this
-        device's slice of one dim it does not already split, a transient split over `mesh_axis` recorded in its
-        `mesh_axes` (a parameter with no such dim that divides evenly stays whole). `gather` restores the durable
-        layout, bit-identically.
+        """Shard the module's parameters along the mesh_axis. This is a transient sharding; you cannot save
+        or run the __call__/forward functions on a transiently_sharded module. You need to call gather first. 
 
         The module counts as unloaded while sharded.
-
-        When calling 'shard' the module (and it's children) call their eviction hooks.
-
-        Every slice is cut before any full weight is freed, so the slices pack together instead of each one filling
-        the hole its predecessor's full weight left; `gather` then frees them as one block, not as holes scattered
-        between the gathered weights.
-
-        Calling a module whose own parameters were split raises until `gather`. Raises, before changing anything, if
-        `mesh_axis` already splits any parameter (see `Parameter.shard`), or if a module overrides
-        `deallocate_weights`: `shard` does not run the override, so whatever it frees would stay on the device.
+        
+        When calling 'shard' the module (and it's children) call their eviction hooks. If a module overrides
+        `deallocate_weights`, we cannot safely shard, so for now we will raise in that situation. TODO: fix.
         """
         modules = list(self._all_modules())
         for module in modules:
@@ -320,7 +311,7 @@ class Module(ABC):
         parameters = list(self._all_parameters())
         for parameter in parameters:
             parameter.check_shard_axis(mesh_axis)
-        # Free the full weights only once every slice is cut (the fragmentation note above).
+
         defer_free: list[ttnn.Tensor] = []
         for parameter in parameters:
             parameter.shard(mesh_axis, defer_free=defer_free)
@@ -629,13 +620,13 @@ class Parameter:
             raise ValueError(msg)
 
     def shard(self, mesh_axis: int, /, *, defer_free: list[ttnn.Tensor] | None = None) -> None:
-        """Keep only this device's slice of one dim not yet split over the mesh: a transient split over `mesh_axis`,
-        recorded in `mesh_axes`. Raises as `check_shard_axis` does. Does nothing without device data, if
-        `mesh_axis` has one device, or if no dim divides evenly (whole tiles, for the last two dims of a tiled
-        tensor).
-
-        The full tensor it replaces is deallocated at once, or, given `defer_free`, appended to it instead, so a
-        caller sharding many parameters can free them all after every slice is cut (see `Module.shard`).
+        """Shard data along the mesh_axis. This sharding is transient, meaning the Parameter cannot be used
+        in compute/save and must be `gather`d before use. Attempting to use a transiently sharded parameter 
+        will result in an error.
+        
+        The full tensor it replaces is either deallocated immediately or appended to `defer_free` (if not None).
+        Defer free is used to allow a caller sharding many parameters to call `free` at the end to reduce memory 
+        fragmentation.
         """
         self.check_shard_axis(mesh_axis)
         if self._data is None or self.on_host:
@@ -657,9 +648,9 @@ class Parameter:
         self._free(full, defer_free)
 
     def gather(self, ccl_manager: Any, /, *, defer_free: list[ttnn.Tensor] | None = None) -> None:  # noqa: ANN401
-        """Undo `shard`: all-gather every transiently split dim, back to the durable layout.
+        """Undo `shard`: all-gather every transiently split dim, back to the durable layout (defined by self.durable_mesh_axes)
 
-        The slice it replaces is deallocated at once, or, given `defer_free`, appended to it instead.
+        If defer_free is provided, the sharded ref is given to the caller to dealloc, else it gets dealloc'd immediately.
         """
         dims = self.transient_dims()
         if not dims or self._data is None:
