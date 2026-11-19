@@ -168,10 +168,11 @@ and `test_all_gather_minimal_matmul_fabric2d_linear_sp[SP8xTP4-mesh]`): the
 Ethernet links carry all-gather traffic while the Tensix cores run matmuls, so a
 link that only fails with the chips drawing power shows up here, not in the
 link-only tests. Only the plain 2D mesh fabric cases run, so like the dI/dt test
-it needs the standard mesh links and no wrap-around cables: a galaxy with or
-without torus cables passes it when healthy. The torus cases in the same file
-are left out, since fabric init stops on a box whose cabling does not match the
-torus.
+it needs the standard mesh links and no wrap-around cables, and the same
+cabling note applies: on torus-cabled units set `TT_MESH_GRAPH_DESC_PATH` to the
+matching descriptor or fabric mesh mapping fails. The torus cases in the same
+file are left out, since fabric init stops on a box whose cabling does not match
+the torus.
 
 **Around the tests** (any tier with tests, live runs only, `--skip-reset`
 included): the eight tray HSCs' `STATUS_WORD` and `STATUS_INPUT` are read before

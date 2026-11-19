@@ -190,6 +190,25 @@ class TestPcieRecount(unittest.TestCase):
             "Read 0xffffffff over PCIe ID 24: the board should be reset.",
         )
 
+    def test_hung_tt_smi_times_out_into_one_line_fail(self):
+        import subprocess
+
+        from diag_runner import recount_after_tests
+        from diag.snapshot import SNAPSHOT_TIMEOUT_S, take_snapshot
+
+        def run(cmd, **kwargs):
+            # A hung chip never returns: only a bounded call gets out.
+            if kwargs.get("timeout") is None:
+                raise AssertionError("tt-smi -f called without a timeout")
+            raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+        with mock.patch("diag.snapshot.subprocess.run", side_effect=run):
+            check = recount_after_tests(lambda: take_snapshot("tt-smi", Path("/nonexistent/after.json")))
+        self.assertEqual((check.name, check.status), ("pcie_enum_count_after_tests", FAIL))
+        self.assertEqual(
+            check.details, f"no snapshot after the tests: tt-smi -f timed out after {SNAPSHOT_TIMEOUT_S} s"
+        )
+
     def test_missing_tt_smi_fails_instead_of_raising(self):
         from diag_runner import recount_after_tests
 

@@ -64,7 +64,7 @@ GTEST_ENV_KEYS = tuple(dict.fromkeys(k for spec in TESTS.values() for k in spec.
 # catches droop-induced non-determinism the short deployment gtests don't.
 # Both bf16_HiFi2 and bf8b_LoFi run: the LoFi variant draws the most power per
 # core, and a weak power stage can pass the HiFi2 one. Measured 545 s for the
-# bf16_HiFi2 variant alone in-suite on a BH galaxy (bh-glx6u-28, 2026-09-01):
+# bf16_HiFi2 variant alone in-suite on a BH galaxy:
 # iterations ~69 ms each, each determinism check ~13 s (reads the full
 # 16k x 16k output back from all 32 chips), plus ~3.5 min cold 32-chip
 # bring-up/compile; the two variants take about 2x that. Check density is the dominant cost: the same test at 5000 iterations
