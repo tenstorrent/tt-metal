@@ -20,6 +20,7 @@ class PytorchBertEncoder(torch.nn.Module):
         self.bert_encoder = hugging_face_reference_model.bert.encoder.layer[0]
 
     def forward(self, x, attention_mask=None):
+        # BertLayer returns its output tensor, not a tuple, since transformers 5.
         return self.bert_encoder(x, attention_mask)
 
 

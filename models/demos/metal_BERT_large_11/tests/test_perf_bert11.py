@@ -8,7 +8,7 @@ from loguru import logger
 from transformers import BertTokenizer
 
 import ttnn
-from models.common.utility_functions import is_blackhole, profiler, run_for_wormhole_b0
+from models.common.utility_functions import profiler, run_for_wormhole_b0
 from models.demos.metal_BERT_large_11.tt.bert_model import TtBertBatchDram
 from models.demos.metal_BERT_large_11.tt.model_config import (
     get_model_config,
@@ -141,7 +141,6 @@ def run_perf_bert11(
     logger.info(f"bert11 compile time: {compile_time}")
 
 
-@pytest.mark.skipif(is_blackhole(), reason="Not functional on BH")
 @run_for_wormhole_b0(reason_str="WH specific batch size")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
