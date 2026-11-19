@@ -256,8 +256,13 @@ DispatchMemMap::DispatchMemMap(
     unused_l1_base_ = align(last_cq_zone_end, 1u << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE);
     unused_l1_size_ = unused_l1_base_ < l1_size ? l1_size - unused_l1_base_ : 0;
 
+    // Unless every FD kernel shares one core, the prefetcher's scratch_db / ringbuffer starts at the same base as the
+    // dispatch side's buffers, on its own core, and reaches further.
+    const uint32_t last_prefetch_end =
+        scratch_db_base_ + std::max(settings.prefetch_scratch_db_size_, settings.prefetch_ringbuffer_size_) +
+        (num_cqs_per_core_ - 1) * cq_zone_stride_;
     l1_footprint_begin_ = l1_base;
-    l1_footprint_end_ = last_cq_zone_end;
+    l1_footprint_end_ = std::max(last_cq_zone_end, last_prefetch_end);
 }
 
 uint32_t DispatchMemMap::unused_l1_base() const { return unused_l1_base_; }
