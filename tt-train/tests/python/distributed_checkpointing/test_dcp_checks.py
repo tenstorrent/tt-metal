@@ -37,7 +37,7 @@ def _label(placements, dist_shape) -> Label:
 def test_host_shards_must_be_exactly_their_logical_size(expect_error):
     view = np.arange(16 * 64, dtype=np.uint16).view(np.uint8)
     assert _logical_bytes(view, (1, 1, 16, 64), 2) is view
-    padded = np.zeros(32 * 64 * 2, dtype=np.uint8)  # height-padded: the old fallback sliced it at the wrong stride
+    padded = np.zeros(32 * 64 * 2, dtype=np.uint8)  # height-padded to 32 rows: refused, not sliced at a guessed stride
     with expect_error(CheckpointError, "is not the 2048 bytes"):
         _logical_bytes(padded, (1, 1, 16, 64), 2)
 
@@ -227,7 +227,8 @@ class _Declaring:
 def test_an_unknown_layout_declaration_is_refused(expect_error):
     _, declarations = _python_parameters(_Declaring({"fused": (2, (64, 32, 32))}), {"Root/w": 0})
     assert list(declarations.values()) == [{"fused": (2, (64, 32, 32))}]
-    # A misspelt key used to leave the weight undeclared: an identity layout that scrambles a cross-TP load.
+    # A misspelt key is refused: ignored, it would leave the weight with an identity layout that scrambles a cross-TP
+    # load.
     with expect_error(LayoutError, r"Root/w: checkpoint_layout declares \['fused_segments'\]"):
         _python_parameters(_Declaring({"fused_segments": (2, (64, 32, 32))}), {"Root/w": 0})
 
