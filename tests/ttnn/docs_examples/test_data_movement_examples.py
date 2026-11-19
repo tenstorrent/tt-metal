@@ -46,8 +46,8 @@ def test_chunk(device):
 
     # Split the last dimension into 3 chunks; the output is a list of tensors
     chunks = ttnn.chunk(input_tensor, 3, dim=-1)
-    logger.info(f"Number of chunks: {len(chunks)}")  # 3
-    logger.info(f"Chunk Shape: {chunks[0].shape}")  # Shape([1, 1, 64, 32])
+    logger.debug(f"Number of chunks: {len(chunks)}")  # 3
+    logger.debug(f"Chunk Shape: {chunks[0].shape}")  # Shape([1, 1, 64, 32])
 
 
 def test_permute(device):
