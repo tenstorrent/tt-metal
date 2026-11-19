@@ -84,6 +84,10 @@ void bind_reshape_view_operation(nb::module_& mod) {
 
                 ``BFLOAT8_B`` and ``BFLOAT4_B`` reshapes that move data go through a ``BFLOAT16`` typecast.
 
+                ``UINT8`` reshapes run directly, except that an explicit ``pad_value`` on a TILE output with tile padding
+                fills that padding through a ``BFLOAT16`` typecast, which needs a temporary tensor twice the size of the
+                output. A fractional ``pad_value`` is truncated and one above 255 is clamped to 255.
+
             Memory Support:
                 - Interleaved: DRAM and L1
                 - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED input and output
