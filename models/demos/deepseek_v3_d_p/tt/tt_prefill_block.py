@@ -1101,6 +1101,13 @@ class TtPrefillBlock(LightweightModule):
         `metadata` is forwarded so the traced path can build the padding config on-device (see
         TtMoe.forward); it is unused on the eager/scalar path."""
         if self.moe_block:  # ([1, 1, S/SP, H/TP] in and out; padding tokens skipped as TtMoe's)
+            if packed:
+                # (the forward's chunk bounds, a MoEBlockPacking: the block's planner skips every pad row, a partial
+                # chunk's ahead of a full one too)
+                assert packed_padding_config is not None and hasattr(
+                    packed_padding_config, "ffn_kwargs"
+                ), f"MoE block: a packed forward takes its MoEBlockPacking, got {type(packed_padding_config).__name__}"
+                return self.ffn(ffn_norm_out, forward_chunks=self.forward_chunks, **packed_padding_config.ffn_kwargs())
             return self.ffn(
                 ffn_norm_out,
                 actual_isl=actual_isl,

@@ -314,6 +314,12 @@ class TtPrefillTransformer(LightweightModule):
             )
             self.layers.append(layer)
 
+        # The MoE layers' implementation (tt/moe_impl.py): a packed forward gives the MoE block its padding as a
+        # MoEBlockPacking (the forward's chunk bounds), TtMoe as a PackedPadding - here (forward_packed) and in
+        # TtPrefillRuntime's traced path. The MTP layer's MoE counts too: it takes the same padding.
+        mtp_layer = getattr(getattr(mtp_predictor, "module", None), "layer", None)
+        self.moe_is_block = any(getattr(layer, "moe_block", False) for layer in [*self.layers, mtp_layer])
+
         build_tail = mtp_predictor is not None and is_last_rank and not kv_only_last_layer
         self.norm = (
             TtDistributedRmsNorm(
@@ -840,7 +846,8 @@ class TtPrefillTransformer(LightweightModule):
         sends the D2H acks itself once the forward is done (TtPrefillRuntime.prefill_forward).
 
         Traced form: ``metadata`` (one ChunkMetadata per chunk position, read on device) and
-        ``padding_config`` (the runtime's persistent PackedPadding) replace ``chunks``, which is then None.
+        ``padding_config`` (the runtime's persistent PackedPadding, or MoEBlockPacking when the MoE is the MoE block)
+        replace ``chunks``, which is then None.
 
         MTP (last rank): ``mtp_unions`` holds one MTPUnionEmbedding per chunk position. Eager, ``provided_levels`` is
         one count per chunk (run_mtp_packed); traced, ``mtp_geometries`` one MTPTraceGeometry per chunk position
@@ -867,12 +874,20 @@ class TtPrefillTransformer(LightweightModule):
         else:
             h = token_ids
 
-        # Eager: one MoE padding (PackedPadding) for every layer of the forward, not one per layer's gate.
+        # Eager: one MoE padding for every layer of the forward, not one per layer's gate: the MoE block's planner reads
+        # the chunks themselves (MoEBlockPacking), TtMoe a PackedPadding.
         owned_padding_config = None
         if metadata is None and padding_config is None:
-            sp = self.mesh_device.shape[self.sp_axis]
-            owned_padding_config = packed_padding(self.mesh_device, chunks, sp, h.shape[2] // n, sp_axis=self.sp_axis)
-            padding_config = owned_padding_config
+            if self.moe_is_block:
+                from models.demos.deepseek_v3_d_p.tt.kimi_k3.moe_block_ffn import MoEBlockPacking
+
+                padding_config = MoEBlockPacking(chunks=list(chunks))
+            else:
+                sp = self.mesh_device.shape[self.sp_axis]
+                owned_padding_config = packed_padding(
+                    self.mesh_device, chunks, sp, h.shape[2] // n, sp_axis=self.sp_axis
+                )
+                padding_config = owned_padding_config
 
         reuse = self.indexer_types is not None
         if reuse:
