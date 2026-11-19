@@ -40,7 +40,7 @@ void bind_squeeze(nb::module_& mod) {
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
-            dim (int or List[int], optional): the dimension or dimensions to remove, each in ``[-rank, rank - 1]`` and listed once, where ``rank`` is the rank of `input_tensor`. Negative values count from the last dimension. A listed dimension whose size is not 1 is kept. Defaults to `None`, which removes every dimension of size 1.
+            dim (int or List[int], optional): the dimension or dimensions to remove, each in ``[-rank, rank - 1]`` and listed once, where ``rank`` is the rank of `input_tensor`; for a rank-0 input, ``0`` or ``-1``, which return the input unchanged. Negative values count from the last dimension. A listed dimension whose size is not 1 is kept. Defaults to `None`, which removes every dimension of size 1.
 
         Returns:
             ttnn.Tensor: the output tensor, with the input's dtype, layout and memory configuration.
