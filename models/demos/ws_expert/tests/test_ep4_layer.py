@@ -458,7 +458,7 @@ def group_report(cfg, st, chips, clk, R, why):
     why the group NCRISCs' idle time by blocker (us, mean over the group's cores; median over chips) - one line a
     group; the chips of mesh column 0 also per chip."""
     sts = ttnn.get_device_tensors(st)
-    ce, ne, wy = {}, {}, {}
+    ce, ne, wy, cw = {}, {}, {}, {}
     for ci in chips:
         s = (ttnn.to_torch(sts[ci]).to(torch.int64) & 0xFFFFFFFF).reshape(cfg.G * cfg.GC, -1)
         rel = ((s - int(s[0, 0]) + (1 << 31)) & 0xFFFFFFFF) - (1 << 31)
@@ -466,6 +466,13 @@ def group_report(cfg, st, chips, clk, R, why):
         for g in range(cfg.G):
             q, r = s[g * cfg.GC : (g + 1) * cfg.GC], rel[g * cfg.GC : (g + 1) * cfg.GC]
             ce[(ci, g)] = (int(r[:, 63].max()) - t0) / clk
+            qd = q.double()
+            cw[(ci, g)] = (
+                (qd[:, 40:45].mean(0) / clk).tolist()
+                + (qd[:, 45:49].mean(0) / clk).tolist()
+                + (qd[:, 50:56].mean(0) / clk).tolist()
+                + (qd[:, 470:476].mean(0) / clk).tolist()
+            )
             ne[(ci, g)] = (int((r[:, 485] + q[:, 484]).max()) - t0) / clk
             if why:
                 wy[(ci, g)] = (q[:, 470:485].double().mean(0) / clk).tolist()
@@ -484,6 +491,13 @@ def group_report(cfg, st, chips, clk, R, why):
                 f"{[round(v) for v in m[7:12]]}, first / last forward {m[12]:.0f} / {m[13]:.0f} us"
             )
         logger.info(line)
+        v = [statistics.median(cw[(ci, g)][k] for ci in chips) for k in range(21)]
+        logger.info(
+            f"EP4 group {g} cores (us, mean over its cores, median over chips): compute waits tilize / x / weights / h / "
+            f"landing {[round(x) for x in v[0:5]]}, MATH gate-up / fold / down / tilize {[round(x) for x in v[5:9]]}; "
+            f"BRISC busy qx / gather / partials / credits / h out / own {[round(x) for x in v[9:15]]}; NCRISC busy "
+            f"weights / x ring / landing / partials up / h ring / y {[round(x) for x in v[15:21]]}"
+        )
     from models.demos.ws_expert.ws_lane5 import PLACED
 
     for rc, (pm, ex) in sorted(PLACED.items()):
