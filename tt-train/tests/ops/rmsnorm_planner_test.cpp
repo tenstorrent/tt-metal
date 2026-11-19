@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <map>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -161,6 +162,26 @@ TEST(RMSNormPlannerTest, SlicesThatDontFitFallBackToWholeRows) {
             {35U, 15U},
             {32U, 16U}};
         EXPECT_EQ(fit_checks, expected_checks);
+    }
+}
+
+// max_slices caps the row above, which takes 16 slices uncapped: 1 keeps whole rows, and 4 gives 4 slices of 128 (cost
+// 128 + 8 + 128 = 264, against 349 for 3). Counts above the cap never reach the fit check.
+TEST(RMSNormPlannerTest, MaxSlicesCapsTheSliceCount) {
+    for (const auto& grid : kGrids) {
+        for (const auto& [max_slices, num_slices, num_checks] :
+             {std::tuple{1U, 1U, size_t{0U}}, std::tuple{4U, 4U, size_t{3U}}}) {
+            SCOPED_TRACE(describe(grid, 1U, 512U) + ", max_slices = " + std::to_string(max_slices));
+            size_t fit_checks = 0U;
+            const auto p = plan_row_slices(grid, 1U, 512U, max_slices, [&](uint32_t, uint32_t) {
+                ++fit_checks;
+                return true;
+            });
+            EXPECT_EQ(p.num_slices, num_slices);
+            EXPECT_EQ(p.slice_tiles, 512U / num_slices);
+            EXPECT_EQ(p.num_cores, num_slices);
+            EXPECT_EQ(fit_checks, num_checks);
+        }
     }
 }
 

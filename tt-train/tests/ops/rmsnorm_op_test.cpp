@@ -419,7 +419,7 @@ static void CompareKernelVsComposite(const std::vector<uint32_t>& shape, const b
 //
 // - Memory usage patterns: L1 cache fit vs overflow
 // - Width alignment: C % 32 == 0 vs not (masking required)
-// - Block sizes: 1 and 2 in both passes; the forward also uses 3 when 3 divides Wt (NanoLlama, Wt = 12)
+// - Block sizes: 1 and 2 in both passes; the forward also uses 3 when 3 divides a core's tiles of the row
 // - Scale testing: small to very large tensor dimensions
 // - Training scenarios: realistic model shapes (NanoLlama, etc.)
 // ============================================================================
@@ -428,8 +428,9 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_Basic_Small) {
     CompareKernelVsComposite({1U, 1U, 2U, 32U});
 }
 
-// Which L1 path a width takes on Blackhole: the backward keeps the row in L1 up to about C = 7.4K; the forward
+// Which L1 path a whole row takes on Blackhole: the backward keeps the row in L1 up to about C = 7.4K; the forward
 // keeps everything in L1 up to about C = 11K and everything but gamma up to about C = 22K. Wider rows stream.
+// Most single tile-rows below are cut into 16 slices that stay in L1; RMSNormModes' _WholeRows cases keep whole rows.
 
 // Test aligned dimensions (C % 32 == 0) that fit in L1 cache
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_FitsInL1) {
@@ -446,15 +447,15 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_Qwen3_32B_Hidden) {
     CompareKernelVsComposite({1U, 1U, 32U, 5120U});
 }
 
-// Test aligned dimensions (C % 32 == 0) where the forward fits in L1 and the backward does not
+// Test aligned dimensions (C % 32 == 0) where a whole row fits in L1 for the forward and not for the backward
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_BwDoesNotFitInL1) {
-    // C = 8192 (1 << 13), the forward keeps everything in L1, the backward streams
+    // C = 8192 (1 << 13): as 16 slices of 16 tiles both passes stay in L1. Plain_1x32x1x8191_WholeRows covers the row.
     CompareKernelVsComposite({1U, 1U, 1U, 8192U});
 }
 
-// Test aligned dimensions (C % 32 == 0) where the forward fits in L1 except for gamma
+// Test aligned dimensions (C % 32 == 0) where a whole row fits in the forward's L1 except for gamma
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_FwL1ExceptGamma) {
-    // C = 16384 (1 << 14), the forward keeps everything but gamma in L1, the backward streams
+    // C = 16384 (1 << 14): as 16 slices of 32 tiles both passes stay in L1. Plain_1x32x1x16384_WholeRows covers rows.
     CompareKernelVsComposite({1U, 1U, 1U, 16384U});
 }
 
@@ -473,9 +474,9 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_Unaligned_FitsInL1) {
     CompareKernelVsComposite({1U, 1U, 1U, 4095U});
 }
 
-// Test unaligned dimensions (C % 32 != 0) where the forward fits in L1 except for gamma
+// Test unaligned dimensions (C % 32 != 0) where a whole row fits in the forward's L1 except for gamma
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Unaligned_FwL1ExceptGamma) {
-    // C = 16383 ((1 << 14) - 1), requires masking, the forward keeps everything but gamma in L1, the backward streams
+    // C = 16383 ((1 << 14) - 1): 16 slices of 32 tiles that stay in L1, and only the last masks.
     CompareKernelVsComposite({1U, 1U, 1U, 16383U});
 }
 
@@ -488,22 +489,23 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_Unaligned_VeryLargeC) {
     CompareKernelVsComposite({1U, 1U, 1U, 1048558U});
 }
 
-// Test block_size = 1: Wt has no divisor 2 or 3
+// Test block_size = 1: a core's tiles of the row have no divisor 2 or 3. RMSNormModes also streams 24540 whole.
 TEST_F(RMSNormOpTest, RMSNorm_Compare_BlockSize1) {
-    CompareKernelVsComposite({1U, 1U, 1U, 160U});  // C = 160, Wt = 5
-    CompareKernelVsComposite({1U, 1U, 1U, 223U});  // C = 223, Wt = 7, requires masking
-    // C = 12500, Wt = 391, requires masking: the forward keeps everything but gamma in L1, the backward streams
+    CompareKernelVsComposite({1U, 1U, 1U, 160U});  // C = 160, Wt = 5, kept whole
+    // C = 223, Wt = 7, requires masking: 4 slices of 2 tiles (block size 2), the last overlapping 1
+    CompareKernelVsComposite({1U, 1U, 1U, 223U});
+    // C = 12500, Wt = 391, requires masking: 16 slices of 25 tiles, the last overlapping 9
     CompareKernelVsComposite({1U, 1U, 1U, 12500U});
-    // C = 24540, Wt = 767, requires masking: both passes stream
+    // C = 24540, Wt = 767, requires masking: 16 slices of 48 tiles (block sizes 3 and 2), the last overlapping 1
     CompareKernelVsComposite({1U, 1U, 1U, 24540U});
 }
 
-// Test the forward's block_size = 3 on the two paths that don't keep everything in L1. NanoLlama (Wt = 12) covers it on
-// the everything-in-L1 path.
+// Test the forward's block_size = 3 on a sliced row. Plain_1x32x1x12480_WholeRows covers it on the paths that don't
+// keep everything in L1.
 TEST_F(RMSNormOpTest, RMSNorm_Compare_FwBlockSize3) {
-    // C = 12480, Wt = 390: the forward keeps everything but gamma in L1, the backward streams with block size 2
+    // C = 12480, Wt = 390: 16 slices of 25 tiles (block size 1), the last overlapping 10
     CompareKernelVsComposite({1U, 1U, 1U, 12480U});
-    // C = 24480, Wt = 765: both passes stream, the backward with block size 1
+    // C = 24480, Wt = 765: 16 slices of 48 tiles, the forward's block size 3, the last overlapping 3
     CompareKernelVsComposite({1U, 1U, 1U, 24480U});
 }
 
@@ -628,6 +630,26 @@ xt::xarray<float> as_stored(const xt::xarray<float>& a, const ttnn::DataType dty
     return ttml::core::to_xtensor(to_device(a, dtype));
 }
 
+// Plain mode: dy += a * out, with a = 1 and 2 on alternate tile-rows, so sum(out * dy) dominates dx and a dropped,
+// doubled or another tile-row's slice partial in the backward moves dx several times past kDxTol.
+void add_output_multiple(Inputs& in, const Shape& s) {
+    const uint32_t C = s.head_dim;
+    for (uint32_t b = 0; b < s.batch; ++b) {
+        for (uint32_t t = 0; t < s.seq; ++t) {
+            const size_t row = s.head_major_index(b, 0U, t, 0U);
+            double sum_sq = 0.0;
+            for (uint32_t c = 0; c < C; ++c) {
+                sum_sq += static_cast<double>(in.x.data()[row + c]) * in.x.data()[row + c];
+            }
+            const double inv = 1.0 / std::sqrt(sum_sq / C + kEps);
+            const double a = (t / tt::constants::TILE_HEIGHT) % 2U == 0U ? 1.0 : 2.0;
+            for (uint32_t c = 0; c < C; ++c) {
+                in.dy.data()[row + c] += static_cast<float>(a * in.x.data()[row + c] * in.gamma.data()[c] * inv);
+            }
+        }
+    }
+}
+
 // Heads and tile-rows get RMS spread over 2^-2 .. 2^3, so normalizing over the wrong columns, or with the sum of x^2
 // of another tile-row, cannot pass. The gate reaches into both saturation tails of sigmoid.
 Inputs make_inputs(const Shape& s, const uint32_t seed, const ttnn::DataType x_dtype, const bool gated) {
@@ -647,13 +669,18 @@ Inputs make_inputs(const Shape& s, const uint32_t seed, const ttnn::DataType x_d
     if (gated) {
         gate = as_stored(ttml::test_utils::make_uniform_xarray<float>(s.head_merged(), -20.0F, 20.0F, seed + 1U));
     }
-    return Inputs{
+    Inputs in{
         .x = as_stored(x, x_dtype),
         .gate = std::move(gate),
         .gamma = as_stored(ttml::test_utils::make_uniform_xarray<float>(
             std::vector<uint32_t>{1U, 1U, 1U, s.head_dim}, 0.5F, 1.5F, seed + 2U)),
-        .dy = as_stored(ttml::test_utils::make_uniform_xarray<float>(s.head_merged(), -1.0F, 1.0F, seed + 3U)),
+        .dy = ttml::test_utils::make_uniform_xarray<float>(s.head_merged(), -1.0F, 1.0F, seed + 3U),
     };
+    if (!gated) {
+        add_output_multiple(in, s);
+    }
+    in.dy = as_stored(in.dy);
+    return in;
 }
 
 double sigmoid(const double z) {
@@ -764,13 +791,15 @@ struct RMSNormCase {
     bool gated = false;
     ttnn::DataType dtype = ttnn::DataType::BFLOAT16;
     uint32_t max_row_slices = ttml::metal::ops::rmsnorm::kMaxRowSlices;
+    bool nightly = false;
 };
 
 std::string rmsnorm_case_name(const ::testing::TestParamInfo<RMSNormCase>& info) {
     const auto& c = info.param;
-    return std::string(c.gated ? "Gated_" : "Plain_") + std::to_string(c.shape.batch) + "x" +
-           std::to_string(c.shape.seq) + "x" + std::to_string(c.shape.heads) + "x" + std::to_string(c.shape.head_dim) +
-           (c.dtype == ttnn::DataType::FLOAT32 ? "_fp32" : "_bf16") + (c.max_row_slices == 1U ? "_WholeRows" : "");
+    return std::string(c.nightly ? "NIGHTLY_" : "") + (c.gated ? "Gated_" : "Plain_") +
+           std::to_string(c.shape.batch) + "x" + std::to_string(c.shape.seq) + "x" + std::to_string(c.shape.heads) +
+           "x" + std::to_string(c.shape.head_dim) + (c.dtype == ttnn::DataType::FLOAT32 ? "_fp32" : "_bf16") +
+           (c.max_row_slices == 1U ? "_WholeRows" : "");
 }
 
 std::vector<RMSNormCase> rmsnorm_cases() {
@@ -797,8 +826,6 @@ std::vector<RMSNormCase> rmsnorm_cases() {
         // The Qwen3.8 hidden norm: 32 tile-rows of 160 tiles are split into column slices over several cores each; on
         // 11x10, 6 slices of 27 whose last moves back over 2 tiles of the one before it.
         Shape{1, 1024, 1, 5120},
-        // Only the last slice masks the partial last tile.
-        Shape{1, 1024, 1, 5119},
         // 37 tile-rows of 77 tiles: on 11x10, 5 slices of 16 (block size 2) whose last overlaps 3 tiles across two
         // blocks, row-groups of 2 and of 1 rows in two core groups, and only the last slice masks.
         Shape{1, 1184, 1, 2463},
@@ -807,6 +834,12 @@ std::vector<RMSNormCase> rmsnorm_cases() {
         // 131 tile-rows of 74 tiles: 3 slices of 25 whose last overlaps 1 tile (block size 1), with row-groups of 4
         // and of 3 rows in two core groups.
         Shape{1, 4192, 1, 2368},
+        // One tile-row of 512 tiles as 16 slices of 32, the most the planner makes: each partial is 1/16 of the sum.
+        Shape{1, 32, 1, 16384},
+    };
+    // As 5120, with only the last slice masking the partial last tile, which 1000, 2463 and 863 also cover.
+    const std::vector<Shape> nightly_plain_shapes = {
+        Shape{1, 1024, 1, 5119},
     };
     // These widths would be sliced, so they keep whole rows to cover the whole-row paths.
     const std::vector<Shape> whole_row_shapes = {
@@ -817,6 +850,10 @@ std::vector<RMSNormCase> rmsnorm_cases() {
         Shape{1, 32, 1, 8191},
         // With fp32 input both stream.
         Shape{1, 32, 1, 16384},
+        // Forward block size 3 (Wt = 390): bf16 keeps everything but gamma in L1, fp32 streams. The backward streams.
+        Shape{1, 32, 1, 12480},
+        // Wt = 767 has no divisor 2 or 3: both passes stream with block size 1, and C % 32 != 0 masks.
+        Shape{1, 32, 1, 24540},
     };
     std::vector<RMSNormCase> cases;
     for (const auto dtype : {ttnn::DataType::BFLOAT16, ttnn::DataType::FLOAT32}) {
@@ -825,6 +862,9 @@ std::vector<RMSNormCase> rmsnorm_cases() {
         }
         for (const auto& s : plain_shapes) {
             cases.push_back({.shape = s, .gated = false, .dtype = dtype});
+        }
+        for (const auto& s : nightly_plain_shapes) {
+            cases.push_back({.shape = s, .gated = false, .dtype = dtype, .nightly = true});
         }
         for (const auto& s : whole_row_shapes) {
             cases.push_back({.shape = s, .gated = false, .dtype = dtype, .max_row_slices = 1U});
@@ -1096,14 +1136,16 @@ const std::vector<RowSplitExpectation>& row_split_expectations() {
     static const std::vector<RowSplitExpectation> expectations = {
         {"Plain_1x32x1x1000", {1U, 1U, 32U, 1000U}, true},
         {"Plain_1x1024x1x5120", {1U, 1U, 1024U, 5120U}, true},
-        {"Plain_1x1024x1x5119", {1U, 1U, 1024U, 5119U}, true},
+        {"NIGHTLY_Plain_1x1024x1x5119", {1U, 1U, 1024U, 5119U}, true},
         {"Plain_1x1184x1x2463", {1U, 1U, 1184U, 2463U}, true},
         {"Plain_1x32x1x863", {1U, 1U, 32U, 863U}, true},
         {"Plain_1x4192x1x2368", {1U, 1U, 4192U, 2368U}, true},
         // The _WholeRows cases force whole rows because these widths would be sliced.
         {"Plain_1x32x1x5120_WholeRows, RMSNorm_Compare_Aligned_Qwen3_32B_Hidden", {1U, 1U, 32U, 5120U}, true},
         {"Plain_1x32x1x8191_WholeRows", {1U, 1U, 32U, 8191U}, true},
-        {"Plain_1x32x1x16384_WholeRows", {1U, 1U, 32U, 16384U}, true},
+        {"Plain_1x32x1x16384, Plain_1x32x1x16384_WholeRows", {1U, 1U, 32U, 16384U}, true},
+        {"Plain_1x32x1x12480_WholeRows", {1U, 1U, 32U, 12480U}, true},
+        {"Plain_1x32x1x24540_WholeRows", {1U, 1U, 32U, 24540U}, true},
         {"RMSNorm_Compare_FrozenGamma, whole rows", {1U, 1U, 4096U, 512U}, false},
         {"RMSNorm_Compare_FrozenGamma, sliced row", {1U, 1U, 1U, 16384U}, true},
         {"DistinctKeys, sliced tile row", {1U, 1U, 32U, 1024U}, true},
