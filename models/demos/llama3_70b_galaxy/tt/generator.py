@@ -3,12 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import time
 from collections import defaultdict
 from dataclasses import fields, replace
 from typing import List
 
 import torch
 from loguru import logger
+
+_DECODE_TIMING = os.environ.get("LLAMA_DECODE_TIMING", "0") == "1"
 
 import ttnn
 from ttnn.tools import trace_allocation_tracker
@@ -339,7 +342,9 @@ class Generator(WarmupForwardMixin):
         # Phase 1: sp0 traces (no prefix caching) - batch 1 and 32
         for warmup_sequence_length in warmup_sequence_lengths:
             # Capture trace for both
-            for batch in (1, 32) if self._batched_prefill_allowed() else (1,):  # TODO add proper support for batched prefill == b-32
+            for batch in (
+                (1, 32) if self._batched_prefill_allowed() else (1,)
+            ):  # TODO add proper support for batched prefill == b-32
                 # For batched prefill this needs to be *32
                 if batch == 32 and warmup_sequence_length >= 4096:
                     # For batched prefill max batch sequence length is 2048 or lower (128k limit), so we skip warmup for sequence lengths >= 4096
@@ -1524,6 +1529,93 @@ class Generator(WarmupForwardMixin):
         reload_page_table: bool,
         reload_sampling_params: bool,
         reset_sampling_state: bool,
+    ):
+        if _DECODE_TIMING:
+            return self._timed_decode_forward(
+                tokens,
+                start_pos,
+                page_table,
+                kv_cache,
+                enable_trace,
+                read_from_device,
+                async_read,
+                sampling_params,
+                tt_out_logits_saved,
+                is_cur_pos_sharded,
+                is_page_table_sharded,
+                prompt_tokens,
+                output_tokens,
+                slot_remap,
+                defer_device_sampling,
+                reload_inputs=reload_inputs,
+                reload_page_table=reload_page_table,
+                reload_sampling_params=reload_sampling_params,
+                reset_sampling_state=reset_sampling_state,
+            )
+        return self._decode_forward_impl(
+            tokens,
+            start_pos,
+            page_table,
+            kv_cache,
+            enable_trace,
+            read_from_device,
+            async_read,
+            sampling_params,
+            tt_out_logits_saved,
+            is_cur_pos_sharded,
+            is_page_table_sharded,
+            prompt_tokens,
+            output_tokens,
+            slot_remap,
+            defer_device_sampling,
+            reload_inputs=reload_inputs,
+            reload_page_table=reload_page_table,
+            reload_sampling_params=reload_sampling_params,
+            reset_sampling_state=reset_sampling_state,
+        )
+
+    def _timed_decode_forward(self, *args, **kwargs):
+        st = self.__dict__.setdefault("_dt", {"n": 0, "inside": 0.0, "period": 0.0, "last": None, "reload": 0})
+        t0 = time.perf_counter()
+        if st["last"] is not None:
+            st["period"] += t0 - st["last"]
+        out = self._decode_forward_impl(*args, **kwargs)
+        t1 = time.perf_counter()
+        st["last"] = t0
+        st["inside"] += t1 - t0
+        st["reload"] += int(bool(kwargs.get("reload_inputs")))
+        st["n"] += 1
+        if st["n"] % 200 == 0:
+            n = st["n"] - 1
+            logger.info(
+                f"DECODE_TIMING steps={st['n']} period_ms={st['period'] / max(n, 1) * 1e3:.2f} "
+                f"inside_ms={st['inside'] / st['n'] * 1e3:.2f} reload_frac={st['reload'] / st['n']:.2f}"
+            )
+            st.update(n=0, inside=0.0, period=0.0, last=None, reload=0)
+        return out
+
+    def _decode_forward_impl(
+        self,
+        tokens,
+        start_pos,
+        page_table=None,
+        kv_cache=None,
+        enable_trace=True,
+        read_from_device=True,
+        async_read=False,
+        sampling_params=None,
+        tt_out_logits_saved=None,
+        is_cur_pos_sharded=False,
+        is_page_table_sharded=False,
+        prompt_tokens=None,
+        output_tokens=None,
+        slot_remap=None,
+        defer_device_sampling=False,
+        *,
+        reload_inputs,
+        reload_page_table,
+        reload_sampling_params,
+        reset_sampling_state,
     ):
         if getattr(self, "_disable_decode_tracing", False):
             enable_trace = False

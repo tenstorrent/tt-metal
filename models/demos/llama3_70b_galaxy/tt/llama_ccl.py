@@ -1606,6 +1606,15 @@ class TT_CCL:
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return ttnn_tensor_out
 
+    def _agmm_semaphores(self, cluster_axis):
+        # Two semaphores from the existing gather ring (no extra allocation: new global semaphores here push
+        # the lowest L1 buffer down into other programs' static CB region and fail the vLLM warmup).
+        cur = self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]]
+        nxt = self.gather_semaphore_handles[cluster_axis][(self.gather_idx[cluster_axis] + 1) % self.num_cbs]
+        if isinstance(cur, list):
+            return cur[:2]
+        return [cur, nxt]
+
     def line_all_gather_matmul(
         self,
         input_tensor_mesh,
@@ -1628,6 +1637,44 @@ class TT_CCL:
         input_tensor_mesh = ttnn.reshape(
             input_tensor_mesh, (1, 1, B * input_tensor_mesh.shape[-2], input_tensor_mesh.shape[-1])
         )
+
+        if self.is_blackhole:
+            # Blackhole (FABRIC_1D_RING): configure the op the way the tt_dit Blackhole callers do. The worker
+            # grid leaves the last core row free for the op's fabric muxes, the in0 sender axis splits into
+            # exactly num_links groups, K_block divides the per-device K tiles, and a barrier semaphore is
+            # passed since no persistent gather buffer is used. Isolated at the 4K FF2 shape on one BH Galaxy:
+            # 342 us vs 456 us for all_gather + minimal_matmul.
+            from models.tt_dit.utils.matmul import get_agmm_config
+
+            ring_size = self.cluster_shape[cluster_axis]
+            num_links = self._galaxy_links()
+            _, bh_config, num_workers_per_link = get_agmm_config(
+                input_tensor_mesh.shape[-2],
+                input_tensor_mesh.shape[-1] * ring_size,
+                weight_tensor.shape[-1],
+                full_grid=self.mesh_device.compute_with_storage_grid_size(),
+                cluster_size=ring_size,
+                num_links=num_links,
+                force_transpose=True,
+            )
+            output = ttnn.experimental.all_gather_minimal_matmul_async(
+                input_tensor=input_tensor_mesh,
+                weight_tensor=weight_tensor,
+                config=bh_config,
+                compute_kernel_config=compute_kernel_config,
+                multi_device_global_semaphore=self._agmm_semaphores(cluster_axis),
+                barrier_semaphore=self.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                num_links=num_links,
+                topology=ttnn.Topology.Ring,
+                cluster_axis=cluster_axis,
+                memory_config=memory_config,
+                dtype=dtype,
+                force_transpose=True,
+                num_workers_per_link=num_workers_per_link,
+                num_buffers_per_channel=24,
+            )
+            self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+            return output[0]
 
         grid_size = matmul_config.compute_with_storage_grid_size
         if hasattr(grid_size, "x"):

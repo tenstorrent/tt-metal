@@ -868,26 +868,26 @@ class TtModelArgs:
             # tile, which doubled prefill latency at 128k tokens (see the prefix-caching benchmark).
             sdpa_grid_x = int(os.environ.get("LLAMA_BH_SDPA_GRID_X", "7"))
             sdpa_grid_y = int(os.environ.get("LLAMA_BH_SDPA_GRID_Y", "10"))
-            self.model_config[
-                "SDPA_PROGCFG"
-            ] = lambda seqlen, chunk_start_idx=0, _gx=sdpa_grid_x, _gy=sdpa_grid_y: ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(_gx, _gy),
-                exp_approx_mode=True,
-                q_chunk_size=256
-                if seqlen >= 2048 and chunk_start_idx == 0
-                else 64
-                if seqlen < 2048 and chunk_start_idx == 0
-                else min(256, chunk_start_idx & -chunk_start_idx)
-                if seqlen >= 2048
-                else min(64, chunk_start_idx & -chunk_start_idx),
-                k_chunk_size=512
-                if seqlen >= 2048 and chunk_start_idx == 0
-                else 64
-                if seqlen < 2048 and chunk_start_idx == 0
-                else min(512, (seqlen + chunk_start_idx) & -(seqlen + chunk_start_idx))
-                if seqlen >= 2048
-                else min(64, (seqlen + chunk_start_idx) & -(seqlen + chunk_start_idx)),
-            )
+
+            # Ring SDPA at >= 2K gives each device 8 heads x (seqlen/4) query rows; with 256-row q chunks that is
+            # only 32 work units for 70 cores, so the op ran at ~1 ms/layer at 4K. LLAMA_BH_SDPA_Q_CHUNK=64 spreads
+            # it over the grid (4K: 0.99 -> 0.28 ms; 2K: 0.28 -> 0.16 ms). Read at call time so tests can toggle it.
+            def _sdpa_progcfg(seqlen, chunk_start_idx=0, _gx=sdpa_grid_x, _gy=sdpa_grid_y):
+                q_long = int(os.environ.get("LLAMA_BH_SDPA_Q_CHUNK", "256"))
+                if chunk_start_idx == 0:
+                    q_chunk, k_chunk = (q_long, 512) if seqlen >= 2048 else (64, 64)
+                else:
+                    q_cap, k_cap = (256, 512) if seqlen >= 2048 else (64, 64)
+                    q_chunk = min(q_cap, chunk_start_idx & -chunk_start_idx)
+                    k_chunk = min(k_cap, (seqlen + chunk_start_idx) & -(seqlen + chunk_start_idx))
+                return ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=(_gx, _gy),
+                    exp_approx_mode=True,
+                    q_chunk_size=q_chunk,
+                    k_chunk_size=k_chunk,
+                )
+
+            self.model_config["SDPA_PROGCFG"] = _sdpa_progcfg
 
             # For flexible chunked SDPA (chunk_start_idx_tensor): fixed program config so one trace
             # works for any block-aligned chunk_start at replay.

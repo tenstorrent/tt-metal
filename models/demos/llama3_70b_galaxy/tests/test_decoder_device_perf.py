@@ -137,7 +137,8 @@ def test_llama_demo(
         weights=weights,
         layers=layers,
         stress_test=stress_test,
-        start_pos=start_pos,
+        # DECODE_START_POS: profile decode at a longer context (decode SDPA cost grows with it).
+        start_pos=int(os.environ.get("DECODE_START_POS", start_pos)),
     )
 
 

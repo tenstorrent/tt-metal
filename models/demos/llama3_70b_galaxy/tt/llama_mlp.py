@@ -516,7 +516,28 @@ class TtLlamaMLP(LightweightModule):
         # On Blackhole always use the unfused all_gather + matmul: the fused all_gather_minimal_matmul_async
         # kernel only supports the 1D LowLatencyPacketHeader and fails to compile against the 2D-torus
         # fabric's HybridMeshPacketHeader required on BH.
-        if seq_len < 4096 or batch_size > 1 or self.args.is_blackhole:
+        # LLAMA_BH_PREFILL_FF2_AGMM=1: on the BH 1D-ring fabric the fused all_gather_minimal_matmul_async does
+        # compile; configured as tt_dit does (see TT_CCL.line_all_gather_matmul) it takes the 4K FF2 from
+        # 456 us (gather + minimal_matmul) to 342 us (one 4K layer 4.67 -> 4.57 ms). At 2K it is slower, so 4K+ only.
+        bh_ff2_agmm = (
+            self.args.is_blackhole
+            and batch_size == 1
+            and seq_len >= 4096
+            and os.environ.get("LLAMA_BH_PREFILL_FF2_AGMM", "0") == "1"
+        )
+        if bh_ff2_agmm:
+            w2_out = self.tt_ccl.line_all_gather_matmul(
+                w2_in,
+                self.w2_interleaved,
+                dim=3,
+                cluster_axis=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                matmul_config=None,
+                compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
+                dtype=self.prefill_output_dtype,
+            )
+            ttnn.deallocate(w2_in)
+        elif seq_len < 4096 or batch_size > 1 or self.args.is_blackhole:
             w2_in_gathered = self.tt_ccl.line_all_gather(
                 w2_in,
                 cluster_axis=1,

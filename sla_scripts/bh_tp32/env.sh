@@ -7,5 +7,11 @@ export LLAMA_DECODE_ROPE_CACHE=1 LLAMA_BH_CCL_TOPOLOGY=ring LLAMA_BH_RS_WORKERS=
 # Prefill (one 4K chunk 8.1 -> ~5.3 ms device time; 80-layer logits PCC 0.992 vs all off). SDPA LoFi drops PCC to 0.96: keep HiFi2.
 export LLAMA_BH_PREFILL_RS_WORKERS=4 LLAMA_BH_SDPA_FIDELITY=HiFi2 LLAMA_BH_PREFILL_WO_RS=1 LLAMA_BH_PREFILL_FF2_MINIMAL=1
 export LLAMA_BH_PREFILL_MM_TUNED=1 LLAMA_BH_PREFILL_FF13_BF8=1 LLAMA_BH_PREFILL_MINIMAL_2K=1
+# Ring SDPA with 64-row query chunks (4K layer 0.99 -> 0.28 ms SDPA) and the fused all-gather + FF2 matmul at 4K
+# (all_gather_minimal_matmul_async, 456 -> 342 us). 80-layer logits PCC vs all off: 0.9945 at 4K, 0.9989 at 2K.
+export LLAMA_BH_SDPA_Q_CHUNK=64 LLAMA_BH_PREFILL_FF2_AGMM=1
 # Fabric: vLLM reads FABRIC (run_server.sh), pytest reads TT_FABRIC_OVERRIDE (conftest.py)
 export FABRIC=${FABRIC:-FABRIC_1D_RING} TT_FABRIC_OVERRIDE=${TT_FABRIC_OVERRIDE:-FABRIC_1D_RING}
+# vLLM async scheduling is on by default in run_server.sh (+13% decode vs off). MMLU 81.6% before and 82.9% after the
+# full SLA bench with it on (Nov 19). Garbage output seen earlier came from chips left dirty by a failed or killed server,
+# not from async: reset the Galaxy (tt-smi -glx_reset_auto) after any hang, hard kill or experimental-op crash.

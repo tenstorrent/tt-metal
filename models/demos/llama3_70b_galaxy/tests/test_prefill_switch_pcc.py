@@ -21,16 +21,23 @@ SWITCHES = [
     "LLAMA_BH_PREFILL_MM_TUNED",
     "LLAMA_BH_PREFILL_FF13_BF8",
 ]
+_ALL = {k: "1" for k in SWITCHES} | {"LLAMA_BH_PREFILL_RS_WORKERS": "4"}
 VARIANTS = {
     "ref_again": ({}, "HiFi4"),
-    "all_lofi": ({k: "1" for k in SWITCHES} | {"LLAMA_BH_PREFILL_RS_WORKERS": "4"}, "LoFi"),
-    "all_hifi2": ({k: "1" for k in SWITCHES} | {"LLAMA_BH_PREFILL_RS_WORKERS": "4"}, "HiFi2"),
-    "all_hifi4": ({k: "1" for k in SWITCHES} | {"LLAMA_BH_PREFILL_RS_WORKERS": "4"}, "HiFi4"),
+    "all_hifi2": (_ALL, "HiFi2"),
+    # SDPA q chunk 64 + fused all-gather/FF2 matmul (needs LLAMA_BH_PREFILL_FF2_AGMM=1 in the launch env too, so the
+    # CCL object creates its semaphores).
+    "q64_agmm_hifi2": (_ALL | {"LLAMA_BH_SDPA_Q_CHUNK": "64", "LLAMA_BH_PREFILL_FF2_AGMM": "1"}, "HiFi2"),
 }
+RUNTIME_KEYS = SWITCHES + [
+    "LLAMA_BH_PREFILL_RS_WORKERS",
+    "LLAMA_BH_SDPA_Q_CHUNK",
+    "LLAMA_BH_PREFILL_FF2_AGMM",
+]
 
 
 def _set(model, env, fid):
-    for k in SWITCHES + ["LLAMA_BH_PREFILL_RS_WORKERS"]:
+    for k in RUNTIME_KEYS:
         os.environ.pop(k, None)
     os.environ.update(env)
     cfg = ttnn.WormholeComputeKernelConfig(

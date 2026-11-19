@@ -10,6 +10,9 @@ until curl -sf localhost:8000/v1/models >/dev/null; do
   if [ -n "$SERVER_PID" ] && ! kill -0 "$SERVER_PID" 2>/dev/null; then echo "server exited, see $OUT/server.log"; exit 1; fi
   sleep 30
 done
+# Garbage from chips left dirty by an earlier failed process looks fine in latency numbers: refuse to bench it.
+python "$D/sanity_check.py" | tee -a "$OUT/progress.txt"
+[ "${PIPESTATUS[0]}" -eq 0 ] || exit 1
 b() {
   local tag=$1; shift
   echo "$(date +%T) START $tag" >> "$OUT/progress.txt"
