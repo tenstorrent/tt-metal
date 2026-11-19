@@ -30,7 +30,7 @@ LTX_DEDUP_GATE_GATHER = os.environ.get("LTX_DEDUP_GATE_GATHER", "1") in ("1", "t
 
 
 def _can_preserve_qk_rope_rounding(norm, x, cos, sin, transform, heads):
-    """The initial device variant supports only the resident scalar LTX TP4 path."""
+    """The device op's preserve_rope_rounding limits; other shapes keep the separate rotation."""
     shape = tuple(x.shape)
     weight = norm.weight.data if norm.weight is not None else None
     if not (
@@ -115,11 +115,6 @@ class LTXAttention(Module):
         self.qk_norm = qk_norm
         self.eps = eps
         self.is_self = is_self
-        # Self-attention fuses its rotation into Q/K RMSNorm's head-split writer; cross-attention may
-        # gather K across SP before rotating it, so it keeps the separate rotation. Both knobs are
-        # bit-identical to the unfused rotation and fall back to it on layouts they do not support.
-        self.rope_active_cores_only = os.environ.get("LTX_ROPE_ACTIVE_CORES_ONLY", "1") == "1"
-        self.preserve_qk_rope_rounding = os.environ.get("LTX_FUSE_QK_ROPE_PRESERVE_BF16", "1") in ("1", "true", "True")
         self.query_input_dim = query_input_dim or dim
         self.output_dim = output_dim or dim
 
@@ -702,40 +697,21 @@ class LTXAttention(Module):
             )
 
         # RMSNorm on Q/K fused with the head split (emits BHNE via num_heads_per_device).
-        # The fused RoPE avoids writing and rereading the unrotated Q/K.
+        # Self-attention rotates Q/K inside the norm, so the unrotated Q/K are never written and reread.
+        # Cross-attention may gather K across SP before rotating it, so it keeps the separate rotation.
+        k_cos = k_rope_cos if k_rope_cos is not None else rope_cos
+        k_sin = k_rope_sin if k_rope_sin is not None else rope_sin
         fuse_qk_rope = (
-            self.preserve_qk_rope_rounding
-            and self.is_self
+            self.is_self
             and prompt_1BLP is None
             and rope_cos is not None
-            and all(
-                _can_preserve_qk_rope_rounding(norm, x, cos, sin, trans_mat, self.n_local_heads)
-                for norm, x, cos, sin in (
-                    (self.norm_q, q_1BNF, rope_cos, rope_sin),
-                    (
-                        self.norm_k,
-                        k_1BNF,
-                        k_rope_cos if k_rope_cos is not None else rope_cos,
-                        k_rope_sin if k_rope_sin is not None else rope_sin,
-                    ),
-                )
-            )
+            and _can_preserve_qk_rope_rounding(self.norm_q, q_1BNF, rope_cos, rope_sin, trans_mat, self.n_local_heads)
+            and _can_preserve_qk_rope_rounding(self.norm_k, k_1BNF, k_cos, k_sin, trans_mat, self.n_local_heads)
         )
-        q_rope_args = (
-            dict(rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat, preserve_rope_rounding=True)
-            if fuse_qk_rope
-            else {}
-        )
-        k_rope_args = (
-            dict(
-                rope_cos=k_rope_cos if k_rope_cos is not None else rope_cos,
-                rope_sin=k_rope_sin if k_rope_sin is not None else rope_sin,
-                trans_mat=trans_mat,
-                preserve_rope_rounding=True,
-            )
-            if fuse_qk_rope
-            else {}
-        )
+        q_rope_args, k_rope_args = {}, {}
+        if fuse_qk_rope:
+            q_rope_args = dict(rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat, preserve_rope_rounding=True)
+            k_rope_args = dict(rope_cos=k_cos, rope_sin=k_sin, trans_mat=trans_mat, preserve_rope_rounding=True)
         q_BHNE = self.norm_q(q_1BNF, num_heads_per_device=self.n_local_heads, **q_rope_args)
         k_BHNE = self.norm_k(k_1BNF, num_heads_per_device=self.n_local_heads, **k_rope_args)
 
@@ -771,16 +747,14 @@ class LTXAttention(Module):
         if rope_cos is not None and not fuse_qk_rope:
             _k_cos = _k_cos_pe
             _k_sin = k_rope_sin if k_rope_sin is not None else rope_sin
-            active_core_args = (
-                {"active_cores_only": True}
-                if self.rope_active_cores_only
-                and q_BHNE.shape[0] == 1
+            # The op supports skipping idle cores only for interleaved batch-1 prefill.
+            active_cores_only = (
+                q_BHNE.shape[0] == 1
                 and k_BHNE.shape[0] == 1
                 and all(
-                    t is not None and t.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+                    t.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
                     for t in (q_BHNE, k_BHNE, rope_cos, rope_sin, _k_cos, _k_sin, trans_mat)
                 )
-                else {}
             )
             q_BHNE = ttnn.experimental.rotary_embedding_llama(
                 q_BHNE,
@@ -788,7 +762,7 @@ class LTXAttention(Module):
                 rope_sin,
                 trans_mat,
                 compute_kernel_config=self.rope_compute_kernel_config,
-                **active_core_args,
+                active_cores_only=active_cores_only,
             )
             k_BHNE = ttnn.experimental.rotary_embedding_llama(
                 k_BHNE,
@@ -796,7 +770,7 @@ class LTXAttention(Module):
                 _k_sin,
                 trans_mat,
                 compute_kernel_config=self.rope_compute_kernel_config,
-                **active_core_args,
+                active_cores_only=active_cores_only,
             )
 
         # SDPA input quant, applied after RoPE so the rotation still runs at full precision. On the

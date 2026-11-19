@@ -1549,14 +1549,15 @@ ProgramDescriptor build_program_descriptor(
     };
 
     // fp32 dest accumulation is REQUIRED, unconditionally — not just for fp32
-    // input. It keeps stats, reduce and normalization intermediate CBs at fp32
-    // (the preserving RoPE variant explicitly rounds only the standalone-op
-    // boundaries to BF16) and the reduce/eps/rsqrt
+    // input. It is what keeps every internal CB (stats, reduce, intermediate,
+    // rotated) at fp32 (intermediate_format above) and the reduce/eps/rsqrt
     // accumulating in fp32 DST. Without it the intermediates silently drop to
     // bf16 (8 mantissa bits) and the sum(x**2) / normalize lose precision (worse
     // for bf16 input than fp32 input, since the unpacker also downcasts through
-    // SrcA to TF32). Statistics and normalization must accumulate in FP32 even
-    // when selected post-normalization pack boundaries reproduce BF16 ops.
+    // SrcA to TF32). The op's invariant is "inputs/outputs may be bf16 or fp32,
+    // internals are always fp32", so we enforce it here regardless of input dtype.
+    // preserve_rope_rounding is the one exception: it packs the rotation's inputs
+    // and output at bf16, where the standalone norm and RoPE ops round them.
     // (Note: the FPU eltwise path — mul_tiles/add_tiles — still truncates its
     // operands to TF32 ~10 mantissa bits; that floor is inherent to SrcA/SrcB and
     // is NOT lifted by fp32_dest_acc_en or UnpackToDestFp32.)

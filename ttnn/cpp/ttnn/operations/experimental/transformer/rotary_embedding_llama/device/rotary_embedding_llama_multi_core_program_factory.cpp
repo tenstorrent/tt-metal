@@ -329,9 +329,8 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
         }
     }
 
-    // Keep the legacy partition and each active core's exact runtime ranges.
-    // Only omit nodes whose batch/sequence loops are empty. In particular this
-    // preserves zero-filling of rows beyond rotary_Ht on a nonempty assignment.
+    // Omit only cores whose batch/sequence loops are empty; the partition is unchanged, so cores with work
+    // still zero-fill rows beyond rotary_Ht.
     std::set<CoreRange> active_ranges;
     if (operation_attributes.active_cores_only) {
         for (uint32_t i = 0; i < cores.size(); ++i) {

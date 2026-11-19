@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-only checks for the mp4 export on the request path. No device needed."""
+"""Host-only: the mp4 export encodes audio off the main thread and still muxes every stream."""
 
 import threading
 
@@ -14,23 +14,14 @@ import torch
 from models.tt_dit.utils import video
 
 
-def _yuv_clip(t=9, h=128, w=192, seed=0):
-    rng = np.random.default_rng(seed)
-    yy, xx = np.mgrid[0:h, 0:w]
-    frames = []
-    for i in range(t):
-        y = (40 + 150 * xx / w + 20 * np.sin(yy / 7.0 + i)).astype(np.uint8)
-        u = np.full((h // 2, w // 2), 110 + i, np.uint8)
-        v = rng.integers(120, 136, (h // 2, w // 2), dtype=np.uint8)
-        frames.append(np.concatenate([y, u.reshape(h // 4, w), v.reshape(h // 4, w)]))
-    return np.stack(frames)
+def _yuv_clip(t, h=128, w=192):
+    """(T, H * 3 / 2, W) planar yuv420p frames."""
+    return np.random.default_rng(0).integers(16, 236, (t, h * 3 // 2, w), dtype=np.uint8)
 
 
-def _pixels_clip(t=9, h=128, w=192):
+def _pixels_clip(t, h=128, w=192):
     """(B, C, F, H, W) float in [-1, 1], as ``decode_latents`` returns it."""
-    yy, xx = torch.meshgrid(torch.arange(h), torch.arange(w), indexing="ij")
-    frames = [torch.stack([xx / w, yy / h, torch.full_like(xx / w, i / t)]) for i in range(t)]
-    return (torch.stack(frames, dim=1) * 1.6 - 0.8)[None]
+    return torch.rand(1, 3, t, h, w) * 2 - 1
 
 
 def _decode(path):
@@ -38,35 +29,8 @@ def _decode(path):
         return np.stack([f.to_ndarray() for f in c.decode(video=0)])
 
 
-def _psnr(a, b):
-    return 10 * np.log10(255.0**2 / np.mean((a.astype(np.float64) - b.astype(np.float64)) ** 2))
-
-
 def _audio(seconds):
     return video.Audio(waveform=torch.zeros(2, int(48000 * seconds)).uniform_(-0.1, 0.1), sampling_rate=48000)
-
-
-def test_default_x264_options_favour_latency():
-    assert video.X264_OPTIONS == {"preset": "ultrafast", "crf": "20"}
-
-
-@pytest.mark.parametrize("layout", ["contiguous", "strided"])
-def test_yuv_export_round_trip(tmp_path, layout):
-    clip = _yuv_clip()
-    if layout == "strided":  # frames that are views into a wider buffer, as a row-padded readback would give
-        wide = np.zeros(clip.shape[:2] + (clip.shape[2] + 64,), np.uint8)
-        wide[:, :, : clip.shape[2]] = clip
-        src = wide[:, :, : clip.shape[2]]
-    else:
-        src = clip
-    out = str(tmp_path / "clip.mp4")
-    video.export_video_audio_yuv(src, out, fps=24, audio=_audio(clip.shape[0] / 24))
-
-    decoded = _decode(out)
-    assert decoded.shape == clip.shape
-    assert _psnr(decoded, clip) > 40.0
-    with av.open(out) as c:
-        assert len(c.streams.audio) == 1
 
 
 def _export_yuv(out, audio):

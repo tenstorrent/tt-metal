@@ -53,7 +53,6 @@ ttnn::Tensor dit_fused_distributed_rmsnorm(
     // Largest per-device row count (batch * N, multiple of 32) one cached program and its stats buffer
     // serve (create the buffer with the same row_capacity). Absent: one program per row count.
     std::optional<uint32_t> row_capacity = std::nullopt,
-    // Preserve the standalone BF16 norm/RoPE pack boundaries on the supported LTX path.
     bool preserve_rope_rounding = false);
 
 // Fused distributed Welford LayerNorm for DiT attention: (x - mean) * rsqrt(var + eps)

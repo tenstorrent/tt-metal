@@ -690,6 +690,29 @@ def test_rotary_embedding_llama_direct_cos_padding_tail(q_seq_len, rope_seq_len,
     _run_rotary_embedding_llama_direct_cos_padding_tail_case(device, q_seq_len, rope_seq_len, cos_sin_sharded)
 
 
+# active_cores_only launches only the cores that get work; the output must not change. Few tiles (s32) leave
+# most cores idle; the second seed reruns the cached program with new buffers.
+@pytest.mark.parametrize(
+    "q_seq_len, rope_seq_len", ((32, 32), (1216, 1216), (128, 16)), ids=("s32", "s1216", "q128_rope16")
+)
+def test_rotary_embedding_llama_active_cores_only(q_seq_len, rope_seq_len, device):
+    head_dim = 128
+    trans_mat = get_rot_transformation_mat(dhead=head_dim)
+    cos, sin = compute_gather_cos_sin(dhead=head_dim, end=2 * rope_seq_len, position_ids=torch.arange(rope_seq_len))
+    for seed in (0, 1):
+        torch.manual_seed(seed)
+        q = torch.randn((1, 8, q_seq_len, head_dim), dtype=torch.float32)
+        args = [
+            ttnn.from_torch(t, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            for t in (q, cos, sin, trans_mat)
+        ]
+        expected = ttnn.to_torch(ttnn.experimental.rotary_embedding_llama(*args, is_decode_mode=False))
+        actual = ttnn.to_torch(
+            ttnn.experimental.rotary_embedding_llama(*args, is_decode_mode=False, active_cores_only=True)
+        )
+        assert torch.equal(actual, expected)
+
+
 # Full-grid sharded cos/sin, one sequence tile per core: core k's own shard is sequence tile k.
 # With batch > 1 the cores of later batches restart at tile 0, so their own shard is the wrong row.
 @skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")

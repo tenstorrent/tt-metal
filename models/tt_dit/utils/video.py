@@ -164,9 +164,8 @@ def _mux_packets(container, packets: Future | None) -> None:
             container.mux(packet)
 
 
-# The export is on the request's critical path. On a 1080p 145-frame clip, ultrafast at crf 20 encodes in about
-# 0.15 s against 0.65 s for veryfast at crf 23 and lands closer to the source frames (Y PSNR 47.9 dB vs 45.6 dB);
-# the cost is a ~3.5x larger file.
+# The export is on the request's critical path: ultrafast encodes ~4x faster than veryfast, and crf 20 keeps
+# it closer to the source frames than veryfast at crf 23, for a larger file.
 X264_OPTIONS = {"preset": "ultrafast", "crf": "20"}
 
 
