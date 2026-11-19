@@ -5525,7 +5525,7 @@ tasks:
       steady_wall_ms_p145408_tagentic: '> 0'
       steady_wall_ms_p145408_tmultilingual: '> 0'
 - id: P.83
-  title: 'OWNER 2026-11-18 perf: mHC residual streams resident / fused (7.8 -> <= 3 ms a chunk at 142k)'
+  title: 'OWNER 2026-11-19 perf: mhc_post to its DRAM roofline (7.8 -> <= 3 ms a chunk at 142k; ~40 us a call vs 137-169 us measured)'
   step: perf
   role: perf
   device: true
@@ -5539,12 +5539,12 @@ tasks:
   - ttnn/ttnn/bringup
   brief:
     prior_work: 'P.16 FORK_OUT_BUFFERS, P.23 OWN_ROWS (streams on the chip''s own 160 rows), P.34 POST_COLLAPSE (mhc_post writes the next collapsed input), P.35 NORM_IN_MHC, DS41-104 (bf16 mHC streams: -4.4 ms device, errors unchanged: check whether it shipped), DS41-222 (BRISC transposes on the collapse''s critical path). Read them first.'
-    details: 'Roofline gap 6 (~5 ms): mhc_post (attn 3.5 + ffn 2.6 ms) and the collapse (1.7 ms) read and write the 4 fp32 streams (160 x 4 x 5120 x 4 B = 13.1 MB a chip) from DRAM every sublayer: 2.7 ms floor in DRAM, ~0.5 ms if the streams stay in L1 (13 MB of the chip''s L1) or post + the next pre are one pass. Target <= 3 ms. Stop rule: if L1 residency collides with the MoE block''s L1 arena or the sdpa, and the fused DRAM pass is still > 3 ms: stop and report. Pick on the picking texts (prose, code, math); the gate validates on the held-out texts (agentic, multilingual; F276), report walls as a spread over texts. Read the roofline first (models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/X.7_roofline.md: hardware numbers, floors, the X.7 per-op rows in results/X.7_ops.json.gz). Derive the design from the roofline and our code; do not copy another stack. Behind the named switch, off = today; the accept ships it on. Precision unchanged (HiFi2 matmuls, the reference''s formats; the accuracy limits are the reference''s own drift x 2: do not loosen any). Bit-identical determinism. Matmuls within 110 cores (PSU rule); non-matmul ops may use 120. Every Python-built op through ttnn.bringup.prepare_program / run_prepared. No weight rebuild, no fork regression suites, no soaks. Fork changes per the bringup-fork-op skill (INDEX.md first). Report: the group''s device ms a chunk before / after at 142k (program real-time profiler, BRINGUP_PROFILE_OPS=1), the steady wall, and what bound the result (bytes moved / FLOPs vs the floor). Stop after your checks; the orchestrator measures both sides.'
+    details: 'Owner pointer 2026-11-19: the MoE block takes most of L1, so the streams cannot stay resident across the MoE sublayer: no L1 residency work unless a measured L1 map shows the room (now ~6.6 MB a chip: the streams are bf16) at that point; residency only around the attention sublayer, if its L1 allows. Both of the owner''s first two leads already shipped: POST_COLLAPSE=on (P.34: mhc_post writes the next sublayer''s collapsed input in the same pass) and BF16_ACTIVATIONS=on (P.20 / DS41-104: bf16 streams, -4.4 ms device). So the bytes are already halved; the gap is the kernel''s efficiency: X.7 at 142k, mhc_post 137-169 us a call (40 calls: attn 3.47 + ffn 2.58 ms, + 1.71 ms ''other'' in ffn_residual), moving ~16.4 MB a call (bf16 streams 160 x 4 x 5120 in and out = 2 x 6.55 MB, x and the collapsed output 2 x 1.6 MB) = ~40 us at 80 % of 512 GB/s: ~25-30 % of DRAM bandwidth. Find what bounds it with device zones (DRAM read / write, the fp32 hc mixes and Sinkhorn on the SFPU, DS41-222''s BRISC word-copy transposes on the collapse''s critical path: 3 x 5.6-8.2 us a call; per-core work split, cores used vs the 120 a non-matmul op may use) and fix the largest; then the 1.71 ms ''other'' rows next to it. Target <= 3 ms a chunk (floor ~1.6 ms). Stop rule: two designs each gaining < 1 ms: stop and report the zone breakdown. L1 residency around the attention sublayer only after the kernel is near its DRAM floor and only with a measured L1 map.'
   ab:
     env:
-      MHC_RESIDENT: off
+      MHC_POST_FAST: off
     change:
-      MHC_RESIDENT: on
+      MHC_POST_FAST: on
   ab_mode: full
   ab_rungs:
   - last

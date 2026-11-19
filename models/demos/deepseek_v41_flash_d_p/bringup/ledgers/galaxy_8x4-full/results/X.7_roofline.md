@@ -27,7 +27,7 @@ Precision is unchanged everywhere (HiFi2 matmuls, fp4 experts, the reference's o
 | **Attention** (projections, sparse sdpa, RoPE, glue) | 21.9 | 8.3 | DRAM | **~13.6** | wq_b + wo_b + wo_a weights 2.5 GB a chunk (every chip holds them whole: 160 rows a chip) = 6.1 ms vs 10.3 measured (linear 6.8 + matmul 3.5); sparse sdpa 13.4 GFLOP a layer = 1.7 ms vs 6.5; q RoPE fused into wq_b's output = 0 vs 2.4; glue (slices, untilize, concat) ~0.5 vs ~2.7 |
 | **MoE head** (`moe_head`: router, shared expert, owners) | 8.9 | 1.6 | compute | **~7.3** | shared expert 0.23 TF = 1.1 ms + weights 0.5 ms; router 5120 x 384 negligible |
 | **MoE dispatch** (`sparse_dispatch_2d`) | 12.0 | 5.8 (bf16) / 3.1 (fp8) | links | **~6** (bf16) / ~9 (fp8) | 160 tokens x 6 picks x 10 KB = 9.5 MB a chip a layer; X ring 2 hops over 4 links a direction = 0.19 ms a layer at line rate; 66 % |
-| **Residual mHC** (`mhc_post` x 2 + collapse) | 7.8 | 2.7 (DRAM) / ~0.5 (L1) | DRAM | **~5** | 4 fp32 streams = 13.1 MB a chip, read + write a sublayer; resident in L1 the floor is ~0.5 |
+| **Residual mHC** (`mhc_post` x 2 + collapse) | 7.8 | 1.6 | DRAM | **~6** | corrected 2026-11-19: the streams are bf16 (BF16_ACTIVATIONS, P.20) and post + collapse is one pass (POST_COLLAPSE, P.34): ~16.4 MB a call x 40 = ~40 us a call at 80 % of 512 GB/s; measured 137-169 us (25-30 % of DRAM). L1 residency not available across the MoE sublayer (owner) |
 | Indexer (score ring, top-k; 3 sources) | 3.1 | 1.9 | compute | ~1.2 | score 0.30 TF = 1.45 ms HiFi2; top-k ~0.4 |
 | q_a, kv, norms, typecasts | 2.3 | 0.8 | DRAM | ~1.5 | q_a weights 0.19 GB = 0.5 ms |
 | Compressor, engram, history gather | 3.8 | ~2 | mixed | ~1.8 | 4-bit gather: 3 x 76800 x 320 B in over 8 links at 70 % = 0.5 ms |
