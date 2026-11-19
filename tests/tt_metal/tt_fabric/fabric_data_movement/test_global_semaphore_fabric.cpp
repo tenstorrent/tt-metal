@@ -22,7 +22,7 @@
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/hal.hpp>
@@ -154,8 +154,8 @@ tt::tt_metal::Program MakeMetal2Receiver(
     });
     args.global_semaphore_args = {{GlobalSemaphoreParamName{"remote"}, std::cref(sem)}};
 
-    Program program = tt::tt_metal::experimental::MakeProgramFromSpec(mesh_device, spec);
-    tt::tt_metal::experimental::SetProgramRunArgs(program, args);
+    Program program(mesh_device, spec);
+    program.set_program_run_args(args);
     return program;
 }
 
@@ -337,7 +337,7 @@ TEST_P(GlobalSemaphoreFabricJITTest, CPU_GlobalSemaphoreFabricJITSmoke) {
         kernel.compiler_options.defines.insert({"FABRIC_2D", "1"});
     }
     auto& mesh_device = devices_.at(0);
-    tt::tt_metal::Program program = tt::tt_metal::experimental::MakeProgramFromSpec(
+    tt::tt_metal::Program program(
         *mesh_device, MakeMetal2Spec("global_semaphore_fabric_smoke", std::move(kernel), CoreCoord{0, 0}));
     EXPECT_NO_THROW(program.impl().compile(mesh_device.get()));
 }

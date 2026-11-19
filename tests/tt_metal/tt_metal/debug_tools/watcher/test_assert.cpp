@@ -27,7 +27,8 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/kernels/kernel.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "internal/tt-2xx/quasar/error_handling.h"
 #include "impl/debug/debug_helpers.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
@@ -147,7 +148,7 @@ static void RunTest(
                 .kernels = {assert_kernel_spec},
                 .work_units = {wu},
             };
-            program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
+            program = tt_metal::Program(*mesh_device, spec);
             break;
         }
         case HalProgrammableCoreType::ACTIVE_ETH:
@@ -232,7 +233,7 @@ static void RunTest(
                         {"hw_assert_cause", args[3]},
                     }),
             }};
-            tt_metal::experimental::SetProgramRunArgs(prog, params);
+            prog.set_program_run_args(params);
         }
     };
 
