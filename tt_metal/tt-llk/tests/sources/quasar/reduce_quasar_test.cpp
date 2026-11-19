@@ -182,8 +182,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_Res       = params.buffer_Res;
 #endif
     const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
-    constexpr std::uint32_t max_tiles_dest    = is_fp32_dest_acc_en ? 4 : 8;
-    const std::uint32_t output_tile_cnt       = IS_REDUCE_TO_ONE ? 1 : TILE_CNT;
+    // A column reduce leaves a 1xN tile in dest (one row per face column), so pack it with that shape.
+    const ckernel::TensorShape tensor_shape_res =
+        (REDUCE_DIM == ckernel::ReduceDim::REDUCE_COL)
+            ? ckernel::make_tensor_shape(1 /*face_r_dim*/, tensor_shape_A.face_c_dim, 1 /*num_faces_r_dim*/, tensor_shape_A.num_faces_c_dim)
+            : tensor_shape_A;
+    constexpr std::uint32_t max_tiles_dest = is_fp32_dest_acc_en ? 4 : 8;
+    const std::uint32_t output_tile_cnt    = IS_REDUCE_TO_ONE ? 1 : TILE_CNT;
 
     {
         START_PERF_MEASURE("INIT")
@@ -199,10 +204,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         const auto bfd_pack =
-            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(tensor_shape_A, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(tensor_shape_res, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_init_(bfd_pack, tensor_shape_A, 1 /*num_tiles_per_pack*/);
-        _llk_pack_reduce_mask_config_<REDUCE_DIM>(tensor_shape_A);
+        _llk_pack_init_(bfd_pack, tensor_shape_res, 1 /*num_tiles_per_pack*/);
+        _llk_pack_reduce_mask_config_<REDUCE_DIM>(tensor_shape_res);
         PROFILER_SYNC();
     }
     {
@@ -219,7 +224,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     const std::uint32_t block_tiles = std::min(output_tile_cnt - block_start, max_tiles_dest);
                     for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
                     {
-                        _llk_pack_(block_tile, block_start + block_tile, tensor_shape_A);
+                        _llk_pack_(block_tile, block_start + block_tile, tensor_shape_res);
                     }
                     if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
                     {

@@ -191,7 +191,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
     const Operand& buffer_Res       = params.buffer_Res;
 #endif
-    const auto tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
+    const auto tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
+    // The column reduce leaves a 1xN tile in dest (one row per face column), so pack it with that shape.
+    const auto tensor_shape = ckernel::make_tensor_shape(1 /*face_r_dim*/, tensor_shape_A.face_c_dim, 1 /*num_faces_r_dim*/, tensor_shape_A.num_faces_c_dim);
 
     {
         START_PERF_MEASURE("INIT")

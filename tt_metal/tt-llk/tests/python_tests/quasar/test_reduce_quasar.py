@@ -42,7 +42,11 @@ from helpers.param_config import (
 )
 from helpers.perf.core import create_test_or_perf_config
 from helpers.reduce_perf_matrix import reduce_to_one_modes
-from helpers.stimuli_config import StimuliConfig
+from helpers.reduce_result import (
+    ReduceStimuliConfig,
+    reduce_result_golden,
+    reduce_result_tile_shape,
+)
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_variant_parameters import (
     DEST_SYNC,
@@ -173,6 +177,8 @@ def test_reduce_quasar(
     input_dimensions=None,
 ):
     tile_shape = construct_tile_shape(tile_dimensions)
+    # A column reduce result is packed as a 1xN tile; row and scalar keep the input shape.
+    res_tile_shape = reduce_result_tile_shape(reduce_dim, tile_shape)
 
     if input_dimensions is None:
         input_dimensions = [tile_dimensions[0] * 2, tile_dimensions[1] * 2]
@@ -238,6 +244,9 @@ def test_reduce_quasar(
                     .sum(dim=0)
                     .to(format_dict[formats.output_format])
                 )
+        golden_tensor = reduce_result_golden(
+            golden_tensor, reduce_dim, tile_shape, output_tile_cnt
+        )
 
     mathop = mathop_mapping[reduce_dim]
 
@@ -267,18 +276,19 @@ def test_reduce_quasar(
             NUM_FACES(tile_shape.total_num_faces()),
             LOOP_FACTOR(loop_factor),
         ],
-        "variant_stimuli": StimuliConfig(
+        "variant_stimuli": ReduceStimuliConfig(
             src_A,
             formats.input_format,
             src_B,
             formats.input_format,
             formats.output_format,
+            input_tile_shape=tile_shape,
             tile_count_A=tile_cnt,
             tile_count_B=1,
             tile_count_res=output_tile_cnt,
-            num_faces=tile_shape.total_num_faces(),
-            face_r_dim=tile_shape.face_r_dim,
-            tile_dimensions=tile_dimensions,
+            num_faces=res_tile_shape.total_num_faces(),
+            face_r_dim=res_tile_shape.face_r_dim,
+            tile_dimensions=res_tile_shape.tile_dims,
             use_dense_tile_dimensions=True,
         ),
         # Reduce needs its operands in SrcA/SrcB; it never unpacks to Dest.
@@ -303,7 +313,7 @@ def test_reduce_quasar(
         golden_tensor,
         res_tensor,
         formats.output_format,
-        tile_shape=tile_shape,
+        tile_shape=res_tile_shape,
         print_errors=True,
     ), "Assert against golden failed"
 
@@ -438,6 +448,8 @@ def test_reduce_quasar_mxfp4_2x_gapool(
 ):
     input_dimensions = reduce_input_dimensions()
     tile_shape = construct_tile_shape((32, 32))
+    # A column reduce result is packed as a 1xN tile; row keeps the input shape.
+    res_tile_shape = reduce_result_tile_shape(reduce_dim, tile_shape)
 
     src_A, tile_cnt, _, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -464,6 +476,9 @@ def test_reduce_quasar_mxfp4_2x_gapool(
             tile_cnt,
             input_format=formats.input_format,
         )
+        golden_tensor = reduce_result_golden(
+            golden_tensor, reduce_dim, tile_shape, tile_cnt
+        )
 
     mathop = mathop_mapping[reduce_dim]
 
@@ -489,18 +504,19 @@ def test_reduce_quasar_mxfp4_2x_gapool(
             NUM_FACES(tile_shape.total_num_faces()),
             LOOP_FACTOR(loop_factor),
         ],
-        "variant_stimuli": StimuliConfig(
+        "variant_stimuli": ReduceStimuliConfig(
             src_A,
             formats.input_format,
             src_B,
             formats.input_format,
             formats.output_format,
+            input_tile_shape=tile_shape,
             tile_count_A=tile_cnt,
             tile_count_B=1,
             tile_count_res=tile_cnt,
-            num_faces=tile_shape.total_num_faces(),
-            face_r_dim=tile_shape.face_r_dim,
-            tile_dimensions=(32, 32),
+            num_faces=res_tile_shape.total_num_faces(),
+            face_r_dim=res_tile_shape.face_r_dim,
+            tile_dimensions=res_tile_shape.tile_dims,
             use_dense_tile_dimensions=True,
         ),
         "unpack_to_dest": False,
@@ -524,6 +540,7 @@ def test_reduce_quasar_mxfp4_2x_gapool(
         golden_tensor,
         res_tensor,
         formats.output_format,
+        tile_shape=res_tile_shape,
         print_errors=False,
     )
 
