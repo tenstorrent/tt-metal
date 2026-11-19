@@ -176,26 +176,8 @@ class BgeM3Attention(LightweightModule):
         if seq_len > _MAX_QKV_MM_CHUNK_SEQ_LEN:
             qkv_fused = ttnn.reshape(qkv_fused, [batch_size, 1, seq_len, -1])
 
-        # Without a mask, the shapes in _concat_sdpa_config run the model-local SDPA. It
-        # reads Q/K/V from the QKV output and writes the concat-heads layout, so Stages
-        # 2, 3 and 5 do not run.
-        nomask_bf8_attention = (
-            attention_mask is None
-            and qkv_fused.dtype == ttnn.bfloat8_b
-            and self.config.score_dtype in (None, ttnn.bfloat8_b)
-        )
-        fused_sdpa_config = None
-        if nomask_bf8_attention:
-            fused_sdpa_config = _concat_sdpa_config(
-                seq_len, batch_size, self.config.mesh_device, self.config.attention_scale
-            )
-            if fused_sdpa_config is not None:
-                fused_sdpa_config = replace(fused_sdpa_config, fused_qkv_input=True)
-
         # Stage 2: split Q/K/V heads (fused head-split kernel on the S512 shapes).
-        if fused_sdpa_config is not None:
-            q = k = v = qkv_fused
-        elif self.config.max_batch_size in (1, 8, 16, 32) and self.config.max_seq_len == 512:
+        if self.config.max_batch_size in (1, 8, 16, 32) and self.config.max_seq_len == 512:
             from models.demos.wormhole.bge_m3.tt.custom_ops.fused_qkv_heads.op import bge_qkv_heads_headsplit
 
             head_groups = 4 if self.config.max_batch_size in (8, 16, 32) else self.config.num_heads
@@ -213,8 +195,7 @@ class BgeM3Attention(LightweightModule):
                 transpose_k_heads=False,
                 memory_config=self.config.create_heads_memcfg,
             )
-        if fused_sdpa_config is None:
-            ttnn.deallocate(qkv_fused)
+        ttnn.deallocate(qkv_fused)
 
         # Stage 3: optional cast to score dtype
         if self.config.score_dtype is not None and q.dtype != self.config.score_dtype:
@@ -250,34 +231,24 @@ class BgeM3Attention(LightweightModule):
                 sdpa_mask = ttnn.to_memory_config(sdpa_mask, ttnn.DRAM_MEMORY_CONFIG)
 
         # Stage 4: SDPA (chunk sizes depend on runtime seq_len).
-        if fused_sdpa_config is not None:
-            from models.demos.wormhole.bge_m3.tt.custom_ops.encoder_sdpa.op import bge_encoder_sdpa_experimental
-
-            context = bge_encoder_sdpa_experimental(
-                qkv_fused, qkv_fused, qkv_fused, config=fused_sdpa_config, output_mem_config=self.config.output_memcfg
-            )
-            ttnn.deallocate(qkv_fused)
-        else:
-            sdpa_program_config = _sdpa_program_config(seq_len, self.config.mesh_device, batch_size=batch_size)
-            context = ttnn.transformer.scaled_dot_product_attention(
-                q,
-                k,
-                v,
-                is_causal=False,
-                attn_mask=sdpa_mask,
-                scale=self.config.attention_scale,
-                program_config=sdpa_program_config,
-                compute_kernel_config=self.config.score_compute_kernel_cfg,
-                memory_config=self.config.score_memcfg,
-            )
-            ttnn.deallocate(q)
-            ttnn.deallocate(k)
-            ttnn.deallocate(v)
+        sdpa_program_config = _sdpa_program_config(seq_len, self.config.mesh_device, batch_size=batch_size)
+        context = ttnn.transformer.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            is_causal=False,
+            attn_mask=sdpa_mask,
+            scale=self.config.attention_scale,
+            program_config=sdpa_program_config,
+            compute_kernel_config=self.config.score_compute_kernel_cfg,
+            memory_config=self.config.score_memcfg,
+        )
+        ttnn.deallocate(q)
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
 
         # Stage 5: concat heads
-        if fused_sdpa_config is not None:
-            pass
-        elif self.config.max_batch_size in (1, 8, 16, 32) and self.config.max_seq_len == 512:
+        if self.config.max_batch_size in (1, 8, 16, 32) and self.config.max_seq_len == 512:
             from models.demos.wormhole.bge_m3.tt.custom_ops.fused_concat_heads.op import bge_concat_heads_headsplit
 
             concat_head_groups = 16 if self.config.max_batch_size in (8, 16) else 4
@@ -495,52 +466,6 @@ def _sdpa_chunks_for_seq_len(seq_len, batch_size=None, data_parallel=False):
     q_chunk = next(q for q in _SDPA_Q_CHUNKS_FLEX if q <= seq_len and seq_len % q == 0)
     k_chunk = next(k for k in _SDPA_K_CHUNKS_FLEX if k <= seq_len and seq_len % k == 0)
     return q_chunk, k_chunk
-
-
-def _concat_sdpa_config(seq_len, batch_size, mesh_device, scale):
-    """EncoderSDPAConfig for the model-local SDPA that writes [B, 1, S, H*D], or None.
-
-    The op runs the stock streaming compute kernel, so its output is bit-identical
-    to stock SDPA + concat (standalone bitwise check, Galaxy chip 0).
-    - B1/S512 on Blackhole: the stock chunk plan and 8x8 grid. 22.4 us against
-      30.7 us for stock SDPA + concat.
-    - B8, B16 and B32/S512 on a grid narrower than 13 columns (Galaxy): the stock
-      chunk plan (_galaxy_s512_chunks) on the full 12x10 grid, with a balanced flat
-      work split. Against stock SDPA + concat: B8 q128/k512 (512 units, 4 or 5 per
-      core) 76.4 us against 126.9 us; B16 q256/k512 144.7 us against 239.9 us; B32
-      q256/k256 301.7 us against 571.2 us. A 13-column grid keeps the stock path;
-      it has not been measured there.
-    """
-    if seq_len != 512 or batch_size not in (1, 8, 16, 32) or mesh_device is None or not ttnn_is_blackhole(mesh_device):
-        return None
-    if batch_size in (8, 16, 32) and not is_galaxy_grid(mesh_device):
-        return None
-    from models.demos.wormhole.bge_m3.tt.custom_ops.encoder_sdpa import EncoderSDPAConfig
-
-    q_chunk, k_chunk = _sdpa_chunks_for_seq_len(seq_len, batch_size=batch_size)
-    if batch_size == 1:
-        grid_x, grid_y = 8, 8
-    else:
-        g = mesh_device.compute_with_storage_grid_size()
-        grid_x, grid_y = int(g.x), int(g.y)
-        q_chunk, k_chunk = _galaxy_s512_chunks(batch_size, grid_x, q_chunk, k_chunk)
-    return EncoderSDPAConfig(
-        batch=batch_size,
-        num_q_heads=16,
-        num_kv_heads=16,
-        q_seq_len=seq_len,
-        kv_seq_len=seq_len,
-        head_dim=64,
-        q_chunk_size=q_chunk,
-        k_chunk_size=k_chunk,
-        grid_x=grid_x,
-        grid_y=grid_y,
-        scale=scale,
-        use_streaming=True,
-        fp32_dest_acc_en=False,
-        direct_concat_heads=True,
-        exp_approx_mode=_sdpa_exp_approx(seq_len, mesh_device),
-    )
 
 
 def _sdpa_exp_approx(seq_len, mesh_device=None):
