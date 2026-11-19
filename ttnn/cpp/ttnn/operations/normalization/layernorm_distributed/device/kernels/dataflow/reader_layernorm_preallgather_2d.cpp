@@ -24,7 +24,7 @@ void kernel_main() {
     const auto Wt = get_arg(args::Wt);                    // Width in tiles
     const auto tile_offset = get_arg(args::tile_offset);  // Tile offset for this core
     const auto row_stride = get_arg(args::row_stride);    // Tiles between the starts of consecutive input rows
-    const bool is_merge_core = get_arg(args::is_merge_core);
+    const bool is_merge_core = get_arg(args::is_merge_core) != 0;
     const auto reduce_core_noc_x = get_arg(args::reduce_core_noc_x);
     const auto reduce_core_noc_y = get_arg(args::reduce_core_noc_y);
     const auto y = get_arg(args::y);
@@ -50,9 +50,9 @@ void kernel_main() {
     // Gather buffer on the merge core: every core in the column lands its partial here.
     DataflowBuffer dfb_x2_merge_buf(dfb::x2_merge);
     // On the merge core: counts the partials that have landed in its gather buffer for the current row.
-    Semaphore reducer_sem(sem::reducer);
+    Semaphore<> reducer_sem(sem::reducer);
     // On the other cores: incremented by the merge core when its gather buffer can take this core's next partial.
-    Semaphore gather_free_sem(sem::gather_free);
+    Semaphore<> gather_free_sem(sem::gather_free);
 
     // ublocks size defined in tiles
     const uint32_t src0_tile_bytes = dfb_inp_buf.get_tile_size();

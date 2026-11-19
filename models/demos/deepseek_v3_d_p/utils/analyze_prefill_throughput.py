@@ -8,11 +8,14 @@ kernel compile (visible as a p99 push outlier), so it understates steady state. 
 the LAST rank's chunk-to-chunk interval after the pipeline is full: in steady state one chunk retires
 per interval, so throughput = chunk_size / median(interval).
 """
+
 import re
 import statistics
 import sys
 
-CHUNK = 5120
+from models.demos.deepseek_v3_d_p.utils.chunk_config import prefill_chunk_tokens
+
+CHUNK = prefill_chunk_tokens()  # the run's PREFILL_CHUNK_SIZE; export it identically when analysing a log
 log = sys.argv[1]
 warmup = int(sys.argv[2]) if len(sys.argv) > 2 else 4
 

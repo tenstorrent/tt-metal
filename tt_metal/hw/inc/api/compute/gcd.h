@@ -6,7 +6,7 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#include "ckernel_sfpu_gcd.h"
+#include "llk_math_gcd_sfpu_entry.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 

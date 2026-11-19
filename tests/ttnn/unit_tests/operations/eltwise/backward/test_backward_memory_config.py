@@ -82,3 +82,32 @@ def test_requesting_a_memory_config_does_not_move_any_value(device, op, arity, s
         x, y = ttnn.to_torch(a).float(), ttnn.to_torch(b).float()
         moved = ((x != y) & ~(torch.isnan(x) & torch.isnan(y))).sum().item()
         assert moved == 0, f"{op} output {i}: {moved} of {x.numel()} values move when L1 is requested"
+
+
+def _hardsigmoid_bw_peak_l1(device, grad_memory_config):
+    grad = _t(1.0, device, grad_memory_config)
+    input_tensor = _t(1.0, device, grad_memory_config)
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
+    try:
+        ttnn.hardsigmoid_bw(grad, input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    finally:
+        graph = ttnn.graph.end_graph_capture()
+    return ttnn.graph.extract_peak_L1_memory_usage(graph)
+
+
+def test_hardsigmoid_bw_places_its_temporary_where_the_caller_asked(device):
+    """Asking for DRAM output must not leave an L1 temporary behind just because grad is in L1.
+
+    hardsigmoid_bw scales grad by 1/6 and feeds that into the ternary select, so the scale
+    is only placed by the requested config if its multiply forwards that config (the way
+    cos_bw's multiply below it does). Otherwise the temporary follows grad's placement.
+    The returned gradient is identical either way, so the check moves grad between L1 and
+    DRAM and requires the op's peak L1 allocation to be unaffected by where grad lives.
+    """
+    grad_in_dram = _hardsigmoid_bw_peak_l1(device, ttnn.DRAM_MEMORY_CONFIG)
+    grad_in_l1 = _hardsigmoid_bw_peak_l1(device, ttnn.L1_MEMORY_CONFIG)
+    assert grad_in_l1 == grad_in_dram, (
+        f"hardsigmoid_bw peaks at {grad_in_l1} B of L1 per core with grad in L1 but "
+        f"{grad_in_dram} B with grad in DRAM, both asking for DRAM output: the grad/6 "
+        "multiply in unary_backward.cpp is not forwarding output_mem_config"
+    )

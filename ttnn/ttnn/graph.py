@@ -331,17 +331,20 @@ def end_graph_capture():
 def end_graph_capture_to_file(report_path):
     """Wrapper that appends Python I/O data to the JSON report."""
     global _python_io_recording_enabled, _python_stack_traces_auto_for_session
-    result_str = _cpp_end_graph_capture_to_file(report_path)
-    if _python_io_data:
-        _write_python_io_sidecar(report_path)
-    if has_comparison_records():
-        _write_comparison_records_sidecar(report_path)
-        reset_comparison_records_data()
-    if not is_graph_capture_active():
-        _python_io_recording_enabled = False
-        if _python_stack_traces_auto_for_session:
-            disable_python_stack_traces()
-            _python_stack_traces_auto_for_session = False
+    try:
+        result_str = _cpp_end_graph_capture_to_file(report_path)
+        if _python_io_data:
+            _write_python_io_sidecar(report_path)
+        if has_comparison_records():
+            _write_comparison_records_sidecar(report_path)
+            reset_comparison_records_data()
+    finally:
+        # The C++ call ends the capture even when the report write fails.
+        if not is_graph_capture_active():
+            _python_io_recording_enabled = False
+            if _python_stack_traces_auto_for_session:
+                disable_python_stack_traces()
+                _python_stack_traces_auto_for_session = False
     return json.loads(result_str)
 
 
@@ -687,14 +690,19 @@ def full_graph_capture(report_path: str, *, run_mode=None, slow_dispatch: bool =
     if slow_dispatch:
         ttnn.CONFIG.enable_fast_runtime_mode = False
 
+    capture_open = False
     try:
         begin_graph_capture(run_mode if run_mode is not None else RunMode.NORMAL)
+        capture_open = True
         yield
+        # end_graph_capture_to_file ends this capture even when it raises, so an
+        # enclosing capture must not be ended below.
+        capture_open = False
         end_graph_capture_to_file(report_path)
     finally:
-        if is_graph_capture_active():
+        if capture_open:
             try:
-                _cpp_end_graph_capture()
+                end_graph_capture()
             except Exception:
                 pass
         if not prev_buffer_tracing:
