@@ -80,9 +80,9 @@ inline void _llk_tile_regs_borrow_()
     {
         const auto base = trisc::_get_dest_buffer_base_();
         LLK_ASSERT(base == 0 || base == 256 || base == 512, "Invalid lender DST section base");
+        mailbox_write(static_cast<std::uint8_t>(To), base);
         dest_borrow::drain<From>();
         _llk_sync_post_(sem);
-        mailbox_write(static_cast<std::uint8_t>(To), base);
     }
     else if constexpr (TRISC_ID == static_cast<std::uint8_t>(To))
     {
