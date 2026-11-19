@@ -21,7 +21,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 namespace ttml::ops {
@@ -57,23 +57,22 @@ ttnn::Tensor unbroadcast_grad(const autograd::TensorPtr& input, const ttnn::Tens
     auto grad_rank = grad_shape.rank();
     auto max_rank = std::max(input_rank, grad_rank);
 
-    ttsl::SmallVector<int64_t> broadcast_dims;
+    ttsl::SmallVector<int> broadcast_dims;
     for (size_t i = 0; i < max_rank; ++i) {
         auto input_dim = (i < max_rank - input_rank) ? 1u : input_shape[i - (max_rank - input_rank)];
         auto grad_dim = (i < max_rank - grad_rank) ? 1u : grad_shape[i - (max_rank - grad_rank)];
         if (input_dim != grad_dim) {
-            broadcast_dims.push_back(static_cast<int64_t>(i));
+            broadcast_dims.push_back(static_cast<int>(i));
         }
     }
 
     auto reduced = grad;
     if (!broadcast_dims.empty()) {
-        reduced = ttnn::moreh_sum(
+        reduced = ttnn::sum(
             grad,
             broadcast_dims,
-            /* keep_dim */ true,
-            /* output_tensor */ std::nullopt,
-            /* memory_config_arg */ std::nullopt,
+            /* keepdim */ true,
+            /* memory_config */ std::nullopt,
             core::ComputeKernelConfig::precise());
     }
 
