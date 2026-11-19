@@ -375,3 +375,16 @@
   code, walls on agentic held-out + prose, one load). P.84 and P.81 both ready; they run through the resident runner.
 - 07:12 UTC RAM unaccounted after the P.84 census process: 162.7 GiB of 566 (135.2 after P.80; +27 GiB). No device
   process running; the resident runner is being built (CPU).
+
+## 2026-11-19 07:25 UTC: OWNER RULE (permanent): device opens and model loads
+- A device open / model load is a decision, justified here BEFORE it happens. One open, one load per task, every
+  measurement of the task in it through the resident runner; never per-context / per-text processes. Layers 21-39
+  are never loaded for prefill work. Each task's line reports: device opens, model loads, layers loaded, RAM
+  unaccounted before / after. Running RAM budget; reboot scheduled at a task boundary before free headroom < ~150 GiB.
+- Enforcement handed to the runner agent (it owns gate / runner code now): layers = executed in every gate test,
+  per-request accounting, a pre-open check that MemAvailable minus the expected load (~215 GB RSS) stays >= 150 GiB.
+- RAM budget now: unaccounted 163.5 GiB; MemAvailable 149 GiB WITH the runner demo's model loaded (215 GB RSS);
+  without a model ~364 GiB, so one load leaves ~149: at the line. Opens this session so far: X.9 11 processes + 2
+  checks, the P.84 census 1 (14 positions, one load), the runner demo 1 (running). Plan: the runner demo is the last
+  open before a reboot; reboot at that task boundary, before P.84. I cannot reboot from here (no sudo; earlier
+  reboots were the owner's / admins'): the owner is asked to reboot or say that releasing the job does it.
