@@ -2,8 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -20,10 +18,6 @@ from models.demos.llama3_70b_galaxy.tt.prefill_config import (
     prefill_minmm_qkv,
     prefill_slab_rows,
 )
-
-# Opt-in: prefill SDPA (ring, chunked/prefix-cached, regular) at HiFi2 instead of HiFi4.
-# Read once at import. Unset keeps the shared HiFi4 config object used before this change.
-PREFILL_SDPA_HIFI2 = os.environ.get("LLAMA_GALAXY_PREFILL_SDPA_HIFI2", "0") == "1"
 
 
 class TtLlamaAttention(LightweightModule):
@@ -134,9 +128,13 @@ class TtLlamaAttention(LightweightModule):
         self.compute_kernel_config_hifi2_fp16 = configuration.compute_kernel_config_hifi2_fp16
 
         self.compute_kernel_config_hifi4 = configuration.compute_kernel_config_hifi4
-        # Prefill SDPA compute config. Default: the shared HiFi4 config (unchanged behaviour).
-        # LLAMA_GALAXY_PREFILL_SDPA_HIFI2=1: HiFi2 with the other fields of compute_kernel_config_hifi4
+        # Prefill SDPA compute config: the shared HiFi4 config, or with LlamaOptimizations.prefill_sdpa_hifi2
+        # (performance(); Llama only) HiFi2 with the other fields of compute_kernel_config_hifi4
         # (model_config.py and qwen_model_config.py: approx False, fp32 dest acc True, packer L1 acc True).
+        prefill_sdpa_hifi2 = (
+            bool(getattr(getattr(configuration, "optimizations", None), "prefill_sdpa_hifi2", False))
+            and not self.is_qwen
+        )
         self.prefill_sdpa_compute_kernel_config = (
             ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -144,11 +142,11 @@ class TtLlamaAttention(LightweightModule):
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
             )
-            if PREFILL_SDPA_HIFI2
+            if prefill_sdpa_hifi2
             else self.compute_kernel_config_hifi4
         )
 
-        # Opt-in LLAMA_GALAXY_ATTN_W_BFP4=1 (LlamaOptimizations.bfp4_attn_w): wqkv and wo in bfp4, their
+        # LlamaOptimizations.bfp4_attn_w (performance()): wqkv and wo in bfp4, their
         # matmuls at LoFi (same pattern as FF2 bfp4 in llama_mlp.py). Llama only. self.dtype is left alone:
         # init_kv_cache also uses it. The weight cache files differ by dtype (ttnn.as_tensor appends
         # _dtype_BFLOAT4_B), so bfp8 files are never reused.

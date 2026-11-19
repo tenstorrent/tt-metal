@@ -498,29 +498,25 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers, is_functional_tes
 @dataclass
 class LlamaOptimizations:
     bfp4_mlp: bool
-    # Opt-in (LLAMA_GALAXY_FF2_BFP4=1): MLP FF2 (w2, down-projection) weights in bfp4 at LoFi instead of
-    # bfp8 at HiFi2, decode and prefill. Read when the optimizations object is built. Llama only
-    # (llama_mlp.py ignores it for Qwen).
-    bfp4_ff2: bool = field(
-        default_factory=lambda: os.environ.get("LLAMA_GALAXY_FF2_BFP4", "0") == "1",
-        repr=False,
-    )
-    # Opt-in (LLAMA_GALAXY_ATTN_W_BFP4=1): attention wqkv and wo weights in bfp4 at LoFi instead of bfp8 at
-    # HiFi2, decode (prefetcher ring) and prefill. Read when the optimizations object is built. Llama only
-    # (llama_attention.py ignores it for Qwen).
-    bfp4_attn_w: bool = field(
-        default_factory=lambda: os.environ.get("LLAMA_GALAXY_ATTN_W_BFP4", "0") == "1",
-        repr=False,
-    )
+    # MLP FF2 (w2, down-projection) weights in bfp4 at LoFi instead of bfp8 at HiFi2, decode and prefill.
+    # Llama only (llama_mlp.py ignores it for Qwen).
+    bfp4_ff2: bool = field(default=False, repr=False)
+    # Attention wqkv and wo weights in bfp4 at LoFi instead of bfp8 at HiFi2, decode (prefetcher ring) and
+    # prefill. Llama only (llama_attention.py ignores it for Qwen).
+    bfp4_attn_w: bool = field(default=False, repr=False)
+    # Prefill SDPA (ring, chunked/prefix-cached, regular) at HiFi2 instead of HiFi4. Llama only
+    # (llama_attention.py ignores it for Qwen). Not in the repr: it does not change any weight.
+    prefill_sdpa_hifi2: bool = field(default=False, repr=False)
     # Future fields will go here:
     # bfp8_activations: bool
     # bfp8_layernorm: bool
     # bfp8_ccl: bool
 
     def __repr__(self):
-        # Unset: same text as the generated dataclass repr. Set: the repr changes, so callers that key a
-        # weight-cache marker on repr(optimizations) (demo/text_demo.py build_variant) see a different
-        # variant and cold-load instead of handing a placeholder weight to a bfp4 cache miss.
+        # bfp4 weights off (accuracy): same text as the generated dataclass repr. On (performance): the repr
+        # changes, so callers that key a weight-cache marker on repr(optimizations) (demo/text_demo.py
+        # build_variant) see a different variant and cold-load instead of handing a placeholder weight to a bfp4
+        # cache miss.
         extra = ", bfp4_ff2=True" if self.bfp4_ff2 else ""
         extra += ", bfp4_attn_w=True" if self.bfp4_attn_w else ""
         return f"{self.__class__.__qualname__}(bfp4_mlp={self.bfp4_mlp!r}{extra})"
@@ -535,9 +531,10 @@ class LlamaOptimizations:
     @classmethod
     def performance(cls, model_name):
         """Configuration optimized for performance
-        All models use bfp4 MLPs in this configuration
+        All models use bfp4 MLPs in this configuration; Llama also bfp4 FF2 and attention weights and HiFi2
+        prefill SDPA
         """
-        return cls(bfp4_mlp=True)
+        return cls(bfp4_mlp=True, bfp4_ff2=True, bfp4_attn_w=True, prefill_sdpa_hifi2=True)
 
 
 class CheckpointType(Enum):

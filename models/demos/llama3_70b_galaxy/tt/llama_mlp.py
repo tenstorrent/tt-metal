@@ -91,7 +91,7 @@ class TtLlamaMLP(LightweightModule):
         )
 
         self.four_bit_mlp = args.optimizations.bfp4_mlp
-        # Opt-in LLAMA_GALAXY_FF2_BFP4=1 (LlamaOptimizations.bfp4_ff2): w2 in bfp4, FF2 matmuls at LoFi.
+        # LlamaOptimizations.bfp4_ff2 (performance()): w2 in bfp4, FF2 matmuls at LoFi.
         # Qwen's sharded w2 is bf16 (as_sharded_tensor), so this stays Llama-only. The weight cache file
         # differs by dtype (ttnn.as_tensor appends _dtype_BFLOAT4_B), so the bfp8 file is never reused.
         self.ff2_bfp4 = bool(getattr(args.optimizations, "bfp4_ff2", False)) and not args.is_qwen
