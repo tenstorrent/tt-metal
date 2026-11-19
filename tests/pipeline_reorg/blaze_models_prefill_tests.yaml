@@ -827,8 +827,9 @@
       # RANDOM weights (never rebuilds): the dense block matches directly, and the MoE block runs at the first
       # FULL-indexer layer (6; GLM-5.3 layers 3-5 reuse a prior layer's indexer top-k, which an isolated block
       # cannot supply) where the non-degenerate random gate agrees with the reference. -k glm53 runs both the
-      # dense and MoE parametrizations.
-      timeout -k 2m 60m mpirun --bind-to none --pernode --tag-output bash -lc '
+      # dense and MoE parametrizations. Two tests at pytest --timeout=600 bound it at 20 min (measured 2m48s in CI,
+      # 2026-11-19).
+      timeout -k 2m 20m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_glm_prefill_block -k "seq5120 and torus-xy-8x4 and glm53" -vvv --tb=short --timeout=600
       '
@@ -887,7 +888,8 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 217
+      # The sum of the section bounds (32 + 20 + 20 + 25 + 40 + 40).
+      timeout: 177
       tier: 2
       release_ready: false
   owner_id: U09LK84G4TF  # Nikola Milicevic
@@ -2335,6 +2337,9 @@
 
 
 
+# [2/2] runs the same 1M request packed: two 5,120-token chunks per forward (glm53_packed.json), traced with D2H acks,
+# against the same golden tail; its KV table and evidence go to their own _packed dirs. [1/2] alone measured 15-19 min
+# in nightly CI and the packed run ~13 min on galaxy 8x4, inside the 80 min bound.
 - name: "(GLM-5.3-744B) disaggregated prefill KV accuracy 1M tail@5k + perf 1M@5k, SC1"
   cmd: |
     set -euo pipefail
@@ -2343,9 +2348,13 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1
+    echo "===== [1/2] (GLM-5.3-744B) prefill KV accuracy 1M tail@5k + perf 1M@5k, one chunk per forward ====="
+    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1 || exit $?
+    echo "===== [2/2] (GLM-5.3-744B) packed prefill KV accuracy 1M tail@5k + perf 1M@5k, two chunks per forward ====="
+    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1 --variant packed || exit $?
+    echo "===== both runs passed ====="
   test_type: prefill_runner_kv_pcc
-  test_tags: [glm_5_3, runner, kv_cache, glm53_trace]
+  test_tags: [glm_5_3, runner, kv_cache, glm53_trace, glm_packed]
   test_group: disagg_prefill
   skus:
     bh_sc1_high_power:
@@ -2377,32 +2386,6 @@
       timeout: 40
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
-  budget_type: demo
-  sp_config: sc1
-
-
-# Single-galaxy (SC1) GLM-5.3 packed prefill through the runner: the same 1M request as the 8x4 SC1 job, two 5,120-token
-# chunks per forward (glm53_packed.json), traced with D2H acks. Checks the KV against the same golden tail, reports
-# throughput at the probe lengths, and publishes the KV table the mock migration reads. SC4 follows once SC1 is stable.
-- name: "(GLM-5.3-744B) packed prefill KV accuracy 1M tail@5k + perf 1M@5k, SC1"
-  cmd: |
-    set -euo pipefail
-    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
-    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
-      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
-    fi
-    cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1 --variant packed
-  test_type: prefill_runner_kv_pcc
-  test_tags: [glm_5_3, runner, kv_cache, glm53_trace, glm_packed]
-  test_group: disagg_prefill
-  skus:
-    bh_sc1_high_power:
-      timeout: 80
-      tier: 2
-      release_ready: false
-  owner_id: U08TJCA5NJY # Ryan Miller
-  team: models
   budget_type: demo
   sp_config: sc1
 

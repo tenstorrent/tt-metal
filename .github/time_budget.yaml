@@ -444,9 +444,8 @@ models:
     bh_galaxy: 470
     # 2385 -> 2463 (+78, PR #64830): K3.1 synthetic suite 47 (traced DSA replay 12 of it), K3.1 L24 / L24-128k
     # depth 45, K3 / K3.1 KV table rows 2 (94 min, 16 of it from existing headroom).
-    # 2463 -> 2503 (+40, PR #63262): GLM-5.3 components suite 177 -> 217 (packed multi-user tests).
-    bh_sc1: 2503
-    bh_sc1_high_power: 580
+    bh_sc1: 2463
+    bh_sc1_high_power: 500
     bh_sc4: 60
     wh_n150: 500
     wh_n150_civ2: 300
