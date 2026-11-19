@@ -82,8 +82,8 @@ def test_fill_implicit_tile_padding(device):
     # Write -inf into the tile padding; the values inside the shape are unchanged
     output = ttnn.fill_implicit_tile_padding(input_tensor, float("-inf"))
     padded = ttnn.from_device(output).to_torch_with_padded_shape()
-    logger.info(f"Padding Value: {padded[0, 0, -1, -1].item()}")  # -inf
-    logger.info(f"Padded Shape: {output.padded_shape}")  # Shape([1, 1, 64, 32])
+    logger.debug(f"Padding Value: {padded[0, 0, -1, -1].item()}")  # -inf
+    logger.debug(f"Padded Shape: {output.padded_shape}")  # Shape([1, 1, 64, 32])
 
 
 def test_scatter_add(device):
