@@ -55,12 +55,13 @@ class KimiK3Adapter(MLAPrefillAdapter):
     # from the Kimi family; inert for the MLA-only tests but correct if a runtime is ever built.
     routing_use_l1_small_for_semaphores = True
 
-    # Packed forwards (PREFILL_FORWARD_TOKENS_BUDGET > chunk size), eager: TtKimiK3Runtime.prefill_forward. No indexer,
-    # so supports_packed_forward_indexer_indices stays off. The runtime also runs packed forwards traced and acks
-    # them per chunk over D2H (test_k3_prefill_multiuser), but no runner-level run has driven those yet (the SC4
-    # packed variant), so the runner refuses them until one has: supports_packed_forward_trace and
-    # supports_packed_forward_d2h_acks stay off.
+    # Packed forwards (PREFILL_FORWARD_TOKENS_BUDGET > chunk size): TtKimiK3Runtime.prefill_forward, eager or traced,
+    # acking each chunk's layers over D2H. Driven through the runner on two pipeline ranks by kimi_k3_packed.json
+    # (run_multirank_pcc.sh kimi_k3 sc1 --variant packed). No indexer, so supports_packed_forward_indexer_indices
+    # stays off.
     supports_packed_forward = True
+    supports_packed_forward_trace = True
+    supports_packed_forward_d2h_acks = True
 
     # Dedups the MLA KV cache only. PREFILL_TP_SHARD_KV=0 rolls back to the TP-replicated cache.
     supports_tp_shard_kv = True
@@ -427,6 +428,11 @@ class KimiK3Adapter(MLAPrefillAdapter):
             max_seq_len=params.max_seq_len,
             mesh_shape=params.mesh_shape,
             chunk_size=params.chunk_size,
+            # As MLAPrefillAdapter.build_runtime: without it the runtime packs nothing, while the runner sizes its
+            # sockets and staging for the whole forward.
+            forward_tokens_budget=(
+                params.forward_chunks * params.chunk_size if self.packed_forward_chunks(params) > 1 else None
+            ),
             num_users=params.num_users,
             sp_axis=params.sp_axis,
             tp_axis=params.tp_axis,

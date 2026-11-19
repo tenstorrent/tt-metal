@@ -428,3 +428,45 @@ def test_compile_rejects_slabs_that_do_not_match_the_runtime(monkeypatch, expect
         runtime.compile(SimpleNamespace(kda_states=SimpleNamespace(num_slots=num_slots, layer_ids=layer_ids)))
     assert runtime.model.kda_states is None
     parent_compile.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "adapter_name, expected_chunks", [("kimi_k3", 2), ("kimi_k3_1", 1)], ids=["k3_packs", "k3_1_does_not"]
+)
+def test_build_runtime_hands_the_forward_budget_to_the_runtime(monkeypatch, adapter_name, expected_chunks):
+    """The runner sizes its sockets and persistent buffers for forward_chunks * chunk_size rows, so a runtime
+    built without the budget runs one chunk per forward and its traced input no longer matches the socket.
+    K3 packs; K3.1 (supports_packed_forward off) keeps the one-chunk runtime."""
+    from models.demos.common.prefill.adapter import PrefillRunParams
+    from models.demos.deepseek_v3_d_p.tt import tt_ccl
+    from models.demos.deepseek_v3_d_p.tt.kimi_k3 import runtime as k3_runtime
+    from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3 import KimiK3Adapter
+    from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3_1 import KimiK31Adapter
+
+    adapter = {"kimi_k3": KimiK3Adapter, "kimi_k3_1": KimiK31Adapter}[adapter_name]()
+    monkeypatch.setattr(tt_ccl, "per_axis_topology", lambda: (None, None))
+    built = Mock()
+    monkeypatch.setattr(k3_runtime, "TtKimiK3Runtime", built)
+    params = PrefillRunParams(
+        mesh_shape=(4, 4),
+        num_layers=12,
+        first_layer_idx=12,
+        is_first_rank=False,
+        is_last_rank=True,
+        max_seq_len=4 * 2560,
+        chunk_size=2560,
+        num_users=126,
+        capacity_factor=8,
+        num_links=2,
+        gate_mode_name="DEVICE_FP32",
+        kv_only_last_layer=False,
+        weight_cache_path=None,
+        sp_axis=1,
+        tp_axis=0,
+        use_trace=True,
+        forward_chunks=2,
+    )
+    adapter.build_runtime(mesh_device=None, hf_config=None, params=params)
+    config = built.call_args.kwargs["config"]
+    assert config.forward_chunks == expected_chunks
+    assert config.forward_chunks == adapter.packed_forward_chunks(params)

@@ -251,7 +251,14 @@ class MultirankPccHarnessTests(unittest.TestCase):
                 json.dumps({"env": {"PREFILL_MAX_SEQ_LEN": max_seq_len, "PREFILL_NUM_USERS": num_users}})
             )
         # Kimi-K3's, Kimi-K3.1's and GLM-5.3's layouts are their manifests', so the harness reads the real ones.
-        for name in ("kimi_k3.json", "kimi_k3_1.json", "glm53.json", "glm53_4x4.json", "glm53_mtp_kv_share.json"):
+        for name in (
+            "kimi_k3.json",
+            "kimi_k3_packed.json",
+            "kimi_k3_1.json",
+            "glm53.json",
+            "glm53_4x4.json",
+            "glm53_mtp_kv_share.json",
+        ):
             shutil.copyfile(REPO / MANIFESTS / name, manifest_dir / name)
         checkpoint = root / "checkpoint"
         checkpoint.mkdir()
@@ -563,6 +570,19 @@ class MultirankPccHarnessTests(unittest.TestCase):
             # The whole 8192-token golden in 2560-token chunks: 10240 tokens, four chunks.
             self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], "4")
         self.assertIn("PCC GATE PASS", result.stdout)
+
+    def test_kimi_k3_sc1_packed_runs_kimi_k3_packed_json(self):
+        result, records = self.run_harness(
+            "kimi_k3", config="sc1", hosts=self.SC4_HOSTS[:1], args=["--variant", "packed"]
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        runner = self.one_record(records, "runner")["env"]
+        self.assertTrue(runner["PREFILL_MANIFEST"].endswith("manifests/kimi_k3_packed.json"))
+        # sc1 opens the packed manifest's slots: one fewer than kimi_k3.json, for the traced scratch slot.
+        self.assertEqual(runner["PREFILL_NUM_USERS"], "126")
+        self.assertEqual(runner["PREFILL_NUM_LAYERS"], "24")
+        producer = self.one_record(records, "producer")["env"]
+        self.assertTrue(producer["PREFILL_PRODUCER_MANIFEST"].endswith("manifests/kimi_k3_packed.json"))
 
     def test_a_capacity_probe_sends_its_own_request_at_its_own_slot_count(self):
         """PREFILL_REQUEST_LEN replaces the config's request (K3.1 sc1: 10240) and PREFILL_NUM_USERS the slots."""
