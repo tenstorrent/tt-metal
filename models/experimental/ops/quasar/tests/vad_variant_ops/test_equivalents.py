@@ -194,7 +194,7 @@ def test_slice_write_fp32(ttnn_mesh_device, reset_seeds, out_shape, value_width)
 
     begins = [0, 0, 0, 0]
     ends = [*out_shape[:-1], value_width]
-    ttnn.experimental.slice_write(tt_value, tt_dst, begins, ends, [1, 1, 1, 1])
+    U.op("slice_write", experimental=True)(tt_value, tt_dst, begins, ends, [1, 1, 1, 1])
 
     ref = dst.clone()
     ref[..., :value_width] = value
@@ -217,6 +217,6 @@ def test_reshard_same_width(ttnn_mesh_device, reset_seeds, shape, shard_h):
     mesh = ttnn_mesh_device
     x_torch = U.torch_rand(shape)
     x = U.to_tt(x_torch, mesh, layout=ttnn.ROW_MAJOR_LAYOUT)
-    out = ttnn.to_memory_config(x, U.hs20(mesh, (shard_h, shape[-1])))
+    out = U.op("to_memory_config")(x, U.hs20(mesh, (shard_h, shape[-1])))
     assert out.is_sharded()
     U.assert_lossless(x_torch, out, mesh_device=mesh)

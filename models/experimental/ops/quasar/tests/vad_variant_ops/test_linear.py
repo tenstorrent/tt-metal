@@ -116,7 +116,7 @@ def _run_linear(
         kwargs["compute_kernel_config"] = ttnn.init_device_compute_kernel_config(
             mesh.arch(), math_fidelity=fidelity, math_approx_mode=approx, fp32_dest_acc_en=fp32, packer_l1_acc=l1_acc
         )
-    out = ttnn.linear(a, w, **kwargs)
+    out = U.op("linear")(a, w, **kwargs)
 
     # Reference on the (bfp8-quantized) values the device saw.
     a_seen = U.from_tt(a, mesh).reshape(-1)[: a_torch.numel()].reshape(a_shape)
