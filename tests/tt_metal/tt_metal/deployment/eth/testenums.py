@@ -1,5 +1,11 @@
 from enum import Enum
 from itertools import chain
+from dataclasses import dataclass
+
+
+@dataclass
+class TestInfo:
+    tests_per_link: int = 1
 
 
 class TestCase(str, Enum):
@@ -15,7 +21,22 @@ class DistTestCase(str, Enum):
     LINK_UP = "LinkUpDist"
     BANDWIDTH = "BandwidthDist"
     BANDWIDTH_BIDIR = "BandwidthBidirDist"
+    DATA_INTEGRITY = "DataIntegrityDramDist"
 
+    # TODO
+    def get_test_info(t: "DistTestCase") -> TestInfo:
+        global dist_test_info
+
+        if t in dist_test_info:
+            return dist_test_info[t]
+
+        return TestInfo()
+
+
+# TODO
+# dist_test_info: dict[DistTestCase, TestInfo] = {
+#     DistTestCase.LINK_UP: TestInfo(tests_per_link=2),
+# }
 
 ALLTESTS = [t for t in chain(TestCase, DistTestCase)]
 
