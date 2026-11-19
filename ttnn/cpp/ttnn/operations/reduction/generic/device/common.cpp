@@ -93,7 +93,7 @@ void validate_rm_preconditions(
     TT_FATAL(
         math_op == tt::tt_metal::ReduceOpMath::SUM || math_op == tt::tt_metal::ReduceOpMath::MAX ||
             math_op == tt::tt_metal::ReduceOpMath::MIN,
-        "{} RM path only supports SUM (mean lowered from AVG), and MAX/MIN as the TILE H-split's stage 2, got {}",
+        "{} RM path only supports SUM (mean lowered from AVG), MAX or MIN, got {}",
         dim_label,
         math_op);
     TT_FATAL(!negate, "{} RM path does not currently support 'negate'", dim_label);

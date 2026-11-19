@@ -88,7 +88,7 @@ void reduce_rm_reader() {
     // Stage one h-tile slab (TILE_HEIGHT entries) for the given W chunk:
     //   reserve → bulk identity-fill the whole slab → async_read real_rows real rows → barrier → push.
     // Padded rows past `real_rows` and padded columns past `valid_bytes` retain the identity (0 for
-    // SUM) from the fill, contributing nothing to the running sum.
+    // SUM, -inf for MAX, +inf for MIN) from the fill, so they never change the result.
     auto stage_slab = [&](uint32_t slab_first_global_row, uint32_t real_rows, const RmWChunkBytes& w_range) {
         dfb_rm.reserve_back(rm_rows_per_tile);
         rm_fill_page_with_clear_template(
@@ -140,7 +140,7 @@ void reduce_rm_reader() {
 
         // Each owned output tile is one work unit (wt_tiles_per_chunk == 1). Decompose its global id
         // into (nc, slice, wt_in_nc) and read only this slice's contiguous H slice. Tiles that run
-        // past H_logical (last slice's overhang) stage as all-identity (real_rows == 0) → contribute 0.
+        // past H_logical (last slice's overhang) stage as all-identity (real_rows == 0) → no effect.
         for (uint32_t out_idx = 0; out_idx < rt_count; ++out_idx) {
             const uint32_t global_tile_id = rt_start + out_idx;
             const uint32_t wt_in_nc = global_tile_id % Wt;

@@ -159,7 +159,8 @@ def test_max_dim(device, input_shape_and_dim, keepdim):
 def test_max_fp32_fast_and_approximate_mode(device, input_shape, dim, scalar, fast_and_approximate_mode):
     """FLOAT32 max with both values of fast_and_approximate_mode.
     - False (default): accurate SFPU path - result matches torch exactly.
-    - True: faster FPU/TF32 path - result is approximate.
+    - True: faster FPU/TF32 path - result is approximate. A negative scalar computes scalar * min(x),
+      which runs on the SFPU regardless, so it stays exact.
     """
     torch.manual_seed(1)
 
@@ -172,7 +173,7 @@ def test_max_fp32_fast_and_approximate_mode(device, input_shape, dim, scalar, fa
     output_tensor = ttnn.max(input_tensor, fast_and_approximate_mode=fast_and_approximate_mode, dim=dim, scalar=scalar)
     output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor)).reshape(torch_output_tensor.shape)
 
-    if fast_and_approximate_mode or device.arch() == ttnn.device.Arch.QUASAR:
+    if (fast_and_approximate_mode and scalar > 0) or device.arch() == ttnn.device.Arch.QUASAR:
         assert_allclose(torch_output_tensor, output_tensor, rtol=1e-3, atol=1e-2)
     else:
         assert_equal(torch_output_tensor, output_tensor)

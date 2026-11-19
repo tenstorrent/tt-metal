@@ -351,7 +351,8 @@ static Tensor reduce_impl(
                 compute_kernel_config,
                 sub_core_grids,
                 /*negate=*/false,
-                /*fast_and_approximate_mode=*/fast_and_approximate_mode);
+                /*fast_and_approximate_mode=*/fast_and_approximate_mode,
+                output_layout);
         } else if constexpr (reduce_type == reduction_common::ReduceType::Min) {
             output_tensor = ttnn::operations::reduction::generic::detail::reduce(
                 input_tensor,
@@ -363,7 +364,8 @@ static Tensor reduce_impl(
                 compute_kernel_config,
                 sub_core_grids,
                 /*negate=*/false,
-                /*fast_and_approximate_mode=*/fast_and_approximate_mode);
+                /*fast_and_approximate_mode=*/fast_and_approximate_mode,
+                output_layout);
         } else {
             TT_THROW("Unsupported reduction operation");
         }
@@ -880,11 +882,26 @@ Tensor max(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    bool fast_and_approximate_mode) {
+    bool fast_and_approximate_mode,
+    const std::optional<Layout>& output_layout) {
     /* Scaling is applied after reduction, so flip the op for negative scalars:
      * max(s * x) = s * min(x) when s < 0.*/
     if (scalar < 0.0f) {
-        return operations::reduction::reduce<reduction_common::ReduceType::Min>(
+        return operations::reduction::convert_output_layout(
+            operations::reduction::reduce<reduction_common::ReduceType::Min>(
+                input_tensor_arg,
+                dim_arg,
+                keepdim,
+                memory_config_arg,
+                compute_kernel_config,
+                scalar,
+                sub_core_grids,
+                fast_and_approximate_mode,
+                output_layout),
+            output_layout);
+    }
+    return operations::reduction::convert_output_layout(
+        operations::reduction::reduce<reduction_common::ReduceType::Max>(
             input_tensor_arg,
             dim_arg,
             keepdim,
@@ -892,17 +909,9 @@ Tensor max(
             compute_kernel_config,
             scalar,
             sub_core_grids,
-            fast_and_approximate_mode);
-    }
-    return operations::reduction::reduce<reduction_common::ReduceType::Max>(
-        input_tensor_arg,
-        dim_arg,
-        keepdim,
-        memory_config_arg,
-        compute_kernel_config,
-        scalar,
-        sub_core_grids,
-        fast_and_approximate_mode);
+            fast_and_approximate_mode,
+            output_layout),
+        output_layout);
 }
 
 Tensor min(
@@ -913,7 +922,8 @@ Tensor min(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    bool fast_and_approximate_mode) {
+    bool fast_and_approximate_mode,
+    const std::optional<Layout>& output_layout) {
     TT_FATAL(
         !(fast_and_approximate_mode && input_tensor_arg.dtype() == DataType::FLOAT32),
         "ttnn.min does not support fast_and_approximate_mode=True on Float32 input: the FPU has no min, so SFPU path "
@@ -922,7 +932,21 @@ Tensor min(
     /* Scaling is applied after reduction, so flip the op for negative scalars:
      * min(s * x) = s * max(x) when s < 0.*/
     if (scalar < 0.0f) {
-        return operations::reduction::reduce<reduction_common::ReduceType::Max>(
+        return operations::reduction::convert_output_layout(
+            operations::reduction::reduce<reduction_common::ReduceType::Max>(
+                input_tensor_arg,
+                dim_arg,
+                keepdim,
+                memory_config_arg,
+                compute_kernel_config,
+                scalar,
+                sub_core_grids,
+                fast_and_approximate_mode,
+                output_layout),
+            output_layout);
+    }
+    return operations::reduction::convert_output_layout(
+        operations::reduction::reduce<reduction_common::ReduceType::Min>(
             input_tensor_arg,
             dim_arg,
             keepdim,
@@ -930,17 +954,9 @@ Tensor min(
             compute_kernel_config,
             scalar,
             sub_core_grids,
-            fast_and_approximate_mode);
-    }
-    return operations::reduction::reduce<reduction_common::ReduceType::Min>(
-        input_tensor_arg,
-        dim_arg,
-        keepdim,
-        memory_config_arg,
-        compute_kernel_config,
-        scalar,
-        sub_core_grids,
-        fast_and_approximate_mode);
+            fast_and_approximate_mode,
+            output_layout),
+        output_layout);
 }
 
 Tensor std(

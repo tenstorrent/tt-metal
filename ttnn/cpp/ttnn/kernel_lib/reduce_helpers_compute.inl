@@ -287,6 +287,35 @@ ALWI void reload_accumulator_if_needed(
     }
 }
 
+// SFPU MAX/MIN cannot seed DST with the reloaded accumulator: the masked pack left zeros outside
+// the reduced lane, and those zeros win the element-wise fold. Fold it in after the intra-tile reduce.
+template <PoolType reduce_type, typename AccumulateT, bool is_sfpu>
+inline constexpr bool sfpu_defers_accumulator =
+    is_sfpu && is_accumulate_v<AccumulateT> && (reduce_type == PoolType::MAX || reduce_type == PoolType::MIN);
+
+template <PoolType reduce_type, DataFormat reduce_format, typename AccumulateT>
+ALWI void fold_deferred_accumulator(
+    uint32_t input_dfb_id, const AccumulateT& accumulate, uint32_t dst_base, uint32_t work_dst, uint32_t count) {
+    if (accumulate.is_first()) {
+        return;
+    }
+    accumulate.config.wait_front(count);
+    reconfig_data_format_srca(input_dfb_id, accumulate.config.cb_accumulator);
+    copy_init(accumulate.config.cb_accumulator);
+    detail::sfpu_reduce_fold_init<reduce_type, reduce_format>();
+    for (uint32_t k = 0; k < count; ++k) {
+        copy_tile(accumulate.config.cb_accumulator, k, work_dst);
+        if constexpr (reduce_type == PoolType::MIN) {
+            detail::sfpu_reduce_min_fold_tile<reduce_format>(dst_base + k, work_dst, dst_base + k);
+        } else {
+            detail::sfpu_reduce_max_fold_tile<reduce_format>(dst_base + k, work_dst, dst_base + k);
+        }
+    }
+    accumulate.config.pop_front(count);
+    reconfig_data_format_srca(accumulate.config.cb_accumulator, input_dfb_id);
+    copy_init(input_dfb_id);
+}
+
 template <ReduceInputPolicy input_policy>
 ALWI void assert_input_dfb_size(uint32_t input_dfb_id, uint32_t tiles_per_bulk, uint32_t total_tiles) {
     if constexpr (waits_per_tile(input_policy)) {
@@ -397,6 +426,7 @@ ALWI void reduce(
     const uint32_t num_batches = input_block_shape.batches;
 
     constexpr bool is_sfpu = is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format, fp32_mode>();
+    constexpr bool defer_acc = sfpu_defers_accumulator<reduce_type, AccumulateT, is_sfpu>;
 
     // The caller's buffers, bound by reference; reduce() never constructs a DataflowBuffer of its own.
     ASSERT(input_dfb.get_id() == input_dfb_id);
@@ -535,11 +565,13 @@ ALWI void reduce(
                 tile_regs_acquire();
 
                 // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
-                reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, is_sfpu>(
-                    input_dfb_id, scaler_dfb_id, accumulate);
+                if constexpr (!defer_acc) {
+                    reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, is_sfpu>(
+                        input_dfb_id, scaler_dfb_id, accumulate);
+                }
                 if constexpr (is_sfpu) {
                     // Fold needed if the axis has >1 tile, or Accumulate reloaded a result into DST.
-                    if (Wt > 1 || !detail::sfpu_is_first_tile(0, accumulate)) {
+                    if (Wt > 1 || (!defer_acc && !detail::sfpu_is_first_tile(0, accumulate))) {
                         detail::sfpu_reduce_fold_init<reduce_type, reduce_format>();
                     }
                 }
@@ -548,7 +580,7 @@ ALWI void reduce(
                 for (uint32_t wt = 0; wt < Wt; ++wt) {
                     if constexpr (is_sfpu) {
                         constexpr uint32_t sfpu_work_dst = 1;
-                        const bool is_first_tile = detail::sfpu_is_first_tile(wt, accumulate);
+                        const bool is_first_tile = defer_acc ? (wt == 0) : detail::sfpu_is_first_tile(wt, accumulate);
                         if constexpr (waits_per_tile(input_policy)) {
                             input_dfb.wait_front(onetile);
                             detail::sfpu_copy_and_fold<reduce_type, reduce_format>(
@@ -580,6 +612,10 @@ ALWI void reduce(
                 if constexpr (is_sfpu) {
                     sfpu_reduce_init<reduce_type, reduce_format>();
                     sfpu_reduce<reduce_type, reduce_format, reduce_dim>(dst_idx, /*ct_dim=*/1, /*rt_dim=*/1);
+                    if constexpr (defer_acc) {
+                        fold_deferred_accumulator<reduce_type, reduce_format>(
+                            input_dfb_id, accumulate, dst_idx, /*work_dst=*/1, /*count=*/1);
+                    }
                 }
 
                 // Call post-reduce operation (e.g., recip_tile for softmax)
@@ -644,11 +680,13 @@ ALWI void reduce(
                 tile_regs_acquire();
 
                 // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
-                reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, is_sfpu>(
-                    input_dfb_id, scaler_dfb_id, accumulate, current_chunk);
+                if constexpr (!defer_acc) {
+                    reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, is_sfpu>(
+                        input_dfb_id, scaler_dfb_id, accumulate, current_chunk);
+                }
                 if constexpr (is_sfpu) {
                     // Fold needed if the axis has >1 tile, or Accumulate reloaded a result into DST.
-                    if (Ht > 1 || !detail::sfpu_is_first_tile(0, accumulate)) {
+                    if (Ht > 1 || (!defer_acc && !detail::sfpu_is_first_tile(0, accumulate))) {
                         detail::sfpu_reduce_fold_init<reduce_type, reduce_format>();
                     }
                 }
@@ -658,7 +696,8 @@ ALWI void reduce(
                     uint32_t dst_idx = get_dst_index(accumulate);
                     for (uint32_t i = wt; i < chunk_end; ++i) {
                         if constexpr (is_sfpu) {
-                            const bool is_first_tile = detail::sfpu_is_first_tile(ht, accumulate);
+                            const bool is_first_tile =
+                                defer_acc ? (ht == 0) : detail::sfpu_is_first_tile(ht, accumulate);
                             constexpr uint32_t sfpu_work_dst = chunk_size;
                             if constexpr (waits_per_tile(input_policy)) {
                                 input_dfb.wait_front(onetile);
@@ -701,6 +740,10 @@ ALWI void reduce(
                     for (uint32_t k = 0; k < current_chunk; ++k) {
                         sfpu_reduce<reduce_type, reduce_format, reduce_dim>(
                             sfpu_base_dst + k, /*ct_dim=*/1, /*rt_dim=*/1);
+                    }
+                    if constexpr (defer_acc) {
+                        fold_deferred_accumulator<reduce_type, reduce_format>(
+                            input_dfb_id, accumulate, sfpu_base_dst, /*work_dst=*/chunk_size, current_chunk);
                     }
                 }
 

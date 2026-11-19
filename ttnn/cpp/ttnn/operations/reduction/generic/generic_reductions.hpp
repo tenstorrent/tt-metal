@@ -65,7 +65,10 @@ Tensor max(
     float scalar = 1.0f,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
     // When false (default), fp32 max runs on the accurate SFPU path; true selects the faster tf32 FPU path.
-    bool fast_and_approximate_mode = false);
+    // A negative scalar computes scalar * min(x), which runs on the SFPU either way.
+    bool fast_and_approximate_mode = false,
+    // See ttnn::sum above.
+    const std::optional<Layout>& output_layout = std::nullopt);
 
 Tensor min(
     const Tensor& input_tensor_arg,
@@ -76,7 +79,9 @@ Tensor min(
     float scalar = 1.0f,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
     // When false (default), fp32 min runs on the accurate SFPU path; true selects the faster tf32 FPU path.
-    bool fast_and_approximate_mode = false);
+    bool fast_and_approximate_mode = false,
+    // See ttnn::sum above.
+    const std::optional<Layout>& output_layout = std::nullopt);
 
 Tensor std(
     const Tensor& input_tensor_arg,

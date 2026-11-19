@@ -48,6 +48,8 @@ class ReduceCase:
     valid_elements: int = TILE
     post_multiplier: float | None = None
     custom_scaler: float | None = None
+    # MAX gets all-negative and MIN all-positive input, so a zero that leaks into the fold wins.
+    one_signed: bool = False
 
     @property
     def row_stride(self) -> int:
@@ -229,6 +231,38 @@ def _numerical_space_cases() -> list[ReduceCase]:
     return cases
 
 
+def _accumulated_selection_cases() -> list[ReduceCase]:
+    variants = [
+        ("bf16", "MIN", "Fast"),
+        ("fp32", "MAX", "Accurate"),
+        ("fp32", "MIN", "Accurate"),
+        ("int32", "MAX", "Fast"),
+        ("int32", "MIN", "Fast"),
+        ("bf16", "MAX", "Fast"),  # FPU: reloads the accumulator through the within-face transpose
+    ]
+    cases = []
+    for dtype, pool, fp32_mode in variants:
+        for dim in ("REDUCE_ROW", "REDUCE_COL"):
+            rows, cols, batches = _shape_for_dim(dim)
+            cases.append(
+                ReduceCase(
+                    name=f"accumulated-{dtype}-{pool}-{dim}-{fp32_mode.lower()}",
+                    family="accumulated-selection",
+                    dim=dim,
+                    rows=rows,
+                    cols=cols,
+                    batches=batches,
+                    pool=pool,
+                    calls=2,
+                    input_dtype=dtype,
+                    output_dtype=dtype,
+                    fp32_mode=fp32_mode,
+                    one_signed=True,
+                )
+            )
+    return cases
+
+
 def _boundary_cases() -> list[ReduceCase]:
     cases = [
         ReduceCase(
@@ -314,7 +348,13 @@ def _boundary_cases() -> list[ReduceCase]:
     return cases
 
 
-ALL_CASES = tuple(_input_space_cases() + _regression_cases() + _numerical_space_cases() + _boundary_cases())
+ALL_CASES = tuple(
+    _input_space_cases()
+    + _regression_cases()
+    + _numerical_space_cases()
+    + _accumulated_selection_cases()
+    + _boundary_cases()
+)
 
 
 def _assert_complete_case_matrix() -> None:
@@ -432,8 +472,11 @@ def _make_logical_chunks(case: ReduceCase) -> list[torch.Tensor]:
             chunk = torch.randint(-16, 17, shape, generator=generator, dtype=torch.int32) + call
         else:
             chunk = torch.rand(shape, generator=generator, dtype=torch.float32) + 0.125 * call
-            if case.input_dtype == "bf16":
-                chunk = chunk.to(torch.bfloat16)
+        if case.one_signed:
+            magnitude = chunk.abs() + 1
+            chunk = -magnitude if case.pool == "MAX" else magnitude
+        if case.input_dtype == "bf16":
+            chunk = chunk.to(torch.bfloat16)
         chunks.append(chunk)
     return chunks
 

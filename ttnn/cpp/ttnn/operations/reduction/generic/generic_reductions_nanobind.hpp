@@ -41,13 +41,15 @@ inline std::string get_generic_reduction_doc(
             : "";
     // All four generic reductions (sum/mean/max/min) expose fast_and_approximate_mode. std/var do
     // not: Welford already reduces on the SFPU at full fp32, so there is no FPU path to select.
-    // ttnn.sum and ttnn.mean both expose output_layout.
+    // ttnn.sum, ttnn.mean, ttnn.max and ttnn.min expose output_layout.
     const char* output_layout_kwarg = has_output_layout ? R"doc(
             output_layout (ttnn.Layout, optional): layout of the output tensor. Defaults to `None`, which keeps the layout the chosen path produces naturally (see the Note below). `ttnn.TILE_LAYOUT` or `ttnn.ROW_MAJOR_LAYOUT` is always honored: it is produced directly by the kernel for a -2 reduce of a ROW_MAJOR input, and converted after reducing otherwise. `ttnn.ROW_MAJOR_LAYOUT` is rejected for block-float results (BFLOAT8_B, BFLOAT4_B), which only exist in TILE layout; typecast explicitly if a row-major result is needed.)doc"
                                                         : "";
     const char* fast_approx_kwarg = !has_fast_approximate_mode           ? ""
                                     : std::string_view(op_name) == "min" ? R"doc(
             fast_and_approximate_mode (bool, optional): must stay `False` (the default) for FLOAT32. The FPU has no min pool, so there is no faster path to select: a FLOAT32 min with `True` is rejected rather than lowered to `-max(-x)`. No effect for non-FLOAT32 inputs.)doc"
+                                    : std::string_view(op_name) == "max" ? R"doc(
+            fast_and_approximate_mode (bool, optional): FLOAT32 only. `False` (default) uses the accurate SFPU path; `True` uses the faster FPU path (inputs truncated to TF32, higher ULP error). The accurate path requires a compute_kernel_config with `fp32_dest_acc_en=True` and is unavailable on Quasar; in those cases it falls back to the FPU. A negative `scalar` computes `scalar * min(x)`, and the FPU has no min pool, so the flag has no effect there. No effect for non-FLOAT32 inputs.)doc"
                                                                          : R"doc(
             fast_and_approximate_mode (bool, optional): FLOAT32 only. `False` (default) uses the accurate SFPU path (full float32 accumulation); `True` uses the faster FPU path (inputs truncated to TF32, higher ULP error). The accurate path requires a compute_kernel_config with `fp32_dest_acc_en=True` and is unavailable on Quasar; in those cases it falls back to the FPU. No effect for non-FLOAT32 inputs.)doc";
     return fmt::format(
@@ -85,8 +87,10 @@ inline std::string get_generic_reduction_doc(
                   - TILE{2}
 
             The output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`.
-            Exception: for sum and mean, 4D ROW_MAJOR BFLOAT16/FLOAT32 inputs with INTERLEAVED memory
-            config reduced along the last (-1) or second-to-last (-2) dimension preserve ROW_MAJOR layout.
+            Exception: 4D ROW_MAJOR BFLOAT16/FLOAT32 inputs with INTERLEAVED memory config reduced along
+            the last (-1) or second-to-last (-2) dimension preserve ROW_MAJOR layout. For max and min this
+            does not apply on Quasar, nor to a FLOAT32 min (or max with a negative `scalar`) that runs with
+            `fp32_dest_acc_en=False`.
 
         Memory Support:
             - Interleaved: DRAM and L1
@@ -146,7 +150,7 @@ inline void bind_generic_reductions(nb::module_& mod) {
         nb::arg("output_layout") = nb::none());
 
     const auto max_doc = get_generic_reduction_doc(
-        "max", "ttnn.max", /*int32_supported=*/true, /*has_output_layout=*/false, /*has_fast_approximate_mode=*/true);
+        "max", "ttnn.max", /*int32_supported=*/true, /*has_output_layout=*/true, /*has_fast_approximate_mode=*/true);
     ttnn::bind_function<"max">(
         mod,
         max_doc.c_str(),
@@ -159,10 +163,11 @@ inline void bind_generic_reductions(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("scalar") = 1.0f,
         nb::arg("sub_core_grids") = nb::none(),
-        nb::arg("fast_and_approximate_mode") = false);
+        nb::arg("fast_and_approximate_mode") = false,
+        nb::arg("output_layout") = nb::none());
 
     const auto min_doc = get_generic_reduction_doc(
-        "min", "ttnn.min", /*int32_supported=*/true, /*has_output_layout=*/false, /*has_fast_approximate_mode=*/true);
+        "min", "ttnn.min", /*int32_supported=*/true, /*has_output_layout=*/true, /*has_fast_approximate_mode=*/true);
     ttnn::bind_function<"min">(
         mod,
         min_doc.c_str(),
@@ -175,7 +180,8 @@ inline void bind_generic_reductions(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("scalar") = 1.0f,
         nb::arg("sub_core_grids") = nb::none(),
-        nb::arg("fast_and_approximate_mode") = false);
+        nb::arg("fast_and_approximate_mode") = false,
+        nb::arg("output_layout") = nb::none());
 }
 
 }  // namespace ttnn::operations::reduction::detail
