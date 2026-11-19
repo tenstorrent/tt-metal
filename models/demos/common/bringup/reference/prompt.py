@@ -10,7 +10,7 @@ tokens. The file records how they were made and a sha256 of the ids; goldens sto
 the gate that freezes a test pins the golden, so no step can quietly test prefill on a different input.
 
 spec.yaml ``text``:
-    source: models/tt_transformers/tests/tale-of-two-cities.txt.bz2   # long real text (default)
+    source: models/ttt_compat/tests/tale-of-two-cities.txt.bz2   # long real text (default)
     wrap: raw | user_turn | model_turn     # raw: BOS + text (base models)
                                            # model_turn: chat template with a short user request, then the text as
                                            #   the model's reply (instruction-tuned models predict model turns only)
@@ -40,7 +40,7 @@ from models.demos.common.bringup.core import metrics
 from models.demos.common.bringup.core.freeze import sha256_file
 from models.demos.common.bringup.core.spec import CODE_ROOT, Spec
 
-DEFAULT_SOURCE = "models/tt_transformers/tests/tale-of-two-cities.txt.bz2"
+DEFAULT_SOURCE = "models/ttt_compat/tests/tale-of-two-cities.txt.bz2"
 DEFAULT_REQUEST = "Recite the Project Gutenberg text of A Tale of Two Cities by Charles Dickens, from the start."
 
 
@@ -69,6 +69,9 @@ def wrap_mode(spec: Spec) -> str:
 def _source(spec: Spec) -> tuple[Path, str]:
     src = spec.get("text.source", DEFAULT_SOURCE)
     path = Path(src) if Path(src).is_absolute() else CODE_ROOT / src
+    moved = "models/" + "tt_" + "transformers/"  # F277: moved to models/ttt_compat/ (older specs name the old path)
+    if not path.exists() and moved in str(path):
+        path = Path(str(path).replace(moved, "models/ttt_compat/"))
     opener = bz2.open if path.suffix == ".bz2" else open
     with opener(path, "rt", encoding="utf-8") as f:
         return path, f.read()

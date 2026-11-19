@@ -60,7 +60,9 @@ def in_precompile_collect_pass() -> bool:
 
 def suffixed(name: str) -> str:
     """F230: the name a metric is recorded under: with BRINGUP_METRIC_SUFFIX, so one gate can hold several positions."""
-    return name + os.environ.get(SUFFIX_ENV, "")
+    text = os.environ.get("BRINGUP_POS_TOKENS")  # F276: a run on a named text carries it (several texts, one gate)
+    tag = f"_t{text}" if text and text != "text" else ""
+    return name + os.environ.get(SUFFIX_ENV, "") + tag
 
 
 def record(name: str, value, task: str | None = None, **extra) -> None:

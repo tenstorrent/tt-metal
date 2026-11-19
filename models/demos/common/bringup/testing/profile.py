@@ -126,7 +126,7 @@ def profile_rung(s) -> str:
 
 POS_ENV = "BRINGUP_POS"  # F230: profile one chunk starting at this token position (timing only)
 HOST_ENV = "BRINGUP_PROFILE_HOST"  # F230: the wall run adds HOST_RUNS chunk runs under cProfile
-POS_TOKENS_ENV = "BRINGUP_POS_TOKENS"  # F275: text (default: the canonical prompt, repeated) | random (seed 0)
+POS_TOKENS_ENV = "BRINGUP_POS_TOKENS"  # F275 / F276: prose (default) | agentic | code | math | multilingual | random
 HOST_RUNS = 5
 
 
@@ -145,17 +145,17 @@ class PositionGolden:
         self.n_chunks = (pos + chunk) // chunk
         self.dir = None
         n = pos + chunk
-        if os.environ.get(POS_TOKENS_ENV, "text") == "text":
-            # F275: real text: the canonical prompt, repeated to the length. Random ids are not neutral for an MoE:
-            # with a zero history they collapse the routing onto a few experts (DeepSeek-V4.1 P.79: one expert of
-            # 1.2k-5.1k of a chunk's 5120 rows, the busiest chip's experts 2x the balanced time)
-            from models.demos.common.bringup.reference import prompt
-
-            ids = prompt.tokens(s, min(n, len(prompt.load(s)["token_ids"])))
-            self._tokens = ids.repeat((n + len(ids) - 1) // len(ids))[:n]
-        else:
+        if os.environ.get(POS_TOKENS_ENV) == "random":
             vocab = int(s.get("checkpoint.config.vocab_size", 32000) or 32000)
             self._tokens = torch.randint(0, vocab, (n,), generator=torch.Generator().manual_seed(0))
+            self.text = {"name": "random", "source": "torch.randint seed 0"}
+        else:
+            # F275 / F276: real text (random ids collapse an MoE's routing over a zero history, DeepSeek-V4.1 P.79);
+            # several texts (reference/texts.py, BRINGUP_POS_TOKENS), so no choice is tuned to one trace
+            from models.demos.common.bringup.reference import texts
+
+            self._tokens, self.text = texts.tokens(s, n)
+        metrics.record("pos_text", self.text["name"], **{k: v for k, v in self.text.items() if k != "name"})
 
     def tokens(self):
         return self._tokens
