@@ -26,7 +26,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 TEST_F(UnitMeshFixture, TransposeHC) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     constexpr bool multibank = true;
 
     CoreCoord core = {0, 0};

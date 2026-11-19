@@ -20,6 +20,9 @@ template <auto...>
 inline constexpr bool always_false_v = false;
 }  // namespace llk_math_detail
 
+// Defined in the Quasar TRISC firmware (trisc.cc); reset per program in llk_math_pack_sync_init.
+extern thread_local bool unpack_math_seeded;
+
 /*************************************************************************
  * LLK MATH COMMON
  *************************************************************************/
@@ -29,12 +32,9 @@ inline constexpr bool always_false_v = false;
  * @brief Configures math hardware.
  * Sets up ALU formats for math destination register and source registers.
  *
- * @tparam EN_IMPLIED_MATH_FORMAT: If set to true, will imply math dest format from SrcA reg format
  * @tparam EN_32BIT_DEST_FORMAT: Set to true to use 32bit math dest in Float32 or Int32 format
- * @param srca_operand: The srcA input operand circular buffer, used to infer srcA data_format if not implied math
- * format
- * @param srcb_operand: The srcB input operand circular buffer, used to infer srcB data_format if not implied math
- * format
+ * @param srca_operand: The srcA input operand circular buffer, used to infer the srcA data_format
+ * @param srcb_operand: The srcB input operand circular buffer, used to infer the srcB data_format
  */
 template <bool EN_32BIT_DEST_FORMAT>
 inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::uint32_t srcb_operand) {
@@ -44,7 +44,7 @@ inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::u
     const DataFormat srca_format = static_cast<DataFormat>(unpack_dst_format[srca_operand_id]);
     const DataFormat srcb_format = static_cast<DataFormat>(unpack_dst_format[srcb_operand_id]);
 
-    _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, EN_32BIT_DEST_FORMAT>(srca_format, srcb_format);
+    _llk_math_srcAB_hw_configure_<EN_32BIT_DEST_FORMAT>(srca_format, srcb_format);
 }
 
 inline void llk_math_reconfig_remap(const bool /*remap_enable*/) {}
@@ -102,6 +102,14 @@ inline void llk_math_wait_for_dest_available() {
     _llk_math_wait_for_dest_available_();
 
     if constexpr (UnpackToDestEn) {
+        // First section only! No wait on UNPACK_MATH may be pending when the unpacker's SEMINIT of it lands
+        // and its first post follows that SEMINIT. A program with no sections should never get here.
+        if (!unpack_math_seeded) {
+            WAYPOINT("MHBW");
+            _llk_sync_spin_until_posted_(semaphore::UNPACK_MATH);
+            WAYPOINT("MHBD");
+            unpack_math_seeded = true;
+        }
         _llk_sync_wait_<p_stall::STALL_MATH | p_stall::STALL_SFPU | p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO>(
             semaphore::UNPACK_MATH);
         // The UNPACK_MATH get is in llk_math_dest_section_done: the tile stays counted until MATH_PACK holds it.
@@ -138,8 +146,7 @@ inline void llk_math_dest_section_done() {
 /**
  * @brief Initializes math–pack synchronization for the destination register.
  * Waits for any previous packs to finish, resets the dest bank id, initializes the MATH_PACK semaphore. In the
- * unpack-to-dest path it then passes the UNPACK_INIT startup barrier that @ref llk_unpack_hw_configure raises behind
- * its seeds of UNPACK_MATH / UNPACK_PACK, so this thread's first wait on them cannot be armed before they exist.
+ * unpack-to-dest path it also re-arms the first-section spin in @ref llk_math_wait_for_dest_available.
  *
  * @warning SYNC SCHEME: semaphores. There are two mutually exclusive Dest register synchronization schemes: the
  * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
@@ -149,15 +156,7 @@ inline void llk_math_pack_sync_init() {
     _llk_math_pack_sync_init_<DST_SYNC_MODE>();
 
     if constexpr (UnpackToDestEn) {
-        // Startup barrier: the unpack thread seeds UNPACK_MATH / UNPACK_PACK (the semaphores it posts) in
-        // llk_unpack_hw_configure and raises UNPACK_INIT behind the seeds. Pass it here, before this thread's first
-        // SEMWAIT on UNPACK_MATH, so no SEMINIT can land on a pending waiter. A RISC-side spin, see
-        // _llk_sync_barrier_pass_; it costs nothing, math has nothing to do before the unpacker's first post anyway.
-        // Unbounded: a program whose unpack thread never calls llk_unpack_hw_configure stays here, so the spin is
-        // bracketed by waypoints for the watcher.
-        WAYPOINT("MHBW");
-        _llk_sync_barrier_pass_(semaphore::UNPACK_INIT);
-        WAYPOINT("MHBD");
+        unpack_math_seeded = false;
     }
 }
 
