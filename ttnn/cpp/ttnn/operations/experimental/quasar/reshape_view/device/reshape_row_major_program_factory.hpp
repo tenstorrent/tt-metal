@@ -12,6 +12,12 @@
 
 namespace ttnn::prim::qsr {
 
+// Depth of the RM factory's destination staging ring on WH/BH. Depends on live L1 occupancy when
+// pages are not NoC-aligned, so compute_program_hash must key on it; otherwise a cache hit replays
+// a slot count budgeted against a different L1 state (#65743).
+uint32_t reshape_rm_num_dest_write_slots(
+    const ReshapeViewParams& operation_attributes, const ReshapeViewInputs& tensor_args);
+
 // Legacy (Gen1 / WH,BH) row-major reshape: emits a ProgramDescriptor with DataMovementKernels.
 struct ReshapeViewRMProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
