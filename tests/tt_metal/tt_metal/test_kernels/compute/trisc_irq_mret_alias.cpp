@@ -16,6 +16,7 @@
 #include "internal/firmware_common.h"
 #include "internal/hw_thread.h"
 #include "tensix.h"
+#include "risc_common.h"
 
 namespace {
 
@@ -92,6 +93,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* results = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg(args::scratch));
     signal_done();
     while (results[ready_idx] == 0) {
+        invalidate_l1_cache();
     }
     TTI_INSN(TT_OP(0xbc, 0));  // illegal Tensix instruction
 #endif

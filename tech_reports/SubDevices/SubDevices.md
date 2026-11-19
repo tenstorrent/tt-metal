@@ -170,7 +170,7 @@ The following is an example of setting up a global circular buffer for use withi
         .set_page_size(single_tile_size)
         .set_data_format(tile_format);
     receiver_cb_config.index(local_cb_index).set_page_size(single_tile_size).set_data_format(tile_format);
-    auto receiver_cb = tt_metal::v1::experimental::CreateCircularBuffer(
+    auto receiver_cb = tt_metal::experimental::CreateCircularBuffer(
         program, l1_receiver_cores, receiver_cb_config, global_circular_buffer);
 ```
 
