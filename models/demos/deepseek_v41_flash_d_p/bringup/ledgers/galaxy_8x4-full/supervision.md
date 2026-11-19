@@ -279,3 +279,21 @@
   at 142k from the experts alone); the next A/B measures both sides on text.
 - RAM unaccounted after the census: 119.3 GiB.
 - Next: P.80 (fp8 dispatch).
+
+## 2026-11-19 03:45 UTC: OWNER (Mac, 03:2x): expert replication approved; several texts, no tuning to one trace
+
+- Queued after the fp8 dispatch task (P.80, not interrupted). Ledger patch ready
+  (scratchpad owner_1119_patch.py), applied when P.80 stops: X.9 = the hot-expert census over texts (per layer and
+  chunk: rows per expert / chip, busiest chip's tiles, hot-8 overlap chunk to chunk and across texts) + the 142k steady
+  wall on each text; P.84 = expert replication (static set picked on the picking texts, or per-chunk placement as a
+  pure function of the routing; chosen by the DS41-299 fit vs replica DRAM / traffic; stop rule < 3 ms at 142k on
+  held-out texts); then attention, MoE head, mHC (their gates gain the held-out texts' walls).
+- F276 (2ebb0d93749): reference/texts.py, BRINGUP_POS_TOKENS = prose (default; the whole Tale of Two Cities, 190k
+  tokens) | agentic (the bring-up agents' own tool-use sessions, 179 transcripts, 1.1M tokens) | code (5591 op
+  sources, 1.1M) | math (sympy / mpmath docstrings, 1.1M) | multilingual (zh / ja / ru / de man pages, 697k) | random.
+  All from files on this machine, no downloads; tokenized once, cached with a sha under $ART/input/texts. A named
+  text tags every metric `_t<text>`; every position run records pos_text (name, source, sha, repeats).
+- Split: pick on prose, code, math; validate on agentic (the AgentX-like one) and multilingual. Walls reported as a
+  spread over texts.
+- F277: the canonical book's path moved (tt_transformers -> ttt_compat): fixed in prompt.py; 9 old selftest failures
+  pass now. The canonical prompt's sha is unchanged.
