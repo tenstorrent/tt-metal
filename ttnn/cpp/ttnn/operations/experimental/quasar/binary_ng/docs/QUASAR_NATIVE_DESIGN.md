@@ -1572,16 +1572,32 @@ place those become real numbers, so the switch must still work when we get there
 
 What that capability imposes — each of these is easy to lose by accident:
 
-1. **The Metal 2.0 factory is deprecated on Quasar.** It runs only what the native gate refuses, and the
-   `TTNN_QSR_NATIVE=0` reference arm. It gets no new work. Its removal waits for the emulator campaign, which captures
-   both arms (items 2 and 7). Until then,
-   `TTNN_QSR_NATIVE=0` routes the same input shapes to `ProgramFactoryMetalV2`, because `matches_metal_v2_slice` admits
-   everything the native gate admits, except DRAM shards and a subtile broadcast in fp32. With `TTNN_QSR_NATIVE=0`
-   those raise an error, since #62591 removed `ProgramFactory`.
-   - **What still reaches it in the suites**, with the native factory on: the 24 activation-format cases with fp32
-     inputs and a bf16 output, which pass on it, and the BFP8 and BFP4 cases (10), which fail on it too.
-   - **What else it admits, with no Quasar test behind it:** SFPU ops that native does not run, other mixed output
-     formats, and block-float dtypes in any other case. Their state on Quasar is unknown.
+1. **The Metal 2.0 factory is deprecated on Quasar, and fenced.** With the native factory on, it runs nothing on
+   Quasar: `matches_metal_v2_slice` returns false there unless `TTNN_QSR_NATIVE=0`, so a program that the native gate
+   refuses raises in `select_program_factory`. It stays as the `TTNN_QSR_NATIVE=0` reference arm and gets no new
+   work. Its removal waits for the emulator campaign, which captures both arms (items 2 and 7). With
+   `TTNN_QSR_NATIVE=0` it runs what `matches_metal_v2_slice` admits; DRAM shards and a subtile broadcast in fp32 then
+   raise an error, since #62591 removed `ProgramFactory`.
+   - **Before the fence**, the native gate took every class that the Metal 2.0 factory ran correctly on Quasar: the
+     OpConfig chain ops, pow, remainder with a scalar b, an fp32 output from bf16 inputs and a bf16 output from fp32
+     inputs, and the MX classes (activations, fp32 at either end, another MX format out, a scalar with an MX output).
+     A census of 500 cases measured the classes before and after.
+   - **What raises now, and reached it before:** the classes that it computed wrong or could not build on Quasar
+     (`QUASAR_PARITY_GAPS.md`, "The Metal 2.0 factory on Quasar").
+   - **When the Metal 2.0 factory is deleted, these test parts go with it.** Each one checks the route between the
+     two factories, and with one factory there is no route to check:
+     - `bound_kernel_sources` (`test_binary_ng_quasar_native.py`) and `kernel_sources` (`binary_ng_mx_test_utils.py`),
+       each with its stale-file guard; `assert_native` and `assert_not_native`, with their 12 calls in the MX tests;
+       `_bound_since` and its route assertions in the parity tests (op chains, remainder with a scalar, output
+       formats).
+     - The route checks of the native module: `test_native_factory_is_engaged` and the route assertions of the
+       uneven-tile tests.
+     - `test_fallback_factory_is_engaged`, and the `TTNN_QSR_NATIVE` switch, which then has nothing to switch.
+     - The routing check in the `_ARM_SRC` child script, and the `"dfb"` branch of `_SHARD_ARM_SRC`, which no
+       caller uses since the fence.
+     - In the refusal tests, the route checks only: `assert_not_native` in `test_mx_gate_refuses` and the "no kernel
+       bound" assertion in `test_native_refused_op_raises`. The tests stay, because they prove that the gate
+       refuses. Since the fence, they check the "not supported" error, not a fallback.
 2. **Both arms selectable in one build.** The switch is a host-side env var plus an arch check; nothing
    about it is craq-sim-specific, and nothing may become so.
 3. **Nothing platform-specific in the harness.** `debug/bench_binary_ng_shapes.py` and

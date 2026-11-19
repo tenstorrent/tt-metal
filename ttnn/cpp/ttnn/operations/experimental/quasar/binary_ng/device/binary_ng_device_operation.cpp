@@ -511,8 +511,11 @@ bool noc_operand_ok(const tt::tt_metal::MemoryConfig& mc) {
 
 bool BinaryNgDeviceOperation::matches_metal_v2_slice(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    // The Metal 2.0 factory is deprecated on Quasar. The list below is what this gate admits, not what Quasar
-    // validates. Only what the native gate refuses, and the TTNN_QSR_NATIVE=0 reference arm, reach it there.
+    // Deprecated on Quasar, where it runs only with TTNN_QSR_NATIVE=0, as the reference arm. The arch goes first, so
+    // that off Quasar the knobs are never parsed. The list below is what this gate admits, not what Quasar validates.
+    if (tensor_args.input_tensor_a.device()->arch() == tt::ARCH::QUASAR && native_tuning().enabled) {
+        return false;
+    }
     // The Metal 2.0 / DataflowBuffer factory (binary_ng_metal_v2_factory.cpp) covers the whole
     // SubtileBroadcastType::NONE, tensor-tensor, TILE slice — FPU and SFPU, any dtype (lhs/rhs must match), full
     // lhs/rhs/post activations. Each of input_a / input_b / output may INDEPENDENTLY be interleaved (DRAM or L1,
@@ -665,9 +668,9 @@ bool BinaryNgDeviceOperation::matches_metal_v2_slice(
 
 bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    // Narrower than matches_metal_v2_slice in op and dtype, but it also admits DRAM shards and a subtile broadcast in
-    // fp32, which that slice refuses. Its refusals by broadcast type are also preconditions of
-    // create_native_artifacts, which asserts them. The others keep the slice to what has been validated on Quasar.
+    // On the default path of Quasar this gate is the only way in: a program that it refuses raises in
+    // select_program_factory. Its refusals by broadcast type are also preconditions of create_native_artifacts, which
+    // asserts them. The others keep the slice to what has been validated on Quasar.
 
     // Cheap checks first: this predicate runs on EVERY dispatch, cache hits included. The arch goes before
     // native_tuning(), so that off Quasar the knobs are never parsed and the settings line is never logged.
@@ -696,18 +699,55 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     // Subtile broadcast runs in bf16 and fp32. In bf16 the compute expands ROW, COL and SCALAR with unary_bcast. That
     // takes no 32-bit operand on Quasar, so in fp32 the reader expands them in software and the compute copies them.
 
-    // In bf16 and MX, add and subtract run the FPU kernel; multiply, divide, maximum and minimum run the SFPU kernel;
-    // and multiply runs the FPU kernel in fast and approximate mode. In fp32 all six run the SFPU kernel. The SFPU
-    // kernel runs no other op here: each needs its own validation on Quasar.
+    // In bf16 and MX, add and subtract run the FPU kernel; multiply, divide, maximum and minimum run the SFPU kernel.
+    // In fast and approximate mode multiply runs the FPU kernel, and in bf16 divide does too. In fp32 all six run the
+    // SFPU kernel.
     const BinaryOpType op_type = attributes.binary_op_type;
-    if (op_type != BinaryOpType::ADD && op_type != BinaryOpType::SUB && op_type != BinaryOpType::MUL &&
-        op_type != BinaryOpType::DIV && op_type != BinaryOpType::MAXIMUM && op_type != BinaryOpType::MINIMUM) {
-        return false;
-    }
     // a and b in one format: bf16, fp32 or one MX format. The output's format is checked below. Mixed formats are not
     // validated on Quasar.
     const DataType dtype = a.dtype();
     const bool mx_in = is_mx(dtype);
+    const bool fp32 = dtype == DataType::FLOAT32;
+    bool base_op = false;
+    switch (op_type) {
+        case BinaryOpType::ADD:
+        case BinaryOpType::SUB:
+        case BinaryOpType::MUL:
+        case BinaryOpType::DIV:
+        case BinaryOpType::MAXIMUM:
+        case BinaryOpType::MINIMUM: base_op = true; break;
+        // In fp32, rsub lowers to rsub_binary_tile, which Quasar's SFPU API does not define, and the fp32 chains of
+        // bias_gelu and hypot are not validated on Quasar.
+        case BinaryOpType::RSUB:
+        case BinaryOpType::BIAS_GELU:
+        case BinaryOpType::HYPOT:
+            if (fp32) {
+                return false;
+            }
+            break;
+        // OpConfig chains around an FPU op in bf16 and an SFPU op in fp32, and pow, one SFPU op.
+        case BinaryOpType::LOGICAL_AND:
+        case BinaryOpType::LOGICAL_OR:
+        case BinaryOpType::LOGICAL_XOR:
+        case BinaryOpType::LDEXP:
+        case BinaryOpType::LOGADDEXP:
+        case BinaryOpType::LOGADDEXP2:
+        case BinaryOpType::SQUARED_DIFFERENCE:
+        case BinaryOpType::POWER: break;
+        // Remainder beside a tensor b is not validated on Quasar.
+        case BinaryOpType::REMAINDER:
+            if (!is_scalar) {
+                return false;
+            }
+            break;
+        default: return false;
+    }
+    // In fp32 the reader fills a broadcast a in software, and no op but the six base ops is validated on a filled a.
+    const SubtileBroadcastType bcast = attributes.subtile_broadcast_type;
+    if (fp32 && !base_op && bcast != SubtileBroadcastType::NONE && bcast != SubtileBroadcastType::ROW_B &&
+        bcast != SubtileBroadcastType::COL_B && bcast != SubtileBroadcastType::SCALAR_B) {
+        return false;
+    }
     if ((dtype != DataType::BFLOAT16 && dtype != DataType::FLOAT32 && !mx_in) || (!is_scalar && b->dtype() != dtype)) {
         return false;
     }
@@ -716,20 +756,20 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     if (is_scalar && ((attributes.is_sfpu && !is_block_float(dtype)) ? dtype : DataType::BFLOAT16) != dtype) {
         return false;
     }
-    // Implied by the format, but checked, so that a routing change falls back instead of running untested: fp32 runs
-    // only the SFPU kernel, and bf16 and MX run add and subtract only on the FPU kernel.
-    const bool fp32 = dtype == DataType::FLOAT32;
+    // Implied by the format, but checked, so that a routing change is refused instead of running untested: fp32 runs
+    // only the SFPU kernel, and bf16 and MX run only multiply, divide, maximum, minimum, pow and remainder on the SFPU
+    // kernel.
     if (fp32 && !attributes.is_sfpu) {
         return false;
     }
     if (!fp32 && attributes.is_sfpu && op_type != BinaryOpType::MUL && op_type != BinaryOpType::DIV &&
-        op_type != BinaryOpType::MAXIMUM && op_type != BinaryOpType::MINIMUM) {
+        op_type != BinaryOpType::MAXIMUM && op_type != BinaryOpType::MINIMUM && op_type != BinaryOpType::POWER &&
+        op_type != BinaryOpType::REMAINDER) {
         return false;
     }
-    // Divide in fast and approximate mode, a reciprocal pass on b before an FPU multiply, is not validated on Quasar.
-    if (!attributes.is_sfpu && op_type == BinaryOpType::DIV) {
-        return false;
-    }
+    // Only the six base ops are validated with MX. Divide in fast and approximate mode on the FPU kernel is a
+    // reciprocal chain on b before a multiply, which MX does not validate.
+    const bool mx_validated_op = base_op && (attributes.is_sfpu || op_type != BinaryOpType::DIV);
     // Attributes, not tensor.layout(): output_layout has no tensor when none was supplied.
     if (attributes.input_layout_a != Layout::TILE || (!is_scalar && attributes.input_layout_b != Layout::TILE) ||
         attributes.output_layout != Layout::TILE) {
@@ -747,18 +787,33 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
 
     // is_binary_sfpu_op sees only the INPUT dtypes, so add(bf16, bf16, dtype=float32) reaches here with
     // is_sfpu false. data_type(), not dtype(), on TensorSpec.
-    // The unpacker and the packer convert MX through Float16_b. Validated on Quasar: MX in with its own MX format or
-    // bf16 out, and bf16 in with an MX format out.
+    // A narrowing output (fp32 in, bf16 out) runs the fp32 program, and the packer rounds the 32-bit DST to bf16. A
+    // widening output (bf16 in, fp32 out) runs with a 32-bit DST, where no bf16 rounding hides an error of the chain,
+    // so it takes only the ops validated with it, multiply and divide only on the SFPU kernel, and no user activation.
+    // The unpacker decodes MX to Float16_b, and the packer encodes MX from a 16-bit or a 32-bit DST. MX in with an
+    // fp32 output is a widening output.
     const DataType out_dtype = out_spec.data_type();
     const bool mx_out = is_mx(out_dtype);
-    if (out_dtype != dtype && !(mx_in && out_dtype == DataType::BFLOAT16) && !(dtype == DataType::BFLOAT16 && mx_out)) {
+    const bool mx_conversion = mx_out || (mx_in && out_dtype == DataType::BFLOAT16);
+    const bool narrowing = fp32 && out_dtype == DataType::BFLOAT16;
+    const bool widening_op = op_type == BinaryOpType::ADD || op_type == BinaryOpType::SUB ||
+                             op_type == BinaryOpType::RSUB || (op_type == BinaryOpType::MUL && attributes.is_sfpu) ||
+                             (op_type == BinaryOpType::DIV && attributes.is_sfpu) ||
+                             op_type == BinaryOpType::REMAINDER || op_type == BinaryOpType::LOGICAL_AND ||
+                             op_type == BinaryOpType::LOGICAL_OR || op_type == BinaryOpType::LOGICAL_XOR ||
+                             op_type == BinaryOpType::LDEXP || op_type == BinaryOpType::SQUARED_DIFFERENCE;
+    const bool user_activation = !attributes.lhs_activations.empty() || !attributes.rhs_activations.empty() ||
+                                 !attributes.post_activations.empty();
+    const bool widening =
+        (dtype == DataType::BFLOAT16 || mx_in) && out_dtype == DataType::FLOAT32 && widening_op && !user_activation;
+    if (out_dtype != dtype && !narrowing && !widening && !mx_conversion) {
         return false;
     }
-    // MX takes no scalar, no subtile broadcast and no activation: those paths are not validated with MX on Quasar. An
-    // outer-dim broadcast only maps whole tiles, so it stays admitted.
-    if ((mx_in || mx_out) && (is_scalar || attributes.subtile_broadcast_type != SubtileBroadcastType::NONE ||
-                              !attributes.lhs_activations.empty() || !attributes.rhs_activations.empty() ||
-                              !attributes.post_activations.empty())) {
+    // MX takes only the validated ops, no subtile broadcast and no scalar beside an MX input: those paths are not
+    // validated with MX on Quasar. An activation runs after the MX decode and before the MX encode, and an outer-dim
+    // broadcast only maps whole tiles, so both are admitted.
+    if ((mx_in || mx_out) &&
+        (!mx_validated_op || (is_scalar && mx_in) || attributes.subtile_broadcast_type != SubtileBroadcastType::NONE)) {
         return false;
     }
     // get_shard_volumes counts every operand's shard in the output's tiles, so those must be 32x32 too.
@@ -808,18 +863,19 @@ BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_progr
         return ProgramFactoryQuasarNative{};
     }
     // DFB / Metal 2.0 for the matching slice (arch-portable: CB-backed on WH/BH, overlay-backed on Quasar).
-    // On Quasar this factory is deprecated: it takes only what the native slice refuses.
+    // On Quasar this factory is deprecated: it runs only with TTNN_QSR_NATIVE=0.
     if (matches_metal_v2_slice(attributes, tensor_args)) {
         return ProgramFactoryMetalV2{};
     }
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
     TT_THROW(
-        "ttnn.experimental.quasar binary op {} is not supported for a {} {}, b {}, broadcast {}. Unsupported cases "
-        "include mixed a and b dtypes, int32, row-major layout, where, quantization, zero volume, a subtile broadcast "
-        "in a dtype other than bfloat16 or float32, and a float32 subtile broadcast off the native factory: with "
-        "TTNN_QSR_NATIVE=0, or with more reader than compute threads beside a COL or SCALAR operand. On Wormhole or "
-        "Blackhole, use the production ttnn op.",
+        "ttnn.experimental.quasar binary op {} is not supported for a {} {}, b {}, broadcast {}. On Quasar the native "
+        "factory runs what its gate admits; TTNN_QSR_NATIVE=0 selects the deprecated Metal 2.0 factory instead, which "
+        "refuses a float32 subtile broadcast and a DRAM shard. Unsupported cases include mixed a and b dtypes, int32, "
+        "row-major layout, where, quantization, zero volume, an op or format that the native gate does not admit, and "
+        "TTNN_QSR_* thread counts that break a ring's ratio, or that put more reader than compute threads beside a "
+        "COL, SCALAR or scalar operand. On Wormhole or Blackhole, use the production ttnn op.",
         enchantum::to_string(attributes.binary_op_type),
         a.dtype(),
         attributes.input_layout_a,

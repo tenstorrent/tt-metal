@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Deprecated on Quasar: this factory runs only what the native gate refuses, and it gets no new work.
+// Deprecated on Quasar, where it runs only with TTNN_QSR_NATIVE=0 (the reference arm). It gets no new work.
 //
 // Metal 2.0 / DataflowBuffer (DFB) program factory for binary_ng's no-broadcast (SubtileBroadcastType::
 // NONE), tiled path.

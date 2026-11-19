@@ -41,6 +41,8 @@ import torch
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
     _add_goldens,
+    _fpu_add_bf16,
+    _fpu_aligned_sum,
     _matches_none,
     _run,
 )
@@ -435,11 +437,9 @@ def test_native_uneven_tile_counts_match_the_prediction(device, tiles):
     got, goldens = _add_one_row(device, tiles, seed=tiles)
     wrong_as_predicted = _matches_prediction(got, goldens, _parent_prediction(tiles), f"{tiles} tiles")
 
-    # Without this the test is a false green: the shape could have been rejected by some OTHER gate
-    # condition, silently run the single-threaded fallback, and pass. Assert on THIS op's new bindings,
-    # not the whole file -- sources accumulate for the life of the process, so a sibling module that
-    # legitimately binds kernels_dfb (bcast, scalar, resnet_add) would otherwise fail this test for an
-    # unrelated reason when the directory runs together.
+    # Assert on this op's new bindings, not the whole file: sources accumulate for the life of the process,
+    # so another module's native kernels would pass the kernels_qsr check. On Quasar a refused shape raises,
+    # so the kernels_dfb check guards only a leak past the fence.
     new_sources = [s for s in bound_kernel_sources() if s not in before]
     assert [
         s for s in new_sources if "kernels_qsr/" in s
@@ -1857,7 +1857,7 @@ _MIXED_CONFIGS = {
 def test_native_mixed_layouts_match_the_prediction(name, knobs):
     """Every mix of placements must run native and give the predicted output.
 
-    The fallback binds kernels_dfb, so a refusing gate fails the routing check. A tile read or written in
+    A refusing gate makes the op raise, which fails the arm. A tile read or written in
     the wrong order, or a borrowed ring paired with a NoC ring of another size in the wrong order, fails the
     comparison, which is exact. A cached program that keeps the first call's addresses fails the repeat.
     """
@@ -3381,51 +3381,60 @@ def test_native_tuning_log_names_each_source(name):
     assert not missing, f"the native settings line lacks {missing}:\n{line}"
 
 
+def _check_refused(p, what):
+    """The arm raised the "not supported" error: the native gate refused its op, and no other factory took it."""
+    assert p.returncode not in (0, 2), f"{what}: the op ran, the gate should refuse it\n{p.stdout}"
+    assert re.search(
+        _NOT_SUPPORTED, p.stdout + p.stderr
+    ), f"{what} failed for another reason:\n{p.stdout}\n{p.stderr[-2000:]}"
+
+
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
-def test_native_illegal_thread_knobs_fall_back():
-    """Set thread counts that break a ring's STRIDED ratio must send the op to the fallback factory.
+def test_native_illegal_thread_knobs_raise():
+    """Set thread counts that break a ring's STRIDED ratio make the native gate refuse the op, and the op raises.
 
     R = 3 beside C = 4 gives the input rings max(R, C) % min(R, C) = 1, which the DFB host refuses. The gate
-    checks the ratio on the NoC path's counts, so the op runs on the Metal 2.0 factory, and runs right.
+    checks the ratio on the NoC path's counts. On Quasar no other factory takes the op.
     """
-    p = _run_shard_arm([_DRAM_128], expect="dfb", timeout=900, knobs=_threads(3, 4, 2))
-    _check_arm(p, "R=3 beside C=4")
+    p = _run_shard_arm([_DRAM_128], expect="qsr", timeout=900, knobs=_threads(3, 4, 2))
+    _check_refused(p, "R=3 beside C=4")
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
-def test_native_col_operand_with_more_readers_than_computes_falls_back():
-    """A COL operand beside more reader than compute threads must send the op to the fallback factory.
+def test_native_col_operand_with_more_readers_than_computes_raises():
+    """A COL operand beside more reader than compute threads makes the native gate refuse the op, and the op raises.
 
     A held operand needs each compute thread to own one tile counter of its input ring, so R = 4 beside C = 2 fails the
-    gate's R <= C check, and the bf16 op runs on the Metal 2.0 factory, and runs right. The same shape with a full b
-    stays native at those knobs, so only the COL operand's program leaves the native factory. The COL entry drops its
-    modes and its walk, which the fallback's kernels do not define.
+    gate's R <= C check. The same shape with a full b stays native at those knobs, so only the COL operand's program
+    is refused.
     """
     col_b = next(entry for entry in _HELD if entry[0] == "col_b")
     col = (*col_b[:5], {key: value for key, value in col_b[5].items() if key not in ("modes", "walk")})
     dense = ("col_b_dense", *col_b[1:5])
     knobs = _threads(4, 2, 2)
-    p = _run_shard_arm([col], expect="dfb", timeout=900, knobs=knobs)
-    _check_arm(p, "a COL operand at R=4 beside C=2")
+    p = _run_shard_arm([col], expect="qsr", timeout=900, knobs=knobs)
+    _check_refused(p, "a COL operand at R=4 beside C=2")
     p = _run_shard_arm([dense], expect="qsr", timeout=900, knobs=knobs)
     _check_arm(p, "a full b at R=4 beside C=2")
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
-def test_native_value_and_scalar_with_more_readers_than_computes_fall_back():
-    """A VALUE b or a scalar beside more reader than compute threads must send the op to the fallback factory.
+def test_native_value_and_scalar_with_more_readers_than_computes_raise():
+    """A VALUE b or a scalar beside more reader than compute threads makes the native gate refuse the op, and the op
+    raises.
 
     A VALUE operand needs each compute thread to own one tile counter of its input ring, as a held operand does, and a
-    scalar runs as VALUE. So R = 4 beside C = 2 fails the gate's R <= C check, and each op runs on the Metal 2.0
-    factory, and runs right. The entries drop their modes and their walk, which the fallback's kernels do not define.
+    scalar runs as VALUE. So R = 4 beside C = 2 fails the gate's R <= C check. Each entry runs in its own arm, because
+    the first refusal ends an arm.
     """
     picked = [
         next(entry for entry in _VALUE if entry[0] == "value_b"),
         next(entry for entry in _SCALAR_OP if entry[0] == "scalar/add"),
     ]
-    entries = [(*entry[:5], {k: v for k, v in entry[5].items() if k not in ("modes", "walk")}) for entry in picked]
-    p = _run_shard_arm(entries, expect="dfb", timeout=900, knobs=_threads(4, 2, 2))
-    _check_arm(p, "a VALUE b and a scalar at R=4 beside C=2")
+    for entry in picked:
+        trimmed = (*entry[:5], {k: v for k, v in entry[5].items() if k not in ("modes", "walk")})
+        p = _run_shard_arm([trimmed], expect="qsr", timeout=900, knobs=_threads(4, 2, 2))
+        _check_refused(p, f"{entry[0]} at R=4 beside C=2")
 
 
 # Every broadcast table, for the no-device checks below.
@@ -3543,3 +3552,535 @@ def test_native_prediction_tables_cover_their_cases():
     ), f"height_67 gives each compute thread {per_thread} tiles, not 2 or more batches of {_RULE_TILES_PER_CYCLE}"
     for table_name, table in (("_OP_TAIL_SHARDS", _OP_TAIL_SHARDS), ("_FP32_TAIL_SHARDS", _FP32_TAIL_SHARDS)):
         assert any(entry[0].startswith("height_67/") for entry in table), f"height_67 is not in {table_name}"
+
+
+# --- Ops with an activation chain, and pow ----------------------------------------------------------------------------
+#
+# OpConfig lowers each of these ops to the FPU or the SFPU kernel with an activation chain on a, on b or on the result.
+# In bf16 rsub, the logical ops, ldexp, logaddexp, logaddexp2, squared_difference, bias_gelu and hypot run the FPU
+# kernel, and so does divide in fast and approximate mode. In fp32 the logical ops, ldexp, logaddexp, logaddexp2 and
+# squared_difference run the SFPU kernel. pow runs the SFPU kernel with no chain, in both formats. Each case clears the
+# program cache, so that it builds its own program, checks that the program bound kernels_qsr and no kernels_dfb, and
+# compares the output with a model of the chain on the operands as the device holds them.
+#
+# The model of each step: the FPU adds and subtracts as _fpu_add_bf16 says, and multiplies with rounding to nearest
+# even. In bf16 the SFPU square drops the low 16 bits of its fp32 product. NEG, NEZ and EXP2 of an integer are exact,
+# so the logical ops and ldexp are exact. In fp32 the SFPU adds, subtracts and multiplies with rounding to nearest
+# even. A step that approximates (SQRT, EXP, LOG, EXP2, LOG2, GELU, RECIP) takes the device's own unary op on the
+# model's input to that step: the unary op runs the same SFPU function in its own program, so the model holds the
+# binary op's chain to it bit for bit. pow is one SFPU function with no unary twin: it is held to its measured bound
+# against torch.pow on the device operands.
+
+_CHAIN_SHAPE = (12 * 32, 24 * 32)  # 288 tiles, 9 per cluster: one full FPU batch and a short one, two SFPU batches
+_CHAIN_B_SHAPE = {"tt": _CHAIN_SHAPE, "row": (1, 24 * 32), "col": (12 * 32, 1), "scalar": (1, 1)}
+# "ragged": a shape that is not a multiple of 32, so the last tile row and column hold padding.
+_RAGGED_SHAPE = (100, 200)
+
+
+def _chain_memory_config(form):
+    """The memory config of a, b and the output. "l1_height": L1 height shards of 72 tiles on 4 clusters, which the
+    native factory borrows (72 divides by its 4 compute threads, so no tail ring runs). Else DRAM interleaved."""
+    if form != "l1_height":
+        return ttnn.DRAM_MEMORY_CONFIG
+    return ttnn.create_sharded_memory_config(
+        (3 * 32, 24 * 32),
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 3))}),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+
+_CHAIN_SCALAR = {"signed": 0.75, "logical": 1.0, "ldexp": 2.0, "div": 1.25}
+# pow's bound: the largest ULP distance from torch.pow on the device operands, on Quasar (ttsim v1.16.0).
+_POW_ULP = {"bfloat16": 1, "float32": 3}
+
+
+def _chain_operands(domain, a_shape, b_shape):
+    """a and b of a domain, from a fixed seed."""
+    gen = torch.Generator().manual_seed(7)
+    uniform = lambda shape, lo, hi: torch.rand(shape, generator=gen) * (hi - lo) + lo
+    a, b = uniform(a_shape, -4, 4), uniform(b_shape, -4, 4)
+    if domain == "logical":
+        # About half of each operand is zero, so every truth-table row occurs.
+        a = torch.where(torch.rand(a_shape, generator=gen) < 0.5, 0.0, a)
+        b = torch.where(torch.rand(b_shape, generator=gen) < 0.5, 0.0, b)
+    elif domain == "ldexp":
+        b = torch.randint(-4, 5, b_shape, generator=gen).float()
+    elif domain == "div":
+        b = torch.where(torch.rand(b_shape, generator=gen) < 0.5, -1.0, 1.0) * uniform(b_shape, 0.5, 4)
+    elif domain == "pow":
+        a, b = uniform(a_shape, 0.25, 4), uniform(b_shape, 0.25, 2)
+    return a, b
+
+
+def _device_unary(device, op, x, dtype):
+    """The device's unary op on x, which the format holds exactly."""
+    t = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return ttnn.to_torch(op(t)).float()
+
+
+def _sfpu_square_bf16(x):
+    return (x.float() * x.float()).contiguous().view(torch.int32).bitwise_and(-65536).view(torch.float32)
+
+
+def _gelu(t):
+    return ttnn.gelu(t, fast_and_approximate_mode=False)
+
+
+def _chain_model(device, op, dtype, a, b):
+    """The output of `op` as its chain computes it, from the device operands a and b (float32 tensors that the format
+    holds exactly), as a tensor in the output's torch format."""
+    fp32 = dtype == ttnn.float32
+    tdt = torch.float32 if fp32 else torch.bfloat16
+    unary = lambda fn, x: _device_unary(device, fn, x.to(tdt).float(), dtype)
+    if op in ("logical_and", "logical_or", "logical_xor"):
+        x, y = a != 0, b != 0
+        return {"logical_and": x & y, "logical_or": x | y, "logical_xor": x ^ y}[op].to(tdt)
+    if op == "ldexp":
+        return (a.double() * torch.exp2(b.double())).to(tdt)
+    if fp32:
+        if op == "squared_difference":
+            d = a - b
+            return d * d
+        exp, log = (ttnn.exp2, ttnn.log2) if op == "logaddexp2" else (ttnn.exp, ttnn.log)
+        return unary(log, unary(exp, a) + unary(exp, b)).to(tdt)
+    if op == "rsub":
+        return _fpu_add_bf16(-a, b)
+    if op == "squared_difference":
+        return _sfpu_square_bf16(_fpu_add_bf16(a, -b).float()).to(tdt)
+    if op == "hypot":
+        return unary(ttnn.sqrt, _fpu_add_bf16(_sfpu_square_bf16(a), _sfpu_square_bf16(b)).float()).to(tdt)
+    if op in ("logaddexp", "logaddexp2"):
+        exp, log = (ttnn.exp2, ttnn.log2) if op == "logaddexp2" else (ttnn.exp, ttnn.log)
+        return unary(log, _fpu_add_bf16(unary(exp, a), unary(exp, b)).float()).to(tdt)
+    if op == "bias_gelu":
+        return unary(_gelu, _fpu_add_bf16(a, b).float()).to(tdt)
+    if op == "divide_fast":
+        return (a * unary(ttnn.reciprocal, b)).to(tdt)
+    raise ValueError(op)
+
+
+# op -> (the ttnn.experimental.quasar function, its extra arguments, the operand domain)
+_CHAIN_OPS = {
+    "rsub": ("rsub", {}, "signed"),
+    "logical_and": ("logical_and", {}, "logical"),
+    "logical_or": ("logical_or", {}, "logical"),
+    "logical_xor": ("logical_xor", {}, "logical"),
+    "ldexp": ("ldexp", {}, "ldexp"),
+    "logaddexp": ("logaddexp", {}, "signed"),
+    "logaddexp2": ("logaddexp2", {}, "signed"),
+    "squared_difference": ("squared_difference", {}, "signed"),
+    "bias_gelu": ("bias_gelu", {}, "signed"),
+    "hypot": ("hypot", {}, "signed"),
+    "divide_fast": ("divide", {"fast_and_approximate_mode": True}, "div"),
+    "pow": ("pow", {}, "pow"),
+}
+_ALL_FORMS = ("tt", "ts", "row", "col", "scalar")
+_NO_SCALAR = ("tt", "row", "col", "scalar")
+# (op, dtype, forms). A form is "tt" (b has a's shape), "ts" (b is a Python scalar), the subtile broadcast of b ("row",
+# "col" or "scalar"), "inplace" (tt through the op's in-place form, which writes the result into a), "l1_height" (tt
+# on borrowed L1 shards) or "ragged" (tt on _RAGGED_SHAPE). The two placement forms run on ops with a chain on a, on b
+# and on the result (logaddexp, hypot, logical_xor) and on squared_difference in fp32.
+_CHAIN_TABLE = [
+    ("rsub", "bfloat16", _ALL_FORMS),
+    ("logical_and", "bfloat16", _ALL_FORMS),
+    ("logical_or", "bfloat16", _ALL_FORMS + ("inplace",)),
+    ("logical_xor", "bfloat16", _ALL_FORMS),
+    ("ldexp", "bfloat16", _ALL_FORMS),
+    ("logaddexp", "bfloat16", _ALL_FORMS + ("l1_height", "ragged")),
+    ("logaddexp2", "bfloat16", _ALL_FORMS),
+    ("squared_difference", "bfloat16", _ALL_FORMS),
+    ("bias_gelu", "bfloat16", _NO_SCALAR),
+    ("hypot", "bfloat16", _NO_SCALAR + ("l1_height", "ragged")),
+    ("divide_fast", "bfloat16", _ALL_FORMS),
+    ("pow", "bfloat16", _NO_SCALAR),
+    ("logical_and", "float32", _ALL_FORMS),
+    ("logical_or", "float32", _ALL_FORMS),
+    ("logical_xor", "float32", _ALL_FORMS + ("l1_height", "ragged")),
+    ("ldexp", "float32", _ALL_FORMS),
+    ("logaddexp", "float32", _ALL_FORMS),
+    ("logaddexp2", "float32", _ALL_FORMS),
+    ("squared_difference", "float32", _ALL_FORMS + ("inplace", "l1_height", "ragged")),
+    ("pow", "float32", _NO_SCALAR),
+]
+_CHAIN_CASES = [(op, dtype, form) for op, dtype, forms in _CHAIN_TABLE for form in forms]
+
+
+def _bound_since(before):
+    """The binary_ng kernel sources that this process bound after `before` sources."""
+    return [s for s in bound_kernel_sources()[before:] if "/binary_ng/device/kernels" in s]
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+@pytest.mark.parametrize("op, dtype, form", _CHAIN_CASES, ids=["-".join(case) for case in _CHAIN_CASES])
+def test_native_op_chains_match_the_model(device, op, dtype, form):
+    """The op runs native, and its output equals the model of its chain (pow: within its measured bound)."""
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    fn_name, extra, domain = _CHAIN_OPS[op]
+    dtype_tt = getattr(ttnn, dtype)
+    memory_config = _chain_memory_config(form)
+    cfg = dict(dtype=dtype_tt, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+    if form == "ragged":
+        a, b = _chain_operands(domain, _RAGGED_SHAPE, _RAGGED_SHAPE)
+    else:
+        a, b = _chain_operands(domain, _CHAIN_SHAPE, _CHAIN_B_SHAPE.get(form, _CHAIN_SHAPE))
+    ta = ttnn.from_torch(a, **cfg)
+    a_held = ttnn.to_torch(ta).float()
+    if form == "ts":
+        tb = _CHAIN_SCALAR[domain]
+        b_held = torch.full((1, 1), tb).to(torch.float32 if dtype == "float32" else torch.bfloat16).float()
+    else:
+        tb = ttnn.from_torch(b, **cfg)
+        b_held = ttnn.to_torch(tb).float()
+    before = len(bound_kernel_sources())
+    if form == "inplace":
+        getattr(ttnn.experimental.quasar, fn_name + "_")(ta, tb, **extra)
+        out = ta
+    else:
+        out = getattr(ttnn.experimental.quasar, fn_name)(ta, tb, memory_config=memory_config, **extra)
+    bound = _bound_since(before)
+    got = ttnn.to_torch(out)
+    a_full, b_full = torch.broadcast_tensors(a_held, b_held)
+    if op == "pow":
+        golden = torch.pow(a_full.double(), b_full.double()).to(got.dtype)
+        differ = _matches_none(got, [golden], _POW_ULP[dtype])
+    else:
+        differ = _matches_none(got, [_chain_model(device, op, dtype_tt, a_full, b_full)])
+    assert int(differ.sum()) == 0, f"{int(differ.sum())} of {differ.numel()} elements differ from the model"
+    assert [s for s in bound if "/kernels_dfb/" in s] == [], f"the op bound the Metal 2.0 kernels: {bound}"
+    assert (
+        len([s for s in bound if "/kernels_qsr/" in s]) == 3
+    ), f"the op did not bind the three native kernels: {bound}"
+
+
+# remainder with a Python scalar reaches binary_ng only with an activation or a dtype; else it runs the unary remainder.
+# It runs the SFPU kernel's remainder_binary_tile, which is exact on these operands (as the Metal 2.0 factory's was in
+# the census), so the model is torch.remainder on the device operands, rounded to the dtype. The divisor is negative, so
+# every result is at most 0: a RELU on the result leaves zeros, and a dropped RELU leaves negative values.
+_REMAINDER_SCALAR = -1.25
+_REMAINDER_ACTS = {
+    "relu_post": ({"activations": [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)]}, lambda a: a, torch.relu),
+    "relu_a": ({"input_tensor_a_activations": [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)]}, torch.relu, lambda r: r),
+}
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+@pytest.mark.parametrize("act", list(_REMAINDER_ACTS))
+@pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
+def test_native_remainder_scalar_matches_torch(device, dtype, act):
+    """remainder with a scalar and an activation runs native, and equals torch.remainder on the device operands."""
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    kwargs, pre, post = _REMAINDER_ACTS[act]
+    dtype_tt = getattr(ttnn, dtype)
+    a, _ = _chain_operands("signed", _CHAIN_SHAPE, _CHAIN_SHAPE)
+    ta = ttnn.from_torch(
+        a, dtype=dtype_tt, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    a_held = ttnn.to_torch(ta).double()
+    before = len(bound_kernel_sources())
+    out = ttnn.experimental.quasar.remainder(ta, _REMAINDER_SCALAR, **kwargs)
+    bound = _bound_since(before)
+    got = ttnn.to_torch(out)
+    golden = post(torch.remainder(pre(a_held), _REMAINDER_SCALAR)).to(got.dtype)
+    differ = _matches_none(got, [golden])
+    assert int(differ.sum()) == 0, f"{int(differ.sum())} of {differ.numel()} elements differ from torch.remainder"
+    assert [s for s in bound if "/kernels_dfb/" in s] == [], f"the op bound the Metal 2.0 kernels: {bound}"
+    assert (
+        len([s for s in bound if "/kernels_qsr/" in s]) == 3
+    ), f"the op did not bind the three native kernels: {bound}"
+
+
+# --- The Metal 2.0 factory runs on Quasar only with TTNN_QSR_NATIVE=0 ------------------------------------------------
+#
+# On Quasar the native factory is the only factory of the default path. A program that the native gate refuses raises
+# the "not supported" error, also where the Metal 2.0 factory would take it: TTNN_QSR_NATIVE=0 alone selects that
+# factory (test_fallback_factory_is_engaged). Each case is a class that the Metal 2.0 factory admits but computes
+# wrong or cannot build on Quasar, and that the native gate refuses.
+
+# The message of the factory selection when no factory takes an op (a regular expression).
+_NOT_SUPPORTED = r"binary op \w+ is not supported for a DataType::"
+# name -> (the op, the input dtype, the output dtype or None for the input's, b a "tensor" or a Python "scalar")
+_REFUSED_CASES = {
+    # The Metal 2.0 factory computes these wrong: hypot in every element (up to 24,875 ULP), bias_gelu near a zero
+    # result, and the widening logaddexp, logaddexp2 and bias_gelu by up to 1.9e9 ULP.
+    "hypot-float32": ("hypot", "float32", None, "tensor"),
+    "bias_gelu-float32": ("bias_gelu", "float32", None, "tensor"),
+    "logaddexp-bfloat16-to-float32": ("logaddexp", "bfloat16", "float32", "tensor"),
+    "logaddexp2-bfloat16-to-float32": ("logaddexp2", "bfloat16", "float32", "tensor"),
+    "bias_gelu-bfloat16-to-float32": ("bias_gelu", "bfloat16", "float32", "tensor"),
+    # The Metal 2.0 factory cannot build these on Quasar: rsub in fp32 (also with a scalar, which takes the scalar
+    # branch of its gate) and the bf16 compares.
+    "rsub-float32": ("rsub", "float32", None, "tensor"),
+    "rsub-float32-scalar": ("rsub", "float32", None, "scalar"),
+    "ge-bfloat16": ("ge", "bfloat16", None, "tensor"),
+}
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+@pytest.mark.parametrize("name", list(_REFUSED_CASES))
+def test_native_refused_op_raises(device, expect_error, name):
+    """An op that the native gate refuses raises the "not supported" error, and binds no binary_ng kernel."""
+    op, dtype, out_dtype, b_form = _REFUSED_CASES[name]
+    cfg = dict(
+        dtype=getattr(ttnn, dtype), layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    ta = ttnn.from_torch(torch.rand((64, 64)) + 0.5, **cfg)
+    tb = ttnn.from_torch(torch.rand((64, 64)) + 0.5, **cfg) if b_form == "tensor" else 1.5
+    kwargs = {"dtype": getattr(ttnn, out_dtype)} if out_dtype else {}
+    before = len(bound_kernel_sources())
+    with expect_error(RuntimeError, _NOT_SUPPORTED):
+        getattr(ttnn.experimental.quasar, op)(ta, tb, **kwargs)
+    assert _bound_since(before) == [], f"{name}: a refused op bound {_bound_since(before)}"
+
+
+# --- bf16 and fp32 output formats -------------------------------------------------------------------------------------
+#
+# The native factory writes fp32 operands' result as bf16, and bf16 operands' result as fp32, where the chain allows it.
+# A narrowing output (fp32 in, bf16 out) runs the fp32 program, then a TYPECAST post activation on the SFPU, which rounds
+# to nearest even. A widening output (bf16 in, fp32 out) runs the whole program with a 32-bit DST: the FPU then keeps its
+# aligned sum unrounded, and the SFPU keeps its fp32 result. A widening output is admitted only where the chain has no
+# approximate SFPU step, so not for logaddexp, logaddexp2, bias_gelu, hypot or pow; test_native_refused_op_raises checks
+# the refusal. Each case checks that the op bound kernels_qsr and no kernels_dfb, and compares its output with the model
+# of its chain. The operands and the output have different tile sizes (4,096 B and 2,048 B), so add (FPU) and multiply
+# (SFPU) also run at the placements that borrow an operand or move it in its own pages.
+
+# divide's bound in each output format: production's 1 ULP in bf16; in fp32 the Quasar SFPU divide is 2 ULP from torch
+# (_ULP), wider than production's bound (a merge blocker, kept visible in the stage ledger).
+_FORMAT_DIVIDE_ULP = {"bfloat16": 1, "float32": 2}
+
+
+def _format_model(device, op, a, b, out_dtype):
+    """The output of `op` from the device operands a and b (float32 tensors that the input format holds exactly), in
+    the output's torch format. fp32 in: the fp32 chain, then rounded to bf16. bf16 in: the chain with a 32-bit DST."""
+    widening = out_dtype == "float32"
+    if op in ("logical_and", "logical_or", "logical_xor"):
+        x, y = a != 0, b != 0
+        result = {"logical_and": x & y, "logical_or": x | y, "logical_xor": x ^ y}[op].float()
+    elif op == "ldexp":
+        result = (a.double() * torch.exp2(b.double())).float()
+    elif op in ("add", "subtract", "rsub"):
+        x, y = {"add": (a, b), "subtract": (a, -b), "rsub": (-a, b)}[op]
+        result = _fpu_aligned_sum(x, y) if widening else x + y
+    elif op == "multiply":
+        result = a * b
+    elif op == "divide":
+        result = a / b  # held to _FORMAT_DIVIDE_ULP, not exact
+    elif op == "remainder":
+        result = torch.remainder(a.double(), b.double()).float()
+    elif op == "squared_difference":
+        d = _fpu_aligned_sum(a, -b) if widening else a - b
+        result = d * d
+    elif op in ("logaddexp", "logaddexp2"):
+        exp, log = (ttnn.exp2, ttnn.log2) if op == "logaddexp2" else (ttnn.exp, ttnn.log)
+        result = _device_unary(
+            device,
+            log,
+            _device_unary(device, exp, a, ttnn.float32) + _device_unary(device, exp, b, ttnn.float32),
+            ttnn.float32,
+        )
+    else:
+        raise ValueError(op)
+    return result.to(torch.float32 if widening else torch.bfloat16)
+
+
+def _dram_width_shards(device, shard_shape):
+    """Width shards over every DRAM bank. The shard grid of a DRAM tensor is in DRAM-bank coordinates."""
+    g = device.dram_grid_size()
+    banks = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(g.x - 1, g.y - 1))})
+    spec = ttnn.ShardSpec(banks, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, spec)
+
+
+# placement -> (shape, the memory configs of a, b and the output, built on the device).
+# l1: the native factory borrows each operand's slice of its L1 bank, a and the output with different page sizes.
+# l1_height_33: shards of 33 tiles on two clusters: 32 borrowed and 1 through the tail rings; the second shard holds 32
+#   real tiles.
+# dram_width: DRAM shards over the NoC.
+# mixed: a and the output borrow their L1 slices, and b moves over the NoC from its DRAM pages.
+_FORMAT_PLACEMENTS = {
+    "l1": (_CHAIN_SHAPE, lambda d: (ttnn.L1_MEMORY_CONFIG,) * 3),
+    "l1_height_33": (
+        (65 * 32, 32),
+        lambda d: (
+            ttnn.create_sharded_memory_config(
+                (33 * 32, 32),
+                core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 1))}),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                use_height_and_width_as_shard_shape=True,
+            ),
+        )
+        * 3,
+    ),
+    "dram_width": (_CHAIN_SHAPE, lambda d: (_dram_width_shards(d, [12 * 32, 12 * 32]),) * 3),
+    "mixed": (_CHAIN_SHAPE, lambda d: (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG)),
+}
+
+_RELU = [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)]
+# (op, input dtype, output dtype, form, activation). A form is one of _CHAIN_TABLE's (tt, ts, row, col, scalar) or a
+# placement of _FORMAT_PLACEMENTS. The activation is a RELU on "a", "b", "ab" or the result ("post"), or none ("").
+_FORMAT_CASES = (
+    [(op, "float32", "bfloat16", "tt", "") for op in ("add", "subtract", "multiply", "divide", "logical_and")]
+    + [
+        (op, "float32", "bfloat16", "tt", "")
+        for op in ("logical_or", "logical_xor", "ldexp", "logaddexp", "logaddexp2")
+    ]
+    + [("squared_difference", "float32", "bfloat16", "tt", "")]
+    + [(op, "float32", "bfloat16", "tt", pre) for op in ("add", "multiply") for pre in ("a", "b", "ab")]
+    + [("add", "float32", "bfloat16", "tt", "post")]
+    + [(op, "float32", "bfloat16", "ts", pre) for op in ("add", "subtract", "multiply") for pre in ("", "a")]
+    + [(op, "float32", "bfloat16", "ts", "") for op in ("divide", "remainder")]
+    + [(op, "float32", "bfloat16", form, "") for op in ("add", "multiply") for form in ("row", "col", "scalar")]
+    + [(op, "bfloat16", "float32", "tt", "") for op in ("add", "subtract", "rsub", "multiply", "divide")]
+    + [(op, "bfloat16", "float32", "tt", "") for op in ("logical_and", "logical_or", "logical_xor", "ldexp")]
+    + [("squared_difference", "bfloat16", "float32", "tt", "")]
+    + [(op, "bfloat16", "float32", form, "") for op in ("add", "multiply") for form in ("ts", "row", "col", "scalar")]
+    + [(op, "bfloat16", "float32", "ts", "") for op in ("divide", "remainder")]
+    + [("logical_and", "bfloat16", "float32", "row", "")]
+    + [
+        (op, i, o, placement, "")
+        for op in ("add", "multiply")
+        for i, o in (("float32", "bfloat16"), ("bfloat16", "float32"))
+        for placement in _FORMAT_PLACEMENTS
+        # The Metal 2.0 factory crashes the simulator on this case (UndefinedBehavior: dest_row_bank), so no run on the
+        # base can show it red; multiply runs a widening output at this placement.
+        if (op, i, placement) != ("add", "bfloat16", "l1_height_33")
+    ]
+)
+_FORMAT_DOMAIN = {
+    "logical_and": "logical",
+    "logical_or": "logical",
+    "logical_xor": "logical",
+    "ldexp": "ldexp",
+    "divide": "div",
+    "remainder": "div",
+}
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+@pytest.mark.parametrize(
+    "op, in_dtype, out_dtype, form, pre",
+    _FORMAT_CASES,
+    ids=["-".join([op, i, "to", o, f] + ([f"relu_{p}"] if p else [])) for op, i, o, f, p in _FORMAT_CASES],
+)
+def test_native_output_formats_match_the_model(device, op, in_dtype, out_dtype, form, pre):
+    """The op runs native with the other output format, and its output equals the model of its chain (divide: within
+    its bound)."""
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    domain = _FORMAT_DOMAIN.get(op, "signed")
+    if form in _FORMAT_PLACEMENTS:
+        shape, memory = _FORMAT_PLACEMENTS[form]
+        a_mem, b_mem, out_mem = memory(device)
+        a, b = _chain_operands(domain, shape, shape)
+    else:
+        a_mem = b_mem = out_mem = ttnn.DRAM_MEMORY_CONFIG
+        a, b = _chain_operands(domain, _CHAIN_SHAPE, _CHAIN_B_SHAPE["tt" if form == "ts" else form])
+    cfg = dict(dtype=getattr(ttnn, in_dtype), layout=ttnn.TILE_LAYOUT, device=device)
+    ta = ttnn.from_torch(a, memory_config=a_mem, **cfg)
+    a_held = ttnn.to_torch(ta).float()
+    if form == "ts":
+        tb = _CHAIN_SCALAR[domain]
+        b_held = torch.full((1, 1), tb).to(torch.float32 if in_dtype == "float32" else torch.bfloat16).float()
+    else:
+        tb = ttnn.from_torch(b, memory_config=b_mem, **cfg)
+        b_held = ttnn.to_torch(tb).float()
+    kwargs = {"dtype": getattr(ttnn, out_dtype), "memory_config": out_mem}
+    if "a" in pre:
+        kwargs["input_tensor_a_activations"] = _RELU
+        a_held = torch.relu(a_held)
+    if "b" in pre:
+        kwargs["input_tensor_b_activations"] = _RELU
+        b_held = torch.relu(b_held)
+    if pre == "post":
+        kwargs["activations"] = _RELU
+    before = len(bound_kernel_sources())
+    out = getattr(ttnn.experimental.quasar, op)(ta, tb, **kwargs)
+    bound = _bound_since(before)
+    got = ttnn.to_torch(out)
+    assert got.dtype == (torch.float32 if out_dtype == "float32" else torch.bfloat16), f"the output is {got.dtype}"
+    a_full, b_full = torch.broadcast_tensors(a_held, b_held)
+    golden = _format_model(device, op, a_full, b_full, out_dtype)
+    if pre == "post":
+        golden = torch.relu(golden)
+    differ = _matches_none(got, [golden], _FORMAT_DIVIDE_ULP[out_dtype] if op == "divide" else 0)
+    assert int(differ.sum()) == 0, f"{int(differ.sum())} of {differ.numel()} elements differ from the model"
+    assert [s for s in bound if "/kernels_dfb/" in s] == [], f"the op bound the Metal 2.0 kernels: {bound}"
+    assert (
+        len([s for s in bound if "/kernels_qsr/" in s]) == 3
+    ), f"the op did not bind the three native kernels: {bound}"
+
+
+# Special values through each conversion, written as raw bits where a float cannot be typed. Narrowing: add(a, 0) with
+# fp32 a, so the TYPECAST rounds a itself: Inf, NaN, the largest fp32 value (it rounds up to the bf16 Inf), exact bf16
+# ties to even down and up, values just above and below a tie, fp32 subnormals and the zeros. Widening: bf16 a and b
+# with Inf, NaN and zeros beside finite values, through the FPU's aligned sum in a 32-bit DST.
+_F32_BITS = [
+    0x7F800000,  # +Inf
+    0xFF800000,  # -Inf
+    0x7FC00000,  # NaN
+    0x7F7FFFFF,  # the largest fp32 value
+    0x3F808000,  # 1 + 2^-8: a tie, rounds down to the even 1.0
+    0x3F818000,  # 1 + 3 * 2^-8: a tie, rounds up to the even 1 + 2^-6
+    0x3F808001,  # just above a tie
+    0x3F807FFF,  # just below a tie
+    0x00000001,  # the smallest fp32 subnormal
+    0x80400000,  # a negative fp32 subnormal
+    0x00000000,  # +0
+    0x80000000,  # -0
+    0x3FC00000,  # 1.5
+    0xC0000000,  # -2
+]
+_BF16_SPECIAL = [math.inf, -math.inf, math.nan, 0.0, -0.0, 1.5, -2.0, 3.0e38, -1.0e-38, 7.0]
+
+
+def _special_tile(values, dtype):
+    """One 32x32 tile: `values`, repeated to fill it."""
+    n = 32 * 32
+    reps = -(-n // len(values))
+    return torch.tensor((values * reps)[:n], dtype=dtype).reshape(32, 32)
+
+
+# Quasar flushes the fp32 subnormal that bf16 can hold (0x80400000) to zero on the narrowing path, where torch keeps
+# it: the indices of the tile that hold it, as measured on ttsim v1.16.0. The other subnormal rounds to zero in both.
+_NARROWING_SPECIAL_WRONG = [i for i in range(32 * 32) if _F32_BITS[i % len(_F32_BITS)] == 0x80400000]
+_SUBNORMAL_FLUSH = pytest.mark.xfail(
+    raises=_WrongOutput,
+    strict=True,
+    reason="Quasar flushes an fp32 subnormal to zero on the narrowing path; torch keeps it in bf16",
+)
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+@pytest.mark.parametrize("direction", [pytest.param("narrowing", marks=_SUBNORMAL_FLUSH), "widening"])
+def test_native_output_formats_special_values(device, direction):
+    """Special values through the output conversion run native, and equal the model; NaN matches NaN, zero signs are
+    ignored. The narrowing case differs on exactly the predicted elements (_NARROWING_SPECIAL_WRONG)."""
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    if direction == "narrowing":
+        a = _special_tile([v - (1 << 32) if v >= 1 << 31 else v for v in _F32_BITS], torch.int32).view(torch.float32)
+        b = torch.zeros_like(a)
+        in_dtype, out_dtype = ttnn.float32, ttnn.bfloat16
+    else:
+        a = _special_tile(_BF16_SPECIAL, torch.float32)
+        b = torch.roll(a, 1, dims=1)
+        in_dtype, out_dtype = ttnn.bfloat16, ttnn.float32
+    cfg = dict(dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ta, tb = ttnn.from_torch(a, **cfg), ttnn.from_torch(b, **cfg)
+    a_held, b_held = ttnn.to_torch(ta).float(), ttnn.to_torch(tb).float()
+    before = len(bound_kernel_sources())
+    out = ttnn.experimental.quasar.add(ta, tb, dtype=out_dtype)
+    bound = _bound_since(before)
+    got = ttnn.to_torch(out)
+    assert [s for s in bound if "/kernels_dfb/" in s] == [], f"the op bound the Metal 2.0 kernels: {bound}"
+    assert (
+        len([s for s in bound if "/kernels_qsr/" in s]) == 3
+    ), f"the op did not bind the three native kernels: {bound}"
+    golden = (a_held + b_held).to(torch.bfloat16) if direction == "narrowing" else _fpu_aligned_sum(a_held, b_held)
+    wrong = torch.nonzero(_matches_none(got, [golden]).flatten()).flatten().tolist()
+    predicted = _NARROWING_SPECIAL_WRONG if direction == "narrowing" else []
+    assert wrong == predicted, f"{len(wrong)} elements differ from the model, the prediction is {len(predicted)}"
+    if wrong:
+        raise _WrongOutput(f"{len(wrong)} elements differ, as predicted")

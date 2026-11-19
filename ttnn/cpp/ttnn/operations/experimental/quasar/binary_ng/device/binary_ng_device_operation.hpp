@@ -117,7 +117,8 @@ struct BinaryNgDeviceOperation {
 
     // Metal 2.0 / DataflowBuffer factory. Emits a ProgramSpec + ProgramRunArgs for the slice that
     // matches_metal_v2_slice() admits. The DFB path is arch-portable: CB-backed on Wormhole/Blackhole,
-    // overlay-backed on Quasar. See binary_ng_metal_v2_factory.cpp.
+    // overlay-backed on Quasar, where it is deprecated and runs only with TTNN_QSR_NATIVE=0. See
+    // binary_ng_metal_v2_factory.cpp.
     struct ProgramFactoryMetalV2 {
         static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
@@ -126,9 +127,9 @@ struct BinaryNgDeviceOperation {
     };
 
     // Quasar-native DFB factory. Starts as a mechanical copy of ProgramFactoryMetalV2 so later commits
-    // read as a diff of what "native" means (>2 of 6 DM cores, >1 of 4 Tensix). The default on Quasar;
-    // TTNN_QSR_NATIVE=0 runs the metal_v2 path instead, as the A/B reference arm, except for DRAM shards and an
-    // fp32 subtile broadcast, which only this factory runs on Quasar.
+    // read as a diff of what "native" means (>2 of 6 DM cores, >1 of 4 Tensix). The only factory of the default path
+    // on Quasar; TTNN_QSR_NATIVE=0 runs the metal_v2 path instead, as the A/B reference arm, for the programs that
+    // matches_metal_v2_slice admits.
     // Must stay a stateless literal type -- the framework default-constructs it into static storage.
     struct ProgramFactoryQuasarNative {
         static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
@@ -143,16 +144,15 @@ struct BinaryNgDeviceOperation {
 
     // Returns ProgramFactoryQuasarNative{} when the op matches the Quasar-native slice and
     // ProgramFactoryMetalV2{} when it matches the Metal 2.0 slice. It throws for any other op.
-    // The Metal 2.0 factory is deprecated on Quasar: it takes only what the native slice refuses.
+    // On Quasar the Metal 2.0 slice is empty unless TTNN_QSR_NATIVE=0.
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
     // True iff (attributes, tensor_args) match the Metal 2.0 factory's supported slice. Shared by
-    // select_program_factory.
+    // select_program_factory. On Quasar it is false unless TTNN_QSR_NATIVE=0.
     static bool matches_metal_v2_slice(const operation_attributes_t&, const tensor_args_t&);
 
-    // Narrower than matches_metal_v2_slice in op and dtype, but it also admits DRAM shards and a subtile broadcast in
-    // fp32, which that slice does not. Off when TTNN_QSR_NATIVE=0. Checked first; its leading tests are the
-    // arch and the cached env bool, so off Quasar it costs one arch read and a branch.
+    // The Quasar-native slice. Off when TTNN_QSR_NATIVE=0. Checked first; its leading tests are the arch and the
+    // cached env bool, so off Quasar it costs one arch read and a branch.
     static bool matches_quasar_native_slice(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);

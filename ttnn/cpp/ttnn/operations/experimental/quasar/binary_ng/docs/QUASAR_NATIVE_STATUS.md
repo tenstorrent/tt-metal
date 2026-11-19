@@ -20,6 +20,43 @@ retired craq-sim on 2026-11-13. The *hardware emulator* is the closest thing to 
 available but far less accessible, so it is spent deliberately and rarely. **Never mix numbers from the simulator
 and the emulator.**
 
+# ► Week of 2026-11-16 — native binary_ng at parity with the Metal 2.0 factory, which is fenced on Quasar
+
+## 1. TL;DR
+
+- **Every class that the Metal 2.0 factory ran correctly on Quasar runs native.** A census of 500 cases at
+  `5a3f5aece3a` found 140 such cases. Three stages moved them, each in the native gate:
+  - the OpConfig chain ops: rsub, bias_gelu and hypot in bf16; the logical ops, ldexp, logaddexp, logaddexp2,
+    squared_difference and pow in bf16 and fp32; divide in fast and approximate mode; and remainder with a scalar b;
+  - the other output format: fp32 in with a bf16 out (the packer rounds the 32-bit DST to nearest even), and bf16 in
+    with an fp32 out (a 32-bit DST) for the ops whose chain is validated with it;
+  - the MX classes: an activation on a, b or the result, fp32 at either end, another MX format out, and a bf16 or fp32
+    scalar with an MX output.
+- **The Metal 2.0 factory is fenced on Quasar.** `matches_metal_v2_slice` returns false there unless
+  `TTNN_QSR_NATIVE=0`. So a program that the native gate refuses raises "not supported". `TTNN_QSR_NATIVE=0` still
+  selects it, as the reference arm. WH and BH do not change.
+- **What raises now.** The classes that it computed wrong or could not build on Quasar: the comparison ops, atan2,
+  floor_div, fmod, isclose, nextafter, xlogy, remainder beside a tensor b and fp32 rsub (no build); fp32 hypot and
+  bias_gelu, and logaddexp, logaddexp2 and bias_gelu with an fp32 output from bf16 (wrong). `QUASAR_PARITY_GAPS.md`
+  lists them.
+- **One kernel change.** The native SFPU kernel includes `binary_remainder.h`.
+- **The oracles are exact.** Each new case but divide and pow compares at 0 ULP with a model of the kernel's
+  rounding, built from the device's operands. An approximate SFPU step (exp, log, sqrt, reciprocal, GELU) takes its
+  value from the device's unary op. Divide keeps production's bound (bf16 1 ULP; fp32 2 ULP, measured), and pow its
+  measured bound (bf16 1 ULP, fp32 3 ULP).
+- **Two defects found, on the Metal 2.0 factory too.** A narrowing output flushes the fp32 subnormal 0x80400000 to
+  zero, and the MX packer rounds 16 fp32 values beside a tie in the mxfp8_e4m3 subnormal range down. Each is a strict
+  expected failure on its measured set.
+- **Census after:** the 140 scope cases run native with the census verdict that they had on the Metal 2.0 factory,
+  and no case binds it. Of the 123 other cases that bound it before, 110 raise "not supported" now, and 13 run native
+  with the same max ULP, error count and PCC (the census measures them against exact math). `compare_census.py`:
+  `PARITY_PROBLEMS=0`.
+- **Verified on ttsim v1.16.0.** Each of the four stages passes its evidence gate (10 of 10 checks): red, then green,
+  a planted defect per check, and the native module, the six suites, the composite and MX suites, 22 model callers,
+  the formatters and clang-tidy on the final code of the stage.
+
+---
+
 # ► Week of 2026-11-09 — MX formats run native
 
 ## 1. TL;DR

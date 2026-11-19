@@ -19,8 +19,11 @@ and then compares the output with the oracle: 0 differing elements.
 - test_mx_program_cache: each op of a sequence of two (bfloat16 then MX, or two MX dtypes) builds its own program.
 - test_mx_special_codes: the special codes of tt-regen-spec 4.2 for every MX dtype, through the unpacker and through
   the packer.
-- test_mx_gate_refuses: the native gate refuses each MX case outside its slice, which then runs as before.
-- test_mx_gate_refuses_by_mx_rule: the same for the cases that only the MX refusal itself sends away.
+- test_mx_classes_run_native: an activation on a, on b or on the result, a float32 or another MX format on the other
+  side, and a bfloat16 or float32 scalar with an MX output, on the FPU and the SFPU kernel; each MX format as the
+  output of the classes that change the packer's encode.
+- test_mx_fp32_in_special_codes: float32 into the packer: exact ties, values beside them, and the special blocks.
+- test_mx_gate_refuses: the native gate refuses each MX case outside its slice, and the op raises.
 
 Run on ttsim, the Quasar simulator. On Wormhole and Blackhole only
 test_mx_rejected_off_quasar runs.
@@ -36,6 +39,7 @@ import ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar import binary_ng_mx_test_utils as mx
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
     _fpu_add_bf16,
+    _fpu_aligned_sum,
     _sfpu_multiply_bf16,
 )
 from tt_py_test_utils_common.utility_functions import is_quasar
@@ -398,51 +402,32 @@ def _add_mx(device, **kwargs):
     return ttnn.experimental.quasar.add(_random(device, ttnn.mxint8), _random(device, ttnn.mxint8), **kwargs)
 
 
-def _add_bf16_to_mx(device, **kwargs):
-    return ttnn.experimental.quasar.add(
-        _random(device, ttnn.bfloat16), _random(device, ttnn.bfloat16), dtype=ttnn.mxint8, **kwargs
-    )
-
-
-# refusal -> (the admitted control, the refused op, what the refused op does today). The control is the refused op
-# without the feature that the gate refuses, so the case shows that the feature, not MX, sends the op away. "throws":
-# no factory takes the op, so it raises. "falls back": the deprecated factory runs it, as before.
+# refusal -> (the admitted control, the refused op). The control is the refused op without the feature that the gate
+# refuses, so the case shows that the feature, not MX, sends the op away. No factory takes the refused op, so it raises.
 _GATE_CASES = {
     "row_broadcast": (
         _add_mx,
         lambda d: ttnn.experimental.quasar.add(_random(d, ttnn.mxint8), _random(d, ttnn.mxint8, (1, 2 * 32))),
-        "throws",
     ),
-    "scalar": (_add_mx, lambda d: ttnn.experimental.quasar.add(_random(d, ttnn.mxint8), 2.0), "throws"),
-    "lhs_activation": (_add_mx, lambda d: _add_mx(d, input_tensor_a_activations=_RELU), "falls back"),
-    "rhs_activation": (_add_mx, lambda d: _add_mx(d, input_tensor_b_activations=_RELU), "falls back"),
-    "post_activation": (_add_bf16_to_mx, lambda d: _add_bf16_to_mx(d, activations=_RELU), "falls back"),
+    "scalar": (_add_mx, lambda d: ttnn.experimental.quasar.add(_random(d, ttnn.mxint8), 2.0)),
     "mx_and_bf16": (
         _add_mx,
         lambda d: ttnn.experimental.quasar.add(_random(d, ttnn.mxint8), _random(d, ttnn.bfloat16)),
-        "throws",
     ),
     "bf16_and_mx": (
         _add_mx,
         lambda d: ttnn.experimental.quasar.add(_random(d, ttnn.bfloat16), _random(d, ttnn.mxint8)),
-        "throws",
     ),
     "two_mx_dtypes": (
         _add_mx,
         lambda d: ttnn.experimental.quasar.add(_random(d, ttnn.mxint8), _random(d, ttnn.mxfp8_e4m3)),
-        "throws",
     ),
-    "fp32_output": (
-        lambda d: _add_mx(d, dtype=ttnn.bfloat16),
-        lambda d: _add_mx(d, dtype=ttnn.float32),
-        "falls back",
+    # multiply runs the SFPU kernel, which keeps the scalar in a's format for an MX a, so only the MX refusal of a
+    # scalar beside an MX input sends it away.
+    "sfpu_scalar": (
+        lambda d: ttnn.experimental.quasar.multiply(_random(d, ttnn.mxint8), _random(d, ttnn.mxint8)),
+        lambda d: ttnn.experimental.quasar.multiply(_random(d, ttnn.mxint8), 2.0),
     ),
-    "fp32_inputs": (
-        _add_bf16_to_mx,
-        lambda d: ttnn.experimental.quasar.add(_random(d, ttnn.float32), _random(d, ttnn.float32), dtype=ttnn.mxint8),
-        "falls back",
-    ),
-    "other_mx_output": (_add_mx, lambda d: _add_mx(d, dtype=ttnn.mxfp8_e4m3), "falls back"),
 }
 
 # The message of the factory selection when no factory takes an op.
@@ -452,67 +437,195 @@ _NO_FACTORY = "is not supported for a"
 @quasar_only
 @pytest.mark.parametrize("refusal", list(_GATE_CASES))
 def test_mx_gate_refuses(device, expect_error, refusal):
-    control, refused, today = _GATE_CASES[refusal]
+    control, refused = _GATE_CASES[refusal]
     torch.manual_seed(0)
     before = mx.kernel_sources()
     control(device)
     mx.assert_native(before, f"{refusal}: the control")
 
     before = mx.kernel_sources()
-    if today == "throws":
-        with expect_error(RuntimeError, _NO_FACTORY):
-            refused(device)
-        mx.assert_not_native(before, refusal)
-    else:
+    with expect_error(RuntimeError, _NO_FACTORY):
         refused(device)
-        bound = mx.assert_not_native(before, refusal)
-        assert [s for s in bound if "/kernels_dfb/" in s], f"{refusal}: did not fall back, it bound {bound}"
+    mx.assert_not_native(before, refusal)
 
 
-# refusal -> (the admitted control, the refused op, what the refused op does today), as in _GATE_CASES. Each refused op
-# passes every earlier check of the gate, so only the MX refusal itself sends it away: its scalar clause, or its half
-# for an MX input. The refusals of _GATE_CASES do not show this: the format check of the scalar refuses an MX add with
-# a scalar first, and each of them has an MX output.
-_GATE_CASES_PAST_THE_SCALAR_FORMAT = {
-    # A bfloat16 tensor-scalar add with an MX output: the scalar takes bfloat16, a's format, so the format check passes.
-    "scalar_with_mx_output": (
-        _add_bf16_to_mx,
-        lambda d: ttnn.experimental.quasar.add(_random(d, ttnn.bfloat16), 2.0, dtype=ttnn.mxint8),
-        "falls back",
-    ),
-    # multiply runs the SFPU kernel, which keeps the scalar in a's format for an MX a, so the format check passes.
-    "sfpu_scalar": (
-        lambda d: ttnn.experimental.quasar.multiply(_random(d, ttnn.mxint8), _random(d, ttnn.mxint8)),
-        lambda d: ttnn.experimental.quasar.multiply(_random(d, ttnn.mxint8), 2.0),
-        "throws",
-    ),
-    # An MX input with a bfloat16 output and a post activation: only the input is MX.
-    "mx_input_post_activation": (
-        lambda d: _add_mx(d, dtype=ttnn.bfloat16),
-        lambda d: _add_mx(d, dtype=ttnn.bfloat16, activations=_RELU),
-        "falls back",
-    ),
+def _sfpu_square_bf16(x):
+    """SQUARE on the SFPU in a 16-bit DST: the float32 square with its low 16 bits dropped."""
+    return (x.float() * x.float()).contiguous().view(torch.int32).bitwise_and(-65536).view(torch.float32)
+
+
+# The kernel's bfloat16 result for each op: the FPU add rounds twice, the SFPU multiply truncates.
+_MX_KERNEL = {"add": _fpu_add_bf16, "multiply": _sfpu_multiply_bf16}
+_SQUARE = [ttnn.UnaryWithParam(ttnn.UnaryOpType.SQUARE)]
+# class -> (a's format, the output format, the activations, the scalar or None), with mxint8 on the MX side. An
+# activation runs in Float16_b beside an MX operand: a RELU on the result is the packer's (PACK_RELU), and a SQUARE on
+# the result runs on the SFPU before the packer.
+_MX_CLASS_SPECS = {
+    "relu_a": (ttnn.mxint8, ttnn.mxint8, {"input_tensor_a_activations": _RELU}, None),
+    "relu_b": (ttnn.mxint8, ttnn.mxint8, {"input_tensor_b_activations": _RELU}, None),
+    "relu_post": (ttnn.mxint8, ttnn.mxint8, {"activations": _RELU}, None),
+    "square_post": (ttnn.mxint8, ttnn.mxint8, {"activations": _SQUARE}, None),
+    "bf16_in_relu_post": (ttnn.bfloat16, ttnn.mxint8, {"activations": _RELU}, None),
+    "bf16_out_relu_post": (ttnn.mxint8, ttnn.bfloat16, {"activations": _RELU}, None),
+    "fp32_out": (ttnn.mxint8, ttnn.float32, {}, None),
+    "fp32_in": (ttnn.float32, ttnn.mxint8, {}, None),
+    "other_mx_out": (ttnn.mxint8, ttnn.mxfp8_e4m3, {}, None),
+    "scalar_bf16_in": (ttnn.bfloat16, ttnn.mxint8, {}, 0.75),
+    "scalar_fp32_in": (ttnn.float32, ttnn.mxint8, {}, 0.1),
 }
 
 
-@quasar_only
-@pytest.mark.parametrize("refusal", list(_GATE_CASES_PAST_THE_SCALAR_FORMAT))
-def test_mx_gate_refuses_by_mx_rule(device, expect_error, refusal):
-    control, refused, today = _GATE_CASES_PAST_THE_SCALAR_FORMAT[refusal]
-    torch.manual_seed(0)
-    before = mx.kernel_sources()
-    control(device)
-    mx.assert_native(before, f"{refusal}: the control")
+def _mx_classes():
+    """case -> (op, a's format, the output format, the activations, the scalar or None). Each class runs on add (FPU)
+    and multiply (SFPU) with mxint8; add also runs SQUARE on a. The classes that change the packer's encode run each MX
+    format as the output, on add: fp32 in (a 32-bit DST into the packer), PACK_RELU into the packer, and another MX
+    format out. For another format out, mxint8 goes to each other format, and mxfp4 to mxint8, so that the input and
+    the output tiles differ in size in both directions. The format loop skips the pairs that the classes run already.
+    The fp32 scalar is one that bf16 cannot hold, so a scalar packed as bf16 shows."""
+    classes = {f"{op}-{name}": (op, *spec) for op in ("add", "multiply") for name, spec in _MX_CLASS_SPECS.items()}
+    classes["add-square_a"] = ("add", ttnn.mxint8, ttnn.mxint8, {"input_tensor_a_activations": _SQUARE}, None)
+    for d in ttnn.MX_DTYPES:
+        name = mx.MX_FORMAT[d]
+        if d != ttnn.mxint8:
+            classes[f"add-fp32_in-{name}"] = ("add", ttnn.float32, d, {}, None)
+            classes[f"add-bf16_in_relu_post-{name}"] = ("add", ttnn.bfloat16, d, {"activations": _RELU}, None)
+        if d != ttnn.mxfp8_e4m3:
+            classes[f"add-other_mx_out-{name}"] = ("add", ttnn.mxfp4 if d == ttnn.mxint8 else ttnn.mxint8, d, {}, None)
+    return classes
 
-    before = mx.kernel_sources()
-    if today == "throws":
-        with expect_error(RuntimeError, _NO_FACTORY):
-            refused(device)
-        mx.assert_not_native(before, refusal)
+
+_MX_CLASSES = _mx_classes()
+
+
+def _mx_class_model(op, a, b, a_dtype, out_dtype, activations):
+    """The op's result from the device operands a and b, before the packer. An MX or bfloat16 input runs the bfloat16
+    kernel; a float32 input runs the float32 SFPU op with rounding to nearest even. A 32-bit DST keeps the FPU's
+    aligned sum unrounded and the SFPU's float32 product."""
+    pre_a = activations.get("input_tensor_a_activations", [])
+    if pre_a and pre_a[0].op_type == ttnn.UnaryOpType.SQUARE:
+        a = _sfpu_square_bf16(a)
+    elif pre_a:
+        a = torch.relu(a)
+    if activations.get("input_tensor_b_activations"):
+        b = torch.relu(b)
+    if a_dtype == ttnn.float32:
+        result = a.float() + b.float() if op == "add" else a.float() * b.float()
+    elif out_dtype == ttnn.float32:
+        result = _fpu_aligned_sum(a, b) if op == "add" else a.float() * b.float()
     else:
-        refused(device)
-        bound = mx.assert_not_native(before, refusal)
-        assert [s for s in bound if "/kernels_dfb/" in s], f"{refusal}: did not fall back, it bound {bound}"
+        result = _MX_KERNEL[op](a.float(), b.float()).float()
+    post = activations.get("activations", [])
+    if post and post[0].op_type == ttnn.UnaryOpType.SQUARE:
+        return _sfpu_square_bf16(result)
+    return torch.relu(result) if post else result
+
+
+@quasar_only
+@pytest.mark.parametrize("case", list(_MX_CLASSES))
+def test_mx_classes_run_native(device, case):
+    """Each class runs native, and its output equals the oracle exactly. The MX output goes through the reference
+    encoder, the bfloat16 and float32 outputs compare directly."""
+    op, a_dtype, out_dtype, activations, scalar = _MX_CLASSES[case]
+    torch.manual_seed(0)
+    if a_dtype in ttnn.MX_DTYPES:
+        ta, a = _mx_input(device, torch.randn(_SHAPES[1], dtype=torch.float32), a_dtype)
+        tb, b = _mx_input(device, torch.randn(_SHAPES[1], dtype=torch.float32), a_dtype)
+    else:
+        cfg = dict(dtype=a_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ta = ttnn.from_torch(torch.randn(_SHAPES[1], dtype=torch.float32), **cfg)
+        tb = ttnn.from_torch(torch.randn(_SHAPES[1], dtype=torch.float32), **cfg)
+        a, b = ttnn.to_torch(ta), ttnn.to_torch(tb)
+    if scalar is not None:
+        held = torch.float32 if a_dtype == ttnn.float32 else torch.bfloat16
+        tb, b = scalar, torch.full(_SHAPES[1], scalar, dtype=held)
+    before = mx.kernel_sources()
+    tc = getattr(ttnn.experimental.quasar, op)(ta, tb, dtype=out_dtype, **activations)
+    mx.assert_native(before, case)
+
+    assert tc.dtype == out_dtype
+    golden = _mx_class_model(op, a, b, a_dtype, out_dtype, activations)
+    if out_dtype in ttnn.MX_DTYPES:
+        wrong = mx.mx_output_wrong(tc, golden)
+    else:
+        wrong = mx.wrong_elements(ttnn.to_torch(tc).float(), golden.float())
+    assert not wrong, f"{len(wrong)} elements differ from the oracle, first at {wrong[:8]}"
+
+
+# fp32 in, MX out: the packer encodes MX from the 32-bit DST, where a value can lie between two bf16 values. Each case
+# runs add(a, 0) with fp32 a, so the output is a as the packer encodes it. Tile 0 holds the midpoint of each pair of
+# neighboring values of the dtype at S = 127 (an exact tie after the alignment), tile 1 the fp32 values one step above
+# and below each midpoint (nonzero bits below the tie), and tile 2 the special blocks of _special_blocks. Every block of
+# tiles 0 and 1 starts with the largest value of the dtype, so that its scale is 127.
+# The case compares the values and the 32 scale bytes of each tile with the reference encoder's. No block holds an fp32
+# subnormal: the SFPU add flushes it to zero before the packer (the narrowing special values of the native module show
+# the flush), so add(a, 0) cannot bring one to the packer.
+_FP32_IN_SPECIAL = {mx.MX_FORMAT[d]: d for d in (ttnn.mxint8, ttnn.mxfp8_e4m3)}
+# case -> (count, sha256 prefix) of the sorted flat indices where the device's values differ from 4.2, and the
+# [tile, block] of each scale byte that differs, as measured on ttsim v1.16.0. A case not here is exact. mxfp8_e4m3: 16
+# values one fp32 step above a tie in the element's subnormal range round down to even, as if the packer drops the fp32
+# bits below the tie first; 4.2 rounds them up.
+_FP32_IN_SPECIAL_WRONG = {"mxfp8_e4m3": (16, "db591b9f290b70f1", [])}
+
+
+def _fp32_step(x, step):
+    """The fp32 value `step` steps away from zero (toward zero if negative) from each element of `x`."""
+    return (x.float().contiguous().view(torch.int32) + step).view(torch.float32)
+
+
+def _special_fp32_tiles(dtype):
+    """Three 32x32 fp32 tiles side by side: the midpoints, their fp32 neighbors, and the special blocks."""
+    values = mx.code_values(dtype)
+    pos = values[values.isfinite() & (values >= 0)].unique()
+    vmax, smallest = float(pos[-1]), float(pos[1])
+    mid = ((pos[:-1].double() + pos[1:].double()) / 2).float()
+    near = torch.cat([_fp32_step(mid, 1), _fp32_step(mid, -1)])
+    g = torch.Generator().manual_seed(2)
+
+    def tile(blocks):
+        t = torch.randn((32, 32), generator=g)
+        for b, block in enumerate(blocks):
+            rows, cols = mx.block_cells(b)
+            t[rows, cols] = torch.tensor([block[i % len(block)] for i in range(32)], dtype=torch.float32)
+        return t
+
+    special = _special_blocks(2.0 ** math.floor(math.log2(vmax)), smallest, vmax)
+    tiles = [
+        tile(_cyclic_blocks(vmax, mid.tolist() + (-mid).tolist())),
+        tile(_cyclic_blocks(vmax, near.tolist() + (-near).tolist())),
+        tile(special),
+    ]
+    return torch.cat(tiles, dim=1)
+
+
+def _fp32_in_marks(case):
+    if case not in _FP32_IN_SPECIAL_WRONG:
+        return []
+    return [pytest.mark.xfail(raises=_WrongAsPredicted, strict=True, reason=f"ttsim differs from 4.2 on {case}")]
+
+
+@quasar_only
+@pytest.mark.parametrize("codes", [pytest.param(c, marks=_fp32_in_marks(c)) for c in _FP32_IN_SPECIAL])
+def test_mx_fp32_in_special_codes(device, codes):
+    dtype = _FP32_IN_SPECIAL[codes]
+    x = _special_fp32_tiles(dtype)
+    shape = tuple(x.shape)
+    cfg = dict(dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ta, tb = ttnn.from_torch(x, **cfg), ttnn.from_torch(torch.zeros_like(x), **cfg)
+    a = ttnn.to_torch(ta).float()
+    before = mx.kernel_sources()
+    tc = ttnn.experimental.quasar.add(ta, tb, dtype=dtype)
+    mx.assert_native(before, f"add on fp32 {codes}")
+
+    got, want = mx.device_bytes(tc), mx.encode(a, dtype)
+    wrong = mx.wrong_elements(mx.decode(got, dtype, shape), mx.decode(want, dtype, shape))
+    scales = torch.nonzero(mx.scale_bytes(got, dtype) != mx.scale_bytes(want, dtype)).tolist()
+    found, predicted = (*_digest(wrong), scales), _FP32_IN_SPECIAL_WRONG.get(codes, _EXACT)
+    assert found == predicted, (
+        f"{codes}: {len(wrong)} values differ from 4.2 (first at {wrong[:16]}), scale bytes differ at {scales[:16]}; "
+        f"found {found}, predicted {predicted}"
+    )
+    if wrong or scales:
+        raise _WrongAsPredicted(f"{codes}: {len(wrong)} values and {len(scales)} scale bytes differ, as predicted")
 
 
 @pytest.mark.skipif(is_quasar(), reason="checks the non-Quasar guard")

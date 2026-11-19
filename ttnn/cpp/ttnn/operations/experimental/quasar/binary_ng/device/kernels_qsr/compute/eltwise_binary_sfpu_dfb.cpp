@@ -13,19 +13,19 @@
 // place of the copy. A held operand (COL, SCALAR) is expanded once per page change into its held ring, and a VALUE
 // operand is one ring entry; each is copied from entry 0 for every tile. In fp32 the reader expands a ROW, COL or
 // SCALAR operand in software (A_FILLED, B_FILLED), and this kernel copies it where it would expand it. The native gate
-// runs bf16 multiply, divide, maximum and minimum on it, and fp32 add, subtract, multiply, divide, maximum and minimum.
+// decides which ops run here.
 
 #include <cstdint>
 
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-// The SFPU binary op headers that are ported to Quasar, as in the kernels_dfb kernel. The ops the native gate admits
-// use eltwise_binary_sfpu.h.
+// The SFPU binary op headers that compile on Quasar.
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/add_int_sfpu.h"
 #include "api/compute/mul_int_sfpu.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/binary_comp.h"
+#include "api/compute/binary_remainder.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/kernel_thread_globals.h"
 #include "experimental/kernel_args.h"

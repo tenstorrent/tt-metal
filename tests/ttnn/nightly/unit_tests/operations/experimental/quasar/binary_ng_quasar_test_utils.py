@@ -118,6 +118,22 @@ def _fpu_add_bf16(a, b):
     return torch.where((a == 0) | (b == 0), (a + b).float().to(torch.bfloat16), rounded)
 
 
+def _fpu_aligned_sum(a, b):
+    """bf16 a + b as Quasar's FPU computes it before its last rounding (_fpu_add_bf16 without that rounding): the operand
+    with the smaller exponent aligned to 7 bits below the other's bf16 ULP, rounded half away from zero, then added
+    exactly. A 32-bit DST keeps this sum, which has at most 16 significant bits. A non-finite operand gives torch's sum.
+    """
+    a, b = a.double(), b.double()
+    ea, eb = torch.frexp(a).exponent, torch.frexp(b).exponent
+    a_big = ea >= eb
+    big, small = torch.where(a_big, a, b), torch.where(a_big, b, a)
+    step = torch.exp2((torch.maximum(ea, eb) - (8 + 7)).double())
+    aligned = torch.sign(small) * torch.floor(small.abs() / step + 0.5) * step
+    # frexp gives a zero the exponent 0, which can make the zero the larger operand.
+    exact = (a == 0) | (b == 0) | ~a.isfinite() | ~b.isfinite()
+    return torch.where(exact, a + b, big + aligned).float()
+
+
 def _sfpu_multiply_bf16(a, b):
     """bf16 a * b as Quasar's SFPU multiply gives it out of fast mode: the float32 product, with its low 16 bits
     dropped. The product of two bf16 values is exact in float32, so only the drop rounds. The Wormhole and Blackhole

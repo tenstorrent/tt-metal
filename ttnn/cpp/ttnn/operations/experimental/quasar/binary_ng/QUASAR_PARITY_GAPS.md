@@ -18,11 +18,30 @@ rather than duplicating per-op LLK status (that duplication is what previously d
 ## Framing (why the gate is the boundary)
 
 The op has two factories, the Quasar-native factory and the Metal 2.0 (DFB) factory, and
-`select_program_factory` throws for an op outside both slices, on every arch. So `matches_metal_v2_slice`
-(the DFB/v2 gate in `binary_ng_device_operation.cpp`), with the native gate, **is** the op's capability
-boundary: anything it rejects has no working path, on Quasar or on Wormhole/Blackhole. All Quasar DFB runs are
+`select_program_factory` throws for an op outside both slices, on every arch. On Wormhole/Blackhole,
+`matches_metal_v2_slice` (the DFB/v2 gate in `binary_ng_device_operation.cpp`) **is** the op's capability boundary.
+On Quasar the native gate is: `matches_metal_v2_slice` admits nothing there unless `TTNN_QSR_NATIVE=0` (the
+reference arm). Anything that the boundary rejects has no working path. All Quasar DFB runs are
 also **slow-dispatch-only** (`tt_metal/impl/program/dispatch.cpp`).
 (Line-number citations were dropped on purpose — they rot on rebase; grep the symbol.)
+
+## The Metal 2.0 factory on Quasar (fenced)
+
+With the native factory on, the Metal 2.0 factory runs nothing on Quasar. Before the fence, a census of 500 cases
+found the classes that only it ran. Each class that it ran correctly runs native now. The classes that it computed
+wrong or could not build on Quasar raise "not supported" now:
+
+| Class | On the Metal 2.0 factory at the fence's base |
+|---|---|
+| eq, ne, gt, ge, lt, le, atan2, floor_div, fmod, isclose, nextafter, xlogy (bf16 and fp32) | the kernel does not build on Quasar |
+| remainder beside a tensor b; rsub in fp32 | the kernel does not build on Quasar |
+| hypot and bias_gelu in fp32 | wrong results |
+| logaddexp, logaddexp2 and bias_gelu with bf16 inputs and an fp32 output | wrong results |
+
+`TTNN_QSR_NATIVE=0` still runs them on the Metal 2.0 factory, with the results above. The census also marks 13 cases
+of admitted classes WRONG (bf16 bias_gelu, logaddexp and logaddexp2, fp32 logaddexp and logaddexp2, pow with a dropped
+fp32 dtype): it compares with exact math, and the native factory gives the same max ULP, error count and PCC as the
+Metal 2.0 factory.
 
 ## Three ways a config can be a "gap" (read this first)
 
@@ -31,9 +50,9 @@ already do that the op has simply not exercised.**
 
 - **(A) LLK-incapable** — the primitive isn't on Quasar (matrix cell `kernel` / `bridge`). Needs an LLK
   port. *Not* fixable in this op.
-- **(B) LLK-capable, but the gate blocks it** — Quasar LLK could run it (matrix cell `✓`), but
-  `matches_metal_v2_slice` rejects the config. **Op-side work only** (relax the gate + factory/kernel
-  wiring); no LLK port needed. → §1 rows marked *capable*.
+- **(B) LLK-capable, but the gate blocks it** — Quasar LLK could run it (matrix cell `✓`), but the gate
+  rejects the config (`matches_quasar_native_slice` on Quasar, `matches_metal_v2_slice` on WH/BH). **Op-side
+  work only** (relax the gate + factory/kernel wiring); no LLK port needed. → §1 rows marked *capable*.
 - **(C) LLK-capable, gate admits, but no Quasar op test** — it should work today; it just isn't
   validated. **Just add a test.** → §5 (the coverage headroom).
 
@@ -63,7 +82,8 @@ LHS activation fusion (see §7).
 
 ## 1. Structural — gate rejects → no Quasar path via this op  [STRUCTURAL]
 
-Each is a `return false` in `matches_metal_v2_slice`; the op throws for it on every arch. The **LLK on
+Each is a `return false` in the gate (`matches_quasar_native_slice` on Quasar, `matches_metal_v2_slice` on WH/BH);
+the op throws for it on every arch. The **LLK on
 Quasar** column is the key per-request signal: *capable* = Quasar LLK could do it, so closing the gap is
 **op-side work only** (class B); otherwise it also needs an LLK port (A) or is an arch wall.
 
@@ -82,14 +102,16 @@ Quasar** column is the key per-request signal: *capable* = Quasar LLK could do i
 
 ## 2. Admitted by the gate but hard-errors on Quasar  [ARCH] / [PORT]
 
-These pass the gate → route to the DFB factory → fail deep on Quasar while WH runs them. The failure is
-**loud** (host throw or JIT compile error), not silent-wrong. Per-op LLK status is in the **matrix**
-(Table 1) — not re-listed here; this section is about op *behavior*.
+With `TTNN_QSR_NATIVE=0`, these pass `matches_metal_v2_slice` → route to the DFB factory → fail deep on Quasar
+while WH runs them. The failure is **loud** (host throw or JIT compile error), not silent-wrong. On the default
+Quasar path the native gate refuses them, so they raise "not supported" first (see "The Metal 2.0 factory on
+Quasar"). Per-op LLK status is in the **matrix** (Table 1) — not re-listed here; this section is about op
+*behavior*.
 
 | Class of config | Failure on Quasar | Matrix cell |
 |---|---|---|
 | bf8_b / bf4_b (block-float), uint32 / uint16 | host format validator throws — not in Quasar's format set (MX/microscaling) | `format` |
-| Integer / float SFPU ops that are unported (bitwise, shift, sub_int, int-div, remainder/fmod, gcd/lcm, xlogy, atan2, isclose, power, quant, float compares) | JIT compile fails — LLK header `#ifndef ARCH_QUASAR` | `kernel` |
+| Integer / float SFPU ops that are unported (bitwise, shift, sub_int, int-div, remainder beside a tensor b, fmod, gcd/lcm, xlogy, atan2, isclose, quant, float compares) | JIT compile fails — LLK header `#ifndef ARCH_QUASAR` | `kernel` |
 
 int32 add/mul, SFPU compare-to-zero, and max/min **do** compile (matrix `✓!`/`✓`). int32 add/mul are the
 dangerous ones: run on the DFB compute path they are **silent-wrong** (garbage / all-zero output; suspected
@@ -122,8 +144,8 @@ the factory sets `fp32_dest_acc_en=true` + `unpack_to_dest_mode=UnpackToDestFp32
 
 ## 5. LLK-capable but op-untested — coverage headroom  [COVERAGE]
 
-The matrix says Quasar LLK supports these (`✓`); `matches_metal_v2_slice` admits them; **the op has no
-Quasar test.** These should pass today — the work is *a test case*, not a port (class C). This is the
+The matrix says Quasar LLK supports these (`✓`); the Metal 2.0 gate admits them (with `TTNN_QSR_NATIVE=0` on
+Quasar); **the op has no Quasar test.** These should pass today — the work is *a test case*, not a port (class C). This is the
 direct "what Quasar LLK can do that the op didn't exercise" list.
 
 **Fusable activations** — the op tests `tanh`/`square`/`sigmoid`/`gelu` fusion
