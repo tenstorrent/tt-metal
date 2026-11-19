@@ -729,7 +729,7 @@ tt-train/configs/experimental/training_configs/** @mmilosevicTT @mcupacTT @jmalo
 tt-train/docs/PRODUCTIZATION_OF_TRAINING.md @mmilosevicTT @mcupacTT @jmalone-tt @vladimirjovanovicTT
 tt-train/sources/ttml/ttml/datasets/provider/** @mmilosevicTT @mcupacTT @jmalone-tt @vladimirjovanovicTT
 tt-train/sources/ttml/ttml/datasets/utils/** @mmilosevicTT @mcupacTT @jmalone-tt @vladimirjovanovicTT
-tt-train/sources/ttml/ttml/experimental/** @mmilosevicTT @mcupacTT @jmalone-tt @vladimirjovanovicTT
+tt-train/sources/ttml/ttml/experimental/trainer/** @mmilosevicTT @mcupacTT @jmalone-tt @vladimirjovanovicTT
 tt-train/sources/ttml/ttml/models/provider/** @mmilosevicTT @mcupacTT @jmalone-tt @vladimirjovanovicTT
 tt-train/sources/ttml/ttml/models/utils/** @mmilosevicTT @mcupacTT @jmalone-tt @vladimirjovanovicTT
 # Last on purpose: CODEOWNERS is last-match-wins, so this must follow the directory rules
