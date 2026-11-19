@@ -276,7 +276,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // s_w: one slice per (group, tile column, 16-column half). The halves get BFDs one slice apart because
     // moving the L1 index between the two UNPACR2s made both read the second half.
     constexpr std::uint32_t slice_bytes_16B = 4 /*rows*/ * 16 /*cols*/ * 4 /*bytes*/ / 16;
-    auto program_group_bfds                 = [&]()
+    auto program_group_bfds                 = [=]()
     {
         ckernel::trisc::program_bfd<bfd_w_scale_lo>(srcs_shape, L1_ADDRESS(buffer_C[0]), ckernel::to_underlying(fp32));
         ckernel::trisc::program_bfd<bfd_w_scale_hi>(srcs_shape, L1_ADDRESS(buffer_C[0]) + slice_bytes_16B, ckernel::to_underlying(fp32));
