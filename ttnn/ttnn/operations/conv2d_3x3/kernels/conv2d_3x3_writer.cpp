@@ -708,8 +708,11 @@ void kernel_main() {
     auto khx_drain = [&]() {
         if (khx_out_i < khx_out_n || khx_in_i < khx_in_n) {
             MaybeDeviceZoneScope("writer_khx_drain");
+            // The writer can reach this drain while it still owes the reader split-fill batches (weight rounds that
+            // landed early): compute then waits for the slab and the halo never comes, unless the fill is served here.
             while (khx_out_i < khx_out_n || khx_in_i < khx_in_n) {
                 khx_poll();
+                serve_fill();
             }
         }
     };
