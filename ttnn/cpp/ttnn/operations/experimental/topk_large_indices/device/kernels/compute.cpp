@@ -333,20 +333,21 @@ FORCE_INLINE void reduce_segmented_row(
         const uint32_t chunk_slot = base + tiles_per_sequence<K>;
         const bool mirror_final_survivor = segment != 0 || (last_segment && final_ascending);
 
-        const uint32_t first_elements = segment_first + 1 == end_chunk_total ? tail_elements : K;
-        if (segment == 0) {
-            sort_fused_chunk<K, true>(input, base, first_elements, false, segment_first & fused_chunk_id_mask);
-        } else {
-            sort_fused_chunk<K, false>(input, base, first_elements, false, segment_first & fused_chunk_id_mask);
-        }
-
-        if (segment_first == last_chunk) {
-            topk_xl_rebuild<K, true>(base, mirror_final_survivor);
-        } else {
-            for (uint32_t chunk = segment_first + 1; chunk <= last_chunk; ++chunk) {
-                const uint32_t active_elements = chunk + 1 == end_chunk_total ? tail_elements : K;
-                sort_fused_chunk<K, false>(input, chunk_slot, active_elements, true, chunk & fused_chunk_id_mask);
+        // The segment's first chunk sorts descending into the base, every later one ascending into the chunk slot and
+        // merges in. One loop, so each sort_fused_chunk form has a single call site.
+        for (uint32_t chunk = segment_first; chunk <= last_chunk; ++chunk) {
+            const bool head = chunk == segment_first;
+            const uint32_t active_elements = chunk + 1 == end_chunk_total ? tail_elements : K;
+            if (head && segment == 0) {
+                sort_fused_chunk<K, true>(input, base, active_elements, false, chunk & fused_chunk_id_mask);
+            } else {
+                sort_fused_chunk<K, false>(
+                    input, head ? base : chunk_slot, active_elements, !head, chunk & fused_chunk_id_mask);
+            }
+            if (!head) {
                 topk_xl_merge<K, true>(base);
+            }
+            if (!head || segment_first == last_chunk) {
                 topk_xl_rebuild<K, true>(base, mirror_final_survivor && chunk == last_chunk);
             }
         }
@@ -543,6 +544,20 @@ FORCE_INLINE void reduce_split_segmented_row(
     }
 }
 
+// Arms the untilize pack of a row's indices. Out of line in two-level programs: four call sites, all with the same
+// constant arguments, so the one copy loses no folding.
+#ifdef TOPK_TWO_LEVEL
+template <uint32_t K>
+__attribute__((noinline)) void arm_untilize_pack(uint32_t indices_cb) {
+    pack_untilize_dest_init<tiles_per_sequence<K>, tiles_per_sequence<K>>(indices_cb);
+}
+#else
+template <uint32_t K>
+FORCE_INLINE void arm_untilize_pack(uint32_t indices_cb) {
+    pack_untilize_dest_init<tiles_per_sequence<K>, tiles_per_sequence<K>>(indices_cb);
+}
+#endif
+
 // A raw pack and unpack round trip can leave unpacker state a later program's init does not reset; one discarded
 // copy resets it. The copy deliberately reads whatever the input CB's read pointer happens to address -- the value
 // is thrown away, and the address is always inside the CB's own L1 allocation.
@@ -659,7 +674,7 @@ void kernel_main() {
     constexpr uint32_t final_survivor = 0;
 
     compute_kernel_hw_startup(input_cb, indices_cb);
-    pack_untilize_dest_init<tiles_per_sequence<K>, tiles_per_sequence<K>>(indices_cb);
+    arm_untilize_pack<K>(indices_cb);
 
     uint32_t num_chunks;
     uint32_t tail_elements;
@@ -807,7 +822,7 @@ void kernel_main() {
 
                 // The pack thread's SFPU work has reprogrammed its ADDR_MODs and MOP, so the untilize pack
                 // below must re-init rather than inherit them.
-                pack_untilize_dest_init<tiles_per_sequence<K>, tiles_per_sequence<K>>(indices_cb);
+                arm_untilize_pack<K>(indices_cb);
                 indices.reserve_back(1);
                 pack_untilize_dest<tiles_per_sequence<K>, tiles_per_sequence<K>>(
                     indices_cb, 1, 0, final_survivor + tiles_per_sequence<K>);
@@ -884,7 +899,7 @@ void kernel_main() {
                 topk_xl_split_end();
                 // The split body leaves the packer in its last segment's mode; both output forms below start
                 // from the untilize one.
-                pack_untilize_dest_init<tiles_per_sequence<K>, tiles_per_sequence<K>>(indices_cb);
+                arm_untilize_pack<K>(indices_cb);
                 half_on_both_threads = true;
             }
         }
@@ -937,7 +952,7 @@ void kernel_main() {
 
         if (row_sends) {
             // Re-arm the untilize pack the row output path expects.
-            pack_untilize_dest_init<tiles_per_sequence<K>, tiles_per_sequence<K>>(indices_cb);
+            arm_untilize_pack<K>(indices_cb);
         }
     }
     if (receives_survivor || sends_survivor) {
