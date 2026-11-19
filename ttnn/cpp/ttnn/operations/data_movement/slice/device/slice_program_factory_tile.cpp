@@ -11,15 +11,14 @@
 #include <span>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
@@ -38,9 +37,10 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
             ? tt::tt_metal::split_work_to_cores(args.sub_core_grids.value(), num_unpadded_tiles)
             : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
 
-    TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
-    tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    tt::DataFormat dfb_data_format =
+        ttnn::operations::data_movement::get_slice_dfb_data_format(input.dtype(), device->arch());
     uint32_t single_tile_size = tt::tile_size(dfb_data_format);
 
     const auto& input_shape = input.padded_shape();
@@ -247,8 +247,8 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
 SliceTileProgramFactory::cached_program_t SliceTileProgramFactory::create(
     const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
     auto artifacts = create_program_artifacts(args, tensor_args, output);
-    auto program = MakeProgramFromSpec(*tensor_args.input.device(), artifacts.spec);
-    SetProgramRunArgs(program, artifacts.run_params);
+    auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*tensor_args.input.device(), artifacts.spec);
+    tt::tt_metal::experimental::SetProgramRunArgs(program, artifacts.run_params);
     // The cache key includes the full input/output geometry, slice bounds and core grid. Reuse the
     // resulting work assignments, but re-apply them on hits to preserve scalar restoration (#52651).
     // Do not retain non-owning references to the miss's tensors after this call.
@@ -261,7 +261,8 @@ void SliceTileProgramFactory::override_runtime_arguments(
     using namespace ttnn::prim::slice_metal2;
     auto& run_args = cached_program.shared_variables.run_args;
     run_args.tensor_args = {{INPUT, tensor_args.input.mesh_tensor()}, {OUTPUT, output.mesh_tensor()}};
-    UpdateProgramRunArgs(cached_program.program, run_args, !ttnn::CONFIG.get<"validate_program_args">());
+    tt::tt_metal::experimental::UpdateProgramRunArgs(
+        cached_program.program, run_args, !ttnn::CONFIG.get<"validate_program_args">());
     run_args.tensor_args.clear();
 }
 

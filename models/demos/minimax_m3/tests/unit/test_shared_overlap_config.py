@@ -16,9 +16,9 @@ import ttnn
 from models.demos.minimax_m3.tt.moe import shared_overlap
 from models.demos.minimax_m3.tt.moe.shared_overlap import (
     CB_BUDGET_TILES,
-    DEST_TILES,
     SharedExpertOverlap,
     cb_tiles,
+    dest_tiles,
     fuse_shared_rs_enabled,
     matmul_2d_config,
     shared_expert_program_configs,
@@ -55,6 +55,7 @@ def test_split_grid(rows, expect_error):
         split_grid(*GRID, GRID[1])
 
 
+@pytest.mark.parametrize("fp32_dest", [True, False], ids=["fp32_dest", "bf16_dest"])
 @pytest.mark.parametrize("rows", [1, 2])
 @pytest.mark.parametrize("m_tiles", [4, 16, 64, 128, 256])
 @pytest.mark.parametrize(
@@ -62,17 +63,17 @@ def test_split_grid(rows, expect_error):
     [(HIDDEN // 32, SHARED_INTER // TP // 32), (SHARED_INTER // TP // 32, HIDDEN // 32)],
     ids=["gate_up", "down"],
 )
-def test_matmul_2d_config_valid(rows, m_tiles, k_tiles, n_tiles):
+def test_matmul_2d_config_valid(rows, m_tiles, k_tiles, n_tiles, fp32_dest):
     """The checks matmul validates for a 2D mcast config with interleaved in/out, the L1 budget, and that
     the launched grid stays inside the shared sub-device."""
     _, shared = split_grid(*GRID, rows)
     grid = shared.bounding_box().grid_size()
-    c = matmul_2d_config(grid, m_tiles, k_tiles, n_tiles)
+    c = matmul_2d_config(grid, m_tiles, k_tiles, n_tiles, fp32_dest=fp32_dest)
     assert k_tiles % c.in0_block_w == 0
     assert c.per_core_M % c.out_block_h == 0 and c.per_core_N % c.out_block_w == 0
     assert c.out_block_h % c.out_subblock_h == 0 and c.out_block_w % c.out_subblock_w == 0
-    assert c.out_subblock_h * c.out_subblock_w <= DEST_TILES
-    assert cb_tiles(c.in0_block_w, c.out_block_h, c.out_block_w, k_tiles) <= CB_BUDGET_TILES
+    assert c.out_subblock_h * c.out_subblock_w <= dest_tiles(fp32_dest)
+    assert cb_tiles(c.in0_block_w, c.out_block_h, c.out_block_w, k_tiles, fp32_dest) <= CB_BUDGET_TILES
     assert math.ceil(m_tiles / c.per_core_M) <= grid.y and math.ceil(n_tiles / c.per_core_N) <= grid.x
     assert c.per_core_M * grid.y >= m_tiles and c.per_core_N * grid.x >= n_tiles
     assert (c.compute_with_storage_grid_size.x, c.compute_with_storage_grid_size.y) == (grid.x, grid.y)

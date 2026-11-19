@@ -6,7 +6,7 @@
 
 #include "impl/metal2_host_api/program_spec/validation/validate_spec.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 // ----------------------------------------------------------------------------
 // Placement validation: where kernels and resources land (WorkUnitSpec target
@@ -39,4 +39,4 @@ void ValidateGen1DMPlacement(const ValidationContext& ctx, tt::ARCH arch);
 // scratchpad.cpp
 void ValidateScratchpadBindersPerNode(const ValidationContext& ctx, tt::ARCH arch);
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

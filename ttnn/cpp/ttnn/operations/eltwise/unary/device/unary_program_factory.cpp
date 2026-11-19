@@ -73,20 +73,20 @@ bool pack_first_op_scalars(
 bool needs_tmp0_dfb(UnaryOpType t) { return t == UnaryOpType::LOGIT; }
 
 // ---- Resource names ----
-const tt::tt_metal::experimental::KernelSpecName READER{"reader"};
-const tt::tt_metal::experimental::KernelSpecName WRITER{"writer"};
-const tt::tt_metal::experimental::KernelSpecName COMPUTE{"compute"};
-const tt::tt_metal::experimental::DFBSpecName IN_DFB{"in"};      // legacy index c_0
-const tt::tt_metal::experimental::DFBSpecName TMP0_DFB{"tmp0"};  // legacy index c_1 (LOGIT only)
-const tt::tt_metal::experimental::DFBSpecName OUT_DFB{"out"};    // legacy index c_2
+const KernelSpecName READER{"reader"};
+const KernelSpecName WRITER{"writer"};
+const KernelSpecName COMPUTE{"compute"};
+const DFBSpecName IN_DFB{"in"};      // legacy index c_0
+const DFBSpecName TMP0_DFB{"tmp0"};  // legacy index c_1 (LOGIT only)
+const DFBSpecName OUT_DFB{"out"};    // legacy index c_2
 // DRAM read work queue (see kernels/dataflow/dram_read.hpp).
-const tt::tt_metal::experimental::DFBSpecName CHUNK_COUNT_DFB{"chunk_count"};  // reader to compute
-const tt::tt_metal::experimental::DFBSpecName CHUNK_RANGE_DFB{"chunk_range"};  // reader to writer
-const tt::tt_metal::experimental::DFBSpecName REQUESTS_DFB{"requests"};        // the scheduler's request table
-const tt::tt_metal::experimental::SemaphoreSpecName REPLY_SEM{"reply"};
-const tt::tt_metal::experimental::SemaphoreSpecName CLEARED_SEM{"cleared"};
-const tt::tt_metal::experimental::TensorParamName INPUT{"input"};
-const tt::tt_metal::experimental::TensorParamName OUTPUT{"output"};
+const DFBSpecName CHUNK_COUNT_DFB{"chunk_count"};  // reader to compute
+const DFBSpecName CHUNK_RANGE_DFB{"chunk_range"};  // reader to writer
+const DFBSpecName REQUESTS_DFB{"requests"};        // the scheduler's request table
+const SemaphoreSpecName REPLY_SEM{"reply"};
+const SemaphoreSpecName CLEARED_SEM{"cleared"};
+const TensorParamName INPUT{"input"};
+const TensorParamName OUTPUT{"output"};
 
 uint32_t get_shards_per_width(const ShardSpec& shard_spec, TensorMemoryLayout memory_layout) {
     auto num_cores = shard_spec.grid.num_cores();
@@ -220,8 +220,8 @@ void enumerate_core_rt_args(
     const uint32_t input_tile_bytes = tile_size(input_df);
     const uint32_t output_tile_bytes = tile_size(output_df);
 
-    const uint32_t input_page_bytes = rm_interleaved ? static_cast<uint32_t>(input.buffer()->page_size()) : 0;
-    const uint32_t output_page_bytes = rm_interleaved ? static_cast<uint32_t>(output.buffer()->page_size()) : 0;
+    const uint32_t input_page_bytes = rm_interleaved ? static_cast<uint32_t>(input.mesh_buffer().page_size()) : 0;
+    const uint32_t output_page_bytes = rm_interleaved ? static_cast<uint32_t>(output.mesh_buffer().page_size()) : 0;
     RmChunkConstants k;
     k.chunks_per_row = rm_interleaved ? (input_page_bytes + input_tile_bytes - 1) / input_tile_bytes : 1;
     k.input_chunk_size = input_tile_bytes;
@@ -230,11 +230,11 @@ void enumerate_core_rt_args(
     k.output_chunk_size = output_tile_bytes;
     k.output_last_chunk_size =
         rm_interleaved ? output_page_bytes - ((k.chunks_per_row - 1) * output_tile_bytes) : output_tile_bytes;
-    k.total_rows = rm_interleaved ? output.buffer()->num_pages() : 0;
+    k.total_rows = rm_interleaved ? output.mesh_buffer().num_pages() : 0;
     if (rm_interleaved && input_page_bytes > 0 && input_page_bytes < input_tile_bytes) {
         const uint32_t input_element_size = datum_size(input_df);
         const uint32_t row_width_elements = input_page_bytes / input_element_size;
-        const uint32_t aligned_page_size = static_cast<uint32_t>(input.buffer()->aligned_page_size());
+        const uint32_t aligned_page_size = static_cast<uint32_t>(input.mesh_buffer().aligned_page_size());
         if (input_page_bytes == aligned_page_size && row_width_elements > 0) {
             k.rows_per_tile = tile_hw / row_width_elements;
         }
@@ -268,10 +268,8 @@ void enumerate_core_rt_args(
             uint32_t sh = tt::round_up(spec.shape[0], tile_height) / tile_height;
             uint32_t sw = tt::round_up(spec.shape[1], tile_width) / tile_width;
             const auto& pshape = tensor.padded_shape();
-            uint32_t D = pshape.rank() >= 5 ? pshape[-5] : 1;
-            uint32_t N = pshape[-4], C = pshape[-3];
             uint32_t Ht = pshape[-2] / tile_height, Wt = pshape[-1] / tile_width;
-            uint32_t unrolled_Ht = D * N * C * Ht;
+            uint32_t unrolled_Ht = pshape.volume() / (pshape[-2] * pshape[-1]) * Ht;
             uint32_t last_h = sh - (tt::round_up(unrolled_Ht, sh) - unrolled_Ht);
             uint32_t last_w = sw - (tt::round_up(Wt, sw) - Wt);
 
@@ -392,12 +390,11 @@ void enumerate_core_rt_args(
 // The per-dispatch run args: every runtime arg on every core, plus both tensor bindings.
 // create_program_artifacts and override_runtime_arguments both return this. The legacy cache-hit
 // override re-applied every slot the miss path wrote, so both paths share one builder and cannot drift.
-tt::tt_metal::experimental::ProgramRunArgs make_run_args(
+tt::tt_metal::ProgramRunArgs make_run_args(
     const UnaryDeviceOperation::operation_attributes_t& operation_attributes,
     const UnaryDeviceOperation::tensor_args_t& tensor_args,
     const Tensor& output) {
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     const auto& input = tensor_args.input;
@@ -466,7 +463,6 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
     tensor_return_value_t& output) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     const auto& input = tensor_args.input;
@@ -532,6 +528,16 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
     const bool math_approx_mode = false;
     std::map<std::string, std::string> unary_defines = get_block_defines(ops_chain, "0", "0", input.dtype());
     add_input_dtype_defines(input.dtype(), unary_defines);
+    if (const auto relu_config = get_pack_relu_config(
+            ops_chain,
+            input.dtype(),
+            output.dtype(),
+            operation_attributes.fp32_dest_acc_en,
+            src_sharded && dst_sharded)) {
+        // The packer applies the op as it writes each tile out, which leaves the SFPU no work.
+        unary_defines = {{"PACK_RELU_CONFIG", *relu_config}};
+        add_input_dtype_defines(input.dtype(), unary_defines);
+    }
     const bool logit_clamp_enabled = pack_first_op_scalars(ops_chain[0], input.dtype(), packed_scalar1, packed_scalar2);
 
     const std::string compute_path = fmt::format(
@@ -808,7 +814,7 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
     };
 }
 
-tt::tt_metal::experimental::ProgramRunArgs UnaryDeviceOperation::ProgramFactory::override_runtime_arguments(
+tt::tt_metal::ProgramRunArgs UnaryDeviceOperation::ProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output,

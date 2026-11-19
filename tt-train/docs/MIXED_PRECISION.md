@@ -55,7 +55,6 @@ These optimizers write in place, and all of them take views:
 |---|---|
 | `AdamW` (fused) | the parameter and its moments |
 | `SGD` (fused) | the parameter and its momentum buffer |
-| `AdamWFullPrecision` | its fp32 master weights and moments |
 | `MorehAdamW` | the parameter and its moments, as `ttnn::moreh_adamw` output tensors |
 | `RemoteOptimizer` | the parameter, received from the aggregator |
 
@@ -71,10 +70,29 @@ a new path in an existing one (for example a config option that changes which te
 - Fused `AdamW` accepts bf16 and fp32 parameters. Its moments take the parameter's native dtype, which its kernel
   requires.
 - Every other optimizer that updates parameters has a bf16 update only. It rejects an fp32 parameter at
-  construction, with an error that names the parameter. `AdamWFullPrecision` keeps its own fp32 master weights for
-  bf16 parameters.
+  construction, with an error that names the parameter.
 - Stochastic rounding (`AdamWConfig::stochastic_rounding`) applies to bf16 parameters only. An fp32 parameter keeps
   the low bits that rounding would lose, so it is updated without it.
+
+## fp32 master weights
+
+`training_config.precision.master_dtype: float32` stores every trainable parameter, the master weight, in fp32, while
+forward and backward keep running in bf16. This is not PyTorch FSDP2's `MixedPrecisionPolicy(param_dtype=...)`, which
+names the compute dtype. It is applied by `core::apply_precision_config()`
+(`sources/ttml/core/parameter_dtype.{hpp,cpp}`) after the model is built and before the optimizer is created, so the
+optimizer state follows: in Python by `ttml.common.utils.create_optimizer()` when it is given the whole config (as in
+`train.py`), and in C++ by the `nano_gpt` runner and the 3-tier optimizer worker. Runners that pass only the optimizer
+section, such as the SFT and GRPO trainers, don't apply it. Loading has to fit around it: a checkpoint loads after it,
+because checkpoint loading uses `assign()`, which casts into the dtype a tensor is stored in, so an fp32 checkpoint
+loaded into bf16 parameters would be rounded first; loaders that install tensors with `set_value()`, such as the C++
+safetensors loaders, run before it, or they would put bf16 tensors back. `train.py` and the `nano_gpt` runner keep this
+order. 3-tier workers keep bf16 parameters for `RemoteOptimizer`; the optimizer worker holds the fp32 master weights.
+The fp32 parameter is the master weight: fused `AdamW` updates it in place with fp32 moments, and forward and backward
+read its bf16 view, which is refreshed into its existing buffer the first time it is read after the step. Parameters
+managed by `ttml.fsdp.fully_shard` are the exception: FSDP swaps the gathered weight and the cached fp32 shard in with
+`set_value()` (`ttml/fsdp.py`), so each managed shard is cast into a new bf16 buffer every step. Frozen parameters and
+non-float tensors keep their dtype. `bfloat16` stores the trainable parameters in bf16; unset, they keep the dtype the
+model builds them in, so existing configs don't change.
 
 ## Loading values into a tensor
 
@@ -111,6 +129,11 @@ file.
 - **No cached copy at all** can never be stale, but a weight is read by several ops per step, so it would be cast
   and allocated several times per step, and `get_value()` could no longer return a reference.
 - **Letting both copies be written** would round the fp32 tensor to bf16 on write and erase its sub-ulp progress.
+- **Keeping the fp32 master weights in the optimizer**, next to bf16 parameters, means casting each master into a new
+  bf16 tensor and installing it after every step: an allocation per parameter per step and a buffer address that
+  moves. With the master in the parameter, the bf16 view is refreshed in place and the step runs the same `AdamW`
+  kernel, so one optimizer covers both precisions. Parameters managed by FSDP still get a new bf16 buffer each step,
+  from FSDP's own swap of the gathered weight and the shard.
 
 PyTorch uses the same idea: one source of truth with a version counter (`c10::VariableVersion`), bumped by in-place
 operations in its autograd layer while the kernels take plain tensors. Here the bump happens when the view is

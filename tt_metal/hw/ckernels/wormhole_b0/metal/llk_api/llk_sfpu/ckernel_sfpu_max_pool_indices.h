@@ -23,7 +23,7 @@ constexpr std::uint32_t max_pool_dst_tile_size = 64;
 
 template <bool is_fp32_dest_acc_en>
 constexpr InstrModLoadStore max_pool_instr_mod_index =
-    is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
+    is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::UINT16;
 
 /**
  * @brief ROW_MAJOR, up to 9 rows: reduces one column parity (even or odd columns of both faces) in place.
@@ -180,8 +180,8 @@ inline void _calculate_max_pool_with_indices_([[maybe_unused]] const std::uint32
 }
 
 /**
- * @brief ROW_MAJOR, 32 rows: loads 3 further LREG pairs (6 rows) behind the running max in LREG0/LREG4 and folds
- *        them in with the replay buffer's first 3 slots (SWAP01, SWAP23, SWAP02).
+ * @brief ROW_MAJOR, 32 rows: loads 3 further even-column LREG pairs (6 rows) behind the running max in LREG0/LREG4
+ *        and folds them in with the replay buffer's first 3 slots (SWAP01, SWAP23, SWAP02).
  * @tparam val_base Dest row of the first value row pair.
  * @tparam idx_base Dest row of the first index row pair.
  */
@@ -199,72 +199,20 @@ inline void _max_pool_with_indices_fold_3_pairs_() {
 }
 
 /**
- * @brief ROW_MAJOR, 32 rows: reduces one column parity (even or odd columns of both faces) into row 0 of the values and
- *        indices tiles, folding in the running max of the previous chunk when accumulating.
- *
- * Each SFPLOAD of 4 Dest rows holds 2 logical rows (both faces) of one column parity, so the 32 rows of a parity are
- * 16 LREG pairs. They are folded lane-wise into LREG0/LREG4 with the replay buffer's first 3 slots (SWAP01, SWAP23,
- * SWAP02: 4 pairs -> 1), loading 3 new pairs behind the running max for each further step. The 4 lane-rows (row r:
- * F0, F1, row r+1: F0, F1) are folded only once at the end with the replay buffer's last 4 slots (TRANSP, SWAP02,
- * SWAP13, TRANSP), leaving the per-face maxima in lane-rows 0/1, i.e. Dest rows 0/1 of the store.
- *
- * @tparam col_offset 0 for the even columns, 2 for the odd columns.
- * @param chunk The chunk index for large kernel accumulation.
+ * @brief ROW_MAJOR, 32 rows: loads 2 further odd-column LREG pairs (4 rows) behind the running max in LREG3/LREG7
+ *        and folds them in with the replay buffer's slots 7-8 (SWAP31, SWAP32).
+ * @tparam val_base Dest row of the first value row pair.
+ * @tparam idx_base Dest row of the first index row pair.
  */
-template <
-    bool is_fp32_dest_acc_en,
-    bool accumulate,
-    std::uint32_t values_tile_offset,
-    std::uint32_t indices_tile_offset,
-    std::uint32_t col_offset>
-inline void _max_pool_with_indices_generic_columns_([[maybe_unused]] const std::uint32_t chunk) {
+template <bool is_fp32_dest_acc_en, std::uint32_t val_base, std::uint32_t idx_base>
+inline void _max_pool_with_indices_fold_2_pairs_odd_() {
     constexpr InstrModLoadStore instr_mod_index = max_pool_instr_mod_index<is_fp32_dest_acc_en>;
-    constexpr std::uint32_t val_base = values_tile_offset + col_offset;
-    constexpr std::uint32_t idx_base = indices_tile_offset + col_offset;
 
-    // Rows 0-7: 4 pairs -> running max in LREG0/LREG4
-    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, val_base + 0);   // Row 0 and 1
-    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, val_base + 4);   // Row 2 and 3
-    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, val_base + 8);   // Row 4 and 5
-    TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_3, val_base + 12);  // Row 6 and 7
-    TTI_SFPLOAD(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_3, idx_base + 0);
-    TTI_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_3, idx_base + 4);
-    TTI_SFPLOAD(p_sfpu::LREG6, instr_mod_index, ADDR_MOD_3, idx_base + 8);
-    TTI_SFPLOAD(p_sfpu::LREG7, instr_mod_index, ADDR_MOD_3, idx_base + 12);
-    lltt::replay(0, 3);
-
-    // Rows 8-31: 3 pairs at a time behind the running max
-    _max_pool_with_indices_fold_3_pairs_<is_fp32_dest_acc_en, val_base + 16, idx_base + 16>();  // Rows 8-13
-    _max_pool_with_indices_fold_3_pairs_<is_fp32_dest_acc_en, val_base + 28, idx_base + 28>();  // Rows 14-19
-    _max_pool_with_indices_fold_3_pairs_<is_fp32_dest_acc_en, val_base + 40, idx_base + 40>();  // Rows 20-25
-    _max_pool_with_indices_fold_3_pairs_<is_fp32_dest_acc_en, val_base + 52, idx_base + 52>();  // Rows 26-31
-
-    // Fold the 4 lane-rows: LREG0/LREG4 lane-rows 0/1 hold Max(R0-31) of face 0 / face 1
-    lltt::replay(3, 4);
-
-    if constexpr (accumulate) {
-        // the running result lives in the tiles right above the operands
-        constexpr std::uint32_t val_accum = val_base + max_pool_dst_tile_size;
-        constexpr std::uint32_t idx_accum = idx_base + max_pool_dst_tile_size;
-        if (chunk > 0) {  // for all but the first chunk we need to load the previous result from DST 1 and 3 and do
-                          // a max with the current result in DST 0 and 2
-            TTI_SFPLOAD(
-                p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, val_accum);  // previous accumulated value
-            TTI_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_3, idx_accum);     // previous accumulated index
-            TTI_SFPSWAP(
-                0,
-                p_sfpu::LREG0,
-                p_sfpu::LREG1,
-                p_sfpswap::ALL_ROWS_MAX);  // LREG0 contains max of current and previous value
-        }
-        // for each chunk we store the running result to DST 1 and 3
-        TTI_SFPSTORE(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_3, idx_accum);
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, val_accum);
-    }
-
-    // store the final result to DST 0 (data) and DST 2 (indices)
-    TTI_SFPSTORE(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_3, idx_base);
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, val_base);
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, val_base + 0);
+    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, val_base + 4);
+    TTI_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_3, idx_base + 0);
+    TTI_SFPLOAD(p_sfpu::LREG6, instr_mod_index, ADDR_MOD_3, idx_base + 4);
+    lltt::replay(7, 2);
 }
 
 /**
@@ -290,9 +238,10 @@ template <
     bool accumulate,
     std::uint32_t values_tile_idx,
     std::uint32_t indices_tile_idx>
-inline void _calculate_max_pool_with_indices_generic_(const std::uint32_t chunk) {
+inline void _calculate_max_pool_with_indices_generic_([[maybe_unused]] const std::uint32_t chunk) {
     constexpr std::uint32_t values_tile_offset = values_tile_idx * max_pool_dst_tile_size;
     constexpr std::uint32_t indices_tile_offset = indices_tile_idx * max_pool_dst_tile_size;
+    constexpr InstrModLoadStore instr_mod_index = max_pool_instr_mod_index<is_fp32_dest_acc_en>;
 
     // ROW MAJOR DATA VERSION OF MPWI
     // DATA IS EXPECTED TO BE IN THE FOLLOWING ORDER IN DEST:
@@ -305,22 +254,91 @@ inline void _calculate_max_pool_with_indices_generic_(const std::uint32_t chunk)
     // .
     // Face 0 Row 31
     // Face 1 Row 31
-
-    // F0 + F1 even and odd cols
+    //
+    // Each SFPLOAD of 4 Dest rows holds 2 logical rows (both faces) of one column parity, so the 32 rows of a
+    // parity are 16 LREG pairs. The even columns are folded lane-wise into LREG0/LREG4 with the replay buffer's
+    // first 3 slots (SWAP01, SWAP23, SWAP02: 4 pairs -> 1), loading 3 new pairs behind the running max for each
+    // further step. The odd columns are then folded into LREG3/LREG7 using only LREG1-3/LREG5-7 (slots 7-8:
+    // SWAP31, SWAP32, 2 new pairs per step), so both results share one fold of the 4 lane-rows (row r: F0, F1, row r+1:
+    // F0, F1) with the replay buffer's last 4 slots (TRANSP, SWAP02, SWAP13, TRANSP). That leaves the per-face maxima
+    // in lane-rows 0/1 of LREG0 (even) and LREG3 (odd), i.e. Dest rows 0/1 of the store. The running max (lower rows)
+    // is always the first SWAP operand, which keeps it on positive ties.
     constexpr std::uint32_t even_column_offset = 0;
     constexpr std::uint32_t odd_column_offset = 2;
-    _max_pool_with_indices_generic_columns_<
-        is_fp32_dest_acc_en,
-        accumulate,
-        values_tile_offset,
-        indices_tile_offset,
-        even_column_offset>(chunk);
-    _max_pool_with_indices_generic_columns_<
-        is_fp32_dest_acc_en,
-        accumulate,
-        values_tile_offset,
-        indices_tile_offset,
-        odd_column_offset>(chunk);
+    constexpr std::uint32_t even_val = values_tile_offset + even_column_offset;
+    constexpr std::uint32_t even_idx = indices_tile_offset + even_column_offset;
+    constexpr std::uint32_t odd_val = values_tile_offset + odd_column_offset;
+    constexpr std::uint32_t odd_idx = indices_tile_offset + odd_column_offset;
+
+    // Even rows 0-7: 4 pairs -> running max in LREG0/LREG4
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, even_val + 0);   // Row 0 and 1
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, even_val + 4);   // Row 2 and 3
+    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, even_val + 8);   // Row 4 and 5
+    TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_3, even_val + 12);  // Row 6 and 7
+    TTI_SFPLOAD(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_3, even_idx + 0);
+    TTI_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_3, even_idx + 4);
+    TTI_SFPLOAD(p_sfpu::LREG6, instr_mod_index, ADDR_MOD_3, even_idx + 8);
+    TTI_SFPLOAD(p_sfpu::LREG7, instr_mod_index, ADDR_MOD_3, even_idx + 12);
+    lltt::replay(0, 3);
+
+    // Even rows 8-31: 3 pairs at a time behind the running max
+    _max_pool_with_indices_fold_3_pairs_<is_fp32_dest_acc_en, even_val + 16, even_idx + 16>();  // Rows 8-13
+    _max_pool_with_indices_fold_3_pairs_<is_fp32_dest_acc_en, even_val + 28, even_idx + 28>();  // Rows 14-19
+    _max_pool_with_indices_fold_3_pairs_<is_fp32_dest_acc_en, even_val + 40, even_idx + 40>();  // Rows 20-25
+    _max_pool_with_indices_fold_3_pairs_<is_fp32_dest_acc_en, even_val + 52, even_idx + 52>();  // Rows 26-31
+
+    // Odd rows 0-5: 3 pairs -> running max in LREG3/LREG7
+    TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_3, odd_val + 0);
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, odd_val + 4);
+    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, odd_val + 8);
+    TTI_SFPLOAD(p_sfpu::LREG7, instr_mod_index, ADDR_MOD_3, odd_idx + 0);
+    TTI_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_3, odd_idx + 4);
+    TTI_SFPLOAD(p_sfpu::LREG6, instr_mod_index, ADDR_MOD_3, odd_idx + 8);
+    lltt::replay(7, 2);
+
+    // Odd rows 6-29: 2 pairs at a time behind the running max
+    _max_pool_with_indices_fold_2_pairs_odd_<is_fp32_dest_acc_en, odd_val + 12, odd_idx + 12>();  // Rows 6-9
+    _max_pool_with_indices_fold_2_pairs_odd_<is_fp32_dest_acc_en, odd_val + 20, odd_idx + 20>();  // Rows 10-13
+    _max_pool_with_indices_fold_2_pairs_odd_<is_fp32_dest_acc_en, odd_val + 28, odd_idx + 28>();  // Rows 14-17
+    _max_pool_with_indices_fold_2_pairs_odd_<is_fp32_dest_acc_en, odd_val + 36, odd_idx + 36>();  // Rows 18-21
+    _max_pool_with_indices_fold_2_pairs_odd_<is_fp32_dest_acc_en, odd_val + 44, odd_idx + 44>();  // Rows 22-25
+    _max_pool_with_indices_fold_2_pairs_odd_<is_fp32_dest_acc_en, odd_val + 52, odd_idx + 52>();  // Rows 26-29
+
+    // Odd rows 30-31
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, odd_val + max_pool_dst_tile_size - 4);
+    TTI_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_3, odd_idx + max_pool_dst_tile_size - 4);
+    TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+
+    // Fold the 4 lane-rows: LREG0/LREG4 (even) and LREG3/LREG7 (odd) lane-rows 0/1 hold Max(R0-31) of face 0 / 1
+    lltt::replay(3, 4);
+
+    if constexpr (accumulate) {
+        // the running result lives in the tiles right above the operands
+        constexpr std::uint32_t even_val_accum = even_val + max_pool_dst_tile_size;
+        constexpr std::uint32_t even_idx_accum = even_idx + max_pool_dst_tile_size;
+        constexpr std::uint32_t odd_val_accum = odd_val + max_pool_dst_tile_size;
+        constexpr std::uint32_t odd_idx_accum = odd_idx + max_pool_dst_tile_size;
+        if (chunk > 0) {  // for all but the first chunk we need to load the previous result from DST 1 and 3 and do
+                          // a max with the current result in DST 0 and 2
+            TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, even_val_accum);
+            TTI_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_3, even_idx_accum);
+            TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, odd_val_accum);
+            TTI_SFPLOAD(p_sfpu::LREG6, instr_mod_index, ADDR_MOD_3, odd_idx_accum);
+            TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+            TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+        }
+        // for each chunk we store the running result to DST 1 and 3
+        TTI_SFPSTORE(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_3, even_idx_accum);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, even_val_accum);
+        TTI_SFPSTORE(p_sfpu::LREG7, instr_mod_index, ADDR_MOD_3, odd_idx_accum);
+        TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_3, odd_val_accum);
+    }
+
+    // store the final result to DST 0 (data) and DST 2 (indices)
+    TTI_SFPSTORE(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_3, even_idx);
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, even_val);
+    TTI_SFPSTORE(p_sfpu::LREG7, instr_mod_index, ADDR_MOD_3, odd_idx);
+    TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_3, odd_val);
 }
 
 /**
@@ -374,7 +392,7 @@ inline void init_max_pool_with_indices() {
 
     if constexpr (layout == ckernel::DataLayout::ROW_MAJOR) {
         // Program replay buffer for row major layout
-        lltt::record(0, 7);
+        lltt::record(0, 9);
 
         TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
         TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
@@ -386,6 +404,10 @@ inline void init_max_pool_with_indices() {
         TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
 
         TTI_SFPTRANSP(0, 0, 0, 0);
+
+        // Odd-column running max of the 32-row path
+        TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
     } else {
         // Program replay buffer for tiled layout (original)
         lltt::record(0, 7);

@@ -12,7 +12,7 @@ from helpers.llk_params import (
     ReduceDimension,
     ReducePool,
 )
-from helpers.param_config import parametrize, quasar_mx_smoke
+from helpers.param_config import parametrize, quasar_dest_sync_modes, quasar_mx_smoke
 from helpers.reduce_perf_matrix import (
     BLOCK_LENGTH_REPRESENTATIVE,
     BLOCK_LENGTH_TILE_COUNTS,
@@ -28,7 +28,6 @@ from helpers.reduce_perf_matrix import (
 )
 from quasar.test_reduce_quasar import (
     reduce_dest_acc_modes,
-    reduce_dest_sync_modes,
     reduce_is_reduce_to_one_modes,
     reduce_tile_dimensions,
 )
@@ -45,7 +44,7 @@ REDUCE_PERF_FORMATS = (
 )
 
 PERF_MEASUREMENT = dict(
-    dest_sync_mode=lambda: reduce_dest_sync_modes(is_perf=True),
+    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=True),
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
     is_perf=[True],
@@ -238,7 +237,7 @@ def test_perf_reduce_block_length_quasar(
     reduce_dim=[ReduceDimension.Column],
     pool_type=[ReducePool.Sum, ReducePool.Average],
     math_fidelity=lambda formats: get_valid_math_fidelities(formats),
-    dest_sync_mode=lambda: reduce_dest_sync_modes(is_perf=True),
+    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=True),
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
     is_perf=[True],
