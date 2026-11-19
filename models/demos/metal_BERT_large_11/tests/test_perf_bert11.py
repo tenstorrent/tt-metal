@@ -5,7 +5,7 @@
 import pytest
 import torch
 from loguru import logger
-from transformers import BertForQuestionAnswering, BertTokenizer
+from transformers import BertTokenizer
 
 import ttnn
 from models.common.utility_functions import is_blackhole, profiler, run_for_wormhole_b0
@@ -13,6 +13,7 @@ from models.demos.metal_BERT_large_11.tt.bert_model import TtBertBatchDram
 from models.demos.metal_BERT_large_11.tt.model_config import (
     get_model_config,
     get_tt_cache_path,
+    load_reference_model,
     skip_unsupported_config,
 )
 from models.perf.perf_utils import prep_perf_report
@@ -46,7 +47,7 @@ def run_perf_bert11(
     second_run_accum_key = "second_run_accum"
     cpu_key = "ref_key"
 
-    HF_model = BertForQuestionAnswering.from_pretrained(model_name, low_cpu_mem_usage=True)
+    HF_model = load_reference_model(model_name, low_cpu_mem_usage=True)
     HF_model.eval()
     tt_model = TtBertBatchDram(
         HF_model.config,

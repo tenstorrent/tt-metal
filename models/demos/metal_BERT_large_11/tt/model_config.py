@@ -2,12 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from pathlib import Path
 
 import pytest
 from loguru import logger
+from transformers import BertConfig, BertForQuestionAnswering
 
 import ttnn
+
+NUM_LAYERS_ENV = "BERT_NUM_LAYERS"
 
 OP_MEMCFG_KEYS = (
     # EMBEDDINGS
@@ -416,6 +420,20 @@ def get_model_config(batch, device_grid_size, model_config_str):
     logger.debug(f"BERT model config: \n{pretty_print_model_config(model_config)}")
 
     return model_config
+
+
+def load_reference_model(model_name, **kwargs):
+    """The Hugging Face model with its first ``BERT_NUM_LAYERS`` encoder layers, or all of them when
+    it is unset. TtBertBatchDram builds as many encoder layers as the model's config holds."""
+    value = os.environ.get(NUM_LAYERS_ENV)
+    if value:
+        num_layers = int(value)
+        max_layers = BertConfig.from_pretrained(model_name).num_hidden_layers
+        if not 1 <= num_layers <= max_layers:
+            raise ValueError(f"{NUM_LAYERS_ENV} must be between 1 and {max_layers}, got {num_layers}")
+        logger.info(f"Running {num_layers} of {max_layers} encoder layers ({NUM_LAYERS_ENV}={num_layers})")
+        kwargs["num_hidden_layers"] = num_layers
+    return BertForQuestionAnswering.from_pretrained(model_name, **kwargs)
 
 
 # TODO: Generalize TT tensor caching
