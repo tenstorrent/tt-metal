@@ -8,10 +8,12 @@ import pytest
 import torch
 import ttnn
 
+from tt_py_test_utils_common.utility_functions import is_blackhole
 from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
     UnreadableDocstring,
     _memory_support_items,
     check_readable,
+    docstring_blackhole_dtype_layout_params,
     docstring_dtype_layout_params,
 )
 from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
@@ -76,11 +78,11 @@ def _row_major_pair_documented(input_layout, input_buffer, output_layout, output
     return input_layout == HEIGHT or ttnn.BufferType.DRAM not in (input_buffer, output_buffer)
 
 
-def _docstring_reshard_params(op):
+def _docstring_reshard_params(op, dtype_layout_params=docstring_dtype_layout_params):
     """One ``pytest.param(dtype, layout, input_placement, output_placement)`` per row of the op's dtype/layout table
     and per pair of a placement on its ``- Input:`` and one on its ``- Output:`` Memory Support item. While the
     docstring has the ROW_MAJOR item, ROW_MAJOR pairs keep the memory layout, and are HEIGHT_SHARDED when either side
-    is in DRAM."""
+    is in DRAM. ``dtype_layout_params`` reads the dtypes and layouts, by default from the table."""
     try:
         inputs = _sharded_placements(op.__doc__, "Input")
         outputs = _sharded_placements(op.__doc__, "Output")
@@ -88,7 +90,7 @@ def _docstring_reshard_params(op):
     except Exception as error:
         return _unreadable(op, error, arity=4)
     params = []
-    for dtype_layout in docstring_dtype_layout_params(op):
+    for dtype_layout in dtype_layout_params(op):
         dtype, layout = dtype_layout.values
         if isinstance(dtype, UnreadableDocstring):
             return [pytest.param(dtype, dtype, dtype, dtype, id=dtype_layout.id)]
@@ -183,6 +185,50 @@ def test_reshard_docstring_supported_inputs(dtype, layout, input_placement, outp
     )
     memory_config = _sharded_memory_config(*output_placement, *_OUTPUT_SHARDS[output_placement[0]])
     _run_reshard(input_tensor, values.dtype, memory_config, device)
+
+
+@pytest.mark.parametrize(
+    "dtype, layout, input_placement, output_placement",
+    _docstring_reshard_params(ttnn.reshard, docstring_blackhole_dtype_layout_params),
+)
+def test_reshard_docstring_blackhole_inputs(dtype, layout, input_placement, output_placement, device):
+    """Reshards a tensor of each dtype the ttnn.reshard docstring lists for Blackhole, from every sharded input
+    placement it lists into every sharded output placement, as a new tensor and into ``output_tensor``. Sharded tensors
+    are made from interleaved L1 tensors. Values are compared after a conversion to FLOAT32 on host, which holds every
+    FP8_E4M3 value."""
+    check_readable(dtype, layout, input_placement, output_placement)
+    if not is_blackhole():
+        pytest.skip("the docstring lists these dtypes for Blackhole")
+
+    def read(tensor):
+        return ttnn.to_torch(ttnn.to_dtype(tensor.cpu(), ttnn.float32))
+
+    def sharded_tensor(values, memory_config):
+        interleaved = ttnn.from_torch(
+            values, dtype=dtype, layout=layout, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        tensor = ttnn.to_memory_config(interleaved, memory_config)
+        ttnn.deallocate(interleaved)
+        return tensor
+
+    torch.manual_seed(0)
+    input_tensor = sharded_tensor(
+        torch.randn(_SHAPE) * 8, _sharded_memory_config(*input_placement, *_INPUT_SHARDS[input_placement[0]])
+    )
+    expected = read(input_tensor)
+    memory_config = _sharded_memory_config(*output_placement, *_OUTPUT_SHARDS[output_placement[0]])
+    # Every value differs from the input's, so the test sees each one overwritten.
+    output_tensor = sharded_tensor(torch.where(expected == 1, 2, 1).to(expected.dtype), memory_config)
+    outputs = [
+        ttnn.reshard(input_tensor, memory_config),
+        ttnn.reshard(input_tensor, memory_config, output_tensor=output_tensor),
+        output_tensor,
+    ]
+    for output in outputs:
+        assert output.dtype == dtype
+        assert output.layout == layout
+        assert output.memory_config() == memory_config
+        assert_exact(expected, read(output))
 
 
 @pytest.mark.parametrize(
