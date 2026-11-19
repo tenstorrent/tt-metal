@@ -44,11 +44,13 @@ def test_layer_norm(ttnn_mesh_device, reset_seeds, shape, dt, in_mem, out_mem):
     beta = U.torch_rand((1, 1, 1, w))
 
     x = U.to_tt_mem(x_torch, mesh, in_mem, dtype=U.DTYPES[dt])
-    tt_gamma = U.to_tt(gamma, mesh, dtype=ttnn.bfloat8_b)
-    tt_beta = U.to_tt(beta, mesh, dtype=ttnn.bfloat8_b)
+    # The model uses bfloat8_b gamma/beta; Quasar has no block-float DFB formats (its set is MX), so use bf16 there.
+    gb_dtype = ttnn.bfloat16 if U.is_quasar() else ttnn.bfloat8_b
+    tt_gamma = U.to_tt(gamma, mesh, dtype=gb_dtype)
+    tt_beta = U.to_tt(beta, mesh, dtype=gb_dtype)
     out = ttnn.layer_norm(x, epsilon=EPS, weight=tt_gamma, bias=tt_beta, memory_config=U.resolve_memcfg(out_mem, mesh))
 
-    # Reference uses the bfp8-quantized gamma/beta the device saw.
+    # Reference uses the quantized (bfp8, or bf16 on Quasar) gamma/beta the device saw.
     g = U.from_tt(tt_gamma, mesh).reshape(-1)[:w]
     b = U.from_tt(tt_beta, mesh).reshape(-1)[:w]
     ref = torch.nn.functional.layer_norm(x_torch.float(), (w,), g, b, EPS)

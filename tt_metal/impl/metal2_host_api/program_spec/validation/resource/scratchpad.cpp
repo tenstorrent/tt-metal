@@ -16,6 +16,10 @@ namespace tt::tt_metal {
 void ValidateScratchpadSpec(
     const ScratchpadSpec& scratchpad, const CollectedSpecData& collected, uint32_t l1_alignment, tt::ARCH arch) {
     TT_FATAL(
+        !scratchpad.advanced_options.override_placement || !scratchpad.advanced_options.override_placement->empty(),
+        "ScratchpadSpec '{}' override_placement must be non-empty",
+        scratchpad.unique_id);
+    TT_FATAL(
         scratchpad.size_per_node != 0,
         "ScratchpadSpec '{}' has size_per_node == 0; a scratchpad must reserve a non-zero number of bytes "
         "(did you forget to set size_per_node?).",

@@ -9,7 +9,7 @@
 #include <stdexcept>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
@@ -32,7 +32,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SemaphoreNonZeroInitialValueFailsOnQuasar) {
     spec.semaphores = {sem};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("has initial_value=1 but only zero is supported on Quasar")));
 }
@@ -50,7 +50,7 @@ TEST_F(ProgramSpecTestGen1, CPU_SemaphoresWithNonZeroInitialValueSucceedOnGen1) 
     spec.kernels[0].semaphore_bindings = {
         SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{"sem_0"}, .accessor_name = "done_flag"}};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 }  // namespace

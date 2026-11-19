@@ -130,6 +130,11 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         three-token history ending at the logical end of the interval
         (``actual_end``, default full capacity), for the next call.
 
+        With ``slab_index`` (replicated UINT32 scalar, read on device),
+        ``history`` is a slab of carries: entry ``slab_index * slab_index_scale +
+        slab_index_offset`` is read (zeros when ``actual_start`` reads 0) and
+        replaced in place; the fourth output is the slab.
+
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: ``q``, ``k``,
                 ``v`` as ``qkv_causal_conv1d_silu``, and the replacement carry in
@@ -155,6 +160,9 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0,
         nb::arg("input_column_offset") = 0,
-        nb::arg("page_channels") = nb::none());
+        nb::arg("page_channels") = nb::none(),
+        nb::arg("slab_index") = nb::none(),
+        nb::arg("slab_index_scale") = 1,
+        nb::arg("slab_index_offset") = 0);
 }
 }  // namespace ttnn::operations::experimental::kda::qkv_causal_conv1d_silu::detail
