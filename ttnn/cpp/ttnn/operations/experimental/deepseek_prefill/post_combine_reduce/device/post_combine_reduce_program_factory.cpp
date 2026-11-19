@@ -268,15 +268,16 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     reader_compile_time_args.push_back(row_index_aligned_page_size);
     reader_compile_time_args.push_back(row_indexed ? static_cast<uint32_t>(combine_output.padded_shape()[0]) : 0);
     tt::tt_metal::TensorAccessorArgs(row_index_buffer).append_to(reader_compile_time_args);
+    reader_compile_time_args.push_back(operation_attributes.valid_token_rows);
 
-    // Compute compile-time args. The skip-mode toggle is appended last so the
-    // DeepSeek-only arg (dispatch_table page count) retains a stable position
-    // across both modes (it is zero in the GPT-OSS path).
+    // Compute compile-time args. Keep the dispatch-table page count and skip toggle
+    // in stable positions; append the optional single-chunk prefix specialization.
     std::vector<uint32_t> compute_compile_time_args = {
         num_experts,
         emb_dim_cb_tiles,
         dispatch_table_num_pages,
         static_cast<uint32_t>(use_dispatch_table_skip ? 1 : 0),
+        operation_attributes.valid_token_rows,
     };
 
     // Writer compile-time args use a fixed layout across both paths. In the
@@ -304,6 +305,7 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     writer_compile_time_args.push_back(static_cast<uint32_t>(weights_per_token ? 1 : 0));
     writer_compile_time_args.push_back(weights_aligned_page_size);
     writer_compile_time_args.push_back(weights_per_batch);
+    writer_compile_time_args.push_back(operation_attributes.valid_token_rows);
 
     // Build kernel descriptors and push them onto desc.kernels.  Stable indices
     // (0=reader, 1=compute, 2=writer) below let emplace_runtime_args identify

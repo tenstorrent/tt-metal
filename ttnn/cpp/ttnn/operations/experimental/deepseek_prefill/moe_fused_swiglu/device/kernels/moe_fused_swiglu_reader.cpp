@@ -1362,4 +1362,7 @@ void kernel_main() {
             cb_push_back(cb_h, h_pad);
         }
     }
+    // Complete reader-owned metadata and final H multicasts before the next
+    // kernel rebases its ACK counters, including when every expert is empty.
+    noc.async_write_barrier();
 }

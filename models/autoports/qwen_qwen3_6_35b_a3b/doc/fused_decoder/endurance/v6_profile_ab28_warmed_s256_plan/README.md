@@ -1,0 +1,22 @@
+# ab28 standard warmed S256 profiler captures: prepared, not executed
+
+Parent owns the device slot. Run these separately from repository root, with no concurrent device job; layer 3 starts only after layer 0 has closed its device. Each script checks device ownership and frozen inputs, uses a bounded 1800-second capture, preserves failures, and runs host validation only after Tracy exits successfully.
+
+```bash
+bash models/autoports/qwen_qwen3_6_35b_a3b/doc/fused_decoder/endurance/v6_profile_ab28_warmed_s256_plan/capture.sh 0
+bash models/autoports/qwen_qwen3_6_35b_a3b/doc/fused_decoder/endurance/v6_profile_ab28_warmed_s256_plan/capture.sh 3
+```
+
+Outputs are fresh sibling directories `v6_profile_ab28_warmed_s256_layer0` and `v6_profile_ab28_warmed_s256_layer3`. Their `capture.log` contains complete profiler/exporter output. The fixed candidate is `v6_corrected_fma_full_v5_triangular_compact_silu_formatted_integration.py.snapshot`, SHA256 `ab28a91bb3cb5e8b88e5371da0defe3b0d731e86a131c8523483e4b6b65b0334`. `capture_contract.json` and `pinned_inputs.sha256` bind the candidate, unchanged standard profile harness, correctness/runtime support, exporter, validator, and capture script.
+
+The unchanged standard harness runs one complete correctness prefill, resets state, then profiles one complete warmed prefill at logical length 256/context 512. Layer 0 retains recurrent-state PCC; layer 3 retains the full-attention paged-cache decode path. Both retain eager/traced output PCC and deterministic replays. There are exactly four signposts, 20 total trace replays (three correctness, one warm, sixteen measured), and phase-boundary profiler drains. No chunk, measured sequence, correctness path, or repeat count was reduced. Whether triangular fusion fits the Tracy 32768-location capacity remains an experimental question; failure is preserved, never accepted as a partial table.
+
+Strict validation requires one final raw CSV, complete rows with unique columns, finite positive executed kernel/FW timings, positive cycle spans, exact phase signposts, all 20 identical trace operation/program/input/output sequences, sixteen complete measured sessions, and zero overlap with full coverage. The candidate's trace operation count is derived once and bound across every replay, rather than borrowing the old c71 count. The exporter may include untimed capture metadata only when every such row is outside measured windows and exactly matches one complete replay's metadata. No other untimed rows are accepted. Instrumentation failures, dropped markers, unknown warning classes, truncated rows, incomplete windows, missing raw Tracy artifacts, or failed correctness/source gates prevent `valid=true`.
+
+Known exporter warnings are individually retained: motherboard/subset topology notices; pandas mixed-type warnings checked by strict string CSV parsing plus numeric validation; optional WASM viewer copy failure accepted only for that exact auxiliary path while the nonempty raw Tracy artifact exists. Unknown warnings require investigation. tt-perf-report must reproduce every measured row, sum to the raw kernel durations within output rounding, and show zero overlap. Default advice remains enabled.
+
+Successful output includes prefill/decode `*_perf_report.csv` and `.txt`, their console logs, `*_op_sequence.csv`, `perf_summary.json`, `op_topology.md`, `raw_capture_validation.json`, `profiler_completeness.json`, exact report commands and source/artifact hashes. These are warmed profiler kernel measurements; separate clean warmed S256 wall/trace benchmarks remain the ranking evidence. The old c71 cold S64 table remains explicitly distinct.
+
+Host-only preparation passed both source preflights and shell syntax. The strict CSV reader accepts all 23,709 rows of the prior valid c71 capture and rejects duplicate columns, truncated/extra-column rows, NaN, infinity, zero and negative durations. No device commands or TTNN imports were executed during preparation; no production, harness, migrated helper or historical evidence was changed.
+
+Host topology correction: `TT_VISIBLE_DEVICES` is explicitly unset, since setting it breaks topology on this host. The frozen standard harness selects `physical_device_ids=[0]`. Validation requires captured `TT_VISIBLE_DEVICES` to be absent and profiler support count 100000. Watcher, allocation tracking and profiler-file suppression remain unset; the previously working legacy Tracy-push suppression and no-op-info-cache flags are preserved.

@@ -1,0 +1,29 @@
+# Ordered projection reduction and layout investigation
+
+Source-only investigation; no device execution, TTNN import, fused-source edit, or native rebuild by this investigator. Root owns all device controls. The motivating `profile_precision` decode costs were approximately 461 us for the large projection multiply and 297 us for its reduction; these predate the row-major decay-lookup repair, so the next matched-source profile is required for decisions.
+
+## Feasible model-local control: combine the two ordered reductions
+
+Store the ordered BF16 projection as `[4,512,32,416]` instead of `[512,4,32,416]`. Broadcast coefficients as `[4,512,1,1]`; preserve separate exact BF16×BF16→FP32 multiplication. Run `fast_reduce_nc(products, dims=[0,1], compute_kernel_config=self.compute)`, then cast its final result to BF16 and reshape/slice the final projection.
+
+The source wrapper `ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc.cpp` sorts reduction dimensions and processes them in descending order. Consequently dim1 performs the required 512 additions in checkpoint odd/even order, followed by dim0's four left-to-right block additions. The FP32 branch of `device/kernels/reduce_nc.cpp` copies the first value and performs sequential `add_binary_tile` for subsequent values. This preserves the current arithmetic schedule while removing three separate block additions and operating on the final projection rather than four partials during reshape/slice. It does **not** eliminate the large product tensor, and speed is unverified until root's control.
+
+The source advertises `output_dtype=bfloat16, fp32_intermediate_stages=True`, which could fold the final cast, but the installed binary does **not** bind either keyword. Root's attempted control fails at Python argument dispatch before decode computation; exact evidence: `logs/projection_reduce_merge_binding_failure.log`. Its supported signature contains only input, dims, output, memory_config, compute_kernel_config, and sub_core_grids. Use FP32 input/intermediates plus explicit final BF16 typecast with this fixed binary. Do not rebuild shared native code in this stage.
+
+`native_fingerprint.json` records `_ttnncpp.so` SHA256 `bad247ff53cb3fbef1406873108506995ca4d309263822ec43c87e8a5f2f20a9` and `libtt_metal.so` SHA256 `2d891acc3c059185db527691ba60531248f9f3fe06763b9db048da9ef6a3c950`. Source capability is not proof of installed binding availability; subsequent native candidates need the existing binary's signature checked by root.
+
+## Existing fused product/reduction blockers
+
+- `experimental.deepseek_moe_fast_reduce_nc_fused`: its validation permits BF16/BFP8 input and BF16 row-major scores; output specification is always input dtype. Thus four K512 partials would be narrowed to BF16 before the required FP32 final sum. Its compute kernel uses FPU `mul_tiles_bcast_cols` in accumulator mode, not the validated SFPU FP32 product/add sequence. The factory reserves one 2 KiB score tile per reduction element and row tile; K512 requires 1 MiB per core before remaining circular buffers. References are `deepseek_moe_fast_reduce_nc_fused/device/{deepseek_moe_fast_reduce_nc_fused_device_operation.cpp,deepseek_moe_fast_reduce_nc_fused_program_factory.cpp,kernels/deepseek_moe_fast_reduce_nc_fused_compute.cpp}` under the same experimental reduction directory. No model-only adaptation establishes exact FP32 partials; reject without hardware rather than silently change precision.
+- `moreh_dot`: `moreh/moreh_dot/device/kernels/moreh_dot.cpp` multiplies a tile then applies the within-tile reduce helper, accumulating tile reductions. This changes the required scalar accumulation schedule. A cleaner graph is not sufficient evidence to relax the already validated precision requirement.
+- Plain matmul likewise does not expose a scalar K-order contract. Existing successful ordered projection is deliberately avoiding this arithmetic discrepancy. No public native op located in this audit fuses the whole product/ordered-reduction while preserving both its FP32 partial boundaries and order.
+
+## Targeted layout control
+
+In `_recurrent_sum`, the second reduction result has logical shape `[1,1,32,128]`. Replace only its final `reshape(total, (1,32,1,128))` with `permute(total, (0,2,1,3))`. Moving a singleton axis past the head axis gives identical logical values. `data_movement/permute/permute.cpp` routes this exact interleaved permutation to the native HC transpose. This may avoid reshape's untilize/tilize sequence while retaining the public recurrent-cache shape and every numerical operation. Root must confirm the installed path and traced latency; it is a proposed control, not a measured improvement.
+
+The input norm's `(rows,4,16,32)` conversion and subsequent sub-tile 16/4/8-lane boundaries cannot all be treated as metadata views: tiled reshape's documented zero-copy condition requires unchanged width and unchanged or tile-aligned height. Forcing private `reshape_force_codegen` is explicitly verification-only in `reshape_nanobind.cpp`; it is not a supported production workaround. Moving the whole recurrent cache to a reduction-friendly internal geometry could remove more movement, but current tests compare `state['recurrent']` directly via reshape, so that change would require an explicit cache-layout adapter and fresh state-contract validation. Prefer the isolated HC transpose control first.
+
+## Acceptance
+
+Root should require exact same-input projection BF16 codes first, then the unchanged 8192-token and nonaligned/context gates, followed by warmed traced latency against the best correct candidate. Profile after the row-major LUT change before attributing remaining ~150 us reshape / ~94 us tilize-untilize aggregates to any one call. No relaxed PCC, precision, or completion claim follows from this source analysis.

@@ -16,6 +16,7 @@
 #if defined(TRACY_ENABLE)
 #include <common/TracyTTDeviceData.hpp>
 #include <tracy/Tracy.hpp>
+#include "impl/context/metal_context.hpp"
 #endif
 
 namespace tt::tt_metal {
@@ -23,6 +24,8 @@ namespace tt::tt_metal {
 namespace {
 
 #if defined(TRACY_ENABLE)
+bool tracy_push_disabled() { return MetalContext::instance().rtoptions().get_profiler_disable_push_to_tracy(); }
+
 // Synthetic core for the real-time profiler's Tracy lanes: programs go on BRISC, sync checks on NCRISC.
 constexpr uint32_t kRealtimeProfilerCore_X = 100;
 constexpr uint32_t kRealtimeProfilerCore_Y = 100;
@@ -84,7 +87,7 @@ std::string FormatTopCounts(const std::unordered_map<Key, uint64_t>& counts) {
 RealtimeProfilerTracyHandler::RealtimeProfilerTracyHandler() {
 #if defined(TRACY_ENABLE)
     callback_handle_ = tt::RegisterProgramRealtimeProfilerCallback([this](const tt::ProgramRealtimeRecordBatch& batch) {
-        if (!tracy::GetProfiler().IsConnected()) {
+        if (tracy_push_disabled() || !tracy::GetProfiler().IsConnected()) {
             return;
         }
         for (const auto& record : batch.records) {
@@ -117,6 +120,9 @@ void RealtimeProfilerTracyHandler::AddDevice(
     [[maybe_unused]] double first_timestamp,
     [[maybe_unused]] double frequency) {
 #if defined(TRACY_ENABLE)
+    if (tracy_push_disabled()) {
+        return;
+    }
     std::lock_guard<std::mutex> lock(mutex_);
     if (tracy_contexts_.contains(chip_id)) {
         log_warning(tt::LogMetal, "RealtimeProfilerTracyHandler: device {} already added, skipping", chip_id);
@@ -151,6 +157,12 @@ void RealtimeProfilerTracyHandler::RemoveDevice([[maybe_unused]] uint32_t chip_i
 }
 
 TracyTTCtx RealtimeProfilerTracyHandler::GetContext(uint32_t chip_id) {
+#if defined(TRACY_ENABLE)
+    // All record, sync, stall and calibration emissions use this lookup.
+    if (tracy_push_disabled()) {
+        return nullptr;
+    }
+#endif
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = tracy_contexts_.find(chip_id);
     return it != tracy_contexts_.end() ? it->second : nullptr;
@@ -360,6 +372,9 @@ void RealtimeProfilerTracyHandler::PushDispatchStallMarker(
 
 void RealtimeProfilerTracyHandler::FlushDispatchStallMessageLocked([[maybe_unused]] uint32_t chip_id) {
 #if defined(TRACY_ENABLE)
+    if (tracy_push_disabled()) {
+        return;
+    }
     auto it = dispatch_stall_messages_.find(chip_id);
     if (it == dispatch_stall_messages_.end() || it->second.suppressed == 0 || !tracy::GetProfiler().IsConnected()) {
         return;

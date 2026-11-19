@@ -26,6 +26,8 @@ struct OperationArguments {
     uint32_t grid_x = 0;
     uint32_t grid_y = 0;
     bool read_x_at_offset = false;
+    // Compile-time rounding policy participates in the program cache key.
+    bool stochastic_rounding = true;
     // Active-token band this op owns. An expert whose count falls outside [min, max] is
     // dropped like a zero count -- uniform across the grid, so it costs no CB traffic, no
     // collective round and no semaphore. Wide open by default; a hybrid dispatch narrows it
@@ -49,6 +51,7 @@ struct OperationArguments {
         "grid_x",
         "grid_y",
         "read_x_at_offset",
+        "stochastic_rounding",
         "min_active_tokens",
         "max_active_tokens",
         "activation",
@@ -64,6 +67,7 @@ struct OperationArguments {
             grid_x,
             grid_y,
             read_x_at_offset,
+            stochastic_rounding,
             min_active_tokens,
             max_active_tokens,
             activation,

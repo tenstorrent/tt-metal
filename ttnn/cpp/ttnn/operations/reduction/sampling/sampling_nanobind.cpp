@@ -46,6 +46,7 @@ void bind_reduction_sampling_operation(nb::module_& mod) {
             seed (int, optional): Seed for sampling randomness. Defaults to `0`.
             sub_core_grids (ttnn.CoreRangeSet, optional): Core range set for multicore execution. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+            max_top_k (int, optional): Physical draw width, 32 (default) or 64 (Blackhole only).
 
         Note:
             This operations only supports inputs and outputs according to the following data types and layout:
@@ -107,7 +108,7 @@ void bind_reduction_sampling_operation(nb::module_& mod) {
               non-power-of-2 ``Wt`` is rejected. Pad ``W`` up to the next power-of-2 multiple of 32
               (e.g. with ``-inf`` values and dummy indices) if needed.
             - The overall shape of :attr:`input_values_tensor` must match that of :attr:`input_indices_tensor`.
-            - :attr:`k`: Must be a 1D tensor of shape ``[num_users]`` (one value per user), in the range '(0,32]'.
+            - :attr:`k`: Must be a 1D tensor of shape ``[num_users]`` (one value per user), in the range '(0,max_top_k]'.
             - :attr:`p`, :attr:`temp`: Must be 1D tensors of shape ``[num_users]`` (one value per user);
               :attr:`p` values must be in the range `[0.0, 1.0]`.
             - :attr:`sub_core_grids` (if provided): must supply at least ``num_users`` cores (1 to 32);
@@ -126,7 +127,8 @@ void bind_reduction_sampling_operation(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("seed") = nb::none(),
         nb::arg("sub_core_grids") = nb::none(),
-        nb::arg("output_tensor") = nb::none());
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("max_top_k") = 32);
 }
 
 }  // namespace ttnn::operations::reduction::detail

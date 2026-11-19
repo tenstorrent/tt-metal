@@ -36,6 +36,10 @@ constexpr uint32_t cb_row_index_id = tt::CBIndex::c_5;
 static_assert(!row_indexed || experts_per_batch == 1);
 
 constexpr uint32_t TOKENS_PER_CHUNK = 32;
+constexpr uint32_t valid_token_rows = get_compile_time_arg_val(row_index_accessor_args.next_compile_time_args_offset());
+constexpr uint32_t rows_to_process = valid_token_rows == 0 ? TOKENS_PER_CHUNK : valid_token_rows;
+static_assert(valid_token_rows <= TOKENS_PER_CHUNK);
+static_assert(valid_token_rows == 0 || !row_indexed);
 
 void kernel_main() {
     uint32_t combine_addr = get_arg_val<uint32_t>(0);
@@ -47,6 +51,22 @@ void kernel_main() {
 
     const auto combine_addrg = TensorAccessor(combine_accessor_args, combine_addr);
     const uint32_t input_tile_size = cb_combine_input.get_tile_size();
+
+    if constexpr (valid_token_rows > 0 && valid_token_rows < TOKENS_PER_CHUNK) {
+        // One chunk only (host validation). c17 starts at its base and compute reserves the full
+        // chunk without advancing that pointer. The reader owns only the omitted-row tail; compute
+        // packs only the disjoint prefix. Complete zeroing BEFORE publishing the first c0 input:
+        // compute must wait on c0 before its first pack, hence also before publishing/tilizing c17.
+        // Do not reserve/push c17 here: compute remains its sole CB producer.
+        CircularBuffer cb_rowmajor(tt::CBIndex::c_17);
+        ASSERT(num_chunks == 1 && token_start_idx == 0);
+        const uint32_t row_bytes = emb_dim_cb_tiles * cb_rowmajor.get_tile_size();
+        noc.async_write_zeros(
+            cb_rowmajor,
+            (TOKENS_PER_CHUNK - valid_token_rows) * row_bytes,
+            {.offset_bytes = valid_token_rows * row_bytes});
+        noc.write_zeros_l1_barrier();
+    }
 
     uint32_t row_index_l1 = 0;
     if constexpr (row_indexed) {
@@ -72,7 +92,7 @@ void kernel_main() {
             }
             noc.async_read_barrier();
         }
-        for (uint32_t token_idx = 0; token_idx < TOKENS_PER_CHUNK; ++token_idx) {
+        for (uint32_t token_idx = 0; token_idx < rows_to_process; ++token_idx) {
             uint32_t global_token_idx = token_start_idx + token_idx;
 
             for (uint32_t expert_base = 0; expert_base < num_experts; expert_base += experts_per_batch) {

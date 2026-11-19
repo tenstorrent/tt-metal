@@ -302,6 +302,12 @@ class TTSampling(LightweightModule):
         raw_batch = getattr(args, "max_batch_size", 32)
         self.max_batch_size = max(32, ((raw_batch + 31) // 32) * 32)
         self.max_top_k = getattr(args, "max_top_k", 32)
+        # Native widening is opt-in: unrelated models retain the default draw.
+        self._sampling_draw_width = getattr(args, "device_sampling_draw_width", 32)
+        if self._sampling_draw_width not in (32, 64):
+            raise ValueError("device_sampling_draw_width must be 32 or 64")
+        if self._sampling_draw_width == 64 and self.max_top_k != 64:
+            raise ValueError("The 64-candidate device draw requires max_top_k=64")
         self.cluster_shape = args.cluster_shape
 
         self.sampling_all_gather_axis = getattr(args, "sampling_all_gather_axis", 0)
@@ -1475,6 +1481,7 @@ class TTSampling(LightweightModule):
             temp=self.temp_tensor,
             sub_core_grids=self._sampling_sub_core_grids,
             output_tensor=tt_out_tok,
+            max_top_k=self._sampling_draw_width,
         )
 
         # Compute logprobs if enabled

@@ -405,7 +405,8 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
              {"logWt", static_cast<uint32_t>(std::log2(Wt))},
              {"seed", random_seed},
              {"tile_width", tile_width},
-             {"stable_sort", static_cast<uint32_t>(stable_sort)}},
+             {"stable_sort", static_cast<uint32_t>(stable_sort)},
+             {"max_top_k", operation_attributes.max_top_k}},
         .hw_config = ComputeHardwareConfig{compute_config},
     };
 
@@ -493,7 +494,7 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
                  // out_stick_size is supplied for every writer but read by none of them.
                  {"out_stick_size", aligned_out0_unit_size},
                  {"core_id", core_index},
-                 {"ids_per_batch", tile_width},
+                 {"ids_per_batch", operation_attributes.max_top_k == 64 ? 64 : tile_width},
                  {"num_cores", num_cores},
                  {"use_32bit_index", static_cast<uint32_t>(use_32bit_index)},
                  {"num_users", num_users}},

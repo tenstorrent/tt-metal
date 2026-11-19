@@ -1,0 +1,15 @@
+# Completed third-attempt accuracy audit
+
+CPU-only independent audit of immutable accuracy JSON and recorded recipe metadata. No network, model requests, dataset reconstruction, heavy ML imports, device access, or scorer execution. Performance outputs were not read or changed.
+
+**No factual or protocol inconsistency found in the checked accuracy evidence.**
+
+- All 14 MMLU-Pro and 18 IFEval selected document IDs and content hashes match the frozen manifest. The manifest checksum and original subset identity match. All 32 response IDs and request-instance identities are unique; links join the correct task/document and raw response. Every request hash matches both its upstream scored-sample arguments and the previously retained structured input for that frozen document.
+- All 32 scored sample responses equal the corresponding raw final-answer content exactly. Hidden reasoning is not substituted into the scored answer. Every response ended with `stop`; none is blank or cap-limited.
+- MMLU-Pro upstream per-document values aggregate to **11/14 = 78.5714%**. One question per subject makes this identical to the configured subject macro. IFEval upstream values aggregate to **15/18 = 83.3333%** prompt strict and loose, and **29/32 = 90.625%** instruction strict and loose. These are the complete frozen-subset results, unlike attempt 2's 17-response diagnostics.
+- Previously missing IFEval document **59** has a retained, linked, scored response: `chatcmpl-a0e8f6a5c1c9ead8`, normal stop, **16,352 completion tokens**, and **2,069 final-content characters**. No question is missing from this attempt's denominator.
+- Independently recomputed extraction/blank counts and nearest-rank token summaries match `completed-accuracy-statistics.json`: MMLU extraction14/14, median/p90/max1521/2295/2560; IFEval extraction18/18,2438/6025/16352; blank-at-cap0 for both; configured/recommended cap32768. Empty advisory list is consistent with these statistics.
+- Stored MMLU recipe uses five validation examples, `first_n`, upstream subject CoT descriptions and `custom-extract`; sample contexts contain six user and five assistant turns. IFEval is zero-shot and its contexts contain one user turn. These structured contexts contain no native ChatML delimiter wrapping, consistent with one server-side native template application. This JSON audit checks consistency, not a new server template execution.
+- Both task metadata records agree on native thinking, the configured generation overrides, concurrency32, shared groups, **3844.048666 seconds** shared accuracy elapsed time, and **28800-second** HTTP timeout. Generation settings are unchanged from the frozen recipe and match run configuration.
+
+Scope limits: no dataset population was reloaded, upstream instruction scorers were not rerun, and no performance or final stage-completion verdict is made. Population/few-shot provenance is the frozen manifest plus the matching original request contexts; aggregation checks use the retained upstream per-document judgments.

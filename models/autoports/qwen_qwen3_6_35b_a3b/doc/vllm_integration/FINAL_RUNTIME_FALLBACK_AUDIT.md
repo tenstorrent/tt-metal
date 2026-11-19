@@ -1,0 +1,45 @@
+# Final runtime and fallback source audit
+
+CPU-only AutoFix validation, 2026-11-17; **not an independent stage review**. No production edits, device jobs or live requests were performed. This source audit is supplemented below with completed owner runtime evidence; it remains separate from independent stage review.
+
+## Canonical device path
+
+`tt/generator_vllm.py:109–130,141–184,223–224,289–305` composes `QwenGenerator` and delegates prefill, command-based decode, readback and host conversion. It does not implement another model or sampler. `tt/serving.py:386–397` executes the selected prepared model trace, calls `generator.replay_sampling()`, then snapshots `generator.tokens`. Device mode directly bypasses the optional `_sample()` host branch. Prefill likewise places low-level final device logits into the common sampler buffer and invokes the same replay (`serving.py:530–560`).
+
+`generator.py:493–502,586–602` uses one canonical `SamplingGenerator._run_sampling`: max_top_k64 candidates, retained native32/native64 draws, shared parameter/seed/token buffers, active-row token preservation and device seed advancement. The physical-row selector includes dormant k40/64 owners. Greedy maps to the canonical k1/p0/temperature1 draw (`:219–265`). This model does not enable the common sampler's separate force-argmax mode: its arguments omit `SAMPLING_AG_CONFIG`, whose default sets `_allow_force_argmax_sampling=False` (`models/common/sampling/tt_sampling.py:360–370`). There is no separate generic top-k greedy fallback.
+
+On device-mode output, `serving_state.py:506–545` copies and reads the fixed token buffer and gathers requested rows. Full-vocabulary concatenation is confined to its explicit `is_tokens=False` branch (`:546–549`). Read token IDs are validated and returned to the caller; they are not written back for resident decode. The next model trace reads the canonical device token buffer, and model-owned positions advance on device (`tt/model.py:397–401`). No host argmax, full-logit readback or Python token-feedback loop was found on the device path.
+
+## Explicit optional host boundary
+
+`QwenGenerator(host_sampling=False)` remains the default; the adapter does not enable it. Standalone `host_sampling=True` is explicit diagnostic compatibility and permits `_sample()` to read logits/sample/upload (`generator.py:635–665`). Serving's separate explicit boundary is `sampling_params=None`: it returns owned logits for the plugin's host sampler. That route supports tests needing logprobs or other features excluded by device capabilities; it is not the performance path.
+
+The advertised device bound is now64 (`serving_capabilities.py:33`). All three serving validation sites read the owning sampler's capacity (`serving.py:315–326,504`); stochastic unbounded/k>64 device requests reject rather than silently clamp or retry. Device penalties/grammar and selective/compact host-logit readback remain explicitly unsupported. Host/device transitions require authoritative inputs; host→device also requires parameter reload and state reset (`serving.py:222–228`). Exception handlers discard/drain owned outputs or poison state; none retries through a host sampler. The required flushed `QWEN_DECODE sampling_mode=device|host` line remains present on every decode (`generator_vllm.py:80–88`), even with detailed auditing disabled.
+
+## Cache, ownership and avoided refresh work
+
+vLLM supplies ten attention-cache specifications; model allocation maps them into the40-layer hybrid state. The adapter passes that exact allocation into the generator and returns it to vLLM (`generator_vllm.py:109–127`). Consequently the standalone allocation branch in `generator.py:73` is not taken. Warmup and command decode reject a different cache identity (`generator_vllm.py:125–127`; `serving.py:216–217`); no hidden standalone cache is rebound. Recurrent state remains outside prefix-cache eligibility.
+
+Two preallocated immutable output leases protect pending answers (`serving_state.py:452–555`). Request/remap/sampling mutations require drained outputs (`serving.py:349–356`); unchanged resident steps can overlap. The pinned plugin finalizer synchronizes returned events before the adapter process hook; direct generator callers retain their own wait, and synchronous published handles retain blocking reads. Page-only updates preserve tokens/positions; `_bind_pages` skips copies when CPU page-table shadows match (`generator.py:306–323`). Resident commands do not even inspect stale token/position payloads (`serving.py:230–254`). Identity remaps avoid device mutation, and validated internal permutations avoid repeated CPU conversion. Required snapshot copies, active-state masks and per-step route logging remain.
+
+## Why the serving bucket is2 rather than1
+
+Capacity32 serves a solo low slot with B2 and preserves the grouped expert path; a high physical slot can still require B32. The generator rejects B1 buckets when capacity>1. This is a numerical/execution constraint, not evidence of scheduler overhead: singleton `decode_batch` enters a different decode path (`multichip_decoder.py:1807–1811`), singleton MoE uses indexed sparse matmuls, while multirow MoE pads internal expert work to32 and executes grouped dispatch/fused SwiGLU/combine (`:1548–1552,1567–1612`). Inactive masking and conditional state commits protect dormant owners.
+
+`doc/full_model/AUTODEBUG_MIXED.md` records grouped-rounding sensitivity and a separately exposed B1-versus-grouped mismatch, with its revision/provenance caveats. It does not establish interchangeable B1/B32 arithmetic. B2/B32 exact controls therefore cannot authorize a switch to B1. The mandatory fused-reader completion barrier also makes earlier pre-repair B1 timing an unsuitable overhead subtraction.
+
+`readiness_vllm/serving_overhead/comparison.json` provides the appropriate repaired-source canonical32 B2 comparison: all18 sequences exact, native serial approximately53.83ms, adapter serial53.96ms, and queued adapter async2 approximately53.75ms per decode interval, for128 input/128 output, capacity32/context262144 and8224 physical cache pages. It supports no material adapter speedup or dominant adapter penalty; queued throughput is not serial latency. This is historical canonical32 evidence, **not final canonical64 throughput**. Full-model teacher-forcing remains only a lower bound for serving.
+
+## Current scoped runtime evidence and pending closure
+
+- `readiness_vllm/adapter_sampling64_dormant/result.json`: PASS14 checkpoints, reduced layers0/3, capacity3/context1024, real adapter, allocation tracking enabled, four captures/releases. Covers two pending outputs, stale inputs, positions/pages/remap and dormant-wide→narrow ownership. Its page check is not allocator-growth evidence.
+- `readiness_vllm/final64_gate/lifecycle_summary.json`: PASS18 checks on one server, actual continuation offsets and concurrent decode, allocator/page growth, two pending outputs, both model buckets, stable four traces/no recapture; scoped sampler replay deltas389 narrow/96 wide. These are lifecycle counts, not final sampling/performance route totals.
+- `readiness_vllm/qualitative_controls/tt_final64_quality_review.json`: all12 outputs exact prior canonical32 token sequences and read in full; coherent/on-topic without loops, gibberish, unintended language drift or contamination. Several outputs hit the256-token cap, so completeness is not claimed. This native control used only small k and is unaffected by the dormant-wide selector correction.
+
+Owner to append: final sampling/performance device/host route counts, any fallback/error scan, final workload/source provenance, measured canonical64 performance and explicit no-leftover-vLLM/EngineCore device-holder evidence. `generator.close()` drains/discards outstanding leases and releases every retained trace (`generator.py:899–908`), but that source path alone does not prove final process cleanup.
+
+## Completed final runtime evidence
+
+`final64_gate/execution.json`: full canonical sampling exit0,68passed/74skipped/0failed,1345device/986explicit host-compatibility decode; P2all15,2547device/0host; qualitative1882device/0host with all12outputs reviewed and degeneracy PASS. `final64_perf/performance_execution.json`: canonical128/128/1,CI100/100/32,prefill128/32/32 benchmarks259device/0host; exact-token matchedHTTP381device/0host. Both jobs exit0, no runtime errors, detailedaudit/trackingdisabled. Final matchedHTTP TPOT53.751ms against repaired nativeB2serial53.806ms does not show a dominant vLLM decode penalty; boundaries differ and two measured samples are descriptive.
+
+Both final64 tracked/performance servers have idle SIGINT shutdown records, all4captures/releases, no remaining owned PIDs and `fuser` exit1 with empty output. Performance shutdown aggregates640device/0host decode. No leftover vLLM/EngineCore holds devices. The stage check reports no degenerate output; overall exit1 is only the serial-prefill comparison advisory. No additional hardware run is needed for that advisory.

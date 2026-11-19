@@ -306,70 +306,117 @@ void top_k() {
         input_transposed_dfb.push_back(Wt);
         index_transposed_dfb.push_back(Wt);
 
-        // iterative divide and conquer on pairs of tiles (bitonic topk merge and rebuild)
-        // first iteration we compare 0th and 1st tile, then 2nd and 3rd, etc. We get the sorted top 32 values in each
-        // pair. second iteration we compare 0th and 2nd tile, then 4th and 6th, etc. logWt iteration we compare 0th and
-        // Wt/2 tile single buffer as we can pack tiles back in-place
-        for (uint32_t m_iter = 0; m_iter < logWt; ++m_iter) {
-            bool a = false;
-            input_transposed_dfb.wait_front(Wt);
-            index_transposed_dfb.wait_front(Wt);
+        if constexpr (K == 64) {
+            // The local phase-5 sort above leaves the first two tiles sorted over 64
+            // positions. Insert every later 32-candidate tile through those two
+            // accumulator tiles. A 64-sort retains 32 winners and carries 32 losers.
+            // Original candidate indices travel through the same stable network.
+            for (uint32_t tile = 2; tile < Wt; ++tile) {
+                for (uint32_t level = 0; level < 2; ++level) {
+                    input_transposed_dfb.wait_front(Wt);
+                    index_transposed_dfb.wait_front(Wt);
+                    tile_regs_acquire();
+                    reconfig_data_format_srca(index_transposed_dfb_index, input_transposed_dfb_index);
+                    copy_init(input_transposed_dfb_index);
+                    copy_tile(input_transposed_dfb_index, level, 0);
+                    copy_tile(input_transposed_dfb_index, tile, 1);
+                    reconfig_data_format_srca(input_transposed_dfb_index, index_transposed_dfb_index);
+                    copy_init(index_transposed_dfb_index);
+                    copy_tile(index_transposed_dfb_index, level, 2);
+                    copy_tile(index_transposed_dfb_index, tile, 3);
+                    ckernel::topk_local_sort<
+                        stable_sort,
+                        DST_ACCUM_MODE,
+                        /*fused=*/false,
+                        /*rank_stamped=*/false,
+                        ckernel::TopkTieOrder::Descending>(0, 0, 5);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_reconfig_data_format(input_transposed_dfb_index);
+                    pack_tile<true>(0, input_transposed_dfb_index, level);
+                    pack_tile<true>(1, input_transposed_dfb_index, tile);
+                    pack_reconfig_data_format(index_transposed_dfb_index);
+                    pack_tile<true>(2, index_transposed_dfb_index, level);
+                    pack_tile<true>(3, index_transposed_dfb_index, tile);
+                    tile_regs_release();
 
-            for (uint32_t left_ind = 0; left_ind < Wt - (1u << m_iter); left_ind += 2u << m_iter) {
-                const uint32_t right_ind = left_ind + (1u << m_iter);
-                tile_regs_acquire();
-
-                reconfig_data_format_srca(index_transposed_dfb_index, input_transposed_dfb_index);
-                copy_init(input_transposed_dfb_index);
-                copy_tile(input_transposed_dfb_index, left_ind, input_dest_start);
-                copy_tile(input_transposed_dfb_index, right_ind, input_dest_end);
-
-                // unpack indices into dest
-                reconfig_data_format_srca(input_transposed_dfb_index, index_transposed_dfb_index);
-                copy_init(index_transposed_dfb_index);
-                copy_tile(index_transposed_dfb_index, left_ind, index_dest_start);
-                copy_tile(index_transposed_dfb_index, right_ind, index_dest_end);
-
-                // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
-                ckernel::topk_merge<
-                    /*idir=*/false,
-                    stable_sort,
-                    DST_ACCUM_MODE,
-                    /*fused=*/false,
-                    /*rank_stamped=*/false,
-                    ckernel::TopkTieOrder::Descending>(0, static_cast<int>(m_iter), K);
-                // sort within the larger 32 values
-                ckernel::topk_rebuild<
-                    stable_sort,
-                    DST_ACCUM_MODE,
-                    /*fused=*/false,
-                    /*rank_stamped=*/false,
-                    ckernel::TopkTieOrder::Descending>(
-                    0, static_cast<uint32_t>(a), static_cast<int>(m_iter), K, logk, true);
-
-                tile_regs_commit();
-                tile_regs_wait();
-                // pack value tiles in-place in the single-buffered cb_intermed0, we only need the upper 32 values for
-                // topk, which was in input_dest_start
-                pack_reconfig_data_format(input_transposed_dfb_index);
-                pack_tile<true>(input_dest_start, input_transposed_dfb_index, left_ind);
-
-                // pack index tiles in-place in the single-buffered cb_intermed1, we only need the upper 32 values for
-                // topk, which was in index_dest_start
-                pack_reconfig_data_format(index_transposed_dfb_index);
-                pack_tile<true>(index_dest_start, index_transposed_dfb_index, left_ind);
-                tile_regs_release();
-                a = !a;
+                    // Re-publish the entire in-place buffer before the next unpack
+                    // reads the freshly packed carry. This is the same pack/unpack
+                    // handoff used between stages of the original merge tree.
+                    input_transposed_dfb.reserve_back(Wt);
+                    index_transposed_dfb.reserve_back(Wt);
+                    input_transposed_dfb.pop_front(Wt);
+                    index_transposed_dfb.pop_front(Wt);
+                    input_transposed_dfb.push_back(Wt);
+                    index_transposed_dfb.push_back(Wt);
+                }
             }
+        } else {
+            // iterative divide and conquer on pairs of tiles (bitonic topk merge and rebuild)
+            // first iteration we compare 0th and 1st tile, then 2nd and 3rd, etc. We get the sorted top 32 values in
+            // each pair. second iteration we compare 0th and 2nd tile, then 4th and 6th, etc. logWt iteration we
+            // compare 0th and Wt/2 tile single buffer as we can pack tiles back in-place
+            for (uint32_t m_iter = 0; m_iter < logWt; ++m_iter) {
+                bool a = false;
+                input_transposed_dfb.wait_front(Wt);
+                index_transposed_dfb.wait_front(Wt);
 
-            input_transposed_dfb.reserve_back(Wt);
-            index_transposed_dfb.reserve_back(Wt);
+                for (uint32_t left_ind = 0; left_ind < Wt - (1u << m_iter); left_ind += 2u << m_iter) {
+                    const uint32_t right_ind = left_ind + (1u << m_iter);
+                    tile_regs_acquire();
 
-            input_transposed_dfb.pop_front(Wt);
-            index_transposed_dfb.pop_front(Wt);
+                    reconfig_data_format_srca(index_transposed_dfb_index, input_transposed_dfb_index);
+                    copy_init(input_transposed_dfb_index);
+                    copy_tile(input_transposed_dfb_index, left_ind, input_dest_start);
+                    copy_tile(input_transposed_dfb_index, right_ind, input_dest_end);
 
-            input_transposed_dfb.push_back(Wt);
-            index_transposed_dfb.push_back(Wt);
+                    // unpack indices into dest
+                    reconfig_data_format_srca(input_transposed_dfb_index, index_transposed_dfb_index);
+                    copy_init(index_transposed_dfb_index);
+                    copy_tile(index_transposed_dfb_index, left_ind, index_dest_start);
+                    copy_tile(index_transposed_dfb_index, right_ind, index_dest_end);
+
+                    // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
+                    ckernel::topk_merge<
+                        /*idir=*/false,
+                        stable_sort,
+                        DST_ACCUM_MODE,
+                        /*fused=*/false,
+                        /*rank_stamped=*/false,
+                        ckernel::TopkTieOrder::Descending>(0, static_cast<int>(m_iter), K);
+                    // sort within the larger 32 values
+                    ckernel::topk_rebuild<
+                        stable_sort,
+                        DST_ACCUM_MODE,
+                        /*fused=*/false,
+                        /*rank_stamped=*/false,
+                        ckernel::TopkTieOrder::Descending>(
+                        0, static_cast<uint32_t>(a), static_cast<int>(m_iter), K, logk, true);
+
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    // pack value tiles in-place in the single-buffered cb_intermed0, we only need the upper 32 values
+                    // for topk, which was in input_dest_start
+                    pack_reconfig_data_format(input_transposed_dfb_index);
+                    pack_tile<true>(input_dest_start, input_transposed_dfb_index, left_ind);
+
+                    // pack index tiles in-place in the single-buffered cb_intermed1, we only need the upper 32 values
+                    // for topk, which was in index_dest_start
+                    pack_reconfig_data_format(index_transposed_dfb_index);
+                    pack_tile<true>(index_dest_start, index_transposed_dfb_index, left_ind);
+                    tile_regs_release();
+                    a = !a;
+                }
+
+                input_transposed_dfb.reserve_back(Wt);
+                index_transposed_dfb.reserve_back(Wt);
+
+                input_transposed_dfb.pop_front(Wt);
+                index_transposed_dfb.pop_front(Wt);
+
+                input_transposed_dfb.push_back(Wt);
+                index_transposed_dfb.push_back(Wt);
+            }
         }
 
         constexpr uint32_t Kt = K % tile_width == 0 ? K / tile_width : (K / tile_width) + 1;
@@ -466,8 +513,8 @@ void kernel_main() {
     constexpr bool stable_sort = get_arg(args::stable_sort) == 1;
     generate_rand_tile(dfb::rand_tile, seed);
 
-    const uint32_t nearest32_K = 32;
-    const uint32_t logk = 5;  // log(32)
+    constexpr uint32_t nearest32_K = get_arg(args::max_top_k);
+    constexpr uint32_t logk = nearest32_K == 64 ? 6 : 5;
 
     // top-k
     top_k<

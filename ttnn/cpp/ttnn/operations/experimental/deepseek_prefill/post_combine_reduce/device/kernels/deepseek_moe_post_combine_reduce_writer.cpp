@@ -50,6 +50,11 @@ constexpr uint32_t weights_per_batch =
     get_compile_time_arg_val(indices_accessor_args.next_compile_time_args_offset() + 3);
 
 constexpr uint32_t TOKENS_PER_CHUNK = 32;
+constexpr uint32_t valid_token_rows =
+    get_compile_time_arg_val(indices_accessor_args.next_compile_time_args_offset() + 4);
+constexpr uint32_t rows_to_process = valid_token_rows == 0 ? TOKENS_PER_CHUNK : valid_token_rows;
+static_assert(valid_token_rows <= TOKENS_PER_CHUNK);
+static_assert(valid_token_rows == 0 || use_dispatch_table_skip);
 
 void kernel_main() {
     // Runtime arg layout: weight_addr, output_addr,
@@ -119,9 +124,9 @@ void kernel_main() {
         uint32_t indices_write_addr = 0;
         if constexpr (use_dispatch_table_skip) {
             const auto indices_addrg = TensorAccessor(indices_accessor_args, indices_addr, indices_page_size);
-            cb_indices.reserve_back(TOKENS_PER_CHUNK);
+            cb_indices.reserve_back(rows_to_process);
             indices_write_addr = cb_indices.get_write_ptr();
-            for (uint32_t i = 0; i < TOKENS_PER_CHUNK; i++) {
+            for (uint32_t i = 0; i < rows_to_process; i++) {
                 noc.async_read(
                     indices_addrg,
                     cb_indices,
@@ -132,11 +137,11 @@ void kernel_main() {
             noc.async_read_barrier();
             // Indices stay as uint16 in the CB — the compute kernel reads them
             // directly via read_tile_value_uint16.
-            cb_indices.push_back(TOKENS_PER_CHUNK);
+            cb_indices.push_back(rows_to_process);
         }
 
         if constexpr (weights_per_token) {
-            for (uint32_t i = 0; i < TOKENS_PER_CHUNK; ++i) {
+            for (uint32_t i = 0; i < rows_to_process; ++i) {
                 noc.async_read(
                     weight_tok_addrg,
                     CoreLocalMem<uint32_t>(wtok_l1 + i * weights_aligned_page_size),
@@ -148,7 +153,7 @@ void kernel_main() {
         }
 
         // Phase 1: Stream one weight per expert per token for this chunk
-        for (uint32_t token_idx = 0; token_idx < TOKENS_PER_CHUNK; ++token_idx) {
+        for (uint32_t token_idx = 0; token_idx < rows_to_process; ++token_idx) {
             uint32_t global_token_idx = token_start_idx + token_idx;
 
             bool has_local = true;

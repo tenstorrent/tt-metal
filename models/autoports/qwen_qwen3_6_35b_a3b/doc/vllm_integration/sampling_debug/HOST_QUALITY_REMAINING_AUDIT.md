@@ -1,0 +1,48 @@
+# Remaining constrained-thinking quality audit
+
+**No further small production repair is justified by the current source and completed evidence while preserving the selected precision policy and canonical sampler.** The two loop trajectories have now been reproduced outside HTTP serving, and their first changed draws are explained by HF/TT numerical distribution differences on identical histories and reconstructed noise. That localizes those draws upstream of host sampling. It does not identify an incorrect operator, establish that all differences are unavoidable quantization, or pass the failed quality comparison.
+
+This was a source/artifact-only AutoFix review. No hardware operation, CPU model inference, production edit, sampler edit, or selected-policy edit was performed. The only file written by this review is this report.
+
+## Completed evidence and its limits
+
+References are relative to `models/autoports/qwen_qwen3_6_35b_a3b`.
+
+- `readiness_vllm/sampling_controls/tt_native_host_card.json` is `PASS/EXACT`: seed 0 reproduces all 770 HTTP tokens and seed 3 reproduces all 1024, including the loops. Its recorded precision dictionary exactly equals `doc/datatype_sweep/selected_precision_config.json`. This argues against a serving-only cause for these two captured trajectories. It does not prove every scheduling/cache/concurrency state correct.
+- `hf_boundary_card.json` records six completed incremental HF comparisons. All six native recorded draws are reproduced using the native compact processed distribution and reconstructed full-vocabulary exponential noise. The two different winners occur at the original first divergences: seed 0/index 44 and seed 3/index 16. HF and native histories agree there, and each HF winner matches the original native HF control. Seed 3/index 44 is explicitly a teacher-forced native history that already differs from the original HF trajectory.
+- `hf_shared_sampler_equivalence.json` is **NINE_EXACT_ONE_DIVERGED**, not all-exact. Seed 6 changes at index 218, producing 350 rather than 764 tokens. The prior source audit's three completed exact seeds were a partial observation. Neither the synthetic RNG equality checks nor nine matching trajectories establish all-trajectory equivalence. One changed HF quality score could increase the original HF failure count from 2 to at most 3; HTTP remains 6, still beyond the permitted 20-point margin. No retrospective rescoring or waiver follows.
+- The frozen model-card comparison remains HF 2/10 versus HTTP 6/10 quality failures. The direct-answer default is a separate operator policy with separate validation. It does not repair or accept the explicit-thinking comparison.
+
+At seed 0/index 44 both processed supports are exactly `{198, 695}`. Token 198 (newline) has raw HF/TT logits 22.875/22.625; token 695 (space-newline) is 17.625 on both. Presence subtracts the same 1.5 from the already-seen newline. The same noise then selects HF 198 versus native 695. The winning log-race margins are approximately 0.1214 and 0.1286 in opposite directions. A 0.25 change in relative logit gap is enough to cross this particular sampling boundary.
+
+At seed 3/index 16 both supports are `{198, 561}`. Neither token has appeared in the generated history. HF/TT raw logits are 26.625/26.75 for newline and 26.5/25.625 for ` The`. HF's relative gap is 0.125; TT's is 1.125. The same noise selects HF 561 versus native 198. Presence handling cannot explain this difference because neither candidate is penalized.
+
+These examples isolate the changed draw without an incorrect mask, different candidate support, or different noise being required. They do not show which upstream layer first changed, or show that the first changed token alone causes the later loop. Candidate statistics cover the captured native raw top 128, not the full vocabulary.
+
+## Source checks on possible small repairs
+
+The retained policy intentionally includes BFP8 dense/expert/LM-head weights, LoFi active-expert work, BF16 public activation/residual/logit boundaries, and an FP32/HiFi2 terminal head accumulation policy. Native HF BF16 does not use the same quantized weights or all the same arithmetic. A difference between their logits is therefore not by itself an implementation defect.
+
+The source checks below did not reveal a conflicting implementation contract:
+
+| Candidate | Inspected source and disposition |
+| --- | --- |
+| Selected precision silently bypassed | `tt/precision.py` resolves the selected artifact by default, validates a complete schema, and fixes the named activation/router/norm boundaries. The completed native artifact's policy matches the selected JSON exactly. Its loops are not evidence of an accidental alternative policy. |
+| Wrong final norm weight convention or premature BF16 cast | `tt/model.py:146` adds one to the checkpoint norm weight in FP32. `terminal` at `:268` casts residual input to FP32, applies RMSNorm with the configured epsilon and FP32 weight, then casts normalized output to selected BF16. Installed HF `Qwen3_5MoeRMSNorm` similarly normalizes FP32 input, multiplies by `1 + weight.float()`, then casts back. I found no missing `+1`, wrong epsilon source, or misplaced public cast to repair. Reduction/reciprocal implementation can still differ numerically. |
+| Wrong terminal projection shape/indexing or hidden fidelity override | `tt/model.py:141` transposes and pads checkpoint head weights, shards vocabulary columns, and uploads the selected head dtype. Its compute configuration comes from selected `lm_head` fidelity. `tt/lm_head.py` carries that configuration and output dtype into `ttnn.linear`; DRAM padding is storage geometry. No conflicting vocabulary index or configuration was found. Existing stage-7 native evidence records BFP8/HiFi2/FP32 head execution. None of this localizes the new difference specifically to the head. |
+| Router formula obviously different from the model | `tt/multichip_decoder.py:1541` selects top-eight logits and softmaxes them. Installed HF softmaxes all router logits, selects the top eight probabilities, and renormalizes. These are mathematically equivalent for ordinary finite logits, but need not be floating-point-identical; tie/rounding behavior also needs actual operands. The boundary artifacts contain no actual router inputs, IDs, or scores showing this distinction causes either changed draw. Switching formulas now would be speculative. |
+| Missing presence penalty, sampler randomness, or HTTP-only state corruption | Earlier source/CPU audit plus the completed native/HTTP and boundary controls directly challenge these hypotheses. No contradictory sampler metadata or state transition is recorded. The seed-3 changed candidates have no presence penalty at all. There is no supported repair in this area for the observed first differences. |
+
+The observed output-logit increments are compatible with BF16 output granularity: near 22–27 the representable spacing is 0.125. Seed 0's newline delta is two output increments; seed 3's ` The` delta is seven. This is **not** proof that final BF16 rounding caused the difference. Both endpoints already return BF16 logits, and different hidden states, quantized weights, routing, or reduction arithmetic can accumulate before that rounding.
+
+The earlier `doc/datatype_sweep/resume_wrapup_assessment.md` is relevant caution rather than a diagnosis of these short requests. It records sensitivity to shape, routing and internal grouped-MoE arithmetic, plus several unsuccessful policy/arithmetic variants. It also explicitly records owner closure and no further resumed-prefill investigation. Those historical failures do not justify reopening that accepted scope or promoting an old unsuccessful variant as a repair for this new quality gate. Conversely, that acceptance does not waive this separate failed comparison.
+
+## Repair boundary and experiment disposition
+
+No numerical calculation or state transition in the inspected path is demonstrated to violate its intended contract. Consequently there is no evidence-backed edit to apply now. Keeping the JSON byte-for-byte unchanged while silently changing a kernel's weight interpretation, fidelity, stochastic rounding, precision boundary, or arithmetic contract would not meaningfully preserve the selected policy.
+
+In particular, there is no basis here for increasing precision/fidelity, disabling selected rounding, altering the presence/frequency penalty, switching RNGs, biasing newline/space-newline tokens, forcing reasoning termination, or changing bans. Such changes could change this finite sample, but that would not establish a repair of a demonstrated defect under the same contract.
+
+**No additional small discriminating experiment is recommended by this source review.** The existing evidence supports full-model numerical divergence, but it does not single out terminal norm, LM head, routing, recurrence, or an individual kernel for a focused hypothesis test. Repeating the already-resolved sampler/HTTP/native comparisons would not close that localization gap. Choosing one operator merely because it can change a marginal draw would be a speculative experiment, not the source-supported check requested here.
+
+Further numerical repair would require new intermediate evidence identifying an inconsistent calculation under the unchanged policy. That is an unresolved localization need, not a proposed new workload or a finding that quantization explains everything. The honest current disposition is: **constrained-thinking quality comparison remains failed; no additional minimal repair demonstrated; canonical sampler and selected precision remain unchanged.**

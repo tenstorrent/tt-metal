@@ -62,6 +62,24 @@ void PostCombineReduceDeviceOperation::validate_on_program_cache_hit(
         operation_attributes.expert_dim,
         combine_rank);
 
+    if (operation_attributes.valid_token_rows != 0) {
+        TT_FATAL(operation_attributes.valid_token_rows <= 32, "valid_token_rows must be in [1, 32] (0 disables)");
+        TT_FATAL(indices.has_value(), "valid_token_rows requires the dispatch-table expert-skip path");
+        TT_FATAL(!tensor_args.combine_row_index.has_value(), "valid_token_rows does not support combine_row_index");
+        TT_FATAL(
+            operation_attributes.expert_dim + 2 == combine_rank,
+            "valid_token_rows requires the expert dimension immediately before embedding");
+        TT_FATAL(combine_shape[operation_attributes.expert_dim] > 0, "valid_token_rows requires at least one expert");
+        uint64_t token_rows = 1;
+        for (uint32_t dim = 0; dim < operation_attributes.expert_dim; ++dim) {
+            token_rows *= combine_shape[dim];
+        }
+        TT_FATAL(token_rows == 32, "valid_token_rows requires exactly one physical 32-row chunk, got {}", token_rows);
+        TT_FATAL(
+            combine_shape[-1] > 0 && combine_shape[-1] % 1024 == 0,
+            "valid_token_rows requires an embedding dimension divisible by 1024");
+    }
+
     const auto& weights_shape = weights.padded_shape();
     const auto weights_rank = weights_shape.rank();
     // Two weight layouts: one weight per page ([..., num_experts, 1], rank == combine rank), or one token's weights
@@ -190,12 +208,13 @@ ttnn::Tensor post_combine_reduce(
     uint32_t expert_dim,
     const tt::tt_metal::MemoryConfig& output_memory_config,
     const std::optional<ttnn::Tensor>& combine_row_index,
-    uint32_t skip_row) {
+    uint32_t skip_row,
+    uint32_t valid_token_rows) {
     namespace pcr = ttnn::operations::experimental::deepseek_prefill::post_combine_reduce;
     using OperationType = pcr::PostCombineReduceDeviceOperation;
 
     return ttnn::device_operation::launch<OperationType>(
-        pcr::PostCombineReduceParams{expert_dim, output_memory_config, skip_row},
+        pcr::PostCombineReduceParams{expert_dim, output_memory_config, skip_row, valid_token_rows},
         pcr::PostCombineReduceInputs{combine_output, weights, indices, expert_dispatch_table, combine_row_index});
 }
 

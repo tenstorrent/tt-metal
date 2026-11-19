@@ -1,0 +1,13 @@
+# Pending recall acceptance work
+
+Production source remains the measured commit08384c10. Do not mutate it while the current tracked server owns the devices.
+
+1. Finish the original full sampling profile, preserve JUnit and exact traceback. Both solo raw tests passed; concurrent raw failed. Determine actual TT failure class before claiming HF attribution. Reasoning truncation and wrong-needle contamination are different.
+2. HF controls now pass all14 exact prompts as explicit nonthinking chat with original24cap. `recall_fourteen_fixtures.json` combines fixture definitions and references the losslessly compressed twelve-case HF outputs plus two solo HF outputs. The raw HF12 control and partial default-thinking839-token diagnostic remain separate evidence.
+3. Only after the original pytest exits, preserve its old three-test override fixture and hash. Candidate model-owned fixture change: add the three exact `test_chunked_prefill.py` node names to the request-level nonthinking override. Use existing plugin `--tt-recall-reasoning-effort=low --tt-recall-reasoning-token-budget=0 --tt-chunked-prefill-budget=2048`. No shared plugin change, no cap/assertion/seed/concurrency/round change. This is explicitly configured chat recall, not unchanged-default sampling.
+4. Run all three canonical recall tests with request/response logging. Check actual audit intervals: nonzero start modulo256, multiple pending prefills, decode between resumptions, stable six traces and no traffic recapture/release. The new chat prompt lengths must be recorded; passing a different aligned schedule cannot close original ragged coverage. If only serving fails, compare exact serial ragged partitions versus decode interleaving.
+5. Complete shared default-thinking qualitative and checkpoint-default check on the live server. Clean it through stop_idle_server.py before native controls.
+6. Run the current native quality harness at actual served cache/context with shared256 suite plus `--recall-fixtures .../optimized_acceptance_recall/recall_fourteen_fixtures.json --recall-max-tokens24 --recall-thinking off`. Read every output and require `recall_control.all_recalled_and_completed`, not merely runner status.
+7. Repeat the full sampling profile with the final explicit request configuration, preserving original failure. Async-versus-sync, corrected untracked performance collection, three-budget eval and final stage-review remain pending.
+
+No quality waiver follows from single greedy controls; a broader HF/TT content-quality attribution requires the skill’s matched model-card ten-seed blind comparison.

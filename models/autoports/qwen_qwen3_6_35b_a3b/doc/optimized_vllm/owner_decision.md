@@ -1,0 +1,7 @@
+# Stage 10 owner acceptance — 2026-11-18
+
+Owner decision (Vladan, full autonomy delegated to the hub): ACCEPT the two missed stage-10 speed floors as recorded known limitations (128/128 single user 31.82 vs 46.23 tok/s/user; 32 users x 6000 output 2.36 vs 4.76 tok/s/user), consistent with the earlier owner decisions on speed floors for this model (stage 5) and others. Record them in limitations with the measured evidence, keep the best validated configuration, run the diff-only review round if needed, and complete stage 10. No further speed work in this stage.
+
+This decision accepts only the recorded single-user and batch32 speed shortfalls. It does not claim that either floor was met or reproduced by HF, change measured results, relax correctness, or promote the experimental P4 candidate. The retained source and configuration remain unchanged. The full-context and long-answer runs have completed; no additional speed work or repeated hardware run is authorized in this stage.
+
+`owner_acceptance.json` records the exact decision, workload shapes, measured values, floors and evidence paths. Both limitations files link that record. The installed checker has no explicit-owner-decision waiver branch: it recognizes only an HF-same control or a two-hour fix attempt. Its raw exit2 remains a historical/mechanical result, separately reconciled with this explicit owner revision. Fix time remains0.5786h and `original_model` remains unchanged; no automatic waiver is fabricated. The installed package remains read-only.

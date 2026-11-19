@@ -48,6 +48,10 @@ namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce 
  * - indices (optional): [dispatch_group_size, seq_len, num_experts_per_tok] (ROW_MAJOR, INT32)
  * - expert_dispatch_table (optional): [num_routed_experts] (ROW_MAJOR, INT32) — sharded per dispatch group
  *
+ * valid_token_rows (default 0, disabled) optionally computes only a prefix of one 32-token chunk
+ * and writes positive zero to the remaining rows. Restricted to the dispatch-table path without
+ * combine_row_index and an embedding divisible by 1024. The caller guarantees omitted rows are padding.
+ *
  * Output shape:
  * - [dispatch_group_size, seq_len, emb_dim] (TILE_LAYOUT, ready for reduce_scatter)
  */
@@ -59,6 +63,7 @@ ttnn::Tensor post_combine_reduce(
     uint32_t expert_dim = 3,
     const std::optional<tt::tt_metal::MemoryConfig>& output_memory_config = std::nullopt,
     const std::optional<ttnn::Tensor>& combine_row_index = std::nullopt,
-    uint32_t skip_row = std::numeric_limits<uint32_t>::max());
+    uint32_t skip_row = std::numeric_limits<uint32_t>::max(),
+    uint32_t valid_token_rows = 0);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce

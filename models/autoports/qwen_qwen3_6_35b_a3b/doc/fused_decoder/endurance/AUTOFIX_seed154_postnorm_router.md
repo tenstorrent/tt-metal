@@ -1,0 +1,41 @@
+# Seed154 position5991: post-attention norm / router hypotheses
+
+Source-only hypotheses pending root's captured tensors; no hardware, TTNN import, or F edits. The all-ordered projection control fails at5991 (contribution PCC about0.994009), and canonical prefix substitution also fails there (about0.993993). These observations show that the Q/Z split and inaccurate initial prefix cache are not necessary causes. They do not establish the first divergent primitive or exclude later recurrent drift.
+
+The relevant path in F is BF16 attention output → `ttnn.add(hidden_states, attention)` → sharded native `rms_norm` with precomputed FP32 `(1+gamma)` → BF16 cast → router linear (FP32-stored checkpoint weights, BF16 decode output) → generalized native top8 gate → sparse experts. Input normalization's exact CPU-order path is selected only for `input_layernorm.weight`; post-attention normalization still uses the native RMSNorm implementation.
+
+Canonical HF RMSNorm explicitly evaluates square/mean/rsqrt and gamma in FP32 before a single cast back to BF16. Its router linear produces BF16 logits from BF16 input/weights, then computes FP32 softmax over all256, selects top8 probabilities, renormalizes selected probabilities, and casts scores to BF16. The native gate sorts logits directly and applies selected-logit softmax. The two formulas are mathematically equivalent away from ordering ties, but not a promise of bit-exact floating-point values or identical tie-breaking. Source: installed `modeling_qwen3_5_moe.py` classes `Qwen3_5MoeRMSNorm`, `Qwen3_5MoeTopKRouter`, `Qwen3_5MoeExperts`; F `norm`, `_forward`, `_moe`.
+
+## Minimal discrimination with position5991 tensors
+
+1. **Check expert-set discontinuity first.** Compare HF selected ids, CPU top8 on TT post-norm input projected through the real checkpoint, top8 of TT BF16 logits, and actual native gate ids. Report the eighth/ninth margin and exact BF16 codes. The running `routing_probe.py` already captures these four views (CPU helper top16 sorts logits; use HF's actual `hf_ids` separately). A changed set can amplify a small upstream difference abruptly. Equal rank8/rank9 logits require a tie-policy diagnosis; do not attribute that case to recurrent precision without evidence.
+2. **Separate upstream norm from router matmul.** If CPU projection on TT post-norm input chooses the TT set, the cause is already in the post-norm input/output. If it chooses the HF set but native projected logits change the boundary, isolate same-input router accumulation/rounding. FP32 weight storage does not imply exact matmul; these are widened BF16 checkpoint values, and native accumulation order differs from CPU.
+3. **Capture the actual input to post norm.** Add a diagnostic capture at `norm(x, 'post_attention_layernorm.weight')` entry, if absent. Compare it with BF16-rounded CPU `(token + captured TT attention)`. This identifies the residual-add boundary; reconstructing that sum only on CPU cannot establish TT's exact input bits. On identical actual norm input, compare native output against canonical CPU FP32 RMSNorm. If this alone flips the boundary, the minimal model control is extending the validated exact normalization arithmetic to post norm, keeping every existing acceptance threshold.
+4. **If sets match, compare score and expert arithmetic.** Capture native routing scores versus canonical HF scores on identical BF16 logits. HF computes softmax over256 then renormalizes; native uses selected softmax with its own exp/reciprocal. Next compare routed/shared branches separately. HF accumulates routed experts via BF16 `index_add_` in ascending expert-id traversal; F sums rank-ordered expert contributions with `ttnn.sum`, a different numerical order. F also folds SiLU/sigmoid into binary multiplies, whereas HF has BF16 intermediate outputs; confirm rounding boundaries on actual operands before changing this path.
+
+The native selected-softmax implementation is in `tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/experimental/ckernel_sfpu_generalized_moe_gate_topk_single_face.h` (`calculate_generalized_moe_gate_combine_finalize` vicinity): max-subtraction, exp21f, selected sum, reciprocal and multiply. The bitonic sorting network tracks expert indices, but source inspection here establishes no contractual equivalence to torch.topk tie selection. Existing native binary/source fingerprint mismatch remains relevant; measured captured ids/scores take precedence over assumptions about current source.
+
+No broad post-norm/router rewrite is justified yet. Same-input captures should select the smallest control. Any canonical injection is diagnostic only and cannot pass the stage; kept fixes require real fused-path seed154 and existing seed42/913/endurance, context, determinism and latency gates unchanged.
+
+## Captured CPU evidence, position5991
+
+Executed `seed154_postnorm_cpu.py` on root's `routing_seed154.json.pos{128,5990,5991,5992}.pt`, loading only checkpoint postnorm/router/output-gated-norm/Z/output-projection weights. Results are `seed154_postnorm_cpu.json`; capture hashes are embedded. No device calls. HF attention and postnorm reconstruct **bit-exactly** at all four positions, validating the CPU counterfactual's checkpoint/formula choices.
+
+At5991, HF router logits233 and252 both equal5.21875 and HF selects233. Actual TT chooses252 at5.25. CPU router on captured TT postnorm also chooses252. Canonical HF postnorm evaluated on CPU-BF16 `(token + captured TT attention)` still yields233=5.21875,252=5.25: **fixing postnorm alone does not remove the observed tie perturbation**. The actual norm input was not captured, so this same-input comparison explicitly assumes canonical BF16 residual-add rounding.
+
+The discrepancy is already substantial between recurrent output and attention output. Rounded TT core differs from HF core in19/4096 BF16 codes, relative L2 0.00009419. Replaying canonical HF output gated norm and CPU output matmul on that TT core gives attention relative L2 0.0013185 against HF. Actual TT attention differs from this canonical-on-TT-core result by relative L2 0.0047815 (1378/2048 BF16 codes). This combined counterfactual cannot independently measure native output projection error, but shows an avoidable output-processing discrepancy larger than the core discrepancy.
+
+CPU output gated-norm boundary ablation, followed by canonical postnorm and router:
+
+| Output processing on captured TT core/Z | logit233 | logit252 | Selected boundary expert |
+|---|---:|---:|---:|
+| Full HF sequence | 5.21875 | 5.21875 | 233 |
+| Keep core FP32 (omit HF core BF16 boundary) | 5.21875 | 5.25 | 252 |
+| BF16 core, fold gamma into FP32 normalization | 5.21875 | 5.25 | 252 |
+| FP32 core and folded gamma | 5.21875 | 5.25 | 252 |
+
+The source difference is concrete: HF's recurrent output enters gated norm as BF16; HF normalizes in FP32, casts normalized values to BF16 **before** multiplying BF16 gamma, stores that gamma product in BF16, multiplies by FP32 SiLU(Z), then casts final output BF16. F's decode core currently enters ordinary native weighted RMSNorm as FP32 and receives one BF16 output before its fused gate multiply. Both HF boundaries are absent from that combined normalization path.
+
+**Minimal principled next device control:** use the actual fused TT core, round it to BF16, apply unweighted RMSNorm with a BF16 normalized boundary, apply gamma with an explicit BF16 result, evaluate SiLU(Z) in FP32, multiply widened weighted-normalized values by it, and return BF16. Leave postnorm/router unchanged initially. A separate core cast alone is insufficient in the CPU ablation above. Native unweighted RMSNorm may still differ in its internal reduction, so this is a falsifiable control, not a proven hardware repair. Preserve existing same-input rounding requirements; no canonical values enter production.
+
+The restored tie still requires verifying the native gate's selection of233 on those actual logits; CPU torch tie selection alone does not prove native behavior. If the actual gated-norm repair restores logits but native ids differ, address tie semantics separately from upstream arithmetic. Final seed154 and seed42/913 fused-path gates remain mandatory.

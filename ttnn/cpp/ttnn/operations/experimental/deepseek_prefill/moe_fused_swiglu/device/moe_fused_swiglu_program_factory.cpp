@@ -607,6 +607,8 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
     // SwiGlu-OAI's SFPU helper is templated on the dst-accumulator mode, which only the host knows;
     // SiTU-GLU reads DST_ACCUM_MODE itself and ignores this.
     compute_descriptor.defines.emplace_back("FP32_DEST_ACC_EN", compute_config.fp32_dest_acc_en ? "1" : "0");
+    compute_descriptor.defines.emplace_back(
+        "MOE_FUSED_SWIGLU_STOCHASTIC_ROUNDING", operation_arguments.stochastic_rounding ? "1" : "0");
     // Exactly one variant define, so each activation caches as its own program. The kernel #errors
     // if both ever arrive.
     if (operation_arguments.fuse_bias) {

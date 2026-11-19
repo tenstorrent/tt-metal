@@ -72,6 +72,13 @@ void bind_post_combine_reduce(nb::module_& mod) {
                     non-local expert in expert_dispatch_table (their L1 slot keeps finite stale data). A row
                     index past the table's last row is not read either.
 
+                valid_token_rows (int, optional): Process only this prefix of a single physical 32-token
+                    chunk and explicitly write positive zero for all remaining output rows. 0 (default)
+                    processes all rows. Requires indices plus expert_dispatch_table, no combine_row_index,
+                    expert_dim immediately before embedding, and embedding divisible by 1024. The caller
+                    must use this only for padded rows whose logical result is zero; omitted inputs and
+                    routing data are not inspected. Valid values are 0 through 32.
+
             Returns:
                 ttnn.Tensor: Reduced output in TILE_LAYOUT ready for reduce_scatter.
                     Shape: [batch, dispatch_group_size, seq_len, emb_dim]
@@ -86,7 +93,8 @@ void bind_post_combine_reduce(nb::module_& mod) {
         nb::arg("expert_dim") = 3,
         nb::arg("output_memory_config") = nb::none(),
         nb::arg("combine_row_index") = nb::none(),
-        nb::arg("skip_row") = std::numeric_limits<uint32_t>::max());
+        nb::arg("skip_row") = std::numeric_limits<uint32_t>::max(),
+        nb::arg("valid_token_rows") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce::detail

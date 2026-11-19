@@ -23,6 +23,10 @@ constexpr uint32_t emb_dim_cb_tiles = get_compile_time_arg_val(1);
 // is true; it carries zero from the program factory otherwise.
 constexpr uint32_t dispatch_table_num_pages = get_compile_time_arg_val(2);
 constexpr bool use_dispatch_table_skip = get_compile_time_arg_val(3) != 0;
+constexpr uint32_t valid_token_rows = get_compile_time_arg_val(4);
+constexpr uint32_t rows_to_process = valid_token_rows == 0 ? 32 : valid_token_rows;
+static_assert(valid_token_rows <= 32);
+static_assert(valid_token_rows == 0 || use_dispatch_table_skip);
 
 // Like read_tile_value but reads a uint16 element (zero-extended to uint32_t).
 // Indices arrive from DRAM as uint16 and stay uint16 in the CB; this avoids
@@ -72,14 +76,14 @@ void kernel_main() {
     for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
         if constexpr (use_dispatch_table_skip) {
             // Wait for writer to load this chunk's indices (one chunk at a time)
-            cb_indices.wait_front(TOKENS_PER_CHUNK);
+            cb_indices.wait_front(rows_to_process);
         }
 
         cb_rowmajor.reserve_back(total_token_tiles);
 
         // Process one expert at a time: both input (c_0) and weight (c_1) are streamed
         // one expert at a time by reader and writer respectively.
-        for (uint32_t i = 0; i < TOKENS_PER_CHUNK; ++i) {
+        for (uint32_t i = 0; i < rows_to_process; ++i) {
             mul_bcast_scalar_init(cb_combine_input_id, cb_weights_id);
 
             // first_active tracks whether we've picked the accumulator-initializing
@@ -149,9 +153,11 @@ void kernel_main() {
 
         if constexpr (use_dispatch_table_skip) {
             // Release this chunk's indices so writer can load the next chunk's
-            cb_indices.pop_front(TOKENS_PER_CHUNK);
+            cb_indices.pop_front(rows_to_process);
         }
 
+        // With valid_token_rows, reader initialized the omitted tail before its first c0 push.
+        // At least one prefix row was consumed, so that initialization is complete here.
         cb_rowmajor.push_back(total_token_tiles);
 
         compute_kernel_lib::tilize<total_token_tiles, cb_rowmajor_id, cb_output_id>(1);

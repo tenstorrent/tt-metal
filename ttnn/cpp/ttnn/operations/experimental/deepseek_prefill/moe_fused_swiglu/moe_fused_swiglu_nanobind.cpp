@@ -43,6 +43,12 @@ void bind_moe_fused_swiglu(nb::module_& mod) {
         BFLOAT8_B TILE in DRAM. By default all cores in the device's
         compute-with-storage grid are used. ``core_grid=(x, y)`` is an explicit
         rectangular-prefix override.
+
+        ``stochastic_rounding`` defaults to True, preserving stochastic FPU rounding
+        into BF16 DEST. Set False to disable schedule-dependent stochastic rounding
+        when a request must produce the same result as other experts' token counts
+        change. This flag does not change tensor dtypes or compute math fidelity;
+        each setting uses a separate cached program.
         )doc",
         &moe_fused_swiglu,
         nb::arg("input").noconvert(),
@@ -65,7 +71,8 @@ void bind_moe_fused_swiglu(nb::module_& mod) {
         nb::arg("up_biases") = nb::none(),
         nb::arg("down_biases") = nb::none(),
         nb::arg("min_active_tokens") = 0,
-        nb::arg("max_active_tokens") = std::numeric_limits<uint32_t>::max());
+        nb::arg("max_active_tokens") = std::numeric_limits<uint32_t>::max(),
+        nb::arg("stochastic_rounding") = true);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::moe_fused_swiglu::detail

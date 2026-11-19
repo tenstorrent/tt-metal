@@ -1,0 +1,7 @@
+# Performance tokenizer repair
+
+The first live upstream vLLM0.26 smoke completed both requests but reported input lengths4096 and4523 (total8619), despite client request lengths4096. The collector rejected the non-4096 lifetime before a timed benchmark. Its raw performance JSON and log remain under collector-smoke/.
+
+Before repair, the dedicated client had Transformers5.23.0/tokenizers0.23.3 and AutoTokenizer selected Qwen3_5Tokenizer. The Stage10 server has Transformers5.12.1/tokenizers0.22.2 and selects Qwen2Tokenizer for the same pinned snapshot. Their pre-tokenizer regexes differ in handling Unicode combining marks. Pinned only the dedicated performance client to the server versions; upstream vLLM remains0.26.0, with unchanged benchmark code and transport. Server/model/precision/context unchanged.
+
+Independent CPU audit after pinning used upstream random prompt adjustment with seed4199 and two4096/128 requests: both environments produced identical distinct prompts and identical token-ID hashes, and each cross-environment encoding contained exactly4096 tokens. vLLM wrapper differences affect Mistral handling, not this Qwen path. No audit HTTP or hardware calls. The parent also generated every planned batch/warmup/lone-user prompt on CPU and checked exact token lengths and distinctness; see client-prompt-length-check.log. Fresh live verification is required and runs under collector-smoke-tokenizer-fixed/.

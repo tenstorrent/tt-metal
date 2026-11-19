@@ -18,6 +18,9 @@ struct PostCombineReduceParams {
     // Row-indexed combine only: pairs whose row is skip_row are not read (their slot is skipped by the expert-skip
     // test; UINT32_MAX: read every pair).
     uint32_t skip_row = std::numeric_limits<uint32_t>::max();
+    // Single 32-row dispatch-table chunk: process this prefix and explicitly zero the output tail.
+    // Zero preserves the default full-chunk path. Part of the operation attributes/program cache key.
+    uint32_t valid_token_rows = 0;
 };
 
 struct PostCombineReduceInputs {

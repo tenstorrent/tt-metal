@@ -1,0 +1,21 @@
+# Experimental product and contraction fusion
+
+The accepted direct contraction leaves two separate FP32 product kernels per linear layer. This new candidate removes their intermediate 512 KiB products by retaining products in FP32 destination registers and feeding the same direct contraction. It does not change the state-update operations, BF16-on-consumption rounding, decay LUT input, or FP32 live-state commit. No hardware has been run by the implementing agent; numerical equivalence and speed are unverified.
+
+Thirty-two workers each own one head and 32 output columns. Each reads four state tiles and four existing q/k column tiles. `sfpu_mul_bcast_col<true>` applies the FP32 column broadcast without scalar BRISC expansion. For the output contraction, `mul_unary_tile<true>` first applies the existing FP32 `128**-0.5` constant (bits `0x3db504f3`) to q. These separate SFPU operations retain the scaling and product rounding boundaries; no TF32/FPU matmul or fused multiply-add is introduced. The independently qualified direct reduction source is imported unchanged. Four native product tiles occupy DST0–3; DST4 holds the transient coefficient and is later reused by the reduction scratch.
+
+The exact source also retains current q/k HC permutations. A full state-slab redesign might remove them later, but this candidate targets only the product boundary. The maximum exposed work is two product launches plus their tensor materialization; the extra duplicated coefficient reads and broadcast work can consume the gain. No additive latency prediction or stage-floor closure is claimed.
+
+The persistent newly committed state is DRAM, whereas the memory contraction's decayed state is L1. Whole-page DRAM reads are supported using local generic circular buffers: `tt_metal/impl/program/program.cpp:2489` passes allocator DRAM alignment into `allocate_dfb`, and `program_allocation_support.cpp:103` explicitly aligns the returned address. Reader assertions additionally require 64-byte-aligned CB pointers. This argument applies to these locally allocated CBs, not arbitrary L1 allocations or globally backed CBs. Whole 4096-byte page offsets preserve alignment. The harness selects both input memory types explicitly, so performance reports must retain those settings.
+
+The adapter is opt-in and leaves production untouched. It supports the selected decay-value singleton geometry, otherwise falling back to the prior recurrence method. The component harness compares existing multiply plus accepted direct sum against the fused operation, including plain/scaled coefficients, both output layouts, eager and changed-input trace runs, exact four-rank shapes/dtypes, real captured state/q/k at positions128 and8157, cancellation, and signed zeros. Timings restore the first real fixture and include complete operator work plus identical persistent-output copies. CPU fixture generation and kernel-string composition pass; device compilation remains unverified.
+
+Parent-only example, under external timeout with exclusive device ownership:
+
+```bash
+env TT_METAL_WATCHER=10 TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=0 timeout 300 python -u -m models.autoports.qwen_qwen3_6_35b_a3b.tests.run_stage7_product_sum_probe --mode acceptance --state-memory dram --column-memory dram --output models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_full_model/product_sum_dram_acceptance.json
+```
+
+Also test `--state-memory l1`; use measured q/k memory placement from the real caller, and retain a control for the other placement if uncertain. Clean timings require tracking0 and no watcher/profiler, `--mode timing`, and separate artifact names. A passing component still requires complete recurrence state/output comparisons, real layer34 and all40 accuracy/trace checks, and clean end-to-end timing before selection.
+
+Independent source review by `evidence_plan` found no concrete blocker in the local-CB alignment, SFPU init/carry ownership, exact scalar operation, four-products-before-reduction ordering, or head/2 addressing. This source review is not hardware qualification. Direct intermediate-product inspection and complete recurrence/adapter checks remain additional evidence beyond the contracted-output comparisons.
