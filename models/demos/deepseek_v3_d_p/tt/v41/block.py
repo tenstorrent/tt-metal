@@ -34,6 +34,11 @@ from .attention import V41CSA, V41SWA, V41CSAConsumer, V41CSAReindex
 
 # DS41F-0068: a ragged final chunk on the attention islands (default on with A3); 0 = eager attention for it
 A3_RAGGED = os.environ.get("PREFILL_V41_A3_RAGGED", "1") == "1"
+# WS2 (prefill TTFT plan 1.5, byte-identical): each mHC site stacks its four streams to fp32 once (mixes) and reuses that
+# stack for its collapse (V41_MHC_REUSE_STACK) and, with V41_MHC_REUSE_X5, for its hc_post's 5-slab stack -- the same values
+# as the per-call stacks, so the same sums. Six concat + typecast pairs per layer become two.
+REUSE_STACK = os.environ.get("V41_MHC_REUSE_STACK", "0") == "1"
+REUSE_X5 = REUSE_STACK and os.environ.get("V41_MHC_REUSE_X5", "0") == "1"
 from .moe import build_v41_moe
 
 HC = M.HC
@@ -52,6 +57,22 @@ class V41HyperConnection(TtHyperConnection):
         super().__init__(device, fn=fn, base=base, scale=scale, hidden=hidden, hc_eps=hc_eps, **kw)
         self.stacked = os.environ.get("V41_MHC_STACKED", "1") == "1"
         self.host_sinkhorn = os.environ.get("V41_MHC_HOST_SINKHORN", "0") == "1"
+        # WS2 (prefill TTFT plan 1.5, byte-identical, the same ops on the same values):
+        #   V41_MHC_MM_CFG=1  the mix row's big fp32 matmuls (Xf @ FN_STACK [1, 4, S_l, D_l] x [1, 4, D_l, 32]) on an explicit
+        #                     reuse program with in0_block_w 2 -- the default's K grouping: bit-identical, 100.9 -> 43.6 us on
+        #                     one chip at S_l 512 / D_l 1280 (ws2/mhc_micro.py T1); other shapes keep the default program
+        #   V41_MHC_L1=1      the big fp32 products of the weighted sums (collapse, hc_post) and the sum of squares in L1
+        #                     instead of DRAM: 119.5 -> 63.5 us per weighted sum, bit-identical (T2); =2 also the stacks
+        self.mm_cfg = os.environ.get("V41_MHC_MM_CFG", "0") == "1"
+        self.l1 = int(os.environ.get("V41_MHC_L1", "0") or 0)
+        self._big_pcs: dict = {}
+        self.ONES_STACK = None
+        if (
+            self.mm_cfg and self.stacked
+        ):  # ONES per stream ([1, H, D_l, 32], the same column per stream): the sum of squares
+            # on the explicit program too -- bit-identical to the broadcast default, 101.2 -> 43.7 us (ws2/mhc_micro2.py T1b)
+            Wp = M.prep_hyper_connection(fn, base, scale, int(hidden))
+            self.ONES_STACK = self._const(Wp["ONES"].view(1, HC, Wp["ONES"].shape[1], M.ROW), tp_dim=2)
         if self.host_sinkhorn:
             W = M.prep_hyper_connection(fn, base, scale, int(hidden))
             K = M.sinkhorn_constants(float(hc_eps))
@@ -96,9 +117,89 @@ class V41HyperConnection(TtHyperConnection):
             X = X / (X @ h["C_AUG"])
         return self._upload_rows(pre), self._upload_rows(post), self._upload_rows(X)
 
-    def mixes(self, streams: list):
+    # ---- WS2 byte-identical program / placement levers (V41_MHC_MM_CFG, V41_MHC_L1) -------------------------------------
+    def _big_pc(self, a, b):
+        """The validated explicit program for ``a [1, B, S_l, D_l] @ b [1, B, D_l, 32]`` (same batch), else None (default)."""
+        if not self.mm_cfg or int(b.shape[1]) != int(a.shape[1]) or int(b.shape[3]) != 32:
+            return None
+        key = (tuple(a.shape), tuple(b.shape))
+        if key not in self._big_pcs:
+            nb, mt, kt = int(a.shape[1]), int(a.shape[2]) // 32, int(a.shape[3]) // 32
+            pc = None
+            if (int(a.shape[2]), int(a.shape[3])) == (512, 1280) and (nb * mt) % 4 == 0 and kt % 2 == 0:
+                g = self.device.compute_with_storage_grid_size()
+                blocks = nb * mt // 4
+                gx = min(int(g.x), blocks)
+                gy = (blocks + gx - 1) // gx
+                if gy <= int(g.y):
+                    pc = ttnn.MatmulMultiCoreReuseProgramConfig(
+                        compute_with_storage_grid_size=(gx, gy),
+                        in0_block_w=2,
+                        out_subblock_h=1,
+                        out_subblock_w=1,
+                        per_core_M=4,
+                        per_core_N=1,
+                    )
+            self._big_pcs[key] = pc
+        return self._big_pcs[key]
+
+    def _mm(self, a, b):
+        if self.l1 < 3:
+            return super()._mm(a, b)
+        # V41_MHC_L1=3: the tiny row matmuls (Sinkhorn sums, mean square, column selects) write L1
+        return ttnn.matmul(
+            a, b, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=self.fp32
+        )
+
+    def _mm_big(self, a, b):
+        pc = self._big_pc(a, b)
+        if pc is None:
+            return self._mm(a, b)
+        return ttnn.matmul(
+            a,
+            b,
+            dtype=ttnn.float32,
+            memory_config=self.memory_config,
+            compute_kernel_config=self.fp32,
+            program_config=pc,
+        )
+
+    def _stack(self, streams: list):
+        if self.l1 < 2:
+            return super()._stack(streams)
+        c = ttnn.concat(streams, dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        out = ttnn.typecast(c, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(c)
+        return out
+
+    def _mix_row_stacked(self, Xf):
+        if not (self.mm_cfg or self.l1):
+            return super()._mix_row_stacked(Xf)
+        p = self._mm_big(Xf, self.FN_STACK)
+        sq = ttnn.multiply(Xf, Xf, memory_config=ttnn.L1_MEMORY_CONFIG if self.l1 else self.memory_config)
+        s_ = self._mm_big(sq, self.ONES_STACK) if self.ONES_STACK is not None else self._mm(sq, self.ONES)
+        ttnn.deallocate(sq)
+        part = ttnn.experimental.fast_reduce_nc(ttnn.add(p, s_), dims=[1], output=None, compute_kernel_config=self.fp32)
+        part = self._tp_all_reduce(part)
+        ms = self._mm(part, self.MS)
+        rstd = ttnn.rsqrt(ttnn.add(ms, self.rms_eps))
+        return ttnn.multiply(part, rstd, memory_config=ttnn.L1_MEMORY_CONFIG if self.l1 >= 3 else None)
+
+    def _weighted_sum_stacked(self, weights_cols, Xf):
+        if not self.l1:
+            return super()._weighted_sum_stacked(weights_cols, Xf)
+        w = ttnn.permute(weights_cols, (0, 3, 2, 1))  # [1, H, S_l, 1]
+        prod = ttnn.multiply(Xf, w, memory_config=ttnn.L1_MEMORY_CONFIG)
+        out = ttnn.experimental.fast_reduce_nc(prod, dims=[1], output=None, compute_kernel_config=self.fp32)
+        ttnn.deallocate(prod)
+        return out
+
+    def mixes(self, streams: list, Xf=None):
+        """``Xf`` (WS2 V41_MHC_REUSE_STACK): the caller's ``_stack(streams)``, reused (and kept: the caller frees it)."""
         assert len(streams) == HC
-        if self.stacked:  # PREFILL_MHC_STACKED=1: the norm-folded logit row in 5 programs instead of 5 per stream
+        if Xf is not None:
+            mix = self._mix_row_stacked(Xf)
+        elif self.stacked:  # PREFILL_MHC_STACKED=1: the norm-folded logit row in 5 programs instead of 5 per stream
             Xf = self._stack(streams)
             mix = self._mix_row_stacked(Xf)
             ttnn.deallocate(Xf)
@@ -111,18 +212,26 @@ class V41HyperConnection(TtHyperConnection):
             return self._mixes_host(mix)
         aff = ttnn.add(ttnn.multiply(mix, self.SV), self.BV)
         sig = ttnn.sigmoid(aff)
-        pre = ttnn.add(sig, self.hc_eps)
-        post = ttnn.multiply(sig, 2.0)
+        omc = (
+            self.memory_config if self.l1 >= 3 else None
+        )  # V41_MHC_L1=3: rows in L1, the site's outputs written to DRAM
+        pre = ttnn.add(sig, self.hc_eps, memory_config=omc)
+        post = ttnn.multiply(sig, 2.0, memory_config=omc)
         E = ttnn.add(ttnn.multiply(ttnn.exp(ttnn.clamp(aff, -M.EXP_CLAMP, M.EXP_CLAMP)), self.COMB_MASK), self.ONE_COL)
         X = ttnn.div(E, self._mm(E, self.R_SOFT))
         X = ttnn.add(X, self.EPS_COMB)
-        X = ttnn.div(X, self._mm(X, self.C_AUG))
-        for _ in range(self.sinkhorn_iters - 1):
+        X = ttnn.div(X, self._mm(X, self.C_AUG), memory_config=omc if self.sinkhorn_iters == 1 else None)
+        for i in range(self.sinkhorn_iters - 1):
             X = ttnn.div(X, self._mm(X, self.R_AUG))
-            X = ttnn.div(X, self._mm(X, self.C_AUG))
+            X = ttnn.div(X, self._mm(X, self.C_AUG), memory_config=omc if i == self.sinkhorn_iters - 2 else None)
         return pre, post, X
 
-    def collapse(self, streams: list, pre_row):
+    def collapse(self, streams: list, pre_row, Xf=None):
+        if (
+            Xf is not None
+        ):  # WS2 V41_MHC_REUSE_STACK: the site's stack from ``mixes`` (same values; the caller frees it)
+            w = self._select_cols(pre_row, list(range(M.PRE0, M.PRE0 + HC)))
+            return ttnn.typecast(self._weighted_sum_stacked(w, Xf), streams[0].dtype)
         if (
             self.stacked
         ):  # one broadcast multiply + one stream-dim reduce instead of a slice / multiply / add per stream
@@ -135,6 +244,29 @@ class V41HyperConnection(TtHyperConnection):
         out = ttnn.typecast(self._weighted_sum(pre_row, M.PRE0, xf), streams[0].dtype)
         for x in xf:
             ttnn.deallocate(x)
+        return out
+
+    def mix(self, streams: list, y, post_row, comb_row, Xf=None) -> list:
+        """``Xf`` (WS2 V41_MHC_REUSE_X5): the site's stacked fp32 streams; the 5-slab stack of ``_mix_stacked`` is then
+        concat([Xf, fp32(y)]) -- the same values as typecast(concat(streams + [y])), so the same sums. The caller frees Xf.
+        """
+        if Xf is None or not self.stacked:
+            return super().mix(streams, y, post_row, comb_row)
+        yf = ttnn.typecast(y, ttnn.float32)
+        X5 = ttnn.concat([Xf, yf], dim=1)  # [1, H+1, S_l, D_l] fp32
+        ttnn.deallocate(yf)
+        rows = ttnn.concat([comb_row, post_row], dim=3)
+        cols = []
+        for k in range(HC):
+            cols += [M.comb_index(j, k) for j in range(HC)] + [M.ROW + M.POST0 + k]
+        W = self._select_cols(rows, cols)
+        out = []
+        for k in range(HC):
+            wk = ttnn.slice(W, [0, 0, 0, k * (HC + 1)], [1, 1, W.shape[2], (k + 1) * (HC + 1)])
+            acc = self._weighted_sum_stacked(wk, X5)
+            out.append(ttnn.typecast(acc, streams[0].dtype))
+            ttnn.deallocate(acc)
+        ttnn.deallocate(X5)
         return out
 
 
@@ -271,20 +403,26 @@ class V41PrefillBlock(LightweightModule):
         assert len(streams) == HC
         mark = prof if prof is not None else (lambda name: None)
         S_l, D_l = streams[0].shape[2], streams[0].shape[3]
-        attn_pre, attn_post, attn_comb = self.attn_hc.mixes(streams)
-        h = self.attn_norm(self.attn_hc.collapse(streams, pre_row))
+        Xa = self._site_stack(self.attn_hc, streams)
+        attn_pre, attn_post, attn_comb = self.attn_hc.mixes(streams, Xf=Xa)
+        h = self.attn_norm(self.attn_hc.collapse(streams, pre_row, Xf=Xa))
+        Xa = self._drop_unless_x5(Xa)
         mark("hc.attn")
         y = self.attn(h, seq_len_actual=real_len, state=self.state)
         ttnn.deallocate(h)
         mark(f"attn.{type(self.attn).__name__}")
         if on_hidden is not None:
             on_hidden(f"{self.layer}:attn.y", y)
-        streams = self.attn_hc.mix(streams, y, attn_post, attn_comb)
+        streams = self.attn_hc.mix(streams, y, attn_post, attn_comb, Xf=Xa)
+        if Xa is not None:
+            ttnn.deallocate(Xa)
         ttnn.deallocate(y)
         mark("hc.mix")
 
-        ffn_pre, ffn_post, ffn_comb = self.ffn_hc.mixes(streams)
-        h = self.ffn_norm(self.ffn_hc.collapse(streams, attn_pre))
+        Xb = self._site_stack(self.ffn_hc, streams)
+        ffn_pre, ffn_post, ffn_comb = self.ffn_hc.mixes(streams, Xf=Xb)
+        h = self.ffn_norm(self.ffn_hc.collapse(streams, attn_pre, Xf=Xb))
+        Xb = self._drop_unless_x5(Xb)
         h3 = ttnn.reshape(h, [1, S_l, D_l])
         mark("hc.ffn")
         moe_out, _ = self.moe(h3, actual_isl=real_len, actual_start=0)
@@ -292,10 +430,25 @@ class V41PrefillBlock(LightweightModule):
         mark("moe")
         if on_hidden is not None:
             on_hidden(f"{self.layer}:moe.out", moe_out)
-        streams = self.ffn_hc.mix(streams, moe_out, ffn_post, ffn_comb)
+        streams = self.ffn_hc.mix(streams, moe_out, ffn_post, ffn_comb, Xf=Xb)
+        if Xb is not None:
+            ttnn.deallocate(Xb)
         ttnn.deallocate(moe_out)
         mark("hc.mix")
         return streams, ffn_pre
+
+    @staticmethod
+    def _site_stack(hc, streams: list):
+        """WS2 V41_MHC_REUSE_STACK: the site's one fp32 stack of its streams (None: every call stacks for itself)."""
+        return hc._stack(streams) if REUSE_STACK and hc.stacked else None
+
+    @staticmethod
+    def _drop_unless_x5(Xf):
+        """After mixes + collapse: keep the stack for the hc_post only with V41_MHC_REUSE_X5."""
+        if Xf is not None and not REUSE_X5:
+            ttnn.deallocate(Xf)
+            return None
+        return Xf
 
     def kv_only(self, streams: list, pre_row, *, real_len: int) -> None:
         """DS41F-0073 marked decoder chunks (V41_PREFILL_DECODER_MARKED): layer 20 on a chunk that does not run the decoder --
@@ -320,7 +473,7 @@ class V41PrefillBlock(LightweightModule):
                 ttnn.deallocate(t)
         if owned_pre:
             ttnn.deallocate(pre_row)
-        _attn_pre, _post, _comb, h = A.replay()
+        h = A.replay()[3]  # (pre, post, comb, h[, the V41_MHC_REUSE_X5 stack])
         self.attn.kv_only(h, seq_len_actual=real_len, state=self.state, slab=True)
 
     # ---- trace islands (V41_PREFILL_ISLANDS, DS41F-0037 C-P1; V4-Flash's DS4F-0246/0247 pattern) ---------------------------
@@ -353,29 +506,39 @@ class V41PrefillBlock(LightweightModule):
 
         def island_a(*args):
             s = list(args[:HC])
-            attn_pre, attn_post, attn_comb = self.attn_hc.mixes(s)
-            h = self.attn_norm(self.attn_hc.collapse(s, args[HC]))
-            return attn_pre, attn_post, attn_comb, h
+            Xa = self._site_stack(self.attn_hc, s)
+            attn_pre, attn_post, attn_comb = self.attn_hc.mixes(s, Xf=Xa)
+            h = self.attn_norm(self.attn_hc.collapse(s, args[HC], Xf=Xa))
+            Xa = self._drop_unless_x5(Xa)  # V41_MHC_REUSE_X5: a 5th persistent output, island B's hc_post reads it
+            return (attn_pre, attn_post, attn_comb, h) + ((Xa,) if Xa is not None else ())
 
         A = TraceIsland(self.mesh_device, island_a, S_in + [pre_in], name=f"v41.L{self.layer}.A")
-        attn_pre, attn_post, attn_comb, h = A.capture()
+        outs_a = A.capture()
+        attn_pre, attn_post, attn_comb, h = outs_a[:4]
+        Xa_out = outs_a[4] if len(outs_a) > 4 else None
         self._capture_attn_islands(h, int(chunk_tokens))
         y_buf = ttnn.clone(h)  # the attention output has the stream shape (o-proj back to D_l)
 
         def island_b(*args):
             s = list(args[:HC])
-            streams2 = self.attn_hc.mix(s, args[HC], attn_post, attn_comb)
-            ffn_pre, ffn_post, ffn_comb = self.ffn_hc.mixes(streams2)
-            hh = self.ffn_norm(self.ffn_hc.collapse(streams2, attn_pre))
+            Xa_in = args[HC + 1] if len(args) > HC + 1 else None  # island A's persistent stack: read, never freed
+            streams2 = self.attn_hc.mix(s, args[HC], attn_post, attn_comb, Xf=Xa_in)
+            Xb = self._site_stack(self.ffn_hc, streams2)
+            ffn_pre, ffn_post, ffn_comb = self.ffn_hc.mixes(streams2, Xf=Xb)
+            hh = self.ffn_norm(self.ffn_hc.collapse(streams2, attn_pre, Xf=Xb))
+            Xb = self._drop_unless_x5(Xb)
             moe_out, _ = self.moe(ttnn.reshape(hh, [1, S_l, D_l]), actual_isl=chunk_tokens, actual_start=0)
             moe_out = ttnn.reshape(moe_out, [1, 1, S_l, D_l])
-            out = self.ffn_hc.mix(streams2, moe_out, ffn_post, ffn_comb)
+            out = self.ffn_hc.mix(streams2, moe_out, ffn_post, ffn_comb, Xf=Xb)
+            if Xb is not None:
+                ttnn.deallocate(Xb)
             ttnn.deallocate(moe_out)
             for t in streams2:
                 ttnn.deallocate(t)
             return tuple(out) + (ffn_pre,)
 
-        B = TraceIsland(self.mesh_device, island_b, S_in + [y_buf], moe=self.moe, name=f"v41.L{self.layer}.B")
+        b_in = S_in + [y_buf] + ([Xa_out] if Xa_out is not None else [])
+        B = TraceIsland(self.mesh_device, island_b, b_in, moe=self.moe, name=f"v41.L{self.layer}.B")
         outs = B.capture()
         self._islands = (A, B, S_in, pre_in, y_buf)
         self._island_chunk = int(chunk_tokens)
@@ -401,7 +564,7 @@ class V41PrefillBlock(LightweightModule):
                 ttnn.deallocate(t)
         if owned_pre:
             ttnn.deallocate(pre_row)
-        _attn_pre, _post, _comb, h = A.replay()
+        h = A.replay()[3]  # (pre, post, comb, h[, the V41_MHC_REUSE_X5 stack])
         traced = self._attn_islands_for(real_len)
         if traced is not None:
             y = self._attn_traced(h, real_len, *traced)  # A2's persistent output: copied, never freed

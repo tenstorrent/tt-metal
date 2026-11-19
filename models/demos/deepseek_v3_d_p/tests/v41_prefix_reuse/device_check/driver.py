@@ -239,9 +239,11 @@ def main() -> None:
         for name in ("A", "A", "U", "A2", "AP", "B"):
             res.append(run_prompt("R2", "X", "off"))
             res.append(run_prompt("R2", name, "off", digest=True))
-    if "P" in PHASES:
+    if "P" in PHASES:  # PREFIX_CHECK_P_DIGEST=1 (WS2): digest every P prompt too (byte-identity at long contexts)
         for name in PROFILE_NAMES:
-            res.append(run_prompt("P", name, "off", timeout_s=7200.0))
+            res.append(
+                run_prompt("P", name, "off", timeout_s=7200.0, digest=os.environ.get("PREFIX_CHECK_P_DIGEST") == "1")
+            )
     if "S2" in PHASES:
         log(f"S2 expected per-chunk patterns at chunk {CHUNK} (s2_plan dry run): {list(zip(S2, EXPECT_S2))}")
         res.append(run_prompt("S2", "X", "clear"))  # the store emptied, X computed (and stored)
