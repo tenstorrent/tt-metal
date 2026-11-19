@@ -102,7 +102,7 @@ void bind_tilize_with_zero_padding(nb::module_& mod) {
                 sub_core_grids (ttnn.CoreRangeSet, optional): Cores to run the operation on. Defaults to `None`, which lets the operation choose its cores.
 
             Returns:
-                ttnn.Tensor: the output tensor, in TILE layout with 32x32 tiles. For an input of rank 2 or more, its padded shape is the input's shape with the last two dimensions rounded up to multiples of 32, and the padding holds zeros. Its shape is the input's, or that padded shape for an input with no elements.
+                ttnn.Tensor: the output tensor, in TILE layout with 32x32 tiles. For an input of rank 2 or more, its padded shape is the input's padded shape with the last two dimensions rounded up to multiples of 32, and the padding holds zeros. Its shape is the input's, or that padded shape for an input with no elements.
 
             Note:
                 Supported dtypes and layouts:

@@ -67,8 +67,8 @@ def test_tilize_with_zero_padding_test(input_shapes, tilize_with_zero_padding_ar
 def test_tilize_with_zero_padding_docstring_supported_inputs(input_shape, dtype, layout, buffer_type, device):
     """Runs every dtype, layout and interleaved buffer type the ttnn.tilize_with_zero_padding docstring lists.
 
-    The data must come back unchanged. For inputs of rank 2 or more, the padded shape must be the input's with the last
-    two dimensions rounded up to multiples of 32, and the padding must hold zeros. BFLOAT16 inputs leave out NaN, as the
+    The data must come back unchanged. For inputs of rank 2 or more, the padded shape must be the input's padded shape
+    with the last two dimensions rounded up to multiples of 32, and the padding must hold zeros. BFLOAT16 inputs leave out NaN, as the
     docstring requires, and compare zeros by value.
     """
     check_readable(dtype, layout, buffer_type)
@@ -92,7 +92,8 @@ def test_tilize_with_zero_padding_docstring_supported_inputs(input_shape, dtype,
         # The docstring states the padded shape only for inputs of rank 2 or more.
         assert_exact(input_values, ttnn.to_torch(output), signed_zeros=signed_zeros)
         return
-    padded_shape = [*input_shape[:-2], *((size + 31) // 32 * 32 for size in input_shape[-2:])]
+    input_padded_shape = list(input_tensor.padded_shape)
+    padded_shape = [*input_padded_shape[:-2], *((size + 31) // 32 * 32 for size in input_padded_shape[-2:])]
     assert list(output.padded_shape) == padded_shape
     expected = torch.zeros(padded_shape, dtype=torch.float64)
     expected[tuple(slice(0, size) for size in input_shape)] = input_values
