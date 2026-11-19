@@ -1049,6 +1049,16 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // The router across the link published its receivers before any kernel is emitted (FabricBuilderContext).
     const auto [link_peer_node, link_peer_chan] =
         control_plane.get_connected_mesh_chip_chan_ids(this->local_fabric_node_id, this->my_eth_channel);
+    if (fabric_context.get_builder_context().find_router_channel_layout(link_peer_node, link_peer_chan) == nullptr) {
+        log_warning(
+            tt::LogFabric,
+            "[1x4-debug] router {} chan {} (direction {}) has link peer {} chan {} with no published layout",
+            this->local_fabric_node_id,
+            this->my_eth_channel,
+            static_cast<int>(this->direction_),
+            link_peer_node,
+            link_peer_chan);
+    }
     const RouterChannelLayout& peer_layout =
         fabric_context.get_builder_context().get_router_channel_layout(link_peer_node, link_peer_chan);
 

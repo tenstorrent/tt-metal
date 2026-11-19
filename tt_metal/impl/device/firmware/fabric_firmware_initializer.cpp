@@ -536,6 +536,13 @@ void FabricFirmwareInitializer::build_fabric_programs(
         // the other ranks are on their way to the exchange: fail there, with them
         phase1_error = std::current_exception();
     }
+    for (auto* dev : devices_) {
+        log_warning(
+            tt::LogFabric,
+            "[1x4-debug] fabric build ran on physical chip {} = {}",
+            dev->id(),
+            control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id()));
+    }
     tt::tt_fabric::exchange_fabric_router_channel_layouts(descriptor_->env_impl(), phase1_error);
     if (!compile) {
         return;
