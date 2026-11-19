@@ -212,8 +212,8 @@ def test_moe_expert_token_remap(device):
 
     # Keep the weights of the selected experts, and flag the experts that each pair of tokens selects
     local_weights, flags = ttnn.moe_expert_token_remap(topk, expert_mapping, expert_metadata, reduction_size=2)
-    logger.info(f"Local Weights Shape: {local_weights.shape}")  # Shape([1, 4, 1, 32])
-    logger.info(f"Flags Shape: {flags.shape}")  # Shape([1, 1, 2, 32])
+    logger.debug(f"Local Weights Shape: {local_weights.shape}")  # Shape([1, 4, 1, 32])
+    logger.debug(f"Flags Shape: {flags.shape}")  # Shape([1, 1, 2, 32])
 
 
 def test_untilize_with_unpadding(device):
