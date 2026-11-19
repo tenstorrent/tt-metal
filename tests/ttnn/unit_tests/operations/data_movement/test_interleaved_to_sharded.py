@@ -10,9 +10,11 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
 from tests.ttnn.unit_tests.base_functionality.test_narrow import assert_quality
+from tt_py_test_utils_common.utility_functions import is_blackhole
 from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
     UnreadableDocstring,
     check_readable,
+    docstring_blackhole_dtype_layout_params,
     docstring_dtype_layout_params,
     docstring_interleaved_buffer_type_params,
     interleaved_memory_config,
@@ -493,6 +495,59 @@ def test_interleaved_to_sharded_docstring_supported_inputs(
         assert output.layout == layout
         assert output.memory_config() == memory_config
         assert_exact(expected, ttnn.to_torch(output))
+
+
+@pytest.mark.parametrize(
+    "memory_layout, output_buffer_type", _docstring_sharded_output_params(ttnn.interleaved_to_sharded)
+)
+@pytest.mark.parametrize(
+    "buffer_type", docstring_interleaved_buffer_type_params(ttnn.interleaved_to_sharded, label="Input")
+)
+@pytest.mark.parametrize("dtype, layout", docstring_blackhole_dtype_layout_params(ttnn.interleaved_to_sharded))
+def test_interleaved_to_sharded_docstring_blackhole_inputs(
+    dtype, layout, buffer_type, memory_layout, output_buffer_type, device
+):
+    """Shards an input of each dtype the ttnn.interleaved_to_sharded docstring lists for Blackhole, from every
+    interleaved buffer type it lists into every sharded output it lists: with a memory config, into a pre-allocated
+    output and, in L1, from a CoreRangeSet grid and from a CoreCoord grid size. Values are compared after a conversion
+    to FLOAT32 on host, which holds every FP8_E4M3 value."""
+    check_readable(dtype, layout, buffer_type, memory_layout, output_buffer_type)
+    if not is_blackhole():
+        pytest.skip("the docstring lists these dtypes for Blackhole")
+
+    def read(tensor):
+        return ttnn.to_torch(ttnn.to_dtype(tensor.cpu(), ttnn.float32))
+
+    torch.manual_seed(0)
+    input_tensor = ttnn.from_torch(
+        torch.randn(_I2S_SHAPE) * 8,
+        dtype=dtype,
+        layout=layout,
+        device=device,
+        memory_config=interleaved_memory_config(buffer_type),
+    )
+    memory_config = _i2s_sharded_memory_config(memory_layout, output_buffer_type)
+    preallocated_output = ttnn.allocate_tensor_on_device(input_tensor.shape, dtype, layout, device, memory_config)
+    outputs = [
+        ttnn.interleaved_to_sharded(input_tensor, memory_config),
+        ttnn.interleaved_to_sharded(input_tensor, memory_config, preallocated_output=preallocated_output),
+        preallocated_output,
+    ]
+    if output_buffer_type == ttnn.BufferType.L1:
+        shard_shape, grid_size = _I2S_SHARDS[memory_layout]
+        for grid in (memory_config.shard_spec.grid, ttnn.CoreCoord(*grid_size)):
+            outputs.append(
+                ttnn.interleaved_to_sharded(
+                    input_tensor, grid, shard_shape, memory_layout, ttnn.ShardOrientation.ROW_MAJOR
+                )
+            )
+
+    expected = read(input_tensor)
+    for output in outputs:
+        assert output.dtype == dtype
+        assert output.layout == layout
+        assert output.memory_config() == memory_config
+        assert_exact(expected, read(output))
 
 
 @pytest.mark.parametrize(
