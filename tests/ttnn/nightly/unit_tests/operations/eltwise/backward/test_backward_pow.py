@@ -356,6 +356,6 @@ def test_bw_unary_pow_zero_input(input_shapes, exponent, device):
     golden = golden_function(grad_data, in_data, exponent)[0].float()
 
     assert torch.isfinite(output).all(), "gradient at input == 0 must be finite"
-    assert torch.equal(output, golden), (
-        f"expected {golden.flatten()[0].item()} at input == 0, got {output.flatten()[0].item()}"
-    )
+    assert torch.equal(
+        output, golden
+    ), f"expected {golden.flatten()[0].item()} at input == 0, got {output.flatten()[0].item()}"
