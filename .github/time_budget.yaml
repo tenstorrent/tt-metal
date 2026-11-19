@@ -471,7 +471,7 @@ models:
     bh_p150: 52
     bh_p150b_civ2: 45
     bh_quietbox_2: 609
-    bh_galaxy: 180  # +30: GLM-5.3-Flash seqlen sweep (PR #64931)
+    bh_galaxy: 200  # +50: GLM-5.3-Flash seqlen sweep (PR #64931; two mesh-model loads from the shared cache)
   sweep_tier2:
     wh_n150: 30
     wh_llmbox_perf: 271

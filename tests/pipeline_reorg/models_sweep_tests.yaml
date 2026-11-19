@@ -478,7 +478,9 @@
   model_family: GLM
   skus:
     bh_galaxy:
-      timeout: 30
+      # two cases, each loads the 45-layer mesh model from the shared cache (~18 min on the CI runners' NFS,
+      # 2026-11-19 run 44457331989: long_1k loaded 04:31-04:49 and passed, long_4k timed out at 30)
+      timeout: 50
       tier: 1
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
