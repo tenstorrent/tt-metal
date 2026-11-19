@@ -132,6 +132,11 @@ MhcPostStatsDeviceOperation::tensor_return_value_t MhcPostStatsDeviceOperation::
 
 ttsl::hash::hash_t MhcPostStatsDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& t) {
+    if (attrs.fast) {  // P.83: the hash without it, then the flag (off: every hash as before)
+        auto off = attrs;
+        off.fast = false;
+        return tt::tt_metal::operation::hash_operation<MhcPostStatsDeviceOperation>(compute_program_hash(off, t), true);
+    }
     if (attrs.feed) {  // P.36: the hash without the feed, then the feed's spec, links, axis and the mesh shape (the
                        // semaphore addresses are runtime args)
         auto off = attrs;
@@ -235,6 +240,7 @@ std::vector<ttnn::Tensor> mhc_post_stats(
         args.collapse_pre = collapse->collapse_pre;
         args.hc_output = collapse->hc_output;
         args.y_output = collapse->y_output;
+        attrs.fast = collapse->fast;              // P.83
         if (collapse->norm_weight.has_value()) {  // P.35
             attrs.norm = true;
             attrs.rms_inv_w = 1.0 / static_cast<double>(input.logical_shape()[-1]);

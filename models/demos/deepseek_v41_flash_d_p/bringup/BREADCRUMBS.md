@@ -1190,3 +1190,44 @@
   the held model (DS41-316).
 - Re-run the probe: `resident submit --cmd "DS41_DECODER_SKIP=decode BRINGUP_POS_TOKENS=agentic
   scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/perf/test_engram_split_probe.py"`.
+
+## P.83 perf (attempt 1): mhc_post pipelined (MHC_POST_FAST True | False)
+
+- Expected saving (written after the zone probe, before the A/B; the brief asked for it before code, it came late):
+  device -25 to -40 us a call x 80 calls = -2.0 to -3.1 ms a chunk (ffn_residual -27, attn_residual -39 us a call from
+  the op probe); host ~0 (same launches, one program each; the fork's C++ descriptor path, addresses patched on cache
+  hits). Below the brief's <= 3 ms target for mhc_post (7.8 ms today): ~4.8-5.6 ms expected after.
+- Zone breakdown of the old program (op probe tests/perf/test_mhc_post_probe.py, 8x4, [160, 5120] a chip, slowest
+  chip, 137.6 us without the feed / 179.7 with it): B = 8 -> 100 units on 100 cores, one each, nothing overlapped.
+  W (fp32, 128 KB a core, every block read by its 5 row cores: 12.8 MB a call) 36-57 us; in parallel the BRISC
+  coefficient build 37.5 us; streams 8.5 us; mix 19 + collapse 9 + matmul 4 us; the sum-of-squares transpose 8.1 us;
+  the root: wait for the slowest unit, sum 5.5, then the hc's transpose 8.1 + Sinkhorn 5.5 + transpose 5.6 us; attn:
+  the feed's port reads one packet a barrier, +45-50 us after the norm.
+- Change (fork option `fast`, CHANGELOG "fast"; model: tt/settings.py MHC_POST_FAST, tt/mhc.py collapse_kwargs, the
+  one place every collapse_pre call takes its kwargs: residual.py and engram_add.py):
+  W read once a block and shared through L1 (5 cores read a fifth each), columns streamed with NoC transaction ids
+  (2 in flight a core: issuing all 8 at once made every core's columns land together late), coefficients built on the
+  SFPU (lane mask + subvec_shflror1 broadcast, bit-exact), collapse a column at a time after its mix, the ss tile
+  folded 32 -> 8 before its transpose, the root copies 25 columns, the feed reads 12 packets deep (16 slots).
+- Steps measured (slowest chip, ffn / attn, us): old 137.6 / 179.7; W share + streaming + fold 113.5 / 158.1; + SFPU
+  build 118.1 / 160.7 (the build was no longer the gate: all columns landed late together); + 2-column window 110.8
+  / 161.0; + feed pipelined 110.8 / 141.0.
+- Bit-identical: X', y, feed_output; stats column 24 (sum x'^2) in another fp32 order (max abs 0.094 on ~2e5), hc
+  within 2.4e-7. Fork test 7 / 7 on the resident mesh (tests/test_mhc_post_fast.py -> the fork's check_fast).
+- What bounds it now: DRAM (~17 MB reads + X' writes in ~45 us, ~385 GB/s); the slowest cores' columns land ~20 us
+  after the median core's (the root waits for them); the root tail (~25 us: sum 5.5, BRISC hc transposes 6.4 + 5.4
+  at ~10 cycles a word even with plain pointers, Sinkhorn 5.5); on attn the feed after the norm (~36 us). Next steps,
+  not done: the hc row transposes split BRISC / NCRISC or the hc spread over the row's units (~-6 to -10 us a call),
+  the 1.71 ms "(other)" rows (programs no wrapped op launched in ffn_residual; not mhc_post).
+- Gotchas: the first pipelined feed reader (8 packets in flight of 8 slots) HUNG the 8x4 (17:09, the safe runner
+  reset it): the sender keeps up to 4 slots unpopped until its flush, so a reader reserving all 8 waits on it forever
+  (DS41-317). Transaction ids are 0..15: cycle them mod the depth, not mod the slot count.
+  The zone probe opens its own mesh (the device profiler must be on at open; its CSV is complete only after close):
+  each run is a fresh open (overseer: 10-27 GiB of host RAM leaked a run); correctness runs go through the resident
+  runner (tests/test_mhc_post_fast.py, BATCH_SHARED, 80 s, 0 opens).
+- Cores: unchanged (109 of the 110 cap with the feed, rule 18; mhc_post has no matmul program config, its FPU work is
+  the per-unit partial). OV-23: a C++ descriptor op, not a Python-built one.
+- Re-run: `python -m models.demos.common.bringup.resident submit --spec $BRINGUP_SPEC --cmd "scripts/run_safe_pytest.sh
+  --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_mhc_post_fast.py"`; zones (fresh open):
+  `MHCP_FAST=both scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/perf/test_mhc_post_probe.py -s`.

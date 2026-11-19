@@ -76,10 +76,12 @@ constexpr uint8_t CB_NRS = 15;     // a root row's rstd (slot n (n + 2) + 1)    
 // feed (P.36) only, on the port cores:
 constexpr uint8_t CB_FEED = 26;  // packet slots (up to P y tiles a slot)             port reader -> port sender
 constexpr uint32_t FEED_SLOTS = 8;
+constexpr uint32_t FEED_SLOTS_FAST = 16;  // P.83 (fast): the port reader keeps FEED_SLOTS_FAST - 4 packets in flight
 constexpr uint32_t SEM_ROOT = 0;
 constexpr uint32_t SEM_NORM = 1;
 constexpr uint32_t SEM_FEED = 2;  // a port's count of finished units (one increment per (unit, target) it carries)
 constexpr uint32_t SEM_FEED_TEARDOWN = 3, SEM_FEED_BUFIDX = 4;  // a port's fabric connection's worker semaphores
+constexpr uint32_t SEM_W = 5;  // P.83 (fast, W shared): counts the W tiles the block's other cores forwarded here
 
 constexpr uint32_t READER_KERNEL = 0, WRITER_KERNEL = 1, COMPUTE_KERNEL = 2;
 constexpr uint32_t FEED_READER_KERNEL = 3, FEED_SENDER_KERNEL = 4;
@@ -304,7 +306,8 @@ void add_feed_ports(
         rr.emplace_back(c, c);
     }
     const CoreRangeSet port_set(rr);
-    desc.cbs.push_back(make_cb(CB_FEED, P * o_page, FEED_SLOTS, port_set, y.dtype()));
+    const uint32_t slots = params.fast ? FEED_SLOTS_FAST : FEED_SLOTS;
+    desc.cbs.push_back(make_cb(CB_FEED, P * o_page, slots, port_set, y.dtype()));
     for (uint32_t id : {SEM_FEED, SEM_FEED_TEARDOWN, SEM_FEED_BUFIDX}) {  // (the last two: the fabric connection's)
         desc.semaphores.push_back(SemaphoreDescriptor{
             .id = id, .core_type = tt::CoreType::WORKER, .core_ranges = port_set, .initial_value = 0});
@@ -375,6 +378,8 @@ tt::tt_metal::ProgramDescriptor build_descriptor(
     TT_FATAL(coef_tiles + n + 1 <= 8, "mhc_post stats: n={} does not fit the 8 fp32 DEST tiles", n);
     const bool collapse = params.collapse;
     TT_FATAL(!collapse || (x16 && n <= 4), "mhc_post stats: collapse needs bf16 streams and n <= 4");
+    const bool fast = params.fast;  // P.83
+    TT_FATAL(!fast || collapse, "mhc_post stats: fast needs collapse");
     const bool norm = params.norm;
     TT_FATAL(!norm || collapse, "mhc_post stats: norm needs collapse");
     TT_FATAL(!norm || n * (n + 2) + 1 < TILE_HW, "mhc_post stats: norm needs column n (n + 2) + 1 of the partial row");
@@ -471,6 +476,11 @@ tt::tt_metal::ProgramDescriptor build_descriptor(
     for (const auto& rr : rooted) {
         max_rooted = std::max<uint32_t>(max_rooted, rr.size());
     }
+    // P.83 (fast): with one unit a core (units <= cores) the RT units of a block sit on RT cores; each reads W tiles
+    // i (k valid + c order) with i mod RT == its row r and forwards them into the others' cb_w (the same address: the
+    // first and only reservation), so a block's W leaves DRAM once instead of RT times. Otherwise each core reads its
+    // blocks' W as before.
+    const bool w_share = fast && max_count == 1 && RT >= 2 && RT <= 32;
 
     // P.36 (feed): the group along feed_axis, the feed table, and each unit's (target, link) pairs: chip-independent
     // (the writer skips its own block's pair and finds the port from the table)
@@ -503,7 +513,8 @@ tt::tt_metal::ProgramDescriptor build_descriptor(
     desc.cbs.push_back(make_cb(CB_IN, x_page, 2 * (n + 1) * B, all_cores, x_dt));
     desc.cbs.push_back(make_cb(CB_W, page, 2 * n * B, all_cores));
     desc.cbs.push_back(make_cb(CB_CF, page, 2 * 2 * coef_tiles, all_cores));
-    desc.cbs.push_back(make_cb(CB_RAW, page, collapse ? 3 : 2, all_cores));  // collapse: + the collapse_pre row
+    // collapse: + the collapse_pre row; P.83 (fast): the writer pushes the raw rows to the compute, two units' worth
+    desc.cbs.push_back(make_cb(CB_RAW, page, fast ? 6 : (collapse ? 3 : 2), all_cores));
     desc.cbs.push_back(make_cb(CB_SOA, page, 1, all_cores));
     desc.cbs.push_back(make_cb(CB_SOA_OUT, page, 1, all_cores));
     TT_FATAL(NB <= 64, "mhc_post stats: {} partials per row", NB);
@@ -601,6 +612,10 @@ tt::tt_metal::ProgramDescriptor build_descriptor(
     if (norm) {
         compute_ct.insert(compute_ct.end(), {CB_NSQ, CB_NR, CB_NG, CB_YN, CB_NRS});
     }
+    if (fast) {  // P.83: the raw rows at 29 (after the norm's 24..28, unused without the norm)
+        compute_ct.resize(29, 0u);
+        compute_ct.push_back(CB_RAW);
+    }
     const auto hc_scalars = collapse ? hc_scalar_args(params, n) : std::vector<uint32_t>{};
 
     KernelDescriptor::RuntimeArgs reader_rt, writer_rt, compute_rt;
@@ -616,6 +631,12 @@ tt::tt_metal::ProgramDescriptor build_descriptor(
                     const uint32_t j = b * RT + row - starts[o];
                     r.push_back((j << 24) | core_xy(o));
                 }
+            }
+        }
+        if (w_share && c == 1) {  // P.83: after every list: the unit's block's RT cores, row order
+            const uint32_t b = s / RT;
+            for (uint32_t rr = 0; rr < RT; ++rr) {
+                r.push_back(core_xy(owner(b * RT + rr)));
             }
         }
         TT_FATAL(r.size() < 300, "mhc_post stats: {} reader runtime args on one core", r.size());
@@ -652,6 +673,9 @@ tt::tt_metal::ProgramDescriptor build_descriptor(
         for (uint8_t cb : {CB_PB, CB_HSOA}) {
             cc.unpack_to_dest_mode[cb] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         }
+    }
+    if (fast) {  // P.83: the raw post / comb / pre rows, copied exactly into the DEST
+        cc.unpack_to_dest_mode[CB_RAW] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
     if (norm) {  // (cb_y stays Default: its bf16 tiles reach the fp32 DEST exactly through srcA)
         for (uint8_t cb : {CB_NR, CB_NG}) {
@@ -698,6 +722,25 @@ tt::tt_metal::ProgramDescriptor build_descriptor(
         wc.insert(wc.end(), ft.head.begin(), ft.head.end());
         add_feed_ports(desc, params, in, outputs, ports, ft, grp, cpt, RT, B, p.col_tiles);
     }
+    if (fast) {  // P.83: the stats kernels and the feed reader; the reader also MHC_POST_WSHARE when W is shared
+        for (auto& k : desc.kernels) {
+            if (k.kernel_source.find("mhc_post_stats_") != std::string::npos ||
+                k.kernel_source.find("mhc_post_feed_reader") != std::string::npos) {
+                k.defines.emplace_back("MHC_POST_FAST", "1");
+            }
+            if (k.kernel_source.find("mhc_post_feed_") != std::string::npos) {
+                k.defines.emplace_back("MHC_POST_FEED_SLOTS", std::to_string(FEED_SLOTS_FAST));
+            }
+        }
+        if (w_share) {
+            desc.kernels[READER_KERNEL].defines.emplace_back("MHC_POST_WSHARE", std::to_string(SEM_W));
+        }
+        // the compute builds the coefficient tiles: it needs the columns of post / comb and the comb order
+        auto& kd = desc.kernels[COMPUTE_KERNEL].defines;
+        kd.emplace_back("MHC_POST_FAST_POST_COL", std::to_string(params.post_col));
+        kd.emplace_back("MHC_POST_FAST_COMB_COL", std::to_string(params.comb_col));
+        kd.emplace_back("MHC_POST_FAST_COMB_T", params.comb_transposed ? "1" : "0");
+    }
     if (params.post_col != 0 || params.comb_col != 0) {  // absent when 0 / 0: the writer unchanged
         TT_FATAL(
             params.post_col + n <= TILE_HW && params.comb_col + n * n <= TILE_HW,
@@ -710,6 +753,10 @@ tt::tt_metal::ProgramDescriptor build_descriptor(
     if (norm) {  // P.35: counts the rstd tiles of a core's units (one increment a unit, from its row's root)
         desc.semaphores.push_back(SemaphoreDescriptor{
             .id = SEM_NORM, .core_type = tt::CoreType::WORKER, .core_ranges = all_cores, .initial_value = 0});
+    }
+    if (w_share) {  // P.83
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = SEM_W, .core_type = tt::CoreType::WORKER, .core_ranges = all_cores, .initial_value = 0});
     }
     return desc;
 }

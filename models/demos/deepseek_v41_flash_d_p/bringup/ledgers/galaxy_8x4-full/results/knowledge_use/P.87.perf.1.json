@@ -1,0 +1,127 @@
+{
+ "used": [
+  {
+   "id": "DS41-26",
+   "how": "device hash covers only [start, valid); rows past valid zero; embedding ids past valid clamp to vocab-1 as the host path",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-294",
+   "how": "the device id history per slot is the tail source (outside-written slots: host history uploaded + explicit tail on the first device chunk)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-298",
+   "how": "the destination layout is HOST_HIDE's TP-sharded [Q, 6144] bfp8 rows, gathered over TP by the existing take_engram_rows path",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-308",
+   "how": "expected saving bounded by the measured engram host exposure (~1.6 ms at 142k agentic)",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-295",
+   "how": "the history prefetch's device time (pack floor + gather) is what the engram wait used to hide: counted in the expected net",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-245",
+   "how": "A/B submitted with DS41_ENGRAM_TABLE=resident (the shipped host path), not F222's mmap test value",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-304",
+   "how": "own one-load A/B test (tests/perf/test_engram_device_ab.py) instead of relying on one test_skip_positions item per side",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-264",
+   "how": "sides alternated (P87_ROUNDS) in one process",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "K-57",
+   "how": "no single-card runs; everything on the mesh via the resident runner",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the resident runner's reload keeps packages, so `from . import mod` serves the old module (DS41-311)",
+  "fabric throughput of a Python-built exchange: one packet per small row is ~1.25 us; per-(src,dst) inbox packets needed (DS41-312)",
+  "Python-built programs: CB addresses are not uniform across cores with different CB sizes; share data through DRAM (DS41-313)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding of work: table rows packed 272 B in 17408 B pages (no row padding); the inbox's 320 B windows are the DRAM read alignment, not extra rows"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "EngramLookup dispatches through ttnn.bringup.prepare_program / run_prepared (start / valid value slots); host enqueue 0.12-0.22 ms a call (32 per-chip programs). The one-time table copy program (_Copy, load only) is a plain generic_op"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork suites run; only the new tests/test_engram_device.py and the model-level A/B"
+  },
+  {
+   "id": "OV-55",
+   "answer": "done",
+   "evidence": "every op-level test through resident submit; device opens this task: 2 (one TT_METAL_HOME process-variable restart at the first submit, one after the 14:08 hang)"
+  },
+  {
+   "id": "overseer-2026-11-19-cores",
+   "answer": "done",
+   "evidence": "no cap applied to the engram kernels: 66 cores a chip (hub 1, hash 32, convert 24, senders 9)"
+  },
+  {
+   "id": "overseer-2026-11-19-hang",
+   "answer": "done",
+   "evidence": "payloads <= 16 x 320 = 5120 B (< 6208), whole 64 B lines, pointer table via DRAM with range checks, bounded waits 2^22 polls; resubmitted the op test only after the reset"
+  },
+  {
+   "id": "overseer-2026-11-19-small-table",
+   "answer": "done",
+   "evidence": "after the one full upload in the new process the tables are kept by the device-weight registry (load_table): every later op test reused them (tables ready in 0.0 s, runs of 3-8 s); no further full uploads"
+  }
+ ],
+ "cited_only": [
+  "DS41-311",
+  "DS41-314"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.87",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-19T14:46:44",
+  "head": "458b4f25a98",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.87.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_engram_device_ab.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_engram_device.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram_device.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/runners/adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

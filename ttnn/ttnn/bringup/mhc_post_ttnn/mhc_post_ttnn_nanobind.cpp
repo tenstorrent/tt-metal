@@ -128,6 +128,11 @@ void bind_mhc_post_ttnn(nb::module_& mod) {
                 2 feed_num_links cores; ttnn.get_global_semaphore_address), at 0, used only by this op.
             feed_num_links (int, optional): fabric links per direction (default 1).
             feed_cluster_axis (int, optional): the mesh axis of the group (default 1).
+            fast (bool, optional; default False = off; deepseek_v41_flash_d_p P.83): needs collapse_pre. The same
+                outputs from a pipelined program (columns streamed in, the compute starting on the first; X' out a
+                column at a time; each W block read from DRAM once and shared through L1 when every core has one
+                unit; cheaper coefficient / transpose copies). Not bit-identical: the sum of squares (stats column
+                n (n + 2), so the hc) is summed in another fp32 order.
 
         Returns:
             ttnn.Tensor: X' (..., T, n*C), the residual's dtype, TILE, DRAM interleaved; with stats_weight the tuple
@@ -162,7 +167,8 @@ void bind_mhc_post_ttnn(nb::module_& mod) {
         nb::arg("feed_output") = nb::none(),
         nb::arg("feed_semaphores") = nb::none(),
         nb::arg("feed_num_links") = 1,
-        nb::arg("feed_cluster_axis") = 1);
+        nb::arg("feed_cluster_axis") = 1,
+        nb::arg("fast") = false);
 
     mod.def(
         "_mhc_post_ttnn_program_descriptor",

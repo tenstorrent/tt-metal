@@ -19,6 +19,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "mhc_post_stats_common.hpp"
+#include "perf_instrumentation.hpp"
 
 void kernel_main() {
     constexpr uint32_t n = get_compile_time_arg_val(0);
@@ -78,9 +79,142 @@ void kernel_main() {
 #endif
 
     uint32_t cur_b = 0xFFFFFFFFu;
+#ifdef MHC_POST_FAST
+    // P.83: per unit, the W block's reads (transaction id W_TRID; MHC_POST_WSHARE: only my share, forwarded to the
+    // block's other cores) and every column's reads (id 1 + c) go out together; each column is pushed when its own id
+    // has landed, so the compute starts on column 0 while the rest stream in; the W block is pushed last (the compute
+    // waits for it only at the unit's matmul). The CB windows stay unit-aligned (B columns pushed a unit).
+    constexpr uint32_t W_TRID = 9;
+    constexpr uint32_t COL_WINDOW = 2;  // columns in flight a core (P.83 probe: see BREADCRUMBS)
+    static_assert(bw <= 8, "fast: one transaction id a column (1..8)");
+#ifdef MHC_POST_WSHARE
+    // the block's RT cores (row order): after every list (7 + rooted rows + the norm's owners)
+#ifdef MHC_POST_NORM
+    const uint32_t peers_arg0 = 7 + n_rooted + n_rooted * nb;
+#else
+    const uint32_t peers_arg0 = 7 + n_rooted;
+#endif
+    volatile tt_l1_ptr uint32_t* w_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(MHC_POST_WSHARE));
+#endif
+    for (uint32_t u = start; u < start + count; ++u) {
+        const mhc_stats::Unit U = mhc_stats::unit_of(u, rt, bw, ct);
+        const bool w_new = U.b != cur_b;
+        cb_reserve_back(cb_in, (n + 1) * bw);
+        const uint32_t base = get_write_ptr(cb_in);
+        cb_reserve_back(cb_f, bw);
+        const uint32_t f_base = get_write_ptr(cb_f);
+        // column c's F and X_0..X_{n-1} tiles, transaction id 1 + c; at most COL_WINDOW columns in flight, so the
+        // DRAM serves every core's early columns first and the compute works while the later ones land
+        auto issue_col = [&](uint32_t c) {
+            noc_async_read_set_trid(1 + c);
+            noc_async_read_page(U.r * ct + U.col0 + c, f_acc, f_base + c * f_page);
+            uint32_t dst = base + c * (n + 1) * in_page;
+            for (uint32_t j = 0; j < n; ++j) {
+                dst += in_page;
+                noc_async_read_page(U.r * n * ct + j * ct + U.col0 + c, x_acc, dst);
+            }
+        };
+        for (uint32_t c = 0; c < U.valid && c < COL_WINDOW; ++c) {
+            issue_col(c);
+        }
+        uint32_t w_base = 0;
+        if (w_new) {  // after the first columns: the compute needs them first
+            cb_reserve_back(cb_w, n * bw);
+            w_base = get_write_ptr(cb_w);
+            noc_async_read_set_trid(W_TRID);
+            for (uint32_t i = 0; i < n * U.valid; ++i) {
+#ifdef MHC_POST_WSHARE
+                if (i % rt != U.r) {
+                    continue;
+                }
+#endif
+                const uint32_t k = i / U.valid, c = i % U.valid;
+                noc_async_read_page(k * ct + U.col0 + c, w_acc, w_base + (k * bw + c) * page);
+            }
+        }
+        noc_async_read_set_trid(0);
+        {
+            MaybeDeviceZoneScope("rd_in");
+            for (uint32_t c = 0; c < U.valid; ++c) {
+                noc_async_read_barrier_with_trid(1 + c);
+                cb_push_back(cb_in, n + 1);
+                cb_push_back(cb_f, 1);
+                if (c + COL_WINDOW < U.valid) {
+                    issue_col(c + COL_WINDOW);
+                    noc_async_read_set_trid(0);
+                }
+            }
+            if (U.valid < bw) {  // the unit's window stays aligned (the compute pops these unread)
+                cb_push_back(cb_in, (n + 1) * (bw - U.valid));
+                cb_push_back(cb_f, bw - U.valid);
+            }
+        }
+        if (w_new) {
+            MaybeDeviceZoneScope("rd_w");
+            noc_async_read_barrier_with_trid(W_TRID);
+#ifdef MHC_POST_WSHARE
+            // my share -> the block's other cores' cb_w (the same address there), then one increment a tile I sent
+            uint32_t mine = 0, want = 0;
+            for (uint32_t i = 0; i < n * U.valid; ++i) {
+                if (i % rt != U.r) {
+                    ++want;
+                    continue;
+                }
+                ++mine;
+                const uint32_t off = ((i / U.valid) * bw + i % U.valid) * page;
+                for (uint32_t p = 0; p < rt; ++p) {
+                    if (p == U.r) {
+                        continue;
+                    }
+                    const uint32_t xy = get_arg_val<uint32_t>(peers_arg0 + p);
+                    noc_async_write(w_base + off, get_noc_addr(xy >> 16, xy & 0xFFFFu, w_base + off), page);
+                }
+            }
+            noc_async_write_barrier();
+            for (uint32_t p = 0; p < rt; ++p) {
+                if (p == U.r) {
+                    continue;
+                }
+                const uint32_t xy = get_arg_val<uint32_t>(peers_arg0 + p);
+                noc_semaphore_inc(get_noc_addr(xy >> 16, xy & 0xFFFFu, get_semaphore(MHC_POST_WSHARE)), mine);
+            }
+            noc_semaphore_wait_min(w_sem, want);
+            noc_semaphore_set(w_sem, 0);
+            noc_async_atomic_barrier();
+#endif
+            cb_push_back(cb_w, n * bw);
+            cur_b = U.b;
+        }
+#ifdef MHC_POST_NORM
+        {  // the unit's weight tile (as below)
+            for (uint32_t c = 0; c < U.valid; ++c) {
+                noc_async_read(g_acc.get_noc_addr(U.col0 + c, 0), gstage + c * 128, 64);
+                noc_async_read(g_acc.get_noc_addr(U.col0 + c, 1024), gstage + c * 128 + 64, 64);
+            }
+            cb_reserve_back(cb_ng, 1);
+            noc_async_read_barrier();
+            const ptr_t src = reinterpret_cast<ptr_t>(gstage);
+            ptr_t dst = reinterpret_cast<ptr_t>(get_write_ptr(cb_ng));
+            for (uint32_t c = 0; c < U.valid; ++c) {
+#pragma GCC unroll 1
+                for (uint32_t g = 0; g < 4; ++g) {
+                    const uint32_t k = 4 * c + g;
+                    const uint32_t col = (g & 1u) + 16u * (g >> 1);
+#pragma GCC unroll 8
+                    for (uint32_t l = 0; l < 32; ++l) {
+                        dst[mhc_stats::slot_index(k, l)] = src[c * 32 + col + 2 * (l & 7u)];
+                    }
+                }
+            }
+            cb_push_back(cb_ng, 1);
+        }
+#endif
+    }
+#else
     for (uint32_t u = start; u < start + count; ++u) {
         const mhc_stats::Unit U = mhc_stats::unit_of(u, rt, bw, ct);
         if (U.b != cur_b) {
+            MaybeDeviceZoneScope("rd_w");
             cb_reserve_back(cb_w, n * bw);
             const uint32_t base = get_write_ptr(cb_w);
             for (uint32_t k = 0; k < n; ++k) {
@@ -94,29 +228,32 @@ void kernel_main() {
         }
         // the unit's B columns in one batch (one barrier): column c's F at slot c (n + 1), X_j at c (n + 1) + 1 + j;
         // always B columns reserved / pushed so the compute's tile indices never wrap the CB
-        cb_reserve_back(cb_in, (n + 1) * bw);
-        const uint32_t base = get_write_ptr(cb_in);
+        {
+            MaybeDeviceZoneScope("rd_in");
+            cb_reserve_back(cb_in, (n + 1) * bw);
+            const uint32_t base = get_write_ptr(cb_in);
 #ifdef MHC_POST_STATS_F16
-        cb_reserve_back(cb_f, bw);
-        const uint32_t f_base = get_write_ptr(cb_f);
+            cb_reserve_back(cb_f, bw);
+            const uint32_t f_base = get_write_ptr(cb_f);
 #endif
-        for (uint32_t c = 0; c < U.valid; ++c) {
-            uint32_t dst = base + c * (n + 1) * in_page;
+            for (uint32_t c = 0; c < U.valid; ++c) {
+                uint32_t dst = base + c * (n + 1) * in_page;
 #ifdef MHC_POST_STATS_F16
-            noc_async_read_page(U.r * ct + U.col0 + c, f_acc, f_base + c * f_page);
+                noc_async_read_page(U.r * ct + U.col0 + c, f_acc, f_base + c * f_page);
 #else
-            noc_async_read_page(U.r * ct + U.col0 + c, f_acc, dst);
+                noc_async_read_page(U.r * ct + U.col0 + c, f_acc, dst);
 #endif
-            for (uint32_t j = 0; j < n; ++j) {
-                dst += in_page;
-                noc_async_read_page(U.r * n * ct + j * ct + U.col0 + c, x_acc, dst);
+                for (uint32_t j = 0; j < n; ++j) {
+                    dst += in_page;
+                    noc_async_read_page(U.r * n * ct + j * ct + U.col0 + c, x_acc, dst);
+                }
             }
-        }
-        noc_async_read_barrier();
-        cb_push_back(cb_in, (n + 1) * bw);
+            noc_async_read_barrier();
+            cb_push_back(cb_in, (n + 1) * bw);
 #ifdef MHC_POST_STATS_F16
-        cb_push_back(cb_f, bw);
+            cb_push_back(cb_f, bw);
 #endif
+        }
 #ifdef MHC_POST_NORM
         {  // the unit's weight tile (row 0 of each column tile: face 0 / face 1 first rows)
             for (uint32_t c = 0; c < U.valid; ++c) {
@@ -142,10 +279,15 @@ void kernel_main() {
         }
 #endif
     }
+#endif  // MHC_POST_FAST
 
     if (n_rooted) {
         volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_id));
-        noc_semaphore_wait_min(sem, n_rooted * nb);
+        {
+            MaybeDeviceZoneScope("rd_rootwait");
+            noc_semaphore_wait_min(sem, n_rooted * nb);
+        }
+        MaybeDeviceZoneScope("rd_part");
         for (uint32_t i = 0; i < n_rooted; ++i) {
             const uint32_t r = get_arg_val<uint32_t>(7 + i);
             cb_reserve_back(cb_part, nb);  // the row's partials in one batch
@@ -162,6 +304,7 @@ void kernel_main() {
     if (n_rooted) {  // the roots: each rooted row's 32 rstd values (column n (n + 2) + 1 of the compute's rstd tile) ->
                      // 128 bytes at 2 KB into page j of cb_nr on the owner of each of the row's NB units, then one
                      // increment each (this kernel is idle here; the writer transposes the row for the hc meanwhile)
+        MaybeDeviceZoneScope("rd_nrs_send");
         uint32_t* stage = reinterpret_cast<uint32_t*>(get_write_ptr(cb_nstage));  // private page (never pushed)
         for (uint32_t i = 0; i < n_rooted; ++i) {
             cb_wait_front(cb_nrs, 1);
@@ -191,7 +334,11 @@ void kernel_main() {
     if (count) {
         volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_norm_id));
         cb_reserve_back(cb_nr, count);  // (the CB's base: nothing pushed to it before)
-        noc_semaphore_wait_min(sem, count);
+        {
+            MaybeDeviceZoneScope("rd_nrwait");
+            noc_semaphore_wait_min(sem, count);
+        }
+        MaybeDeviceZoneScope("rd_nrlay");
         // each unit's 32 rstd values (2 KB into its page) -> its rstd tile: slot blk, lane l = rstd of token row
         // 4 blk + (l >> 3) (the rows of DEST vector v, blk = 4 (v >> 4) + ((v >> 1) & 3)); slots 0..7: the first 1 KB
         const uint32_t base = get_write_ptr(cb_nr);

@@ -740,6 +740,20 @@ TABLE = {
         "one exact, so some outputs differ by one bf16 step (fork test: 1e-5 of the elements one step off float64). "
         "Layer 0's attn_hc and any hc step that keeps mhc_pre_xing keep their rms_norm. off = the P.34 path",
     ),
+    "MHC_POST_FAST": Setting(
+        True,
+        (True, False),
+        "P.83 (OWNER 2026-11-19: mhc_post to its DRAM roofline). True = every mhc_post(collapse_pre=) call (the "
+        "residual passes with POST_COLLAPSE, NORM_IN_MHC, FFN_FEED) runs the fork's pipelined program (fast=True): "
+        "the columns stream in a NoC transaction id each (2 in flight a core) and the compute starts on the first, "
+        "X' goes out a column at a time, each W block leaves DRAM once (one unit a core: the block's 5 cores read a "
+        "fifth each and forward it through L1; 12.8 -> 2.6 MB a call), the coefficient / pre-block tiles are built on "
+        "the SFPU (lane broadcast; the BRISC build took 30-37 us), the sum-of-squares tile is folded 32 -> 8 columns "
+        "before its transpose (DS41-222), and the feed's port reads keep 12 packets in flight. Op probe (8x4, "
+        "[160, 5120] a chip, slowest chip): ffn_residual's call 137.6 -> 110.8 us, attn_residual's (with the feed) "
+        "179.7 -> 141.0 us. X', y, the feed bit-identical; stats column 24 (sum x'^2) in another fp32 order (rel "
+        "<= 1e-5), so the hc within 2.4e-7. False = the P.36 program",
+    ),
     "FFN_FEED": Setting(
         "on",
         ("on", "off"),

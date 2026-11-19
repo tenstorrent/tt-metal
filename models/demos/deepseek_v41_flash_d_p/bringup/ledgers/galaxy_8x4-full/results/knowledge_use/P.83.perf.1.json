@@ -1,0 +1,108 @@
+{
+ "used": [
+  {
+   "id": "DS41-222",
+   "how": "measured the BRISC transposes in the zone probe (sfin 8.1 us, root 8.1 + 5.6 us); folded the ss tile 32 -> 8 before its transpose and cut the root copy to 25 columns",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-210",
+   "how": "the W-share peer list goes after every per-core list (never patched on a cache hit); addresses stay in fixed slots 0-4",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-223",
+   "how": "the SFPU coefficient build reconfigures srcA / the packer explicitly before its copies and packs (a core's first phase)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-189",
+   "how": "the SFPU lane broadcast is fully templated (every DEST index constant), no runtime-indexed DEST loop",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-104",
+   "how": "confirmed bf16 streams shipped; the remaining bytes are W (fp32) and the streams, so the pick targets W re-reads and overlap, not formats",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-80",
+   "how": "treated the pass as DRAM-bound: cut bytes (W 12.8 -> 2.6 MB) and overlapped compute with the reads instead of tuning SFPU math",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "how to read device zones of a 32-chip mesh run (the device CSV is complete only after close; run host id = call base + chip) and that the resident runner's mesh has no device profiler",
+  "the feed sender holds up to 4 CB slots unpopped (now DS41-317)",
+  "BRISC plain-pointer L1 copies are not much faster than volatile ones (now DS41-318)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding: ragged blocks keep their valid columns; the reader's alignment pushes are CB bookkeeping, no extra DRAM reads or compute"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "mhc_post is a C++ descriptor op (addresses patched in override_runtime_arguments), not a Python-built program"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression suite run; only the new tests/unit/test_mhc_post_fast.py cases, through the resident runner (tests/test_mhc_post_fast.py, 7/7)"
+  },
+  {
+   "id": "OV-56",
+   "answer": "done",
+   "evidence": "fused / modified the fork (mhc_post fast); no change to served caches, acks, chunk header or engine input; device-profile op probe -25 to -39 us a call (~-2.6 ms a chunk); the A/B on the runner is the orchestrator's"
+  }
+ ],
+ "cited_only": [
+  "DS41-317",
+  "DS41-318",
+  "DS41-319"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.83",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-19T17:30:17",
+  "head": "32840871d92",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.83.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.83.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_mhc_post_probe.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_mhc_post_fast.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/mhc.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/README.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_stats_device_operation.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_stats_device_operation.hpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_stats_program_factory.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_feed_reader.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_feed_sender.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_stats_compute.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_stats_reader.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_stats_writer.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/mhc_post_ttnn.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/mhc_post_ttnn.hpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/mhc_post_ttnn_nanobind.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/tests/unit/test_mhc_post_fast.py"
+  ]
+ }
+}

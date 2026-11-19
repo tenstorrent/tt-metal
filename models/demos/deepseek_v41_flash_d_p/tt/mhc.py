@@ -149,6 +149,7 @@ class TtHcMixes:
             y_output=self._given[1],
             **self.norm_kwargs(),
             **self.feed_kwargs(),
+            fast=bool(settings.get("MHC_POST_FAST")),  # P.83: the fork's pipelined program
         )
 
     def feed_kwargs(self) -> dict:

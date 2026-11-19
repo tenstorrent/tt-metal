@@ -262,7 +262,8 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> mhc_post_with_collapse(
     const std::optional<Tensor>& feed_output,
     const std::optional<std::vector<uint32_t>>& feed_semaphores,
     int64_t feed_num_links,
-    int64_t feed_cluster_axis) {
+    int64_t feed_cluster_axis,
+    bool fast) {
     // the stats_weight checks first (the same refusals), then the collapse's own
     const auto cfg = compute_kernel_config.value_or(default_compute_kernel_config());
     check_supported(input_tensor, residual, cfg);
@@ -385,7 +386,8 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> mhc_post_with_collapse(
         .feed_output = feed_output,
         .feed_semaphores = feed_semaphores.value_or(std::vector<uint32_t>{}),
         .feed_links = static_cast<uint32_t>(feed_num_links),
-        .feed_axis = static_cast<uint32_t>(feed_cluster_axis)};
+        .feed_axis = static_cast<uint32_t>(feed_cluster_axis),
+        .fast = fast};
     auto out = ttnn::prim::bringup::mhc_post_stats(
         input_tensor,
         residual,
@@ -432,7 +434,8 @@ std::variant<Tensor, std::tuple<Tensor, Tensor>, std::tuple<Tensor, Tensor, Tens
     const std::optional<Tensor>& feed_output,
     const std::optional<std::vector<uint32_t>>& feed_semaphores,
     int64_t feed_num_links,
-    int64_t feed_cluster_axis) {
+    int64_t feed_cluster_axis,
+    bool fast) {
     if (collapse_pre.has_value()) {  // P.34
         if (!stats_weight.has_value() || !hc_scale.has_value() || !hc_base.has_value()) {
             throw ValueErrorCpp("mhc_post: collapse_pre needs stats_weight, hc_scale and hc_base");
@@ -465,12 +468,13 @@ std::variant<Tensor, std::tuple<Tensor, Tensor>, std::tuple<Tensor, Tensor, Tens
             feed_output,
             feed_semaphores,
             feed_num_links,
-            feed_cluster_axis);
+            feed_cluster_axis,
+            fast);
     }
     if (hc_output.has_value() || y_output.has_value() || hc_scale.has_value() || hc_base.has_value() ||
-        norm_weight.has_value() || feed_output.has_value()) {
+        norm_weight.has_value() || feed_output.has_value() || fast) {
         throw ValueErrorCpp(
-            "mhc_post: hc_scale / hc_base / hc_output / y_output / norm_weight / feed_output need collapse_pre");
+            "mhc_post: hc_scale / hc_base / hc_output / y_output / norm_weight / feed_output / fast need collapse_pre");
     }
     if (stats_weight.has_value()) {
         return mhc_post_with_stats(

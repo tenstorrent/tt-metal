@@ -44,6 +44,7 @@
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
 #include "mhc_post_stats_common.hpp"
+#include "perf_instrumentation.hpp"
 
 #ifdef TRISC_MATH
 #include "sfpi.h"
@@ -86,6 +87,9 @@ constexpr uint32_t cb_nr = get_compile_time_arg_val(25);
 constexpr uint32_t cb_ng = get_compile_time_arg_val(26);
 constexpr uint32_t cb_yn = get_compile_time_arg_val(27);
 constexpr uint32_t cb_nrs = get_compile_time_arg_val(28);
+#endif
+#ifdef MHC_POST_FAST
+constexpr uint32_t cb_raw = get_compile_time_arg_val(29);  // P.83: the unit's raw post / comb / pre row tiles (writer)
 #endif
 
 #ifdef TRISC_MATH
@@ -145,6 +149,133 @@ void add_tiles() {
     for (int v = 0; v < T; ++v) {
         dst_reg[T * A + v] = vFloat(dst_reg[T * A + v]) + vFloat(dst_reg[T * B + v]);
     }
+}
+
+// P.83 (fast): DEST tile BASE: row i's 32 columns folded to 8 at row-major columns 0, 2, .., 14 (column 2 m = the sum
+// of columns 2 m, 2 m + 1, 2 m + 16, 2 m + 17), as sq_fold below; then 256 words go coefficient-major (DS41-222)
+template <int K>
+sfpi_inline void fold_at() {
+    dst_reg[K] = (vFloat(dst_reg[K]) + vFloat(dst_reg[K + 1])) + (vFloat(dst_reg[K + 8]) + vFloat(dst_reg[K + 9]));
+}
+template <int BASE>
+void fold_tile() {
+    fold_at<T * BASE + 0>();
+    fold_at<T * BASE + 2>();
+    fold_at<T * BASE + 4>();
+    fold_at<T * BASE + 6>();
+    fold_at<T * BASE + 16>();
+    fold_at<T * BASE + 18>();
+    fold_at<T * BASE + 20>();
+    fold_at<T * BASE + 22>();
+}
+
+#ifdef MHC_POST_FAST
+// P.83: the coefficient tiles (cb_cf) and the pre-block tile (cb_pb) built on the SFPU from the raw row tiles in DEST
+// (the writer's build_coefficients / build_pre_blocks words, bit for bit). A raw value (row R, column COL) sits in DEST
+// vector 16 (R >> 4) + 2 ((R >> 2) & 3) + (COL & 1) + 8 ((COL >> 4) & 1) at lane (COL & 15) >> 1 of the 8-lane
+// subvector of its row; the coefficient layout wants it in all 8 lanes of that
+// subvector: mask the lane (vConstTileId & 0xE = 2 x the lane within the subvector), then OR the subvector rotated by
+// 1, 2 and 4 lanes (exact bit copies).
+template <int J>
+sfpi_inline vInt lane_mask() {
+    vInt m = 0;
+    v_if((vConstTileId & 0xE) == 2 * J) { m = -1; }
+    v_endif;
+    return m;
+}
+
+template <int SRC, int DST>
+sfpi_inline void bcast_lane(vInt mask) {
+    vInt x = as<vInt>(vFloat(dst_reg[SRC])) & mask;
+    x = x | vInt(subvec_shflror1(x));
+    vInt y = vInt(subvec_shflror1(x));
+    x = x | vInt(subvec_shflror1(y));
+    y = vInt(subvec_shflror1(x));
+    y = vInt(subvec_shflror1(y));
+    y = vInt(subvec_shflror1(y));
+    x = x | vInt(subvec_shflror1(y));
+    dst_reg[DST] = as<vFloat>(x);
+}
+
+constexpr int FAST_POST_COL = MHC_POST_FAST_POST_COL;
+constexpr int FAST_COMB_COL = MHC_POST_FAST_COMB_COL;
+constexpr bool FAST_COMB_T = MHC_POST_FAST_COMB_T != 0;
+
+// coefficient tiles: DEST 0 = the raw post row tile, DEST 1 = the raw comb row tile; half h's tiles at DEST 2 + h CF ..
+// term TERM (output k = TERM / (N + 1), input m = TERM % (N + 1)) of row block BLK -> vector q = 4 TERM + (BLK & 3)
+template <int TERM, int BLK>
+sfpi_inline void cf_block(vInt mask) {
+    constexpr int k = TERM / (N + 1), m = TERM % (N + 1);
+    constexpr int col = m == 0 ? FAST_POST_COL + k : FAST_COMB_COL + (FAST_COMB_T ? (m - 1) * N + k : k * N + (m - 1));
+    constexpr int src_tile = m == 0 ? 0 : 1;
+    constexpr int h = BLK >> 2, q4 = BLK & 3;
+    constexpr int q = 4 * TERM + q4;
+    constexpr int src = T * src_tile + 16 * h + 2 * q4 + (col & 1) + 8 * ((col >> 4) & 1);
+    constexpr int dst = T * (2 + h * CF + (q >> 5)) + (q & 31);
+    bcast_lane<src, dst>(mask);
+}
+
+template <int TERM>
+sfpi_inline void cf_term() {
+    constexpr int k = TERM / (N + 1), m = TERM % (N + 1);
+    constexpr int col = m == 0 ? FAST_POST_COL + k : FAST_COMB_COL + (FAST_COMB_T ? (m - 1) * N + k : k * N + (m - 1));
+    const vInt mask = lane_mask<((col & 15) >> 1)>();
+    cf_block<TERM, 0>(mask);
+    cf_block<TERM, 1>(mask);
+    cf_block<TERM, 2>(mask);
+    cf_block<TERM, 3>(mask);
+    cf_block<TERM, 4>(mask);
+    cf_block<TERM, 5>(mask);
+    cf_block<TERM, 6>(mask);
+    cf_block<TERM, 7>(mask);
+}
+
+template <int... Ts>
+sfpi_inline void cf_terms(std::integer_sequence<int, Ts...>) {
+    (cf_term<Ts>(), ...);
+}
+
+void build_cf() {
+    static_assert(2 + 2 * CF <= 8, "fast: the raw rows and both halves' coefficient tiles in the 8 fp32 DEST tiles");
+    cf_terms(std::make_integer_sequence<int, N*(N + 1)>{});
+}
+
+// pre-block tile: DEST 0 = the raw pre row tile -> DEST 1, slot 8 i + b, lane l = pre_i (column i) of row 4 b + l / 8
+template <int I, int B>
+sfpi_inline void pb_block(vInt mask) {
+    constexpr int src = 16 * (B >> 2) + 2 * (B & 3) + (I & 1) + 8 * ((I >> 4) & 1);
+    bcast_lane<src, T + 8 * I + B>(mask);
+}
+
+template <int I>
+sfpi_inline void pb_col() {
+    const vInt mask = lane_mask<((I & 15) >> 1)>();
+    pb_block<I, 0>(mask);
+    pb_block<I, 1>(mask);
+    pb_block<I, 2>(mask);
+    pb_block<I, 3>(mask);
+    pb_block<I, 4>(mask);
+    pb_block<I, 5>(mask);
+    pb_block<I, 6>(mask);
+    pb_block<I, 7>(mask);
+}
+
+template <int... Is>
+sfpi_inline void pb_cols(std::integer_sequence<int, Is...>) {
+    (pb_col<Is>(), ...);
+}
+
+void build_pb() { pb_cols(std::make_integer_sequence<int, N>{}); }
+#endif
+
+// DEST 0 slot 0 <- sum of slots 0..7 (lane-wise; a folded tile, coefficient-major)
+void slot_total8_any() {
+    vFloat s = dst_reg[0];
+#pragma GCC unroll 7
+    for (int k = 1; k < 8; ++k) {
+        s = s + dst_reg[k];
+    }
+    dst_reg[0] = s;
 }
 
 // DEST 0 slot 0 <- sum of slots 0..31 (column order), lane-wise.
@@ -290,12 +421,46 @@ ALWI void pack_to(uint32_t cb) {
     pack_reconfig_data_format(cb);
 #endif
 }
+#ifdef MHC_POST_FAST
+// P.83: the unit's coefficient tiles (cb_cf, both halves) and pre-block tile (cb_pb) from its raw post / comb / pre row
+// tiles (cb_raw, from the writer), on the SFPU (stats_sfpu::build_cf / build_pb); every copy exact (unpack to the fp32
+// DEST, fp32 pack).
+ALWI void build_coefficient_tiles() {
+    cb_wait_front(cb_raw, 3);
+    cb_reserve_back(cb_cf, 2 * cf);
+    tile_regs_acquire();
+    reconfig_data_format_srca(cb_raw);
+    copy_init(cb_raw);
+    copy_from(cb_raw, 0, 0);
+    copy_from(cb_raw, 1, 1);
+    STATS_SFPU(stats_sfpu::build_cf);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_reconfig_data_format(cb_cf);
+    for (uint32_t j = 0; j < 2 * cf; ++j) {
+        pack_tile(2 + j, cb_cf);
+    }
+    tile_regs_release();
+    cb_push_back(cb_cf, 2 * cf);
+    cb_reserve_back(cb_pb, 1);
+    tile_regs_acquire();
+    copy_from(cb_raw, 2, 0);
+    STATS_SFPU(stats_sfpu::build_pb);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(1, cb_pb);
+    tile_regs_release();
+    cb_push_back(cb_pb, 1);
+    cb_pop_front(cb_raw, 3);
+}
+#endif
 
 #ifdef MHC_POST_COLLAPSE
 // The next step's hc of a rooted row (mhc_pre_xing(deepseek=True)'s coefficient stage on the summed row): its
 // coefficient-major copy (cb_hsoa front) -> cb_hsoa_out.
 ALWI void hc_row() {
     cb_wait_front(cb_hsoa, 1);
+    MaybeDeviceZoneScope("c_hc");
     cb_reserve_back(cb_hsoa_out, 1);
     tile_regs_acquire();
     copy_init(cb_hsoa);
@@ -323,6 +488,93 @@ void kernel_main() {
     uint32_t cur_b = 0xFFFFFFFFu;
     for (uint32_t u = start; u < start + count; ++u) {
         const mhc_stats::Unit U = mhc_stats::unit_of(u, rt, bw, ct);
+#ifdef MHC_POST_FAST
+        // P.83: the unit's coefficient / pre-block tiles built here from the raw rows; then a column at a time as the
+        // reader pushes each: the mix (X' -> cb_out for the writer and cb_xs, the squares -> cb_ssc) and right after it
+        // that column's collapse y (cb_y), so the compute keeps pace with the columns landing; the W block is waited
+        // for only at the matmul below.
+        build_coefficient_tiles();
+        cb_wait_front(cb_cf, 2 * cf);
+        cb_wait_front(cb_pb, 1);
+        cb_reserve_back(cb_ssc, bw);
+        cb_reserve_back(cb_y, bw);
+        {
+            MaybeDeviceZoneScope("c_mix");
+            for (uint32_t c = 0; c < U.valid; ++c) {
+                cb_wait_front(cb_in, n + 1);
+                cb_wait_front(cb_f, 1);
+                tile_regs_acquire();
+                srca_to(cb_cf);
+                copy_init(cb_cf);
+                for (uint32_t t = 0; t < cf; ++t) {
+                    copy_from(cb_cf, t, t);
+                }
+                reconfig_data_format_srca(cb_cf, cb_f);
+                copy_init(cb_f);
+                copy_from(cb_f, 0, cf);  // F (bf16 -> fp32 DEST, exact)
+                reconfig_data_format_srca(cb_f, cb_in);
+                copy_init(cb_in);
+                for (uint32_t t = 1; t <= n; ++t) {
+                    copy_from(cb_in, t, cf + t);
+                }
+                STATS_SFPU(stats_sfpu::mix_half<0>);
+                srca_to(cb_cf);
+                copy_init(cb_cf);
+                for (uint32_t t = 0; t < cf; ++t) {
+                    copy_from(cb_cf, cf + t, t);
+                }
+                STATS_SFPU(stats_sfpu::mix_half<1>);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_to(cb_out);
+                cb_reserve_back(cb_out, n);
+                for (uint32_t k = 0; k < n; ++k) {
+                    pack_tile<true>(cf + k, cb_out, k);
+                }
+                cb_push_back(cb_out, n);
+                cb_reserve_back(cb_xs, n);
+                for (uint32_t k = 0; k < n; ++k) {
+                    pack_tile<true>(cf + k, cb_xs, k);
+                }
+                cb_push_back(cb_xs, n);
+                pack_to(cb_ssc);
+                pack_tile<true>(cf + n, cb_ssc, c);
+                tile_regs_release();
+                cb_pop_front(cb_in, n + 1);
+                cb_pop_front(cb_f, 1);
+
+                // this column's y = sum_k pre_k X'_k of the bf16 X' just packed (mhc_pre_xing's ymix)
+                cb_wait_front(cb_xs, (c + 1) * n);
+                tile_regs_acquire();
+                reconfig_data_format_srca(cb_pb);
+                copy_init(cb_pb);
+                copy_from(cb_pb, 0, 0);
+                reconfig_data_format_srca(cb_pb, cb_xs);
+                copy_init(cb_xs);
+                for (uint32_t k = 0; k < n; ++k) {
+                    copy_from(cb_xs, c * n + k, 1 + k);
+                }
+                STATS_SFPU(HcK::ymix);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_reconfig_data_format(cb_y);
+                pack_tile<true>(1, cb_y, c);
+                tile_regs_release();
+            }
+        }
+        if (U.valid < bw) {  // the reader's alignment pages; cb_xs filled to the unit's B columns
+            cb_wait_front(cb_in, (n + 1) * (bw - U.valid));
+            cb_pop_front(cb_in, (n + 1) * (bw - U.valid));
+            cb_wait_front(cb_f, bw - U.valid);
+            cb_pop_front(cb_f, bw - U.valid);
+            cb_reserve_back(cb_xs, n * (bw - U.valid));
+            cb_push_back(cb_xs, n * (bw - U.valid));
+        }
+        cb_push_back(cb_ssc, bw);
+        cb_push_back(cb_y, bw);
+        cb_pop_front(cb_cf, 2 * cf);
+        cb_pop_front(cb_pb, 1);
+#else
         if (U.b != cur_b) {
             if (cur_b != 0xFFFFFFFFu) {
                 cb_pop_front(cb_w, n * bw);
@@ -414,6 +666,9 @@ void kernel_main() {
         }
         cb_push_back(cb_y, bw);
         cb_pop_front(cb_pb, 1);
+#endif                    // (the old head's MHC_POST_COLLAPSE)
+#endif                    // MHC_POST_FAST
+#ifdef MHC_POST_COLLAPSE  // (closed after the norm's y^2 below)
 #ifdef MHC_POST_NORM
         {  // the unit's lane-wise sum of y^2 (the y tiles stay in cb_y: unit j's at j B from the front)
             const uint32_t j = u - start;
@@ -441,30 +696,45 @@ void kernel_main() {
 #endif
 
         // the unit's partial: DEST 0 = X'_unit @ W_block (FPU), DEST 1 = sum of the columns' squares (SFPU)
+#ifdef MHC_POST_FAST
+        if (U.b != cur_b) {  // P.83: the W block is needed only here (the reader pushes it after the columns)
+            if (cur_b != 0xFFFFFFFFu) {
+                cb_pop_front(cb_w, n * bw);
+            }
+            cb_wait_front(cb_w, n * bw);
+            cur_b = U.b;
+        }
+#endif
         cb_wait_front(cb_xs, n * bw);
         cb_wait_front(cb_ssc, bw);
         cb_reserve_back(cb_mfin, 1);
         cb_reserve_back(cb_sfin, 1);
-        tile_regs_acquire();
-        reconfig_data_format<SrcOrder::Reverse>(cb_xs, cb_w);
-        matmul_init(cb_xs, cb_w);
-        for (uint32_t c = 0; c < U.valid; ++c) {
-            for (uint32_t k = 0; k < n; ++k) {
-                matmul_tiles(cb_xs, cb_w, c * n + k, k * bw + c, 0);
+        {
+            MaybeDeviceZoneScope("c_mm");
+            tile_regs_acquire();
+            reconfig_data_format<SrcOrder::Reverse>(cb_xs, cb_w);
+            matmul_init(cb_xs, cb_w);
+            for (uint32_t c = 0; c < U.valid; ++c) {
+                for (uint32_t k = 0; k < n; ++k) {
+                    matmul_tiles(cb_xs, cb_w, c * n + k, k * bw + c, 0);
+                }
             }
+            reconfig_data_format_srca(cb_ssc);
+            copy_init(cb_ssc);
+            copy_from(cb_ssc, 0, 1);
+            for (uint32_t c = 1; c < U.valid; ++c) {
+                copy_from(cb_ssc, c, 2);
+                STATS_SFPU((stats_sfpu::add_tiles<1, 2>));
+            }
+#ifdef MHC_POST_FAST
+            STATS_SFPU(stats_sfpu::fold_tile<1>);  // P.83: a row's 32 columns -> 8 (0, 2, .., 14) before the transpose
+#endif
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, cb_mfin);
+            pack_tile(1, cb_sfin);
+            tile_regs_release();
         }
-        reconfig_data_format_srca(cb_ssc);
-        copy_init(cb_ssc);
-        copy_from(cb_ssc, 0, 1);
-        for (uint32_t c = 1; c < U.valid; ++c) {
-            copy_from(cb_ssc, c, 2);
-            STATS_SFPU((stats_sfpu::add_tiles<1, 2>));
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, cb_mfin);
-        pack_tile(1, cb_sfin);
-        tile_regs_release();
         cb_push_back(cb_mfin, 1);
         cb_push_back(cb_sfin, 1);
         cb_pop_front(cb_xs, n * bw);
@@ -491,7 +761,11 @@ void kernel_main() {
         tile_regs_acquire();
         copy_init(cb_soa);
         copy_from(cb_soa, 0, 0);
+#ifdef MHC_POST_FAST
+        STATS_SFPU(stats_sfpu::slot_total8_any);  // P.83: the folded tile's 8 slots
+#else
         STATS_SFPU(stats_sfpu::slot_total);
+#endif
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, cb_soa_out);
@@ -512,9 +786,10 @@ void kernel_main() {
 #endif
     for (uint32_t i = 0; i < n_rooted; ++i) {
         cb_reserve_back(cb_fin, 1);
+        cb_wait_front(cb_part, nb);
+        MaybeDeviceZoneScope("c_root");
         tile_regs_acquire();
         copy_init(cb_part);
-        cb_wait_front(cb_part, nb);
         copy_from(cb_part, 0, 0);
         for (uint32_t b = 1; b < nb; ++b) {
             copy_from(cb_part, b, 1);
@@ -561,6 +836,7 @@ void kernel_main() {
         cb_wait_front(cb_ng, 1);
         cb_wait_front(cb_y, bw);
         cb_reserve_back(cb_yn, bw);
+        MaybeDeviceZoneScope("c_norm");
         for (uint32_t c0 = 0; c0 < U.valid; c0 += 6) {
             const uint32_t c1 = U.valid < c0 + 6 ? U.valid : c0 + 6;
             tile_regs_acquire();

@@ -280,3 +280,47 @@ two perf-tournament rounds); its golden suite is `eval/golden_tests/mhc_post` on
   `device/mhc_post_stats_program_factory.cpp`, `kernels/mhc_post_stats_writer.cpp`,
   `kernels/mhc_post_feed_{layout.hpp,common.hpp,reader.cpp,sender.cpp}` (new), `tests/unit/test_mhc_post_feed.py`
   (new).
+
+### fast: the collapse program pipelined (deepseek_v41_flash_d_p P.83)
+- What: opt-in `fast=True` (needs `collapse_pre`; default False: every program, CT / RT arg, define and hash as
+  before). Define MHC_POST_FAST (the stats kernels and the feed reader), MHC_POST_WSHARE (reader, with one unit a core),
+  semaphore 5 (W share), CB_RAW 6 pages pushed to the compute (compute CT arg 29, UnpackToDestFp32), feed CB 16 slots.
+  - Reader: a unit's columns stream in with a NoC transaction id each, at most 2 columns in flight a core, each pushed
+    when its id lands; the W block after the first columns. With one unit a core (units <= cores, 2 <= RT <= 32) the
+    RT cores of a block each read the W tiles i with i mod RT == their row and forward them into the others' cb_w (same
+    L1 address: the only reservation), then one increment a forwarded tile; W leaves DRAM once, not RT times
+    (12.8 -> 2.6 MB a call at [160, 5120]).
+  - Compute: the coefficient and pre-block tiles built on the SFPU from the raw post / comb / pre rows (mask the
+    lane holding the value, vConstTileId & 0xE, then OR the 8-lane subvector rotated by 1, 2, 4: exact bit copies;
+    the BRISC word build took 30-37 us a unit); per column: the mix, X' pushed to the writer and to cb_xs, then that
+    column's collapse y; W waited for only at the matmul; the unit's sum-of-squares tile folded 32 -> 8 columns
+    (fold_tile) and summed over 8 slots (slot_total8_any).
+  - Writer: pushes the raw rows (no word build); X' written a column at a time; the folded tile's 256-word transpose
+    (folded_to_soa8) instead of 1024 words; a root copies the hc's n (n + 2) + 1 columns (plain pointers).
+  - Feed port reader: up to SLOTS - 4 = 12 packets' reads in flight (a transaction id each, mod 12), pushed in order;
+    more than SLOTS - 4 ahead deadlocks against the sender, which holds up to 4 slots unpopped until a flush (the first
+    version with 8 in flight of 8 slots hung the 8x4, reset by the safe runner).
+- Why: the op at [160, 5120] a chip ran 137.6 (ffn) / 179.7 us (attn, with the feed) a call, ~25-30 % of DRAM
+  bandwidth. Device zones (op probe): W read 36-57 us (100 cores x 128 KB fp32), the BRISC coefficient build 37.5 us in
+  parallel, then the mix 19 + collapse 9 + matmul 4 us serially (one unit a core: nothing overlapped), the
+  sum-of-squares transpose 8 us, the root tail ~25 us, the feed's port reads one packet a barrier (22-50 us).
+- Precision: X', y (normalized or not) and feed_output bit-identical to fast=False; stats bit-identical except column
+  n (n + 2) (sum x'^2, another fp32 summation order: max abs 0.094 on values ~2e5, rel <= 1e-5 checked), so the hc
+  (its rsqrt) within 2.4e-7.
+- Measured (8x4 Galaxy, FABRIC_2D_TORUS_XY, [160, 5120] bf16 a chip, 110-core cap, device profiler, slowest chip of 32,
+  median of 4 calls): no feed 137.6 -> 110.8 us; with the feed (2 links) 179.7 -> 141.0 us. The DRAM phase now moves
+  ~17 MB in ~45 us (~385 GB/s: reads + the X' writes); what is left: the slowest cores' DRAM service (their columns
+  land ~20 us after the median core's) and the root tail (sum 5.5 us, the hc's two BRISC transposes 6.4 + 5.4 us and
+  its Sinkhorn 5.5 us), and on the attn site the feed after the norm (~36 us).
+- Tests: `tests/unit/test_mhc_post_fast.py` (fast vs off: [64, 640] ragged with / without the feed, [160, 5120] with /
+  without the feed and separate post / comb / pre with comb as stored, [640, 1280] feed, [1280, 5120] several units a
+  core; refusal), run on the model's resident mesh through models/demos/deepseek_v41_flash_d_p/tests/test_mhc_post_fast.py:
+  7 / 7 cases pass. Fork regression not run on the 8x4 (owner OV-25: F.1 runs every suite); fast=False is the old
+  program (its kernels' only change: device zones, free without the profiler).
+- Device zones (MaybeDeviceZoneScope, permanent) in the stats reader / writer / compute and the feed kernels; the op
+  probe models/demos/deepseek_v41_flash_d_p/tests/perf/test_mhc_post_probe.py prints them per call.
+- Cores: unchanged (units + spare-core roots + ports inside max_grid: 109 of the 110 cap at [160, 5120] with the feed).
+- Needed by: deepseek_v41_flash_d_p P.83 (setting MHC_POST_FAST, tt/mhc.py collapse_kwargs).
+- Files: `mhc_post_ttnn.{hpp,cpp}`, `mhc_post_ttnn_nanobind.cpp`, `device/mhc_post_stats_device_operation.{hpp,cpp}`,
+  `device/mhc_post_stats_program_factory.cpp`, `kernels/mhc_post_stats_{reader,writer,compute}.cpp`,
+  `kernels/mhc_post_feed_{reader,sender}.cpp`, `tests/unit/test_mhc_post_fast.py` (new).

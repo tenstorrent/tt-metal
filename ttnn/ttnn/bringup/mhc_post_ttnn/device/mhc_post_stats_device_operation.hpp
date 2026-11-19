@@ -68,6 +68,14 @@ struct MhcPostStatsParams {
     uint32_t feed_axis = 1;
     uint32_t feed_links = 1;
     std::array<uint32_t, 2> feed_sems{};
+    // Fork option fast (deepseek_v41_flash_d_p P.83, MHC_POST_FAST; false = off: every program, arg and hash as before;
+    // needs collapse): the same outputs from a pipelined program: the unit's columns stream in (a NoC transaction id a
+    // column, the compute starts on the first), X' goes out a column at a time, the W block is read once a block (with
+    // one unit a core: each of the block's RT cores reads 1 / RT of it and forwards it to the others through L1), the
+    // coefficient tiles are built with plain word copies, the sum-of-squares tile is folded 32 -> 8 columns on the SFPU
+    // before its transpose (DS41-222), and a root copies only the hc's n (n + 2) + 1 columns. Not bit-identical to off:
+    // the sum of squares (stats column n (n + 2)) is summed in another fp32 order (and so the hc's rsqrt).
+    bool fast = false;
 };
 
 // The collapse option's call arguments (P.34): the next step's pre, its coefficient scalars, the caller's buffers.
@@ -89,6 +97,8 @@ struct MhcPostCollapseArgs {
     std::vector<uint32_t> feed_semaphores;
     uint32_t feed_links = 1;
     uint32_t feed_axis = 1;
+    // P.83 (fast): the pipelined program (MhcPostStatsParams::fast)
+    bool fast = false;
 };
 
 struct MhcPostStatsInputs {

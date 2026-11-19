@@ -29,6 +29,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "mhc_post_stats_common.hpp"
+#include "perf_instrumentation.hpp"
 #ifdef MHC_POST_FEED
 #include "mhc_post_feed_common.hpp"
 #endif
@@ -91,7 +92,7 @@ inline void build_coefficients(
     }
 }
 
-#ifdef MHC_POST_NORM
+#if defined(MHC_POST_NORM) || defined(MHC_POST_FAST)
 // dst coefficient-major slots [0, 8) <- src row-major columns 0, 2, .., 14 (the compute's folded y^2 tile: slot m, lane
 // l = row l's sum over columns 2 m, 2 m + 1, 2 m + 16, 2 m + 17); 256 words, plain loads (after the CB wait)
 inline void folded_to_soa8(const uint32_t* src, uint32_t* dst) {
@@ -146,6 +147,40 @@ inline void soa_to_cols(const volatile tt_l1_ptr uint32_t* src, volatile tt_l1_p
             d[rc_index(0, k)] = s[slot_index(k, 0)];
         }
     }
+}
+#endif
+
+#ifdef MHC_POST_FAST
+// P.83: the same words as cols_to_soa / soa_to_cols, with plain (non-volatile) pointers after the CB waits.
+// dst coefficient-major slots [0, COUNT) <- src row-major columns [0, COUNT) (a root's summed row: the hc's columns)
+template <uint32_t COUNT>
+inline void cols_to_soa_fast(const uint32_t* src, uint32_t* dst) {
+    asm volatile("" ::: "memory");
+#pragma GCC unroll 1
+    for (uint32_t l = 0; l < 32; ++l) {
+        const uint32_t* s = src + rc_index(l, 0);
+        uint32_t* d = dst + slot_index(0, l);
+#pragma GCC unroll 32
+        for (uint32_t k = 0; k < COUNT; ++k) {
+            d[slot_index(k, 0)] = s[rc_index(0, k)];
+        }
+    }
+    asm volatile("" ::: "memory");
+}
+
+template <uint32_t COUNT>
+inline void soa_to_cols_fast(const uint32_t* src, uint32_t* dst) {
+    asm volatile("" ::: "memory");
+#pragma GCC unroll 1
+    for (uint32_t l = 0; l < 32; ++l) {
+        const uint32_t* s = src + slot_index(0, l);
+        uint32_t* d = dst + rc_index(l, 0);
+#pragma GCC unroll 32
+        for (uint32_t k = 0; k < COUNT; ++k) {
+            d[rc_index(0, k)] = s[slot_index(k, 0)];
+        }
+    }
+    asm volatile("" ::: "memory");
 }
 #endif
 
@@ -224,6 +259,22 @@ void kernel_main() {
     const uint32_t sem_feed = get_semaphore(sem_feed_id);
 #endif
 
+#ifdef MHC_POST_FAST
+    // P.83: the unit's raw post / comb / pre row tiles go to the compute (cb_raw), which builds the coefficient and
+    // pre-block tiles on the SFPU (mhc_post_stats_compute.cpp build_coefficient_tiles); 6 pages: the next unit's
+    // rows are read while the compute uses this one's
+    auto build = [&](uint32_t u) {
+        MaybeDeviceZoneScope("wr_build");
+        const mhc_stats::Unit U = mhc_stats::unit_of(u, rt, bw, ct);
+        cb_reserve_back(cb_raw, 3);
+        const uint32_t raw = get_write_ptr(cb_raw);
+        noc_async_read_page(U.r, p_acc, raw);
+        noc_async_read_page(U.r, c_acc, raw + page);
+        noc_async_read_page(U.r, pre_acc, raw + 2 * page);
+        noc_async_read_barrier();
+        cb_push_back(cb_raw, 3);
+    };
+#else
     auto build = [&](uint32_t u) {
         const mhc_stats::Unit U = mhc_stats::unit_of(u, rt, bw, ct);
         cb_reserve_back(cb_raw, 2);
@@ -246,6 +297,7 @@ void kernel_main() {
         cb_push_back(cb_pb, 1);
 #endif
     };
+#endif
 
     if (count) {
         build(start);
@@ -255,8 +307,23 @@ void kernel_main() {
         if (u + 1 < start + count) {
             build(u + 1);
         }
+#ifdef MHC_POST_FAST
+        {  // P.83: a column's X' tiles as the compute packs them (tile k = X'_k[r, b B + c])
+            MaybeDeviceZoneScope("wr_xout");
+            for (uint32_t c = 0; c < U.valid; ++c) {
+                cb_wait_front(cb_out, n);
+                const uint32_t src = get_read_ptr(cb_out);
+                for (uint32_t k = 0; k < n; ++k) {
+                    noc_async_write_page(U.r * n * ct + k * ct + U.col0 + c, o_acc, src + k * o_page);
+                }
+                noc_async_writes_flushed();
+                cb_pop_front(cb_out, n);
+            }
+        }
+#else
         cb_wait_front(cb_out, n * bw);  // the unit's X' tiles, tile c n + k = X'_k[r, b B + c]
         {
+            MaybeDeviceZoneScope("wr_xout");
             const uint32_t src = get_read_ptr(cb_out);
             for (uint32_t c = 0; c < U.valid; ++c) {
                 for (uint32_t k = 0; k < n; ++k) {
@@ -266,6 +333,7 @@ void kernel_main() {
             noc_async_writes_flushed();
             cb_pop_front(cb_out, n * bw);
         }
+#endif
 #if defined(MHC_POST_COLLAPSE) && !defined(MHC_POST_NORM)
         cb_wait_front(cb_y, bw);  // the unit's y tiles, tile c = y[r, b B + c]
         {
@@ -281,15 +349,27 @@ void kernel_main() {
 #ifdef MHC_POST_NORM
         cb_wait_front(cb_nsq, 1);  // the folded y^2 tile first (ready before the matmul's): its 8 columns a row
         cb_reserve_back(cb_soa, 1);
-        folded_to_soa8(
-            reinterpret_cast<const uint32_t*>(get_read_ptr(cb_nsq)),
-            reinterpret_cast<uint32_t*>(get_write_ptr(cb_soa)));
+        {
+            MaybeDeviceZoneScope("wr_nsq_soa");
+            folded_to_soa8(
+                reinterpret_cast<const uint32_t*>(get_read_ptr(cb_nsq)),
+                reinterpret_cast<uint32_t*>(get_write_ptr(cb_soa)));
+        }
         cb_push_back(cb_soa, 1);
         cb_pop_front(cb_nsq, 1);
 #endif
         cb_wait_front(cb_sfin, 1);
         cb_reserve_back(cb_soa, 1);
-        cols_to_soa(reinterpret_cast<ptr_t>(get_read_ptr(cb_sfin)), reinterpret_cast<ptr_t>(get_write_ptr(cb_soa)));
+        {
+            MaybeDeviceZoneScope("wr_sfin_soa");
+#ifdef MHC_POST_FAST  // P.83: the compute folded the tile to 8 columns a row (256 words, not 1024)
+            folded_to_soa8(
+                reinterpret_cast<const uint32_t*>(get_read_ptr(cb_sfin)),
+                reinterpret_cast<uint32_t*>(get_write_ptr(cb_soa)));
+#else
+            cols_to_soa(reinterpret_cast<ptr_t>(get_read_ptr(cb_sfin)), reinterpret_cast<ptr_t>(get_write_ptr(cb_soa)));
+#endif
+        }
         cb_push_back(cb_soa, 1);
         cb_pop_front(cb_sfin, 1);
         cb_wait_front(cb_mfin, 1);
@@ -310,8 +390,11 @@ void kernel_main() {
             mix[rc_index(l, ss_col)] = tot[slot_index(0, l)];
         }
         cb_pop_front(cb_soa_out, 1);
-        noc_async_write_page(U.r * nb + U.b, s_acc, get_read_ptr(cb_mfin));
-        noc_async_write_barrier();
+        {
+            MaybeDeviceZoneScope("wr_partial");
+            noc_async_write_page(U.r * nb + U.b, s_acc, get_read_ptr(cb_mfin));
+            noc_async_write_barrier();
+        }
         cb_pop_front(cb_mfin, 1);
         const uint32_t xy = get_arg_val<uint32_t>(root_arg0 + (u - start));
         noc_semaphore_inc(get_noc_addr(xy >> 16, xy & 0xFFFFu, sem_addr), 1);
@@ -331,8 +414,14 @@ void kernel_main() {
     // a rooted row's hc: the compute's coefficient-major tile (cb_hsoa_out) -> the row-major stage -> hc page r
     auto hc_out = [&](uint32_t r) {
         cb_wait_front(cb_hsoa_out, 1);
+        MaybeDeviceZoneScope("wr_hc");
         noc_async_write_barrier();  // the previous row's hc write has left the stage
+#ifdef MHC_POST_FAST
+        soa_to_cols_fast<hc_cols>(
+            reinterpret_cast<const uint32_t*>(get_read_ptr(cb_hsoa_out)), const_cast<uint32_t*>(stage));
+#else
         soa_to_cols<hc_cols>(reinterpret_cast<ptr_t>(get_read_ptr(cb_hsoa_out)), stage);
+#endif
         cb_pop_front(cb_hsoa_out, 1);
         noc_async_write_page(r, hc_acc, reinterpret_cast<uint32_t>(stage));
     };
@@ -340,10 +429,17 @@ void kernel_main() {
     for (uint32_t i = 0; i < n_rooted; ++i) {
         const uint32_t r = get_arg_val<uint32_t>(8 + i);
         cb_wait_front(cb_fin, 1);
+        MaybeDeviceZoneScope("wr_fin");
         noc_async_write_page(r, st_acc, get_read_ptr(cb_fin));
 #ifdef MHC_POST_COLLAPSE
         cb_reserve_back(cb_hsoa, 1);
+#ifdef MHC_POST_FAST  // P.83: the hc reads columns 0 .. n (n + 2) (the mixes and sum x^2) only
+        cols_to_soa_fast<hc_cols + 1>(
+            reinterpret_cast<const uint32_t*>(get_read_ptr(cb_fin)),
+            reinterpret_cast<uint32_t*>(get_write_ptr(cb_hsoa)));
+#else
         cols_to_soa(reinterpret_cast<ptr_t>(get_read_ptr(cb_fin)), reinterpret_cast<ptr_t>(get_write_ptr(cb_hsoa)));
+#endif
         cb_push_back(cb_hsoa, 1);
 #endif
         noc_async_writes_flushed();
@@ -359,6 +455,7 @@ void kernel_main() {
     for (uint32_t u = start; u < start + count; ++u) {  // the normalized y of each unit
         const mhc_stats::Unit U = mhc_stats::unit_of(u, rt, bw, ct);
         cb_wait_front(cb_yn, bw);
+        MaybeDeviceZoneScope("wr_yn");
         const uint32_t src = get_read_ptr(cb_yn);
         for (uint32_t c = 0; c < U.valid; ++c) {
 #ifdef MHC_POST_FEED

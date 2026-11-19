@@ -21,6 +21,7 @@
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "mhc_post_feed_common.hpp"
+#include "perf_instrumentation.hpp"
 
 namespace {
 
@@ -46,7 +47,11 @@ void kernel_main() {
     constexpr uint32_t ct = get_compile_time_arg_val(5);
     constexpr uint32_t cpt = get_compile_time_arg_val(6);
     constexpr auto f_args = TensorAccessorArgs<7>();
+#ifdef MHC_POST_FEED_SLOTS
+    constexpr uint32_t slots = MHC_POST_FEED_SLOTS;  // P.83 (fast): cb_feed's packet slots (FEED_SLOTS_FAST)
+#else
     constexpr uint32_t slots = 8;  // cb_feed's packet slots (FEED_SLOTS)
+#endif
     constexpr uint32_t num_headers = 4;
     constexpr uint32_t FT0 = 3;
 
@@ -77,89 +82,100 @@ void kernel_main() {
             hdrs[h] = PacketHeaderPool::allocate_header();
         }
         conn.open();
-        // 1. the ready fence
-        for (uint32_t t = 0; t < G; ++t) {
-            if (t == me || ft.side(me, t) != d) {
-                continue;
-            }
-            const uint32_t rxy = ft.port_xy(ft.side(t, me) * links + l);
-            volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[0];
-            (void)fabric_set_unicast_route(hdr, static_cast<uint16_t>(ft.chip_of(t)), static_cast<uint16_t>(ft.mesh));
-            hdr->to_noc_unicast_atomic_inc(
-                NocUnicastAtomicIncCommandHeader{get_noc_addr(rxy >> 16, rxy & 0xFFFFu, ready_addr), 1, true});
-            conn.wait_for_empty_write_slot();
-            conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdr), sizeof(PACKET_HEADER_TYPE));
-        }
-        wait_and_rearm(ready_addr, n_targets);
-
-        // 2. the streams
-        const uint64_t arrival_noc_base = get_noc_addr(recv_xy >> 16, recv_xy & 0xFFFFu, arrival_addr);
-        const uint32_t base = get_read_ptr(cb_feed);
-        uint32_t pos = 0, unflushed = 0, h = 0;
-        auto flush = [&]() {
-            if (unflushed) {
-                noc_async_writes_flushed();
-                cb_pop_front(cb_feed, unflushed);
-                unflushed = 0;
-            }
-        };
-        for (uint32_t t = 0; t < G; ++t) {
-            if (t == me || ft.side(me, t) != d) {
-                continue;
-            }
-            const uint32_t u_lo = ft.u_lo(t), u_hi = ft.u_hi(t);
-            flush();  // (the headers get this target's route)
-            for (uint32_t q = 0; q < num_headers; ++q) {
-                (void)fabric_set_unicast_route(
-                    hdrs[q], static_cast<uint16_t>(ft.chip_of(t)), static_cast<uint16_t>(ft.mesh));
-            }
-            uint32_t left = mhc_feed::count_tiles(t, u_lo, u_hi, l, links, rt, bw, ct, cpt);
-            if (left == 0) {
+        {
+            MaybeDeviceZoneScope("fs_fence");
+            // 1. the ready fence
+            for (uint32_t t = 0; t < G; ++t) {
+                if (t == me || ft.side(me, t) != d) {
+                    continue;
+                }
+                const uint32_t rxy = ft.port_xy(ft.side(t, me) * links + l);
                 volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[0];
-                hdr->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{arrival_noc_base, 1, true});
+                (void)fabric_set_unicast_route(
+                    hdr, static_cast<uint16_t>(ft.chip_of(t)), static_cast<uint16_t>(ft.mesh));
+                hdr->to_noc_unicast_atomic_inc(
+                    NocUnicastAtomicIncCommandHeader{get_noc_addr(rxy >> 16, rxy & 0xFFFFu, ready_addr), 1, true});
                 conn.wait_for_empty_write_slot();
                 conn.send_payload_flush_blocking_from_address(
                     reinterpret_cast<uint32_t>(hdr), sizeof(PACKET_HEADER_TYPE));
-                continue;
             }
-            uint64_t addrs[P > 1 ? P : 2];
-            uint16_t sizes[P > 1 ? P : 2];
-            uint32_t in_pkt = 0, size = 0;
-            mhc_feed::for_each_tile(t, u_lo, u_hi, l, links, rt, bw, ct, cpt, [&](uint32_t r, uint32_t kk) {
-                if (in_pkt == 0) {
-                    size = mhc_feed::packet_size(left, P);
-                }
-                addrs[in_pkt] = f_acc.get_noc_addr((me * rt + r) * cpt + (kk - t * cpt), 0, 0);
-                sizes[in_pkt] = static_cast<uint16_t>(page);
-                --left;
-                if (++in_pkt < size) {
-                    return;
-                }
-                cb_wait_front(cb_feed, unflushed + 1);
-                const uint32_t src = base + (pos % slots) * (P * page);
-                ++pos;
-                volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[h];
-                h = (h + 1 == num_headers) ? 0 : h + 1;
-                if (left == 0) {  // the stream's last tile (alone): + the arrival increment
-                    hdr->to_noc_fused_unicast_write_atomic_inc(
-                        NocUnicastAtomicIncFusedCommandHeader{addrs[0], arrival_noc_base, 1, true}, page);
-                } else if (size == 1) {
-                    hdr->to_noc_unicast_write(NocUnicastCommandHeader{addrs[0]}, page);
-                } else {
-                    hdr->to_noc_unicast_scatter_write(
-                        NocUnicastScatterCommandHeader(addrs, sizes, static_cast<uint8_t>(size)), size * page);
-                }
-                conn.wait_for_empty_write_slot();
-                conn.send_current_slot_non_blocking(src, size * page, reinterpret_cast<uint32_t>(hdr));
-                in_pkt = 0;
-                if (++unflushed == num_headers) {
-                    flush();
-                }
-            });
+            wait_and_rearm(ready_addr, n_targets);
         }
-        flush();
-        conn.close();
+        {
+            MaybeDeviceZoneScope("fs_send");
+
+            // 2. the streams
+            const uint64_t arrival_noc_base = get_noc_addr(recv_xy >> 16, recv_xy & 0xFFFFu, arrival_addr);
+            const uint32_t base = get_read_ptr(cb_feed);
+            uint32_t pos = 0, unflushed = 0, h = 0;
+            auto flush = [&]() {
+                if (unflushed) {
+                    noc_async_writes_flushed();
+                    cb_pop_front(cb_feed, unflushed);
+                    unflushed = 0;
+                }
+            };
+            for (uint32_t t = 0; t < G; ++t) {
+                if (t == me || ft.side(me, t) != d) {
+                    continue;
+                }
+                const uint32_t u_lo = ft.u_lo(t), u_hi = ft.u_hi(t);
+                flush();  // (the headers get this target's route)
+                for (uint32_t q = 0; q < num_headers; ++q) {
+                    (void)fabric_set_unicast_route(
+                        hdrs[q], static_cast<uint16_t>(ft.chip_of(t)), static_cast<uint16_t>(ft.mesh));
+                }
+                uint32_t left = mhc_feed::count_tiles(t, u_lo, u_hi, l, links, rt, bw, ct, cpt);
+                if (left == 0) {
+                    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[0];
+                    hdr->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{arrival_noc_base, 1, true});
+                    conn.wait_for_empty_write_slot();
+                    conn.send_payload_flush_blocking_from_address(
+                        reinterpret_cast<uint32_t>(hdr), sizeof(PACKET_HEADER_TYPE));
+                    continue;
+                }
+                uint64_t addrs[P > 1 ? P : 2];
+                uint16_t sizes[P > 1 ? P : 2];
+                uint32_t in_pkt = 0, size = 0;
+                mhc_feed::for_each_tile(t, u_lo, u_hi, l, links, rt, bw, ct, cpt, [&](uint32_t r, uint32_t kk) {
+                    if (in_pkt == 0) {
+                        size = mhc_feed::packet_size(left, P);
+                    }
+                    addrs[in_pkt] = f_acc.get_noc_addr((me * rt + r) * cpt + (kk - t * cpt), 0, 0);
+                    sizes[in_pkt] = static_cast<uint16_t>(page);
+                    --left;
+                    if (++in_pkt < size) {
+                        return;
+                    }
+                    cb_wait_front(cb_feed, unflushed + 1);
+                    const uint32_t src = base + (pos % slots) * (P * page);
+                    ++pos;
+                    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[h];
+                    h = (h + 1 == num_headers) ? 0 : h + 1;
+                    if (left == 0) {  // the stream's last tile (alone): + the arrival increment
+                        hdr->to_noc_fused_unicast_write_atomic_inc(
+                            NocUnicastAtomicIncFusedCommandHeader{addrs[0], arrival_noc_base, 1, true}, page);
+                    } else if (size == 1) {
+                        hdr->to_noc_unicast_write(NocUnicastCommandHeader{addrs[0]}, page);
+                    } else {
+                        hdr->to_noc_unicast_scatter_write(
+                            NocUnicastScatterCommandHeader(addrs, sizes, static_cast<uint8_t>(size)), size * page);
+                    }
+                    conn.wait_for_empty_write_slot();
+                    conn.send_current_slot_non_blocking(src, size * page, reinterpret_cast<uint32_t>(hdr));
+                    in_pkt = 0;
+                    if (++unflushed == num_headers) {
+                        flush();
+                    }
+                });
+            }
+            flush();
+            conn.close();
+        }
     }
     // 3. port 0: everything the group's other chips send me
-    wait_and_rearm(arrival_addr, recv_expect);
+    {
+        MaybeDeviceZoneScope("fs_arrive");
+        wait_and_rearm(arrival_addr, recv_expect);
+    }
 }

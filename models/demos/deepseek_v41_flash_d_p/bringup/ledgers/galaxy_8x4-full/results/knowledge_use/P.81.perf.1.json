@@ -1,0 +1,21 @@
+{
+  "used": [
+    {"id": "DS41-191", "how": "it named DRAM-sharded weights as the next lever for the 160-row projections: probed that first (test_attn_proj_probe.py), then out-block splits it had not swept"},
+    {"id": "DS41-139", "how": "kept the replicated full weights at 160 rows a chip (column split needs the head reshards); the floor is computed on them"},
+    {"id": "DS41-68", "how": "kept HiFi2 for every candidate (fp8 operands exact at HiFi2, not at LoFi): rejected the DRAM-sharded pipeline whose error vs fp64 is 4.5x the shipped one"},
+    {"id": "DS41-297", "how": "kept the 5120 chunk / 160 rows a chip as the probe shapes (no other tile-aligned per-chip split to test)"}
+  ],
+  "contradicted": [
+    {"id": "DS41-191", "evidence": "P.81 tests/perf/test_attn_proj_probe.py on the 8x4: wq_b 1D out_block 5x2, bw 20 = 0.1818 ms vs the table's 0.1976 (-8 %, bit-identical): the projections were not at their program-config optimum (the sweep never split out blocks); and DRAM-sharded weights do not pay at M = 160 (DS41-306), so 'next lever is DRAM-sharded weights' is out of date"}
+  ],
+  "missing": [
+    "a bool Setting whose A/B values in tasks.yaml are on / off: YAML loads them as True / False (a string on/off setting is refused by switch_env)",
+    "the stock DRAM-sharded multicore pipeline (use_multicore_pipeline) takes up to ~13 cores a bank and multi-tile M, but needs an L1 width-sharded output and measured less exact than the 1D program at HiFi2 + fp32 DEST",
+    "measure --part test on a perf task runs only the A/B side's timing tests (test_skip_positions), not the ladder / determinism / contract units"
+  ],
+  "overseer": [
+    {"id": "OV-3", "answer": "done", "evidence": "nothing padded: every probe and the shipped config use the real shapes; the DRAM-sharded rows were tried only on shapes the banks divide (N % (32 x 8) == 0)"},
+    {"id": "OV-23", "answer": "n/a", "evidence": "no Python-built op added or touched: the change is a stock ttnn.linear program config (tt/mm_configs.ROOFLINE)"},
+    {"id": "OV-25", "answer": "done", "evidence": "no fork regression or unit suite run; only the two new op probes (tests/perf/test_attn_proj_probe.py, test_sdpa_probe.py) and the orchestrator's measure"}
+  ]
+}

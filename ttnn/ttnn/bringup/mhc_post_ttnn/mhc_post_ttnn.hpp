@@ -88,7 +88,8 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> mhc_post_with_collapse(
     const std::optional<Tensor>& feed_output = std::nullopt,
     const std::optional<std::vector<uint32_t>>& feed_semaphores = std::nullopt,
     int64_t feed_num_links = 1,
-    int64_t feed_cluster_axis = 1);
+    int64_t feed_cluster_axis = 1,
+    bool fast = false);
 
 // The Python entry: X' without stats_weight (the op as it was), (X', stats) with it, (X', stats, hc, y) with
 // collapse_pre.
@@ -120,6 +121,7 @@ std::variant<Tensor, std::tuple<Tensor, Tensor>, std::tuple<Tensor, Tensor, Tens
     const std::optional<Tensor>& feed_output = std::nullopt,
     const std::optional<std::vector<uint32_t>>& feed_semaphores = std::nullopt,
     int64_t feed_num_links = 1,
-    int64_t feed_cluster_axis = 1);
+    int64_t feed_cluster_axis = 1,
+    bool fast = false);
 
 }  // namespace ttnn::operations::bringup::mhc_post_ttnn
