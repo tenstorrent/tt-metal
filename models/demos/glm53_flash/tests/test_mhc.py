@@ -103,6 +103,18 @@ def _build(device, cfg, raw, which: str):
     )
 
 
+def _fast_for(fast, T: int):
+    """the fast mHC for a T-row call: the post-mix prefetch reader ("mcast", the default since 2026-11-03) serves the
+    decode tile only (T <= 32); prefill-sized calls run its "off" reader, as the op asks"""
+    if T <= 32 or fast.post_prefetch == "off":
+        return fast
+    if getattr(fast, "_prefill_twin", None) is None:
+        fast._prefill_twin = TtMHCFast(
+            fast.device, fast.cfg, *fast._raw_coeffs, dtype=ttnn.float32, post_prefetch="off"
+        )
+    return fast._prefill_twin
+
+
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("which", ["attn", "ffn"])
 def test_mhc_fast_vs_wrap(mesh_device, which):
@@ -110,11 +122,13 @@ def test_mhc_fast_vs_wrap(mesh_device, which):
     cfg = GLM53FlashConfig.from_hf_config_json(snapshot / "config.json")
     kcfg = mhc_kernel_config(cfg)
     raw = load_layer_raw(snapshot, LAYER, shard_headers(snapshot))
-    wrap, fast, (fn, base, scale) = _build(mesh_device, cfg, raw, which)
-    assert isinstance(wrap, TtMHCWrap) and isinstance(fast, TtMHCFast)
+    wrap, fast0, (fn, base, scale) = _build(mesh_device, cfg, raw, which)
+    assert isinstance(wrap, TtMHCWrap) and isinstance(fast0, TtMHCFast)
+    fast0._raw_coeffs = (fn, base, scale)
     n, C = kcfg.n, kcfg.dim
     g = torch.Generator().manual_seed(0)
     for T in SHAPES:
+        fast = _fast_for(fast0, T)
         x = _streams(T, offset=100)
         logger.info(f"hc_{which} T={T}: |x| max {x.abs().max():.3f} rms {x.pow(2).mean().sqrt():.4f}")
         r_mixes, r_h, r_post, r_comb = torch_reference(x, fn, base, scale, kcfg)
