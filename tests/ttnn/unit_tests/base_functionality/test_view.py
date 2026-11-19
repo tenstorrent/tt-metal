@@ -14,6 +14,7 @@ from tt_py_test_utils_common.utility_functions import is_blackhole
 from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
     UnreadableDocstring,
     check_readable,
+    docstring_blackhole_dtype_layout_params,
     docstring_dtype_layout_params,
     docstring_interleaved_buffer_type_params,
     interleaved_memory_config,
@@ -90,13 +91,17 @@ def test_invalid_cases(input_shape, output_shape, layout, expected_message, devi
         ttnn.view(input_tensor, output_shape)
 
 
-def _assert_is_view(input_tensor, output, shape):
-    """``output`` has ``shape``, the input's dtype, layout, memory configuration and buffer, and the input's values."""
+def _assert_is_view(input_tensor, shape):
+    """Views ``input_tensor`` as ``shape``. The output must have ``shape``, the input's dtype and layout, the input's
+    memory layout, buffer type, shard spec and buffer, and the input's values."""
     expected = ttnn.to_torch(input_tensor).reshape(list(shape))
+    output = ttnn.view(input_tensor, shape)
     assert list(output.shape) == list(expected.shape)
     assert output.dtype == input_tensor.dtype
     assert output.layout == input_tensor.layout
-    assert output.memory_config() == input_tensor.memory_config()
+    assert output.memory_config().memory_layout == input_tensor.memory_config().memory_layout
+    assert output.memory_config().buffer_type == input_tensor.memory_config().buffer_type
+    assert output.memory_config().shard_spec == input_tensor.memory_config().shard_spec
     assert output.buffer_address() == input_tensor.buffer_address()
     assert_exact(expected, ttnn.to_torch(output))
 
@@ -128,9 +133,9 @@ def test_view_docstring_supported_inputs(dtype, layout, buffer_type, device):
         input_tensor = ttnn.from_torch(
             full_range_input(input_shape, dtype), dtype=dtype, layout=layout, device=device, memory_config=memory_config
         )
-        _assert_is_view(input_tensor, ttnn.view(input_tensor, shape), shape)
+        _assert_is_view(input_tensor, shape)
         if -1 not in shape:
-            _assert_is_view(input_tensor, ttnn.view(input_tensor, ttnn.Shape(list(shape))), shape)
+            _assert_is_view(input_tensor, ttnn.Shape(list(shape)))
 
 
 def _docstring_sharded_params(op):
@@ -160,6 +165,14 @@ def _docstring_sharded_params(op):
         return [pytest.param(reason, reason, id="docstring-unreadable")]
 
 
+# An ND shard shape for each memory layout that gives a (2, 2, 64, 64) tensor the shard spec of _sharded_memory_config.
+_ND_SHARD_SHAPES = {
+    ttnn.TensorMemoryLayout.HEIGHT_SHARDED: [1, 2, 64, 64],
+    ttnn.TensorMemoryLayout.WIDTH_SHARDED: [2, 2, 64, 32],
+    ttnn.TensorMemoryLayout.BLOCK_SHARDED: [1, 2, 64, 32],
+}
+
+
 def _sharded_memory_config(memory_layout, buffer_type):
     """Shards a tensor of 256 rows of 64 values over two cores, or over 2x2 cores for BLOCK_SHARDED."""
     if memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
@@ -176,40 +189,27 @@ def _sharded_memory_config(memory_layout, buffer_type):
 @pytest.mark.parametrize("memory_layout, buffer_type", _docstring_sharded_params(ttnn.view))
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["TILE", "ROW_MAJOR"])
 def test_view_docstring_sharded_inputs(memory_layout, buffer_type, layout, device):
-    """Views a sharded input in every sharded placement the ttnn.view docstring lists, to rank 3 and rank 2 shapes."""
+    """Views a sharded input in every sharded placement the ttnn.view docstring lists, to rank 3 and rank 2 shapes.
+    The input's memory configuration is made from a ShardSpec, and from an NdShardSpec with the same shards."""
     check_readable(memory_layout, buffer_type)
-    input_tensor = ttnn.from_torch(
-        full_range_input((2, 2, 64, 64), ttnn.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=layout,
-        device=device,
-        memory_config=_sharded_memory_config(memory_layout, buffer_type),
-    )
-    for shape in [(4, 64, 64), (256, 64)]:
-        _assert_is_view(input_tensor, ttnn.view(input_tensor, shape), shape)
-
-
-def _docstring_blackhole_dtype_layouts(op):
-    """One ``pytest.param(dtype, layout)`` per "On Blackhole, ... ``<DTYPE>`` tensor in <LAYOUT> layout" sentence of the
-    op's docstring."""
-    try:
-        text = " ".join(op.__doc__.split())
-        found = re.findall(r"On Blackhole, [^.]*?``(\w+)`` tensors? in (\w+) layout", text)
-        assert found, "no 'On Blackhole, ... ``<DTYPE>`` tensor in <LAYOUT> layout' sentence"
-        params = []
-        for dtype_name, layout_name in found:
-            dtype, layout = getattr(ttnn.DataType, dtype_name, None), getattr(ttnn.Layout, layout_name, None)
-            assert isinstance(dtype, ttnn.DataType), f"not a ttnn.DataType: {dtype_name}"
-            assert isinstance(layout, ttnn.Layout), f"not a ttnn.Layout: {layout_name}"
-            params.append(pytest.param(dtype, layout, id=f"{dtype_name}-{layout_name}"))
-        return params
-    except Exception as error:
-        reason = UnreadableDocstring(f"could not read the Blackhole dtypes from the {op} docstring: {error}")
-        return [pytest.param(reason, reason, id="docstring-unreadable")]
+    memory_config = _sharded_memory_config(memory_layout, buffer_type)
+    nd_shard_spec = ttnn.NdShardSpec(ttnn.Shape(_ND_SHARD_SHAPES[memory_layout]), memory_config.shard_spec.grid)
+    for input_memory_config in (memory_config, ttnn.MemoryConfig(buffer_type, nd_shard_spec)):
+        input_tensor = ttnn.from_torch(
+            full_range_input((2, 2, 64, 64), ttnn.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=layout,
+            device=device,
+            memory_config=input_memory_config,
+        )
+        assert input_tensor.memory_config().memory_layout == memory_layout
+        assert input_tensor.memory_config().shard_spec == memory_config.shard_spec
+        for shape in [(4, 64, 64), (256, 64)]:
+            _assert_is_view(input_tensor, shape)
 
 
 @pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.view))
-@pytest.mark.parametrize("dtype, layout", _docstring_blackhole_dtype_layouts(ttnn.view))
+@pytest.mark.parametrize("dtype, layout", docstring_blackhole_dtype_layout_params(ttnn.view))
 def test_view_docstring_blackhole_inputs(dtype, layout, buffer_type, device):
     """Views a tensor of each dtype the ttnn.view docstring lists for Blackhole, in every interleaved buffer type. The
     values are compared after a conversion to FLOAT32 on host, which holds every FP8_E4M3 value."""
@@ -229,7 +229,8 @@ def test_view_docstring_blackhole_inputs(dtype, layout, buffer_type, device):
     assert list(output.shape) == [300, 70]
     assert output.dtype == dtype
     assert output.layout == layout
-    assert output.memory_config() == input_tensor.memory_config()
+    assert output.memory_config().memory_layout == input_tensor.memory_config().memory_layout
+    assert output.memory_config().buffer_type == input_tensor.memory_config().buffer_type
     assert output.buffer_address() == input_tensor.buffer_address()
     expected = ttnn.to_torch(ttnn.to_dtype(input_tensor.cpu(), ttnn.float32)).reshape(300, 70)
     assert_exact(expected, ttnn.to_torch(ttnn.to_dtype(output.cpu(), ttnn.float32)))

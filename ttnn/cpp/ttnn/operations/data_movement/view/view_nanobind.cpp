@@ -33,7 +33,7 @@ void bind_view(nb::module_& mod) {
             shape (ttnn.Shape or List[int]): the new shape. It must have the input's number of elements and the input's last dimension. For a TILE input, its second-to-last dimension must be the input's, or a multiple of 32 in both the input and `shape`. As a list or tuple, one dimension may be `-1`; its size is inferred from the other dimensions.
 
         Returns:
-            ttnn.Tensor: the output tensor, with the new shape and the input's dtype, layout and memory configuration. It holds the input's values in the same row-major order, in the input's device buffer.
+            ttnn.Tensor: the output tensor, with the new shape, the input's dtype and layout, and the input's memory layout, buffer type and shard spec. It holds the input's values in the same row-major order, in the input's device buffer.
 
         Note:
             Supported dtypes and layouts:
@@ -48,7 +48,7 @@ void bind_view(nb::module_& mod) {
                * - BFLOAT8_B, BFLOAT4_B
                  - TILE
 
-            On Blackhole, the input can also be a ``FP8_E4M3`` tensor in ROW_MAJOR layout.
+            On Blackhole, the input can also be an ``FP8_E4M3`` tensor in ROW_MAJOR layout.
 
         Memory Support:
             - Interleaved: DRAM and L1
