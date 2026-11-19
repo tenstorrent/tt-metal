@@ -1,0 +1,846 @@
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+@@ -1699,6 +1699,121 @@
+     return [top, bot, *up, *lo, fv, lve, up_lve, lo_fv]
+ 
+ 
++# kw-fold slab fill, planned on the host (kernels: the reader's and writer's kw-fold fill runtime args). The fill was
++# control-bound: the on-device plan (kwf_slab_plan on both DM RISCs), a TensorAccessor lookup per page run (~0.1-0.2 us
++# each) and a hand-over per 4-row batch cost the res2 reader ~2.2 us of a ~10.5 us call with every read stubbed. The host
++# knows every M-block's live slab rows and every owner shard's core, so each RISC gets its reads as (core, offset, slab
++# row, rows) pieces. On a split core the writer (NoC1) reads the higher shards' rows plus the last own-shard rows that
++# balance the two RISCs (center_head.1's 122 KB slab is bandwidth-bound: 9.51 -> 9.10 us with the balance). Each part is
++# pushed in groups of at most KWF_FILL_GROUP_ROWS slab tile-rows, the reader's first: compute waits per subblock for the
++# rows it reads, so a large slab (stem.conv2: 72 rows) still starts compute on its first groups; 4 or 16 rows measured
++# no better. Measured with round 0 streamed (below; LoFi bf8_b, unzoned, medians of 3 alternating): res2 10.23 -> 9.77,
++# center_head.1 9.60 -> 9.10, res3.x 10.26 -> 9.87, inst dec res3 fc0 -6.2%, sem dec res3 fc0 -3.6%, stem.conv2 -1.4%.
++KWF_FILL_GROUP_ROWS = 8
++KWF_FILL_MAX_GROUPS = 16  # kernels: per-block group array
++
++
++def _kwf_live_segments(g, t0, valid, xchg):
++    """[(first input tile-row, rows, slab row)] of one M-block, in slab order: tile_slab_plan's placement (compute's
++    kw_fold.hpp slab_bases mirrors it), but each band's segment holds only the input tile-rows the walk reads. The walk
++    covers tile-rows [t0 - ht, t_end + hb), the halo tile-row on a side only where it recomputes it (a block boundary
++    inside an image row, without the halo exchange), and reads row t + (kh - 1) R of each, so up to six rounded-out band
++    rows are dead: never filled, never read. Bands that overlap share slab rows; a segment contiguous in the input and
++    the slab with the previous one extends it."""
++    tpr = g.input_width // TILE
++    r = g.dilation * tpr
++    m_in = g.num_in_px // TILE
++    o_first = t0 * TILE
++    o_last = min((t0 + valid) * TILE, g.num_out_px) - 1
++    band_len = _block_band_len(g, o_first, o_last)
++    f = _block_first_tap(g, o_first)
++    t_end = t0 + valid
++    live_lo = t0 - (1 if not xchg and t0 % tpr != 0 else 0)
++    live_hi = t_end + (1 if not xchg and t_end % tpr != 0 and t_end < m_in else 0)
++    segs = []
++    next_free, read_hi, prev = 0, 0, None
++    for kh in range(3):
++        v_lo = f + kh * g.dilation * g.input_width
++        lo, hi = max(v_lo, 0), min(v_lo + band_len, g.num_in_px)
++        if lo >= hi:
++            continue
++        t_lo, t_hi = lo // TILE, _div_up(hi, TILE)
++        row = prev[2] + (t_lo - prev[0]) if prev is not None and t_lo < prev[1] else next_free
++        a = max(live_lo + (kh - 1) * r, t_lo, read_hi)
++        b = min(live_hi + (kh - 1) * r, t_hi)
++        if a < b:
++            slab = row + (a - t_lo)
++            if segs and segs[-1][0] + segs[-1][1] == a and segs[-1][2] + segs[-1][1] == slab:
++                segs[-1][1] += b - a
++            else:
++                segs.append([a, b - a, slab])
++            read_hi = b
++        next_free = row + (t_hi - t_lo)
++        prev = (t_lo, t_hi, row)
++    return segs
++
++
++def _kwf_fill_args(g, t0, valid, xchg, slab_rows, shard_rows, my_shard, split, shard_xy, row_bytes):
++    """One M-block's fill: (reader args, writer args). On a split core the writer reads a suffix of the slab: the
++    higher shards' rows (NoC1 is their short way back) and the last own-shard rows that balance the two RISCs' rows.
++    Each part is pushed in groups of at most KWF_FILL_GROUP_ROWS slab rows, the reader's first.
++    reader: [groups, writer groups] + per group [slab rows pushed] + (a reader group) [pieces] + its pieces;
++    writer: [groups] + per group [pieces] + its pieces. A piece is [x << 16 | y of the owner shard's core, byte offset in
++    the shard, slab row << 16 | tile-rows] (reader: slab row from the group's first row; writer: from the slab base)."""
++    pieces = []  # (slab row, rows, shard, row in shard), slab order
++    for a, n, s in _kwf_live_segments(g, t0, valid, xchg):
++        row = a
++        while row < a + n:
++            sh = row // shard_rows
++            end = min(a + n, (sh + 1) * shard_rows)
++            pieces.append((s + row - a, end - row, sh, row - sh * shard_rows))
++            row = end
++    mine = [p for p in pieces if not (split and p[2] > my_shard)]
++    theirs = [p for p in pieces if split and p[2] > my_shard]
++    if split and theirs:
++        # The last own-shard rows (a local copy on either RISC; in slab order right before the higher shards' rows, so
++        # the writer's part stays a suffix) move to the writer until the two parts' rows balance.
++        move = (sum(p[1] for p in mine) - sum(p[1] for p in theirs)) // 2
++        while move > 0 and mine and mine[-1][2] == my_shard:
++            p = mine.pop()
++            k = min(move, p[1])
++            if k < p[1]:
++                mine.append((p[0], p[1] - k, p[2], p[3]))
++            theirs.insert(0, (p[0] + p[1] - k, k, p[2], p[3] + p[1] - k))
++            move -= k
++    w_first = min((p[0] for p in theirs), default=slab_rows)
++    assert all(p[0] + p[1] <= w_first for p in mine), "the writer's rows are a slab suffix"
++
++    def enc(p, lo):
++        x, y = shard_xy[p[2]]
++        return [(x << 16) | y, p[3] * row_bytes, ((p[0] - lo) << 16) | p[1]]
++
++    def groups(part, lo, hi, base):
++        out = []  # (slab rows pushed, encoded pieces)
++        while lo < hi:
++            g_hi = min(hi, lo + KWF_FILL_GROUP_ROWS)
++            enc_g = []
++            for p in part:
++                a, b = max(p[0], lo), min(p[0] + p[1], g_hi)
++                if a < b:
++                    enc_g += enc((a, b - a, p[2], p[3] + a - p[0]), lo if base is None else base)
++            out.append((g_hi - lo, enc_g))
++            lo = g_hi
++        return out
++
++    rd = groups(mine, 0, w_first, None)
++    wr = groups(theirs, w_first, slab_rows, 0) if theirs else []
++    reader = [len(rd) + len(wr), len(wr)]
++    for rows, enc_g in rd:
++        reader += [rows, len(enc_g) // 3] + enc_g
++    reader += [rows for rows, _ in wr]
++    writer = [len(wr)]
++    for _, enc_g in wr:
++        writer += [len(enc_g) // 3] + enc_g
++    assert reader[0] <= KWF_FILL_MAX_GROUPS
++    return reader, writer
++
++
+ def _kw_fold_cb_bytes(g, kb):
+     """L1 of the kw-fold CBs (the descriptor's kwf CB list)."""
+     slabs = 2 if kb.max_m_blocks_per_core > 1 else 1
+@@ -1715,7 +1830,7 @@
+ # start at round 0; whole-K on the K-blocked LoFi cases measured flat (res3.x 14.94 -> 14.48, inst res2 fc1 28.09 ->
+ # 28.14 us, medians of 3).
+ KW_FOLD_KBLOCK_MIN_WEIGHT_TILES = 128
+-# kw-fold's slab fill batch: tile-rows per reader push (compute waits for the rows each subblock reads).
++# kw-fold's slab rows are a whole number of these (the writer locates a block's slab in the ring in these units).
+ KW_FOLD_FILL_BATCH_ROWS = 4
+ # K-blocked kw-fold's weight slots where L1 permits at the chosen bm (2 otherwise). With two, a weight server sends round
+ # r + 2 only once every receiver of its rectangle freed round r's slot, then multicasts it: on res3.x (3 rounds, ~2 us
+@@ -2139,7 +2254,17 @@
+                 cbs[i] = _cb(
+                     CB_WEIGHTS, weight_tensor.dtype, g.weight_tile_bytes, b.weight_depth * (bk + 1) * bn, cores
+                 )
+-    sem_ids += tuple(range(len(sem_ids), len(sem_ids) + 2 + b.weight_depth)) if weight_servers is not None else ()
++    # kw-fold under weight servers streams round 0 (KWF_ROUND0_STREAM; conv2d_3x3_kw_fold.hpp): one early flag per server
++    # chunk but the last, after the bias flag. res3.x's 52 KB round 0 lands over ~0.8 us of multicast; compute now
++    # multiplies the first subblocks' kernel rows as each lands (res3.x 10.16 -> 9.69 us over the host fill alone,
++    # unzoned, 2 alternating pairs). One-burst rounds (res2, center_head.1) land together: nothing to stream, no cost.
++    server_chunks = max(d for d in range(1, WEIGHT_SERVER_CHUNKS + 1) if (bk * bn) % d == 0)
++    round0_stream = kwf and weight_servers is not None and server_chunks > 1
++    sem_ids += (
++        tuple(range(len(sem_ids), len(sem_ids) + 2 + b.weight_depth + (server_chunks - 1 if round0_stream else 0)))
++        if weight_servers is not None
++        else ()
++    )
+     # kw-fold halo exchange: rows-landed counters from the upper and from the lower neighbour.
+     kwf_xchg = kwf and kw_fold_halo_exchange(b)
+     kwf_xchg_sem_ids = (len(sem_ids), len(sem_ids) + 1) if kwf_xchg else (0, 0)
+@@ -2448,6 +2573,12 @@
+         return [0, 0, 0]
+ 
+     ring_owners = None if kwf else ring_owner_cols(g, b)
++    kwf_shard_xy = []
++    if kwf:
++        assert input_tensor.memory_config().is_sharded() and tile_fill_split and input_shard_rows > 0
++        for c in shard_cores(input_tensor):
++            v = device.worker_core_from_logical_core(c)
++            kwf_shard_xy.append((v.x, v.y))
+     for core, m_index, col in work:
+         m_tile_start, actual_m_tiles = m_ranges[m_index]
+         num_m_blocks_this_core = m_blocks_per_index[m_index]
+@@ -2458,6 +2589,23 @@
+         out_valid_tiles = max(0, min(ns, g.tensor_n_tiles - out_n_tile_start))
+         # The split is a runtime flag: a per-core kernel split fragments the core ranges (a staggered sender per
+         # column), and the launch of many-range kernels measured up to ~10 us of start skew.
++        kwf_reader_fill, kwf_writer_fill = [], []
++        if kwf:
++            for m in range(num_m_blocks_this_core):
++                rd, wr = _kwf_fill_args(
++                    g,
++                    m_tile_start + m * bm,
++                    min(bm, actual_m_tiles - m * bm),
++                    kwf_xchg,
++                    b.slab_tile_rows,
++                    input_shard_rows,
++                    m_index,
++                    split_of(core),
++                    kwf_shard_xy,
++                    g.c_in_tiles * g.in0_tile_bytes,
++                )
++                kwf_reader_fill += rd
++                kwf_writer_fill += wr
+         reader_cores, reader_rt = reader_groups.setdefault(
+             (_slice_channels(g, col), bool(split_cores)), ([], ttnn.RuntimeArgs())
+         )
+@@ -2478,6 +2626,7 @@
+             + row_peer_coords.get(m_index, [])
+             + [int(split_of(core))]
+             + slab_rows_per_block
++            + kwf_reader_fill
+         )
+         compute_args = [num_m_blocks_this_core, int(out_valid_tiles > 0), col]
+         if g.k_split and b.nslice and not kwf:
+@@ -2524,6 +2673,7 @@
+             + [int(split_of(core))]
+             + server_rt_args(core)
+             + (_kwf_xchg_writer_args(g, work, m_index, m_ranges, device) if kwf_xchg else [])
++            + kwf_writer_fill
+         )
+ 
+     # kw-fold kernels: the mode flag and its compile-time shape (defines keep the regular kernels' CT args intact).
+@@ -2539,6 +2689,7 @@
+             ("KWF_N", str(g.tensor_n_tiles)),
+             ("KWF_BIAS_BFP8", str(int(bias_tensor.dtype == ttnn.bfloat8_b))),
+             ("KWF_FUSED_GW", str(kw_fold_fused_gw(g.tensor_n_tiles))),
++            ("KWF_FILL_MAX_GROUPS", str(KWF_FILL_MAX_GROUPS)),
+         ]
+         if kwf_xchg:
+             _kwf_dm_defines += [
+@@ -2640,6 +2791,7 @@
+     # lands, so the column weight stream starts at kernel start (with the spare groups that stream paces the walk:
+     # res4.x 12022 -> 11607 ns; without them flat to -1.7%).
+     _async_bias_defines = [("NSLICE_ASYNC_BIAS", "1")] if g.k_split and b.nslice and has_bias and not kwf else []
++    _round0_defines = [("KWF_ROUND0_STREAM", str(server_chunks))] if round0_stream else []
+     readers = [
+         ttnn.KernelDescriptor(
+             kernel_source=str(KERNEL_DIR / "conv2d_3x3_reader.cpp"),
+@@ -2657,7 +2809,7 @@
+             core_ranges=_core_range_set(writer_cores),
+             compile_time_args=writer_ct_args_for(*slice_channels),
+             runtime_args=writer_rt,
+-            defines=_kwf_dm_defines + _ring_owner_defines + _sd_dm_defines + _async_bias_defines,
++            defines=_kwf_dm_defines + _ring_owner_defines + _sd_dm_defines + _async_bias_defines + _round0_defines,
+             config=ttnn.WriterConfigDescriptor(),
+         )
+         for slice_channels, (writer_cores, writer_rt) in writer_groups.items()
+@@ -2754,6 +2906,7 @@
+                     else ttnn.TensorAccessorArgs().get_compile_time_args()
+                 ),
+                 runtime_args=server_writer_rt,
++                defines=_round0_defines,
+                 config=ttnn.WriterConfigDescriptor(),
+             ),
+         ]
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_kw_fold.hpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_kw_fold.hpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_kw_fold.hpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_kw_fold.hpp
+@@ -43,6 +43,11 @@
+ // the K-blocked tap-direct walk they ran before): 135.9 -> 100.4 and 108.8 -> 89.7 us; all planes resident measured the
+ // same (89.4 us) at 215 KB more L1.
+ //
++// Round 0 streams: its in1 tiles are (kh, c, n), so each kernel row's block of Ct x RW tiles is one of the weight
++// server's three chunks. The writer pushes each chunk as the server's early flag reports it landed, and the first
++// subblocks wait for kernel row kh's chunk right before its matmuls, so compute multiplies kernel rows 0 and 1 while the
++// rest of round 0 is still in the multicast (res3.x: 52 KB over ~0.8 us). Every later wait counts whole rounds.
++//
+ // Halo exchange (xchg: every core runs one M-block). Where a core boundary lies inside an image row, the d boundary
+ // rows on each side miss one kw partial that lives in the neighbour's tile-row: the lower core's first d rows need
+ // Q_0 of the upper core's last tile-row, the upper core's last d rows need Q_2 of the lower core's first tile-row.
+@@ -222,8 +227,8 @@
+ }
+ #endif
+ 
+-// Slab row of input tile-row r read for kernel row kh is r + base[kh]: the placement of the reader's kwf_slab_plan
+-// (tile_slab_plan's, conv2d_3x3_slab_dataflow.hpp, dataflow-only; the fill writes only the rows this walk reads) for
++// Slab row of input tile-row r read for kernel row kh is r + base[kh]: the placement of the host-planned fill
++// (descriptor _kwf_live_segments: tile_slab_plan's placement; the fill writes only the rows this walk reads) for
+ // output pixels [o_first, o_end), stride 1, padding == dilation, band_last_tap 2. Bands that overlap or touch share
+ // consecutive rows; a band past a gap (a short ragged last core) is packed right after the previous one.
+ template <int32_t W, int32_t num_in_px, int32_t d>
+@@ -310,6 +315,10 @@
+ 
+     compute_kernel_hw_startup(cb_w, cb_in, cb_acc);
+     uint32_t halo_seen = 0;  // exchange tokens waited for (held fronted until the n-group's final pass ends)
++    // Round 0 streams (file comment): its kernel-row blocks of KH_TILES in1 tiles are waited for one at a time, inside
++    // the first subblocks, as the writer pushes each landed chunk. w_landed: tiles of round 0 waited for so far.
++    constexpr uint32_t KH_TILES = Ct * RW;
++    uint32_t w_landed = 0;
+     [[maybe_unused]] uint32_t acc_base = 0;
+     PACK((acc_base = get_local_cb_interface(get_output_id(cb_acc)).fifo_wr_ptr << 4));
+     // M-blocks of bm tile-rows (one ACC: a block's Q_1 overwrite packs follow the previous block's final pass on the
+@@ -379,6 +388,12 @@
+                         const uint32_t in0 =
+                             static_cast<uint32_t>(static_cast<int32_t>(t_first + a + kh * R - R) + base[kh]) * Ct;
+                         const uint32_t in1 = w0 + kh * Ct * RW;
++                        if (w_landed < 3 * KH_TILES && (kh + 1) * KH_TILES > w_landed) {
++                            // Round 0, streamed: this kernel row's chunk (step 0 of the first n-group: w0 == 0).
++                            MaybeDeviceZoneScope("compute_kwf_chunk_wait");
++                            w_landed = (kh + 1) * KH_TILES;
++                            w.wait_front(w_landed);
++                        }
+                         for (uint32_t c = 0; c < Ct; ++c) {
+                             matmul_block(cb_in, cb_w, in0 + c, in1 + c * RW, a * sbw, false, sbw, b - a, Ct);
+                         }
+@@ -539,7 +554,10 @@
+                     // neighbour core supplies those rows (exchange).
+                     const uint32_t i_lo = kw == 0 && halo_top ? 0 : 1;
+                     const uint32_t i_end = valid + (kw == 2 && halo_bot ? 2 : 1);
+-                    {
++                    if (w_landed < 3 * KH_TILES) {
++                        // Round 0 (the first n-group's Q_1 of the first M-block): streamed per kernel row inside the
++                        // subblocks below.
++                    } else {
+                         // K-blocked: this sub-round at the front (the previous one was popped), so its in1 tiles start
+                         // at index 0. Whole-K: rounds 0 .. step.
+                         MaybeDeviceZoneScope("compute_kwf_weight_wait");
+@@ -587,6 +605,11 @@
+                             push = false;
+                         }
+                     }
++                    if (w_landed < 3 * KH_TILES) {
++                        // Round 0 is streamed only through its first subblocks; every later wait counts whole rounds.
++                        w_landed = 3 * KH_TILES;
++                        w.wait_front(w_landed);
++                    }
+                     if constexpr (kblocked) {
+                         w.pop_front(ROUND_TILES);
+                     }
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
+@@ -46,6 +46,10 @@
+ // cb_im2col_tiles' L1 when every core runs one M-block: in0 is written only after the untilize consumed every batch),
+ // it reserves the whole slab once and never waits on compute.
+ //
++// kw-fold fill (the descriptor's _kwf_fill_args): the host plans the slab as reads of (owner core, offset, slab row,
++// rows) pieces in runtime args, pushed in groups; on a split core the writer reads the slab's suffix (the higher shards'
++// rows and the last own rows). No on-device plan and no TensorAccessor lookup.
++//
+ // Split TILE fill (sharded TILE input, on the weight multicast's pure receivers; a per-core runtime flag): the same NoC
+ // split for the tile-row fill. The reader reads its own and lower shards' tile-rows into each cb_input_tiles batch it
+ // reserved; a batch that holds higher shards' tile-rows is handed to the writer (fill_go) and pushed once the writer's
+@@ -607,6 +611,8 @@
+     };
+ 
+     [[maybe_unused]] uint32_t fill_batches_handed = 0;  // split TILE fill: batches handed to the writer
++    // kw-fold: the host-planned fill's runtime args (descriptor _kwf_fill_args), per M-block in order.
++    [[maybe_unused]] uint32_t kwf_fill_arg = split_flag_arg + 1;
+     // Ring slab: the input tile-row at the slab CB's front, its ring slot, and one past the last row pushed.
+     [[maybe_unused]] int32_t ring_front_row = 0;
+     [[maybe_unused]] uint32_t ring_front_slot = 0;
+@@ -718,21 +724,65 @@
+             // ---- fill_halo_slab (TILE): plan the slab rows, then stream input tile-rows in slab order.
+             MaybeDeviceZoneScope("reader_fill");
+ #ifdef CONV2D_3X3_KW_FOLD
+-            // kw-fold: only the slab rows compute reads (conv2d_3x3_slab_dataflow.hpp KwfSlabPlan); nothing reads
+-            // slab_ready_pages.
+-#ifdef KWF_XCHG
+-            constexpr bool kwf_xchg = true;
+-#else
+-            constexpr bool kwf_xchg = false;
+-#endif
+-            conv2d_3x3::KwfSlabPlan plan;
+-            conv2d_3x3::kwf_slab_plan<input_width, num_in_px, dilation, kwf_xchg>(
+-                footprint, m_tile_start + block_tiles_done, block_valid_tiles, slab_x_base, plan);
+-            // Split fill: the slab rows the writer reads (the higher-index shards' live input tile-rows).
+-            [[maybe_unused]] const conv2d_3x3::SlabSuffix writer_sfx =
+-                tile_fill_split ? conv2d_3x3::kwf_slab_rows_from(plan, (my_shard + 1) * input_shard_rows)
+-                                : conv2d_3x3::SlabSuffix{0, 0};
+-            const uint32_t(&seg_slab)[3] = plan.seg_slab;
++            // kw-fold: the host planned the fill (descriptor _kwf_fill_args: only the slab rows compute reads, as
++            // reads from each owner shard's core). Every group of this RISC is issued at once (up to fill_window in
++            // flight, one transaction id each) and pushed in slab order as it lands; on a split core the last groups
++            // are the writer's (a suffix of the slab: the higher shards' rows and the last own rows), handed over once
++            // per block and each pushed on its slab_fwd_done. On-device planning and a TensorAccessor lookup per page
++            // run had made this fill control-bound (res2: ~2.2 us with every read stubbed). Nothing reads
++            // slab_x_base / slab_ready_pages.
++            {
++                const uint32_t num_groups = get_arg_val<uint32_t>(kwf_fill_arg++);
++                const uint32_t writer_groups = get_arg_val<uint32_t>(kwf_fill_arg++);
++                const uint32_t reader_groups = num_groups - writer_groups;
++                {
++                    MaybeDeviceZoneScope("reader_fill_reserve");
++                    cb_reserve_back(cb_input_tiles, slab_rows_m * c_in_tiles);
++                }
++                if (writer_groups > 0) {
++                    Semaphore<>(slab_free_sem_id).up(1);
++                }
++                const uint32_t slab_l1 = get_write_ptr(cb_input_tiles);
++                constexpr uint32_t TRID_FILL_BASE = 8;
++                uint32_t group_rows[KWF_FILL_MAX_GROUPS];
++                uint32_t pushed = 0;
++                uint32_t row_lo = 0;
++                auto retire = [&]() {
++                    if (pushed < reader_groups) {
++                        reads.wait(TRID_FILL_BASE + pushed % fill_window);
++                    } else {
++                        MaybeDeviceZoneScope("reader_fill_fwd_wait");
++                        Semaphore<>(slab_fwd_done_sem_id).wait_min(++fill_batches_handed);
++                    }
++                    cb_push_back(cb_input_tiles, group_rows[pushed] * c_in_tiles);
++                    ++pushed;
++                };
++                for (uint32_t grp = 0; grp < num_groups; ++grp) {
++                    group_rows[grp] = get_arg_val<uint32_t>(kwf_fill_arg++);
++                    if (grp < reader_groups) {
++                        if (grp - pushed == fill_window) {
++                            retire();
++                        }
++                        const uint32_t pieces = get_arg_val<uint32_t>(kwf_fill_arg++);
++                        reads.begin(TRID_FILL_BASE + grp % fill_window);
++                        const uint32_t l1 = slab_l1 + row_lo * row_bytes;
++                        for (uint32_t i = 0; i < pieces; ++i) {
++                            const uint32_t xy = get_arg_val<uint32_t>(kwf_fill_arg);
++                            const uint32_t offset = get_arg_val<uint32_t>(kwf_fill_arg + 1);
++                            const uint32_t dst = get_arg_val<uint32_t>(kwf_fill_arg + 2);
++                            kwf_fill_arg += 3;
++                            reads.read(
++                                get_noc_addr(xy >> 16, xy & 0xFFFF, input_addr + offset),
++                                l1 + (dst >> 16) * row_bytes,
++                                (dst & 0xFFFF) * row_bytes);
++                        }
++                    }
++                    row_lo += group_rows[grp];
++                }
++                while (pushed < num_groups) {
++                    retire();
++                }
++            }
+ #else
+             conv2d_3x3::TileSlabPlan plan;
+             conv2d_3x3::tile_slab_plan<input_width, num_in_px, dilation, c_in_tiles>(footprint, slab_x_base, plan);
+@@ -746,7 +796,6 @@
+             for (int32_t kh = 0; kh < 3; ++kh) {
+                 slab_ready_pages[kh] = plan.ready_pages[kh];
+             }
+-#endif
+             const uint32_t num_segs = plan.num_segs;
+             const uint32_t(&seg_first)[3] = plan.seg_first;
+             const uint32_t(&seg_count)[3] = plan.seg_count;
+@@ -822,23 +871,6 @@
+                         l1 -= ring_bytes;
+                     }
+                     reads.begin(TRID_FILL_BASE + batch % fill_window);
+-#ifdef CONV2D_3X3_KW_FOLD
+-                    // Slab rows [b_lo, b_lo + batch rows) of the live segments, each at its slab row.
+-                    const uint32_t b_lo = batch * untilize_batch_rows;
+-                    while (seg < num_segs && seg_slab[seg] + seg_row < b_lo + untilize_batch_rows) {
+-                        const uint32_t s = seg_slab[seg] + seg_row;
+-                        const uint32_t seg_left = seg_count[seg] - seg_row;
+-                        const uint32_t room = b_lo + untilize_batch_rows - s;
+-                        const uint32_t rows = room < seg_left ? room : seg_left;
+-                        const uint32_t row0 = seg_first[seg] + seg_row;
+-                        read_rows(row0, row0 + rows, l1 + (s - b_lo) * row_bytes);
+-                        seg_row += rows;
+-                        if (seg_row == seg_count[seg]) {
+-                            ++seg;
+-                            seg_row = 0;
+-                        }
+-                    }
+-#else
+                     for (uint32_t r = 0; r < untilize_batch_rows && seg < num_segs;) {
+                         // The batch's rows of one segment are consecutive input tile-rows: consecutive pages.
+                         const uint32_t seg_left = seg_count[seg] - seg_row;
+@@ -853,12 +885,12 @@
+                             seg_row = 0;
+                         }
+                     }
+-#endif
+                 }
+                 while (pushed < num_batches) {
+                     retire();
+                 }
+             }
++#endif
+         } else {
+             // ---- fill_halo_slab (ROW_MAJOR): band kh tagged trid kh + 1; overlapping bands read only their
+             // new tail.
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_slab_dataflow.hpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_slab_dataflow.hpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_slab_dataflow.hpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_slab_dataflow.hpp
+@@ -209,105 +209,4 @@
+     return batch * batch_rows < sfx.rows && (batch + 1) * batch_rows > sfx.first;
+ }
+ 
+-// kw-fold (conv2d_3x3_kw_fold.hpp) TILE slab plan: tile_slab_plan's placement (compute's slab_bases mirrors it), but
+-// each band's segment holds only the input tile-rows compute reads. Its walk covers tile-rows [lo, hi) = [t0 - ht,
+-// t_end + hb), the halo tile-row on a side only where it recomputes it (a block boundary inside an image row, without
+-// the halo exchange), and reads row t + (kh - 1) R of each: band kh's live rows are [lo + (kh - 1) R, hi + (kh - 1) R).
+-// The footprint rounds every band out by one tile-row on each side (the d-pixel tap reach), so where the halo is
+-// exchanged or not needed (a boundary on an image-row edge) up to six slab rows are dead: the fill skips them, their
+-// slots stay unwritten and are never read, and the batch pushes (compute's cumulative slab waits) are unchanged.
+-// seg_slab[s] is the slab row of seg_first[s]; segments ascend in both. One pass like tile_slab_plan's: planning cost
+-// is on the fill's critical start (a separate split of the plan at the dead rows measured ~0.3 us there).
+-struct KwfSlabPlan {
+-    uint32_t seg_first[3];
+-    uint32_t seg_count[3];
+-    uint32_t seg_slab[3];
+-    uint32_t num_segs;
+-};
+-
+-template <int32_t input_width, int32_t num_in_px, int32_t dilation, bool xchg>
+-FORCE_INLINE void kwf_slab_plan(
+-    const SlabFootprint& fp, uint32_t t0, uint32_t valid, int32_t (&slab_x_base)[3], KwfSlabPlan& plan) {
+-    constexpr int32_t TILE_DIM = 32;
+-    constexpr int32_t tpr = input_width / TILE_DIM;
+-    constexpr int32_t R = dilation * tpr;
+-    // kw_fold.hpp run(): halo_top / halo_bot (the exchange runs on one M-block per core and then replaces both).
+-    const int32_t t_end = static_cast<int32_t>(t0 + valid);
+-    const int32_t live_lo = static_cast<int32_t>(t0) - (!xchg && t0 % tpr != 0 ? 1 : 0);
+-    const int32_t live_hi = t_end + (!xchg && t_end % tpr != 0 && t_end < num_in_px / TILE_DIM ? 1 : 0);
+-    uint32_t n = 0;
+-    int32_t next_free = 0;
+-    int32_t read_hi = 0;  // one past the last live row an earlier band holds
+-    bool have_prev = false;
+-    int32_t prev_t_lo = 0, prev_t_hi = 0, prev_row = 0;
+-    for (int32_t kh = 0; kh < 3; ++kh) {
+-        const int32_t v_lo = fp.f + kh * dilation * input_width;
+-        const int32_t lo = v_lo > 0 ? v_lo : 0;
+-        const int32_t hi = v_lo + fp.band_len < num_in_px ? v_lo + fp.band_len : num_in_px;
+-        if (lo >= hi) {
+-            slab_x_base[kh] = 0;
+-            continue;
+-        }
+-        const int32_t t_lo = lo / TILE_DIM;
+-        const int32_t t_hi = (hi + TILE_DIM - 1) / TILE_DIM;
+-        const bool shares = have_prev && t_lo < prev_t_hi;
+-        const int32_t row = shares ? prev_row + (t_lo - prev_t_lo) : next_free;
+-        int32_t a = live_lo + (kh - 1) * R;
+-        a = a > t_lo ? a : t_lo;
+-        a = a > read_hi ? a : read_hi;
+-        int32_t b = live_hi + (kh - 1) * R;
+-        b = b < t_hi ? b : t_hi;
+-        if (a < b) {
+-            const uint32_t slab = static_cast<uint32_t>(row + (a - t_lo));
+-            if (n > 0 && plan.seg_first[n - 1] + plan.seg_count[n - 1] == static_cast<uint32_t>(a) &&
+-                plan.seg_slab[n - 1] + plan.seg_count[n - 1] == slab) {
+-                plan.seg_count[n - 1] += b - a;  // contiguous in the input and in the slab: one segment
+-            } else {
+-                plan.seg_first[n] = a;
+-                plan.seg_count[n] = b - a;
+-                plan.seg_slab[n] = slab;
+-                ++n;
+-            }
+-            read_hi = b;
+-        }
+-        slab_x_base[kh] = TILE_DIM * (row - t_lo);
+-        next_free = row + (t_hi - t_lo);
+-        have_prev = true;
+-        prev_t_lo = t_lo;
+-        prev_t_hi = t_hi;
+-        prev_row = row;
+-    }
+-    plan.num_segs = n;
+-}
+-
+-// tile_batch_rows over a KwfSlabPlan (explicit slab rows).
+-template <uint32_t batch_rows, typename Fn>
+-FORCE_INLINE void kwf_batch_rows(const KwfSlabPlan& plan, uint32_t batch, Fn&& fn) {
+-    const uint32_t b_lo = batch * batch_rows;
+-    const uint32_t b_hi = b_lo + batch_rows;
+-    for (uint32_t s = 0; s < plan.num_segs; ++s) {
+-        const uint32_t seg_lo = plan.seg_slab[s];
+-        const uint32_t seg_hi = seg_lo + plan.seg_count[s];
+-        const uint32_t lo = b_lo > seg_lo ? b_lo : seg_lo;
+-        const uint32_t hi = b_hi < seg_hi ? b_hi : seg_hi;
+-        if (lo < hi) {
+-            fn(plan.seg_first[s] + (lo - seg_lo), hi - lo, lo - b_lo);
+-        }
+-    }
+-}
+-
+-// slab_rows_from over a KwfSlabPlan: the first slab row holding a live row >= hi_row, one past the last live slab row
+-// (a batch of dead rows only is not handed over).
+-FORCE_INLINE SlabSuffix kwf_slab_rows_from(const KwfSlabPlan& plan, uint32_t hi_row) {
+-    uint32_t first = 0xFFFFFFFF;
+-    uint32_t end = 0;
+-    for (uint32_t s = 0; s < plan.num_segs; ++s) {
+-        if (first == 0xFFFFFFFF && plan.seg_first[s] + plan.seg_count[s] > hi_row) {
+-            first = plan.seg_slab[s] + (hi_row > plan.seg_first[s] ? hi_row - plan.seg_first[s] : 0);
+-        }
+-        end = plan.seg_slab[s] + plan.seg_count[s];
+-    }
+-    return {first < end ? first : end, end};
+-}
+-
+ }  // namespace conv2d_3x3
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp
+@@ -38,6 +38,16 @@
+     constexpr auto bias_args = TensorAccessorArgs<9>();
+     constexpr uint32_t chunk_tiles = round_tiles / num_chunks;
+     constexpr uint32_t bias_flag_sem_id = flag_sem_id + weight_depth;
++#ifdef KWF_ROUND0_STREAM
++    // Round 0 streams (kw-fold, conv2d_3x3_kw_fold.hpp): chunk j < num_chunks - 1 has its own flag (after the bias flag),
++    // set VALID in the chain right after the multicast that completes chunks 0 .. j, so a receiver pushes and compute
++    // multiplies each landed kernel row of round 0 before the round is complete. Written once, never reused.
++    constexpr uint32_t early_flag_sem_id = bias_flag_sem_id + 1;
++    constexpr bool stream_round0 = true;
++#else
++    constexpr uint32_t early_flag_sem_id = 0;
++    constexpr bool stream_round0 = false;
++#endif
+ 
+     const uint32_t num_rounds = get_arg_val<uint32_t>(0);
+     const uint32_t num_receivers = get_arg_val<uint32_t>(1);
+@@ -107,6 +117,13 @@
+             noc_async_write_multicast(
+                 src, get_noc_multicast_addr(sx, sy, ex, ey, src), n * chunk_tiles * tile_bytes, num_receivers, true);
+             c += n;
++            if (stream_round0 && r == 0 && c < num_chunks) {
++                // Chunks 0 .. c - 1 landed: their early flag (the VALID word of this slot's flag as the source).
++                const uint32_t early = get_semaphore(early_flag_sem_id + c - 1);
++                noc_semaphore_set_multicast(
++                    flag, get_noc_multicast_addr(sx, sy, ex, ey, early), num_receivers, landed(c));
++                continue;
++            }
+             // Keep the chain open only into a chunk that already landed.
+             if (c == num_chunks || !landed(c)) {
+                 noc_semaphore_set_multicast(c == num_chunks ? flag : MEM_ZEROS_BASE, flag_mcast, num_receivers, false);
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+@@ -28,7 +28,9 @@
+ // ack of round k + 1 goes out while round k is awaited, as soon as compute freed round k + 1's slot (acking only once
+ // round k had landed held the server's round 2 behind every receiver's round 1). The server also multicasts the bias
+ // into cb_bias and sets the bias flag (the semaphore after the slot flags): the receiver reserves cb_bias at kernel
+-// start and pushes it once the flag is set, polled inside the round waits.
++// start and pushes it once the flag is set, polled inside the round waits. Under kw-fold (KWF_ROUND0_STREAM) the server
++// also sets an early flag per landed chunk of round 0 (the semaphores after the bias flag), and the receiver pushes
++// round 0 chunk by chunk, so compute starts on its first kernel rows.
+ //
+ // K split (BLOCK_SHARDED, k_cols > 1; regime R4): every core of a grid row computes fp32 partials
+ // [bm, all C_out] over its own channel slice, and grid column y owns output N-slice y. Per M-block the
+@@ -304,16 +306,7 @@
+     [[maybe_unused]] uint32_t fill_b = 0;
+     [[maybe_unused]] uint32_t fill_plan_m = 0xFFFFFFFF;
+     [[maybe_unused]] uint32_t fill_served = 0;
+-#ifdef CONV2D_3X3_KW_FOLD
+-    [[maybe_unused]] conv2d_3x3::KwfSlabPlan fill_plan;  // only the slab rows compute reads
+-#ifdef KWF_XCHG
+-    constexpr bool kwf_xchg = true;
+-#else
+-    constexpr bool kwf_xchg = false;
+-#endif
+-#else
+     [[maybe_unused]] conv2d_3x3::TileSlabPlan fill_plan;
+-#endif
+     [[maybe_unused]] conv2d_3x3::SlabSuffix fill_sfx{0, 0};  // the cursor block's slab rows this writer reads
+     // Ring slab: the cursor block's first streamed row, its row end and batch count, the kernel batches before it, and
+     // the previous block's window end.
+@@ -383,23 +376,12 @@
+                 const uint32_t first = (m_tile_start + block_tiles_done) * 32;
+                 const uint32_t end_tiles = first + block_valid_tiles * 32;
+                 int32_t unused_x_base[3];
+-#ifdef CONV2D_3X3_KW_FOLD
+-                conv2d_3x3::kwf_slab_plan<input_width, input_height * input_width, dilation, kwf_xchg>(
+-                    conv2d_3x3::block_footprint<output_width, input_width, stride, padding, dilation, band_last_tap>(
+-                        first, end_tiles < num_out_px ? end_tiles : num_out_px),
+-                    m_tile_start + block_tiles_done,
+-                    block_valid_tiles,
+-                    unused_x_base,
+-                    fill_plan);
+-                fill_sfx = conv2d_3x3::kwf_slab_rows_from(fill_plan, fill_hi_row);
+-#else
+                 conv2d_3x3::tile_slab_plan<input_width, input_height * input_width, dilation, c_in_p / 32>(
+                     conv2d_3x3::block_footprint<output_width, input_width, stride, padding, dilation, band_last_tap>(
+                         first, end_tiles < num_out_px ? end_tiles : num_out_px),
+                     unused_x_base,
+                     fill_plan);
+                 fill_sfx = conv2d_3x3::slab_rows_from(fill_plan, fill_hi_row);
+-#endif
+                 fill_plan_m = fill_m;
+             }
+             if (conv2d_3x3::batch_has_rows_from<untilize_batch_rows>(fill_sfx, fill_b)) {
+@@ -419,11 +401,7 @@
+         const uint32_t slot =
+             fill_ring_base + ((fill_m * fill_batches_per_block + fill_b) % input_tile_depth_batches) * fill_batch_bytes;
+         fill_reads.begin(trid);
+-#ifdef CONV2D_3X3_KW_FOLD
+-        conv2d_3x3::kwf_batch_rows<untilize_batch_rows>(
+-#else
+         conv2d_3x3::tile_batch_rows<untilize_batch_rows>(
+-#endif
+             fill_plan, fill_b, [&](uint32_t row0, uint32_t rows, uint32_t batch_row) {
+                 const uint32_t lo = row0 > fill_hi_row ? row0 : fill_hi_row;
+                 if (lo >= row0 + rows) {
+@@ -543,6 +521,78 @@
+         }
+     };
+ #endif
++#ifdef CONV2D_3X3_KW_FOLD
++    // kw-fold: the host-planned fill (descriptor _kwf_fill_args). Per M-block this writer's part is [groups] + per group
++    // [pieces] + pieces (a suffix of the block's slab: the higher shards' rows and the last own-shard rows), read on
++    // NoC1 once the reader handed the block over (slab_free), each group under its own transaction id (up to
++    // fill_writer_window in flight) and counted in slab_fwd_done in order as it lands. The first block's groups may go
++    // out at kernel start (writer_fill_early): the slab ring is empty then.
++#ifdef KWF_XCHG
++    constexpr uint32_t kwf_fill_arg0 = server_arg + 3 + 10;  // after the halo exchange's 10 args
++#else
++    constexpr uint32_t kwf_fill_arg0 = server_arg + 3;
++#endif
++    constexpr uint32_t TRID_KWF_FILL = 8;
++    [[maybe_unused]] uint32_t kwf_fill_arg = kwf_fill_arg0;
++    [[maybe_unused]] uint32_t kwf_fill_m = 0;          // the M-block whose groups are being issued
++    [[maybe_unused]] uint32_t kwf_fill_left = 0;       // its groups not issued yet
++    [[maybe_unused]] uint32_t kwf_fill_blocks = 0;     // blocks with groups started (the reader hands each over once)
++    [[maybe_unused]] uint32_t kwf_fill_issued = 0;     // groups issued, all blocks
++    [[maybe_unused]] uint32_t kwf_fill_landed = 0;     // groups landed and counted in slab_fwd_done
++    [[maybe_unused]] bool kwf_fill_open = false;       // kwf_fill_left belongs to block kwf_fill_m
++    [[maybe_unused]] auto kwf_serve_fill = [&](bool early) {
++        while (kwf_fill_landed < kwf_fill_issued &&
++               ncrisc_noc_read_with_transaction_id_flushed(
++                   fill_reads.noc.get_noc_id(), TRID_KWF_FILL + kwf_fill_landed % fill_writer_window)) {
++            Semaphore<>(slab_fwd_done_sem_id).up(1);
++            ++kwf_fill_landed;
++        }
++        while (kwf_fill_issued - kwf_fill_landed < fill_writer_window) {
++            if (!kwf_fill_open) {
++                if (kwf_fill_m >= num_m_blocks_this_core) {
++                    return;
++                }
++                const uint32_t groups = get_arg_val<uint32_t>(kwf_fill_arg);
++                if (groups == 0) {
++                    ++kwf_fill_arg;
++                    ++kwf_fill_m;
++                    continue;
++                }
++                // Early (kernel start): only the core's first M-block, whose slab the ring holds empty. A later block's
++                // slab may still be read by compute (or filled by the reader for an earlier block).
++                if (!(early && kwf_fill_m == 0) && Semaphore<>(slab_free_sem_id).value() <= kwf_fill_blocks) {
++                    return;
++                }
++                ++kwf_fill_arg;
++                ++kwf_fill_blocks;
++                kwf_fill_left = groups;
++                kwf_fill_open = true;
++            }
++            MaybeDeviceZoneScope("writer_fill");
++            const uint32_t slab_l1 =
++                fill_ring_base + ((kwf_fill_m * fill_batches_per_block) % input_tile_depth_batches) * fill_batch_bytes;
++            const uint32_t pieces = get_arg_val<uint32_t>(kwf_fill_arg++);
++            fill_reads.begin(TRID_KWF_FILL + kwf_fill_issued % fill_writer_window);
++            for (uint32_t i = 0; i < pieces; ++i, kwf_fill_arg += 3) {
++                const uint32_t xy = get_arg_val<uint32_t>(kwf_fill_arg);
++                const uint32_t dst = get_arg_val<uint32_t>(kwf_fill_arg + 2);
++                fill_reads.read(
++                    get_noc_addr(xy >> 16, xy & 0xFFFF, input_addr + get_arg_val<uint32_t>(kwf_fill_arg + 1)),
++                    slab_l1 + (dst >> 16) * fill_row_bytes,
++                    (dst & 0xFFFF) * fill_row_bytes);
++            }
++            dataflow_kernel_lib::set_read_trid(fill_reads.noc, 0);
++            ++kwf_fill_issued;
++            if (--kwf_fill_left == 0) {
++                kwf_fill_open = false;
++                ++kwf_fill_m;
++            }
++        }
++    };
++    [[maybe_unused]] auto kwf_fill_done = [&]() {
++        return kwf_fill_m >= num_m_blocks_this_core && kwf_fill_landed == kwf_fill_issued;
++    };
++#endif
+     // Every batch the reader has handed over so far (windowed: retire the landed ones, issue up to the window).
+     [[maybe_unused]] auto serve_fill = [&]() {
+         if constexpr (slab_direct) {
+@@ -557,6 +607,14 @@
+             }
+ #endif
+         }
++#ifdef CONV2D_3X3_KW_FOLD
++        if constexpr (tile_fill_split) {
++            if (split_here) {
++                kwf_serve_fill(false);
++            }
++            return;
++        }
++#endif
+         if constexpr (tile_fill_split) {
+             if constexpr (!ring_slab) {
+                 while (fill_served < fill_issued &&
+@@ -610,6 +668,12 @@
+             if (!split_here) {
+                 return;
+             }
++#ifdef CONV2D_3X3_KW_FOLD
++            while (!kwf_fill_done()) {
++                kwf_serve_fill(false);
++            }
++            return;
++#endif
+             if constexpr (!ring_slab) {
+                 while (true) {
+                     serve_fill();
+@@ -639,14 +703,19 @@
+         tile_fill_split && !ring_slab && input_tile_depth_batches >= fill_batches_per_block && weight_servers) {
+         if (split_here) {
+             MaybeDeviceZoneScope("writer_fill_early");
++#ifdef CONV2D_3X3_KW_FOLD
++            // kw-fold: the first block's group goes out now (the ring is empty), without the reader's hand-over.
++            kwf_serve_fill(true);
++#else
+             // Only a first-block batch: the reader hands a later block's batches over only after its first block's
+-            // fill, and under kw-fold after decoding this writer's late bias, so a spin on one here would deadlock (a
+-            // first block without writer rows: a multi-block core whose first block's slab ends inside its own shard).
++            // fill, so a spin on one here would deadlock (a first block without writer rows: a multi-block core whose
++            // first block's slab ends inside its own shard).
+             if (fill_next() && fill_m == 0) {
+                 while (Semaphore<>(slab_free_sem_id).value() == 0) {
+                 }
+                 serve_fill();
+             }
++#endif
+         }
+     }
+ 
+@@ -1033,6 +1102,15 @@
+         }
+         finish_weight_k_block(l1);
+     };
++    // Round 0 streamed (kw-fold under weight servers, KWF_ROUND0_STREAM = the server's chunks per round): its chunks
++    // pushed so far. Semaphore server_flag_sem_id + depth + j (after the bias flag), j >= 1, is the server's early flag
++    // "chunks 0 .. j - 1 landed" (conv2d_3x3_weight_server_writer.cpp).
++#ifdef KWF_ROUND0_STREAM
++    constexpr uint32_t round0_chunks = KWF_ROUND0_STREAM;
++#else
++    constexpr uint32_t round0_chunks = 1;
++#endif
++    [[maybe_unused]] uint32_t round0_pushed = 0;
+     auto issue_weight_k_block = [&]() {
+         {
+             // Back-pressure from compute's matmul.
+@@ -1066,6 +1144,17 @@
+                 if (*flag == VALID) {
+                     break;
+                 }
++                if (round0_chunks > 1 && k_blocks_issued == 0) {
++                    // Round 0 streams: push the chunks the server's early flags report landed.
++                    for (uint32_t j = round0_chunks - 1; j > round0_pushed; --j) {
++                        if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
++                                get_semaphore(server_flag_sem_id + nslice_weight_depth + j)) == VALID) {
++                            cb_push_back(cb_weights, (j - round0_pushed) * (weight_k_block_tiles / round0_chunks));
++                            round0_pushed = j;
++                            break;
++                        }
++                    }
++                }
+                 if (early_ack && server_reuse_acks < k_blocks_issued + 2 - nslice_weight_depth &&
+                     cb_pages_reservable_at_back(cb_weights, 2 * weight_k_block_tiles)) {
+                     noc_semaphore_inc(server_ack_noc, 1);
+@@ -1102,7 +1191,8 @@
+                 read_weight_k_block(l1);
+             }
+         }
+-        cb_push_back(cb_weights, weight_k_block_tiles);
++        cb_push_back(cb_weights, weight_k_block_tiles - round0_pushed * (weight_k_block_tiles / round0_chunks));
++        round0_pushed = 0;
+         ++k_blocks_issued;
+         if constexpr (weight_servers) {
+             if constexpr (kw_fold) {

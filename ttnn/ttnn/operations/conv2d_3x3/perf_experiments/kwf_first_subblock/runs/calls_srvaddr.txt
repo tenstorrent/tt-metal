@@ -1,0 +1,6 @@
+res2 base 0
+res2 copy 0
+res3x base 0
+res3x copy 0
+ch1 base 0
+ch1 copy 0

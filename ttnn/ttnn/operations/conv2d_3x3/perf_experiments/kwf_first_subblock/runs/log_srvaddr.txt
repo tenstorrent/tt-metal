@@ -1,0 +1,663 @@
+SAFE_PYTEST: Waiting for device lock...
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: off (disabled) — kernels compile on demand
+SAFE_PYTEST: python -m tracy -r -m pytest --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/test_kfs_ab.py
+========================================
+2026-11-19 18:16:41.716 | INFO     | __main__:main:381 - Using port 8086
+2026-11-19 18:16:41.716 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-11-19 18:16:41.751 | INFO     | __main__:run_workload:416 - Test process started
+2026-11-19 18:16:44.125 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/workspaces/opgen
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, anyio-4.16.0, benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, cov-7.0.0, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 6 items
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/test_kfs_ab.py::test_kfs_ab[res2-base-0] 2026-11-19 18:16:48.951 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-19 18:16:48.951 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-19 18:16:48.953 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-19 18:16:48.953 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-19 18:16:48.976 | info     |             UMD | Established firmware bundle version: 19.16.1 (topology_discovery.cpp:700)
+2026-11-19 18:16:48.977 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-19 18:16:49.241 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:174)
+2026-11-19 18:16:49.241 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-19 18:16:49.241 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-19 18:16:49.241 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-19 18:16:49.248 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-19 18:16:49.504 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-19 18:16:49.654 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-19 18:16:49.654 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-19 18:16:49.834 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-19 18:16:49.852 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/test_kfs_ab.py::test_kfs_ab[res2-copy-0] Building ncrisc, compile step:
+/localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/workspaces/opgen/ -I/localdev/pmilojevic/workspaces/opgen/ttnn -I/localdev/pmilojevic/workspaces/opgen/ttnn/cpp -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/workspaces/opgen/tt_metal/api/ -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels -include /localdev/pmilojevic/tt-metal-cache/tt-metal-cache/pch/842cea1ec115824b/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="conv2d_3x3_weight_server_reader/655572508677157495/" -DKERNEL_COMPILE_TIME_ARGS=3,2,6,3,3,3,2,1,2,3,1088,1,8,36,2,16777216,50332160,83887104,117442048 -c -o /localdev/pmilojevic/tt-metal-cache/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_weight_server_reader/655572508677157495/ncrisc/ncrisck.11573640125848793878_1961053.o /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/pmilojevic/tt-metal-cache/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_weight_server_reader/655572508677157495/ncrisc/ncrisck.11573640125848793878_1961053.d
+In file included from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,645,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:645:5: note: in expansion of macro 'SrcLocNameToHash'
+  645 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: server_read,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,63,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:63:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   63 |         MaybeDeviceZoneScope("server_read");
+      |         ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: dbg_s_issue,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,161,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:161:17: note: in expansion of macro 'DeviceZoneScopedN'
+  161 |                 DeviceZoneScopedN("dbg_s_issue");
+      |                 ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: dbg_s_land,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,167,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:167:17: note: in expansion of macro 'DeviceZoneScopedN'
+  167 |                 DeviceZoneScopedN("dbg_s_land");
+      |                 ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: NCRISC-KERNEL,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1067:5: note: in expansion of macro 'DO_PRAGMA'
+ 1067 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/test_kfs_ab.py::test_kfs_ab[res3x-base-0] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/test_kfs_ab.py::test_kfs_ab[res3x-copy-0] Building ncrisc, compile step:
+/localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/workspaces/opgen/ -I/localdev/pmilojevic/workspaces/opgen/ttnn -I/localdev/pmilojevic/workspaces/opgen/ttnn/cpp -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/workspaces/opgen/tt_metal/api/ -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels -include /localdev/pmilojevic/tt-metal-cache/tt-metal-cache/pch/842cea1ec115824b/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="conv2d_3x3_weight_server_reader/16625905967006316714/" -DKERNEL_COMPILE_TIME_ARGS=3,4,12,3,3,1,4,1,4,3,1088,1,8,144,4,16777216,50332160,83887104,117442048 -c -o /localdev/pmilojevic/tt-metal-cache/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_weight_server_reader/16625905967006316714/ncrisc/ncrisck.11573640125848793878_1961053.o /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/pmilojevic/tt-metal-cache/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_weight_server_reader/16625905967006316714/ncrisc/ncrisck.11573640125848793878_1961053.d
+In file included from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,645,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:645:5: note: in expansion of macro 'SrcLocNameToHash'
+  645 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: server_read,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,63,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:63:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   63 |         MaybeDeviceZoneScope("server_read");
+      |         ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: dbg_s_issue,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,161,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:161:17: note: in expansion of macro 'DeviceZoneScopedN'
+  161 |                 DeviceZoneScopedN("dbg_s_issue");
+      |                 ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: dbg_s_land,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,167,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:167:17: note: in expansion of macro 'DeviceZoneScopedN'
+  167 |                 DeviceZoneScopedN("dbg_s_land");
+      |                 ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: NCRISC-KERNEL,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1067:5: note: in expansion of macro 'DO_PRAGMA'
+ 1067 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/test_kfs_ab.py::test_kfs_ab[ch1-base-0] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/test_kfs_ab.py::test_kfs_ab[ch1-copy-0] 2026-11-19 18:16:52.360 | error    |    BuildKernels | ncrisc compile failure -- cmd: /localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/workspaces/opgen/ -I/localdev/pmilojevic/workspaces/opgen/ttnn -I/localdev/pmilojevic/workspaces/opgen/ttnn/cpp -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/workspaces/opgen/tt_metal/api/ -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels -include /localdev/pmilojevic/tt-metal-cache/tt-metal-cache/pch/842cea1ec115824b/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="conv2d_3x3_weight_server_reader/443419411707676837/" -DKERNEL_COMPILE_TIME_ARGS=3,4,3,3,3,1,1,0,0,2,1088 -c -o /localdev/pmilojevic/tt-metal-cache/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_weight_server_reader/443419411707676837/ncrisc/ncrisck.11573640125848793878_1961053.o /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/pmilojevic/tt-metal-cache/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_weight_server_reader/443419411707676837/ncrisc/ncrisck.11573640125848793878_1961053.d (build.cpp:141)
+2026-11-19 18:16:52.360 | critical |          Always | TT_THROW: ncrisc build failed. Log: In file included from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,645,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:645:5: note: in expansion of macro 'SrcLocNameToHash'
+  645 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: server_read,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,63,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:63:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   63 |         MaybeDeviceZoneScope("server_read");
+      |         ^~~~~~~~~~~~~~~~~~~~
+In file included from ../kernel_includes.hpp:2,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:23:
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp: In lambda function:
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:108:32: error: 'const struct TensorAccessor<tensor_accessor::DistributionSpec<0, 0, tensor_accessor::ArrayStaticWrapper<long unsigned int>, tensor_accessor::ArrayStaticWrapper<long unsigned int>, tensor_accessor::ArrayStaticWrapper<short unsigned int>, true, true, false, 4294967295> >' has no member named 'get_shard_noc_addr'; did you mean 'get_noc_addr'?
+  108 |                 return weights.get_shard_noc_addr(sid, in_shard * weights.get_aligned_page_size());
+      |                                ^~~~~~~~~~~~~~~~~~
+      |                                get_noc_addr
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: dbg_s_issue,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,161,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:161:17: note: in expansion of macro 'DeviceZoneScopedN'
+  161 |                 DeviceZoneScopedN("dbg_s_issue");
+      |                 ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: dbg_s_land,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,167,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:167:17: note: in expansion of macro 'DeviceZoneScopedN'
+  167 |                 DeviceZoneScopedN("dbg_s_land");
+      |                 ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: NCRISC-KERNEL,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1067:5: note: in expansion of macro 'DO_PRAGMA'
+ 1067 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+ (assert.hpp:104)
+2026-11-19 18:16:52.362 | critical |          Always | TT_THROW: Failed to generate binaries for conv2d_3x3_weight_server_reader TT_THROW @ /localdev/pmilojevic/workspaces/opgen/tt_metal/jit_build/build.cpp:148: tt::exception
+info:
+ncrisc build failed. Log: In file included from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,645,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:645:5: note: in expansion of macro 'SrcLocNameToHash'
+  645 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: server_read,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,63,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:63:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   63 |         MaybeDeviceZoneScope("server_read");
+      |         ^~~~~~~~~~~~~~~~~~~~
+In file included from ../kernel_includes.hpp:2,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:23:
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp: In lambda function:
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:108:32: error: 'const struct TensorAccessor<tensor_accessor::DistributionSpec<0, 0, tensor_accessor::ArrayStaticWrapper<long unsigned int>, tensor_accessor::ArrayStaticWrapper<long unsigned int>, tensor_accessor::ArrayStaticWrapper<short unsigned int>, true, true, false, 4294967295> >' has no member named 'get_shard_noc_addr'; did you mean 'get_noc_addr'?
+  108 |                 return weights.get_shard_noc_addr(sid, in_shard * weights.get_aligned_page_size());
+      |                                ^~~~~~~~~~~~~~~~~~
+      |                                get_noc_addr
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: dbg_s_issue,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,161,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:161:17: note: in expansion of macro 'DeviceZoneScopedN'
+  161 |                 DeviceZoneScopedN("dbg_s_issue");
+      |                 ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: dbg_s_land,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,167,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:167:17: note: in expansion of macro 'DeviceZoneScopedN'
+  167 |                 DeviceZoneScopedN("dbg_s_land");
+      |                 ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: NCRISC-KERNEL,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1067:5: note: in expansion of macro 'DO_PRAGMA'
+ 1067 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+
+backtrace:
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x170bf08) [0x7b8ad3f0bf08]
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xde889f) [0x7b8ad1be889f]
+ --- tt::tt_metal::JitBuildState::compile_one(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, tt::tt_metal::JitBuildSettings const*, unsigned long) const
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xe15208) [0x7b8ad1c15208]
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xe1518e) [0x7b8ad1c1518e]
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0x81ab9f) [0x7b8ad161ab9f]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x99ea8) [0x7b8c2d8f0ea8]
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0x81ab09) [0x7b8ad161ab09]
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xe14fde) [0x7b8ad1c14fde]
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0x819d65) [0x7b8ad1619d65]
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0x818870) [0x7b8ad1618870]
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0x817d58) [0x7b8ad1617d58]
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xdc253) [0x7b8b800b0253]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x94a83) [0x7b8c2d8eba83]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x1268e0) [0x7b8c2d97d8e0]
+ (assert.hpp:104)
+FAILED2026-11-19 18:16:53.225 | info     |           Metal | Device kernel duration perf summary (device=0): count=5, min=9880ns, avg=10383.4ns, max=10616ns (profiler_analysis.cpp:729)
+2026-11-19 18:16:53.225 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=100ns, range=[9800..10800), underflow(<9800ns)=0, overflow(>=10800ns)=0) (profiler_analysis.cpp:772)
+2026-11-19 18:16:53.225 | info     |           Metal |   [        9800 ..         9900) |#############                           |        1 (profiler_analysis.cpp:777)
+2026-11-19 18:16:53.225 | info     |           Metal |   [        9900 ..        10000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-19 18:16:53.225 | info     |           Metal |   [       10000 ..        10100) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-19 18:16:53.225 | info     |           Metal |   [       10100 ..        10200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-19 18:16:53.225 | info     |           Metal |   [       10200 ..        10300) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-19 18:16:53.225 | info     |           Metal |   [       10300 ..        10400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-19 18:16:53.225 | info     |           Metal |   [       10400 ..        10500) |########################################|        3 (profiler_analysis.cpp:777)
+2026-11-19 18:16:53.225 | info     |           Metal |   [       10500 ..        10600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-19 18:16:53.225 | info     |           Metal |   [       10600 ..        10700) |#############                           |        1 (profiler_analysis.cpp:777)
+2026-11-19 18:16:53.225 | info     |           Metal |   [       10700 ..        10800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-19 18:16:53.273 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+
+=================================== FAILURES ===================================
+___________________________ test_kfs_ab[ch1-copy-0] ____________________________
+
+case_id = 'ch1', variant = 'copy', rep = 0
+device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7b8aa5b3dbd0>
+
+    @pytest.mark.parametrize("case_id,variant,rep", PARAMS, ids=[f"{c}-{v}-{r}" for c, v, r in PARAMS])
+    def test_kfs_ab(case_id, variant, rep, device, monkeypatch):
+        import torch
+        import ttnn
+
+        pkg, knobs = _parse(variant)
+        op_mod, pd_mod = copy_modules(pkg)
+        for name, val in knobs.items():
+            assert hasattr(pd_mod, name), name
+            monkeypatch.setattr(pd_mod, name, val)
+        for name in dir(pd_mod):
+            m = getattr(pd_mod, name)
+            if callable(m) and hasattr(m, "cache_clear"):
+                m.cache_clear()
+        for name in ("conv2d_3x3", "prepare_conv2d_bias", "prepare_conv2d_weights"):
+            monkeypatch.setattr(perf, name, getattr(op_mod, name))
+        captured = {}
+        real = op_mod.conv2d_3x3
+
+        def capture(*a, **k):
+            out = real(*a, **k)
+            captured["out"] = ttnn.to_torch(out).float()
+            return out
+
+        monkeypatch.setattr(perf, "conv2d_3x3", capture)
+        with open(CALLS, "a") as f:
+            f.write(f"{case_id} {variant} {rep}\n")
+>       perf.test_conv2d_3x3_perf_focus(CASES[case_id], device)
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/test_kfs_ab.py:107:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_perf.py:294: in test_conv2d_3x3_perf_focus
+    tt_output = conv2d_3x3(
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/test_kfs_ab.py:100: in capture
+    out = real(*a, **k)
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/conv2d_3x3.py:635: in conv2d_3x3
+    return ttnn.generic_op(io_tensors, descriptor)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = FastOperation(python_fully_qualified_name='ttnn.generic_op', function=<ttnn._ttnn.operations.generic.generic_op_t obje...ut_tensor', 'optional_tensor', 'optional_output_tensor', 'out', 'output', 'output_tensors', 'optional_output_tensors'))
+function_args = ([ttnn.Tensor([[[[-0.1406, -1.1875,  ..., -0.2188,  0.1250],
+               [-1.4688,  0.7812,  ...,  0.5938, -0.6875]...DataType::BFLOAT8_B, layout=Layout::TILE)], <ttnn._ttnn.program_descriptor.ProgramDescriptor object at 0x56d81a918ec0>)
+function_kwargs = {}, cq_id = None, recording = False, started = False
+python_io_record = None
+
+    def __call__(self, *function_args, **function_kwargs):
+        if self._requires_slow_runtime():
+            return self._slow_operation_instance()(*function_args, **function_kwargs)
+
+        cq_id = None
+        if "queue_id" in function_kwargs:
+            cq_id = function_kwargs.pop("queue_id")
+        elif "cq_id" in function_kwargs:
+            cq_id = function_kwargs.pop("cq_id")
+
+        recording = ttnn.graph.is_python_io_recording_enabled()
+        started = False
+        python_io_record = None
+        try:
+            if recording:
+                ttnn.graph.track_function_start(self.python_fully_qualified_name)
+                started = True
+                python_io_record = ttnn.graph.append_python_io_record(self.python_fully_qualified_name)
+                ttnn.graph.record_python_operation(
+                    self.python_fully_qualified_name,
+                    function_args,
+                    function_kwargs,
+                    record=python_io_record,
+                )
+                input_tensors = get_all_tensors((function_args, function_kwargs))
+                set_tensor_id(input_tensors)
+
+            if cq_id is None:
+>               result = self.function(*function_args, **function_kwargs)
+E               RuntimeError: TT_THROW @ /localdev/pmilojevic/workspaces/opgen/tt_metal/impl/program/program.cpp:457: tt::exception
+E               info:
+E               Failed to generate binaries for conv2d_3x3_weight_server_reader TT_THROW @ /localdev/pmilojevic/workspaces/opgen/tt_metal/jit_build/build.cpp:148: tt::exception
+E               info:
+E               ncrisc build failed. Log: In file included from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+E                                from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+E                                from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/firmware_common.h:23,
+E                                from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+E               /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+E               /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,645,KERNEL_PROFILER'
+E                  32 | #define DO_PRAGMA(x) _Pragma(#x)
+E                     |                      ^~~~~~~
+E               /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+E                  42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+E                     |     ^~~~~~~~~
+E               /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:645:5: note: in expansion of macro 'SrcLocNameToHash'
+E                 645 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+E                     |     ^~~~~~~~~~~~~~~~
+E               /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp: In function 'void kernel_main()':
+E               /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: server_read,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,63,KERNEL_PROFILER'
+E                  32 | #define DO_PRAGMA(x) _Pragma(#x)
+E                     |                      ^~~~~~~
+E               /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+E                1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+E                     |     ^~~~~~~~~
+E               /localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+E                  25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+E                     |                                    ^~~~~~~~~~~~~~~~~
+E               /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:63:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+E                  63 |         MaybeDeviceZoneScope("server_read");
+E                     |         ^~~~~~~~~~~~~~~~~~~~
+E               In file included from ../kernel_includes.hpp:2,
+E                                from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:23:
+E               /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp: In lambda function:
+E               /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:108:32: error: 'const struct TensorAccessor<tensor_accessor::DistributionSpec<0, 0, tensor_accessor::ArrayStaticWrapper<long unsigned int>, tensor_accessor::ArrayStaticWrapper<long unsigned int>, tensor_accessor::ArrayStaticWrapper<short unsigned int>, true, true, false, 4294967295> >' has no member named 'get_shard_noc_addr'; did you mean 'get_noc_addr'?
+E                 108 |                 return weights.get_shard_noc_addr(sid, in_shard * weights.get_aligned_page_size());
+E                     |                                ^~~~~~~~~~~~~~~~~~
+E                     |                                get_noc_addr
+E               /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp: In function 'void kernel_main()':
+E               /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: dbg_s_issue,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,161,KERNEL_PROFILER'
+E                  32 | #define DO_PRAGMA(x) _Pragma(#x)
+E                     |                      ^~~~~~~
+E               /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+E                1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+E                     |     ^~~~~~~~~
+E               /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:161:17: note: in expansion of macro 'DeviceZoneScopedN'
+E                 161 |                 DeviceZoneScopedN("dbg_s_issue");
+E                     |                 ^~~~~~~~~~~~~~~~~
+E               /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: dbg_s_land,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,167,KERNEL_PROFILER'
+E                  32 | #define DO_PRAGMA(x) _Pragma(#x)
+E                     |                      ^~~~~~~
+E               /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+E                1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+E                     |     ^~~~~~~~~
+E               /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:167:17: note: in expansion of macro 'DeviceZoneScopedN'
+E                 167 |                 DeviceZoneScopedN("dbg_s_land");
+E                     |                 ^~~~~~~~~~~~~~~~~
+E               /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+E               /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: NCRISC-KERNEL,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+E                  32 | #define DO_PRAGMA(x) _Pragma(#x)
+E                     |                      ^~~~~~~
+E               /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1067:5: note: in expansion of macro 'DO_PRAGMA'
+E                1067 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+E                     |     ^~~~~~~~~
+E               /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+E                  70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+E                     |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+E
+E               backtrace:
+E                --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x170bf08) [0x7b8ad3f0bf08]
+E                --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xde889f) [0x7b8ad1be889f]
+E                --- tt::tt_metal::JitBuildState::compile_one(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, tt::tt_metal::JitBuildSettings const*, unsigned long) const
+E                --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xe15208) [0x7b8ad1c15208]
+E                --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xe1518e) [0x7b8ad1c1518e]
+E                --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0x81ab9f) [0x7b8ad161ab9f]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(+0x99ea8) [0x7b8c2d8f0ea8]
+E                --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0x81ab09) [0x7b8ad161ab09]
+E                --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xe14fde) [0x7b8ad1c14fde]
+E                --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0x819d65) [0x7b8ad1619d65]
+E                --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0x818870) [0x7b8ad1618870]
+E                --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0x817d58) [0x7b8ad1617d58]
+E                --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xdc253) [0x7b8b800b0253]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(+0x94a83) [0x7b8c2d8eba83]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(+0x1268e0) [0x7b8c2d97d8e0]
+E
+E               backtrace:
+E                --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x12ef7e8) [0x7b8ad3aef7e8]
+E                --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xb1c91b) [0x7b8ad191c91b]
+E                --- tt::tt_metal::JitBuildCache::build_once_no_wait(unsigned long, std::function<void ()> const&)
+E                --- tt::tt_metal::jit_build_once_no_wait(unsigned long, std::function<void ()> const&)
+E                --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xb15a23) [0x7b8ad1915a23]
+E                --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xb210b2) [0x7b8ad19210b2]
+E                --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xe15208) [0x7b8ad1c15208]
+E                --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xe1518e) [0x7b8ad1c1518e]
+E                --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0x81ab9f) [0x7b8ad161ab9f]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(+0x99ea8) [0x7b8c2d8f0ea8]
+E                --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0x81ab09) [0x7b8ad161ab09]
+E                --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xe14fde) [0x7b8ad1c14fde]
+E                --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0x819d65) [0x7b8ad1619d65]
+E                --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0x818870) [0x7b8ad1618870]
+E                --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0x817d58) [0x7b8ad1617d58]
+E                --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xdc253) [0x7b8b800b0253]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(+0x94a83) [0x7b8c2d8eba83]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(+0x1268e0) [0x7b8c2d97d8e0]
+
+ttnn/ttnn/decorators.py:1245: RuntimeError
+- generated xml file: /localdev/pmilojevic/workspaces/opgen/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+1.62s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/test_kfs_ab.py::test_kfs_ab[res2-base-0]
+0.58s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/test_kfs_ab.py::test_kfs_ab[res2-copy-0]
+0.52s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/test_kfs_ab.py::test_kfs_ab[res3x-copy-0]
+0.27s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/test_kfs_ab.py::test_kfs_ab[ch1-copy-0]
+0.17s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/test_kfs_ab.py::test_kfs_ab[res2-base-0]
+0.12s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/test_kfs_ab.py::test_kfs_ab[ch1-base-0]
+0.11s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/test_kfs_ab.py::test_kfs_ab[ch1-copy-0]
+0.09s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/test_kfs_ab.py::test_kfs_ab[res3x-base-0]
+0.01s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/test_kfs_ab.py::test_kfs_ab[res2-copy-0]
+0.01s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/test_kfs_ab.py::test_kfs_ab[ch1-base-0]
+0.01s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/test_kfs_ab.py::test_kfs_ab[res3x-base-0]
+0.01s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/test_kfs_ab.py::test_kfs_ab[res3x-copy-0]
+0.01s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/test_kfs_ab.py::test_kfs_ab[ch1-copy-0]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/test_kfs_ab.py::test_kfs_ab[res2-copy-0]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/test_kfs_ab.py::test_kfs_ab[res3x-copy-0]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/test_kfs_ab.py::test_kfs_ab[ch1-base-0]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/test_kfs_ab.py::test_kfs_ab[res3x-base-0]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/test_kfs_ab.py::test_kfs_ab[res2-base-0]
+=========================== short test summary info ============================
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/test_kfs_ab.py::test_kfs_ab[ch1-copy-0] - RuntimeError: TT_THROW @ /localdev/pmilojevic/workspaces/opgen/tt_metal/impl/program/program.cpp:457: tt::exception
+info:
+Failed to generate binaries for conv2d_3x3_weight_server_reader TT_THROW @ /localdev/pmilojevic/workspaces/opgen/tt_metal/jit_build/build.cpp:148: tt::exception
+info:
+ncrisc build failed. Log: In file included from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,645,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:645:5: note: in expansion of macro 'SrcLocNameToHash'
+  645 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: server_read,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,63,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:63:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   63 |         MaybeDeviceZoneScope("server_read");
+      |         ^~~~~~~~~~~~~~~~~~~~
+In file included from ../kernel_includes.hpp:2,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:23:
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp: In lambda function:
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:108:32: error: 'const struct TensorAccessor<tensor_accessor::DistributionSpec<0, 0, tensor_accessor::ArrayStaticWrapper<long unsigned int>, tensor_accessor::ArrayStaticWrapper<long unsigned int>, tensor_accessor::ArrayStaticWrapper<short unsigned int>, true, true, false, 4294967295> >' has no member named 'get_shard_noc_addr'; did you mean 'get_noc_addr'?
+  108 |                 return weights.get_shard_noc_addr(sid, in_shard * weights.get_aligned_page_size());
+      |                                ^~~~~~~~~~~~~~~~~~
+      |                                get_noc_addr
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: dbg_s_issue,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,161,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:161:17: note: in expansion of macro 'DeviceZoneScopedN'
+  161 |                 DeviceZoneScopedN("dbg_s_issue");
+      |                 ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: dbg_s_land,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,167,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:167:17: note: in expansion of macro 'DeviceZoneScopedN'
+  167 |                 DeviceZoneScopedN("dbg_s_land");
+      |                 ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: NCRISC-KERNEL,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1067:5: note: in expansion of macro 'DO_PRAGMA'
+ 1067 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+
+backtrace:
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x170bf08) [0x7b8ad3f0bf08]
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xde889f) [0x7b8ad1be889f]
+ --- tt::tt_metal::JitBuildState::compile_one(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, tt::tt_metal::JitBuildSettings const*, unsigned long) const
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xe15208) [0x7b8ad1c15208]
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xe1518e) [0x7b8ad1c1518e]
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0x81ab9f) [0x7b8ad161ab9f]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x99ea8) [0x7b8c2d8f0ea8]
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0x81ab09) [0x7b8ad161ab09]
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xe14fde) [0x7b8ad1c14fde]
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0x819d65) [0x7b8ad1619d65]
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0x818870) [0x7b8ad1618870]
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0x817d58) [0x7b8ad1617d58]
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xdc253) [0x7b8b800b0253]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x94a83) [0x7b8c2d8eba83]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x1268e0) [0x7b8c2d97d8e0]
+
+backtrace:
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x12ef7e8) [0x7b8ad3aef7e8]
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xb1c91b) [0x7b8ad191c91b]
+ --- tt::tt_metal::JitBuildCache::build_once_no_wait(unsigned long, std::function<void ()> const&)
+ --- tt::tt_metal::jit_build_once_no_wait(unsigned long, std::function<void ()> const&)
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xb15a23) [0x7b8ad1915a23]
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xb210b2) [0x7b8ad19210b2]
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xe15208) [0x7b8ad1c15208]
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xe1518e) [0x7b8ad1c1518e]
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0x81ab9f) [0x7b8ad161ab9f]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x99ea8) [0x7b8c2d8f0ea8]
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0x81ab09) [0x7b8ad161ab09]
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xe14fde) [0x7b8ad1c14fde]
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0x819d65) [0x7b8ad1619d65]
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0x818870) [0x7b8ad1618870]
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0x817d58) [0x7b8ad1617d58]
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xdc253) [0x7b8b800b0253]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x94a83) [0x7b8c2d8eba83]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x1268e0) [0x7b8c2d97d8e0]
+========================= 1 failed, 5 passed in 5.09s ==========================
+2026-11-19 18:16:54.656 | info     |    BuildKernels | JIT cache stats: 58/60 hits (96.7%) [58 cached, 70 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-19 18:16:54.656 | info     |    BuildKernels | JIT telemetry: 40 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-19 18:16:54.703 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:605)
+2026-11-19 18:16:54.703 | info     |             UMD | Closing devices in cluster (cluster.cpp:1496)
+2026-11-19 18:16:55.013 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1506)
+2026-11-19 18:16:55.013 | info     |             UMD | Cluster destructor started. (cluster.cpp:1227)
+2026-11-19 18:16:55.013 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1240)
+2026-11-19 18:16:55.329 | INFO     | __main__:main:490 - Copying /localdev/pmilojevic/workspaces/opgen/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/pmilojevic/workspaces/opgen/build/profiler/build_wasm/traces/test_kfs_ab_2026_11_19_18_16_55.tracy
+2026-11-19 18:16:55.332 | INFO     | __main__:main:493 - Copied /localdev/pmilojevic/workspaces/opgen/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/pmilojevic/workspaces/opgen/build/profiler/build_wasm/traces/test_kfs_ab_2026_11_19_18_16_55.tracy
+2026-11-19 18:16:55.332 | INFO     | __main__:main:502 - embed.tracy -> traces/test_kfs_ab_2026_11_19_18_16_55.tracy
+2026-11-19 18:16:55.333 | INFO     | tracy.serve_wasm:launch_server_subprocess:310 - Launching tracy web app GUI server subprocess...
+2026-11-19 18:16:55.333 | INFO     | tracy.serve_wasm:launch_server_subprocess:313 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-11-19 18:16:55.333 | INFO     | tracy.serve_wasm:launch_server_subprocess:320 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-11-19 18:16:56.651 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /localdev/pmilojevic/workspaces/opgen/generated/profiler/.logs/tracy_ops_times.csv
+2026-11-19 18:16:56.714 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /localdev/pmilojevic/workspaces/opgen/generated/profiler/.logs/tracy_ops_data.csv
+2026-11-19 18:16:56.715 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:430 - Importing ops logs
+/localdev/pmilojevic/workspaces/opgen/tools/tracy/process_ops_logs.py:535: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-11-19 18:16:59.134 | INFO     | tracy.perf_counter_analysis:get_device_op_data:420 - Getting device ops
+2026-11-19 18:16:59.134 | INFO     | tracy.process_ops_logs:append_device_data:995 - Appending device data
+2026-11-19 18:16:59.256 | INFO     | tracy.process_ops_logs:generate_reports:1323 - OPs' perf analysis is finished! Generating reports ...
+2026-11-19 18:16:59.257 | INFO     | tracy.process_ops_logs:generate_reports:1343 - Copying runtime artifacts
+2026-11-19 18:16:59.278 | INFO     | tracy.process_ops_logs:generate_reports:1352 - Generating OPs CSV
+2026-11-19 18:16:59.284 | INFO     | tracy.process_ops_logs:generate_reports:1814 - OPs csv generated at: /localdev/pmilojevic/workspaces/opgen/generated/profiler/reports/2026_11_19_18_16_59/ops_perf_results_2026_11_19_18_16_59.csv
+========================================
+SAFE_PYTEST: PROFILER CSV: /localdev/pmilojevic/workspaces/opgen/generated/profiler/reports/2026_11_19_18_16_59/ops_perf_results_2026_11_19_18_16_59.csv
+SAFE_PYTEST_RESULT: PASS
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 0m20s (20s total, device-lock-acquired -> exit)

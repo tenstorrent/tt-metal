@@ -38,6 +38,16 @@ void kernel_main() {
     constexpr auto bias_args = TensorAccessorArgs<9>();
     constexpr uint32_t chunk_tiles = round_tiles / num_chunks;
     constexpr uint32_t bias_flag_sem_id = flag_sem_id + weight_depth;
+#ifdef KWF_ROUND0_STREAM
+    // Round 0 streams (kw-fold, conv2d_3x3_kw_fold.hpp): chunk j < num_chunks - 1 has its own flag (after the bias
+    // flag), set VALID in the chain right after the multicast that completes chunks 0 .. j, so a receiver pushes and
+    // compute multiplies each landed kernel row of round 0 before the round is complete. Written once, never reused.
+    constexpr uint32_t early_flag_sem_id = bias_flag_sem_id + 1;
+    constexpr bool stream_round0 = true;
+#else
+    constexpr uint32_t early_flag_sem_id = 0;
+    constexpr bool stream_round0 = false;
+#endif
 
     const uint32_t num_rounds = get_arg_val<uint32_t>(0);
     const uint32_t num_receivers = get_arg_val<uint32_t>(1);
@@ -107,6 +117,13 @@ void kernel_main() {
             noc_async_write_multicast(
                 src, get_noc_multicast_addr(sx, sy, ex, ey, src), n * chunk_tiles * tile_bytes, num_receivers, true);
             c += n;
+            if (stream_round0 && r == 0 && c < num_chunks) {
+                // Chunks 0 .. c - 1 landed: their early flag (the VALID word of this slot's flag as the source).
+                const uint32_t early = get_semaphore(early_flag_sem_id + c - 1);
+                noc_semaphore_set_multicast(
+                    flag, get_noc_multicast_addr(sx, sy, ex, ey, early), num_receivers, landed(c));
+                continue;
+            }
             // Keep the chain open only into a chunk that already landed.
             if (c == num_chunks || !landed(c)) {
                 noc_semaphore_set_multicast(c == num_chunks ? flag : MEM_ZEROS_BASE, flag_mcast, num_receivers, false);

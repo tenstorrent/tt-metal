@@ -1726,6 +1726,121 @@ def _kwf_xchg_writer_args(g, work, m_index, ranges, device):
     return [top, bot, *up, *lo, fv, lve, up_lve, lo_fv]
 
 
+# kw-fold slab fill, planned on the host (kernels: the reader's and writer's kw-fold fill runtime args). The fill was
+# control-bound: the on-device plan (kwf_slab_plan on both DM RISCs), a TensorAccessor lookup per page run (~0.1-0.2 us
+# each) and a hand-over per 4-row batch cost the res2 reader ~2.2 us of a ~10.5 us call with every read stubbed. The host
+# knows every M-block's live slab rows and every owner shard's core, so each RISC gets its reads as (core, offset, slab
+# row, rows) pieces. On a split core the writer (NoC1) reads the higher shards' rows plus the last own-shard rows that
+# balance the two RISCs (center_head.1's 122 KB slab is bandwidth-bound: 9.51 -> 9.10 us with the balance). Each part is
+# pushed in groups of at most KWF_FILL_GROUP_ROWS slab tile-rows, the reader's first: compute waits per subblock for the
+# rows it reads, so a large slab (stem.conv2: 72 rows) still starts compute on its first groups; 4 or 16 rows measured
+# no better. Measured with round 0 streamed (below; LoFi bf8_b, unzoned, medians of 3 alternating): res2 10.23 -> 9.77,
+# center_head.1 9.60 -> 9.10, res3.x 10.26 -> 9.87, inst dec res3 fc0 -6.2%, sem dec res3 fc0 -3.6%, stem.conv2 -1.4%.
+KWF_FILL_GROUP_ROWS = 8
+KWF_FILL_MAX_GROUPS = 16  # kernels: per-block group array
+
+
+def _kwf_live_segments(g, t0, valid, xchg):
+    """[(first input tile-row, rows, slab row)] of one M-block, in slab order: tile_slab_plan's placement (compute's
+    kw_fold.hpp slab_bases mirrors it), but each band's segment holds only the input tile-rows the walk reads. The walk
+    covers tile-rows [t0 - ht, t_end + hb), the halo tile-row on a side only where it recomputes it (a block boundary
+    inside an image row, without the halo exchange), and reads row t + (kh - 1) R of each, so up to six rounded-out band
+    rows are dead: never filled, never read. Bands that overlap share slab rows; a segment contiguous in the input and
+    the slab with the previous one extends it."""
+    tpr = g.input_width // TILE
+    r = g.dilation * tpr
+    m_in = g.num_in_px // TILE
+    o_first = t0 * TILE
+    o_last = min((t0 + valid) * TILE, g.num_out_px) - 1
+    band_len = _block_band_len(g, o_first, o_last)
+    f = _block_first_tap(g, o_first)
+    t_end = t0 + valid
+    live_lo = t0 - (1 if not xchg and t0 % tpr != 0 else 0)
+    live_hi = t_end + (1 if not xchg and t_end % tpr != 0 and t_end < m_in else 0)
+    segs = []
+    next_free, read_hi, prev = 0, 0, None
+    for kh in range(3):
+        v_lo = f + kh * g.dilation * g.input_width
+        lo, hi = max(v_lo, 0), min(v_lo + band_len, g.num_in_px)
+        if lo >= hi:
+            continue
+        t_lo, t_hi = lo // TILE, _div_up(hi, TILE)
+        row = prev[2] + (t_lo - prev[0]) if prev is not None and t_lo < prev[1] else next_free
+        a = max(live_lo + (kh - 1) * r, t_lo, read_hi)
+        b = min(live_hi + (kh - 1) * r, t_hi)
+        if a < b:
+            slab = row + (a - t_lo)
+            if segs and segs[-1][0] + segs[-1][1] == a and segs[-1][2] + segs[-1][1] == slab:
+                segs[-1][1] += b - a
+            else:
+                segs.append([a, b - a, slab])
+            read_hi = b
+        next_free = row + (t_hi - t_lo)
+        prev = (t_lo, t_hi, row)
+    return segs
+
+
+def _kwf_fill_args(g, t0, valid, xchg, slab_rows, shard_rows, my_shard, split, shard_xy, row_bytes):
+    """One M-block's fill: (reader args, writer args). On a split core the writer reads a suffix of the slab: the
+    higher shards' rows (NoC1 is their short way back) and the last own-shard rows that balance the two RISCs' rows.
+    Each part is pushed in groups of at most KWF_FILL_GROUP_ROWS slab rows, the reader's first.
+    reader: [groups, writer groups] + per group [slab rows pushed] + (a reader group) [pieces] + its pieces;
+    writer: [groups] + per group [pieces] + its pieces. A piece is [x << 16 | y of the owner shard's core, byte offset in
+    the shard, slab row << 16 | tile-rows] (reader: slab row from the group's first row; writer: from the slab base)."""
+    pieces = []  # (slab row, rows, shard, row in shard), slab order
+    for a, n, s in _kwf_live_segments(g, t0, valid, xchg):
+        row = a
+        while row < a + n:
+            sh = row // shard_rows
+            end = min(a + n, (sh + 1) * shard_rows)
+            pieces.append((s + row - a, end - row, sh, row - sh * shard_rows))
+            row = end
+    mine = [p for p in pieces if not (split and p[2] > my_shard)]
+    theirs = [p for p in pieces if split and p[2] > my_shard]
+    if split and theirs:
+        # The last own-shard rows (a local copy on either RISC; in slab order right before the higher shards' rows, so
+        # the writer's part stays a suffix) move to the writer until the two parts' rows balance.
+        move = (sum(p[1] for p in mine) - sum(p[1] for p in theirs)) // 2
+        while move > 0 and mine and mine[-1][2] == my_shard:
+            p = mine.pop()
+            k = min(move, p[1])
+            if k < p[1]:
+                mine.append((p[0], p[1] - k, p[2], p[3]))
+            theirs.insert(0, (p[0] + p[1] - k, k, p[2], p[3] + p[1] - k))
+            move -= k
+    w_first = min((p[0] for p in theirs), default=slab_rows)
+    assert all(p[0] + p[1] <= w_first for p in mine), "the writer's rows are a slab suffix"
+
+    def enc(p, lo):
+        x, y = shard_xy[p[2]]
+        return [(x << 16) | y, p[3] * row_bytes, ((p[0] - lo) << 16) | p[1]]
+
+    def groups(part, lo, hi, base):
+        out = []  # (slab rows pushed, encoded pieces)
+        while lo < hi:
+            g_hi = min(hi, lo + KWF_FILL_GROUP_ROWS)
+            enc_g = []
+            for p in part:
+                a, b = max(p[0], lo), min(p[0] + p[1], g_hi)
+                if a < b:
+                    enc_g += enc((a, b - a, p[2], p[3] + a - p[0]), lo if base is None else base)
+            out.append((g_hi - lo, enc_g))
+            lo = g_hi
+        return out
+
+    rd = groups(mine, 0, w_first, None)
+    wr = groups(theirs, w_first, slab_rows, 0) if theirs else []
+    reader = [len(rd) + len(wr), len(wr)]
+    for rows, enc_g in rd:
+        reader += [rows, len(enc_g) // 3] + enc_g
+    reader += [rows for rows, _ in wr]
+    writer = [len(wr)]
+    for _, enc_g in wr:
+        writer += [len(enc_g) // 3] + enc_g
+    assert reader[0] <= KWF_FILL_MAX_GROUPS
+    return reader, writer
+
+
 def _kw_fold_cb_bytes(g, kb):
     """L1 of the kw-fold CBs (the descriptor's kwf CB list)."""
     slabs = 2 if kb.max_m_blocks_per_core > 1 else 1
@@ -1742,7 +1857,7 @@ def _kw_fold_cb_bytes(g, kb):
 # start at round 0; whole-K on the K-blocked LoFi cases measured flat (res3.x 14.94 -> 14.48, inst res2 fc1 28.09 ->
 # 28.14 us, medians of 3).
 KW_FOLD_KBLOCK_MIN_WEIGHT_TILES = 128
-# kw-fold's slab fill batch: tile-rows per reader push (compute waits for the rows each subblock reads).
+# kw-fold's slab rows are a whole number of these (the writer locates a block's slab in the ring in these units).
 KW_FOLD_FILL_BATCH_ROWS = 4
 # K-blocked kw-fold's weight slots where L1 permits at the chosen bm (2 otherwise). With two, a weight server sends round
 # r + 2 only once every receiver of its rectangle freed round r's slot, then multicasts it: on res3.x (3 rounds, ~2 us
@@ -2211,7 +2326,17 @@ def create_program_descriptor(
                 cbs[i] = _cb(
                     CB_WEIGHTS, weight_tensor.dtype, g.weight_tile_bytes, b.weight_depth * (bk + 1) * bn, cores
                 )
-    sem_ids += tuple(range(len(sem_ids), len(sem_ids) + 2 + b.weight_depth)) if weight_servers is not None else ()
+    # kw-fold under weight servers streams round 0 (KWF_ROUND0_STREAM; conv2d_3x3_kw_fold.hpp): one early flag per server
+    # chunk but the last, after the bias flag. res3.x's 52 KB round 0 lands over ~0.8 us of multicast; compute now
+    # multiplies the first subblocks' kernel rows as each lands (res3.x 10.16 -> 9.69 us over the host fill alone,
+    # unzoned, 2 alternating pairs). One-burst rounds (res2, center_head.1) land together: nothing to stream, no cost.
+    server_chunks = max(d for d in range(1, WEIGHT_SERVER_CHUNKS + 1) if (bk * bn) % d == 0)
+    round0_stream = kwf and weight_servers is not None and server_chunks > 1
+    sem_ids += (
+        tuple(range(len(sem_ids), len(sem_ids) + 2 + b.weight_depth + (server_chunks - 1 if round0_stream else 0)))
+        if weight_servers is not None
+        else ()
+    )
     # kw-fold halo exchange: rows-landed counters from the upper and from the lower neighbour.
     kwf_xchg = kwf and kw_fold_halo_exchange(b)
     kwf_xchg_sem_ids = (len(sem_ids), len(sem_ids) + 1) if kwf_xchg else (0, 0)
@@ -2520,6 +2645,12 @@ def create_program_descriptor(
         return [0, 0, 0]
 
     ring_owners = None if kwf else ring_owner_cols(g, b)
+    kwf_shard_xy = []
+    if kwf:
+        assert input_tensor.memory_config().is_sharded() and tile_fill_split and input_shard_rows > 0
+        for c in shard_cores(input_tensor):
+            v = device.worker_core_from_logical_core(c)
+            kwf_shard_xy.append((v.x, v.y))
     for core, m_index, col in work:
         m_tile_start, actual_m_tiles = m_ranges[m_index]
         num_m_blocks_this_core = m_blocks_per_index[m_index]
@@ -2530,6 +2661,23 @@ def create_program_descriptor(
         out_valid_tiles = max(0, min(ns, g.tensor_n_tiles - out_n_tile_start))
         # The split is a runtime flag: a per-core kernel split fragments the core ranges (a staggered sender per
         # column), and the launch of many-range kernels measured up to ~10 us of start skew.
+        kwf_reader_fill, kwf_writer_fill = [], []
+        if kwf:
+            for m in range(num_m_blocks_this_core):
+                rd, wr = _kwf_fill_args(
+                    g,
+                    m_tile_start + m * bm,
+                    min(bm, actual_m_tiles - m * bm),
+                    kwf_xchg,
+                    b.slab_tile_rows,
+                    input_shard_rows,
+                    m_index,
+                    split_of(core),
+                    kwf_shard_xy,
+                    g.c_in_tiles * g.in0_tile_bytes,
+                )
+                kwf_reader_fill += rd
+                kwf_writer_fill += wr
         reader_cores, reader_rt = reader_groups.setdefault(
             (_slice_channels(g, col), bool(split_cores)), ([], ttnn.RuntimeArgs())
         )
@@ -2550,6 +2698,7 @@ def create_program_descriptor(
             + row_peer_coords.get(m_index, [])
             + [int(split_of(core))]
             + slab_rows_per_block
+            + kwf_reader_fill
         )
         compute_args = [num_m_blocks_this_core, int(out_valid_tiles > 0), col]
         if g.k_split and b.nslice and not kwf:
@@ -2596,6 +2745,7 @@ def create_program_descriptor(
             + [int(split_of(core))]
             + server_rt_args(core)
             + (_kwf_xchg_writer_args(g, work, m_index, m_ranges, device) if kwf_xchg else [])
+            + kwf_writer_fill
         )
 
     # kw-fold kernels: the mode flag and its compile-time shape (defines keep the regular kernels' CT args intact).
@@ -2611,6 +2761,7 @@ def create_program_descriptor(
             ("KWF_N", str(g.tensor_n_tiles)),
             ("KWF_BIAS_BFP8", str(int(bias_tensor.dtype == ttnn.bfloat8_b))),
             ("KWF_FUSED_GW", str(kw_fold_fused_gw(g.tensor_n_tiles))),
+            ("KWF_FILL_MAX_GROUPS", str(KWF_FILL_MAX_GROUPS)),
         ]
         if kwf_xchg:
             _kwf_dm_defines += [
@@ -2725,6 +2876,7 @@ def create_program_descriptor(
     # lands, so the column weight stream starts at kernel start (with the spare groups that stream paces the walk:
     # res4.x 12022 -> 11607 ns; without them flat to -1.7%).
     _async_bias_defines = [("NSLICE_ASYNC_BIAS", "1")] if g.k_split and b.nslice and has_bias and not kwf else []
+    _round0_defines = [("KWF_ROUND0_STREAM", str(server_chunks))] if round0_stream else []
     # N-slice walk with one weight round per ND shard (conv2d_3x3._block_weight_memory_config): the writer reads a
     # round as one run. Weights placed any other way (DRAM interleaved) keep the one-tile reads.
     _wspec = weight_tensor.memory_config().nd_shard_spec
@@ -2754,7 +2906,12 @@ def create_program_descriptor(
             core_ranges=_core_range_set(writer_cores),
             compile_time_args=writer_ct_args_for(*slice_channels),
             runtime_args=writer_rt,
-            defines=_kwf_dm_defines + _ring_owner_defines + _sd_dm_defines + _async_bias_defines + _page_run_defines,
+            defines=_kwf_dm_defines
+            + _ring_owner_defines
+            + _sd_dm_defines
+            + _async_bias_defines
+            + _page_run_defines
+            + _round0_defines,
             config=ttnn.WriterConfigDescriptor(),
         )
         for slice_channels, (writer_cores, writer_rt) in writer_groups.items()
@@ -2852,6 +3009,7 @@ def create_program_descriptor(
                     else ttnn.TensorAccessorArgs().get_compile_time_args()
                 ),
                 runtime_args=server_writer_rt,
+                defines=_round0_defines,
                 config=ttnn.WriterConfigDescriptor(),
             ),
         ]

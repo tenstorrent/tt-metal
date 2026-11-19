@@ -1,0 +1,15 @@
+res2 base 0
+res2 copy 0
+res2 nofill 0
+res2 nowt 0
+res2 nofill_nowt 0
+res3x base 0
+res3x copy 0
+res3x nofill 0
+res3x nowt 0
+res3x nofill_nowt 0
+ch1 base 0
+ch1 copy 0
+ch1 nofill 0
+ch1 nowt 0
+ch1 nofill_nowt 0

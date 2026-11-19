@@ -43,6 +43,11 @@
 // the K-blocked tap-direct walk they ran before): 135.9 -> 100.4 and 108.8 -> 89.7 us; all planes resident measured the
 // same (89.4 us) at 215 KB more L1.
 //
+// Round 0 streams: its in1 tiles are (kh, c, n), so each kernel row's block of Ct x RW tiles is one of the weight
+// server's three chunks. The writer pushes each chunk as the server's early flag reports it landed, and the first
+// subblocks wait for kernel row kh's chunk right before its matmuls, so compute multiplies kernel rows 0 and 1 while
+// the rest of round 0 is still in the multicast (res3.x: 52 KB over ~0.8 us). Every later wait counts whole rounds.
+//
 // Halo exchange (xchg: every core runs one M-block). Where a core boundary lies inside an image row, the d boundary
 // rows on each side miss one kw partial that lives in the neighbour's tile-row: the lower core's first d rows need
 // Q_0 of the upper core's last tile-row, the upper core's last d rows need Q_2 of the lower core's first tile-row.
@@ -222,8 +227,8 @@ inline void unpack_tilize_bias_at(uint32_t addr, uint32_t col_tile, uint32_t add
 }
 #endif
 
-// Slab row of input tile-row r read for kernel row kh is r + base[kh]: the placement of the reader's kwf_slab_plan
-// (tile_slab_plan's, conv2d_3x3_slab_dataflow.hpp, dataflow-only; the fill writes only the rows this walk reads) for
+// Slab row of input tile-row r read for kernel row kh is r + base[kh]: the placement of the host-planned fill
+// (descriptor _kwf_live_segments: tile_slab_plan's placement; the fill writes only the rows this walk reads) for
 // output pixels [o_first, o_end), stride 1, padding == dilation, band_last_tap 2. Bands that overlap or touch share
 // consecutive rows; a band past a gap (a short ragged last core) is packed right after the previous one.
 template <int32_t W, int32_t num_in_px, int32_t d>
@@ -310,6 +315,10 @@ ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_block
 
     compute_kernel_hw_startup(cb_w, cb_in, cb_acc);
     uint32_t halo_seen = 0;  // exchange tokens waited for (held fronted until the n-group's final pass ends)
+    // Round 0 streams (file comment): its kernel-row blocks of KH_TILES in1 tiles are waited for one at a time, inside
+    // the first subblocks, as the writer pushes each landed chunk. w_landed: tiles of round 0 waited for so far.
+    constexpr uint32_t KH_TILES = Ct * RW;
+    uint32_t w_landed = 0;
     [[maybe_unused]] uint32_t acc_base = 0;
     PACK((acc_base = get_local_cb_interface(get_output_id(cb_acc)).fifo_wr_ptr << 4));
     // M-blocks of bm tile-rows (one ACC: a block's Q_1 overwrite packs follow the previous block's final pass on the
@@ -379,6 +388,12 @@ ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_block
                         const uint32_t in0 =
                             static_cast<uint32_t>(static_cast<int32_t>(t_first + a + kh * R - R) + base[kh]) * Ct;
                         const uint32_t in1 = w0 + kh * Ct * RW;
+                        if (w_landed < 3 * KH_TILES && (kh + 1) * KH_TILES > w_landed) {
+                            // Round 0, streamed: this kernel row's chunk (step 0 of the first n-group: w0 == 0).
+                            MaybeDeviceZoneScope("compute_kwf_chunk_wait");
+                            w_landed = (kh + 1) * KH_TILES;
+                            w.wait_front(w_landed);
+                        }
                         for (uint32_t c = 0; c < Ct; ++c) {
                             matmul_block(cb_in, cb_w, in0 + c, in1 + c * RW, a * sbw, false, sbw, b - a, Ct);
                         }
@@ -539,7 +554,10 @@ ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_block
                     // neighbour core supplies those rows (exchange).
                     const uint32_t i_lo = kw == 0 && halo_top ? 0 : 1;
                     const uint32_t i_end = valid + (kw == 2 && halo_bot ? 2 : 1);
-                    {
+                    if (w_landed < 3 * KH_TILES) {
+                        // Round 0 (the first n-group's Q_1 of the first M-block): streamed per kernel row inside the
+                        // subblocks below.
+                    } else {
                         // K-blocked: this sub-round at the front (the previous one was popped), so its in1 tiles start
                         // at index 0. Whole-K: rounds 0 .. step.
                         MaybeDeviceZoneScope("compute_kwf_weight_wait");
@@ -586,6 +604,11 @@ ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_block
                             halo_out.push_back(1);
                             push = false;
                         }
+                    }
+                    if (w_landed < 3 * KH_TILES) {
+                        // Round 0 is streamed only through its first subblocks; every later wait counts whole rounds.
+                        w_landed = 3 * KH_TILES;
+                        w.wait_front(w_landed);
                     }
                     if constexpr (kblocked) {
                         w.pop_front(ROUND_TILES);
