@@ -556,14 +556,14 @@ FORCE_INLINE bool credit_completions(
                 // status read after the commands issued so far. While this pass's writes are still being issued,
                 // prove an older slot if one waits (its commands went out a pass or more ago, on its own
                 // transaction ID); otherwise leave the credit to a later pass.
-                const bool local_write_ready = noc_cmd_buf_ready(LOCAL_NOC, CommandBuffers::local_writes);
+                const bool local_write_ready = noc_cmd_buf_ready(LOCAL_DELIVERY_NOC, CommandBuffers::local_writes);
                 const bool forward_ready =
                     noc_cmd_buf_ready(tt::tt_fabric::edm_to_downstream_noc, CommandBuffers::forward_data[VC]);
                 if (!(local_write_ready & forward_ready) && waiting <= 1) {
                     return false;
                 }
             } else {
-                while (!noc_cmd_buf_ready(LOCAL_NOC, CommandBuffers::local_writes));
+                while (!noc_cmd_buf_ready(LOCAL_DELIVERY_NOC, CommandBuffers::local_writes));
             }
         }
     }

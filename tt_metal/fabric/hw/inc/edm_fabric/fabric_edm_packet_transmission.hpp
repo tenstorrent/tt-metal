@@ -186,7 +186,7 @@ FORCE_INLINE
                 transaction_id,
                 tt::tt_fabric::local_chip_data_cmd_buf,
                 tt::tt_fabric::edm_to_local_chip_noc,
-                tt::tt_fabric::forward_and_local_write_noc_vc);
+                tt::tt_fabric::local_write_noc_vc);
         }
         return;
     }
@@ -205,7 +205,7 @@ FORCE_INLINE
                 transaction_id,
                 tt::tt_fabric::local_chip_data_cmd_buf,
                 tt::tt_fabric::edm_to_local_chip_noc,
-                tt::tt_fabric::forward_and_local_write_noc_vc);
+                tt::tt_fabric::local_write_noc_vc);
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC: {
@@ -215,10 +215,7 @@ FORCE_INLINE
                 flush_write_to_noc_pipeline(rx_channel_id);
             }
             noc_semaphore_inc<true>(
-                dest_address,
-                increment,
-                tt::tt_fabric::edm_to_local_chip_noc,
-                tt::tt_fabric::forward_and_local_write_noc_vc);
+                dest_address, increment, tt::tt_fabric::edm_to_local_chip_noc, tt::tt_fabric::local_write_noc_vc);
 
         } break;
 
@@ -226,11 +223,7 @@ FORCE_INLINE
             const auto dest_address = header.command_fields.unicast_inline_write.noc_address;
             const auto value = header.command_fields.unicast_inline_write.value;
             noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(
-                dest_address,
-                value,
-                0xF,
-                tt::tt_fabric::edm_to_local_chip_noc,
-                tt::tt_fabric::forward_and_local_write_noc_vc);
+                dest_address, value, 0xF, tt::tt_fabric::edm_to_local_chip_noc, tt::tt_fabric::local_write_noc_vc);
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC: {
@@ -242,7 +235,7 @@ FORCE_INLINE
                 transaction_id,
                 tt::tt_fabric::local_chip_data_cmd_buf,
                 tt::tt_fabric::edm_to_local_chip_noc,
-                tt::tt_fabric::forward_and_local_write_noc_vc);
+                tt::tt_fabric::local_write_noc_vc);
 
             const uint64_t semaphore_dest_address = header.command_fields.unicast_seminc_fused.semaphore_noc_address;
             const auto increment = header.command_fields.unicast_seminc_fused.val;
@@ -253,7 +246,7 @@ FORCE_INLINE
                 semaphore_dest_address,
                 increment,
                 tt::tt_fabric::edm_to_local_chip_noc,
-                tt::tt_fabric::forward_and_local_write_noc_vc);
+                tt::tt_fabric::local_write_noc_vc);
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE: {
@@ -280,7 +273,7 @@ FORCE_INLINE
                 transaction_id,
                 tt::tt_fabric::local_chip_data_cmd_buf,
                 tt::tt_fabric::edm_to_local_chip_noc,
-                tt::tt_fabric::forward_and_local_write_noc_vc);
+                tt::tt_fabric::local_write_noc_vc);
             offset += chunk_size;
             shift_to_next_chunk(packet_encoding);
 
@@ -294,7 +287,7 @@ FORCE_INLINE
                     transaction_id,
                     tt::tt_fabric::local_chip_data_cmd_buf,
                     tt::tt_fabric::edm_to_local_chip_noc,
-                    tt::tt_fabric::forward_and_local_write_noc_vc);
+                    tt::tt_fabric::local_write_noc_vc);
                 offset += chunk_size;
                 shift_to_next_chunk(packet_encoding);
 
@@ -308,7 +301,7 @@ FORCE_INLINE
                         transaction_id,
                         tt::tt_fabric::local_chip_data_cmd_buf,
                         tt::tt_fabric::edm_to_local_chip_noc,
-                        tt::tt_fabric::forward_and_local_write_noc_vc);
+                        tt::tt_fabric::local_write_noc_vc);
                     offset += chunk_size;
                     shift_to_next_chunk(packet_encoding);
                 }
@@ -327,7 +320,7 @@ FORCE_INLINE
                     transaction_id,
                     tt::tt_fabric::local_chip_data_cmd_buf,
                     tt::tt_fabric::edm_to_local_chip_noc,
-                    tt::tt_fabric::forward_and_local_write_noc_vc);
+                    tt::tt_fabric::local_write_noc_vc);
             } else if (chunk_encoding != ChunkEncoding::CHUNK_ENCODING_NOP) {
                 if (chunk_encoding == ChunkEncoding::CHUNK_ENCODING_SEMINC_FLUSH) {
                     flush_write_to_noc_pipeline(rx_channel_id);
@@ -338,7 +331,7 @@ FORCE_INLINE
                     final_destination_noc_address,
                     scatter.chunk_size[last_chunk_index],
                     tt::tt_fabric::edm_to_local_chip_noc,
-                    tt::tt_fabric::forward_and_local_write_noc_vc);
+                    tt::tt_fabric::local_write_noc_vc);
             } else {
                 // Every scatter write packet contains a chunk_count, and the unicast_writes above are only called for
                 // chunk_count-1 times. Therefore, we should never get here (seeing a NOP).

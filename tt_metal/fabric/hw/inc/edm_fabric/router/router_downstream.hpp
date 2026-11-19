@@ -216,7 +216,7 @@ struct FullPresetForwards {
     __attribute__((noinline)) static void preset(const DownstreamArgs& args) {
         constexpr size_t entry = downstream_entry(lowest_bit(live_downstreams<VC>()));
         if ((args.entries >> entry) & 1u) {
-            constexpr uint8_t noc_vc = tt::tt_fabric::forward_and_local_write_noc_vc;
+            constexpr uint8_t noc_vc = tt::tt_fabric::forward_noc_vc;
             const uint32_t dense = popcount(args.entries & ((1u << entry) - 1));  // entries below it with a downstream
             const uint32_t x = dense_noc_x(args, dense);
             const uint32_t y = dense_noc_y(args, dense);
@@ -335,7 +335,7 @@ struct PartialPresetForwards {
 
 private:
     __attribute__((noinline)) static void preset_cmd_bufs() {
-        constexpr uint8_t noc_vc = tt::tt_fabric::forward_and_local_write_noc_vc;
+        constexpr uint8_t noc_vc = tt::tt_fabric::forward_noc_vc;
         noc_async_write_one_packet_with_trid_set_state</*posted=*/true>(0, Traits::data_cmd_buf, Traits::noc, noc_vc);
         noc_inline_dw_write_set_state</*posted=*/true, /*set_val=*/true>(
             0,
