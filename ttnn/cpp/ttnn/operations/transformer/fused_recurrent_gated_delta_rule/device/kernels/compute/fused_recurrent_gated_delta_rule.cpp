@@ -64,5 +64,11 @@ void kernel_main() {
         // CB: the next iteration reads it as S_cur. The ring (S, then s2 / s3 alternating) is the CB header's.
         gdn_decode::decode_token<Kt, Vt, /*FuseReadVector=*/true>(
             tcb, cb::state_cur(t), cb::state_next(t), per_token || last);
+        if (last) {
+            constexpr uint32_t kv = Kt * Vt;
+            CircularBuffer next_state_cb(cb::state_next(t).utd);
+            next_state_cb.wait_front(kv);
+            next_state_cb.pop_front(kv);
+        }
     }
 }
