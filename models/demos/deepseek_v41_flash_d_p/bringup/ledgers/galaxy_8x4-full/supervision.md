@@ -356,7 +356,7 @@
 - Resident runner, first request -> first chunk: estimate ~10:00 UTC (CPU pieces ~2-3 h, then the device demo);
   expected ~3-4 min for the cold first request (load 0-20 + compile), < 1 min for each later one.
 
-## 2026-11-19 07:25 UTC: owner items
+## 2026-11-19 06:58 UTC: owner items
 - X.9 accepted on its 06:47 check, no re-run (4ac9d10bf0b; metrics merged from the unit stamps). The orchestrator's
   pointless A/B on it killed mid-load.
 - Load-once rule: given to the runner agent (it edits core/gate.py: refuse a gate needing > 1 load, at plan time and
@@ -364,7 +364,7 @@
 - P.84 reopened as STATIC agentic replicas (owner): agentic text = 7 sessions (65k-218k tokens each); census of 14
   positions x 4 chunks (2 a session) running in ONE process; offline split 4 pick / 3 held-out sessions next.
 
-## 2026-11-19 07:45 UTC: P.84 static agentic replicas: offline passes, device step queued
+## 2026-11-19 07:10 UTC: P.84 static agentic replicas: offline passes, device step queued
 - Census: 14 agentic positions x 4 chunks (2 a session, 7 sessions) in ONE process: 527 s (one load 212 s, then ~22 s
   a position; as separate processes ~74 min).
 - Offline (results/P.84_offline.*; 32 replicas a layer = one extra expert a chip, chosen on code + 4 agentic
@@ -373,3 +373,5 @@
   17.9 MiB a layer a chip = 0.35 GiB a chip (layers 0-19), 0.70 GiB (40).
 - P.84 rewritten to the owner's static design (table in results/P.84_replicas.json, reuse the replica branch's
   code, walls on agentic held-out + prose, one load). P.84 and P.81 both ready; they run through the resident runner.
+- 07:12 UTC RAM unaccounted after the P.84 census process: 162.7 GiB of 566 (135.2 after P.80; +27 GiB). No device
+  process running; the resident runner is being built (CPU).
