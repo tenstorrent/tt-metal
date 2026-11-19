@@ -54,6 +54,7 @@ from helpers.test_variant_parameters import (
     MATH_FIDELITY,
     MATH_OP,
     NUM_FACES,
+    OVERLAPPED_WORKLOAD,
     SFPU_IMPL,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
@@ -303,6 +304,7 @@ def test_sfpu_exp_parallel_matmul_quasar(
             SFPU_IMPL(sfpu_impl),
             APPROX_MODE(approx_mode),
             MATH_OP(mathop=MathOperation.Exp),
+            OVERLAPPED_WORKLOAD(),
         ],
         "runtimes": [
             CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),

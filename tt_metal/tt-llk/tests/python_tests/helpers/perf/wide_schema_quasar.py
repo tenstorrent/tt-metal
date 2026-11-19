@@ -108,6 +108,7 @@ DB_SCHEMA = [
     Column("output_num_blocks", "int64", True, "configuration"),
     Column("output_num_tiles_in_block", "int64", True, "configuration"),
     Column("output_tile_cnt", "int64", True, "configuration"),
+    Column("overlapped_workload", "bool", True, "configuration"),
     Column("pool_type", "string", True, "configuration"),
     Column("r_dimm", "int64", True, "configuration"),
     Column("quasar_variant", "string", True, "configuration"),

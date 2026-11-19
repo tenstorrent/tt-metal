@@ -35,6 +35,7 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
+    OVERLAPPED_WORKLOAD,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
@@ -229,6 +230,7 @@ def test_matmul_int4_dequant_quasar(
             ENABLE_DIRECT_INDEXING(False),
             DEST_SYNC(DEST_SYNC_MODE),
             UNPACK_TRANS_FACES(Transpose.No),
+            OVERLAPPED_WORKLOAD(),
         ],
         "runtimes": [
             CRK_TILE_DIMM(ct_dim, rt_dim, kt_dim),

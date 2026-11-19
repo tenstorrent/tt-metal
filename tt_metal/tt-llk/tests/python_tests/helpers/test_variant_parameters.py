@@ -310,6 +310,20 @@ class SFPU_CLOBBER_LREGS(TemplateParameter):
 
 
 @dataclass
+class OVERLAPPED_WORKLOAD(TemplateParameter):
+    """Marks a 4-TRISC kernel whose FPU and SFPU workloads run in parallel, as a perf CSV column.
+
+    In these kernels ``L1_TO_L1`` is the overlap of both workloads, not the cost of either, so
+    its numbers do not compare with a standalone test's ``L1_TO_L1``. It emits no code.
+    """
+
+    overlapped_workload: bool = True
+
+    def convert_to_cpp(self) -> str:
+        return ""
+
+
+@dataclass
 class QUASAR_VARIANT(TemplateParameter):
     """The Quasar part variant this build targets, recorded as a perf CSV column.
 
