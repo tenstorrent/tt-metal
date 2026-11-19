@@ -417,7 +417,7 @@
 
 <span class="n">KernelHandle</span><span class="w"> </span><span class="n">dram_copy_kernel_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateKernel</span><span class="p">(</span>
 <span class="w">    </span><span class="n">program</span><span class="p">,</span>
-<span class="w">    </span><span class="s">"loopback/kernels/loopback_dram_copy.cpp"</span><span class="p">,</span>
+<span class="w">    </span><span class="n">OVERRIDE_KERNEL_PREFIX</span><span class="w"> </span><span class="s">"loopback/kernels/loopback_dram_copy.cpp"</span><span class="p">,</span>
 <span class="w">    </span><span class="n">core</span><span class="p">,</span>
 <span class="w">    </span><span class="n">DataMovementConfig</span><span class="p">{</span>
 <span class="w">        </span><span class="p">.</span><span class="n">processor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DataMovementProcessor</span><span class="o">::</span><span class="n">RISCV_0</span><span class="p">,</span>
@@ -430,11 +430,15 @@
 <p class="admonition-title">Note</p>
 <p>The path to the kernel source file can either be</p>
 <ul class="simple">
-<li><p>Relative to the <code class="docutils literal notranslate"><span class="pre">TT_METAL_KERNEL_PATH</span></code> environment variable (or <code class="docutils literal notranslate"><span class="pre">TT_METAL_HOME</span></code> if the former is not set), or</p></li>
 <li><p>Absolute path to the file, or</p></li>
-<li><p>Relative to the current working directory</p></li>
+<li><p>Relative to the current working directory, or</p></li>
+<li><p>Relative to the <code class="docutils literal notranslate"><span class="pre">TT_METAL_KERNEL_PATH</span></code> environment variable (if set), or</p></li>
+<li><p>Relative to the system kernel directory (<code class="docutils literal notranslate"><span class="pre">/usr/share/tenstorrent/kernels/</span></code>), or</p></li>
+<li><p>Relative to the runtime root</p></li>
 </ul>
-<p>Metalium will search for the kernel source file in order of the above. In this case the kernel will be found relative to <code class="docutils literal notranslate"><span class="pre">TT_METAL_HOME</span></code>. If the file is not found, an error will be thrown.</p>
+<p>Metalium will search for the kernel source file in order of the above. If the file is not found, an error will be thrown.</p>
+<p>The runtime root is <code class="docutils literal notranslate"><span class="pre">TT_METAL_RUNTIME_ROOT</span></code> if set, otherwise the root passed to <code class="docutils literal notranslate"><span class="pre">SetRootDir</span></code>, otherwise the package install root if it exists. Only when none of these is available does Metalium fall back to the current working directory, and only if that directory contains <code class="docutils literal notranslate"><span class="pre">tt_metal/</span></code>.</p>
+<p>The programming examples are built with <code class="docutils literal notranslate"><span class="pre">OVERRIDE_KERNEL_PREFIX</span></code> defined as <code class="docutils literal notranslate"><span class="pre">tt_metal/programming_examples/</span></code>, so this example passes <code class="docutils literal notranslate"><span class="pre">tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp</span></code>. When the example is run from the repository root, that path is found relative to the current working directory.</p>
 </div>
 <p>The kernel itself is simple. It takes the buffer addresses and the number of tiles to copy. It copies data from the input DRAM buffer to the L1 buffer and then back out to the output DRAM buffer. You might notice that the kernel is using <code class="docutils literal notranslate"><span class="pre">uint32_t</span></code> instead of pointers for addresses. This is intended design as the DRAM is not directly addressable by the kernels. Instead, access requests are sent to the NoC (Network on Chip) and be brought to the L1 before the kernel can access it in a meaningful way. However, letting the RISC-V core directly access the L1 is not the most efficient way to move data around. Thus the L1 address is also an integer.</p>
 <p>The <code class="docutils literal notranslate"><span class="pre">TensorAccessor</span></code> object handles bank addressing and page size automatically, simplifying interleaved or sharded buffer access. Data transfers are asynchronous, allowing the kernel to issue multiple requests while transfers are in progress. This improves performance by utilizing on-core resources more efficiently. In this example, we use <code class="docutils literal notranslate"><span class="pre">noc_async_read_barrier()</span></code> and <code class="docutils literal notranslate"><span class="pre">noc_async_write_barrier()</span></code> after each operation to ensure data integrity before proceeding to the next loop iteration.</p>

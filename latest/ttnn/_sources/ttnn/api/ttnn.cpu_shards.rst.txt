@@ -1,0 +1,8 @@
+﻿ttnn.cpu\_shards
+================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.cpu_shards:
+
+.. autodata:: ttnn.cpu_shards

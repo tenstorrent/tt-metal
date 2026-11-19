@@ -433,6 +433,8 @@ each dimension <code class="docutils literal notranslate"><span class="pre">i</s
 <li><p>A BLOCK_SHARDED input must hold one matrix: every dimension before the last two has size 1</p></li>
 <li><p>A WIDTH_SHARDED input keeps every dimension before the last two. With an interleaved output it must hold one matrix, and its padded width minus the output width must be less than its shard width. With a WIDTH_SHARDED output, the output width must equal the input’s padded width or need every input shard: <code class="docutils literal notranslate"><span class="pre">ceil(output_width</span> <span class="pre">/</span> <span class="pre">shard_width)</span></code> equals the number of input cores</p></li>
 <li><p>A HEIGHT_SHARDED output from a HEIGHT_SHARDED input that holds more than one matrix keeps every row</p></li>
+<li><p>ND sharded: L1 and DRAM input with ROUND_ROBIN_1D shard distribution (the default), with an interleaved or sharded output; an ND sharded output needs an ND sharded input</p></li>
+<li><p>A sharded output from an ND sharded input needs a shard width, in bytes, that is a multiple of the output buffer’s alignment</p></li>
 </ul>
 </dd>
 </dl>

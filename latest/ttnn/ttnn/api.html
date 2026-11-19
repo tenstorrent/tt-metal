@@ -264,6 +264,7 @@
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.copy_device_to_host_tensor.html">ttnn.copy_device_to_host_tensor</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.copy_host_to_device_tensor.html">ttnn.copy_host_to_device_tensor</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.copy_host_to_device_tensor_partial.html">ttnn.copy_host_to_device_tensor_partial</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.cpu_shards.html">ttnn.cpu_shards</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.deallocate.html">ttnn.deallocate</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.dump_tensor.html">ttnn.dump_tensor</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.from_device.html">ttnn.from_device</a></li>
@@ -1009,6 +1010,10 @@ use <code class="docutils literal notranslate"><span class="pre">align_shape_to_
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.copy_host_to_device_tensor_partial.html#ttnn.copy_host_to_device_tensor_partial" title="ttnn.copy_host_to_device_tensor_partial"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.copy_host_to_device_tensor_partial</span></code></a></p>
 <p class="tt-api-card-desc">Copies host tensor data into a pre-allocated device tensor, writing only the shards mapped to cores in <code class="xref py py-attr docutils literal notranslate"><span class="pre">logical_core_filter</span></code>.</p>
+</div>
+<div class="tt-api-card docutils container">
+<p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.cpu_shards.html#ttnn.cpu_shards" title="ttnn.cpu_shards"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.cpu_shards</span></code></a></p>
+<p class="tt-api-card-desc">ttnn._ttnn.tensor.Tensor, coords: collections.abc.Sequence[ttnn._ttnn.multi_device.MeshCoordinate], blocking: bool = True, cq_id: ttnn._ttnn.types.QueueId | None = None) -&gt; list[ttnn._ttnn.tensor.Tensor]</p>
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.deallocate.html#ttnn.deallocate" title="ttnn.deallocate"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.deallocate</span></code></a></p>
