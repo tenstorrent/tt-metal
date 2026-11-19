@@ -135,13 +135,14 @@ FORCE_INLINE void math_segment(CircularBuffer& input, uint32_t seg_chunks, uint3
 // and the last segment needs when the row's survivor leaves this core. `keep_fused` leaves the survivor fused for a
 // fused cross-core join; only a single-segment row may ask for it.
 template <uint32_t K>
-FORCE_INLINE void sfpu_segment(uint32_t seg_chunks, bool later, uint32_t block, bool mirror, bool keep_fused) {
+FORCE_INLINE void sfpu_segment(
+    uint32_t seg_chunks, bool later, uint32_t block, bool mirror, bool keep_fused, uint32_t index_base) {
     constexpr uint32_t accumulator_slot = 0;
-    auto epilogue = [block, later, keep_fused] {
+    auto epilogue = [block, later, keep_fused, index_base] {
         if (keep_fused) {
             return;
         }
-        topk_xl_split_indices<K>(block * (max_fused_chunks * K));
+        topk_xl_split_indices<K>(index_base + block * (max_fused_chunks * K));
         if (later) {
             topk_large_indices_move_segment_result_at_split<K>();
         }
@@ -470,7 +471,8 @@ FORCE_INLINE void reduce_split_segmented_row(
     uint32_t tail_elements,
     bool final_ascending,
     bool emit_indices,
-    bool keep_fused) {
+    bool keep_fused,
+    uint32_t index_base) {
     static_assert(K == 2048, "the segmented body is K = 2048's");
     constexpr uint32_t accumulator_tiles = 2 * tiles_per_sequence<K>;
     constexpr uint32_t accumulator_slot = 0;
@@ -508,7 +510,7 @@ FORCE_INLINE void reduce_split_segmented_row(
             }
             feed_segment<K>(input, seg_chunks, seg_tail);
             math_segment<K>(input, seg_chunks, seg_tail);
-            sfpu_segment<K>(seg_chunks, later, block, mirror, keep_fused);
+            sfpu_segment<K>(seg_chunks, later, block, mirror, keep_fused, index_base);
         }
 
         if (later) {
@@ -748,6 +750,9 @@ void kernel_main() {
     // A split-row half that starts on a 32-chunk block runs on the split body like a whole row, as the last item of
     // the loop below, so the body has one call site. Its survivor stays in DEST for the split-row path.
     bool half_done = false;
+    // A two-level split row's halves are sorted as 16-chunk rows from chunk 0, their indices offset to the row's
+    // positions, and join unfused.
+    bool shifted_half = false;
     if constexpr (split_whole_rows) {
 #ifdef TOPK_TWO_LEVEL
         // A two-level row is two items on this loop's split body, both read from input_cb: its block maxima (stage
@@ -787,12 +792,14 @@ void kernel_main() {
                         if constexpr (!segmented_split) {
                             break;
                         }
-                        // The pair's first core sorts the first half of the split row's 32 candidate chunks here: it
-                        // starts on chunk 0 and is at least min_split_chunks long, as half_in_split requires.
+                        // Each core of the pair sorts its half of the split row's 32 candidate chunks here, stamped
+                        // from chunk 0 (the split body decodes stamps per 32-chunk block) and offset to the row's
+                        // positions when the indices are separated. The halves join unfused.
                         static_assert(topk_two_level::candidate_keys / K / 2 >= min_split_chunks);
-                        if (!has_split || second_half) {
+                        if (!has_split) {
                             break;
                         }
+                        shifted_half = true;
                         num_chunks = topk_two_level::candidate_keys / K;
                         tail_elements = K;
                         const auto half = half_bounds({num_chunks, tail_elements}, K, second_half);
@@ -810,7 +817,7 @@ void kernel_main() {
                     continue;
                 }
                 // Shadow the row bounds with this item's: the call below is the single-level loop's.
-                const bool fused_join = num_chunks <= max_fused_chunks;
+                const bool fused_join = !shifted_half && num_chunks <= max_fused_chunks;
                 const uint32_t num_chunks =
                     half_item ? split_num_chunks
                               : (!two_level_rows ? whole_row_chunks
@@ -841,12 +848,13 @@ void kernel_main() {
                         input,
                         acc_cb,
                         indices_cb,
-                        half_item ? split_first_chunk : 0,
+                        half_item && !shifted_half ? split_first_chunk : 0,
                         num_chunks,
                         tail_elements,
                         half_item && sends_survivor,
                         !half_item,
-                        half_item && fused_join);
+                        half_item && fused_join,
+                        shifted_half ? split_first_chunk * K : 0);
                     if (half_item) {
                         half_done = true;
                         break;
@@ -928,7 +936,7 @@ void kernel_main() {
         const bool row_sends = split_row && sends_survivor;
         // A split row's halves are joined fused whenever its stamps are unique, i.e. the whole row is at most 32
         // chunks; both partners derive this from the same whole-row chunk count, so they agree on the format.
-        const bool fused_join = split_row && num_chunks <= max_fused_chunks;
+        const bool fused_join = split_row && !shifted_half && num_chunks <= max_fused_chunks;
 
         // A half long enough, and starting on a 32-chunk block so the split body's segment-local stamps decode, ran
         // across MATH and PACK as the split-body loop's last item, which left its survivor in tile 0 with DEST held.
