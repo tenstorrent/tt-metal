@@ -15,7 +15,6 @@ groups must not interleave: the TP tests come first, the FSDP test last.
 """
 
 import glob
-import json
 import os
 import random
 import secrets
@@ -27,7 +26,7 @@ import numpy as np
 import pytest
 import torch
 import ttnn
-from dcp_oracle import Loader, advance_generators
+from dcp_oracle import MISREAD_RNG, WRONG_LENGTH_RNG, Loader, advance_generators, damage_stored_rng, host_draws
 from dcp_shards import NATIVE, assert_same_shards, assert_some_differ, model_shards, optimizer_shards, tensor_shards
 from tp_block import TPBlock, fresh_tp, make_adamw, train_step
 
@@ -512,19 +511,7 @@ def _adamw_stochastic_rounding(params):
     return ttml.optimizers.AdamW(params, cfg)
 
 
-def _set_ttml_position(own: dict, value: str) -> None:
-    tokens = own["ttml"].split()
-    tokens[-1] = value
-    own["ttml"] = " ".join(tokens)
-
-
-DAMAGED_RNG = [
-    pytest.param(lambda own: _set_ttml_position(own, "625"), id="ttml_position_past_624"),
-    pytest.param(lambda own: own["python"].update(gauss_next="corrupt"), id="python_gauss_next_text"),
-]
-
-
-@pytest.mark.parametrize("damage", DAMAGED_RNG)
+@pytest.mark.parametrize("damage", ["ttml_position_past_624", "python_gauss_next_text"])
 def test_damaged_rng_state_changes_nothing(tp_mesh, tmp_path, damage, expect_error):
     """A load asking for damaged RNG state changes nothing, and one that does not ask for RNG state goes ahead."""
     ctx = ttml.autograd.AutoContext.get_instance()
@@ -532,12 +519,7 @@ def test_damaged_rng_state_changes_nothing(tp_mesh, tmp_path, damage, expect_err
     train_step(model, opt, DIM)
     path = str(tmp_path / "ckpt")
     dcp.save(path, model=model)
-    header_path = os.path.join(path, "header.json")
-    with open(header_path) as f:
-        header = json.load(f)
-    damage(header["train_state"]["rng"]["ranks"]["0"])
-    with open(header_path, "w") as f:
-        json.dump(header, f)
+    damage_stored_rng(path, MISREAD_RNG[damage])
 
     model2, params2, _ = fresh_tp(DIM)
     before, generator = model_shards(params2), ctx.get_generator_state()
@@ -587,9 +569,7 @@ def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path, expect_er
         "lrs": sched.get_last_lrs(),
         "loader": loader.get_state_dict(),
         "ttml": _ttml_draw(),
-        "python": random.random(),
-        "numpy": float(np.random.random()),
-        "torch": torch.rand(2).tolist(),
+        "host": host_draws(),
     }
 
     model2, params2, opt2 = fresh_tp(DIM, _adamw_stochastic_rounding)
@@ -599,7 +579,8 @@ def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path, expect_er
     random.seed(0)
     np.random.seed(0)
     torch.manual_seed(0)
-    loaded = dcp.load(path, model=model2, optimizer=opt2, scheduler=sched2, dataloader=loader2, rng=True)
+    # rng by default: restoring a scheduler and a dataloader restores the generators with them.
+    loaded = dcp.load(path, model=model2, optimizer=opt2, scheduler=sched2, dataloader=loader2)
     assert loaded.restored == [
         "scheduler",
         "dataloader",
@@ -620,41 +601,39 @@ def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path, expect_er
     assert sched2.get_last_lrs() == expected["lrs"]
     assert loader2.get_state_dict() == expected["loader"]
     assert torch.equal(_ttml_draw(), expected["ttml"])
-    assert random.random() == expected["python"] and float(np.random.random()) == expected["numpy"]
-    assert torch.rand(2).tolist() == expected["torch"]
+    assert host_draws() == expected["host"]
 
-    # The negative control: everything restored but the generators, and the same step rounds differently.
+    # The negative control: everything restored but the generators (rng=False, a deliberate reseed), and the same
+    # step rounds differently.
     model3, params3, opt3 = fresh_tp(DIM, _adamw_stochastic_rounding)
     sched3 = CosineAnnealingScheduler(opt3, T_max=8)
     ctx.set_seed(999)
-    dcp.load(path, model=model3, optimizer=opt3, scheduler=sched3)
+    dcp.load(path, model=model3, optimizer=opt3, scheduler=sched3, rng=False)
     train_step(model3, opt3, DIM, input_scale=0.5)
     assert_some_differ(model_shards(params3), after_step)
 
-    # Not asked for, not touched: a plain load leaves the generators alone.
+    # A load of the model alone leaves the generators alone.
     before = ctx.get_generator_state()
     plain = dcp.load(path, model=model2)
     assert plain.restored == [] and ctx.get_generator_state() == before
 
-    # Asked for but absent: a strict load refuses before touching anything, a lenient one lists it.
+    # Asked for but absent (the generators too, by default, with a scheduler): a strict load refuses before touching
+    # anything, a lenient one lists them.
     bare = str(tmp_path / "bare")
     dcp.save(bare, model=model, rng=False)
     assert dcp.read_train_state(bare) == {}
     untouched = model_shards(params2), sched2.get_state_dict()
-    with expect_error(dcp.MissingKeyError, r"the checkpoint holds no state for \['train_state/scheduler'\]"):
+    with expect_error(
+        dcp.MissingKeyError, r"the checkpoint holds no state for \['train_state/scheduler', 'train_state/rng'\]"
+    ):
         dcp.load(bare, model=model2, scheduler=sched2)
     assert sched2.get_state_dict() == untouched[1]
     assert_same_shards(model_shards(params2), untouched[0])
-    lenient = dcp.load(bare, model=model2, scheduler=sched2, rng=True, strict=False)
+    lenient = dcp.load(bare, model=model2, scheduler=sched2, strict=False)
     assert lenient.missing == ["train_state/scheduler", "train_state/rng"] and lenient.restored == []
 
     # A damaged RNG block is refused before anything is placed, generators and model alike.
-    header_path = os.path.join(path, "header.json")
-    header = json.loads(open(header_path).read())
-    numpy_state = header["train_state"]["rng"]["ranks"]["0"]["numpy"]
-    numpy_state["state"] = numpy_state["state"][:-8]  # 623 words
-    with open(header_path, "w") as f:
-        json.dump(header, f)
+    damage_stored_rng(path, WRONG_LENGTH_RNG["numpy_623_words"])
     untouched = model_shards(params2), ctx.get_generator_state(), random.getstate()
     with expect_error(dcp.CheckpointError, "the stored RNG state is malformed"):
         dcp.load(path, model=model2, optimizer=opt2, rng=True)

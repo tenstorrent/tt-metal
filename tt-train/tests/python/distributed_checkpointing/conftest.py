@@ -27,19 +27,17 @@ def _restore_process_generators():
     not through the checkpoint code these tests check."""
     ctx = ttml.autograd.AutoContext.get_instance()
     torch = sys.modules.get("torch")
-    init_rng = ttml.init._rng
     saved = (
         ctx.get_generator_state(),
         random.getstate(),
         np.random.get_state(),
-        init_rng.bit_generator.state,
+        ttml.init.get_rng_state(),
         torch.get_rng_state() if torch is not None else None,
     )
     yield
     ctx.set_generator_state(saved[0])
     random.setstate(saved[1])
     np.random.set_state(saved[2])
-    init_rng.bit_generator.state = saved[3]
-    ttml.init._rng = init_rng  # a restore or manual_seed replaces the object
+    ttml.init.set_rng_state(saved[3])
     if torch is not None:
         torch.set_rng_state(saved[4])

@@ -40,8 +40,9 @@ from ._index import HEADER_NAME, check_json, read_checked_header
 
 TRAIN_STATE_KEY = "train_state"
 RNG_FORMAT = 1
-# The text of a std::mt19937 (get_generator_state): its 624 state words and its position.
-_MT19937_TOKENS = 625
+# A std::mt19937's state words. get_generator_state writes them as text, the C++ standard library's form: libstdc++
+# writes the 624 words and the position in [0, 624], libc++ the 624 words alone, starting at the position.
+_MT19937_WORDS = 624
 
 
 def _hex_u32(words) -> str:
@@ -57,6 +58,11 @@ def this_world_rank() -> int:
     if ttnn.distributed_context_is_initialized():
         return int(ttnn.distributed_context_world_rank())
     return 0
+
+
+def _mt19937_text_tokens() -> int:
+    """How many tokens this build's ttml generator text has: 625 with libstdc++, 624 with libc++."""
+    return len(ttml.autograd.AutoContext.get_instance().get_generator_state().split())
 
 
 def capture_rng(world_rank: int | None = None) -> dict:
@@ -88,7 +94,7 @@ def capture_process_rng() -> dict:
         }
     else:
         warnings.warn("numpy's global generator is not the legacy MT19937; its state is not saved", stacklevel=2)
-    init_state = ttml.init._rng.bit_generator.state
+    init_state = ttml.init.get_rng_state()
     if init_state["bit_generator"] == "PCG64":
         state["ttml_init"] = {
             "bit_generator": "PCG64",
@@ -152,16 +158,21 @@ def _decode_process_rng(state: dict) -> dict[str, Any]:
             tokens = str(state["ttml"]).split()
             # The C++ setter streams the text into the live generator and stops partway at anything it cannot read,
             # leaving the generator in neither state, and no throwaway ttml generator exists to try it on. So the text
-            # is checked to be what an mt19937 writes: 624 ASCII-decimal 32-bit words and a position in [0, 624].
+            # is checked to be what this build's mt19937 writes: as many ASCII-decimal tokens as its own text, the
+            # first 624 of them 32-bit words, and a position in [0, 624] after them when its form has one. A text in
+            # the other standard library's form would be misread, so it is refused too.
+            expected = _mt19937_text_tokens()
             if (
-                len(tokens) != _MT19937_TOKENS
+                len(tokens) != expected
                 or not all(token.isascii() and token.isdigit() for token in tokens)
-                or any(int(token) > 0xFFFFFFFF for token in tokens[:-1])
-                or int(tokens[-1]) > _MT19937_TOKENS - 1
+                or any(int(token) > 0xFFFFFFFF for token in tokens[:_MT19937_WORDS])
+                or (expected > _MT19937_WORDS and int(tokens[-1]) > _MT19937_WORDS)
             ):
+                position = f" and a position in [0, {_MT19937_WORDS}]" if expected > _MT19937_WORDS else ""
                 raise ValueError(
-                    f"the ttml generator state is not the {_MT19937_TOKENS - 1} 32-bit words and position in "
-                    f"[0, {_MT19937_TOKENS - 1}] of an mt19937 ({len(tokens)} tokens)"
+                    f"the ttml generator state is not the {expected} tokens this build writes for an mt19937 "
+                    f"({_MT19937_WORDS} 32-bit words{position}); it has {len(tokens)} (a build with the other C++ "
+                    "standard library writes another form)"
                 )
             decoded["ttml"] = " ".join(tokens)
         python_state = state.get("python")
@@ -182,23 +193,29 @@ def _decode_process_rng(state: dict) -> dict[str, Any]:
                 int(numpy_state["has_gauss"]),
                 float(numpy_state["cached_gaussian"]),
             )
+            # set_state takes any position, and the next draw then reads past the 624 words: zeros, or a crash.
+            if not 0 <= decoded["numpy"][2] <= _MT19937_WORDS:
+                raise ValueError(f"numpy's position {decoded['numpy'][2]} is outside [0, {_MT19937_WORDS}]")
             np.random.RandomState().set_state(decoded["numpy"])
         init_state = state.get("ttml_init")
         if init_state is not None:
-            bit_generator = np.random.PCG64()
-            bit_generator.state = {
+            decoded["ttml_init"] = {
                 "bit_generator": init_state["bit_generator"],
                 "state": {"state": int(init_state["state"], 16), "inc": int(init_state["inc"], 16)},
                 "has_uint32": int(init_state["has_uint32"]),
                 "uinteger": int(init_state["uinteger"]),
             }
-            decoded["ttml_init"] = np.random.Generator(bit_generator)
+            # PCG64's state and increment are 128-bit; it would wrap a negative one rather than refuse it.
+            for name, value in decoded["ttml_init"]["state"].items():
+                if not 0 <= value < 2**128:
+                    raise ValueError(f"ttml.init's PCG64 {name} {value:#x} is not a 128-bit value")
+            np.random.PCG64().state = decoded["ttml_init"]
         if state.get("torch") is not None:
             decoded["torch"] = np.frombuffer(bytes.fromhex(state["torch"]), dtype=np.uint8).copy()
             torch = sys.modules.get("torch")
             if torch is not None:
                 torch.Generator().set_state(torch.from_numpy(decoded["torch"]))
-    except (KeyError, TypeError, ValueError, IndexError, RuntimeError) as err:
+    except (KeyError, TypeError, ValueError, IndexError, OverflowError, RuntimeError) as err:
         raise CheckpointError(
             f"the stored RNG state is malformed ({type(err).__name__}: {err}); pass rng=False to load to restore "
             "everything else and keep the current generators"
@@ -234,7 +251,7 @@ def restore_process_rng(state: dict) -> list[str]:
         np.random.set_state(decoded["numpy"])
         restored.append("rng.numpy")
     if "ttml_init" in decoded:
-        ttml.init._rng = decoded["ttml_init"]  # replaced, as ttml.init.manual_seed does
+        ttml.init.set_rng_state(decoded["ttml_init"])
         restored.append("rng.ttml_init")
     if "torch" in decoded and torch is not None:
         torch.set_rng_state(torch.from_numpy(decoded["torch"]))
