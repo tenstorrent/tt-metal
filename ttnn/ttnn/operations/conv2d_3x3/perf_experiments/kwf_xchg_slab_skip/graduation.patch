@@ -1,0 +1,271 @@
+diff -ruN a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_kw_fold.hpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_kw_fold.hpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_kw_fold.hpp	2026-11-19 12:44:33.000000000 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_kw_fold.hpp	2026-11-19 15:33:25.794405648 +0000
+@@ -222,10 +222,10 @@
+ }
+ #endif
+ 
+-// Slab row of input tile-row r read for kernel row kh is r + base[kh]: the reader's tile_slab_plan
+-// (conv2d_3x3_slab_dataflow.hpp; that header is dataflow-only) for output pixels [o_first, o_end), stride 1,
+-// padding == dilation, band_last_tap 2. Bands that overlap or touch share consecutive rows; a band past a gap (a short
+-// ragged last core) is packed right after the previous one.
++// Slab row of input tile-row r read for kernel row kh is r + base[kh]: the placement of the reader's kwf_slab_plan
++// (tile_slab_plan's, conv2d_3x3_slab_dataflow.hpp, dataflow-only; the fill writes only the rows this walk reads) for
++// output pixels [o_first, o_end), stride 1, padding == dilation, band_last_tap 2. Bands that overlap or touch share
++// consecutive rows; a band past a gap (a short ragged last core) is packed right after the previous one.
+ template <int32_t W, int32_t num_in_px, int32_t d>
+ inline void slab_bases(uint32_t o_first, uint32_t o_end, int32_t (&base)[3]) {
+     const int32_t f = static_cast<int32_t>(o_first) - d * W - d;
+diff -ruN a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp	2026-11-19 12:44:33.000000000 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp	2026-11-19 15:33:25.800405741 +0000
+@@ -710,6 +710,23 @@
+         } else if constexpr (tile_input) {
+             // ---- fill_halo_slab (TILE): plan the slab rows, then stream input tile-rows in slab order.
+             MaybeDeviceZoneScope("reader_fill");
++#ifdef CONV2D_3X3_KW_FOLD
++            // kw-fold: only the slab rows compute reads (conv2d_3x3_slab_dataflow.hpp KwfSlabPlan); nothing reads
++            // slab_ready_pages.
++#ifdef KWF_XCHG
++            constexpr bool kwf_xchg = true;
++#else
++            constexpr bool kwf_xchg = false;
++#endif
++            conv2d_3x3::KwfSlabPlan plan;
++            conv2d_3x3::kwf_slab_plan<input_width, num_in_px, dilation, kwf_xchg>(
++                footprint, m_tile_start + block_tiles_done, block_valid_tiles, slab_x_base, plan);
++            // Split fill: the slab rows the writer reads (the higher-index shards' live input tile-rows).
++            [[maybe_unused]] const conv2d_3x3::SlabSuffix writer_sfx =
++                tile_fill_split ? conv2d_3x3::kwf_slab_rows_from(plan, (my_shard + 1) * input_shard_rows)
++                                : conv2d_3x3::SlabSuffix{0, 0};
++            const uint32_t(&seg_slab)[3] = plan.seg_slab;
++#else
+             conv2d_3x3::TileSlabPlan plan;
+             conv2d_3x3::tile_slab_plan<input_width, num_in_px, dilation, c_in_tiles>(footprint, slab_x_base, plan);
+             if constexpr (nslice_center) {
+@@ -719,12 +736,13 @@
+             [[maybe_unused]] const conv2d_3x3::SlabSuffix writer_sfx =
+                 tile_fill_split ? conv2d_3x3::slab_rows_from(plan, (my_shard + 1) * input_shard_rows)
+                                 : conv2d_3x3::SlabSuffix{0, 0};
+-            const uint32_t num_segs = plan.num_segs;
+-            const uint32_t(&seg_first)[3] = plan.seg_first;
+-            const uint32_t(&seg_count)[3] = plan.seg_count;
+             for (int32_t kh = 0; kh < 3; ++kh) {
+                 slab_ready_pages[kh] = plan.ready_pages[kh];
+             }
++#endif
++            const uint32_t num_segs = plan.num_segs;
++            const uint32_t(&seg_first)[3] = plan.seg_first;
++            const uint32_t(&seg_count)[3] = plan.seg_count;
+ 
+             // Slab rows past the plan's last row are pushed unread: compute untilizes a fixed count.
+             constexpr uint32_t batch_pages = untilize_batch_rows * c_in_tiles;
+@@ -797,6 +815,23 @@
+                         l1 -= ring_bytes;
+                     }
+                     reads.begin(TRID_FILL_BASE + batch % fill_window);
++#ifdef CONV2D_3X3_KW_FOLD
++                    // Slab rows [b_lo, b_lo + batch rows) of the live segments, each at its slab row.
++                    const uint32_t b_lo = batch * untilize_batch_rows;
++                    while (seg < num_segs && seg_slab[seg] + seg_row < b_lo + untilize_batch_rows) {
++                        const uint32_t s = seg_slab[seg] + seg_row;
++                        const uint32_t seg_left = seg_count[seg] - seg_row;
++                        const uint32_t room = b_lo + untilize_batch_rows - s;
++                        const uint32_t rows = room < seg_left ? room : seg_left;
++                        const uint32_t row0 = seg_first[seg] + seg_row;
++                        read_rows(row0, row0 + rows, l1 + (s - b_lo) * row_bytes);
++                        seg_row += rows;
++                        if (seg_row == seg_count[seg]) {
++                            ++seg;
++                            seg_row = 0;
++                        }
++                    }
++#else
+                     for (uint32_t r = 0; r < untilize_batch_rows && seg < num_segs;) {
+                         // The batch's rows of one segment are consecutive input tile-rows: consecutive pages.
+                         const uint32_t seg_left = seg_count[seg] - seg_row;
+@@ -811,6 +846,7 @@
+                             seg_row = 0;
+                         }
+                     }
++#endif
+                 }
+                 while (pushed < num_batches) {
+                     retire();
+diff -ruN a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_slab_dataflow.hpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_slab_dataflow.hpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_slab_dataflow.hpp	2026-11-19 12:44:33.000000000 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_slab_dataflow.hpp	2026-11-19 15:33:25.800405741 +0000
+@@ -209,4 +209,105 @@
+     return batch * batch_rows < sfx.rows && (batch + 1) * batch_rows > sfx.first;
+ }
+ 
++// kw-fold (conv2d_3x3_kw_fold.hpp) TILE slab plan: tile_slab_plan's placement (compute's slab_bases mirrors it), but
++// each band's segment holds only the input tile-rows compute reads. Its walk covers tile-rows [lo, hi) = [t0 - ht,
++// t_end + hb), the halo tile-row on a side only where it recomputes it (a block boundary inside an image row, without
++// the halo exchange), and reads row t + (kh - 1) R of each: band kh's live rows are [lo + (kh - 1) R, hi + (kh - 1) R).
++// The footprint rounds every band out by one tile-row on each side (the d-pixel tap reach), so where the halo is
++// exchanged or not needed (a boundary on an image-row edge) up to six slab rows are dead: the fill skips them, their
++// slots stay unwritten and are never read, and the batch pushes (compute's cumulative slab waits) are unchanged.
++// seg_slab[s] is the slab row of seg_first[s]; segments ascend in both. One pass like tile_slab_plan's: planning cost
++// is on the fill's critical start (a separate split of the plan at the dead rows measured ~0.3 us there).
++struct KwfSlabPlan {
++    uint32_t seg_first[3];
++    uint32_t seg_count[3];
++    uint32_t seg_slab[3];
++    uint32_t num_segs;
++};
++
++template <int32_t input_width, int32_t num_in_px, int32_t dilation, bool xchg>
++FORCE_INLINE void kwf_slab_plan(
++    const SlabFootprint& fp, uint32_t t0, uint32_t valid, int32_t (&slab_x_base)[3], KwfSlabPlan& plan) {
++    constexpr int32_t TILE_DIM = 32;
++    constexpr int32_t tpr = input_width / TILE_DIM;
++    constexpr int32_t R = dilation * tpr;
++    // kw_fold.hpp run(): halo_top / halo_bot (the exchange runs on one M-block per core and then replaces both).
++    const int32_t t_end = static_cast<int32_t>(t0 + valid);
++    const int32_t live_lo = static_cast<int32_t>(t0) - (!xchg && t0 % tpr != 0 ? 1 : 0);
++    const int32_t live_hi = t_end + (!xchg && t_end % tpr != 0 && t_end < num_in_px / TILE_DIM ? 1 : 0);
++    uint32_t n = 0;
++    int32_t next_free = 0;
++    int32_t read_hi = 0;  // one past the last live row an earlier band holds
++    bool have_prev = false;
++    int32_t prev_t_lo = 0, prev_t_hi = 0, prev_row = 0;
++    for (int32_t kh = 0; kh < 3; ++kh) {
++        const int32_t v_lo = fp.f + kh * dilation * input_width;
++        const int32_t lo = v_lo > 0 ? v_lo : 0;
++        const int32_t hi = v_lo + fp.band_len < num_in_px ? v_lo + fp.band_len : num_in_px;
++        if (lo >= hi) {
++            slab_x_base[kh] = 0;
++            continue;
++        }
++        const int32_t t_lo = lo / TILE_DIM;
++        const int32_t t_hi = (hi + TILE_DIM - 1) / TILE_DIM;
++        const bool shares = have_prev && t_lo < prev_t_hi;
++        const int32_t row = shares ? prev_row + (t_lo - prev_t_lo) : next_free;
++        int32_t a = live_lo + (kh - 1) * R;
++        a = a > t_lo ? a : t_lo;
++        a = a > read_hi ? a : read_hi;
++        int32_t b = live_hi + (kh - 1) * R;
++        b = b < t_hi ? b : t_hi;
++        if (a < b) {
++            const uint32_t slab = static_cast<uint32_t>(row + (a - t_lo));
++            if (n > 0 && plan.seg_first[n - 1] + plan.seg_count[n - 1] == static_cast<uint32_t>(a) &&
++                plan.seg_slab[n - 1] + plan.seg_count[n - 1] == slab) {
++                plan.seg_count[n - 1] += b - a;  // contiguous in the input and in the slab: one segment
++            } else {
++                plan.seg_first[n] = a;
++                plan.seg_count[n] = b - a;
++                plan.seg_slab[n] = slab;
++                ++n;
++            }
++            read_hi = b;
++        }
++        slab_x_base[kh] = TILE_DIM * (row - t_lo);
++        next_free = row + (t_hi - t_lo);
++        have_prev = true;
++        prev_t_lo = t_lo;
++        prev_t_hi = t_hi;
++        prev_row = row;
++    }
++    plan.num_segs = n;
++}
++
++// tile_batch_rows over a KwfSlabPlan (explicit slab rows).
++template <uint32_t batch_rows, typename Fn>
++FORCE_INLINE void kwf_batch_rows(const KwfSlabPlan& plan, uint32_t batch, Fn&& fn) {
++    const uint32_t b_lo = batch * batch_rows;
++    const uint32_t b_hi = b_lo + batch_rows;
++    for (uint32_t s = 0; s < plan.num_segs; ++s) {
++        const uint32_t seg_lo = plan.seg_slab[s];
++        const uint32_t seg_hi = seg_lo + plan.seg_count[s];
++        const uint32_t lo = b_lo > seg_lo ? b_lo : seg_lo;
++        const uint32_t hi = b_hi < seg_hi ? b_hi : seg_hi;
++        if (lo < hi) {
++            fn(plan.seg_first[s] + (lo - seg_lo), hi - lo, lo - b_lo);
++        }
++    }
++}
++
++// slab_rows_from over a KwfSlabPlan: the first slab row holding a live row >= hi_row, one past the last live slab row
++// (a batch of dead rows only is not handed over).
++FORCE_INLINE SlabSuffix kwf_slab_rows_from(const KwfSlabPlan& plan, uint32_t hi_row) {
++    uint32_t first = 0xFFFFFFFF;
++    uint32_t end = 0;
++    for (uint32_t s = 0; s < plan.num_segs; ++s) {
++        if (first == 0xFFFFFFFF && plan.seg_first[s] + plan.seg_count[s] > hi_row) {
++            first = plan.seg_slab[s] + (hi_row > plan.seg_first[s] ? hi_row - plan.seg_first[s] : 0);
++        }
++        end = plan.seg_slab[s] + plan.seg_count[s];
++    }
++    return {first < end ? first : end, end};
++}
++
+ }  // namespace conv2d_3x3
+diff -ruN a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp	2026-11-19 12:44:33.000000000 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp	2026-11-19 15:33:25.799405725 +0000
+@@ -282,7 +282,16 @@
+     [[maybe_unused]] uint32_t fill_b = 0;
+     [[maybe_unused]] uint32_t fill_plan_m = 0xFFFFFFFF;
+     [[maybe_unused]] uint32_t fill_served = 0;
++#ifdef CONV2D_3X3_KW_FOLD
++    [[maybe_unused]] conv2d_3x3::KwfSlabPlan fill_plan;  // only the slab rows compute reads
++#ifdef KWF_XCHG
++    constexpr bool kwf_xchg = true;
++#else
++    constexpr bool kwf_xchg = false;
++#endif
++#else
+     [[maybe_unused]] conv2d_3x3::TileSlabPlan fill_plan;
++#endif
+     [[maybe_unused]] conv2d_3x3::SlabSuffix fill_sfx{0, 0};  // the cursor block's slab rows this writer reads
+     // Ring slab: the cursor block's first streamed row, its row end and batch count, the kernel batches before it, and
+     // the previous block's window end.
+@@ -352,12 +361,23 @@
+                 const uint32_t first = (m_tile_start + block_tiles_done) * 32;
+                 const uint32_t end_tiles = first + block_valid_tiles * 32;
+                 int32_t unused_x_base[3];
++#ifdef CONV2D_3X3_KW_FOLD
++                conv2d_3x3::kwf_slab_plan<input_width, input_height * input_width, dilation, kwf_xchg>(
++                    conv2d_3x3::block_footprint<output_width, input_width, stride, padding, dilation, band_last_tap>(
++                        first, end_tiles < num_out_px ? end_tiles : num_out_px),
++                    m_tile_start + block_tiles_done,
++                    block_valid_tiles,
++                    unused_x_base,
++                    fill_plan);
++                fill_sfx = conv2d_3x3::kwf_slab_rows_from(fill_plan, fill_hi_row);
++#else
+                 conv2d_3x3::tile_slab_plan<input_width, input_height * input_width, dilation, c_in_p / 32>(
+                     conv2d_3x3::block_footprint<output_width, input_width, stride, padding, dilation, band_last_tap>(
+                         first, end_tiles < num_out_px ? end_tiles : num_out_px),
+                     unused_x_base,
+                     fill_plan);
+                 fill_sfx = conv2d_3x3::slab_rows_from(fill_plan, fill_hi_row);
++#endif
+                 fill_plan_m = fill_m;
+             }
+             if (conv2d_3x3::batch_has_rows_from<untilize_batch_rows>(fill_sfx, fill_b)) {
+@@ -377,7 +397,11 @@
+         const uint32_t slot =
+             fill_ring_base + ((fill_m * fill_batches_per_block + fill_b) % input_tile_depth_batches) * fill_batch_bytes;
+         fill_reads.begin(trid);
++#ifdef CONV2D_3X3_KW_FOLD
++        conv2d_3x3::kwf_batch_rows<untilize_batch_rows>(
++#else
+         conv2d_3x3::tile_batch_rows<untilize_batch_rows>(
++#endif
+             fill_plan, fill_b, [&](uint32_t row0, uint32_t rows, uint32_t batch_row) {
+                 const uint32_t lo = row0 > fill_hi_row ? row0 : fill_hi_row;
+                 if (lo >= row0 + rows) {
+@@ -554,7 +578,10 @@
+         tile_fill_split && !ring_slab && input_tile_depth_batches >= fill_batches_per_block && weight_servers) {
+         if (split_here) {
+             MaybeDeviceZoneScope("writer_fill_early");
+-            if (fill_next()) {
++            // Only a first-block batch: the reader hands a later block's batches over only after its first block's
++            // fill, and under kw-fold after decoding this writer's late bias, so a spin on one here would deadlock (a
++            // first block without writer rows: a multi-block core whose first block's slab ends inside its own shard).
++            if (fill_next() && fill_m == 0) {
+                 while (Semaphore<>(slab_free_sem_id).value() == 0) {
+                 }
+                 serve_fill();

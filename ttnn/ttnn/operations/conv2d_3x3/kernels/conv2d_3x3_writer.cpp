@@ -282,7 +282,16 @@ void kernel_main() {
     [[maybe_unused]] uint32_t fill_b = 0;
     [[maybe_unused]] uint32_t fill_plan_m = 0xFFFFFFFF;
     [[maybe_unused]] uint32_t fill_served = 0;
+#ifdef CONV2D_3X3_KW_FOLD
+    [[maybe_unused]] conv2d_3x3::KwfSlabPlan fill_plan;  // only the slab rows compute reads
+#ifdef KWF_XCHG
+    constexpr bool kwf_xchg = true;
+#else
+    constexpr bool kwf_xchg = false;
+#endif
+#else
     [[maybe_unused]] conv2d_3x3::TileSlabPlan fill_plan;
+#endif
     [[maybe_unused]] conv2d_3x3::SlabSuffix fill_sfx{0, 0};  // the cursor block's slab rows this writer reads
     // Ring slab: the cursor block's first streamed row, its row end and batch count, the kernel batches before it, and
     // the previous block's window end.
@@ -352,12 +361,23 @@ void kernel_main() {
                 const uint32_t first = (m_tile_start + block_tiles_done) * 32;
                 const uint32_t end_tiles = first + block_valid_tiles * 32;
                 int32_t unused_x_base[3];
+#ifdef CONV2D_3X3_KW_FOLD
+                conv2d_3x3::kwf_slab_plan<input_width, input_height * input_width, dilation, kwf_xchg>(
+                    conv2d_3x3::block_footprint<output_width, input_width, stride, padding, dilation, band_last_tap>(
+                        first, end_tiles < num_out_px ? end_tiles : num_out_px),
+                    m_tile_start + block_tiles_done,
+                    block_valid_tiles,
+                    unused_x_base,
+                    fill_plan);
+                fill_sfx = conv2d_3x3::kwf_slab_rows_from(fill_plan, fill_hi_row);
+#else
                 conv2d_3x3::tile_slab_plan<input_width, input_height * input_width, dilation, c_in_p / 32>(
                     conv2d_3x3::block_footprint<output_width, input_width, stride, padding, dilation, band_last_tap>(
                         first, end_tiles < num_out_px ? end_tiles : num_out_px),
                     unused_x_base,
                     fill_plan);
                 fill_sfx = conv2d_3x3::slab_rows_from(fill_plan, fill_hi_row);
+#endif
                 fill_plan_m = fill_m;
             }
             if (conv2d_3x3::batch_has_rows_from<untilize_batch_rows>(fill_sfx, fill_b)) {
@@ -377,7 +397,11 @@ void kernel_main() {
         const uint32_t slot =
             fill_ring_base + ((fill_m * fill_batches_per_block + fill_b) % input_tile_depth_batches) * fill_batch_bytes;
         fill_reads.begin(trid);
+#ifdef CONV2D_3X3_KW_FOLD
+        conv2d_3x3::kwf_batch_rows<untilize_batch_rows>(
+#else
         conv2d_3x3::tile_batch_rows<untilize_batch_rows>(
+#endif
             fill_plan, fill_b, [&](uint32_t row0, uint32_t rows, uint32_t batch_row) {
                 const uint32_t lo = row0 > fill_hi_row ? row0 : fill_hi_row;
                 if (lo >= row0 + rows) {
@@ -554,7 +578,10 @@ void kernel_main() {
         tile_fill_split && !ring_slab && input_tile_depth_batches >= fill_batches_per_block && weight_servers) {
         if (split_here) {
             MaybeDeviceZoneScope("writer_fill_early");
-            if (fill_next()) {
+            // Only a first-block batch: the reader hands a later block's batches over only after its first block's
+            // fill, and under kw-fold after decoding this writer's late bias, so a spin on one here would deadlock (a
+            // first block without writer rows: a multi-block core whose first block's slab ends inside its own shard).
+            if (fill_next() && fill_m == 0) {
                 while (Semaphore<>(slab_free_sem_id).value() == 0) {
                 }
                 serve_fill();

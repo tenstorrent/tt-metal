@@ -1,0 +1,262 @@
+SAFE_PYTEST: Waiting for device lock...
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: on — collect + parallel compile (x64) inside the pytest session, local
+SAFE_PYTEST: env UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=64 PYTHONPATH=/localdev/pmilojevic/workspaces/opgen:/localdev/pmilojevic/workspaces/opgen pytest -p tests.plugins.up_front_collect --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py
+========================================
+2026-11-19 14:47:25.793 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/workspaces/opgen
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, anyio-4.16.0, benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, cov-7.0.0, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-11-19 14:47:25.979 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-19 14:47:25.979 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-19 14:47:25.982 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-19 14:47:25.982 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-19 14:47:26.006 | info     |             UMD | Established firmware bundle version: 19.16.1 (topology_discovery.cpp:700)
+2026-11-19 14:47:26.006 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-19 14:47:26.274 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:174)
+2026-11-19 14:47:26.274 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-19 14:47:26.274 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-19 14:47:26.274 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-19 14:47:26.282 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-19 14:47:26.780 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-19 14:47:26.925 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-19 14:47:26.925 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-19 14:47:27.057 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+collected 56 items
+{"case": "stem.conv2 @ LoFi [perf]", "plan": {"copy": [38, 1, true], "base": [38, 1, true]}, "rows": {"filled": 7734, "live": 7520, "dead_frac": 0.0277}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "stem.conv3 @ LoFi [perf]", "plan": {"copy": [19, 2, false], "base": [19, 2, false]}, "rows": {"filled": 11397, "live": 11370, "dead_frac": 0.0024}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "res2.{0,1,2}.conv2 @ LoFi [perf]", "plan": {"copy": [10, 1, true], "base": [10, 1, true]}, "rows": {"filled": 2853, "live": 2648, "dead_frac": 0.0719}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "res3.{1,2,3}.conv2 + instance res3.fuse_conv.1 @ LoFi [perf]", "plan": {"copy": [3, 1, true], "base": [3, 1, true]}, "rows": {"filled": 1098, "live": 760, "dead_frac": 0.3078}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "semantic decoder.res3.fuse_conv.0 @ LoFi [perf]", "plan": {"copy": [3, 1, true], "base": [3, 1, true]}, "rows": {"filled": 1098, "live": 760, "dead_frac": 0.3078}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "instance decoder.res3.fuse_conv.0 @ LoFi [perf]", "plan": {"copy": [3, 1, true], "base": [3, 1, true]}, "rows": {"filled": 1098, "live": 760, "dead_frac": 0.3078}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "semantic decoder.res3.fuse_conv.1 @ LoFi [perf]", "plan": {"copy": [3, 1, true], "base": [3, 1, true]}, "rows": {"filled": 1098, "live": 760, "dead_frac": 0.3078}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "semantic decoder.res2.fuse_conv.0 @ LoFi [perf]", "plan": {"copy": [10, 1, true], "base": [10, 1, true]}, "rows": {"filled": 2853, "live": 2648, "dead_frac": 0.0719}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "instance decoder.res2.fuse_conv.0 @ LoFi [perf]", "plan": {"copy": [10, 1, true], "base": [10, 1, true]}, "rows": {"filled": 2853, "live": 2648, "dead_frac": 0.0719}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "semantic res2.fuse_conv.1 + semantic_head.head.{0,1} @ LoFi [perf]", "plan": {"copy": [10, 1, true], "base": [10, 1, true]}, "rows": {"filled": 2853, "live": 2648, "dead_frac": 0.0719}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "instance res2.fuse_conv.1 + center_head.0 + offset_head.0 @ LoFi [perf]", "plan": {"copy": [10, 1, true], "base": [10, 1, true]}, "rows": {"filled": 2853, "live": 2648, "dead_frac": 0.0719}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "center_head.1 + offset_head.1 @ LoFi [perf]", "plan": {"copy": [10, 1, true], "base": [10, 1, true]}, "rows": {"filled": 2853, "live": 2648, "dead_frac": 0.0719}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "forced-n1_bf8", "ref": "base", "plan": {"copy": [4, 1, true], "base": [4, 1, true]}, "rows": {"filled": 154, "live": 124, "dead_frac": 0.1948}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "forced-bf16_bias_kblocked", "ref": "base", "plan": {"copy": [4, 1, true], "base": [4, 1, true]}, "rows": {"filled": 154, "live": 124, "dead_frac": 0.1948}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "forced-bf16_act_bf8_w_hifi4", "ref": "base", "plan": {"copy": [4, 1, true], "base": [4, 1, true]}, "rows": {"filled": 154, "live": 124, "dead_frac": 0.1948}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "forced-d2_bf8", "ref": "base", "plan": {"copy": [4, 1, true], "base": [4, 1, true]}, "rows": {"filled": 436, "live": 376, "dead_frac": 0.1376}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "forced-cout48_bf8", "ref": "base", "plan": {"copy": [4, 1, true], "base": [4, 1, true]}, "rows": {"filled": 280, "live": 234, "dead_frac": 0.1643}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "forced-multiblock_bf8", "ref": "base", "plan": {"copy": [32, 1, true], "base": [32, 1, true]}, "rows": {"filled": 326, "live": 312, "dead_frac": 0.0429}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "forced-kblocked_multiblock_hifi4", "ref": "base", "plan": {"copy": [16, 2, false], "base": [16, 2, false]}, "rows": {"filled": 406, "live": 376, "dead_frac": 0.0739}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "forced-ragged_bf8", "ref": "base", "plan": {"copy": [5, 1, true], "base": [5, 1, true]}, "rows": {"filled": 208, "live": 170, "dead_frac": 0.1827}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "forced-many_blocks_whole_k", "ref": "base", "plan": {"copy": [32, 8, false], "base": [32, 8, false]}, "rows": {"filled": 1582, "live": 1520, "dead_frac": 0.0392}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "forced-many_blocks_kblocked", "ref": "base", "plan": {"copy": [16, 2, false], "base": [16, 2, false]}, "rows": {"filled": 406, "live": 376, "dead_frac": 0.0739}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "forced-kblocked_n2", "ref": "base", "plan": {"copy": [4, 1, true], "base": [4, 1, true]}, "rows": {"filled": 154, "live": 124, "dead_frac": 0.1948}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "forced-kblocked_n10", "ref": "base", "plan": {"copy": [4, 1, true], "base": [4, 1, true]}, "rows": {"filled": 436, "live": 376, "dead_frac": 0.1376}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "xchg-kblocked_lofi", "ref": "base", "plan": {"copy": [3, 1, true], "base": [3, 1, true]}, "rows": {"filled": 1098, "live": 760, "dead_frac": 0.3078}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "xchg-kblocked_hifi4", "ref": "base", "plan": {"copy": [3, 1, true], "base": [3, 1, true]}, "rows": {"filled": 1098, "live": 760, "dead_frac": 0.3078}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "xchg-kblocked_two_planes", "ref": "base", "plan": {"copy": [3, 1, true], "base": [3, 1, true]}, "rows": {"filled": 1098, "live": 760, "dead_frac": 0.3078}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "xchg-kblocked_few_cores", "ref": "base", "plan": {"copy": [9, 1, true], "base": [9, 1, true]}, "rows": {"filled": 535, "live": 480, "dead_frac": 0.1028}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "xchg-kblocked_no_server", "ref": "base", "plan": {"copy": [4, 1, true], "base": [4, 1, true]}, "rows": {"filled": 1744, "live": 1310, "dead_frac": 0.2489}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "xchg-d2_bf8", "ref": "base", "plan": {"copy": [3, 1, true], "base": [3, 1, true]}, "rows": {"filled": 1254, "live": 752, "dead_frac": 0.4003}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "xchg-n1_bf8", "ref": "base", "plan": {"copy": [5, 1, true], "base": [5, 1, true]}, "rows": {"filled": 761, "live": 658, "dead_frac": 0.1353}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "xchg-n3_hifi2", "ref": "base", "plan": {"copy": [5, 1, true], "base": [5, 1, true]}, "rows": {"filled": 494, "live": 418, "dead_frac": 0.1538}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "xchg-ragged_one_row", "ref": "base", "plan": {"copy": [5, 1, true], "base": [5, 1, true]}, "rows": {"filled": 208, "live": 170, "dead_frac": 0.1827}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "xchg-bf16", "ref": "base", "plan": {"copy": [3, 1, true], "base": [3, 1, true]}, "rows": {"filled": 543, "live": 376, "dead_frac": 0.3076}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "xchg-whole_k_n1", "ref": "base", "plan": {"copy": [10, 1, true], "base": [10, 1, true]}, "rows": {"filled": 2853, "live": 2648, "dead_frac": 0.0719}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "xchg-kblocked_n2_hifi4", "ref": "base", "plan": {"copy": [3, 1, true], "base": [3, 1, true]}, "rows": {"filled": 1098, "live": 760, "dead_frac": 0.3078}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "xchg-whole_k_n2_one_row", "ref": "base", "plan": {"copy": [1, 1, true], "base": [1, 1, true]}, "rows": {"filled": 436, "live": 188, "dead_frac": 0.5688}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "recompute-kblocked_lofi", "ref": "base", "plan": {"copy": [3, 1, false], "base": [3, 1, false]}, "rows": {"filled": 1098, "live": 1056, "dead_frac": 0.0383}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "recompute-kblocked_hifi4", "ref": "base", "plan": {"copy": [3, 1, false], "base": [3, 1, false]}, "rows": {"filled": 1098, "live": 1056, "dead_frac": 0.0383}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "recompute-kblocked_two_planes", "ref": "base", "plan": {"copy": [3, 1, false], "base": [3, 1, false]}, "rows": {"filled": 1098, "live": 1056, "dead_frac": 0.0383}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "recompute-kblocked_few_cores", "ref": "base", "plan": {"copy": [9, 1, false], "base": [9, 1, false]}, "rows": {"filled": 535, "live": 522, "dead_frac": 0.0243}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "recompute-kblocked_no_server", "ref": "base", "plan": {"copy": [4, 1, false], "base": [4, 1, false]}, "rows": {"filled": 1744, "live": 1702, "dead_frac": 0.0241}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "recompute-d2_bf8", "ref": "base", "plan": {"copy": [3, 1, false], "base": [3, 1, false]}, "rows": {"filled": 1254, "live": 1128, "dead_frac": 0.1005}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "recompute-n1_bf8", "ref": "base", "plan": {"copy": [5, 1, false], "base": [5, 1, false]}, "rows": {"filled": 761, "live": 736, "dead_frac": 0.0329}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "recompute-n3_hifi2", "ref": "base", "plan": {"copy": [5, 1, false], "base": [5, 1, false]}, "rows": {"filled": 494, "live": 470, "dead_frac": 0.0486}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "recompute-ragged_one_row", "ref": "base", "plan": {"copy": [5, 1, false], "base": [5, 1, false]}, "rows": {"filled": 208, "live": 190, "dead_frac": 0.0865}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "recompute-bf16", "ref": "base", "plan": {"copy": [3, 1, false], "base": [3, 1, false]}, "rows": {"filled": 543, "live": 522, "dead_frac": 0.0387}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "recompute-whole_k_n1", "ref": "base", "plan": {"copy": [10, 1, false], "base": [10, 1, false]}, "rows": {"filled": 2853, "live": 2802, "dead_frac": 0.0179}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "recompute-kblocked_n2_hifi4", "ref": "base", "plan": {"copy": [3, 1, false], "base": [3, 1, false]}, "rows": {"filled": 1098, "live": 1056, "dead_frac": 0.0383}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "recompute-whole_k_n2_one_row", "ref": "base", "plan": {"copy": [1, 1, false], "base": [1, 1, false]}, "rows": {"filled": 436, "live": 376, "dead_frac": 0.1376}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "extra-mb_w96_mid_row", "ref": "basefix", "plan": {"copy": [32, 3, false], "base": [32, 3, false]}, "rows": {"filled": 472, "live": 466, "dead_frac": 0.0127}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "extra-mb_w96_mid_row_d2", "ref": "basefix", "plan": {"copy": [32, 3, false], "base": [32, 3, false]}, "rows": {"filled": 538, "live": 532, "dead_frac": 0.0112}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "extra-mb_ragged_w64", "ref": "basefix", "plan": {"copy": [39, 1, true], "base": [39, 1, true]}, "rows": {"filled": 216, "live": 208, "dead_frac": 0.037}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "extra-n2_one_row_cores", "ref": "basefix", "plan": {"copy": [1, 1, true], "base": [1, 1, true]}, "rows": {"filled": 436, "live": 188, "dead_frac": 0.5688}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "extra-n2_d3", "ref": "basefix", "plan": {"copy": [4, 1, true], "base": [4, 1, true]}, "rows": {"filled": 618, "live": 414, "dead_frac": 0.3301}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "extra-kblocked_n2_multiblock", "ref": "basefix", "plan": {"copy": [8, 4, false], "base": [8, 4, false]}, "rows": {"filled": 566, "live": 504, "dead_frac": 0.1095}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+
+UP_FRONT_INLINE: collect pass over 56 item(s) took 8.7s
+UP_FRONT_INLINE: compile route local (programs=109, farm_min=10)
+
+UP_FRONT_COLLECT: 168 ops stashed across 56 bodies -> 109 unique programs (swallowed 0, skipped-capture 0)
+UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=504 fallback=0
+2026-11-19 14:47:34.847 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-19 14:47:34.928 | info     |           Metal | Enabling program cache on MeshDevice 3 (mesh_device.cpp:1322)
+UP_FRONT_COLLECT: 109 collected · 109 built · 0 already compiled in 2.7s (workers=64, errors=0) -> on-disk JIT cache warm
+UP_FRONT_COLLECT_RESULT: status=ok reason=ok unique=109 programs=109 errors=0 pytest_exit=0 xpass_strict=0 other_failures=0 built=109 compile_s=3.0 collect_s=8.7 route=local
+UP_FRONT_INLINE: compile step took 3.0s; starting the real pass
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[stem_conv2] 2026-11-19 14:47:37.833 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+{"case": "stem.conv2 @ LoFi [perf]", "plan": {"copy": [38, 1, true], "base": [38, 1, true]}, "rows": {"filled": 7734, "live": 7520, "dead_frac": 0.0277}, "copy": {"pcc": 1.0, "mae": 0.17522}, "base": {"pcc": 1.0, "mae": 0.17522}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[stem_conv3] {"case": "stem.conv3 @ LoFi [perf]", "plan": {"copy": [19, 2, false], "base": [19, 2, false]}, "rows": {"filled": 11397, "live": 11370, "dead_frac": 0.0024}, "copy": {"pcc": 0.999876, "mae": 0.17316}, "base": {"pcc": 0.999876, "mae": 0.17316}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[res2] {"case": "res2.{0,1,2}.conv2 @ LoFi [perf]", "plan": {"copy": [10, 1, true], "base": [10, 1, true]}, "rows": {"filled": 2853, "live": 2648, "dead_frac": 0.0719}, "copy": {"pcc": 1.0, "mae": 0.1749}, "base": {"pcc": 1.0, "mae": 0.1749}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[res3_x] {"case": "res3.{1,2,3}.conv2 + instance res3.fuse_conv.1 @ LoFi [perf]", "plan": {"copy": [3, 1, true], "base": [3, 1, true]}, "rows": {"filled": 1098, "live": 760, "dead_frac": 0.3078}, "copy": {"pcc": 0.99993, "mae": 0.24493}, "base": {"pcc": 0.99993, "mae": 0.24493}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[sem_dec_res3_fc0] {"case": "semantic decoder.res3.fuse_conv.0 @ LoFi [perf]", "plan": {"copy": [3, 1, true], "base": [3, 1, true]}, "rows": {"filled": 1098, "live": 760, "dead_frac": 0.3078}, "copy": {"pcc": 0.999818, "mae": 0.38534}, "base": {"pcc": 0.999818, "mae": 0.38534}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[inst_dec_res3_fc0] {"case": "instance decoder.res3.fuse_conv.0 @ LoFi [perf]", "plan": {"copy": [3, 1, true], "base": [3, 1, true]}, "rows": {"filled": 1098, "live": 760, "dead_frac": 0.3078}, "copy": {"pcc": 1.0, "mae": 0.3849}, "base": {"pcc": 1.0, "mae": 0.3849}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[sem_dec_res3_fc1] {"case": "semantic decoder.res3.fuse_conv.1 @ LoFi [perf]", "plan": {"copy": [3, 1, true], "base": [3, 1, true]}, "rows": {"filled": 1098, "live": 760, "dead_frac": 0.3078}, "copy": {"pcc": 1.0, "mae": 0.34396}, "base": {"pcc": 1.0, "mae": 0.34396}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[sem_dec_res2_fc0] {"case": "semantic decoder.res2.fuse_conv.0 @ LoFi [perf]", "plan": {"copy": [10, 1, true], "base": [10, 1, true]}, "rows": {"filled": 2853, "live": 2648, "dead_frac": 0.0719}, "copy": {"pcc": 0.999206, "mae": 0.36661}, "base": {"pcc": 0.999206, "mae": 0.36661}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[inst_dec_res2_fc0] {"case": "instance decoder.res2.fuse_conv.0 @ LoFi [perf]", "plan": {"copy": [10, 1, true], "base": [10, 1, true]}, "rows": {"filled": 2853, "live": 2648, "dead_frac": 0.0719}, "copy": {"pcc": 0.999611, "mae": 0.27338}, "base": {"pcc": 0.999611, "mae": 0.27338}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[sem_res2_fc1] {"case": "semantic res2.fuse_conv.1 + semantic_head.head.{0,1} @ LoFi [perf]", "plan": {"copy": [10, 1, true], "base": [10, 1, true]}, "rows": {"filled": 2853, "live": 2648, "dead_frac": 0.0719}, "copy": {"pcc": 0.99929, "mae": 0.34497}, "base": {"pcc": 0.99929, "mae": 0.34497}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[inst_res2_fc1] {"case": "instance res2.fuse_conv.1 + center_head.0 + offset_head.0 @ LoFi [perf]", "plan": {"copy": [10, 1, true], "base": [10, 1, true]}, "rows": {"filled": 2853, "live": 2648, "dead_frac": 0.0719}, "copy": {"pcc": 0.999486, "mae": 0.24569}, "base": {"pcc": 0.999486, "mae": 0.24569}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[center_head_1] {"case": "center_head.1 + offset_head.1 @ LoFi [perf]", "plan": {"copy": [10, 1, true], "base": [10, 1, true]}, "rows": {"filled": 2853, "live": 2648, "dead_frac": 0.0719}, "copy": {"pcc": 1.0, "mae": 0.24705}, "base": {"pcc": 1.0, "mae": 0.24705}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[forced-n1_bf8] {"case": "forced-n1_bf8", "ref": "base", "plan": {"copy": [4, 1, true], "base": [4, 1, true]}, "rows": {"filled": 154, "live": 124, "dead_frac": 0.1948}, "copy": {"pcc": 0.999829, "mae": 0.00946}, "base": {"pcc": 0.999829, "mae": 0.00946}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[forced-bf16_bias_kblocked] {"case": "forced-bf16_bias_kblocked", "ref": "base", "plan": {"copy": [4, 1, true], "base": [4, 1, true]}, "rows": {"filled": 154, "live": 124, "dead_frac": 0.1948}, "copy": {"pcc": 0.999814, "mae": 0.00974}, "base": {"pcc": 0.999814, "mae": 0.00974}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[forced-bf16_act_bf8_w_hifi4] {"case": "forced-bf16_act_bf8_w_hifi4", "ref": "base", "plan": {"copy": [4, 1, true], "base": [4, 1, true]}, "rows": {"filled": 154, "live": 124, "dead_frac": 0.1948}, "copy": {"pcc": 0.999973, "mae": 0.00805}, "base": {"pcc": 0.999973, "mae": 0.00805}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[forced-d2_bf8] {"case": "forced-d2_bf8", "ref": "base", "plan": {"copy": [4, 1, true], "base": [4, 1, true]}, "rows": {"filled": 436, "live": 376, "dead_frac": 0.1376}, "copy": {"pcc": 0.999636, "mae": 0.00751}, "base": {"pcc": 0.999636, "mae": 0.00751}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[forced-cout48_bf8] {"case": "forced-cout48_bf8", "ref": "base", "plan": {"copy": [4, 1, true], "base": [4, 1, true]}, "rows": {"filled": 280, "live": 234, "dead_frac": 0.1643}, "copy": {"pcc": 0.999838, "mae": 0.00869}, "base": {"pcc": 0.999838, "mae": 0.00869}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[forced-multiblock_bf8] {"case": "forced-multiblock_bf8", "ref": "base", "plan": {"copy": [32, 1, true], "base": [32, 1, true]}, "rows": {"filled": 326, "live": 312, "dead_frac": 0.0429}, "copy": {"pcc": 1.0, "mae": 0.0081}, "base": {"pcc": 1.0, "mae": 0.0081}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[forced-kblocked_multiblock_hifi4] {"case": "forced-kblocked_multiblock_hifi4", "ref": "base", "plan": {"copy": [16, 2, false], "base": [16, 2, false]}, "rows": {"filled": 406, "live": 376, "dead_frac": 0.0739}, "copy": {"pcc": 1.0, "mae": 0.00669}, "base": {"pcc": 1.0, "mae": 0.00669}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[forced-ragged_bf8] {"case": "forced-ragged_bf8", "ref": "base", "plan": {"copy": [5, 1, true], "base": [5, 1, true]}, "rows": {"filled": 208, "live": 170, "dead_frac": 0.1827}, "copy": {"pcc": 0.999723, "mae": 0.00767}, "base": {"pcc": 0.999723, "mae": 0.00767}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[forced-many_blocks_whole_k] {"case": "forced-many_blocks_whole_k", "ref": "base", "plan": {"copy": [32, 8, false], "base": [32, 8, false]}, "rows": {"filled": 1582, "live": 1520, "dead_frac": 0.0392}, "copy": {"pcc": 0.999766, "mae": 0.01026}, "base": {"pcc": 0.999766, "mae": 0.01026}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[forced-many_blocks_kblocked] {"case": "forced-many_blocks_kblocked", "ref": "base", "plan": {"copy": [16, 2, false], "base": [16, 2, false]}, "rows": {"filled": 406, "live": 376, "dead_frac": 0.0739}, "copy": {"pcc": 0.999625, "mae": 0.00879}, "base": {"pcc": 0.999625, "mae": 0.00879}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[forced-kblocked_n2] {"case": "forced-kblocked_n2", "ref": "base", "plan": {"copy": [4, 1, true], "base": [4, 1, true]}, "rows": {"filled": 154, "live": 124, "dead_frac": 0.1948}, "copy": {"pcc": 0.999788, "mae": 0.00818}, "base": {"pcc": 0.999788, "mae": 0.00818}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[forced-kblocked_n10] {"case": "forced-kblocked_n10", "ref": "base", "plan": {"copy": [4, 1, true], "base": [4, 1, true]}, "rows": {"filled": 436, "live": 376, "dead_frac": 0.1376}, "copy": {"pcc": 0.999924, "mae": 0.00902}, "base": {"pcc": 0.999924, "mae": 0.00902}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[xchg-kblocked_lofi] {"case": "xchg-kblocked_lofi", "ref": "base", "plan": {"copy": [3, 1, true], "base": [3, 1, true]}, "rows": {"filled": 1098, "live": 760, "dead_frac": 0.3078}, "copy": {"pcc": 0.999625, "mae": 0.00879}, "base": {"pcc": 0.999625, "mae": 0.00879}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[xchg-kblocked_hifi4] {"case": "xchg-kblocked_hifi4", "ref": "base", "plan": {"copy": [3, 1, true], "base": [3, 1, true]}, "rows": {"filled": 1098, "live": 760, "dead_frac": 0.3078}, "copy": {"pcc": 1.0, "mae": 0.00669}, "base": {"pcc": 1.0, "mae": 0.00669}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[xchg-kblocked_two_planes] {"case": "xchg-kblocked_two_planes", "ref": "base", "plan": {"copy": [3, 1, true], "base": [3, 1, true]}, "rows": {"filled": 1098, "live": 760, "dead_frac": 0.3078}, "copy": {"pcc": 0.999982, "mae": 0.00849}, "base": {"pcc": 0.999982, "mae": 0.00849}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[xchg-kblocked_few_cores] {"case": "xchg-kblocked_few_cores", "ref": "base", "plan": {"copy": [9, 1, true], "base": [9, 1, true]}, "rows": {"filled": 535, "live": 480, "dead_frac": 0.1028}, "copy": {"pcc": 0.999864, "mae": 0.01853}, "base": {"pcc": 0.999864, "mae": 0.01853}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[xchg-kblocked_no_server] {"case": "xchg-kblocked_no_server", "ref": "base", "plan": {"copy": [4, 1, true], "base": [4, 1, true]}, "rows": {"filled": 1744, "live": 1310, "dead_frac": 0.2489}, "copy": {"pcc": 0.99949, "mae": 0.00831}, "base": {"pcc": 0.99949, "mae": 0.00831}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[xchg-d2_bf8] {"case": "xchg-d2_bf8", "ref": "base", "plan": {"copy": [3, 1, true], "base": [3, 1, true]}, "rows": {"filled": 1254, "live": 752, "dead_frac": 0.4003}, "copy": {"pcc": 0.999818, "mae": 0.00803}, "base": {"pcc": 0.999818, "mae": 0.00803}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[xchg-n1_bf8] {"case": "xchg-n1_bf8", "ref": "base", "plan": {"copy": [5, 1, true], "base": [5, 1, true]}, "rows": {"filled": 761, "live": 658, "dead_frac": 0.1353}, "copy": {"pcc": 0.999837, "mae": 0.00825}, "base": {"pcc": 0.999837, "mae": 0.00825}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[xchg-n3_hifi2] {"case": "xchg-n3_hifi2", "ref": "base", "plan": {"copy": [5, 1, true], "base": [5, 1, true]}, "rows": {"filled": 494, "live": 418, "dead_frac": 0.1538}, "copy": {"pcc": 0.999594, "mae": 0.0065}, "base": {"pcc": 0.999594, "mae": 0.0065}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[xchg-ragged_one_row] {"case": "xchg-ragged_one_row", "ref": "base", "plan": {"copy": [5, 1, true], "base": [5, 1, true]}, "rows": {"filled": 208, "live": 170, "dead_frac": 0.1827}, "copy": {"pcc": 0.999723, "mae": 0.00767}, "base": {"pcc": 0.999723, "mae": 0.00767}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[xchg-bf16] {"case": "xchg-bf16", "ref": "base", "plan": {"copy": [3, 1, true], "base": [3, 1, true]}, "rows": {"filled": 543, "live": 376, "dead_frac": 0.3076}, "copy": {"pcc": 0.999931, "mae": 0.00932}, "base": {"pcc": 0.999931, "mae": 0.00932}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[xchg-whole_k_n1] {"case": "xchg-whole_k_n1", "ref": "base", "plan": {"copy": [10, 1, true], "base": [10, 1, true]}, "rows": {"filled": 2853, "live": 2648, "dead_frac": 0.0719}, "copy": {"pcc": 0.999766, "mae": 0.01026}, "base": {"pcc": 0.999766, "mae": 0.01026}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[xchg-kblocked_n2_hifi4] {"case": "xchg-kblocked_n2_hifi4", "ref": "base", "plan": {"copy": [3, 1, true], "base": [3, 1, true]}, "rows": {"filled": 1098, "live": 760, "dead_frac": 0.3078}, "copy": {"pcc": 0.999927, "mae": 0.01277}, "base": {"pcc": 0.999927, "mae": 0.01277}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[xchg-whole_k_n2_one_row] {"case": "xchg-whole_k_n2_one_row", "ref": "base", "plan": {"copy": [1, 1, true], "base": [1, 1, true]}, "rows": {"filled": 436, "live": 188, "dead_frac": 0.5688}, "copy": {"pcc": 0.999765, "mae": 0.00843}, "base": {"pcc": 0.999765, "mae": 0.00843}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[recompute-kblocked_lofi] {"case": "recompute-kblocked_lofi", "ref": "base", "plan": {"copy": [3, 1, false], "base": [3, 1, false]}, "rows": {"filled": 1098, "live": 1056, "dead_frac": 0.0383}, "copy": {"pcc": 0.999625, "mae": 0.00879}, "base": {"pcc": 0.999625, "mae": 0.00879}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[recompute-kblocked_hifi4] {"case": "recompute-kblocked_hifi4", "ref": "base", "plan": {"copy": [3, 1, false], "base": [3, 1, false]}, "rows": {"filled": 1098, "live": 1056, "dead_frac": 0.0383}, "copy": {"pcc": 1.0, "mae": 0.00669}, "base": {"pcc": 1.0, "mae": 0.00669}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[recompute-kblocked_two_planes] {"case": "recompute-kblocked_two_planes", "ref": "base", "plan": {"copy": [3, 1, false], "base": [3, 1, false]}, "rows": {"filled": 1098, "live": 1056, "dead_frac": 0.0383}, "copy": {"pcc": 0.999982, "mae": 0.00849}, "base": {"pcc": 0.999982, "mae": 0.00849}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[recompute-kblocked_few_cores] {"case": "recompute-kblocked_few_cores", "ref": "base", "plan": {"copy": [9, 1, false], "base": [9, 1, false]}, "rows": {"filled": 535, "live": 522, "dead_frac": 0.0243}, "copy": {"pcc": 0.999864, "mae": 0.01853}, "base": {"pcc": 0.999864, "mae": 0.01853}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[recompute-kblocked_no_server] {"case": "recompute-kblocked_no_server", "ref": "base", "plan": {"copy": [4, 1, false], "base": [4, 1, false]}, "rows": {"filled": 1744, "live": 1702, "dead_frac": 0.0241}, "copy": {"pcc": 0.99949, "mae": 0.00831}, "base": {"pcc": 0.99949, "mae": 0.00831}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[recompute-d2_bf8] {"case": "recompute-d2_bf8", "ref": "base", "plan": {"copy": [3, 1, false], "base": [3, 1, false]}, "rows": {"filled": 1254, "live": 1128, "dead_frac": 0.1005}, "copy": {"pcc": 0.999818, "mae": 0.00803}, "base": {"pcc": 0.999818, "mae": 0.00803}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[recompute-n1_bf8] {"case": "recompute-n1_bf8", "ref": "base", "plan": {"copy": [5, 1, false], "base": [5, 1, false]}, "rows": {"filled": 761, "live": 736, "dead_frac": 0.0329}, "copy": {"pcc": 0.999837, "mae": 0.00825}, "base": {"pcc": 0.999837, "mae": 0.00825}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[recompute-n3_hifi2] {"case": "recompute-n3_hifi2", "ref": "base", "plan": {"copy": [5, 1, false], "base": [5, 1, false]}, "rows": {"filled": 494, "live": 470, "dead_frac": 0.0486}, "copy": {"pcc": 0.999594, "mae": 0.0065}, "base": {"pcc": 0.999594, "mae": 0.0065}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[recompute-ragged_one_row] {"case": "recompute-ragged_one_row", "ref": "base", "plan": {"copy": [5, 1, false], "base": [5, 1, false]}, "rows": {"filled": 208, "live": 190, "dead_frac": 0.0865}, "copy": {"pcc": 0.999723, "mae": 0.00767}, "base": {"pcc": 0.999723, "mae": 0.00767}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[recompute-bf16] {"case": "recompute-bf16", "ref": "base", "plan": {"copy": [3, 1, false], "base": [3, 1, false]}, "rows": {"filled": 543, "live": 522, "dead_frac": 0.0387}, "copy": {"pcc": 0.999931, "mae": 0.00932}, "base": {"pcc": 0.999931, "mae": 0.00932}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[recompute-whole_k_n1] {"case": "recompute-whole_k_n1", "ref": "base", "plan": {"copy": [10, 1, false], "base": [10, 1, false]}, "rows": {"filled": 2853, "live": 2802, "dead_frac": 0.0179}, "copy": {"pcc": 0.999766, "mae": 0.01026}, "base": {"pcc": 0.999766, "mae": 0.01026}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[recompute-kblocked_n2_hifi4] {"case": "recompute-kblocked_n2_hifi4", "ref": "base", "plan": {"copy": [3, 1, false], "base": [3, 1, false]}, "rows": {"filled": 1098, "live": 1056, "dead_frac": 0.0383}, "copy": {"pcc": 0.999927, "mae": 0.01277}, "base": {"pcc": 0.999927, "mae": 0.01277}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[recompute-whole_k_n2_one_row] {"case": "recompute-whole_k_n2_one_row", "ref": "base", "plan": {"copy": [1, 1, false], "base": [1, 1, false]}, "rows": {"filled": 436, "live": 376, "dead_frac": 0.1376}, "copy": {"pcc": 0.999765, "mae": 0.00843}, "base": {"pcc": 0.999765, "mae": 0.00843}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-mb_w96_mid_row] {"case": "extra-mb_w96_mid_row", "ref": "basefix", "plan": {"copy": [32, 3, false], "base": [32, 3, false]}, "rows": {"filled": 472, "live": 466, "dead_frac": 0.0127}, "copy": {"pcc": 0.999835, "mae": 0.00983}, "base": {"pcc": 0.999835, "mae": 0.00983}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-mb_w96_mid_row_d2] {"case": "extra-mb_w96_mid_row_d2", "ref": "basefix", "plan": {"copy": [32, 3, false], "base": [32, 3, false]}, "rows": {"filled": 538, "live": 532, "dead_frac": 0.0112}, "copy": {"pcc": 0.999928, "mae": 0.00979}, "base": {"pcc": 0.999928, "mae": 0.00979}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-mb_ragged_w64] {"case": "extra-mb_ragged_w64", "ref": "basefix", "plan": {"copy": [39, 1, true], "base": [39, 1, true]}, "rows": {"filled": 216, "live": 208, "dead_frac": 0.037}, "copy": {"pcc": 0.999691, "mae": 0.00792}, "base": {"pcc": 0.999691, "mae": 0.00792}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-n2_one_row_cores] {"case": "extra-n2_one_row_cores", "ref": "basefix", "plan": {"copy": [1, 1, true], "base": [1, 1, true]}, "rows": {"filled": 436, "live": 188, "dead_frac": 0.5688}, "copy": {"pcc": 0.999765, "mae": 0.00843}, "base": {"pcc": 0.999765, "mae": 0.00843}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-n2_d3] {"case": "extra-n2_d3", "ref": "basefix", "plan": {"copy": [4, 1, true], "base": [4, 1, true]}, "rows": {"filled": 618, "live": 414, "dead_frac": 0.3301}, "copy": {"pcc": 0.999814, "mae": 0.00878}, "base": {"pcc": 0.999814, "mae": 0.00878}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-kblocked_n2_multiblock] {"case": "extra-kblocked_n2_multiblock", "ref": "basefix", "plan": {"copy": [8, 4, false], "base": [8, 4, false]}, "rows": {"filled": 566, "live": 504, "dead_frac": 0.1095}, "copy": {"pcc": 1.0, "mae": 0.00996}, "base": {"pcc": 1.0, "mae": 0.00996}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSEDUP_FRONT_INLINE: real pass took 8.0s
+
+
+- generated xml file: /localdev/pmilojevic/workspaces/opgen/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+1.10s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[sem_dec_res2_fc0]
+0.98s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[sem_res2_fc1]
+0.84s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[sem_dec_res3_fc0]
+0.67s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[sem_dec_res3_fc1]
+0.66s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[stem_conv3]
+0.45s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[inst_dec_res3_fc0]
+0.42s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[stem_conv2]
+0.36s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[inst_dec_res2_fc0]
+0.30s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[inst_res2_fc1]
+0.24s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[stem_conv2]
+0.19s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[res3_x]
+0.13s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[center_head_1]
+0.10s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[res2]
+0.07s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[recompute-kblocked_no_server]
+0.06s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[xchg-kblocked_no_server]
+0.06s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[xchg-kblocked_two_planes]
+0.06s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[recompute-kblocked_n2_hifi4]
+0.06s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[recompute-kblocked_two_planes]
+0.05s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[xchg-kblocked_n2_hifi4]
+0.05s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[xchg-kblocked_hifi4]
+0.05s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[recompute-kblocked_hifi4]
+0.05s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[recompute-kblocked_lofi]
+0.05s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[forced-kblocked_multiblock_hifi4]
+0.04s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[xchg-whole_k_n1]
+0.04s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[forced-many_blocks_kblocked]
+============================= 56 passed in 19.76s ==============================
+2026-11-19 14:47:46.749 | info     |    BuildKernels | JIT cache stats: 505/605 hits (83.5%) [505 cached, 691 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-19 14:47:46.749 | info     |    BuildKernels | JIT telemetry: 42 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-19 14:47:46.800 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:605)
+2026-11-19 14:47:46.800 | info     |             UMD | Closing devices in cluster (cluster.cpp:1496)
+2026-11-19 14:47:47.224 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1506)
+2026-11-19 14:47:47.225 | info     |             UMD | Cluster destructor started. (cluster.cpp:1227)
+2026-11-19 14:47:47.225 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1240)
+========================================
+PRECOMPILE: UP_FRONT_INLINE: collect pass over 56 item(s) took 8.7s
+PRECOMPILE: UP_FRONT_INLINE: compile route local (programs=109, farm_min=10)
+PRECOMPILE: UP_FRONT_COLLECT: 168 ops stashed across 56 bodies -> 109 unique programs (swallowed 0, skipped-capture 0)
+PRECOMPILE: UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=504 fallback=0
+PRECOMPILE: UP_FRONT_COLLECT: 109 collected · 109 built · 0 already compiled in 2.7s (workers=64, errors=0) -> on-disk JIT cache warm
+PRECOMPILE: UP_FRONT_INLINE: compile step took 3.0s; starting the real pass
+SAFE_PYTEST_RESULT: PASS
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 0m27s (27s total, device-lock-acquired -> exit)

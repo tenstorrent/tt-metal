@@ -1,0 +1,129 @@
+SAFE_PYTEST: Waiting for device lock...
+[2026-11-19 15:27:22] SAFE_PYTEST: waiting for device (20s) — holder pid=1097112 cmd="/bin/bash scripts/run_safe_pytest.sh --dev --run-all --no-precompile ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tap_shift_rate/test_tsr.py --import-mode=prepend -q " parent pid=1097108 cmd="timeout 590 scripts/run_safe_pytest.sh --dev --run-all --no-precompile ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tap_shift_rate/test_tsr.py --i"
+[2026-11-19 15:27:42] SAFE_PYTEST: waiting for device (40s) — holder pid=1144512 cmd="/bin/bash scripts/run_safe_pytest.sh --dev --run-all --precompile --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_unit.py -s " parent pid=1144511 cmd="timeout 580 scripts/run_safe_pytest.sh --dev --run-all --precompile --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_p"
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: [dev] asserts=ebreak llk_asserts=ON watcher=polling triage=ON timeout=5s
+PRECOMPILE: on — collect + parallel compile (x64) inside the pytest session, local
+SAFE_PYTEST: env UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=64 PYTHONPATH=/localdev/pmilojevic/workspaces/opgen:/localdev/pmilojevic/workspaces/opgen pytest -p tests.plugins.up_front_collect --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus\[res3_x\] ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus\[stem_conv3\] ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus\[res2\] ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus\[sem_dec_res3_fc0\] ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit\[xchg-ragged_one_row\] ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit\[recompute-kblocked_few_cores\] ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit\[forced-kblocked_multiblock_hifi4\] ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit\[extra-mb_w96_mid_row\] ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit\[extra-n2_d3\] ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit\[extra-kblocked_n2_multiblock\]
+========================================
+2026-11-19 15:28:00.336 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/workspaces/opgen
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, anyio-4.16.0, benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, cov-7.0.0, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-11-19 15:28:00.522 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-19 15:28:00.522 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-19 15:28:00.525 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-19 15:28:00.525 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-19 15:28:00.548 | info     |             UMD | Established firmware bundle version: 19.16.1 (topology_discovery.cpp:700)
+2026-11-19 15:28:00.549 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-19 15:28:00.813 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:174)
+2026-11-19 15:28:00.813 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-19 15:28:00.813 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-19 15:28:00.813 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-19 15:28:00.820 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-19 15:28:01.143 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-19 15:28:01.282 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-19 15:28:01.282 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-19 15:28:01.502 | info     |       LLRuntime | Watcher log file: /localdev/pmilojevic/workspaces/opgen/generated/watcher/watcher.log (watcher_server.cpp:306)
+2026-11-19 15:28:01.503 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+collected 10 items
+{"case": "res3.{1,2,3}.conv2 + instance res3.fuse_conv.1 @ LoFi [perf]", "plan": {"copy": [3, 1, true], "base": [3, 1, true]}, "rows": {"filled": 1098, "live": 760, "dead_frac": 0.3078}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "stem.conv3 @ LoFi [perf]", "plan": {"copy": [19, 2, false], "base": [19, 2, false]}, "rows": {"filled": 11397, "live": 11370, "dead_frac": 0.0024}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "res2.{0,1,2}.conv2 @ LoFi [perf]", "plan": {"copy": [10, 1, true], "base": [10, 1, true]}, "rows": {"filled": 2853, "live": 2648, "dead_frac": 0.0719}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "semantic decoder.res3.fuse_conv.0 @ LoFi [perf]", "plan": {"copy": [3, 1, true], "base": [3, 1, true]}, "rows": {"filled": 1098, "live": 760, "dead_frac": 0.3078}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "xchg-ragged_one_row", "ref": "base", "plan": {"copy": [5, 1, true], "base": [5, 1, true]}, "rows": {"filled": 208, "live": 170, "dead_frac": 0.1827}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "recompute-kblocked_few_cores", "ref": "base", "plan": {"copy": [9, 1, false], "base": [9, 1, false]}, "rows": {"filled": 535, "live": 522, "dead_frac": 0.0243}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "forced-kblocked_multiblock_hifi4", "ref": "base", "plan": {"copy": [16, 2, false], "base": [16, 2, false]}, "rows": {"filled": 406, "live": 376, "dead_frac": 0.0739}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "extra-mb_w96_mid_row", "ref": "basefix", "plan": {"copy": [32, 3, false], "base": [32, 3, false]}, "rows": {"filled": 472, "live": 466, "dead_frac": 0.0127}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "extra-n2_d3", "ref": "basefix", "plan": {"copy": [4, 1, true], "base": [4, 1, true]}, "rows": {"filled": 618, "live": 414, "dead_frac": 0.3301}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "extra-kblocked_n2_multiblock", "ref": "basefix", "plan": {"copy": [8, 4, false], "base": [8, 4, false]}, "rows": {"filled": 566, "live": 504, "dead_frac": 0.1095}, "copy": {"pcc": NaN, "mae": 0.0}, "base": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+
+UP_FRONT_INLINE: collect pass over 10 item(s) took 3.5s
+UP_FRONT_INLINE: compile route local (programs=20, farm_min=10)
+
+UP_FRONT_COLLECT: 30 ops stashed across 10 bodies -> 20 unique programs (swallowed 0, skipped-capture 0)
+UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=90 fallback=0
+2026-11-19 15:28:04.295 | info     |       LLRuntime | Watcher log file: /localdev/pmilojevic/workspaces/opgen/generated/watcher/watcher.log (watcher_server.cpp:306)
+2026-11-19 15:28:04.295 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-19 15:28:04.434 | info     |           Metal | Enabling program cache on MeshDevice 3 (mesh_device.cpp:1322)
+UP_FRONT_COLLECT: 20 collected · 20 built · 0 already compiled in 2.7s (workers=64, errors=0) -> on-disk JIT cache warm
+UP_FRONT_COLLECT_RESULT: status=ok reason=ok unique=20 programs=20 errors=0 pytest_exit=0 xpass_strict=0 other_failures=0 built=20 compile_s=3.2 collect_s=3.5 route=local
+UP_FRONT_INLINE: compile step took 3.2s; starting the real pass
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[res3_x] 2026-11-19 15:28:07.460 | info     |       LLRuntime | Watcher log file: /localdev/pmilojevic/workspaces/opgen/generated/watcher/watcher.log (watcher_server.cpp:306)
+2026-11-19 15:28:07.461 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+{"case": "res3.{1,2,3}.conv2 + instance res3.fuse_conv.1 @ LoFi [perf]", "plan": {"copy": [3, 1, true], "base": [3, 1, true]}, "rows": {"filled": 1098, "live": 760, "dead_frac": 0.3078}, "copy": {"pcc": 0.99993, "mae": 0.24493}, "base": {"pcc": 0.99993, "mae": 0.24493}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[stem_conv3] {"case": "stem.conv3 @ LoFi [perf]", "plan": {"copy": [19, 2, false], "base": [19, 2, false]}, "rows": {"filled": 11397, "live": 11370, "dead_frac": 0.0024}, "copy": {"pcc": 0.999876, "mae": 0.17316}, "base": {"pcc": 0.999876, "mae": 0.17316}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[res2] {"case": "res2.{0,1,2}.conv2 @ LoFi [perf]", "plan": {"copy": [10, 1, true], "base": [10, 1, true]}, "rows": {"filled": 2853, "live": 2648, "dead_frac": 0.0719}, "copy": {"pcc": 1.0, "mae": 0.1749}, "base": {"pcc": 1.0, "mae": 0.1749}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[sem_dec_res3_fc0] {"case": "semantic decoder.res3.fuse_conv.0 @ LoFi [perf]", "plan": {"copy": [3, 1, true], "base": [3, 1, true]}, "rows": {"filled": 1098, "live": 760, "dead_frac": 0.3078}, "copy": {"pcc": 0.999818, "mae": 0.38534}, "base": {"pcc": 0.999818, "mae": 0.38534}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[xchg-ragged_one_row] {"case": "xchg-ragged_one_row", "ref": "base", "plan": {"copy": [5, 1, true], "base": [5, 1, true]}, "rows": {"filled": 208, "live": 170, "dead_frac": 0.1827}, "copy": {"pcc": 0.999723, "mae": 0.00767}, "base": {"pcc": 0.999723, "mae": 0.00767}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[recompute-kblocked_few_cores] {"case": "recompute-kblocked_few_cores", "ref": "base", "plan": {"copy": [9, 1, false], "base": [9, 1, false]}, "rows": {"filled": 535, "live": 522, "dead_frac": 0.0243}, "copy": {"pcc": 0.999864, "mae": 0.01853}, "base": {"pcc": 0.999864, "mae": 0.01853}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[forced-kblocked_multiblock_hifi4] {"case": "forced-kblocked_multiblock_hifi4", "ref": "base", "plan": {"copy": [16, 2, false], "base": [16, 2, false]}, "rows": {"filled": 406, "live": 376, "dead_frac": 0.0739}, "copy": {"pcc": 1.0, "mae": 0.00669}, "base": {"pcc": 1.0, "mae": 0.00669}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-mb_w96_mid_row] {"case": "extra-mb_w96_mid_row", "ref": "basefix", "plan": {"copy": [32, 3, false], "base": [32, 3, false]}, "rows": {"filled": 472, "live": 466, "dead_frac": 0.0127}, "copy": {"pcc": 0.999835, "mae": 0.00983}, "base": {"pcc": 0.999835, "mae": 0.00983}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-n2_d3] {"case": "extra-n2_d3", "ref": "basefix", "plan": {"copy": [4, 1, true], "base": [4, 1, true]}, "rows": {"filled": 618, "live": 414, "dead_frac": 0.3301}, "copy": {"pcc": 0.999814, "mae": 0.00878}, "base": {"pcc": 0.999814, "mae": 0.00878}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-kblocked_n2_multiblock] {"case": "extra-kblocked_n2_multiblock", "ref": "basefix", "plan": {"copy": [8, 4, false], "base": [8, 4, false]}, "rows": {"filled": 566, "live": 504, "dead_frac": 0.1095}, "copy": {"pcc": 1.0, "mae": 0.00996}, "base": {"pcc": 1.0, "mae": 0.00996}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSEDUP_FRONT_INLINE: real pass took 2.4s
+
+
+- generated xml file: /localdev/pmilojevic/workspaces/opgen/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+0.85s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[sem_dec_res3_fc0]
+0.62s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[stem_conv3]
+0.40s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[res3_x]
+0.13s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[res3_x]
+0.08s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[res2]
+0.06s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-kblocked_n2_multiblock]
+0.05s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[forced-kblocked_multiblock_hifi4]
+0.04s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-mb_w96_mid_row]
+0.04s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[recompute-kblocked_few_cores]
+0.02s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-kblocked_n2_multiblock]
+0.02s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-n2_d3]
+0.02s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[xchg-ragged_one_row]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[xchg-ragged_one_row]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[forced-kblocked_multiblock_hifi4]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-mb_w96_mid_row]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-n2_d3]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-kblocked_n2_multiblock]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[sem_dec_res3_fc0]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[recompute-kblocked_few_cores]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[res2]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[stem_conv3]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[forced-kblocked_multiblock_hifi4]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_focus[res2]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-mb_w96_mid_row]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[recompute-kblocked_few_cores]
+============================== 10 passed in 9.12s ==============================
+2026-11-19 15:28:10.921 | info     |    BuildKernels | JIT cache stats: 89/137 hits (65.0%) [89 cached, 356 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-19 15:28:10.921 | info     |    BuildKernels | JIT telemetry: 48 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-19 15:28:10.971 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:605)
+2026-11-19 15:28:10.971 | info     |             UMD | Closing devices in cluster (cluster.cpp:1496)
+2026-11-19 15:28:11.454 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1506)
+2026-11-19 15:28:11.454 | info     |             UMD | Cluster destructor started. (cluster.cpp:1227)
+2026-11-19 15:28:11.454 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1240)
+========================================
+PRECOMPILE: UP_FRONT_INLINE: collect pass over 10 item(s) took 3.5s
+PRECOMPILE: UP_FRONT_INLINE: compile route local (programs=20, farm_min=10)
+PRECOMPILE: UP_FRONT_COLLECT: 30 ops stashed across 10 bodies -> 20 unique programs (swallowed 0, skipped-capture 0)
+PRECOMPILE: UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=90 fallback=0
+PRECOMPILE: UP_FRONT_COLLECT: 20 collected · 20 built · 0 already compiled in 2.7s (workers=64, errors=0) -> on-disk JIT cache warm
+PRECOMPILE: UP_FRONT_INLINE: compile step took 3.2s; starting the real pass
+SAFE_PYTEST_RESULT: PASS
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 0m16s (16s total, device-lock-acquired -> exit)

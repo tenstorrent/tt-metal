@@ -222,10 +222,10 @@ inline void unpack_tilize_bias_at(uint32_t addr, uint32_t col_tile, uint32_t add
 }
 #endif
 
-// Slab row of input tile-row r read for kernel row kh is r + base[kh]: the reader's tile_slab_plan
-// (conv2d_3x3_slab_dataflow.hpp; that header is dataflow-only) for output pixels [o_first, o_end), stride 1,
-// padding == dilation, band_last_tap 2. Bands that overlap or touch share consecutive rows; a band past a gap (a short
-// ragged last core) is packed right after the previous one.
+// Slab row of input tile-row r read for kernel row kh is r + base[kh]: the placement of the reader's kwf_slab_plan
+// (tile_slab_plan's, conv2d_3x3_slab_dataflow.hpp, dataflow-only; the fill writes only the rows this walk reads) for
+// output pixels [o_first, o_end), stride 1, padding == dilation, band_last_tap 2. Bands that overlap or touch share
+// consecutive rows; a band past a gap (a short ragged last core) is packed right after the previous one.
 template <int32_t W, int32_t num_in_px, int32_t d>
 inline void slab_bases(uint32_t o_first, uint32_t o_end, int32_t (&base)[3]) {
     const int32_t f = static_cast<int32_t>(o_first) - d * W - d;

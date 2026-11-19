@@ -1,0 +1,91 @@
+SAFE_PYTEST: precompile off for a -k selection (its size is unknown from the command line); pass --precompile when the slice covers more than a few tests
+SAFE_PYTEST: Waiting for device lock...
+[2026-11-19 14:04:13] SAFE_PYTEST: waiting for device (20s) — holder pid=168439 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all --precompile --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_noc_split/test_krn_op.py::test_conv2d_3x3_perf_f" parent pid=168438 cmd="timeout 2400 scripts/run_safe_pytest.sh --profile --run-all --precompile --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_ro"
+[2026-11-19 14:04:33] SAFE_PYTEST: waiting for device (40s) — holder pid=168439 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all --precompile --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_noc_split/test_krn_op.py::test_conv2d_3x3_perf_f" parent pid=168438 cmd="timeout 2400 scripts/run_safe_pytest.sh --profile --run-all --precompile --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_ro"
+[2026-11-19 14:04:53] SAFE_PYTEST: waiting for device (60s) — holder pid=173378 cmd="/bin/bash scripts/run_safe_pytest.sh --run-all --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact.py -s " parent pid=173372 cmd="timeout 2400 scripts/run_safe_pytest.sh --run-all --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_exact"
+[2026-11-19 14:05:14] SAFE_PYTEST: waiting for device (80s) — holder pid=174948 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all --precompile --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_noc_split/test_krn_op.py::test_conv2d_3x3_perf_f" parent pid=174947 cmd="timeout 2400 scripts/run_safe_pytest.sh --profile --run-all --precompile --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_ro"
+[2026-11-19 14:05:34] SAFE_PYTEST: waiting for device (100s) — holder pid=180453 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_perf.py " parent pid=180452 cmd="timeout 2400 scripts/run_safe_pytest.sh --profile --run-all --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test"
+[2026-11-19 14:05:55] SAFE_PYTEST: waiting for device (120s) — holder pid=168287 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/stem1_slab_stream/test_ss.py --import-mode=prepend -q " parent pid=168279 cmd="bash ./run.sh r1_first "
+[2026-11-19 14:06:15] SAFE_PYTEST: waiting for device (140s) — holder pid=188309 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_spare_mgroups/test_bsm.py --import-mode=prepend -q" parent pid=188305 cmd="timeout 3000 scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/blo"
+[2026-11-19 14:06:36] SAFE_PYTEST: waiting for device (160s) — holder pid=188309 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_spare_mgroups/test_bsm.py --import-mode=prepend -q" parent pid=188305 cmd="timeout 3000 scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/blo"
+[2026-11-19 14:06:56] SAFE_PYTEST: waiting for device (180s) — holder pid=187677 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test_kfp_perf.py " parent pid=187676 cmd="timeout 2400 scripts/run_safe_pytest.sh --profile --run-all --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_final_pass/test"
+[2026-11-19 14:07:17] SAFE_PYTEST: waiting for device (200s) — holder pid=190640 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all --no-precompile /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tap_shift_rate/test_bench.py --import-mo" parent pid=190639 cmd="timeout 1500 scripts/run_safe_pytest.sh --profile --run-all --no-precompile /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf"
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: off (narrow) — kernels compile on demand
+SAFE_PYTEST: pytest --import-mode=prepend -k extra ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit
+========================================
+2026-11-19 14:07:32.931 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/workspaces/opgen
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, anyio-4.16.0, benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, cov-7.0.0, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 44 items / 38 deselected / 6 selected
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-mb_w96_mid_row] 2026-11-19 14:07:33.126 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-19 14:07:33.126 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-19 14:07:33.128 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-19 14:07:33.128 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-19 14:07:33.152 | info     |             UMD | Established firmware bundle version: 19.16.1 (topology_discovery.cpp:700)
+2026-11-19 14:07:33.153 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-19 14:07:33.416 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:174)
+2026-11-19 14:07:33.417 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-19 14:07:33.417 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-19 14:07:33.417 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-19 14:07:33.424 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-19 14:07:33.845 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-19 14:07:33.990 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-19 14:07:33.990 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-19 14:07:34.123 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+{"case": "extra-mb_w96_mid_row", "ref": "basefix", "plan": {"copy": [32, 3, false], "base": [32, 3, false]}, "rows": {"filled": 472, "live": 466, "dead_frac": 0.0127}, "copy": {"pcc": 0.999835, "mae": 0.00983}, "base": {"pcc": 0.999835, "mae": 0.00983}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-mb_w96_mid_row_d2] {"case": "extra-mb_w96_mid_row_d2", "ref": "basefix", "plan": {"copy": [32, 3, false], "base": [32, 3, false]}, "rows": {"filled": 538, "live": 532, "dead_frac": 0.0112}, "copy": {"pcc": 0.999928, "mae": 0.00979}, "base": {"pcc": 0.999928, "mae": 0.00979}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-mb_ragged_w64] {"case": "extra-mb_ragged_w64", "ref": "basefix", "plan": {"copy": [39, 1, true], "base": [39, 1, true]}, "rows": {"filled": 216, "live": 208, "dead_frac": 0.037}, "copy": {"pcc": 0.999691, "mae": 0.00792}, "base": {"pcc": 0.999691, "mae": 0.00792}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-n2_one_row_cores] {"case": "extra-n2_one_row_cores", "ref": "basefix", "plan": {"copy": [1, 1, true], "base": [1, 1, true]}, "rows": {"filled": 436, "live": 188, "dead_frac": 0.5688}, "copy": {"pcc": 0.999765, "mae": 0.00843}, "base": {"pcc": 0.999765, "mae": 0.00843}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-n2_d3] {"case": "extra-n2_d3", "ref": "basefix", "plan": {"copy": [4, 1, true], "base": [4, 1, true]}, "rows": {"filled": 618, "live": 414, "dead_frac": 0.3301}, "copy": {"pcc": 0.999814, "mae": 0.00878}, "base": {"pcc": 0.999814, "mae": 0.00878}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-kblocked_n2_multiblock] {"case": "extra-kblocked_n2_multiblock", "ref": "basefix", "plan": {"copy": [8, 4, false], "base": [8, 4, false]}, "rows": {"filled": 566, "live": 504, "dead_frac": 0.1095}, "copy": {"pcc": 1.0, "mae": 0.00996}, "base": {"pcc": 1.0, "mae": 0.00996}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+
+- generated xml file: /localdev/pmilojevic/workspaces/opgen/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+1.67s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-mb_w96_mid_row]
+1.03s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-kblocked_n2_multiblock]
+1.03s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-mb_w96_mid_row]
+0.99s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-mb_w96_mid_row_d2]
+0.99s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-mb_ragged_w64]
+0.99s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-n2_d3]
+0.98s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-n2_one_row_cores]
+0.02s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-kblocked_n2_multiblock]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-mb_ragged_w64]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-mb_w96_mid_row_d2]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-n2_one_row_cores]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-kblocked_n2_multiblock]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-n2_d3]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-mb_w96_mid_row_d2]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-mb_w96_mid_row]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-n2_d3]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-mb_ragged_w64]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_xchg_slab_skip/test_xss_exact.py::test_xss_exact_unit[extra-n2_one_row_cores]
+======================= 6 passed, 38 deselected in 7.79s =======================
+2026-11-19 14:07:42.261 | info     |    BuildKernels | JIT cache stats: 42/76 hits (55.3%) [42 cached, 16 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-19 14:07:42.261 | info     |    BuildKernels | JIT telemetry: 48 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-19 14:07:42.311 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:605)
+2026-11-19 14:07:42.311 | info     |             UMD | Closing devices in cluster (cluster.cpp:1496)
+2026-11-19 14:07:42.766 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1506)
+2026-11-19 14:07:42.766 | info     |             UMD | Cluster destructor started. (cluster.cpp:1227)
+2026-11-19 14:07:42.766 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1240)
+========================================
+SAFE_PYTEST_RESULT: PASS
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 0m15s (15s total, device-lock-acquired -> exit)
