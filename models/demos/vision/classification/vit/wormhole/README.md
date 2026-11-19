@@ -39,17 +39,17 @@ pytest models/demos/vision/classification/vit/wormhole/tests/test_vit_device_per
 ```
 
 ## Testing
-- Use the following command to run the demo and to test inference accuracy for Imagenet-21K:
+- Use the following command to run the demo:
 ```sh
-pytest --disable-warnings models/demos/vision/classification/vit/wormhole/demo/demo_vit_performant_imagenet_inference.py::test_run_vit_trace_2cqs_inference
+pytest --disable-warnings models/demos/vision/classification/vit/wormhole/demo/demo_vit_performant_inference.py::test_run_vit_trace_2cqs_inference
 ```
 
 ## Details
 - Entry point for the model is `vit` in `models/demos/vision/classification/vit/wormhole/tt/ttnn_optimized_sharded_vit_wh.py`
 - Batch Size: 8
 - Sequence size: 224
-- Dataset Used: `ImageNet-21k dataset`.
+- Inputs: synthetic images, or a labelled image folder given by `VIT_IMAGE_DIR` (one subfolder per
+  class index), for which the demo also reports the top-1 accuracy.
 
 ### Results
 - Model runtime (host end-2-end) is `~1370` FPS
-- The Imagenet-21K inference accuracy is `80%`

@@ -35,7 +35,7 @@ from models.common.utility_functions import comp_pcc
 from ....models.transformers.minimax_h3.attention_minimax_h3 import DYNAMIC_RING_SDPA_CHUNKS, MiniMaxH3Attention
 from ....models.transformers.minimax_h3.length_classes import length_class
 from ....parallel.manager import CCLManager
-from ....pipelines.minimax_h3.pipeline_minimax_h3 import _resolve_denoise_path, resolve_mesh_preset
+from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Residency, _resolve_denoise_path, resolve_mesh_preset
 from ....utils.device_constants import compute_grid_key
 from .common import GALAXY_MESHES, REAL_BLOCK_CONFIG, fabric_topology
 
@@ -59,7 +59,7 @@ def test_h3_ring_sdpa_bench(mesh_device):
         bucket_denoise=None,
         bucket_ladder=None,
         dynamic_length=None,
-        coresident=preset.get("coresident", True),
+        coresident="t2va" in preset.get("residency", MiniMaxH3Residency()).coresident_tasks,
     ).dynamic_length
     tp, sp = mesh_device.shape[tp_axis], mesh_device.shape[sp_axis]
     local_heads = HEADS // tp

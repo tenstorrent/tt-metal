@@ -717,7 +717,7 @@ class TtMoe(LightweightModule):
         self.overlap_routed_expert_with_combine = overlap_routed_expert_with_combine
         # Fetched here, not in forward: the first call creates them and synchronizes, which a trace cannot capture.
         self.combine_overlap_semaphores = (
-            self.tt_ccl.get_combine_overlap_semaphores() if overlap_routed_expert_with_combine else None
+            self.tt_ccl.get_combine_overlap_semaphores(self.sp_axis) if overlap_routed_expert_with_combine else None
         )
         # Fetched at init, before the first forward, so it is not allocated amid one forward's buffers; see
         # TT_CCL.get_combine_forwarding_buffer.

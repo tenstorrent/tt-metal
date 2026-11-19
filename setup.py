@@ -252,6 +252,8 @@ class CMakeBuild(build_ext):
                     "-DWITH_PYTHON_BINDINGS=ON",
                     "-DTT_USE_SYSTEM_SFPI=ON",
                     "-DENABLE_CCACHE=TRUE",
+                    # The wheel leaves out the matmul config model blob (ttnn/ttnn/matmul_model/__init__.py)
+                    "-DTT_MATMUL_MODEL_FETCH=OFF",
                 ]
 
                 # Add Tracy flags if enabled
@@ -351,6 +353,8 @@ class CMakeBuild(build_ext):
             # the same header tree in an installed wheel as it does in a source checkout.
             "ttnn/kernel_lib/**/*.{hpp,inl}",
             "ttnn/operations/normalization/kernel_util/**/*",
+            # The matmul config model pin (ttnn/ttnn/matmul_model/__init__.py)
+            "ttnn/operations/matmul/device/config/model/matmul_model.json",
         ]
         tt_metal_patterns = [
             "api/tt-metalium/buffer_constants.hpp",
@@ -390,6 +394,10 @@ class CMakeBuild(build_ext):
         )
         copy_tree_with_patterns(source_dir / "ttnn", self.build_lib + "/ttnn", ttnn_patterns)
         copy_tree_with_patterns(source_dir / "ttnn/cpp", self.build_lib + "/ttnn/ttnn/cpp", ttnn_cpp_patterns)
+        matmul_model_pin = (
+            Path(self.build_lib) / "ttnn/ttnn/cpp/ttnn/operations/matmul/device/config/model/matmul_model.json"
+        )
+        assert matmul_model_pin.is_file(), f"{matmul_model_pin} is missing: ttnn can't download the matmul config model"
         copy_tree_with_patterns(source_dir / "tt_metal", self.build_lib + "/ttnn/tt_metal", tt_metal_patterns)
 
         # Move built final built _ttnn SO into appropriate location in ttnn Python tree in wheel
