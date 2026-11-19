@@ -71,7 +71,8 @@
 //
 // Shared-L1 N-slice walk (whenever every core runs one M-block): cb_combine_slots shares cb_halo_slab's L1, dead once
 // the core's gather landed. The credit therefore waits for the reader's slab_dead, so no peer writes a slot before
-// then; the first weight rounds and the split row gather's serving still go out before that wait.
+// then. It is polled inside the weight waits and given as soon as it is ready; the first `depth` weight rounds (whose
+// slots no walk of this M-block holds) and the split row gather's serving go out before it is waited for.
 //
 // Every push of cb_combine_slots is its whole capacity, so its write pointer never leaves the CB base and
 // the same base address is right on every core. The counters only grow, so round j waits for
@@ -940,7 +941,7 @@ void kernel_main() {
     static_assert(!nslice_outer || (k_split && output_sharded));
     constexpr uint32_t nslice_k_tiles = block_k_tiles * num_k_blocks;
     constexpr uint32_t slice_weight_tiles = nslice_k_tiles * out_n_tiles;
-    // Rounds issued before the split row gather's serving and the credit.
+    // Rounds issued before the split row gather's serving.
     constexpr uint32_t nslice_weight_lookahead = 2;
     static_assert(!nslice_outer || nslice_weight_depth == 1 || nslice_weight_depth >= nslice_weight_lookahead + 2);
     // Every participant pushes one slice per round from the CB base, so slot round % depth is the same L1 address on
@@ -963,25 +964,93 @@ void kernel_main() {
         }
         dataflow_kernel_lib::set_read_trid(weight_reads.noc, 0);
     };
+    // The ring credit of M-block credit_m (see nslice_round), given from inside the weight waits as soon as it is
+    // ready: the slab is dead (shared-L1 walk) and compute popped the previous M-block's slots (it pushes and pops the
+    // whole CB once per M-block, so its acked count is then credit_m whole CBs). Giving it only after the first weight
+    // rounds were out held the ring behind them: on aspp.convs.1 / .2 the columns 0, 8, 9, 10 read the same N-slice
+    // every round (same owner order), so the same DRAM bank, and their rounds 1-2 land 4-7 us late.
+    bool credit_pending = false;
+    uint32_t credit_m = 0;
+    auto credit_ready = [&]() -> bool {
+        if constexpr (alias_slab_combine) {
+            if (Semaphore<>(slab_dead_sem_id).value() < credit_m + 1) {
+                return false;
+            }
+        }
+        const uintptr_t acked_ptr = (uintptr_t)get_cb_tiles_acked_ptr(cb_combine_slots);
+        const uint16_t acked_target = static_cast<uint16_t>(credit_m * k_cols * slot_tiles);
+        invalidate_l1_cache();
+        return static_cast<uint16_t>(reg_read(acked_ptr)) == acked_target;
+    };
+    // One credit per M-block to column my_col - 1, the only core that writes this core's slots.
+    auto poll_credit = [&]() {
+        serve_fill();
+        if (credit_pending && credit_ready()) {
+            MaybeDeviceZoneScope("writer_ring_credit");
+            const uint32_t prev_col = my_col == 0 ? k_cols - 1 : my_col - 1;
+            combine_credit.up(noc, peer_x(prev_col), peer_y(prev_col), 1);
+            credit_pending = false;
+        }
+    };
+    auto reserve_polling = [&](uint32_t pages) {
+        while (!cb_pages_reservable_at_back(cb_weights, pages)) {
+            poll_credit();
+        }
+        cb_reserve_back(cb_weights, pages);
+    };
+    // The fixed-sender multicast receive (ack the sender, then the round's data-ready signal), polling while it waits.
+    // Raw for the same reason as receive_serving: ReceiverPipe::receive has no poll form.
+    auto receive_polling = [&](auto& wm, uint32_t round) {
+        using WM = std::decay_t<decltype(wm)>;
+        if constexpr (WM::active) {
+            static_assert(WM::transfer_mode == dataflow_kernel_lib::TransferMode::Multicast && !WM::rotating);
+            constexpr uint32_t ct_base = get_named_compile_time_arg_val("weight_mcast_ct_offset");
+            Semaphore<> data_ready(
+                dataflow_kernel_lib::detail::
+                    positional_mcast_semaphore<ct_base, dataflow_kernel_lib::mcast_wire::DATA_READY>());
+            if constexpr (WM::pre_handshake) {
+                Semaphore<>(dataflow_kernel_lib::detail::
+                                positional_mcast_semaphore<ct_base, dataflow_kernel_lib::mcast_wire::CONSUMER_READY>())
+                    .up(noc, wm.sender_x(), wm.sender_y(), 1);
+            }
+            if constexpr (WM::signal == dataflow_kernel_lib::DataReadySignal::Counter) {
+                while (data_ready.value() < round + 1) {
+                    poll_credit();
+                }
+            } else {
+                while (data_ready.value() != VALID) {
+                    poll_credit();
+                }
+                data_ready.set(INVALID);
+            }
+        }
+    };
     // Weights of slice y; next_y is the M-block's next slice, or k_cols after the last.
     [[maybe_unused]] auto issue_weight_slice = [&](uint32_t y, uint32_t next_y) {
         const uint32_t round = k_blocks_issued;
         MaybeDeviceZoneScope("writer_weight_fetch");
         if (!weight_receiver || (weight_sender && weight_mcast.should_send(round))) {
+            // A sender spends its rounds issuing reads and multicasting, rarely in a wait: it polls the credit between
+            // the steps too (res5: a sender that reached the credit only after its first rounds gave it ~3 us late, and
+            // its grid row's ring paid for it).
+            poll_credit();
             if (prefetched_round != round) {
-                reserve_serving(cb_weights, slice_weight_tiles);
+                reserve_polling(slice_weight_tiles);
                 start_weight_reads(round, y);
+                poll_credit();
             }
-            if (nslice_weight_depth > 1 && next_y < k_cols) {
-                reserve_serving(cb_weights, 2 * slice_weight_tiles);
+            // Prefetch only into a slot that is already free: a blocking reserve here waits for compute, and held this
+            // round's multicast (and, before the credit, the ring) behind it.
+            if (nslice_weight_depth > 1 && next_y < k_cols &&
+                cb_pages_reservable_at_back(cb_weights, 2 * slice_weight_tiles)) {
+                cb_reserve_back(cb_weights, 2 * slice_weight_tiles);
                 start_weight_reads(round + 1, next_y);
                 prefetched_round = round + 1;
+                poll_credit();
             }
-            if constexpr (tile_fill_split) {
-                while (!ncrisc_noc_read_with_transaction_id_flushed(
-                    weight_reads.noc.get_noc_id(), TRID_WEIGHTS + (round & 1))) {
-                    serve_fill();
-                }
+            while (!ncrisc_noc_read_with_transaction_id_flushed(
+                weight_reads.noc.get_noc_id(), TRID_WEIGHTS + (round & 1))) {
+                poll_credit();
             }
             weight_reads.wait(TRID_WEIGHTS + (round & 1));
             if (weight_sender && weight_mcast.should_send(round)) {
@@ -989,33 +1058,16 @@ void kernel_main() {
                     weights_base + (round % nslice_weight_depth) * slice_weight_tiles * weight_tile_bytes;
                 weight_sender->send(l1, l1, slice_weight_tiles * weight_tile_bytes);
             }
+            poll_credit();
         } else {
-            reserve_serving(cb_weights, slice_weight_tiles);
-            if constexpr (tile_fill_split) {
-                receive_serving(weight_mcast, round);
-            } else {
-                weight_receiver->receive(round);
-            }
+            reserve_polling(slice_weight_tiles);
+            receive_polling(weight_mcast, round);
         }
         cb_push_back(cb_weights, slice_weight_tiles);
         ++k_blocks_issued;
     };
     // before_sends runs once the first weight rounds are out, before the credit (the split row gather's serving).
     [[maybe_unused]] auto nslice_round = [&](uint32_t m_block_idx, auto&& before_sends) {
-        // One credit per M-block to column my_col - 1, once this core's slots are free: its gather landed (shared-L1
-        // walk) and compute popped the previous M-block's slots (it pushes and pops the whole CB once per M-block,
-        // so its acked count is then m_block_idx whole CBs).
-        auto give_credit = [&]() {
-            MaybeDeviceZoneScope("writer_ring_credit");
-            const uintptr_t acked_ptr = (uintptr_t)get_cb_tiles_acked_ptr(cb_combine_slots);
-            const uint16_t acked_target = static_cast<uint16_t>(m_block_idx * k_cols * slot_tiles);
-            while (static_cast<uint16_t>(reg_read(acked_ptr)) != acked_target) {
-                serve_fill();
-                invalidate_l1_cache();
-            }
-            const uint32_t prev_col = my_col == 0 ? k_cols - 1 : my_col - 1;
-            combine_credit.up(noc, peer_x(prev_col), peer_y(prev_col), 1);
-        };
         uint32_t order[k_cols];
         uint32_t num_slices = 0;
         for (uint32_t j = 0; j < k_cols; ++j) {
@@ -1031,15 +1083,23 @@ void kernel_main() {
                     order[weights_issued], weights_issued + 1 < num_slices ? order[weights_issued + 1] : k_cols);
             }
         };
+        // Rounds [0, depth) of the M-block reuse slots of earlier M-blocks only, so issuing them never waits on this
+        // block's walk: they go out before the credit, which their waits poll. Every later round can wait on compute,
+        // which can wait on the ring, so the credit is given (blocking) before them.
+        credit_m = m_block_idx;
+        credit_pending = true;
         issue_weights_through(1 + nslice_weight_lookahead);
         before_sends();
-        if constexpr (alias_slab_combine) {
-            // The combine slots are the slab's L1: column my_col - 1 may write them only once this core's gather
-            // landed.
+        issue_weights_through(nslice_weight_depth);
+        if (credit_pending) {
+            // The combine slots are the slab's L1 (shared-L1 walk): column my_col - 1 may write them only once this
+            // core's gather landed.
             MaybeDeviceZoneScope("writer_slab_dead_wait");
-            sem_wait_serving(slab_dead_sem_id, m_block_idx + 1);
+            while (!credit_ready()) {
+                serve_fill();
+            }
+            poll_credit();
         }
-        give_credit();
         issue_weights_through(num_slices);
     };
 
