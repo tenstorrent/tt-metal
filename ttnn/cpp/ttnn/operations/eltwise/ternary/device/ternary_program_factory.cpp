@@ -251,7 +251,7 @@ void overwrite_compute_kernel_name_and_defines(
 // Get operation-specific compute kernel defines
 std::map<std::string, std::string> get_ternary_compute_defines(
     const TernaryDeviceOperation::operation_attributes_t& operation_attributes, ttnn::DataType dtype) {
-    return get_compute_defines(operation_attributes.ternary_op_type, dtype);
+    return get_compute_defines(operation_attributes.ternary_op_type, dtype, operation_attributes.fast_interpolate);
 }
 
 // Helper function to get shape dimensions
