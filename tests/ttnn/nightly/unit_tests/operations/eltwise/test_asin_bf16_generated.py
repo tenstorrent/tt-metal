@@ -107,7 +107,7 @@ def test_asin_bf16_bfloat8_b(device):
 def test_asin_bf16_exhaustive_inputs(device):
     """All 65,536 BF16 inputs: torch's result as stored, within STEPS BF16 steps.
 
-    SKIP lists inputs the LLK sweep judges instead. MODEL: per board, the kernel's offset in BF16 steps from torch's word.
+    SKIP lists inputs the LLK sweep judges instead. MODEL: the kernel's offset in BF16 steps from torch's word.
     """
     board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
     if board not in ("blackhole",):

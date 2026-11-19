@@ -2,8 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 namespace ckernel::sfpu::ttpoly::asin {
-using namespace ::sfpi;
+using ::sfpi::as;
+using ::sfpi::copysgn;
 using ::sfpi::DataLayout;
+using ::sfpi::setsgn;
+using ::sfpi::SFPMAD_MOD1_OFFSET_NONE;
+using ::sfpi::vConstFloatPrgm1;
+using ::sfpi::vConstFloatPrgm2;
+using ::sfpi::vConstIntPrgm0;
+using ::sfpi::vFloat;
+using ::sfpi::vInt;
+using ::sfpi::vUInt;
 // A nonzero Magic makes the constants immediates of the call; zero reads the pool the caller programmed
 // (Prgm0 the magic, Prgm1 -0.5 without SharedPool, Prgm2 1.5).
 template <bool SharedPool, unsigned Iterations = 2, unsigned Magic = 0u>
