@@ -536,3 +536,4 @@
   far: 8 (1 fresh process, 7 runner restarts: MOE_REPLICAS is a load-time switch, every flip reloads); loads 8.
   RAM unaccounted 175.5 GiB (163.3 at the first open). Hint only: agentic 145408 on 80.3 vs off 81.1-81.9 measured
   earlier (runner demo / X.9): ~1 ms, not the fit's 4.5. Decision waits for a correct A/B.
+- 10:53 UTC overseer decision (iteration time): P.84 attempt 3: MOE_REPLICAS call-time, slot always filled when a table is set, both A/B sides in one load; off bit-identical to pre-P.84. Starts when the runner agent's A/B-per-unit fix lands.

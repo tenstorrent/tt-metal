@@ -526,6 +526,18 @@ notes:
     restart with MOE_REPLICAS=on (a load-time switch): being fixed in the framework now. Run model-level checks ONLY through
     the resident runner (resident submit), both values of MOE_REPLICAS, before you finish; op-level kernel tests through
     the safe runner. One open per configuration.'
+- id: OV-51
+  tasks:
+  - P.84
+  status: open
+  t: '2026-11-19T10:53:53'
+  text: 'Overseer 10:53: attempt 3 (tree kept). Make MOE_REPLICAS a CALL-time switch: when a replica table is set (MOE_REPLICA_TABLE),
+    the 13th slot is ALWAYS filled at load; MOE_REPLICAS=on|off only selects the routing / planner / combine path per chunk
+    (hooks.batch_call_settings), so the A/B''s two sides and your own on/off checks share ONE runner load (the iteration-time
+    priority: every load-time flip cost a reload and a device open; attempt 2 had 8). Off must stay bit-identical to the
+    pre-P.84 path (outputs and the served caches): prove it in one runner load (off vs the committed tree''s numbers / the
+    determinism records). Report the replica DRAM per chip measured. All model-level checks through the resident runner;
+    at most 2 device opens this attempt.'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
