@@ -1641,9 +1641,8 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_sfpu_ema": "perf_sfpu_ema"},
     },
     "perf_sfpu_reduce": {
-        "version": 6,
+        "version": 7,
         "columns": [
-            "approx_mode",
             "block_ct_dim",
             "block_rt_dim",
             "dest_acc",

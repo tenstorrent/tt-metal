@@ -38,7 +38,6 @@ import torch
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import ELEMENTS_PER_TILE, TILE_DIM, TILE_DIMENSIONS
 from helpers.llk_params import (
-    ApproximationMode,
     BlocksCalculationAlgorithm,
     DestAccumulation,
     DestSync,
@@ -50,7 +49,6 @@ from helpers.param_config import get_num_blocks_and_num_tiles_in_block, parametr
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
-    APPROX_MODE,
     MATH_OP,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
@@ -241,7 +239,6 @@ def test_sfpu_reduce_multidim(
         formats,
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(ApproximationMode.No),
             MATH_OP(pool_type=pool_type),
             REDUCE_ORDER(reduce_order),
         ],
