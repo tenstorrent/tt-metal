@@ -23,7 +23,7 @@ def test_assign(device):
 
     # Copy the tensor into a new tensor in L1
     output_tensor = ttnn.assign(input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
-    logger.info(f"Assigned Tensor Shape: {output_tensor.shape}")  # Shape([1, 1, 64, 32])
+    logger.debug(f"Assigned Tensor Shape: {output_tensor.shape}")  # Shape([1, 1, 64, 32])
 
 
 def test_nonzero(device):
