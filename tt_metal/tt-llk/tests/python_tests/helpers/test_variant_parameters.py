@@ -1463,8 +1463,8 @@ class TOP32_RM(TemplateParameter):
                       layer, and the only thing in the tree that calls those 7 entry points at
                       all. In the plain mode the unpack goes through
                       ``experimental/llk_unpack_A_top32_rm_api.h`` too, which picks its own
-                      branch (Float32 takes SrcA there, not unpack-to-dest, so those cells differ
-                      from their primitives-path namesakes) and the per-chunk L1 offset, so
+                      branch (Float32 takes SrcA there, not unpack-to-dest) and applies the
+                      per-chunk L1 offsets used by the consumer.
     """
 
     top_min: bool = False
@@ -1728,6 +1728,7 @@ class TOP32_GEOMETRY(RuntimeParameter):
 
     row_elements: int
     datum_bytes: int
+    top32_result_stride: int = 0
 
     def __post_init__(self):
         if self.row_elements % 32 != 0:
@@ -1736,19 +1737,27 @@ class TOP32_GEOMETRY(RuntimeParameter):
             )
         if self.datum_bytes not in (2, 4):
             raise ValueError(f"datum_bytes must be 2 or 4, got {self.datum_bytes}")
+        if self.top32_result_stride not in (0, 2):
+            raise ValueError(
+                "top32_result_stride must be 0 (reuse outputs) or 2 "
+                f"(retain every repeat), got {self.top32_result_stride}"
+            )
 
     def convert_to_cpp(self) -> str:
         return "\n".join(
             [
                 f"constexpr std::uint32_t TOP32_ROW_ELEMENTS = {self.row_elements}u;",
                 f"constexpr std::uint32_t TOP32_DATUM_BYTES = {self.datum_bytes}u;",
+                f"constexpr std::uint32_t TOP32_RESULT_STRIDE = {self.top32_result_stride}u;",
             ]
         )
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return (
-            "std::uint32_t TOP32_ROW_ELEMENTS;\n" "std::uint32_t TOP32_DATUM_BYTES;",
-            "II",
+            "std::uint32_t TOP32_ROW_ELEMENTS;\n"
+            "std::uint32_t TOP32_DATUM_BYTES;\n"
+            "std::uint32_t TOP32_RESULT_STRIDE;",
+            "III",
         )
 
 

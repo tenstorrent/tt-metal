@@ -169,6 +169,7 @@ def test_top32_rm(
     perf_report=None,
     run_types=None,
     loop_factor=1,
+    retain_repeat_outputs=False,
 ):
     is_32bit = formats.input_format.is_32_bit()
     # Through the Metal wrappers Float32 goes through SrcA, narrowed to Float16_b (dest_acc=No) or
@@ -203,6 +204,7 @@ def test_top32_rm(
             TOP32_GEOMETRY(
                 row_elements=row_elements,
                 datum_bytes=4 if is_32bit else 2,
+                top32_result_stride=2 if retain_repeat_outputs else 0,
             ),
             LOOP_FACTOR(loop_factor),
             # Each row-major chunk stages values and indices separately.
@@ -216,8 +218,8 @@ def test_top32_rm(
             formats.output_format,
             tile_count_A=tiles_per_operand,
             tile_count_B=tiles_per_operand,
-            # Two result tiles: the top-32 values, then their indices.
-            tile_count_res=2,
+            # Two result tiles per retained iteration: values, then indices.
+            tile_count_res=2 * loop_factor if retain_repeat_outputs else 2,
         ),
         unpack_to_dest=unpacks_to_dest,
         dest_acc=dest_acc,
@@ -260,29 +262,38 @@ def test_top32_rm(
     # Each result tile carries its 32 datums at the front: the sort leaves the survivors in
     # the first column of Dest rows 0..31, and the driver narrows the packer to one datum
     # per row before packing, exactly as the consumer does.
-    device_values = torch.tensor(result[:TOP_K], dtype=torch_format).to(torch.float32)
-    device_indices = torch.tensor(
-        result[ELEMENTS_PER_TILE : ELEMENTS_PER_TILE + TOP_K], dtype=torch_format
-    ).to(torch.float32)
+    iterations = range(loop_factor) if retain_repeat_outputs else range(1)
+    for iteration in iterations:
+        result_base = 2 * iteration * ELEMENTS_PER_TILE
+        device_values = torch.tensor(
+            result[result_base : result_base + TOP_K], dtype=torch_format
+        ).to(torch.float32)
+        device_indices = torch.tensor(
+            result[
+                result_base
+                + ELEMENTS_PER_TILE : result_base
+                + ELEMENTS_PER_TILE
+                + TOP_K
+            ],
+            dtype=torch_format,
+        ).to(torch.float32)
 
-    assert passed_test(
-        golden_values, device_values, formats.output_format, print_errors=False
-    ), (
-        f"top32 values wrong for row_elements={row_elements}, dest_acc={dest_acc.name}\n"
-        f"  device: {device_values.tolist()}\n"
-        f"  golden: {golden_values.tolist()}"
-    )
+        assert passed_test(
+            golden_values, device_values, formats.output_format, print_errors=False
+        ), (
+            f"top32 values wrong for row_elements={row_elements}, "
+            f"dest_acc={dest_acc.name}, iteration={iteration}\n"
+            f"  device: {device_values.tolist()}\n"
+            f"  golden: {golden_values.tolist()}"
+        )
 
-    # Indices are asserted exactly, which the distinct-values stimuli make well defined:
-    # this is what separates a top-32 from a max-32 and is the only check that the sort
-    # permutes the index region in step with the value region.
-    assert torch.equal(device_indices, golden_indices), (
-        f"top32 indices wrong for row_elements={row_elements}, "
-        f"dest_acc={dest_acc.name} -- the values may still be right, in which case the "
-        f"index region is not being permuted with them\n"
-        f"  device: {device_indices.tolist()}\n"
-        f"  golden: {golden_indices.tolist()}"
-    )
+        # Exact indices prove each sort permutes the index region with its values.
+        assert torch.equal(device_indices, golden_indices), (
+            f"top32 indices wrong for row_elements={row_elements}, "
+            f"dest_acc={dest_acc.name}, iteration={iteration}\n"
+            f"  device: {device_indices.tolist()}\n"
+            f"  golden: {golden_indices.tolist()}"
+        )
 
 
 # --- pre-sorted mode (>= 1024 elements) ------------------------------------------------
@@ -352,8 +363,20 @@ def test_top32_rm_pre_sorted(
     perf_report=None,
     run_types=None,
     loop_factor=1,
+    retain_repeat_outputs=False,
 ):
     """The >= 1024-element path: transpose whole tiles, then prep / combine / final."""
+    if row_elements < ELEMENTS_PER_TILE:
+        raise ValueError(
+            f"pre-sorted mode needs at least {ELEMENTS_PER_TILE} row elements, "
+            f"got {row_elements}"
+        )
+    if is_perf and via_wrappers and not TestConfig.SPEED_OF_LIGHT:
+        pytest.skip(
+            "runtime wrapper builds require Os to fit TRISC1; measure this series "
+            "only under speed-of-light O2"
+        )
+
     values, indices = _pre_sorted_stimuli(row_elements)
 
     # Float32 holds every value and index here exactly, so the golden needs no rounding --
@@ -384,7 +407,11 @@ def test_top32_rm_pre_sorted(
             ),
         ],
         runtimes=[
-            TOP32_GEOMETRY(row_elements=row_elements, datum_bytes=4),
+            TOP32_GEOMETRY(
+                row_elements=row_elements,
+                datum_bytes=4,
+                top32_result_stride=2 if retain_repeat_outputs else 0,
+            ),
             LOOP_FACTOR(loop_factor),
             # Each whole tile or tail chunk stages values and indices separately.
             TILE_COUNT(
@@ -404,7 +431,7 @@ def test_top32_rm_pre_sorted(
             formats.output_format,
             tile_count_A=tiles_per_operand,
             tile_count_B=tiles_per_operand,
-            tile_count_res=2,
+            tile_count_res=2 * loop_factor if retain_repeat_outputs else 2,
         ),
         # 32-bit operands take the unpack-to-dest transpose branch, and fp32 Dest is the
         # only configuration this mode has ever run in.
@@ -426,11 +453,6 @@ def test_top32_rm_pre_sorted(
     configuration = TestConfig(**with_functional_defaults(test_config_kwargs))
     result = configuration.run().result
 
-    device_values = torch.tensor(result[:TOP_K], dtype=torch_format).to(torch.float32)
-    device_indices = torch.tensor(
-        result[ELEMENTS_PER_TILE : ELEMENTS_PER_TILE + TOP_K], dtype=torch_format
-    ).to(torch.float32)
-
     golden_values, golden_indices = _golden(values, indices)
 
     tail_first = (row_elements // ELEMENTS_PER_TILE) * ELEMENTS_PER_TILE
@@ -442,21 +464,37 @@ def test_top32_rm_pre_sorted(
             f"region (index >= {tail_first}), so this case does not exercise the tail path"
         )
 
-    assert passed_test(
-        golden_values, device_values, formats.output_format, print_errors=False
-    ), (
-        f"pre-sorted top32 values wrong for row_elements={row_elements}\n"
-        f"  device: {device_values.tolist()}\n"
-        f"  golden: {golden_values.tolist()}"
-    )
+    iterations = range(loop_factor) if retain_repeat_outputs else range(1)
+    for iteration in iterations:
+        result_base = 2 * iteration * ELEMENTS_PER_TILE
+        device_values = torch.tensor(
+            result[result_base : result_base + TOP_K], dtype=torch_format
+        ).to(torch.float32)
+        device_indices = torch.tensor(
+            result[
+                result_base
+                + ELEMENTS_PER_TILE : result_base
+                + ELEMENTS_PER_TILE
+                + TOP_K
+            ],
+            dtype=torch_format,
+        ).to(torch.float32)
 
-    assert torch.equal(device_indices, golden_indices), (
-        f"pre-sorted top32 indices wrong for row_elements={row_elements} -- the values "
-        f"may still be right, in which case the index region is not being permuted with "
-        f"them\n"
-        f"  device: {device_indices.tolist()}\n"
-        f"  golden: {golden_indices.tolist()}"
-    )
+        assert passed_test(
+            golden_values, device_values, formats.output_format, print_errors=False
+        ), (
+            f"pre-sorted top32 values wrong for row_elements={row_elements}, "
+            f"iteration={iteration}\n"
+            f"  device: {device_values.tolist()}\n"
+            f"  golden: {golden_values.tolist()}"
+        )
+
+        assert torch.equal(device_indices, golden_indices), (
+            f"pre-sorted top32 indices wrong for row_elements={row_elements}, "
+            f"iteration={iteration}\n"
+            f"  device: {device_indices.tolist()}\n"
+            f"  golden: {golden_indices.tolist()}"
+        )
 
 
 # --- the 32-bit branch cannot take a partially-filled chunk -------------------------------
@@ -625,12 +663,20 @@ def test_top32_rm_pre_sorted_via_metal_wrappers(
     )
 
 
+def test_top32_rm_pre_sorted_rejects_undersized_rows():
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK tests
+        ValueError, match="pre-sorted mode needs at least 1024 row elements"
+    ):
+        test_top32_rm_pre_sorted(PRE_SORTED_FORMATS[0], ELEMENTS_PER_CHUNK)
+
+
 def test_top32_rm_pack_state_repeats():
     test_top32_rm(
         FORMATS[0],
         ELEMENTS_PER_CHUNK,
         DestAccumulation.No,
         loop_factor=2,
+        retain_repeat_outputs=True,
     )
 
 
@@ -639,4 +685,5 @@ def test_top32_rm_pre_sorted_tail_state_repeats():
         PRE_SORTED_FORMATS[0],
         ELEMENTS_PER_TILE + ELEMENTS_PER_CHUNK,
         loop_factor=2,
+        retain_repeat_outputs=True,
     )

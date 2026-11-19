@@ -175,6 +175,7 @@ DB_SCHEMA = [
     Column("throttle_level", "int64", True, "configuration"),
     Column("tilize", "string", True, "configuration"),
     Column("top32_mode", "int64", True, "configuration"),
+    Column("top32_result_stride", "int64", True, "configuration"),
     Column("top_min", "bool", True, "configuration"),
     Column("unpack_full_transpose", "bool", True, "configuration"),
     Column("unpack_transpose_faces", "string", True, "configuration"),

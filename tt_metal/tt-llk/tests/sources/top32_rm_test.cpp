@@ -404,9 +404,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_MATH
 
 #if TOP32_PRE_SORTED_MODE
-// The pre-sorted SFPU sequence is close to the TRISC1 budget. Scope the size
-// trade-off to that mode's math translation unit; plain Top32 and both other
-// threads stay O3. The wrapper path needs Os only in runtime-geometry builds.
+// Runtime wrapper builds require Os to fit TRISC1; their perf series is measured only in SoL/O2.
 #pragma GCC push_options
 #if TOP32_VIA_WRAPPERS && defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
 #pragma GCC optimize("Os")
@@ -804,8 +802,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
-    const Operand& buffer_Res       = params.buffer_Res;
+    const std::uint32_t LOOP_FACTOR         = params.LOOP_FACTOR;
+    const Operand& buffer_Res               = params.buffer_Res;
+    const std::uint32_t top32_result_stride = params.TOP32_RESULT_STRIDE;
+#else
+    constexpr std::uint32_t top32_result_stride = TOP32_RESULT_STRIDE;
 #endif
     {
         START_PERF_MEASURE("INIT")
@@ -824,6 +825,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             constexpr bool sync_with_math = PERF_RUN_TYPE == PerfRunType::L1_TO_L1;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
+                const std::uint32_t result_base = loop * top32_result_stride;
                 if constexpr (sync_with_math)
                 {
                     _llk_packer_wait_for_math_done_();
@@ -835,8 +837,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(FACE_R_DIM);
                 TTI_SETADCXX(p_setadc::PAC, 1 - 1, 0x0);
 
-                _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(VALUE_TILE, L1_ADDRESS(buffer_Res[0]));
-                _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(INDEX_TILE, L1_ADDRESS(buffer_Res[1]));
+                _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(VALUE_TILE, L1_ADDRESS(buffer_Res[result_base]));
+                _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(INDEX_TILE, L1_ADDRESS(buffer_Res[result_base + 1]));
 
                 // Configuration writes must not race the asynchronous pack MOPs above.
                 TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);

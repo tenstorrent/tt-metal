@@ -923,6 +923,7 @@ PERF_TEST_SCHEMAS = {
             "marker",
             "row_elements",
             "top32_mode",
+            "top32_result_stride",
             "top_min",
             "tile_cnt",
             "unpack_to_dest",
