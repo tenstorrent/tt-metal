@@ -333,3 +333,17 @@
   passes, bit for bit) and a selftest checks the grouping. (2) Layers loaded = the layers the run executes
   (decoder skip): a model-side fix job (hooks / device_model layer list), A/B-free (same outputs), measured by load
   time.
+
+## 2026-11-19 06:50 UTC: OWNER TOP PRIORITY: iteration time (load once; then a resident runner)
+
+- X.9: its last per-text process (multilingual wall, unit 11 of 11) was already running; all five texts' census and
+  walls were measured in its first check pass (05:48). No further per-text processes start; no device task runs
+  until the resident runner lands.
+- F279 (92e0db9d955): per-run variables a test declares (BATCH_ITEM_VARS: SKIP_POS, CENSUS_*) and the text
+  (BRINGUP_POS_TOKENS) no longer split processes: X.9's ten text runs plan as ONE group (was ten processes).
+- Resident runner (owner addendum: measuring within ~1-2 min of a request) being built by a dedicated agent:
+  (1) a long-lived server holding the mesh and the model, requests over a socket, request -> first chunk timed;
+  (2) code-change awareness: model python reloaded with the device weights kept (a device-tensor registry under the
+  upload), restart only for a .so change; (3) layers loaded = layers executed (decode skip: 0-20);
+  (4) gate units submit to it; fresh-process determinism once per accepted task; (5) a device demo with X.9's census
+  and walls (prose, agentic). Each piece gets a status line here.
