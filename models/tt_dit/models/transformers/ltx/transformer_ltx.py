@@ -509,8 +509,8 @@ class LTXTransformerBlock(Module):
             # V→A: video provides context for audio
             audio_q_v2a = ttnn.addcmul(a_shift_v2a, audio_normed_xattn, a_scale_v2a_p1)
             video_kv_v2a = ttnn.addcmul(a_ca_shift_v, video_normed_xattn, a_ca_scale_v_p1)
-            # Zero padded video tokens (on the SP-local shard) after the affine, before to_kv. Under SP > 1
-            # the ring SDPA already drops K/V rows at or past kv_logical_n, so the multiply is not needed.
+            # Zero padded video tokens (on the SP-local shard) after the affine, before to_kv.
+            # Under SP > 1 the ring SDPA already drops K/V rows at or past kv_logical_n.
             if video_padding_mask is not None and self.parallel_config.sequence_parallel.factor == 1:
                 video_kv_v2a = ttnn.multiply(video_kv_v2a, video_padding_mask)
             v2a_output = self.video_to_audio_attn(

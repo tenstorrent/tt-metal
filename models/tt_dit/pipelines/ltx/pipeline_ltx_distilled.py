@@ -100,13 +100,10 @@ class LTXDistilledPipeline(LTXPipeline):
         pool = getattr(self, "_noise_pool", None)
         if pool is None:
             pool = self._noise_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ltx-noise")
-        self._noise_prefetch = {
-            (seed, shapes): pool.submit(self._draw_seeded_noise, seed, shapes) for shapes in map(tuple, draws)
-        }
+        self._noise_prefetch = {(seed, shapes): pool.submit(self._draw_seeded_noise, seed, shapes) for shapes in draws}
 
     def _seeded_noise(self, seed: int, *shapes: tuple) -> list[torch.Tensor]:
         """``_draw_seeded_noise``, served from ``_prefetch_noise`` when it started the same draws."""
-        shapes = tuple(tuple(s) for s in shapes)
         pending = getattr(self, "_noise_prefetch", {}).pop((seed, shapes), None)
         if pending is not None:
             return pending.result()
@@ -817,7 +814,6 @@ class LTXDistilledPipeline(LTXPipeline):
             image_cond_strength=cond_strength,
             traced=self._traced,
             trace_key="s2",
-            # Stage 1 (traced) left this gen's prompt in the shared buffers.
             reuse_prompt=self._traced,
         )
         t_stage2 = time.time() - t0

@@ -263,8 +263,6 @@ class DistributedRMSNorm(Module):
             raise ValueError(msg)
 
         extra = {} if dynamic_tile_row_map is None else {"affine_tile_row_map": dynamic_tile_row_map}
-        if preserve_rope_rounding:
-            extra["preserve_rope_rounding"] = True
 
         # Fused distributed RMSNorm device op (PRE sum-of-squares + fabric ring AG + POST
         # normalize, with optional fused RoPE / per-head norm).
@@ -318,6 +316,7 @@ class DistributedRMSNorm(Module):
             rope_sin=rope_sin,
             dtype=dtype,
             row_capacity=row_capacity,
+            preserve_rope_rounding=preserve_rope_rounding,
             **extra,
         )
 
