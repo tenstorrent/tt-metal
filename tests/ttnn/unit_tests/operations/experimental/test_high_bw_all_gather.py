@@ -76,6 +76,16 @@ _LINE_PERF_DEVICE_PARAMS = [
     ),
 ]
 
+# Without a mesh shape a Galaxy opens as 1x32, and _rank_line_mesh takes its first eight chips: no ring, so the ring
+# floors above would gate a line. A Galaxy opens as 8x4 instead: the rank line is the 8x1 column, a ring on axis 0
+# under FABRIC_1D_RING / TORUS_Y / TORUS_XY and a line under the others, as the axis-0 floors expect. Other systems
+# keep their default mesh.
+_LINE_PERF_MESH = pytest.mark.parametrize(
+    "mesh_device",
+    [pytest.param((8, 4), id="8x4")] if ttnn.get_num_devices() == 32 else [pytest.param(None, id="system_mesh")],
+    indirect=True,
+)
+
 _FABRIC_2D_LINE_DEVICE_PARAMS = pytest.param(
     _device_params(ttnn.FabricConfig.FABRIC_2D),
     id="fabric_2d_line",
@@ -291,24 +301,35 @@ def _to_torch_with_device_padding(tensor):
     return torch.nn.functional.pad(host_tensor, padding)
 
 
-def _assert_exact_all_gather(device_input, persistent_output, mesh_device, dtype, batch_index=None):
+def _assert_exact_all_gather(
+    device_input, persistent_output, mesh_device, dtype, batch_index=None, full_mesh_outer_axis=0
+):
     """The collective performs no arithmetic, so compare the gathered device values exactly.
 
     `batch_index` selects one cache slot of a multi-slot input: the gather reads only that slot, so the
-    reference has to be sliced to it before the ranks are concatenated.
+    reference has to be sliced to it before the ranks are concatenated. `full_mesh_outer_axis=1` expects
+    the ranks in column-major order (c * rows + r) instead of the row-major order the shards come in.
     """
 
     def _slot(tensor):
         return tensor if batch_index is None else tensor[batch_index : batch_index + 1]
 
+    def _rank_order(shards):
+        if full_mesh_outer_axis == 0:
+            return shards
+        rows, cols = tuple(mesh_device.shape)
+        return [shards[r * cols + c] for c in range(cols) for r in range(rows)]
+
     if dtype == ttnn.fp8_e4m3:
-        expected = torch.cat([_slot(payload) for payload in _fp8_payloads(device_input, mesh_device)], dim=2)
+        expected = torch.cat(
+            [_slot(payload) for payload in _rank_order(_fp8_payloads(device_input, mesh_device))], dim=2
+        )
         actual_outputs = _fp8_payloads(persistent_output, mesh_device)
     else:
         # Compare the device representation so quantized types and padding inserted
         # independently into each local tile shard are both represented exactly.
         expected = torch.cat(
-            [_slot(_to_torch_with_device_padding(tensor)) for tensor in ttnn.get_device_tensors(device_input)],
+            [_slot(_to_torch_with_device_padding(t)) for t in _rank_order(ttnn.get_device_tensors(device_input))],
             dim=2,
         )
         actual_outputs = [ttnn.to_torch(tensor) for tensor in ttnn.get_device_tensors(persistent_output)]
@@ -434,6 +455,7 @@ def _run_high_bw_all_gather_accuracy(
     metadata_batch_index=None,
     *,
     external_semaphores=False,
+    full_mesh_outer_axis=0,
 ):
     """Exact-output check for one configuration.
 
@@ -526,6 +548,7 @@ def _run_high_bw_all_gather_accuracy(
                 cluster_axis=cluster_axis,
                 num_links=num_links,
                 **external_kwargs,
+                **({"full_mesh_outer_axis": full_mesh_outer_axis} if full_mesh_outer_axis else {}),
             )
 
         # This call carries no per-chunk scalars, so the traced arm proves the op CAPTURES and REPLAYS at
@@ -539,7 +562,14 @@ def _run_high_bw_all_gather_accuracy(
     # main's split: a partial collective replicates rather than concatenating, so it needs the
     # replicated-output compare. Keep the metadata slot index on the full-mesh branch.
     if collective_size == mesh_device.get_num_devices():
-        _assert_exact_all_gather(device_input, persistent_output, mesh_device, dtype, batch_index=metadata_batch_index)
+        _assert_exact_all_gather(
+            device_input,
+            persistent_output,
+            mesh_device,
+            dtype,
+            batch_index=metadata_batch_index,
+            full_mesh_outer_axis=full_mesh_outer_axis,
+        )
     else:
         _assert_exact_replicated_output(host_input, persistent_output, mesh_device, dtype, layout)
 
@@ -569,10 +599,15 @@ def test_high_bw_all_gather_external_semaphore_equivalence_matrix(
     )
 
 
+# The (2, 4) tests below are LoudBox tests. On a Galaxy the 2x4 corner of the 32 chips does not open (its fabric
+# routers time out in their first handshake, on main as well), so they skip there.
+_LOUDBOX_ONLY = {"require_exact_physical_num_devices": True}
+
+
 @run_for_blackhole("high_bw_all_gather requires Blackhole fabric")
 @pytest.mark.parametrize(
     "device_params",
-    [pytest.param(_device_params(ttnn.FabricConfig.FABRIC_2D, 6144), id="fabric_2d_6k_payload")],
+    [pytest.param({**_device_params(ttnn.FabricConfig.FABRIC_2D, 6144), **_LOUDBOX_ONLY}, id="fabric_2d_6k_payload")],
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
@@ -598,7 +633,7 @@ def test_high_bw_all_gather_single_page_bank_owned_packet(mesh_device, ag_traced
     "device_params,mesh_device",
     [
         pytest.param(
-            _device_params(ttnn.FabricConfig.FABRIC_2D, 6144),
+            {**_device_params(ttnn.FabricConfig.FABRIC_2D, 6144), **_LOUDBOX_ONLY},
             (2, 4),
             id="loudbox_fabric_2d_6k_payload",
         ),
@@ -684,7 +719,11 @@ def test_high_bw_all_gather_mesh_partition_output_on_tp_axis(mesh_device):
 
 
 @run_for_blackhole("high_bw_all_gather requires Blackhole fabric")
-@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [pytest.param({**_device_params(ttnn.FabricConfig.FABRIC_2D_TORUS_XY), **_LOUDBOX_ONLY}, id="fabric_2d_torus_xy")],
+    indirect=True,
+)
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 def test_high_bw_all_gather_preserves_same_dim_sharding_on_other_axis(mesh_device):
     """Gathering TP must preserve SP when both mesh axes shard the same tensor dimension."""
@@ -841,6 +880,7 @@ def _run_high_bw_all_gather_perf(
     input_batch_index=None,
     gathered_dim_size=None,
     invocation="scalar",
+    num_links=_NUM_LINKS,
 ):
     """Measure one configuration's gather bandwidth, under either invocation form.
 
@@ -934,7 +974,7 @@ def _run_high_bw_all_gather_perf(
                 dim=2,
                 output_tensor=persistent_output,
                 cluster_axis=cluster_axis,
-                num_links=_NUM_LINKS,
+                num_links=num_links,
                 input_batch_index_tensor=slot_meta,
                 batch_slot_num_layers=num_layers,
                 batch_slot_layer_idx=layer_idx,
@@ -964,7 +1004,7 @@ def _run_high_bw_all_gather_perf(
                 dim=2,
                 output_tensor=persistent_output,
                 cluster_axis=cluster_axis,
-                num_links=_NUM_LINKS,
+                num_links=num_links,
                 **runtime_controls,
             )
 
@@ -993,7 +1033,7 @@ def _run_high_bw_all_gather_perf(
     bandwidth_gbps = pages_per_device * page_size * (axis_size - 1) / median_ns
     print(
         f"HIGH_BW_ALL_GATHER fabric={ttnn.get_fabric_config()} dtype={dtype} "
-        f"layout={layout} num_links={_NUM_LINKS} rows_per_device={rows_per_device} "
+        f"layout={layout} num_links={num_links} mesh={tuple(mesh_device.shape)} rows_per_device={rows_per_device} "
         f"capacity_rows_per_device={capacity_rows_per_device} cache_slots={cache_slots} page_size={page_size}B "
         f"median={median_ns / 1e6:.3f}ms effective_receive_bw={bandwidth_gbps:.3f}GB/s "
         f"samples_ms={[round(duration / 1e6, 3) for duration in durations_ns]}"
@@ -1062,7 +1102,12 @@ def _run_high_bw_all_gather_test_cases(mesh_device, min_bandwidth_gbps, cluster_
 
 
 def _run_high_bw_all_gather_ci_perf(
-    mesh_device, cluster_axis, min_bandwidth_gbps, global_rows_cases=_CI_PERF_GLOBAL_ROWS, invocation="scalar"
+    mesh_device,
+    cluster_axis,
+    min_bandwidth_gbps,
+    global_rows_cases=_CI_PERF_GLOBAL_ROWS,
+    invocation="scalar",
+    num_links=_NUM_LINKS,
 ):
     """Run the compact CI matrix and pair every bandwidth measurement with correctness.
 
@@ -1071,6 +1116,8 @@ def _run_high_bw_all_gather_ci_perf(
     arms walk the same cases against the same floors, and each pairs its measurement with a compact
     correctness run through the SAME invocation, so a bandwidth number never stands alone on a
     functionally wrong gather.
+
+    `min_bandwidth_gbps` is one floor, a floor per global row count, or per global row count a floor per case name.
     """
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("high_bw_all_gather CI performance coverage requires the realtime device profiler")
@@ -1083,6 +1130,11 @@ def _run_high_bw_all_gather_ci_perf(
             min_bandwidth_gbps[global_rows] if isinstance(min_bandwidth_gbps, dict) else min_bandwidth_gbps
         )
         for case_name, dtype, width, layout, expected_page_size in _CI_PERF_TEST_CASES:
+            case_bandwidth_gbps = (
+                required_bandwidth_gbps[case_name]
+                if isinstance(required_bandwidth_gbps, dict)
+                else required_bandwidth_gbps
+            )
             print(f"HIGH_BW_ALL_GATHER_CI_PERF invocation={invocation} global_rows={global_rows} case={case_name}")
             # Replace the large BF16 measurement with the serving-shaped indexed-cache path. Its
             # 512K active payload keeps the existing ring floor meaningful while the 1M allocation
@@ -1108,13 +1160,14 @@ def _run_high_bw_all_gather_ci_perf(
                 width,
                 layout,
                 expected_page_size,
-                required_bandwidth_gbps,
+                case_bandwidth_gbps,
                 cluster_axis,
                 rows_per_device=rows_per_device,
                 capacity_rows_per_device=capacity_rows_per_device,
                 input_batch_index=perf_batch_index,
                 gathered_dim_size=perf_gathered_dim_size,
                 invocation=invocation,
+                num_links=num_links,
             )
             # Use a compact reference run after the full-size measurement. This
             # validates the same dtype/layout/route without doubling CI memory
@@ -1128,6 +1181,7 @@ def _run_high_bw_all_gather_ci_perf(
                 cluster_axis,
                 rows_per_device=min(rows_per_device, _ACCURACY_ROWS_PER_DEVICE),
                 metadata_batch_index=perf_batch_index if invocation == "metadata" else None,
+                num_links=num_links,
             )
 
 
@@ -1190,6 +1244,43 @@ def test_high_bw_all_gather_galaxy_full_mesh_matched_local_perf(mesh_device):
         cluster_axis=None,
         min_bandwidth_gbps=_GALAXY_FULL_MESH_MATCHED_LOCAL_MIN_BANDWIDTH_GBPS,
         global_rows_cases=_GALAXY_FULL_MESH_MATCHED_LOCAL_GLOBAL_ROWS,
+    )
+
+
+# A 4x4 submesh of the Galaxy is a cylinder: axis 1 (four columns) keeps its wrap, axis 0 (four of eight rows) is a
+# line. The 16-rank full-mesh gather runs over three Hamiltonian cycles (2 links per hop, one per cycle on a hop two
+# cycles share). Same global volumes as the 32-rank gate (both divide by 16). Expected from link volume: the cycles
+# carry 5 shards on the busiest hop against the 2-link snake's 7.5 (1.5x).
+_GALAXY_CYLINDER_CI_PERF_GLOBAL_ROWS = (55_040, 512 * 1024)
+
+# Floors per case: 95% of the lowest of 8 runs on three 110-A Galaxies (FABRIC_2D_TORUS_XY, 2 links). Lowest seen:
+# 55K 113.0 / 99.4 / 113.2 / 94.6 GB/s, 512K 139.0 / 136.8 / 139.2 / 136.0 (bf16 row-major, fp8, bf16 tiled, bfloat8).
+# The short case differs by dtype, so one floor per row count would either fail its fp8 and bfloat8 cases or leave bf16
+# unguarded. Override every floor with TT_METAL_HIGH_BW_ALL_GATHER_CYLINDER_MIN_GBPS when recalibrating.
+_GALAXY_CYLINDER_CI_MIN_BANDWIDTH_GBPS = {
+    55_040: {"bf16_row_major": 107.0, "fp8_row_major": 94.0, "bf16_tiled": 108.0, "bfloat8_tiled": 90.0},
+    512 * 1024: {"bf16_row_major": 132.0, "fp8_row_major": 130.0, "bf16_tiled": 132.0, "bfloat8_tiled": 129.0},
+}
+if os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_CYLINDER_MIN_GBPS") is not None:
+    _GALAXY_CYLINDER_CI_MIN_BANDWIDTH_GBPS = float(os.environ["TT_METAL_HIGH_BW_ALL_GATHER_CYLINDER_MIN_GBPS"])
+
+
+@run_for_blackhole("Blackhole Galaxy 4x4 cylinder perf requires Blackhole")
+@pytest.mark.skipif(
+    os.getenv("MESH_DEVICE") != "TG", reason="Blackhole Galaxy 4x4 cylinder perf requires MESH_DEVICE=TG"
+)
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+def test_high_bw_all_gather_galaxy_cylinder_4x4_perf(mesh_device):
+    """Bandwidth floors of the 16-rank full-mesh gather on a 4x4 cylinder, each paired with a correctness run."""
+    cylinder = mesh_device.create_submesh(ttnn.MeshShape(4, 4))
+    assert cylinder.get_num_devices() == 16
+    _run_high_bw_all_gather_ci_perf(
+        cylinder,
+        cluster_axis=None,
+        min_bandwidth_gbps=_GALAXY_CYLINDER_CI_MIN_BANDWIDTH_GBPS,
+        global_rows_cases=_GALAXY_CYLINDER_CI_PERF_GLOBAL_ROWS,
+        num_links=2,
     )
 
 
@@ -1287,6 +1378,38 @@ def test_high_bw_all_gather_full_mesh_open_path_accuracy(mesh_device, submesh_sh
     )
 
 
+@run_for_blackhole("full-mesh column-major coverage requires Blackhole")
+@pytest.mark.skipif(
+    os.getenv("MESH_DEVICE") != "TG",
+    reason="full-mesh column-major coverage requires MESH_DEVICE=TG",
+)
+@pytest.mark.parametrize("device_params", _FULL_MESH_DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("submesh_shape", [(2, 4), (4, 2), (4, 4)], ids=["2x4", "4x2", "4x4"])
+@pytest.mark.parametrize("full_mesh_outer_axis", [0, 1], ids=["row-major", "column-major"])
+@pytest.mark.parametrize("ag_traced", [False, True], ids=["eager", "traced"])
+def test_high_bw_all_gather_full_mesh_outer_axis_accuracy(mesh_device, submesh_shape, full_mesh_outer_axis, ag_traced):
+    """cluster_axis=None with each mesh axis outermost in the gathered order.
+
+    A TP-deduplicated cache with SP on mesh axis 1 (a 4x4 tray-half stage) holds its shards SP-major,
+    which is column-major on the mesh, so the gather must be able to emit that order. Every rank's shard
+    differs, so a wrong order is a data mismatch even on the square mesh.
+    """
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+    _run_high_bw_all_gather_accuracy(
+        submesh,
+        ttnn.bfloat16,
+        width=576,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        expected_page_size=1152,
+        cluster_axis=None,
+        rows_per_device=64,
+        num_links=1,
+        ag_traced=ag_traced,
+        full_mesh_outer_axis=full_mesh_outer_axis,
+    )
+
+
 @run_for_blackhole("axis-ring regression requires Blackhole")
 @pytest.mark.skipif(
     not os.getenv("TT_METAL_SIMULATOR") and os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_RUN_32_RANK_ACCURACY") != "1",
@@ -1356,6 +1479,7 @@ def test_high_bw_all_gather_quietbox_ci_perf(mesh_device):
     _LINE_PERF_DEVICE_PARAMS,
     indirect=["device_params"],
 )
+@_LINE_PERF_MESH
 def test_high_bw_all_gather_512k(mesh_device, axis_0_min_bandwidth_gbps, axis_1_min_bandwidth_gbps):
     rank_line, cluster_axis = _rank_line_mesh(mesh_device)
     min_bandwidth_gbps = (axis_0_min_bandwidth_gbps, axis_1_min_bandwidth_gbps)[cluster_axis]
@@ -2288,7 +2412,7 @@ def test_high_bw_all_gather_cached_link_discovery(mesh_device, num_links, expect
         num_links=num_links,
         metadata_batch_index=2,
     )
-    for invalid_links, message in [(0, "greater than 0"), (100, "usable links")]:
+    for invalid_links, message in [(0, "greater than 0"), (100, "usable link")]:
         with expect_error(RuntimeError, message):
             _run_high_bw_all_gather_accuracy(
                 rank_line,

@@ -199,8 +199,15 @@ class TtPrefillTransformer(LightweightModule):
         lm_head_is_column_parallel: bool = True,
         mtp_predictor=None,
         use_fused_rmsnorm: Optional[bool] = None,
+        # Chunks per packed forward (TtPrefillRuntime forward_tokens_budget). This model runs one chunk per forward.
+        forward_chunks: int = 1,
     ):
         super().__init__()
+        if forward_chunks != 1:
+            raise NotImplementedError(
+                f"TtPrefillTransformer has no packed forward yet; got forward_chunks={forward_chunks}"
+            )
+        self.forward_chunks = forward_chunks
         self.mesh_device = mesh_device
         self.seq_len = seq_len
         self.padding_side = padding_side
@@ -226,8 +233,9 @@ class TtPrefillTransformer(LightweightModule):
         self.indexer_types = getattr(config, "indexer_types", None)
         self.last_indexer_indices = None
 
-        tp_topology = topology[1] if isinstance(topology, tuple) else topology
-        sp_topology = topology[0] if isinstance(topology, tuple) else topology
+        # A tuple is per mesh axis (tt_ccl.per_axis_topology), so index it by the TP / SP axis.
+        tp_topology = topology[tp_axis] if isinstance(topology, tuple) else topology
+        sp_topology = topology[sp_axis] if isinstance(topology, tuple) else topology
 
         if not state_dict and not (weight_cache_path and weight_cache_path.exists()):
             raise ValueError(
@@ -331,6 +339,8 @@ class TtPrefillTransformer(LightweightModule):
         self.lm_head = (
             TtLMHead(
                 mesh_device=mesh_device,
+                sp_axis=sp_axis,
+                tp_axis=tp_axis,
                 emb_dim=config.hidden_size,
                 vocab_size=config.vocab_size,
                 torch_weight=state_dict.get("lm_head_weight"),
@@ -460,9 +470,11 @@ class TtPrefillTransformer(LightweightModule):
 
     def _to_host(self, tt_tensor):
         """Bring SP+TP sharded tensor to host as [1, seq, emb] bfloat16."""
+        # Sequence concatenates over the SP axis and the embedding over the TP axis.
+        dims = (-2, -1) if self.sp_axis == 0 else (-1, -2)
         host = ttnn.to_torch(
             tt_tensor,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=dims, mesh_shape=self.mesh_device.shape),
         ).to(torch.bfloat16)
         if len(tt_tensor.shape) == 4:
             host = host.squeeze(0)
@@ -507,6 +519,7 @@ class TtPrefillTransformer(LightweightModule):
         provided_levels: int = 0,
         mtp_geometry=None,
         seed_indexer_indices: Optional[ttnn.Tensor] = None,
+        chunks: Optional[list] = None,
     ):
         """
         Forward pass: [embed] -> [block x N]. The populated KV cache is the output.
@@ -567,6 +580,8 @@ class TtPrefillTransformer(LightweightModule):
             "norm" for h^0), otherwise None. No token is produced: the populated KV cache is
             the output.
         """
+        if chunks is not None:
+            raise NotImplementedError("TtPrefillTransformer has no packed forward yet; chunks must be None")
         # The two ack transports are mutually exclusive: the block takes the d2h_service branch and would
         # silently drop on_layer_complete, so a caller wiring both would get half the acks it asked for
         # with no diagnostic. The runner's single-rank and pipeline branches are disjoint today; keep it so.

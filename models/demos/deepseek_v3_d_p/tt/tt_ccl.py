@@ -184,6 +184,10 @@ class TT_CCL:
         # Full-indexer layers execute serially, so they reuse the same resources. The pair belongs
         # exclusively to the SP KV-prefix gather branch and is never shared with the TP index gather.
         self.sparse_mla_overlap_resources: SparseMlaOverlapResources | None = None
+        # The pair itself, per profile, for the life of this TT_CCL (the mesh): releasing the overlap removes only its
+        # sub-device manager. Cached gather programs keep their own references to the pair, so a pair created anew for
+        # each model built on the mesh would leave the previous one pinned in L1_SMALL beside it.
+        self.sparse_mla_overlap_semaphores: dict[str, tuple] = {}
 
         self.sparse_kv_push_planner = None  # SparseKvPushPlanner, created on first use
 
@@ -259,7 +263,7 @@ class TT_CCL:
         return self.combine_overlap_semaphores
 
     def get_combine_forwarding_buffer(
-        self, emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links, fwd_vc_pages
+        self, emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links, fwd_vc_pages, combine_axis=0
     ):
         """combine_fabric2d's DRAM forwarding buffer for hybrid_routed_expert_moe overlapped with combine.
 
@@ -267,7 +271,7 @@ class TT_CCL:
         forward: left to the op, it is allocated while that forward's dispatch buffer and outputs are live and stays
         pinned there, splitting the DRAM each later layer's dispatch buffer needs in one piece.
         """
-        key = (emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links, fwd_vc_pages)
+        key = (emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links, fwd_vc_pages, combine_axis)
         buffer = self.combine_forwarding_buffers.get(key)
         if buffer is None:
             buffer = ttnn.experimental.deepseek_prefill.hybrid_routed_expert_moe_forwarding_buffer(
@@ -276,7 +280,7 @@ class TT_CCL:
                 experts_per_chip=experts_per_chip,
                 num_experts_per_tok=num_experts_per_tok,
                 seq_len_per_chip=seq_len_per_chip,
-                combine_axis=0,
+                combine_axis=combine_axis,
                 combine_num_links=num_links,
                 combine_fwd_vc_pages=fwd_vc_pages,
             )
@@ -311,7 +315,8 @@ class TT_CCL:
 
         Resource creation happens outside the hot forward path. Semaphore allocation is followed by a
         mesh-wide synchronization so every participating device observes the zero initialization before
-        the first Fabric atomic increment.
+        the first Fabric atomic increment. After a release, the next call registers a new manager over the
+        same semaphore pair (see sparse_mla_overlap_semaphores).
         """
         profile = profile.lower()
         profile = _SPARSE_MLA_OVERLAP_PROFILE_ALIASES.get(profile, profile)
@@ -356,23 +361,25 @@ class TT_CCL:
             [ttnn.CoreRange(ttnn.CoreCoord(0, rows), ttnn.CoreCoord(grid.x - 1, grid.y - 1))]
         )
 
-        manager_id = self.mesh_device.create_sub_device_manager(
-            [ttnn.SubDevice([topk_core_grid]), ttnn.SubDevice([gather_core_grid])],
-            0,
-        )
-        try:
+        semaphores = self.sparse_mla_overlap_semaphores.get(profile)
+        if semaphores is None:
             l1_small_view = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.L1_SMALL)
             semaphore_buffer_type = (
                 ttnn.BufferType.L1_SMALL if l1_small_view.total_bytes_per_bank > 0 else ttnn.BufferType.L1
             )
-            ready_semaphore = ttnn.create_global_semaphore(self.mesh_device, gather_core_grid, 0, semaphore_buffer_type)
-            data_valid_semaphore = ttnn.create_global_semaphore(
-                self.mesh_device, gather_core_grid, 0, semaphore_buffer_type
+            semaphores = tuple(
+                ttnn.create_global_semaphore(self.mesh_device, gather_core_grid, 0, semaphore_buffer_type)
+                for _ in range(2)
             )
             ttnn.synchronize_device(self.mesh_device)
-        except Exception:
-            self.mesh_device.remove_sub_device_manager(manager_id)
-            raise
+            self.sparse_mla_overlap_semaphores[profile] = semaphores
+        # A reused pair is at zero: release resets it after draining.
+        ready_semaphore, data_valid_semaphore = semaphores
+
+        manager_id = self.mesh_device.create_sub_device_manager(
+            [ttnn.SubDevice([topk_core_grid]), ttnn.SubDevice([gather_core_grid])],
+            0,
+        )
 
         resources = SparseMlaOverlapResources(
             profile=profile,
@@ -402,7 +409,9 @@ class TT_CCL:
         ttnn.synchronize_device(self.mesh_device)
 
     def release_sparse_mla_overlap_manager(self) -> None:
-        """Idempotently drain, reset, and unregister sparse-MLA overlap resources before mesh close."""
+        """Idempotently drain, reset the semaphores, and unregister the overlap's sub-device manager before mesh close.
+
+        The semaphore pair stays with this TT_CCL for the next model built on the mesh."""
         resources = self.sparse_mla_overlap_resources
         if resources is None:
             return
@@ -669,14 +678,15 @@ def default_topology(mesh_device: ttnn.MeshDevice) -> Optional[ttnn.Topology]:
     return None
 
 
-# Per-axis CCL topology. Mesh dim 0 = rows = "Y" = sp_axis; dim 1 = cols = "X" = tp_axis.
+# Per-axis CCL topology, indexed by mesh axis: dim 0 = rows = "Y", dim 1 = cols = "X". SP and TP can sit on
+# either axis, so callers pick their entry with [sp_axis] / [tp_axis] (see resolve_per_axis_topology).
 # A torus fabric physically wraps a given axis; Ring is only valid on a wrapped axis (otherwise the
 # collective hangs forever on a wrap link the fabric does not service — get_usable_topology() keeps
 # Ring because the coords span the axis). Reading the *active* fabric config keeps the returned
 # topology consistent with whatever was opened, so a (descriptor, fabric, topology) mismatch can't
 # silently ask Ring on an unwrapped axis.
 _FABRIC_PER_AXIS_TOPOLOGY = {
-    # fabric_config: (sp_topology [dim 0 / Y], tp_topology [dim 1 / X])
+    # fabric_config: (dim 0 / Y topology, dim 1 / X topology)
     ttnn.FabricConfig.FABRIC_2D_TORUS_X: (ttnn.Topology.Linear, ttnn.Topology.Ring),
     ttnn.FabricConfig.FABRIC_2D_TORUS_Y: (ttnn.Topology.Ring, ttnn.Topology.Linear),
     ttnn.FabricConfig.FABRIC_2D_TORUS_XY: (ttnn.Topology.Ring, ttnn.Topology.Ring),
@@ -687,12 +697,12 @@ _FABRIC_PER_AXIS_TOPOLOGY = {
 def per_axis_topology(
     fabric_config: Optional[ttnn.FabricConfig] = None,
 ) -> tuple[ttnn.Topology, ttnn.Topology]:
-    """Return the per-axis CCL topology ``(sp_topology, tp_topology)`` for the fabric.
+    """Return the per-axis CCL topology ``(dim0_topology, dim1_topology)`` for the fabric.
 
-    ``sp_topology`` drives cluster_axis=0 (rows / Y) collectives, ``tp_topology`` drives
-    cluster_axis=1 (cols / X). Ring is returned only for an axis the fabric physically wraps; every
-    other axis is Linear. When ``fabric_config`` is None the currently-active fabric is queried so
-    the result always matches the opened fabric.
+    Entry ``i`` drives cluster_axis=i collectives (0 = rows / Y, 1 = cols / X), so the SP and TP
+    topologies are ``result[sp_axis]`` and ``result[tp_axis]``. Ring is returned only for an axis the
+    fabric physically wraps; every other axis is Linear. When ``fabric_config`` is None the
+    currently-active fabric is queried so the result always matches the opened fabric.
     """
     if fabric_config is None:
         fabric_config = ttnn.get_fabric_config()
@@ -729,10 +739,9 @@ def resolve_per_axis_topology(topology, sp_axis: int, tp_axis: int):
     if isinstance(topology, tuple):
         if len(topology) != 2:
             raise ValueError(f"a per-axis topology tuple must be (dim0, dim1), got {topology}")
-        # Unpacking the (dim0, dim1) tuple as (sp, tp) is only correct at sp_axis=0/tp_axis=1.
-        if sp_axis != 0 or tp_axis != 1:
-            raise ValueError("per-axis topology tuple assumes sp_axis=0, tp_axis=1")
-        return topology
+        if {sp_axis, tp_axis} != {0, 1}:
+            raise ValueError(f"sp_axis and tp_axis must be 0 and 1 in some order, got {sp_axis=}, {tp_axis=}")
+        return topology[sp_axis], topology[tp_axis]
     return topology, topology
 
 
