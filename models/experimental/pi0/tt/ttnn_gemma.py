@@ -205,9 +205,11 @@ class GemmaAttentionTTNN:
         self.cos_meta = cos_meta
         self.sin_meta = sin_meta
 
-        # Compute kernel config for attention (HiFi4 for precision-critical ops)
+        # Compute kernel config for the output projection. Its input (QKV linear -> heads -> rotary -> SDPA ->
+        # concat_heads) is bfloat8_b, which fits in SrcB's high slice: HiFi4 only adds phases that multiply
+        # zeros, so HiFi2 gives bit-identical output.
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,

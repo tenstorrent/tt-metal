@@ -115,8 +115,13 @@ class TtMambaSSM(torch.nn.Module):
         )
         self.hidden_state_cache = TensorCache(self.configs["num_users"], 1, self.hidden_size * self.n, device)
 
+        # bfloat4_b weights fit in SrcA's high slice, so HiFi2's extra phase multiplies zeros: LoFi is bit-identical.
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=(
+                ttnn.MathFidelity.LoFi
+                if self.configs["dtype"]["weights"] == ttnn.bfloat4_b
+                else ttnn.MathFidelity.HiFi2
+            ),
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )

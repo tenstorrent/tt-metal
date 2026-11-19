@@ -126,7 +126,7 @@ class Attention(LightweightModule):
             decoder_id=layer_num, tensor=TensorGroup.KV_CACHE, prefetcher=use_prefetcher
         )
         self.li_qkv_decode_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
-            decoder_id=layer_num, op=OpGroup.LI_QKV_DECODE, configuration=configuration
+            decoder_id=layer_num, op=OpGroup.LI_QKV_DECODE, configuration=configuration, weight_dtype=self.wqkv_dtype
         )
         self.sdpa_decode_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.SDPA_DECODE, configuration=configuration
@@ -139,16 +139,20 @@ class Attention(LightweightModule):
             self.sdpa_decode_compute_kernel_cfg = None
 
         self.li_o_decode_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
-            decoder_id=layer_num, op=OpGroup.LI_O_DECODE, configuration=configuration
+            decoder_id=layer_num, op=OpGroup.LI_O_DECODE, configuration=configuration, weight_dtype=self.wo_dtype
         )
         self.sdpa_prefill_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.SDPA_PREFILL, configuration=configuration
         )
         self.li_qkv_prefill_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
-            decoder_id=layer_num, op=OpGroup.LI_QKV_PREFILL, configuration=configuration
+            decoder_id=layer_num, op=OpGroup.LI_QKV_PREFILL, configuration=configuration, weight_dtype=self.wqkv_dtype
         )
         self.li_o_prefill_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
-            decoder_id=layer_num, op=OpGroup.LI_O_PREFILL, configuration=configuration
+            decoder_id=layer_num,
+            op=OpGroup.LI_O_PREFILL,
+            configuration=configuration,
+            in0_dtype=self.activation_dtype or ttnn.bfloat8_b,  # prefill SDPA output keeps the dtype Q is cast to
+            weight_dtype=self.wo_dtype,
         )
 
         layer_name = configuration.get_state_dict_prefix(self.__class__.__name__, layer_num)

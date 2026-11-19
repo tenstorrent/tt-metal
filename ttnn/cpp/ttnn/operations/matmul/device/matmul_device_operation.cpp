@@ -2789,6 +2789,9 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor_b = args.input_tensors.at(1);
     const auto& optional_input_tensors = args.optional_input_tensors;
 
+    operations::matmul::utilities::warn_if_matmul_fidelity_has_zero_phases(
+        "matmul", input_tensor_a, input_tensor_b, ttnn::get_math_fidelity(attributes.compute_kernel_config));
+
     auto a_shape =
         operations::matmul::utilities::get_matmul_tensor_logical_shape(input_tensor_a, attributes.transpose_a);
     const auto& b_shape =
@@ -3418,6 +3421,10 @@ MatmulParams create_matmul_attributes(
     math_fidelity = are_inputs_32F
                         ? (is_wormhole ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4)
                         : math_fidelity;
+    // Don't let the default pay for fidelity phases that cannot change the result for these dtypes
+    // (bf16 x bfloat4_b at HiFi2 is bit-identical to LoFi). Only reached when no compute_kernel_config is given.
+    math_fidelity = operations::matmul::utilities::get_lowest_equivalent_matmul_fidelity(
+        arch, input_tensor_a.dtype(), input_tensor_b.dtype(), math_fidelity);
 
     bool broadcast_batch = parameters.bcast_batch.value_or(get_broadcast_batch(
         input_tensor_a, input_tensor_b, parameters.transpose_a, parameters.transpose_b, parameters.program_config));

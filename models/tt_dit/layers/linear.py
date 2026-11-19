@@ -20,12 +20,14 @@ from ..utils.matmul import (
 from ..utils.tensor import prepare_for_fused_swiglu
 from .module import Module, Parameter
 
-# Fidelity per weight dtype. Quantized dtypes (e.g. bfloat8_b) are deliberately absent: callers
-# look up with .get(dtype, HiFi2). This compute_config is a dead default for any op handed an
-# explicit compute_kernel_config (every LTX matmul is), so the fallback only has to construct.
+# Fidelity per weight dtype. bfloat8_b is deliberately absent: callers look up with
+# .get(dtype, HiFi2). This compute_config is a dead default for any op handed an explicit
+# compute_kernel_config (every LTX matmul is), so the fallback only has to construct.
+# bfloat4_b weights fit in SrcA's high slice, so HiFi2's extra phase multiplies zeros: LoFi is bit-identical.
 MATH_FIDELITY = {
     ttnn.bfloat16: ttnn.MathFidelity.HiFi2,
     ttnn.float32: ttnn.MathFidelity.HiFi4,
+    ttnn.bfloat4_b: ttnn.MathFidelity.LoFi,
 }
 
 # Activation strings accepted by Linear / ColParallelLinear `activation_fn`,

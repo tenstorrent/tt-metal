@@ -187,7 +187,7 @@ class MLP(LightweightModule):
             decoder_id=layer_num, tensor=TensorGroup.ACTIVATION
         )
         li_ff1_3_compute_kernel_cfg = self.decoders_optimizations.get_math_fidelity(
-            decoder_id=layer_num, op=OpGroup.LI_FF1_FF3, configuration=self.args
+            decoder_id=layer_num, op=OpGroup.LI_FF1_FF3, configuration=self.args, weight_dtype=self.ff1_3_dtype
         )
 
         if mode == Mode.PREFILL and seq_len >= self.args.prefill_len_cutoff:  # 512 if Blackhole, 1024 if Wormhole
@@ -351,7 +351,11 @@ class MLP(LightweightModule):
                 w2_in = ttnn.to_memory_config(w2_in, ttnn.L1_MEMORY_CONFIG)
 
         li_ff2_compute_kernel_cfg = self.decoders_optimizations.get_math_fidelity(
-            decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=self.args
+            decoder_id=layer_num,
+            op=OpGroup.LI_FF2,
+            configuration=self.args,
+            in0_dtype=activation_dtype or ttnn.bfloat8_b,  # dtype of w2_in (the w1 * w3 product)
+            weight_dtype=self.ff2_dtype,
         )
 
         w2_output_dtype = activation_dtype

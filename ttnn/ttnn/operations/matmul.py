@@ -25,6 +25,7 @@ MatmulInputs = ttnn._ttnn.operations.matmul.MatmulInputs
 MatmulDeviceOperation = ttnn._ttnn.operations.matmul.MatmulDeviceOperation
 create_matmul_attributes = ttnn._ttnn.operations.matmul.create_matmul_attributes
 matmul_select_program_factory = ttnn._ttnn.operations.matmul.matmul_select_program_factory
+get_lowest_equivalent_matmul_fidelity = ttnn._ttnn.operations.matmul.get_lowest_equivalent_matmul_fidelity
 
 
 def _golden_function(

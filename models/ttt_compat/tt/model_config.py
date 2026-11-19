@@ -5178,6 +5178,29 @@ class HfModelWrapper:
         ]  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
 
 
+def skip_zero_fidelity_phases(compute_kernel_config, arch, in0_dtype=None, in1_dtype=None):
+    """
+    Return compute_kernel_config with math_fidelity lowered to the lowest fidelity whose matmul output is
+    bit-identical for these operand dtypes (see ttnn.get_lowest_equivalent_matmul_fidelity). Every other
+    setting is kept. A dtype of None means unknown and is treated as bfloat16, which uses every phase.
+    """
+    if compute_kernel_config is None:
+        return compute_kernel_config
+    fidelity = ttnn.get_lowest_equivalent_matmul_fidelity(
+        arch, in0_dtype or ttnn.bfloat16, in1_dtype or ttnn.bfloat16, compute_kernel_config.math_fidelity
+    )
+    if fidelity == compute_kernel_config.math_fidelity:
+        return compute_kernel_config
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=fidelity,
+        math_approx_mode=compute_kernel_config.math_approx_mode,
+        fp32_dest_acc_en=compute_kernel_config.fp32_dest_acc_en,
+        packer_l1_acc=compute_kernel_config.packer_l1_acc,
+        dst_full_sync_en=compute_kernel_config.dst_full_sync_en,
+        throttle_level=compute_kernel_config.throttle_level,
+    )
+
+
 class DecodersPrecision:
     @classmethod
     def from_string(cls, optimizations: str):
@@ -5258,7 +5281,22 @@ class DecodersPrecision:
 
         return precision_setting_lookup[key]
 
-    def get_math_fidelity(self, decoder_id, op: OpGroup, configuration: ModelArgs):
+    def get_math_fidelity(self, decoder_id, op: OpGroup, configuration: ModelArgs, in0_dtype=None, weight_dtype=None):
+        """
+        Get the compute kernel config for an op in a decoder layer.
+
+        For linear ops, pass the dtypes the matmul actually sees: in0_dtype for the activations and weight_dtype
+        for the weights as loaded. Fidelity phases that only multiply zero mantissa bits for those dtypes are then
+        dropped (bfloat4_b weights: HiFi2 -> LoFi, HiFi4 -> HiFi3; bfloat8_b activations: HiFi3/HiFi4 -> HiFi2).
+        The output is bit-identical. None means unknown, and nothing is dropped for it.
+        """
+        config = self._get_configured_math_fidelity(decoder_id, op, configuration)
+        mesh_device = getattr(configuration, "mesh_device", None)
+        if mesh_device is None:
+            return config
+        return skip_zero_fidelity_phases(config, mesh_device.arch(), in0_dtype=in0_dtype, in1_dtype=weight_dtype)
+
+    def _get_configured_math_fidelity(self, decoder_id, op: OpGroup, configuration: ModelArgs):
         math_fidelity_setting_lookup = {
             MathFidelitySetting.LOFI: configuration.compute_kernel_config_lofi,
             MathFidelitySetting.HIFI2: configuration.compute_kernel_config_hifi2,
