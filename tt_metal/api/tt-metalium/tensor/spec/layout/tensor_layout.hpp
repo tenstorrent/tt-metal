@@ -67,6 +67,8 @@ public:
         tt_metal::Shape
         compute_padded_shape(const tt::tt_metal::Shape& shape) const;
 
+    [[deprecated(
+        "Construct a new TensorLayout with the memory config instead. This API will be removed after 2027-02-17.")]]
     TensorLayout with_memory_config(MemoryConfig memory_config) const;
 
     bool operator==(const TensorLayout& other) const;
