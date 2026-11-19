@@ -83,7 +83,13 @@ ITEM_VARS = {
     "BRINGUP_PROFILE_OPS",
     "BRINGUP_PROFILE_LAYERS",
     "BRINGUP_AB",
+    "BRINGUP_POS_TOKENS",  # F279: the text a position run reads (F276); the model is the same for every text
 }
+# F279 (OWNER 2026-11-19, "load once per gate"): a shareable model test names its own per-run variables (the
+# positions / text / chunk count it measures; the model does not read them) with a module-level line
+# ``BATCH_ITEM_VARS = ("SKIP_POS", ...)``; runs differing only in those share one process. Collected by ``parse``.
+ITEM_MARK = re.compile(r"^BATCH_ITEM_VARS\s*=\s*\(([^)]*)\)", re.M)
+DECLARED_ITEM_VARS: set = set()
 SAFE_RUN = re.compile(r"^((?:\w+=\S*\s+)*)scripts/run_safe_pytest\.sh\s+(.+)$", re.S)
 ASSIGN = re.compile(r"^(\w+)=(\S*)$")
 
@@ -103,6 +109,15 @@ def shareable(test: str, repo: Path | None = None) -> bool:
         return False
 
 
+def declared_item_vars(test: str, repo: Path | None = None) -> set:
+    """F279: the per-run variables a model test file declares (``BATCH_ITEM_VARS = (...)``)."""
+    try:
+        m = ITEM_MARK.search(((repo or _REPO) / test.split("::")[0]).read_text(errors="replace"))
+    except OSError:
+        return set()
+    return set(re.findall(r"[\"']([A-Z0-9_]+)[\"']", m.group(1))) if m else set()
+
+
 def parse(seg: str) -> dict | None:
     """One `&&` segment as a batch run {env, args, run_all}, or None when it cannot share a process."""
     m = SAFE_RUN.match(seg.strip())
@@ -116,6 +131,8 @@ def parse(seg: str) -> dict | None:
         return None
     if not all(shareable(t) for t in tests):
         return None
+    for t in tests:  # F279
+        DECLARED_ITEM_VARS.update(declared_item_vars(t))
     if any(k.startswith("TT_METAL_") for k in env) or env.get("BRINGUP_PROFILER") == "device":
         return None
     return {"env": env, "args": tests, "run_all": "--run-all" in flags}
@@ -288,8 +305,9 @@ def model_key(env: dict, names: set) -> str:
     """The model configuration of a run: its effective value of every non-per-run variable any run sets (FIX.31: a
     switch at the value a test reads unset counts as unset). Only which runs share a process: the device side loads
     again whenever a load-time switch value differs (testing/batch.shared_model)."""
-    env = normalized({k: v for k, v in env.items() if k in names - ITEM_VARS})
-    return json.dumps({k: env.get(k) for k in sorted(names - ITEM_VARS)}, sort_keys=True)
+    item = ITEM_VARS | DECLARED_ITEM_VARS  # F279
+    env = normalized({k: v for k, v in env.items() if k in names - item})
+    return json.dumps({k: env.get(k) for k in sorted(names - item)}, sort_keys=True)
 
 
 def gate_groups(units: list[tuple[str, str]], env: dict) -> list[list[tuple[str, str]]]:

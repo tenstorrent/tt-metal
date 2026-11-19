@@ -550,3 +550,18 @@ def test_a_runs_record_gives_its_configuration_a_need_and_a_group_takes_its_unit
         genv = G.hostmem_env(log, [a, b], f)
     assert genv[H.NEED_ENV] == str(need_a) and genv[H.KEY_ENV].startswith("group:")  # its largest unit's need
     assert "host memory (FIX.30): available" in (tmp_path / "gate.log").read_text()
+
+
+def test_declared_item_vars_share_a_process(tmp_path):
+    """F279: a test file's BATCH_ITEM_VARS are per-run: runs differing only in them share one process."""
+    from models.demos.common.bringup.core import batch as B
+
+    t = tmp_path / "models" / "x" / "tests" / "test_pts.py"
+    t.parent.mkdir(parents=True)
+    t.write_text('BATCH_SHARED = True\nBATCH_ITEM_VARS = ("SKIP_POS",)\n')
+    assert B.declared_item_vars("models/x/tests/test_pts.py", tmp_path) == {"SKIP_POS"}
+    B.DECLARED_ITEM_VARS.add("SKIP_POS")
+    names = {"SKIP_POS", "BRINGUP_POS_TOKENS", "DS41_X"}
+    a = B.model_key({"SKIP_POS": "1", "BRINGUP_POS_TOKENS": "prose", "DS41_X": "on"}, names)
+    assert a == B.model_key({"SKIP_POS": "2", "BRINGUP_POS_TOKENS": "code", "DS41_X": "on"}, names)
+    assert a != B.model_key({"SKIP_POS": "1", "DS41_X": "off"}, names)
