@@ -8,15 +8,17 @@ of one request can be split over a layer's K and V buffers.
 Most tests compare with the op on the default [BMAX, ...] layout bit for bit; test_paged_steps_vs_reference compares
 with the torch reference."""
 
-import time
-
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tests.measure.determinism import (
+    device_mismatch_marker_is_set,
+    fold_mismatches,
+    mismatch_report,
+)
 from tests.ttnn.nightly.unit_tests.operations.experimental.gdn.gdn_decode_step_test_utils import (
-    BMAX,
     DK,
     DV,
     HP,
@@ -25,28 +27,36 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.gdn.gdn_decode_step_t
     MODES,
     NV,
     W,
+    assert_close_to_reference,
     bits,
     consts_dev,
     default_step,
-    from_pooled,
     inputs,
     pack_rows,
-    pcc,
     run,
     step_reference,
     tile_dev,
     tiles,
     token_rows,
 )
-from tt_py_test_utils_common.utility_functions import run_for_blackhole
+from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program, require_realtime_profiler
+from tt_py_test_utils_common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 
-pytestmark = run_for_blackhole()
+# One device per module; the trace region is for the tests that capture a trace.
+DEVICE_PARAMS = {"trace_region_size": 16_000_000}
+pytestmark = [run_for_blackhole(), pytest.mark.use_module_device(DEVICE_PARAMS)]
 
 MODEL_MODE = (True, True)  # (fast_mode, fp32_state) as the model runs it
 BLOCK = 64  # fp32 pages of one 1024-token bfloat8_b K (or V) block, the two_pools layout
 K_HEADS = 4  # two_pools: heads 0..3 in the K pool, heads 4..5 and the whole history in the V pool
-TRACE_PARAMS = [{"trace_region_size": 16_000_000}]
 FP32_PAGE, BF16_PAGE, BF8_PAGE = 4096, 2048, 1088
+DETERMINISM_RUNS = 10
+# Device time of one gdn_decode_step at PERF_B rows in the model's call (1024-token K / V blocks), on a P150, and the
+# band around it: a slowdown fails, and a speed-up asks for a new measurement.
+# Measured 112.7 to 116.2 us over six runs on a host-IOMMU P150b.
+PERF_B = 32
+DECODE_STEP_DURATION_NS = 113_500
+PERF_MARGIN = 0.05
 
 
 def _random_starts(n, run_pages, pool_pages, gen, first=0):
@@ -271,7 +281,8 @@ def test_paged_steps_vs_reference(device, fast_mode, fp32_state):
             )
         ).reshape(B, -1)
         sp, hp = _pools_host(pools_dev)
-        worst_out, worst_state = 1.0, 1.0
+        out_ref = torch.zeros(B, NV * DV)
+        state_ref, state = (torch.zeros(B, NV, KV, 32, 32) for _ in range(2))
         for b, r in enumerate(perm):
             out_r, h_ref[r], rows_ref[r] = step_reference(
                 rows_ref[r][1:],
@@ -282,17 +293,16 @@ def test_paged_steps_vs_reference(device, fast_mode, fp32_state):
                 h_ref[r],
                 inp["w"].float(),
             )
-            worst_out = min(worst_out, pcc(out[b], out_r))
+            out_ref[b] = out_r
             hist_r = pack_rows([t.bfloat16() for t in rows_ref[r]], both=True)
             for h in range(NV):
                 pool, page = lay.st[r][h]
-                worst_state = min(worst_state, pcc(sp[pool][0, page : page + KV], tiles(h_ref[r][h])))
+                state[b, h], state_ref[b, h] = sp[pool][0, page : page + KV], tiles(h_ref[r][h])
                 pool, page = lay.hs[r][h]
                 assert torch.equal(
                     hp[pool][0, page : page + HP], hist_r[h]
                 ), f"step {step} request {r} head {h}: history"
-        logger.info(f"step {step}: worst out pcc {worst_out:.6f}, worst state pcc {worst_state:.6f}")
-        assert worst_out > 0.999 and worst_state > (0.999 if fast_mode else 0.9999), (step, worst_out, worst_state)
+        assert_close_to_reference(f"step {step}", fast_mode, fp32_state, out_ref, out, state_ref, state)
 
 
 @pytest.mark.parametrize("null_fill", ["zero", "random", "nan"])
@@ -509,7 +519,6 @@ def test_paged_rejects_a_second_pool_of_smaller_tiles(device, expect_error, pool
         run(x, consts, sa, ha, *MODEL_MODE, state_page_idx=idx, state_pool2=sb, conv_hist_pool2=hb)
 
 
-@pytest.mark.parametrize("device_params", TRACE_PARAMS, indirect=True)
 @pytest.mark.parametrize("B", [8, 32])
 def test_paged_trace_follows_index(device, B):
     """two_pools layout with 2B requests; request B + i starts from the same data as request i. Capture one trace with
@@ -769,56 +778,64 @@ def test_kv_block_copy_and_clear_with_existing_ops(device):
             assert torch.equal(bits((got[0], got[1])[pool][page : page + KV]), bits(tiles(h_new[i][h])))
 
 
-@pytest.mark.parametrize("device_params", TRACE_PARAMS, indirect=True)
-@pytest.mark.parametrize("B", [1, 8, 32])
-def test_gdn_decode_step_traced_latency(device, B):
-    """Traced time per call in the model's mode: the default layout, page pools (two_pools) and the 1024-token K / V
-    blocks. One trace holds N back-to-back calls; the median of REPS replays is reported. Not a pass / fail gate."""
-    n_calls, reps = 64, 15
-    gen = torch.Generator().manual_seed(3)
-    inp = inputs(B, seed=B)
+def _model_call(device, B, seed):
+    """The model's gdn_decode_step call: B requests in blocks 1..B of 1024-token K / V blocks, fast_mode and
+    fp32_state. Returns (kv, step), where step() runs the call once and returns its output."""
+    gen = torch.Generator().manual_seed(seed)
+    inp = inputs(B, seed=seed)
     consts = consts_dev(device, inp)
     x = _x(device, B, gen)
-    h = torch.zeros(BMAX, NV, DK, DV)
-    hist = torch.zeros(BMAX, NV, 4, 32, 32, dtype=torch.bfloat16)
-    for b in range(B):
-        h[b], hist[b] = inp["h"][b], from_pooled(inp["hist2"][b], b)
-    default = (tile_dev(device, h, ttnn.float32), tile_dev(device, hist, ttnn.bfloat16))
-    lay = Layout(B, "two_pools", gen)
-    pools_dev = _pools_dev(device, lay.host_pools(inp, gen))
-    idx = lay.index(device, list(range(B)))
     kv = _kv_blocks_or_skip(device, 2 * B + 2, gen)
     blocks = list(range(1, B + 1))
     kv.place(list(zip(blocks, inp["h"], inp["hist2"])))
     kv.write()
-    kv_idx = ttnn.from_torch(kv.index_host(blocks), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    idx = ttnn.from_torch(kv.index_host(blocks), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    return kv, lambda: kv.run(x, consts, idx)
 
-    def per_call_us(call):
-        call()
-        tid = ttnn.begin_trace_capture(device, cq_id=0)
-        for _ in range(n_calls):
-            ttnn.deallocate(call())
-        ttnn.end_trace_capture(device, tid, cq_id=0)
-        ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
-        times = []
-        for _ in range(reps):
-            t0 = time.perf_counter()
-            ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
-            times.append((time.perf_counter() - t0) / n_calls * 1e6)
-        ttnn.release_trace(device, tid)
-        return sorted(times)[reps // 2]
 
-    calls = {
-        "default": lambda: run(x, consts, *default, *MODEL_MODE),
-        "paged": lambda: _run_pooled(x, consts, pools_dev, idx, *MODEL_MODE),
-        "kv_blocks_1024": lambda: kv.run(x, consts, kv_idx),
-    }
-    res = {k: [] for k in calls}
-    for _ in range(2):  # alternate the layouts so drift hits all of them
-        for k, call in calls.items():
-            res[k].append(per_call_us(call))
-    # DRAM traffic of the state per call: state pages read and written, history slots 1..3 read twice (reader and
-    # writer), 4 history pages written
-    state_bytes = B * NV * (2 * KV * FP32_PAGE + 10 * BF16_PAGE)
-    summary = ", ".join(f"{k} {min(v):.2f} us" for k, v in res.items())
-    logger.info(f"LATENCY B={B}: {summary}; state traffic {state_bytes / 2**20:.2f} MiB per call")
+@pytest.mark.parametrize("B", [1, 8, 32])
+def test_gdn_decode_step_is_device_deterministic(device, B):
+    """DETERMINISM_RUNS back-to-back calls of the model's call from the same start state, with no sync between them:
+    every run's output and every K / V byte equal the first run's. The op updates the state in place, so each run
+    first copies the start state back into the blocks on device. The comparison stays on device; one marker is read
+    back at the end."""
+    kv, step = _model_call(device, B, seed=90 + B)
+    views = [kv.rec_k, kv.rec_v]
+    start = [ttnn.clone(view) for view in views]
+
+    def run_from_start():
+        for src, dst in zip(start, views):
+            ttnn.copy(src, dst)
+        return step()
+
+    reference = [run_from_start()] + [ttnn.clone(view) for view in views]
+    marker, outputs = None, None
+    for _ in range(1, DETERMINISM_RUNS):
+        if outputs is not None:
+            ttnn.deallocate(outputs[0])
+        outputs = [run_from_start()] + views
+        marker = fold_mismatches(marker, reference, outputs)
+    if device_mismatch_marker_is_set(marker):
+        raise AssertionError(
+            f"gdn_decode_step B={B} is not deterministic:\n"
+            + mismatch_report(["output", "K fp32 view", "V fp32 view"], reference, outputs)
+        )
+    logger.info(f"gdn_decode_step B={B}: {DETERMINISM_RUNS} runs bit-identical")
+
+
+@pytest.mark.requires_host_iommu
+@skip_with_llk_assert("LLK asserts change kernel timing.")
+@skip_with_watcher("The watcher changes kernel timing.")
+def test_gdn_decode_step_performance(device):
+    """Device time of the model's call at PERF_B rows, inside +/- PERF_MARGIN of DECODE_STEP_DURATION_NS."""
+    require_realtime_profiler("gdn_decode_step performance")
+    _, step = _model_call(device, PERF_B, seed=3)
+    ttnn.deallocate(step())  # compile outside the measured call
+    out, record = profile_realtime_program(device, step)
+    ttnn.deallocate(out)
+    duration_ns = record["duration_ns"]
+    logger.info(f"gdn_decode_step B={PERF_B}: {duration_ns:.0f} ns (reference {DECODE_STEP_DURATION_NS} ns)")
+    if DECODE_STEP_DURATION_NS is None:
+        pytest.fail(f"no reference duration: set DECODE_STEP_DURATION_NS from the measured {duration_ns:.0f} ns")
+    lower, upper = DECODE_STEP_DURATION_NS * (1 - PERF_MARGIN), DECODE_STEP_DURATION_NS * (1 + PERF_MARGIN)
+    assert lower <= duration_ns <= upper, f"duration {duration_ns:.0f} ns outside [{lower:.0f}, {upper:.0f}] ns"

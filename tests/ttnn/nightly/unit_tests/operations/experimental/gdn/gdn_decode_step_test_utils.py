@@ -6,8 +6,10 @@ The shapes are one Qwen3.8 GDN layer at TP=8 on one device: 6 value heads, 2 key
 """
 
 import torch
+from loguru import logger
 
 import ttnn
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, nrmse
 
 NV, NK, DK, DV = 6, 2, 128, 128
 KD, VD = NK * DK, NV * DV
@@ -21,6 +23,11 @@ BMAX = 32
 # (fast_mode, fp32_state); the model runs (True, True)
 MODES = [(False, False), (True, False), (True, True)]
 MODE_IDS = ["default", "fast", "fast_fp32_state"]
+# NRMSE gates of assert_close_to_reference: the worst (row, value head) NRMSE against the torch reference measured on a
+# P150 over the reference tests, plus headroom. The output's NRMSE depends on its dtype more than on the mode (measured
+# worst 9.9e-3 for float32 outputs, 2.0e-2 for bfloat16 outputs); the state's on the mode (5.5e-3, 5.5e-3, 4.4e-3).
+OUT_NRMSE = {torch.float32: 0.015, torch.bfloat16: 0.025}
+STATE_NRMSE = {(False, False): 0.007, (True, False): 0.007, (True, True): 0.006}
 
 
 def recurrence_reference(q, k, v, beta, g, h, w, l2_eps=1e-6, norm_eps=1e-6):
@@ -103,8 +110,37 @@ def bits(x):
     return x.view({2: torch.int16, 4: torch.int32}[x.element_size()])
 
 
-def pcc(a, b):
-    return torch.corrcoef(torch.stack([a.flatten().float(), b.flatten().float()]))[0, 1].item()
+def assert_close_to_reference(name, fast_mode, fp32_state, out_ref, out, state_ref, state):
+    """assert_accurate of GDN step outputs and states against the torch reference. out_ref, out: [rows, NV * DV];
+    state_ref, state: [rows, NV, ...] (any per-head layout, the same in both). PCC gates each row. NRMSE gates each
+    (row, value head), because PCC does not see a scale error and a whole-tensor NRMSE averages one bad head away."""
+    out_nrmse = OUT_NRMSE[out.dtype]
+    rows = out.shape[0]
+    out_ref, out = (t.float().reshape(rows, NV, DV) for t in (out_ref, out))
+    state_ref, state = state_ref.float(), state.float()
+    logger.info(
+        f"{name}: worst output NRMSE {nrmse(out_ref, out, (0, 1)).max():.3e}, "
+        f"worst state NRMSE {nrmse(state_ref, state, (0, 1)).max():.3e} (per row and value head)"
+    )
+    assert_accurate(
+        out_ref,
+        out,
+        name=f"{name} output",
+        pcc_threshold=0.999,
+        pcc_keep_dims=(0,),
+        nrmse_threshold=out_nrmse,
+        nrmse_keep_dims=(0, 1),
+    )
+    # the default kernels truncate the state to TF32 in the add, so their state tracks fp32 torch more closely
+    assert_accurate(
+        state_ref,
+        state,
+        name=f"{name} state",
+        pcc_threshold=0.999 if fast_mode else 0.9999,
+        pcc_keep_dims=(0,),
+        nrmse_threshold=STATE_NRMSE[(fast_mode, fp32_state)],
+        nrmse_keep_dims=(0, 1),
+    )
 
 
 def tile_dev(device, t, dtype):

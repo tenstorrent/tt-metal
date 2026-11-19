@@ -5,7 +5,6 @@ tensors (without state_page_idx)."""
 
 import pytest
 import torch
-from loguru import logger
 
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.gdn.gdn_decode_step_test_utils import (
@@ -16,10 +15,10 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.gdn.gdn_decode_step_t
     MODES,
     NV,
     W,
+    assert_close_to_reference,
     consts_dev,
     inputs,
     pack_rows,
-    pcc,
     run,
     step_reference,
     tile_dev,
@@ -27,12 +26,7 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.gdn.gdn_decode_step_t
 )
 from tt_py_test_utils_common.utility_functions import run_for_blackhole
 
-pytestmark = run_for_blackhole()
-
-
-def _state_threshold(fast_mode):
-    # the default kernels truncate the state to TF32 in the add, so their state tracks fp32 torch more closely
-    return 0.999 if fast_mode else 0.9999
+pytestmark = [run_for_blackhole(), pytest.mark.use_module_device]
 
 
 @pytest.mark.parametrize("fast_mode, fp32_state", MODES, ids=MODE_IDS)
@@ -62,11 +56,10 @@ def test_gdn_decode_step_vs_reference(device, fast_mode, fp32_state):
                 ttnn.float32,
             )
         ).reshape(-1)
-        h_t = ttnn.to_torch(state).reshape(NV, DK, DV)
-        p_out, p_h = pcc(out, out_ref), pcc(h_t, h_ref)
-        hist_ok = torch.equal(ttnn.to_torch(hist)[0], pack_rows([r.bfloat16() for r in rows_ref]))
-        logger.info(f"step {step}: out pcc {p_out:.6f}, state pcc {p_h:.6f}, history shift exact {hist_ok}")
-        assert p_out > 0.999 and p_h > _state_threshold(fast_mode) and hist_ok, (p_out, p_h, hist_ok)
+        h_t = ttnn.to_torch(state).reshape(1, NV, DK, DV)
+        assert_close_to_reference(f"step {step}", fast_mode, fp32_state, out_ref[None], out[None], h_ref[None], h_t)
+        hist_now = ttnn.to_torch(hist)[0]
+        assert torch.equal(hist_now, pack_rows([r.bfloat16() for r in rows_ref])), f"step {step}: history shift"
 
 
 @pytest.mark.parametrize("fast_mode, fp32_state", MODES, ids=MODE_IDS)
@@ -106,10 +99,7 @@ def test_gdn_decode_step_batched_vs_reference(device, B, fast_mode, fp32_state):
         )
     ).reshape(B, -1)
     h_t, hist_t = ttnn.to_torch(state), ttnn.to_torch(hist)
-    worst_out = min(pcc(out[b], refs[b]) for b in range(B))
-    worst_state = min(pcc(h_t[b], h_ref[b]) for b in range(B))
-    logger.info(f"B={B}: worst out pcc {worst_out:.6f}, worst state pcc {worst_state:.6f}")
-    assert worst_out > 0.999 and worst_state > _state_threshold(fast_mode)
+    assert_close_to_reference(f"B={B}", fast_mode, fp32_state, torch.stack(refs), out, h_ref[:B], h_t[:B])
     assert torch.equal(hist_t[:B], hist_ref[:B]), "history shift differs from the reference"
     assert torch.equal(h_t[B:], inp["h"][B:]) and torch.equal(hist_t[B:], hist_host[B:]), "idle rows changed"
 
