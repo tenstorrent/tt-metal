@@ -165,6 +165,8 @@ void bind_fabric_api(nb::module_& mod) {
             Returns the fabric configuration in effect for ``mesh_device``.
         )");
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     mod.def(
         "get_fabric_config",
         []() { return tt::tt_fabric::GetFabricConfig(); },
@@ -175,6 +177,7 @@ void bind_fabric_api(nb::module_& mod) {
                 Pass ``mesh_device`` instead. This overload resolves the default context and will be
                 removed after 2026-12-31.
         )");
+#pragma GCC diagnostic pop
 
     mod.def(
         "setup_fabric_connection",

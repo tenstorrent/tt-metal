@@ -77,7 +77,7 @@ void AllReduceAsyncDeviceOperation::validate_on_program_cache_miss(
 
     if (args.one_shot) {
         TT_FATAL(
-            tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig()),
+            tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig(*input_tensor.device())),
             "all_reduce_async one_shot routes by hop count and needs a 1D (line or ring) fabric");
         TT_FATAL(args.ring_size >= 2, "all_reduce_async one_shot needs at least 2 devices, got {}", args.ring_size);
         TT_FATAL(!args.use_noc1_only, "all_reduce_async one_shot does not support use_noc1_only");
