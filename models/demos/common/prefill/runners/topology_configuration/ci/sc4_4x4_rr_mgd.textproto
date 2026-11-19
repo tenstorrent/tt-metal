@@ -8,9 +8,7 @@
 # Inside a mesh both axes are rings: SP on mesh axis 1, TP on axis 0, FABRIC_2D_TORUS_XY. Stage chain
 # 0 -> 1 -> ... -> 7 (no 7 -> 0 connection: prefill does not close the ring).
 #
-# Intra-mesh channels are STRICT 2 (every torus edge of the pod must have 2 links). A pod with a short
-# hop (a 13-link host-to-host hop leaves one seam torus with 1-link edges) needs
-# sc4_4x4_rr_1link_mgd.textproto, which is this file with STRICT 1.
+# Intra-mesh channels are STRICT 2: every torus edge of the pod must have 2 links.
 #
 # The pins are the subtorus_4x4_pipeline_8stage profiles that TestSubtorus4x4PipelineMgdPinningsExact
 # checks (corner pins and one orientation anchor per mesh, per board revision).

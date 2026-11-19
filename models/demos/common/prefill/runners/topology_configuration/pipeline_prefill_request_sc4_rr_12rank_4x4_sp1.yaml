@@ -1,8 +1,7 @@
 # [RING,RING] 4x4 prefill on SC4: 8 stages on 4 Galaxies, 12 ranks. Even stages are in-Galaxy tori (one rank, one
 # host); odd stages are seam tori split over two hosts (mesh_host_rank 0 on host k, 1 on host k+1), so a seam
 # stage's MeshDevice is shared by two ranks. Ranks are ordered mesh-major, host-rank-minor, as the control plane
-# assigns them. The descriptor is ci/sc4_4x4_rr_mgd.textproto (ci/sc4_4x4_rr_1link_mgd.textproto for a pod with a
-# short hop).
+# assigns them. The descriptor is ci/sc4_4x4_rr_mgd.textproto.
 #
 # TEMPLATE for rr_pipeline_binding.py, which fills TT_VISIBLE_DEVICES (a 2x4-slice map per rank) and prints
 # the rankfile, with the hosts in cabling ring order h0 -> h1 -> h2 -> h3:

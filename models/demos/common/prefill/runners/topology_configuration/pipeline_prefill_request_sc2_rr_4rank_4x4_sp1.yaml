@@ -1,6 +1,6 @@
 # [RING,RING] 4x4 prefill on two neighbouring Galaxies h0 -> h1: 3 stages, 4 ranks. Stage 0 is h0's in-Galaxy
 # torus, stage 1 the seam torus split over both hosts (mesh_host_rank 0 on h0, 1 on h1), stage 2 h1's in-Galaxy
-# torus. The descriptor is ci/sc2_4x4_rr_mgd.textproto (ci/sc2_4x4_rr_1link_mgd.textproto for a single-link pair).
+# torus. The descriptor is ci/sc2_4x4_rr_mgd.textproto.
 # Ranks are ordered mesh-major, host-rank-minor. TEMPLATE for rr_pipeline_binding.py (see
 # pipeline_prefill_request_sc4_rr_12rank_4x4_sp1.yaml); h1 must follow h0 in the pod's cabling ring.
 

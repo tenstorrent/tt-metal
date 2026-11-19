@@ -4,8 +4,7 @@
 #   mesh 2: in-Galaxy torus of h1, one host.
 # This is the SC4 carve (sc4_4x4_rr_mgd.textproto) cut to the first three stages. h0 must be the host whose
 # slice-3 trays are cabled to h1's slice-0 trays, i.e. h1 follows h0 in the pod's cabling ring.
-# Neighbouring stages share 8 links. Intra-mesh channels are STRICT 2; sc2_4x4_rr_1link_mgd.textproto is the
-# STRICT 1 variant for pairs whose cabling has fewer links.
+# Neighbouring stages share 8 links. Intra-mesh channels are STRICT 2.
 
 mesh_descriptors {
   name: "M0"

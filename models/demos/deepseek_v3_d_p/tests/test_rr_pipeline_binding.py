@@ -146,9 +146,7 @@ def mesh_graph(path):
     }
 
 
-@pytest.mark.parametrize(
-    "name, stages", [("sc4_4x4_rr", 8), ("sc4_4x4_rr_1link", 8), ("sc2_4x4_rr", 3), ("sc2_4x4_rr_1link", 3)]
-)
+@pytest.mark.parametrize("name, stages", [("sc4_4x4_rr", 8), ("sc2_4x4_rr", 3)])
 def test_descriptors_alternate_single_and_two_host_rings(name, stages):
     g = mesh_graph(TOPO / f"ci/{name}_mgd.textproto")
     assert g["dim_types"] == {("RING", "RING")}
@@ -156,18 +154,8 @@ def test_descriptors_alternate_single_and_two_host_rings(name, stages):
     assert g["meshes"] == [(f"M{i % 2}", str(i)) for i in range(stages)]
     # A chain: one 8-link seam between consecutive stages, nothing closing the ring.
     assert g["seams"] == ["8"] * (stages - 1)
-    # Both mesh kinds ask for 2 channels per edge: STRICT, or RELAXED so a pod with a single-link edge still maps.
-    assert g["intra_mesh"] == [("2", "RELAXED" if name.endswith("1link") else "STRICT")] * 2
-
-
-@pytest.mark.parametrize("pair", [("sc4_4x4_rr", "sc4_4x4_rr_1link"), ("sc2_4x4_rr", "sc2_4x4_rr_1link")])
-def test_single_link_variant_differs_only_in_intra_mesh_policy(pair):
-    def body(name):
-        text = (TOPO / f"ci/{name}_mgd.textproto").read_text()
-        text = re.sub(r"^#.*\n", "", text, flags=re.M)
-        return re.sub(r"channels \{ count: 2 policy: (STRICT|RELAXED) \}", "channels INTRA", text)
-
-    assert body(pair[0]) == body(pair[1])
+    # Both mesh kinds ask for 2 channels per edge.
+    assert g["intra_mesh"] == [("2", "STRICT")] * 2
 
 
 def test_pins_name_both_board_revisions_and_the_right_meshes():

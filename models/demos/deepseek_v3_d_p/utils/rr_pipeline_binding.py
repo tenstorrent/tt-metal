@@ -16,8 +16,7 @@ tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py (shared with the blitz 
               identically, so one host's map serves all.
     predict   from cabling descriptors (tt-cluster-descriptors submodule), no devices needed: fill the
               binding, and report per stage whether its 16 chips hold a C4xC4 torus at 2 links (or 1) per
-              edge and how many links each stage boundary has. Picks the descriptor: the 2-link MGD when
-              every torus has 2-link edges, else the 1-link variant.
+              edge and how many links each stage boundary has. Fails when a torus edge has a single link.
 
 Both write a rankfile (`rank i=host slot=<n>`, n counting the ranks on that host), the placement the binding needs: tt-run takes no host
 field, so launch with `--mpi-args "--map-by rankfile:file=<rankfile>"`.
@@ -242,10 +241,6 @@ def default_template(num_stages):
     return templates[num_stages]
 
 
-def single_link_mgd(path):
-    return path.replace("_mgd.textproto", "_1link_mgd.textproto")
-
-
 def render(template, rank_table, source, hosts, mgd=None):
     """Fill the template's TT_VISIBLE_DEVICES for rank_table (one dict per rank, in rank order)."""
     text = Path(template).read_text()
@@ -367,7 +362,7 @@ def cmd_predict(args):
             l.split(": ", 1)[1] for l in Path(template).read_text().splitlines() if l.startswith("mesh_graph_desc_path")
         )
         if min(m for *_, m in rows) < 2:
-            mgd = single_link_mgd(mgd)
+            raise SystemExit("a torus has 1-link edges; the descriptors need 2 links on every torus edge")
     print(f"\ndescriptor: {mgd}")
     print(f'launch: --mpi-args "--map-by rankfile:file=<rankfile>"')
     write_outputs(args, render(template, rank_table, f"predicted from {args.mapping}", hosts, mgd), rank_table)
