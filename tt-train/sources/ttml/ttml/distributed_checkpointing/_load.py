@@ -297,7 +297,7 @@ def load(
     optimizer=None,
     scheduler=None,
     dataloader=None,
-    rng: bool = False,
+    rng: bool | None = None,
     strict: bool = True,
     threads: int | None = None,
 ) -> LoadResult:
@@ -307,14 +307,16 @@ def load(
     ``strict`` (default), a live tensor without an entry, or an entry of a requested role (model, and optimizer state
     when ``optimizer`` is passed) without a live tensor, is an error; otherwise they are listed in the result.
     Optimizer scalars (steps, learning rates) are restored through ``set_state_dict``. ``scheduler`` and
-    ``dataloader`` are restored through their ``set_state_dict`` from the state ``save`` stored, and with
-    ``rng=True`` so is every random generator ``save`` captured (ttml's and ttml.init's for this world rank, python,
-    numpy, torch when imported). A component asked for that the checkpoint lacks entirely is an error under ``strict``
-    and listed in ``missing`` otherwise; within the RNG block, a generator or a world rank the checkpoint holds no state
-    for (torch imported only now, a world with more hosts than the save) keeps its current state with a warning, and
-    ``restored`` lists exactly what was restored. ``threads`` caps the reader threads (default 32; a read is one
-    contiguous byte range of one file). FSDP modules are resharded first. Returns the header passed to ``save``, the
-    train state stored and the names restored.
+    ``dataloader`` are restored through their ``set_state_dict`` from the state ``save`` stored. With ``rng`` so is
+    every random generator ``save`` captured (ttml's and ttml.init's for this world rank, python, numpy, torch when
+    imported). By default (``None``) the generators are restored whenever a scheduler or a dataloader is, since a resume
+    that restores those but keeps the current generators takes a different step; ``rng=False`` keeps them (a deliberate
+    reseed), ``rng=True`` restores them with only a model. A component asked for that the checkpoint lacks entirely is
+    an error under ``strict`` and listed in ``missing`` otherwise; within the RNG block, a generator or a world rank the
+    checkpoint holds no state for (torch imported only now, a world with more hosts than the save) keeps its current
+    state with a warning, and ``restored`` lists exactly what was restored. ``threads`` caps the reader threads (default
+    32; a read is one contiguous byte range of one file). FSDP modules are resharded first. Returns the header passed to
+    ``save``, the train state stored and the names restored.
 
     Everything that can be checked without reading tensor data is checked before the first tensor is placed: keys,
     shapes, dtypes, layouts, param groups, the sizes of the data files and the stored RNG state. A failure after that
@@ -329,6 +331,8 @@ def load(
     if optimizer is not None and model is None:
         raise TypeError("optimizer state is keyed by the model's parameters; pass model= as well")
     check_threads(threads)
+    if rng is None:  # a resume: the generators come back with the scheduler or the dataloader
+        rng = scheduler is not None or dataloader is not None
     t0 = time.perf_counter()
     ckpt_dir = os.path.abspath(ckpt_dir)
     if not is_complete(ckpt_dir):

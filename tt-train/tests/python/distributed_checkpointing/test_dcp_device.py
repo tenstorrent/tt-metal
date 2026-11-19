@@ -559,7 +559,8 @@ def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path, expect_er
     random.seed(0)
     np.random.seed(0)
     torch.manual_seed(0)
-    loaded = dcp.load(path, model=model2, optimizer=opt2, scheduler=sched2, dataloader=loader2, rng=True)
+    # rng by default: restoring a scheduler and a dataloader restores the generators with them.
+    loaded = dcp.load(path, model=model2, optimizer=opt2, scheduler=sched2, dataloader=loader2)
     assert loaded.restored == [
         "scheduler",
         "dataloader",
@@ -583,29 +584,33 @@ def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path, expect_er
     assert random.random() == expected["python"] and float(np.random.random()) == expected["numpy"]
     assert torch.rand(2).tolist() == expected["torch"]
 
-    # The negative control: everything restored but the generators, and the same step rounds differently.
+    # The negative control: everything restored but the generators (rng=False, a deliberate reseed), and the same
+    # step rounds differently.
     model3, params3, opt3 = fresh_tp(DIM, _adamw_stochastic_rounding)
     sched3 = CosineAnnealingScheduler(opt3, T_max=8)
     ctx.set_seed(999)
-    dcp.load(path, model=model3, optimizer=opt3, scheduler=sched3)
+    dcp.load(path, model=model3, optimizer=opt3, scheduler=sched3, rng=False)
     train_step(model3, opt3, DIM, input_scale=0.5)
     assert_some_differ(model_shards(params3), after_step)
 
-    # Not asked for, not touched: a plain load leaves the generators alone.
+    # A load of the model alone leaves the generators alone.
     before = ctx.get_generator_state()
     plain = dcp.load(path, model=model2)
     assert plain.restored == [] and ctx.get_generator_state() == before
 
-    # Asked for but absent: a strict load refuses before touching anything, a lenient one lists it.
+    # Asked for but absent (the generators too, by default, with a scheduler): a strict load refuses before touching
+    # anything, a lenient one lists them.
     bare = str(tmp_path / "bare")
     dcp.save(bare, model=model, rng=False)
     assert dcp.read_train_state(bare) == {}
     untouched = model_shards(params2), sched2.get_state_dict()
-    with expect_error(dcp.MissingKeyError, r"the checkpoint holds no state for \['train_state/scheduler'\]"):
+    with expect_error(
+        dcp.MissingKeyError, r"the checkpoint holds no state for \['train_state/scheduler', 'train_state/rng'\]"
+    ):
         dcp.load(bare, model=model2, scheduler=sched2)
     assert sched2.get_state_dict() == untouched[1]
     assert_same_shards(model_shards(params2), untouched[0])
-    lenient = dcp.load(bare, model=model2, scheduler=sched2, rng=True, strict=False)
+    lenient = dcp.load(bare, model=model2, scheduler=sched2, strict=False)
     assert lenient.missing == ["train_state/scheduler", "train_state/rng"] and lenient.restored == []
 
     # A damaged RNG block is refused before anything is placed, generators and model alike.

@@ -12,10 +12,11 @@ one mesh shape and parallelism strategy loads onto another.
 
     import ttml.distributed_checkpointing as dcp
     dcp.save(ckpt_dir, model=model, optimizer=optimizer, scheduler=scheduler, dataloader=loader, header={"step": step})
-    result = dcp.load(ckpt_dir, model=model, optimizer=optimizer, scheduler=scheduler, dataloader=loader, rng=True)
+    result = dcp.load(ckpt_dir, model=model, optimizer=optimizer, scheduler=scheduler, dataloader=loader)
 
 The scheduler, the dataloader and the random generators (the ttml generator, ttml.init's, python, numpy, torch) are
-saved beside the header and restored on request; see ``_train_state``.
+saved beside the header. A load restores the scheduler and dataloader passed, and with them the generators (``rng``
+defaults to restoring them whenever a scheduler or dataloader is); see ``load`` and ``_train_state``.
 
 Topology labels are trusted. The one fact a label cannot carry, the segment order inside a fused projection, is
 declared by the layer that fuses it (``ColumnParallelLinear(fused_segments=...)``), and a padded vocab weight
