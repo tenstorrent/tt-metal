@@ -22,6 +22,7 @@ from itertools import product
 
 import numpy as np
 
+import ttml.init
 from ttml.distributed_checkpointing._boxes import Box
 from ttml.distributed_checkpointing._errors import TopologyError
 from ttml.distributed_checkpointing._index import FileRecord, Index, data_file_name
@@ -191,8 +192,6 @@ def advance_generators() -> None:
     """Draw from every host generator once, so a state captured next is mid-stream: python's cached Gaussian, numpy's
     cached Gaussian and position and the half-used 32-bit word of ttml.init's PCG64 are then set, all of which a state
     captured right after seeding leaves at their defaults, where a decoder that dropped them would still pass."""
-    import ttml.init  # here: the format tests import this module without ttml's runtime
-
     random.gauss(0.0, 1.0)
     np.random.standard_normal()
     ttml.init._rng.integers(0, 2**32, dtype=np.uint32)
