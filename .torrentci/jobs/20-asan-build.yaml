@@ -139,6 +139,16 @@ jobs:
             - du -sh ttnn-import ttnn-import/build/lib
             - tar -I 'zstd -1 -T0' -cf ttnn-import.tar.zst -C ttnn-import .
             - ls -l ttnn-import.tar.zst
+      - id: probe-links
+        kind: shell
+        shell:
+          run:
+            - |-
+              find build/lib runtime \( -type l -o -links +1 \) -printf '%y %n %p -> %l\n'
+            - |-
+              find build/lib runtime -type d -perm -2000 -printf 'setgid %p\n'
+            - |-
+              find build/lib runtime -type f -size +0 -printf '%S %p\n' | awk '$1 < 1'
       - id: cpm-cache-save
         kind: shell
         shell:
