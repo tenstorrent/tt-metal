@@ -23,8 +23,9 @@
 // Weight servers (HEIGHT-sharded K-blocked walk, when the device has a spare core per channel rectangle): the rounds
 // come from a server core outside the work grid instead (conv2d_3x3_weight_server_{reader,writer}.cpp: DRAM reads on
 // NoC0, multicast on NoC1, one server per rectangle), and every participant is a pure receiver. A participant acks its
-// server first thing at kernel start (it runs and its semaphores are initialized) and then once per round that reuses
-// a cb_weights slot; the server sets one flag per slot after the round's data, and the receiver clears it. The reuse
+// server once per round that reuses a cb_weights slot (no kernel-start ack: a program's go follows every core's
+// configuration, see conv2d_3x3_weight_server_writer.cpp); the server sets one flag per slot after the round's data,
+// and the receiver clears it. The reuse
 // ack of round k + 1 goes out while round k is awaited, as soon as compute freed round k + 1's slot (acking only once
 // round k had landed held the server's round 2 behind every receiver's round 1). The server also multicasts the bias
 // into cb_bias and sets the bias flag (the semaphore after the slot flags): the receiver reserves cb_bias at kernel
@@ -229,15 +230,13 @@ void kernel_main() {
     // Weight servers: 1 on a receiver, then its server's (x, y).
     constexpr uint32_t server_arg = split_flag_arg + 1;
     [[maybe_unused]] const bool server_receiver = weight_servers && get_arg_val<uint32_t>(server_arg) != 0;
-    // Weight servers: the kernel-start ack goes out first (see the file comment); the server's first multicast waits
-    // for every receiver's.
+    // Weight servers: the server's slot-reuse ack counter (slot 0's under SERVER_SLOT_ACKS).
     [[maybe_unused]] uint64_t server_ack_noc = 0;
     if (server_receiver) {
         server_ack_noc = get_noc_addr(
             get_arg_val<uint32_t>(server_arg + 1),
             get_arg_val<uint32_t>(server_arg + 2),
             get_semaphore(server_ack_sem_id));
-        noc_semaphore_inc(server_ack_noc, 1);
     }
 
 #ifdef SD_BIAS_IN_WEIGHTS
@@ -367,6 +366,156 @@ void kernel_main() {
     }
 #endif
 
+    // ---- Split TILE fill, writer half (declared here: kw-fold's round-0 wait below serves it before the rest of the
+    // start-up; see "Split TILE fill, writer half" below).
+    constexpr uint32_t fill_c_in_tiles = c_in_p / 32;
+    constexpr uint32_t fill_batches_per_block = tile_fill_split ? slab_tile_rows / untilize_batch_rows : 1;
+    constexpr uint32_t fill_row_bytes = fill_c_in_tiles * input_page_bytes;
+    constexpr uint32_t fill_batch_bytes = untilize_batch_rows * fill_row_bytes;
+    [[maybe_unused]] const uint32_t fill_ring_base = tile_fill_split ? get_write_ptr(cb_input_tiles) : 0;
+    conv2d_3x3::TaggedReads<false> fill_reads;
+#ifdef CONV2D_3X3_KW_FOLD
+    // kw-fold: the host-planned fill (descriptor _kwf_fill_args). Per M-block this writer's part is [groups] + per
+    // group [pieces] + pieces (a suffix of the block's slab: the higher shards' rows and the last own-shard rows), read
+    // on NoC1 once the reader handed the block over (slab_free), each group under its own transaction id (up to
+    // fill_writer_window in flight) and counted in slab_fwd_done in order as it lands. The first block's groups may go
+    // out at kernel start (writer_fill_early): the slab ring is empty then.
+#ifdef KWF_XCHG
+    constexpr uint32_t kwf_fill_arg0 = server_arg + 3 + 10;  // after the halo exchange's 10 args
+#else
+    constexpr uint32_t kwf_fill_arg0 = server_arg + 3;
+#endif
+    constexpr uint32_t TRID_KWF_FILL = 8;
+    [[maybe_unused]] uint32_t kwf_fill_arg = kwf_fill_arg0;
+    [[maybe_unused]] uint32_t kwf_fill_m = 0;       // the M-block whose groups are being issued
+    [[maybe_unused]] uint32_t kwf_fill_left = 0;    // its groups not issued yet
+    [[maybe_unused]] uint32_t kwf_fill_blocks = 0;  // blocks with groups started (the reader hands each over once)
+    [[maybe_unused]] uint32_t kwf_fill_issued = 0;  // groups issued, all blocks
+    [[maybe_unused]] uint32_t kwf_fill_landed = 0;  // groups landed and counted in slab_fwd_done
+    [[maybe_unused]] bool kwf_fill_open = false;    // kwf_fill_left belongs to block kwf_fill_m
+    [[maybe_unused]] auto kwf_serve_fill = [&](bool early) {
+        while (kwf_fill_landed < kwf_fill_issued &&
+               ncrisc_noc_read_with_transaction_id_flushed(
+                   fill_reads.noc.get_noc_id(), TRID_KWF_FILL + kwf_fill_landed % fill_writer_window)) {
+            Semaphore<>(slab_fwd_done_sem_id).up(1);
+            ++kwf_fill_landed;
+        }
+        while (kwf_fill_issued - kwf_fill_landed < fill_writer_window) {
+            if (!kwf_fill_open) {
+                if (kwf_fill_m >= num_m_blocks_this_core) {
+                    return;
+                }
+                const uint32_t groups = get_arg_val<uint32_t>(kwf_fill_arg);
+                if (groups == 0) {
+                    ++kwf_fill_arg;
+                    ++kwf_fill_m;
+                    continue;
+                }
+                // Early (kernel start): only the core's first M-block, whose slab the ring holds empty. A later block's
+                // slab may still be read by compute (or filled by the reader for an earlier block).
+                if (!(early && kwf_fill_m == 0) && Semaphore<>(slab_free_sem_id).value() <= kwf_fill_blocks) {
+                    return;
+                }
+                ++kwf_fill_arg;
+                ++kwf_fill_blocks;
+                kwf_fill_left = groups;
+                kwf_fill_open = true;
+            }
+            MaybeDeviceZoneScope("writer_fill");
+            const uint32_t slab_l1 =
+                fill_ring_base + ((kwf_fill_m * fill_batches_per_block) % input_tile_depth_batches) * fill_batch_bytes;
+            const uint32_t pieces = get_arg_val<uint32_t>(kwf_fill_arg++);
+            fill_reads.begin(TRID_KWF_FILL + kwf_fill_issued % fill_writer_window);
+            for (uint32_t i = 0; i < pieces; ++i, kwf_fill_arg += 3) {
+                const uint32_t xy = get_arg_val<uint32_t>(kwf_fill_arg);
+                const uint32_t dst = get_arg_val<uint32_t>(kwf_fill_arg + 2);
+                fill_reads.read(
+                    get_noc_addr(xy >> 16, xy & 0xFFFF, input_addr + get_arg_val<uint32_t>(kwf_fill_arg + 1)),
+                    slab_l1 + (dst >> 16) * fill_row_bytes,
+                    (dst & 0xFFFF) * fill_row_bytes);
+            }
+            dataflow_kernel_lib::set_read_trid(fill_reads.noc, 0);
+            ++kwf_fill_issued;
+            if (--kwf_fill_left == 0) {
+                kwf_fill_open = false;
+                ++kwf_fill_m;
+            }
+        }
+    };
+    [[maybe_unused]] auto kwf_fill_done = [&]() {
+        return kwf_fill_m >= num_m_blocks_this_core && kwf_fill_landed == kwf_fill_issued;
+    };
+#endif
+    // ---- kw-fold round 0 under weight servers: straight from the fill issue into round 0's wait, before the rest of
+    // this kernel's start-up. The wait serves the fill (slab_fwd_done as each group lands, so the reader pushes the
+    // slab) and pushes round 0's kernel-row chunks and the server's bias as they land. Everything else this writer
+    // sets up (exchange, multicast channels, bias bookkeeping, the round loop) is first-run code: ~0.5 us of it before
+    // the round-0 wait put the slab hand-over and round 0's push ~1.2 us after kernel start even with every read and
+    // the weights stubbed (res2), while compute waited from ~0.25 us. Measured with the server's start ack gone
+    // (Blackhole p150b, LoFi bf8_b, compute waits zoned only, per core from its own kernel start, median of cores):
+    // slab ready res2 1.30 -> 1.04 us, res3.x 1.24 -> 0.96, center_head.1 1.44 -> 1.38; first matmul 1.63 -> 1.31, 1.88
+    // -> 1.64, 1.73 -> 1.44. Later rounds take the round loop (issue_weight_k_block).
+    [[maybe_unused]] bool bias_pushed = false;
+#ifdef CONV2D_3X3_KW_FOLD
+    if constexpr (
+        weight_servers && tile_fill_split && !ring_slab && input_tile_depth_batches >= fill_batches_per_block) {
+        if (server_receiver && num_m_blocks_this_core > 0) {
+            if (split_here) {
+                // The first block's groups (the ring is empty), without the reader's hand-over (writer_fill_early).
+                kwf_serve_fill(true);
+            }
+            MaybeDeviceZoneScope("writer_round0");
+#ifdef KWF_ROUND0_STREAM
+            constexpr uint32_t r0_chunks = KWF_ROUND0_STREAM;
+#else
+            constexpr uint32_t r0_chunks = 1;
+#endif
+            constexpr uint32_t r0_chunk_tiles = weight_k_block_tiles / r0_chunks;
+            // Round 0's slot (slot 0, free at kernel start), its flag, and the server's bias flag (after the slot
+            // flags; kw-fold is never slab-direct, so a server multicasts the bias whenever there is one).
+            constexpr bool r0_bias = has_bias && !slab_split;
+            cb_reserve_back(cb_weights, weight_k_block_tiles);
+            volatile tt_l1_ptr uint32_t* r0_flag =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(server_flag_sem_id));
+            volatile tt_l1_ptr uint32_t* r0_bias_flag =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(server_flag_sem_id + nslice_weight_depth));
+            if constexpr (r0_bias) {
+                cb_reserve_back(cb_bias, out_n_tiles);
+            }
+            uint32_t r0_pushed = 0;  // chunks pushed
+            while (true) {
+                invalidate_l1_cache();
+                if constexpr (r0_bias) {
+                    if (!bias_pushed && *r0_bias_flag == VALID) {
+                        cb_push_back(cb_bias, out_n_tiles);
+                        bias_pushed = true;
+                    }
+                }
+                if (*r0_flag == VALID) {
+                    break;
+                }
+                if constexpr (r0_chunks > 1) {
+                    // Semaphore server_flag_sem_id + depth + j (after the bias flag), j >= 1: chunks 0 .. j - 1 landed.
+                    for (uint32_t j = r0_chunks - 1; j > r0_pushed; --j) {
+                        if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                                get_semaphore(server_flag_sem_id + nslice_weight_depth + j)) == VALID) {
+                            cb_push_back(cb_weights, (j - r0_pushed) * r0_chunk_tiles);
+                            r0_pushed = j;
+                            break;
+                        }
+                    }
+                }
+                if (split_here) {
+                    kwf_serve_fill(false);
+                }
+            }
+            *r0_flag = INVALID;
+            cb_push_back(cb_weights, weight_k_block_tiles - r0_pushed * r0_chunk_tiles);
+            k_blocks_issued = 1;  // round 0 is in: the round loop starts at round 1
+        }
+    }
+#endif
+
     // ---- prefetch_bias: the core's output columns; stays fronted in cb_bias for the whole kernel. Slots
     // past the last C_out tile (a short last N-slice) only feed output padding columns. With the split slab fill
     // it follows the first block's slab reads, which the reader waits on before it can gather.
@@ -414,11 +563,6 @@ void kernel_main() {
     // reserve and push is one batch and the CB holds input_tile_depth_batches of them, so batch g of the kernel sits
     // at slot g % depth. Served wherever the writer would otherwise wait: compute untilizes a block before it
     // multiplies it, so the weight round two past the block's first waits on this block's fill.
-    constexpr uint32_t fill_c_in_tiles = c_in_p / 32;
-    constexpr uint32_t fill_batches_per_block = tile_fill_split ? slab_tile_rows / untilize_batch_rows : 1;
-    constexpr uint32_t fill_row_bytes = fill_c_in_tiles * input_page_bytes;
-    constexpr uint32_t fill_batch_bytes = untilize_batch_rows * fill_row_bytes;
-    [[maybe_unused]] const uint32_t fill_ring_base = tile_fill_split ? get_write_ptr(cb_input_tiles) : 0;
     [[maybe_unused]] const uint32_t fill_hi_row = (my_shard + 1) * input_shard_rows;
     [[maybe_unused]] uint32_t fill_m = 0;  // cursor: block and batch of the next batch to look at
     [[maybe_unused]] uint32_t fill_b = 0;
@@ -433,7 +577,6 @@ void kernel_main() {
     [[maybe_unused]] uint32_t ring_batches = 0;
     [[maybe_unused]] uint32_t ring_batch_base = 0;
     [[maybe_unused]] int32_t ring_prev_hi = -1;
-    conv2d_3x3::TaggedReads<false> fill_reads;
     constexpr uint32_t TRID_FILL = 6;
     [[maybe_unused]] const uint64_t fill_zero_noc =
         fill_zero_lanes ? get_noc_addr(get_write_ptr(cb_zero_src), fill_reads.noc.get_noc_id()) : 0;
@@ -639,78 +782,6 @@ void kernel_main() {
         }
     };
 #endif
-#ifdef CONV2D_3X3_KW_FOLD
-    // kw-fold: the host-planned fill (descriptor _kwf_fill_args). Per M-block this writer's part is [groups] + per
-    // group [pieces] + pieces (a suffix of the block's slab: the higher shards' rows and the last own-shard rows), read
-    // on NoC1 once the reader handed the block over (slab_free), each group under its own transaction id (up to
-    // fill_writer_window in flight) and counted in slab_fwd_done in order as it lands. The first block's groups may go
-    // out at kernel start (writer_fill_early): the slab ring is empty then.
-#ifdef KWF_XCHG
-    constexpr uint32_t kwf_fill_arg0 = server_arg + 3 + 10;  // after the halo exchange's 10 args
-#else
-    constexpr uint32_t kwf_fill_arg0 = server_arg + 3;
-#endif
-    constexpr uint32_t TRID_KWF_FILL = 8;
-    [[maybe_unused]] uint32_t kwf_fill_arg = kwf_fill_arg0;
-    [[maybe_unused]] uint32_t kwf_fill_m = 0;       // the M-block whose groups are being issued
-    [[maybe_unused]] uint32_t kwf_fill_left = 0;    // its groups not issued yet
-    [[maybe_unused]] uint32_t kwf_fill_blocks = 0;  // blocks with groups started (the reader hands each over once)
-    [[maybe_unused]] uint32_t kwf_fill_issued = 0;  // groups issued, all blocks
-    [[maybe_unused]] uint32_t kwf_fill_landed = 0;  // groups landed and counted in slab_fwd_done
-    [[maybe_unused]] bool kwf_fill_open = false;    // kwf_fill_left belongs to block kwf_fill_m
-    [[maybe_unused]] auto kwf_serve_fill = [&](bool early) {
-        while (kwf_fill_landed < kwf_fill_issued &&
-               ncrisc_noc_read_with_transaction_id_flushed(
-                   fill_reads.noc.get_noc_id(), TRID_KWF_FILL + kwf_fill_landed % fill_writer_window)) {
-            Semaphore<>(slab_fwd_done_sem_id).up(1);
-            ++kwf_fill_landed;
-        }
-        while (kwf_fill_issued - kwf_fill_landed < fill_writer_window) {
-            if (!kwf_fill_open) {
-                if (kwf_fill_m >= num_m_blocks_this_core) {
-                    return;
-                }
-                const uint32_t groups = get_arg_val<uint32_t>(kwf_fill_arg);
-                if (groups == 0) {
-                    ++kwf_fill_arg;
-                    ++kwf_fill_m;
-                    continue;
-                }
-                // Early (kernel start): only the core's first M-block, whose slab the ring holds empty. A later block's
-                // slab may still be read by compute (or filled by the reader for an earlier block).
-                if (!(early && kwf_fill_m == 0) && Semaphore<>(slab_free_sem_id).value() <= kwf_fill_blocks) {
-                    return;
-                }
-                ++kwf_fill_arg;
-                ++kwf_fill_blocks;
-                kwf_fill_left = groups;
-                kwf_fill_open = true;
-            }
-            MaybeDeviceZoneScope("writer_fill");
-            const uint32_t slab_l1 =
-                fill_ring_base + ((kwf_fill_m * fill_batches_per_block) % input_tile_depth_batches) * fill_batch_bytes;
-            const uint32_t pieces = get_arg_val<uint32_t>(kwf_fill_arg++);
-            fill_reads.begin(TRID_KWF_FILL + kwf_fill_issued % fill_writer_window);
-            for (uint32_t i = 0; i < pieces; ++i, kwf_fill_arg += 3) {
-                const uint32_t xy = get_arg_val<uint32_t>(kwf_fill_arg);
-                const uint32_t dst = get_arg_val<uint32_t>(kwf_fill_arg + 2);
-                fill_reads.read(
-                    get_noc_addr(xy >> 16, xy & 0xFFFF, input_addr + get_arg_val<uint32_t>(kwf_fill_arg + 1)),
-                    slab_l1 + (dst >> 16) * fill_row_bytes,
-                    (dst & 0xFFFF) * fill_row_bytes);
-            }
-            dataflow_kernel_lib::set_read_trid(fill_reads.noc, 0);
-            ++kwf_fill_issued;
-            if (--kwf_fill_left == 0) {
-                kwf_fill_open = false;
-                ++kwf_fill_m;
-            }
-        }
-    };
-    [[maybe_unused]] auto kwf_fill_done = [&]() {
-        return kwf_fill_m >= num_m_blocks_this_core && kwf_fill_landed == kwf_fill_issued;
-    };
-#endif
     // Every batch the reader has handed over so far (windowed: retire the landed ones, issue up to the window).
     [[maybe_unused]] auto serve_fill = [&]() {
         if constexpr (slab_direct) {
@@ -822,7 +893,8 @@ void kernel_main() {
         if (split_here) {
             MaybeDeviceZoneScope("writer_fill_early");
 #ifdef CONV2D_3X3_KW_FOLD
-            // kw-fold: the first block's group goes out now (the ring is empty), without the reader's hand-over.
+            // kw-fold: the first block's group goes out now (the ring is empty), without the reader's hand-over (a
+            // server receiver issued it already, before its round-0 wait above).
             kwf_serve_fill(true);
 #else
             // Only a first-block batch: the reader hands a later block's batches over only after its first block's
@@ -1035,6 +1107,9 @@ void kernel_main() {
     [[maybe_unused]] auto issue_late_bias = [&]() {
         if constexpr (weight_servers && has_bias && (!slab_split || slab_direct)) {
             late_bias_issued = true;
+            if (bias_pushed) {
+                return;  // pushed in kw-fold's round-0 wait
+            }
             if (server_receiver) {
                 cb_reserve_back(cb_bias, out_n_tiles);
                 late_bias_pending = true;
@@ -1096,11 +1171,11 @@ void kernel_main() {
     // rounds this receiver takes (kw-fold whole-K keeps its weights resident across M-blocks: one stream).
     [[maybe_unused]] uint32_t server_reuse_acks = 0;
     // Reuse ack j (round nslice_weight_depth + j, slot j % depth). SERVER_SLOT_ACKS (descriptor: weight servers with
-    // more rounds than slots): one ack counter per slot on the server (slot 0's is the kernel-start counter, the others
-    // from SERVER_SLOT_ACKS on). On one total counter a core that runs ahead (a short ragged core, or one whose compute
-    // frees slots early) acks later slots before a slower core acked an earlier one, and those acks count toward the
-    // earlier slot's reuse: the server could overwrite a slot a core was still multiplying (a receiver two acks ahead,
-    // e.g. the ragged short core, is enough).
+    // more rounds than slots): one ack counter per slot on the server (slot 0's is the server's ack semaphore, the
+    // others from SERVER_SLOT_ACKS on). On one total counter a core that runs ahead (a short ragged core, or one whose
+    // compute frees slots early) acks later slots before a slower core acked an earlier one, and those acks count
+    // toward the earlier slot's reuse: the server could overwrite a slot a core was still multiplying (a receiver two
+    // acks ahead, e.g. the ragged short core, is enough).
     [[maybe_unused]] auto server_reuse_ack = [&]() {
 #ifdef SERVER_SLOT_ACKS
         const uint32_t slot = server_reuse_acks % nslice_weight_depth;

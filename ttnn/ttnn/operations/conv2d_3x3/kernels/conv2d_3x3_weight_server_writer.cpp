@@ -2,15 +2,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // conv2d_3x3 weight server, writer half (BRISC / NoC1). Per round: wait until every receiver of the rectangle can take
-// it (a monotonic ack counter: one ack per receiver at its kernel start, then one per round that reuses a cb_weights
-// slot), then multicast the chunks the server reader hands over into the same slot of every receiver, and free the
-// slot once the multicast has read it. Every chunk that has landed goes out in one linked chain, one path set-up per
-// chain (NoC estimator, Blackhole: 16 linked 8 KB multicasts to 64 cores at 43 B/cycle, unlinked at 15; one chain per
-// chunk measured ~0.3 us per 8.7 KB chunk on res3.x). The chain is closed by a 4 B write to the receivers' flag of
-// this slot when the round is complete (the flag is set) or when the next chunk has not landed yet (a write of zero:
-// the flag stays INVALID until this round's end, the receiver cleared it before its ack let this round start), so no
-// path stays reserved across a wait. One multicast into the rectangle at a time: concurrent multicasts from several
-// senders into one rectangle measured 1.6x to 3.7x slower.
+// it (a monotonic ack counter: one ack per receiver per round that reuses a cb_weights slot), then multicast the chunks
+// the server reader hands over into the same slot of every receiver, and free the slot once the multicast has read it.
+// The first weight_depth rounds wait for nothing: a program's go reaches a core only after every core finished the
+// previous program and every core's semaphores and runtime args were written (fast dispatch: dispatch_s sends the go
+// after the program's config writes and the previous program's completion count; slow dispatch: every core is
+// configured, then launched), so a receiver's slots and flags are ready before this kernel starts, whether or not the
+// receiver has started. The old kernel-start ack (one NoC atomic per receiver) arrived ~10 ns apart at this core:
+// 99 receivers (res2, center_head.1) took ~0.8-1.0 us, which with the DRAM read gated round 0. Every chunk that has
+// landed goes out in one linked chain, one path set-up per chain (NoC estimator, Blackhole: 16 linked 8 KB multicasts
+// to 64 cores at 43 B/cycle, unlinked at 15; one chain per chunk measured ~0.3 us per 8.7 KB chunk on res3.x). The
+// chain is closed by a 4 B write to the receivers' flag of this slot when the round is complete (the flag is set) or
+// when the next chunk has not landed yet (a write of zero: the flag stays INVALID until this round's end, the receiver
+// cleared it before its ack let this round start), so no path stays reserved across a wait. One multicast into the
+// rectangle at a time: concurrent multicasts from several senders into one rectangle measured 1.6x to 3.7x slower.
 //
 // With a bias the server also reads it once (NoC1, at kernel start) and multicasts it into every receiver's cb_bias
 // (same index and size, so the same L1 address) before round 0, then sets the receivers' bias flag (the semaphore
@@ -59,8 +64,8 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_weights);
     volatile tt_l1_ptr uint32_t* ack = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ack_sem_id));
     // The round whose ack wait the bias multicast follows. Round 1 only with two or more slots: its ack wait then needs
-    // only the kernel-start acks, while a non-kw-fold receiver blocks on the bias right after round 0 (with one slot,
-    // round 1 would wait for that receiver's reuse ack).
+    // no ack, while a non-kw-fold receiver blocks on the bias right after round 0 (with one slot, round 1 would wait
+    // for that receiver's reuse ack).
     const uint32_t bias_round =
         round_tiles * tile_bytes <= NOC_MAX_BURST_SIZE && num_rounds > 1 && weight_depth >= 2 ? 1 : 0;
 
@@ -83,16 +88,16 @@ void kernel_main() {
         {
             MaybeDeviceZoneScope("server_wait_ack");
 #ifdef SERVER_SLOT_ACKS
-            // One counter per slot (the receivers' SERVER_SLOT_ACKS): slot 0's also holds the kernel-start acks, so a
-            // receiver's acks for later slots never stand in for another receiver's ack of this one.
-            const uint32_t slot = r < weight_depth ? 0 : r % weight_depth;
-            const uint32_t uses = r < weight_depth ? 0 : r / weight_depth;
+            // One counter per slot (the receivers' SERVER_SLOT_ACKS; slot 0's is the ack semaphore), so a receiver's
+            // acks for later slots never stand in for another receiver's ack of this one.
+            const uint32_t slot = r % weight_depth;
+            const uint32_t uses = r / weight_depth;
             noc_semaphore_wait_min(
                 slot == 0 ? ack
                           : reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SERVER_SLOT_ACKS + slot - 1)),
-                (uses + (slot == 0 ? 1 : 0)) * num_receivers);
+                uses * num_receivers);
 #else
-            const uint32_t acks = 1 + (r + 1 > weight_depth ? r + 1 - weight_depth : 0);
+            const uint32_t acks = r + 1 > weight_depth ? r + 1 - weight_depth : 0;
             noc_semaphore_wait_min(ack, acks * num_receivers);
 #endif
         }

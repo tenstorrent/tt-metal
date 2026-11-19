@@ -11,11 +11,14 @@
 // the issue loop. With ND-sharded weights (conv2d_3x3.weight_memory_config: shards of shard_rows tile-rows x
 // shard_cols columns, round-robin over the DRAM banks) every run of slot tiles that is contiguous both in the slot and
 // in one shard is one read (page runs): a shard's tiles sit at consecutive aligned-page addresses in its bank. On
-// res3.x a 52 KB round is 12 reads of 4 tiles instead of 48 one-tile reads (2.1 -> 1.3-1.5 us). A round 0 of at most
-// one NoC burst (kw-fold whole-K: res2, center_head.1) is latency-bound and gates compute's first matmul: all its
-// chunks' reads go out at once, so it lands together and the writer sends it as one chain (res2 unzoned,
-// leave-one-out: 10.50 us without it, 10.27 us with). Larger rounds keep the pipelined issue: on sem dec res3 fc0's
-// 120-tile rounds the extra issue in front of chunk 0 delayed round 0 by ~0.35 us.
+// res3.x a 52 KB round is 12 reads of 4 tiles instead of 48 one-tile reads (2.1 -> 1.3-1.5 us). A round of at most
+// one NoC burst (kw-fold whole-K: res2, center_head.1) is latency-bound: all its chunks' reads go out at once, so it
+// lands together and the writer sends it as one chain (round 0: res2 unzoned, leave-one-out: 10.50 us without it, 10.27
+// us with). Every such round does, not round 0 alone: issued chunk by chunk, rounds 1 and 2 took ~1.1 us each (three
+// DRAM round trips back to back), and with round 0 no longer held for start acks (the server writer) res2's fused side
+// rounds and center_head.1's Q_0 / Q_2 rounds waited for them. Larger rounds keep the pipelined issue: on sem dec res3
+// fc0's 120-tile rounds the extra issue in front of chunk 0 delayed round 0 by ~0.35 us (round 0 all at once there and
+// on res3.x's 52 KB round: sem dec res3 fc0 / inst dec res3 fc0 first matmul ~1.1 us later, zoned).
 
 #include <cstdint>
 
@@ -137,8 +140,8 @@ void kernel_main() {
                 t += len;
             }
         };
-        // Issue chunk c, then hand over chunk c - 1; a small round 0 issues every chunk first.
-        const uint32_t ahead = r == 0 && small_round ? num_chunks : 1;
+        // Issue chunk c, then hand over chunk c - 1; a one-burst round issues every chunk first.
+        const uint32_t ahead = small_round ? num_chunks : 1;
         for (uint32_t c = 0; c < num_chunks + ahead; ++c) {
             if (c < num_chunks) {
                 reads.begin(1 + c);
