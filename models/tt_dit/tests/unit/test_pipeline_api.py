@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The trace / offload_weights rule of the pipeline base class. Needs no device."""
+"""How the pipeline base class holds trace and offload_weights, and drops a per-call traced. Needs no device."""
 
 from __future__ import annotations
 
@@ -14,8 +14,6 @@ from loguru import logger
 
 from ...pipelines import pipeline_api
 from ...pipelines.pipeline_api import Pipeline
-
-_RULE = "^TDM-130: trace=True is unsupported with offload_weights=True"
 
 
 class _FakeModule:
@@ -36,34 +34,29 @@ class _FakePipeline(Pipeline):
         return "output"
 
 
-def test_conflict_raises_at_construction(expect_error: Callable) -> None:
-    with expect_error(ValueError, _RULE):
-        _FakePipeline(offload_weights=True, trace=True)
-
-
-@pytest.mark.parametrize(("offload_weights", "trace"), [(False, False), (False, True), (True, False)])
-def test_other_combinations_construct_and_run(offload_weights: bool, trace: bool) -> None:
+@pytest.mark.parametrize(("offload_weights", "trace"), [(False, False), (False, True), (True, False), (True, True)])
+def test_every_combination_constructs_and_runs(offload_weights: bool, trace: bool) -> None:
     pipeline = _FakePipeline(offload_weights=offload_weights, trace=trace)
     assert pipeline.offload_weights is offload_weights
     assert pipeline(prompts=["a"]) == "output"
     assert pipeline.calls == [{"prompts": ["a"], "traced": trace}]
 
 
-def test_conflict_raises_at_call_without_init(expect_error: Callable) -> None:
+def test_a_traced_offloading_pipeline_built_without_init_runs() -> None:
     pipeline = object.__new__(_FakePipeline)
     assert pipeline.offload_weights is False
     pipeline.offload_weights = True
     pipeline.trace = True
-    with expect_error(ValueError, _RULE):
-        pipeline(prompts=["a"])
+    pipeline.calls = []
+    assert pipeline(prompts=["a"]) == "output"
+    assert pipeline.calls == [{"prompts": ["a"], "traced": True}]
 
 
-def test_conflict_raises_at_call_after_attributes_change(expect_error: Callable) -> None:
+def test_a_traced_pipeline_that_starts_to_offload_still_runs() -> None:
     pipeline = _FakePipeline(offload_weights=False, trace=True)
     pipeline.offload_weights = True
-    with expect_error(ValueError, _RULE):
-        pipeline(prompts=["a"])
-    assert pipeline.calls == []
+    assert pipeline(prompts=["a"]) == "output"
+    assert pipeline.calls == [{"prompts": ["a"], "traced": True}]
 
 
 def test_registering_exclusions_makes_the_pipeline_offload() -> None:
@@ -74,19 +67,13 @@ def test_registering_exclusions_makes_the_pipeline_offload() -> None:
     assert pipeline.offload_weights is True
 
 
-def test_registering_on_a_traced_pipeline_raises(expect_error: Callable) -> None:
-    pipeline = _FakePipeline(offload_weights=False, trace=True)
-    with expect_error(ValueError, _RULE):
-        pipeline.register_coresident_exclusions(_FakeModule(), _FakeModule())
-
-
-def test_refused_exclusion_is_not_registered_on_the_module(expect_error: Callable) -> None:
+def test_a_traced_pipeline_takes_an_exclusion() -> None:
     pipeline = _FakePipeline(offload_weights=False, trace=True)
     loaded, evicted = _FakeModule(), _FakeModule()
-    with expect_error(ValueError, _RULE):
-        pipeline.register_coresident_exclusions(loaded, evicted)
-    assert loaded.exclusions == []
-    assert pipeline.offload_weights is False
+    pipeline.register_coresident_exclusions(loaded, evicted)
+    assert loaded.exclusions == [evicted]
+    assert (pipeline.offload_weights, pipeline.trace) == (True, True)
+    assert pipeline(prompts=["a"]) == "output"
 
 
 def test_offload_stays_set_while_a_module_is_registered() -> None:

@@ -262,7 +262,7 @@ def _resolve_denoise_path(
     `bucket_denoise=True` is contradictory and raises; a ladder beside it only supplies the default
     `max_sequence_length`.
     """
-    # An evicting pipeline cannot trace: the preset's trace yields to it, and so does an explicit request.
+    # An evicting pipeline does not trace its denoise: the preset's trace yields, and so does an explicit request.
     trace = (preset.get("trace_denoise", False) if trace_denoise is None else trace_denoise) and coresident
     pinned = trace_denoise is not None or bucket_denoise is not None or bucket_ladder is not None
     dynamic, from_env = _requested_dynamic_length(dynamic_length, preset.get("dynamic_length", False) and not pinned)
@@ -761,7 +761,7 @@ class MiniMaxH3Pipeline(Pipeline):
             if trace_denoise:
                 logger.warning(
                     f"{type(self).__name__}: trace_denoise=True IGNORED: coresident=False evicts each stage, and "
-                    "a pipeline that evicts weights cannot trace (TDM-130). The denoise runs eager."
+                    "this pipeline does not trace its denoise while it evicts (TDM-130). The denoise runs eager."
                 )
         # `coresident=False` is the pipeline's `offload_weights`; `trace_denoise` and `trace_audio` are the two
         # parts of its `trace`.

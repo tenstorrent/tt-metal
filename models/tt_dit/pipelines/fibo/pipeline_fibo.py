@@ -350,7 +350,7 @@ class FiboPipeline(Pipeline):
                 # Edit prompts must carry an edit instruction, and the JSON around it takes a few
                 # tokens.
                 prompt = json.dumps({"edit_instruction": "a " * (length - 16)})
-            # A capture run is an ordinary call, so that the trace rule applies to it.
+            # A capture run is an ordinary call, so that the pipeline owns the traces it captures.
             (self if traced else self.run_untraced)(
                 prompts=[prompt],
                 negative_prompts=[prompt],

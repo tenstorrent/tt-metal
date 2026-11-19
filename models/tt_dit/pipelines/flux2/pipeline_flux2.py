@@ -361,7 +361,7 @@ class Flux2Pipeline(Pipeline):
         logger.info(
             f"Warming up pipeline at {width}x{height}{' with a reference image' if edit else ''}: {warmup_info}..."
         )
-        # A traced warm-up is an ordinary call, so that the trace rule applies to it.
+        # A traced warm-up is an ordinary call, so that the pipeline owns the traces it captures.
         (self if traced else self.run_untraced)(
             prompts=["warmup"],
             num_inference_steps=2,
@@ -444,7 +444,7 @@ class Flux2Pipeline(Pipeline):
         ``is_fsdp`` or ``offload_weights``: FLUX.2-dev needs both on 2x2, Klein neither.
 
         ``trace`` defaults to tracing exactly when the weights stay resident: a pipeline that offloads
-        weights cannot trace.
+        weights releases its traces at every eviction and captures them again.
         """
         if trace is None:
             trace = not offload_weights

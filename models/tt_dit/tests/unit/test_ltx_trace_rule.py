@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The LTX pipelines refuse to trace while offloading weights, before they build anything. Needs no device."""
+"""How the LTX pipelines resolve trace and offload_weights, and their deprecated names. Needs no device."""
 
 from __future__ import annotations
 
@@ -22,24 +22,45 @@ from ...pipelines.ltx.pipeline_ltx_one_stage import LTXOneStagePipeline
 from ...pipelines.ltx.pipeline_ltx_two_stages import LTXTwoStagesPipeline
 from ...pipelines.pipeline_api import Pipeline
 
-_RULE = "^TDM-130: trace=True is unsupported with offload_weights=True"
 _PIPELINES = [LTXPipeline, LTXDistilledPipeline, LTXOneStagePipeline, LTXTwoStagesPipeline]
 
 
-@pytest.mark.parametrize("pipeline_class", _PIPELINES)
-def test_construction_raises_before_any_device_use(pipeline_class: type[LTXPipeline], expect_error: Callable) -> None:
-    with expect_error(ValueError, _RULE):
-        pipeline_class(None, None, None, offload_weights=True, trace=True)
+class _Resolved(Exception):
+    """Stops construction once the base has the resolved values."""
+
+
+def _handed_to_base(monkeypatch: pytest.MonkeyPatch, construct: Callable[[], object]) -> tuple[bool, bool]:
+    def init(self: Pipeline, *, offload_weights: bool, trace: bool) -> None:
+        raise _Resolved(offload_weights, trace)
+
+    monkeypatch.setattr(Pipeline, "__init__", init)
+    try:
+        construct()
+    except _Resolved as resolved:
+        return resolved.args
+    msg = "construction did not reach the base"
+    raise AssertionError(msg)
 
 
 @pytest.mark.parametrize("pipeline_class", _PIPELINES)
-def test_generate_goes_through_the_base(pipeline_class: type[LTXPipeline], expect_error: Callable) -> None:
+def test_construction_hands_the_flags_to_the_base(
+    pipeline_class: type[LTXPipeline], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def construct() -> LTXPipeline:
+        return pipeline_class(None, None, None, offload_weights=True, trace=True)
+
+    assert _handed_to_base(monkeypatch, construct) == (True, True)
+
+
+@pytest.mark.parametrize("pipeline_class", _PIPELINES)
+def test_generate_goes_through_the_base(pipeline_class: type[LTXPipeline], monkeypatch: pytest.MonkeyPatch) -> None:
     assert pipeline_class.__call__ is Pipeline.__call__
+    monkeypatch.setattr(pipeline_class, "_run", lambda self, *args, **kwargs: args)
     pipeline = object.__new__(pipeline_class)
+    # A pipeline that traces and offloads is called like any other.
     pipeline.offload_weights = True
     pipeline.trace = True
-    with expect_error(ValueError, _RULE):
-        pipeline.generate("a prompt")
+    assert pipeline.generate("a prompt") == ("a prompt",)
 
 
 @pytest.mark.parametrize("pipeline_class", _PIPELINES)
@@ -143,12 +164,9 @@ def test_a_deprecated_name_that_contradicts_the_new_one_raises(
         _create(monkeypatch, **kwargs)
 
 
-def test_deprecated_names_still_meet_the_trace_rule(expect_error: Callable) -> None:
-    kwargs = {"dynamic_load": True, "traced": True}
-    offload_weights = pipeline_ltx._renamed_keyword(kwargs, "dynamic_load", "offload_weights", None)  # noqa: SLF001
-    trace = pipeline_ltx._renamed_keyword(kwargs, "traced", "trace", None)  # noqa: SLF001
-    with expect_error(ValueError, _RULE):
-        LTXPipeline(None, None, None, offload_weights=offload_weights, trace=trace)
+def test_deprecated_names_can_ask_for_both(monkeypatch: pytest.MonkeyPatch) -> None:
+    built, _ = _create(monkeypatch, dynamic_load=True, traced=True)
+    assert (built["offload_weights"], built["trace"]) == (True, True)
 
 
 @pytest.mark.parametrize(

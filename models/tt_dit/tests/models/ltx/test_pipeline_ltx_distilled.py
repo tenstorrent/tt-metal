@@ -34,7 +34,7 @@ from models.tt_dit.utils.ltx import (
     traced_default,
 )
 from models.tt_dit.utils.patchifiers import AudioLatentShape, VideoPixelShape
-from models.tt_dit.utils.test import skip_if_unsupported_num_links
+from models.tt_dit.utils.test import skip_if_unsupported_num_links, watch_trace_releases
 
 from .ltx_mesh_params import (
     LTX_DISTILLED_AUDIO_MESH_PARAMS_DL,
@@ -102,6 +102,7 @@ def test_pipeline_distilled(
     topology,
     is_fsdp,
     no_prompt,
+    request,
 ):
     """LTX-2.3 distilled 2-stage AV pipeline."""
     skip_if_unsupported_num_links(mesh_device, num_links)
@@ -133,8 +134,10 @@ def test_pipeline_distilled(
     # (rule + rationale: utils.ltx.traced_default, unit-tested in tests/unit/test_ltx_traced_default.py).
     traced = traced_default(device_params, os.environ.get("LTX_TRACED"))
     if "LTX_TRACED" not in os.environ:
-        # A pipeline that offloads weights cannot trace; an explicit LTX_TRACED=1 there raises.
+        # By default a pipeline that offloads weights runs eager. An explicit LTX_TRACED=1 there traces:
+        # the pipeline then releases its traces at each eviction and captures them again.
         traced = traced and not offload_weights
+    trace_releases = watch_trace_releases(request)
 
     # Conditioning image (I2V). Its mere presence drives image_conditioning: with a path the
     # transformer builds the per-token video-timestep (I2V) modulation; without one pure T2V keeps
@@ -377,6 +380,10 @@ def test_pipeline_distilled(
             check_output_with_clip(prompt, i)
             check_output_with_vbench(prompt, i, i)
 
+    if traced and offload_weights and int(ttnn.distributed_context_get_rank()) == 0:
+        # Each generation loads the stages in turn, and every load evicts a traced stage.
+        assert trace_releases, "a traced pipeline that offloads weights evicted without releasing a trace"
+        logger.info(f"trace releases at evictions: {len(trace_releases)}")
     if traced:
         pipeline.release_traces()
 

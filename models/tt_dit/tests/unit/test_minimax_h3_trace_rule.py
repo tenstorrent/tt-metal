@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""MiniMax-H3 refuses to trace while it evicts stages, before it builds anything. Needs no device."""
+"""MiniMax-H3 on an evicting mesh: preset traces yield, an explicit audio trace is kept. Needs no device."""
 
 from __future__ import annotations
 
@@ -18,8 +18,6 @@ from ...pipelines.minimax_h3 import pipeline_minimax_h3 as module
 from ...pipelines.minimax_h3.pipeline_minimax_h3 import _DYNAMIC_LENGTH_ENV, _PRESETS_BH, _PRESETS_WH, MiniMaxH3Pipeline
 from ...pipelines.minimax_h3.pipeline_minimax_h3_turbo import MiniMaxH3TurboPipeline
 from ...pipelines.pipeline_api import Pipeline
-
-_RULE = "^TDM-130: trace=True is unsupported with offload_weights=True"
 
 
 class _Resolved(Exception):
@@ -47,18 +45,16 @@ def _resolved(monkeypatch: pytest.MonkeyPatch, preset: dict, **kwargs: object) -
     raise AssertionError(msg)
 
 
-def test_explicit_audio_trace_on_the_evicting_preset_raises(
-    monkeypatch: pytest.MonkeyPatch, expect_error: Callable
+@pytest.mark.parametrize(
+    ("preset", "kwargs"),
+    [(_PRESETS_WH[(4, 8)], {"dynamic_length": False}), (_PRESETS_BH[(4, 32)], {"coresident": False})],
+)
+def test_an_explicit_audio_trace_is_kept_by_an_evicting_pipeline(
+    monkeypatch: pytest.MonkeyPatch, preset: dict, kwargs: dict
 ) -> None:
-    with expect_error(ValueError, _RULE):
-        _construct(monkeypatch, _PRESETS_WH[(4, 8)], trace_audio=True, dynamic_length=False)
-
-
-def test_explicit_audio_trace_with_explicit_eviction_raises(
-    monkeypatch: pytest.MonkeyPatch, expect_error: Callable
-) -> None:
-    with expect_error(ValueError, _RULE):
-        _construct(monkeypatch, _PRESETS_BH[(4, 32)], coresident=False, trace_audio=True)
+    # Only the preset's audio trace yields to eviction. An explicit one is kept: the pipeline then
+    # releases it whenever the audio decoder is evicted.
+    assert _resolved(monkeypatch, preset, trace_audio=True, **kwargs) == (True, True)
 
 
 @pytest.mark.parametrize(

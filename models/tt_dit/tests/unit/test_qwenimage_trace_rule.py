@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Qwen-Image traces exactly when it offloads no weights. Needs no device."""
+"""Qwen-Image traces by default exactly when it offloads no weights. Needs no device."""
 
 from __future__ import annotations
 
@@ -19,7 +19,6 @@ from ...pipelines.pipeline_api import Pipeline
 from ...pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline, QwenImagePipelineConfig
 from ...pipelines.qwenimage.text_encoder import TextEncoder
 
-_RULE = "^TDM-130: trace=True is unsupported with offload_weights=True"
 _T2I, _EDIT = "Qwen/Qwen-Image", "Qwen/Qwen-Image-Edit"
 
 
@@ -54,18 +53,31 @@ def test_offloading_the_text_encoder_runs_eager(monkeypatch: pytest.MonkeyPatch)
     assert (config.offloads_weights, config.trace) == (False, True)
 
 
-def test_an_explicit_trace_is_kept_for_the_pipeline_to_refuse(
-    monkeypatch: pytest.MonkeyPatch, expect_error: Callable
-) -> None:
+def test_an_explicit_trace_is_kept(monkeypatch: pytest.MonkeyPatch) -> None:
     config = _config(monkeypatch, blackhole=False, checkpoint=_EDIT, trace=True)
     assert (config.offloads_weights, config.trace) == (True, True)
-    with expect_error(ValueError, _RULE):
-        QwenImagePipeline(device=None, config=config)
 
 
-def test_construction_raises_before_any_device_use(expect_error: Callable) -> None:
-    with expect_error(ValueError, _RULE):
-        QwenImagePipeline(device=None, config=SimpleNamespace(offloads_weights=True, trace=True))
+class _Resolved(Exception):
+    """Stops construction once the base has the resolved values."""
+
+
+def _handed_to_base(monkeypatch: pytest.MonkeyPatch, construct: Callable[[], object]) -> tuple[bool, bool]:
+    def init(self: Pipeline, *, offload_weights: bool, trace: bool) -> None:
+        raise _Resolved(offload_weights, trace)
+
+    monkeypatch.setattr(Pipeline, "__init__", init)
+    try:
+        construct()
+    except _Resolved as resolved:
+        return resolved.args
+    msg = "construction did not reach the base"
+    raise AssertionError(msg)
+
+
+def test_construction_hands_the_config_flags_to_the_base(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = SimpleNamespace(offloads_weights=True, trace=True)
+    assert _handed_to_base(monkeypatch, lambda: QwenImagePipeline(device=None, config=config)) == (True, True)
 
 
 def test_calls_go_through_the_base() -> None:
@@ -101,17 +113,18 @@ def _pipeline(*, trace: bool, text_encoder: TextEncoder, transformers: int = 2) 
     return pipeline
 
 
-def test_registering_what_the_text_encoder_offloads(expect_error: Callable) -> None:
-    # A tower the checkpoint does not have is not offloaded, so the pipeline may trace.
+def test_registering_what_the_text_encoder_offloads() -> None:
+    # A tower the checkpoint does not have is not offloaded.
     pipeline = _pipeline(trace=True, text_encoder=_encoder(offload=False, offload_vision=True, vision=None))
     pipeline._register_text_encoder_exclusions()
     assert pipeline.offload_weights is False
 
-    pipeline = _pipeline(trace=True, text_encoder=_encoder(offload=False, offload_vision=True, vision=_Module()))
-    with expect_error(ValueError, _RULE):
-        pipeline._register_text_encoder_exclusions()
-    assert [t.exclusions for t in pipeline._transformers] == [[], []]
-    assert pipeline.offload_weights is False
+    # A traced pipeline takes the exclusion: it releases its traces when the tower is evicted.
+    vision = _Module()
+    pipeline = _pipeline(trace=True, text_encoder=_encoder(offload=False, offload_vision=True, vision=vision))
+    pipeline._register_text_encoder_exclusions()
+    assert [t.exclusions for t in pipeline._transformers] == [[vision], [vision]]
+    assert (pipeline.offload_weights, pipeline.trace) == (True, True)
 
 
 def test_each_transformer_excludes_what_the_text_encoder_offloads() -> None:

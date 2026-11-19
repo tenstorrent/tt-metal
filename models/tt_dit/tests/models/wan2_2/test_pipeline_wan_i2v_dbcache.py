@@ -44,7 +44,12 @@ from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt, WanPipelin
 from models.tt_dit.utils import dram_probe
 from models.tt_dit.utils.dbcache import DBCacheConfig
 
-from ....utils.test import line_params_req_exact_devices, ring_params_req_exact_devices, skip_if_unsupported_num_links
+from ....utils.test import (
+    line_params_req_exact_devices,
+    ring_params_req_exact_devices,
+    skip_if_unsupported_num_links,
+    watch_trace_releases,
+)
 from .common import check_first_frame_matches_seed, check_output_sanity
 from .test_pipeline_wan_dbcache import _TRACE_REGION_SIZE, _parse_custom_config, _pcc, _psnr, _save_frame_strip, _Timer
 
@@ -194,6 +199,7 @@ def test_wan_i2v_dbcache_ab(
     traced: bool,
     width: int,
     height: int,
+    request: pytest.FixtureRequest,
 ) -> None:
     skip_if_unsupported_num_links(mesh_device, num_links)
     if not ttnn.device.is_blackhole():
@@ -231,6 +237,8 @@ def test_wan_i2v_dbcache_ab(
     # and the experts before use, so each call pays one extra T5 cache load.
     evict_t5 = os.environ.get("WAN_DBCACHE_EVICT_T5") == "1"
     mem_probe = os.environ.get("WAN_DBCACHE_MEM_PROBE") == "1"
+    evict_for_vae = os.environ.get("WAN_DBCACHE_EVICT_FOR_VAE") == "1"
+    trace_releases = watch_trace_releases(request)
     pipeline = WanPipelineI2V(
         run_warmup=not (evict_t5 or mem_probe),
         device=mesh_device,
@@ -275,7 +283,8 @@ def test_wan_i2v_dbcache_ab(
         pipeline._vae.reload_weights()  # noqa: SLF001 - __call__ does not reload the decoder
     if evict_t5:
         t5 = pipeline._text_encoder._tt_encoder  # noqa: SLF001
-        # Registered through the pipeline: it then counts as offloading weights, and refuses a traced row.
+        # Registered through the pipeline: it then counts as offloading weights. On a traced row the
+        # pipeline releases its traces whenever a load evicts T5, and captures them again.
         pipeline.register_coresident_exclusions(pipeline.transformer, t5)
         pipeline.register_coresident_exclusions(pipeline.transformer_2, t5)
         pipeline.register_coresident_exclusions(t5, pipeline.transformer, pipeline.transformer_2)
@@ -284,7 +293,7 @@ def test_wan_i2v_dbcache_ab(
         for ts in pipeline.transformer_states:
             ts.model.deallocate_weights()
         logger.info(f"T5 text encoder added to the dynamic-load swap chain; experts dropped -> {_dram(mesh_device)}")
-    if os.environ.get("WAN_DBCACHE_EVICT_FOR_VAE") == "1":
+    if evict_for_vae:
         # Also keep the experts out of DRAM during the VAE decode (the WH T3K chain); the decoder
         # adapter reloads its own weights in decode(), and the next call reloads the experts anyway.
         dec = pipeline._vae.decoder  # noqa: SLF001
@@ -456,6 +465,11 @@ def test_wan_i2v_dbcache_ab(
                 # Informational, not a failure: e.g. 720p with flow_shift=12 at threshold 0.05 never
                 # gets a residual diff under the threshold. The run still counts as a data point.
                 logger.warning(f"{name} fs={fs_key}: DBCache never cached a step")
+
+    if traced and (evict_t5 or evict_for_vae) and is_rank0 and len(flow_shifts) * len(runs) >= 2:
+        # Every run after the first finds captured traces when its first load evicts T5 or the decoder.
+        assert trace_releases, "a traced pipeline with an eviction chain evicted without releasing a trace"
+        logger.info(f"trace releases at evictions: {len(trace_releases)}")
 
     if is_rank0:
         path = out_dir / f"wan_i2v_dbcache_results_{width}x{height}{'_traced' if traced else ''}.json"

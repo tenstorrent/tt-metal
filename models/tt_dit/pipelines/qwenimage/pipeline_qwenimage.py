@@ -208,7 +208,7 @@ class QwenImagePipelineConfig:
     offload_text_encoder: bool
     # Load the vision tower's device weights only while encoding the input images.
     offload_vision_tower: bool
-    # Capture traces and replay them. Not possible while any weights are offloaded.
+    # Capture traces and replay them. Off by default while any weights are offloaded.
     trace: bool
 
     resolutions: tuple[tuple[int, int], ...]
@@ -681,7 +681,7 @@ class QwenImagePipeline(Pipeline):
     ) -> None:
         """One warm-up generation, its last step cached with DBCache."""
         cached_step = self._warm_up_computed_steps
-        # A capture run is an ordinary call, so that the trace rule applies to it.
+        # A capture run is an ordinary call, so that the pipeline owns the traces it captures.
         (self if traced else self.run_untraced)(
             prompts=prompts,
             negative_prompts=prompts,

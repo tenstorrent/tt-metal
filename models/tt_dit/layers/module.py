@@ -394,8 +394,8 @@ class Module(ABC):
         Register modules that cannot be resident in memory at the same time as this module.
         They should be deallocated before this module is loaded. See `evict_coresident_exclusions` .
 
-        Called through `Pipeline.register_coresident_exclusions`, which records the evicted modules:
-        a pipeline that evicts weights must not trace.
+        Called through `Pipeline.register_coresident_exclusions`, which also gives this module the
+        pipeline's way to evict them: a pipeline that traces releases its traces first.
         Args:
             *args: Modules that cannot be co-resident in memory with this module.
         """

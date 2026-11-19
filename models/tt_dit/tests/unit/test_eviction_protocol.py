@@ -22,6 +22,7 @@ from ...pipelines.ideogram4.pipeline_ideogram4 import Ideogram4Pipeline
 from ...pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from ...pipelines.pipeline_api import Pipeline, owns_captures
 from ...utils import cache, tracing
+from ...utils.test import watch_trace_releases
 from ...utils.tracing import Tracer
 
 _NoParallelism = namedtuple("_NoParallelism", [])
@@ -92,8 +93,8 @@ class _Wrapper:
 
 
 class _Pipeline(Pipeline):
-    def __init__(self, *, trace: bool = False) -> None:
-        super().__init__(offload_weights=False, trace=trace)
+    def __init__(self, *, trace: bool = False, offload_weights: bool = False) -> None:
+        super().__init__(offload_weights=offload_weights, trace=trace)
 
     def _run(self, *, capture: tuple[Callable, ...] = (), traced: bool | None = None) -> None:
         del traced
@@ -126,30 +127,18 @@ def _captured() -> Tracer:
     return tracer
 
 
-def _capture_as(pipeline: Pipeline, *tracers: Tracer) -> None:
-    """Runs the tracers as a call of ``pipeline`` would. A traced pipeline that evicts cannot be called yet."""
-    with pipeline._owning_captures():
-        for tracer in tracers:
-            tracer()
-
-
 def _owned(pipeline: Pipeline, count: int = 1) -> list[Tracer]:
-    """Tracers that captured while ``pipeline`` owned the captures."""
+    """Tracers that captured during a call of ``pipeline``."""
     tracers = [_tracer() for _ in range(count)]
-    _capture_as(pipeline, *tracers)
+    pipeline(capture=tuple(tracers))
     return tracers
 
 
 def _excluding(pipeline: Pipeline, events: list[str], excluded: object | None = None) -> tuple[_Model, object]:
-    """A module whose load evicts another, registered through ``pipeline``, which the caller keeps alive.
-
-    A traced pipeline does not take an exclusion yet, so the trace flag is set after the registration.
-    """
+    """A module whose load evicts another, registered through ``pipeline``, which the caller keeps alive."""
     loading = _Model(events)
     excluded = _loaded(events) if excluded is None else excluded
-    trace, pipeline.trace = pipeline.trace, False
     pipeline.register_coresident_exclusions(loading, excluded)
-    pipeline.trace = trace
     events.clear()
     return loading, excluded
 
@@ -259,6 +248,29 @@ def test_the_owner_is_cleared_when_a_call_raises(expect_error: Callable) -> None
     assert tracing.current_capture_owner() is None
 
 
+def test_a_pipeline_built_to_trace_and_offload_releases_and_captures_again(
+    events: list[str], request: pytest.FixtureRequest
+) -> None:
+    # What the device tests watch for: it must see the warning whatever its exact wording becomes.
+    watched = watch_trace_releases(request)
+    pipeline = _Pipeline(trace=True, offload_weights=True)
+    loading, excluded = _excluding(pipeline, events)
+    tracer = _tracer()
+    pipeline(capture=(tracer, tracer))
+    assert events == ["execute", "execute"]
+    events.clear()
+    messages = _warnings(loading.evict_coresident_exclusions)
+    assert messages == ["_Pipeline: module _Model is evicting. Releasing traces (1 released)."]
+    assert watched == messages
+    assert events == ["release", "deallocate"]
+    assert not excluded.is_loaded()
+    events.clear()
+    pipeline(capture=(tracer, tracer))
+    # The next call captures and runs, the one after replays.
+    assert events == ["execute", "execute"]
+    assert tracer.trace_captured
+
+
 def test_with_no_captured_trace_the_exclusion_is_evicted_quietly(events: list[str]) -> None:
     pipeline = _OwnRelease(trace=True)
     loading, excluded = _excluding(pipeline, events)
@@ -366,7 +378,7 @@ def test_the_next_traced_call_after_an_eviction_captures_again(events: list[str]
     (tracer,) = _owned(pipeline)
     assert len(_warnings(loading.evict_coresident_exclusions)) == 1
     events.clear()
-    _capture_as(pipeline, tracer, tracer)
+    pipeline(capture=(tracer, tracer))
     # The first call captures and runs, the second replays: one execution each, no release.
     assert events == ["execute", "execute"]
     assert tracer.trace_captured
@@ -379,11 +391,11 @@ def test_a_recaptured_trace_watches_its_weights_again(events: list[str], expect_
     pipeline = _Pipeline(trace=True)
     loading, _ = _excluding(pipeline, events)
     tracer = Tracer(lambda: weight.data and None, device=_Device(), prep_run=False)
-    _capture_as(pipeline, tracer)
+    pipeline(capture=(tracer,))
     assert len(weight._tracers) == 1
     loading.evict_coresident_exclusions()
     assert len(weight._tracers) == 0
-    _capture_as(pipeline, tracer)
+    pipeline(capture=(tracer,))
     assert len(weight._tracers) == 1
     # A free that does not go through the pipeline still makes the recaptured trace refuse to replay.
     weight.deallocate()
@@ -404,7 +416,7 @@ def test_an_exclusion_that_holds_no_weights_releases_no_trace(events: list[str])
     loading, excluded = _excluding(pipeline, events)
     assert len(_warnings(loading.evict_coresident_exclusions)) == 1
     assert not excluded.is_loaded()
-    _capture_as(pipeline, tracer)
+    pipeline(capture=(tracer,))
     events.clear()
     assert _warnings(loading.evict_coresident_exclusions) == []
     assert "release" not in events
@@ -448,9 +460,7 @@ def test_loading_a_resident_model_evicts_through_the_pipeline(
     monkeypatch.delenv("TT_DIT_CACHE_DIR", raising=False)
     pipeline = _Pipeline(trace=True)
     loading, excluded = _loaded(events), _loaded(events)
-    pipeline.trace = False
     pipeline.register_coresident_exclusions(loading, excluded)
-    pipeline.trace = True
     (tracer,) = _owned(pipeline)
     events.clear()
 
@@ -471,7 +481,7 @@ def test_loading_a_resident_model_evicts_through_the_pipeline(
     assert not excluded.is_loaded()
     assert not tracer.trace_captured
     # The next load of the resident model finds the exclusion empty and releases nothing.
-    _capture_as(pipeline, tracer)
+    pipeline(capture=(tracer,))
     events.clear()
     assert _warnings(load) == []
     assert "release" not in events

@@ -23,6 +23,10 @@ if TYPE_CHECKING:
     from .events import PipelineEventCallback
 
 
+# The part of the eviction warning that tests look for in a log.
+TRACE_RELEASE_NOTICE = "is evicting. Releasing traces"
+
+
 def owns_captures(method: Callable[..., Any]) -> Callable[..., Any]:
     """For a pipeline method that captures traces outside a call, such as a warm-up: the pipeline owns them."""
 
@@ -40,14 +44,16 @@ class Pipeline:
     ``trace`` says that calls capture ttnn traces and replay them. ``offload_weights`` says that
     the pipeline evicts and reloads module weights between or within calls, because they do not
     all fit in device memory together. A captured trace replays the weight addresses it saw at
-    capture, and a reload does not preserve them, so a pipeline cannot do both.
+    capture, and a reload does not preserve them. So before loading one module evicts another, a
+    pipeline that traces releases its traces, with a warning, and captures them again on its next
+    traced calls: one release and one capture for every eviction.
 
     ``offload_weights`` is about weight residency only. A pipeline that serves varying input
     sizes eagerly (MiniMax-H3 ``dynamic_length``) keeps its weights resident and does not set it.
 
     A subclass calls ``Pipeline.__init__`` before it builds modules or runs a warm-up, registers
     every eviction through ``register_coresident_exclusions``, and implements ``_run``. It does
-    not define ``__call__``: that would skip the rule.
+    not define ``__call__``: the pipeline would then not own the traces its calls capture.
 
     Tracing is decided at construction. A call that still passes the former per-call ``traced``
     argument runs as the pipeline was constructed, whatever the value, and logs a warning.
@@ -56,7 +62,7 @@ class Pipeline:
     def __init_subclass__(cls, **kwargs: Any) -> None:  # noqa: ANN401
         super().__init_subclass__(**kwargs)
         if "__call__" in cls.__dict__:
-            msg = f"{cls.__name__} must implement _run, not __call__: Pipeline.__call__ enforces the trace rule"
+            msg = f"{cls.__name__} must implement _run, not __call__: Pipeline.__call__ owns the traces a call captures"
             raise TypeError(msg)
         # The base only sees the trace flags a caller passes, so `_run` must not default one to on.
         for name, parameter in inspect.signature(cls._run).parameters.items():
@@ -68,7 +74,6 @@ class Pipeline:
         self._offload_weights_requested = bool(offload_weights)
         self._evictable: weakref.WeakSet[Module] = weakref.WeakSet()
         self.trace = bool(trace)
-        self._check_trace_rule()
         if not self._offload_weights_requested and not self.trace:
             # A resident pipeline could trace; operators look for this line when a serving config forgot to ask.
             logger.info(f"{type(self).__name__}: static mesh, running untraced (offload_weights=False, trace=False)")
@@ -76,7 +81,7 @@ class Pipeline:
     @property
     def offload_weights(self) -> bool:
         """Whether weights are evicted and reloaded: requested, or any module is registered as evictable."""
-        # getattr: the rule must also hold on an instance built without __init__.
+        # getattr: an instance built without __init__ has neither attribute.
         return bool(getattr(self, "_offload_weights_requested", False)) or bool(getattr(self, "_evictable", ()))
 
     @offload_weights.setter
@@ -86,11 +91,8 @@ class Pipeline:
     def register_coresident_exclusions(self, module: Module, *others: Module | None) -> None:
         """Make loading ``module`` evict ``others``, which thereby become evictable. ``None`` entries are skipped."""
         present = [m for m in others if m is not None]
-        # Checked first: a refused exclusion must not stay live on the module.
-        if present and getattr(self, "trace", False):
-            raise self._trace_rule_error()
         module._register_coresident_exclusions(*present)  # noqa: SLF001
-        # hasattr: the rule must also hold on an instance built without __init__.
+        # hasattr: an instance built without __init__ has no set yet.
         if not hasattr(self, "_evictable"):
             self._evictable = weakref.WeakSet()
         self._evictable.update(present)
@@ -119,8 +121,8 @@ class Pipeline:
             # A subclass releases the traces it knows of; this takes the rest of what the pipeline owns.
             self._release_owned_traces()
             logger.warning(
-                f"{type(self).__name__}: module {type(module).__name__} is evicting. "
-                f"Releasing traces ({before - tracing.captured_trace_count()} released)."
+                f"{type(self).__name__}: module {type(module).__name__} {TRACE_RELEASE_NOTICE} "
+                f"({before - tracing.captured_trace_count()} released)."
             )
         module.deallocate_weights()
 
@@ -151,19 +153,6 @@ class Pipeline:
             yield
         finally:
             tracing._capture_owner.traces = previous  # noqa: SLF001
-
-    @staticmethod
-    def _trace_rule_error() -> ValueError:
-        return ValueError(
-            "TDM-130: trace=True is unsupported with offload_weights=True: a captured trace replays "
-            "the weight addresses it saw at capture, and offloading evicts and reloads weights. "
-            "Construct the pipeline with trace=False, or keep every module resident "
-            "(offload_weights=False) on a mesh with enough DRAM."
-        )
-
-    def _check_trace_rule(self) -> None:
-        if getattr(self, "trace", False) and self.offload_weights:
-            raise self._trace_rule_error()
 
     def _check_component_flags(self, kwargs: dict[str, Any]) -> None:
         """Per-component flags (``vae_traced``, ``encoder_traced``, ...) narrow ``trace``; they cannot widen it."""
@@ -233,13 +222,11 @@ class Pipeline:
             cause = " because it offloads weights (TDM-130)" if self.offload_weights else ""
             logger.warning(
                 f"{name}: traced=True IGNORED: the pipeline was constructed with trace=False and runs "
-                f"eager{cause}. To trace, construct the pipeline with trace=True; an offloading pipeline "
-                "cannot trace."
+                f"eager{cause}. To trace, construct the pipeline with trace=True."
             )
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
         self._drop_legacy_traced(kwargs)
-        self._check_trace_rule()
         self._check_component_flags(kwargs)
         with self._owning_captures():
             return self._run(*args, **kwargs)
