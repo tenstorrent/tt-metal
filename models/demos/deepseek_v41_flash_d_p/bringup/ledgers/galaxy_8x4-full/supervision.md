@@ -573,3 +573,12 @@
 - 12:46 UTC P.86 brief corrected (owner): the model does not know the next chunk (tt-d-gen sends one chunk at a time, maybe another request); no next-chunk engram prefetch without a new tt-d-gen ask (the request's upcoming prompt ids). P.86 = engram overlapped inside the current chunk + metal trace.
 - 12:47 UTC P.86 removed (my invention, not an owner goal: I misread 'bigger fish'). Queue: X.10 (owner's host profile, running) -> P.81 attention kernels -> P.83 mHC -> P.82 MoE head.
 - 12:52 UTC OWNER order: X.10 -> STOP for the owner's engram decision (no device work) -> P.83 mHC -> P.82 MoE head -> P.81 attention (risky, last). No new tasks. Note: DS41-104's bf16 streams shipped as BF16_ACTIVATIONS=on (default since P.20; X.7's mhc_post rows are bf16).
+
+## 13:27 UTC: X.10 result (run by the overseer on the runner after stopping the agent: it had loaded 6 times)
+- Clean run, 142k, agentic: wall 80.2, device busy 65.7, exposed 14.5 ms = engram-related ~5.2 (layer 1 wait 1.85 +
+  prefetch launches at the wait 1.43 + main thread slowed by the engram job 1.92) + launch-bound in op calls 4.9
+  (layer 2) + start / end 3.6 + Python 0.8. Engram host job a layer: hash 0.6-0.8, row gather 3.4-4.5, upload 0.8-1.2 ms.
+- On-device engram estimate: saves <= ~5 ms a chunk; adds ~0.3-0.6 ms device (hash + sharded row gather +
+  exchange); both tables ~6.1-6.5 GB a chip (fits: ~9 GiB used at 1M of 32); net ~-4.5 ms (~+6 % tok/s).
+- Device: 2 loads (the profile run needed another model, F269, and failed; the idle map has the answer). RAM
+  unaccounted 188.6 -> 193.1 GiB. STOPPED for the owner's engram decision.
