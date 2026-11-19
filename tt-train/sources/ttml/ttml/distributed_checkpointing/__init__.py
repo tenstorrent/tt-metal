@@ -12,10 +12,11 @@ one mesh shape and parallelism strategy loads onto another.
 
     import ttml.distributed_checkpointing as dcp
     dcp.save(ckpt_dir, model=model, optimizer=optimizer, scheduler=scheduler, dataloader=loader, header={"step": step})
-    result = dcp.load(ckpt_dir, model=model, optimizer=optimizer, scheduler=scheduler, dataloader=loader, rng=True)
+    result = dcp.load(ckpt_dir, model=model, optimizer=optimizer, scheduler=scheduler, dataloader=loader)
 
 The scheduler, the dataloader and the random generators (the ttml generator, ttml.init's, python, numpy, torch) are
-saved beside the header and restored on request; see ``_train_state``.
+saved beside the header. A load restores the scheduler and dataloader passed, and with them the generators (``rng``
+defaults to restoring them whenever a scheduler or dataloader is); see ``load`` and ``_train_state``.
 
 Under ``tt-run`` with several ranks (a mesh spread over hosts, or one mesh per host) ``save`` and ``load`` are
 collective: every rank calls them at the same point, each writes and reads only the shards of the coordinates it holds,

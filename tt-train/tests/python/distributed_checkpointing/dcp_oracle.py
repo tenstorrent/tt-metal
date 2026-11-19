@@ -15,6 +15,8 @@ trips instead of agreeing with itself.
 
 from __future__ import annotations
 
+import json
+import os
 import random
 import sys
 import zlib
@@ -25,7 +27,7 @@ import numpy as np
 import ttml.init
 from ttml.distributed_checkpointing._boxes import Box
 from ttml.distributed_checkpointing._errors import TopologyError
-from ttml.distributed_checkpointing._index import FileRecord, Index, data_file_name
+from ttml.distributed_checkpointing._index import HEADER_NAME, FileRecord, Index, data_file_name
 from ttml.distributed_checkpointing._planner import TensorInfo, create_load_plan, create_save_plan
 from ttml.distributed_checkpointing._topology import Label, Placement, dist_coords, owner
 
@@ -200,6 +202,22 @@ def advance_generators() -> None:
         torch.randn(1)
 
 
+def host_draws() -> tuple:
+    """The next draws from python's, numpy's and torch's generators, and ttml.init's state. The Gaussians come first:
+    each returns its generator's cached Gaussian (python's gauss_next, numpy's cached Gaussian, torch's cached normal),
+    which uniform draws never read, so a restore that dropped one shows here."""
+    torch = sys.modules.get("torch")
+    return (
+        random.gauss(0.0, 1.0),
+        float(np.random.standard_normal()),
+        torch.randn(3).tolist() if torch is not None else None,
+        random.random(),
+        float(np.random.random()),
+        torch.rand(3).tolist() if torch is not None else None,
+        ttml.init.get_rng_state(),  # what the next layer's initial weights are drawn from
+    )
+
+
 class Loader:
     """A stateful dataloader stand-in for the tests and the driver: its only state is how many batches it handed out."""
 
@@ -214,3 +232,54 @@ class Loader:
 
     def set_state_dict(self, state: dict) -> None:
         self.position = int(state["position"])
+
+
+def set_ttml_token(own: dict, index: int, value: str) -> None:
+    """Replace token ``index`` of the ttml generator's text in one rank's RNG entry (the last token is its position)."""
+    tokens = own["ttml"].split()
+    tokens[index] = value
+    own["ttml"] = " ".join(tokens)
+
+
+def shorten_hex(text: str, nbytes: int) -> str:
+    return text[: -2 * nbytes]
+
+
+# Damage to one rank's RNG entry, by test id; every case leaves valid JSON.
+# The hex or text of a generator's state, the wrong length for it.
+WRONG_LENGTH_RNG = {
+    "numpy_623_words": lambda own: own["numpy"].update(state=shorten_hex(own["numpy"]["state"], 4)),
+    "python_624_words": lambda own: own["python"].update(state=shorten_hex(own["python"]["state"], 4)),
+    "torch_one_byte_short": lambda own: own.update(torch=shorten_hex(own["torch"], 1)),
+    "ttml_600_tokens": lambda own: own.update(ttml=" ".join(own["ttml"].split()[:600])),
+}
+# The right length, but what a setter would misread: the ttml text the C++ stream stops partway through (non-ASCII
+# digits, a word past 64 bits) or reads into a state no mt19937 has (a word past 32 bits, a position past 624), a cached
+# Gaussian Python's setstate keeps but the next random.gauss cannot use, a numpy position past its 624 words, and a
+# ttml.init state for another bit generator than the PCG64 it was captured from, or with values past 128 bits (an
+# OverflowError) or negative (wrapped silently).
+MISREAD_RNG = {
+    "ttml_superscript_digit": lambda own: set_ttml_token(own, 5, "²"),
+    "ttml_arabic_indic_digit": lambda own: set_ttml_token(own, 5, "٣"),
+    "ttml_word_past_32_bits": lambda own: set_ttml_token(own, 5, str(2**32)),
+    "ttml_word_past_64_bits": lambda own: set_ttml_token(own, 5, str(2**64)),
+    "ttml_position_past_624": lambda own: set_ttml_token(own, -1, "625"),
+    "python_gauss_next_text": lambda own: own["python"].update(gauss_next="corrupt"),
+    "python_gauss_next_list": lambda own: own["python"].update(gauss_next=[0.5]),
+    "python_gauss_next_bool": lambda own: own["python"].update(gauss_next=True),
+    "numpy_position_past_624": lambda own: own["numpy"].update(pos=700),
+    "numpy_negative_position": lambda own: own["numpy"].update(pos=-1),
+    "ttml_init_not_pcg64": lambda own: own["ttml_init"].update(bit_generator="MT19937"),
+    "ttml_init_state_past_128_bits": lambda own: own["ttml_init"].update(state=format(2**200, "x")),
+    "ttml_init_negative_increment": lambda own: own["ttml_init"].update(inc="-1"),
+}
+
+
+def damage_stored_rng(ckpt_dir: str, damage, world_rank: int = 0) -> None:
+    """Apply ``damage`` to world rank ``world_rank``'s RNG entry in the header.json of the checkpoint ``ckpt_dir``."""
+    path = os.path.join(ckpt_dir, HEADER_NAME)
+    with open(path) as f:
+        header = json.load(f)
+    damage(header["train_state"]["rng"]["ranks"][str(world_rank)])
+    with open(path, "w") as f:
+        json.dump(header, f)

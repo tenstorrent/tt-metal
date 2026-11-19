@@ -16,11 +16,13 @@ import sys
 import numpy as np
 import pytest
 import torch
+import ttnn
 
-from dcp_oracle import Loader, advance_generators
+from dcp_oracle import MISREAD_RNG, WRONG_LENGTH_RNG, Loader, advance_generators, host_draws
 
 import ttml
 from ttml.common.schedulers import CosineAnnealingScheduler, LinearScheduler, SequentialScheduler, StepScheduler
+from ttml.distributed_checkpointing import _train_state
 from ttml.distributed_checkpointing._errors import CheckpointError, IncompleteCheckpointError, VersionError
 from ttml.distributed_checkpointing._index import read_header_json, write_header
 from ttml.distributed_checkpointing._train_state import (
@@ -60,13 +62,7 @@ def test_every_generator_comes_back_exactly():
     assert own["python"]["gauss_next"] is not None and own["numpy"]["has_gauss"] == 1 and own["numpy"]["pos"] != 624
     assert own["ttml_init"]["has_uint32"] == 1
     assert len(own["python"]["state"]) == 625 * 8 and len(own["numpy"]["state"]) == 624 * 8  # hex of u32
-    expected = (
-        random.random(),
-        float(np.random.random()),
-        torch.rand(3).tolist(),
-        ttml.init._rng.random(2).tolist(),  # what the next layer's initial weights would be drawn from
-        ctx.get_generator_state(),
-    )
+    expected = (host_draws(), ctx.get_generator_state())
 
     ctx.set_seed(99)
     random.seed(0)
@@ -77,13 +73,7 @@ def test_every_generator_comes_back_exactly():
     assert restore_rng(state, world_rank=0) == ["rng.ttml", "rng.python", "rng.numpy", "rng.ttml_init", "rng.torch"]
     assert ctx.get_generator_state() == own["ttml"]
     # The same draws again, and the ttml generator reaches the same state through them (nothing drew from it).
-    assert (
-        random.random(),
-        float(np.random.random()),
-        torch.rand(3).tolist(),
-        ttml.init._rng.random(2).tolist(),
-        ctx.get_generator_state(),
-    ) == expected
+    assert (host_draws(), ctx.get_generator_state()) == expected
 
 
 def test_generator_without_stored_state_warns(monkeypatch):
@@ -103,10 +93,18 @@ def test_generator_without_stored_state_warns(monkeypatch):
     assert restored == ["rng.ttml", "rng.python", "rng.numpy", "rng.ttml_init"]
 
 
-def test_capture_and_restore_default_to_this_process_world_rank():
-    state = capture_rng()  # one process: world rank 0
-    assert list(state["ranks"]) == [str(this_world_rank())] == ["0"]
+def test_capture_and_restore_default_to_this_process_world_rank(monkeypatch):
+    """Without a world_rank, both take this process's rank in the MPI world: 0 without a distributed context, here
+    3 under a faked one, so a default hard-coded to 0 fails."""
+    assert this_world_rank() == 0 and list(capture_rng()["ranks"]) == ["0"]
+    for name, value in (("distributed_context_is_initialized", True), ("distributed_context_world_rank", 3)):
+        monkeypatch.setattr(ttnn, name, lambda value=value: value, raising=False)
+    assert this_world_rank() == 3
+    state = capture_rng()
+    assert list(state["ranks"]) == ["3"]
     assert restore_rng(state)[0] == "rng.ttml"
+    with pytest.warns(UserWarning, match="no RNG state for world rank 3"):
+        assert restore_rng(capture_rng(world_rank=0)) == []
 
 
 def test_a_rank_restores_only_its_own_entry():
@@ -225,22 +223,48 @@ def test_component_without_state_setter_is_refused(expect_error):
     check_train_state({}, dataloader=iter([]))  # nothing stored for it: nothing to restore it with
 
 
+_GENERATORS = ("ttml", "python", "numpy", "ttml.init", "torch")
+
+
+def _live_generators() -> tuple:
+    """Every generator's current state, in _GENERATORS order, comparable with ==."""
+    numpy_state = np.random.get_state()
+    return (
+        ttml.autograd.AutoContext.get_instance().get_generator_state(),
+        random.getstate(),
+        (numpy_state[1].tobytes(),) + tuple(numpy_state[2:]),
+        ttml.init.get_rng_state(),
+        torch.get_rng_state().numpy().tobytes(),
+    )
+
+
+def _leave_the_stored_state() -> None:
+    """Reseed and draw from every generator, so that none holds the state just captured: one set from its intact
+    entry before a later entry is refused then differs from what it was."""
+    ttml.autograd.AutoContext.get_instance().set_seed(7)
+    advance_generators()
+
+
+def _assert_unchanged(before: tuple) -> None:
+    changed = [name for name, now, then in zip(_GENERATORS, _live_generators(), before) if now != then]
+    assert not changed, f"set before the stored state was refused: {changed}"
+
+
 def test_rng_state_is_checked_whole_before_any_generator_is_set(expect_error):
-    random.seed(21)
     block = capture_rng(world_rank=0)
-    before = random.getstate()
+    _leave_the_stored_state()
+    before = _live_generators()
     broken = json.loads(json.dumps(block))
     broken["ranks"]["0"]["numpy"]["state"] = "not hex"
     with expect_error(CheckpointError, "the stored RNG state is malformed"):
         check_train_state({"rng": broken}, rng=True, world_rank=0)
     with expect_error(CheckpointError, "the stored RNG state is malformed"):
         restore_rng(broken, world_rank=0)
-    assert random.getstate() == before, "python's generator was not set before numpy's failed to decode"
+    _assert_unchanged(before)  # python's entry, decoded before numpy's, is intact
     newer = dict(block, format=2)
     with expect_error(VersionError, "newer than this reader"):
         check_train_state({"rng": newer}, rng=True, world_rank=0)
-    # The whole train state passed where its RNG block belongs, or a block with a bad format, restores nothing
-    # silently no more.
+    # The whole train state passed where its RNG block belongs, and a block whose format is not a number, are refused.
     with expect_error(CheckpointError, r"not an RNG block \(found \['dataloader', 'rng'\]\)"):
         restore_rng({"dataloader": {"position": 1}, "rng": block}, world_rank=0)
     with expect_error(CheckpointError, "RNG state format 'x' is not a version number"):
@@ -248,75 +272,53 @@ def test_rng_state_is_checked_whole_before_any_generator_is_set(expect_error):
     check_train_state({"rng": block}, rng=False)  # not asked for: nothing to check
 
 
-def _shorten_hex(text: str, nbytes: int) -> str:
-    return text[: -2 * nbytes]
-
-
-@pytest.mark.parametrize(
-    "damage",
-    [
-        pytest.param(
-            lambda own: own["numpy"].update(state=_shorten_hex(own["numpy"]["state"], 4)), id="numpy_623_words"
-        ),
-        pytest.param(
-            lambda own: own["python"].update(state=_shorten_hex(own["python"]["state"], 4)), id="python_624_words"
-        ),
-        pytest.param(lambda own: own.update(torch=_shorten_hex(own["torch"], 1)), id="torch_one_byte_short"),
-        pytest.param(lambda own: own.update(ttml=" ".join(own["ttml"].split()[:600])), id="ttml_600_tokens"),
-    ],
-)
+@pytest.mark.parametrize("damage", list(WRONG_LENGTH_RNG.values()), ids=list(WRONG_LENGTH_RNG))
 def test_rng_state_of_the_wrong_length_changes_no_generator(damage, expect_error):
-    # Valid JSON and hex, the wrong length: what each setter, not the decoder, used to find out, after the generators
-    # before it in the restore order were already set.
-    ctx = ttml.autograd.AutoContext.get_instance()
+    # Valid JSON and hex of the wrong length for its generator: refused while decoding, before any generator is set.
     block = capture_rng(world_rank=0)
+    _leave_the_stored_state()
     broken = json.loads(json.dumps(block))
     damage(broken["ranks"]["0"])
-    before = (ctx.get_generator_state(), random.getstate(), np.random.get_state()[1].copy(), torch.get_rng_state())
+    before = _live_generators()
     with expect_error(CheckpointError, "the stored RNG state is malformed"):
         restore_rng(broken, world_rank=0)
-    after = (ctx.get_generator_state(), random.getstate(), np.random.get_state()[1], torch.get_rng_state())
-    assert after[0] == before[0] and after[1] == before[1], "ttml and python untouched"
-    assert np.array_equal(after[2], before[2]) and torch.equal(after[3], before[3]), "numpy and torch untouched"
+    _assert_unchanged(before)
 
 
-def _set_ttml_token(own: dict, index: int, value: str) -> None:
-    tokens = own["ttml"].split()
-    tokens[index] = value
-    own["ttml"] = " ".join(tokens)
-
-
-# Valid JSON of the right length that a setter would misread: the ttml text the C++ stream stops partway through
-# (non-ASCII digits, a word past 64 bits) or reads into a state no mt19937 has (a word past 32 bits, a position past
-# 624), and a cached Gaussian Python's setstate keeps but the next random.gauss cannot use.
-MISREAD = [
-    pytest.param(lambda own: _set_ttml_token(own, 5, "\u00b2"), id="ttml_superscript_digit"),
-    pytest.param(lambda own: _set_ttml_token(own, 5, "\u0663"), id="ttml_arabic_indic_digit"),
-    pytest.param(lambda own: _set_ttml_token(own, 5, str(2**32)), id="ttml_word_past_32_bits"),
-    pytest.param(lambda own: _set_ttml_token(own, 5, str(2**64)), id="ttml_word_past_64_bits"),
-    pytest.param(lambda own: _set_ttml_token(own, -1, "625"), id="ttml_position_past_624"),
-    pytest.param(lambda own: own["python"].update(gauss_next="corrupt"), id="python_gauss_next_text"),
-    pytest.param(lambda own: own["python"].update(gauss_next=[0.5]), id="python_gauss_next_list"),
-    pytest.param(lambda own: own["python"].update(gauss_next=True), id="python_gauss_next_bool"),
-]
-
-
-@pytest.mark.parametrize("damage", MISREAD)
+@pytest.mark.parametrize("damage", list(MISREAD_RNG.values()), ids=list(MISREAD_RNG))
 def test_misreadable_rng_state_is_refused(damage, expect_error):
     """RNG state a setter would misread is refused, and no generator changes."""
-    ctx = ttml.autograd.AutoContext.get_instance()
     block = capture_rng(world_rank=0)
+    _leave_the_stored_state()
     broken = json.loads(json.dumps(block))
     damage(broken["ranks"]["0"])
-    before = (ctx.get_generator_state(), random.getstate(), np.random.get_state()[1].copy(), torch.get_rng_state())
+    before = _live_generators()
     with expect_error(CheckpointError, "the stored RNG state is malformed .*pass rng=False to load"):
         check_train_state({"rng": broken}, rng=True, world_rank=0)
     with expect_error(CheckpointError, "the stored RNG state is malformed"):
         restore_rng(broken, world_rank=0)
-    after = (ctx.get_generator_state(), random.getstate(), np.random.get_state()[1], torch.get_rng_state())
-    assert after[0] == before[0] and after[1] == before[1], "ttml and python untouched"
-    assert np.array_equal(after[2], before[2]) and torch.equal(after[3], before[3]), "numpy and torch untouched"
+    _assert_unchanged(before)
     check_train_state({"rng": broken}, rng=False)  # not asked for: not decoded, so a load without rng goes ahead
+
+
+def test_the_ttml_text_must_have_the_form_this_build_writes(monkeypatch, expect_error):
+    """libstdc++ writes an mt19937 as its 624 words and its position, libc++ as the 624 words alone, and each reads
+    the other's text wrongly. The decoder expects the form the running build writes, so a build takes its own
+    checkpoints and refuses the other's."""
+    block = capture_rng(world_rank=0)
+    tokens = block["ranks"]["0"]["ttml"].split()
+    this_form = len(tokens)
+    assert this_form in (624, 625), f"an mt19937 text of {this_form} tokens"
+    other_form = 624 if this_form == 625 else 625
+    other = json.loads(json.dumps(block))
+    other["ranks"]["0"]["ttml"] = " ".join(tokens[:624] + ["0"] * (other_form - 624))
+    with expect_error(CheckpointError, f"is not the {this_form} tokens this build writes .*it has {other_form}"):
+        check_train_state({"rng": other}, rng=True, world_rank=0)
+
+    monkeypatch.setattr(_train_state, "_mt19937_text_tokens", lambda: other_form)  # a build with the other library
+    check_train_state({"rng": other}, rng=True, world_rank=0)  # its own form decodes
+    with expect_error(CheckpointError, f"is not the {other_form} tokens this build writes .*it has {this_form}"):
+        check_train_state({"rng": block}, rng=True, world_rank=0)
 
 
 class _TupleLoader(Loader):
@@ -338,11 +340,14 @@ def test_a_tuple_comes_back_as_a_list_and_the_refusal_says_so(expect_error):
         restore_train_state(stored, dataloader=_TupleLoader())
 
 
-class _IntKeyLoader(Loader):
+class _IntKeyScheduler:
+    """A scheduler whose state keys its LRs by param group index, which JSON would hand back as strings."""
+
     def get_state_dict(self) -> dict:
-        return {"per_shard": {0: 7}}
+        return {"group_lrs": {0: 1e-3}}
 
 
 def test_state_that_would_not_read_back_as_written_is_refused(expect_error):
-    with expect_error(CheckpointError, "dataloader state at /per_shard: key 0 is a int"):
-        capture_train_state(dataloader=_IntKeyLoader(), rng=False)
+    # The scheduler's state goes through the same check as the dataloader's (test_state_that_is_not_json_is_refused).
+    with expect_error(CheckpointError, "scheduler state at /group_lrs: key 0 is a int"):
+        capture_train_state(scheduler=_IntKeyScheduler(), rng=False)
