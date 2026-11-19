@@ -1,0 +1,286 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Precise conv/gates fusion versus the current production convolution contract.
+
+Run under the serialized device runner with Watcher. Candidate and control own
+independent persistent history and recurrent states. History shifts must match
+bitwise; convolution, gate, output and state PCC must remain at least .995.
+The control uses FP32 per-tap products/adds, SiLU and a BF16 final convolution
+pack; gate preparation preserves the original TTNN operation boundaries.
+"""
+
+import argparse
+import hashlib
+import json
+import os
+import sys
+from pathlib import Path
+
+import torch
+
+import ttnn
+from models.autoports.ornith_ai_ornith_1_5_9b.tests import multichip_conv_gates_precise_wide_modes as fused
+from models.autoports.ornith_ai_ornith_1_5_9b.tests import multichip_flat_ordered_conv_gates as recurrent
+from models.autoports.ornith_ai_ornith_1_5_9b.tt import flat_ordered_post_loop as control
+from models.autoports.ornith_ai_ornith_1_5_9b.tt import tiled_conv as production_conv
+from models.autoports.ornith_ai_ornith_1_5_9b.tests.run_decoder import pcc
+from models.autoports.ornith_ai_ornith_1_5_9b.tests.validate_optimized import device_only
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--output", required=True)
+    ap.add_argument("--batches", default="1,2,6,13,14,16,17,26,27,31,32")
+    ap.add_argument("--waves", default="104,7")
+    ap.add_argument("--steps", type=int, default=8)
+    ap.add_argument("--epsilon", type=float, default=1e-6)
+    args = ap.parse_args()
+    batches, waves = [int(x) for x in args.batches.split(",")], [int(x) for x in args.waves.split(",")]
+    assert args.steps > 0 and args.epsilon > 0
+    assert all(1 <= b <= 32 for b in batches) and all(1 <= w <= 110 for w in waves)
+    torch.set_num_threads(8)
+    torch.manual_seed(7903)
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    sources = [Path(__file__), Path(fused.__file__), Path(recurrent.__file__), Path(control.__file__), Path(production_conv.__file__)]
+    for module in (fused, recurrent, control, production_conv):
+        sources += sorted(module.KERNEL_DIR.glob("*"))
+    result = {
+        "command": sys.argv,
+        "options": vars(args),
+        "mesh": [1, 4],
+        "seed": 7903,
+        "watcher": os.getenv("TT_METAL_WATCHER"),
+        "tracking": os.getenv("TT_METAL_TRACE_ALLOC_TRACKING", "0"),
+        "skip_program_cache_tracking": os.getenv("TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE", "0"),
+        "sources": {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources if p.is_file()},
+        "control": "Production tiled_conv + separate TTNN gates + production post_loop; separate TTNN convolution retained for paired checks",
+        "gates": "Finite output and state, global and per-head PCC >= .995; zero/constant requires equality",
+        "identical_input_control": "Independent state, production conv and candidate g/beta; bitwise state required",
+        "records": [],
+        "complete": False,
+    }
+
+    def save():
+        output.write_text(json.dumps(result, indent=2) + "\n")
+
+    def score(actual, expected):
+        if not bool(torch.isfinite(actual).all() and torch.isfinite(expected).all()):
+            return 0.0
+        if torch.equal(actual, expected):
+            return 1.0
+        if bool(torch.all(expected == expected.flatten()[0])):
+            return 0.0
+        return pcc(expected, actual)
+
+    def check(actual, expected, label, record, *, heads=False, bitwise=False):
+        actual, expected = actual.float(), expected.float()
+        scores = [score(actual, expected)]
+        if heads:
+            shape = (record["batch"] * 8, -1)
+            scores += [score(a, b) for a, b in zip(actual.reshape(shape), expected.reshape(shape))]
+        finite = torch.isfinite(actual)
+        record[label] = {
+            "pcc": scores[0],
+            "min_head_pcc": min(scores),
+            "bitwise_equal": torch.equal(actual, expected),
+            "actual_shape": list(actual.shape),
+            "expected_shape": list(expected.shape),
+            "finite": int(finite.sum()),
+            "elements": actual.numel(),
+            "finite_maxabs": float(actual[finite].abs().max()) if bool(finite.any()) else None,
+            "maxabs_error": float((actual - expected).abs().max()) if bool(finite.all()) else None,
+        }
+        if not all(s >= 0.995 for s in scores) or (bitwise and not torch.equal(actual, expected)):
+            failure = output.with_suffix(
+                f".B{record['batch']}.wave{record['wave']}.step{record['step']}.rank{record['rank']}.{label}.pt"
+            )
+            torch.save({"actual": actual, "expected": expected}, failure)
+            record[label]["failure_tensors"] = str(failure)
+            save()
+            raise AssertionError((label, record))
+
+    save()
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=0)
+
+    def device(value, dtype, memory=ttnn.DRAM_MEMORY_CONFIG):
+        return ttnn.from_torch(
+            value.contiguous(),
+            device=mesh,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=memory,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+
+    try:
+        for wave in waves:
+            for batch in batches:
+                initial = torch.randn(batch * 8, 128, 128) * 0.01
+                state_fused, state_control = device(initial, ttnn.float32), device(initial, ttnn.float32)
+                state_same_gates = device(initial, ttnn.float32)
+                history = (torch.randn(3, 1, batch, 2048) * 0.2).bfloat16()
+                history_memory = ttnn.DRAM_MEMORY_CONFIG if wave == waves[0] else ttnn.L1_MEMORY_CONFIG
+                history_fused = device(history, ttnn.bfloat16, history_memory)
+                history_control = device(history, ttnn.bfloat16, history_memory)
+                history_production = device(history, ttnn.bfloat16, history_memory)
+                for step in range(args.steps):
+                    memory = ttnn.DRAM_MEMORY_CONFIG if step % 2 == 0 else ttnn.L1_MEMORY_CONFIG
+                    taps = [torch.randn(1, 1, 1, 2048) * 0.25 for _ in range(4)]
+                    if step % 2 == 0:
+                        taps = [t.bfloat16().float() for t in taps]
+                    for tap in taps:
+                        if step % 4 == 0:
+                            tap[..., :1024] = 0
+                        elif step % 4 == 2:
+                            tap[..., :1024] *= 0.001
+                    # Fill unused projection lanes with unrelated, nonzero data.
+                    # Reading a neighboring head or the beta/a tile gap must fail.
+                    packed = (torch.randn(1, 1, batch, 3136) * 7).bfloat16()
+                    packed[..., :2048] = (torch.randn(1, 1, batch, 2048) * 0.2).bfloat16()
+                    packed[..., 2048:3072] = (torch.randn(1, 1, batch, 1024) * (0.1, 1, 6)[step % 3]).bfloat16()
+                    raw_beta = torch.randn(1, 1, batch, 8) * (0.1, 2, 12)[step % 3]
+                    raw_a = torch.randn(1, 1, batch, 8) * (0.1, 3, 12)[step % 3]
+                    # Hit sigmoid saturation and both sides of softplus threshold.
+                    if step % 4 == 3:
+                        raw_beta[..., :4] = torch.tensor([-30.0, -10.0, 10.0, 30.0])
+                        raw_a[..., :4] = torch.tensor([-30.0, -0.001, 19.875, 20.125])
+                    packed[..., 3072:3080] = raw_beta.bfloat16()
+                    packed[..., 3104:3112] = raw_a.bfloat16()
+                    bias = torch.randn(1, 1, 8) * 0.5
+                    decay = -torch.exp(torch.randn(1, 1, 8).clamp(-3, 1))
+                    if step % 2 == 0:
+                        bias = bias.bfloat16().float()  # model-like and full FP32 cases
+                    gamma = (1 + torch.randn(1, 1, 1, 128) * 0.35).bfloat16()
+                    gamma[..., ::7] *= -1
+                    gamma[..., ::31] = 0
+                    packed_tt = device(packed, ttnn.bfloat16, memory)
+                    taps_tt = [device(t, ttnn.float32, memory) for t in taps]
+                    bias_tt, decay_tt = device(bias, ttnn.float32, memory), device(decay, ttnn.float32, memory)
+                    gamma_tt = device(gamma, ttnn.bfloat16, memory)
+                    with device_only():
+                        conv_actual_tt, g_actual_tt, beta_actual_tt = fused.conv_gates(
+                            packed_tt, history_fused, taps_tt, bias_tt, decay_tt
+                        )
+                        actual_tt = recurrent.flat_ordered_conv_gates(
+                            conv_actual_tt,
+                            g_actual_tt,
+                            beta_actual_tt,
+                            state_fused,
+                            packed_tt,
+                            gamma_tt,
+                            args.epsilon,
+                            wave,
+                        )
+                        raw_tt = packed_tt[:, :, :, :2048]
+                        production_conv_tt = production_conv.tiled_conv(raw_tt, history_production, taps_tt)
+                        conv_tt = ttnn.multiply(ttnn.typecast(raw_tt, ttnn.float32), taps_tt[3])
+                        for j in range(3):
+                            old = history_control[j : j + 1, :, :, :]
+                            conv_tt = ttnn.add(conv_tt, ttnn.multiply(ttnn.typecast(old, ttnn.float32), taps_tt[j]))
+                        conv_tt = ttnn.typecast(ttnn.silu(conv_tt), ttnn.bfloat16)
+                        next_history = ttnn.concat(
+                            [
+                                history_control[1:3, :, :, :],
+                                ttnn.to_memory_config(raw_tt, history_control.memory_config()),
+                            ],
+                            dim=0,
+                        )
+                        ttnn.copy(next_history, history_control)
+                        beta_tt = ttnn.reshape(ttnn.sigmoid(packed_tt[:, :, :, 3072:3080]), (batch, 1, 8))
+                        a_tt = ttnn.typecast(ttnn.reshape(packed_tt[:, :, :, 3104:3112], (1, batch, 8)), ttnn.float32)
+                        g_tt = ttnn.reshape(
+                            ttnn.multiply(
+                                ttnn.add(a_tt, bias_tt),
+                                decay_tt,
+                                input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)],
+                            ),
+                            (batch, 1, 8),
+                        )
+                        gate_tt = packed_tt[:, :, :, 2048:3072]
+                        expected_tt = control.flat_ordered_post_loop(
+                            production_conv_tt, g_tt, beta_tt, state_control, gate_tt, gamma_tt, args.epsilon, wave
+                        )
+                        same_gates_tt = control.flat_ordered_post_loop(
+                            production_conv_tt,
+                            ttnn.reshape(g_actual_tt, (batch, 1, 8)),
+                            ttnn.reshape(beta_actual_tt, (batch, 1, 8)),
+                            state_same_gates, gate_tt, gamma_tt, args.epsilon, wave,
+                        )
+                    assert beta_tt.dtype == ttnn.bfloat16 and g_tt.dtype == ttnn.float32
+                    tensors = [
+                        actual_tt,
+                        expected_tt,
+                        state_fused,
+                        state_control,
+                        conv_actual_tt,
+                        conv_tt,
+                        g_actual_tt,
+                        g_tt,
+                        beta_actual_tt,
+                        beta_tt,
+                        history_fused,
+                        history_control,
+                        production_conv_tt, history_production, same_gates_tt, state_same_gates,
+                    ]
+                    rank_tensors = [ttnn.get_device_tensors(t) for t in tensors]
+                    assert all(len(t) == 4 for t in rank_tensors)
+                    conv_torch = packed[..., :2048].float() * taps[3]
+                    for j in range(3):
+                        conv_torch = conv_torch + history[j : j + 1].float() * taps[j]
+                    conv_torch = torch.nn.functional.silu(conv_torch).bfloat16()
+                    history = torch.cat([history[1:], packed[..., :2048]], dim=0)
+                    for rank, values in enumerate(zip(*rank_tensors)):
+                        (
+                            actual,
+                            expected,
+                            updated,
+                            updated_control,
+                            conv_host,
+                            conv_control,
+                            g_host,
+                            g_control,
+                            beta_host,
+                            beta_control,
+                            history_host,
+                            history_reference,
+                            production_conv_host, production_history_host, same_gates_host, same_gates_state,
+                        ) = [ttnn.to_torch(t).float() for t in values]
+                        record = {
+                            "batch": batch,
+                            "wave": wave,
+                            "step": step,
+                            "rank": rank,
+                            "input_memory": "DRAM" if step % 2 == 0 else "L1",
+                            "history_memory": "DRAM" if wave == waves[0] else "L1",
+                            "bias_precision": "BF16 widened" if step % 2 == 0 else "FP32",
+                            "max_heads_per_core": (batch * 8 + min(wave, batch * 8) - 1) // min(wave, batch * 8),
+                        }
+                        result["records"].append(record)
+                        check(history_host, production_history_host, "history_vs_production", record, bitwise=True)
+                        check(conv_host, production_conv_host, "conv_vs_production", record, bitwise=True)
+                        check(production_conv_host, conv_control, "production_conv_vs_ttnn", record)
+                        check(history_host, history_reference, "history_vs_ttnn", record, bitwise=True)
+                        check(history_host, history, "history_vs_torch", record, bitwise=True)
+                        check(conv_host, conv_control, "conv_vs_ttnn", record)
+                        check(conv_host, conv_torch, "conv_vs_torch", record)
+                        check(beta_host.reshape(batch, 1, 8), beta_control, "beta_vs_ttnn", record)
+                        check(g_host.reshape(batch, 1, 8), g_control, "g_vs_ttnn", record)
+                        check(updated, same_gates_state, "state_same_gates_vs_production", record, heads=True, bitwise=True)
+                        check(actual, same_gates_host, "output_same_gates_vs_production", record, heads=True)
+                        check(updated, updated_control, "state_vs_production", record, heads=True)
+                        check(actual, expected, "output_vs_production", record, heads=True)
+                    save()
+                print("CONV_GATES_MATCHED_BATCH_PASS", batch, "wave", wave, flush=True)
+        result["complete"] = True
+    except BaseException as exc:
+        result["error"] = repr(exc)
+        raise
+    finally:
+        save()
+        ttnn.close_mesh_device(mesh)
+
+
+if __name__ == "__main__":
+    main()

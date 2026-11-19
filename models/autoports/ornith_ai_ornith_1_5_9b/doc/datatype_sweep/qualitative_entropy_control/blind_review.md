@@ -1,0 +1,11 @@
+Blind content review of the 20 supplied anonymous samples
+
+Reviewed only blind_samples.json and rubric.json. Preserved sample order, IDs, prompts, seeds, outputs and stop reasons in blind_scores.json. No backend identities were inferred or inspected.
+
+One of 20 samples receives a materially_wrong_or_irrelevant_answer flag: 3dc1b357efb453b1035a claims, "No process is 100% efficient; some energy is always lost as unusable heat." This categorical all-process assertion materially overextends the second law. No sample receives incoherence, mechanical-loop, wrong-language, prompt-echo/leakage, or corrupt-token flags. Restating the user's question inside coherent reasoning is not scored as pathological prompt echo; expected thinking delimiters are not corruption.
+
+Nineteen samples are recorded as cap-limited incomplete because an explanation, sentence, or response-planning sequence remains unfinished. Sample 4fd1d75ee214b4dfc3c0 supplies a complete substantive outline of all three laws and ends at a complete third-law statement, so its token-cap stop alone does not establish incompleteness. A final thinking delimiter is not required for that content-based judgment. None of the cap-limited omissions is itself a failure.
+
+Scoring caveats: repeated discussion of whether to include the zeroth law is verbose and sometimes self-correcting, but remains coherent rather than mechanically looping. Localized simplifications such as "always increases" without an equilibrium exception, heat-to-work language plausibly referring to heat engines, and minimum-entropy wording without a perfect-crystal qualification are noted rather than flagged as materially wrong. The erroneous historical claim in 7298e05c81e7f5c66fb7 is also noted as incidental to the requested laws. The single material-error flag uses the broader unrestricted claim about every process as its distinguishing evidence; this is a qualitative severity judgment, not a precision audit of every scientific qualifier. Scores concern only the visible capped text and cannot establish how unfinished reasoning would conclude.
+
+All samples concern prompt04. This review makes no backend comparison, matched-seed failure-rate claim, early token-divergence claim, or stage verdict; those require subsequent unblinding by the caller after these scores are saved.

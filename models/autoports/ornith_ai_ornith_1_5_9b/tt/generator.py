@@ -628,7 +628,23 @@ class OrnithGenerator(Generator):
             self._sampling_progress.pop((id(cache), slot), None)
         self._invalidate_resident(cache)
 
+    def _drain_submissions(self):
+        """Complete every outstanding decode readback (host-synchronizing).
+
+        vLLM can preempt a request (KV pool full) while an async-scheduled decode
+        is still in flight; the plugin then releases that request's slot before
+        it has processed the in-flight output, and reset_slots would refuse
+        ("Drain decode submissions before resetting slots"), killing the engine.
+        Completing the reads here caches each result on its handle, so the
+        plugin's later read/process calls for the same handle return the cached
+        output (both are idempotent once ``handle.completion`` is set).
+        """
+        for handle, _, _ in list(self.submissions.values()):
+            self.process_decode_output_host(handle, is_tokens=handle.mode == "tokens")
+
     def release_request(self, slot, *, kv_cache=None):
+        if self.submissions and not self.closed:
+            self._drain_submissions()
         if kv_cache is not None:
             return self.reset_slots([slot], kv_cache=kv_cache)
         return self.cache_ownership.release_request(slot, reset_slots=self.reset_slots)
