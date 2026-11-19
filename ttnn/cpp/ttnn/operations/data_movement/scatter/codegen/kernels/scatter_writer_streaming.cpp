@@ -27,12 +27,12 @@ void kernel_main() {
     const uint32_t core_id = get_arg_val<uint32_t>(1);
 
     // Compile-time args
-    constexpr uint32_t cb_input = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_output = get_compile_time_arg_val(1);
-    constexpr uint32_t Ht = get_compile_time_arg_val(2);
-    constexpr uint32_t Wt_output = get_compile_time_arg_val(3);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(4);
-    constexpr auto input_ta_args = TensorAccessorArgs<5>();
+    constexpr uint32_t cb_input = get_named_compile_time_arg_val("cb_input");
+    constexpr uint32_t cb_output = get_named_compile_time_arg_val("cb_output");
+    constexpr uint32_t Ht = get_named_compile_time_arg_val("Ht");
+    constexpr uint32_t Wt_output = get_named_compile_time_arg_val("Wt_output");
+    constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
+    constexpr auto input_ta_args = TensorAccessorArgs<0>();
     constexpr auto output_ta_args = TensorAccessorArgs<input_ta_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t one_tile = 1;

@@ -396,19 +396,7 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryInterleaved::create_
     desc.cbs.push_back(make_tile_cb(kCbSrc, src_t, 1, split.core_range));
     desc.cbs.push_back(make_tile_cb(kCbInput, in_t, attributes.Wt_output, split.core_range));
 
-    KernelDescriptor::CompileTimeArgs reader_ct = {
-        kCbInput,
-        kCbOutput,
-        kCbIndex,
-        kCbSrc,
-        attributes.Wt_output,
-        attributes.Wt_index,
-        split.num_cores,
-        attributes.idx_valid_h_last,
-        attributes.idx_valid_w_last,
-        attributes.Ht_per_batch_index,
-        attributes.output_logical_w,
-    };
+    KernelDescriptor::CompileTimeArgs reader_ct;
     TensorAccessorArgs(*index_t.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*src_t.buffer()).append_to(reader_ct);
 
@@ -418,11 +406,22 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryInterleaved::create_
     reader_desc.core_ranges = split.core_range;
     reader_desc.compile_time_args = reader_ct;
     reader_desc.named_compile_time_args = {
+        {"cb_input", kCbInput},
+        {"cb_output", kCbOutput},
+        {"cb_index", kCbIndex},
+        {"cb_src", kCbSrc},
+        {"Wt_output", attributes.Wt_output},
+        {"Wt_index", attributes.Wt_index},
+        {"num_cores", split.num_cores},
+        {"idx_valid_h_last", attributes.idx_valid_h_last},
+        {"idx_valid_w_last", attributes.idx_valid_w_last},
+        {"Ht_per_batch_index", attributes.Ht_per_batch_index},
+        {"output_logical_w", attributes.output_logical_w},
         {"reduction_mode", attributes.reduction_mode},
     };
     reader_desc.config = ReaderConfigDescriptor{};
 
-    KernelDescriptor::CompileTimeArgs writer_ct = {kCbInput, kCbOutput, attributes.Wt_output, split.num_cores};
+    KernelDescriptor::CompileTimeArgs writer_ct;
     TensorAccessorArgs(*in_t.buffer()).append_to(writer_ct);
     TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_ct);
 
@@ -431,6 +430,12 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryInterleaved::create_
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = split.core_range;
     writer_desc.compile_time_args = writer_ct;
+    writer_desc.named_compile_time_args = {
+        {"cb_input", kCbInput},
+        {"cb_output", kCbOutput},
+        {"Wt_output", attributes.Wt_output},
+        {"num_cores", split.num_cores},
+    };
     writer_desc.config = WriterConfigDescriptor{};
 
     // Buffer addresses are common (per-kernel) runtime args, so a program-cache hit rebinds four slots
@@ -476,20 +481,7 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryStreaming::create_de
     desc.cbs.push_back(make_tile_cb(kCbSrc, src_t, kStreamingSrcPages, split.core_range));
     desc.cbs.push_back(make_tile_cb(kCbInput, in_t, kStreamingInputPages, split.core_range));
 
-    KernelDescriptor::CompileTimeArgs reader_ct = {
-        kCbInput,
-        kCbOutput,
-        kCbIndex,
-        kCbSrc,
-        attributes.Ht,
-        attributes.Wt_output,
-        attributes.Wt_index,
-        split.num_cores,
-        attributes.idx_valid_h_last,
-        attributes.idx_valid_w_last,
-        attributes.Ht_per_batch_index,
-        attributes.output_logical_w,
-    };
+    KernelDescriptor::CompileTimeArgs reader_ct;
     TensorAccessorArgs(*index_t.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*src_t.buffer()).append_to(reader_ct);
 
@@ -499,12 +491,23 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryStreaming::create_de
     reader_desc.core_ranges = split.core_range;
     reader_desc.compile_time_args = reader_ct;
     reader_desc.named_compile_time_args = {
+        {"cb_input", kCbInput},
+        {"cb_output", kCbOutput},
+        {"cb_index", kCbIndex},
+        {"cb_src", kCbSrc},
+        {"Ht", attributes.Ht},
+        {"Wt_output", attributes.Wt_output},
+        {"Wt_index", attributes.Wt_index},
+        {"num_cores", split.num_cores},
+        {"idx_valid_h_last", attributes.idx_valid_h_last},
+        {"idx_valid_w_last", attributes.idx_valid_w_last},
+        {"Ht_per_batch_index", attributes.Ht_per_batch_index},
+        {"output_logical_w", attributes.output_logical_w},
         {"reduction_mode", attributes.reduction_mode},
     };
     reader_desc.config = ReaderConfigDescriptor{};
 
-    KernelDescriptor::CompileTimeArgs writer_ct = {
-        kCbInput, kCbOutput, attributes.Ht, attributes.Wt_output, split.num_cores};
+    KernelDescriptor::CompileTimeArgs writer_ct;
     TensorAccessorArgs(*in_t.buffer()).append_to(writer_ct);
     TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_ct);
 
@@ -513,6 +516,13 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryStreaming::create_de
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = split.core_range;
     writer_desc.compile_time_args = writer_ct;
+    writer_desc.named_compile_time_args = {
+        {"cb_input", kCbInput},
+        {"cb_output", kCbOutput},
+        {"Ht", attributes.Ht},
+        {"Wt_output", attributes.Wt_output},
+        {"num_cores", split.num_cores},
+    };
     writer_desc.config = WriterConfigDescriptor{};
 
     // Same common/per-core split as the interleaved factory; the kernels share the ABI.
@@ -588,20 +598,7 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryRowMajor::create_des
     desc.cbs.push_back(make_rm_cb(kCbSrc, src_t.dtype(), src_chunk_bytes, 1, split.core_range));
     desc.cbs.push_back(make_rm_cb(kCbInput, in_t.dtype(), input_page_bytes, 1, split.core_range));
 
-    KernelDescriptor::CompileTimeArgs reader_ct = {
-        kCbInput,
-        kCbOutput,
-        kCbIndex,
-        kCbSrc,
-        attributes.input_stick_elems,
-        attributes.index_stick_elems,
-        output_elem_size,
-        index_elem_size,
-        src_elem_size,
-        index_page_bytes,
-        src_page_bytes,
-        chunk_elems,
-    };
+    KernelDescriptor::CompileTimeArgs reader_ct;
     TensorAccessorArgs(*index_t.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*src_t.buffer()).append_to(reader_ct);
 
@@ -614,11 +611,23 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryRowMajor::create_des
     // (select_program_factory), so this reader only ever runs with reduction_mode == kReductionNone,
     // which it static_asserts.
     reader_desc.named_compile_time_args = {
+        {"cb_input", kCbInput},
+        {"cb_output", kCbOutput},
+        {"cb_index", kCbIndex},
+        {"cb_src", kCbSrc},
+        {"input_stick_elems", attributes.input_stick_elems},
+        {"index_stick_elems", attributes.index_stick_elems},
+        {"output_df_size", output_elem_size},
+        {"index_df_size", index_elem_size},
+        {"src_df_size", src_elem_size},
+        {"index_page_bytes", index_page_bytes},
+        {"src_page_bytes", src_page_bytes},
+        {"chunk_elems", chunk_elems},
         {"reduction_mode", attributes.reduction_mode},
     };
     reader_desc.config = ReaderConfigDescriptor{};
 
-    KernelDescriptor::CompileTimeArgs writer_ct = {kCbInput, kCbOutput, input_page_bytes, output_page_bytes};
+    KernelDescriptor::CompileTimeArgs writer_ct;
     TensorAccessorArgs(*in_t.buffer()).append_to(writer_ct);
     TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_ct);
 
@@ -627,6 +636,12 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryRowMajor::create_des
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = split.core_range;
     writer_desc.compile_time_args = writer_ct;
+    writer_desc.named_compile_time_args = {
+        {"cb_input", kCbInput},
+        {"cb_output", kCbOutput},
+        {"input_page_bytes", input_page_bytes},
+        {"output_page_bytes", output_page_bytes},
+    };
     writer_desc.config = WriterConfigDescriptor{};
 
     // Buffer addresses are common (per-kernel) runtime args, so a program-cache hit rebinds four
@@ -699,20 +714,7 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryBf16ReduceRowMajor::
     desc.cbs.push_back(make_rm_cb(kCbInput, in_t.dtype(), input_page_bytes, 1, split.core_range));
     desc.cbs.push_back(make_rm_cb(kCbFp32Temp, DataType::FLOAT32, fp32_temp_page_bytes, 1, split.core_range));
 
-    KernelDescriptor::CompileTimeArgs reader_ct = {
-        kCbInput,
-        kCbOutput,
-        kCbIndex,
-        kCbSrc,
-        kCbFp32Temp,
-        attributes.input_stick_elems,
-        attributes.index_stick_elems,
-        index_elem_size,
-        src_elem_size,
-        index_page_bytes,
-        src_page_bytes,
-        chunk_elems,
-    };
+    KernelDescriptor::CompileTimeArgs reader_ct;
     TensorAccessorArgs(*index_t.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*src_t.buffer()).append_to(reader_ct);
 
@@ -722,11 +724,23 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryBf16ReduceRowMajor::
     reader_desc.core_ranges = split.core_range;
     reader_desc.compile_time_args = reader_ct;
     reader_desc.named_compile_time_args = {
+        {"cb_input", kCbInput},
+        {"cb_output", kCbOutput},
+        {"cb_index", kCbIndex},
+        {"cb_src", kCbSrc},
+        {"cb_fp32_temp", kCbFp32Temp},
+        {"input_stick_elems", attributes.input_stick_elems},
+        {"index_stick_elems", attributes.index_stick_elems},
+        {"index_df_size", index_elem_size},
+        {"src_df_size", src_elem_size},
+        {"index_page_bytes", index_page_bytes},
+        {"src_page_bytes", src_page_bytes},
+        {"chunk_elems", chunk_elems},
         {"reduction_mode", attributes.reduction_mode},
     };
     reader_desc.config = ReaderConfigDescriptor{};
 
-    KernelDescriptor::CompileTimeArgs writer_ct = {kCbInput, kCbOutput, input_page_bytes, output_page_bytes};
+    KernelDescriptor::CompileTimeArgs writer_ct;
     TensorAccessorArgs(*in_t.buffer()).append_to(writer_ct);
     TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_ct);
 
@@ -735,6 +749,12 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryBf16ReduceRowMajor::
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = split.core_range;
     writer_desc.compile_time_args = writer_ct;
+    writer_desc.named_compile_time_args = {
+        {"cb_input", kCbInput},
+        {"cb_output", kCbOutput},
+        {"input_page_bytes", input_page_bytes},
+        {"output_page_bytes", output_page_bytes},
+    };
     writer_desc.config = WriterConfigDescriptor{};
 
     // Same common/per-core split as the plain ROW_MAJOR factory: the writer kernel is shared.

@@ -36,19 +36,19 @@ void kernel_main() {
     const uint32_t num_sticks = get_arg_val<uint32_t>(1);
     // Args 2..18 are the fixed-width logical page-map descriptor.
 
-    constexpr uint32_t cb_input = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_output = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_index = get_compile_time_arg_val(2);
-    constexpr uint32_t cb_src = get_compile_time_arg_val(3);
-    constexpr uint32_t cb_fp32_temp = get_compile_time_arg_val(4);
-    constexpr uint32_t input_stick_elems = get_compile_time_arg_val(5);
-    constexpr uint32_t index_stick_elems = get_compile_time_arg_val(6);
-    constexpr uint32_t index_df_size = get_compile_time_arg_val(7);
-    constexpr uint32_t src_df_size = get_compile_time_arg_val(8);
-    constexpr uint32_t index_page_bytes = get_compile_time_arg_val(9);
-    constexpr uint32_t src_page_bytes = get_compile_time_arg_val(10);
-    constexpr uint32_t chunk_elems = get_compile_time_arg_val(11);
-    constexpr auto index_ta_args = TensorAccessorArgs<12>();
+    constexpr uint32_t cb_input = get_named_compile_time_arg_val("cb_input");
+    constexpr uint32_t cb_output = get_named_compile_time_arg_val("cb_output");
+    constexpr uint32_t cb_index = get_named_compile_time_arg_val("cb_index");
+    constexpr uint32_t cb_src = get_named_compile_time_arg_val("cb_src");
+    constexpr uint32_t cb_fp32_temp = get_named_compile_time_arg_val("cb_fp32_temp");
+    constexpr uint32_t input_stick_elems = get_named_compile_time_arg_val("input_stick_elems");
+    constexpr uint32_t index_stick_elems = get_named_compile_time_arg_val("index_stick_elems");
+    constexpr uint32_t index_df_size = get_named_compile_time_arg_val("index_df_size");
+    constexpr uint32_t src_df_size = get_named_compile_time_arg_val("src_df_size");
+    constexpr uint32_t index_page_bytes = get_named_compile_time_arg_val("index_page_bytes");
+    constexpr uint32_t src_page_bytes = get_named_compile_time_arg_val("src_page_bytes");
+    constexpr uint32_t chunk_elems = get_named_compile_time_arg_val("chunk_elems");
+    constexpr auto index_ta_args = TensorAccessorArgs<0>();
     constexpr auto src_ta_args = TensorAccessorArgs<index_ta_args.next_compile_time_args_offset()>();
     constexpr uint32_t reduction_mode = get_named_compile_time_arg_val("reduction_mode");
     static_assert(

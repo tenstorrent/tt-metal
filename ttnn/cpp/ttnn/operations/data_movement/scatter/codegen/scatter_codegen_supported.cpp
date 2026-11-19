@@ -179,12 +179,15 @@ bool supported_by_codegen(
 
     // Device-resource feasibility. This and every routing helper consulted after this gate
     // (prefers_row_major_strategy, codegen_plan_fits_live_l1) read L1 geometry off the operands'
-    // device, so a host-resident or deallocated operand is out of scope outright; native raises its
-    // own structural error for it.
-    const bool on_device = input_tensor.storage_type() == StorageType::DEVICE &&
-                           index_tensor.storage_type() == StorageType::DEVICE &&
-                           src_tensor.storage_type() == StorageType::DEVICE && input_tensor.buffer() != nullptr &&
-                           index_tensor.buffer() != nullptr && src_tensor.buffer() != nullptr;
+    // buffers, and buffer() throws on a deallocated tensor and on a remote-only submesh (no local
+    // buffer to reference), so those are turned away before any buffer is touched; native raises
+    // its own structural error for them.
+    const auto local_device_tensor = [](const Tensor& tensor) {
+        return tensor.storage_type() == StorageType::DEVICE && tensor.is_allocated() &&
+               !tensor.device()->is_remote_only();
+    };
+    const bool on_device =
+        local_device_tensor(input_tensor) && local_device_tensor(index_tensor) && local_device_tensor(src_tensor);
     if (!on_device) {
         return false;
     }

@@ -23,13 +23,13 @@ void kernel_main() {
     const uint32_t num_sticks = get_arg_val<uint32_t>(1);
 
     // Compile-time args
-    constexpr uint32_t cb_input = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_output = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_input = get_named_compile_time_arg_val("cb_input");
+    constexpr uint32_t cb_output = get_named_compile_time_arg_val("cb_output");
     // Actual page sizes in bytes — passed explicitly: get_tile_size() reports a
     // 32x32 tile's bytes, not the RM stick page these CBs hold.
-    constexpr uint32_t input_page_bytes = get_compile_time_arg_val(2);
-    constexpr uint32_t output_page_bytes = get_compile_time_arg_val(3);
-    constexpr auto input_ta_args = TensorAccessorArgs<4>();
+    constexpr uint32_t input_page_bytes = get_named_compile_time_arg_val("input_page_bytes");
+    constexpr uint32_t output_page_bytes = get_named_compile_time_arg_val("output_page_bytes");
+    constexpr auto input_ta_args = TensorAccessorArgs<0>();
     constexpr auto output_ta_args = TensorAccessorArgs<input_ta_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t one_page = 1;

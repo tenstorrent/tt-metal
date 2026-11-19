@@ -39,26 +39,24 @@ void kernel_main() {
     // Args 2..18 are the fixed-width logical page-map descriptor.
 
     // Compile-time args
-    constexpr uint32_t cb_input = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_output = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_index = get_compile_time_arg_val(2);
-    constexpr uint32_t cb_src = get_compile_time_arg_val(3);
-    constexpr uint32_t input_stick_elems = get_compile_time_arg_val(4);
-    constexpr uint32_t index_stick_elems = get_compile_time_arg_val(5);
-    // Element sizes in bytes — passed explicitly: get_tile_size() reports a
-    // 32x32 tile's bytes, which says nothing about an RM stick's element.
-    constexpr uint32_t output_df_size = get_compile_time_arg_val(6);
-    constexpr uint32_t index_df_size = get_compile_time_arg_val(7);
-    constexpr uint32_t src_df_size = get_compile_time_arg_val(8);
-    // Actual page sizes in bytes — passed explicitly: get_tile_size() reports a
-    // 32x32 tile's bytes, not the RM stick page these CBs hold.
-    constexpr uint32_t index_page_bytes = get_compile_time_arg_val(9);
-    constexpr uint32_t src_page_bytes = get_compile_time_arg_val(10);
+    constexpr uint32_t cb_input = get_named_compile_time_arg_val("cb_input");
+    constexpr uint32_t cb_output = get_named_compile_time_arg_val("cb_output");
+    constexpr uint32_t cb_index = get_named_compile_time_arg_val("cb_index");
+    constexpr uint32_t cb_src = get_named_compile_time_arg_val("cb_src");
+    constexpr uint32_t input_stick_elems = get_named_compile_time_arg_val("input_stick_elems");
+    constexpr uint32_t index_stick_elems = get_named_compile_time_arg_val("index_stick_elems");
+    // Element and page sizes in bytes, passed explicitly: get_tile_size() reports a 32x32 tile's
+    // bytes, which says nothing about an RM stick's element or the stick page these CBs hold.
+    constexpr uint32_t output_df_size = get_named_compile_time_arg_val("output_df_size");
+    constexpr uint32_t index_df_size = get_named_compile_time_arg_val("index_df_size");
+    constexpr uint32_t src_df_size = get_named_compile_time_arg_val("src_df_size");
+    constexpr uint32_t index_page_bytes = get_named_compile_time_arg_val("index_page_bytes");
+    constexpr uint32_t src_page_bytes = get_named_compile_time_arg_val("src_page_bytes");
     // Chunk size (elements) for streaming index/src: the whole stick (one chunk
     // at offset 0) or a multiple of 32 elements, so every chunk offset is
     // NOC-aligned for the 2- and 4-byte dtypes in scope.
-    constexpr uint32_t chunk_elems = get_compile_time_arg_val(11);
-    constexpr auto index_ta_args = TensorAccessorArgs<12>();
+    constexpr uint32_t chunk_elems = get_named_compile_time_arg_val("chunk_elems");
+    constexpr auto index_ta_args = TensorAccessorArgs<0>();
     constexpr auto src_ta_args = TensorAccessorArgs<index_ta_args.next_compile_time_args_offset()>();
     // This reader overwrites; every reduce the gate admits is served by scatter_reader_bf16_reduce_rm.cpp.
     constexpr uint32_t reduction_mode = get_named_compile_time_arg_val("reduction_mode");

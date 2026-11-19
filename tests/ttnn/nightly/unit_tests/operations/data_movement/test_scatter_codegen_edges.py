@@ -172,6 +172,20 @@ def test_scatter_codegen_host_operands_raise_like_native(device, expect_error):
         _force_codegen(xt, -1, it, st)
 
 
+def test_scatter_codegen_deallocated_operand_raises_like_native(device, expect_error):
+    # A deallocated operand still reports device storage, and buffer() throws on it, so the gate has
+    # to decline before it reads any buffer: auto must raise exactly what native raises.
+    xt, it, st = _make_case([1, 1, 32, 64], [1, 1, 32, 32], -1, ttnn.TILE_LAYOUT, device)
+    ttnn.deallocate(it)
+    native_error = _error_of(lambda: _force_native(xt, -1, it, st))
+    assert native_error is not None, "native accepted a deallocated operand"
+    assert (
+        _error_of(lambda: ttnn.scatter(xt, -1, it, st)) == native_error
+    ), "auto diverged from native on a deallocated operand"
+    with expect_error(RuntimeError, "scatter_force_codegen invoked for a case the codegen path does not support"):
+        _force_codegen(xt, -1, it, st)
+
+
 @pytest.mark.parametrize("operand", ["input", "index", "src"])
 def test_scatter_codegen_over_padded_tile_operand_stays_native(device, operand, expect_error):
     # tilize_with_val_padding can pad a TILE operand past tile rounding. The codegen TILE factories

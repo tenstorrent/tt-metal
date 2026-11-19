@@ -35,20 +35,20 @@ void kernel_main() {
     // Args 4..20 are the fixed-width logical page-map descriptor.
 
     // Compile-time args
-    constexpr uint32_t cb_input = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_output = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_index = get_compile_time_arg_val(2);
-    constexpr uint32_t cb_src = get_compile_time_arg_val(3);
-    constexpr uint32_t Ht = get_compile_time_arg_val(4);
-    constexpr uint32_t Wt_output = get_compile_time_arg_val(5);
+    constexpr uint32_t cb_input = get_named_compile_time_arg_val("cb_input");
+    constexpr uint32_t cb_output = get_named_compile_time_arg_val("cb_output");
+    constexpr uint32_t cb_index = get_named_compile_time_arg_val("cb_index");
+    constexpr uint32_t cb_src = get_named_compile_time_arg_val("cb_src");
+    constexpr uint32_t Ht = get_named_compile_time_arg_val("Ht");
+    constexpr uint32_t Wt_output = get_named_compile_time_arg_val("Wt_output");
     // Index and src share this geometry: validate requires src to carry index's shape.
-    constexpr uint32_t Wt_index = get_compile_time_arg_val(6);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(7);
-    constexpr uint32_t idx_valid_h_last = get_compile_time_arg_val(8);
-    constexpr uint32_t idx_valid_w_last = get_compile_time_arg_val(9);
-    constexpr uint32_t Ht_per_batch_index = get_compile_time_arg_val(10);
-    constexpr uint32_t output_logical_w = get_compile_time_arg_val(11);
-    constexpr auto index_ta_args = TensorAccessorArgs<12>();
+    constexpr uint32_t Wt_index = get_named_compile_time_arg_val("Wt_index");
+    constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
+    constexpr uint32_t idx_valid_h_last = get_named_compile_time_arg_val("idx_valid_h_last");
+    constexpr uint32_t idx_valid_w_last = get_named_compile_time_arg_val("idx_valid_w_last");
+    constexpr uint32_t Ht_per_batch_index = get_named_compile_time_arg_val("Ht_per_batch_index");
+    constexpr uint32_t output_logical_w = get_named_compile_time_arg_val("output_logical_w");
+    constexpr auto index_ta_args = TensorAccessorArgs<0>();
     constexpr auto src_ta_args = TensorAccessorArgs<index_ta_args.next_compile_time_args_offset()>();
     // This reader overwrites; every reduce the gate admits is served by scatter_reader_bf16_reduce_rm.cpp.
     constexpr uint32_t reduction_mode = get_named_compile_time_arg_val("reduction_mode");
@@ -73,7 +73,7 @@ void kernel_main() {
     // The tile is the default 32x32 in 2x2 faces of 16, pinned by the gate's has_default_tile(); the
     // runtime tile dims above only size the valid-extent masks of the last tile row and column.
     constexpr uint32_t face_size = 16;
-    constexpr uint32_t FACE_SIZE_MASK = face_size - 1;
+    constexpr uint32_t face_size_mask = face_size - 1;
     constexpr uint32_t tile_faces = 2;
 
     Noc noc;
@@ -178,7 +178,7 @@ void kernel_main() {
                                     const uint32_t src_value = get_value_from_tile(src_l1, count, src_df_size);
                                     const uint32_t index_in_local_tile = global_index & tile_width_mask;
                                     const uint32_t which_row = index_in_local_tile >> __builtin_ctz(face_size);
-                                    const uint32_t which_col = index_in_local_tile & FACE_SIZE_MASK;
+                                    const uint32_t which_col = index_in_local_tile & face_size_mask;
 
                                     const uint32_t local_index = which_row * (face_size * face_size) + k * face_size +
                                                                  which_col + i * (tile_width * face_size);
