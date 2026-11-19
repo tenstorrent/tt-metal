@@ -1064,46 +1064,43 @@ def _dram_nd_sharded(
 @pytest.mark.parametrize(
     "ag_output_shape, dim, mem_config_input, mem_config_ag",
     [
-        # Page-indexing code paths of the all_gather kernel's chunk iterator.
-        # Glossary (see all_gather_factory.cpp): a "chunk" = one NOC write = min(input_page, output_page).
-        #   m = output_chunks_per_page (chunks packed into one output page; m>1 == concat)
-        #   s = split_factor           (chunks an input page splits into; s>1 == split)
-        #   k = input_pages_per_stripe (input width-shards per row; k>1 == multi-shard input)
-        # Modes: matched (m=s=1) | concat (m>1) | split (s>1).
+        # Reshard geometry of the packet walk (all_gather_walk.hpp): A = cut quantum (16 B on L1), S = a device's
+        # stripe per output row, E = one output page when S is whole output pages, else one A unit; a packet carries
+        # <= 4 segments, cap = min(payload, 4 x shortest segment); unequal pages whose content is not an A multiple
+        # move whole at align(content, A). Height-512 rows are >= 48 KB per device, so the 1-link ring runs unicast
+        # and the relay re-reads the resharded output; the rest run multicast.
         #
-        # matched (m=1,s=1,k=1): RM last-dim, equal in/out shard widths.
+        # matched: RM last-dim, equal in/out shard widths.
         ([1, 1, 32, 512], -1, _l1_width_sharded(32, 64, 1), _l1_width_sharded(32, 64, 8)),
-        # matched at rank 1 (m=1,s=1,k=1): a sub-rank-2 padded shape is promoted to [1, N] for the shard grid.
+        # matched at rank 1: a sub-rank-2 padded shape is promoted to [1, N] for the shard grid.
         ([256], 0, _l1_width_sharded(1, 32, 1), _l1_width_sharded(1, 32, 8)),
-        # concat full (m=8,s=1,k=1): sharded -> interleaved; one chunk/device packed per output row.
-        ([1, 1, 32, 512], -1, _l1_width_sharded(32, 64, 1), ttnn.L1_MEMORY_CONFIG),
-        # concat partial (m=2,s=1,k=1): 2 device contributions per output page (multiple pages/row).
+        # concat full: sharded -> interleaved; every device's stripe packed into one output row.
+        ([1, 1, 512, 512], -1, _l1_width_sharded(512, 64, 1), ttnn.L1_MEMORY_CONFIG),
+        # concat partial: 2 device contributions per output page (multiple pages/row).
         ([1, 1, 32, 512], -1, _l1_width_sharded(32, 64, 1), _l1_width_sharded(32, 128, 4)),
-        # split (m=1,s=2,k=1): output sharded twice as finely as input.
-        ([1, 1, 32, 512], -1, _l1_width_sharded(32, 64, 1), _l1_width_sharded(32, 32, 16)),
-        # matched multi-shard (m=1,s=1,k=2): >1 input page per row, equal output shard width.
+        # split: output sharded twice as finely as input.
+        ([1, 1, 512, 512], -1, _l1_width_sharded(512, 64, 1), _l1_width_sharded(512, 32, 16)),
+        # matched multi-shard: >1 input page per row, equal output shard width.
         ([1, 1, 32, 1024], -1, _l1_width_sharded(32, 64, 2), _l1_width_sharded(32, 64, 16)),
-        # split multi-shard (m=1,s=2,k=2): split combined with multi-shard input.
+        # split multi-shard: split combined with multi-shard input.
         ([1, 1, 32, 1024], -1, _l1_width_sharded(32, 64, 2), _l1_width_sharded(32, 32, 32)),
-        # multi-shard concat, no straddle (m=4,s=1,k=2): m a multiple of k; per-chunk byte offsets.
+        # multi-shard concat, no straddle: an output page holds 2 whole stripes.
         ([1, 1, 32, 1024], -1, _l1_width_sharded(32, 64, 2), _l1_width_sharded(32, 256, 4)),
-        # multi-shard concat WITH straddle (m=4,s=1,k=3): a device's 3 chunks cross a 4-chunk
-        #   output-page boundary (page carry mid-stripe). m | N*k: 4|24.
-        ([1, 1, 32, 1536], -1, _l1_width_sharded(32, 64, 3), _l1_width_sharded(32, 256, 6)),
-        # multi-shard concat, run spans MULTIPLE output pages (m=2,s=1,k=3, m<k): byte-offset wrap
-        #   + repeated page carry mid-stripe. m | N*k: 2|24.
-        ([1, 1, 32, 1536], -1, _l1_width_sharded(32, 64, 3), _l1_width_sharded(32, 128, 12)),
-        # RM interleaved last-dim (concat m=8,k=1, interleaved both sides): native RM-interleaved
+        # multi-shard concat WITH straddle: a device's 3-page stripe crosses output pages of 4 input pages.
+        ([1, 1, 512, 1536], -1, _l1_width_sharded(512, 64, 3), _l1_width_sharded(512, 256, 6)),
+        # multi-shard concat, a stripe spans MULTIPLE output pages: repeated page boundaries mid-stripe.
+        ([1, 1, 512, 1536], -1, _l1_width_sharded(512, 64, 3), _l1_width_sharded(512, 128, 12)),
+        # RM interleaved last-dim (concat, interleaved both sides): native RM-interleaved
         #   accessor path; per-device page 64*2=128B is aligned so it stays off the composite route.
-        ([1, 1, 32, 512], -1, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
-        # non-last-dim gather (m=1,s=1,k from extents), RM interleaved both sides: gather along height.
+        ([1, 1, 512, 512], -1, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
+        # non-last-dim gather, RM interleaved both sides: gather along height.
         ([1, 1, 256, 64], 2, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
-        # split, padded output (m=1,s=2,k=1): DRAM shard content 16B pads to 32B, so split uses content.
+        # composite: a padded split (16 B DRAM output rows < 32 B cut quantum).
         ([8, 1, 32, 16], 0, _dram_width_sharded(32, 16, 1), _dram_width_sharded(256, 8, 2)),
-        # matched, padded, sharded -> interleaved, non-last-dim (m=1,s=1,k=1): a full-row DRAM shard
+        # matched, padded, sharded -> interleaved, non-last-dim: a full-row DRAM shard
         # (content 136*2=272B, padded to the 32B DRAM page) gathered on the height dim into interleaved output.
         ([1, 1, 256, 136], 2, _dram_width_sharded(32, 136, 1), ttnn.DRAM_MEMORY_CONFIG),
-        # matched, output page slot smaller than the input's aligned page (m=1,s=1,k=1): 272B content
+        # composite: the output page slot is smaller than the input's aligned page; 272B content
         # pads to 288B in DRAM (32B align) but stays 272B in L1 (16B align).
         ([1, 1, 256, 136], 2, _dram_nd_sharded([1, 1, 32, 136], 1), _l1_nd_sharded([1, 1, 32, 136])),
     ],
@@ -1120,9 +1117,9 @@ def _dram_nd_sharded(
         "multishard_concat_straddle_multipage",
         "rm_interleaved_last_dim",
         "non_last_dim_interleaved",
-        "split_padded_output",
+        "composite_split_padded_output",
         "matched_sharded_to_interleaved_padded",
-        "matched_out_page_smaller_than_in_aligned",
+        "composite_out_page_smaller_than_in_aligned",
     ],
 )
 @pytest.mark.parametrize(
@@ -1161,8 +1158,8 @@ def test_all_gather_page_indexing(
     "ag_output_shape, dim, layout, mem_config_input, mem_config_ag",
     [
         # ND sharding: the shard shape is a full ND shape instead of being flattened to 2D.
-        # The m/s/k iterator modes are covered by test_all_gather_page_indexing. What's exercised here
-        # is page_id -> address for ND page grids, plus the host's output-spec/route plumbing.
+        # Reshard geometry (concat, split, straddle) is covered by test_all_gather_page_indexing; this test
+        # covers the ND page grid (contiguous_page_stride, num_contiguous_pages) and the output-spec plumbing.
         #
         # --- basic: matched mode (in page == out page), tile + row-major, gather dim varied ---
         ([1, 1, 128, 512], -1, ttnn.TILE_LAYOUT, _l1_nd_sharded([1, 1, 64, 64]), _l1_nd_sharded([1, 1, 64, 64])),
@@ -1222,7 +1219,7 @@ def test_all_gather_page_indexing(
         # in:out shard widths with no integer ratio (96 vs 64 elements). Native for tile, where the
         # page is one tile either way, so shard width doesn't enter page indexing.
         ([1, 1, 128, 768], -1, ttnn.TILE_LAYOUT, _l1_nd_sharded([1, 1, 64, 96]), _l1_width_sharded(128, 64, 12)),
-        # --- concat (m=2) and split (s=2) driven by unequal ND shard widths ---
+        # --- concat and split driven by unequal ND shard widths ---
         ([1, 1, 64, 512], -1, ttnn.ROW_MAJOR_LAYOUT, _l1_nd_sharded([1, 1, 8, 64]), _l1_nd_sharded([1, 1, 8, 128])),
         ([1, 1, 64, 512], -1, ttnn.ROW_MAJOR_LAYOUT, _l1_nd_sharded([1, 1, 8, 64]), _l1_nd_sharded([1, 1, 8, 32])),
         # --- mem_config_ag=None: the plain ttnn.all_gather(x, dim) call, where the output config is
@@ -1230,7 +1227,7 @@ def test_all_gather_page_indexing(
         #     rules must not be re-applied to the num_devices-times-larger output.
         ([8, 2, 64, 64], 0, ttnn.TILE_LAYOUT, _l1_nd_sharded([1, 1, 32, 64], num_cores=9), None),
         ([1, 1, 64, 512], -1, ttnn.ROW_MAJOR_LAYOUT, _l1_nd_sharded([1, 1, 8, 64]), None),
-        # --- composite AG, since non-integral in:out page ratio (192B vs 256B)
+        # --- native: 192 B rows into 256 B output pages; stripes straddle output pages (E = one unit)
         ([1, 1, 32, 768], -1, ttnn.ROW_MAJOR_LAYOUT, ttnn.L1_MEMORY_CONFIG, _l1_nd_sharded([1, 1, 32, 128])),
         # --- composite AG, since padding on the gather dim
         ([1, 1, 32, 384], -1, ttnn.ROW_MAJOR_LAYOUT, _l1_nd_sharded([1, 1, 8, 64]), _l1_nd_sharded([1, 1, 8, 64])),
@@ -1262,7 +1259,7 @@ def test_all_gather_page_indexing(
         "nd_split",
         "default_out_config_tile",
         "default_out_config_rm",
-        "composite_nonintegral_page_ratio",
+        "nonintegral_page_ratio",
         "composite_pad_on_gather_dim_input",
         "pad_on_gather_dim_output",
     ],
