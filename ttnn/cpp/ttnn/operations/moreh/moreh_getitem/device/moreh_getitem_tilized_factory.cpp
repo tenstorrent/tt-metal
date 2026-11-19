@@ -9,8 +9,8 @@
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 
@@ -32,7 +32,6 @@ ttnn::device_operation::ProgramArtifacts MorehGetItemOperation::MorehGetItemTili
     tensor_return_value_t& output_tensor) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     const auto& input = tensor_args.input;

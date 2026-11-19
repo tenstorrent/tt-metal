@@ -17,7 +17,7 @@
 
 namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill {
 
-// One program per mesh coordinate. Kernels in
+// The program of one mesh coordinate (the mesh workload merges a range's into one program). Kernels in
 // ::matmul_reduce_scatter_prefill::kernel_index order: reader, compute, writer, port reader, port sender.
 struct MatmulReduceScatterPrefillProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
@@ -27,8 +27,9 @@ struct MatmulReduceScatterPrefillProgramFactory {
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
 };
 
-// The mesh workload: a program per coordinate from create_descriptor, with what a cache hit writes kept at creation
-// (the four kernels' common-arg objects, the three staging-backed CBs and their zone offsets), so a hit computes the
+// The mesh workload: one program per range, the coordinates' create_descriptor programs merged with per-device runtime
+// args (a program per coordinate where they do not merge), with what a cache hit writes kept at creation
+// (the four kernels' common-arg objects), so a hit computes the
 // call's addresses once and writes them into each program, with no lookup per program.
 struct MatmulReduceScatterPrefillMeshWorkloadFactory {
     struct shared_variables_t {
@@ -37,8 +38,6 @@ struct MatmulReduceScatterPrefillMeshWorkloadFactory {
         std::reference_wrapper<tt::tt_metal::RuntimeArgsData> writer;
         std::reference_wrapper<tt::tt_metal::RuntimeArgsData> port_reader;
         std::reference_wrapper<tt::tt_metal::RuntimeArgsData> port_sender;
-        std::array<tt::tt_metal::CBHandle, 3> staging_cbs{};  // FINISHED, ARRIVALS_FWD, ARRIVALS_BWD
-        std::array<uint32_t, 3> staging_offsets{};
     };
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
@@ -48,8 +47,8 @@ struct MatmulReduceScatterPrefillMeshWorkloadFactory {
         const MatmulReduceScatterPrefillInputs& tensor_args,
         Tensor& output);
 
-    // A, W and the output on every hit; the staging address and its CBs only when the staging tensor moved; the
-    // per-mesh semaphores and mailbox never (they keep create_descriptor's values for the mesh's life).
+    // A, W and the output on every hit; the per-mesh semaphores and mailbox never (they keep create_descriptor's values
+    // for the mesh's life).
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached,
         const MatmulReduceScatterPrefillParams& attrs,
@@ -70,21 +69,6 @@ enum MeshSem : uint32_t { ARR_FWD, ARR_BWD, READY, CREDIT };
 // Called by the public entry before launch: creates the mesh's resources on first use (synchronizing the device once).
 // The first call cannot be traced: a mesh with no resources yet refuses a call made during trace capture.
 MeshResources& ensure_mesh_resources(tt::tt_metal::distributed::MeshDevice* mesh);
-// One call's staging tensor (bf16 tiles, height-sharded over the full grid, staging_tiles tiles per core). The mesh
-// allocator gives it the same address on every chip, which the fabric writes rely on; the entry frees it when the call
-// has been enqueued: a neighbour writes into it only after this chip's fence_ready, and this chip's program finishes
-// only after every arrival has landed.
-//
-// Per call by design: the op holds no L1 between calls, and keeps nothing of the staging between calls either (each
-// call builds the spec and allocates through create_device_tensor). Costs:
-//   - host time on every eager call: building, allocating and freeing that tensor. Traced replays pay nothing.
-//   - traces: the staging is freed during capture, so an L1 buffer allocated after capture can land on it and is
-//     overwritten by every replay (tt-metal's general rule: buffers allocated while a trace exists are unsafe unless
-//     released before it runs).
-// A caller-held staging_tensor (see the entry) avoids both: allocated once, it costs nothing per call and stays put.
-Tensor allocate_staging(tt::tt_metal::distributed::MeshDevice* mesh, uint32_t staging_tiles);
-// The spec allocate_staging gives a call's staging on a grid of grid_size cores.
-tt::tt_metal::TensorSpec staging_spec(const CoreCoord& grid_size, uint32_t staging_tiles);
 // Lookup only (factory and the hit path); TT_FATAL when the entry has not created them.
 MeshResources& mesh_resources(tt::tt_metal::distributed::MeshDevice* mesh);
 

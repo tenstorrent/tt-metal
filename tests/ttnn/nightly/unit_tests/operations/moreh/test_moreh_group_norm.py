@@ -742,3 +742,20 @@ def run_test_moreh_group_norm_backward_gamma_grad_group_index(N, C_num_groups, H
 @pytest.mark.parametrize("HW", [[32, 32], [23, 23]])
 def test_moreh_group_norm_backward_gamma_grad_group_index(N, C_num_groups, HW, device):
     run_test_moreh_group_norm_backward_gamma_grad_group_index(N, C_num_groups, HW, device)
+
+
+@pytest.mark.parametrize("affine_width", [32, 256], ids=["narrower", "wider"])
+@pytest.mark.parametrize("affine", ["gamma", "beta"])
+def test_moreh_group_norm_rejects_mismatched_gamma_beta(device, affine_width, affine, expect_error):
+    N, C, H, W, num_groups = 2, 128, 32, 32, 4
+    good = to_ttnn(torch.rand([1, 1, 1, C]), device=device)
+    bad = to_ttnn(torch.rand([1, 1, 1, affine_width]), device=device)
+    with expect_error(RuntimeError, f"{affine} shape"):
+        ttnn.operations.moreh.group_norm(
+            to_ttnn(torch.rand([N, C, H, W]), device=device),
+            num_groups,
+            1e-5,
+            bad if affine == "gamma" else good,
+            bad if affine == "beta" else good,
+            are_required_outputs=(True, False, False),
+        )

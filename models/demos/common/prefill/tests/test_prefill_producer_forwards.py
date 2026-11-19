@@ -30,7 +30,7 @@ def env(monkeypatch):
     def set_env(forward_chunks=1, sp=8):
         monkeypatch.setattr(producer, "CHUNK_SIZE", C)
         monkeypatch.setattr(producer, "MAX_SEQ_LEN", MAX_SEQ_LEN)
-        monkeypatch.setattr(producer, "GLOBAL_MESH_SHAPE", (sp, 4))
+        monkeypatch.setattr(producer, "SP_FACTOR", sp)
         monkeypatch.setattr(producer, "MTP_LEVELS", 0)
         monkeypatch.setattr(producer, "FORWARD_CHUNKS", forward_chunks)
 
@@ -191,6 +191,10 @@ def test_packed_payload(env):
     assert mtp is None
     assert rows.shape == (sp, 1, forward_chunks * C // sp)
     chunks = decode_forward_metadata(list(struct.unpack(f"<{len(metadata) // 4}i", metadata)), forward_chunks)
+    # Runs ending in a partial chunk go last, whole, so its pad rows fall past the MoE dispatch loop's bound and each
+    # slot's chunks stay one run.
+    pushes = [pushes[2], pushes[0], pushes[1]]
+    validate_chunks(chunks, chunk_size=C, forward_chunks=forward_chunks, num_users=2, max_seq_len=MAX_SEQ_LEN)
     assert chunks == [PrefillChunk(p.slot_id, p.actual_start, p.actual_end) for p in pushes] + [EMPTY_CHUNK]
     s = C // sp
     for k, p in enumerate(pushes):
@@ -302,7 +306,7 @@ def test_packed_respects_max_requests(env, interleave):
 
 
 def test_import_config_defers_budget_check(monkeypatch, expect_error):
-    for name in ("GLOBAL_MESH_SHAPE", "CHUNK_SIZE", "MAX_SEQ_LEN", "FORWARD_CHUNKS", "CHUNK_METADATA_SIZE_BYTES"):
+    for name in ("SP_FACTOR", "CHUNK_SIZE", "MAX_SEQ_LEN", "FORWARD_CHUNKS", "CHUNK_METADATA_SIZE_BYTES"):
         monkeypatch.setattr(producer, name, getattr(producer, name))  # restored after the reloads below
     monkeypatch.delenv("PREFILL_CHUNK_SIZE", raising=False)
     monkeypatch.setenv("PREFILL_FORWARD_TOKENS_BUDGET", str(8 * C))
@@ -332,12 +336,13 @@ def test_slot_lengths_from_env(monkeypatch, expect_error):
         monkeypatch.setenv("PREFILL_PRODUCER_SLOT_LENGTHS", bad)
         with expect_error(ValueError, "PREFILL_PRODUCER_SLOT_LENGTHS"):
             producer._slot_lengths_from_env(4, 16)
-    # The last chunk is padded: with 5120-token chunks a 262144-token cache holds 51 whole chunks (261120 tokens).
-    monkeypatch.setattr(producer, "CHUNK_SIZE", 5120)
-    monkeypatch.setattr(producer, "MAX_SEQ_LEN", 262144)
-    monkeypatch.setenv("PREFILL_PRODUCER_SLOT_LENGTHS", "261120")
-    assert producer._slot_lengths_from_env(1, 51) == {0: 261120}
-    monkeypatch.setenv("PREFILL_PRODUCER_SLOT_LENGTHS", "261121")
+    # The last chunk is padded: the cache holds only whole chunks, so the longest slot is a whole-chunk multiple.
+    chunk, cache = 5 * C, 51 * 5 * C + 1  # 51 whole chunks plus a remainder the padded last chunk cannot use
+    monkeypatch.setattr(producer, "CHUNK_SIZE", chunk)
+    monkeypatch.setattr(producer, "MAX_SEQ_LEN", cache)
+    monkeypatch.setenv("PREFILL_PRODUCER_SLOT_LENGTHS", str(51 * chunk))
+    assert producer._slot_lengths_from_env(1, 51) == {0: 51 * chunk}
+    monkeypatch.setenv("PREFILL_PRODUCER_SLOT_LENGTHS", str(51 * chunk + 1))
     with expect_error(ValueError, "PREFILL_PRODUCER_SLOT_LENGTHS"):
         producer._slot_lengths_from_env(1, 51)
 

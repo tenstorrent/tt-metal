@@ -38,7 +38,7 @@ tt::tt_metal::ProgramDescriptor DeepseekGroupedGateDeviceOperation::ProgramFacto
     TT_FATAL(device != nullptr, "Device must be non-null");
 
     auto grid = device->compute_with_storage_grid_size();
-    auto num_tiles = scores.buffer()->num_pages();
+    auto num_tiles = scores.mesh_buffer().num_pages();
     uint32_t tile_width = scores.tensor_spec().page_config().get_tile().get_width();
     uint32_t tile_height = scores.tensor_spec().page_config().get_tile().get_height();
     auto width_tiles = scores.padded_shape()[-1] / scores.tensor_spec().page_config().get_tile().get_width();
@@ -70,10 +70,10 @@ tt::tt_metal::ProgramDescriptor DeepseekGroupedGateDeviceOperation::ProgramFacto
     auto weights_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_weights.dtype());
     auto indices_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_indices.dtype());
 
-    const uint32_t scores_page_size = static_cast<uint32_t>(scores.buffer()->page_size());
-    const uint32_t bias_page_size = static_cast<uint32_t>(bias.buffer()->page_size());
-    const uint32_t weights_page_size = static_cast<uint32_t>(output_weights.buffer()->page_size());
-    const uint32_t indices_page_size = static_cast<uint32_t>(output_indices.buffer()->page_size());
+    const uint32_t scores_page_size = static_cast<uint32_t>(scores.mesh_buffer().page_size());
+    const uint32_t bias_page_size = static_cast<uint32_t>(bias.mesh_buffer().page_size());
+    const uint32_t weights_page_size = static_cast<uint32_t>(output_weights.mesh_buffer().page_size());
+    const uint32_t indices_page_size = static_cast<uint32_t>(output_indices.mesh_buffer().page_size());
 
     uint32_t n_activated_expert_tiles = tt::div_up(operation_attributes.n_activated_experts, 32);
 

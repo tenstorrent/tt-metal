@@ -87,7 +87,7 @@ def _models(mesh_device, precision_name):
 
 def _check_packed(reference, model, context, patches):
     """Packed vs reference and vs the unpacked path; returns (k, packed NRMSE, unpacked NRMSE)."""
-    from tests.ttnn.utils_for_testing import assert_with_pcc
+    from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
     with torch.no_grad():
         expected = reference(context=context, num_output_patches=patches).quantile_preds.float()
@@ -123,7 +123,7 @@ def test_packed_forecast_over_envelope(mesh_device, precision_name):
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_groups_are_never_packed(mesh_device):
-    from tests.ttnn.utils_for_testing import assert_with_pcc
+    from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
     reference, model = _models(mesh_device, "default")
     context = _series(32, 512, seed=2)

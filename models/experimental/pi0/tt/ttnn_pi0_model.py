@@ -89,6 +89,70 @@ class PI0ModelTTNN:
 
         # Initialize components
         self._init_components()
+        self._init_attention_tables()
+
+    def _init_attention_tables(self):
+        def rows(table):
+            return ttnn.to_layout(ttnn.reshape(table, (table.shape[-2], table.shape[-1])), ttnn.ROW_MAJOR_LAYOUT)
+
+        self._vlm_rope_rows = (rows(self.backbone.cos_meta), rows(self.backbone.sin_meta))
+        self._expert_rope_rows = (rows(self.backbone.expert_cos_meta), rows(self.backbone.expert_sin_meta))
+        self._suffix_len = self.config.action_horizon + (0 if self.config.pi05 else 1)
+
+        def upload(t):
+            return ttnn.from_torch(t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self.device)
+
+        self._suffix_offsets = upload(torch.arange(self._suffix_len, dtype=torch.float32).reshape(1, -1))
+        max_len = self.config.max_seq_len
+        self._zero_column = upload(torch.zeros(1, 1, max_len, 1))
+        self._zero_suffix_keys = upload(torch.zeros(1, 1, 1, self._suffix_len))
+        self._key_index = upload(torch.arange(max_len, dtype=torch.float32).reshape(1, 1, 1, max_len))
+        # PI0's state token is its own block: it may not attend to the action tokens after it.
+        state_row = torch.zeros(1, 1, self._suffix_len, 1)
+        if not self.config.pi05:
+            state_row[0, 0, 0, 0] = 1.0
+        self._state_row = upload(state_row)
+
+    def _attention_inputs(self, prefix_pad):
+        """Attention masks and RoPE tables with openpi semantics: padded prefix tokens are never attended, PI0's
+        state token does not see the actions, and positions count valid tokens only, continuing into the suffix."""
+        pad = ttnn.typecast(ttnn.to_layout(prefix_pad, ttnn.TILE_LAYOUT), ttnn.float32)
+        prefix_len, suffix_len = pad.shape[-1], self._suffix_len
+        pad = ttnn.reshape(pad, (1, prefix_len))
+
+        # Masks are [1, 1, queries, keys]: a zero column broadcast against a row of key biases.
+        key_bias = ttnn.reshape(ttnn.multiply(ttnn.subtract(pad, 1.0), 1e9), (1, 1, 1, prefix_len))
+        rows = ttnn.slice(self._zero_column, [0, 0, 0, 0], [1, 1, prefix_len, 1])
+        prefix_mask = ttnn.typecast(ttnn.add(rows, key_bias), ttnn.bfloat16)
+
+        width = prefix_len + suffix_len
+        suffix_keys = ttnn.concat([key_bias, self._zero_suffix_keys], dim=-1)
+        rows = ttnn.slice(self._zero_column, [0, 0, 0, 0], [1, 1, suffix_len, 1])
+        suffix_mask = ttnn.add(rows, suffix_keys)
+        if not self.config.pi05:
+            columns = ttnn.slice(self._key_index, [0, 0, 0, 0], [1, 1, 1, width])
+            action_keys = ttnn.typecast(ttnn.ge(columns, float(prefix_len + 1)), ttnn.float32)
+            suffix_mask = ttnn.add(suffix_mask, ttnn.multiply(ttnn.multiply(self._state_row, action_keys), -1e9))
+        suffix_mask = ttnn.typecast(suffix_mask, ttnn.bfloat16)
+
+        counts = ttnn.cumsum(pad, dim=-1)
+        prefix_positions = ttnn.relu(ttnn.subtract(counts, 1.0))
+        valid = ttnn.slice(counts, [0, prefix_len - 1], [1, prefix_len])
+        suffix_positions = ttnn.add(self._suffix_offsets, valid)
+        return (
+            prefix_mask,
+            self._gather_rope(self._vlm_rope_rows, prefix_positions),
+            suffix_mask,
+            self._gather_rope(self._expert_rope_rows, suffix_positions),
+        )
+
+    def _gather_rope(self, tables, positions):
+        idx = ttnn.to_layout(ttnn.typecast(positions, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT)
+        out = []
+        for table in tables:
+            rows = ttnn.embedding(idx, table, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+            out.append(ttnn.reshape(rows, (1, 1, rows.shape[-2], rows.shape[-1])))
+        return tuple(out)
 
     def _init_components(self):
         """Initialize all model components."""
@@ -204,7 +268,10 @@ class PI0ModelTTNN:
         prefix_embs, prefix_pad, prefix_att = self.embed_prefix(images, img_masks, lang_tokens_ttnn, lang_masks_ttnn)
 
         # Step 2: Forward prefix through VLM and cache KV
-        _, prefix_kv_cache = self.backbone.forward_vlm(prefix_embs, use_cache=True)
+        prefix_mask, prefix_rope, suffix_mask, suffix_rope = self._attention_inputs(prefix_pad)
+        _, prefix_kv_cache = self.backbone.forward_vlm(
+            prefix_embs, attention_mask=prefix_mask, use_cache=True, rope=prefix_rope
+        )
 
         # Get timesteps using pure Python list (for control flow on host)
         num_steps = self.denoise_config.num_steps
@@ -248,7 +315,9 @@ class PI0ModelTTNN:
             # Forward through expert with cached prefix KV
             expert_output, _ = self.backbone.forward_expert(
                 suffix_embs,
+                attention_mask=suffix_mask,
                 past_key_values=prefix_kv_cache,
+                rope=suffix_rope,
             )
 
             # Extract action output (skip state token in PI0 mode)
