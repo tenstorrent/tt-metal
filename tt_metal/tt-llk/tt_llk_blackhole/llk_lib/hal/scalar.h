@@ -8,9 +8,9 @@
 #include <type_traits>
 
 #include "ckernel.h"
-#include "llk_assert.h"
 #include "utils/gpr.h"
 #include "utils/helpers.h"
+#include "utils/validate.h"
 
 /**
  * @brief Scalar-unit programming: GPR loads, arithmetic, bitwise, shift, and
@@ -236,32 +236,12 @@ inline constexpr std::uint32_t encode(const std::uint32_t destination, const std
     }
 }
 
-inline __attribute__((always_inline)) void assert_valid(const bool valid, [[maybe_unused]] const char* message)
-{
-    LLK_ASSERT(valid, message);
-}
-
-constexpr void require_valid(const bool valid, const char* message)
-{
-    if (__builtin_is_constant_evaluated())
-    {
-        if (!valid)
-        {
-            __builtin_trap();
-        }
-    }
-    else
-    {
-        assert_valid(valid, message);
-    }
-}
-
 template <std::uint32_t Index>
 constexpr void validate_gpr(const hal::Gpr<Index> operand)
 {
     if constexpr (Index == hal::detail::DynamicGprIndex)
     {
-        require_valid(operand.index < hal::detail::GprCount, "Scalar-unit GPR index must be in [0, 63]");
+        hal::detail::require(operand.index < hal::detail::GprCount, "Scalar-unit GPR index must be in [0, 63]");
     }
     else
     {
@@ -287,11 +267,11 @@ constexpr void validate_runtime_immediate(const std::uint32_t value)
 {
     if constexpr (Operation == BinaryOperation::ShiftLeft || Operation == BinaryOperation::ShiftRight)
     {
-        require_valid(value <= 31u, "Scalar-unit shift amount must fit in five bits");
+        hal::detail::require(value <= 31u, "Scalar-unit shift amount must fit in five bits");
     }
     else
     {
-        require_valid(value <= ImmediateLimit, "Scalar-unit immediate must fit in six bits");
+        hal::detail::require(value <= ImmediateLimit, "Scalar-unit immediate must fit in six bits");
     }
 }
 
@@ -408,7 +388,7 @@ inline constexpr std::uint32_t set_half_operation(const hal::Gpr<Index> destinat
         }
         validate_gpr(destination);
         const std::uint32_t half_value = OperandTraits<Immediate<Value>>::value(value);
-        require_valid(half_value < (1u << 16), "GPR half value must fit in 16 bits");
+        hal::detail::require(half_value < (1u << 16), "GPR half value must fit in 16 bits");
         return TT_OP_SETDMAREG(DMAReg::Payload::IMMEDIATE, half_value, DMAReg::Mode::IMMEDIATE, OperandTraits<hal::Gpr<Index>>::value(destination) * 2u + High);
     }
 }
