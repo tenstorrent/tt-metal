@@ -104,7 +104,13 @@ protected:
                 EXPECT_EQ(result[(row * 2 * width) + col], expected) << "at row " << row << ", column " << col;
             }
         }
+
+        const auto l1_allocated = [&] {
+            return device_->allocator()->get_statistics(BufferType::L1).total_allocated_bytes;
+        };
+        const size_t l1_held = l1_allocated();
         command_list.deallocate();
+        EXPECT_LT(l1_allocated(), l1_held) << "The list should hold pad's pad-value tensor until it is deallocated";
     }
 };
 

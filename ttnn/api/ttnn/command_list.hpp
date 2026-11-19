@@ -154,9 +154,10 @@ private:
         detail::CmdListLayout layout,
         detail::CmdListOpOwnedTensors op_owned_tensors);
 
+    // Declared before metal_list_ so it is destroyed after metal_list_ drains the replays that read it.
+    detail::CmdListOpOwnedTensors op_owned_tensors_;
     tt::tt_metal::experimental::CommandList metal_list_;
     detail::CmdListLayout layout_;
-    detail::CmdListOpOwnedTensors op_owned_tensors_;
 };
 
 }  // namespace ttnn::command_list
