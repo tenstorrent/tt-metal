@@ -5,12 +5,19 @@
 #include <gtest/gtest.h>
 
 #include <array>
-#include <set>
 #include <cstdint>
+#include <memory>
+#include <set>
+#include <string>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-umd/soc_arch_descriptor.hpp>
+#include <tt-umd/soc_descriptor.hpp>
 #include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 
 #include "device_fixture.hpp"
@@ -169,8 +176,8 @@ TEST_F(DramSubchannelHelperFixture, MetalDramCoresLogicalResolvesToTranslatedSet
     EXPECT_EQ(resolved.size(), logical_cores.size()) << "LOGICAL DRAM coords are not distinct after resolution";
 }
 
-// CI boards run pre-relocation CMFW, so the relocated assignment is only reachable by passing its
-// telemetry word directly.
+// CI boards run pre-relocation CMFW, so the other assignments are only reachable by passing their
+// telemetry words directly, on descriptors built with the DRAM harvesting under test.
 namespace {
 
 // GDDR_MRISC_NOC2AXI_PORT per kMriscFwNoc2AxiPort in bh_arc/gddr.c: nibble i is GDDR instance i's port.
@@ -184,17 +191,25 @@ using EndpointTable = std::array<std::array<int, 2>, kNumDramChannels>;
 constexpr EndpointTable kPreRelocationEndpoints = {{{2, 1}, {0, 1}, {0, 1}, {0, 1}, {2, 1}, {2, 1}, {2, 1}, {2, 1}}};
 constexpr EndpointTable kRelocatedEndpoints = {{{0, 2}, {1, 2}, {1, 2}, {1, 2}, {2, 0}, {2, 0}, {2, 0}, {2, 0}}};
 
+// A UMD descriptor for the live board's device descriptor with `dram_harvesting_mask` in place of the
+// board's own DRAM harvesting.
+tt::umd::SocDescriptor with_dram_harvesting_mask(const metal_SocDescriptor& live, size_t dram_harvesting_mask) {
+    tt::ChipInfo chip_info;
+    chip_info.noc_translation_enabled = true;
+    chip_info.harvesting_masks = live.harvesting_masks;
+    chip_info.harvesting_masks.dram_harvesting_mask = dram_harvesting_mask;
+    return tt::umd::SocDescriptor(
+        std::make_shared<const tt::umd::SocArchDescriptor>(live.device_descriptor_file_path), chip_info);
+}
+
 }  // namespace
 
 TEST_F(DramSubchannelHelperFixture, MriscTelemetrySelectsMatchingEndpointAssignment) {
     auto mesh_device = devices_[0];
     auto* device = mesh_device->get_devices()[0];
-    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device->id());
-
-    if (soc_desc.harvesting_masks.dram_harvesting_mask != 0) {
-        GTEST_SKIP() << "board has harvested DRAM channels; view index is not the physical channel";
-    }
-    ASSERT_EQ(soc_desc.get_num_dram_views(), kNumDramChannels);
+    const auto& live = MetalContext::instance().get_cluster().get_soc_desc(device->id());
+    // Every channel enabled, so view index is the physical channel.
+    const tt::umd::SocDescriptor soc_desc = with_dram_harvesting_mask(live, 0);
 
     struct Assignment {
         const char* name;
@@ -206,6 +221,7 @@ TEST_F(DramSubchannelHelperFixture, MriscTelemetrySelectsMatchingEndpointAssignm
           Assignment{"relocated", kRelocatedTelemetry, kRelocatedEndpoints}}) {
         SCOPED_TRACE(assignment.name);
         const metal_SocDescriptor selected(soc_desc, tt::BoardType::UNKNOWN, assignment.telemetry);
+        ASSERT_EQ(selected.get_num_dram_views(), kNumDramChannels);
 
         for (size_t channel = 0; channel < kNumDramChannels; ++channel) {
             const auto& expected = assignment.endpoints.at(channel);
@@ -240,6 +256,105 @@ TEST_F(DramSubchannelHelperFixture, MriscTelemetrySelectsMatchingEndpointAssignm
 
     const uint32_t mixed_word = kRelocatedTelemetry & ~0xF0u;
     EXPECT_ANY_THROW(metal_SocDescriptor(soc_desc, tt::BoardType::UNKNOWN, mixed_word));
+}
+
+// SYS-5391 CMFW on a DRAM-harvested chip runs MRISC on noc2axi port 0 of every GDDR instance when the
+// harvested channel is in the east column and on port 2 when it is in the west, which puts MRISC on
+// subchannel 0 in the translated column with four live channels and on subchannel 2 in the other.
+namespace {
+
+constexpr size_t kNumHarvestedDramViews = kNumDramChannels - 1;
+constexpr uint32_t kMriscPortHarvested = 0xF;
+
+uint32_t harvested_cmfw_telemetry(size_t harvested_channel) {
+    const uint32_t port = harvested_channel < kNumDramChannels / 2 ? 2u : 0u;
+    uint32_t word = 0;
+    for (size_t channel = 0; channel < kNumDramChannels; ++channel) {
+        word |= (channel == harvested_channel ? kMriscPortHarvested : port) << (4 * channel);
+    }
+    return word;
+}
+
+// Marks `harvested_channel` harvested in a telemetry word from a chip with every channel enabled.
+uint32_t with_channel_harvested(uint32_t telemetry, size_t harvested_channel) {
+    return telemetry | (kMriscPortHarvested << (4 * harvested_channel));
+}
+
+}  // namespace
+
+TEST_F(DramSubchannelHelperFixture, HarvestedCmfwTelemetryGivesSameEndpointsForEveryHarvestedChannel) {
+    const auto& live = MetalContext::instance().get_cluster().get_soc_desc(devices_[0]->get_devices()[0]->id());
+
+    // CMFW's translated DRAM origin: the column with four live channels is x=17, the other x=18, and
+    // each column's channels take three rows apiece from y=12. SYS-5391's GDDR_MRISC_TRANSLATED_ROW for
+    // a harvested chip is 0xF2220000: MRISC is the first row of each x=17 channel and the last of each
+    // x=18 one. NOC1 takes the other end and the middle row stays free.
+    constexpr uint32_t kTranslatedDramX = 17;
+    constexpr uint32_t kTranslatedDramY = 12;
+    constexpr uint32_t kRowsPerChannel = 3;
+    constexpr size_t kViewsInFullColumn = kNumDramChannels / 2;
+    std::vector<std::vector<CoreCoord>> expected_bank_endpoints;
+    for (size_t view = 0; view < kNumHarvestedDramViews; ++view) {
+        const bool full_column = view < kViewsInFullColumn;
+        const uint32_t x = kTranslatedDramX + (full_column ? 0 : 1);
+        const uint32_t first_row =
+            kTranslatedDramY + kRowsPerChannel * static_cast<uint32_t>(full_column ? view : view - kViewsInFullColumn);
+        const uint32_t noc0_row = full_column ? first_row : first_row + 2;
+        const uint32_t noc1_row = full_column ? first_row + 2 : first_row;
+        expected_bank_endpoints.push_back({{x, noc0_row}, {x, noc1_row}, {x, first_row + 1}});
+    }
+
+    for (size_t harvested_channel = 0; harvested_channel < kNumDramChannels; ++harvested_channel) {
+        SCOPED_TRACE("harvested channel " + std::to_string(harvested_channel));
+        const tt::umd::SocDescriptor harvested = with_dram_harvesting_mask(live, size_t{1} << harvested_channel);
+
+        const metal_SocDescriptor selected(
+            harvested, tt::BoardType::UNKNOWN, harvested_cmfw_telemetry(harvested_channel));
+        ASSERT_EQ(selected.get_num_dram_views(), kNumHarvestedDramViews);
+        EXPECT_EQ(selected.dram_bank_endpoint_coords, expected_bank_endpoints);
+        for (size_t view = 0; view < kNumHarvestedDramViews; ++view) {
+            for (uint8_t noc = 0; noc < 2; ++noc) {
+                EXPECT_EQ(
+                    selected.get_preferred_worker_core_for_dram_view(static_cast<int>(view), noc),
+                    expected_bank_endpoints[view][noc])
+                    << "view " << view << " noc" << static_cast<int>(noc);
+                EXPECT_EQ(
+                    selected.get_preferred_eth_core_for_dram_view(static_cast<int>(view), noc),
+                    expected_bank_endpoints[view][noc])
+                    << "view " << view << " noc" << static_cast<int>(noc);
+            }
+        }
+        // MRISC owns the NOC0 endpoint, so Metal may use the NOC1 endpoint and the free subchannel.
+        std::set<std::pair<size_t, size_t>> expected_metal_cores;
+        for (const auto& endpoints : expected_bank_endpoints) {
+            expected_metal_cores.emplace(endpoints[1].x, endpoints[1].y);
+            expected_metal_cores.emplace(endpoints[2].x, endpoints[2].y);
+        }
+        std::set<std::pair<size_t, size_t>> metal_cores;
+        for (const CoreCoord& core : selected.get_metal_dram_cores(tt::CoordSystem::TRANSLATED)) {
+            metal_cores.emplace(core.x, core.y);
+        }
+        EXPECT_EQ(metal_cores, expected_metal_cores);
+
+        // Firmware that has not moved MRISC keeps today's per-channel views on the same chip.
+        for (const auto& [name, telemetry, endpoints] :
+             {std::tuple{"pre-relocation", kPreRelocationTelemetry, kPreRelocationEndpoints},
+              std::tuple{"relocated", kRelocatedTelemetry, kRelocatedEndpoints}}) {
+            SCOPED_TRACE(name);
+            const metal_SocDescriptor per_channel(
+                harvested, tt::BoardType::UNKNOWN, with_channel_harvested(telemetry, harvested_channel));
+            ASSERT_EQ(per_channel.get_num_dram_views(), kNumHarvestedDramViews);
+            for (size_t view = 0; view < kNumHarvestedDramViews; ++view) {
+                const size_t channel = view < harvested_channel ? view : view + 1;
+                const tt::umd::CoreCoord noc0_core = per_channel.get_dram_core_for_channel(
+                    static_cast<int>(view), endpoints.at(channel)[0], tt::CoordSystem::TRANSLATED);
+                EXPECT_EQ(
+                    per_channel.get_preferred_worker_core_for_dram_view(static_cast<int>(view), 0),
+                    CoreCoord(noc0_core.x, noc0_core.y))
+                    << "view " << view << " (channel " << channel << ")";
+            }
+        }
+    }
 }
 
 TEST_F(DramSubchannelHelperFixture, RejectsOutOfRangeBank) {
