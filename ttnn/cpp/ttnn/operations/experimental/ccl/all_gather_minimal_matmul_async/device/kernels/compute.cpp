@@ -513,10 +513,13 @@ void kernel_main() {
 
     // Same uniform M split as the data-movement kernels (see dm_in0_sender.cpp).
     const uint32_t M_tiles = get_common_arg_val<uint32_t>(0);
-    uint32_t argidx = 0;
-    const uint32_t in0_idx = get_arg_val<uint32_t>(argidx++);
-    const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
-    const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
+    // This core's M and N ranges, from its logical coordinates (see AgmmCore in matmul_dataflow_common.hpp)
+    constexpr bool transpose_grid = get_named_compile_time_arg_val("transpose_grid");
+    constexpr uint32_t N_tiles_per_core = get_named_compile_time_arg_val("N_tiles_per_core");
+    const uint32_t in0_idx = transpose_grid ? get_absolute_logical_x() : get_absolute_logical_y();
+    const uint32_t in1_idx = transpose_grid ? get_absolute_logical_y() : get_absolute_logical_x();
+    const uint32_t N_start_tile = N_tiles_per_core * in1_idx;
+    const uint32_t N_end_tile = N_start_tile + N_tiles_per_core;
     [[maybe_unused]] const auto [M_tiles_per_core, M_blocks_per_core, padded_M_tiles, M_start_tile, M_end_tile] =
         ttnn::runtime_length::uniform_split(M_tiles, in0_parallel_axis_cores, in0_idx, M_block_tiles);
 
