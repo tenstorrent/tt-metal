@@ -3714,6 +3714,9 @@
   "top5_overlap": 1.0,
   "top5_overlap_limit": 0.994286
  },
+ "PB.0": {
+  "chips": 32
+ },
  "X.4": {
   "acks_early": 0,
   "contract_checks_failed": 0,
