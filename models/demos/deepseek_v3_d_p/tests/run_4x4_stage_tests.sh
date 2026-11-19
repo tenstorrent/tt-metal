@@ -79,4 +79,6 @@ else
     -k "4x4${user_k:+ and ($user_k)}"
 fi
 
-exec pytest "$@"
+# python3 -m puts the cwd (TT_METAL_HOME) on sys.path; bare pytest under --import-mode=importlib does not, and the
+# root conftest.py imports from models.
+exec python3 -m pytest "$@"

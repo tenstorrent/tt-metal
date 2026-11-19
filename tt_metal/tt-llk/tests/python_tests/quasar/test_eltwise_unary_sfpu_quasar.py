@@ -28,6 +28,7 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     QuasarSfpuVariant,
+    flat_axes,
     generate_dest_depth_input_dimensions,
     generate_quasar_sfpu_format_variants,
     input_output_formats,
@@ -103,10 +104,17 @@ SFPU_UNARY_FORMATS = input_output_formats(
 TRIGONOMETRY_OPS = [
     MathOperation.Sin,
     MathOperation.Cos,
+    MathOperation.Tan,
     MathOperation.Acosh,
     MathOperation.Asinh,
     MathOperation.Atanh,
 ]
+
+# Two output steps, relative: the bound the tangent sweep holds on top of the suite tolerance.
+TAN_RTOL = {
+    DataFormat.Float32: 2 * 2.0**-23,
+    DataFormat.Float16_b: 2 * 2.0**-7,
+}
 
 # The six comparison-to-zero modes. These run integer formats too (and UInt16 via
 # the Int16 container), so the sweep adds them to the float formats above.
@@ -297,6 +305,11 @@ def prepare_inputs_for_operation(
         max_val = 10.0
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
+    elif mathop == MathOperation.Hardmish:
+        # for_op spans the piecewise region [-2, 0] and both linear sides.
+        spec = for_op(mathop, input_format).spec_A
+        src_A = spec.low + src_A.to(torch.float32) * (spec.high - spec.low)
+        src_A = src_A.to(torch_format)
     elif mathop == MathOperation.Gelu:
         # Scale to range [-10, 10] for gelu - balanced negative/near-zero/positive coverage
         min_val = -10.0
@@ -439,8 +452,13 @@ def prepare_inputs_for_operation(
         max_val = 10.0
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
-    elif mathop == MathOperation.Softplus:
-        # for_op spans the t < -5 tail and the linear threshold.
+    elif mathop in (
+        MathOperation.Softplus,
+        MathOperation.Softsign,
+        MathOperation.I0,
+    ):
+        # for_op spans softplus' t < -5 tail and linear threshold, softsign's [-5, 5] and i0's
+        # |x| <= 3.75 fit.
         spec = for_op(mathop, input_format).spec_A
         min_val = spec.low
         max_val = spec.high
@@ -474,6 +492,7 @@ def prepare_trig_inputs(
     stays in its accurate range:
       sin / cos — [-pi, pi] (argument reduction is valid far wider, but a small domain
                   keeps the Maclaurin polynomial precise).
+      tan      — [-1.3, 1.3] (the sfpu_domains range, inside the poles at +-pi/2).
       asinh    — [-10, 10] (log polynomial stable away from overflow).
       acosh    — [1.1, 50]  (x >= 1 domain; avoid near-1 where the 3rd-order log loses
                   precision).
@@ -484,6 +503,9 @@ def prepare_trig_inputs(
 
     if mathop in (MathOperation.Sin, MathOperation.Cos):
         lo, hi = -math.pi, math.pi
+    elif mathop == MathOperation.Tan:
+        spec = for_op(mathop, input_format).spec_A
+        lo, hi = spec.low, spec.high
     elif mathop == MathOperation.Asinh:
         lo, hi = -10.0, 10.0
     elif mathop == MathOperation.Acosh:
@@ -995,6 +1017,7 @@ _APPROX_MATHOPS = (
     MathOperation.Gelu,
     MathOperation.Reciprocal,
     MathOperation.Rsqrt,
+    MathOperation.Softsign,
 )
 _QSR_EXTRA_MATHOPS = (
     MathOperation.Relu,
@@ -1051,11 +1074,16 @@ OP_CONFIGS = [
     OpConfig(MathOperation.Tanh, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Sigmoid, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Silu, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    # Reaches hardmish through SFPU_UNARY_INIT(hardmish), the Compute API's hardmish_tile_init.
+    OpConfig(MathOperation.Hardmish, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Clamp, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Neg, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     # p = 0 only (golden x * 2.0); seeding is test_dropout_reseed_quasar, p = 1 the fuser YAMLs.
     OpConfig(MathOperation.Dropout, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Softplus, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Softsign, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    # Reaches calculate_i0 through SFPU_UNARY_INIT(i0), the Compute API's i0_tile_init.
+    OpConfig(MathOperation.I0, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     *[OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES) for op in UNARY_MAX_MIN_OPS],
     # Column-wise cumulative sum: a whole-tile op (VectorMode::RC_custom, one call per
     # tile) whose running total lives in LREG4-7 between calls. Every tile is swept with
@@ -1428,6 +1456,26 @@ def run_eltwise_unary_sfpu_quasar(
         formats.output_format,
     ), "Assert against golden failed"
 
+    if mathop == MathOperation.Hardmish:
+        # The suite tolerance passes a Float16_b result that was not rounded to nearest-even on the
+        # store; the kernel matches the golden bit for bit.
+        assert torch.equal(
+            res_tensor, golden_tensor
+        ), "hardmish is not bit-exact against the golden"
+
+    if mathop == MathOperation.Tan:
+        # The suite tolerance passes a tangent whose polynomial coefficients are bound in the
+        # wrong order; the kernel itself stays within one output step of the golden.
+        golden = golden_tensor.to(torch.float64)
+        assert torch.all(
+            torch.isclose(
+                res_tensor.to(torch.float64),
+                golden,
+                rtol=TAN_RTOL[formats.output_format],
+                atol=0.0,
+            )
+        ), "tan is more than two output steps from the golden"
+
     if mathop == MathOperation.Softplus:
         # atol 0.05 lets a flush to 0 through. Require t < -5 to stay positive
         # where the output format's golden is still positive (Float16 underflows below ~-16).
@@ -1714,15 +1762,17 @@ def _cumsum_detector_stimulus() -> torch.Tensor:
     return (1 + (cols % 2) + 3 * (rows % 2)).to(torch.float32)
 
 
+CUMSUM_FLAT_NAMES = ("formats", "dest_acc")
+CUMSUM_COMBINATIONS = [
+    (fmt, dest_acc)
+    for fmt in CUMSUM_DETECTOR_FORMATS
+    for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
+]
+
+
 @pytest.mark.quasar
-@parametrize(
-    cumsum_formats_dest_acc=[
-        (fmt, dest_acc)
-        for fmt in CUMSUM_DETECTOR_FORMATS
-        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
-    ],
-)
-def test_cumsum_tilized_dest_quasar(cumsum_formats_dest_acc):
+@parametrize(**flat_axes(CUMSUM_FLAT_NAMES, CUMSUM_COMBINATIONS))
+def test_cumsum_tilized_dest_quasar(formats, dest_acc):
     """
     Deterministic proof that Quasar cumsum walks the tilized Dest layout and carries its
     running total across the face-pair boundary.
@@ -1733,8 +1783,6 @@ def test_cumsum_tilized_dest_quasar(cumsum_formats_dest_acc):
     so both the input and the output permutation are load-bearing: an untilized row-major
     reading of Dest cannot satisfy this oracle.
     """
-    formats, dest_acc = cumsum_formats_dest_acc[0]
-
     input_dimensions = [DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM]
     src_A = _cumsum_detector_stimulus().to(format_dict[formats.input_format])
     # src_B is unused by a unary op, but StimuliConfig requires an operand-B buffer.

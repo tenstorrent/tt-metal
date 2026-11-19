@@ -7,6 +7,7 @@ import os
 import torch
 
 import ttnn
+from models.common.hf_layer_type_attention import layer_type_attention
 from models.demos.gemma4_26b_a4b_qb2.tt.generator import Gemma4Generator
 
 
@@ -82,16 +83,13 @@ class Gemma4ForCausalLM:
         # global specs differ in geometry even though TP4 makes their physical
         # per-device pages equal; without this accounting pad vLLM doubles the
         # full-attention block size while unifying the groups.
-        page_size_padded = 2 * 32 * config.num_key_value_heads * config.head_dim * 2
+        attn = layer_type_attention(config)
+        page_size_padded = 2 * 32 * attn.sliding_kv_heads * attn.sliding_head_dim * 2
         result = {}
         for index, kind in enumerate(config.layer_types):
             sliding = kind == "sliding_attention"
-            heads = (
-                config.num_key_value_heads
-                if sliding
-                else (config.num_global_key_value_heads or config.num_key_value_heads)
-            )
-            width = config.head_dim if sliding else (config.global_head_dim or config.head_dim)
+            heads = attn.sliding_kv_heads if sliding else attn.full_kv_heads
+            width = attn.sliding_head_dim if sliding else attn.full_head_dim
             # The current TT vLLM runner converts these global head counts to
             # per-device cache shapes.  Supplying local counts here would
             # divide them by the TP degree twice.

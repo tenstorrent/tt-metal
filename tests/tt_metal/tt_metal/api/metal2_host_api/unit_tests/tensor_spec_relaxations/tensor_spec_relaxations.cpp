@@ -379,33 +379,59 @@ TEST(TensorSpecRelaxations, CPU_RelaxTensorLayoutAlignmentStillPinsRestOfLayout)
     }
 }
 
-// Inert without dynamic_tensor_shape, in the same idiom as relax_logical_rank. The pair that would
-// tell is the second and third spec: the same logical AND padded shape, differing only in alignment.
-// Padded-shape matching still rejects it with the flag set.
-TEST(TensorSpecRelaxations, CPU_RelaxTensorLayoutAlignmentInertWithoutDynamicTensorShape) {
+// Inert under strict matching, in the same idiom as relax_logical_rank. The pair that would tell is
+// the second and third spec: the same logical AND padded shape, differing only in alignment.
+TEST(TensorSpecRelaxations, CPU_RelaxTensorLayoutAlignmentInertUnderStrictMatching) {
     const std::vector<TensorSpec> specs = {
         make_spec(Shape{1, 1, 30, 30}),
         make_spec(Shape{1, 1, 64, 64}),                             // pads to {..,64,64} at alignment {32,32}
         make_aligned_spec(Shape{1, 1, 64, 64}, Alignment{64, 64}),  // pads to {..,64,64} at alignment {64,64}
         make_aligned_spec(Shape{1, 1, 30, 30}, Alignment{64, 64}),
     };
-    const std::vector<std::pair<TensorSpecRelaxations, TensorSpecRelaxations>> without_and_with = {
-        {TensorSpecRelaxations{}, TensorSpecRelaxations{.relax_tensor_layout_alignment = true}},
-        {TensorSpecRelaxations{.match_padded_shape_only = true},
-         TensorSpecRelaxations{.match_padded_shape_only = true, .relax_tensor_layout_alignment = true}},
-    };
+    const TensorSpecRelaxations without{};
+    const TensorSpecRelaxations with{.relax_tensor_layout_alignment = true};
     ASSERT_EQ(specs[1].padded_shape(), specs[2].padded_shape());
     ASSERT_NE(specs[1].tensor_layout().get_alignment(), specs[2].tensor_layout().get_alignment());
 
-    for (const auto& [without, with] : without_and_with) {
-        for (const auto& x : specs) {
-            EXPECT_EQ(hash_tensorspec_with_relaxation(x, without), hash_tensorspec_with_relaxation(x, with));
-            for (const auto& y : specs) {
-                EXPECT_EQ(
-                    tensorspecs_match_with_relaxation(x, y, without), tensorspecs_match_with_relaxation(x, y, with));
-            }
+    for (const auto& x : specs) {
+        EXPECT_EQ(hash_tensorspec_with_relaxation(x, without), hash_tensorspec_with_relaxation(x, with));
+        for (const auto& y : specs) {
+            EXPECT_EQ(tensorspecs_match_with_relaxation(x, y, without), tensorspecs_match_with_relaxation(x, y, with));
         }
     }
+}
+
+// With match_padded_shape_only, the flag frees the alignment while the padded shape stays pinned, so
+// a tensor argument may reach the declared padded shape from a different logical shape. This is for
+// ops whose work split depends on the padded shape: it must not vary, but how it was reached may.
+// Both tensors here pad to width 64, one from 30 at alignment 64 and one from 50 at the default 32.
+TEST(TensorSpecRelaxations, CPU_RelaxTensorLayoutAlignmentWithPaddedShapeOnly) {
+    const TensorSpecRelaxations padded{.match_padded_shape_only = true};
+    const TensorSpecRelaxations relaxed{.match_padded_shape_only = true, .relax_tensor_layout_alignment = true};
+    const auto from_30 = make_aligned_spec(Shape{1, 1, 32, 30}, Alignment{32, 64});
+    const auto from_50 = make_spec(Shape{1, 1, 32, 50});
+    ASSERT_EQ(from_30.padded_shape(), (Shape{1, 1, 32, 64}));
+    ASSERT_EQ(from_30.padded_shape(), from_50.padded_shape());
+
+    EXPECT_FALSE(tensorspecs_match_with_relaxation(from_30, from_50, padded));
+    EXPECT_NE(hash_tensorspec_with_relaxation(from_30, padded), hash_tensorspec_with_relaxation(from_50, padded));
+    EXPECT_TRUE(tensorspecs_match_with_relaxation(from_30, from_50, relaxed));
+    EXPECT_EQ(hash_tensorspec_with_relaxation(from_30, relaxed), hash_tensorspec_with_relaxation(from_50, relaxed));
+
+    // The padded shape stays pinned: a tensor padded to width 96 is still rejected.
+    const auto from_70 = make_spec(Shape{1, 1, 32, 70});
+    ASSERT_NE(from_70.padded_shape(), from_50.padded_shape());
+    EXPECT_FALSE(tensorspecs_match_with_relaxation(from_50, from_70, relaxed));
+    EXPECT_NE(hash_tensorspec_with_relaxation(from_50, relaxed), hash_tensorspec_with_relaxation(from_70, relaxed));
+
+    // The same holds through an upper-dimension alignment: {1, 3, 32, 32} with its outer dim padded
+    // to 4 reaches the padded shape of {1, 4, 32, 32} at the default alignment.
+    const auto upper = make_aligned_spec(Shape{1, 3, 32, 32}, Alignment{128, 128, 32, 32});
+    const auto plain = make_spec(Shape{1, 4, 32, 32});
+    ASSERT_EQ(upper.padded_shape(), plain.padded_shape());
+    EXPECT_FALSE(tensorspecs_match_with_relaxation(upper, plain, padded));
+    EXPECT_TRUE(tensorspecs_match_with_relaxation(upper, plain, relaxed));
+    EXPECT_EQ(hash_tensorspec_with_relaxation(upper, relaxed), hash_tensorspec_with_relaxation(plain, relaxed));
 }
 
 // On interleaved ROW-MAJOR the alignment can move the page size, since the page is one padded row.
@@ -599,6 +625,43 @@ TEST(TensorSpecRelaxations, CPU_RelaxTensorLayoutAlignmentUpperDimShardedGeometr
     EXPECT_NE(hash_tensorspec_with_relaxation(a, relaxed), hash_tensorspec_with_relaxation(b, relaxed));
 }
 
+// relax_tensor_layout_alignment under match_padded_shape_only rests on this invariant: with the rest
+// of tensor_layout fixed, the padded shape determines the physical layout, whatever alignment
+// produced it. The CTAs are then unchanged, because they are baked from the physical layout. Pinned
+// here because nothing else states it, and TensorLayout interprets its lower and upper alignment
+// entries differently. Each pair below reaches the same padded shape by a different alignment.
+TEST(TensorSpecRelaxations, CPU_PaddedShapeDeterminesPhysicalLayout) {
+    const Shape nd_shard{1, 64, 64};
+    const std::vector<std::pair<TensorSpec, TensorSpec>> same_padded = {
+        {make_spec(Shape{1, 1, 32, 50}), make_aligned_spec(Shape{1, 1, 32, 30}, Alignment{32, 64})},
+        {make_spec(Shape{1, 1, 64, 64}), make_aligned_spec(Shape{1, 1, 30, 30}, Alignment{64, 64})},
+        {make_spec(Shape{1, 4, 32, 32}), make_aligned_spec(Shape{1, 3, 32, 32}, Alignment{128, 128, 32, 32})},
+        {make_spec(Shape{1, 4, 32, 32}), make_aligned_spec(Shape{1, 2, 32, 32}, Alignment{128, 32, 32})},
+        {make_spec(Shape{1, 1, 32, 64}, Layout::ROW_MAJOR),
+         make_aligned_spec(Shape{1, 1, 32, 40}, Alignment{64}, Layout::ROW_MAJOR)},
+        {make_nd_sharded_spec(Shape{2, 32, 64}, nd_shard),
+         make_nd_sharded_spec(Shape{2, 20, 64}, nd_shard, Alignment{32, 64})},
+        {make_nd_sharded_spec(Shape{3, 32, 64}, nd_shard),
+         make_nd_sharded_spec(Shape{2, 32, 64}, nd_shard, Alignment{96, 32, 32})},
+    };
+
+    for (const auto& [a, b] : same_padded) {
+        ASSERT_EQ(a.padded_shape(), b.padded_shape());
+        ASSERT_NE(a.tensor_layout().get_alignment(), b.tensor_layout().get_alignment());
+        EXPECT_EQ(a.physical_shape(), b.physical_shape()) << "padded shape " << a.padded_shape();
+        EXPECT_EQ(a.compute_page_size_bytes(), b.compute_page_size_bytes()) << "padded shape " << a.padded_shape();
+        if (a.memory_config().is_sharded()) {
+            const auto a_args = a.compute_buffer_sharding_args();
+            const auto b_args = b.compute_buffer_sharding_args();
+            const auto& a_dist = *a_args.buffer_distribution_spec();
+            const auto& b_dist = *b_args.buffer_distribution_spec();
+            EXPECT_EQ(a_dist.tensor_shape_in_pages(), b_dist.tensor_shape_in_pages());
+            EXPECT_EQ(a_dist.shard_shape_in_pages(), b_dist.shard_shape_in_pages());
+            EXPECT_EQ(a_dist.cores(), b_dist.cores());
+        }
+    }
+}
+
 // Every flag combination is swept, not a hand-picked list: with the flags composing as modifiers
 // rather than as a chain of modes, the combinations are where a term wired into one function but
 // not the other would show up.
@@ -638,6 +701,9 @@ TEST(TensorSpecRelaxations, CPU_HashConsistentWithMatch) {
         // from the rank-4 BFLOAT16 TILE entries above only in alignment, so it is a second
         // discriminator for the alignment term, through the upper-dimension path.
         make_aligned_spec(Shape{1, 3, 32, 32}, Alignment{128, 128, 32, 32}),
+        // ...and the default-alignment tensor with the same padded shape, so the upper-dimension path is
+        // also discriminated under match_padded_shape_only.
+        make_spec(Shape{1, 4, 32, 32}),
     };
 
     for (unsigned bits = 0; bits < (1u << kNumRelaxationFlags); ++bits) {
