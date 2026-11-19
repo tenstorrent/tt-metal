@@ -32,7 +32,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
 )
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
 from models.demos.deepseek_v3_d_p.tt.kda.relay_chunk_scan import OutputNorm, SlabEntry, persistent_semaphores
-from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
+from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, beta_columns, load_kda_weights
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.tt_transformers.tt.ccl import TT_CCL
 
@@ -76,12 +76,13 @@ def reduce_scatter_tp_partials(
 
 @dataclass(frozen=True)
 class _ProjectedInputs:
-    # The fused input projection. The QKV columns, the decay's low-rank activations, the output gate and beta's
-    # pre-sigmoid logits are read in place from their column offsets, so it stays allocated until the gated norm.
+    # The fused input projection. The QKV columns, the decay's low-rank activations, beta's pre-sigmoid logits and,
+    # without sequence parallelism, the output gate are read in place from their column offsets, so it stays allocated
+    # until the last of them is read. With sequence parallelism the relay forms the output gate itself.
     projected: ttnn.Tensor
     decay_rank_offset: int
-    output_gate_offset: int
     beta_offset: int
+    output_gate_offset: int
 
 
 @dataclass(frozen=True)
@@ -229,6 +230,7 @@ class ttKDA:
                 cache_name_prefix=f"layer_{layer_idx}.kda",
                 tensor_parallel_axis=tp_axis,
                 projection_dtype=program_config.projection_dtype,
+                separate_output_gate=self._is_sequence_parallel,
             )
         expected_tp_size = tuple(mesh_device.shape)[tp_axis] if isinstance(mesh_device, ttnn.MeshDevice) else 1
         if weights.tensor_parallel_size != expected_tp_size or weights.tensor_parallel_axis != tp_axis:
@@ -237,6 +239,8 @@ class ttKDA:
                 f"weights TP={weights.tensor_parallel_size} axis={weights.tensor_parallel_axis}, "
                 f"layer TP={expected_tp_size} axis={tp_axis}"
             )
+        if (weights.output_gate_projection is not None) != self._is_sequence_parallel:
+            raise ValueError("KDAWeights need a separate output gate with sequence parallelism, and only then")
         self.weights = weights
         self.tensor_parallel_size = self.weights.tensor_parallel_size
         self.config = replace(config, num_heads=config.num_heads // self.tensor_parallel_size)
@@ -295,6 +299,7 @@ class ttKDA:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        self.input_projection_math_fidelity = program_config.input_projection_math_fidelity
         self.input_projection_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=program_config.input_projection_math_fidelity,
@@ -546,12 +551,12 @@ class ttKDA:
                 ),
                 compute_kernel_config=self.input_projection_compute_config,
             )
-        auxiliary_start = self._convolution_width
+        beta_offset = self._convolution_width + config.head_k_dim
         return _ProjectedInputs(
             projected=projected,
-            decay_rank_offset=auxiliary_start,
-            output_gate_offset=auxiliary_start + config.head_k_dim,
-            beta_offset=auxiliary_start + config.head_k_dim + config.v_dim,
+            decay_rank_offset=self._convolution_width,
+            beta_offset=beta_offset,
+            output_gate_offset=beta_offset + beta_columns(config, 1),
         )
 
     def _compute_decay(self, projected: ttnn.Tensor, decay_rank_offset: int) -> ttnn.Tensor:
@@ -588,18 +593,18 @@ class ttKDA:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def _kda_rms_norm(self, output: ttnn.Tensor, norm: OutputNorm) -> ttnn.Tensor:
-        """Apply the KDA gated RMSNorm epilogue ``norm`` describes, as its own program."""
+    def _kda_rms_norm(self, output: ttnn.Tensor, inputs: _ProjectedInputs) -> ttnn.Tensor:
+        """Apply the KDA gated RMSNorm epilogue, as its own program, with the output gate the projection's columns."""
         return ttnn.experimental.kda.sigmoid_gated_rms_norm(
             output,
-            norm.gate,
-            norm.weight,
-            norm.num_heads,
-            epsilon=norm.norm_epsilon,
-            memory_config=norm.memory_config,
+            inputs.projected,
+            self.weights.norm,
+            self.config.num_heads,
+            epsilon=self.config.norm_eps,
+            memory_config=self.norm_output_memory_config,
             compute_kernel_config=self.kda_compute_config,
-            output_dtype=norm.output_dtype,
-            gate_column_offset=norm.gate_column_offset,
+            output_dtype=self.gated_rms_output_dtype,
+            gate_column_offset=inputs.output_gate_offset,
         )
 
     def _project_output(
@@ -698,17 +703,21 @@ class ttKDA:
             **convolution_slab,
         )
         gate = self._compute_decay(inputs.projected, inputs.decay_rank_offset)
-        # With sequence parallelism the relay applies the gated norm; otherwise its own program does.
+        # With sequence parallelism the relay forms the output gate from the gathered input (with the fused gather, its
+        # buffer, less this rank's slice: the shard itself) and applies the gated norm; otherwise its own program does.
+        relay_norm = self.recurrence.applies_output_norm
+        fused_gather = self._fuses_tp_gather(hidden_states)
         output_norm = OutputNorm(
-            gate=inputs.projected,
+            gate_input=self._tp_gather_kwargs["persistent_output_buffer"] if fused_gather else hidden_states,
+            gate_weight=self.weights.output_gate_projection,
             weight=self.weights.norm,
             num_heads=self.config.num_heads,
-            gate_column_offset=inputs.output_gate_offset,
             norm_epsilon=self.config.norm_eps,
             output_dtype=self.gated_rms_output_dtype,
             memory_config=self.norm_output_memory_config,
+            gate_local=hidden_states if fused_gather else None,
+            gate_math_fidelity=self.input_projection_math_fidelity,
         )
-        relay_norm = self.recurrence.applies_output_norm
         result = self.recurrence(
             q=q,
             k=k,
@@ -724,9 +733,10 @@ class ttKDA:
         )
         output = result.output
         if not relay_norm:
-            output = self._kda_rms_norm(output, output_norm)
+            output = self._kda_rms_norm(output, inputs)
             ttnn.deallocate(result.output)
-        # The norm read the output gate, the projection's last columns in use.
         ttnn.deallocate(inputs.projected)
+        if gathered:
+            ttnn.deallocate(hidden_states)
         output = self._project_output(output)
         return output, KdaState(recurrent=result.final_state, convolution=new_convolution)

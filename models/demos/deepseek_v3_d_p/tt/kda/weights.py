@@ -18,7 +18,8 @@ from models.demos.deepseek_v3_d_p.reference.kda.weights import normalize_kda_sta
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import FastCacheChecker
 
 # v2: projections at the caller's projection_dtype. v3: a bounded gate's decay_scale_flat and decay_bias_flat are FP32.
-_CACHE_SCHEMA_VERSION = 3
+# v4: the input projection's beta columns precede the output gate's, padded to a tile per TP rank.
+_CACHE_SCHEMA_VERSION = 4
 
 # Stored at the caller's `projection_dtype`.
 PROJECTION_ARTIFACTS = ("input_projection_head_major", "decay_output_projection", "output_projection")
@@ -106,6 +107,8 @@ class _KDAHostWeights:
 
 @dataclass(frozen=True)
 class KDAWeights:
+    # The fused input projection, per TP rank [Q | K | V | decay rank | beta, padded to a tile | output gate]; with a
+    # separate output gate, without its columns, which output_gate_projection then holds.
     input_projection: ttnn.Tensor
     decay_output_projection: ttnn.Tensor
     output_projection: ttnn.Tensor
@@ -115,6 +118,7 @@ class KDAWeights:
     convolution_taps: tuple[ttnn.Tensor, ...]
     tensor_parallel_size: int
     tensor_parallel_axis: int
+    output_gate_projection: ttnn.Tensor | None = None
 
     @classmethod
     def check_cache_complete(
@@ -186,6 +190,7 @@ class KDAWeights:
         *,
         tensor_parallel_axis: int = 1,
         projection_dtype: ttnn.DataType = ttnn.bfloat16,
+        separate_output_gate: bool = False,
     ) -> "KDAWeights":
         """Construct device weights exclusively from a complete TTNN cache."""
         return load_kda_weights(
@@ -196,6 +201,7 @@ class KDAWeights:
             cache_name_prefix=cache_name_prefix,
             tensor_parallel_axis=tensor_parallel_axis,
             projection_dtype=projection_dtype,
+            separate_output_gate=separate_output_gate,
         )
 
 
@@ -228,26 +234,31 @@ def _group_projection_rows_by_tp_rank(
     return torch.cat(grouped, dim=0)
 
 
+def beta_columns(config: KDAConfig, tensor_parallel_size: int) -> int:
+    """A TP rank's beta columns in the input projection: its heads, padded to a tile so the output gate's start one."""
+    heads = config.num_heads // tensor_parallel_size
+    return -(-heads // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+
+
 def _prepare_kda_host_weights(
     state_dict: Mapping[str, torch.Tensor],
     config: KDAConfig,
     tensor_parallel_size: int,
 ) -> _KDAHostWeights:
     state_dict = normalize_kda_state_dict(state_dict, config)
+    heads = config.num_heads // tensor_parallel_size
+    beta = state_dict["b_proj.weight"].reshape(tensor_parallel_size, heads, -1)
+    beta = torch.nn.functional.pad(beta, (0, 0, 0, beta_columns(config, tensor_parallel_size) - heads))
     common_input_weights = (
         state_dict["q_proj.weight"],
         state_dict["k_proj.weight"],
         state_dict["v_proj.weight"],
         state_dict["f_a_proj.weight"].repeat(tensor_parallel_size, 1),
+        beta.reshape(-1, beta.shape[-1]),
     )
     if config.use_full_rank_gate:
         input_projection = _group_projection_rows_by_tp_rank(
-            common_input_weights
-            + (
-                state_dict["g_proj.weight"],
-                state_dict["b_proj.weight"],
-            ),
-            tensor_parallel_size,
+            common_input_weights + (state_dict["g_proj.weight"],), tensor_parallel_size
         ).T
     else:
         output_gate_projection = state_dict["g_b_proj.weight"].reshape(
@@ -260,12 +271,7 @@ def _prepare_kda_host_weights(
             state_dict["g_a_proj.weight"],
         ).reshape(config.v_dim, config.hidden_size)
         input_projection = _group_projection_rows_by_tp_rank(
-            common_input_weights
-            + (
-                output_gate_direct,
-                state_dict["b_proj.weight"],
-            ),
-            tensor_parallel_size,
+            common_input_weights + (output_gate_direct,), tensor_parallel_size
         ).T
 
     decay_scale = state_dict["A_log"].float().exp()
@@ -502,8 +508,12 @@ def load_kda_weights(
     cache_name_prefix: str = "kda",
     tensor_parallel_axis: int = 1,
     projection_dtype: ttnn.DataType = ttnn.bfloat16,
+    separate_output_gate: bool = False,
 ) -> KDAWeights:
-    """Prepare KDA weights and materialize them on the target device."""
+    """Prepare KDA weights and materialize them on the target device.
+
+    ``separate_output_gate`` splits the output gate's columns off the input projection, for a layer whose relay forms
+    the gate itself (ttKDA with sequence parallelism)."""
     if state_dict is not None and not state_dict:
         raise ValueError("state_dict must be non-empty when provided; use None for cache-only loading")
     mesh_shape, tensor_parallel_size = _validated_parallel_geometry(device, config, tensor_parallel_axis)
@@ -540,6 +550,15 @@ def load_kda_weights(
             materialized["decay_bias_flat"],
             materialized["decay_scale_flat"],
         )
+    if separate_output_gate:
+        # The output gate's columns are the last of each TP rank's, from a tile boundary: slice them off on device.
+        projection = materialized["input_projection"]
+        gate_start = projection.shape[-1] - config.v_dim // tensor_parallel_size
+        materialized["output_gate_projection"] = ttnn.slice(
+            projection, (0, gate_start), (projection.shape[0], projection.shape[-1])
+        )
+        materialized["input_projection"] = ttnn.slice(projection, (0, 0), (projection.shape[0], gate_start))
+        ttnn.deallocate(projection)
     return KDAWeights(
         **materialized,
         convolution_taps=convolution_taps,

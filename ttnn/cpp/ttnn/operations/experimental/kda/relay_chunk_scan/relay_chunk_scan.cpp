@@ -13,7 +13,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> relay_chunk_scan(
     const ttnn::Tensor& initial_state,
     const ttnn::Tensor& final_e,
     const ttnn::Tensor& final_b,
-    const ttnn::Tensor& output_gate,
+    const ttnn::Tensor& gate_input,
+    const ttnn::Tensor& gate_weight,
     const ttnn::Tensor& norm_weight,
     const ttnn::Tensor& actual_start,
     const ttnn::Tensor& landing,
@@ -24,7 +25,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> relay_chunk_scan(
     uint32_t num_heads,
     const std::optional<ttnn::Tensor>& actual_end,
     uint32_t sequence_parallel_axis,
-    uint32_t gate_column_offset,
+    const std::optional<ttnn::Tensor>& gate_local,
+    tt::tt_metal::MathFidelity gate_math_fidelity,
     float norm_epsilon,
     tt::tt_metal::DataType output_dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config,
@@ -35,7 +37,15 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> relay_chunk_scan(
     TT_FATAL(
         packed.storage_type() == StorageType::DEVICE && packed.is_allocated(),
         "relay_chunk_scan: packed must be an allocated device tensor");
-    TT_FATAL(semaphores.size() == 3, "relay_chunk_scan: needs three global semaphores, got {}", semaphores.size());
+    TT_FATAL(
+        semaphores.size() == prim::relay_semaphores,
+        "relay_chunk_scan: needs {} global semaphores, got {}",
+        prim::relay_semaphores,
+        semaphores.size());
+    std::array<uint32_t, prim::relay_semaphores> semaphore_addresses{};
+    for (uint32_t i = 0; i < prim::relay_semaphores; ++i) {
+        semaphore_addresses[i] = static_cast<uint32_t>(semaphores[i].address());
+    }
     // The hop's, the correction's and the norm's products accumulate in an FP32 DST.
     const auto kernel_config = ttnn::init_device_compute_kernel_config(
         packed.device()->arch(),
@@ -50,20 +60,20 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> relay_chunk_scan(
         initial_state,
         final_e,
         final_b,
-        output_gate,
+        gate_input,
+        gate_local,
+        gate_weight,
         norm_weight,
         actual_start,
         actual_end,
         landing,
         num_heads,
-        gate_column_offset,
+        gate_math_fidelity,
         norm_epsilon,
         output_dtype,
         memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG),
         kernel_config,
-        {static_cast<uint32_t>(semaphores[0].address()),
-         static_cast<uint32_t>(semaphores[1].address()),
-         static_cast<uint32_t>(semaphores[2].address())},
+        semaphore_addresses,
         sequence_parallel_axis,
         local_rows,
         num_links,

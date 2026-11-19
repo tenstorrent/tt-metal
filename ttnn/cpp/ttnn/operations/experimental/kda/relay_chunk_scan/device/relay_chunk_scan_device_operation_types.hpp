@@ -14,6 +14,10 @@
 
 namespace ttnn::experimental::prim {
 
+// The relay's persistent counters: its entry-state, final-state and final-carry arrivals, then the output gate's
+// handshakes: x's and W's ready and valid counts, and a head core's g landed.
+inline constexpr uint32_t relay_semaphores = 8;
+
 struct RelayChunkScanParams {
     uint32_t sequence_parallel_axis;
     uint32_t local_rows;
@@ -22,17 +26,18 @@ struct RelayChunkScanParams {
     // head's first core also runs the relay's hop), then two sender cores per link: the relay's, and the final carry's
     // second.
     std::vector<tt::tt_metal::CoreCoord> cores;
-    // The gated output norm: heads per batch (the output is [B, T, H*V]), the output gate's first column in its
-    // [B, T, W] tensor, epsilon, and the output's dtype and memory.
+    // The gated output norm: heads per batch (the output is [B, T, H*V]), the output gate's math fidelity, epsilon,
+    // and the output's dtype and memory.
     uint32_t num_heads;
-    uint32_t gate_column_offset;
+    tt::tt_metal::MathFidelity gate_math_fidelity;
     float norm_epsilon;
     tt::tt_metal::DataType output_dtype;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
-    // L1 addresses of the caller's entry-state, final-state and final-carry arrival counters, kept alive across
-    // calls: a peer counts into them before this rank's call starts, and each call subtracts what it consumed.
-    std::array<uint32_t, 3> semaphore_addresses{};
+    // L1 addresses of the caller's counters, kept alive across calls (each call subtracts what it consumed): the
+    // entry-state, final-state and final-carry arrivals, which a peer counts into before this rank's call starts, then
+    // the output gate's (relay_gate_semaphores).
+    std::array<uint32_t, relay_semaphores> semaphore_addresses{};
     uint32_t slab_index_scale = 1;
     uint32_t slab_index_offset = 0;
 };
@@ -57,8 +62,11 @@ struct RelayChunkScanInputs {
     Tensor final_e;
     Tensor final_b;
     std::optional<Tensor> actual_end;
-    // The gated output norm: the [B, T, W] gate (the input projection) and the [V] weight.
-    Tensor output_gate;
+    // The gated output norm: its gate x @ W from the [B, T, X] input x and the [X, H*V] weight W, and the [V] weight.
+    // With gate_local, x's columns of this rank's TP slice are read from gate_local's [B, T, X / TP] instead.
+    Tensor gate_input;
+    std::optional<Tensor> gate_local;
+    Tensor gate_weight;
     Tensor norm_weight;
     // initial_state is then a [entries, H, K, K] slab, read at its entry (zeros at actual_start == 0); the final carry
     // is written back into the same entry, in place, and the slab is returned as the carry.

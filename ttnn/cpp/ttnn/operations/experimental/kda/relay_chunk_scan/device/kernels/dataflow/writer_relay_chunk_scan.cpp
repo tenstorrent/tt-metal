@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/relay_chunk_scan/device/kernels/dataflow/gate_matmul_dataflow.hpp"
 
 constexpr uint32_t cb_eout = get_compile_time_arg_val(0);
 constexpr uint32_t cb_chron = get_compile_time_arg_val(1);
@@ -32,11 +33,21 @@ constexpr uint32_t slab_scale = get_compile_time_arg_val(slab_ct + 2);
 constexpr uint32_t slab_offset = get_compile_time_arg_val(slab_ct + 3);
 constexpr uint32_t entry_tiles = get_compile_time_arg_val(slab_ct + 4);
 constexpr uint32_t slab_index_word = get_compile_time_arg_val(slab_ct + 5);
+// The output gate's W: kt tile columns of the head per K block of gate_kb tiles of the [X, H*V] weight, shared in the
+// group of the head's cores and its helper (gate_matmul_dataflow.hpp).
+constexpr uint32_t gate_ct = slab_ct + 6;
+constexpr uint32_t cb_gin1 = get_compile_time_arg_val(gate_ct);
+constexpr uint32_t gate_kb = get_compile_time_arg_val(gate_ct + 1);
+constexpr uint32_t gate_k = get_compile_time_arg_val(gate_ct + 2);
+constexpr uint32_t gate_columns = get_compile_time_arg_val(gate_ct + 3);
+constexpr uint32_t gate_groups = get_compile_time_arg_val(gate_ct + 4);
+constexpr uint32_t gate_table = get_compile_time_arg_val(gate_ct + 5);
+constexpr auto gate_weight_args = TensorAccessorArgs<gate_ct + 6>();
 constexpr uint32_t state_tiles = kt * kt;
 
-// Every core of a head writes its chunk outputs. The head's first core is also the relay's head core: it first hands
-// each tile column of the next entry state to the head's sender, and on the first rank, between the chunks that start
-// from the entry state and those of the separated tail, hands on and writes the final carry.
+// Every core of a head writes its chunk outputs, and every other core of a head first shares the output gate's W. The
+// head's first core is also the relay's head core: it first hands each tile column of the next entry state to the
+// head's sender, and on the first rank, before its chunk outputs, hands on and writes the final carry.
 void kernel_main() {
     // Every core takes the same args (common, per device): its head and share follow from its place in the grid.
     const uint32_t core = get_absolute_logical_y() * grid_x + get_absolute_logical_x() - first_core;
@@ -50,12 +61,32 @@ void kernel_main() {
     const uint32_t back_sender_xy = get_common_arg_val<uint32_t>(3 + num_links + head % num_links);
     const uint32_t notify_semaphore = get_semaphore(head / num_links);
 
+    if (!relay_head) {
+        const auto weight = TensorAccessor(gate_weight_args, get_common_arg_val<uint32_t>(3 + 2 * num_links));
+        const uint32_t tile = get_tile_size(cb_gin1);
+        const uint32_t first_column = head % heads * kt;
+        kda_gate::Share{
+            kda_gate::group(gate_table, gate_groups + head),
+            cb_gin1,
+            gate_kb * kt,
+            gate_kb * kt * tile,
+            get_common_arg_val<uint32_t>(4 + 2 * num_links),
+            get_common_arg_val<uint32_t>(5 + 2 * num_links)}
+            .all(gate_k / gate_kb, [&](uint32_t b, uint32_t slot) {
+                for (uint32_t i = 0; i < gate_kb; ++i) {
+                    for (uint32_t j = 0; j < kt; ++j) {
+                        noc_async_read_page(
+                            (b * gate_kb + i) * gate_columns + first_column + j, weight, slot + (i * kt + j) * tile);
+                    }
+                }
+            });
+    }
+
     // The reader's chronology: this rank's position and this core's chunk counts.
     cb_wait_front(cb_chron, 1);
     const auto* chron = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_chron));
     const uint32_t position = chron[0];
     const uint32_t chunks = chron[1];
-    const uint32_t group_chunks = chron[2];
     const uint32_t index = slab ? chron[slab_index_word] : 0;
     const bool writes_carry = !slab || index < slab_index_limit;
     const uint32_t carry_base = writes_carry ? (index * slab_scale + slab_offset) * entry_tiles : 0;
@@ -96,8 +127,6 @@ void kernel_main() {
             cb_pop_front(cb_norm, kt);
         }
     };
-    write_outputs(0, group_chunks);
-
     if (relay_head && position == 0) {
         // The final carry: hand its columns to the senders, then write it (stored column-major by tile) to this rank's
         // row-major carry output.
@@ -114,7 +143,7 @@ void kernel_main() {
         cb_pop_front(cb_eout, state_tiles);
     }
 
-    write_outputs(group_chunks, chunks);
+    write_outputs(0, chunks);
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 }

@@ -50,8 +50,9 @@ inline constexpr uint32_t relay_chunk_scan_max_heads_per_link =
 inline constexpr uint32_t relay_chunk_scan_max_connections = 4;
 
 // The cores of each head: the op's cores are the heads' cores, head by head, then two senders per link.
+// The cores are each head's cores, then two senders per link, then a helper per head.
 inline uint32_t relay_chunk_scan_cores_per_head(size_t cores, uint32_t heads, uint32_t num_links) {
-    return (cores - 2 * num_links) / heads;
+    return (cores - 2 * num_links - heads) / heads;
 }
 
 // Legacy program descriptors: the metal2 ProgramSpec cannot yet open fabric connections.
