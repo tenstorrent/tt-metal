@@ -6,6 +6,8 @@ add_executable(tt-nn-validation-smoke)
 
 target_link_libraries(tt-nn-validation-smoke PRIVATE TTNN::Test::Smoke)
 target_link_libraries(tt-nn-validation-smoke PRIVATE TTNN::Test::CCL::Ops)
+# CPU_ kernel compile tests on mock devices
+target_link_libraries(tt-nn-validation-smoke PRIVATE TTNN::Test::KernelCompile)
 
 install(TARGETS tt-nn-validation-smoke RUNTIME COMPONENT ttnn-validation)
 

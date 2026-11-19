@@ -363,6 +363,8 @@ jobs:
       prebuilt-image: ${{ needs.build-ttnn-smoke-image.outputs.image }}
       docker-image: ${{ needs.asan-build.outputs.ci-test-docker-image }}
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
+      # For the github_hosted_cpu entries: GitHub-hosted runners have no Harbor access.
+      cpu-docker-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
       product: tt-nn
       test-category: pr_gate
       upload-coverage: false

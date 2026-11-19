@@ -735,6 +735,19 @@ def test_deb_path_cmd_takes_the_packages_install(repo: Repo):
     assert {leg["profile"] for leg in touched} == {"default"}
 
 
+@pytest.mark.parametrize("binary", ["tt-metalium-validation-smoke", "tt-nn-validation-smoke"])
+def test_validation_binary_cmd_takes_the_packages_install(repo: Repo, binary):
+    """The validation smoke binaries are only in /usr/bin once their debs are installed."""
+    repo.write(
+        "tests/pipeline_reorg/sample_unit_tests.yaml",
+        BASE_TESTS_YAML.replace("./build/test/alpha", f"/usr/bin/{binary} --gtest_filter='*CPU_*'"),
+    )
+    code, payload, _ = repo.scope()
+    assert code == 0
+    touched = [leg for leg in payload["run_legs"] if leg["name"] == "unit alpha"]
+    assert touched and all(leg["packages"] for leg in touched)
+
+
 def test_build_tree_cmd_does_not_take_the_packages_install(repo: Repo):
     repo.write("tests/pipeline_reorg/sample_unit_tests.yaml", BASE_TESTS_YAML.replace("alpha", "alpha2"))
     code, payload, _ = repo.scope()
