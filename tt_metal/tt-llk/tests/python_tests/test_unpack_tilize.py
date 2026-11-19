@@ -14,7 +14,7 @@ from helpers.golden_generators import (
     TilizeGolden,
     get_golden_generator,
 )
-from helpers.llk_params import DestAccumulation, DestSync, PerfRunType
+from helpers.llk_params import DataCopyType, DestAccumulation, DestSync, PerfRunType
 from helpers.param_config import (
     input_output_formats,
     max_dest_tiles,
@@ -24,10 +24,14 @@ from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_variant_parameters import (
+    DATA_COPY_TYPE,
     LOOP_FACTOR,
     NUM_BLOCKS,
     NUM_FACES,
+    NUM_FACES_C_DIM,
+    NUM_FACES_R_DIM,
     NUM_TILES_IN_BLOCK,
+    TEST_FACE_DIMS,
     TILE_COUNT,
     generate_input_dim,
 )
@@ -194,12 +198,17 @@ def unpack_tilize(
         "templates": [
             LOOP_FACTOR(loop_factor),
             NUM_FACES(num_faces),
+            # The kernel tilizes through UNPACK_A into Dest with 16-row faces.
+            DATA_COPY_TYPE(DataCopyType.A2D),
             TILE_COUNT(tile_cnt_A),
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
         ],
         "runtimes": [
             generate_input_dim(input_dimensions, input_dimensions),
+            TEST_FACE_DIMS(face_r_dim=face_r_dim),
+            NUM_FACES_R_DIM(num_faces_r_dim, num_faces_r_dim),
+            NUM_FACES_C_DIM(num_faces_c_dim, num_faces_c_dim),
         ],
         "variant_stimuli": StimuliConfig(
             src_A,
