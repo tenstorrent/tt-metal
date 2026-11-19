@@ -18,6 +18,9 @@ tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py (shared with the blitz 
     check     with the cluster descriptors of the candidate hosts and that discovery's slice map: report per
               stage whether its 16 chips hold a C4xC4 torus at 2 links (or 1) per edge and how many links each
               stage boundary has, and search the host orders. --print-order prints the lines a job script reads.
+              Orders are ranked by torus existence and edge link count only; the descriptors' pinned corners
+              and host ranks are not modelled, so an order the topology mapper rejects is reported when the
+              binding is launched.
 
 generate writes a rankfile (`rank i=host slot=<n>`, n counting the ranks on that host), the placement the binding needs: tt-run takes no host
 field, so launch with `--mpi-args "--map-by rankfile:file=<rankfile>"`.
@@ -32,6 +35,7 @@ import sys
 from pathlib import Path
 
 import yaml
+from loguru import logger
 
 REPO = Path(__file__).resolve().parents[4]
 
@@ -272,10 +276,10 @@ def rankfile(rank_table):
 def write_outputs(args, text, rank_table):
     if args.out:
         Path(args.out).write_text(text)
-        print(f"wrote {args.out} ({len(rank_table)} ranks)")
+        logger.info(f"wrote {args.out} ({len(rank_table)} ranks)")
     if args.rankfile_out:
         Path(args.rankfile_out).write_text(rankfile(rank_table))
-        print(f"wrote {args.rankfile_out}")
+        logger.info(f"wrote {args.rankfile_out}")
 
 
 def cmd_generate(args):
