@@ -65,7 +65,7 @@ def test_expand(device):
 
     # Expand the last dimension to 64 and add a leading dimension of size 2; -1 keeps the size of a dimension
     expanded_tensor = ttnn.expand(input_tensor, [2, -1, 64])
-    logger.info(f"Expanded Tensor Shape: {expanded_tensor.shape}")  # Shape([2, 32, 64])
+    logger.debug(f"Expanded Tensor Shape: {expanded_tensor.shape}")  # Shape([2, 32, 64])
 
 
 def test_scatter(device):
