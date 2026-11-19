@@ -103,8 +103,7 @@ void kernel_main() {
     pack_reconfig_data_format(cb_in, cb_x2);
     reconfig_data_format(cb_in0, cb_in, cb_in1, cb_in);
 #else
-    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup
-    // full-init behaviour) should become a targeted DST re-arm.
+    // Without pre-add this is the sole startup; later phases use per-operation reconfiguration.
     compute_kernel_hw_startup(cb_in, cb_in, cb_x2);
 #endif
 
@@ -175,9 +174,10 @@ void kernel_main() {
     cb_signaling.pop_front(1);
     constexpr uint32_t post_dst0 = 0;
     constexpr uint32_t post_scaler0 = 0;
-    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup
-    // full-init behaviour) should become a targeted DST re-arm.
-    compute_kernel_hw_startup(cb_stats, post_cb_scaler_global, cb_var);
+    // Keep the initial DST synchronization lifecycle. Restarting hardware here is
+    // unsafe, and cb_stats/cb_var exist only on the sender. The sender's reduce
+    // below reconfigures its own operands/packer; other workers enter ckl::mul
+    // with their valid local input, reciprocal-RMS and intermediate buffers.
     index_subblock_w_offset = 0;
     index_h_offset = 0;
     index = 0;
@@ -197,8 +197,8 @@ void kernel_main() {
             DataflowBuffer cb_eps_obj(cb_eps);
             DataflowBuffer cb_stats_reduced_obj(cb_stats_reduced);
 
-            // The factory gives cb_var and cb_x2 the same cb_data_format, so the existing packer
-            // configuration also covers this INPUT-only reduce after the stats handshake.
+            // Phase-local reconfiguration replaces the old mid-kernel startup.
+            // Only the stats consumer touches the sender-only cb_stats/cb_var metadata.
             ckl::reduce<
                 PoolType::AVG,
                 ReduceDim::REDUCE_ROW,
@@ -206,7 +206,8 @@ void kernel_main() {
                 post_cb_scaler_global,
                 cb_var,
                 ckl::ReduceInputPolicy::NoWaitNoPop,
-                ckl::ReduceDataFormatReconfigMode::INPUT>(ckl::ReduceInputBlockShape::row(num_distributed_blocks));
+                ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT>(
+                ckl::ReduceInputBlockShape::row(num_distributed_blocks));
             cb_stats_obj.pop_front(num_distributed_blocks);
 
             // Reduce distributed E[x^2], then compute 1/sqrt(E[x^2] + eps).

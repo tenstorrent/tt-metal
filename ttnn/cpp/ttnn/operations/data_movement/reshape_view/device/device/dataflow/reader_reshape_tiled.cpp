@@ -22,6 +22,7 @@ void kernel_main() {
 
     constexpr uint32_t Max_Map_Size_Bytes = get_arg(args::Max_Map_Size_Bytes);
     constexpr uint32_t Tile_size_bytes = get_arg(args::Tile_size_bytes);
+    constexpr uint32_t Mapping_column_stride = get_arg(args::Mapping_column_stride);
 
     constexpr uint32_t Max_Map_Entries = Max_Map_Size_Bytes / sizeof(SegmentMapData);
     constexpr uint32_t Max_Map_Elements = Max_Map_Entries * SegmentMapData::size;
@@ -35,7 +36,8 @@ void kernel_main() {
     bool first = true;
     for (uint32_t out_page_idx = start_output_page_idx; out_page_idx < end_output_page_idx; ++out_page_idx) {
         dfb_mapping.reserve_back(One_Tile_Reserve);
-        const uint64_t map_noc_addr = map_addr_gen.get_noc_addr(out_page_idx);
+        const uint64_t map_noc_addr = map_addr_gen.get_noc_addr(out_page_idx / Mapping_column_stride);
+        const uint32_t input_column = out_page_idx % Mapping_column_stride;
         const uint32_t map_addr = dfb_mapping.get_write_ptr();
         enhanced_noc_async_read<Max_Map_Size_Bytes, true>(noc, map_noc_addr, map_addr, Max_Map_Size_Bytes);
         noc.async_read_barrier();
@@ -48,7 +50,7 @@ void kernel_main() {
                 continue;
             }
 
-            const uint32_t input_page_idx = map_ptr[map_idx].input_page_index;
+            const uint32_t input_page_idx = map_ptr[map_idx].input_page_index + input_column;
             if (first) {
                 first = false;
             } else {

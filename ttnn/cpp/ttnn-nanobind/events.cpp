@@ -72,6 +72,13 @@ void py_module(nb::module_& mod) {
             )doc");
 
     mod.def(
+        "event_query",
+        &tt::tt_metal::distributed::EventQuery,
+        nb::call_guard<nb::gil_scoped_release>(),
+        nb::arg("mesh_event"),
+        "Return whether all mesh devices completed this event, without blocking or enqueueing a barrier.");
+
+    mod.def(
         "event_synchronize",
         nb::overload_cast<const MeshEvent&>(&event_synchronize),
         nb::call_guard<nb::gil_scoped_release>(),

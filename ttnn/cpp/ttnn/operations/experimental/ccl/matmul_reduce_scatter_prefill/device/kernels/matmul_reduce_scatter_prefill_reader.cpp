@@ -107,10 +107,11 @@ void kernel_main() {
     constexpr uint32_t prefetch_steps = get_compile_time_arg_val(ct::PREFETCH_STEPS);  // windows a sender reads ahead
     constexpr bool lookahead_after_barrier = get_compile_time_arg_val(ct::LOOKAHEAD_AFTER_BARRIER) != 0;  // issue
     // look-ahead reads after the current step's read barrier (else before it)
-    // NoC of each operand's DRAM reads. This kernel owns every read on both NoCs of its core (the writer only writes),
-    // so the second NoC adds DRAM-response links for the fill
+    // Dedicated ownership: BRISC owns NoC1, including its cumulative exit counters.
+    // Both operands must use the dedicated reader's interface.
     constexpr uint8_t a_read_noc = get_compile_time_arg_val(ct::A_READ_NOC);
     constexpr uint8_t w_read_noc = get_compile_time_arg_val(ct::W_READ_NOC);
+    static_assert(a_read_noc == noc_index && w_read_noc == noc_index && noc_index == 0);
     constexpr bool two_read_nocs = a_read_noc != w_read_noc || a_read_noc != noc_index;
     constexpr uint32_t num_waves = get_compile_time_arg_val(ct::NUM_WAVES);  // entries per block (e is wave e mod W)
     constexpr uint32_t num_chunks = get_compile_time_arg_val(ct::NUM_CHUNKS);

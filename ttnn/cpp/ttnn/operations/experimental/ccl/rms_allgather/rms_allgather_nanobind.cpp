@@ -33,17 +33,22 @@ void bind_fused_rms_minimal(nb::module_& mod) {
               Blackhole DRAM is unsupported.
             - weight (gamma): required. ROW_MAJOR layout with 2-D shape (N/32, 32); dtype FLOAT32 or
               BFLOAT16. Passing weight=None is not supported.
-            - stats: required. A pre-allocated tiled, width-sharded tensor of shape
-              (1, 1, 32, num_devices) that backs the op's internal all-gather circular buffer.
+            - stats: required. A pre-allocated TILE, WIDTH_SHARDED L1 tensor with padded shape
+              (1, 1, 32, 32 * num_devices), one full gathered tile per rank. Its ROW_MAJOR shard
+              grid must contain only the first input shard core (the reduction sender), with a
+              (32, >= 32 * num_devices) shard. The sender reads all gathered tiles locally;
+              distributed multi-core stats require a staging reader and are not supported.
               Passing stats=None is not supported, and its dtype MUST match the compute accumulation format:
               FLOAT32 when fp32_dest_acc_en is enabled, otherwise BFLOAT16.
+            - num_links: exactly 1. The single stats producer does not implement multi-link completion credits.
             - memory_config (output): must be a sharded config whose buffer type and memory layout
               match the input's. Interleaved output configs are not accepted; reshard the result
               afterward if a downstream consumer needs interleaved/DRAM.
             - residual_input_tensor (if provided): must be sharded with the same shard spec and memory
               config as input_tensor.
-            - persistent_output_tensor: a pre-allocated tiled tensor for the intermediate all-gather,
-              per-device shape (32, 32), sharded with a shard shape (32, 32) on core (0, 0).
+            - persistent_output_tensor: optional pre-allocated final normalized output, with the
+              input's logical (1, 1, M, N) shape and the requested output dtype/shard configuration.
+              This is not the internal stats all-gather scratch tensor.
         )doc",
         &ttnn::fused_rms_minimal,
         nb::arg("input_tensor"),

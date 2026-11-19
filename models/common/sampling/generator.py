@@ -320,12 +320,17 @@ class SamplingGenerator:
             max_batch_size = self.tt_sampling.max_batch_size
 
             if chunks_per_model == 1:
-                formatted_params = format_sampling_params(sampling_params_chunks[0], max_batch_size)
+                formatted_params = format_sampling_params(
+                    sampling_params_chunks[0], max_batch_size, max_top_k=self.tt_sampling.max_top_k
+                )
                 self.reset_sampling_params(formatted_params)
             else:
                 # Row-sharded case: format each chunk to max_batch_size,
                 # concatenate, then upload one merged parameter set.
-                formatted_chunks = [format_sampling_params(chunk, max_batch_size) for chunk in sampling_params_chunks]
+                formatted_chunks = [
+                    format_sampling_params(chunk, max_batch_size, max_top_k=self.tt_sampling.max_top_k)
+                    for chunk in sampling_params_chunks
+                ]
                 concat_fields = {}
                 for field in SAMPLING_PARAM_FIELDS:
                     lists = [getattr(fc, field) for fc in formatted_chunks]
@@ -714,12 +719,13 @@ class SamplingGenerator:
         return tt_out
 
 
-def format_sampling_params(sampling_params, max_batch_size):
+def format_sampling_params(sampling_params, max_batch_size, *, max_top_k=32):
     """
     Format sampling parameters for on-device use.
 
     Converts scalar fields to lists, pads all lists to ``max_batch_size``, inverts
-    temperature, clamps top-p/top-k, and normalises penalties.
+    temperature, clamps top-p/top-k, and normalises penalties. ``max_top_k``
+    selects the device sampler's candidate capacity; existing callers default to 32.
 
     ``temperature`` defines the ACTIVE lane count: ``active_len = len(temperature)`` after
     the scalar->list normalisation below. Three field groups, each with its own rule:
@@ -851,12 +857,11 @@ def format_sampling_params(sampling_params, max_batch_size):
         else:
             temperature[i] = 1 / temperature[i]
 
-        # top_k contract: TT sampling supports up to 32 today.
-        # k < 1 means "no restriction" → max (32); k > 32 → capped to 32.
+        # k < 1 means "no restriction"; bound it to this sampler's capacity.
         if top_k[i] < 1:
-            top_k[i] = 32
-        if top_k[i] > 32:
-            top_k[i] = 32
+            top_k[i] = max_top_k
+        if top_k[i] > max_top_k:
+            top_k[i] = max_top_k
 
         if repetition_penalty[i] == 0:
             repetition_penalty[i] = defaults["repetition_penalty"]

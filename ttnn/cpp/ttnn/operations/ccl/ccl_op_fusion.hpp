@@ -35,7 +35,13 @@ enum class FusedOpSignalerMode {
     MULTI
 };
 
+// Receiver ABI is selected explicitly; unrelated fused all-gathers retain Ring behavior.
+enum class AllGatherMatmulSchedule { RING, LINEAR_FULL_SLICE_V1 };
+
 struct AllGatherFusedOpSignaler {
+    AllGatherMatmulSchedule all_gather_schedule = AllGatherMatmulSchedule::RING;
+    bool is_linear_full_slice() const { return all_gather_schedule == AllGatherMatmulSchedule::LINEAR_FULL_SLICE_V1; }
+
     uint32_t num_fused_op_cores_to_signal = 0;
     std::vector<tt::tt_metal::CoreCoord> fused_op_receiver_cores_noc;
     std::vector<uint32_t> fused_op_receiver_signal_semaphores;
@@ -177,6 +183,9 @@ enum class MatmulFusedOpSignalerType {
 
 // Used to propagate semaphore information from matmul to all_gather or reduce_scatter
 struct MatmulFusedOpSignaler {
+    AllGatherMatmulSchedule all_gather_schedule = AllGatherMatmulSchedule::RING;
+    bool is_linear_full_slice() const { return all_gather_schedule == AllGatherMatmulSchedule::LINEAR_FULL_SLICE_V1; }
+
     MatmulFusedOpSignalerType fused_op_type = MatmulFusedOpSignalerType::EMPTY;
 
     /* Matmul info for All Gather */

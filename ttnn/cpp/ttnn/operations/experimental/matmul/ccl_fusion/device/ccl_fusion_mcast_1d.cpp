@@ -454,6 +454,10 @@ void create_program_mcast_in0_descriptor(
     std::map<std::string, std::string> mm_kernel_defines;
     std::map<std::string, std::string> mm_kernel_in0_sender_writer_defines;
     std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
+    if (fuse_op && fused_op_signaler->is_linear_full_slice()) {
+        mm_kernel_in0_sender_writer_defines["LINEAR_FULL_SLICE_V1"] = "1";
+        mm_kernel_in1_sender_writer_defines["LINEAR_FULL_SLICE_V1"] = "1";
+    }
     if (bias_tensor.has_value()) {
         mm_kernel_defines["FUSE_BIAS"] = "1";
         mm_kernel_in1_sender_writer_defines["FUSE_BIAS"] = "1";

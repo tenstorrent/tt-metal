@@ -84,6 +84,10 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
     // bitonic merge tree whose schedule assumes a power-of-2 tile count. A non-power-of-2 Wt hangs
     // the device (odd Wt) or silently drops candidate tiles (even non-power-of-2 Wt), so reject it
     // here instead of timing out. See https://github.com/tenstorrent/tt-metal/issues/44558.
+    TT_FATAL(args.max_top_k == 32 || args.max_top_k == 64, "max_top_k must be 32 or 64");
+    TT_FATAL(
+        args.max_top_k != 64 || input_shape[3] == 64,
+        "max_top_k=64 requires exactly 64 input candidates; reduce wider inputs with topk first");
     const uint32_t Wt = input_shape[3] / 32;
     TT_FATAL(
         (Wt & (Wt - 1)) == 0,
@@ -197,9 +201,10 @@ ttnn::Tensor sampling(
     const Tensor& temp,
     const std::optional<uint32_t>& seed,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
-    const std::optional<Tensor>& preallocated_output_tensor) {
+    const std::optional<Tensor>& preallocated_output_tensor,
+    uint32_t max_top_k) {
     return ttnn::device_operation::launch<SamplingDeviceOperation>(
-        SamplingParams{.seed = seed, .sub_core_grids = sub_core_grids},
+        SamplingParams{.max_top_k = max_top_k, .seed = seed, .sub_core_grids = sub_core_grids},
         SamplingInputs{
             .input_values = input_values_tensor,
             .input_indices = input_indices_tensor,

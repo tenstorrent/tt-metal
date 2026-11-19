@@ -59,6 +59,10 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     // Create a matmul signal info object that gets populated by the matmul kernel
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> matmul_fused_op_signaler =
         ttnn::experimental::ccl::MatmulFusedOpSignaler(ttnn::experimental::ccl::MatmulFusedOpSignalerType::ALL_GATHER);
+    if (ag.topology == ttnn::ccl::Topology::Linear) {
+        matmul_fused_op_signaler->all_gather_schedule =
+            ttnn::experimental::ccl::AllGatherMatmulSchedule::LINEAR_FULL_SLICE_V1;
+    }
     matmul_fused_op_signaler->init_all_gather(
         num_transfers,
         ag.ring_size,
@@ -108,6 +112,11 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     // Create the all gather fused op signaler
     std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> all_gather_fused_op_signaler =
         ttnn::experimental::ccl::AllGatherFusedOpSignaler();
+    all_gather_fused_op_signaler->all_gather_schedule = matmul_fused_op_signaler->all_gather_schedule;
+    TT_FATAL(
+        !matmul_fused_op_signaler->is_linear_full_slice() ||
+            matmul_fused_op_signaler->fused_op_signaler_mode == ttnn::experimental::ccl::FusedOpSignalerMode::MULTI,
+        "Linear AGMM requires complete-slice MULTI signaling");
     all_gather_fused_op_signaler->init_fused_op(
         matmul_fused_op_signaler->fused_op_receiver_cores_noc,
         matmul_fused_op_signaler->fused_op_receiver_signal_semaphores,
@@ -145,6 +154,27 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         "cache-hit override depends on it",
         all_gather_kernels.reader_kernel_index,
         all_gather_kernels.writer_kernel_index);
+
+    if (matmul_fused_op_signaler->is_linear_full_slice()) {
+        // A 1D N tail can multicast to a dummy core absent from its kernel set. Reserve
+        // the entire physical rectangle, not just the active compute participants.
+        std::visit(
+            [&](const auto& config) {
+                using Config = std::decay_t<decltype(config)>;
+                if constexpr (
+                    std::is_same_v<Config, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig> ||
+                    std::is_same_v<Config, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                    const auto grid = config.compute_with_storage_grid_size;
+                    const CoreRange physical_mcast_rectangle({0, 0}, {grid.x - 1, grid.y - 1});
+                    for (const auto& kernel : all_gather_desc.kernels) {
+                        TT_FATAL(
+                            !kernel.core_ranges.intersects(physical_mcast_rectangle),
+                            "Linear AGMM all-gather workers must avoid every physical multicast destination");
+                    }
+                }
+            },
+            program_config);
+    }
 
     // The all-gather workers and the matmul cores are separate core sets (all_gather_core_grid_offset); the merge
     // checks that, and keeps the all-gather's kernels first.

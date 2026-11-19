@@ -302,6 +302,8 @@ class TTSampling(LightweightModule):
         raw_batch = getattr(args, "max_batch_size", 32)
         self.max_batch_size = max(32, ((raw_batch + 31) // 32) * 32)
         self.max_top_k = getattr(args, "max_top_k", 32)
+        if not (1 <= self.max_top_k <= 32 or self.max_top_k == 64):
+            raise ValueError("max_top_k must be in [1, 32] or 64")
         self.cluster_shape = args.cluster_shape
 
         self.sampling_all_gather_axis = getattr(args, "sampling_all_gather_axis", 0)
@@ -1442,10 +1444,12 @@ class TTSampling(LightweightModule):
 
             topk_global_indices_interleaved = ttnn.to_memory_config(topk_global_indices, ttnn.DRAM_MEMORY_CONFIG)
 
-        # Untilize indices for sampling operation
-        topk_global_indices_interleaved_untilised = ttnn.untilize(
-            topk_global_indices_interleaved, use_multicore=True, sub_core_grids=self.sub_core_grids
-        )
+        # Keep the existing <=32 path's operation order unchanged. The 64-candidate
+        # kernel takes exactly two tiles, so that path selects global candidates below.
+        if self.max_top_k <= 32:
+            topk_global_indices_interleaved_untilised = ttnn.untilize(
+                topk_global_indices_interleaved, use_multicore=True, sub_core_grids=self.sub_core_grids
+            )
         # Perform the actual sampling with top-k, top-p, and temperature.
         # Host-side tie-break (in lieu of stable=True on every top-k route; see _topk_stable):
         # for argmax users (k==1) only, boost the single lowest-GLOBAL-INDEX tied maximum in the
@@ -1457,6 +1461,31 @@ class TTSampling(LightweightModule):
         sampling_values = self._adjust_values_for_tiebreak(
             topk_values_gathered_bf16_interleaved, topk_global_indices_interleaved
         )
+        if self.max_top_k == 64:
+            # The union of each shard's top 64 contains the global top 64. Select
+            # those candidates AFTER the greedy tie-break, then gather their global
+            # token IDs in the same order. Keep the original gathered tensors alive
+            # for log-probs; only these sampling intermediates are replaced.
+            gathered_sampling_values = sampling_values
+            sampling_values, sampling_positions = ttnn.topk(
+                gathered_sampling_values,
+                k=64,
+                dim=-1,
+                stable=self._topk_stable,
+                sub_core_grids=self.sub_core_grid_topk,
+            )
+            sampling_indices = ttnn.gather(
+                topk_global_indices_interleaved,
+                dim=3,
+                index=sampling_positions,
+                sub_core_grids=self.sub_core_grids,
+            )
+            topk_global_indices_interleaved_untilised = ttnn.untilize(
+                sampling_indices, use_multicore=True, sub_core_grids=self.sub_core_grids
+            )
+            ttnn.deallocate(gathered_sampling_values)
+            ttnn.deallocate(sampling_positions)
+            ttnn.deallocate(sampling_indices)
         # Seed immediately before the draw. The tie-break's int32 ops run on the
         # SFPU (use_sfpu_reduce_path admits INT32 MIN/MAX/SUM) on the same sub-core grid,
         # and rand_tile's PRNG/LREG state is programmed by manual_seed -- so any SFPU work
@@ -1475,6 +1504,7 @@ class TTSampling(LightweightModule):
             temp=self.temp_tensor,
             sub_core_grids=self._sampling_sub_core_grids,
             output_tensor=tt_out_tok,
+            **({"max_top_k": 64} if self.max_top_k == 64 else {}),
         )
 
         # Compute logprobs if enabled

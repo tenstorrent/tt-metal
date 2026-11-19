@@ -1,0 +1,9 @@
+# Final29 profiler annotation limitation
+
+Independent stage-review round1 traced an impossible175.6527% compute-utilization annotation for GDN B1 decode32x5120x7168 to the reporting tool, not to a measured throughput claim. The raw ops attributes select num_workers_per_dram_bank=2. The DRAM-sharded matmul factory creates16 workers across8 DRAM banks; installed tt_perf_report/perf_report.py line1337 overrides the core count with the architecture's fixed8-core default. Thus this row's compute utilization annotation uses half the selected worker count. The same tool assumption affects two-reader DRAM-sharded matmul rows across the reports.
+
+Preserve all raw tool tables, CSVs, ops and hashes. Their DRAM-sharded Cores, FLOPs[%], and derived compute-bound labels are **not valid measured utilization for this two-reader configuration** and must not support an optimization rejection or70% stop-rule claim. Correcting those annotations in the reporting tool, including reader-count-aware compute-bound analysis, is carried to the next authorized stage. No profiler or hardware rerun is needed to classify this source-explained issue.
+
+The actual kernel/host latencies, dtype/fidelity, measured source identity and independently derived byte-traffic lower-bound/host ratios are unaffected. Final README timing uses separate uninstrumented default runs. Final decode Advice columns are empty; the carried prefill advice inventory remains exact tool output, with shape/config provenance and no new performance claim.
+
+Evidence: final29_review_round1.md; perf/final29_profile_l0_b1_s512/{ops.csv,decode_perf_report.csv}; ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_dram_sharded_program_factory.cpp lines124–190; python_env/lib/python3.12/site-packages/tt_perf_report/perf_report.py line1337. These are source/tool annotations, not a change to model correctness gates.

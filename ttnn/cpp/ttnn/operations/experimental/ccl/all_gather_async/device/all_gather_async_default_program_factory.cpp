@@ -177,6 +177,23 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
 
     /* All gather fusion */
     const bool fuse_op = fused_op_signaler.has_value();
+    const bool linear_full_slice = fuse_op && fused_op_signaler->is_linear_full_slice();
+    if (linear_full_slice) {
+        TT_FATAL(
+            topology == ccl::Topology::Linear && ring_size == 4 &&
+                tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_1D,
+            "Linear full-slice fused all-gather requires TP4 Linear on FABRIC_1D");
+        TT_FATAL(barrier_semaphore.has_value(), "Linear fused all-gather requires a scratch admission barrier");
+        TT_FATAL(
+            num_links == 1 && num_workers_per_direction == 2 && !reverse_order,
+            "Linear full-slice fused all-gather requires one link, two workers per direction, and forward ordering");
+        TT_FATAL(
+            fused_op_signaler->fused_op_signaler_mode == experimental::ccl::FusedOpSignalerMode::MULTI,
+            "Linear full-slice fused all-gather requires MULTI readiness signaling");
+    }
+
+    // Arrival at the next merged program proves the previous local matmul has released scratch.
+    const bool use_barrier = barrier_semaphore.has_value() && (!using_persistent_buffers || linear_full_slice);
 
     // Need a separate signaler for the sender workers, to handle the first tensor slice that is locally available
     std::optional<experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_sender_workers;
@@ -217,7 +234,8 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
         mesh_device);
 
     TT_FATAL(
-        !((topology == ccl::Topology::Linear) && fuse_op), "linear is not support when using fused for all-gather");
+        topology != ccl::Topology::Linear || !fuse_op || linear_full_slice,
+        "Linear fused all-gather requires the validated full-slice receiver capability");
     [[maybe_unused]] const auto [all_core_range, all_cores] = ttnn::ccl::choose_worker_cores(
         num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset, sub_core_grid);
 
@@ -331,10 +349,29 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
     if (num_mux_cores_per_direction_per_link) {
         writer_compute_defines.emplace_back("USE_WORKER_MUX", "1");
     }
+    if (linear_full_slice) {
+        writer_compute_defines.emplace_back("LINEAR_FULL_SLICE_ADMISSION", "1");
+    }
 
     if (fuse_op) {
         auto sender_workers_forward = corerange_to_cores(sender_forward_core_ranges, std::nullopt, true);
         auto sender_workers_backward = corerange_to_cores(sender_backward_core_ranges, std::nullopt, true);
+        if (linear_full_slice) {
+            // OpSignaler identifies its master from this serialized vector and the runtime
+            // worker index. Reject placements whose set ordering changes that identity.
+            for (uint32_t dir = 0; dir < num_directions_per_link; ++dir) {
+                const auto& workers = dir ? sender_workers_forward : sender_workers_backward;
+                TT_FATAL(workers.size() == num_workers_per_direction, "Unexpected Linear fused worker count");
+                for (uint32_t worker = 0; worker < num_workers_per_direction; ++worker) {
+                    const auto allocation_index =
+                        dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction) +
+                        num_mux_cores_per_direction_per_link + worker;
+                    TT_FATAL(
+                        workers[worker] == all_cores[allocation_index],
+                        "Linear fused worker ordering must match its serialized signaler coordinates");
+                }
+            }
+        }
         fused_op_signaler_forward->init_all_gather(
             desc, mesh_device, sender_forward_core_ranges, sender_workers_forward);
         fused_op_signaler_backward->init_all_gather(
@@ -577,6 +614,14 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
             }
             for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
                 auto core = *((worker_core_iter++)->begin());
+                if (linear_full_slice) {
+                    const auto allocation_index =
+                        dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction) +
+                        num_mux_cores_per_direction_per_link + worker;
+                    TT_FATAL(
+                        core == all_cores[allocation_index],
+                        "Linear fused runtime worker ordering must match the allocated worker placement");
+                }
                 CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
                 CoreCoord supplemental_core = all_cores
                     [(link * num_cores_per_link) +
@@ -630,15 +675,15 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
                     mesh_device->worker_core_from_logical_core(termination_master_logical_core);
 
                 std::vector<uint32_t> writer_rt_args = {
-                    virtual_core.x,                                              // out_ready_sem_noc0_x
-                    virtual_core.y,                                              // out_ready_sem_noc0_y
-                    barrier_semaphore.has_value() && !using_persistent_buffers,  // use synchronize barrier semaphore
-                    opposite_core_coord.x,                                       // opposite_core_sem_noc0_x
-                    opposite_core_coord.y,                                       // opposite_core_sem_noc0_y
-                    dir,                                                         // direction
-                    global_worker_id,                                            // global_worker_id
-                    global_worker_count,                                         // global_worker_count
-                    chunks_per_sync_val};                                        // chunks_per_sync (0 = derive)
+                    virtual_core.x,  // out_ready_sem_noc0_x
+                    virtual_core.y,  // out_ready_sem_noc0_y
+                    use_barrier,              // protect persistent fused scratch generations
+                    opposite_core_coord.x,    // opposite_core_sem_noc0_x
+                    opposite_core_coord.y,    // opposite_core_sem_noc0_y
+                    dir,                      // direction
+                    global_worker_id,         // global_worker_id
+                    global_worker_count,      // global_worker_count
+                    chunks_per_sync_val};     // chunks_per_sync (0 = derive)
 
                 if (num_mux_cores_per_direction_per_link) {
                     ccl::fabric_mux_connection_rt_args(

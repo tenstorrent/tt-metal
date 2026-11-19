@@ -676,7 +676,9 @@ void MatmulFusedOpSignaler::push_matmul_fused_op_rt_args(
 void MatmulFusedOpSignaler::push_matmul_fused_op_rt_args(std::vector<uint32_t>& out_rt_args, bool use_in1_offset) {
     TT_FATAL(initialized_all_gather && initialized_fused_op, "MatmulFusedOpSignaler not initialized fully.");
 
-    out_rt_args.push_back(static_cast<uint32_t>(this->num_transfers));
+    // Nine words for both operands. Linear word 0 is the actual full-slice count,
+    // not the legacy Ring per-direction transfer count; its kernel define selects the parser.
+    out_rt_args.push_back(is_linear_full_slice() ? this->ring_size : this->num_transfers);
     out_rt_args.push_back(static_cast<uint32_t>(this->ring_size));
     out_rt_args.push_back(static_cast<uint32_t>(this->start_ring_index));
     out_rt_args.push_back(static_cast<uint32_t>(this->tensor_slice_shape_width));

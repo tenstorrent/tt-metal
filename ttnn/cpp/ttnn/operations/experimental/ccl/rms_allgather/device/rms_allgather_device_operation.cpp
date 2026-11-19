@@ -181,6 +181,40 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
         a.memory_config().memory_layout(),
         args.output_mem_config.memory_layout());
 
+    // Supplied outputs bypass compute_output_specs allocation, so validate their
+    // actual specification before the factory creates output-backed CBs/routes.
+    if (tensor_args.preallocated_output.has_value()) {
+        const auto& output = tensor_args.preallocated_output.value();
+        TT_FATAL(
+            output.storage_type() == StorageType::DEVICE && output.is_allocated(),
+            "fused_rms_minimal persistent output must be an allocated device tensor.");
+        TT_FATAL(
+            output.device() == a.device(),
+            "fused_rms_minimal persistent output must be on the input mesh device.");
+        TT_FATAL(output.layout() == Layout::TILE, "fused_rms_minimal persistent output must be TILE.");
+        TT_FATAL(
+            output.dtype() == args.dtype.value_or(a.dtype()),
+            "fused_rms_minimal persistent output dtype must match requested output dtype.");
+        TT_FATAL(
+            output.memory_config() == args.output_mem_config,
+            "fused_rms_minimal persistent output memory/shard config must match requested output memory config.");
+        const auto output_tile_shape = output.tensor_spec().tile().get_tile_shape();
+        TT_FATAL(
+            output_tile_shape[0] == TILE_HEIGHT && output_tile_shape[1] == TILE_WIDTH,
+            "fused_rms_minimal persistent output requires standard 32x32 tiles.");
+        TT_FATAL(
+            output.logical_shape() == a.logical_shape(),
+            "fused_rms_minimal persistent output logical shape must match input logical shape.");
+        auto expected_padded_shape = a.padded_shape();
+        const auto& requested_shard = args.output_mem_config.shard_spec().value();
+        if (requested_shard != a.shard_spec().value()) {
+            expected_padded_shape[3] = requested_shard.shape[1] * requested_shard.num_cores();
+        }
+        TT_FATAL(
+            output.padded_shape() == expected_padded_shape,
+            "fused_rms_minimal persistent output padded shape must match requested output capacity.");
+    }
+
     // tensor shape
     const auto& shape = a.padded_shape();
     uint32_t M = a.physical_volume() / shape[-1];
@@ -195,6 +229,9 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(args.subblock_wt > 0, "subblock_w must be greater than 0.");
     TT_FATAL(args.block_wt % args.subblock_wt == 0, "block_w must be divisible by subblock_w.");
     TT_FATAL(args.num_links > 0, "num_links must be greater than 0.");
+    TT_FATAL(
+        args.num_links == 1,
+        "fused_rms_minimal supports exactly one link: its single stats producer cannot satisfy multi-link credits.");
     TT_FATAL(M % input_height == 0, "M must be divisible by tile height.");
     TT_FATAL(K % input_width == 0, "K must be divisible by tile width.");
     const auto bbox = shard_spec.grid.bounding_box();
@@ -202,6 +239,45 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
         bbox.end_coord.x - bbox.start_coord.x < args.grid_size.x &&
             bbox.end_coord.y - bbox.start_coord.y < args.grid_size.y,
         "Shard grid bounding box must fit within compute grid size");
+
+    // The transport writes one gathered tile per rank, but the post-reduce consumer is a
+    // sender-local dynamic CB, not a sharded accessor. All gathered tiles must fit on
+    // that one core. A multi-core stats layout needs an explicit staging reader.
+    const auto& stats = tensor_args.stats.value();
+    TT_FATAL(
+        stats.storage_type() == StorageType::DEVICE && stats.is_allocated(),
+        "fused_rms_minimal requires allocated device stats.");
+    TT_FATAL(stats.device() == a.device(), "fused_rms_minimal stats must be on the input mesh device.");
+    TT_FATAL(stats.layout() == Layout::TILE, "fused_rms_minimal requires TILE stats.");
+    TT_FATAL(
+        stats.is_sharded() && stats.memory_config().buffer_type() == BufferType::L1 &&
+            stats.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
+        "fused_rms_minimal requires WIDTH_SHARDED L1 stats.");
+    const auto stats_shard = stats.shard_spec().value();
+    TT_FATAL(
+        stats_shard.orientation == ShardOrientation::ROW_MAJOR,
+        "fused_rms_minimal requires ROW_MAJOR stats shard orientation.");
+    TT_FATAL(
+        stats_shard.num_cores() == 1,
+        "fused_rms_minimal requires stats on one sender core; distributed stats shards need a staging reader.");
+    TT_FATAL(
+        stats_shard.grid.bounding_box().start_coord == bbox.start_coord,
+        "fused_rms_minimal stats core must be the first input shard core (the reduction sender).");
+    const auto stats_tile_shape = stats.tensor_spec().tile().get_tile_shape();
+    TT_FATAL(
+        stats_tile_shape[0] == TILE_HEIGHT && stats_tile_shape[1] == TILE_WIDTH,
+        "fused_rms_minimal requires standard 32x32 stats tiles.");
+    TT_FATAL(args.ring_size > 0, "fused_rms_minimal requires a nonempty collective axis.");
+    const auto& stats_shape = stats.padded_shape();
+    TT_FATAL(stats_shape.rank() == 4, "fused_rms_minimal requires rank-4 stats.");
+    TT_FATAL(
+        stats_shape[0] == 1 && stats_shape[1] == 1 && stats_shape[2] == TILE_HEIGHT &&
+            stats_shape[3] == args.ring_size * TILE_WIDTH,
+        "fused_rms_minimal requires padded stats shape [1,1,32,32*num_devices], one full tile per rank.");
+    TT_FATAL(
+        stats_shard.shape[0] == TILE_HEIGHT && stats_shard.shape[1] % TILE_WIDTH == 0 &&
+            stats_shard.shape[1] >= args.ring_size * TILE_WIDTH,
+        "fused_rms_minimal sender stats shard must contain all gathered rank tiles in one tile row.");
 
     TT_FATAL(M == input_height, "Minimal version assumes (1,1,TILE_HEIGHT,N) shape");
     TT_FATAL(tt::div_up(Kt, shard_spec.num_cores()) == args.block_wt, "block_w must equal to K / num_cores.");

@@ -890,11 +890,8 @@ ProgramDescriptor build_rms_allgather_program_descriptor(
     CoreCoord drain_sync_core;
     auto input_cores_vec = corerange_to_cores(input_tensor_cores, std::nullopt, true);
     auto stats_cores_vec = corerange_to_cores(stats_tensor_cores, std::nullopt, true);
-    auto cores_per_device = stats_cores_vec.size() + ring_size - (1 / ring_size);
-    uint32_t start_core_index_for_device = stats_cores_vec.size() / ring_size * device_index;
-    uint32_t end_core_index_for_device = start_core_index_for_device + cores_per_device;
-    auto stats_cores_this_device = std::vector<CoreCoord>(
-        stats_cores_vec.begin() + start_core_index_for_device, stats_cores_vec.begin() + end_core_index_for_device);
+    TT_FATAL(stats_tensor_shard_num_pages > 0, "fused_rms_minimal stats shard must contain a full tile.");
+    TT_FATAL(!stats_cores_vec.empty(), "fused_rms_minimal stats shard grid must not be empty.");
 
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];
@@ -1010,14 +1007,24 @@ ProgramDescriptor build_rms_allgather_program_descriptor(
             uint32_t remainder = 1 % num_links;
             uint32_t input_tile_id_start = (i * base_pages_per_worker) + std::min(i, remainder);
             uint32_t input_tile_id_end = ((i + 1) * base_pages_per_worker) + std::min(i + 1, remainder);
-            uint32_t stats_first_core_tile_start_offset =
-                (device_index + input_tile_id_start) % stats_tensor_shard_num_pages;
+            // One gathered page per source rank. Place the global page, not a rank's
+            // fraction of the core vector: for P pages/core the owner is g/P and
+            // the local page is g%P. The current consumer admits sender-local stats.
+            const uint32_t gathered_tile_start = device_index + input_tile_id_start;
+            const uint32_t gathered_tile_end = device_index + input_tile_id_end;
+            TT_FATAL(
+                gathered_tile_start < gathered_tile_end && gathered_tile_end <= ring_size,
+                "fused_rms_minimal stats producer interval must contain its rank's gathered page.");
+            const uint32_t first_stats_core = gathered_tile_start / stats_tensor_shard_num_pages;
+            const uint32_t last_stats_core = (gathered_tile_end - 1) / stats_tensor_shard_num_pages;
+            TT_FATAL(
+                last_stats_core < stats_cores_vec.size(),
+                "fused_rms_minimal gathered stats page exceeds the stats shard grid capacity.");
+            uint32_t stats_first_core_tile_start_offset = gathered_tile_start % stats_tensor_shard_num_pages;
             std::vector<uint32_t> stats_tensor_cores_x;
             std::vector<uint32_t> stats_tensor_cores_y;
-            for (uint32_t i = input_tile_id_start / stats_tensor_shard_num_pages;
-                 i < (input_tile_id_end + stats_tensor_shard_num_pages - 1) / stats_tensor_shard_num_pages;
-                 i++) {
-                auto this_core = mesh_device->worker_core_from_logical_core(stats_cores_this_device[i]);
+            for (uint32_t stats_core_index = first_stats_core; stats_core_index <= last_stats_core; stats_core_index++) {
+                auto this_core = mesh_device->worker_core_from_logical_core(stats_cores_vec[stats_core_index]);
                 stats_tensor_cores_x.push_back(this_core.x);
                 stats_tensor_cores_y.push_back(this_core.y);
             }

@@ -310,7 +310,7 @@ void top_k() {
         // first iteration we compare 0th and 1st tile, then 2nd and 3rd, etc. We get the sorted top 32 values in each
         // pair. second iteration we compare 0th and 2nd tile, then 4th and 6th, etc. logWt iteration we compare 0th and
         // Wt/2 tile single buffer as we can pack tiles back in-place
-        for (uint32_t m_iter = 0; m_iter < logWt; ++m_iter) {
+        for (uint32_t m_iter = 0; m_iter < (K == 64 ? 0 : logWt); ++m_iter) {
             bool a = false;
             input_transposed_dfb.wait_front(Wt);
             index_transposed_dfb.wait_front(Wt);
@@ -466,8 +466,11 @@ void kernel_main() {
     constexpr bool stable_sort = get_arg(args::stable_sort) == 1;
     generate_rand_tile(dfb::rand_tile, seed);
 
-    const uint32_t nearest32_K = 32;
-    const uint32_t logk = 5;  // log(32)
+    constexpr uint32_t nearest32_K = get_arg(args::max_top_k);
+    constexpr uint32_t logk = nearest32_K == 64 ? 6 : 5;
+    // The opt-in 64-candidate path is one complete two-tile local sort.
+    // Host validation requires Wt=2; no lossy top-32 merge is performed.
+    static_assert(nearest32_K != 64 || Wt == 2);
 
     // top-k
     top_k<

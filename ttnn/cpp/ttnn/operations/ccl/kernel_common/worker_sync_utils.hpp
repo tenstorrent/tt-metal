@@ -10,6 +10,7 @@
 #include "api/debug/dprint.h"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <array>
+#include "ttnn/operations/ccl/shared_with_host/linear_full_slice_schedule.hpp"
 
 FORCE_INLINE bool is_master(uint32_t master_x, uint32_t master_y, uint32_t worker_x, uint32_t worker_y) {
     return master_x == worker_x && master_y == worker_y;
@@ -199,12 +200,24 @@ struct MatmulOpReceiver {
         this->last_output_page_offset = get_arg_val<uint32_t>(rt_args_idx++);
         uint32_t is_clockwise_direction = get_arg_val<uint32_t>(rt_args_idx++);
 
+        // Linear records always consume all nine words, including the nonwaiting B reader.
+#ifdef LINEAR_FULL_SLICE_V1
+        if (true) {
+#else
         if (this->wait_for_op_signal) {
+#endif
             this->signal_op_semaphore_ids[0] = get_arg_val<uint32_t>(rt_args_idx++);
             this->signal_op_semaphore_ids[1] = get_arg_val<uint32_t>(rt_args_idx++);
         }
 
+#ifdef LINEAR_FULL_SLICE_V1
+        this->num_tensor_slices = this->num_transfers;
+        ASSERT(this->num_tensor_slices == this->ring_size);
+        ASSERT(start_ring_index < this->ring_size);
+        ASSERT(tiles_per_block > 0 && this->tensor_slice_shape_width % tiles_per_block == 0);
+#else
         this->num_tensor_slices = this->num_transfers * this->num_directions;
+#endif
 
         // Setup internal states for bi-direction
         this->ring_idxs[0] = start_ring_index;
@@ -217,6 +230,7 @@ struct MatmulOpReceiver {
         this->is_clockwise_dirs[1] = !is_clockwise_direction;
 
         this->num_blocks_per_slice = this->tensor_slice_shape_width / tiles_per_block;
+        ASSERT(this->num_blocks_per_slice > 0);
         ASSERT(this->num_tensor_slices * this->num_blocks_per_slice == this->num_blocks);
 
         this->curr_dir =
@@ -230,6 +244,16 @@ struct MatmulOpReceiver {
         const uint32_t& block_idx, uint32_t& curr_block_start_tile_id, const uint32_t& tensor_start_tile_id) {
         ASSERT(this->initialized);
         if (block_idx % this->num_blocks_per_slice == 0) {  // Aligned to the start of a tensor slice
+#ifdef LINEAR_FULL_SLICE_V1
+            const auto ordinal = block_idx / this->num_blocks_per_slice;
+            ASSERT(ordinal < this->num_tensor_slices);
+            const auto slice = ttnn::ccl::linear_full_slice(this->ring_size, this->ring_idxs[0], ordinal);
+            ASSERT(slice.source < this->ring_size);
+            curr_block_start_tile_id = tensor_start_tile_id + slice.source * this->output_page_offset;
+            if (this->wait_for_op_signal) {
+                Semaphore<>(this->signal_op_semaphore_ids[slice.direction]).wait_min(slice.threshold);
+            }
+#else
             if (this->curr_transfer_idx != 0) {  // Skip update for local slice
 
                 // Update the start page idx of the tensor slice in curr_direction
@@ -256,6 +280,7 @@ struct MatmulOpReceiver {
             // Update the relevant internal states
             this->curr_transfer_idx++;
             this->curr_dir = !this->curr_dir;  // Change direction
+#endif
         }
     }
 

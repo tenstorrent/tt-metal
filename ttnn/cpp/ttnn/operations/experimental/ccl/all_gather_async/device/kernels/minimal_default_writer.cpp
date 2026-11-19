@@ -304,7 +304,16 @@ void kernel_main() {
         }
 
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), barrier_target_count);
+#ifdef LINEAR_FULL_SLICE_ADMISSION
+        static_assert(topology == Topology::Linear && fuse_op && ring_size == 4);
+        static_assert(barrier_target_count == ring_size - 1);
+        // The next launch may already have delivered admission credits. Consume only
+        // this generation, and acknowledge the non-posted atomic before reusing scratch.
+        noc_semaphore_inc(get_noc_addr(barrier_sem), uint32_t{0} - barrier_target_count);
+        noc_obj.async_atomic_barrier();
+#else
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
+#endif
     }
 
     uint32_t slice_writes = 0;
