@@ -917,13 +917,15 @@ jobs:
     # changed) is OK. The changes job is there too: when it fails, the gate skips.
     # llk-perf-merge-gate-measure is not: the gate already fails on a measuring leg that did not
     # complete, and a failed warehouse upload or report-only stage 2 must not block.
-    needs: [static-checks, docker-images, find-changes, build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests, ttsim-quasar-merge-gate-tests, llk-perf-merge-gate-changes, llk-perf-merge-gate-measure, llk-perf-merge-gate]
+    needs: [static-checks, docker-images, find-changes, find-queue-builds, build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests, ttsim-quasar-merge-gate-tests, llk-perf-merge-gate-changes, llk-perf-merge-gate-measure, llk-perf-merge-gate]
     runs-on: ubuntu-slim
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
-          required-jobs: "static-checks, find-changes"
+          # find-queue-builds is required: when it fails, the build jobs and the tests skip,
+          # and an optional skip would let the gate pass with no build.
+          required-jobs: "static-checks, find-changes, find-queue-builds"
           optional-jobs: "build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-unit-tests, ttsim-quasar-merge-gate-tests, llk-perf-merge-gate-changes, llk-perf-merge-gate"
         env:
           NEEDS_CONTEXT: "${{ toJSON(needs) }}"

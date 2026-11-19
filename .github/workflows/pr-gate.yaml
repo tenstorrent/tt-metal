@@ -765,6 +765,7 @@ jobs:
         contains(join(needs.*.result, ','), 'failure')
       }}
     needs:
+      - find-queue-builds
       - asan-build
       - runtime-smoke-tests
       - ttnn-smoke-tests
@@ -789,7 +790,9 @@ jobs:
         with:
           # verify-time-budgets is required, not optional: it has no build dependency
           # and never skips, so a skip would mean it silently stopped gating.
-          required-jobs: "verify-time-budgets"
+          # find-queue-builds is required: when it fails, asan-build and its tests skip,
+          # and an optional skip would let the gate pass with no build.
+          required-jobs: "verify-time-budgets, find-queue-builds"
           optional-jobs: >-
             asan-build, code-analysis,
             runtime-smoke-tests, ttnn-smoke-tests, runtime-examples, ttnn-examples,

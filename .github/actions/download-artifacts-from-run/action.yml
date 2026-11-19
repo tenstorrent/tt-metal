@@ -115,15 +115,17 @@ runs:
     - name: Download artifacts
       id: download
       shell: bash
+      # The patterns hold a ref name, so they go in through env, not into the script text.
+      env:
+        BUILD_PATTERN: ${{ inputs.build-artifact-pattern }}
+        REQUIRE_BUILD: ${{ inputs.require-build-artifact }}
+        PACKAGES_PATTERN: ${{ inputs.packages-artifact-pattern }}
+        WHEEL_PATTERN: ${{ inputs.wheel-artifact-pattern }}
+        TTNN_IMPORT_NAME: ${{ inputs.ttnn-import-artifact-name }}
       run: |
         WORKFLOW_RUN_ID="${{ inputs.workflow_run_id }}"
         WORK_DIR="${{ inputs.working-directory }}"
         TRACY_ENABLED="${{ inputs.tracy }}"
-        BUILD_PATTERN="${{ inputs.build-artifact-pattern }}"
-        REQUIRE_BUILD="${{ inputs.require-build-artifact }}"
-        PACKAGES_PATTERN="${{ inputs.packages-artifact-pattern }}"
-        WHEEL_PATTERN="${{ inputs.wheel-artifact-pattern }}"
-        TTNN_IMPORT_NAME="${{ inputs.ttnn-import-artifact-name }}"
 
         mkdir -p "$WORK_DIR"
         cd "$WORK_DIR"
