@@ -68,10 +68,6 @@ std::vector<CoreCoord> all_dispatch_engine_cores(distributed::MeshDevice& mesh_d
 }
 
 std::string fds_tests_skip_reason(const distributed::MeshDevice& mesh_device) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        return "This test can only be run under the simulator or emulator. "
-               "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
     if (MetalContext::instance().rtoptions().get_fast_dispatch()) {
         return "This test can only run in slow dispatch mode. Set TT_METAL_SLOW_DISPATCH_MODE=1.";
     }

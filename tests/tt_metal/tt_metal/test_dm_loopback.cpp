@@ -22,14 +22,8 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-// This test requires simulator environment
 TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
-    // Skip if simulator is not available
-    char* env_var = std::getenv("TT_METAL_SIMULATOR");
-    if (env_var == nullptr) {
-        GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
-    }
-    env_var = std::getenv("TT_METAL_DPRINT_CORES");
+    char* env_var = std::getenv("TT_METAL_DPRINT_CORES");
     if (env_var == nullptr) {
         std::cerr << "WARNING: Please set the environment variable TT_METAL_DPRINT_CORES to 0,0 to see the output of "
                      "the Data Movement kernels."

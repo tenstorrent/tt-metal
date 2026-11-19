@@ -176,11 +176,6 @@ distributed::MeshWorkload create_multi_node_workload(
 }  // namespace
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TestSingleWorkloadNonBlockingEnqueueFinish) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
-
     const NodeCoord node{0, 0};
 
     const uint32_t base_address = MetalContext::instance().hal().get_dev_addr(
@@ -212,11 +207,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSingleWorkloadNonBlockingEnqueueFi
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TestMultipleWorkloadsNonBlockingEnqueueFinish) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
-
     const NodeCoord node{0, 0};
 
     const uint32_t base_address = MetalContext::instance().hal().get_dev_addr(
@@ -265,11 +255,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestMultipleWorkloadsNonBlockingEnqueu
 }
 
 TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, TestInterleavedWorkloadsAcrossTwoCQs) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
-
     const NodeCoord node{0, 0};
 
     const uint32_t base_address = MetalContext::instance().hal().get_dev_addr(
@@ -322,11 +307,6 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, TestInterleavedWorkloadsAcrossT
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TestWorkloadAcrossMultipleWorkerNodes) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
-
     const CoreCoord worker_grid = this->device().compute_with_storage_grid_size();
     const uint32_t num_nodes = worker_grid.x * worker_grid.y;
     if (num_nodes < 2) {
@@ -402,11 +382,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestWorkloadAcrossMultipleWorkerNodes)
 // on the next open kills them mid-flight, and the Tensix state they leave behind can hang or corrupt the
 // next program on the same cores.
 TEST_F(QuasarMeshDeviceSingleCardFixture, TestMeshDeviceCloseDrainsNonBlockingWorkload) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
-
     const NodeCoord node{0, 0};
     // Result region on `node`: the DM slots in the first cache line, the compute slots in the second.
     static_assert(kNumUserDMThreads * sizeof(uint32_t) <= kL1CacheLineBytes);

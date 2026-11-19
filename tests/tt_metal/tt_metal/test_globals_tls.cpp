@@ -32,16 +32,10 @@ constexpr uint32_t FIRST_USER_DM = 2;
 constexpr uint32_t NUM_USER_DMS = 6;
 constexpr uint32_t TOTAL_RESULT_BYTES = NUM_DM_CORES * TLS_CHECK_RESULT_SLOT_BYTES;
 
-// This test requires simulator environment
 TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
     const uint32_t signal_address = 100 * 1024;
     const uint32_t l1_result_addr = 200 * 1024;
     const uint32_t dram_address = 30000 * 1024;
-
-    char* env_var = std::getenv("TT_METAL_SIMULATOR");
-    if (env_var == nullptr) {
-        GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
-    }
 
     constexpr CoreCoord core = {0, 0};
     constexpr uint32_t dram_channel = 0;
@@ -269,11 +263,6 @@ static constexpr uint32_t NUM_COMPUTE_SLOTS =
 static constexpr uint32_t QUASAR_FIRST_COMPUTE_HARTID = 8;  // DM 0-7, compute 8-23
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
-    char* env_var = std::getenv("TT_METAL_SIMULATOR");
-    if (env_var == nullptr) {
-        GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
-    }
-
     constexpr CoreCoord core = {0, 0};
     const uint32_t signal_address = 100 * 1024;
     constexpr uint32_t l1_result_addr = 200 * 1024;

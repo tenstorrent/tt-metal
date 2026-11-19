@@ -28,9 +28,6 @@ using namespace tt::tt_metal;
 // or a wrong destination count cannot pass.
 // Needs two worker nodes in a row (the 2x3 simulator/emulator grids).
 TEST_F(QuasarMeshDeviceSingleCardFixture, DmWorkerMulticast) {
-    if (std::getenv("TT_METAL_SIMULATOR") == nullptr) {
-        GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
-    }
     const auto grid = this->device().compute_with_storage_grid_size();
     if (grid.x < 2) {
         GTEST_SKIP() << "needs >= 2 worker nodes in a row for a multicast rectangle (got " << grid.x << "x" << grid.y
