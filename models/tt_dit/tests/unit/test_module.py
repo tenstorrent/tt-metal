@@ -176,6 +176,25 @@ def test_shard_and_gather(mesh_device: ttnn.MeshDevice, expect_error) -> None:  
     assert replicated.mesh_axes == (None, None) and not replicated.is_transiently_sharded()
 
 
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_shard_without_a_split_keeps_the_module_loaded(mesh_device: ttnn.MeshDevice) -> None:
+    model = ShardableModule(device=mesh_device)
+    model.load_torch_state_dict(
+        {
+            "replicated": torch.randn([512, 256], dtype=torch.bfloat16),
+            "tensor_parallel": torch.randn([512, 256], dtype=torch.bfloat16),
+            "small": torch.randn([32, 32], dtype=torch.bfloat16),
+        }
+    )
+    evictions = []
+    model.register_eviction_hook(lambda: evictions.append(True))
+
+    model.shard(1)  # one device on the axis: nothing splits
+
+    assert model.is_loaded() and not model.is_transiently_sharded() and not evictions
+    model()
+
+
 class FreesExtraState(ShardableModule):
     def deallocate_weights(self) -> None:
         super().deallocate_weights()

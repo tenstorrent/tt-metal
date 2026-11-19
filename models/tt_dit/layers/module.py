@@ -296,7 +296,8 @@ class Module(ABC):
         module, call it, or read a sharded parameter's data until you call gather. Note that calling `forward`
         directly skips the check in `__call__`, so it is only caught if that forward reads a sharded parameter's data.
 
-        The module counts as unloaded while sharded.
+        The module counts as unloaded while sharded. If no parameter can be split (for example, when the mesh_axis
+        has only one device), we leave the module as it is: it stays loaded and its eviction hooks do not run.
 
         We defer freeing the full weights until every parameter's sharded tensor is allocated, to avoid fragmenting
         DRAM. If we freed each full weight right after allocating its sharded tensor, the next sharded tensor would
@@ -322,6 +323,8 @@ class Module(ABC):
         defer_free: list[ttnn.Tensor] = []
         for parameter in parameters:
             parameter.shard(mesh_axis, defer_free=defer_free)
+        if not defer_free:
+            return
         for t in defer_free:
             ttnn.deallocate(t)
         for module in modules:
@@ -356,7 +359,7 @@ class Module(ABC):
             hook()
 
     def register_eviction_hook(self, hook: Callable[[], None]) -> None:
-        """Run `hook` whenever this module's weights are deallocated.
+        """Run `hook` whenever this module's weights are deallocated or transiently sharded (`shard`).
 
         For device state that belongs with the module's residency but lives outside its parameters
         and children -- an owner's per-geometry caches, for instance -- so that evicting the module
