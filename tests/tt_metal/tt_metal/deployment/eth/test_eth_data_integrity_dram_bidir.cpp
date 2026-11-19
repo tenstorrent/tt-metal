@@ -21,68 +21,6 @@ using namespace tt;
 using namespace tt::test_utils;
 
 template <typename FIXTURE>
-static void prepare_bidir_integrity(
-    FIXTURE* fixture,
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    const CoreCoord& send_core,
-    uint32_t transfer_size,
-    uint32_t send_delta_addr,
-    DataMovementProcessor processor,
-    uint32_t dram_start_addr,
-    uint32_t dram_end_addr,
-    uint32_t num_bytes_per_send,
-    uint32_t iter_l1_address,
-    uint32_t channel0,
-    uint32_t channel1,
-    uint32_t read_bank,
-    uint32_t write_bank,
-    uint32_t sendbuf0,
-    uint32_t sendbuf1,
-    uint32_t recvbuf0,
-    uint32_t recvbuf1,
-    tt_metal::Program* send_program) {
-    /* =================== */
-    tensix_counter_dram(fixture, mesh_device, dram_start_addr, dram_end_addr, read_bank);
-    tensix_zero_dram(fixture, mesh_device, dram_start_addr, dram_end_addr, write_bank);
-
-    auto send_eth_config = tt_metal::EthernetConfig{
-        .noc = tt_metal::NOC::NOC_0,
-        .processor = processor,
-        .compile_args =
-            {
-                num_bytes_per_send,
-                transfer_size,
-                iter_l1_address,
-                dram_start_addr,
-                dram_end_addr,
-                send_delta_addr,
-                sendbuf0,
-                sendbuf1,
-                recvbuf0,
-                recvbuf1,
-            },
-    };
-    eth_test_common::set_arch_specific_eth_config(send_eth_config);
-
-    auto send_kernel = tt_metal::CreateKernel(
-        *send_program,
-        "tests/tt_metal/tt_metal/deployment/kernels/eth_integrity_dram_bidir_kernel.cpp",
-        send_core,
-        send_eth_config);
-
-    tt_metal::SetRuntimeArgs(
-        *send_program,
-        send_kernel,
-        send_core,
-        {
-            channel0,
-            channel1,
-            read_bank,
-            write_bank,
-        });
-}
-
-template <typename FIXTURE>
 static bool run_test_integrity_dram_bidir(
     FIXTURE* fixture,
     const std::shared_ptr<distributed::MeshDevice>& send_mesh_device,
