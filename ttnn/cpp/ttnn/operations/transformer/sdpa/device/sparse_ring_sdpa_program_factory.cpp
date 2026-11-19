@@ -109,7 +109,6 @@ constexpr uint32_t kRingJointChainCompileArgCount = ring_joint::kChainCompileArg
 constexpr uint32_t kRingJointChainSemaphoreCompileArgCount = ring_joint::kChainSemaphoreCompileArgCount;
 constexpr uint32_t kRingJointChainMcastEnabledCompileArgOffset = ring_joint::kChainMcastEnabledCompileArgOffset;
 constexpr uint32_t kReaderBatchChainExtraArgCount = 1;
-constexpr uint32_t kReaderGQAChainExtraArgCount = 1;
 constexpr uint32_t kWriterBaseArgCount = 3;  // output address, Q range
 constexpr uint32_t kComputeRingSequencerArgCount = 6;
 
@@ -219,16 +218,14 @@ RingWritePlan build_ring_write_plan(
     return plan;
 }
 
-RingJointRuntimeArgLayout get_runtime_arg_layout(bool use_head_chain, bool k_uses_batch_chain, bool gqa_grouped_kv) {
+RingJointRuntimeArgLayout get_runtime_arg_layout(bool use_head_chain, bool k_uses_batch_chain) {
     const uint32_t head_chain_args = use_head_chain ? kRingJointChainConfigArgCount : 0;
     const uint32_t batch_chain_args =
         k_uses_batch_chain ? (kRingJointChainConfigArgCount + kReaderBatchChainExtraArgCount) : 0;
-    const uint32_t gqa_chain_args = gqa_grouped_kv ? (kRingJointChainConfigArgCount + kReaderGQAChainExtraArgCount) : 0;
 
     RingJointRuntimeArgLayout layout;
     layout.reader_kv_cache_batch_idx = kReaderBaseBufferArgCount + 2;
-    layout.reader_logical_nt =
-        kReaderBaseBufferArgCount + kReaderQWorkArgCount + head_chain_args + batch_chain_args + gqa_chain_args;
+    layout.reader_logical_nt = kReaderBaseBufferArgCount + kReaderQWorkArgCount + head_chain_args + batch_chain_args;
     layout.reader_active_ring_iter_mask = layout.reader_logical_nt + 1;
     layout.writer_logical_nt = kWriterBaseArgCount;
     layout.writer_active_ring_iter_mask = layout.writer_logical_nt + 1;
@@ -451,7 +448,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const uint32_t ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
     const uint32_t gathered_padded_N = k_shape[2];
 
-    const bool gqa_grouped_kv = ring_joint::is_gqa_grouped_kv_head_mode(/*v_shares_k_buffer=*/false, NH, NHK, NHV);
+    // MHA only (validated): no GQA grouped chains. One local K head shares K over every core (shared-K chain).
+    constexpr bool gqa_grouped_kv = false;
     const bool k_uses_batch_chain = ring_joint::uses_shared_k_batch_chain(gqa_grouped_kv, NHK);
     const bool use_head_chain =
         ring_joint::uses_v_head_chain(/*enable_kv_chains=*/true, gqa_grouped_kv, /*v_shares_k_buffer=*/false);
@@ -462,8 +460,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const uint32_t DHt = DH / tt::constants::TILE_WIDTH;
     const uint32_t vDHt = vDH / tt::constants::TILE_WIDTH;
     const RingWorkMasks ring_work_masks = build_ring_work_masks(args, tensor_args, ring_write_plan);
-    const RingJointRuntimeArgLayout runtime_arg_layout =
-        get_runtime_arg_layout(use_head_chain, k_uses_batch_chain, gqa_grouped_kv);
+    const RingJointRuntimeArgLayout runtime_arg_layout = get_runtime_arg_layout(use_head_chain, k_uses_batch_chain);
     const uint32_t logical_nt = tt::div_up(static_cast<uint32_t>(args.logical_n), tt::constants::TILE_HEIGHT);
     // Chunked-prefill Q mapping words of the shared runtime-arg layout; unused here.
     constexpr uint32_t kUnusedQMappingWord = 0;
@@ -732,8 +729,6 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         .mesh_rows = ag_attributes.mesh_rows,
         .mesh_cols = ag_attributes.mesh_cols};
 
-    const uint32_t q_heads_per_kv = NH / NHK;
-
     // Cores actually issuing Q reads. When the flat Q block distribution is smaller than the grid the trailing cores
     // get zero work.
     const uint32_t num_active_cores = std::min(num_cores, all_heads_num_q_chunks);
@@ -858,15 +853,11 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
 
     std::optional<ChainSemaphores> head_sems;
     std::optional<ChainSemaphores> batch_sems;
-    std::optional<ChainSemaphores> gqa_sems;
     if (use_head_chain) {
         head_sems = ChainSemaphores::create(desc, core_grid_set);  // head chain (MHA or separate-V V)
     }
     if (k_uses_batch_chain) {
         batch_sems = ChainSemaphores::create(desc, core_grid_set);  // shared-K chain
-    }
-    if (gqa_grouped_kv) {
-        gqa_sems = ChainSemaphores::create(desc, core_grid_set);  // grouped K/V chain
     }
     // Load balancing: per SDPA core the release of its unit table (written after the table) and the imports-arrived
     // signal; on the balance core the count of cores that wrote their costs and of swapped-in units whose outputs are
@@ -904,10 +895,6 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     if (k_uses_batch_chain) {
         batch_sems->append_to_compile_args(reader_compile_time_args);
         reader_compile_time_args.push_back(0);  // shared-K mcast placeholder (patched after chain construction)
-    }
-    if (gqa_grouped_kv) {
-        gqa_sems->append_to_compile_args(reader_compile_time_args);
-        reader_compile_time_args.push_back(0);  // GQA mcast placeholder (patched after chain construction)
     }
 
     std::vector<uint32_t> writer_compile_time_args = {
@@ -1199,11 +1186,10 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         fit_slots,
         min_q_per_working_core);
     TT_FATAL(
-        num_q_passes == 1 || (!gqa_grouped_kv && !k_uses_batch_chain),
-        "SparseRingSDPA: several Q passes need separate K and V heads per query head (MHA), got NH {} NHK {} NHV {}",
-        NH,
-        NHK,
-        NHV);
+        num_q_passes == 1 || !k_uses_batch_chain,
+        "SparseRingSDPA: several Q passes need more than one local head (a single head shares K over every core), got "
+        "NH {}",
+        NH);
     const uint32_t pass_slots = tt::div_up(max_q_per_core, num_q_passes);
     uint32_t resident_slots = pass_slots;
     if (balance) {
@@ -1341,7 +1327,6 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     std::vector<CoreWork> core_work(num_cores);
     std::vector<ChainConfig> head_chain_configs(use_head_chain ? num_cores : 0);       // MHA K/V or separate-V V
     std::vector<ChainConfig> batch_chain_configs(k_uses_batch_chain ? num_cores : 0);  // Shared K for separate-V
-    std::vector<ChainConfig> gqa_chain_configs(gqa_grouped_kv ? num_cores : 0);        // Grouped K/V for GQA
     std::vector<std::vector<HeadSegmentRef>> head_segments(use_head_chain ? NH : 0);
 
     // Evenly distribute flat global Q blocks across cores
@@ -1367,12 +1352,6 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         next_global_chunk += chunk_count;
     }
 
-    std::vector<uint32_t> gqa_chain_max_q(gqa_chain_configs.size(), 0);  // per-core loop-padding count
-    ring_joint::GqaKvChains gqa_chains;
-    if (gqa_grouped_kv) {
-        gqa_chains = ring_joint::build_gqa_kv_chains(
-            core_work, gqa_chain_configs, gqa_chain_max_q, NHK, q_heads_per_kv, grid_size, mesh_device);
-    }
     if (k_uses_batch_chain) {
         ring_joint::build_shared_k_chain(core_work, batch_chain_configs);
     }
@@ -1392,7 +1371,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const std::array<size_t, 3> ct_arg_sizes_with_rotated_last = {
         reader_compile_time_args.size(), writer_compile_time_args.size(), compute_compile_time_args.size()};
 
-    // Build static MHA/shared-K V head chains. GQA uses KV-head-grouped chains instead.
+    // Build static MHA/shared-K V head chains.
     if (use_head_chain) {
         for (uint32_t head_id = 0; head_id < static_cast<uint32_t>(head_segments.size()); ++head_id) {
             const auto& segs = head_segments[head_id];
@@ -1414,8 +1393,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         }
     }
 
-    // The head chains are never multicast (group delivery below replaces that). Patch the shared-K and GQA
-    // multicast flags.
+    // The head chains are never multicast (group delivery below replaces that). Patch the shared-K multicast flag.
     {
         const uint32_t head_chain_compile_args = use_head_chain ? kRingJointChainCompileArgCount : 0;
         if (k_uses_batch_chain) {
@@ -1423,23 +1401,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
                 sem_args_offset + head_chain_compile_args + kRingJointChainMcastEnabledCompileArgOffset;
             reader_compile_time_args[batch_mcast_arg_index] = k_mcast_enabled ? 1 : 0;
         }
-        if (gqa_grouped_kv) {
-            const uint32_t batch_chain_compile_args = k_uses_batch_chain ? kRingJointChainCompileArgCount : 0;
-            const uint32_t gqa_mcast_arg_index = sem_args_offset + head_chain_compile_args + batch_chain_compile_args +
-                                                 kRingJointChainMcastEnabledCompileArgOffset;
-            reader_compile_time_args[gqa_mcast_arg_index] = gqa_chains.mcast_enabled ? 1 : 0;
-        }
     }
 
-    if (gqa_grouped_kv) {
-        log_debug(
-            tt::LogOp,
-            "K/V chain mode: grouped GQA {} (chains={}, participant_cores={}, local_fallback_cores={})",
-            gqa_chains.mcast_enabled ? "mcast" : fmt::format("unicast, {}", gqa_chains.mcast_fallback_reason),
-            gqa_chains.grouped_chains,
-            gqa_chains.grouped_participant_cores,
-            gqa_chains.local_fallback_cores);
-    } else if (k_uses_batch_chain) {
+    if (k_uses_batch_chain) {
         log_debug(
             tt::LogOp,
             "K chain mode: batch ({})",
@@ -1557,6 +1521,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
         .math_approx_mode = math_approx_mode,
     };
 
@@ -1695,12 +1660,6 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
             reader_args.append(batch_chain_args);
             reader_args.push_back(k_chain_max_q[i]);
         }
-        if (gqa_grouped_kv) {
-            std::vector<uint32_t> gqa_chain_args;
-            gqa_chain_configs.at(i).append_to_args(gqa_chain_args);
-            reader_args.append(gqa_chain_args);
-            reader_args.push_back(gqa_chain_max_q[i]);
-        }
 
         reader_args.push_checked(runtime_arg_layout.reader_logical_nt, logical_nt, "reader.logical_nt");
         reader_args.push_checked(
@@ -1716,45 +1675,13 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         reader_args.append(reader_signaler_args);
 
         // Block-sparse args, read by the kernel at rotated_args_base. Word offsets from there:
-        //   +0 mask, +1 pooled K, +2 pooled V, +3 block counts (null: geometric), +4 n_members, +5 my_start, then the
-        //   kPooledBiasTableWords packed bf16 table, then members (start, count)..., then the group delivery words.
+        //   +0 mask, +1 pooled K, +2 pooled V, +3 block counts (null: geometric), then (load balancing) 6 balance
+        //   words, the kPooledBiasTableWords packed bf16 table, then the group delivery words.
         // Buffer entries are registered as bindings and re-patched on cache hits by the descriptor adapter.
         reader_args.push_back(tensor_args.block_mask.buffer());
         reader_args.push_back(pooled_k_buf);  // null without the pooled route; positions do not move
         reader_args.push_back(pooled_v_buf);
         reader_args.push_back(block_counts_buf);
-        // Linear head chains: the chain's members as (Q block start within the head, count) plus this core's own
-        // start. At stream position j every member is on Q block start_m + j, so each core derives the same
-        // chain-wide kept set and the chain skips a piece nobody needs in lockstep. Non-participants (head-boundary
-        // cores before the injector) get no members and skip on their own mask.
-        std::vector<std::pair<uint32_t, uint32_t>> group_members;
-        uint32_t sparse_my_start = 0;
-        if (use_head_chain && head_chain_configs[i].participates) {
-            const uint32_t h = head_chain_configs[i].head;
-            for (const auto& seg : head_segments[h]) {
-                const auto& cfg = head_chain_configs[seg.core_idx];
-                if (!cfg.participates || cfg.head != h) {
-                    continue;
-                }
-                const auto& w = core_work[seg.core_idx];
-                uint32_t flat = w.global_q_start;
-                for (uint32_t s = 0; s < seg.head_work_index; ++s) {
-                    flat += w.head_work[s].q_chunk_count;
-                }
-                const uint32_t start_in_head = flat % num_local_q_chunks;
-                const uint32_t count = w.head_work[seg.head_work_index].q_chunk_count;
-                if (seg.core_idx == i) {
-                    sparse_my_start = start_in_head;
-                }
-                group_members.emplace_back(start_in_head, count);
-            }
-            TT_FATAL(
-                group_members.size() <= 64,
-                "SparseRingSDPA: head chain of {} members is too long",
-                group_members.size());
-        }
-        reader_args.push_back(static_cast<uint32_t>(group_members.size()));
-        reader_args.push_back(sparse_my_start);
         if (balance) {
             // [core index, cost table, balance core NoC x, y, import Q, import mask].
             reader_args.push_back(i);
@@ -1766,10 +1693,6 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         }
         for (uint32_t w = 0; w < kPooledBiasTableWords; ++w) {
             reader_args.push_back(pooled_bias_table[w]);
-        }
-        for (const auto& [start, count] : group_members) {
-            reader_args.push_back(start);
-            reader_args.push_back(count);
         }
         if (group_mcast) {
             for (const uint32_t w : group_args[i]) {

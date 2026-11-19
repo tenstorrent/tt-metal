@@ -37,8 +37,10 @@ constexpr bool reduce_trigger_supported = true;
 #endif
 
 // Each includer of sdpa_streaming_common.hpp sets its own blocked-pack threshold before including it.
-// WH keeps 8: blocked pack reconfiguration costs more than it saves at smaller widths.
-#ifdef ARCH_BLACKHOLE
+// SDPA_MIN_BLOCKED_PACK_TILES comes from SDPAProgramConfig::min_blocked_pack_tiles.
+#if defined(SDPA_MIN_BLOCKED_PACK_TILES)
+constexpr uint32_t MIN_BLOCKED_PACK_TILES = SDPA_MIN_BLOCKED_PACK_TILES;
+#elif defined(ARCH_BLACKHOLE)
 constexpr uint32_t MIN_BLOCKED_PACK_TILES = 2;
 #else
 constexpr uint32_t MIN_BLOCKED_PACK_TILES = 8;
@@ -2563,6 +2565,9 @@ void sdpa_ring_v2(
                     if (causal_active < active_Sk_param) {
                         active_Sk_param = causal_active;
                         chunk_sbw = largest_factor_le(active_Sk_param, qkt_subblock_w);
+                        // The partial tile lies past the active columns. The step stamps it at column active_Sk - 1,
+                        // here the last Q row's diagonal tile, so this chunk takes no partial stamp.
+                        lw_partial_tile_idx = 0;
                     }
                 }
             }

@@ -4,12 +4,13 @@
 
 #pragma once
 
-// Host-side K/V chain construction for the sparse ring SDPA program factory, in the layout the ring joint SDPA reader
-// also uses: each core's flat Q range, linear store-and-forward chains, and row-wide multicast groups for the shared-K
-// and GQA K/V chains.
+// Host-side K/V chain construction for the sparse ring SDPA program factory (MHA only), in the layout the ring joint
+// SDPA reader also uses: each core's flat Q range, linear store-and-forward chains, and row-wide multicast groups for
+// the shared-K chain (one local K head).
 // The chain arguments' layout is in kernels/ring_joint_chain_layout.hpp.
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <deque>
 #include <limits>
@@ -65,30 +66,28 @@ struct ChainConfig {
     CoreCoord injector_physical = CoreCoord{0, 0};  // Injector's coords (for receiver sem addr in mcast)
     uint32_t mcast_num_dests = 0;                   // Receivers count (excludes self)
 
-    // Append runtime args in canonical order
+    // Append runtime args in canonical order. A word added or removed here without updating
+    // kChainConfigRuntimeArgCount (the kernels' layout) fails to compile.
     void append_to_args(std::vector<uint32_t>& args) const {
-        const size_t start_size = args.size();
-        args.push_back(static_cast<uint32_t>(participates));
-        args.push_back(static_cast<uint32_t>(is_injector));
-        args.push_back(static_cast<uint32_t>(is_sink));
-        args.push_back(head);
-        args.push_back(static_cast<uint32_t>(prev_physical.x));
-        args.push_back(static_cast<uint32_t>(prev_physical.y));
-        args.push_back(static_cast<uint32_t>(next_physical.x));
-        args.push_back(static_cast<uint32_t>(next_physical.y));
-        args.push_back(next_core_q_chunks);
-        args.push_back(static_cast<uint32_t>(mcast_start.x));
-        args.push_back(static_cast<uint32_t>(mcast_start.y));
-        args.push_back(static_cast<uint32_t>(mcast_end.x));
-        args.push_back(static_cast<uint32_t>(mcast_end.y));
-        args.push_back(static_cast<uint32_t>(injector_physical.x));
-        args.push_back(static_cast<uint32_t>(injector_physical.y));
-        args.push_back(mcast_num_dests);
-        TT_FATAL(
-            args.size() == start_size + kChainConfigRuntimeArgCount,
-            "ChainConfig expected to append {} runtime args, appended {}",
-            kChainConfigRuntimeArgCount,
-            args.size() - start_size);
+        const auto words = std::to_array<uint32_t>(
+            {participates,
+             is_injector,
+             is_sink,
+             head,
+             static_cast<uint32_t>(prev_physical.x),
+             static_cast<uint32_t>(prev_physical.y),
+             static_cast<uint32_t>(next_physical.x),
+             static_cast<uint32_t>(next_physical.y),
+             next_core_q_chunks,
+             static_cast<uint32_t>(mcast_start.x),
+             static_cast<uint32_t>(mcast_start.y),
+             static_cast<uint32_t>(mcast_end.x),
+             static_cast<uint32_t>(mcast_end.y),
+             static_cast<uint32_t>(injector_physical.x),
+             static_cast<uint32_t>(injector_physical.y),
+             mcast_num_dests});
+        static_assert(std::tuple_size_v<decltype(words)> == kChainConfigRuntimeArgCount);
+        args.insert(args.end(), words.begin(), words.end());
     }
 };
 
@@ -265,110 +264,6 @@ inline void configure_row_wide_chain_mcast(
         }
         chain_max_q[ci] = selection.max_q;
     }
-}
-
-struct GqaKvChains {
-    uint32_t grouped_chains = 0;
-    uint32_t grouped_participant_cores = 0;
-    uint32_t local_fallback_cores = 0;
-    bool mcast_enabled = false;
-    std::string mcast_fallback_reason;
-};
-
-// GQA K/V chains: one linear chain per K/V head over the cores whose Q range stays in that head's group (other
-// cores read their own K/V). With one local K/V head per chip (B = 1, NHK = NHV = 1) every active Q-head core
-// consumes the same K and V chunks, so each row with work uses a row-wide multicast instead of the store-and-forward
-// chain; idle cores in an active row participate in padded iterations. chain_max_q gets each multicast member's
-// loop-padding count.
-template <typename DeviceT>
-GqaKvChains build_gqa_kv_chains(
-    const std::vector<CoreWork>& core_work,
-    std::vector<ChainConfig>& chain_configs,
-    std::vector<uint32_t>& chain_max_q,
-    uint32_t NHK,
-    uint32_t q_heads_per_kv,
-    CoreCoord grid_size,
-    DeviceT* device) {
-    GqaKvChains res;
-    const uint32_t num_cores = static_cast<uint32_t>(core_work.size());
-    std::vector<std::vector<ChainSegment>> kv_group_segments(NHK);
-
-    for (uint32_t ci = 0; ci < num_cores; ++ci) {
-        if (core_work[ci].global_q_count == 0) {
-            continue;
-        }
-
-        bool has_single_group = false;
-        bool spans_multiple_groups = false;
-        uint32_t single_group_id = 0;
-        uint32_t q_chunk_count = 0;
-        for (const auto& hw : core_work[ci].head_work) {
-            const uint32_t kv_head = hw.head / q_heads_per_kv;
-            if (!has_single_group) {
-                has_single_group = true;
-                single_group_id = kv_head;
-            } else if (single_group_id != kv_head) {
-                spans_multiple_groups = true;
-                break;
-            }
-            q_chunk_count += hw.q_chunk_count;
-        }
-
-        if (has_single_group && !spans_multiple_groups) {
-            kv_group_segments[single_group_id].emplace_back(ci, q_chunk_count);
-            res.grouped_participant_cores++;
-        } else {
-            res.local_fallback_cores++;
-        }
-    }
-
-    for (uint32_t kv_head = 0; kv_head < static_cast<uint32_t>(kv_group_segments.size()); ++kv_head) {
-        const auto& chain_segs = kv_group_segments[kv_head];
-        if (chain_segs.size() < 2) {
-            continue;
-        }
-        if (build_linear_chain(chain_segs, kv_head, chain_configs, core_work, false)) {
-            res.grouped_chains++;
-        }
-    }
-
-    if (NHK != 1) {
-        res.mcast_fallback_reason = "NHK != 1 (multi-KV-head GQA mcast not supported)";
-    } else if (num_cores < 2) {
-        res.mcast_fallback_reason = "num_cores < 2";
-    } else if (grid_size.x < 2) {
-        res.mcast_fallback_reason = "grid_size.x < 2 (singleton rows)";
-    } else {
-        std::deque<uint32_t> recent_cols;  // FIFO of <= grid.x-1 most-recent claimed phys_x
-        uint32_t gqa_mcast_rows = 0;
-
-        for (uint32_t row = 0; row < grid_size.y; ++row) {
-            const auto selection = select_row_wide_chain_mcast(core_work, grid_size, device, row, recent_cols);
-            if (!selection.has_value()) {
-                continue;
-            }
-            configure_row_wide_chain_mcast(*selection, 0, chain_configs, chain_max_q, grid_size);
-            gqa_mcast_rows++;
-            log_debug(
-                tt::LogOp,
-                "GQA K/V mcast row {}: injector core {} phys=({},{}) max_q={}, rect ({},{})-({},{})",
-                selection->row,
-                selection->injector_idx,
-                selection->injector_physical.x,
-                selection->injector_physical.y,
-                selection->max_q,
-                selection->phys_start.x,
-                selection->phys_start.y,
-                selection->phys_end.x,
-                selection->phys_end.y);
-        }
-
-        res.mcast_enabled = gqa_mcast_rows > 0;
-        if (!res.mcast_enabled) {
-            res.mcast_fallback_reason = "no active groups";
-        }
-    }
-    return res;
 }
 
 // Shared-K chain for separate-V / latent cases: K is shared across all heads, so all active cores form one chain,

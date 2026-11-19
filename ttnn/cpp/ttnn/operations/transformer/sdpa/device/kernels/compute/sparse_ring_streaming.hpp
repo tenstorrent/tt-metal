@@ -594,8 +594,14 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
     // rare: in practice only a row's first steps move its max that far. A slot's first step (uninitialized) only
     // copies its new max into the slot. Either way S5 subtracts cb_max_in, after the S3 packs are drained.
     constexpr float kScale = __builtin_bit_cast(float, scale_fp32);
-    constexpr float kLazyThrRaw = 16.0f * 0.69314718055994531f / kScale;
+    // The host rejects scales that are not finite and positive, so the threshold is positive: the unsigned compare
+    // of bf16 bits below orders positive values. A scale so small that the quotient would overflow (below ~3e-38)
+    // gets +inf directly (an overflowing division is not a constant expression), which only turns lazy rescaling
+    // off: the exp inputs (score - max) * scale are then tiny anyway.
+    constexpr float kLazyThrNum = 16.0f * 0.69314718055994531f;
+    constexpr float kLazyThrRaw = kScale > kLazyThrNum / __FLT_MAX__ ? kLazyThrNum / kScale : __builtin_inff();
     constexpr uint16_t kLazyThrBits = static_cast<uint16_t>(__builtin_bit_cast(uint32_t, kLazyThrRaw) >> 16);
+    static_assert(kLazyThrRaw > 0.0f, "the lazy-rescale threshold needs a positive scale");
     uint32_t n_init = 0;
     for (uint32_t g = 0; g < n_slots; ++g) {
         n_init += slot_init(g) ? 1u : 0u;
@@ -715,7 +721,10 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
                 invalidate_l1_cache();
             });
             const uint32_t growth = ckernel::read_tile_value(cb_exp_max_diff, 0, 0);
-            rescale = (growth & 0xFFFFu) > kLazyThrBits;
+            // bf16 bits compared as a signed 16-bit integer: positive values keep their order and a sign-set word
+            // (-0.0 or a tiny negative from rounding: no growth) is negative, so only positive growth above the
+            // threshold rescales. (One signed compare: the riscv-tt GCC 15 crashes on the equivalent range check.)
+            rescale = static_cast<int16_t>(growth & 0xFFFFu) > static_cast<int16_t>(kLazyThrBits);
         }
 
         // ---- S3: rescale: alpha = exp((old max - new max) * scale) into cb_exp_max_diff and the new max into every

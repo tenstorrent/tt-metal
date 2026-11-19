@@ -254,6 +254,7 @@ class Ideogram4TransformerBlock(Module):
             q_chunk_size=self.sdpa_q_chunk_size,
             k_chunk_size=self.sdpa_k_chunk_size,
             exp_approx_mode=False,
+            min_blocked_pack_tiles=2,
         )
         # Ring SDPA (sequence parallel) reserves the last worker row for the CCL all-gather.
         self.sdpa_worker_grid = (device_grid.x, device_grid.y - 1)
@@ -331,6 +332,7 @@ class Ideogram4TransformerBlock(Module):
                 q_chunk_size=qc,
                 k_chunk_size=self.sdpa_k_chunk_size,
                 exp_approx_mode=False,
+                min_blocked_pack_tiles=2,
             )
             self._ring_sdpa_pc_cache[qc] = pc
         return pc

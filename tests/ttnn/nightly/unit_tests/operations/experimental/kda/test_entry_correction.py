@@ -86,8 +86,8 @@ def _host_inputs(seed: int, chunks: int = _CHUNKS) -> tuple[torch.Tensor, ...]:
     generator = torch.Generator().manual_seed(seed)
     zero = 0.1 * torch.randn(_HEADS, chunks, _CHUNK, _KEY, generator=generator)
     identity = 0.1 * torch.randn(_HEADS, chunks, _CHUNK, _KEY, generator=generator)
-    final_a, final_b, entry, tail = (0.1 * torch.randn(_HEADS, _KEY, _KEY, generator=generator) for _ in range(4))
-    return zero, identity, final_a, final_b, entry, tail
+    final_e, final_b, entry, tail = (0.1 * torch.randn(_HEADS, _KEY, _KEY, generator=generator) for _ in range(4))
+    return zero, identity, final_e, final_b, entry, tail
 
 
 def _device_inputs(device, correction: EntryCorrection, host: tuple[torch.Tensor, ...]) -> tuple[ttnn.Tensor, ...]:
@@ -104,18 +104,25 @@ def _device_inputs(device, correction: EntryCorrection, host: tuple[torch.Tensor
 
 
 def _terms(correction: EntryCorrection, zero: torch.Tensor, identity: torch.Tensor) -> torch.Tensor:
-    """F(0) and F(I) [BH, NC, 32, K] as the summary emits them: each core's chunk rows of F(0), then of F(I)."""
+    """F(0) and F(I) [BH, NC, 32, K] as the summary emits them: a block's chunk rows of F(0), then of F(I). Sharded, a
+    block is one core's chunks; streamed from DRAM, it is a whole head's (the summary's emit_block_chunks)."""
     heads, *_, key = zero.shape
-    blocks = heads * correction.cores_per_head
+    blocks = heads * (correction.cores_per_head if correction.terms_memory_config.is_sharded() else 1)
     return torch.stack([zero.reshape(blocks, -1, key), identity.reshape(blocks, -1, key)], dim=1)
+
+
+def _chunked(output: ttnn.Tensor) -> torch.Tensor:
+    host = ttnn.to_torch(output).float()
+    return host.reshape(host.shape[0], -1, _CHUNK, host.shape[-1])
 
 
 def _reference(host: tuple[torch.Tensor, ...], interval: _Interval) -> tuple[torch.Tensor, torch.Tensor, int]:
     """The valid chunk outputs and the final state, in FP64. tail_entry is never read on one rank."""
-    zero, identity, final_a, final_b, entry, _ = (tensor.double() for tensor in host)
+    zero, identity, final_e, final_b, entry, _ = (tensor.double() for tensor in host)
     valid = interval.valid_chunks()
     output = zero + (identity - zero) @ entry.unsqueeze(1)
-    final = final_a @ entry + final_b
+    # The final transition in complement form, E = A - I: final = A @ entry + B = entry + (E @ entry + B).
+    final = entry + (final_e @ entry + final_b)
     return output[:, :valid].float(), final.float(), valid
 
 
@@ -165,7 +172,7 @@ def test_entry_correction_accuracy_and_determinism(
     results = []
     for _ in range(3):
         output, final = correction(*inputs, actual_start, actual_end)
-        results.append((ttnn.to_torch(output).float()[:, :valid], ttnn.to_torch(final)))
+        results.append((_chunked(output)[:, :valid], ttnn.to_torch(final)))
         ttnn.deallocate(output)
         ttnn.deallocate(final)
     got_output, got_final = results[0]
@@ -182,13 +189,13 @@ def test_entry_correction_streams_terms_over_the_l1_budget(device: ttnn.Device) 
     assert correction.terms_memory_config.buffer_type == ttnn.BufferType.DRAM
     host = _host_inputs(seed=rows, chunks=rows // _CHUNK)
     inputs = _device_inputs(device, correction, host)
-    zero, identity, final_a, final_b, entry, _ = (tensor.double() for tensor in host)
-    expected = (zero + (identity - zero) @ entry.unsqueeze(1)).float(), (final_a @ entry + final_b).float()
+    zero, identity, final_e, final_b, entry, _ = (tensor.double() for tensor in host)
+    expected = (zero + (identity - zero) @ entry.unsqueeze(1)).float(), (entry + (final_e @ entry + final_b)).float()
 
     results = []
     for _ in range(2):
         output, final = correction(*inputs, make_actual_start(device, 0), None)
-        results.append((ttnn.to_torch(output).float(), ttnn.to_torch(final)))
+        results.append((_chunked(output), ttnn.to_torch(final)))
         ttnn.deallocate(output)
         ttnn.deallocate(final)
     _assert_matches(expected, results[0], "streamed")
@@ -209,7 +216,7 @@ def test_entry_correction_cache_hit_reads_new_interval(device: ttnn.Device, isol
             *inputs, make_actual_start(device, interval.start), make_actual_start(device, interval.end)
         )
         *expected, valid = _reference(host, interval)
-        got = (ttnn.to_torch(output).float()[:, :valid], ttnn.to_torch(final))
+        got = (_chunked(output)[:, :valid], ttnn.to_torch(final))
         _assert_matches(expected, got, f"cached {interval_id}")
     assert device.num_program_cache_entries() == entries + 1
 
@@ -221,13 +228,13 @@ def test_entry_correction_rejects_aliased_entry_states(
     bindings ambiguous: rejected, and a later call with distinct tensors is still correct."""
     correction = _correction(device, ttnn.MathFidelity.HiFi4)
     host = _host_inputs(seed=11)
-    terms, final_a, final_b, entry, tail = _device_inputs(device, correction, host)
+    terms, final_e, final_b, entry, tail = _device_inputs(device, correction, host)
     actual_start = make_actual_start(device, 0)
     with expect_error(RuntimeError, "entry and tail_entry must be different tensors"):
-        correction(terms, final_a, final_b, entry, entry, actual_start, None)
-    output, final = correction(terms, final_a, final_b, entry, tail, actual_start, None)
+        correction(terms, final_e, final_b, entry, entry, actual_start, None)
+    output, final = correction(terms, final_e, final_b, entry, tail, actual_start, None)
     *expected, valid = _reference(host, _INTERVALS["full"])
-    got = (ttnn.to_torch(output).float()[:, :valid], ttnn.to_torch(final))
+    got = (_chunked(output)[:, :valid], ttnn.to_torch(final))
     _assert_matches(expected, got, "after a rejected alias")
 
 
@@ -249,7 +256,7 @@ def test_entry_correction_production_performance(device: ttnn.Device) -> None:
 
     (output, final), perf_record = profile_realtime_program(device, lambda: correction(*inputs, actual_start, None))
     duration_ns = perf_record["duration_ns"]
-    assert tuple(output.shape) == (_HEADS, _CHUNKS, _CHUNK, _KEY)
+    assert tuple(output.shape) == (_HEADS, _ROWS, _KEY)
     assert tuple(final.shape) == (_HEADS, _KEY, _KEY)
     performance = perf_model.performance(
         fpu=_entry_correction_ops(),

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -155,7 +155,8 @@ void kernel_main() {
     constexpr bool enable_kv_chains = true;
     constexpr uint32_t gathered_padded_Nt = get_compile_time_arg_val(30);
     // Slots 31-35 are the trace metadata and joint-token fields (unused).
-    constexpr bool gqa_grouped_kv = ring_joint::is_gqa_grouped_kv_head_mode(v_shares_k_buffer, NH, NHK, NHV);
+    // MHA only (validated on the host): no GQA grouped chains.
+    constexpr bool gqa_grouped_kv = false;
     constexpr bool k_uses_batch_chain = ring_joint::uses_shared_k_batch_chain(gqa_grouped_kv, NHK);
     constexpr bool use_head_chain = ring_joint::uses_v_head_chain(enable_kv_chains, gqa_grouped_kv, v_shares_k_buffer);
     constexpr uint32_t q_heads_per_v = NH / NHV;
@@ -201,16 +202,11 @@ void kernel_main() {
         head_cfg = ChainConfig::read_from_args(argidx);
     }
 
-    // Batch chain runtime args (only present for non-GQA shared-K modes).
+    // Batch chain runtime args (only present with one local K head: shared K).
     ChainConfig batch_cfg;  // default zero-initialized
     if constexpr (enable_kv_chains && k_uses_batch_chain) {
         batch_cfg = ChainConfig::read_from_args(argidx);
         argidx++;  // max_q_per_core (dense loop only)
-    }
-    ChainConfig gqa_cfg;  // default zero-initialized
-    if constexpr (enable_kv_chains && gqa_grouped_kv) {
-        gqa_cfg = ChainConfig::read_from_args(argidx);
-        argidx++;  // gqa_max_q_per_core (dense loop only)
     }
 
     const uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
@@ -222,20 +218,16 @@ void kernel_main() {
 
     // The sparse runtime args follow the fused-op receiver block.
     const uint32_t sparse_args_base = argidx;
-    // Compile-time semaphore ids and multicast flags of the head, shared-K and GQA chains, appended after all
+    // Compile-time semaphore ids and multicast flags of the head and shared-K chains, appended after all
     // TensorAccessorArgs() (ring_joint_chain_layout.hpp); a chain the op does not use has no args.
     using HeadChainArgs = ChainCompileArgs<use_head_chain, chains_base_offset>;
     using BatchChainArgs =
         ChainCompileArgs<enable_kv_chains && k_uses_batch_chain, chains_base_offset + HeadChainArgs::arg_count>;
-    using GqaChainArgs = ChainCompileArgs<
-        enable_kv_chains && gqa_grouped_kv,
-        chains_base_offset + HeadChainArgs::arg_count + BatchChainArgs::arg_count>;
     [[maybe_unused]] constexpr uint32_t head_sender_semaphore_id = HeadChainArgs::sender_semaphore_id;
     [[maybe_unused]] constexpr uint32_t head_receiver_semaphore_id = HeadChainArgs::receiver_semaphore_id;
     [[maybe_unused]] constexpr uint32_t head_valid_semaphore_id = HeadChainArgs::valid_semaphore_id;
 
-    constexpr uint32_t cb_arg_offset =
-        chains_base_offset + HeadChainArgs::arg_count + BatchChainArgs::arg_count + GqaChainArgs::arg_count;
+    constexpr uint32_t cb_arg_offset = chains_base_offset + HeadChainArgs::arg_count + BatchChainArgs::arg_count;
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
@@ -243,19 +235,16 @@ void kernel_main() {
     const uint32_t mask_addr = get_arg_val<uint32_t>(sparse_args_base + 0);
     [[maybe_unused]] const uint32_t pooled_k_addr = get_arg_val<uint32_t>(sparse_args_base + 1);
     [[maybe_unused]] const uint32_t pooled_v_addr = get_arg_val<uint32_t>(sparse_args_base + 2);
-    // +3: block counts address (none: geometric counts). +4: head chain member count, +5: this core's first Q
-    // chunk in the chain. Then (load balancing) the balance words, the packed bf16 bias-per-token-count table
-    // (pooled_bias_gen::kTableWords words), the members (start, count) and the head group's delivery arguments.
+    // +3: block counts address (none: geometric counts). Then (load balancing) the balance words, the packed bf16
+    // bias-per-token-count table (pooled_bias_gen::kTableWords words) and the head group's delivery arguments.
     [[maybe_unused]] const uint32_t block_counts_addr = get_arg_val<uint32_t>(sparse_args_base + 3);
-    const uint32_t group_n_members = get_arg_val<uint32_t>(sparse_args_base + 4);
     // Load balancing: +0 this core's index, +1 the cost table, +2 / +3 the balance core's NoC x / y, +4 / +5 the
     // swapped-in Q and mask rows (cross-device; laid out as Q and the mask, by local slot).
     constexpr bool balance = get_named_compile_time_arg_val("balance") == 1;
     constexpr bool balance_remote = get_named_compile_time_arg_val("balance_remote") == 1;
-    [[maybe_unused]] const uint32_t balance_base = sparse_args_base + 6;
+    [[maybe_unused]] const uint32_t balance_base = sparse_args_base + 4;
     constexpr uint32_t kBalanceArgs = balance ? 6 : 0;
     const uint32_t pooled_bias_table_base = balance_base + kBalanceArgs;
-    const uint32_t group_members_base = pooled_bias_table_base + pooled_bias_gen::kTableWords;
     constexpr uint32_t logical_n_tokens = get_named_compile_time_arg_val("sparse_logical_n");
     constexpr uint32_t mask_nb = get_named_compile_time_arg_val("mask_nb");
     constexpr uint32_t mask_nb_pad = get_named_compile_time_arg_val("mask_nb_pad");
@@ -314,25 +303,15 @@ void kernel_main() {
 
     // Head chain (query-head level): MHA uses it for K/V; separate-V shared-K uses it for V only.
     auto head_chain = make_chain_link<HeadChainArgs, true>(head_cfg, v_chunk_tiles, v_tile_bytes, head_cfg.head);
-    // Shared-K chain used by K in non-GQA shared-K modes (no chain head).
+    // Shared-K chain used by K with one local K head (no chain head).
     auto batch_chain = make_chain_link<BatchChainArgs, false>(batch_cfg, k_chunk_tiles, k_tile_bytes, 0);
-    // GQA grouped chain (head-level where head means KV head): used by both K and V in GQA_GROUPED_KV.
-    auto gqa_chain = make_chain_link<GqaChainArgs, true>(gqa_cfg, v_chunk_tiles, v_tile_bytes, gqa_cfg.head);
 
-    // Non-shared V uses the head chain, except GQA where K and V share the grouped KV-head chain.
-    auto& v_chain = [&]() -> auto& {
-        if constexpr (gqa_grouped_kv) {
-            return gqa_chain;
-        } else {
-            return head_chain;
-        }
-    }();
+    // V uses the head chain.
+    auto& v_chain = head_chain;
 
-    // K uses the grouped GQA chain, the shared-K chain, or the query-head chain.
+    // K uses the shared-K chain or the query-head chain.
     auto& k_chain = [&]() -> auto& {
-        if constexpr (gqa_grouped_kv) {
-            return gqa_chain;
-        } else if constexpr (k_uses_batch_chain) {
+        if constexpr (k_uses_batch_chain) {
             return batch_chain;
         } else {
             return head_chain;
@@ -662,15 +641,11 @@ void kernel_main() {
                     uhi |= res_hi[i1];
                     ++i1;
                 }
-                if (group_n_members > 0 && head_cfg.participates && res_nq[i0] == head_cfg.head) {
+                if (head_cfg.participates && res_nq[i0] == head_cfg.head) {
                     // Chain / group members stream every piece holding a live block of this shard: a superset of the
                     // members' union that needs no mask reads and is the same on every member. Compute skips a piece
                     // it keeps no block of.
-                    uint32_t words[kBlockWords];
-                    for (uint32_t w = 0; w < kBlockWords; ++w) {
-                        words[w] = live_bits[w];
-                    }
-                    piece_bits(words, ulo, uhi);
+                    piece_bits(live_bits, ulo, uhi);
                 }
                 for (uint32_t i = i0; i < i1; ++i) {
                     seg_ulo[i] = ulo;
@@ -723,9 +698,7 @@ void kernel_main() {
                 const uint32_t nv = nq / q_heads_per_v;
                 const uint32_t row0 = (source_is_local ? 0 : source_start_tile) + k * Sk_chunk_t;
                 const Slice k_slice(nb, nk, row0, row0 + Sk_chunk_t, 0, DHt);
-                // Chain scope keys: the query head for MHA chains, the KV head for grouped ones.
-                const uint32_t k_head = gqa_grouped_kv ? nk : nq;
-                const bool k_rx = k_chain_moves && k_chain.should_receive(k_head);
+                const bool k_rx = k_chain_moves && k_chain.should_receive(nq);
                 const bool v_rx = v_chain_moves && v_chain.should_receive(nv);
                 CircularBuffer cb_k(cb_k_in);
                 uint32_t k_addr;
@@ -749,8 +722,7 @@ void kernel_main() {
                 } else {
                     fetch_block(gathered_k_generator, k_slice, end_seq_tile, cb_k_in, k_addr, k_tile_bytes, true);
                 }
-                // Push before the forward: the forward only reads the page, its NoC write is flushed inside
-                // forward(), and the page is not reused before piece p+2's reserve.
+                // Safe to push before forwarding: the page is not reused before piece p+2's reserve.
                 cb_k.push_back(k_chunk_tiles);
                 // Arm V(p) (reserve its page, signal ready) before forwarding K(p) when the page is free.
                 const Slice v_slice(nb, nv, row0, row0 + Sk_chunk_t, v_col_offset_t, v_col_offset_t + vDHt);
@@ -763,8 +735,8 @@ void kernel_main() {
                     v_reserved = true;
                     v_chain.signal_ready(noc);
                 }
-                if (k_chain_moves && k_chain.should_forward(k_head, 0)) {
-                    k_chain.forward(noc, k_addr, k_chunk_tiles, k_tile_bytes);
+                if (k_chain_moves && k_chain.should_forward(nq, 0)) {
+                    k_chain.forward_at(noc, k_addr, k_chunk_tiles, k_tile_bytes);
                 }
                 if (!v_reserved) {
                     cb_v.reserve_back(v_chunk_tiles);
@@ -789,7 +761,7 @@ void kernel_main() {
                     k_chain.signal_ready(noc);
                 }
                 if (v_chain_moves && v_chain.should_forward(nv, 0)) {
-                    v_chain.forward(noc, v_addr);
+                    v_chain.forward_at(noc, v_addr, v_chunk_tiles, v_tile_bytes);
                 }
             };
             // After each streamed piece's K/V: one key-bias tile per block of the piece whose real tokens end inside a
@@ -835,7 +807,7 @@ void kernel_main() {
             // The credit lookahead must stay one piece: then the shared credit sum reaches receivers x p only if
             // every consumer has credited p; a deeper lookahead lets a fast consumer's credits stand in for a slow
             // one's and the multicast overwrites a page the slow core has not popped.
-            [[maybe_unused]] const uint32_t g_base = group_members_base + 2 * group_n_members;
+            [[maybe_unused]] const uint32_t g_base = pooled_bias_table_base + pooled_bias_gen::kTableWords;
             [[maybe_unused]] const uint32_t g_role = group_mcast ? get_arg_val<uint32_t>(g_base) : 0;
             [[maybe_unused]] uint32_t g_granted = 0;  // pieces credited this iteration
             [[maybe_unused]] uint32_t g_ahead = 0;    // pieces credited, not yet pushed

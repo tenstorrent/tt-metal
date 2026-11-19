@@ -89,8 +89,8 @@ def test_the_cache_check_call_binds_to_the_transformer():
 
 
 def test_every_forward_call_binds_to_the_transformer():
-    """The eager and traced chunk paths both call `self.model.forward`; neither is reached by an eager test."""
-    for call in _call_sites("self.model.forward", expected=2):
+    """The eager and traced chunk paths and the packed `prefill_forward` call `self.model.forward`; none is reached by an eager test."""
+    for call in _call_sites("self.model.forward", expected=3):
         _bind(TtKimiK3Transformer.forward, call, None)
 
 
@@ -108,6 +108,34 @@ def test_forward_rejects_mtp_arguments_before_device_work(expect_error, mtp_kwar
     model = object.__new__(TtKimiK3Transformer)
     with expect_error(ValueError, "no MTP predictor"):
         model.forward(object(), **mtp_kwargs)
+
+
+def test_forward_checks_the_index_cache_against_the_config(expect_error):
+    """K3 has no DSA indexer, so an index cache is a wiring mistake; K3.1's DSA layers cannot run without one."""
+    model = object.__new__(TtKimiK3Transformer)
+    model.has_indexer = False
+    with expect_error(ValueError, "no DSA indexer"):
+        model.forward(object(), index_kv_cache=object())
+    model.has_indexer, model.schedule = True, SimpleNamespace(num_mla_layers=1)
+    with expect_error(ValueError, "pass index_kv_cache"):
+        model.forward(object())
+
+
+def test_only_a_dsa_config_takes_a_sparse_kv_cache_format(expect_error):
+    """K3's dense MLA cache cannot take a sparse format; refused before any device work."""
+    from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
+    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
+
+    with expect_error(ValueError, "dense MLA KV cache"):
+        TtKimiK3Transformer(
+            None,
+            kimi_k3_hf_config(),
+            KimiK3Config,
+            {},
+            num_layers=1,
+            seq_len=5120,
+            sparse_kv_cache_format=MlaKvCacheFormat.SCALED_FP8,
+        )
 
 
 def test_runtime_rejects_mtp_before_the_shared_build(monkeypatch, expect_error):
@@ -163,7 +191,6 @@ def test_kda_construction_passes_global_and_local_geometry(monkeypatch, sp_axis,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         topology=(ttnn.Topology.Linear, ttnn.Topology.Linear),
-        kda_scratch=object(),
     )
     kwargs = constructor.call_args.kwargs
     assert kwargs["active_seq_len"] == 2560
@@ -207,11 +234,11 @@ def test_build_kda_scalars_rejects_invalid_host_bounds_before_upload(monkeypatch
     upload.assert_not_called()
 
 
-def test_kda_forward_runs_the_whole_layer_on_its_slot_through_the_shared_scratch(monkeypatch):
+def test_kda_forward_runs_the_whole_layer_on_its_slot_in_the_slabs(monkeypatch):
     kdas = [create_autospec(ttKDA, instance=True) for _ in range(2)]
     for kda in kdas:
         kda.convolution_page_channels = KDA_CONVOLUTION_PAGE_CHANNELS
-        kda.forward_slot.return_value = object()
+        kda.forward.return_value = (object(), None)
     slot, start, end = object(), object(), object()
     from_torch, deallocate, gather = Mock(), Mock(), Mock()
     monkeypatch.setattr(ttnn, "from_torch", from_torch)
@@ -219,7 +246,7 @@ def test_kda_forward_runs_the_whole_layer_on_its_slot_through_the_shared_scratch
     monkeypatch.setattr(ttnn, "all_gather", gather)
     monkeypatch.setattr(ttnn, "squeeze", lambda tensor, **kwargs: tensor)
     monkeypatch.setattr(ttnn, "unsqueeze", lambda tensor, **kwargs: tensor)
-    slabs, scratch = Mock(), object()
+    slabs = Mock()
     # The host ints are MLA's; a KDA layer reads only the scalars and the slabs, the same objects on every layer.
     ctx = K3AttnContext(
         actual_start=5120,
@@ -230,19 +257,14 @@ def test_kda_forward_runs_the_whole_layer_on_its_slot_through_the_shared_scratch
     )
     hidden = object()
     for layer_idx, kda in enumerate(kdas):
-        output = kda.forward_slot.return_value
-        assert TtK3KdaAttention(kda, layer_idx, 1, 1, ttnn.Topology.Linear, scratch).forward(hidden, ctx) is output
-        # The whole per-chunk layer (import, TP all-gather, KDA, export) is ttKDA.forward_slot, on the TP-sharded
-        # input and the shared scratch. The carry is selected by the device slot, so a capture never pins the slot
-        # it was recorded on.
-        kda.forward_slot.assert_called_once_with(
-            hidden, scratch, slabs, slot, layer_idx, actual_start=start, actual_end=end
-        )
-        kda.forward.assert_not_called()
+        output = kda.forward.return_value[0]
+        assert TtK3KdaAttention(kda, layer_idx, 1, 1, ttnn.Topology.Linear).forward(hidden, ctx) is output
+        # The whole per-chunk layer is ttKDA.forward on the slot's slab entry, selected by the device slot, so a
+        # capture never pins the slot it was recorded on.
+        kda.forward.assert_called_once_with(hidden, slabs.entry.return_value, start, end)
+        slabs.entry.assert_called_with(slot, layer_idx)
     # The wrapper itself moves nothing: no gather, no slab copy, no free of the block's input.
     gather.assert_not_called()
-    slabs.import_layer.assert_not_called()
-    slabs.export_layer.assert_not_called()
     deallocate.assert_not_called()
     from_torch.assert_not_called()
 
@@ -260,6 +282,7 @@ def _mocked_layer(monkeypatch, tensor_parallel_size: int):
     for name in ("qkv_convolution_program_config", "qkv_memory_config", "sequence_parallel_axis"):
         setattr(layer, name, None)
     layer._history_exchange = SimpleNamespace(buffer=None, semaphores=None)
+    layer._tp_gather_kwargs = None
     layer._validate_forward = Mock()
     layer._validate_runtime_bound = Mock()
     projected = SimpleNamespace(projected=object(), decay_rank_offset=0, output_gate_offset=0, beta_offset=0)
@@ -279,29 +302,6 @@ def _mocked_layer(monkeypatch, tensor_parallel_size: int):
     return layer, calls
 
 
-def test_kda_forward_slot_imports_gathers_runs_and_exports_in_order(monkeypatch):
-    layer, calls = _mocked_layer(monkeypatch, tensor_parallel_size=4)
-    slabs, slot, scratch, start, end = Mock(), object(), Mock(), object(), object()
-    calls.attach_mock(slabs, "slabs")
-    tp_shard = SimpleNamespace(shape=(1, 64, 64))  # 256 / TP 4: the model's TP-sharded residual
-    assert layer.forward_slot(tp_shard, scratch, slabs, slot, 7, start, end) == "output"
-    order = [c[0] for c in calls.mock_calls if not c[0].startswith("project_inputs().")]
-    # import -> TP all-gather -> projection -> ... -> output projection -> export, then free the replacement carry.
-    assert order.index("slabs.import_layer") < order.index("all_gather") < order.index("project_inputs")
-    assert order.index("project_output") < order.index("slabs.export_layer")
-    calls.slabs.import_layer.assert_called_once_with(scratch, slot, 7, zero_fill_at_zero=start)
-    calls.all_gather.assert_called_once_with(tp_shard, dim=-1, cluster_axis=1)
-    calls.project_inputs.assert_called_once_with("gathered")
-    exported = calls.slabs.export_layer.call_args.args
-    assert (exported[0].recurrent, exported[0].convolution, exported[1:]) == (
-        "final_recurrent",
-        "new_convolution",
-        (slot, 7),
-    )
-    freed = [c.args[0] for c in calls.deallocate.call_args_list]
-    assert "gathered" in freed and freed[-2:] == ["final_recurrent", "new_convolution"]
-
-
 def test_kda_layer_functional_path_skips_the_gather_on_a_full_width_input(monkeypatch):
     layer, calls = _mocked_layer(monkeypatch, tensor_parallel_size=4)
     full = SimpleNamespace(shape=(1, 64, 256))
@@ -315,7 +315,7 @@ def test_kda_attention_rejects_a_layer_without_the_contract_convolution_pages(ex
     # A default-config layer keeps its convolution tail token-paged.
     kda = Mock(convolution_page_channels=KDAProgramConfig().convolution_page_channels)
     with expect_error(ValueError, f"convolution_page_channels={KDA_CONVOLUTION_PAGE_CHANNELS}"):
-        TtK3KdaAttention(kda, 1, 1, 1, ttnn.Topology.Linear, object())
+        TtK3KdaAttention(kda, 1, 1, 1, ttnn.Topology.Linear)
 
 
 @pytest.mark.parametrize(
@@ -333,7 +333,7 @@ def test_kda_forward_requires_scalars_and_slabs_before_device_work(monkeypatch, 
     gather = Mock()
     monkeypatch.setattr(ttnn, "all_gather", gather)
     attention = TtK3KdaAttention(
-        Mock(convolution_page_channels=KDA_CONVOLUTION_PAGE_CHANNELS), 1, 1, 1, ttnn.Topology.Linear, object()
+        Mock(convolution_page_channels=KDA_CONVOLUTION_PAGE_CHANNELS), 1, 1, 1, ttnn.Topology.Linear
     )
     with expect_error(ValueError, message):
         attention.forward(object(), ctx)
@@ -365,32 +365,32 @@ def test_runtime_accepts_unaligned_end(monkeypatch):
     parent_forward.assert_called_once()
 
 
-def _runtime_serving(*, num_users: int, kda_layer_ids: tuple[int, ...], scratch):
+def _runtime_serving(*, num_users: int, kda_layer_ids: tuple[int, ...], has_kda_layers: bool):
     from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import TtKimiK3Runtime
 
     runtime = object.__new__(TtKimiK3Runtime)
     runtime.config = SimpleNamespace(num_users=num_users)
     schedule = SimpleNamespace(rank_kda_layer_ids=lambda: kda_layer_ids)
-    runtime.model = SimpleNamespace(kda_scratch=scratch, kda_states=None, schedule=schedule)
+    runtime.model = SimpleNamespace(has_kda_layers=has_kda_layers, kda_states=None, schedule=schedule)
     return runtime
 
 
 @pytest.mark.parametrize(
-    "has_slabs,scratch",
-    [(False, None), (True, object()), (False, object()), (True, None)],
+    "has_slabs,has_kda_layers",
+    [(False, False), (True, True), (False, True), (True, False)],
     ids=["no-kda-rank", "kda-rank", "slabs-missing", "slabs-without-kda-layers"],
 )
 def test_compile_hands_the_slabs_to_the_model_only_when_the_rank_has_kda_layers(
-    monkeypatch, expect_error, has_slabs, scratch
+    monkeypatch, expect_error, has_slabs, has_kda_layers
 ):
     from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
 
     slabs = SimpleNamespace(num_slots=2, layer_ids=(0, 3)) if has_slabs else None
-    runtime = _runtime_serving(num_users=2, kda_layer_ids=(0, 3), scratch=scratch)
+    runtime = _runtime_serving(num_users=2, kda_layer_ids=(0, 3), has_kda_layers=has_kda_layers)
     parent_compile = Mock()
     monkeypatch.setattr(TtPrefillRuntime, "compile", parent_compile)
     kv_caches = SimpleNamespace(kda_states=slabs)
-    if has_slabs == (scratch is not None):
+    if has_slabs == has_kda_layers:
         runtime.compile(kv_caches)
         assert runtime.model.kda_states is slabs
         parent_compile.assert_called_once_with(kv_caches)
@@ -408,10 +408,25 @@ def test_compile_rejects_slabs_that_do_not_match_the_runtime(monkeypatch, expect
 
     # An out-of-range slot is a silent no-op on device, so a slot count or layer set that disagrees
     # with the runtime must fail here, before the first forward.
-    runtime = _runtime_serving(num_users=2, kda_layer_ids=(0, 3), scratch=object())
+    runtime = _runtime_serving(num_users=2, kda_layer_ids=(0, 3), has_kda_layers=True)
     parent_compile = Mock()
     monkeypatch.setattr(TtPrefillRuntime, "compile", parent_compile)
     with expect_error(RuntimeError, "KDA slabs"):
         runtime.compile(SimpleNamespace(kda_states=SimpleNamespace(num_slots=num_slots, layer_ids=layer_ids)))
     assert runtime.model.kda_states is None
     parent_compile.assert_not_called()
+
+
+def test_only_k3_1_moves_the_indexer_score_off_the_op_default():
+    """K3.1 scores at HiFi2; the other DSA configs keep the op's default (None passed,
+    as before), so their indexer is unchanged."""
+    from models.demos.deepseek_v3_d_p.reference.deepseek_v3_2_config import deepseek_v32_hf_config
+    from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import glm_5_3_hf_config
+    from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import kimi_k3_1_hf_config
+    from models.demos.deepseek_v3_d_p.tt.mla.indexer import score_compute_kernel_config
+
+    k31 = score_compute_kernel_config(kimi_k3_1_hf_config(), ttnn.Arch.BLACKHOLE)
+    assert k31.math_fidelity == ttnn.MathFidelity.HiFi2
+    assert not (k31.fp32_dest_acc_en or k31.packer_l1_acc or k31.dst_full_sync_en)
+    for other in (glm_5_3_hf_config(), deepseek_v32_hf_config()):
+        assert score_compute_kernel_config(other, ttnn.Arch.BLACKHOLE) is None

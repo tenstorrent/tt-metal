@@ -26,7 +26,8 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-umd/types/arch.hpp>
 #include "impl/kernels/kernel.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "distributed/mesh_device_impl.hpp"
 
@@ -145,8 +146,8 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         .kernels = kernel_specs,
         .work_units = {wu},
     };
-    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
-    tt_metal::experimental::SetProgramRunArgs(program, params);
+    Program program(*mesh_device, spec);
+    program.set_program_run_args(params);
     workload.add_program(device_range, std::move(program));
 
     // Dispatch non-blocking: kernels post waypoint then spin on sync flag
@@ -175,9 +176,12 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
 
     constexpr int timeout_ms = 30000;
     auto start = std::chrono::steady_clock::now();
-    while (!FileContainsAllStrings(fixture->log_file_name, poll_strings)) {
+    while (!FileContainsAllStrings(fixture->log_file_name, poll_strings, /*report_missing=*/false)) {
         auto elapsed =
             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+        if (elapsed >= timeout_ms) {
+            FileContainsAllStrings(fixture->log_file_name, poll_strings);  // logs what's missing, and the file
+        }
         ASSERT_LT(elapsed, timeout_ms) << "Timed out waiting for watcher to log " << waypoint << " waypoints";
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     }
@@ -303,9 +307,12 @@ void RunEthTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::
 
     constexpr int timeout_ms = 30000;
     auto start = std::chrono::steady_clock::now();
-    while (!FileContainsAllStrings(fixture->log_file_name, poll_strings)) {
+    while (!FileContainsAllStrings(fixture->log_file_name, poll_strings, /*report_missing=*/false)) {
         auto elapsed =
             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+        if (elapsed >= timeout_ms) {
+            FileContainsAllStrings(fixture->log_file_name, poll_strings);  // logs what's missing, and the file
+        }
         ASSERT_LT(elapsed, timeout_ms) << "Timed out waiting for watcher to log ETH waypoints";
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     }

@@ -15,14 +15,11 @@ wormhole_b0:
   # Job-level timeouts -- can be cut down still
   - tests/ttnn/unit_tests/base_functionality/test_graph_report.py::test_resnet50_e2e_graph_capture
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_unary_dram_reads_large.py
   - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
   - tests/ttnn/unit_tests/operations/reduce/test_argmax.py
   - tests/ttnn/unit_tests/operations/reduce/test_cumsum.py
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
-  - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
-  - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
 
   # ttsim: UnpredictableValue noc_check_self_overlap. conv3d's reader shifts retained W
   # columns with one NOC read whose source and destination overlap in the same L1.
@@ -34,16 +31,11 @@ wormhole_b0:
 blackhole:
   # Job-level timeouts
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
-  - tests/ttnn/unit_tests/operations/conv/test_conv_transpose2d.py
-  - tests/ttnn/unit_tests/operations/conv/test_prepare_conv_weights.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_unary_dram_reads_large.py
   - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
   - tests/ttnn/unit_tests/operations/reduce/test_argmax.py
   - tests/ttnn/unit_tests/operations/reduce/test_cumsum.py
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
-  - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
-  - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
 
   # ttsim: UnpredictableValue noc_check_self_overlap. conv3d's reader shifts retained W
   # columns with one NOC read whose source and destination overlap in the same L1.
@@ -75,6 +67,3 @@ quasar:
   - tt_metal/tt-llk/tests/python_tests/quasar/test_eltwise_unary_sfpu_quasar.py::test_dropout_reseed_quasar
   - "tt_metal/tt-llk/tests/python_tests/quasar/test_eltwise_unary_sfpu_quasar.py::test_eltwise_unary_sfpu_quasar[mathop_formats_dest_acc_sync_input_dims:(<MathOperation.Dropout:"
   - tt_metal/tt-llk/tests/python_tests/quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_dropout_
-
-  # --- Sanity ttnn sim_quasar tests ---
-  - models/experimental/ops/quasar/tests/yolo_ops/test_softmax.py::test_softmax[l_s-640-dfl-ttnn_mesh_device0]  # #62095: check_fidelity_phase, HiFi4 default with bf16 operands

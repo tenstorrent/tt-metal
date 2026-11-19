@@ -22,7 +22,7 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
             Per chip, per ring direction and per link one fabric link worker core reads (its own shard
             from the input, forwarded shards from the output) and sends each fabric chunk one fabric hop
             into the same pages of the neighbour's output; local copy cores write the chip's own shard
-            (and convert an ND-sharded input). Link workers sit as close as the core grid allows to their
+            (an ND-sharded input: the link workers write it). Link workers sit as close as the core grid allows to their
             link's Ethernet core. Calls are fenced: no chip writes into a neighbour's output before the
             neighbour has started the same call. Even rings are balanced (the opposite shard travels half
             each way). With ``cluster_axis=None`` on a torus whose sides are both at least 3, the mesh is
@@ -58,7 +58,9 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                     discovered across both axes in full-mesh mode. An explicit value
                     must be greater than zero and cannot exceed that discovered count;
                     use ``2`` to keep the same link count across QuietBox, LoudBox, and
-                    Galaxy.
+                    Galaxy. It counts links per neighbour hop: on a 4x4 cylinder, where
+                    two Hamiltonian cycles share a hop, each gets half of them, and
+                    fewer than two selects the snake.
                 subdevice_id: Subdevice containing the worker cores.
                 sub_core_grids: Optional worker-core restriction.
                 input_batch_index: Optional batch slot selected from a persistent input cache.

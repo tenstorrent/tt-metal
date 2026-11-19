@@ -70,6 +70,7 @@ std::vector<ttnn::Tensor> inbound_socket_service_sync(
     uint32_t overhang_size_bytes,
     const std::optional<ttnn::Tensor>& tokens_out = std::nullopt,
     const std::optional<ttnn::Tensor>& overhang_out = std::nullopt,
-    const std::optional<ttnn::Tensor>& metadata_out = std::nullopt);
+    const std::optional<ttnn::Tensor>& metadata_out = std::nullopt,
+    const std::vector<ttnn::Tensor>& extras_out = {});
 
 }  // namespace ttnn::prim

@@ -153,6 +153,8 @@ class PrefillModelAdapter(ABC):
     dflash_rope_convention: str = "interleaved"
     supports_mtp: bool = False
     supports_tp_shard_kv: bool = False
+    # Builds any missing TTNN weight-cache pieces from the HF checkpoint (PREFILL_HF_MODEL) at start-up.
+    builds_missing_weight_cache: bool = False
     tp_shard_kv_default: bool = False
     # The runtime implements prefill_forward; without it a forward of several chunks runs prefill_chunk per chunk.
     supports_packed_forward: bool = False
@@ -161,6 +163,11 @@ class PrefillModelAdapter(ABC):
     # chunk per KV-writing layer, each chunk's records contiguous). Otherwise the runner refuses those at F > 1.
     supports_packed_forward_trace: bool = False
     supports_packed_forward_d2h_acks: bool = False
+    # With supports_packed_forward and passes_indexer_indices, whether prefill_forward takes a pipeline boundary's
+    # indexer indices for every chunk of the forward (indexer_indices=..., one tensor of indexer_indices_shape(), which
+    # covers all forward_chunks chunks) and leaves its own the same way (outbound_indexer_indices). Otherwise the runner
+    # refuses F > 1 on a split that passes indices.
+    supports_packed_forward_indexer_indices: bool = False
     # Whether a pipeline split can hand indexer indices from one rank to the next (cross-layer indexer reuse).
     passes_indexer_indices: bool = False
     # Fail PCC verification unless the producer drained exactly one completion per layer per chunk.
@@ -368,8 +375,8 @@ ADAPTER_PATHS = {
     # Kimi-K2.7-Code: DeepSeek-V3 architecture (MLA + MoE), single expert group (adapters/kimi_k2_7.py).
     "kimi_k2_7": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_7:KimiK27Adapter",
     "kimi_k3": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3:KimiK3Adapter",
-    # Kimi-K3.1: K3 + DSA indexer on its 24 MLA layers; test-only (sparse-MLA module tests, serving not wired).
-    "kimi_k3_1": "models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla:KimiK31Adapter",
+    # Kimi-K3.1: K3 + DSA indexer on its 24 MLA layers; selected through K3's stack (adapters/kimi_k3_1.py).
+    "kimi_k3_1": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3_1:KimiK31Adapter",
     "minimax_m3": "models.demos.minimax_m3.tt.runners.adapters.minimax_m3:MiniMaxM3PrefillAdapter",
     # Mistral-Small-4-119B: dense MLA + MoE; config hand-built (transformers 5.x rope_parameters).
     "mistral_small_4": "models.demos.deepseek_v3_d_p.tt.runners.adapters.mistral_small_4:MistralSmall4Adapter",

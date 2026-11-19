@@ -274,7 +274,7 @@ def unrun_family(root: Path, hung: str, all_ids: list) -> list:
     """Unfinished cases of the same test as `hung`.
 
     One hang is the race. The other params hit the same site and need another
-    `tt-smi -r` to clear. Other tests stay on the queue.
+    card reset to clear. Other tests stay on the queue.
     """
     if not hung:
         return []

@@ -50,6 +50,12 @@ static ttnn::PadValue get_tilize_pad_value(tt::tt_metal::ReduceOpMath reduce_mat
             default: return ttnn::PadValue{uint32_t{0}};
         }
     }
+    if (dtype == tt::tt_metal::DataType::UINT32) {
+        switch (reduce_math) {
+            case tt::tt_metal::ReduceOpMath::MIN: return ttnn::PadValue{uint32_t{0xFFFFFFFF}};  // UINT32_MAX
+            default: return ttnn::PadValue{uint32_t{0}};  // MAX and SUM: 0 is the identity for both
+        }
+    }
     return ttnn::PadValue{ttnn::prim::get_reduce_pad_value(reduce_math)};
 }
 
@@ -218,8 +224,8 @@ Tensor reduce(
 
     // The FPU has no MIN primitive, so remaining MIN lowers to -MAX(-x) via the fused negate kernels:
     // bfloat8_b and fast-mode fp32. Accurate fp32 MIN and bf16 MIN drive the LLK MIN
-    // reduce directly (like Int32 MIN) and must skip that lowering.
-    if (reduce_math == tt::tt_metal::ReduceOpMath::MIN && input_tensor.dtype() != tt::tt_metal::DataType::INT32 &&
+    // reduce directly (like Int32/UInt32 MIN) and must skip that lowering.
+    if (reduce_math == tt::tt_metal::ReduceOpMath::MIN && !ttnn::prim::is_int_reduce_dtype(input_tensor.dtype()) &&
         !use_sfpu_fp32_min && !use_sfpu_bf16_min) {
         TT_FATAL(
             !is_mx(input_tensor.dtype()),
@@ -254,7 +260,7 @@ Tensor reduce(
     // These reductions have no SFPU REDUCE_SCALAR primitive, so HW must decompose into W-then-H.
     const bool use_two_step_hw_sfpu_reduce =
         (reduce_dim == tt::tt_metal::ReduceOpDim::HW) &&
-        ((prepared_input.dtype() == tt::tt_metal::DataType::INT32 &&
+        ((ttnn::prim::is_int_reduce_dtype(prepared_input.dtype()) &&
           (reduce_math == tt::tt_metal::ReduceOpMath::MAX || reduce_math == tt::tt_metal::ReduceOpMath::SUM ||
            reduce_math == tt::tt_metal::ReduceOpMath::MIN)) ||
          use_sfpu_reduce);

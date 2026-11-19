@@ -150,7 +150,7 @@ void SparseRingSDPADeviceOperation::validate_on_program_cache_miss(
         "k_chunk_size must be a positive multiple of the {}-token block, got {}",
         block_size,
         args.get_k_chunk_size());
-    // The kernels bake the scale into constants (the lazy-rescale threshold 0.5 / scale, the pooled bias
+    // The kernels bake the scale into constants (the lazy-rescale threshold 16 ln 2 / scale, the pooled bias
     // ln(len) / scale) and mask entries with a large negative bias that only a positive scale keeps negative.
     TT_FATAL(
         !args.scale.has_value() || (std::isfinite(*args.scale) && *args.scale > 0.0f),
@@ -349,8 +349,47 @@ void SparseRingSDPADeviceOperation::validate_on_program_cache_miss(
 }
 
 void SparseRingSDPADeviceOperation::validate_on_program_cache_hit(
-    const SparseRingSDPAParams& /*args*/, const SparseRingSDPAInputs& /*tensor_args*/) {
-    // Every attribute the miss path checks is part of the program hash.
+    const SparseRingSDPAParams& args, const SparseRingSDPAInputs& tensor_args) {
+    // The hash keys shapes, dtypes, layouts and memory configs, not whether a buffer exists: a cache hit with an
+    // unallocated or host tensor would reach the descriptor adapter's buffer patching with a null buffer.
+    const auto check_allocated = [](const Tensor& t, const char* name) {
+        TT_FATAL(
+            t.storage_type() == StorageType::DEVICE && t.is_allocated(),
+            "SparseRingSDPA: {} must be allocated on device",
+            name);
+    };
+    check_allocated(tensor_args.input_q, "input_q");
+    check_allocated(tensor_args.input_k, "input_k");
+    check_allocated(tensor_args.input_v, "input_v");
+    check_allocated(tensor_args.gathered_k, "gathered_k");
+    check_allocated(tensor_args.gathered_v, "gathered_v");
+    check_allocated(tensor_args.block_mask, "block_mask");
+    for (const auto& [t, name] :
+         {std::pair{&tensor_args.pooled_k, "pooled_k"},
+          std::pair{&tensor_args.pooled_v, "pooled_v"},
+          std::pair{&tensor_args.block_counts, "block_counts"}}) {
+        if (t->has_value()) {
+            check_allocated(**t, name);
+        }
+    }
+    const auto& ag_inputs = args.all_gather_tensor_args.input_tensor;
+    const auto& ag_outputs = args.all_gather_tensor_args.persistent_output_buffer;
+    TT_FATAL(
+        ag_outputs.size() == ag_inputs.size(),
+        "SparseRingSDPA: {} all-gather inputs but {} persistent outputs",
+        ag_inputs.size(),
+        ag_outputs.size());
+    for (size_t i = 0; i < ag_inputs.size(); ++i) {
+        check_allocated(ag_inputs[i], "all-gather input");
+        TT_FATAL(ag_outputs[i].has_value(), "SparseRingSDPA requires persistent all-gather output tensor {}", i);
+        check_allocated(*ag_outputs[i], "persistent all-gather output");
+        TT_FATAL(
+            ag_outputs[i]->buffer()->page_size() == ag_inputs[i].buffer()->page_size(),
+            "SparseRingSDPA: persistent all-gather output {} page size {} differs from its input's {}",
+            i,
+            ag_outputs[i]->buffer()->page_size(),
+            ag_inputs[i].buffer()->page_size());
+    }
 }
 
 SparseRingSDPAResultSpec SparseRingSDPADeviceOperation::compute_output_specs(

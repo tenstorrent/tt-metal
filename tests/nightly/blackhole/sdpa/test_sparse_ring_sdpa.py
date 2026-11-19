@@ -30,6 +30,29 @@ HEADS_PER_DEVICE = 14  # MiniMax-H3 at TP=4
 D = 128
 KEEP_ALL = 1.0
 SLOW = pytest.mark.skipif(os.environ.get("CI") == "true", reason="production-size shapes - skip on CI")
+# On CI (a shared job with a tight time budget) only these cases run, about 2 minutes on a Galaxy: one per feature
+# (dense equivalence, one local head, a short last shard, ragged shards, partial blocks, LoFi block float, block
+# counts, several passes, no block 0, frame masks, per-head masks, argument checks). The rest run locally.
+CI_SUBSET = {
+    "test_keep_all_matches_dense[r1024k256]",
+    "test_keep_all_matches_dense[r1024k256-one_head]",
+    "test_random_density[r1024k256short-0.2]",
+    "test_ragged_shards[r1184k256-0.2]",
+    "test_kept_partial_blocks[r1184ln_off-kept_only]",
+    "test_lofi[r1024k256-bf8-pooled]",
+    "test_block_counts[r1024k256-vsa-kept_only]",
+    "test_empty_q_blocks[pooled-2]",
+    "test_without_block0[r1024k256-band-kept_only]",
+    "test_frame_mask[256-window]",
+    "test_heads_differ",
+}
+
+
+@pytest.fixture(autouse=True)
+def _ci_subset(request):
+    name = request.node.name
+    if os.environ.get("CI") == "true" and name not in CI_SUBSET and not name.startswith("test_invalid_args"):
+        pytest.skip("not in the CI subset (CI_SUBSET)")
 
 
 def _pad32(n):
@@ -306,11 +329,12 @@ class Case:
     (bf16, or block float), and of Q unless lofi. lofi: LoFi matmuls, on Q rounded to 7 significant bits (bf16) and
     K / V to 5."""
 
-    def __init__(self, rt, geo, dtype=ttnn.bfloat16, lofi=False):
+    def __init__(self, rt, geo, dtype=ttnn.bfloat16, lofi=False, heads_per_device=HEADS_PER_DEVICE):
         self.rt, self.geo, self.dtype, self.lofi = rt, geo, dtype, lofi
+        self.heads_per_device = heads_per_device
         self.q_dtype = ttnn.bfloat16 if lofi else dtype
         self.S, self.TP = MESH_CONFIG.sp_size, MESH_CONFIG.tp_size
-        self.H = HEADS_PER_DEVICE * self.TP  # heads in total; HEADS_PER_DEVICE per device
+        self.H = heads_per_device * self.TP  # heads in total
         self.scale = 1.0 / math.sqrt(D)
         dev = rt.mesh_device
         shape = tuple(dev.shape)
@@ -384,7 +408,7 @@ class Case:
         """(most, fewest) Q blocks a working core holds: the op splits the flat (head, Q block) units evenly."""
         cols, rows = self.rt.sdpa_compute_grid
         cores = cols * rows
-        total = HEADS_PER_DEVICE * self.geo.nb()
+        total = self.heads_per_device * self.geo.nb()
         return -(-total // cores), max(1, total // cores)
 
     def q_blocks_per_pass_for(self, passes):
@@ -487,7 +511,7 @@ class Case:
             if dense_floor:
                 dense_ref = dense_reference(q, k, v, geo.logical_n, self.scale, rows=geo.rows, **sl)
         else:
-            sl = dict(heads=sorted({0, 1, self.H // 2, self.H - 1}))
+            sl = dict(heads=sorted({0, min(1, self.H - 1), self.H // 2, self.H - 1}))
         ref = (
             sparse_reference(
                 q, k, v, mask, pooled_k, pooled_v, geo, self.S, self.scale, pooled=pooled, counts=counts, **sl
@@ -596,10 +620,15 @@ RAGGED = {
 GEOMETRIES = {**ALIGNED, **RAGGED}
 
 
-@pytest.mark.parametrize("geom", list(ALIGNED))
-def test_keep_all_matches_dense(runtime, geom):
+# one_head: a single local head, so every core shares one K head (the reader's shared-K chain).
+@pytest.mark.parametrize(
+    "geom, heads_per_device",
+    [*((g, HEADS_PER_DEVICE) for g in ALIGNED), ("r1024k256", 1)],
+    ids=[*ALIGNED, "r1024k256-one_head"],
+)
+def test_keep_all_matches_dense(runtime, geom, heads_per_device):
     """Every full block kept and no partial blocks: the sparse op is dense attention."""
-    case = Case(runtime, ALIGNED[geom])
+    case = Case(runtime, ALIGNED[geom], heads_per_device=heads_per_device)
     mask = make_mask(case.geo, case.S, case.H, density=KEEP_ALL)
     r = case.run(*case.inputs(0), mask, want_ref="full" if geom == "r512k512" else True)
     _check(f"keepall {geom}", r, _density(mask, case.geo, case.S), dense_min=0.9995, ref_min=0.9995)
