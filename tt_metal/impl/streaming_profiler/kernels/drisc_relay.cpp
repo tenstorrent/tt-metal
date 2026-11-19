@@ -149,19 +149,20 @@ struct SpoolPump {
         uint32_t ack_target;  // write-ack mirror at ship: this bounce's flush line
         uint32_t seq;         // refill order; a both-ready pass ships the older bytes first
         uint32_t rd_mark;     // drain-stream issue count at refill: this bounce's completion line
-        uint64_t rd_end;      // what rd advances to when this bounce turns READY
+        uint32_t rd_end;      // what rd advances to when this bounce turns READY
     };
 
-    uint64_t wr = 0;          // bytes appended by the ship DMA
-    uint64_t done = 0;        // bytes whose ship writes completed (safe for the drain stream to read)
-    uint64_t rd_iss = 0;      // bytes a bounce refill has been issued for
-    uint64_t rd = 0;          // bytes whose refill reads completed (safe to overwrite)
+    // Modular byte counters: every difference taken is at most kSpoolBytes (< 4 GiB).
+    uint32_t wr = 0;          // bytes appended by the ship DMA
+    uint32_t done = 0;        // bytes whose ship writes completed (safe for the drain stream to read)
+    uint32_t rd_iss = 0;      // bytes a bounce refill has been issued for
+    uint32_t rd = 0;          // bytes whose refill reads completed (safe to overwrite)
     uint32_t wr_off = 0;      // wr % kSpoolBytes
     uint32_t rd_iss_off = 0;  // rd_iss % kSpoolBytes
     uint32_t dma_issued = 0;  // cumulative ship-stream writes: the caller's per-generation completion gate
     uint32_t dma_rd_issued = 0;
     uint32_t chunks = 0;  // refills so far; also the sequence number the oldest-first ship compares
-    Bounce b[2] = {};
+    Bounce b[2];          // only state is read before refill writes the rest
     uint32_t notified = 0;    // bytes_sent as the host last saw it
     uint32_t acked_seen = 0;  // the downstream's bytes_acked as last read
     uint32_t level = kLevelIdle;
@@ -169,7 +170,10 @@ struct SpoolPump {
     volatile tt_l1_ptr uint32_t* acked_;  // the downstream's bytes_acked word
 
     explicit SpoolPump(SocketSenderInterface& sender) :
-        sender_(sender), acked_(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender.bytes_acked_base_addr)) {}
+        sender_(sender), acked_(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender.bytes_acked_base_addr)) {
+        b[0].state = kEmpty;
+        b[1].state = kEmpty;
+    }
 
     uint32_t occupancy() const { return static_cast<uint32_t>(wr - rd); }
     bool has_room(uint32_t bytes) const { return kSpoolBytes - occupancy() >= bytes; }
@@ -192,7 +196,7 @@ struct SpoolPump {
         level = occ >= kBandInline ? kLevelInline : occ >= kBandEverySweep ? kLevelEverySweep : kLevelIdle;
     }
 
-    FORCE_INLINE void append(uint32_t src, uint32_t len) {
+    __attribute__((noinline)) void append(uint32_t src, uint32_t len) {
         while (len != 0) {
             const uint32_t piece = len > kSpoolBytes - wr_off ? kSpoolBytes - wr_off : len;
             experimental::dma_async_write<false>(kDmaShip, src, kSpoolBase + wr_off, piece);
@@ -228,7 +232,7 @@ struct SpoolPump {
             for (uint32_t i = 0; i < 2; i++) {
                 if (b[i].state == kReading && rd_out <= dma_rd_issued - b[i].rd_mark) {
                     b[i].state = kReady;
-                    if (b[i].rd_end > rd) {
+                    if (static_cast<int32_t>(b[i].rd_end - rd) > 0) {
                         rd = b[i].rd_end;
                     }
                     did = true;
@@ -915,7 +919,7 @@ void kernel_main() {
                 }
                 if constexpr (kSpool) {
                     if (pump.level >= SpoolPump::kLevelInline) {
-                        pump.pass();
+                        pump.pass_cold();
                     }
                 }
 
@@ -927,7 +931,7 @@ void kernel_main() {
                     if constexpr (kSpool) {
                         // Inline level means occupancy is over the 5/8 line, so nonempty holds.
                         if (pump.level >= SpoolPump::kLevelInline) {
-                            pump.pass();
+                            pump.pass_cold();
                         }
                     }
                 }
@@ -965,7 +969,7 @@ void kernel_main() {
         if constexpr (kSpool) {
             const bool cadence = (sweeps & (kIdlePumpStride - 1u)) == 0;
             if (pump.level >= SpoolPump::kLevelEverySweep || cadence || relieved == relieved_at_sweep_start) {
-                pump.pass();
+                pump.pass_cold();
                 refresh_first_batch();
                 pump.notify();
             }
