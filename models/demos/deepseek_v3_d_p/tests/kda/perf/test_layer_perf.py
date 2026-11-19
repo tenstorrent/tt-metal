@@ -43,9 +43,14 @@ _TIMING_SAMPLES = 5
 # Host-time targets (ms) per (layout, mode), as tests/measure measures them: untraced fastest of 10 after 10 warm-up,
 # traced one replay, both with the CPU clock held. LoudBox SP8xTP1 and QuietBox SP4xTP1 report until a CI run gives
 # their targets.
+# SP8xTP4 is the SP-sharded slab layer (forward_slot: two slab copies and two SP all-gathers load the carry, two
+# head-selecting copies store it). Its targets are the in-place layer's CI targets (1.47 / 1.244 ms) scaled by the
+# sharded/in-place ratio this gate measured on one 75 W Galaxy, 4 runs per arm interleaved: untraced 1.7748 / 1.5213 ms
+# (x1.1666), traced 1.3248 / 1.2795 ms (x1.0354). Untraced is host dispatch-bound (the gathers are per-chip programs),
+# and CI's Galaxy hosts dispatch faster, so its untraced ratio there may be lower: a CI run re-centres it.
 _TARGETS_MS = {
-    ("SP8xTP4", "untraced"): 1.47,
-    ("SP8xTP4", "traced"): 1.244,
+    ("SP8xTP4", "untraced"): 1.715,
+    ("SP8xTP4", "traced"): 1.288,
 }
 # Galaxy-equivalent layouts outside CI: they report wall time but are not gated.
 _REPORT_ONLY_LAYOUTS = ("SP4xTP2", "SP2xTP2")
