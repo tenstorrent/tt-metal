@@ -214,7 +214,9 @@ assert (
     not MEDIA_MAX_REFS or ADAPTER.supports_media
 ), f"PREFILL_MEDIA_MAX_REFS={MEDIA_MAX_REFS}: model {ADAPTER.name!r} does not take media refs"
 assert not (MEDIA_MAX_REFS and USE_TRACE), "PREFILL_MEDIA_MAX_REFS>0 does not support PREFILL_USE_TRACE=1 yet"
-_H2D_PAGE_BYTES = int(make_h2d_spec(GLOBAL_MESH_SHAPE, FORWARD_TOKENS_BUDGET, MTP_LEVELS).shape[-1]) * TOKEN_ID_BYTES
+_H2D_PAGE_BYTES = (
+    int(make_h2d_spec(GLOBAL_MESH_SHAPE, FORWARD_TOKENS_BUDGET, MTP_LEVELS, SP_AXIS).shape[-1]) * TOKEN_ID_BYTES
+)
 assert MEDIA_MAX_REFS <= media_refs_capacity(FORWARD_CHUNKS, _H2D_PAGE_BYTES), (
     f"PREFILL_MEDIA_MAX_REFS={MEDIA_MAX_REFS}: the H2D metadata must fit one {_H2D_PAGE_BYTES} B socket page, "
     f"which holds at most {media_refs_capacity(FORWARD_CHUNKS, _H2D_PAGE_BYTES)} refs"
