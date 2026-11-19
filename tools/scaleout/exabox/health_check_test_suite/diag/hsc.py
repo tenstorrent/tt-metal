@@ -2,13 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Read-only tray input-voltage status, taken before and after the tests.
+"""Read-only tray power status, taken before and after the tests.
 
 Each Galaxy tray's two hot-swap controllers (HSCs) latch an input under-voltage
-flag when the tray's 12 V input sags. A weak bus bar usually does not fail the
-test that sags it: the chip survives and the flag stays latched. The tests phase
-reads STATUS_WORD and STATUS_INPUT of every HSC before and after the load and
-reports a flag that was newly set during it.
+flag when the tray's 12 V input sags, and an over-current fault when they trip
+on the tray's current (usually turning the tray off). A weak bus bar usually
+does not fail the test that sags it: the chip survives and the flag stays
+latched. The tests phase reads STATUS_WORD and STATUS_INPUT of every HSC before
+and after the load and reports a flag that was newly set during it.
 
 Only those two PMBus registers are read, through the in-band BMC channel
 (``ipmitool raw 0x06 0x52``). Nothing is written, and the latches are not
@@ -30,9 +31,11 @@ HSC_ADDRS = (0x40, 0x42)
 STATUS_WORD = (0x79, 2)
 STATUS_INPUT = (0x7C, 1)
 
-# STATUS_INPUT bits and the STATUS_WORD bit for an HSC that turned itself off.
-INPUT_BITS = {0x20: "VIN_UV_WARN", 0x10: "VIN_UV_FAULT"}
-WORD_OFF = 0x40
+# STATUS_WORD bits (an HSC that turned itself off, an over-current trip) and
+# STATUS_INPUT bits, in the order a reading names them.
+WORD_BITS = {0x40: "OFF", 0x10: "IOUT_OC_FAULT"}
+INPUT_BITS = {0x10: "VIN_UV_FAULT", 0x20: "VIN_UV_WARN"}
+FLAG_ORDER = (*WORD_BITS.values(), *INPUT_BITS.values())
 
 READ_TIMEOUT_S = 5
 
@@ -80,10 +83,14 @@ def read_hsc_status() -> HscStatus:
 
 def _flags(reading: "tuple[int, int]") -> set[str]:
     word, inp = reading
-    flags = {name for bit, name in INPUT_BITS.items() if inp & bit}
-    if word & WORD_OFF:
-        flags.add("OFF")
-    return flags
+    return {name for bit, name in WORD_BITS.items() if word & bit} | {
+        name for bit, name in INPUT_BITS.items() if inp & bit
+    }
+
+
+def flag_names(flags: set[str]) -> str:
+    """The flags as one reason, e.g. 'OFF, IOUT_OC_FAULT' for an over-current trip."""
+    return ", ".join(f for f in FLAG_ORDER if f in flags)
 
 
 def judge_hsc(before: HscStatus, after: HscStatus, phase: Phase) -> None:
@@ -107,14 +114,18 @@ def judge_hsc(before: HscStatus, after: HscStatus, phase: Phase) -> None:
         if post is None or pre is None:
             unread.append(f"{where} not read {'before' if pre is None else 'after'} the tests")
             continue
-        for flag in sorted(_flags(post) - _flags(pre)):
+        if fresh := _flags(post) - _flags(pre):
             new.append(
-                f"{where}: {flag} newly set during the tests (STATUS_WORD {pre[0]:#06x} -> {post[0]:#06x}, STATUS_INPUT {pre[1]:#04x} -> {post[1]:#04x})"
+                f"{where}: {flag_names(fresh)} newly set during the tests (STATUS_WORD {pre[0]:#06x} -> {post[0]:#06x}, STATUS_INPUT {pre[1]:#04x} -> {post[1]:#04x})"
             )
-        for flag in sorted(_flags(post) & _flags(pre)):
-            standing.append(f"{where}: {flag} already set before the tests, so a new one cannot be told apart")
+        if held := _flags(post) & _flags(pre):
+            standing.append(
+                f"{where}: {flag_names(held)} already set before the tests, so a new one cannot be told apart"
+            )
     status = FAIL if new else WARN if standing or unread else PASS
-    details = "; ".join(new + standing + unread) or "no under-voltage or OFF flag on any of the 8 tray HSCs"
+    details = (
+        "; ".join(new + standing + unread) or "no under-voltage, over-current or OFF flag on any of the 8 tray HSCs"
+    )
     phase.add(
         Check(
             name="hsc_input_status",
