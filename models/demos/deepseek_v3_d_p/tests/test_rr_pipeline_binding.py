@@ -20,6 +20,7 @@ REPO = Path(__file__).resolve().parents[4]
 TOPO = REPO / "models/demos/common/prefill/runners/topology_configuration"
 HOSTS = ["h0", "h1", "h2", "h3"]
 
+
 @pytest.fixture(autouse=True)
 def _repo_root(monkeypatch):
     # Descriptor and template paths are repo-relative, as on the command line.
@@ -230,7 +231,11 @@ def test_check_finds_tori_on_every_stage_and_the_cabling_direction():
     h0, h1 = fake_pod()
     table = rr.grb.build_split_ring_rank_table(["h0", "h1"], 3)
     rows, _ = rr.stage_report([h0, h1], table, FAKE_SLICES)
-    assert [(kind, links) for _, kind, _, links in rows] == [("in-Galaxy torus", 2), ("seam torus", 2), ("in-Galaxy torus", 2)]
+    assert [(kind, links) for _, kind, _, links in rows] == [
+        ("in-Galaxy torus", 2),
+        ("seam torus", 2),
+        ("in-Galaxy torus", 2),
+    ]
     found = rr.ring_orders([h1, h0], 3, FAKE_SLICES)
     assert [[g.name for g in order] for _, order in found] == [["h0", "h1"]]
 
