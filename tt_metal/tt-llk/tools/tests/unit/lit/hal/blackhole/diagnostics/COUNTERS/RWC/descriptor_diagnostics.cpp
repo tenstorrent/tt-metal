@@ -13,7 +13,7 @@
 // EMPTY: error: static assertion failed: math-counter descriptor must update a counter, flip a bank, or clear the fidelity phase
 // DEST_ONLY: error: could not convert {{.*}}IncrementAndSave{{.*}} to 'hal::counters::rwc::SrcUpdate'
 // NOT_CONSTANT: error: {{.*}}is not a constant expression
-// TWO_INSTRUCTIONS: error: call to non-'constexpr' function 'void hal::counters::rwc::detail::reject_two_instructions()'
+// TWO_INSTRUCTIONS: in 'constexpr' expansion of 'hal::detail::require({{.*}}"MathCounter::operation() encodes one instruction, but this descriptor needs SETRWC and INCRWC{{.*}}"))'
 // clang-format on
 
 //--- common.h
