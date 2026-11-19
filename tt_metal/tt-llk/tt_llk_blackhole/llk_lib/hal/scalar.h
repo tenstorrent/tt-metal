@@ -148,7 +148,8 @@ struct DMAReg
     /**
      * @brief SETDMAREG Payload_SigSelSize field: payload width select.
      *
-     * This header issues only the immediate (16-bit) payload.
+     * @note Must be IMMEDIATE with Mode::IMMEDIATE: there the field holds the top bits of the
+     *       16-bit value. WIDTH_32BIT, WIDTH_128BIT and TILE_HEADER apply only to Mode::SIGNAL.
      */
     struct Payload
     {
@@ -389,7 +390,8 @@ inline constexpr std::uint32_t set_half_operation(const hal::Gpr<Index> destinat
         validate_gpr(destination);
         const std::uint32_t half_value = OperandTraits<Immediate<Value>>::value(value);
         hal::detail::require(half_value < (1u << 16), "GPR half value must fit in 16 bits");
-        return TT_OP_SETDMAREG(DMAReg::Payload::IMMEDIATE, half_value, DMAReg::Mode::IMMEDIATE, OperandTraits<hal::Gpr<Index>>::value(destination) * 2u + High);
+        return TT_OP_SETDMAREG(
+            DMAReg::Payload::IMMEDIATE, half_value, DMAReg::Mode::IMMEDIATE, OperandTraits<hal::Gpr<Index>>::value(destination) * 2u + High /*RegIndex16b*/);
     }
 }
 
@@ -417,8 +419,10 @@ public:
 template <std::uint32_t Value, std::uint32_t Index>
 inline __attribute__((always_inline)) void set(const hal::Gpr<Index>)
 {
-    TTI_SETDMAREG(detail::DMAReg::Payload::IMMEDIATE, Value & 0xffffu, detail::DMAReg::Mode::IMMEDIATE, detail::half_index<Index>(false /*high*/));
-    TTI_SETDMAREG(detail::DMAReg::Payload::IMMEDIATE, Value >> 16, detail::DMAReg::Mode::IMMEDIATE, detail::half_index<Index>(true /*high*/));
+    TTI_SETDMAREG(
+        detail::DMAReg::Payload::IMMEDIATE, Value & 0xffffu /*Payload_SigSel*/, detail::DMAReg::Mode::IMMEDIATE, detail::half_index<Index>(false /*high*/));
+    TTI_SETDMAREG(
+        detail::DMAReg::Payload::IMMEDIATE, Value >> 16 /*Payload_SigSel*/, detail::DMAReg::Mode::IMMEDIATE, detail::half_index<Index>(true /*high*/));
 }
 
 /** @brief Set a GPR to a runtime 32-bit value. */
@@ -427,8 +431,8 @@ inline __attribute__((always_inline)) void set(const hal::Gpr<Index> destination
 {
     detail::validate_gpr(destination);
     const std::uint32_t index = detail::OperandTraits<hal::Gpr<Index>>::value(destination);
-    TT_SETDMAREG(detail::DMAReg::Payload::IMMEDIATE, value & 0xffffu, detail::DMAReg::Mode::IMMEDIATE, index * 2u);
-    TT_SETDMAREG(detail::DMAReg::Payload::IMMEDIATE, value >> 16, detail::DMAReg::Mode::IMMEDIATE, index * 2u + 1u);
+    TT_SETDMAREG(detail::DMAReg::Payload::IMMEDIATE, value & 0xffffu /*Payload_SigSel*/, detail::DMAReg::Mode::IMMEDIATE, index * 2u /*RegIndex16b*/);
+    TT_SETDMAREG(detail::DMAReg::Payload::IMMEDIATE, value >> 16 /*Payload_SigSel*/, detail::DMAReg::Mode::IMMEDIATE, index * 2u + 1u /*RegIndex16b*/);
 }
 
 /** @brief Set the low half of a GPR to a compile-time 16-bit value. */
