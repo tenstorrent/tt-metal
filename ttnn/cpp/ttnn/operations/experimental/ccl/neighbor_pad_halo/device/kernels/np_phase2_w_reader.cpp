@@ -5,7 +5,7 @@
 // Phase 2 W fabric reader for the fused neighbor_pad + conv3d op
 
 #include "api/dataflow/dataflow_api.h"
-#include <tt-metalium/buffer_types.hpp>
+#include "api/buffer_types.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_common/kernels/np_reorder.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_common/kernels/np_zero_pad.hpp"
 #include <cstdint>
