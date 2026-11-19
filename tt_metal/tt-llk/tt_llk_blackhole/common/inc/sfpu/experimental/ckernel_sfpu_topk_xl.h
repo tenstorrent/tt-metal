@@ -2416,7 +2416,7 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     // ── Phase 6 — length 512 ───────────────────────────────────────────────
     // The face moves write SrcA/SrcB, which hardware arbitration does not gate: hold the math
     // class until both banks are math-owned and their in-flight consumers have drained.
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
+    TTI_STALLWAIT(p_stall::STALL_THREAD, p_stall::MATH | p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
     transpose_8_faces<true, 256, /*manage_outer_cfg=*/false>();
 
     // Stride-2 (load + TRANSP + sort_4 + store<2, 16>), N = 8.
@@ -2445,6 +2445,9 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     TTI_SFPCONFIG(0x0000, 0xF, 1); // restore default SFPU config
 
     // ── Phase 7 — length 1024 ──────────────────────────────────────────────
+    // The macro stores of the block above must land before the face moves write Dst (tt-metal#64475). Every class is
+    // stalled: a STALLWAIT only holds the instruction that follows it when that instruction is in a stalled class.
+    TTI_STALLWAIT(p_stall::STALL_THREAD, p_stall::MATH | p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
     transpose_8_faces<true, 256, /*manage_outer_cfg=*/false>();
 
     // Stride-2 (load + sort_8 + store<2, 16>), N = 8.
@@ -2471,6 +2474,9 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     TTI_SFPCONFIG(0x0000, 0xF, 1); // restore default SFPU config
 
     // ── Phase 8 — length 2048 ──────────────────────────────────────────────
+    // The macro stores of the block above must land before the face moves write Dst (tt-metal#64475). Every class is
+    // stalled: a STALLWAIT only holds the instruction that follows it when that instruction is in a stalled class.
+    TTI_STALLWAIT(p_stall::STALL_THREAD, p_stall::MATH | p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
     transpose_8_faces<true, 256, /*manage_outer_cfg=*/false>();
 
     // Stride-2 (load + sort_16_alt + store<2, 16>), N = 8.
@@ -2720,7 +2726,7 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
     enter_transpose_cfg_block();
     // The face moves write SrcA/SrcB, which hardware arbitration does not gate: hold the math
     // class until both banks are math-owned and their in-flight consumers have drained.
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
+    TTI_STALLWAIT(p_stall::STALL_THREAD, p_stall::MATH | p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
 
     // ── build bitonic sequences of len=(K/4) ──────────────────────────────
     transpose_N_faces</*N*/ row_scale_factor * 2, /*fused=*/true, /*indices_offset=*/256, /*manage_outer_cfg=*/false>();
@@ -2747,6 +2753,9 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
     TTI_SFPCONFIG(0x0000, 0xF, 1); // restore default SFPU config
 
     // ── build bitonic sequences of len=(K/2) ──────────────────────────────
+    // The macro stores of the block above must land before the face moves write Dst (tt-metal#64475). Every class is
+    // stalled: a STALLWAIT only holds the instruction that follows it when that instruction is in a stalled class.
+    TTI_STALLWAIT(p_stall::STALL_THREAD, p_stall::MATH | p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
     transpose_N_faces</*N*/ row_scale_factor * 2, /*fused=*/true, /*indices_offset=*/256, /*manage_outer_cfg=*/false>();
     load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
     bitonic_sort_len_8(dir);
@@ -2769,6 +2778,9 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
     TTI_SFPCONFIG(0x0000, 0xF, 1); // restore default SFPU config
 
     // ── build bitonic sequences of len=K ──────────────────────────────────
+    // The macro stores of the block above must land before the face moves write Dst (tt-metal#64475). Every class is
+    // stalled: a STALLWAIT only holds the instruction that follows it when that instruction is in a stalled class.
+    TTI_STALLWAIT(p_stall::STALL_THREAD, p_stall::MATH | p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
     transpose_N_faces</*N*/ row_scale_factor * 2, /*fused=*/true, /*indices_offset=*/256, /*manage_outer_cfg=*/false>();
     load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
     bitonic_sort_len_16_alt(dir);
@@ -2974,7 +2986,7 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
         enter_transpose_cfg_block();
         // The face moves write SrcA/SrcB, which hardware arbitration does not gate: hold the math
         // class until both banks are math-owned and their in-flight consumers have drained.
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
+        TTI_STALLWAIT(p_stall::STALL_THREAD, p_stall::MATH | p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
         transpose_8_faces<true, 256, /*manage_outer_cfg=*/false>();
 
         // Length-2048 build phase via the 5-slot MOP template.
@@ -3031,7 +3043,7 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
         enter_transpose_cfg_block();
         // The face moves write SrcA/SrcB, which hardware arbitration does not gate: hold the math
         // class until both banks are math-owned and their in-flight consumers have drained.
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
+        TTI_STALLWAIT(p_stall::STALL_THREAD, p_stall::MATH | p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
         transpose_8_faces<fused, indices_offset, /*manage_outer_cfg=*/false>();
 
         // Stride-8 (load + sort_16_alt<false> + store<8, 16>), N = 8 per
@@ -3284,7 +3296,7 @@ inline void _topk_xl_rebuild_generic_(const std::uint32_t dst_index, const bool 
         enter_transpose_cfg_block();
         // The face moves write SrcA/SrcB, which hardware arbitration does not gate: hold the math
         // class until both banks are math-owned and their in-flight consumers have drained.
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
+        TTI_STALLWAIT(p_stall::STALL_THREAD, p_stall::MATH | p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
         transpose_N_faces</*N*/ row_scale_factor * 2, /*fused=*/true, /*indices_offset=*/256, /*manage_outer_cfg=*/false>();
 
         // ── stride-2 + sort_16_alt build phase ─────────────────────────
@@ -3334,7 +3346,7 @@ inline void _topk_xl_rebuild_generic_(const std::uint32_t dst_index, const bool 
         enter_transpose_cfg_block();
         // The face moves write SrcA/SrcB, which hardware arbitration does not gate: hold the math
         // class until both banks are math-owned and their in-flight consumers have drained.
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
+        TTI_STALLWAIT(p_stall::STALL_THREAD, p_stall::MATH | p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
         transpose_N_faces</*N*/ row_scale_factor * 2, fused, indices_offset, /*manage_outer_cfg=*/false>();
 
         // ── stride-8 + sort_16_alt build phase (both columns) ──────────

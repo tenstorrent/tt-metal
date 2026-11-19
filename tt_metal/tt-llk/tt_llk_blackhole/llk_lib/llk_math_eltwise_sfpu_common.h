@@ -22,6 +22,12 @@ inline void _llk_math_eltwise_sfpu_start_(const std::uint32_t dst_index)
 
 inline void _llk_math_eltwise_sfpu_done_()
 {
+    // Hold everything this thread issues next until its SFPU work has drained, SFPLOADMACRO-scheduled stores
+    // included. The hardware does not serialise a late macro store against an FPU or MOV write to the same half of
+    // Dst: the FPU-side write is silently lost when the two land in one cycle (tt-metal#64475). tile_regs_commit drains
+    // too, but a kernel may run more FPU work on the section before it commits. Every instruction class is stalled
+    // because a STALLWAIT only holds the instruction that follows it when that instruction is in a stalled class.
+    TTI_STALLWAIT(p_stall::STALL_THREAD, p_stall::WAIT_SFPU);
     math::clear_dst_reg_addr();
 }
 
