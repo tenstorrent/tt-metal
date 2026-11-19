@@ -2073,6 +2073,30 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
         "test_name_aliases": {"perf_unpack_A_custom": "perf_unpack_A_custom"},
     },
+    "perf_sfpu_add_rsqrt": {
+        "version": 1,
+        "columns": [
+            "approx_mode",
+            "dest_acc",
+            "fast_approx",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "input_scale_bits",
+            "loop_factor",
+            "marker",
+            "typed_bf16_store",
+            "unpack_to_dest",
+            "value_bits",
+            "vector_mode",
+        ],
+        "aliases": {},
+        "test_name_aliases": {"perf_sfpu_add_rsqrt": "perf_sfpu_add_rsqrt"},
+    },
 }
 
 
