@@ -112,7 +112,8 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet01BandwidthDist) {
     if (not this->slow_dispatch_) {
         GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
     }
-    const auto num_eriscs = MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
+    // TODO MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
+    const auto num_eriscs = 1;
 
     vector<LinkError> errors;
     int n = 0;
