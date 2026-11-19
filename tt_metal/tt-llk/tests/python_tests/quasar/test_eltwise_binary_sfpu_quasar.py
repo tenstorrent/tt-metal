@@ -50,8 +50,8 @@ from helpers.test_variant_parameters import (
     DEST_INDEX,
     DEST_SYNC,
     LOOP_FACTOR,
+    MATH_OP,
     NUM_FACES,
-    SFPU_BINARY_OP,
     SFPU_DST_ROUNDING_MODE,
     SFPU_TILE_INDICES,
     SIGN_MAGNITUDE_FORMAT,
@@ -72,20 +72,6 @@ def _seed_rng():
 
 
 _CPP_SOURCE = "sources/quasar/eltwise_binary_sfpu_quasar_test.cpp"
-
-# The Int32 members share the BinaryOp enumerator of their float counterpart; the kernel picks the
-# integer path from the math format.
-_INT32_BINARY_OP = {
-    MathOperation.SfpuMulInt32: "MUL",
-    MathOperation.SfpuMaxInt32: "MAX",
-    MathOperation.SfpuMinInt32: "MIN",
-}
-
-
-def _binary_op(mathop):
-    """The ckernel::BinaryOp enumerator the Quasar kernel dispatches ``mathop`` to."""
-    return _INT32_BINARY_OP.get(mathop, mathop.cpp_enum_value)
-
 
 # Shared (src0_idx, src1_idx, dst_idx) tile-index variants exercised by every
 # binary SFPU family
@@ -168,7 +154,6 @@ def _run_sfpu_binary_llk_golden(
     dest_acc,
     tile_indices,
     mathop,
-    binary_op,
     prepare_stimuli,
     post_check=None,
     *,
@@ -228,7 +213,7 @@ def _run_sfpu_binary_llk_golden(
         "test_name": _CPP_SOURCE,
         "formats": formats,
         "templates": [
-            SFPU_BINARY_OP(binary_op),
+            MATH_OP(mathop=mathop),
             APPROX_MODE(approx_mode),
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(
@@ -394,7 +379,6 @@ def test_eltwise_binary_sfpu_int_quasar(
     perf_report=None,
 ):
     """Binary SFPU integer ops (add, mul, gt, lt, le, ge, copy_dest, gcd, lcm), Int32."""
-    binary_op = _binary_op(mathop)
     # GCD excludes INT_MIN: SFPABS saturates it.
     clamp_inputs = _INT_CLAMP.get(mathop)
     _run_sfpu_binary_llk_golden(
@@ -402,7 +386,6 @@ def test_eltwise_binary_sfpu_int_quasar(
         dest_acc,
         tile_indices,
         mathop,
-        binary_op,
         prepare_stimuli=lambda f, dims, s0, s1, op: _prepare_int_stimuli(
             f, dims, s0, s1, op, clamp_inputs
         ),
@@ -557,7 +540,6 @@ def test_eltwise_binary_sfpu_float_quasar(
     assert (
         format_variant is not None
     ), f"no Quasar SFPU route for {formats} dest_acc={dest_acc}"
-    binary_op = mathop.cpp_enum_value
     post_check = (
         _check_div_special_cases if mathop == MathOperation.SfpuElwdiv else None
     )
@@ -574,7 +556,6 @@ def test_eltwise_binary_sfpu_float_quasar(
         dest_acc,
         tile_indices,
         mathop,
-        binary_op,
         prepare_stimuli=_prepare_float_stimuli,
         post_check=post_check,
         approx_mode=approx_mode,
@@ -677,7 +658,6 @@ def test_eltwise_binary_sfpu_logsigmoid_quasar(formats, dest_acc, tile_indices):
         dest_acc,
         tile_indices,
         mathop,
-        mathop.cpp_enum_value,
         prepare_stimuli=_prepare_logsigmoid_stimuli,
         post_check=_check_every_region,
         format_variant=format_variant,
@@ -703,7 +683,6 @@ def test_eltwise_binary_sfpu_dest_depth_quasar(format_variant, mathop, num_block
         format_variant.dest_acc,
         DEFAULT_SFPU_BINARY_TILE_INDICES,
         mathop,
-        mathop.cpp_enum_value,
         prepare_stimuli=_prepare_float_stimuli,
         format_variant=format_variant,
         num_blocks=num_blocks,
@@ -781,7 +760,6 @@ def test_eltwise_binary_sfpu_bcast_quasar(
     assert (
         format_variant is not None
     ), f"no Quasar SFPU route for {formats} dest_acc={dest_acc}"
-    binary_op = mathop.cpp_enum_value
 
     def prepare_stimuli(formats, input_dimensions, src0_idx, src1_idx, mathop):
         src_A, tile_cnt_A, src_B = _prepare_float_stimuli(
@@ -795,7 +773,6 @@ def test_eltwise_binary_sfpu_bcast_quasar(
         format_variant.dest_acc,
         tile_indices,
         mathop,
-        binary_op,
         prepare_stimuli=prepare_stimuli,
         run_types=run_types,
         loop_factor=loop_factor,
@@ -806,13 +783,8 @@ def test_eltwise_binary_sfpu_bcast_quasar(
     )
 
 
-_BF16_ADD_SUB_OPS = [
-    ("ADD", MathOperation.SfpuElwadd),
-    ("SUB", MathOperation.SfpuElwsub),
-]
-
 BF16_RNE_SWEEP = dict(
-    binary_op_mathop=_BF16_ADD_SUB_OPS,
+    mathop=[MathOperation.SfpuElwadd, MathOperation.SfpuElwsub],
 )
 
 
@@ -822,7 +794,7 @@ BF16_RNE_SWEEP = dict(
     tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_bf16_rne_quasar(
-    binary_op_mathop,
+    mathop,
     tile_indices,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
@@ -835,7 +807,6 @@ def test_eltwise_binary_sfpu_bf16_rne_quasar(
     RNE narrowing only applies when DEST holds bf16 (fp32 dest accumulation
     disabled), so this test is scoped to Float16_b with DestAccumulation.No.
     """
-    binary_op, mathop = binary_op_mathop
     formats = InputOutputFormat(
         input_format=DataFormat.Float16_b, output_format=DataFormat.Float16_b
     )
@@ -844,7 +815,6 @@ def test_eltwise_binary_sfpu_bf16_rne_quasar(
         DestAccumulation.No,
         tile_indices,
         mathop,
-        binary_op,
         prepare_stimuli=_prepare_float_stimuli,
         dst_rounding_mode=DstRoundingMode.NearestEven,
         run_types=run_types,
@@ -889,7 +859,6 @@ def test_eltwise_binary_sfpu_add_top_row_quasar(
         DestAccumulation.Yes,
         tile_indices,
         MathOperation.SfpuAddTopRow,
-        "ADD_TOP_ROW",
         prepare_stimuli=prepare_stimuli,
         run_types=run_types,
         loop_factor=loop_factor,
@@ -1016,7 +985,6 @@ def test_eltwise_binary_sfpu_fmod_quasar(formats, dest_acc, tile_indices):
         dest_acc,
         tile_indices,
         mathop,
-        mathop.cpp_enum_value,
         prepare_stimuli=_prepare_fmod_stimuli,
         post_check=_check_fmod,
         format_variant=format_variant,
@@ -1119,7 +1087,6 @@ def _run_max_min(
     assert (
         format_variant is not None
     ), f"no Quasar SFPU route for {formats} dest_acc={dest_acc}"
-    binary_op = _binary_op(mathop)
     is_max_op = mathop in (MathOperation.SfpuBinaryMax, MathOperation.SfpuMaxInt32)
     src0_idx, src1_idx, dst_idx = tile_indices
     num_faces = MAX_NUM_FACES
@@ -1177,7 +1144,7 @@ def _run_max_min(
         "test_name": _CPP_SOURCE,
         "formats": formats,
         "templates": [
-            SFPU_BINARY_OP(binary_op),
+            MATH_OP(mathop=mathop),
             APPROX_MODE(),
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(
@@ -1331,16 +1298,20 @@ _QUANT_INT8_MIN = -127
 _QUANT_INT8_MAX = 127
 
 
-_QUANT_OPS = ["QUANT", "REQUANT", "DEQUANT"]
+_QUANT_OPS = [
+    MathOperation.SfpuQuant,
+    MathOperation.SfpuRequant,
+    MathOperation.SfpuDequant,
+]
 
 QUANT_SWEEP = dict(
-    binary_op=_QUANT_OPS,
+    mathop=_QUANT_OPS,
     sign_magnitude=[False, True],
 )
 
 
 def _run_quant(
-    binary_op,
+    mathop,
     tile_indices,
     sign_magnitude=False,
     *,
@@ -1353,8 +1324,8 @@ def _run_quant(
     dest_acc = DestAccumulation.Yes  # all quant endpoints are 32-bit
     num_faces = MAX_NUM_FACES
 
-    is_dequant = binary_op == "DEQUANT"
-    a_is_int = binary_op in ("REQUANT", "DEQUANT")
+    is_dequant = mathop == MathOperation.SfpuDequant
+    a_is_int = mathop in (MathOperation.SfpuRequant, MathOperation.SfpuDequant)
     output_format = DataFormat.Float32 if is_dequant else DataFormat.Int32
 
     # ---- stimuli (one tile's worth of active datums) ----
@@ -1423,7 +1394,7 @@ def _run_quant(
         "test_name": _CPP_SOURCE,
         "formats": formats,
         "templates": [
-            SFPU_BINARY_OP(binary_op),
+            MATH_OP(mathop=mathop),
             APPROX_MODE(),
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
@@ -1484,7 +1455,7 @@ def _run_quant(
         golden_tensor[:_PROCESSED_ELEMS],
         res_tensor[:_PROCESSED_ELEMS],
         output_format,
-    ), f"{binary_op} (sign_magnitude={sign_magnitude}) mismatch (tile_indices={tile_indices})"
+    ), f"{mathop.name} (sign_magnitude={sign_magnitude}) mismatch (tile_indices={tile_indices})"
 
 
 @pytest.mark.quasar
@@ -1493,7 +1464,7 @@ def _run_quant(
     tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_quant_quasar(
-    binary_op,
+    mathop,
     sign_magnitude,
     tile_indices,
     *,
@@ -1507,7 +1478,7 @@ def test_eltwise_binary_sfpu_quant_quasar(
     (dequant). Exercised on both the 2's-complement and SIGN_MAGNITUDE_FORMAT
     (SMAG32) datapaths."""
     _run_quant(
-        binary_op,
+        mathop,
         tile_indices,
         sign_magnitude,
         run_types=run_types,

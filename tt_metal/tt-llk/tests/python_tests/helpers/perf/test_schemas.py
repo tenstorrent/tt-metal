@@ -2372,7 +2372,7 @@ PERF_TEST_SCHEMAS_QSR = {
         },
     },
     "perf_eltwise_binary_sfpu_quasar": {
-        "version": 5,
+        "version": 6,
         "columns": [
             "approx_mode",
             "broadcast_type",
@@ -2394,10 +2394,10 @@ PERF_TEST_SCHEMAS_QSR = {
             "input_format",
             "loop_factor",
             "marker",
+            "mathop",
             "num_faces",
             "num_faces_A",
             "num_faces_B",
-            "op",
             "output_format",
             "sign_magnitude",
             "src0_tile_idx",
@@ -2409,8 +2409,7 @@ PERF_TEST_SCHEMAS_QSR = {
         ],
         "aliases": {
             "formats.sfpu_math": "formats.sfpu_src",
-            # BH/WH emit this column as mathop. Same op, different header name.
-            "mathop": "op",
+            "op": "mathop",
         },
         "test_name_aliases": {
             "perf_eltwise_binary_sfpu_quasar": "perf_eltwise_binary_sfpu_quasar"
