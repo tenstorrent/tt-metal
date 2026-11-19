@@ -38,7 +38,7 @@ def test_bcast(device):
 
     # Add the row of input_tensor_b to every row of input_tensor_a
     output_tensor = ttnn.bcast(input_tensor_a, input_tensor_b, ttnn.BcastOpMath.ADD, ttnn.BcastOpDim.H)
-    logger.info(f"Bcast Tensor Shape: {output_tensor.shape}")  # Shape([1, 1, 64, 32])
+    logger.debug(f"Bcast Tensor Shape: {output_tensor.shape}")  # Shape([1, 1, 64, 32])
 
 
 def test_pad(device):
