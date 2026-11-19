@@ -26,7 +26,7 @@ from models.common.sampling import (
 from models.common.warmup import WarmupForwardMixin
 from models.demos.llama3_70b_galaxy.tt.llama_attention import CPF_RING_ALIGN, cpf_ring_eligible, cpf_ring_warm_prefixes
 from models.demos.llama3_70b_galaxy.tt.model_config import SDPA_CHUNK_ALIGN
-from models.demos.llama3_70b_galaxy.tt.prefill_padding import (
+from models.demos.llama3_70b_galaxy.tt.prefill_config import (
     cpf_pad512_on,
     cpf_pad512_seqlens,
     padded_prefill_len,
@@ -948,10 +948,9 @@ class Generator(WarmupForwardMixin):
             ):
                 pre = tokens[request_idx, :num_cached_tokens].to(torch.int64).contiguous().numpy().tobytes()
                 self._cpf_rep_cur = (int(num_cached_tokens), hashlib.sha1(pre).hexdigest())
-                # LLAMA_GALAXY_PREFILL_CPF_REPLICA_FORCE=read: test-only planted bug (read whatever the replica holds)
-                force = self._cpf_rep_force or os.environ.get("LLAMA_GALAXY_PREFILL_CPF_REPLICA_FORCE") or None
-                if force is not None:
-                    rep_mode = force
+                # warmup compiles both variants (self._cpf_rep_force)
+                if self._cpf_rep_force is not None:
+                    rep_mode = self._cpf_rep_force
                 else:
                     rep_mode = "read" if self._cpf_rep_cur == self._cpf_rep_valid else "write"
                 if rep_mode == "write":

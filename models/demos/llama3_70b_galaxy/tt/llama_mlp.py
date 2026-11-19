@@ -4,7 +4,7 @@
 
 import torch
 import ttnn
-from models.demos.llama3_70b_galaxy.tt.prefill_padding import prefill_minmm, prefill_slab_rows
+from models.demos.llama3_70b_galaxy.tt.prefill_config import prefill_minmm, prefill_slab_rows
 from models.common.lightweightmodule import LightweightModule
 import torch.nn.functional as F
 

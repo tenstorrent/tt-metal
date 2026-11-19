@@ -7,7 +7,11 @@ import torch
 import os
 from loguru import logger
 
-from models.demos.llama3_70b_galaxy.tt.prefill_padding import cpf_pad512_seqlens, prefill_extra_seqlens
+from models.demos.llama3_70b_galaxy.tt.prefill_config import (
+    PREFILL_CCL_BUFS_KINDS,
+    cpf_pad512_seqlens,
+    prefill_extra_seqlens,
+)
 
 # Only for prefill, check tt-metal/models/demos/llama3_70b_galaxy/README.md
 LINE_RS = os.environ.get("LINE_RS", "0") == "1"
@@ -28,15 +32,10 @@ PREFILL_SEQSPLIT_MIN = 2048
 PREFILL_SEQSPLIT_MAX = 8192
 
 # LLAMA_GALAXY_PREFILL_CCL_BUFS=<n> (opt-in, read at call time): num_buffers_per_channel for the Wormhole
-# prefill ring CCLs (reduce_scatter_minimal_async / all_gather_async; the ops default to 1). Applies to
-# ring_reduce_scatter (FF1/FF3 RS; QKV/WO RS without seqsplit), ring_all_gather (FF2 input AG < 4096, SDPA
-# output AG, QKV/WO AG without seqsplit) and the seqsplit RS/AG (WO, FF2, norm output, QKV heads).
-# LLAMA_GALAXY_PREFILL_CCL_BUFS_OPS = comma (or +) list of rs, ag, seqrs, seqag (default: rs only).
-# Default rs: traced A/B (9 vs 1 layer, 16 buffers) per layer: rs (FF1/FF3 ring RS) -0.05 ms at 4096 and 6144,
+# prefill ring CCLs in PREFILL_CCL_BUFS_KINDS (the FF1/FF3 ring reduce-scatter; the ops default to 1).
+# Traced A/B (9 vs 1 layer, 16 buffers) per layer: rs (FF1/FF3 ring RS) -0.05 ms at 4096 and 6144,
 # +0.003 at 2048 (noise); seqrs neutral; ag and seqag slower at every length (+0.007..+0.020 ms).
 PREFILL_CCL_BUFS_ENV = "LLAMA_GALAXY_PREFILL_CCL_BUFS"
-PREFILL_CCL_BUFS_KINDS = ("rs", "ag", "seqrs", "seqag")
-PREFILL_CCL_BUFS_DEFAULT_KINDS = ("rs",)
 
 
 def prefill_ccl_bufs(kind):
@@ -44,12 +43,7 @@ def prefill_ccl_bufs(kind):
     value = os.environ.get(PREFILL_CCL_BUFS_ENV, "").strip()
     if value in ("", "0"):
         return None
-    ops = os.environ.get(PREFILL_CCL_BUFS_ENV + "_OPS", "").strip()
-    kinds = tuple(k.strip() for k in ops.replace("+", ",").split(",")) if ops else PREFILL_CCL_BUFS_DEFAULT_KINDS
-    for k in kinds:
-        if k not in PREFILL_CCL_BUFS_KINDS:
-            raise ValueError(f"{PREFILL_CCL_BUFS_ENV}_OPS={ops!r}: unknown kind {k!r}; use {PREFILL_CCL_BUFS_KINDS}")
-    return int(value) if kind in kinds else None
+    return int(value) if kind in PREFILL_CCL_BUFS_KINDS else None
 
 
 # If set, use line for those AG ops in prefill, otherwise use ring if available
@@ -1461,7 +1455,6 @@ class TT_CCL:
             subdevice_id=self.worker_sub_device_id,
             cluster_axis=cluster_axis,
             num_workers_per_link=4 if seqlen > 128 else 1,
-            num_buffers_per_channel=prefill_ccl_bufs("seqrs"),
         )
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return ttnn_tensor_out
@@ -1479,7 +1472,6 @@ class TT_CCL:
             topology=ttnn.Topology.Ring,
             subdevice_id=self.worker_sub_device_id,
             cluster_axis=cluster_axis,
-            num_buffers_per_channel=prefill_ccl_bufs("seqag"),
         )
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return ttnn_tensor_out
@@ -1714,7 +1706,6 @@ class TT_CCL:
             topology=ttnn.Topology.Ring,
             subdevice_id=self.worker_sub_device_id,
             cluster_axis=cluster_axis,
-            num_buffers_per_channel=prefill_ccl_bufs("ag") if (self.use_prefetcher and not self.is_blackhole) else None,
         )
 
         if self.mode == "prefill" and buffer_key is not None and dim != 2:

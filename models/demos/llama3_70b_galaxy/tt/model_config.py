@@ -34,7 +34,8 @@ from models.demos.llama3_70b_galaxy.tt.load_checkpoints import (
     convert_meta_to_hf,
     standardize_hf_keys,
 )
-from models.demos.llama3_70b_galaxy.tt.prefill_padding import (
+from models.demos.llama3_70b_galaxy.tt.prefill_config import (
+    CPF_PAD512_Q_CHUNK,
     prefill_sdpa_q64_2048_enabled,
     prefill_slab1024_q_chunk,
     ring_sdpa_q_chunk_override,
@@ -63,11 +64,10 @@ def ring_sdpa_q_chunk_size(seqlen):
     """q_chunk_size for ring_distributed_sdpa at seqlen >= 2048 (ring_size 4: each device takes two
     seqlen/8 slices). The op places a slice at slice_index * (seqlen/8) // q_chunk_size, so q_chunk_size
     must divide seqlen/8: 256 for every power of two >= 2048, 128 for 3072 and 5120.
-    LLAMA_GALAXY_PREFILL_SLAB1024 can lower it at 4096/6144/8192 (prefill_padding.py)."""
+    LLAMA_GALAXY_PREFILL_SLAB1024 can lower it at 4096/6144/8192 (prefill_config.py)."""
     default = 256 if (seqlen // 8) % 256 == 0 else 128 if (seqlen // 8) % 128 == 0 else 64  # 64: CPF_PAD512 lengths
     if default == 64:
-        # LLAMA_GALAXY_PREFILL_CPF_PAD512_Q (read at call time): q_chunk for the CPF_PAD512 lengths (64 or 32)
-        default = int(os.environ.get("LLAMA_GALAXY_PREFILL_CPF_PAD512_Q", "64"))
+        default = CPF_PAD512_Q_CHUNK
     if seqlen == 2048 and prefill_sdpa_q64_2048_enabled():
         return 64
     return ring_sdpa_q_chunk_override(seqlen, default, PREFILL_SLAB1024_Q_CHUNK)

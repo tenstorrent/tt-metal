@@ -93,12 +93,18 @@ def prefill_sdpa_q64_2048_enabled():
 # 137-155 TFLOP/s on FF1 where linear reaches 81-105. Comma (or +) list of parts, or "1" for all:
 #   qkv     : the QKV matmul at every batch-1 prefill length >= 2048 (unslabbed [1, 1, S, 2048] input)
 #   mlp2048 : FF1/FF3 (minimal) and FF2 (fused AG + minimal) at 2048
-#   wo2048  : WO at 2048
 #   mlp3072 : FF1/FF3 (minimal) and FF2 (fused AG + minimal) at 3072 (not part of "1")
 #   mlp512  : the same at the CPF_PAD512 lengths below 4096 (2560, 3584; not part of "1")
 PREFILL_MINMM_ENV = "LLAMA_GALAXY_PREFILL_MINMM"
-PREFILL_MINMM_PARTS = ("qkv", "mlp2048", "wo2048", "mlp3072", "mlp512")
-PREFILL_MINMM_ALL = ("qkv", "mlp2048", "wo2048")  # what "1" turns on
+PREFILL_MINMM_PARTS = ("qkv", "mlp2048", "mlp3072", "mlp512")
+PREFILL_MINMM_ALL = ("qkv", "mlp2048")  # what "1" turns on
+
+# Settings that were env-tunable probes, fixed at the values every serving run used.
+CPF_RING_WARM_PREFIXES = (2048,)  # prefix lengths whose CPF ring traces are warmed; only these take the ring path
+CPF_RING_MIN_NEW = 2048  # fewest padded new rows that take the CPF ring path
+CPF_PAD512_Q_CHUNK = 64  # ring SDPA q_chunk_size at the CPF_PAD512 lengths (their seqlen/8 is a multiple of 64 only)
+MINMM_QKV_CONFIG = (8, 8, 4, 1, 4, 7, 10)  # QKV minimal_matmul: M/K/N block, subblock h/w, grid x/y (in tiles)
+PREFILL_CCL_BUFS_KINDS = ("rs",)  # prefill CCLs that get PREFILL_CCL_BUFS buffers per channel: the FF1/FF3 ring RS
 
 
 # LLAMA_GALAXY_PREFILL_CPF_PAD512 (opt-in, read at TT_CCL construction and call time): a prefill over a cached
