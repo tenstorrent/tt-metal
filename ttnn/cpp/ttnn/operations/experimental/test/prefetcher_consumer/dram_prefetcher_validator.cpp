@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dram_prefetcher_validator.hpp"
+#include "ttnn/core.hpp"
 
 #include "ttnn/prefetcher_pipe.hpp"
 #include "ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher.hpp"
@@ -535,8 +536,9 @@ void test_tensor_prefetcher_pipe_validator(
         streaming,
         rotation,
         groups);
-    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/false);
-    tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue());
+    tt::tt_metal::distributed::EnqueueMeshWorkload(
+        ttnn::core::current_mesh_command_queue(*mesh_device), workload, /*blocking=*/false);
+    tt::tt_metal::distributed::Finish(ttnn::core::current_mesh_command_queue(*mesh_device));
 }
 
 }  // namespace ttnn::operations::experimental::test
