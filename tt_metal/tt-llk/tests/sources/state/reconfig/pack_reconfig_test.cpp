@@ -38,6 +38,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
+#include "llk_lib_pack_wrappers.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -52,15 +53,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Distinct prev/next tile sizes; both paths need to hit NEXT_SIZE.
     constexpr std::uint32_t PREV_SIZE = 16 * 16 * 2;
     constexpr std::uint32_t NEXT_SIZE = 16 * 16 * 4;
+    const std::uint32_t face_r_dim    = params.TEST_FACE_R_DIM;
+    const std::uint32_t num_faces     = params.num_faces;
 
+    // Configure takes partial_face as tt-metal's Tile sets it; tt-metal's reconfig passes false.
     if (params.CONFIGURE_TEST_RUN_IDX == 0)
     {
-        _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(next_src, next_dst, NEXT_SIZE);
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en>(next_src, next_dst, NEXT_SIZE, face_r_dim, TILE_C_DIM, num_faces, PARTIAL_FACE_PACK);
     }
     else
     {
-        _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(prev_src, prev_dst, PREV_SIZE);
-        _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(next_src, next_dst, NEXT_SIZE);
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en>(prev_src, prev_dst, PREV_SIZE, face_r_dim, TILE_C_DIM, num_faces, PARTIAL_FACE_PACK);
+        _llk_pack_reconfig_data_format_wrapper_<is_fp32_dest_acc_en>(next_src, next_dst, NEXT_SIZE, face_r_dim, TILE_C_DIM, num_faces);
     }
 
     ckernel::packer::are_packers_configured_correctly(next_src, next_dst);
