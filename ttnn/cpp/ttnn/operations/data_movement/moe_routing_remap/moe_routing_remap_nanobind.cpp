@@ -44,7 +44,7 @@ void bind_moe_routing_remap(nb::module_& mod) {
         On a single device, `expert_parallel_size` is 1 and the output equals `routing_weights_tensor`.
 
         Args:
-            routing_weights_tensor (ttnn.Tensor): the routing weights, of shape ``[1, experts]``, replicated on every device: one weight per expert. Exactly `non_zero_weight_size` weights must be non-zero, and the others ``0`` (``+0.0`` for BFLOAT16 and FLOAT32).
+            routing_weights_tensor (ttnn.Tensor): the routing weights, of shape ``[1, experts]`` with ``experts`` at most 65536, replicated on every device: one weight per expert. Exactly `non_zero_weight_size` weights must be non-zero, and the others ``0`` (``+0.0`` for BFLOAT16 and FLOAT32).
             non_zero_weight_size (int): the number of non-zero weights in `routing_weights_tensor`. Must be greater than 0, at most ``experts``, and a multiple of `expert_parallel_size`.
             expert_parallel_size (int): the number of groups to split the non-zero weights into. Must equal the number of devices along `cluster_axis` of the mesh (1 on a single device), and divide ``experts``.
             cluster_axis (int): the mesh axis to split the weights along: 0 or 1. The device at mesh coordinate ``(row, column)`` is device ``row`` along axis 0 and device ``column`` along axis 1.
