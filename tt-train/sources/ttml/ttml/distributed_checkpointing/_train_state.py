@@ -88,7 +88,7 @@ def capture_process_rng() -> dict:
         }
     else:
         warnings.warn("numpy's global generator is not the legacy MT19937; its state is not saved", stacklevel=2)
-    init_state = ttml.init._rng.bit_generator.state
+    init_state = ttml.init.get_rng_state()
     if init_state["bit_generator"] == "PCG64":
         state["ttml_init"] = {
             "bit_generator": "PCG64",
@@ -185,14 +185,13 @@ def _decode_process_rng(state: dict) -> dict[str, Any]:
             np.random.RandomState().set_state(decoded["numpy"])
         init_state = state.get("ttml_init")
         if init_state is not None:
-            bit_generator = np.random.PCG64()
-            bit_generator.state = {
+            decoded["ttml_init"] = {
                 "bit_generator": init_state["bit_generator"],
                 "state": {"state": int(init_state["state"], 16), "inc": int(init_state["inc"], 16)},
                 "has_uint32": int(init_state["has_uint32"]),
                 "uinteger": int(init_state["uinteger"]),
             }
-            decoded["ttml_init"] = np.random.Generator(bit_generator)
+            np.random.PCG64().state = decoded["ttml_init"]
         if state.get("torch") is not None:
             decoded["torch"] = np.frombuffer(bytes.fromhex(state["torch"]), dtype=np.uint8).copy()
             torch = sys.modules.get("torch")
@@ -234,7 +233,7 @@ def restore_process_rng(state: dict) -> list[str]:
         np.random.set_state(decoded["numpy"])
         restored.append("rng.numpy")
     if "ttml_init" in decoded:
-        ttml.init._rng = decoded["ttml_init"]  # replaced, as ttml.init.manual_seed does
+        ttml.init.set_rng_state(decoded["ttml_init"])
         restored.append("rng.ttml_init")
     if "torch" in decoded and torch is not None:
         torch.set_rng_state(torch.from_numpy(decoded["torch"]))
