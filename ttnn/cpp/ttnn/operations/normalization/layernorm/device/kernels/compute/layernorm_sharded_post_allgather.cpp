@@ -77,7 +77,7 @@ void kernel_main() {
     constexpr uint32_t dfb_var = dfb::var;                      // Var[x]
 #endif
 
-    DataflowBuffer dfb_in0_obj(dfb_in0);
+    const DataflowBuffer dfb_in0_obj(dfb_in0);
     DataflowBuffer dfb_eps_obj(dfb_eps);
     DataflowBuffer dfb_scaler_global_obj(dfb_scaler_global);
 #ifdef FUSE_GAMMA
@@ -91,7 +91,7 @@ void kernel_main() {
     DataflowBuffer dfb_out_obj(dfb_out);
     DataflowBuffer dfb_ex_sqr_obj(dfb_ex_sqr);
 #ifdef IS_ALLGATHER_WORKER
-    DataflowBuffer dfb_stats_obj(dfb_stats);
+    const DataflowBuffer dfb_stats_obj(dfb_stats);
     DataflowBuffer dfb_stats_reduced_obj(dfb_stats_reduced);
     DataflowBuffer dfb_var_obj(dfb_var);
 #endif
@@ -366,7 +366,7 @@ void kernel_main() {
                 }
                 tile_regs_release();
                 index_subblock_w_offset += subblock_w;
-                dfb_outgamma_obj.push_back(subblock_w);
+                dfb_outgamma_obj.push_back(static_cast<uint16_t>(subblock_w));
             }
             index_h_offset += block_w;
         }

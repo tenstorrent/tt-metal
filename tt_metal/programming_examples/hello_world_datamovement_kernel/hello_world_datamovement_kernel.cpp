@@ -31,7 +31,7 @@ int main() {
     // Prepare a workload and a device coordinate range that spans the mesh.
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
 
     // Configure and create Data Movement kernels
     // There are 2 Data Movement cores per Tensix. In applications one is usually used for reading data from DRAM and
