@@ -188,12 +188,11 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    check, per step and end to end, compares against the reference's full-precision numerics (`native`); the
    official arithmetic only measures the margin (F128). A check that fails only because the device skips such a
    rounding is not a reason to add it: report the check, its value and its limit.
-18. Galaxy power limit (owner, 2026-10-30): on a Galaxy (any box whose chips sit in a Galaxy chassis, e.g. galaxy_8x4)
-   no op may run on more than 110 Tensix cores of a chip. The chassis' power supply trips when a chip's current
-   rises too fast (di/dt), and a full 12 x 10 = 120-core grid can do it. This holds for every op you add, configure or
-   fork: matmul program configs (cap the grid, e.g. 11 x 10 = 110), the core grids of fork kernels, the MoE engines,
-   attention, CCL workers. An op that defaults to the full device grid gets an explicit sub-grid. Take the limit from
-   the model's settings (one value, `MAX_WORKER_CORES`), never a literal in a module, so other boxes keep their grid.
+18. Galaxy power limit (owner 2026-10-30, narrowed 2026-11-18): on a Galaxy (any box whose chips sit in a Galaxy
+   chassis, e.g. galaxy_8x4) only MATMULS stay within 110 Tensix cores of a chip (matmul program configs: cap the
+   grid, e.g. 11 x 10 = 110; the chassis' supply trips on a matmul's current step, di/dt). Every other op (fork
+   kernels, data movement, CCLs, eltwise, the MoE engines' non-matmul parts, new kernels) may use the full 120-core
+   grid (`NONMM_MAX_CORES=0`). Take the matmul limit from the model's settings (`MAX_WORKER_CORES`), never a literal.
    When you add or change an op, report how many cores it runs on.
 19. Galaxy resets (2026-10-31, FIX.15): never run a single-card device job (`--device N|auto`, `tt-probe.sh
    --device`) on a Galaxy whose mesh the run depends on, unless the brief says so: if it hangs, the safe runner resets
