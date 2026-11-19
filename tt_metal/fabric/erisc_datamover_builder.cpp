@@ -989,11 +989,9 @@ std::array<uint32_t, 2> FabricEriscDatamoverBuilder::get_downstream_edm_array_si
 }
 
 MasterRouterCandidate FabricEriscDatamoverBuilder::describe_master_router_candidate() const {
-    const bool is_intramesh_router_on_edge = compute_edge_facing_flags(
-                                                 fabric_context_.get_control_plane(),
-                                                 this->local_fabric_node_id,
-                                                 this->my_eth_channel)
-                                                 .second;
+    const bool is_intramesh_router_on_edge =
+        compute_edge_facing_flags(fabric_context_.get_control_plane(), this->local_fabric_node_id, this->my_eth_channel)
+            .second;
     return MasterRouterCandidate{
         .eth_chan = static_cast<chan_id_t>(this->my_eth_channel),
         .facing = this->direction_,
