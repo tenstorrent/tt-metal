@@ -11,6 +11,8 @@
 #include <gmock/gmock.h>
 
 #include <cstdint>
+#include <string>
+#include <map>
 #include <set>
 #include <stdexcept>
 #include <utility>
@@ -128,10 +130,13 @@ void verify_default_page_size(
                                           << ", Buffer page_size: " << output_device_buffer->page_size();
 }
 
+// With a nonzero crta_offset, the input's common runtime args come after that many decoys, the kernel gives its
+// TensorAccessorArgs the offset at runtime, and builds the accessor with the 2-arg constructor.
 void verify_runtime_page_size(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const distributed::MeshBuffer& input_buffer,
-    uint32_t sentinel_page_size) {
+    uint32_t sentinel_page_size,
+    uint32_t crta_offset = 0) {
     auto& cq = mesh_device->mesh_command_queue();
 
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -161,6 +166,10 @@ void verify_runtime_page_size(
     EXPECT_EQ(common_runtime_args, std::vector<uint32_t>{static_cast<uint32_t>(input_buffer.aligned_page_size())});
     TensorAccessorArgs(*output_buffer).append_to(compile_time_args);
 
+    std::map<std::string, std::string> defines;
+    if (crta_offset != 0) {
+        defines["RUNTIME_CRTA_OFFSET"] = std::to_string(crta_offset);
+    }
     auto kernel = CreateKernel(
         prog,
         RUNTIME_PAGE_SIZE_KERNEL_PATH,
@@ -168,13 +177,16 @@ void verify_runtime_page_size(
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
-            .compile_args = compile_time_args});
+            .compile_args = compile_time_args,
+            .defines = defines});
 
     SetRuntimeArgs(prog, kernel, KERNEL_CORE, {input_buffer.address(), output_buffer->address()});
     // The input's dynamic page size rides common runtime arg 0 -- the channel the device accessor
     // reads via get_aligned_page_size() when the RuntimePageSize bit is set. Replace it with the
     // sentinel, so a passing check can only mean the kernel read the runtime value.
     common_runtime_args[0] = sentinel_page_size;
+    // Decoys in front of the page size: an accessor that ignores the runtime offset reads one of them.
+    common_runtime_args.insert(common_runtime_args.begin(), crta_offset, 0xDEAD);
     SetCommonRuntimeArgs(prog, kernel, common_runtime_args);
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
@@ -288,6 +300,14 @@ TEST_F(MeshDispatchFixture, TensixTensorAccessorRuntimePageSizeInterleavedDram) 
         // its page size is NOT -- the accessor must read the page size from the runtime sentinel.
         auto input = create_interleaved_buffer(*mesh_device, RM_PAGE_SIZE, RM_NUM_PAGES, BufferType::DRAM);
         verify_runtime_page_size(mesh_device, *input, RUNTIME_PAGE_SIZE_SENTINEL);
+    }
+}
+
+// The 2-arg accessor reads the runtime page size at the common runtime arg offset its args were given.
+TEST_F(MeshDispatchFixture, TensixTensorAccessorRuntimePageSizeInterleavedDramAtRuntimeOffset) {
+    for (auto& mesh_device : devices_) {
+        auto input = create_interleaved_buffer(*mesh_device, RM_PAGE_SIZE, RM_NUM_PAGES, BufferType::DRAM);
+        verify_runtime_page_size(mesh_device, *input, RUNTIME_PAGE_SIZE_SENTINEL, /*crta_offset=*/1);
     }
 }
 
