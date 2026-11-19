@@ -107,7 +107,7 @@ def test_fold(device):
 
     # Move each 2x3 block of pixels into the channel dimension
     folded_tensor = ttnn.fold(input_tensor, stride_h=2, stride_w=3)
-    logger.info(f"Folded Tensor Shape: {folded_tensor.shape}")  # Shape([1, 2, 2, 48])
+    logger.debug(f"Folded Tensor Shape: {folded_tensor.shape}")  # Shape([1, 2, 2, 48])
 
 
 def test_repeat_interleave(device):
