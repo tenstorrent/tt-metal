@@ -116,9 +116,11 @@ gradient.
 - **FSDP.** `backward_post` reduce-scatters in the `reduce_dtype` given to `ttml.fsdp.fully_shard()`, else in the
   stored one, which it reads when it runs, as the DDP sync does. It first runs in the first backward, after the
   optimizer is created, so a script that shards before `create_optimizer()`, as `train.py` does, needs nothing else. A
-  `reduce_dtype` given to `fully_shard()` wins over the stored one. The fp32 sum holds more while a gradient is
-  reduced: an fp32 copy of the gathered gradient (the bf16 one is freed once it is cast), and the reduce-scatter's
-  working buffer, which ttnn allocates in its input's dtype at the input's size, twice that on a line
+  `reduce_dtype` given to `fully_shard()` wins over the stored one for this reduce-scatter; how gradients are
+  accumulated before it follows the stored value alone (see
+  [fp32 gradient accumulation](#fp32-gradient-accumulation)). The fp32 sum holds more while a gradient is reduced: an
+  fp32 copy of the gathered gradient (the bf16 one is freed once it is cast), and the reduce-scatter's working buffer,
+  which ttnn allocates in its input's dtype at the input's size, twice that on a line
   (`ReduceScatterMinimalAsyncDeviceOperation::compute_output_specs`). On a line that is about 12 bytes per gathered
   element against 6 for the bf16 sum. With `FLOAT32` the mean shard is kept in fp32, twice the size of a bf16 shard;
   with `BFLOAT16` or none, a bf16 gradient's shard is written in bf16.
@@ -182,7 +184,11 @@ a tied embedding and LM head.
   `override_tensor()`; Python modules register theirs through the same calls, and `Tensor.is_parameter()` tells). Its
   gradient is summed in fp32 when the stored default (`AutoContext::get_gradient_reduce_dtype()`) is `FLOAT32`, read
   at every add: set by `core::apply_precision_config()` or by hand with `set_gradient_reduce_dtype()`, it applies to
-  every parameter, including one created or unfrozen later. Tensors no module registered, such as activations and the
+  every parameter, including one created or unfrozen later. The stored value alone decides it: a `reduce_dtype`
+  passed to `ttml.sync_gradients()`, `synchronize_gradients()` or `ttml.fsdp.fully_shard()` sets the dtype of that sum
+  across devices and nothing else. With `float32` stored, `fully_shard(reduce_dtype=BFLOAT16)` still sums in fp32 from
+  the second micro-batch on; with nothing stored, an explicit `FLOAT32` sums across devices in fp32 while
+  `add_grad()` keeps adding bf16 gradients in bf16. Tensors no module registered, such as activations and the
   memory-efficient runner's `input_detached` (`sources/ttml/models/common/transformer_common.hpp`), keep their
   gradients in the dtype they arrive in, because the backward kernels they feed take bf16. A gradient that is already
   fp32 is always summed in fp32.
@@ -204,15 +210,14 @@ a tied embedding and LM head.
   `clip_grad_norm()`, and `RemoteOptimizer` before it sends. With clipping on, fused `AdamW` therefore gets the clipped
   bf16 gradient; a clip op that reads and scales fp32 gradients in place (#64517) would keep them in fp32 at about the
   same bytes. A Python optimizer registered with `ttml.optimizers.register_optimizer()` gets the gradients as stored;
-  one whose math takes bf16 calls `ttml.core.cast_fp32_gradients_to_bf16(parameters)` first. No test covers
-  `RemoteOptimizer`'s cast, since its step needs a second host.
+  one whose math takes bf16 calls `ttml.core.cast_fp32_gradients_to_bf16(parameters)` first.
 - **Memory.** An fp32 gradient takes 2 bytes per parameter more than a bf16 one while gradients are held. With fp32
   master weights and fused `AdamW` that is 18 instead of 16 bytes per parameter (4 for the master, 2 for its bf16
   view, 8 for the moments, 4 for the gradient); with bf16 parameters, 10 instead of 8.
 - **Cost.** Each extra add moves 18 bytes per element in two dispatches, against 6 for a bf16 add, and the second
   micro-batch, whose stored gradient is still bf16, 24 bytes in three: about 30 to 46 ms per micro-batch for every
   billion gradient elements a chip holds, counted at the gathered size under FSDP. A fused op that adds a bf16 gradient
-  into the fp32 one in place would move about 10 bytes in one dispatch; it is a follow-up of #56513.
+  into the fp32 one in place would move about 10 bytes in one dispatch (#65669).
 
 Why both operands are cast, with the measurements behind these rules, is in
 [a comment on #56513](https://github.com/tenstorrent/tt-metal/issues/56513#issuecomment-6886483685).
