@@ -2,11 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import re
+
 import pytest
 import torch
 import ttnn
 
 from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
+    UnreadableDocstring,
     check_readable,
     docstring_dtype_layout_params,
     docstring_interleaved_buffer_type_params,
@@ -89,3 +92,31 @@ def test_moe_routing_remap_docstring_supported_inputs(dtype, layout, input_buffe
     )
     _check(preallocated, expected, dtype, output_memory_config)
     _check(output, expected, dtype, output_memory_config)
+
+
+def _docstring_most_experts():
+    """The largest number of experts the ttnn.moe_routing_remap docstring allows."""
+    match = re.search(r"``experts`` at most (\d+)", " ".join(ttnn.moe_routing_remap.__doc__.split()))
+    if not match:
+        return UnreadableDocstring("no '``experts`` at most <n>' in the ttnn.moe_routing_remap docstring")
+    return int(match.group(1))
+
+
+@pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.moe_routing_remap))
+@pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.moe_routing_remap))
+def test_moe_routing_remap_docstring_most_experts(dtype, layout, buffer_type, device):
+    """Runs the largest number of experts the ttnn.moe_routing_remap docstring allows, with non-zero weights at the
+    first and the last experts, for every dtype, layout and interleaved buffer type it lists."""
+    experts = _docstring_most_experts()
+    check_readable(dtype, layout, buffer_type, experts)
+    memory_config = interleaved_memory_config(buffer_type)
+    expected = torch.zeros((1, experts), dtype=torch.float64)
+    expected[0, [0, 1, experts // 2, experts - 2, experts - 1]] = torch.tensor([5, 4, 3, 2, 1], dtype=torch.float64)
+    torch_dtype = full_range_input((8,), dtype).dtype
+    routing_weights = ttnn.from_torch(
+        expected.to(torch_dtype), dtype=dtype, layout=layout, device=device, memory_config=memory_config
+    )
+
+    output = ttnn.moe_routing_remap(routing_weights, non_zero_weight_size=5, expert_parallel_size=1, cluster_axis=0)
+
+    _check(output, expected, dtype, memory_config)
