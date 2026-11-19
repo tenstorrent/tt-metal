@@ -190,7 +190,9 @@ def get_model_config(batch, device_grid_size, model_config_str):
         model_config.update(new_config_values)
 
     elif model_config_str == "BFLOAT8_B-L1" or model_config_str == "BFLOAT8_B-DRAM":
-        grid_size = ttnn.CoreCoord(12, batch)
+        # One core row per image, up to 12 columns; every per_core_N below covers its output's width
+        # on 8 columns or more.
+        grid_size = ttnn.CoreCoord(min(12, device_grid_size.x), batch)
         new_config_values = {
             "OP3_PRE_SOFTMAX_BMM_CONFIG": ttnn.MatmulMultiCoreReuseProgramConfig(
                 compute_with_storage_grid_size=grid_size,
