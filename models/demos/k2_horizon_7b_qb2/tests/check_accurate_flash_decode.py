@@ -61,8 +61,8 @@ def main():
     from models.demos.k2_horizon_7b_qb2.tt.accurate_attention import accurate_attention, accurate_flash_decode
     from models.demos.k2_horizon_7b_qb2.tt.multichip_decoder import MultichipDecoder
 
-    # The model's previous long-context decode path (B1 scalar / batched packed-GQA accurate attention).
-    production = types.SimpleNamespace(accurate_attention_batch_size=32, _attention=accurate_attention)
+    # The model's chunked decode fallback (one ACCURATE-recipe call per request).
+    production = types.SimpleNamespace(_attention=accurate_attention)
 
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), physical_device_ids=[a.device])
     up = lambda x, dt, lay: ttnn.from_torch(

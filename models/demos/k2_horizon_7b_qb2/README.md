@@ -24,12 +24,13 @@ whose `<think>` segments need the `k2_horizon` reasoning and tool-call parsers t
   The policy was selected against HF logits with a teacher-forced gate (top-1/5/100 agreement
   98/100/100 on the AIME fixture) and a repeated-boundary stress fixture (PCC 0.995).
 - **Attention in two regimes.** Prompts up to 64K tokens use the stock chunked SDPA with 64-row
-  Q chunks (bitwise identical to the 128-row default, 1.28x faster). Beyond that, the model's own
-  kernels in `tt/accurate_attention` take over: an FP32 online-softmax prefill kernel on the full
-  11x10 core grid and a split-K flash-decode kernel generated from the stock decode program with
-  FP32 statistics. They exist because the stock long-context paths lose accuracy (approximate
-  exponentials on half tiles and BF16 running statistics gave 7 % error at 512K) and the fallback
-  "accurate" path only used 8 of 64 cores. The host binding and kernels build on first use
+  Q chunks (bitwise identical to the 128-row default, 1.28x faster). Beyond that, `tt/accurate_attention`
+  takes over: prefill runs the chunked SDPA's ACCURATE precision recipe (FP32 scores, maxima and
+  running statistics, HiFi4) on the full 11x10 core grid, and decode a split-K flash-decode kernel
+  generated from the stock decode program with FP32 statistics. They exist because the stock
+  long-context paths lose accuracy (approximate exponentials on half tiles and BF16 running
+  statistics gave 7 % error at 512K) and the fallback "accurate" path only used 8 of 64 cores. The
+  decode host binding and kernel build on first use
   (`python -m models.demos.k2_horizon_7b_qb2.tt.accurate_attention.build`).
 - **Prefill in 8192-token chunks**, so causal work balances across the grid; output tokens are
   identical to 4096-token chunks.

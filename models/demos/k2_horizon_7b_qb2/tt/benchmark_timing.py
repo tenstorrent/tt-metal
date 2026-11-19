@@ -106,6 +106,7 @@ def _accurate_attention_identity(model):
         "library": {"path": str(library), "sha256": _hash(library)},
         "provenance": {"path": str(provenance_path), "sha256": _hash(provenance_path), "data": provenance},
         "compute_kernel": {"path": str(kernel_path), "sha256": _hash(kernel_path)},
+        "prefill_attention": "ttnn chunked SDPA, SDPAPrecision.ACCURATE",
         "wrapper": {"path": str(root / "__init__.py"), "sha256": _hash(root / "__init__.py")},
     }
     if packed:
