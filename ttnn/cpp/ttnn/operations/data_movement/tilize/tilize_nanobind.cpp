@@ -54,8 +54,8 @@ void bind_tilize(nb::module_& mod) {
                  - ROW_MAJOR
 
             ``BFLOAT16`` input values must not be NaN. On Blackhole, ``BFLOAT16``, ``UINT16`` and ``UINT8`` inputs need a
-            tile height of 2 or more, and a ``UINT8`` input must be in DRAM. On Quasar, a ``FLOAT32`` input needs a tile
-            height of 32.
+            tile height of 2 or more, and a ``UINT8`` input must be in DRAM. On Quasar, the input must be a ROW_MAJOR
+            ``BFLOAT16``, ``FLOAT32`` or ``INT32`` tensor, and ``FLOAT32`` and ``INT32`` inputs need a tile height of 32.
 
             On Blackhole, a ``FP8_E4M3`` ROW_MAJOR input is also supported. Its output defaults to ``FLOAT32`` and can be
             ``FLOAT32``, ``BFLOAT16``, ``BFLOAT8_B`` or ``BFLOAT4_B``, and its last dimension must be more than 32.
