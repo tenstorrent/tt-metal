@@ -25,7 +25,7 @@ import re
 import pytest
 import ttnn
 from dcp_harness import ranks_in_step, two_rank_world
-from dcp_shards import assert_same, optimizer_state, param_shards
+from dcp_shards import assert_same_shards, model_shards, optimizer_shards
 from tp_block import TPBlock, make_adamw, train_step
 
 import ttml
@@ -87,12 +87,15 @@ def test_each_mesh_saves_its_own_stage_and_the_shared_layer_once(two_meshes, exp
     params = model.parameters()
     opt = make_adamw(params)
     train_step(model, opt, DIM)
-    before = param_shards(params, local)
-    assert len(before) == len(params) * len(local)
+    before = model_shards(params, local)
+    assert len(before) == len(params) and all(len(arrays) == len(local) for arrays in before.values())
     trainable = [name for name, tensor in params.items() if tensor.get_requires_grad()]
     assert len(trainable) == len(params) - 2, "everything but the shared layer's weight and bias"
-    state_before, scalars_before = optimizer_state(opt, local)
-    assert len(state_before) == 2 * len(trainable) * len(local) and scalars_before["steps"] == 1
+    state_before, scalars_before = optimizer_shards(opt, local)
+    assert len(state_before) == 2 * len(trainable) and all(
+        len(arrays) == len(local) for arrays in state_before.values()
+    )
+    assert scalars_before["steps"] == 1
     path = os.path.join(root, dcp.step_dir_name(1))
 
     result = dcp.save(path, model=model, optimizer=opt, header={"step": 1})
@@ -113,9 +116,9 @@ def test_each_mesh_saves_its_own_stage_and_the_shared_layer_once(two_meshes, exp
     opt2 = make_adamw(params2)
     loaded = dcp.load(path, model=model2, optimizer=opt2)
     assert loaded.missing == [] and loaded.unexpected == [], "judged over the union of the ranks' keys"
-    assert_same(param_shards(params2, local), before, "parameters")
-    state_after, scalars_after = optimizer_state(opt2, local)
-    assert_same(state_after, state_before, "optimizer moments")
+    assert_same_shards(model_shards(params2, local), before, "parameters")
+    state_after, scalars_after = optimizer_shards(opt2, local)
+    assert_same_shards(state_after, state_before, "optimizer moments")
     # The scalars restored are the index's; this rank keeps its own param-group member list (its own stage).
     assert {k: v for k, v in scalars_after.items() if not k.endswith(".params")} == {
         k: v for k, v in scalars_before.items() if not k.endswith(".params")
