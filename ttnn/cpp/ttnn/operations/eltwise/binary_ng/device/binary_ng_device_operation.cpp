@@ -389,6 +389,7 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
     const bool is_8bit_sub = attributes.binary_op_type == BinaryOpType::SUB &&
                              (input_tensor_a.dtype() == DataType::UINT8 || input_tensor_a.dtype() == DataType::INT8);
     if (is_8bit_sub) {
+        TT_FATAL(input_tensor_a.device()->arch() != tt::ARCH::QUASAR, "8-bit subtract is not supported on Quasar");
         const auto output_dtype =
             output_tensor.has_value() ? output_tensor->dtype() : attributes.dtype.value_or(input_tensor_a.dtype());
         TT_FATAL(
