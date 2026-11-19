@@ -42,6 +42,8 @@ void bind_reshard(nb::module_& mod) {
                * - BFLOAT8_B, BFLOAT4_B
                  - TILE
 
+            On Blackhole, the input can also be an ``FP8_E4M3`` tensor in ROW_MAJOR layout.
+
         Memory Support:
             - Input: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1; HEIGHT_SHARDED and WIDTH_SHARDED in DRAM
             - Output: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1; HEIGHT_SHARDED and WIDTH_SHARDED in DRAM
