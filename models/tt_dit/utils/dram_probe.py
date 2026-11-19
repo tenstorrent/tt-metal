@@ -77,7 +77,10 @@ def _device_dram_tensor(t: Any) -> bool:
     if not isinstance(t, ttnn.Tensor):
         return False
     try:
-        if t.device() is None:
+        # A deallocated tensor still reachable from a module (a parked shape slot's freed weights) has no buffer:
+        # reading its address or pages dereferenced freed memory and killed the worker in warm_shapes'
+        # dram_by_category (blx06 broker job 367, 2026-11-19 02:59 UTC, SIGSEGV).
+        if not t.is_allocated() or t.device() is None:
             return False
         return t.memory_config().buffer_type == ttnn.BufferType.DRAM
     except Exception:
@@ -85,10 +88,17 @@ def _device_dram_tensor(t: Any) -> bool:
 
 
 def _bytes_addr(t: ttnn.Tensor) -> tuple[int, int | None]:
+    try:
+        if not t.is_allocated():
+            return 0, None
+    except Exception:
+        return 0, None
     s = _shard0(t)
     if s is None:
         return 0, None
     try:
+        if not s.is_allocated():
+            return 0, None
         return s.buffer_aligned_page_size() * s.buffer_num_pages(), s.buffer_address()
     except Exception:
         return 0, None

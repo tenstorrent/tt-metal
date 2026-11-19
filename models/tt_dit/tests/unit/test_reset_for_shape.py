@@ -314,6 +314,45 @@ class DramByCategory(unittest.TestCase):
         self.assertIn("programs=12", ns["format_row"]("warm", row))
 
 
+class DramProbeSkipsFreedTensors(unittest.TestCase):
+    """A freed tensor is never read: its buffer address and pages are gone (blx06 job 367, SIGSEGV in warm_shapes)."""
+
+    def test_a_deallocated_tensor_is_not_dram_and_reads_no_buffer(self):
+        reads = []
+
+        class Tensor:
+            def __init__(self, live):
+                self.live = live
+
+            def is_allocated(self):
+                return self.live
+
+            def device(self):
+                return "dev"
+
+            def memory_config(self):
+                return SimpleNamespace(buffer_type="dram")
+
+            def buffer_aligned_page_size(self):
+                reads.append(self)
+                return 32
+
+            def buffer_num_pages(self):
+                return 4
+
+            def buffer_address(self):
+                return 7
+
+        ttnn = SimpleNamespace(Tensor=Tensor, BufferType=SimpleNamespace(DRAM="dram"), get_device_tensors=lambda t: [t])
+        ns = _lift("utils/dram_probe.py", ["_shard0", "_device_dram_tensor", "_bytes_addr"], {"ttnn": ttnn, "Any": object})
+        live, freed = Tensor(True), Tensor(False)
+        self.assertTrue(ns["_device_dram_tensor"](live))
+        self.assertFalse(ns["_device_dram_tensor"](freed))
+        self.assertEqual(ns["_bytes_addr"](live), (128, 7))
+        self.assertEqual(ns["_bytes_addr"](freed), (0, None))
+        self.assertEqual(reads, [live])
+
+
 class PipelineResetForShape(unittest.TestCase):
     def test_releases_everything_before_freeing_ccl_and_warms_at_the_new_shape(self):
         log = []
