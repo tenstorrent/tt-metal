@@ -4,11 +4,15 @@
 
 #pragma once
 
+#include <vector>
+
 #include "optimizers/optimizer_base.hpp"
 #include "serialization/serializable.hpp"
 
 namespace ttml::optimizers {
 
+// Defaults for every param group. Groups can override lr and momentum; ns_steps applies to the whole
+// optimizer.
 struct MuonConfig {
     float lr{1e-3F};
     float momentum{0.95F};
@@ -21,7 +25,10 @@ public:
         return "MuonComposite";
     }
 
-    explicit MuonComposite(ttml::serialization::NamedParameters parameters, const MuonConfig& config);
+    explicit MuonComposite(
+        ttml::serialization::NamedParameters parameters,
+        const MuonConfig& config,
+        std::vector<ParamGroup> param_groups = {});
 
     void zero_grad() override;
 
@@ -33,17 +40,9 @@ public:
     [[nodiscard]] size_t get_steps() const override;
     void set_steps(size_t steps) override;
 
-    [[nodiscard]] float get_lr() const override {
-        return m_config.lr;
-    }
-
-    void set_lr(float lr) override {
-        m_config.lr = lr;
-    }
-
 private:
     size_t m_steps{0};
-    MuonConfig m_config;
+    int m_ns_steps{5};
     ttml::serialization::NamedParameters m_momentum_buffer;
 };
 
