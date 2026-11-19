@@ -39,6 +39,7 @@ import ttnn
 
 from ...encoders.qwen3vl.loader_minimax_h3 import build_minimax_h3_text_encoder, build_minimax_h3_vision_tower
 from ...models.transformers.minimax_h3.adaln_tilerow import DEFAULT_MAX_MIXED_TILES, tilerow_remap
+from ...models.transformers.minimax_h3.length_classes import LENGTH_CLASSES
 from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from ...models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
@@ -235,7 +236,7 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
         self.vision_patch_ladder = tuple(r for r in IMAGE_VISION_PATCH_LADDER if r < self.vision_patch_cap) + (
             self.vision_patch_cap,
         )
-        self._force_bucket = self._force_prompt_pad = self._force_vision_pad = None
+        self._force_bucket = self._force_prompt_pad = self._force_vision_pad = self._force_dit_rows = None
         self._log_generation = True
         # Each SP device gathers only its own rows, so forward skips `mesh_partition` -- the one op whose program was
         # still keyed on the padded length (one JIT compile per new length in the hot path).
@@ -344,6 +345,8 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
         if not self.dynamic_length:
             return super()._select_bucket(seq_len)
         padded = padded_sequence_length(seq_len, self.sp_factor)
+        if self._force_dit_rows is not None:  # warmup: pad into a given length class (padding rows are masked)
+            padded = max(padded, self._force_dit_rows)
         if padded > self.max_sequence_length:
             raise ValueError(f"packed length {seq_len} exceeds max_sequence_length {self.max_sequence_length}")
         return padded
@@ -797,7 +800,8 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
         programs on the presentation length: each rung of `presentation_ladder` is encoded once, text-only and (where
         a 1024^2 reference fits) with one, which is what an edit merges. Then a 4K t2i (the default size; the most
         VAE decode waves) and a 2K edit (the vision tower and the VAE encoder) run end to end. With dynamic length a
-        4K edit with as many 1024^2 references as the limit admits (up to sixteen) warms the DiT's long length
+        4K edit with as many 1024^2 references as the limit admits (up to sixteen) runs the many-reference path, and
+        one small request forced into each further DiT length class an admitted request can reach compiles that
         class; bucketed, `warm_rungs` warms each ladder rung instead (the bucketed limit admits no such request).
         """
         started = time.perf_counter()
@@ -843,9 +847,20 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
         if num_refs:
             self("warmup", width=2048, height=2048, seed=0, images=[reference])
         if self.dynamic_length:
-            # Sixteen references put the DiT past 6144 rows a device, its "long" length class (its own programs).
-            if num_refs > 1:
+            if num_refs > 1:  # the many-reference edit path end to end (references, anchors, VAE encode waves)
                 self("warmup", width=4096, height=4096, seed=0, images=[reference] * num_refs)
+            # Each DiT length class has its own programs. Which class a request reaches depends on its references'
+            # geometry and prompt, not just their count, so force one small request into every class an admitted
+            # request can reach (up to `max_sequence_length`) rather than relying on the edit above to cross a bound.
+            for previous in LENGTH_CLASSES[:-1]:
+                rows = padded_sequence_length((previous.max_rows + 1) * self.sp_factor, self.sp_factor)
+                if rows > self.max_sequence_length:
+                    break
+                self._force_dit_rows = rows
+                try:
+                    self("warmup", width=1024, height=1024, seed=0, min_generation_area=None)
+                finally:
+                    self._force_dit_rows = None
         else:
             self.warm_rungs()
         return time.perf_counter() - started

@@ -302,8 +302,14 @@ def test_served_envelope(mesh_device, guide_examples):
                 images=refs,
             )
     refs = [Image.new("RGB", (1600, 1200), (90, 120, 60)), Image.new("RGB", (1200, 1600), (60, 90, 120))]
-    run("edit 2 refs -> 2720x1536", prompt="Put <Picture 1> beside <Picture 2>.", width=2720, height=1536, seed=1,
-        images=refs)
+    run(
+        "edit 2 refs -> 2720x1536",
+        prompt="Put <Picture 1> beside <Picture 2>.",
+        width=2720,
+        height=1536,
+        seed=1,
+        images=refs,
+    )
     assert not failures, f"{len(failures)} envelope cases failed: {failures}"
 
 
@@ -369,8 +375,13 @@ def test_reference_area_limit(mesh_device, guide_examples, limit_mp):
         labels = " ".join(f"<Picture {i + 1}>" for i in range(len(refs)))
         area = host.effective_reference_area(sizes) if sizes else 0
         try:
-            result = pipe(f"Combine {labels} into one scene. {prompt_text}".strip(), width=width, height=height,
-                          seed=3, images=refs or None)
+            result = pipe(
+                f"Combine {labels} into one scene. {prompt_text}".strip(),
+                width=width,
+                height=height,
+                seed=3,
+                images=refs or None,
+            )
         except host.ReferenceLimitError as err:
             ok = area > limit
             if not ok:
@@ -433,26 +444,44 @@ def test_host_time_4k(mesh_device, guide_examples):
 
         setattr(owner, name, wrapper)
 
-    for name in ("load_reference_image", "bound_short_edge", "draw_request_noise", "vae_reference_pixels",
-                 "reference_rows", "anchor_rows", "build_image_packed_sequence", "patchify", "unpatchify",
-                 "finish_image"):
+    for name in (
+        "load_reference_image",
+        "bound_short_edge",
+        "draw_request_noise",
+        "vae_reference_pixels",
+        "reference_rows",
+        "anchor_rows",
+        "build_image_packed_sequence",
+        "patchify",
+        "unpatchify",
+        "finish_image",
+    ):
         timed(pmod.host, name, f"host {name}")
     timed(pipe, "_build_presentation", "host tokenize + image processor")
     pipe("warm", width=4096, height=4096, seed=0)
     pipe("warm", width=4096, height=4096, seed=0, images=[ref])
     timed(pipe._vae, "_stream_decoder_units", "vae device decode + readback", materialize=True)
     timed(pipe._vae, "_stitch_decoded", "host vae tile stitch")
-    for tag, kwargs in (("t2i 4K", dict(prompt=t2i["prompt"], width=4096, height=4096, seed=1)),
-                        ("edit 4K 1 ref", dict(prompt=edit_prompt, width=4096, height=4096, seed=1, images=[ref]))):
+    for tag, kwargs in (
+        ("t2i 4K", dict(prompt=t2i["prompt"], width=4096, height=4096, seed=1)),
+        ("edit 4K 1 ref", dict(prompt=edit_prompt, width=4096, height=4096, seed=1, images=[ref])),
+    ):
         spent.clear()
         result = pipe(**kwargs)
         t = result.timings
-        post = t.decode - spent["vae device decode + readback"] - spent["host vae tile stitch"] - spent[
-            "host finish_image"] - spent["host unpatchify"]
+        post = (
+            t.decode
+            - spent["vae device decode + readback"]
+            - spent["host vae tile stitch"]
+            - spent["host finish_image"]
+            - spent["host unpatchify"]
+        )
         host_total = sum(v for k, v in spent.items() if k.startswith("host")) + post
         lines = [f"{k}: {v * 1e3:.0f} ms" for k, v in sorted(spent.items(), key=lambda kv: -kv[1])]
         lines.append(f"host un-normalize (mul/add/clamp): {post * 1e3:.0f} ms")
-        logger.info(f"RESULT host_time {tag}: total {t.total:.2f}s, host-only {host_total * 1e3:.0f} ms | " + "; ".join(lines))
+        logger.info(
+            f"RESULT host_time {tag}: total {t.total:.2f}s, host-only {host_total * 1e3:.0f} ms | " + "; ".join(lines)
+        )
 
 
 @pytest.mark.timeout(3600)
@@ -461,7 +490,7 @@ def test_defer_finish_overlap(mesh_device, guide_examples):
     """`defer_finish` as a server uses it: the host tail (stitch, un-normalize, uint8) of request N runs on a thread
     while request N+1 runs on the device. Asserts the deferred image is byte-identical to the normal path; reports
     back-to-back 4K throughput serial vs overlapped, and whether the overlapped tail slows the next request."""
-    import threading
+    from concurrent.futures import ThreadPoolExecutor
 
     t2i, edit_prompt, ref = guide_examples
     pipe = MiniMaxH3ImagePipeline(mesh_device=mesh_device, weights_dir=_weights_dir())
@@ -478,20 +507,21 @@ def test_defer_finish_overlap(mesh_device, guide_examples):
     serial = [pipe(**r) for r in requests]
     serial_s = time.perf_counter() - started
 
+    # One finisher thread, as the server's encode stage: request N's tail overlaps request N+1 on the device. A failed
+    # finish re-raises from its future, so the test cannot pass on missing outputs.
     started = time.perf_counter()
-    totals, finishes, pending = [], [], None
-    for r in requests:
-        result = pipe(**r, defer_finish=True)
-        totals.append(result.timings.total)
-        if pending is not None:
-            pending.join()
-        pending = threading.Thread(target=lambda res=result: finishes.append((res.finish(), res.timings.finish)))
-        pending.start()
-    pending.join()
+    totals, futures = [], []
+    with ThreadPoolExecutor(max_workers=1) as finisher:
+        for r in requests:
+            result = pipe(**r, defer_finish=True)
+            totals.append(result.timings.total)
+            futures.append(finisher.submit(lambda res=result: (res.finish(), res.timings.finish)))
+        finishes = [f.result() for f in futures]
     overlapped_s = time.perf_counter() - started
 
-    for a, (b, _) in zip(serial, finishes):
-        assert a.image.tobytes() == b.tobytes()
+    assert len(finishes) == len(serial), f"expected {len(serial)} completed finishes, got {len(finishes)}"
+    for i, (a, (b, _)) in enumerate(zip(serial, finishes)):
+        assert a.image.tobytes() == b.tobytes(), f"request {i}: deferred finish differs from the serial image"
     serial_totals = ", ".join(f"{r.timings.total:.2f}" for r in serial)
     logger.info(
         f"RESULT defer_finish: {len(requests)} requests (4 t2i + 2 edit, 4K) serial {serial_s:.2f}s vs overlapped "
@@ -506,7 +536,6 @@ def test_defer_finish_overlap(mesh_device, guide_examples):
 def test_prompt_encode_scaling(mesh_device, guide_examples):
     """Warm prompt-encode time at the presentation rungs (text only): flat across rungs means per-op dispatch, not
     compute or weight bandwidth, dominates -- the case for tracing the encoder."""
-    import torch
     import ttnn as _ttnn
 
     t2i, _, _ = guide_examples
@@ -542,10 +571,14 @@ def test_ccl_link_probe(mesh_device):
     per-chip durations under `--profile` expose per-group link speed with no cross-group waiting mixed in.
     Axis 0 = the 4-chip TP groups (one per column), axis 1 = the 8-chip SP rings (one per row)."""
     import torch
+
     import ttnn as _ttnn
 
     x = _ttnn.from_torch(
-        torch.randn(1, 1, 4096, 2048), dtype=_ttnn.bfloat16, layout=_ttnn.TILE_LAYOUT, device=mesh_device,
+        torch.randn(1, 1, 4096, 2048),
+        dtype=_ttnn.bfloat16,
+        layout=_ttnn.TILE_LAYOUT,
+        device=mesh_device,
         mesh_mapper=_ttnn.ReplicateTensorToMesh(mesh_device),
     )
     for axis in (0, 1):
@@ -558,8 +591,10 @@ def test_ccl_link_probe(mesh_device):
             times.append(time.perf_counter() - mark)
             _ttnn.deallocate(out)
         times = sorted(times[1:])
-        logger.info(f"RESULT ccl_probe axis {axis}: wall min {times[0] * 1e3:.2f} ms, median {times[len(times) // 2] * 1e3:.2f} ms "
-                    f"(16 MB per chip in, x{tuple(mesh_device.shape)[axis]} out)")
+        logger.info(
+            f"RESULT ccl_probe axis {axis}: wall min {times[0] * 1e3:.2f} ms, median {times[len(times) // 2] * 1e3:.2f} ms "
+            f"(16 MB per chip in, x{tuple(mesh_device.shape)[axis]} out)"
+        )
 
 
 @pytest.mark.timeout(7200)
@@ -588,8 +623,10 @@ def test_step_profile_text_tokens(mesh_device, guide_examples):
         os.environ["H3_IMAGE_PROFILE_STEP"] = profile_step
     result = pipe(prompt, width=4096, height=4096, seed=2)
     pad = result.rung - result.packed_length
-    logger.info(f"RESULT text_tokens {len(tok(prompt, add_special_tokens=False)['input_ids'])}: packed "
-                f"{result.packed_length} -> rung {result.rung}, padding rows {pad}")
+    logger.info(
+        f"RESULT text_tokens {len(tok(prompt, add_special_tokens=False)['input_ids'])}: packed "
+        f"{result.packed_length} -> rung {result.rung}, padding rows {pad}"
+    )
     _log_result(f"text_tokens_{n}", result)
 
 
@@ -609,7 +646,7 @@ def test_sustained_load_clock(mesh_device, guide_examples):
     def telemetry(tag):
         try:
             out = subprocess.run(["tt-smi", "-s"], capture_output=True, text=True, timeout=60).stdout
-            data = json.loads(out[out.index("{"):])
+            data = json.loads(out[out.index("{") :])
             rows = []
             for dev in data.get("device_info", []):
                 t = dev.get("telemetry", {})
@@ -617,9 +654,11 @@ def test_sustained_load_clock(mesh_device, guide_examples):
             clk = sorted(float(str(r[0]).split()[0]) for r in rows if r[0] is not None)
             pw = sorted(float(str(r[1]).split()[0]) for r in rows if r[1] is not None)
             tmp = sorted(float(str(r[2]).split()[0]) for r in rows if r[2] is not None)
-            logger.info(f"RESULT telemetry {tag}: aiclk min/med/max {clk[0]:.0f}/{clk[len(clk) // 2]:.0f}/{clk[-1]:.0f}, "
-                        f"power med {pw[len(pw) // 2]:.0f} max {pw[-1]:.0f}, temp med {tmp[len(tmp) // 2]:.0f} "
-                        f"max {tmp[-1]:.0f} ({len(rows)} chips)")
+            logger.info(
+                f"RESULT telemetry {tag}: aiclk min/med/max {clk[0]:.0f}/{clk[len(clk) // 2]:.0f}/{clk[-1]:.0f}, "
+                f"power med {pw[len(pw) // 2]:.0f} max {pw[-1]:.0f}, temp med {tmp[len(tmp) // 2]:.0f} "
+                f"max {tmp[-1]:.0f} ({len(rows)} chips)"
+            )
         except Exception as err:
             logger.info(f"RESULT telemetry {tag}: unavailable ({type(err).__name__}: {str(err)[:120]})")
 
@@ -657,7 +696,7 @@ def test_step_slowdown_cause(mesh_device, guide_examples):
         while not stop.is_set():
             try:
                 out = subprocess.run(["tt-smi", "-s"], capture_output=True, text=True, timeout=30).stdout
-                data = json.loads(out[out.index("{"):])
+                data = json.loads(out[out.index("{") :])
                 clk = [float(str(d["telemetry"]["aiclk"]).split()[0]) for d in data.get("device_info", [])]
                 pw = [float(str(d["telemetry"]["power"]).split()[0]) for d in data.get("device_info", [])]
                 samples.append((time.time(), min(clk), max(clk), sorted(pw)[len(pw) // 2], max(pw)))

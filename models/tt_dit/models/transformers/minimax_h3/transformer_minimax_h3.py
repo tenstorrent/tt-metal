@@ -699,7 +699,7 @@ class MiniMaxH3Transformer3DModel(Module):
             )
         mark("norm_out + TP gather")
 
-        video_head =self.proj_out_heads[output_head] if self.proj_out_heads is not None else self.proj_out
+        video_head = self.proj_out_heads[output_head] if self.proj_out_heads is not None else self.proj_out
         video_all = video_head(hidden, matmul_config=self._head_configs.get("video"))
         audio_all = (
             self.audio_proj_out(hidden, matmul_config=self._head_configs.get("audio"))

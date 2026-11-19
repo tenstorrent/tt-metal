@@ -176,6 +176,7 @@ IMAGE_AGMM_PINS: dict[tuple[int, int], dict[str, tuple[tuple[int, int, int], Agm
         "long": ((2, 28, 4), AgmmLayout(transposed=False, grid=(12, 9), workers_per_link=5)),
     },
 }
+IMAGE_AGMM_PINS_NUM_LINKS = 2  # the link count the image layouts were swept (and are valid) for
 MATMUL_PROFILES = (None, "image")
 
 
@@ -252,8 +253,9 @@ def agmm_pins(
     # in0 senders group along the M-parallel axis (grid.x transposed, grid.y not) into `num_links` groups.
     in0_axis = grid.x if layer.transpose_core_grid else grid.y
     default_layout = AgmmLayout(layer.transpose_core_grid, (grid.x, grid.y), math.ceil(in0_axis / num_links))
-    # The image pins were swept on Blackhole's grid; elsewhere every profile is the mode's pin.
-    image = profile == "image" and device_grid == BLACKHOLE_COMPUTE_GRID
+    # The image pins were swept on Blackhole's grid at 2 links (their workers_per_link split the sender axis into
+    # exactly two groups, which the op asserts against num_links); elsewhere every profile is the mode's pin.
+    image = profile == "image" and device_grid == BLACKHOLE_COMPUTE_GRID and num_links == IMAGE_AGMM_PINS_NUM_LINKS
     overrides = IMAGE_AGMM_PINS.get((k, n), {}) if image else {}
     compute_kernel_config = _with_fp32_dest_acc(compute_kernel_config, layer.fp32_dest_acc_en)
     subblock_h, subblock_w = layer.subblock

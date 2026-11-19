@@ -61,12 +61,13 @@ from loguru import logger
 
 import ttnn
 
-from ....models.transformers.minimax_h3.agmm_config import AGMM_PINNED_BLOCKING, AGMM_PINNED_TRANSPOSED
+from ....models.transformers.minimax_h3.agmm_config import AGMM_PINS, AgmmMode, resolve_agmm_mode
 from ....models.transformers.minimax_h3.length_classes import length_class
 from ....models.transformers.minimax_h3.mmrs_config import pinned_mmrs_config
 from ....models.transformers.minimax_h3.transformer_block_minimax_h3 import MiniMaxH3TransformerBlock
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
+from ....utils.device_constants import compute_grid_key
 from ....utils.matmul import FusedMMRSConfig, agmm_worker_grid
 from ....utils.tensor import from_torch
 from .common import MESH_4X8_RING
@@ -376,12 +377,20 @@ def workers_variants(spec: LayerSpec, c: Cand, full: tuple[int, int], num_links:
 
 
 def agmm_pin(spec: LayerSpec, cls: str, full_grid, num_links: int) -> Cand:
-    """The current pin of an AGMM layer, as `agmm_config.agmm_pins` builds it (orientation table, the worker grid of
-    `agmm_worker_grid`, in0 senders per link, the class's blocking at subblock 2x2)."""
-    transposed = AGMM_PINNED_TRANSPOSED[(spec.k, spec.n)]
+    """The current (video, `profile=None`) pin of an AGMM layer, as `agmm_config.agmm_pins` builds it: the layer's
+    pin for the resolved AGMM mode on this compute grid (else its ACCURATE pin), the worker grid of
+    `agmm_worker_grid`, in0 senders per link, the class's blocking. The sweep holds the subblock at 2x2."""
+    pins_by_mode = AGMM_PINS[compute_grid_key(full_grid)]
+    layer = (
+        pins_by_mode.get(resolve_agmm_mode(), {}).get((spec.k, spec.n))
+        or pins_by_mode[AgmmMode.ACCURATE][(spec.k, spec.n)]
+    )
+    if layer.subblock != (2, 2):
+        logger.warning(f"AGMM pin for {(spec.k, spec.n)} has subblock {layer.subblock}; the sweep holds 2x2")
+    transposed = layer.transpose_core_grid
     grid = agmm_worker_grid(full_grid, transposed, num_links)
     in0 = grid.x if transposed else grid.y
-    mb, kb, nb = AGMM_PINNED_BLOCKING[(spec.k, spec.n)][cls]
+    mb, kb, nb = layer.blockings[cls]
     return Cand("T" if transposed else "NT", grid.x, grid.y, math.ceil(in0 / num_links), mb, kb, nb)
 
 
@@ -481,9 +490,7 @@ class Results:
 
     def select(self, layer: str, cls: str, stages=None) -> list[dict]:
         return [
-            r
-            for r in self.rows
-            if r["layer"] == layer and r["class"] == cls and (not stages or r["stage"] in stages)
+            r for r in self.rows if r["layer"] == layer and r["class"] == cls and (not stages or r["stage"] in stages)
         ]
 
     def failed(self, layer: str, cls: str, stage: str) -> set[Cand]:
@@ -676,7 +683,9 @@ class Harness:
         extra = {}
         if spec.addcmul:  # to_out folds `residual + out * gate` into its epilogue
             extra = {"addcmul_a": rnd(spec.n), "addcmul_b": rnd(spec.n)}
-        kernel_config = attn.mm_compute_kernel_config if layer in ("qkv", "out") else block.mm_compute_kernel_config
+        # The model runs each AGMM with its resolved pin's compute config (the pin's Dst accumulation), per class.
+        live_pins = {"qkv": attn._qkv_pins, "out": attn._out_pins, "ff1": block._ff1_pins}[layer]
+        kernel_config = live_pins[length_class(m).name].compute_kernel_config
         persistent = attn.use_persistent_ccl_buffers if layer in ("qkv", "out") else block.use_persistent_ccl_buffers
 
         def prepare(c: Cand):

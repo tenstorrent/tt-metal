@@ -848,7 +848,6 @@ class MiniMaxH3Vae:
         a caller given a list would have to hold the whole video to do so. Streaming lets it
         stitch and release each chunk while later waves are still in flight.
         """
-        from .decoder_minimax_h3 import unpatchify
 
         if not units:
             return []

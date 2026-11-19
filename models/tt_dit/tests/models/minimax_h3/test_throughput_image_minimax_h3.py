@@ -203,7 +203,13 @@ def test_dp_replica_process(mesh_device):
         result = pipe(PROMPT, width=size, height=size, seed=100 + 10 * rank + i, defer_finish=True)
         t = result.timings
         records.append(
-            {"total": t.total, "prompt": t.encode_prompt, "denoise": t.denoise, "steps": t.denoise_steps, "decode": t.decode}
+            {
+                "total": t.total,
+                "prompt": t.encode_prompt,
+                "denoise": t.denoise,
+                "steps": t.denoise_steps,
+                "decode": t.decode,
+            }
         )
         pending.append(finisher.submit(result.finish))
     for f in pending:
