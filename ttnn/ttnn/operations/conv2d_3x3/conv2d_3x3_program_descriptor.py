@@ -244,6 +244,14 @@ INPUT_TILE_DEPTH_BATCHES = 2
 # aspp.convs.1 @ LoFi (2-tile-row batches) the fill ran at ~22 GB/s and the untilize waited on it.
 FILL_WINDOW_BATCHES = 4
 FILL_WRITER_WINDOW_BATCHES = 4
+# Under a K split (BLOCK) the slab fill is NoC0-column-link bound and lands nearly all at once, so the untilize, which
+# waits per batch, started only once the whole slab was in (aspp.convs.2: three 8-tile-row batches landing within
+# 0.4 us of each other at ~6 us). Batches of at most KSPLIT_UNTILIZE_BATCH_ROWS tile-rows with up to
+# KSPLIT_FILL_WINDOW_BATCHES of them in flight keep the whole slab in flight and let the untilize start on the first
+# batches while the rest lands. 4 rows: a whole DEST section of the 1-wide untilize (3 measured +1.7% on res4.x);
+# aspp.convs.2 50.4 -> 49.7 us, aspp.convs.1 53.3 -> 52.3 us (zoned, median of 3), flat on res4 / res5 / HiFi4 BLOCK.
+KSPLIT_UNTILIZE_BATCH_ROWS = 4
+KSPLIT_FILL_WINDOW_BATCHES = 8
 # The split TILE fill under a K split runs on a column receiver only when one of its M-blocks reads at least this many
 # bytes from higher-index shards. The split pays by taking those reads off NoC0's wrap-around; a small hand-over is
 # pure latency (res4 layers, ~3 KB per core: +2.0% / +4.3% median of 3 with the split; res5.0, ~11 KB: flat;
@@ -620,10 +628,12 @@ def _block_extents(g: Conv3x3Geometry, core_m_tiles, block_m_tiles):
 
 
 def _default_untilize_batch_rows(g: Conv3x3Geometry, band_len, raw_slab_rows):
-    """One untilize batch = the tile-rows one band can touch, so the reader fences about once per band."""
+    """One untilize batch = the tile-rows one band can touch, so the reader fences about once per band; under a K
+    split at most KSPLIT_UNTILIZE_BATCH_ROWS (see there)."""
     if not g.tile_input:
         return 1
-    return max(1, min(raw_slab_rows, _div_up(band_len, TILE) + 1))
+    ub = max(1, min(raw_slab_rows, _div_up(band_len, TILE) + 1))
+    return min(ub, KSPLIT_UNTILIZE_BATCH_ROWS) if g.k_split else ub
 
 
 def face_direct_im2col(g: Conv3x3Geometry, bk):
@@ -1961,7 +1971,11 @@ def create_program_descriptor(
             else 1,
             input_ring_batches,
             # A window past the ring would reserve more than the CB holds.
-            min(FILL_WINDOW_BATCHES, input_ring_batches) if g.tile_input and not b.ring else 1,
+            (
+                min(KSPLIT_FILL_WINDOW_BATCHES if g.k_split else FILL_WINDOW_BATCHES, input_ring_batches)
+                if g.tile_input and not b.ring
+                else 1
+            ),
             tap_direct_fifo_units,
             int(tap_direct_windows),
             int(nslice_center),
