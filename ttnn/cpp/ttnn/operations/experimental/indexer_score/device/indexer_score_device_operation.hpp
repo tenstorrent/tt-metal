@@ -181,6 +181,9 @@ ttnn::Tensor ring_indexer_score_dsa(
     // user_id * index_cache_num_layers + index_cache_layer_idx. Mutually exclusive with cache_batch_idx.
     const std::optional<ttnn::Tensor>& cache_batch_idx_tensor = std::nullopt,
     uint32_t index_cache_num_layers = 1,
-    uint32_t index_cache_layer_idx = 0);
+    uint32_t index_cache_layer_idx = 0,
+    // cluster_axis=None only: the mesh axis outermost in the K-ownership / causal rank order. 0 = row-major,
+    // 1 = column-major. Pass the SP axis when Q, K and the cache are SP-major.
+    uint32_t full_mesh_outer_axis = 0);
 
 }  // namespace ttnn::experimental

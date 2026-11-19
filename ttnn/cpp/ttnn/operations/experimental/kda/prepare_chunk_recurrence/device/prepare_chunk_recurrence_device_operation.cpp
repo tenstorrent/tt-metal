@@ -3,10 +3,14 @@
 
 #include "prepare_chunk_recurrence_device_operation.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 #include "ttnn/operations/experimental/kda/kda_performance_model.hpp"
@@ -52,6 +56,12 @@ void PrepareChunkRecurrenceOperation::validate_on_program_cache_miss(
     check_same_device(in.q, in.beta, operation_name, "beta");
     check_output_interleaved(attrs.output_mem_config, operation_name);
     check_compute_config(attrs.compute_kernel_config, operation_name);
+    // The FPU forms the q/k norm squares and the gate scale as exact BF16 products, which only HiFi4 guarantees.
+    TT_FATAL(
+        attrs.compute_kernel_config.math_fidelity == MathFidelity::HiFi4,
+        "{}: math_fidelity must be HiFi4, got {}",
+        operation_name,
+        attrs.compute_kernel_config.math_fidelity);
 
     const auto& q_shape = in.q.logical_shape();
     const auto& k_shape = in.k.logical_shape();
@@ -97,6 +107,29 @@ void PrepareChunkRecurrenceOperation::validate_on_program_cache_miss(
         (attrs.output_bf16_mask & ~allowed_bf16_mask) == 0,
         "unsupported KDA prep BF16 mask 0x{:x}",
         attrs.output_bf16_mask);
+
+    // The batched inverse holds all of a core's work items at once, so the heads' chunks must spread over the cores
+    // thinly enough for the program's buffers to fit the L1 free per core.
+    const auto* mesh = in.q.device();
+    const auto distribution = kda_factory_detail::distribute_prep(
+        mesh->compute_with_storage_grid_size(),
+        attrs.num_heads * attrs.num_chunks,
+        std::numeric_limits<uint32_t>::max());
+    const uint32_t max_items = *std::max_element(distribution.wi_count.begin(), distribution.wi_count.end());
+    const uint64_t dfb_bytes = prepare_chunk_recurrence_l1_bytes(attrs, max_items);
+    const uint64_t l1_bytes =
+        mesh->l1_size_per_core() - mesh->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    TT_FATAL(
+        dfb_bytes <= l1_bytes,
+        "{}: {} work items per core ({} heads x {} chunks) need {} bytes of L1, {} of them per item for the batched "
+        "inverse, only {} are available",
+        operation_name,
+        max_items,
+        attrs.num_heads,
+        attrs.num_chunks,
+        dfb_bytes,
+        prepare_chunk_recurrence_inverse_tiles_per_item * tt::tile_size(tt::DataFormat::Float32),
+        l1_bytes);
 }
 
 PrepareChunkRecurrenceOperation::spec_return_value_t PrepareChunkRecurrenceOperation::compute_output_specs(

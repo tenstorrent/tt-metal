@@ -717,6 +717,40 @@ def test_sparse_matmul_volume_must_match_batch_length(device, expect_error):
         )
 
 
+@pytest.mark.parametrize("wrong_shape", [(1, 1, 1, 32), (32, 1, 1, 1)], ids=["flat_row", "column"])
+def test_sparse_matmul_rejects_same_volume_wrong_sparsity_shape(device, expect_error, wrong_shape):
+    """The kernel reads one ROW_MAJOR page of num_experts entries per outer batch, so a sparsity tensor with the
+    right volume but another shape must be rejected. Expected layout here is [1, 4, 1, 8]."""
+    in0, in1, sparsity, nnz, pc, dims = _make_sparse_inputs(device)
+    _, _, _, num_experts, tile_h, tile_w = dims
+
+    def run(sparsity_t):
+        return ttnn.sparse_matmul(
+            in0,
+            in1,
+            sparsity=sparsity_t,
+            nnz=nnz,
+            is_input_a_sparse=False,
+            is_input_b_sparse=True,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tile=ttnn.Tile([tile_h, tile_w]),
+            program_config=pc,
+        )
+
+    # Control: the expected [1, 4, 1, 8] layout is accepted.
+    run(sparsity)
+
+    wrong_sparsity = ttnn.from_torch(
+        torch.ones(wrong_shape, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    with expect_error(RuntimeError, "sparsity must hold one ROW_MAJOR page"):
+        run(wrong_sparsity)
+
+
 def test_sparse_matmul_inputA_wrong_layout(device, expect_error):
     """Input tensor A must be TILE layout, ROW_MAJOR must be rejected."""
     _, in1, sparsity, nnz, pc, dims = _make_sparse_inputs(device)
@@ -1213,6 +1247,43 @@ def test_sparse_matmul_rejects_zero_out_block_w(device, expect_error):
         mcast_in0=True,
     )
     with expect_error(RuntimeError, "out_block_w and out_block_h must be non-zero"):
+        ttnn.sparse_matmul(
+            in0,
+            in1,
+            sparsity=sparsity,
+            nnz=nnz,
+            is_input_a_sparse=False,
+            is_input_b_sparse=True,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tile=ttnn.Tile([tile_h, tile_w]),
+            program_config=bad_pc,
+        )
+
+
+@pytest.mark.parametrize("zero_field", ["in0_block_w", "per_core_M", "per_core_N"])
+def test_sparse_matmul_rejects_zero_block_dims(device, expect_error, zero_field):
+    # The factory divides Kt by in0_block_w and Mt / Nt by per_core_M / per_core_N.
+    in0, in1, sparsity, nnz, pc, dims = _make_sparse_inputs(device)
+    _, _, _, _, tile_h, tile_w = dims
+
+    fields = dict(
+        in0_block_w=pc.in0_block_w,
+        per_core_M=pc.per_core_M,
+        per_core_N=pc.per_core_N,
+    )
+    fields[zero_field] = 0
+    bad_pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=pc.compute_with_storage_grid_size,
+        out_subblock_h=pc.out_subblock_h,
+        out_subblock_w=pc.out_subblock_w,
+        out_block_h=pc.out_block_h,
+        out_block_w=pc.out_block_w,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=True,
+        **fields,
+    )
+    with expect_error(RuntimeError, r"in0_block_w \(\d+\), per_core_M \(\d+\) and per_core_N \(\d+\) must be non-zero"):
         ttnn.sparse_matmul(
             in0,
             in1,

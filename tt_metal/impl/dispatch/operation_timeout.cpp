@@ -4,17 +4,20 @@
 
 #include <tt-metalium/experimental/operation_timeout.hpp>
 
-#include "impl/context/metal_context.hpp"
+#include <tt-metalium/mesh_device.hpp>
+
+#include "distributed/mesh_device_impl.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "llrt/rtoptions.hpp"
 
 namespace tt::tt_metal::experimental {
 
-std::chrono::duration<float> GetOperationTimeout() {
-    return MetalContext::instance().rtoptions().get_timeout_duration_for_operations();
+std::chrono::duration<float> GetOperationTimeout(const distributed::MeshDevice& mesh_device) {
+    return mesh_device.impl().metal_env().get_rtoptions().get_timeout_duration_for_operations();
 }
 
-void SetOperationTimeout(std::chrono::duration<float> timeout) {
-    MetalContext::instance().rtoptions().set_timeout_duration_for_operations(timeout);
+void SetOperationTimeout(distributed::MeshDevice& mesh_device, std::chrono::duration<float> timeout) {
+    mesh_device.impl().metal_env().get_rtoptions().set_timeout_duration_for_operations(timeout);
 }
 
 }  // namespace tt::tt_metal::experimental

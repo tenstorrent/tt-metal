@@ -5,6 +5,7 @@
 #include "ttnn/async_runtime.hpp"
 
 #include <tt-metalium/distributed.hpp>
+#include "ttnn/device_operation_detail.hpp"
 #include "ttnn/distributed/api.hpp"
 
 using namespace tt::tt_metal;
@@ -47,13 +48,16 @@ void event_synchronize(const tt::tt_metal::distributed::MeshEvent& event) {
 
 void wait_for_event(
     tt::tt_metal::distributed::MeshCommandQueue& cq, const tt::tt_metal::distributed::MeshEvent& event) {
+    ttnn::device_operation::detail::throw_if_recording_command_list("wait_for_event");
     cq.enqueue_wait_for_event(event);
 }
 
 tt::tt_metal::distributed::MeshEvent record_event(tt::tt_metal::distributed::MeshCommandQueue& cq) {
+    ttnn::device_operation::detail::throw_if_recording_command_list("record_event");
     return cq.enqueue_record_event();
 }
 tt::tt_metal::distributed::MeshEvent record_event_to_host(tt::tt_metal::distributed::MeshCommandQueue& cq) {
+    ttnn::device_operation::detail::throw_if_recording_command_list("record_event_to_host");
     return cq.enqueue_record_event_to_host();
 }
 

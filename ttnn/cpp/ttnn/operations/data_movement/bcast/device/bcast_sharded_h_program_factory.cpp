@@ -11,7 +11,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/math.hpp>
 #include <cstdint>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast_types.hpp"
@@ -21,7 +21,6 @@
 namespace ttnn::prim {
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 using namespace tt::constants;
 
 ttnn::device_operation::ProgramArtifacts BcastShardedHProgramFactory::create_program_artifacts(
@@ -35,7 +34,8 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHProgramFactory::create_pro
     const auto& out_mt = output.mesh_tensor();
 
     const auto& bshape = b.padded_shape();
-    const std::uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1;
+    // b's tiles are ordered by N, then C, so each (n, c) is one batch of b.
+    const std::uint32_t bN = get_batch_size(bshape);
 
     MeshDevice* device = a.device();
 
@@ -96,7 +96,7 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHProgramFactory::create_pro
         num_tile_per_core);
 
     const std::uint32_t aligned_input_tile_nbytes =
-        round_up_to_mul32(input_tile_size);  // will have issue if the page is not multiple of 32
+        tt::round_up(input_tile_size, 32u);  // will have issue if the page is not multiple of 32
 
     const std::uint32_t num_input_tiles = (b.padded_shape()[-1] * output.element_size() + TILE_HW - 1) / TILE_HW;
 
@@ -182,6 +182,16 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHProgramFactory::create_pro
     KernelRunArgs compute_args{.kernel = COMPUTE};
 
     const std::uint32_t ncores_y = ncores / ncores_x;
+    if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+        // The block-sharded offsets below split the cores along the shard height evenly between b's batches.
+        const std::uint32_t height_cores = shard_spec.orientation == ShardOrientation::ROW_MAJOR ? ncores_x : ncores_y;
+        TT_FATAL(
+            height_cores % bN == 0,
+            "Block-sharded bcast H needs the {} cores along the shard height to split evenly between the {} batches "
+            "of input b",
+            height_cores,
+            bN);
+    }
     for (std::uint32_t i = 0; i < ncores; i++) {
         CoreCoord core;
         std::uint32_t offset = 0;

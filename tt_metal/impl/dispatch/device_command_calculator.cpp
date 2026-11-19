@@ -7,7 +7,6 @@
 #include <algorithm>
 
 #include "dispatch/kernels/cq_commands.hpp"
-#include "hal.hpp"
 #include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {
