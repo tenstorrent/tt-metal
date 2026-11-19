@@ -44,11 +44,13 @@ void bind_move(nb::module_& mod) {
                    * - BFLOAT8_B, BFLOAT4_B
                      - TILE
 
-                On Blackhole, the input can also be a ``FP8_E4M3`` tensor in ROW_MAJOR layout.
+                On Blackhole, the input can also be an ``FP8_E4M3`` tensor in ROW_MAJOR layout.
 
-                When an interleaved output is in the input's buffer type, each core's share of the tensor, its size
-                divided by the number of cores in the device's compute grid, must fit in that core's free L1: anywhere
-                above the allocator's base for a DRAM tensor, and below the output for an L1 tensor.
+                When an interleaved output is in the input's buffer type, each core's share of the tensor must fit in
+                that core's free L1: anywhere above the allocator's base for a DRAM tensor, and below the output for an
+                L1 tensor. A core's share is the tensor's number of pages divided by the number of cores in the
+                device's compute grid, rounded up, times the page size rounded up to the tensor's buffer alignment. A
+                page is a tile for a TILE tensor and a row for a ROW_MAJOR one.
 
             Memory Support:
                 - Interleaved: DRAM and L1; the input and the output can be in different buffer types
