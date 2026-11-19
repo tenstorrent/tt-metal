@@ -576,15 +576,6 @@ Tensor concat_impl(
         }
         return concat_impl(interleaved_inputs, dim, groups, output_mem_config, sub_core_grids);
     }
-    if (input_tensors[0].layout() == Layout::ROW_MAJOR && normalized_dim == ref_rank - 1) {
-        for (const auto& input_tensor : input_tensors) {
-            TT_FATAL(
-                (input_tensor.padded_shape()[dim] * input_tensor.element_size()) %
-                        input_tensor.mesh_buffer().alignment() ==
-                    0,
-                "Current concat implementation requires aligned last dim when concatting on last dim");
-        }
-    }
     // Determine target layout by checking all inputs
     // Start with first input's layout, but may need to fall back to ROW_MAJOR
     Layout target_layout = input_tensors[0].layout();
@@ -597,6 +588,23 @@ Tensor concat_impl(
                 target_layout = Layout::ROW_MAJOR;
                 break;
             }
+        }
+    }
+
+    // RM width-concat NOC rule on the resolved target layout: max alignment across inputs (mixed L1/DRAM safe).
+    if (target_layout == Layout::ROW_MAJOR && normalized_dim == ref_rank - 1) {
+        uint32_t common_align = 0;
+        for (const auto& t : input_tensors) {
+            common_align = std::max<uint32_t>(common_align, t.mesh_buffer().alignment());
+        }
+        for (const auto& t : input_tensors) {
+            TT_FATAL(
+                (static_cast<uint64_t>(t.padded_shape()[normalized_dim]) * t.element_size()) % common_align == 0,
+                "ttnn.concat: RM width-concat requires every input's last dim to be a multiple of the max buffer "
+                "alignment across inputs (got {} elements, element size {}, max alignment {}).",
+                t.padded_shape()[normalized_dim],
+                t.element_size(),
+                common_align);
         }
     }
 

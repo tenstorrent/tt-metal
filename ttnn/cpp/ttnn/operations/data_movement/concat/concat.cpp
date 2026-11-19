@@ -40,6 +40,21 @@ inline void concat_db_print(bool condition, const std::string& msg) {
 
 namespace ttnn::operations::data_movement {
 
+namespace {
+// Max buffer alignment across inputs (RM width-concat NOC rule). Shared by fast and normal paths.
+uint32_t rm_width_concat_common_alignment(const std::vector<ttnn::Tensor>& tensors) {
+    uint32_t align = 0;
+    for (const auto& t : tensors) {
+        TT_FATAL(
+            t.storage_type() == ttnn::StorageType::DEVICE,
+            "ttnn.concat: expected device storage, got storage type {}",
+            t.storage_type());
+        align = std::max<uint32_t>(align, t.mesh_buffer().alignment());
+    }
+    return align;
+}
+}  // namespace
+
 using OwnedConcatArgs = std::tuple<std::vector<ttnn::Tensor>, int, unsigned int>;
 
 using MassagedConcat = MassagedOperation<ttnn::Tensor, const std::vector<ttnn::Tensor>&, int, unsigned int>;
@@ -195,16 +210,7 @@ MassagedConcat build_non_aligned_last_dim_concat(
         const bool rm_width_concat =
             tensors.front().layout() == ttnn::ROW_MAJOR_LAYOUT && dim == tensors.front().logical_shape().rank() - 1;
         // RM width-concat uses max alignment across inputs; TILE uses per-input (tile pages unaffected).
-        uint32_t common_align = 0;
-        if (rm_width_concat) {
-            for (const auto& t : tensors) {
-                TT_FATAL(
-                    t.storage_type() == ttnn::StorageType::DEVICE,
-                    "ttnn.concat: expected device storage, got storage type {}",
-                    t.storage_type());
-                common_align = std::max<uint32_t>(common_align, t.mesh_buffer().alignment());
-            }
-        }
+        const uint32_t common_align = rm_width_concat ? rm_width_concat_common_alignment(tensors) : 0;
         return std::all_of(tensors.begin(), tensors.end(), [&](const ttnn::Tensor& tensor) {
             TT_FATAL(
                 tensor.storage_type() == ttnn::StorageType::DEVICE,
@@ -298,8 +304,8 @@ ttnn::Tensor concat_native(
 
     ttnn::Shape logical_output_shape = compute_output_shape(input_tensors, dim);
 
-    // For interleaved outputs, if sub_core_grids is provided, use direct path to avoid massaged operations
-    // which don't currently support sub_core_grids
+    // For interleaved outputs, if sub_core_grids is provided, use direct path. Alignment and
+    // layout-normalization checks live in `concat_impl` so all callers enforce the same rule.
     if (sub_core_grids.has_value() && !first_tensor.is_sharded() &&
         (mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED)) {
         return ttnn::operations::data_movement::concat_impl(input_tensors, dim, groups, mem_config, sub_core_grids);
