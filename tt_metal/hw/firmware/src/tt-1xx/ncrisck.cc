@@ -25,6 +25,7 @@
 #include "api/remote_circular_buffer.h"
 #endif
 #include "internal/debug/stack_usage.h"
+#include "internal/profiler/riscv_pmc.hpp"
 #ifdef UDM_MODE
 #include "tt_metal/fabric/hw/inc/udm/tt_fabric_udm.hpp"
 #endif
@@ -70,7 +71,9 @@ uint32_t _start() {
     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
     EARLY_RETURN_FOR_DEBUG
     WAYPOINT("K");
+    RiscvPmcBegin();
     kernel_main();
+    RiscvPmcEnd();
     WAYPOINT("KD");
     // Unregister all the DFB L1 extents this RISC declared in the DFB ctor. Done here rather than in the dtor so
     // DFBs stays trivially copyable.

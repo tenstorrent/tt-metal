@@ -18,6 +18,7 @@
 #include "api/debug/kernel_profiler.hpp"
 #include "internal/profiler/noc_debugging_profiler.hpp"  // RECORD_DFB_REGION_CLEAR
 #include "internal/debug/stack_usage.h"
+#include "internal/profiler/riscv_pmc.hpp"
 #include <kernel_includes.hpp>
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #include "api/remote_circular_buffer.h"
@@ -77,7 +78,9 @@ uint32_t _start() {
         DeviceZoneScopedMainChildN("BRISC-KERNEL");
         EARLY_RETURN_FOR_DEBUG
         WAYPOINT("K");
+        RiscvPmcBegin();
         kernel_main();
+        RiscvPmcEnd();
         WAYPOINT("KD");
         // Unregister all the DFB L1 extents this RISC declared in the DFB ctor. Done here rather than in the dtor so
         // DFBs stays trivially copyable.

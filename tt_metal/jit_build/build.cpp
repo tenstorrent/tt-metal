@@ -416,7 +416,7 @@ void JitBuildEnv::init(
         this->defines_ += "-DPROFILE_PERF_COUNTERS=" + std::to_string(perf_counter_mode) + " ";
     }
     if (rtoptions.get_profiler_riscv_pmc_enabled()) {
-        // The hooks live in the baby-core firmware, so the define has to reach the firmware build.
+        // The hooks are in the Tensix kernel entries and the ethernet and Quasar firmware, so every build gets it.
         TT_ASSERT(rtoptions.get_profiler_enabled());
         TT_FATAL(
             this->arch_ == tt::ARCH::BLACKHOLE || this->arch_ == tt::ARCH::QUASAR,

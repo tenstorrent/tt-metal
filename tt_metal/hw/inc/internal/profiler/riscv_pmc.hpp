@@ -9,7 +9,7 @@
 //
 // Enable with TT_METAL_PROFILE_RISCV_PMC=<mhpmevent3>[,<mhpmevent4>] (Quasar DMs:
 // TT_METAL_PROFILE_RISCV_PMC_DM=<mhpmevent3>[,<mhpmevent4>[,<mhpmevent5>[,<mhpmevent6>]]]).
-// The selects are compile-time constants and part of the firmware build key.
+// The selects are compile-time constants and part of the build key.
 
 #pragma once
 
@@ -22,19 +22,21 @@ constexpr uint16_t RISCV_PMC_EVENTS_PROFILER_ID = 9094;  // (mhpmevent4 << 32) |
 constexpr uint16_t RISCV_PMC_COUNTS_UPPER_PROFILER_ID = 9095;  // (pmc6 << 32) | pmc5
 constexpr uint16_t RISCV_PMC_EVENTS_UPPER_PROFILER_ID = 9096;  // (mhpmevent6 << 32) | mhpmevent5
 
-// Cores that carry the counters and have a firmware hook.
-#if defined(ARCH_BLACKHOLE) && (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || \
-                                defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_AERISC))
+// Cores that carry the counters, and the build that holds the hook. The Blackhole Tensix cores run it in the kernel
+// entry (brisck, ncrisck, trisck): their firmware regions are fixed and everything after them in L1 would shift.
+#if defined(ARCH_BLACKHOLE) && !defined(FW_BUILD) && !defined(DISPATCH_KERNEL) && \
+    (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_TRISC))
 #define RISCV_PMC_CORE 1
-#elif defined(ARCH_QUASAR) && (defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_DM))
+#elif defined(ARCH_BLACKHOLE) && defined(FW_BUILD) && defined(COMPILE_FOR_AERISC)
+#define RISCV_PMC_CORE 1
+#elif defined(ARCH_QUASAR) && defined(FW_BUILD) && (defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_DM))
 #define RISCV_PMC_CORE 1
 #endif
 
-// Included directly by the firmware TUs: the kernel_profiler.hpp includes sit inside its
+// Included directly by the firmware and kernel entry TUs: the kernel_profiler.hpp includes sit inside its
 // PROFILE_KERNEL block, so the empty macros below would be missing on a profiler-off build.
 // The streaming profiler has no TS_DATA path.
-#if defined(PROFILE_RISCV_PMC) && defined(PROFILE_KERNEL) && !defined(PROFILE_STREAMING) && defined(FW_BUILD) && \
-    defined(RISCV_PMC_CORE)
+#if defined(PROFILE_RISCV_PMC) && defined(PROFILE_KERNEL) && !defined(PROFILE_STREAMING) && defined(RISCV_PMC_CORE)
 
 #include "api/debug/kernel_profiler.hpp"
 
@@ -107,10 +109,9 @@ inline __attribute__((always_inline)) void begin() {
     instret_begin = llk::perf::riscv::read_minstret();
 }
 
-// The markers share one buffer-room check and one timestamp, which keeps the BRISC image
-// inside its region. Re-emitting the selects every launch keeps each capture self-describing.
-// No flush_to_dram_if_full(): a full buffer drops the markers, and the flush would pull noc_index
-// into firmware images that do not define it.
+// The markers share one buffer-room check and one timestamp, which keeps the hook small. Re-emitting the selects every
+// launch keeps each capture self-describing. No flush_to_dram_if_full(): a full buffer drops the markers, and the flush
+// would pull noc_index into images that do not define it.
 inline __attribute__((always_inline)) void end() {
     const uint32_t pmc3 = llk::perf::riscv::read_counter3();
     const uint32_t pmc4 = llk::perf::riscv::read_counter4();
