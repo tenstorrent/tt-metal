@@ -221,7 +221,7 @@
   sp_config: sc1
 
 
-- name: "(Kimi-K2.7-1T, Kimi-K3-2.8T) MoE perf 5k"
+- name: "(Kimi-K3-2.8T) MoE perf 5k"
   fabric_profile: torus_xy
   cmd: |
 
@@ -232,7 +232,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_kimi_moe_perf.py -k galaxy -vvv --tb=short
     '
   test_type: kimi_moe_perf
-  test_tags: [kimi_k2_7, kimi_k3, moe]
+  test_tags: [kimi_k3, moe]
   test_group: module
   skus:
     bh_sc1_high_power:

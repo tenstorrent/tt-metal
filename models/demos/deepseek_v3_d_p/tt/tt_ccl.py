@@ -196,7 +196,7 @@ class TT_CCL:
         # counters, shared by every MoE layer; one set per combine axis. Created on first use; see
         # get_combine_overlap_semaphores.
         self.combine_overlap_semaphores = {}
-        # The same overlap's DRAM forwarding buffer, one per shape; see get_combine_forwarding_buffer.
+        # combine_fabric2d's DRAM forwarding buffer, one per shape; see get_combine_forwarding_buffer.
         self.combine_forwarding_buffers = {}
         # dispatch_fabric2d's forwarding and staging buffers, one pair per shape; see get_dispatch_fabric2d_buffers.
         self.dispatch_fabric2d_buffers = {}
@@ -272,11 +272,12 @@ class TT_CCL:
     def get_combine_forwarding_buffer(
         self, emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links, fwd_vc_pages, combine_axis=0
     ):
-        """combine_fabric2d's DRAM forwarding buffer for hybrid_routed_expert_moe overlapped with combine.
+        """combine_fabric2d's DRAM forwarding buffer, for hybrid_routed_expert_moe overlapped with combine and for
+        the standalone combine_fabric2d alike: both size it from emb_dim, num_links, fwd_vc_pages and the ring.
 
-        One per shape, shared by every MoE layer, which run one after another. Call it before the first overlapped
-        forward: left to the op, it is allocated while that forward's dispatch buffer and outputs are live and stays
-        pinned there, splitting the DRAM each later layer's dispatch buffer needs in one piece.
+        One per shape, shared by every MoE layer, which run one after another. Call it before the first forward:
+        left to the op, it is allocated while that forward's dispatch buffer and outputs are live and stays pinned
+        there, splitting the DRAM each later layer's dispatch buffer needs in one piece.
         """
         key = (emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links, fwd_vc_pages, combine_axis)
         buffer = self.combine_forwarding_buffers.get(key)

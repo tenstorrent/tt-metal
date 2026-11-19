@@ -637,6 +637,17 @@ class TtMoe(LightweightModule):
                 cluster_axis=self.sp_axis,
                 num_links=self.sp_num_links,
                 fwd_vc_pages=self.combine_fwd_vc_pages,
+                # Fetched here, at init, so the buffer is placed before any forward's tensors. The same buffer the
+                # overlap below takes: the two combines size it alike, and only one of them runs in a forward.
+                forwarding_buffer=self.tt_ccl.get_combine_forwarding_buffer(
+                    self.routed_emb_dim,
+                    experts_per_chip,
+                    num_experts_per_tok,
+                    self.seq_len_per_chip,
+                    self.sp_num_links,
+                    fwd_vc_pages=self.combine_fwd_vc_pages,
+                    combine_axis=self.sp_axis,
+                ),
             )
         else:
             self.combine_module = TtCombineModule(
