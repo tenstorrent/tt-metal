@@ -178,7 +178,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocationsStartAbovePers
     auto mesh_device = devices_[0];
 
     // Persistent pipe L1 on (0,0)-(1,0): the space reserves it, the pipe claims it.
-    auto space = experimental::CreatePrefetcherPipeSpace(*mesh_device, make_pipe_space_config());
+    auto space = experimental::CreatePrefetcherPipeSpace(mesh_device->mesh_command_queue(0), make_pipe_space_config());
     auto pipe = space.create_pipe(CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})));
     const DeviceAddr persistent_end = pipe.config_address() + pipe.config_page_size();
 
@@ -228,10 +228,13 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceManagerSealsPersistentL1U
     SubDevice sub_device(std::array{cores});
     const auto manager = mesh_device->create_sub_device_manager({sub_device}, local_l1_size);
 
-    EXPECT_THROW(experimental::CreatePrefetcherPipeSpace(*mesh_device, make_pipe_space_config()), std::exception);
+    EXPECT_THROW(
+        experimental::CreatePrefetcherPipeSpace(mesh_device->mesh_command_queue(0), make_pipe_space_config()),
+        std::exception);
 
     mesh_device->remove_sub_device_manager(manager);
-    EXPECT_NO_THROW(experimental::CreatePrefetcherPipeSpace(*mesh_device, make_pipe_space_config()));
+    EXPECT_NO_THROW(
+        experimental::CreatePrefetcherPipeSpace(mesh_device->mesh_command_queue(0), make_pipe_space_config()));
 }
 
 TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBankIds) {
