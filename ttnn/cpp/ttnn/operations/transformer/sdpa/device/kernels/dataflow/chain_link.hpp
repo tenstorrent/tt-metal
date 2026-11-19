@@ -184,12 +184,14 @@ public:
      * Protocol: signal sender that we're ready, then wait for data.
      */
     void receive(Noc noc) const {
-        signal_ready(noc);
-        wait_data();
+        Semaphore<> receiver_sem(receiver_sem_id_);
+        receiver_sem.set(INVALID);
+        Semaphore<>(sender_sem_id_).up(noc, signal_target_x_, signal_target_y_, 1);
+        receiver_sem.wait(VALID);
     }
 
-    // receive() is split so a member can signal its next ready early. At most one transfer may be outstanding per
-    // link, so when K and V share a link only the next handshake in order may be signalled early.
+    // receive() in two halves, so a member can signal its next ready early. At most one transfer may be outstanding
+    // per link, so when K and V share a link only the next handshake in order may be signalled early.
     void signal_ready(Noc noc) const {
         Semaphore<>(receiver_sem_id_).set(INVALID);
         Semaphore<>(sender_sem_id_).up(noc, signal_target_x_, signal_target_y_, 1);
