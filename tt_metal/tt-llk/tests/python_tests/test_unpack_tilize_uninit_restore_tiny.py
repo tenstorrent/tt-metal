@@ -28,7 +28,10 @@ operand with the wrong per-row datum count and the result diverges from the
 tilized golden.
 """
 
+import pytest
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
+from helpers.golden_generators import quantize_input_to_unpack_format
 from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
@@ -43,9 +46,12 @@ TINY_NUM_FACES = 2
 
 
 @parametrize(
-    # Same input/output format for both ops so the second op needs NO data-format
-    # reconfig — isolating the uninit restore as the only state reset.
-    formats=InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+    # Same input format for both ops, so the uninit restore is the only unpacker state reset;
+    # the Bfp8_b output has run 1 reconfigure the packer onto a tiny BFP tile.
+    formats=[
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp8_b),
+    ],
     dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
     # All sub-16 face row counts. face_r_dim=16 is the Phase 1 baseline and is
     # covered by test_unpack_tilize_uninit_restore.py.
@@ -56,6 +62,13 @@ def test_unpack_tilize_uninit_restore_tiny(
     dest_acc,
     face_r_dim,
 ):
+    if (
+        get_chip_architecture() == ChipArchitecture.WORMHOLE
+        and formats.output_format.is_block_float()
+    ):
+        pytest.skip(
+            "Wormhole's run 1 packs with run 0's packer config (no reconfig), so it cannot change the output format"
+        )
     torch_format = format_dict[formats.output_format]
     # Tiny tile: a single [face_r_dim, 32] tile (2 horizontal faces).
     input_dimensions = [face_r_dim, 32]
@@ -78,6 +91,10 @@ def test_unpack_tilize_uninit_restore_tiny(
         stimuli_format=formats.output_format,
         tile_dimensions=input_dimensions,
     ).flatten()
+    # Compare against the packed values: a tiny tile has too few lanes to absorb BFP error.
+    golden_tensor = quantize_input_to_unpack_format(
+        golden_tensor, formats.output_format
+    )
 
     L1_to_L1_iterations = 2
     configuration = TestConfig(
@@ -99,8 +116,10 @@ def test_unpack_tilize_uninit_restore_tiny(
             tile_count_res=tile_cnt_A,
             num_faces=TINY_NUM_FACES,
             face_r_dim=face_r_dim,
-            # Tiny tile is dense (num_faces * face_r_dim * 16 == face_r_dim * 32
-            # row-major elements), so do NOT pad to a full 32x32 tile.
+            # Tiny tile is dense (face_r_dim * 32 row-major elements): no padding to 32x32,
+            # and the dense layout also sizes the BFP result readback.
+            tile_dimensions=input_dimensions,
+            use_dense_tile_dimensions=True,
         ),
         dest_acc=dest_acc,
         L1_to_L1_iterations=L1_to_L1_iterations,

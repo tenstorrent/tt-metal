@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import DestAccumulation
@@ -8,7 +9,12 @@ from helpers.param_config import flat_axes, parametrize
 from helpers.reconfig_formats import NEXT_TILE_SIZE, RECONFIG_FORMATS
 from helpers.tensix import TensixState, TensixThread
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import CONFIGURE_TEST_RUN_IDX
+from helpers.test_variant_parameters import (
+    CONFIGURE_TEST_RUN_IDX,
+    NUM_FACES,
+    PARTIAL_FACE,
+    TEST_FACE_DIMS,
+)
 
 _BFP_FORMATS = {
     DataFormat.Bfp8,
@@ -106,13 +112,26 @@ def test_pack_reconfig(
     dest_acc,
     next_src,
 ):
+    run_pack_reconfig(prev_src, next_dst, dest_acc, next_src)
+
+
+def run_pack_reconfig(
+    prev_src,
+    next_dst,
+    dest_acc,
+    next_src,
+    face_r_dim=16,
+    num_faces=4,
+    partial_face=False,
+):
+    geometry = [TEST_FACE_DIMS(face_r_dim=face_r_dim), NUM_FACES(num_faces)]
+
     configuration = TestConfig(
         "sources/state/reconfig/pack_reconfig_test.cpp",
         # The kernel takes prev_dst from the inferred unpack_A_dst and next_src from pack_src.
         InputOutputFormat(prev_src, next_dst),
-        runtimes=[
-            CONFIGURE_TEST_RUN_IDX(0),
-        ],
+        templates=[PARTIAL_FACE(partial_face_pack=partial_face)],
+        runtimes=[CONFIGURE_TEST_RUN_IDX(0)] + geometry,
         dest_acc=dest_acc,
     )
     if next_src is not None:
@@ -121,12 +140,12 @@ def test_pack_reconfig(
 
     configuration.run()
     expected = TensixState.fetch(TestConfig.TENSIX_LOCATION)
-    if not TestConfig.TEST_TARGET.run_simulator:
+    if not TestConfig.TEST_TARGET.run_simulator and (face_r_dim, num_faces) == (16, 4):
         # configure_pack stores the tile size in the pack thread's TILE_HEADER GPR.
         assert expected["gpr"][TensixThread.PACK]["tile_header"] == NEXT_TILE_SIZE
 
     # Only the runtime parameter changes between runs.
-    configuration.runtimes = [CONFIGURE_TEST_RUN_IDX(1)]
+    configuration.runtimes = [CONFIGURE_TEST_RUN_IDX(1)] + geometry
 
     configuration.run()
     actual = TensixState.fetch(TestConfig.TENSIX_LOCATION)
@@ -140,3 +159,30 @@ def test_pack_reconfig(
         actual = _drop_key(actual, "exp_section_size")
 
     TensixState.assert_equal(expected, actual)
+    return actual
+
+
+@parametrize(
+    next_dst=[DataFormat.Bfp8_b, DataFormat.Bfp4_b],
+    tile_rows=[1, 2, 4, 8, 16],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_pack_reconfig_bfp_tiny_tile(next_dst, tile_rows, dest_acc):
+    if get_chip_architecture() == ChipArchitecture.WORMHOLE:
+        pytest.skip(
+            "Wormhole still sizes the packer's BFP exponent section from partial_face, not the exponent count "
+            "(https://github.com/tenstorrent/tt-metal/issues/61060)"
+        )
+    # A rows x 32 tile: two faces of tile_rows rows, partial_face set as tt-metal's Tile sets it.
+    actual = run_pack_reconfig(
+        DataFormat.Float16_b,
+        next_dst,
+        dest_acc,
+        None,
+        face_r_dim=tile_rows,
+        num_faces=2,
+        partial_face=True,
+    )
+    # One exponent per 16-datum row, in 16-byte words: 1 for 1x32..8x32, 2 for 16x32.
+    expected_words = (tile_rows * 2 + 15) // 16
+    assert actual["pack_config"][0]["exp_section_size"] == expected_words
