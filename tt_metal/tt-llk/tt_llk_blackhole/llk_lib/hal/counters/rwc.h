@@ -12,8 +12,8 @@
 #include <cstdint>
 
 #include "../utils/helpers.h"
+#include "../utils/validate.h"
 #include "ckernel.h"
-#include "llk_assert.h"
 
 /**
  * @brief Register-word counters (RWCs) of the issuing math thread.
@@ -225,37 +225,6 @@ enum class Control : std::uint8_t
     ClearFidelity ///< Fidelity-phase clear.
 };
 
-/**
- * @brief Fail constant evaluation, or LLK_ASSERT at runtime, when a condition does not hold.
- *
- * @param valid: Condition required by the descriptor or instruction encoding.
- */
-inline __attribute__((always_inline)) constexpr void require(const bool valid)
-{
-    if (!valid)
-    {
-        if (__builtin_is_constant_evaluated())
-        {
-            __builtin_trap();
-        }
-        else
-        {
-            // Keep assertion assembly outside the C++17 constexpr body.
-            [valid] { LLK_ASSERT(valid, "invalid math-counter descriptor or value outside the instruction's four-bit field"); }();
-        }
-    }
-}
-
-/**
- * @brief Reject MathCounter::operation() for a descriptor that needs both SETRWC and INCRWC.
- *
- * Not constexpr, so constant evaluation fails with an error naming this function.
- */
-inline void reject_two_instructions()
-{
-    LLK_ASSERT(false, "MathCounter::operation() encodes one instruction, but this descriptor needs SETRWC and INCRWC; issue it with counters::set()");
-}
-
 /** @brief Instructions able to encode an operation. Edit this table for a different instruction set. */
 inline __attribute__((always_inline)) constexpr Instr encodable_in(const Op op)
 {
@@ -360,7 +329,7 @@ inline __attribute__((always_inline)) constexpr std::uint32_t encode_counter(
     {
         return 0;
     }
-    require(update.value <= RwcValueMax);
+    hal::detail::require(update.value <= RwcValueMax, "math-counter value must fit in four bits");
     select |= hal::to_underlying(write_bit);
     if (update.op == Op::AdvanceAndReset)
     {
@@ -405,11 +374,10 @@ inline __attribute__((always_inline)) constexpr std::uint32_t incrwc(const MathC
 inline constexpr __attribute__((always_inline)) std::uint32_t MathCounter::operation() const
 {
     const detail::Instr issued = detail::plan(*this);
-    if (issued == (detail::Instr::Setrwc | detail::Instr::Incrwc))
-    {
-        detail::reject_two_instructions();
-    }
-    detail::require(issued != detail::Instr::None);
+    hal::detail::require(
+        issued != (detail::Instr::Setrwc | detail::Instr::Incrwc),
+        "MathCounter::operation() encodes one instruction, but this descriptor needs SETRWC and INCRWC; issue it with counters::set()");
+    hal::detail::require(issued != detail::Instr::None, "math-counter descriptor must update a counter, flip a bank, or clear the fidelity phase");
     return issued == detail::Instr::Setrwc ? detail::setrwc(*this, issued) : detail::incrwc(*this, issued);
 }
 
@@ -447,7 +415,7 @@ inline __attribute__((always_inline)) void set()
 inline __attribute__((always_inline)) void set(const MathCounter descriptor)
 {
     const detail::Instr issued = detail::plan(descriptor);
-    detail::require(issued != detail::Instr::None);
+    hal::detail::require(issued != detail::Instr::None, "math-counter descriptor must update a counter, flip a bank, or clear the fidelity phase");
     if (detail::issues(issued, detail::Instr::Setrwc))
     {
         TT_INSN(detail::setrwc(descriptor, issued));
