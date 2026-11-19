@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 import torch
 
-from dcp_oracle import Loader, advance_generators
+from dcp_oracle import MISREAD_RNG, WRONG_LENGTH_RNG, Loader, advance_generators
 
 import ttml
 from ttml.common.schedulers import CosineAnnealingScheduler, LinearScheduler, SequentialScheduler, StepScheduler
@@ -247,23 +247,7 @@ def test_rng_state_is_checked_whole_before_any_generator_is_set(expect_error):
     check_train_state({"rng": block}, rng=False)  # not asked for: nothing to check
 
 
-def _shorten_hex(text: str, nbytes: int) -> str:
-    return text[: -2 * nbytes]
-
-
-@pytest.mark.parametrize(
-    "damage",
-    [
-        pytest.param(
-            lambda own: own["numpy"].update(state=_shorten_hex(own["numpy"]["state"], 4)), id="numpy_623_words"
-        ),
-        pytest.param(
-            lambda own: own["python"].update(state=_shorten_hex(own["python"]["state"], 4)), id="python_624_words"
-        ),
-        pytest.param(lambda own: own.update(torch=_shorten_hex(own["torch"], 1)), id="torch_one_byte_short"),
-        pytest.param(lambda own: own.update(ttml=" ".join(own["ttml"].split()[:600])), id="ttml_600_tokens"),
-    ],
-)
+@pytest.mark.parametrize("damage", list(WRONG_LENGTH_RNG.values()), ids=list(WRONG_LENGTH_RNG))
 def test_rng_state_of_the_wrong_length_changes_no_generator(damage, expect_error):
     # Valid JSON and hex of the wrong length for its generator: refused while decoding, before any generator is set.
     ctx = ttml.autograd.AutoContext.get_instance()
@@ -278,28 +262,7 @@ def test_rng_state_of_the_wrong_length_changes_no_generator(damage, expect_error
     assert np.array_equal(after[2], before[2]) and torch.equal(after[3], before[3]), "numpy and torch untouched"
 
 
-def _set_ttml_token(own: dict, index: int, value: str) -> None:
-    tokens = own["ttml"].split()
-    tokens[index] = value
-    own["ttml"] = " ".join(tokens)
-
-
-# Valid JSON of the right length that a setter would misread: the ttml text the C++ stream stops partway through
-# (non-ASCII digits, a word past 64 bits) or reads into a state no mt19937 has (a word past 32 bits, a position past
-# 624), and a cached Gaussian Python's setstate keeps but the next random.gauss cannot use.
-MISREAD = [
-    pytest.param(lambda own: _set_ttml_token(own, 5, "\u00b2"), id="ttml_superscript_digit"),
-    pytest.param(lambda own: _set_ttml_token(own, 5, "\u0663"), id="ttml_arabic_indic_digit"),
-    pytest.param(lambda own: _set_ttml_token(own, 5, str(2**32)), id="ttml_word_past_32_bits"),
-    pytest.param(lambda own: _set_ttml_token(own, 5, str(2**64)), id="ttml_word_past_64_bits"),
-    pytest.param(lambda own: _set_ttml_token(own, -1, "625"), id="ttml_position_past_624"),
-    pytest.param(lambda own: own["python"].update(gauss_next="corrupt"), id="python_gauss_next_text"),
-    pytest.param(lambda own: own["python"].update(gauss_next=[0.5]), id="python_gauss_next_list"),
-    pytest.param(lambda own: own["python"].update(gauss_next=True), id="python_gauss_next_bool"),
-]
-
-
-@pytest.mark.parametrize("damage", MISREAD)
+@pytest.mark.parametrize("damage", list(MISREAD_RNG.values()), ids=list(MISREAD_RNG))
 def test_misreadable_rng_state_is_refused(damage, expect_error):
     """RNG state a setter would misread is refused, and no generator changes."""
     ctx = ttml.autograd.AutoContext.get_instance()
