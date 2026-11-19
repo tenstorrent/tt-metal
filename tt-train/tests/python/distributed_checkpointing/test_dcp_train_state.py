@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 import torch
 
-from dcp_oracle import MISREAD_RNG, WRONG_LENGTH_RNG, Loader, advance_generators
+from dcp_oracle import MISREAD_RNG, WRONG_LENGTH_RNG, Loader, advance_generators, host_draws
 
 import ttml
 from ttml.common.schedulers import CosineAnnealingScheduler, LinearScheduler, SequentialScheduler, StepScheduler
@@ -61,13 +61,7 @@ def test_every_generator_comes_back_exactly():
     assert own["python"]["gauss_next"] is not None and own["numpy"]["has_gauss"] == 1 and own["numpy"]["pos"] != 624
     assert own["ttml_init"]["has_uint32"] == 1
     assert len(own["python"]["state"]) == 625 * 8 and len(own["numpy"]["state"]) == 624 * 8  # hex of u32
-    expected = (
-        random.random(),
-        float(np.random.random()),
-        torch.rand(3).tolist(),
-        ttml.init._rng.random(2).tolist(),  # what the next layer's initial weights would be drawn from
-        ctx.get_generator_state(),
-    )
+    expected = (host_draws(), ctx.get_generator_state())
 
     ctx.set_seed(99)
     random.seed(0)
@@ -78,13 +72,7 @@ def test_every_generator_comes_back_exactly():
     assert restore_rng(state, world_rank=0) == ["rng.ttml", "rng.python", "rng.numpy", "rng.ttml_init", "rng.torch"]
     assert ctx.get_generator_state() == own["ttml"]
     # The same draws again, and the ttml generator reaches the same state through them (nothing drew from it).
-    assert (
-        random.random(),
-        float(np.random.random()),
-        torch.rand(3).tolist(),
-        ttml.init._rng.random(2).tolist(),
-        ctx.get_generator_state(),
-    ) == expected
+    assert (host_draws(), ctx.get_generator_state()) == expected
 
 
 def test_generator_without_stored_state_warns(monkeypatch):

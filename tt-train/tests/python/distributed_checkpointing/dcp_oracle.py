@@ -202,6 +202,22 @@ def advance_generators() -> None:
         torch.randn(1)
 
 
+def host_draws() -> tuple:
+    """The next draws from python's, numpy's and torch's generators, and ttml.init's state. The Gaussians come first:
+    each returns its generator's cached Gaussian (python's gauss_next, numpy's cached Gaussian, torch's cached normal),
+    which uniform draws never read, so a restore that dropped one shows here."""
+    torch = sys.modules.get("torch")
+    return (
+        random.gauss(0.0, 1.0),
+        float(np.random.standard_normal()),
+        torch.randn(3).tolist() if torch is not None else None,
+        random.random(),
+        float(np.random.random()),
+        torch.rand(3).tolist() if torch is not None else None,
+        ttml.init.get_rng_state(),  # what the next layer's initial weights are drawn from
+    )
+
+
 class Loader:
     """A stateful dataloader stand-in for the tests and the driver: its only state is how many batches it handed out."""
 

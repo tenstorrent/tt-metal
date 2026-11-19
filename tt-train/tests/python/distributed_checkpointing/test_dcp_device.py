@@ -24,7 +24,7 @@ import numpy as np
 import pytest
 import torch
 import ttnn
-from dcp_oracle import MISREAD_RNG, WRONG_LENGTH_RNG, Loader, advance_generators, damage_stored_rng
+from dcp_oracle import MISREAD_RNG, WRONG_LENGTH_RNG, Loader, advance_generators, damage_stored_rng, host_draws
 from dcp_shards import NATIVE, assert_same_shards, assert_some_differ, model_shards, optimizer_shards, tensor_shards
 from tp_block import TPBlock, fresh_tp, make_adamw, train_step
 
@@ -547,9 +547,7 @@ def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path, expect_er
         "lrs": sched.get_last_lrs(),
         "loader": loader.get_state_dict(),
         "ttml": _ttml_draw(),
-        "python": random.random(),
-        "numpy": float(np.random.random()),
-        "torch": torch.rand(2).tolist(),
+        "host": host_draws(),
     }
 
     model2, params2, opt2 = fresh_tp(DIM, _adamw_stochastic_rounding)
@@ -581,8 +579,7 @@ def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path, expect_er
     assert sched2.get_last_lrs() == expected["lrs"]
     assert loader2.get_state_dict() == expected["loader"]
     assert torch.equal(_ttml_draw(), expected["ttml"])
-    assert random.random() == expected["python"] and float(np.random.random()) == expected["numpy"]
-    assert torch.rand(2).tolist() == expected["torch"]
+    assert host_draws() == expected["host"]
 
     # The negative control: everything restored but the generators (rng=False, a deliberate reseed), and the same
     # step rounds differently.
