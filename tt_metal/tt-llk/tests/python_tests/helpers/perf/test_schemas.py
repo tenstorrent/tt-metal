@@ -1483,7 +1483,7 @@ PERF_TEST_SCHEMAS = {
         },
     },
     "perf_pack_untilize": {
-        "version": 6,
+        "version": 7,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -1504,6 +1504,7 @@ PERF_TEST_SCHEMAS = {
             "num_faces_A",
             "num_faces_B",
             "pack_untilize_benchmark",
+            "tile_cnt",
             "tile_dst_ct_offset",
             "unpack_to_dest",
         ],
