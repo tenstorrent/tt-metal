@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 
@@ -265,6 +266,15 @@ class MiniMaxH3Attention(Module):
             and self.exp_ring_num_passes <= self.exp_ring_max_passes
         )
         self._exp_sdpa_program_configs: dict[int, ttnn.SDPAProgramConfig | None] = {}
+        # Ring joint SDPA hangs with a ring of two (a 4x2 DP replica's SP pair); two chips are the same link pair as a
+        # line, which the op supports, so SP=2 runs it as a line. MINIMAX_H3_RING_SDPA_TOPOLOGY overrides.
+        sdpa_topology = os.environ.get("MINIMAX_H3_RING_SDPA_TOPOLOGY", "").lower()
+        if sdpa_topology:
+            self.ring_sdpa_topology = {"ring": ttnn.Topology.Ring, "linear": ttnn.Topology.Linear}[sdpa_topology]
+        elif parallel_config.sequence_parallel.factor == 2:
+            self.ring_sdpa_topology = ttnn.Topology.Linear
+        else:
+            self.ring_sdpa_topology = ccl_manager.topology
 
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -649,7 +659,7 @@ class MiniMaxH3Attention(Module):
                 num_links=self.ccl_manager.num_links,
                 cluster_axis=self.sp_mesh_axis,
                 mesh_device=self.mesh_device,
-                topology=self.ccl_manager.topology,
+                topology=self.ring_sdpa_topology,
                 subdevice_id=self.ccl_manager.ccl_sub_device_id,
                 ccl_core_grid_offset=(self.sdpa_worker_grid[0], 0),
                 use_column_major_ccl=True,

@@ -188,7 +188,11 @@ def test_dp_replica_process(mesh_device):
     tag = f"replica{rank}_{shape[0]}x{shape[1]}_{size}"
     logger.info(f"RESULT {tag}: topology {topology}, dynamic_length {pipe.dynamic_length}")
     for seed in (0, 1):  # warm: compile, then one warm request
-        pipe(PROMPT, width=size, height=size, seed=seed)
+        warm = pipe(PROMPT, width=size, height=size, seed=seed)
+    save_dir = os.environ.get("H3_DP_SAVE_DIR")  # the seed-1 image, to compare layouts (same prompt, seed, size)
+    if save_dir:
+        os.makedirs(save_dir, exist_ok=True)
+        warm.image.save(os.path.join(save_dir, f"{shape[0]}x{shape[1]}_{size}_seed1.png"))
     if sync:
         open(os.path.join(sync, f"ready_{rank}"), "w").close()
         deadline = time.time() + 3 * 3600

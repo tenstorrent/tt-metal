@@ -246,7 +246,14 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
         self.last_program_cache_misses: dict[str, int] = {}
 
         self.ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
-        self.encoder_ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+        # The text encoder, vision tower and VAE share this manager. Their ring joint SDPA hangs with a ring of two (a
+        # 4x2 DP replica's SP pair), and two chips are the same link pair as a line, so SP=2 runs them as lines while
+        # the DiT keeps the ring. H3_IMAGE_ENCODER_TOPOLOGY (ring | linear) overrides.
+        encoder_default = ttnn.Topology.Linear if self.sp_factor == 2 else topology
+        encoder_topology = {"ring": ttnn.Topology.Ring, "linear": ttnn.Topology.Linear}.get(
+            os.environ.get("H3_IMAGE_ENCODER_TOPOLOGY", "").lower(), encoder_default
+        )
+        self.encoder_ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=encoder_topology)
         # The base `encode_prompt` frees this manager's transient ping-pong pairs after every encode (on video it is
         # shared by the VAE and the vision tower); here nothing else allocates through it, so the scope is a no-op.
         self.vae_ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
