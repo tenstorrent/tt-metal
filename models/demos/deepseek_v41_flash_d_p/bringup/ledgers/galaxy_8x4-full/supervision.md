@@ -311,7 +311,7 @@
 - RAM unaccounted after P.80: 135.2 GiB of 566 GiB (119.3 before; +16 GiB this task).
 - Owner patch applied (X.9 census over texts, P.84 replication, held-out walls in P.81-P.83); validate: valid.
 
-## 2026-11-19 07:00 UTC: OWNER pointer (Mac): one process for every text / position of a gate; estimate from X.9
+## 2026-11-19 06:37 UTC: OWNER pointer (Mac): one process for every text / position of a gate; estimate from X.9
 
 - X.9's check (11 units, 3107 s = 52 min), from its log timestamps:
   - a census unit (316 s): device open + layers 0-20 loaded 142 s, layers 21-39's MoE weights 100 s, the census
