@@ -400,7 +400,10 @@ def test_prefill_wide_grid_matches_narrow(mesh_device, device_params, K, N, M, m
         got = ttnn.to_torch(out).float()
         assert list(out.shape) == [1, 1, M, N], out.shape
         assert torch.isfinite(got).all()
-        us = _traced_us(mesh_device, lambda lin=lin: lin(tx, compute_kernel_config=ckc, prefill=True))
+        # printed, not asserted: 2 calls x 3 replays (the default 600 calls cost ~26 s at M 4096)
+        us = _traced_us(
+            mesh_device, lambda lin=lin: lin(tx, compute_kernel_config=ckc, prefill=True), n_calls=2, replays=3
+        )
         res[name] = (_pcc(got, golden), float((got - golden).abs().max()), us, pc)
         outs[name] = got
         lin.weight.deallocate(True)

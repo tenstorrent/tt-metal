@@ -644,6 +644,7 @@
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
     export TT_METAL_WATCHER=30
+    export GEMMA4_TEST_MESH_REUSE=1  # consecutive tests share one open mesh (tests/unit/_mesh_reuse.py)
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-31B-it
     # The SigLIP vision-tower unit tests (test_vision_*.py) load the real HF
     # vision weights, so they cannot run on the checked-in config.json; the

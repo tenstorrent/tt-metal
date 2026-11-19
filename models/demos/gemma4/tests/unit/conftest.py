@@ -328,6 +328,33 @@ def import_adapter(patch, env=None):
     return _fresh_import(patch, "models.demos.gemma4.tt.generator_vllm")
 
 
+from models.demos.gemma4.tests.unit import _mesh_reuse  # noqa: E402
+
+if _mesh_reuse.reuse_enabled():
+
+    @pytest.fixture(scope="function")
+    def mesh_device(request, silicon_arch_name, device_params):
+        """Root mesh_device, kept open across tests while the mesh and device_params stay the same (_mesh_reuse)."""
+        return _mesh_reuse.get_device(request, silicon_arch_name, device_params)
+
+    @pytest.hookimpl(hookwrapper=True)
+    def pytest_runtest_makereport(item, call):
+        outcome = yield
+        if outcome.get_result().failed:
+            _mesh_reuse.mark_dirty()
+
+    @pytest.hookimpl(hookwrapper=True)
+    def pytest_runtest_teardown(item, nextitem):
+        yield
+        _mesh_reuse.after_test(nextitem)
+
+    def pytest_collection_modifyitems(config, items):
+        _mesh_reuse.group_by_mesh(items)
+
+    def pytest_sessionfinish(session, exitstatus):
+        _mesh_reuse.close()
+
+
 @pytest.fixture(scope="module")
 def adapter():
     with pytest.MonkeyPatch.context() as patch:
