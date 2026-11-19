@@ -646,9 +646,8 @@ def test_resnet50_linear(device):
         # Matrix-vector: (m, k) x (k) -> (m)
         ((32, 32), (32,), (32,)),  # Standard bias shape
         ((32, 32), (32,), (1,)),  # Broadcast bias
-        # GH Issue #16599
-        pytest.param((32, 1, 32), (32, 32), (1, 32), marks=pytest.mark.xfail),  # 4D tensors with no bias
-        ((32, 2, 32), (32, 32), (1, 32)),  # 4D tensors with no bias
+        ((32, 1, 32), (32, 32), (1, 32)),  # 3D input with bias
+        ((32, 2, 32), (32, 32), (1, 32)),  # 3D input with bias
     ],
 )
 def test_vector_linear(device, shape_a, shape_b, shape_bias) -> None:
@@ -818,16 +817,12 @@ def test_linear_yolov7(
         mcast_in0=False,
     )
 
-    shard_grid = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(7, 7),
-            ),
-        }
-    )
+    # Shard the factory's actual work-core set (div_up(M, per_core_M)); any larger grid silently drops tail-core data.
+    m_tiles = (nhw + 31) // 32
+    work_cores = (m_tiles + per_core_M - 1) // per_core_M
+    shard_grid = ttnn.num_cores_to_corerangeset(work_cores, ttnn.CoreCoord(8, 8), row_wise=True)
 
-    shard_height = (nhw + num_cores * 32 - 1) // (num_cores * 32) * 32
+    shard_height = (nhw + work_cores * 32 - 1) // (work_cores * 32) * 32
     x = tt_input_tensor
     in0_shard_shape = [shard_height, input_channels]
     in0_shard_spec = ttnn.ShardSpec(shard_grid, in0_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)

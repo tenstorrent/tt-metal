@@ -25,17 +25,68 @@ cd $TT_METAL_HOME
 
 Output goes to `./diag_report.json` by default; gtest logs to `./logs/<test>.log`.
 
+### Running in Docker
+
+`run_diag_docker.sh` runs the same suite inside the `exabox-tools` image (the one
+the scheduled fleet run uses), so a host needs no build, and keeps the report,
+the per-step logs and the console transcript on the host:
+
+```bash
+# Medium tier into ./test_output_<date>-<time>/
+./tools/scaleout/exabox/health_check_test_suite/run_diag_docker.sh
+
+# Deploy tier with the QSFP phase, results in a named directory
+./tools/scaleout/exabox/health_check_test_suite/run_diag_docker.sh deploy \
+    --output-dir /data/hc-run-1 --gh-token "$GH_TOKEN"
+
+# Data collection before a BMC reboot, with the sys-triage bundle
+BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
+    ./tools/scaleout/exabox/health_check_test_suite/run_diag_docker.sh pre_reboot
+```
+
+- The tier defaults to `medium`; `--image` defaults to `exabox-tools:latest`,
+  which is re-pulled on every run.
+- `--gh-token` (default `$GH_TOKEN`) installs `tt-syseng-diag` from its private
+  release (`tenstorrent/tt-syseng-diag-packages`, `--diag-pkg-version`, default
+  `0.0.4`). Without it the QSFP and sys-triage phases report SKIP; every other
+  check still runs.
+- `--bmc-ip` / `--bmc-user` / `--bmc-password` (default `$BMC_*`) feed the
+  sys-triage phase, `pre_reboot` only.
+- `--bmc-api-url` / `--bmc-api-token` (default `$TT_BMC_API_URL` /
+  `$TT_BMC_API_TOKEN`) feed the QSFP collector on every tier; without them it
+  reads the FRU with ipmitool and collects no QSFP cages.
+- Tokens and credentials reach the container through a 0600 `--env-file`, never
+  a command line.
+- `--output` is not forwardable — the wrapper owns the bind mount. Use
+  `--output-dir`. Most flags in [Flags](#flags) are forwarded directly; pass
+  `--tt-metal-path` after a `--` separator, using an in-container repo path.
+  Host paths (`--input-snapshot`, `--qsfp-descriptor`, `--triage-dir`) supplied
+  before the separator are mounted read-only for you.
+- The exit code is the suite's own: `1` on FAIL, `0` on PASS/WARN.
+
 ## Tiers
 
-| Tier | Resets | Tests | Triage | QSFP tests | Duration | Use when |
-|---|---|---|---|---|---|---|
-| `light`  | `tt-smi -r` × 1                            | eth_link_up                                                                | — | — | ~75 s   | Smoke check on every new unit |
-| `medium` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | host_side + device_side | yes, if installed | ~5 min + triage + ~7 min | Pre-deployment validation |
-| `deploy` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, ~9 min) | host_side + device_side | yes, if installed | ~18 min + triage + ~7 min | Final deploy gate |
-| `pre_reboot` | none | — | host_side + device_side | yes, if installed | snapshot + triage + ~7 min | Collect data before a BMC reboot |
+| Tier | Resets | Tests | Triage | QSFP tests | sys-triage | Duration | Use when |
+|---|---|---|---|---|---|---|---|
+| `light`  | `tt-smi -r` × 1                            | eth_link_up                                                                | — | — | — | ~75 s   | Smoke check on every new unit |
+| `medium` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | host_side + device_side | yes, if installed | — | ~5 min + triage + ~7 min | Pre-deployment validation |
+| `deploy` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, ~9 min) | host_side + device_side | yes, if installed | — | ~18 min + triage + ~7 min | Final deploy gate |
+| `pre_reboot` | none | — | host_side + device_side | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data before a BMC reboot |
 
-`pre_reboot` also ends with the [sys-triage phase](#sys-triage-phase) when the
-package and BMC credentials are available; it collects a bundle and never gates.
+The [sys-triage phase](#sys-triage-phase) runs last on `pre_reboot` only; it
+collects a bundle for the ticket and never gates the run.
+
+What each tier runs is defined in one place, `TIERS` in
+[`tiers.py`](tiers.py): per tier, the pre-test resets, the tests, the post-test
+reset, the triage tools, and whether the QSFP tests and sys-triage run. To add a
+step to a tier, or drop one, edit its entry there. The steps it can name are
+defined beside the phase that runs them: gtests in `TESTS` and pytests in
+`PYTESTS` (`diag/device_tests.py`), triage tools in `TRIAGE_TOOLS`
+(`diag/triage.py`). An unknown name fails at import. The phase order is fixed in
+`diag_runner.run_diag()` and is not a per-tier choice. A new tier also has to be
+added to the tier lists in `run_diag.sh` and `run_diag_docker.sh`, and to the
+table above; `tools/scaleout/exabox/tests/test_diag_tiers.py` fails until the
+scripts agree with `TIERS`.
 
 `pre_reboot` collects data; it does not check the unit. It runs on a unit that is
 about to be power cycled through the BMC, so it records the state first and runs
@@ -70,8 +121,8 @@ filters above. Needs the venv (`./create_venv.sh`) and standard mesh cabling —
 on torus-cabled units set `TT_MESH_GRAPH_DESC_PATH` to the matching descriptor
 or fabric mesh mapping fails.
 
-The reset cadence and test set are defined in `RESET_PLAN` / `TIER_TESTS` /
-`PYTESTS` in `diag_runner.py`.
+The reset cadence and test set per tier are in `tiers.py`; the gtest filters and
+pytest invocations themselves are `TESTS` / `PYTESTS` in `diag/device_tests.py`.
 
 ## Triage phase
 
@@ -79,8 +130,9 @@ The reset cadence and test set are defined in `RESET_PLAN` / `TIER_TESTS` /
 first-step triage tools — `host_side.sh` (host, PCIe and driver state, read from
 sysfs) and `device_side.sh` (per-chip liveness, ARC scratch, telemetry and a NOC0
 node sweep). `pre_reboot` runs the same tools with no reset before them. They
-live in `tools/scaleout/kmd_triage/`. Tables are `POST_TEST_RESET_PLAN`,
-`TRIAGE_TOOLS` and `TIER_TRIAGE` in `diag_runner.py`.
+live in `tools/scaleout/kmd_triage/`. Which tiers run them, and the reset before
+them, is `post_test_resets` / `triage` in `tiers.py`; the tools themselves are
+`TRIAGE_TOOLS` in `diag/triage.py`.
 
 **What the two tools actually check, how to run them by hand, their exit codes
 and their known gaps are documented in
@@ -146,7 +198,7 @@ can't vanish from the console summary.
   correctable-AER findings on a unit `device_side.sh` and the rest of the suite called
   healthy. Gating on that from day one would ticket the fleet.
 - Two are held the other way: **`hostside_pcie_aer` and `hostside_kernel_log` record
-  their WARN as PASS** (`TRIAGE_ADVISORY_WARN` in `diag_runner.py`). Both count host
+  their WARN as PASS** (`TRIAGE_ADVISORY_WARN` in `diag/triage.py`). Both count host
   state accumulated over a boot, so they WARN on units everything else calls healthy,
   and one phase WARN is a run WARN. FAIL continues to follow `--triage-gating`; the
   finding still reaches `details` and `data`, annotated `[advisory: WARN recorded as PASS]`.
@@ -199,6 +251,13 @@ its scripts, and a host that has not had the package installed simply **SKIPs
 with that reason on the report**. Nothing needs configuring to turn it on:
 install the package and the next `medium` run collects a dump.
 
+The cage sweep reads the QSFP modules through the BMC API, so the collector also
+needs `TT_BMC_API_URL` and `TT_BMC_API_TOKEN` in its environment
+(`run_diag_docker.sh` forwards them from `--bmc-api-url` / `--bmc-api-token`).
+Without them it reads the FRU with ipmitool and collects no cages: the ETH port
+records are still there, but the cage and module records — and with them
+`qsfp_cage_gaps` and `qsfp_modules` — are not.
+
 It runs last, after the post-test `-glx_reset`, for the two reasons the triage
 phase sits there — it opens every chip, so it must not overlap the gtests, and
 it has no SIGBUS handler, so a concurrent reset would kill it outright rather
@@ -212,7 +271,7 @@ expects and what the firmware found, side by side, and leaves the comparison to
 the reader — nothing in it says PASS or FAIL, and its JSONL record shape looks
 nothing like this suite's report.
 
-`qsfp_ingest.py` is that reader. Each fault class it derives is one of
+`diag/qsfp_ingest.py` is that reader. Each fault class it derives is one of
 the access patterns the dump was shaped to answer (`cluster_debug_spec.md`
 §10.3, declared as SQL in the tool's own `visualizer/queries.py`), re-derived in
 Python over a single dump so the health check needs neither the merge step nor
@@ -233,7 +292,7 @@ The ingest module is separately runnable, with the triage scripts' interface, so
 a dump collected on a sick machine is reviewable at a desk:
 
 ```bash
-python3 qsfp_ingest.py qsfp_dump_bh-glx-110-a07u02.jsonl --json out.json
+python3 diag/qsfp_ingest.py qsfp_dump_bh-glx-110-a07u02.jsonl --json out.json
 ```
 
 ### Coverage depends on the descriptor, and the checks say so
@@ -395,7 +454,7 @@ whose baked-in suite predates the phase has the `--skip-sys-triage` and
 | `--bmc-password PASS` | `$BMC_PASSWORD` | BMC password for sys-triage. Prefer the variable: a flag value is visible in the process list. |
 | `--input-snapshot PATH` | — | Use a stored snapshot instead of calling tt-smi |
 | `--tt-smi-path PATH` | `/opt/tt_metal_infra/.../tt-smi` else `tt-smi` on PATH | Override tt-smi binary or repo path |
-| `--tt-metal-path PATH` | `$TT_METAL_HOME` | tt-metal repo root (must contain the deployment-test binary under `build_Release/`) |
+| `--tt-metal-path PATH` | `$TT_METAL_HOME` | tt-metal repo root. The deployment-test binary is looked up under `build_Release/`, `build/`, `build_Debug/` and `build_RelWithDebInfo/`, in that order (`DEPLOYMENT_BIN_CANDIDATES`). |
 | `--output PATH` | `./diag_report.json` | Where to write the JSON report. Gtest logs go to `<output_dir>/logs/`. |
 | `--snapshot-out PATH` | `/tmp/diag_snapshot.json` | Where `tt-smi -f` writes the raw snapshot |
 
@@ -534,7 +593,7 @@ miscabled.
 - **`mrisc_fw` / `gddr_fw` only in tt-smi 5.1+**: 4.1.2 snapshots SKIP this check.
 - **GDDR thermal + error counters only in tt-smi 5.1+**: 4.1.2 snapshots SKIP these.
 - **Eth port muxing**: `ENABLED_ETH` reflects per-chip muxed enable bits; the wiring
-  table in `diag_runner.py` (`ETH_*_BY_ASIC`) covers physical intent. Effective
+  table in `diag/galaxy.py` (`ETH_*_BY_ASIC`) covers physical intent. Effective
   per-chip masks are the intersection.
 
 ## Sample healthy console output (5.1.1 unit, light tier, skip-reset)
@@ -573,12 +632,13 @@ Exit code: `1` on FAIL, `0` on PASS/WARN.
 
 ## Build prereqs
 
-The deployment-test binary is not in `build_metal.sh`'s default target list.
-Build with either:
+The `exabox-tools` image already carries the deployment-test binary (under
+`build/`), so `run_diag_docker.sh` needs no build. On a host checkout, note it is
+not in `build_metal.sh`'s default target list. Build with either:
 
 ```bash
 ./build_metal.sh --build-tests
-# or, after configure:
+# or, after configure (build_Release/ or build/, whichever your configure used):
 ninja -C build_Release unit_tests_deployment
 ```
 
@@ -587,10 +647,24 @@ ninja -C build_Release unit_tests_deployment
 ```
 tools/scaleout/exabox/health_check_test_suite/
 ├── run_diag.sh         # bash dispatcher (sets TT_METAL_HOME / PYTHONPATH / LD_LIBRARY_PATH, execs runner)
-├── diag_runner.py      # Python orchestrator (all check logic lives here). Also exposes run_diag() as a
+├── run_diag_docker.sh  # runs run_diag.sh inside the exabox-tools image; results land on the host
+├── diag_runner.py      # CLI and the phase order. Also exposes run_diag() as a
 │                       #   programmatic entry point returning (exit_code, report_dict).
-├── qsfp_ingest.py      # QSFP tests: cluster-debug JSONL dump -> checks. No hardware in it: a stored
-│                       #   dump is all it needs, so it is tested at a desk. Runnable standalone.
+├── tiers.py            # what each tier runs: resets, tests, triage, QSFP, sys-triage
+├── diag/               # the phases and what they share
+│   ├── model.py            # Check / Phase result model
+│   ├── common.py           # subprocess, console and path helpers
+│   ├── galaxy.py           # BH Galaxy topology: BDF <-> UBB/ASIC, ETH wiring, board revs
+│   ├── snapshot.py         # phase 1: tt-smi snapshot capture, BMC FRU inventory
+│   ├── snapshot_checks.py  # phase 1: the checks over a snapshot
+│   ├── resets.py           # phase 2: pre-test reset loop; phase 4: post-test reset
+│   ├── device_tests.py     # phase 3: deployment gtests (TESTS) and pytests (PYTESTS)
+│   ├── external.py         # ingesting checks written by external tools
+│   ├── triage.py           # phase 5: kmd_triage tools (TRIAGE_TOOLS)
+│   ├── qsfp.py             # phase 6: QSFP tests, collection
+│   ├── qsfp_ingest.py      # phase 6: cluster-debug JSONL dump -> checks. No hardware in it: a stored
+│   │                       #   dump is all it needs, so it is tested at a desk. Runnable standalone.
+│   └── sys_triage.py       # phase 7: sys-triage bundle
 ├── HEALTH_CHECK.md     # this file
 └── test_infrastructure/  # scheduled/CI harness around the diag suite
     ├── run_health_check.py              # entrypoint: run diag as a subprocess, then JIRA + CSV + SFTP
@@ -602,10 +676,15 @@ tools/scaleout/exabox/health_check_test_suite/
         ├── telemetry.py                 # tt-telemetry (Prometheus) collection + formatting
         ├── report.py                    # post-reset normalization + actionable-failure verdict
         ├── jira_client.py               # JIRA ticket create / update / close / attach
+        ├── grafana.py                   # per-node tt-telemetry dashboard link for tickets
+        ├── node_recovery.py             # Slurm reboot-and-requeue self-heal
         ├── sftp_upload.py               # CSV upload to the Data-team SFTP endpoint
         ├── secrets_loader.py            # JIRA / SFTP credential-file parsing
         └── health_check_models.py       # Pydantic schema for the CSV output
 ```
+
+The unit tests for the parsers and the harness live outside this directory, in
+`tools/scaleout/exabox/tests/` (e.g. `test_diag_runner_parsers.py`, `test_diag_tiers.py`).
 
 The `test_infrastructure/` harness previously lived in the `exabox-infra` repo and
 spun up a nested Docker container to run the diag suite. Now that the harness ships

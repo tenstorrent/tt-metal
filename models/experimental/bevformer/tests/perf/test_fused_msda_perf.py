@@ -23,7 +23,8 @@ time is in:
     nothing else. Four variants:
 
     * ``packed_multi_dram`` -- packed value/offsets/attn, one call covering all
-      levels, with ``value`` and output in DRAM.
+      levels, with ``value`` and output in DRAM. The offsets are the module's:
+      heads-packed when each head's fill whole alignment units of the buffer.
     * ``packed_multi_l1`` -- the same, with ``value`` moved to L1 interleaved
       before the measured region (the op's output follows it into L1). This is
       the placement ``auto`` picks when L1 fits.
@@ -52,10 +53,9 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.experimental.bevformer.config import DeformableAttentionConfig
-from models.experimental.bevformer.config.encoder_config import get_preset_config
+from models.experimental.bevformer.model_config import DeformableAttentionConfig
 from models.experimental.bevformer.reference.ms_deformable_attention import MSDeformableAttention
-from models.experimental.bevformer.tests.test_utils import check_with_pcc
+from models.experimental.bevformer.tests.common import PRESETS, assert_pcc
 from models.experimental.bevformer.tt.model_preprocessing import create_ms_deformable_attention_parameters
 from models.experimental.bevformer.tt import tt_ms_deformable_attention
 from models.experimental.bevformer.tt.tt_ms_deformable_attention import (
@@ -87,12 +87,9 @@ def _build(device, config_name, batch_size, num_queries):
     Deliberately the same construction as the PCC file: a perf number measured
     on a different shape than the correctness gate is not comparable to it.
     """
-    preset_config = get_preset_config(config_name)
-    assert preset_config is not None, f"Configuration '{config_name}' not found"
-
-    model_config = preset_config.model_config
+    model_config = PRESETS[config_name]
     num_levels = model_config.num_levels
-    spatial_shapes = torch.tensor(preset_config.dataset_config.spatial_shapes[:num_levels], dtype=torch.long)
+    spatial_shapes = torch.tensor(model_config.spatial_shapes, dtype=torch.long)
     num_keys = int(spatial_shapes.prod(dim=1).sum().item())
 
     config = DeformableAttentionConfig(
@@ -109,9 +106,7 @@ def _build(device, config_name, batch_size, num_queries):
     ref_model = MSDeformableAttention(config)
     ref_model.eval()
 
-    tt_parameters = create_ms_deformable_attention_parameters(
-        torch_model=ref_model, device=device, config=config, dtype=ttnn.float32
-    )
+    tt_parameters = create_ms_deformable_attention_parameters(ref_model, device=device, dtype=ttnn.float32)
 
     logger.info(
         f"{config_name}: Q={num_queries} heads={config.num_heads} D={config.embed_dims // config.num_heads} "
@@ -144,27 +139,16 @@ def _tt_model(device, config, tt_parameters, spatial_shapes):
 def _packed_operands(model, tt_query, tt_value, tt_reference_points):
     """The op's four inputs, in the packed ROW_MAJOR forms the module produces.
 
-    This is the projection/softmax prefix of ``TTMSDeformableAttention.forward``
-    lifted out so it runs before the signpost. Keeping it identical to the
-    module matters: the packed shapes are what make the reader's byte-offset
-    addressing legal, so a different prefix would measure a different op.
+    This is the projection/softmax prefix of ``TTMSDeformableAttention.forward``,
+    run before the signpost through the module's own ``sampling_operands``: the
+    packed shapes are what make the reader's byte-offset addressing legal, so a
+    different prefix would measure a different op.
     """
-    bs, num_queries, _ = tt_query.shape
 
     value = ttnn.to_layout(tt_value, ttnn.TILE_LAYOUT)
     value = ttnn.linear(value, model.params.value_proj.weight, bias=model.params.value_proj.bias)
 
-    query = ttnn.to_layout(tt_query, ttnn.TILE_LAYOUT)
-
-    attn = ttnn.linear(query, model.params.attention_weights.weight, bias=model.params.attention_weights.bias)
-    attn = ttnn.reshape(attn, (bs, num_queries, model.num_heads, model.num_levels * model.num_points))
-    attn = ttnn.softmax(attn, dim=-1)
-
-    offsets = ttnn.linear(
-        query, model.params.sampling_offsets.weight, bias=getattr(model.params.sampling_offsets, "bias", None)
-    )
-    offsets = ttnn.to_layout(offsets, ttnn.ROW_MAJOR_LAYOUT)
-    offsets = ttnn.reshape(offsets, (bs, num_queries, model.num_heads, model.num_levels * model.num_points * 2))
+    offsets, attn = model.sampling_operands(ttnn.to_layout(tt_query, ttnn.TILE_LAYOUT))
 
     value = ttnn.to_layout(value, ttnn.ROW_MAJOR_LAYOUT)
     attn = ttnn.to_layout(attn, ttnn.ROW_MAJOR_LAYOUT)
@@ -198,7 +182,7 @@ def _per_level_operands(device, value, offsets, attn, model, spatial_shapes):
     sum computes the same thing as one multi-level call.
     """
     value_t = ttnn.to_torch(value)
-    offsets_t = ttnn.to_torch(offsets)
+    offsets_t = ttnn.to_torch(offsets).reshape(*list(offsets.shape)[:2], model.num_heads, -1)
     attn_t = ttnn.to_torch(attn)
 
     p = model.num_points
@@ -326,7 +310,7 @@ def test_fused_msda_module_perf(
         if value_memory == "l1" and "value_memory='l1' is unsafe" in str(error):
             pytest.skip(f"forced L1 placement is unavailable: {error}")
         raise
-    passed, message = check_with_pcc(expected, ttnn.to_torch(tt_output, dtype=torch.float32), expected_pcc)
+    passed, message = assert_pcc(expected, ttnn.to_torch(tt_output, dtype=torch.float32), expected_pcc)
     assert passed, f"PCC check failed: {message}"
     logger.info(f"PCC gate: {message}")
     ttnn.deallocate(tt_output)
@@ -388,7 +372,7 @@ def test_fused_msda_kernel_perf(
     assert (
         list(warmup.shape) == expected_shape
     ), f"variant {variant} produced {list(warmup.shape)}, want {expected_shape}"
-    passed, message = check_with_pcc(
+    passed, message = assert_pcc(
         ttnn.to_torch(golden, dtype=torch.float32),
         ttnn.to_torch(warmup, dtype=torch.float32),
         pcc=0.999,

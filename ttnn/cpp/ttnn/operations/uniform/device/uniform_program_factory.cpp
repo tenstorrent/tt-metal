@@ -206,7 +206,7 @@ void UniformDeviceOperation::UniformProgramFactory::override_runtime_arguments(
     constexpr uint32_t compute_kernel_idx = 1;
 
     const auto [lower_bound_bits, upper_bound_bits] = uniform_range(operation_attributes);
-    const uint32_t out_addr = output.buffer()->address();
+    const uint32_t out_addr = output.mesh_buffer().address();
 
     const auto ws = uniform_work_split(output);
     const auto layout = uniform_core_layout(ws);
