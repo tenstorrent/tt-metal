@@ -263,6 +263,15 @@ TEST_F(ScatterCodegenPrimFixture, ChargesTheSlicedSourceAheadOfItsTranspose) {
     EXPECT_EQ(with_slice - without_slice, before - after);
 }
 
+TEST_F(ScatterCodegenPrimFixture, DeclinesADeallocatedOperandBeforeTouchingItsBuffer) {
+    // buffer() throws on a deallocated tensor, so the gate has to decline on is_allocated() first;
+    // ttnn::scatter() then raises native's own error instead of a routing failure.
+    Operands ops = make_operands(device_, 64);
+    EXPECT_TRUE(supported_by_codegen(ops.input, -1, ops.index, ops.src, kReductionNone));
+    ops.index.deallocate();
+    EXPECT_FALSE(supported_by_codegen(ops.input, -1, ops.index, ops.src, kReductionNone));
+}
+
 TEST_F(ScatterCodegenPrimFixture, RejectsRankZeroRowMajorOperands) {
     // The ROW_MAJOR stick geometry reads the last dim before validate runs; a scalar has none, so the
     // call must be refused there instead of walking off the empty shape.

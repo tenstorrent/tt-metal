@@ -30,17 +30,17 @@ void kernel_main() {
     const uint32_t core_id = get_arg_val<uint32_t>(1);
 
     // Compile-time args
-    constexpr uint32_t cb_input = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_output = get_compile_time_arg_val(1);
-    constexpr uint32_t Wt_output = get_compile_time_arg_val(2);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(3);
-    constexpr auto input_ta_args = TensorAccessorArgs<4>();
+    constexpr uint32_t cb_input = get_named_compile_time_arg_val("cb_input");
+    constexpr uint32_t cb_output = get_named_compile_time_arg_val("cb_output");
+    constexpr uint32_t Wt_output = get_named_compile_time_arg_val("Wt_output");
+    constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
+    constexpr auto input_ta_args = TensorAccessorArgs<0>();
     constexpr auto output_ta_args = TensorAccessorArgs<input_ta_args.next_compile_time_args_offset()>();
 
     // Tiles per barrier. Any depth up to the CB's tile count is correct, since each burst is clamped
     // against the tiles left in the row; 4 is the gather port's measured choice.
-    constexpr uint32_t READ_BATCH = 4;
-    constexpr uint32_t WRITE_BATCH = 4;
+    constexpr uint32_t read_batch = 4;
+    constexpr uint32_t write_batch = 4;
 
     // Input tensor accessor
     constexpr uint32_t input_tile_bytes = get_tile_size(cb_input);
@@ -60,7 +60,7 @@ void kernel_main() {
         // --- Phase 1: Read full input data row (Wt_output tiles) from DRAM ---
         uint32_t tiles_read = 0;
         while (tiles_read < Wt_output) {
-            uint32_t batch = (Wt_output - tiles_read < READ_BATCH) ? (Wt_output - tiles_read) : READ_BATCH;
+            uint32_t batch = (Wt_output - tiles_read < read_batch) ? (Wt_output - tiles_read) : read_batch;
             in_cb.reserve_back(batch);
             uint32_t l1_offset = 0;
             for (uint32_t b = 0; b < batch; b++) {
@@ -80,7 +80,7 @@ void kernel_main() {
         // --- Phase 2: Write completed output tiles to the output buffer ---
         uint32_t tiles_written = 0;
         while (tiles_written < Wt_output) {
-            uint32_t batch = (Wt_output - tiles_written < WRITE_BATCH) ? (Wt_output - tiles_written) : WRITE_BATCH;
+            uint32_t batch = (Wt_output - tiles_written < write_batch) ? (Wt_output - tiles_written) : write_batch;
             out_cb.wait_front(batch);
             uint32_t l1_offset = 0;
             for (uint32_t b = 0; b < batch; b++) {
