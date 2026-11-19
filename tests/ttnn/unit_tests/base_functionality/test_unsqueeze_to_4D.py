@@ -9,9 +9,11 @@ import torch
 
 import ttnn
 
+from tt_py_test_utils_common.utility_functions import is_blackhole
 from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
     UnreadableDocstring,
     check_readable,
+    docstring_blackhole_dtype_layout_params,
     docstring_dtype_layout_params,
     docstring_interleaved_buffer_type_params,
     interleaved_memory_config,
@@ -83,6 +85,27 @@ def test_unsqueeze_to_4D_docstring_sharded_inputs(memory_layout, layout, device)
     x = full_range_input(shape, ttnn.bfloat16)
     input_tensor = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=sharded)
     _assert_unsqueeze_to_4D_view(input_tensor)
+
+
+@pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.unsqueeze_to_4D))
+@pytest.mark.parametrize("dtype, layout", docstring_blackhole_dtype_layout_params(ttnn.unsqueeze_to_4D))
+def test_unsqueeze_to_4D_docstring_blackhole_inputs(dtype, layout, buffer_type, device):
+    """Runs the dtypes the ttnn.unsqueeze_to_4D docstring lists for Blackhole, on each interleaved buffer type it
+    lists, with inputs of rank 0 to 4. Values are compared after a conversion to FLOAT32 on host, which holds every
+    FP8_E4M3 value."""
+    check_readable(dtype, layout, buffer_type)
+    if not is_blackhole():
+        pytest.skip("the docstring lists these dtypes for Blackhole")
+
+    def read(tensor):
+        return ttnn.to_torch(ttnn.to_dtype(tensor.cpu(), ttnn.float32))
+
+    memory_config = interleaved_memory_config(buffer_type)
+    torch.manual_seed(0)
+    for shape in ((), (64,), (50, 64), (3, 50, 64), (2, 3, 50, 64)):
+        x = torch.randn(shape) * 8
+        input_tensor = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
+        _assert_unsqueeze_to_4D_view(input_tensor, read)
 
 
 def test_unsqueeze_to_4D_rank_above_4(device, expect_error):
