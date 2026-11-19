@@ -454,6 +454,35 @@
   sp_config: sc1
 
 
+# TEMPORARY (with the kimi_k3_1 checkbox): the MoE block's own op tests - routed_experts_combine, the flat routed
+# expert, moe_tail, the block's padding / skew / loop goldens and smoke - selected by the kimi_k3 and glm_5_3 checkboxes.
+- name: "(MoE block) op tests: routed_experts_combine, flat routed expert, moe_tail, padding, skew, loops, smoke"
+  cmd: |
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=$(nproc)
+      U=tests/ttnn/unit_tests/operations/experimental/moe_block
+      M=models/demos/deepseek_v3_d_p/tests/moe_block
+      python3 -m pytest $U/routed_experts_combine/test_experts_combine_checks.py -k "8x4" -vvv --tb=short
+      python3 -m pytest $U/flat_routed_expert/test_flat_routed_expert_checks.py -vvv --tb=short
+      python3 -m pytest $U/moe_tail/test_moe_tail_checks.py -k "8x4" -vvv --tb=short
+      python3 -m pytest $M/test_moe_block_padding.py $M/test_moe_block_skew.py $M/test_moe_block_loops_golden.py $M/test_moe_block_smoke.py $M/test_moe_block_ffn_packing.py -vvv --tb=short
+    '
+  test_type: moe_block_ops
+  test_tags: [kimi_k3, glm_5_3, moe, moe_block_ops]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 45
+      tier: 2
+      release_ready: false
+  owner_id: U08RL15T4N8 # Danilo Djekic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
 - name: "(Kimi-K3-2.8T) MoE accuracy 5k"
   fabric_profile: torus_xy
   cmd: |
