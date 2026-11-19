@@ -29,11 +29,9 @@ passes only on exactly the predicted wrong tiles.
 import json
 import math
 import os
-import pathlib
 import re
 import subprocess
 import sys
-import time
 
 import pytest
 import torch
@@ -43,20 +41,9 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quas
     _add_goldens,
     _matches_none,
     _run,
+    bound_kernel_sources,
 )
 from tt_py_test_utils_common.utility_functions import is_quasar
-
-# Resolve the inspector output the way the runtime does: <logs_dir>/generated/inspector, where
-# logs_dir is TT_METAL_LOGS_PATH if set, else the root dir (TT_METAL_HOME, else cwd). See
-# tt_metal/llrt/rtoptions.cpp. A hardcoded absolute path would be the only one in this directory and
-# would silently miss the file under any relocated logs dir.
-_LOGS_ROOT = pathlib.Path(os.environ.get("TT_METAL_LOGS_PATH") or os.environ.get("TT_METAL_HOME") or os.getcwd())
-INSPECTOR_YAML = _LOGS_ROOT / "generated" / "inspector" / "kernels.yaml"
-
-# Wall-clock at module import. pytest imports every test module during collection, strictly before any
-# fixture runs, so kernels.yaml -- created when the `device` fixture opens the device -- is necessarily
-# newer than this. See bound_kernel_sources() for why that matters.
-_IMPORT_TIME = time.time()
 
 # The benchmark shape: 32x40 tiles = 1280 tiles, ~40/core on the Quasar simulator's 8x4 worker grid.
 # Matches _INTERLEAVED_SHAPE in test_binary_ng_no_bcast.py so cycle counts are comparable.
@@ -185,24 +172,6 @@ def _matches_prediction(got, goldens, expected_wrong, what):
     total = got.numel() // (32 * 32)
     assert wrong == expected_wrong, f"{what}: {wrong} of {total} tiles differ, the prediction is {expected_wrong}."
     return wrong > 0
-
-
-def bound_kernel_sources():
-    """Kernel `source:` lines from THIS process's inspector output.
-
-    Do NOT unlink kernels.yaml first: the inspector opens it once with std::ios::trunc at device
-    creation and holds the handle, and the `device` fixture runs before the test body -- so deleting the
-    path unlinks a live inode and it never reappears. Truncate-at-open is what makes the contents this
-    process's; the mtime assertion is what rejects a stale leftover, which for the fallback arm would
-    otherwise be a false green (a previous run's file holds exactly the kernels_dfb sources it asserts).
-    """
-    mtime = INSPECTOR_YAML.stat().st_mtime
-    assert mtime >= _IMPORT_TIME, (
-        f"{INSPECTOR_YAML} predates this process (mtime {mtime} < import {_IMPORT_TIME}); it is a stale "
-        "leftover, so it proves nothing about this run. Is the inspector disabled?"
-    )
-    text = INSPECTOR_YAML.read_text()
-    return [ln.split("source:", 1)[1].strip() for ln in text.splitlines() if "source:" in ln]
 
 
 def _run_benchmark_add(device):
@@ -868,7 +837,7 @@ _SHARD_ARM_SRC = """
 import collections, csv, json, os, pathlib, sys
 import torch, ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
-    _FPU_ADD_ROUNDINGS, _ULP, _matches_none)
+    _FPU_ADD_ROUNDINGS, _ULP, _matches_none, _truncate_to_bf16)
 
 SHARDS = json.loads(os.environ["ARM_SHARDS"])
 EXPECT = os.environ["ARM_EXPECT"]
@@ -890,12 +859,6 @@ def round_to_bf16(x):
     return x.to(torch.bfloat16)
 
 
-def truncate_to_bf16(x):
-    # Quasar's SFPU multiply drops the low 16 bits of the fp32 result today, where the Wormhole and Blackhole LLKs
-    # round to nearest even.
-    return (x.contiguous().view(torch.int32) & -65536).view(torch.float32).to(torch.bfloat16)
-
-
 # op -> (the op, its extra arguments, the kernel's bf16 results from the operands; an element is right when it matches
 # one). The FPU kernel adds and subtracts as _FPU_ADD_ROUNDINGS says, and multiplies with rounding to nearest even. The
 # SFPU kernel runs multiply out of fast mode, which truncates, and divide, which rounds to nearest even. It runs maximum
@@ -903,7 +866,7 @@ def truncate_to_bf16(x):
 OPS = {"add": (ttnn.experimental.quasar.add, {}, _FPU_ADD_ROUNDINGS),
        "subtract": (ttnn.experimental.quasar.subtract, {},
                     tuple(lambda a, b, rounding=rounding: rounding(a, -b) for rounding in _FPU_ADD_ROUNDINGS)),
-       "multiply": (ttnn.experimental.quasar.multiply, {}, (lambda a, b: truncate_to_bf16(torch.multiply(a, b)),)),
+       "multiply": (ttnn.experimental.quasar.multiply, {}, (lambda a, b: _truncate_to_bf16(torch.multiply(a, b)),)),
        "multiply_fast": (ttnn.experimental.quasar.multiply, {"fast_and_approximate_mode": True},
                          (lambda a, b: round_to_bf16(torch.multiply(a, b)),)),
        "divide": (ttnn.experimental.quasar.divide, {}, (lambda a, b: round_to_bf16(torch.divide(a, b)),)),
@@ -913,7 +876,7 @@ OPS = {"add": (ttnn.experimental.quasar.add, {}, _FPU_ADD_ROUNDINGS),
 
 def square(x):
     # SQUARE runs on the SFPU on both kernels, and truncates as the SFPU multiply does.
-    return truncate_to_bf16(x * x).float()
+    return _truncate_to_bf16(x * x).float()
 
 
 # act ->(the op's activation arguments, the output from the operands and one of the op's results). SQUARE

@@ -751,14 +751,17 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     // bf16 out, and bf16 in with an MX format out.
     const DataType out_dtype = out_spec.data_type();
     const bool mx_out = is_mx(out_dtype);
-    if (out_dtype != dtype && !(mx_in && out_dtype == DataType::BFLOAT16) && !(dtype == DataType::BFLOAT16 && mx_out)) {
+    const bool mx_to_bf16 = mx_in && out_dtype == DataType::BFLOAT16;
+    const bool bf16_to_mx = dtype == DataType::BFLOAT16 && mx_out;
+    if (out_dtype != dtype && !mx_to_bf16 && !bf16_to_mx) {
         return false;
     }
     // MX takes no scalar, no subtile broadcast and no activation: those paths are not validated with MX on Quasar. An
     // outer-dim broadcast only maps whole tiles, so it stays admitted.
-    if ((mx_in || mx_out) && (is_scalar || attributes.subtile_broadcast_type != SubtileBroadcastType::NONE ||
-                              !attributes.lhs_activations.empty() || !attributes.rhs_activations.empty() ||
-                              !attributes.post_activations.empty())) {
+    const bool has_subtile_broadcast = attributes.subtile_broadcast_type != SubtileBroadcastType::NONE;
+    const bool has_activation = !attributes.lhs_activations.empty() || !attributes.rhs_activations.empty() ||
+                                !attributes.post_activations.empty();
+    if ((mx_in || mx_out) && (is_scalar || has_subtile_broadcast || has_activation)) {
         return false;
     }
     // get_shard_volumes counts every operand's shard in the output's tiles, so those must be 32x32 too.

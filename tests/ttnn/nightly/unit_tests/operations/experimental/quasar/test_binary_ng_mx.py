@@ -17,9 +17,12 @@ and then compares the output with the oracle: 0 differing elements.
 - test_add_mx_placement: each MX tile size (1,056, 544 and 288 B) at each placement, with full batches.
 - test_add_mx_outer_broadcast: an outer-dim broadcast, which the native slice holds.
 - test_mx_program_cache: each op of a sequence of two (bfloat16 then MX, or two MX dtypes) builds its own program.
+- test_mx_partial_tiles: a logical shape that is not a whole number of tiles. The padding beside real values in an
+  MX block must not change them.
 - test_mx_special_codes: the special codes of tt-regen-spec 4.2 for every MX dtype, through the unpacker and through
   the packer.
-- test_mx_gate_refuses: the native gate refuses each MX case outside its slice, which then runs as before.
+- test_mx_gate_refuses: the native gate refuses each MX case outside its slice, which then raises an error or runs on
+  the deprecated Metal 2.0 factory.
 - test_mx_gate_refuses_by_mx_rule: the same for the cases that only the MX refusal itself sends away.
 
 Run on ttsim, the Quasar simulator. On Wormhole and Blackhole only
@@ -34,9 +37,11 @@ import torch
 
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar import binary_ng_mx_test_utils as mx
+from tests.ttnn.nightly.unit_tests.operations.experimental.quasar import mx_reference_codec as ref
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
     _fpu_add_bf16,
     _sfpu_multiply_bf16,
+    bound_kernel_sources,
 )
 from tt_py_test_utils_common.utility_functions import is_quasar
 
@@ -66,11 +71,11 @@ def test_add_mx_in_mx_out(device, dtype, shape):
     torch.manual_seed(0)
     ta, a = _mx_input(device, torch.randn(shape, dtype=torch.float32), dtype)
     tb, b = _mx_input(device, torch.randn(shape, dtype=torch.float32), dtype)
-    before = mx.kernel_sources()
+    before = bound_kernel_sources()
     tc = ttnn.experimental.quasar.add(ta, tb)
     mx.assert_native(before, "add")
 
-    assert tc.dtype == dtype
+    assert tc.dtype == dtype, f"output dtype {tc.dtype}, expected {dtype}"
     wrong = mx.mx_output_wrong(tc, _fpu_add_bf16(a, b))
     assert not wrong, f"{len(wrong)} elements differ from the oracle, first at {wrong[:8]}"
 
@@ -83,11 +88,11 @@ def test_add_bf16_in_mx_out(device, dtype, shape):
     torch.manual_seed(0)
     ta, a = _bf16_input(device, torch.randn(shape, dtype=torch.bfloat16))
     tb, b = _bf16_input(device, torch.randn(shape, dtype=torch.bfloat16))
-    before = mx.kernel_sources()
+    before = bound_kernel_sources()
     tc = ttnn.experimental.quasar.add(ta, tb, dtype=dtype)
     mx.assert_native(before, "add")
 
-    assert tc.dtype == dtype
+    assert tc.dtype == dtype, f"output dtype {tc.dtype}, expected {dtype}"
     wrong = mx.mx_output_wrong(tc, _fpu_add_bf16(a, b))
     assert not wrong, f"{len(wrong)} elements differ from the oracle, first at {wrong[:8]}"
 
@@ -99,11 +104,11 @@ def test_add_mx_in_bf16_out(device, dtype, shape):
     torch.manual_seed(0)
     ta, a = _mx_input(device, torch.randn(shape, dtype=torch.float32), dtype)
     tb, b = _mx_input(device, torch.randn(shape, dtype=torch.float32), dtype)
-    before = mx.kernel_sources()
+    before = bound_kernel_sources()
     tc = ttnn.experimental.quasar.add(ta, tb, dtype=ttnn.bfloat16)
     mx.assert_native(before, "add")
 
-    assert tc.dtype == ttnn.bfloat16
+    assert tc.dtype == ttnn.bfloat16, f"output dtype {tc.dtype}, expected bfloat16"
     wrong = mx.bf16_output_wrong(tc, _fpu_add_bf16(a, b))
     assert not wrong, f"{len(wrong)} elements differ from the oracle, first at {wrong[:8]}"
 
@@ -120,11 +125,11 @@ def test_multiply_mx_sfpu(device, direction):
     else:
         ta, a = _bf16_input(device, torch.randn(_SWEEP_SHAPE, dtype=torch.bfloat16))
         tb, b = _bf16_input(device, torch.randn(_SWEEP_SHAPE, dtype=torch.bfloat16))
-    before = mx.kernel_sources()
+    before = bound_kernel_sources()
     tc = ttnn.experimental.quasar.multiply(ta, tb, dtype=ttnn.mxint8)
     mx.assert_native(before, "multiply")
 
-    assert tc.dtype == ttnn.mxint8
+    assert tc.dtype == ttnn.mxint8, f"output dtype {tc.dtype}, expected mxint8"
     wrong = mx.mx_output_wrong(tc, _sfpu_multiply_bf16(a, b))
     assert not wrong, f"{len(wrong)} elements differ from the oracle, first at {wrong[:8]}"
 
@@ -183,11 +188,11 @@ def test_add_mx_placement(device, dtype, placement):
     torch.manual_seed(0)
     ta, a = _mx_input(device, torch.randn(shape, dtype=torch.float32), dtype, _MEMORY[a_mem](device))
     tb, b = _mx_input(device, torch.randn(shape, dtype=torch.float32), dtype, _MEMORY[b_mem](device))
-    before = mx.kernel_sources()
+    before = bound_kernel_sources()
     tc = ttnn.experimental.quasar.add(ta, tb, memory_config=_MEMORY[out_mem](device))
     mx.assert_native(before, f"add at {placement}")
 
-    assert tc.dtype == dtype
+    assert tc.dtype == dtype, f"output dtype {tc.dtype}, expected {dtype}"
     wrong = mx.mx_output_wrong(tc, _fpu_add_bf16(a, b))
     assert not wrong, f"{len(wrong)} elements differ from the oracle, first at {wrong[:8]}"
 
@@ -199,11 +204,11 @@ def test_add_mx_outer_broadcast(device):
     torch.manual_seed(0)
     ta, a = _mx_input(device, torch.randn((2, 2, 2 * 32, 2 * 32), dtype=torch.float32), ttnn.mxint8)
     tb, b = _mx_input(device, torch.randn((1, 2, 2 * 32, 2 * 32), dtype=torch.float32), ttnn.mxint8)
-    before = mx.kernel_sources()
+    before = bound_kernel_sources()
     tc = ttnn.experimental.quasar.add(ta, tb)
     mx.assert_native(before, "add with an outer broadcast")
 
-    assert tc.dtype == ttnn.mxint8 and tuple(tc.shape) == tuple(ta.shape)
+    assert tc.dtype == ttnn.mxint8 and tuple(tc.shape) == tuple(ta.shape), f"output {tc.dtype} {tuple(tc.shape)}"
     wrong = mx.mx_output_wrong(tc, _fpu_add_bf16(a, b.expand(a.shape)))
     assert not wrong, f"{len(wrong)} elements differ from the oracle, first at {wrong[:8]}"
 
@@ -212,7 +217,8 @@ def test_add_mx_outer_broadcast(device):
 _CACHE_SEQUENCES = {
     # The same bfloat16 inputs to bfloat16, then to mxint8: only the output dtype differs, so it must be in the key.
     "bf16_then_mxint8": ((ttnn.bfloat16, ttnn.bfloat16), (ttnn.bfloat16, ttnn.mxint8)),
-    # Two MX dtypes one after the other on one device (design risk 6: the ALU format state).
+    # Two MX dtypes one after the other on one device: the unpacker's and the packer's format state changes
+    # between them.
     "mxint8_then_mxfp4": ((ttnn.mxint8, ttnn.mxint8), (ttnn.mxfp4, ttnn.mxfp4)),
 }
 
@@ -233,15 +239,70 @@ def test_mx_program_cache(device, sequence):
             tb, b = _mx_input(device, y, in_dtype)
         what = f"add {step} ({in_dtype} to {out_dtype})"
         entries = device.num_program_cache_entries()
-        before = mx.kernel_sources()
+        before = bound_kernel_sources()
         tc = ttnn.experimental.quasar.add(ta, tb, dtype=out_dtype)
         assert device.num_program_cache_entries() == entries + 1, f"{what} did not build its own program"
         mx.assert_native(before, what)
 
-        assert tc.dtype == out_dtype
+        assert tc.dtype == out_dtype, f"{what}: output dtype {tc.dtype}"
         golden = _fpu_add_bf16(a, b)
         wrong = mx.bf16_output_wrong(tc, golden) if out_dtype == ttnn.bfloat16 else mx.mx_output_wrong(tc, golden)
         assert not wrong, f"{what}: {len(wrong)} elements differ from the oracle, first at {wrong[:8]}"
+
+
+# A logical shape that is not a whole number of tiles: (41, 50) pads to (64, 64), 4 tiles. The 2x16 MX blocks at
+# columns 48-63, and the blocks of rows 40 and 41, hold real values beside padding under one scale. The padding must not
+# change the real values, so the expected output is the logical result with its padding set to 0, encoded by 4.2. A
+# bfloat16 input pads with +0, and the divide gives NaN for +0 / +0 in the padding: 4.2 counts a NaN in a block scale
+# only when the whole block is NaN, and MXINT stores it as 0, so the real values beside it keep their scale.
+_PARTIAL_SHAPE = (41, 50)
+# case -> (the op, the input dtype, the kernel's bfloat16 model)
+_PARTIAL_CASES = {
+    "add_bf16_to_mx": (ttnn.experimental.quasar.add, ttnn.bfloat16, _fpu_add_bf16),
+    "add_mx_to_mx": (ttnn.experimental.quasar.add, ttnn.mxint8, _fpu_add_bf16),
+    "divide_bf16_to_mx": (
+        ttnn.experimental.quasar.divide,
+        ttnn.bfloat16,
+        lambda a, b: (a.float() / b.float()).to(torch.bfloat16),
+    ),
+}
+
+
+def _partial_input(device, x, dtype):
+    """(device tensor, bfloat16 values over its padded shape as the device holds them) of an operand whose logical
+    shape is not a whole number of tiles. A bfloat16 operand pads with 0; an MX operand's padding is what the host
+    codec writes, read from its bytes."""
+    host = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, pad_value=0.0)
+    padded = tuple(host.padded_shape)
+    if dtype == ttnn.bfloat16:
+        values = torch.zeros(padded, dtype=torch.bfloat16)
+        values[..., : x.shape[-2], : x.shape[-1]] = x.to(torch.bfloat16)
+    else:
+        values = mx.as_bf16(mx.decode(mx.host_bytes(host), dtype, padded))
+    return ttnn.to_device(host, device, memory_config=ttnn.DRAM_MEMORY_CONFIG), values
+
+
+@quasar_only
+@pytest.mark.parametrize("case", list(_PARTIAL_CASES))
+def test_mx_partial_tiles(device, case):
+    op, in_dtype, model = _PARTIAL_CASES[case]
+    torch.manual_seed(0)
+    ta, a = _partial_input(device, torch.randn(_PARTIAL_SHAPE, dtype=torch.float32), in_dtype)
+    tb, b = _partial_input(device, torch.randn(_PARTIAL_SHAPE, dtype=torch.float32), in_dtype)
+    before = bound_kernel_sources()
+    tc = op(ta, tb, dtype=ttnn.mxint8)
+    mx.assert_native(before, case)
+
+    assert tc.dtype == ttnn.mxint8 and tuple(tc.shape) == _PARTIAL_SHAPE, f"output {tc.dtype} {tuple(tc.shape)}"
+    h, w = _PARTIAL_SHAPE
+    padded = tuple(tc.padded_shape)
+    golden = model(a, b).float()
+    golden[..., h:, :] = 0
+    golden[..., :, w:] = 0
+    want = mx.decode(mx.encode(golden, ttnn.mxint8), ttnn.mxint8, padded)[..., :h, :w]
+    got = mx.decode(mx.device_bytes(tc), ttnn.mxint8, padded)[..., :h, :w]
+    wrong = mx.wrong_elements(got, want)
+    assert not wrong, f"{len(wrong)} of {h * w} real elements differ from the oracle, first at {wrong[:8]}"
 
 
 # The special codes of tt-regen-spec 4.2 for every MX dtype in both directions: each format has its own special
@@ -268,7 +329,8 @@ def _special_mx_tiles(dtype):
     """The bytes of one MX tile per scale of _DECODE_SCALES: element 32 b + i of a tile holds the code
     (32 b + i) mod 2^bits, and every block of tile t has the scale _DECODE_SCALES[t]."""
     codes = (torch.arange(32 * 32) % (1 << mx.element_bits(dtype))).reshape(32, 32)
-    return torch.cat([mx.pack_tile([scale] * 32, codes, dtype) for scale in _DECODE_SCALES])
+    fmt = mx.MX_FORMAT[dtype]
+    return torch.cat([ref.pack_tile(torch.full((32,), scale), codes, fmt) for scale in _DECODE_SCALES])
 
 
 def _bf16_step(x, step):
@@ -305,10 +367,10 @@ def _blocks_tile(blocks, generator):
     """One 32x32 bfloat16 tile: block b holds the values blocks[b], repeated to fill its 32 elements, so that they alone
     set its scale. The blocks after them hold random values."""
     tile = torch.randn((32, 32), generator=generator).to(torch.bfloat16)
+    rows, cols = ref.block_map()
     for b, values in enumerate(blocks):
-        rows, cols = mx.block_cells(b)
         filled = [values[i % len(values)] for i in range(32)]
-        tile[rows, cols] = torch.tensor(filled, dtype=torch.float32).to(torch.bfloat16)
+        tile[rows[b], cols[b]] = torch.tensor(filled, dtype=torch.float32).to(torch.bfloat16)
     return tile
 
 
@@ -341,7 +403,9 @@ def _digest(indices):
 _EXACT = (*_digest([]), [])
 
 # case -> (count, sha256 prefix) of the sorted flat indices where the device's values differ from 4.2, and the
-# [tile, block] of each scale byte that differs, as measured on ttsim v1.16.0. A case not here is exact.
+# [tile, block] of each scale byte that differs, as measured on ttsim v1.16.0. A case not here is exact. The suite
+# records a measured simulator or hardware difference here, as a strict expected failure that asserts the differing
+# set; none is measured today.
 _SPECIAL_WRONG = {}
 
 
@@ -367,7 +431,7 @@ def test_mx_special_codes(device, codes):
         ta, a = _bf16_input(device, x)
         tb, b = _bf16_input(device, torch.zeros_like(x))
         out_dtype = dtype
-    before = mx.kernel_sources()
+    before = bound_kernel_sources()
     tc = ttnn.experimental.quasar.add(ta, tb, dtype=out_dtype)
     mx.assert_native(before, f"add on {codes}")
 
@@ -406,7 +470,7 @@ def _add_bf16_to_mx(device, **kwargs):
 
 # refusal -> (the admitted control, the refused op, what the refused op does today). The control is the refused op
 # without the feature that the gate refuses, so the case shows that the feature, not MX, sends the op away. "throws":
-# no factory takes the op, so it raises. "falls back": the deprecated factory runs it, as before.
+# no factory takes the op, so it raises. "falls back": the deprecated Metal 2.0 factory runs it.
 _GATE_CASES = {
     "row_broadcast": (
         _add_mx,
@@ -449,16 +513,15 @@ _GATE_CASES = {
 _NO_FACTORY = "is not supported for a"
 
 
-@quasar_only
-@pytest.mark.parametrize("refusal", list(_GATE_CASES))
-def test_mx_gate_refuses(device, expect_error, refusal):
-    control, refused, today = _GATE_CASES[refusal]
+def _check_refusal(device, expect_error, refusal, control, refused, today):
+    """The control runs on the native factory, and the refused op does what `today` says: it raises, or it runs on
+    the deprecated Metal 2.0 factory."""
     torch.manual_seed(0)
-    before = mx.kernel_sources()
+    before = bound_kernel_sources()
     control(device)
     mx.assert_native(before, f"{refusal}: the control")
 
-    before = mx.kernel_sources()
+    before = bound_kernel_sources()
     if today == "throws":
         with expect_error(RuntimeError, _NO_FACTORY):
             refused(device)
@@ -467,6 +530,12 @@ def test_mx_gate_refuses(device, expect_error, refusal):
         refused(device)
         bound = mx.assert_not_native(before, refusal)
         assert [s for s in bound if "/kernels_dfb/" in s], f"{refusal}: did not fall back, it bound {bound}"
+
+
+@quasar_only
+@pytest.mark.parametrize("refusal", list(_GATE_CASES))
+def test_mx_gate_refuses(device, expect_error, refusal):
+    _check_refusal(device, expect_error, refusal, *_GATE_CASES[refusal])
 
 
 # refusal -> (the admitted control, the refused op, what the refused op does today), as in _GATE_CASES. Each refused op
@@ -498,21 +567,7 @@ _GATE_CASES_PAST_THE_SCALAR_FORMAT = {
 @quasar_only
 @pytest.mark.parametrize("refusal", list(_GATE_CASES_PAST_THE_SCALAR_FORMAT))
 def test_mx_gate_refuses_by_mx_rule(device, expect_error, refusal):
-    control, refused, today = _GATE_CASES_PAST_THE_SCALAR_FORMAT[refusal]
-    torch.manual_seed(0)
-    before = mx.kernel_sources()
-    control(device)
-    mx.assert_native(before, f"{refusal}: the control")
-
-    before = mx.kernel_sources()
-    if today == "throws":
-        with expect_error(RuntimeError, _NO_FACTORY):
-            refused(device)
-        mx.assert_not_native(before, refusal)
-    else:
-        refused(device)
-        bound = mx.assert_not_native(before, refusal)
-        assert [s for s in bound if "/kernels_dfb/" in s], f"{refusal}: did not fall back, it bound {bound}"
+    _check_refusal(device, expect_error, refusal, *_GATE_CASES_PAST_THE_SCALAR_FORMAT[refusal])
 
 
 @pytest.mark.skipif(is_quasar(), reason="checks the non-Quasar guard")

@@ -73,8 +73,9 @@ class _E(NamedTuple):
     ttnn: dict  # position ("S" or an element index) -> the rule by which the ttnn codec differs from 4.2
 
 
-# Each row is worked from the text of 4.2 and cross-checked with the RTL-checked port of ttsim's MX model. The rows
-# "g1" follow the text of 4.2 (one rounding in the element subnormal range); the port truncates first (design Q4).
+# Each row is worked from the text of 4.2 and cross-checked with ttsim's MX model, which is checked against the A0
+# RTL. The rows "g1" follow the text of 4.2 (one rounding in the element subnormal range), where ttsim's model
+# truncates first.
 # fmt: off
 _ENCODE_ROWS = (
     # mxint8: w = 7, an element is code / 64 times X = 2^(S - 127).
@@ -239,7 +240,7 @@ class _D(NamedTuple):
 
 
 # A zero code decodes to a zero of its sign ("the value times X"; in bfloat16 "the product is exact"). The +0 of
-# the bfloat16 flush applies to a nonzero product below 2^-126. The MXINT code -2^w is -0 (design Q3).
+# the bfloat16 flush applies to a nonzero product below 2^-126. The MXINT code -2^w is -0, as the RTL decodes it.
 # fmt: off
 _DECODE_ROWS = (
     _D("s127", "mxint8", 127, (0x40, 0x7F, 0x81, 0xFF, 0x01, 0x00, 0x80),
@@ -311,8 +312,9 @@ _DECODE_ROWS = (
 # fmt: on
 
 
-# The rules by which the ttnn host codec differs from 4.2, from the stage 0 comparison of the two: rule -> (the
-# number of elements that the rule predicts over the 8 dtypes, what differs). A, B, C: encode; D, Q3: decode.
+# The rules by which the ttnn host codec differs from 4.2, found by comparing the two codecs over every element
+# code: rule -> (the number of elements that the rule predicts over the 8 dtypes, what differs). A, B, C: encode;
+# D: decode.
 _KNOWN_DIFFERENCES = {
     "A4": (3, "MXINT, a block whose largest datum is a float32 denormal: ttnn S = 1 (log2f rounds), 4.2 S = 0"),
     "A6": (8, "Inf with denormals and no normal datum: ttnn S = 0, 4.2 S = 254"),
@@ -326,7 +328,7 @@ _KNOWN_DIFFERENCES = {
     "D2": (1318, "float32 decode below 2^-126: ttnn gives a denormal, 4.2 zero"),
     "D4": (1312, "S = 255: MXINT ttnn 0, 4.2 NaN; MX float with the sign bit ttnn +NaN, 4.2 -NaN"),
     "D6": (1227, "bfloat16 decode below 2^-126: ttnn gives a denormal or -0, 4.2 +0"),
-    "Q3": (176, "the MXINT code -2^w: ttnn -2 X, 4.2 -0 (the hardware's reading, design Q3)"),
+    "D7": (176, "the MXINT code -2^w: ttnn -2 X, 4.2 -0 (as the RTL decodes it)"),
 }
 _ENCODE_RULES = ("A4", "A6", "A7", "B1", "B3", "B7", "C3", "C4", "C6")
 
@@ -339,7 +341,7 @@ def _f32(bits):
 
 def _code_values(fmt):
     """float64 [2^bits]: the value of each element code before the scale. A NaN code gives NaN, an Inf code Inf,
-    a negative zero code -0. The MXINT code -2^w is -0: the hardware's reading (design Q3)."""
+    a negative zero code -0. The MXINT code -2^w is -0, as the RTL decodes it."""
     f = _FORMATS[fmt]
     out = []
     for c in range(1 << f.bits):
@@ -537,7 +539,10 @@ def _encode_comparison(fmt):
     blocks = torch.cat([sweep, _row_blocks(rows)])
     ref_scales, ref_codes = ref.encode_block(blocks, fmt)
     tt_scales, tt_codes = _ttnn_encode(blocks, fmt)
-    assert tuple(ref_scales.shape) == tuple(tt_scales.shape) and tuple(ref_codes.shape) == tuple(tt_codes.shape)
+    assert tuple(ref_scales.shape) == tuple(tt_scales.shape) and tuple(ref_codes.shape) == tuple(tt_codes.shape), (
+        f"{fmt}: reference {tuple(ref_scales.shape)} {tuple(ref_codes.shape)}, "
+        f"ttnn {tuple(tt_scales.shape)} {tuple(tt_codes.shape)}"
+    )
     measured = {(b, -1) for b in torch.nonzero(ref_scales.long() != tt_scales).flatten().tolist()}
     measured |= {(b, i) for b, i in torch.nonzero(ref_codes.long() != tt_codes).tolist()}
     return _predict_encode(fmt, sweep, rows), measured
@@ -556,7 +561,7 @@ def _predict_decode(fmt, scales, codes):
     - D2: float32, 0 < |value * X| < 2^-126 (ttnn a denormal, 4.2 zero);
     - D6: bfloat16, the same elements except 0 < value * X <= 2^-134, which ttnn rounds to +0 as 4.2 flushes;
     - D4: S = 255, both outputs: MXINT every code; MX float a code with the sign bit;
-    - Q3: below S = 255, both outputs: the MXINT code -2^w."""
+    - D7: below S = 255, both outputs: the MXINT code -2^w."""
     f = _FORMATS[fmt]
     v = _code_values(fmt)[codes]
     x = v * torch.pow(2.0, scales.double() - 127).unsqueeze(1)
@@ -564,13 +569,13 @@ def _predict_decode(fmt, scales, codes):
     tiny = torch.isfinite(x) & (x != 0) & (x.abs() < 2.0**-126) & ~s255
     flush_matches = tiny & (x > 0) & (x <= 2.0**-134)
     if f.kind == "int":
-        d4, q3 = s255, (codes == 1 << f.man_bits) & ~s255
+        d4, d7 = s255, (codes == 1 << f.man_bits) & ~s255
     else:
-        d4, q3 = s255 & _code_negative(fmt)[codes], torch.zeros_like(s255)
+        d4, d7 = s255 & _code_negative(fmt)[codes], torch.zeros_like(s255)
     predicted = {}
     for out, rule, mask in (("f32", "D2", tiny), ("bf16", "D6", tiny & ~flush_matches)):
         predicted |= {(out, b, i): rule for b, i in torch.nonzero(mask).tolist()}
-    for rule, mask in (("D4", d4), ("Q3", q3)):
+    for rule, mask in (("D4", d4), ("D7", d7)):
         for out in ("f32", "bf16"):
             predicted |= {(out, b, i): rule for b, i in torch.nonzero(mask).tolist()}
     return predicted
@@ -609,7 +614,7 @@ def _matches(got, want, width):
 def _patch_tile(fmt):
     """A 32x32 tile whose block b has its own scale S = 100 + b, and exact element values: (tile, scales, codes).
     Element 0 of each block is the anchor (MXINT 1.0, MX float 2^emax) that sets S; the others cycle through the
-    finite codes (the MXINT code -2^w left out, design Q3)."""
+    finite codes (the MXINT code -2^w left out: it decodes to -0, so an encode cannot give it back)."""
     f = _FORMATS[fmt]
     v = _code_values(fmt)
     anchor = int(torch.nonzero(v == (1.0 if f.kind == "int" else 2.0**f.emax))[0])
@@ -622,7 +627,7 @@ def _patch_tile(fmt):
 
 @pytest.mark.parametrize("fmt", _ALL)
 def test_encode_rules(fmt):
-    """S0-C1: the reference encodes each hand-worked block to the scale byte and codes of 4.2."""
+    """The reference encodes each hand-worked block to the scale byte and codes of 4.2."""
     rows = [r for r in _ENCODE_ROWS if r.fmt == fmt]
     scales, codes = ref.encode_block(_row_blocks(rows), fmt)
     bad = []
@@ -637,7 +642,7 @@ def test_encode_rules(fmt):
 
 @pytest.mark.parametrize("fmt", _ALL)
 def test_decode_rules(fmt):
-    """S0-C2: the reference decodes each hand-worked block to the float32 and bfloat16 values of 4.2."""
+    """The reference decodes each hand-worked block to the float32 and bfloat16 values of 4.2."""
     rows = [r for r in _DECODE_ROWS if r.fmt == fmt]
     scales = torch.tensor([r.scale for r in rows])
     codes = torch.zeros(len(rows), 32, dtype=torch.int64)
@@ -659,7 +664,7 @@ def test_decode_rules(fmt):
 
 @pytest.mark.parametrize("fmt", _ALL)
 def test_block_shape(fmt):
-    """S0-C3: a block is a 2x16 patch of one face, and the tile holds its 32 scale bytes first."""
+    """A block is a 2x16 patch of one face, and the tile holds its 32 scale bytes first."""
     tile, scales, codes = _patch_tile(fmt)
     want = _pack_tiles(scales, codes, fmt)
     assert_equal(want, ref.encode_tile(tile, fmt))
@@ -678,7 +683,7 @@ def test_block_shape(fmt):
 
 @pytest.mark.parametrize("fmt", _ALL)
 def test_agree_encode(fmt):
-    """S0-C4, encode: the reference and the ttnn codec differ only where a rule of _KNOWN_DIFFERENCES predicts."""
+    """Encode: the reference and the ttnn codec differ only where a rule of _KNOWN_DIFFERENCES predicts."""
     predicted, measured = _encode_comparison(fmt)
     unexpected = sorted(measured - predicted.keys())
     assert not unexpected, (
@@ -689,7 +694,7 @@ def test_agree_encode(fmt):
 
 @pytest.mark.parametrize("fmt", _ALL)
 def test_agree_decode(fmt):
-    """S0-C4, decode: the reference and the ttnn codec differ only where a rule of _KNOWN_DIFFERENCES predicts."""
+    """Decode: the reference and the ttnn codec differ only where a rule of _KNOWN_DIFFERENCES predicts."""
     predicted, measured = _decode_comparison(fmt)
     unexpected = sorted(measured - predicted.keys())
     assert not unexpected, (
@@ -705,11 +710,11 @@ class _WrongAsPredicted(AssertionError):
 @pytest.mark.xfail(
     raises=_WrongAsPredicted,
     strict=True,
-    reason="design Q1: the ttnn host MX codec differs from tt-regen-spec 4.2 by this rule",
+    reason="the ttnn host MX codec differs from tt-regen-spec 4.2 by this rule; the reference codec is the golden",
 )
 @pytest.mark.parametrize("rule", tuple(_KNOWN_DIFFERENCES))
 def test_ttnn_codec_differs(rule):
-    """S0-C4, the predicted differences: the codecs differ on each element that the rule predicts. A set that
+    """The predicted differences: the codecs differ on each element that the rule predicts. A set that
     shrinks (a fixed or a moved difference) fails; test_agree_* fail on a difference that no rule predicts."""
     count, what = _KNOWN_DIFFERENCES[rule]
     compare = _encode_comparison if rule in _ENCODE_RULES else _decode_comparison

@@ -4,9 +4,10 @@
 
 """Reference MX codec: the oracle of the Quasar MX tests. Host only.
 
-The truth is tt-regen-spec section 4.2 (format conversions, checked on the Quasar A0 RTL) and 4.3 (the MX block),
-then the Tensix Formats spec, then the OCP MX spec. The codec uses torch integer operations on float32 bit patterns.
-It imports neither ttnn nor any file under tt_metal/, so it shares no code with the ttnn host codec.
+The truth is tt-regen-spec, `ttnn/specs/ttnn.md` at commit f3b10055 (2026-11-13): section 4.2 (format conversions,
+checked on the Quasar A0 RTL) and 4.3 (the MX block). Then the Tensix Formats spec, then the OCP MX spec. The codec
+uses torch integer operations on float32 bit patterns. It imports neither ttnn nor any file under tt_metal/, so it
+shares no code with the ttnn host codec.
 
 Its host test is test_mx_reference_codec.py in this directory. A codec without that test is not an oracle.
 
@@ -265,7 +266,7 @@ def to_bfloat16(scales: torch.Tensor, codes: torch.Tensor, fmt: str) -> torch.Te
     return torch.where(high >= 1 << 15, high - (1 << 16), high).to(torch.int16).view(torch.bfloat16)
 
 
-def _block_map():
+def block_map():
     """(rows, cols) int64 [32, 32]: element i of block b of a 32x32 tile sits at (rows[b, i], cols[b, i]).
 
     4.3: a block is two consecutive rows of one 16x16 face. The faces are in row-major order. Block b is face b // 8,
@@ -286,23 +287,36 @@ def _element_slots(f):
     return bit // 8, bit % 8
 
 
+def pack_tile(scales: torch.Tensor, codes: torch.Tensor, fmt: str) -> torch.Tensor:
+    """The bytes of one MX tile by 4.3: its 32 scale bytes first, then element 32 b + i of codes [32 blocks, 32
+    elements] in its storage width. A 6-bit code sits in bits 7..2 of its byte."""
+    f = _format(fmt)
+    scales = torch.as_tensor(scales).reshape(-1).long()
+    codes = torch.as_tensor(codes).reshape(-1).long()
+    if scales.numel() != _BLOCK or codes.numel() != _BLOCK * _BLOCK:
+        raise ValueError(
+            f"mx_reference_codec: a tile has 32 scales and 1,024 codes, not {scales.numel()} and {codes.numel()}"
+        )
+    if bool(((scales < 0) | (scales > 255)).any()) or bool(((codes < 0) | (codes >= 1 << f.element_bits)).any()):
+        raise ValueError(f"mx_reference_codec: a scale is not a byte or a code is not {f.element_bits} bits")
+    units = codes << (f.storage_bits - f.element_bits)
+    byte, shift = _element_slots(f)
+    data = torch.zeros(_BLOCK * _BLOCK * f.storage_bits // 8, dtype=torch.int64)
+    data.index_add_(0, byte, units << shift)
+    return torch.cat([scales, data]).to(torch.uint8)
+
+
 def encode_tile(tile: torch.Tensor, fmt: str) -> torch.Tensor:
     """Encode one 32x32 tile by 4.2 and 4.3: the 32 scale bytes first, then the elements in their storage width.
 
     tile: float32 [32, 32]. Returns uint8 [tile bytes] (1,056 B for an 8-bit slot, 544 B for 4 bits, 288 B for 2).
     The conversion is encode_block's: the tile functions add the layout only.
     """
-    f = _format(fmt)
     if tuple(tile.shape) != (_BLOCK, _BLOCK):
         raise ValueError(f"mx_reference_codec: a tile is [32, 32], not {tuple(tile.shape)}")
-    rows, cols = _block_map()
+    rows, cols = block_map()
     scales, codes = encode_block(tile[rows, cols], fmt)
-    # A 6-bit code sits in bits 7..2 of its byte.
-    units = codes.reshape(-1).long() << (f.storage_bits - f.element_bits)
-    byte, shift = _element_slots(f)
-    data = torch.zeros(_BLOCK * _BLOCK * f.storage_bits // 8, dtype=torch.int64)
-    data.index_add_(0, byte, units << shift)
-    return torch.cat([scales.long(), data]).to(torch.uint8)
+    return pack_tile(scales, codes, fmt)
 
 
 def decode_tile(raw: torch.Tensor, fmt: str) -> torch.Tensor:
@@ -318,7 +332,7 @@ def decode_tile(raw: torch.Tensor, fmt: str) -> torch.Tensor:
     byte, shift = _element_slots(f)
     units = (raw[_BLOCK + byte] >> shift) & ((1 << f.storage_bits) - 1)
     codes = (units >> (f.storage_bits - f.element_bits)).reshape(_BLOCK, _BLOCK)
-    rows, cols = _block_map()
+    rows, cols = block_map()
     out = torch.zeros(_BLOCK, _BLOCK, dtype=torch.float32)
     out[rows, cols] = decode_block(raw[:_BLOCK], codes, fmt)
     return out

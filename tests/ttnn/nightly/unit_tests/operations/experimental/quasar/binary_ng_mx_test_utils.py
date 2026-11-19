@@ -14,23 +14,24 @@ The oracle has three parts. Each part starts from the bytes that the device hold
 3. For an MX output, the reference encoder packs the result (4.2 is the packer's rule). The reference decoder then
    reads the expected bytes and the device's bytes. For a bfloat16 output, the test compares the values.
 
-No golden goes through the ttnn MX codec. ttnn.from_torch may build an MX input, and the test then reads its bytes.
-ttnn.to_torch never reads an MX tensor here. The comparison is exact: 0 differing elements. As production's
-allow_nonfinite does, a NaN matches a NaN of any sign and payload, and an Inf matches an Inf of its own sign. The
-sign of a zero does not count.
+The directory's mx_test_utils.py compares through the ttnn MX codec with PCC floors; this oracle cannot, because
+that codec is itself under test. No golden goes through the ttnn MX codec. ttnn.from_torch may build an MX input,
+and the test then reads its bytes. ttnn.to_torch never reads an MX tensor here. The comparison is exact: 0
+differing elements. As production's allow_nonfinite does, a NaN matches a NaN of any sign and payload, and an Inf
+matches an Inf of its own sign. The sign of a zero does not count.
 
 A tensor here has any rank. Its last two dims are whole tiles, and its tiles lie in row-major tile order over the
-rows of all the outer dims, as in a 2D tensor of (all rows, columns).
+rows of all the outer dims, as in a 2D tensor of (all rows, columns). decode and encode take a padded shape, so a
+tensor of another logical shape goes through them by its padded shape; the tensor-level helpers need whole tiles.
 """
-
-import os
-import pathlib
-import time
 
 import torch
 
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar import mx_reference_codec as ref
+from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
+    bound_kernel_sources,
+)
 from tt_py_test_utils_common.utils_for_testing import ulp_distance
 
 # The reference codec's name of each ttnn MX dtype.
@@ -182,47 +183,10 @@ def bf16_output_wrong(t, golden):
     return wrong_elements(ttnn.to_torch(t), golden)
 
 
-def block_cells(b):
-    """(rows, cols) of the 32 elements of MX block b in a 32x32 tile. 4.3: a block is two consecutive rows of one
-    16x16 face, and the faces are in row-major order."""
-    face, pair = divmod(b, 8)
-    rows = [16 * (face // 2) + 2 * pair + i // 16 for i in range(32)]
-    cols = [16 * (face % 2) + i % 16 for i in range(32)]
-    return rows, cols
-
-
-def pack_tile(scales, codes, dtype):
-    """The bytes of one MX tile from its 32 scale bytes and its codes [32 blocks, 32 elements]. 4.3: the scale bytes
-    come first. Element 32 b + i follows in its storage width, from the low bits of each byte up. A 6-bit code sits in
-    the high bits of its 8-bit slot."""
-    f = ref.FORMATS[MX_FORMAT[dtype]]
-    out = torch.zeros(tile_bytes(dtype), dtype=torch.int64)
-    out[:_BLOCKS] = torch.as_tensor(scales, dtype=torch.int64)
-    for k, code in enumerate(torch.as_tensor(codes).flatten().tolist()):
-        unit = code << (f.storage_bits - f.element_bits)
-        bit = k * f.storage_bits
-        out[_BLOCKS + bit // 8] |= unit << (bit % 8)
-    return out.to(torch.uint8)
-
-
-# The inspector's kernels.yaml, where the runtime resolves it: <logs dir>/generated/inspector, with the logs dir
-# TT_METAL_LOGS_PATH if set, else TT_METAL_HOME, else the working directory (as test_binary_ng_quasar_native.py does).
-_LOGS_ROOT = pathlib.Path(os.environ.get("TT_METAL_LOGS_PATH") or os.environ.get("TT_METAL_HOME") or os.getcwd())
-_KERNELS_YAML = _LOGS_ROOT / "generated" / "inspector" / "kernels.yaml"
-# pytest imports this module at collection, before any device opens. So a kernels.yaml of this process is newer.
-_IMPORT_TIME = time.time()
-
-
-def kernel_sources():
-    """The kernel sources that this process bound, in the order of kernels.yaml. The file grows as ops build
-    programs, so the sources after a recorded length are those of the ops that ran since."""
-    mtime = _KERNELS_YAML.stat().st_mtime
-    assert mtime >= _IMPORT_TIME, f"{_KERNELS_YAML} predates this process: a stale file proves nothing"
-    return [ln.split("source:", 1)[1].strip() for ln in _KERNELS_YAML.read_text().splitlines() if "source:" in ln]
-
-
 def _binary_ng_since(before):
-    return [s for s in kernel_sources()[len(before) :] if "/binary_ng/device/kernels" in s]
+    """The binary_ng kernel sources bound since `before`, a list of bound_kernel_sources(). kernels.yaml grows as ops
+    build programs, so the sources after a recorded length are those of the ops that ran since."""
+    return [s for s in bound_kernel_sources()[len(before) :] if "/binary_ng/device/kernels" in s]
 
 
 def assert_native(before, what):
