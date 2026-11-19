@@ -227,7 +227,8 @@ void record_to_command_list(
     std::string_view operation_name,
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     tt::tt_metal::distributed::MeshWorkload& workload,
-    std::span<const CmdListProgramBindings> programs) {
+    std::span<const CmdListProgramBindings> programs,
+    std::span<const std::shared_ptr<const std::vector<tt::tt_metal::MeshTensor>>> op_owned_tensors) {
     auto* builder = t_recording;
     TT_FATAL(builder != nullptr, "{}: no CommandListBuilder is recording on this thread", operation_name);
     TT_FATAL(
@@ -235,7 +236,7 @@ void record_to_command_list(
         "{} runs on a different MeshDevice than the recording CommandListBuilder",
         operation_name);
     try {
-        builder->record(ttnn::get_current_command_queue_id_for_thread(), workload, programs);
+        builder->record(ttnn::get_current_command_queue_id_for_thread(), workload, programs, op_owned_tensors);
     } catch (const std::exception& e) {
         TT_THROW("{} cannot be recorded into a command list: {}", operation_name, e.what());
     }
@@ -488,19 +489,21 @@ ScopeGuard CommandListBuilder::record_scope() {
 CommandList CommandListBuilder::build(std::optional<QueueId> cq_id) const {
     ZoneScoped;
     const QueueId queue = cq_id.value_or(get_current_command_queue_id_for_thread());
-    return CommandList(metal_builder_.build(device().mesh_command_queue(queue.get())), layout_);
+    return CommandList(metal_builder_.build(device().mesh_command_queue(queue.get())), layout_, op_owned_tensors_);
 }
 
 void CommandListBuilder::clear() {
     TT_FATAL(!recording_, "Cannot clear a recording CommandListBuilder");
     metal_builder_.clear();
     layout_.clear();
+    op_owned_tensors_.clear();
 }
 
 void CommandListBuilder::deallocate() {
     TT_FATAL(!recording_, "Cannot deallocate a recording CommandListBuilder");
     metal_builder_.deallocate();
     layout_.clear();
+    op_owned_tensors_.clear();
 }
 
 tt::tt_metal::distributed::MeshDevice& CommandListBuilder::device() const { return metal_builder_.device(); }
@@ -508,7 +511,8 @@ tt::tt_metal::distributed::MeshDevice& CommandListBuilder::device() const { retu
 void CommandListBuilder::record(
     QueueId binary_upload_cq_id,
     tt::tt_metal::distributed::MeshWorkload& workload,
-    std::span<const device_operation::detail::CmdListProgramBindings> programs) {
+    std::span<const device_operation::detail::CmdListProgramBindings> programs,
+    std::span<const std::shared_ptr<const std::vector<tt::tt_metal::MeshTensor>>> op_owned_tensors) {
     detail::RecordedParameters parameters;
     std::vector<ActiveBind*> matched;
     for (const auto& program : programs) {
@@ -552,6 +556,7 @@ void CommandListBuilder::record(
     }
     metal_builder_.add(device().mesh_command_queue(binary_upload_cq_id.get()), workload, metal_parameters);
     layout_ = std::move(layout);
+    op_owned_tensors_.insert(op_owned_tensors_.end(), op_owned_tensors.begin(), op_owned_tensors.end());
     for (ActiveBind* active : matched) {
         active->claimed = true;
     }
@@ -600,8 +605,9 @@ void CommandListBuilder::pop_binds(bool warn) {
 
 bool CommandListBuilder::has_binds() const { return !binds_.empty(); }
 
-CommandList::CommandList(metal::CommandList metal_list, detail::CmdListLayout layout) :
-    metal_list_(std::move(metal_list)), layout_(std::move(layout)) {}
+CommandList::CommandList(
+    metal::CommandList metal_list, detail::CmdListLayout layout, detail::CmdListOpOwnedTensors op_owned_tensors) :
+    metal_list_(std::move(metal_list)), layout_(std::move(layout)), op_owned_tensors_(std::move(op_owned_tensors)) {}
 
 void CommandList::enqueue(bool blocking, bool check_dram_overlap) {
     ZoneScoped;
@@ -638,7 +644,10 @@ void CommandList::update_args(const std::unordered_map<std::string, CmdListValue
     metal_list_.update_args(patch, blocking);
 }
 
-void CommandList::deallocate() { metal_list_.deallocate(); }
+void CommandList::deallocate() {
+    metal_list_.deallocate();
+    op_owned_tensors_.clear();
+}
 
 tt::tt_metal::distributed::MeshDevice& CommandList::device() const { return metal_list_.device(); }
 

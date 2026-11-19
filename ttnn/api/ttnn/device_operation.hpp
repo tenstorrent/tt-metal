@@ -4,8 +4,10 @@
 
 #pragma once
 
+#include <algorithm>
 #include <concepts>
 #include <exception>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -204,8 +206,9 @@ inline void log_operation(
 
 #endif
 
-// Records `workload` into the calling thread's TTNN CommandListBuilder. With binds pushed and a spec-adapter
-// workload, first collects each program's stored CmdListBindings and the tensors this call binds.
+// Records `workload` into the calling thread's TTNN CommandListBuilder, with the op-owned tensors of a spec-adapter
+// workload. With binds pushed and a spec-adapter workload, first collects each program's stored CmdListBindings and
+// the tensors this call binds.
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 [[gnu::noinline]] void record_mesh_workload(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
@@ -215,8 +218,18 @@ template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
     tt::tt_metal::distributed::MeshWorkload& workload,
     const typename mesh_device_operation_t::SpecSharedVariablesMap* spec_shared_variables) {
     const auto operation_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
+    std::vector<std::shared_ptr<const std::vector<tt::tt_metal::MeshTensor>>> op_owned_tensors;
+    if (spec_shared_variables != nullptr) {
+        for (const auto& [_, sv] : *spec_shared_variables) {
+            if (sv.op_owned_tensors && !sv.op_owned_tensors->empty() &&
+                std::find(op_owned_tensors.begin(), op_owned_tensors.end(), sv.op_owned_tensors) ==
+                    op_owned_tensors.end()) {
+                op_owned_tensors.push_back(sv.op_owned_tensors);
+            }
+        }
+    }
     if (spec_shared_variables == nullptr || !has_active_cmd_list_binds()) {
-        record_to_command_list(operation_name, mesh_device, workload);
+        record_to_command_list(operation_name, mesh_device, workload, {}, op_owned_tensors);
         return;
     }
     const auto io_mesh_tensors =
@@ -236,7 +249,7 @@ template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
                     sv, io_mesh_tensors, binding.tensor_idx));
         }
     }
-    record_to_command_list(operation_name, mesh_device, workload, programs);
+    record_to_command_list(operation_name, mesh_device, workload, programs, op_owned_tensors);
 }
 
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>

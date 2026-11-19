@@ -136,9 +136,10 @@ void py_module_types(nb::module_& mod) {
     nb::class_<CommandList>(mod, "CommandList", R"doc(
         A replayable command list in device DRAM, bound to the command queue it was built for (experimental).
 
-        Lists record raw device addresses, not tensors. Replay reads and writes those addresses whether or not the
-        tensors are still allocated; what lives there is the caller's responsibility. Released when garbage collected
-        or by ``deallocate()``.
+        Lists record raw device addresses, not tensors. Replay reads and writes the addresses of the tensors passed to
+        the recorded ops whether or not those tensors are still allocated; what lives there is the caller's
+        responsibility. Tensors a recorded op allocated for itself are kept alive by the list. Released when garbage
+        collected or by ``deallocate()``.
     )doc")
         .def(
             "enqueue",
