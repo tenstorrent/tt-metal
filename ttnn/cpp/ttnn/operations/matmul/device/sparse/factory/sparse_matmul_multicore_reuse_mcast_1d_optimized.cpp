@@ -599,11 +599,21 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     // factory. The two triples happen to coincide with the writer and reader defaults respectively,
     // but the arch-parameterised noc expressions are kept so the values cannot drift from the legacy
     // ones if a future arch changes the preferred NOCs.
+    // config_2xx applies on Quasar only. The in0 and in1 kernels manage DFB credits explicitly
+    // (reserve_back/push_back on the data movement side, pop on the compute side). With implicit sync
+    // left on, the firmware flush at kernel exit (dfb_dm0_flush_side) credits each tile counter with the
+    // tiles that implicit sync has not credited. The explicit calls have already counted those tiles, so
+    // the counter then holds more tiles than the DFB. So every bound DFB opts out of implicit sync, as in
+    // the dense matmul factories.
     const auto in0_hw_config = DataMovementHardwareConfig{
         .config_1xx =
             DataMovementHardwareConfig::DataMovement1XXConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = in0_noc,
+            },
+        .config_2xx =
+            DataMovementHardwareConfig::DataMovement2XXConfig{
+                .disable_dfb_implicit_sync_for_all = true,
             },
     };
     const auto in1_hw_config = DataMovementHardwareConfig{
@@ -611,6 +621,10 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
             DataMovementHardwareConfig::DataMovement1XXConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = in1_noc,
+            },
+        .config_2xx =
+            DataMovementHardwareConfig::DataMovement2XXConfig{
+                .disable_dfb_implicit_sync_for_all = true,
             },
     };
 

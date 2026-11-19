@@ -12,14 +12,14 @@ a single JSON report with per-check PASS/WARN/FAIL/SKIP status grouped by IP.
 export TT_METAL_HOME=/path/to/tt-metal
 cd $TT_METAL_HOME
 
-# Full light tier (snapshot + tt-smi -r + eth_link_up gtest, ~75s)
-./tools/scaleout/exabox/health_check_test_suite/run_diag.sh light
+# Daily tier (2 resets + GDDR fast + eth link_up/bandwidth + triage + QSFP tests)
+./tools/scaleout/exabox/health_check_test_suite/run_diag.sh daily
 
 # Snapshot-only smoke (fastest iteration)
-./tools/scaleout/exabox/health_check_test_suite/run_diag.sh light --skip-reset --skip-tests
+./tools/scaleout/exabox/health_check_test_suite/run_diag.sh daily --skip-reset --skip-tests --skip-triage --skip-qsfp-tests
 
 # Offline / dev iteration against a stored snapshot
-./tools/scaleout/exabox/health_check_test_suite/run_diag.sh light --dry-run \
+./tools/scaleout/exabox/health_check_test_suite/run_diag.sh daily --dry-run \
     --input-snapshot snap.json --output /tmp/diag_report.json
 ```
 
@@ -32,26 +32,26 @@ the scheduled fleet run uses), so a host needs no build, and keeps the report,
 the per-step logs and the console transcript on the host:
 
 ```bash
-# Medium tier into ./test_output_<date>-<time>/
+# Daily tier into ./test_output_<date>-<time>/
 ./tools/scaleout/exabox/health_check_test_suite/run_diag_docker.sh
 
-# Deploy tier with the QSFP phase, results in a named directory
-./tools/scaleout/exabox/health_check_test_suite/run_diag_docker.sh deploy \
+# Weekly tier with the QSFP phase, results in a named directory
+./tools/scaleout/exabox/health_check_test_suite/run_diag_docker.sh weekly \
     --output-dir /data/hc-run-1 --gh-token "$GH_TOKEN"
 
 # Data collection before a BMC reboot, with the sys-triage bundle
 BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
-    ./tools/scaleout/exabox/health_check_test_suite/run_diag_docker.sh pre_reboot
+    ./tools/scaleout/exabox/health_check_test_suite/run_diag_docker.sh pre_bmc_reboot
 ```
 
-- The tier defaults to `medium`; `--image` defaults to `exabox-tools:latest`,
+- The tier defaults to `daily`; `--image` defaults to `exabox-tools:latest`,
   which is re-pulled on every run.
 - `--gh-token` (default `$GH_TOKEN`) installs `tt-syseng-diag` from its private
   release (`tenstorrent/tt-syseng-diag-packages`, `--diag-pkg-version`, default
   `0.0.4`). Without it the QSFP and sys-triage phases report SKIP; every other
   check still runs.
 - `--bmc-ip` / `--bmc-user` / `--bmc-password` (default `$BMC_*`) feed the
-  sys-triage phase, `pre_reboot` only.
+  sys-triage phase, `full`, `pre_bmc_reboot` and `post_bmc_reboot` only.
 - `--bmc-api-url` / `--bmc-api-token` (default `$TT_BMC_API_URL` /
   `$TT_BMC_API_TOKEN`) feed the QSFP collector on every tier; without them it
   reads the FRU with ipmitool and collects no QSFP cages.
@@ -68,13 +68,20 @@ BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
 
 | Tier | Resets | Tests | Triage | QSFP tests | sys-triage | Duration | Use when |
 |---|---|---|---|---|---|---|---|
-| `light`  | `tt-smi -r` × 1                            | eth_link_up                                                                | — | — | — | ~75 s   | Smoke check on every new unit |
-| `medium` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | host_side + device_side | yes, if installed | — | ~5 min + triage + ~7 min | Pre-deployment validation |
-| `deploy` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, ~9 min) | host_side + device_side | yes, if installed | — | ~18 min + triage + ~7 min | Final deploy gate |
-| `pre_reboot` | none | — | host_side + device_side | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data before a BMC reboot |
+| `daily` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | host_side + device_side | yes, if installed | — | ~5 min + triage + ~7 min | The scheduled fleet run |
+| `weekly` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, ~9 min) | host_side + device_side | yes, if installed | — | ~18 min + triage + ~7 min | Every test, less often |
+| `full` | as `weekly` | as `weekly` | host_side + device_side | yes, if installed | yes, if installed and BMC credentials set | `weekly` + sys-triage | A unit with an issue: everything, for the logs on its DIIM ticket |
+| `pre_bmc_reboot` | none | — | host_side + device_side | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data before a BMC reboot |
+| `post_bmc_reboot` | none | — | host_side + device_side | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data after a BMC reboot; for now the same as `pre_bmc_reboot` |
 
-The [sys-triage phase](#sys-triage-phase) runs last on `pre_reboot` only; it
-collects a bundle for the ticket and never gates the run.
+The [sys-triage phase](#sys-triage-phase) runs last on `full`, `pre_bmc_reboot`
+and `post_bmc_reboot` only; it collects a bundle for the ticket and never gates
+the run.
+
+`flash`, a quick machine status check, is commented out in `tiers.py` until its
+tests exist. The old names still run, with a deprecation warning: `light` and
+`medium` as `daily`, `deploy` as `weekly`, `pre_reboot` as `pre_bmc_reboot`. The
+report records the new name.
 
 What each tier runs is defined in one place, `TIERS` in
 [`tiers.py`](tiers.py): per tier, the pre-test resets, the tests, the post-test
@@ -84,18 +91,23 @@ defined beside the phase that runs them: gtests in `TESTS` and pytests in
 `PYTESTS` (`diag/device_tests.py`), triage tools in `TRIAGE_TOOLS`
 (`diag/triage.py`). An unknown name fails at import. The phase order is fixed in
 `diag_runner.run_diag()` and is not a per-tier choice. A new tier also has to be
-added to the tier lists in `run_diag.sh` and `run_diag_docker.sh`, and to the
-table above; `tools/scaleout/exabox/tests/test_diag_tiers.py` fails until the
-scripts agree with `TIERS`.
+added to the tier lists in `run_diag.sh`, `run_diag_docker.sh` and
+`test_infrastructure/run_health_check.py`, and to the table above;
+`tools/scaleout/exabox/tests/test_diag_tiers.py` fails until they agree with
+`TIERS`.
 
-`pre_reboot` collects data; it does not check the unit. It runs on a unit that is
-about to be power cycled through the BMC, so it records the state first and runs
-nothing that would change it. It never resets the unit: the snapshot, the
+`pre_bmc_reboot` collects data; it does not check the unit. It runs on a unit
+that is about to be power cycled through the BMC, so it records the state first
+and runs nothing that would change it. It never resets the unit: the snapshot, the
 triage tools and the QSFP tests all read the unit as it was found. There are no
 gtests or pytests either: a stress run on a unit that is already going to be
 rebooted would change the state the later phases are meant to record. The reset
 loop and test phases are recorded as SKIP with the reason, not left out; there
 is no `post_test_reset` phase.
+
+`post_bmc_reboot` runs after the reboot. For now it runs the same steps as
+`pre_bmc_reboot`; it has its own entry in `tiers.py` so the two can change
+independently.
 
 The eth deployment tests are registered as `TensixDeploymentEthernet<NN><Name>`
 (e.g. `TensixDeploymentEthernet00LinkUp`, `TensixDeploymentEthernet01Bandwidth`,
@@ -103,12 +115,16 @@ The eth deployment tests are registered as `TensixDeploymentEthernet<NN><Name>`
 two-digit index: `eth_link_up` is `*TensixDeploymentEthernet*LinkUp` and
 `eth_bandwidth` is `*TensixDeploymentEthernet*Bandwidth*`. The trailing wildcard
 on `eth_bandwidth` means it runs both `Bandwidth` and `BandwidthBidir`, both of
-which `tests/tt_metal/tt_metal/deployment/sources.cmake` now compiles.
+which `tests/tt_metal/tt_metal/deployment/sources.cmake` now compiles. Both run
+with `TT_METAL_SLOW_DISPATCH_MODE=1`: fast dispatch to active ethernet cores was
+removed, and under fast dispatch each eth test skips itself and exits 0.
 
-(Filters without the index wildcard match zero tests, so gtest exits 0 and the
-check is silently recorded as PASS without running — avoid that form.)
+A gtest check passes only if at least one of its test cases passed, as a pytest
+check does. A filter that matches nothing (one without the index wildcard, say)
+and a run whose tests all skip both exit 0 having tested nothing, and are
+recorded as FAIL with the `passed` / `failed` / `skipped` counts.
 
-The deploy tier also runs `didt_matmul_galaxy`, a pytest-based dI/dt stress
+`weekly` and `full` also run `didt_matmul_galaxy`, a pytest-based dI/dt stress
 test: 1000 matmul iterations on the full (8, 4) mesh with a determinism
 re-check every 50, via the repo venv's pytest. Measured ~9 min on a BH galaxy
 (mostly cold bring-up + the 20 output readbacks); bump
@@ -126,13 +142,13 @@ pytest invocations themselves are `TESTS` / `PYTESTS` in `diag/device_tests.py`.
 
 ## Triage phase
 
-`medium` and `deploy` end with a post-test `tt-smi -glx_reset` followed by the
-first-step triage tools — `host_side.sh` (host, PCIe and driver state, read from
+`daily`, `weekly` and `full` end with a post-test `tt-smi -glx_reset` followed by
+the first-step triage tools — `host_side.sh` (host, PCIe and driver state, read from
 sysfs) and `device_side.sh` (per-chip liveness, ARC scratch, telemetry and a NOC0
-node sweep). `pre_reboot` runs the same tools with no reset before them. They
-live in `tools/scaleout/kmd_triage/`. Which tiers run them, and the reset before
-them, is `post_test_resets` / `triage` in `tiers.py`; the tools themselves are
-`TRIAGE_TOOLS` in `diag/triage.py`.
+node sweep). `pre_bmc_reboot` and `post_bmc_reboot` run the same tools with no
+reset before them. They live in `tools/scaleout/kmd_triage/`. Which tiers run
+them, and the reset before them, is `post_test_resets` / `triage` in `tiers.py`;
+the tools themselves are `TRIAGE_TOOLS` in `diag/triage.py`.
 
 **What the two tools actually check, how to run them by hand, their exit codes
 and their known gaps are documented in
@@ -229,7 +245,7 @@ in the container's PID namespace — the holder count is right, the names are no
 
 ## QSFP tests phase
 
-`medium`, `deploy` and `pre_reboot` finish by collecting an ETH dump with
+Every tier finishes by collecting an ETH dump with
 `tt-bh-glx-cluster-debug collect --parallelize`, when that binary is on PATH.
 
 **It answers a question nothing else in this suite reaches.** The snapshot phase
@@ -249,7 +265,7 @@ binary on PATH, no repo, no venv, no import path to arrange. So the phase probes
 for a *command* rather than for a checkout the way the triage phase probes for
 its scripts, and a host that has not had the package installed simply **SKIPs
 with that reason on the report**. Nothing needs configuring to turn it on:
-install the package and the next `medium` run collects a dump.
+install the package and the next run collects a dump.
 
 The cage sweep reads the QSFP modules through the BMC API, so the collector also
 needs `TT_BMC_API_URL` and `TT_BMC_API_TOKEN` in its environment
@@ -373,7 +389,7 @@ its own 600 s `--qsfp-budget`; a full run measures ~7 min. The phase's own
 timeout is 1200 s as a backstop. That has to stay well inside
 `run_health_check.py`'s whole-run `--timeout-minutes` (30 by default), which
 kills the process group and takes the report with it — so raise it when running
-`medium`, `deploy` or `pre_reboot` on a host that has the package.
+any tier on a host that has the package.
 
 ## sys-triage phase
 
@@ -385,11 +401,13 @@ MB/PDB and per-tray CPLD DIAG, `tt-smi -s`, `ipmitool sdr elist`, `lspci -vvv`,
 `tt-fw-terminal` vuart. It is forensics for whoever picks up the ticket, not
 findings for this report to judge, so the phase **never gates** the run.
 
-It runs on `pre_reboot` only, as its last step: the bundle is the record of the
-unit's state before the BMC power cycles it, and the vuart and scratch reads are
-worth most on a unit nothing has reset since it misbehaved. It follows the QSFP
-tests because it opens every chip, so nothing may run beside it. The other tiers
-record it as **SKIP** with the reason.
+It runs on `full`, `pre_bmc_reboot` and `post_bmc_reboot` only, as their last
+step. On `pre_bmc_reboot` the bundle is the record of the unit's state before the
+BMC power cycles it, and the vuart and scratch reads are worth most on a unit
+nothing has reset since it misbehaved; on `post_bmc_reboot` it records the state
+the reboot left; on `full` it rounds out the logs for a DIIM ticket. It follows
+the QSFP tests because it opens every chip, so nothing may run beside it. The
+other tiers record it as **SKIP** with the reason.
 
 **Where it comes from.** `sys-triage` ships in the same syseng `.deb` as
 `tt-bh-glx-cluster-debug` and is probed for on PATH the same way
@@ -414,7 +432,7 @@ variable over `--bmc-password`, which is visible in the process list.
 The bundle lands in `<output_dir>/logs/sys_triage/` beside `sys_triage.log`, so
 `collect_run_artifacts()` attaches it to the JIRA ticket with no extra wiring.
 
-**In a container** (`run_diag_docker.sh`), on `pre_reboot` only, a few host tools
+**In a container** (`run_diag_docker.sh`), on the three sys-triage tiers only, a few host tools
 and paths the image lacks are provided, each best-effort and after the packages
 every tier needs, since a missing one costs a section of the bundle and nothing
 else. Other tiers get the same container as before the phase existed. An image
@@ -436,7 +454,7 @@ whose baked-in suite predates the phase has the `--skip-sys-triage` and
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `--tier {light,medium,deploy,pre_reboot}` | required | Selects reset cadence + gtest matrix |
+| `--tier {daily,weekly,full,pre_bmc_reboot,post_bmc_reboot}` | required | Selects reset cadence + gtest matrix |
 | `--dry-run` | off | Print intended subprocess calls; skip destructive steps |
 | `--skip-reset` | off | Skip the reset loop phase entirely |
 | `--skip-tests` | off | Skip the gtest phase entirely |
@@ -525,7 +543,7 @@ while `eth_links_up` reads the `ETH_LIVE_STATUS` telemetry from the snapshot.
 ### Thermal (JSON-only)
 `asic_thermal_precheck` records the hottest chip / temp vs `thm_limit` for forensics.
 
-### QSFP tests (medium / deploy / pre_reboot, when the package is installed)
+### QSFP tests (every tier, when the package is installed)
 
 Derived from the ETH dump; see [the phase section](#qsfp-tests-phase) above
 for how they get here. **The status column below is what the ingest assesses.**
@@ -624,7 +642,7 @@ miscabled.
             dm_app_fw_consistent             SKIP   not applicable to Galaxy
             dm_bl_fw_consistent              SKIP   not applicable to Galaxy
   tests          PASS  (25.2s)
-    other:  eth_link_up                      PASS   filter=*TensixDeploymentEthernet*LinkUp rc=0 dur=25.2s passed=1 failed=0 log=./logs/eth_link_up.log
+    other:  eth_link_up                      PASS   filter=*TensixDeploymentEthernet*LinkUp rc=0 dur=25.2s passed=1 failed=0 skipped=0 log=./logs/eth_link_up.log
   OVERALL        WARN
 ```
 
