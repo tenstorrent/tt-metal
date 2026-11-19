@@ -215,7 +215,9 @@ def round_context(max_seq: int, compress_rates, block_size: int) -> int:
     return math.ceil(max(max_seq, 1) / step) * step
 
 
-def plan_pool_blocks(groups: dict[str, PagedGroup], max_sessions: int, total_tokens: int) -> dict[str, int]:
+def plan_pool_blocks(
+    groups: dict[str, PagedGroup], max_sessions: int, total_tokens: int, cap_to_sessions: bool = True
+) -> dict[str, int]:
     """Size each group's pool in blocks: ``group -> num_blocks``, where ``num_blocks`` is the
     leading dim of that layer type's ``[num_blocks, 1, block_size, Dh]`` pool tensor.
 
@@ -224,6 +226,8 @@ def plan_pool_blocks(groups: dict[str, PagedGroup], max_sessions: int, total_tok
     construction (one ring per session, whatever the context length), so only the compressor
     groups scale with the token budget, and both are capped at ``1 + max_sessions *
     logical_blocks`` -- a session's page-table row cannot address more than that.
+    ``cap_to_sessions=False`` drops that cap for a caller that keeps blocks of sessions with no
+    page-table row (conversations parked in device RAM), so the pool holds all of ``total_tokens``.
     """
     plan = {}
     for name, g in groups.items():
@@ -231,7 +235,8 @@ def plan_pool_blocks(groups: dict[str, PagedGroup], max_sessions: int, total_tok
         if g.compress_rate is not None:
             # +max_sessions: each session's final, partially filled block.
             blocks += math.ceil(total_tokens / g.compress_rate / g.block_size) + max_sessions
-            blocks = min(blocks, 1 + max_sessions * g.logical_blocks)
+            if cap_to_sessions:
+                blocks = min(blocks, 1 + max_sessions * g.logical_blocks)
         plan[name] = blocks
     return plan
 

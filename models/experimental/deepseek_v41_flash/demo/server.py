@@ -59,15 +59,20 @@ What V4.1 imposes on the serving side:
   (:class:`_Instances`). With ``--dspark`` each round of a reply is either a 4-row verify step (3 drafts + 1 checked in
   ONE traced step, ``DeepSeekV41Model.decode_verify_block``; the draft's FFNs on the server as 4-row requests too) or a
   one-row step: ``--dspark-drafts`` (entries 3 or 0) picks by how many users decode on all the instances, default
-  :data:`_INSTANCE_DSPARK_DRAFTS` (4-row rounds while at most three decode), since every 4-row request loads the shared
-  MoE ~2.6x a one-row one. The server is launched once for 4-row blocks and runs one-row requests natively on the same
-  launch, so the switch costs nothing. One instance alone measured ~216 tok/s/user on GSM8K and ~145 on chat text
+  :data:`_INSTANCE_DSPARK_DRAFTS` (4-row rounds at any load: with five users decoding at once, one per instance, GSM8K
+  measured 127 tok/s/user, 635 in all, against 100 / 500 a step at a time). The server is launched once for 4-row
+  blocks and runs one-row requests natively on the same launch, so a switch costs nothing. Up to ``--instances`` users
+  decode in parallel, one session each: a request finding every instance's session busy gets a 429, and a new
+  conversation takes a parked session only if it repeats that session's start (:class:`_V41SlotPool`) or once the
+  session has been idle ``--slot-idle-timeout`` seconds. One instance alone measured ~216 tok/s/user on GSM8K and ~145 on chat text
   against ~149 a step at a time (``tests/decode/test_dspark_spec.py``). What that path takes: one session per
   instance (``--num-users 1``), greedy decoding with the sampler on device (``--temperature 0``; a request's
   ``temperature`` and ``top_p`` are ignored), no traced prefill model (prompts are replayed through decode,
   ``--no-prefill``) and no ``--vision``. The 4-row verify attends the compressed groups densely, so it covers
   positions below ~508; past them the reply decodes a step at a time. ``--max-context`` defaults to
-  :data:`_PERSISTENT_MAX_CONTEXT` here (one-level select; longer contexts are untested on this layout).
+  :data:`_PERSISTENT_MAX_CONTEXT` here (one-level select; longer contexts are untested on this layout), and
+  ``--total-context`` to :data:`_PERSISTENT_TOTAL_CONTEXT` (4M tokens per instance, shared by its running user and
+  any number of conversations parked in its device RAM).
   ``--instances 1`` serves the single stage on row 4 with the drafter on row 3. The rest of this docstring describes
   the stage pipeline.
 * Speculative decode (``--dspark``, on by default; ``--no-dspark`` or ``DEEPSEEK_V41_DSPARK=0`` turns it off). The DSpark drafter takes the
@@ -283,16 +288,21 @@ _DSPARK_MAX_DRAFTS = 3
 _PERSISTENT_VERIFY_ROWS = 4
 _PERSISTENT_L1_SMALL_SIZE = 16384
 _PERSISTENT_MAX_CONTEXT = 16384
+# Default --total-context with --persistent-moe: each instance's compressed-KV pool, shared by its running user and
+# every conversation parked in its device RAM (any number of them, until the pool is full). ~13.4 GB per chip of the
+# instance's TP4 row (~3.2 KB per token: 4 compressed groups of bf16 KV and index keys).
+_PERSISTENT_TOTAL_CONTEXT = 4 * 1024 * 1024
 # Default --num-users with --persistent-moe and no --dspark (one stage holds every user's pools).
 _NUM_USERS_PERSISTENT = 8
 # Default --instances with --persistent-moe: one whole TP4 model (and its drafter) on each of mesh rows 4, 3, 2, 1, 0,
 # all sharing the TP12 MoE on rows 5-7 (pmoe.INSTANCE_ROWS).
 _INSTANCES = 5
 # Default --dspark-drafts with several instances, by the users decoding on all of them: 4-row verify rounds (3 drafts)
-# while at most three decode, one-row steps beyond. A 4-row request costs the shared MoE ~2.6x a one-row one (122.7 vs
-# 47.3 us a layer with three requesters) for ~2.1-3.2 tokens a round, so with every instance busy the MoE does about as
-# much either way and one-row steps leave it room. Not tuned on the served load yet.
-_INSTANCE_DSPARK_DRAFTS = (3, 3, 3, 0)
+# at every load. tests/decode/test_instances_dspark.py (GSM8K, 300 tokens, one user per instance, Nov 17) measured
+# DSpark against one-row steps at 1-5 users decoding at once: 184.0 / 176.0 / 171.9 / 142.6 / 127.0 tok/s/user against
+# 125.1 / 121.1 / 118.8 / 109.8 / 100.0 (635 against 500 tok/s in all with five), 3.25 tokens a round throughout. The
+# shared MoE saturates from four users (verify 13.7 -> 16.8 ms a round) but DSpark still wins there.
+_INSTANCE_DSPARK_DRAFTS = (3,)
 # Fewer seated users raise the drafts only once they have stayed fewer this long, so a reply ending just before the
 # next one is seated does not switch speculation on and off.
 _DSPARK_RAISE_SECONDS = 2.0
@@ -1293,8 +1303,10 @@ class _SlotReuse:
                     slot_owner = pool.owner[oldest_slot]
             if evict_dev:
                 if pool.host_users:
+                    exported = False  # export_device_park frees the parked KV blocks itself
                     try:
                         snapshot = self.engine.model.export_device_park(oldest_dev.snapshot)
+                        exported = True
                         pool.store(
                             _HostConversation(
                                 owner=oldest_dev.owner,
@@ -1312,7 +1324,8 @@ class _SlotReuse:
                         )
                     except Exception as e:  # noqa: BLE001
                         logger.warning(f"user {oldest_dev.owner!r}: could not export device-parked to host: {e}")
-                        self.engine.model.free_device_park(oldest_dev.snapshot)
+                        if not exported:
+                            self.engine.model.free_device_park(oldest_dev.snapshot)
                 else:
                     self.engine.model.free_device_park(oldest_dev.snapshot)
                 logger.debug(
@@ -1537,7 +1550,8 @@ class _PrefillFirst(_Scheduler):
         Returns whether the pipeline is still usable (``False`` once a readback has aborted every turn)."""
         if not self._posted and not self._inflight:
             return True
-        logger.info(
+        # Every scheduler round while a prompt replays through decode (each round's steps are in flight): debug only.
+        logger.debug(
             f"prefill waiting: finishing {len(self._posted)} posted decode step(s) "
             f"({len(self._inflight)} in flight) before prefilling"
         )
@@ -3082,8 +3096,8 @@ def parse_args(argv: list[str] | None = None):
     if args.num_users is None:
         args.num_users = _NUM_USERS
     if args.total_context is None and args.persistent_moe:
-        # One stage holds every layer's pools: each user's context, no more.
-        args.total_context = args.num_users * args.max_context
+        # One stage holds every layer's pools, shared by the running user and the conversations parked on device.
+        args.total_context = max(_PERSISTENT_TOTAL_CONTEXT, args.num_users * args.max_context)
     if args.total_context is None:
         kv_users = _NUM_USERS_ALL_STAGES if args.prefill_all_stages else (_NUM_USERS_DSPARK if args.dspark else 64)
         args.total_context = max(kv_users * _KV_TOKENS_PER_USER, args.max_context)
