@@ -31,7 +31,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     validate_convolution_page_channels,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
-from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import persistent_semaphores
+from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import SlabEntry, persistent_semaphores
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -494,6 +494,11 @@ class ttKDA:
             raise ValueError(
                 f"hidden_states local T={sequence} does not match constructed T={self.active_seq_len_local}"
             )
+        if isinstance(state.recurrent, SlabEntry):
+            # Only the SP relay and final carry address a slab; the ops validate it.
+            if not self._is_sequence_parallel:
+                raise ValueError("a state slab entry needs a sequence-parallel layer (SP > 1)")
+            return
         if state.recurrent.shape != self._recurrent_state_shape:
             raise ValueError(f"recurrent state shape {state.recurrent.shape} != {self._recurrent_state_shape}")
         if state.convolution.shape != self._convolution_state_shape:
@@ -638,7 +643,8 @@ class ttKDA:
 
         ``hidden_states`` is either TP-sharded, ``[B, T, H/TP]`` (the model's residual layout: the layer all-gathers
         it over TP for the column-parallel input projection, the counterpart of the output's reduce-scatter), or
-        already full width, ``[B, T, H]`` (no gather). :meth:`forward_slot` wraps this with a model's state slabs.
+        already full width, ``[B, T, H]`` (no gather). ``state`` may also be a model's slab entry
+        (``KdaStates.entry``), read and replaced in place.
 
         ``actual_start`` is the absolute global position of this chunk's first
         token. It selects the chronological SP segment order for MLA's
@@ -663,17 +669,20 @@ class ttKDA:
         self._validate_forward(hidden_states, state, actual_start)
         if actual_end is not None:
             self._validate_runtime_bound(actual_end, "actual_end")
+        hidden_states, gathered = self._gather_tp_input(hidden_states)
+        inputs = self._project_inputs(hidden_states)
         # The SP predecessor's relay can write into this rank's landing buffer before its own recurrence starts. The
         # convolution's history-exchange entry barrier below keeps every rank from relaying until all have reserved it:
         # keep an SP barrier between this reservation and the recurrence.
         self.recurrence.reserve_affine_relay()
-        hidden_states, gathered = self._gather_tp_input(hidden_states)
-        inputs = self._project_inputs(hidden_states)
         if gathered:
             ttnn.deallocate(hidden_states)
+        convolution, convolution_slab = state.convolution, {}
+        if isinstance(convolution, SlabEntry):
+            convolution, convolution_slab = convolution.slab, convolution.op_kwargs()
         q, k, v, new_convolution = ttnn.experimental.kda.qkv_causal_conv1d_silu_with_carry(
             inputs.projected,
-            state.convolution,
+            convolution,
             *self.weights.convolution_taps,
             self.config.q_dim,
             self.config.k_dim,
@@ -689,6 +698,7 @@ class ttKDA:
             # FP32 DST accumulates the four taps in FP32; BF16 DST biases q/k/v by about one BF16 ulp where taps
             # cancel large activations.
             compute_kernel_config=self.kda_compute_config,
+            **convolution_slab,
         )
         gate = self._compute_decay(inputs.projected, inputs.decay_rank_offset)
         result = self.recurrence(
@@ -709,28 +719,3 @@ class ttKDA:
         ttnn.deallocate(inputs.projected)
         output = self._project_output(output)
         return output, KdaState(recurrent=result.final_state, convolution=new_convolution)
-
-    def forward_slot(
-        self,
-        hidden_states: ttnn.Tensor,
-        scratch: KdaState,
-        states,
-        slot: ttnn.Tensor,
-        layer_idx: int,
-        actual_start: ttnn.Tensor,
-        actual_end: ttnn.Tensor | None = None,
-    ) -> ttnn.Tensor:
-        """One model layer per chunk, its carry kept in the model's state slabs: import -> forward -> export.
-
-        ``states`` is the model's ``KdaStates`` (``tt/kda/state_adapter.py``, typed loosely because that module
-        imports this one). ``slot`` is its replicated one-element UINT32 device scalar, read on device by both copies,
-        so a captured trace follows the slot of the replay. ``scratch`` is overwritten with the slot's carry; the
-        replacement carry is stored back at ``(slot, layer_idx)`` and freed. ``actual_start`` also marks a request
-        head: where it reads 0 the import loads zeros instead of the slot. Returns the layer output.
-        """
-        states.import_layer(scratch, slot, layer_idx, zero_fill_at_zero=actual_start)
-        output, new_state = self.forward(hidden_states, scratch, actual_start, actual_end)
-        states.export_layer(new_state, slot, layer_idx)
-        ttnn.deallocate(new_state.recurrent)
-        ttnn.deallocate(new_state.convolution)
-        return output

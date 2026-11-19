@@ -39,6 +39,7 @@
 #include "distributed/mesh_device_impl.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 #include "tt_metal/distributed/mesh_workload_impl.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
 
 namespace tt::tt_metal::experimental::test {
@@ -333,12 +334,12 @@ CmdListParameters patchable_input(const Program& program, const CmdListTensorArg
 }
 
 void write_tensor(const MeshTensor& tensor, const std::vector<uint32_t>& data) {
-    ::tt::tt_metal::detail::WriteToBuffer(*tensor.mesh_buffer().get_reference_buffer(), data);
+    ::tt::tt_metal::slow_dispatch::WriteToBuffer(tensor.mesh_buffer(), data);
 }
 
 std::vector<uint32_t> read_tensor(const MeshTensor& tensor) {
     std::vector<uint32_t> result;
-    ::tt::tt_metal::detail::ReadFromBuffer(*tensor.mesh_buffer().get_reference_buffer(), result);
+    ::tt::tt_metal::slow_dispatch::ReadFromBuffer(tensor.mesh_buffer(), result);
     return result;
 }
 
@@ -1184,13 +1185,18 @@ TEST_F(CommandListMultiDeviceTest, FailedPerDeviceRunArgsUpdateChangesNothing) {
     auto workload = make_l1_write_workload(*mesh_device_, kAddressA, kValueA, "per_device_atomic");
     const MeshCoordinateRange all_devices(mesh_device_->shape());
     const auto device = *std::next(all_devices.begin());
-    // "value" is valid; "address" on a node the kernel does not run on is not: the whole call fails.
-    // The valid value is applied first, then the bad node fails.
+    const auto& program = workload.get_programs().at(all_devices);
+    const uint64_t owner = program.impl().per_device_run_arg_drops().owner;
+    // "value" is valid; "address" on a node the kernel does not run on is not: the whole call fails, and the
+    // workload holds no values, the program keeps its owner and is not tracked.
     m2::ProgramRunArgs args = l1_write_value_for_device(per_device_value(1));
     args.kernel_run_args.push_back(m2::ProgramRunArgs::KernelRunArgs{
         .kernel = m2::KernelSpecName{kKernelName},
         .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(m2::NodeCoord{5, 5}, {{"address", kAddressB}})});
     EXPECT_ANY_THROW(UpdateProgramRunArgsForDevice(workload, all_devices, device, args));
+    EXPECT_FALSE(workload.impl().has_per_device_runtime_args());
+    EXPECT_EQ(program.impl().per_device_run_arg_drops().owner, owner);
+    EXPECT_FALSE(program.impl().tracks_per_device_run_args());
     auto& cq = mesh_device_->mesh_command_queue(0);
     for (const auto& coord : all_devices) {
         write_l1(mesh_device_, coord, kAddressA, 0);
@@ -1198,6 +1204,70 @@ TEST_F(CommandListMultiDeviceTest, FailedPerDeviceRunArgsUpdateChangesNothing) {
     EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
     for (const auto& coord : all_devices) {
         EXPECT_EQ(read_l1(mesh_device_, coord, kAddressA), kValueA) << "Device coordinate: " << coord;
+    }
+}
+
+// A word changing next to a per-device arg, inside the per-device command images' region (a common `other` beside
+// the per-device common `value`): the delta update copies it into every device's image, with no rebuild.
+TEST_F(CommandListMultiDeviceTest, PerDeviceImagesDeltaInsideRegion) {
+    auto kernel = MakeMinimalGen1DMKernel(kKernelName, DataMovementProcessor::RISCV_0);
+    kernel.source = m2::KernelSpec::SourceCode{R"(
+#include "api/dataflow/dataflow_api.h"
+#include "experimental/kernel_args.h"
+void kernel_main() {
+    volatile tt_l1_ptr uint32_t* out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg(args::address));
+    out[0] = get_arg(args::value);
+    out[1] = get_arg(args::other);
+}
+)"};
+    kernel.runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value", "other"}};
+    const m2::ProgramSpec spec{
+        .name = "per_device_images_delta",
+        .kernels = {kernel},
+        .work_units = {m2::WorkUnitSpec{
+            .name = "main", .kernels = {m2::KernelSpecName{kKernelName}}, .target_nodes = kNode}},
+    };
+    auto workload = MakeMeshWorkloadFromSpec(*mesh_device_, spec);
+    const MeshCoordinateRange all_devices(mesh_device_->shape());
+    auto& program = workload.get_programs().at(all_devices);
+    auto other_args = [](uint32_t other) {
+        m2::ProgramRunArgs args;
+        args.kernel_run_args = {m2::ProgramRunArgs::KernelRunArgs{
+            .kernel = m2::KernelSpecName{kKernelName}, .common_runtime_arg_values = {{"other", other}}}};
+        return args;
+    };
+    m2::ProgramRunArgs args = l1_write_address(kAddressA);
+    args.kernel_run_args[0].common_runtime_arg_values = {{"value", kValueA}, {"other", 0u}};
+    SetProgramRunArgs(program, args);
+    set_per_device_values(workload, all_devices);
+    auto& cq = mesh_device_->mesh_command_queue(0);
+    EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+    EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+    auto rebuilds = [&]() -> uint64_t {
+        const auto* per_device = workload.impl().per_device_runtime_args(all_devices);
+        EXPECT_NE(per_device, nullptr);
+        return per_device != nullptr ? per_device->device_images.rebuilds : 0;
+    };
+    const uint64_t before = rebuilds();
+    ASSERT_GT(before, 0u) << "the per-device command images must exist for this test to mean anything";
+
+    for (uint32_t round = 0; round < 3; ++round) {
+        const uint32_t other = 900 + round;
+        UpdateProgramRunArgs(program, other_args(other));
+        set_per_device_values(workload, all_devices);
+        for (const auto& coord : all_devices) {
+            write_l1(mesh_device_, coord, kAddressA, 0);
+            write_l1(mesh_device_, coord, kAddressA + sizeof(uint32_t), 0);
+        }
+        EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+        uint32_t index = 0;
+        for (const auto& coord : all_devices) {
+            EXPECT_EQ(read_l1(mesh_device_, coord, kAddressA), expected_value(index++))
+                << "Device coordinate: " << coord << ", round " << round;
+            EXPECT_EQ(read_l1(mesh_device_, coord, kAddressA + sizeof(uint32_t)), other)
+                << "Device coordinate: " << coord << ", round " << round;
+        }
+        EXPECT_EQ(rebuilds(), before) << "round " << round;
     }
 }
 

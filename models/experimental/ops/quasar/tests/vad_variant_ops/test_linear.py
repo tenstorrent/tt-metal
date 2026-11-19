@@ -89,6 +89,14 @@ def _run_linear(
     act=None,
     w_mem="dram",
 ):
+    # Tolerance follows the model's dtypes, before the Quasar remap below.
+    low_precision = "bfp8" in (a_dt, out_dt) or fidelity == LOFI
+    # Quasar has no block-float DFB formats (its set is MX), so run the model's bfloat8_b tensors as bf16 there.
+    bias_dt = ttnn.bfloat8_b
+    if U.is_quasar():
+        a_dt, w_dt, out_dt = ("bf16" if d == "bfp8" else d for d in (a_dt, w_dt, out_dt))
+        bias_dt = ttnn.bfloat16
+
     k = a_shape[-1]
     a_torch = U.torch_rand(a_shape, dtype=torch.float32 if a_dt == "fp32" else torch.bfloat16)
     w_torch = U.torch_rand((k, n), std=k**-0.5)
@@ -96,7 +104,7 @@ def _run_linear(
 
     a = U.to_tt_mem(a_torch, mesh, a_mem, dtype=U.DTYPES[a_dt])
     w = U.to_tt_mem(w_torch, mesh, w_mem, dtype=U.DTYPES[w_dt])
-    b = U.to_tt(b_torch, mesh, dtype=ttnn.bfloat8_b) if bias else None
+    b = U.to_tt(b_torch, mesh, dtype=bias_dt) if bias else None
 
     kwargs = dict(bias=b, memory_config=U.resolve_memcfg(out_mem, mesh), dtype=U.DTYPES[out_dt])
     if pc is not None:
@@ -121,7 +129,6 @@ def _run_linear(
     elif act == GELU:
         ref = torch.nn.functional.gelu(ref)
 
-    low_precision = "bfp8" in (a_dt, out_dt) or fidelity == LOFI
     U.assert_pcc(ref, out, pcc=0.99 if low_precision else 0.999, mesh_device=mesh)
 
 

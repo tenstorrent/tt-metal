@@ -9,6 +9,7 @@
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <mutex>
 #include <ranges>
@@ -102,6 +103,7 @@ Tensor create_device_tensor(
     const TensorSpec& tensor_spec,
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     std::optional<TensorTopology> tensor_topology) {
+    TT_FATAL(mesh_device != nullptr, "create_device_tensor requires a device");
     auto guard = tt::tt_metal::make_allocation_context_guard("ttnn.allocate_tensor_on_device");
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::create_device_tensor",
@@ -255,6 +257,40 @@ Tensor cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_
     return output;
 }
 
+std::vector<Tensor> cpu_shards(
+    const Tensor& input_tensor,
+    const std::vector<tt::tt_metal::distributed::MeshCoordinate>& coords,
+    bool blocking,
+    std::optional<QueueId> cq_id) {
+    TT_FATAL(is_device_tensor(input_tensor), "cpu_shards needs a device tensor, got {}", input_tensor.storage_type());
+    TT_FATAL(!coords.empty(), "cpu_shards needs at least one coordinate");
+    const auto& held = input_tensor.device_storage().get_coords();
+    for (size_t i = 0; i < coords.size(); ++i) {
+        const auto& coord = coords[i];
+        TT_FATAL(
+            std::find(held.begin(), held.end(), coord) != held.end(),
+            "cpu_shards: the tensor holds no shard at {}",
+            coord);
+        TT_FATAL(
+            std::find(coords.begin(), coords.begin() + i, coord) == coords.begin() + i,
+            "cpu_shards: coordinate {} is listed twice",
+            coord);
+    }
+    // A storage restricted to `coords` shares the mesh tensor, so one read fetches exactly those shards. Each comes
+    // back as a single-device host tensor over the read's memory, labelled as one device: no result lists shards it
+    // does not hold, and nothing here writes a label to the mesh tensor.
+    const Tensor host = cpu(Tensor(DeviceStorage(input_tensor.device_storage(), coords)), blocking, cq_id);
+    const auto& buffer = host.host_storage().buffer();
+    std::vector<Tensor> shards;
+    shards.reserve(coords.size());
+    for (const auto& coord : coords) {
+        auto shard = buffer.get_shard(coord);
+        TT_FATAL(shard.has_value(), "cpu_shards: the read returned no shard at {}", coord);
+        shards.emplace_back(std::move(*shard), host.tensor_spec());
+    }
+    return shards;
+}
+
 Tensor pad(
     const Tensor& input_tensor,
     const tt::tt_metal::Shape& output_padded_shape,
@@ -392,6 +428,10 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
         if (is_row_major && input_memory_config.is_sharded() && changing_last_dim) {
             auto shard_spec = input_memory_config.shard_spec().value();
             auto shard_volume = shard_spec.numel();
+            TT_FATAL(
+                new_padded_shape[-1] > 0,
+                "Cannot reshape a sharded tensor to a zero last dimension, new shape: {}",
+                new_padded_shape);
             shard_spec.shape[1] = new_padded_shape[-1];
             shard_spec.shape[0] = shard_volume / shard_spec.shape[1];
             output_memory_config =
