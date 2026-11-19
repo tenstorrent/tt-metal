@@ -21,7 +21,7 @@
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "command_queue_fixture.hpp"
@@ -165,8 +165,8 @@ ProgramRunArgs MakeCounterRunArgs(distributed::MeshDevice& mesh_device, HubMode 
 
 distributed::MeshWorkload MakeCounterWorkload(
     distributed::MeshDevice& mesh_device, HubMode hub_mode, const GlobalSemaphore& sem) {
-    Program program = experimental::MakeProgramFromSpec(mesh_device, MakeCounterSpec(hub_mode));
-    experimental::SetProgramRunArgs(program, MakeCounterRunArgs(mesh_device, hub_mode, sem));
+    Program program(mesh_device, MakeCounterSpec(hub_mode));
+    program.set_program_run_args(MakeCounterRunArgs(mesh_device, hub_mode, sem));
     return MakeWorkload(mesh_device, std::move(program));
 }
 
@@ -203,7 +203,7 @@ TEST_F(GlobalSemaphoreMetal2Test, ValuePersistsAcrossPrograms) {
     EXPECT_EQ(ReadWord(mesh_device, kHub, sem.address()), 2 * kPerRun);
 }
 
-// The same compiled program counts into a different semaphore after UpdateProgramRunArgs supplies only the
+// The same compiled program counts into a different semaphore after Program::update_program_run_args supplies only the
 // new semaphore.
 TEST_F(GlobalSemaphoreMetal2Test, UpdateProgramRunArgsSwitchesSemaphore) {
     auto& mesh_device = *devices_.at(0);
@@ -217,7 +217,7 @@ TEST_F(GlobalSemaphoreMetal2Test, UpdateProgramRunArgsSwitchesSemaphore) {
 
     ProgramRunArgs update;
     update.global_semaphore_args = {{GlobalSemaphoreParamName{"counter"}, std::cref(second)}};
-    experimental::UpdateProgramRunArgs(OnlyProgram(workload), update);
+    OnlyProgram(workload).update_program_run_args(update);
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
 
     EXPECT_EQ(ReadWord(mesh_device, kHub, first.address()), kPerRun);
@@ -240,7 +240,7 @@ TEST_F(GlobalSemaphoreMetal2TraceTest, TraceReplayUsesCaptureTimeAddress) {
 
     ProgramRunArgs update;
     update.global_semaphore_args = {{GlobalSemaphoreParamName{"counter"}, std::cref(second)}};
-    experimental::UpdateProgramRunArgs(OnlyProgram(workload), update);
+    OnlyProgram(workload).update_program_run_args(update);
     mesh_device.replay_mesh_trace(cq.id(), tid, /*blocking=*/true);
 
     EXPECT_EQ(ReadWord(mesh_device, kHub, first.address()), 2 * kPerRun);
@@ -285,8 +285,8 @@ void RunMcast(distributed::MeshDevice& mesh_device, bool increment, uint32_t ini
     });
     args.global_semaphore_args = {{GlobalSemaphoreParamName{"flag"}, std::cref(sem)}};
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
-    experimental::SetProgramRunArgs(program, args);
+    Program program(mesh_device, spec);
+    program.set_program_run_args(args);
     auto workload = MakeWorkload(mesh_device, std::move(program));
     distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
 
@@ -324,8 +324,8 @@ TEST_F(GlobalSemaphoreMetal2Test, StopFlagSeenThroughValue) {
     });
     args.global_semaphore_args = {{GlobalSemaphoreParamName{"stop"}, std::cref(sem)}};
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
-    experimental::SetProgramRunArgs(program, args);
+    Program program(mesh_device, spec);
+    program.set_program_run_args(args);
     auto& cq = mesh_device.mesh_command_queue();
     auto workload = MakeWorkload(mesh_device, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
@@ -429,8 +429,8 @@ Program MakeQuasarCounterProgram(
     }
     args.global_semaphore_args = {{GlobalSemaphoreParamName{"counter"}, std::cref(sem)}};
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
-    experimental::SetProgramRunArgs(program, args);
+    Program program(mesh_device, spec);
+    program.set_program_run_args(args);
     return program;
 }
 
@@ -457,7 +457,7 @@ TEST_F(GlobalSemaphoreQuasarTest, ManyToOneUpThenDown) {
     EXPECT_EQ(report[1], 0u) << "hub did not drain the semaphore";
 }
 
-// The value persists across programs, and UpdateProgramRunArgs switches the program to another semaphore.
+// The value persists across programs, and Program::update_program_run_args switches the program to another semaphore.
 TEST_F(GlobalSemaphoreQuasarTest, ValuePersistsAndUpdateSwitchesSemaphore) {
     auto& mesh_device = *devices_.at(0);
     auto& cq = mesh_device.mesh_command_queue();
@@ -472,7 +472,7 @@ TEST_F(GlobalSemaphoreQuasarTest, ValuePersistsAndUpdateSwitchesSemaphore) {
 
     ProgramRunArgs update;
     update.global_semaphore_args = {{GlobalSemaphoreParamName{"counter"}, std::cref(second)}};
-    experimental::UpdateProgramRunArgs(OnlyProgram(workload), update);
+    OnlyProgram(workload).update_program_run_args(update);
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
 
     EXPECT_EQ(ReadWord(mesh_device, nodes[0], first.address()), 2 * per_run);
@@ -514,8 +514,8 @@ TEST_F(GlobalSemaphoreQuasarTest, MulticastSetAndInc) {
                  {"value", 3u}}),
         });
         args.global_semaphore_args = {{GlobalSemaphoreParamName{"flag"}, std::cref(sem)}};
-        Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
-        experimental::SetProgramRunArgs(program, args);
+        Program program(mesh_device, spec);
+        program.set_program_run_args(args);
         auto workload = MakeWorkload(mesh_device, std::move(program));
         distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
 
@@ -532,29 +532,29 @@ TEST_F(GlobalSemaphoreQuasarTest, MulticastSetAndInc) {
 TEST_F(GlobalSemaphoreMetal2Test, SetProgramRunArgsWithoutTheSemaphoreFails) {
     auto& mesh_device = *devices_.at(0);
     auto sem = CreateGlobalSemaphore(mesh_device, kHubAndSenders, 0);
-    Program program = experimental::MakeProgramFromSpec(mesh_device, MakeCounterSpec(HubMode::NONE));
+    Program program(mesh_device, MakeCounterSpec(HubMode::NONE));
     ProgramRunArgs args = MakeCounterRunArgs(mesh_device, HubMode::NONE, sem);
     args.global_semaphore_args = {};
     EXPECT_THAT(
-        [&] { experimental::SetProgramRunArgs(program, args); },
+        [&] { program.set_program_run_args(args); },
         ThrowsMessage<std::runtime_error>(HasSubstr("has no GlobalSemaphoreArgument entry")));
 }
 
 TEST_F(GlobalSemaphoreMetal2Test, UnknownGlobalSemaphoreArgFails) {
     auto& mesh_device = *devices_.at(0);
     auto sem = CreateGlobalSemaphore(mesh_device, kHubAndSenders, 0);
-    Program program = experimental::MakeProgramFromSpec(mesh_device, MakeCounterSpec(HubMode::NONE));
+    Program program(mesh_device, MakeCounterSpec(HubMode::NONE));
     ProgramRunArgs args = MakeCounterRunArgs(mesh_device, HubMode::NONE, sem);
     args.global_semaphore_args.insert({GlobalSemaphoreParamName{"other"}, std::cref(sem)});
     EXPECT_THAT(
-        [&] { experimental::SetProgramRunArgs(program, args); },
+        [&] { program.set_program_run_args(args); },
         ThrowsMessage<std::runtime_error>(HasSubstr("unknown GlobalSemaphoreParameter 'other'")));
 
-    experimental::SetProgramRunArgs(program, MakeCounterRunArgs(mesh_device, HubMode::NONE, sem));
+    program.set_program_run_args(MakeCounterRunArgs(mesh_device, HubMode::NONE, sem));
     ProgramRunArgs update;
     update.global_semaphore_args = {{GlobalSemaphoreParamName{"other"}, std::cref(sem)}};
     EXPECT_THAT(
-        [&] { experimental::UpdateProgramRunArgs(program, update); },
+        [&] { program.update_program_run_args(update); },
         ThrowsMessage<std::runtime_error>(HasSubstr("unknown GlobalSemaphoreParameter 'other'")));
 }
 
@@ -563,9 +563,9 @@ TEST_F(GlobalSemaphoreMetal2Test, SemaphoreFromAnotherMeshDeviceFails) {
     // A submesh is a separate MeshDevice, so this needs only one chip.
     auto other_mesh = mesh_device.create_submesh(distributed::MeshShape{1, 1});
     auto other_sem = CreateGlobalSemaphore(*other_mesh, kHubAndSenders, 0);
-    Program program = experimental::MakeProgramFromSpec(mesh_device, MakeCounterSpec(HubMode::NONE));
+    Program program(mesh_device, MakeCounterSpec(HubMode::NONE));
     EXPECT_THAT(
-        [&] { experimental::SetProgramRunArgs(program, MakeCounterRunArgs(mesh_device, HubMode::NONE, other_sem)); },
+        [&] { program.set_program_run_args(MakeCounterRunArgs(mesh_device, HubMode::NONE, other_sem)); },
         ThrowsMessage<std::runtime_error>(HasSubstr("created on a different MeshDevice")));
 }
 

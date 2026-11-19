@@ -46,7 +46,6 @@
 #include "impl/buffers/semaphore.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/lightmetal/host_api_capture_helpers.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include "llrt/tt_cluster.hpp"
 #include "sub_device_types.hpp"
@@ -330,9 +329,9 @@ std::pair<Program*, PerDeviceRuntimeArgs*> MeshWorkloadImpl::per_device_target(
     TT_FATAL(
         is_metal2 == metal2,
         "{}",
-        metal2 ? "experimental::UpdateProgramRunArgsForDevice requires a Metal 2.0 (ProgramSpec) program"
+        metal2 ? "MeshWorkload::update_program_run_args_for_device requires a Metal 2.0 (ProgramSpec) program"
                : "Metal 2.0 (ProgramSpec) programs set per-device values of named run args with "
-                 "experimental::UpdateProgramRunArgsForDevice");
+                 "MeshWorkload::update_program_run_args_for_device");
     TT_FATAL(
         !program_range.wraparound_shape().has_value(),
         "Per-device runtime args are not supported for wraparound program ranges ({})",
@@ -493,7 +492,8 @@ void MeshWorkloadImpl::clear_per_device_runtime_args(
 }
 
 namespace {
-// Applies `program`'s pending drops (Metal 2.0 SetProgramRunArgs / UpdateProgramRunArgs) to its per-device args.
+// Applies `program`'s pending drops (Metal 2.0 Program::set_program_run_args / Program::update_program_run_args) to its
+// per-device args.
 void apply_run_arg_drops(PerDeviceRuntimeArgs& per_device, Program& program) {
     auto& drops = program.impl().per_device_run_arg_drops();
     if (!drops.any_pending()) {
@@ -1140,8 +1140,8 @@ ResolvedNamedArgs resolve_named_args(const Program& program, const ProgramRunArg
     const auto& program_impl = program.impl();
     TT_FATAL(
         program_impl.created_from_spec() || program_impl.has_metal2_registry(),
-        "UpdateProgramRunArgsForDevice requires a Metal 2.0 (ProgramSpec) program; legacy programs use "
-        "distributed::SetRuntimeArgsPerDevice");
+        "MeshWorkload::update_program_run_args_for_device requires a Metal 2.0 (ProgramSpec) program; legacy "
+        "programs use distributed::SetRuntimeArgsPerDevice");
     TT_FATAL(
         args.tensor_args.empty() && args.dfb_run_overrides.empty() && args.advanced_options.sram_arena_args.empty() &&
             args.advanced_options.prefetcher_pipe_args.empty(),
@@ -1236,14 +1236,20 @@ const Program& program_at(
 
 }  // namespace
 
-void UpdateProgramRunArgsForDevice(
-    distributed::MeshWorkload& workload,
-    const distributed::MeshCoordinateRange& program_range,
-    const distributed::MeshCoordinate& device,
-    const ProgramRunArgs& values) {
-    const auto resolved = resolve_named_args(program_at(workload, program_range, device), values);
-    workload.impl().set_per_device_named_runtime_args(program_range, device, resolved.args, resolved.words);
+}  // namespace tt::tt_metal::experimental
+
+namespace tt::tt_metal::distributed {
+
+void MeshWorkload::update_program_run_args_for_device(
+    const MeshCoordinateRange& program_range, const MeshCoordinate& device, const ProgramRunArgs& values) {
+    const auto resolved =
+        experimental::resolve_named_args(experimental::program_at(*this, program_range, device), values);
+    impl().set_per_device_named_runtime_args(program_range, device, resolved.args, resolved.words);
 }
+
+}  // namespace tt::tt_metal::distributed
+
+namespace tt::tt_metal::experimental {
 
 void SetRuntimeArgsForDevice(
     distributed::MeshWorkload& mesh_workload,

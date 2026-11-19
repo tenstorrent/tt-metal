@@ -55,7 +55,7 @@ struct RangeState {
     // The cached programs of the range: {factory_range} when merged, its coordinates in range order when split.
     std::vector<ttnn::MeshCoordinateRange> program_ranges;
     // The keys that carried a per-device value after the last call. The next call's base must list them, so its
-    // UpdateProgramRunArgs drops every one of those values (see check_base_covers).
+    // Program::update_program_run_args drops every one of those values (see check_base_covers).
     KeySet prev_keys;
     // The program's named run args, to check per-device values before anything is set.
     ArgSchema schema;
