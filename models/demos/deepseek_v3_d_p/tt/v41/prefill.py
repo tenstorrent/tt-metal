@@ -468,7 +468,13 @@ class V41Prefill:
         streams = self._streams([0] * self.chunk)
         pre = identity_pre_row(self.mesh, self.chunk // self.sp, self.sp_axis)
         t0 = time.time()
+        from .engram import ENGRAM_ISLAND
+
         for blk in self.blocks:
+            if ENGRAM_ISLAND and blk.layer in self.engrams:
+                streams = self.engrams[blk.layer].enable_island(
+                    streams, self.chunk
+                )  # DS41F-0163: its outputs feed the block
             streams, pre = blk.enable_trace_islands(streams, pre, self.chunk)
         self.islands = True
         logger.info(f"[v41 prefill] trace islands captured for {len(self.blocks)} blocks in {time.time() - t0:.1f} s")
@@ -563,12 +569,14 @@ class V41Prefill:
                 r = rows[L].result() if hasattr(rows[L], "result") else rows[L]
                 mark("engram.wait")
                 rd = self.engrams[L].upload_rows(r, self.chunk)
-                new = self.engrams[L](streams, rd)
+                isl = getattr(self.engrams[L], "_island", None) is not None
+                # DS41F-0163 V41_PREFILL_ENGRAM_ISLAND: the island's outputs are persistent (not owned: never freed here)
+                new = self.engrams[L].forward_island(streams, rd) if isl else self.engrams[L](streams, rd)
                 ttnn.deallocate(rd)
                 if owned:
                     for t in streams:
                         ttnn.deallocate(t)
-                streams, owned = new, True
+                streams, owned = new, not isl
                 mark("engram.dev")
             if kv_only20 and L >= self.cfg.first_decoder_layer:
                 blk.kv_only_islands(streams, pre, real_len=real_len, owned=owned, owned_pre=blk is self.blocks[0])

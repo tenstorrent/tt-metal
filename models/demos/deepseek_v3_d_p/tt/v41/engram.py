@@ -25,12 +25,18 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.v4.hyper_connection import _TtHyperBase
+from models.demos.deepseek_v3_d_p.tt.v4.trace_island import TraceIsland, copy_into
 
 # DS41F-0119 (prefill bench 10-29: engram.dev = 129 ms of host issue per 8192 chunk): V41_PREFILL_ENGRAM_RM=1 uploads the
 # [S, 6144] bf16 rows ROW_MAJOR and tilizes them on device, instead of the host tilize of ~100 MB per layer per chunk;
 # bf16 tilize is a pure permutation, so the tensor is the same. V41_PREFILL_ENGRAM_RM_CHECK=N compares both on N uploads.
 ENGRAM_RM = os.environ.get("V41_PREFILL_ENGRAM_RM", "0") == "1"
 ENGRAM_RM_CHECK = [int(os.environ.get("V41_PREFILL_ENGRAM_RM_CHECK", "0"))]
+# tt-blaze DS41F-0163 (TTFT, 11-19): V41_PREFILL_ENGRAM_ISLAND=1 replays ``forward`` (~70 eager ops: wkv, the 4 copies' dot / norm
+# partials, the TP all-reduce, the gate) as a trace island on the island path -- a synced phase profile put its eager issue at
+# ~28 ms per Engram layer per 4096 chunk (engram.dev 82 ms for 2 layers, of which the rows upload is ~12.5 ms each, host-40
+# bench). The same ops on the same inputs: byte-identical by construction. Off = eager as before.
+ENGRAM_ISLAND = os.environ.get("V41_PREFILL_ENGRAM_ISLAND", "0") == "1"
 
 HC = 4
 ROW = 32
@@ -47,6 +53,8 @@ class V41PrefillEngram(_TtHyperBase):
         self.D_l = D_l
         wkv = w["engram.wkv.weight"].float()  # [5 * D, K] (fp8 dequantised by V41Checkpoint)
         K = int(wkv.shape[1])
+        self.K = K
+        self._island = None
         assert wkv.shape[0] == (HC + 1) * D, wkv.shape
         # [K, 5, tp, D_l] -> [K, tp, 5, D_l]: chip t's columns are (key_0..key_3, value) of its D slice
         wt = wkv.t().reshape(K, HC + 1, tp, D_l).permute(0, 2, 1, 3).reshape(1, 1, K, tp * (HC + 1) * D_l)
@@ -124,6 +132,34 @@ class V41PrefillEngram(_TtHyperBase):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=self._mesh_mapper(sp_dim=2),
         )
+
+    def enable_island(self, streams: list, chunk_tokens: int) -> list:
+        """V41_PREFILL_ENGRAM_ISLAND: capture ``forward`` once on persistent inputs -- clones of the stream templates and a rows
+        buffer of the upload's layout (``upload_rows`` of zeros) -- and return its persistent outputs (the next block's capture
+        template). Call after the eager warm-up built every program (``V41Prefill.enable_islands``)."""
+        assert self._island is None, f"Engram L{self.layer} island already captured"
+        self._isl_in = [ttnn.clone(t) for t in streams]
+        self._isl_rows = self.upload_rows(
+            torch.zeros(int(chunk_tokens), self.K, dtype=torch.bfloat16), int(chunk_tokens)
+        )
+        isl = TraceIsland(
+            self.device,
+            lambda *a: self.forward(list(a[:HC]), a[HC]),
+            self._isl_in + [self._isl_rows],
+            name=f"v41.engram.L{self.layer}",
+        )
+        out = list(isl.capture())
+        self._island = isl
+        return out
+
+    def forward_island(self, streams: list, rows_dev) -> list:
+        """``forward`` on the captured island: the inputs copied in, the island replayed (non-blocking). The outputs are the
+        island's persistent buffers: the caller must not free them (the next block copies them in before its own replay).
+        """
+        for dst, src in zip(self._isl_in, streams):
+            copy_into(dst, src)
+        copy_into(self._isl_rows, rows_dev)
+        return list(self._island.replay())
 
     def forward(self, streams: list, rows_dev) -> list:
         assert len(streams) == HC
