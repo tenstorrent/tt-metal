@@ -54,6 +54,16 @@ Then, wrap the code you want to measure with the macro:
 
     The ``DeviceZoneScopedN`` annotation introduces some overhead. Use it selectively in performance-critical sections, and be cautious when interpreting timings for code with many ``DeviceZoneScopedN`` annotations.
 
+To keep a zone in the source but profile it only on some builds or cores, use ``DeviceZoneScopedNIf(zone_name, active)``, where ``active`` is a constant expression (for example a compile-time argument of the kernel). When it is false the zone is compiled out of the kernel: no code, no markers, no room taken in the profiler buffer. A condition that is only known at run time does not compile; the streaming profiler's ``DeviceZoneScopedNIf`` is the one that decides at run time.
+
+.. code-block:: c++
+
+    void kernel_main() {
+        constexpr bool profile_loop = get_compile_time_arg_val(0) != 0;
+        DeviceZoneScopedNIf("MyLoop", profile_loop);
+        // Kernel code, profiled only on the cores built with the argument set
+    }
+
 Controlling Profiling from Host Code
 ------------------------------------
 
