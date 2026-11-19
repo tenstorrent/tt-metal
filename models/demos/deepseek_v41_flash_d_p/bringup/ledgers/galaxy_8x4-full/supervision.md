@@ -524,3 +524,9 @@
   the two tables on the runner, timing only). Note: the census's history is zeros apart from the real previous chunk,
   so a position deep in a session changes only the tables' sizes, not the routing inputs much.
 - 10:10 UTC F287 texts built (agentic_cc 3 slices 118 sessions, agentic_ds 3 slices 57, agentic_ds_ml 2 slices 48; 384447e2bc9); census plan 288 runs (pick 45 repos / held 93, no overlap) and the offline script ready in /scratch/dnijemcevic/bringup/p85.
+- 10:15 UTC OWNER: no zero-history census for P.85. Replaced the 288 skip-position runs with a session
+  census: every session a REAL prefill from position 0 to its end (full chunks), routing read after every chunk
+  (tests/perf/test_session_census.py, staged in /scratch/dnijemcevic/bringup/p85 until P.84 closes: P.84's agent owns
+  tests/ right now). 233 sessions / ~1880 chunks in one runner load: 223 trace sessions (pick 79 / held 144 by repo),
+  the 7 bring-up sessions, and 142k prefixes of code / prose / multilingual. The same records re-pick P.84's table on
+  real history (code + bring-up sessions 1/3/5/7) to answer whether the zero-history pick changes.
