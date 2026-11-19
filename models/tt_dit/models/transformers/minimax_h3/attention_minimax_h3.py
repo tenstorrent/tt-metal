@@ -731,7 +731,7 @@ class MiniMaxH3Attention(Module):
         the captured blocks (whose `_sol_tensors` does not run on replay)."""
         assert self.sol_logical_n is not None, "set sol_logical_n (host int) before a sparse forward"
         sp_factor = self.parallel_config.sequence_parallel.factor
-        cfg = self._sdpa_program_config(rows, ring=True, q_chunk=self._sol_q_chunk)
+        cfg = self._sdpa_program_config(rows, ring=True, q_chunk=self._sol_q_chunk, k_chunk=self._sol_k_chunk)
         geo = SolGeometry(
             shards=sp_factor,
             rows=rows,
