@@ -45,7 +45,8 @@ void ReduceScatterDeviceOperation::validate_on_program_cache_hit(
 ReduceScatterDeviceOperation::spec_return_value_t ReduceScatterDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
-    auto inter_shape = input_tensor.tensor_spec().logical_shape();
+    // Padded shape: doubled logical rows can stay within one tile row, and the intermediate would not double.
+    auto inter_shape = input_tensor.padded_shape();
 
     // For now default to tt::tt_metal::BufferType::DRAM to prevent CB overflows.
     // TODO: add L1 estimation similar to the one in all_to_all_dispatch and choose to use L1 as an intermediate buffer
@@ -213,10 +214,10 @@ ReduceScatterDeviceOperation::create_op_performance_model(
     // take max(read_bw, write_bw) rather than summing them.
     // =========================================================================
     const auto& output_tensor = output_tensors[1];  // [0] is intermediate, [1] is output
-    const bool input_is_dram = input_tensor.buffer()->buffer_type() == BufferType::DRAM;
-    const bool output_is_dram = output_tensor.buffer()->buffer_type() == BufferType::DRAM;
-    const uint32_t read_page_size = input_tensor.buffer()->page_size();
-    const uint32_t write_page_size = output_tensor.buffer()->page_size();
+    const bool input_is_dram = input_tensor.memory_config().buffer_type() == BufferType::DRAM;
+    const bool output_is_dram = output_tensor.memory_config().buffer_type() == BufferType::DRAM;
+    const uint32_t read_page_size = input_tensor.mesh_buffer().page_size();
+    const uint32_t write_page_size = output_tensor.mesh_buffer().page_size();
     const uint32_t device_rows = input_tensor.device()->compute_with_storage_grid_size().x;
     const uint32_t device_cols = input_tensor.device()->compute_with_storage_grid_size().y;
     const uint32_t num_cores = device_rows * device_cols;

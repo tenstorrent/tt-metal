@@ -26,7 +26,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
 
 using namespace tt;
@@ -52,7 +52,7 @@ bool dram_to_l1_multicast(
     distributed::MeshWorkload workload;
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     workload.add_program(device_range, std::move(program));
 
     auto& program_ = workload.get_programs().at(device_range);
@@ -78,7 +78,9 @@ bool dram_to_l1_multicast(
 
 
     CoreCoord core_start = {0, 0};
-    CoreCoord grid_size = mesh_device->logical_grid_size();
+    // Only worker cores: the full logical grid also holds the fast dispatch cores, whose L1 the
+    // multicast would overwrite.
+    CoreCoord grid_size = mesh_device->compute_with_storage_grid_size();
     CoreCoord core_end = {core_start.x + (grid_size.x - 1), core_start.y + (grid_size.y - 1)};
     auto core_start_physical = mesh_device->worker_core_from_logical_core(core_start);
     auto core_end_physical = mesh_device->worker_core_from_logical_core(core_end);

@@ -7,8 +7,8 @@
 #include <tt-metalium/work_split.hpp>
 #include <vector>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
@@ -83,8 +83,8 @@ ttsl::SmallVector<uint32_t> get_inverse_permutation(const ttsl::SmallVector<uint
 
 uint32_t get_buffer_alignment(const ttnn::Tensor& tensor) {
     return (
-        tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? tt::tt_metal::hal::get_dram_alignment()
-                                                                         : tt::tt_metal::hal::get_l1_alignment());
+        tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM ? tt::tt_metal::hal::get_dram_alignment()
+                                                                               : tt::tt_metal::hal::get_l1_alignment());
 }
 
 }  // namespace detail
@@ -95,7 +95,6 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileIn
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
 
     const auto& input_tensor = tensor_args.input_tensor;
     auto& output_tensor = tensor_return_value;
@@ -171,12 +170,10 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileIn
 
     // ---- Compute (donor fork: transpose_wh, swap-hw only) ----
     if (swap_hw) {
-        bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32 || cb_data_format == tt::DataFormat::Int32 ||
-                                cb_data_format == tt::DataFormat::UInt32;
+        bool fp32_dest_acc_en = requires_32bit_dest(cb_data_format);
         ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
-        // Legacy set unpack_to_dest_mode[c_0] = UnpackToDestFp32 for Float32 → UnpackMode::UnpackToDest.
-        // Compute consumes SRC0 (c_0); the required-entry rule fires only for Float32.
-        if (cb_data_format == tt::DataFormat::Float32) {
+        // UnpackToDest lowers to UnpackToDestFp32 (bypasses SrcA); keep 8-bit ints on SrcA.
+        if (requires_unpack_to_dest(cb_data_format)) {
             compute_cfg.unpack_modes = {{SRC0, UnpackMode::UnpackToDest}};
         }
         kernels.push_back(KernelSpec{
@@ -272,7 +269,6 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileRo
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
     const float pad_value = operation_attributes.pad_value;
 
     const auto& input_tensor = tensor_args.input_tensor;
@@ -340,24 +336,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileRo
     if (output_H % tile_shape[1] != 0) {
         uint32_t num_packed_values = sizeof(uint32_t) / element_size;
         num_writes = face_shape[1] / num_packed_values;
-        switch (input_tensor.dtype()) {
-            case DataType::INT32: padding_val_packed = std::bit_cast<uint32_t>(pad_value); break;
-            case DataType::UINT32: padding_val_packed = pad_value; break;
-            case DataType::BFLOAT16:
-                padding_val_packed = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
-                break;
-            case DataType::UINT16:
-                padding_val_packed =
-                    pack_two_uint16_into_uint32({float_to_uint16(pad_value), float_to_uint16(pad_value)});
-                break;
-            case DataType::FLOAT32: padding_val_packed = std::bit_cast<uint32_t>(pad_value); break;
-            default:
-                padding_val_packed = 0;
-                TT_ASSERT(
-                    false,
-                    "Unsupported datatype for pad tile multicore, can only support INT32, UINT32, BFLOAT16, UINT16, "
-                    "FLOAT32");
-        }
+        padding_val_packed = pack_scalar_into_uint32(input_tensor.dtype(), pad_value);
     }
 
     uint32_t h_in_dest = 0;
@@ -474,12 +453,10 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileRo
 
     // ---- Compute (donor fork: transpose_wh, swap-hw only) ----
     if (swap_hw) {
-        bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32 || cb_data_format == tt::DataFormat::Int32 ||
-                                cb_data_format == tt::DataFormat::UInt32;
+        bool fp32_dest_acc_en = requires_32bit_dest(cb_data_format);
         ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
-        // Legacy set unpack_to_dest_mode[c_0] = UnpackToDestFp32 for Float32 → UnpackMode::UnpackToDest.
-        // Compute consumes SRC0 (c_0); the required-entry rule fires only for Float32.
-        if (cb_data_format == tt::DataFormat::Float32) {
+        // UnpackToDest lowers to UnpackToDestFp32 (bypasses SrcA); keep 8-bit ints on SrcA.
+        if (requires_unpack_to_dest(cb_data_format)) {
             compute_cfg.unpack_modes = {{SRC0, UnpackMode::UnpackToDest}};
         }
         kernels.push_back(KernelSpec{
@@ -611,7 +588,6 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
 
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
     const float pad_value = operation_attributes.pad_value;
 
     const auto& input_tensor = tensor_args.input_tensor;
@@ -685,24 +661,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
         uint32_t num_packed_values = sizeof(uint32_t) / element_size;
         num_writes = face_shape[1] / num_packed_values;
 
-        switch (input_tensor.dtype()) {
-            case DataType::INT32: padding_val_packed = std::bit_cast<uint32_t>(pad_value); break;
-            case DataType::UINT32: padding_val_packed = pad_value; break;
-            case DataType::BFLOAT16:
-                padding_val_packed = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
-                break;
-            case DataType::UINT16:
-                padding_val_packed =
-                    pack_two_uint16_into_uint32({float_to_uint16(pad_value), float_to_uint16(pad_value)});
-                break;
-            case DataType::FLOAT32: padding_val_packed = std::bit_cast<uint32_t>(pad_value); break;
-            default:
-                padding_val_packed = 0;
-                TT_ASSERT(
-                    false,
-                    "Unsupported datatype for pad tile multicore, can only support INT32, UINT32, BFLOAT16, UINT16, "
-                    "FLOAT32");
-        }
+        padding_val_packed = pack_scalar_into_uint32(input_tensor.dtype(), pad_value);
     }
 
     // Faces with real data in the final tile along the width dimension, divided up
@@ -739,7 +698,11 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
     all_cores = num_cores > padded_num_cores ? all_cores : padded_all_cores;
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t input_page_size = detail::tile_size(tensor_return_value) + misalignment;
+    // Each cb_in entry has misalignment spare bytes for the reader to bounce a misaligned source line into place.
+    // Quasar's unpacker steps through a DFB one whole tile per entry, so there the reader bounces through a scratchpad.
+    const bool bounce_in_scratchpad = (misalignment > 0) && (input_tensor.device()->arch() == tt::ARCH::QUASAR);
+    uint32_t input_page_size = detail::tile_size(tensor_return_value) + (bounce_in_scratchpad ? 0 : misalignment);
+    const ScratchpadSpecName BOUNCE_SP{"bounce"};
 
     // ---- Resource names ----
     const TensorParamName INPUT{"input"};
@@ -781,16 +744,10 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
     uint32_t non_x_rows = num_rows / x;
 
     // ---- Compute config (Style B: build ComputeHardwareConfig directly, mirroring legacy) ----
-    bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32 || cb_data_format == tt::DataFormat::Int32 ||
-                            cb_data_format == tt::DataFormat::UInt32;
+    bool fp32_dest_acc_en = requires_32bit_dest(cb_data_format);
     ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
-    // Metal 2.0 requires an explicit unpack_modes entry for each Float32 DFB the compute kernel consumes
-    // when enable_32_bit_dest = true. Compute consumes SRC_CB (via tilize) and TILIZE_CB (self-loop).
-    // Keep both the tilize input (c_0 = SRC_CB) and its output (c_1 = TILIZE_CB, which feeds the transpose)
-    // in full Float32 on the unpack-to-dest path; otherwise the unpacker falls back to tf32 and drops the
-    // low mantissa bits. UnpackToDest is the Metal 2.0 equivalent of the legacy UnpackToDestFp32.
-    // (Float32-only; Int32/UInt32 deferred, #49936.)
-    if (cb_data_format == tt::DataFormat::Float32) {
+    // UnpackToDest lowers to UnpackToDestFp32 (bypasses SrcA, drops to tf32 on floats); keep 8-bit ints on SrcA.
+    if (requires_unpack_to_dest(cb_data_format)) {
         compute_cfg.unpack_modes = {{SRC_CB, UnpackMode::UnpackToDest}, {TILIZE_CB, UnpackMode::UnpackToDest}};
     }
 
@@ -811,6 +768,11 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
         writer_rta_names.push_back("end_padding_tile_idx");
     }
 
+    Group<KernelSpec::ScratchpadBinding> reader_scratchpad_bindings;
+    if (bounce_in_scratchpad) {
+        reader_scratchpad_bindings.push_back(
+            KernelSpec::ScratchpadBinding{.scratchpad_spec_name = BOUNCE_SP, .accessor_name = "bounce"});
+    }
     KernelSpec reader{
         .unique_id = READER,
         .source =
@@ -818,6 +780,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
             "reader_permute_interleaved_tiled_generic.cpp",
         .compiler_options = {.defines = pad_defines},
         .dfb_bindings = reader_dfb,
+        .scratchpad_bindings = reader_scratchpad_bindings,
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
         .compile_time_args =
             {{"rank", rank},
@@ -845,7 +808,8 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
              {"needs_x_padding", needs_x_padding},
              {"rows_per_x", non_x_rows},
              {"misalignment", misalignment},
-             {"read_alignment", read_alignment}},
+             {"read_alignment", read_alignment},
+             {"bounce_in_scratchpad", bounce_in_scratchpad}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_block", "end_block"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = 2 * rank},
@@ -969,6 +933,10 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
     // ---- Assemble ----
     ProgramSpec spec;
     spec.name = "permute_tiled_generic";
+    if (bounce_in_scratchpad) {
+        spec.scratchpads = {
+            ScratchpadSpec{.unique_id = BOUNCE_SP, .size_per_node = 2 * read_alignment + subtile_line_bytes}};
+    }
     spec.kernels = {std::move(reader), std::move(writer), std::move(compute)};
     spec.dataflow_buffers = std::move(dataflow_buffers);
     spec.tensor_parameters = {

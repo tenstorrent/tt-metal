@@ -10,7 +10,7 @@
 #include "impl/metal2_host_api/helpers.hpp"
 #include "impl/metal2_host_api/program_spec/validation/validate_spec.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 namespace {
 
@@ -230,4 +230,4 @@ void ValidateKernelHardwareConfig(const KernelSpec& kernel, const ValidationCont
     ValidateImplicitSyncOptOuts(kernel);
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

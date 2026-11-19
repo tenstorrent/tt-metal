@@ -8,7 +8,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 
 namespace ttnn::prim::qsr {
 
@@ -34,7 +34,7 @@ tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
     const auto* device = input.device();
 
     // Get number of pages (tiles for TILE layout, rows for ROW_MAJOR layout)
-    const uint32_t num_pages = input.buffer()->num_pages();
+    const uint32_t num_pages = input.mesh_buffer().num_pages();
 
     Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();
