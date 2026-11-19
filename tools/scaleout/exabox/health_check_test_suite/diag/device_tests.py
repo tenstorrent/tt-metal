@@ -33,14 +33,15 @@ DEPLOYMENT_BIN_CANDIDATES = [
 # gtest filter -> test name table. Names match deployment_tests_dram_glx (outlogix).
 # The eth deployment tests are registered as TensixDeploymentEthernet<NN><Name>
 # (e.g. TensixDeploymentEthernet00LinkUp, ...Ethernet01Bandwidth), so the filters
-# need a wildcard for the two-digit index; otherwise gtest matches 0 tests, exits
-# 0, and the test is silently recorded as PASS without running.
+# need a wildcard for the two-digit index; otherwise gtest matches 0 tests.
 # eth_bandwidth keeps a trailing wildcard so it also picks up BandwidthBidir.
+# They need slow dispatch too: fast dispatch to active ethernet cores was
+# removed, and under fast dispatch each eth test skips itself and exits 0.
 # Each entry is the gtest filter plus, optionally, environment set for that run
 # only (recorded in the check as env_overrides and prefixed to its command line).
 TESTS = {
-    "eth_link_up": {"filter": "*TensixDeploymentEthernet*LinkUp"},
-    "eth_bandwidth": {"filter": "*TensixDeploymentEthernet*Bandwidth*"},
+    "eth_link_up": {"filter": "*TensixDeploymentEthernet*LinkUp", "env": {"TT_METAL_SLOW_DISPATCH_MODE": "1"}},
+    "eth_bandwidth": {"filter": "*TensixDeploymentEthernet*Bandwidth*", "env": {"TT_METAL_SLOW_DISPATCH_MODE": "1"}},
     "gddr_fast": {
         "filter": "*DramDeployment_PersistentOptimalWorkersAllDramBanks",
         "env": {"DRAM_TEST_FAST": "1"},
@@ -97,6 +98,7 @@ PYTESTS = {
 GTEST_RUN_RE = re.compile(r"\[\s*RUN\s*\]\s+(\S+\.\S+)")
 GTEST_OK_RE = re.compile(r"\[\s*OK\s*\]\s+(\S+\.\S+)")
 GTEST_FAIL_RE = re.compile(r"\[\s*FAILED\s*\]\s+(\S+\.\S+)")
+GTEST_SKIP_RE = re.compile(r"\[\s*SKIPPED\s*\]\s+(\S+\.\S+)")
 
 
 # pytest progress markers. Counts come from the end-of-run summary line
@@ -297,7 +299,7 @@ def run_tests(tt_metal: Path, names: Sequence[str], phase: Phase, dry_run: bool,
                         "duration_s": 0.0,
                         "env_overrides": env_overrides,
                         "log_file": str(log_path),
-                        "testcases": {"passed": 0, "failed": 0, "failures": []},
+                        "testcases": {"passed": 0, "failed": 0, "skipped": 0, "failures": []},
                     },
                 )
             )
@@ -308,6 +310,7 @@ def run_tests(tt_metal: Path, names: Sequence[str], phase: Phase, dry_run: bool,
         t0 = time.time()
         passed = 0
         failed = 0
+        skipped = 0
         failures: list[str] = []
         in_flight: set[str] = set()  # testcases that have started but not yet ended
         with log_path.open("w") as logf:
@@ -337,15 +340,23 @@ def run_tests(tt_metal: Path, names: Sequence[str], phase: Phase, dry_run: bool,
                         in_flight.discard(m.group(1))
                         failed += 1
                         failures.append(m.group(1))
+                elif m := GTEST_SKIP_RE.search(line):
+                    if m.group(1) in in_flight:
+                        in_flight.discard(m.group(1))
+                        skipped += 1
             rc = proc.wait()
         dt = time.time() - t0
 
-        status = PASS if rc == 0 and failed == 0 else FAIL
+        # Require passed > 0, as for pytest: a filter that matches nothing and a
+        # run whose tests all skip both exit 0 without having tested anything.
+        status = PASS if rc == 0 and failed == 0 and passed > 0 else FAIL
         suffix = f"({dt:.1f}s)"
-        if failed:
-            suffix += f"  passed={passed} failed={failed}"
+        if status == FAIL:
+            suffix += f"  passed={passed} failed={failed} skipped={skipped}"
         emit_result(name, status, suffix=suffix)
-        details = f"filter={filt} rc={rc} dur={dt:.1f}s " f"passed={passed} failed={failed} log={log_path}"
+        details = (
+            f"filter={filt} rc={rc} dur={dt:.1f}s passed={passed} failed={failed} skipped={skipped} log={log_path}"
+        )
         phase.add(
             Check(
                 name=name,
@@ -358,7 +369,7 @@ def run_tests(tt_metal: Path, names: Sequence[str], phase: Phase, dry_run: bool,
                     "duration_s": dt,
                     "env_overrides": env_overrides,
                     "log_file": str(log_path),
-                    "testcases": {"passed": passed, "failed": failed, "failures": failures},
+                    "testcases": {"passed": passed, "failed": failed, "skipped": skipped, "failures": failures},
                 },
                 ip="other",
             )

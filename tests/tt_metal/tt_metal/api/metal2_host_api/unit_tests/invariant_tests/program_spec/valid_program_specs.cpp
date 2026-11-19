@@ -8,7 +8,7 @@
 #include <gmock/gmock.h>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "impl/program/program_impl.hpp"
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
@@ -27,12 +27,12 @@ using test_helpers::ProgramSpecTestQuasar;
 TEST_F(ProgramSpecTestQuasar, CPU_MinimalValidProgramSpecSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_MinimalValidProgramSpecSucceeds) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_MinimalValidProgramSpecWithTensorParameterSucceeds) {
@@ -45,7 +45,7 @@ TEST_F(ProgramSpecTestGen1, CPU_MinimalValidProgramSpecWithTensorParameterSuccee
     spec.tensor_parameters = {MakeMinimalTensorParameter("input_tensor")};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 }  // namespace

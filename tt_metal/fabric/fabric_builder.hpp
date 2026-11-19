@@ -89,6 +89,16 @@ protected:
     virtual std::unique_ptr<FabricRouterBuilder> make_router(const RouterLocation& location);
 
     /**
+     * The chip's handshake master router, once its routers exist. Stock takes the first in routers_.
+     */
+    virtual chan_id_t pick_master_router_chan() const;
+
+    /**
+     * What every router kernel on the chip is told about the chip's routers.
+     */
+    virtual KernelCreationContext kernel_creation_context() const;
+
+    /**
      * RouterConnectionPair - Internal struct for router connection info
      */
     struct RouterConnectionPair {
