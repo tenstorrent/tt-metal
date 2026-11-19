@@ -71,7 +71,7 @@ def _mla_cache_complete(cache_path: Path, prefix: str, layer_idx: int, model_cfg
 
     # Sparse (DSA) attention is a property of the model; a `shared` layer is still sparse (it replicates wkv_b1) but
     # owns no indexer weights, so only the indexer files depend on the layer's own type.
-    from models.demos.deepseek_v3_d_p.tt.mla.mla_2d import ttMLA2DTP, uses_2d_tp
+    from models.demos.deepseek_v3_d_p.tt.mla.mla_2d import mla_2d_cache_layout, ttMLA2DTP, uses_2d_tp
     from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
 
     sparse = hf_config is not None and resolve_has_indexer(hf_config)
@@ -84,6 +84,7 @@ def _mla_cache_complete(cache_path: Path, prefix: str, layer_idx: int, model_cfg
             has_indexer=owns_indexer,
             has_output_gate=bool(getattr(model_cfg, "USE_OUTPUT_GATE", False)),
             has_sink=bool(getattr(model_cfg, "USE_LEARNABLE_SINK", False)),
+            **mla_2d_cache_layout(model_cfg),
         )
     replicated = sparse and ttMLA.replicates_wkv_b1(hf_config, tp_factor, sparse)
     names = ttMLA.weight_names(

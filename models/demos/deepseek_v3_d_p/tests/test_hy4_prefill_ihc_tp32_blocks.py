@@ -19,8 +19,8 @@ no 2D layout (#65887), so a full-indexer layer cannot build ``ttMLA2DTP``, and t
 Scored per iHC site against the fp32 CPU reference's streams (``HY4_IHC_REF_STREAMS``; see
 ``test_hy4_prefill_ihc_layers.py``): streams in, sublayer input y, streams out, and the update out - in.
 
-Weights: read from the checkpoint once and cached under ``HY4_TP32_TTNN_CACHE`` (the TP32 shards differ from the dev
-layout's). Env: ``HY4_HF_MODEL``, ``HY4_IHC_REF_STREAMS``, ``HY4_TP32_LAYERS`` (default 4), ``HY4_IHC_REPORT``.
+Weights: what the cache lacks is read from the checkpoint once and cached under ``HY4_TP32_TTNN_CACHE`` (default: the
+dev layout's cache dir; the 2D shards are named by their layout, everything else is shared). Env: ``HY4_HF_MODEL``, ``HY4_IHC_REF_STREAMS``, ``HY4_TP32_LAYERS`` (default 4), ``HY4_IHC_REPORT``.
 """
 
 from __future__ import annotations
@@ -41,8 +41,14 @@ from models.demos.deepseek_v3_d_p.tests.test_hy4_prefill_ihc_layers import REF_D
 from models.demos.deepseek_v3_d_p.tt.hy4 import ihc as hy4_ihc
 
 CHECKPOINT = Path(os.environ.get("HY4_HF_MODEL", "/mnt/tt-data/Hy4-Preview"))
-GOLDEN = Path(os.environ.get("PREFILL_TRACE_DIR", "/mnt/tt-data/dwadhwani/hy4-golden/hy4-bf16-longbench-4k-v2"))
-CACHE = Path(os.environ.get("HY4_TP32_TTNN_CACHE", "/mnt/tt-data/dwadhwani/Hy4-Preview-Cache/tp32-blocks/8x4_sp0"))
+GOLDEN = Path(os.environ.get("PREFILL_TRACE_DIR", "/mnt/tt-data/dwadhwani/hy4-golden/hy4-bf16-longbench-4k-v3-row2"))
+# The 2D shards carry their layout in their names (mla2d_<layout>, *_8x4_h4ax1_i8ax0), and on this mesh mapping the
+# norms, router and EP32 routed experts are the dev layout's own files, so the TP32 blocks share the dev cache dir.
+CACHE = Path(
+    os.environ.get(
+        "HY4_TP32_TTNN_CACHE", "/mnt/tt-data/dwadhwani/Hy4-Preview-Cache/prefill-v1/hy4_preview_bh_32dev/8x4"
+    )
+)
 NUM_LAYERS = int(os.environ.get("HY4_TP32_LAYERS", "4"))
 S = 4096
 SP_AXIS, TP_AXIS = 0, 1  # sequence + heads on the 8-chip axis, hidden on the 4-chip axis (#65884)
@@ -100,8 +106,25 @@ def test_hy4_prefill_ihc_tp32_blocks(variant, config_only, mesh_device, device_p
     experts_per_chip = model_cfg.NUM_ROUTED_EXPERTS // (sp * tp)
 
     ckpt = hc.Hy4Checkpoint(CHECKPOINT)
-    all_cats = {wc.NORMS, wc.MLA, wc.DENSE_FFN, wc.MOE_GATE, wc.SHARED_EXPERTS, wc.ROUTED_EXPERTS, wc.IHC}
     CACHE.mkdir(parents=True, exist_ok=True)
+    from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE
+
+    # Only what this cache lacks for the TP32 blocks (the runner's own per-category check), from the checkpoint.
+    missing = wc.missing_trunk_categories(
+        CACHE,
+        num_layers=NUM_LAYERS,
+        first_layer_idx=0,
+        experts_per_chip=experts_per_chip,
+        model_cfg=model_cfg,
+        routed_expert_weights_dtype=DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
+        is_first_rank=True,
+        is_last_rank=False,
+        mtp_levels=0,
+        kv_only_last_layer=False,
+        hf_config=config,
+        tp_factor=tp,
+    )
+    logger.info(f"[tp32] cache {CACHE}: building {wc.format_missing(missing) if missing else 'nothing'}")
     kvpe_cache = init_mla_kv_cache(
         cache_format=MlaKvCacheFormat.SCALED_FP8,
         hf_config=config,
@@ -114,15 +137,8 @@ def test_hy4_prefill_ihc_tp32_blocks(variant, config_only, mesh_device, device_p
     )
     blocks = []
     for i in range(NUM_LAYERS):
-        complete = TtPrefillBlock.check_cache_complete(
-            CACHE, i, i < model_cfg.NUM_DENSE_LAYERS, experts_per_chip, model_cfg=model_cfg, hf_config=config
-        )
-        cats = (
-            set()
-            if complete
-            else (all_cats - ({wc.MOE_GATE, wc.SHARED_EXPERTS, wc.ROUTED_EXPERTS} if i == 0 else {wc.DENSE_FFN}))
-        )
-        logger.info(f"[tp32] layer {i}: {'cache' if complete else 'checkpoint -> cache'}")
+        cats = {c for c, layers in missing.items() if i in layers}
+        logger.info(f"[tp32] layer {i}: {sorted(cats) if cats else 'cache'}")
         sd = hc.hy4_layer_state_dict(ckpt, config, model_cfg, i, cats) if cats else {}
         blocks.append(
             TtPrefillBlock(

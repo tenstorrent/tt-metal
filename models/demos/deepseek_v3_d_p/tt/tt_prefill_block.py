@@ -16,7 +16,7 @@ from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.hy4 import ihc as hy4_ihc
 from models.demos.deepseek_v3_d_p.tt.kv_ack import zero_pad_and_ack
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
-from models.demos.deepseek_v3_d_p.tt.mla.mla_2d import mla_class
+from models.demos.deepseek_v3_d_p.tt.mla.mla_2d import mla_2d_cache_layout, mla_class, uses_2d_tp
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     compute_constants,
     extract_mesh_config,
@@ -138,9 +138,12 @@ class TtPrefillBlock(LightweightModule):
             return False
         if kv_only:
             return TtPrefillBlock._kv_only_mla_cache_complete(cache_path, prefix, layer_idx, hf_config)
-        if not (mla_class(hf_config) if hf_config is not None else ttMLA).check_cache_complete(
+        mla_2d = hf_config is not None and uses_2d_tp(hf_config)
+        if not mla_class(hf_config if mla_2d else None).check_cache_complete(
             cache_path,
             f"{prefix}.mla",
+            # 2D TP shards are named by the mesh layout (ttMLA2DTP.cache_name); the model config names it.
+            **(mla_2d_cache_layout(model_cfg) if mla_2d else {}),
             # #54836: a cache missing the MLA output gate reported complete, and `ttnn.as_tensor` then
             # loaded a `torch.empty` placeholder as the weights. Reading the flag off `model_cfg` keeps
             # every non-gated model's existing cache valid, since only Kimi-K3 sets USE_OUTPUT_GATE.

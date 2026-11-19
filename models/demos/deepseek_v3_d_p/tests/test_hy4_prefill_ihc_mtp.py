@@ -45,7 +45,7 @@ from models.demos.deepseek_v3_d_p.tt.hy4 import ihc as hy4_ihc
 
 chunked = smoke.chunked
 TRUNK = 5  # the MTP layer sits at index 5
-TRACE = Path(os.environ.get("HY4_MTP_TRACE", "/mnt/tt-data/dwadhwani/hy4-golden/hy4-4k-v2-mtp-L5"))
+TRACE = Path(os.environ.get("HY4_MTP_TRACE", "/mnt/tt-data/dwadhwani/hy4-golden/hy4-4k-v3-mtp-L5"))
 MTP_CACHE_ROOT = Path(
     os.environ.get("HY4_MTP_TTNN_CACHE", "/mnt/tt-data/dwadhwani/Hy4-Preview-Cache/hy4_mtp_ttnn_cache")
 )

@@ -97,6 +97,20 @@ def uses_2d_tp(config) -> bool:
     return bool(getattr(config, MLA_2D_TP_FLAG, False))
 
 
+def mla_2d_cache_layout(model_cfg) -> dict:
+    """``{mesh_shape, sp_axis, tp_axis}`` that name a 2D-TP layer's cache shards, for cache checks that run without a
+    mesh (``TtPrefillBlock.check_cache_complete``, the runner's weight categories). Attention and the 2D FFN share the
+    TP32 placement, so it is the model config's ``FFN_2D_MESH`` / ``FFN_2D_HIDDEN_AXIS`` (hidden = TP axis)."""
+    mesh = getattr(model_cfg, "FFN_2D_MESH", None)
+    hidden_axis = getattr(model_cfg, "FFN_2D_HIDDEN_AXIS", None)
+    if mesh is None or hidden_axis is None:
+        raise ValueError(
+            f"{getattr(model_cfg, '__name__', model_cfg)}: a 2D-TP attention cache is named by its mesh layout; set "
+            "FFN_2D_MESH / FFN_2D_HIDDEN_AXIS (Hy4TP32Config does)"
+        )
+    return {"mesh_shape": tuple(mesh), "sp_axis": 1 - int(hidden_axis), "tp_axis": int(hidden_axis)}
+
+
 def mla_class(config):
     """ttMLA2DTP when the config opts in to 2D TP attention, else ttMLA."""
     return ttMLA2DTP if uses_2d_tp(config) else ttMLA
