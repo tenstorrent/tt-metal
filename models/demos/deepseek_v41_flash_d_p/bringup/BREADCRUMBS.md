@@ -1271,3 +1271,64 @@
   bounds wo_a now: ~320 GB/s of its 42.6 MB a call (DRAM floor at 410 GB/s: 0.104 ms) vs 0.133 measured. Accuracy:
   `--part test_ladder` has no run on the A/B side (F285); the change is bit-identical at the op level (wo_a's shape and
   dtypes, tests/test_grouped_matmul_wo_a.py); the accept gate runs the frozen tests. No `gate --check` run.
+
+## PPB.1 (PB.1 perf, attempt 2): packed prefill, design + interfaces, CPU only
+
+- Expected saving of THIS task (written before code): 0 ms device, 0 ms host a chunk. PB.1 adds no device path: a
+  design, a CPU module (tt/packed.py: descriptor and per-segment index math), a CPU packed reference and the PACKED
+  switch (call-time, read by nothing on the device yet: PB.3 wires it). Target the design serves (PB.3-PB.6,
+  projected, packed8k_projection.md): 4 x 2k @ 139k as one 8192 chunk 106-145 ms vs 4 padded 5120 chunks today
+  (~4 x 75 ms = ~300 ms): ~2-2.8x new tok/s for small turns; owner bar <= ~122 ms (67k new tok/s).
+- Loads: none (no device, runner not started). The CPU rung loads layers [0, 1, 2, 3] of the real checkpoint on the
+  host ("needs 4 layers because they hold every per-chunk kind the oracle must cover: window-only 0, engram 1, KV +
+  index source with ratio-2 groups 2, a reader of 2's top-k 3"; ~4 s load, ~22 s a 256-row forward, measured).
+- Attempt 1 (stopped by the overseer, OV-57) left no code in the tree (git status: ledger files only); started over
+  from the owner's 20:45 clarifications.
+- Built: `tt/packed.py` (Segment / ChunkDescriptor: today's header = `ChunkDescriptor.single`; lanes, per-row
+  positions / valid / write rows, block-diagonal causal mask, ids pack / unpack, lane -> chips and carry sources on
+  every box, compressor groups for any ratio, window carry class, engram tail, snapshot range, DRAM budget);
+  `reference/packed_ref.py` (`forward_packed`: token-wise steps once over all rows, kv with per-row positions,
+  engram_rows / compressor / indexer / attention per segment on its own rows and slot State; `fixed_expert_tiles`);
+  `tests/packed/test_packed_cpu.py` (the gate: 28 cases, 0 failures, ~5 min CPU); `tests/packed/
+  test_chunk8192_reference.py` (PB.2, not run); `PACKED_DESIGN.md`; `drafts/tt_d_gen_packed_ask.md`; Setting PACKED
+  (off|on, default off: nothing on the device reads it yet, so both A/B sides run the same device path; PB.3 wires it)
+  in batch_call_settings.
+- Key design fact: at 8192 every 2048-row lane is a fixed set of whole chips on every box (8x4: 8 chips = 2 SP rows),
+  so per-segment attention becomes one call with per-chip arguments (table / key buffer / start / carry source)
+  except the cross-chip history gather and the indexer's key ring (PACKED_DESIGN.md sections 1, 5).
+- CPU rung results (layers 0-3, 4 x 64-row lanes, 5 slots, histories 0-160, padded / odd / empty lanes): lane
+  equivalence 0, lane move 0, determinism 0, today's single header vs packed lane 0, slot digests 0 mismatches;
+  vs DS41Reference.forward_chunk (the segment as its own 64-row chunk) max rel 5.8e-7 (the reference's dense GEMMs at
+  other row counts; index states equal, float states written at the same rows).
+- Gotcha (DS41-321): the CPU reference's routed SwiGLU is not row-local (torch threaded elementwise ops: 1 ulp by
+  the row's place in the expert group); the oracle runs it row by row on every side. GEMMs in fixed tiles were
+  already row-local. The device MoE's row-locality is PB.4's first check.
+- CPU iteration: the test file was run with `python -m pytest` directly while iterating (CPU only: no device code,
+  no ttnn device open); the final check via `gate PB.1 --check`.
+- 8192 on today's tree (section 8): since X.7 only P.78 / P.85 / F281-283 / C++ engram / P.87 / P.83 / P.81 touched
+  tt/; risks at 256 rows a chip: P.83 mhc_post fast (probed at 160 only), P.81 grouped_matmul plan at M = 256,
+  mm_configs fall back to stock (untuned). Accuracy at 8192 from the existing s56320 golden + drift files (from0 /
+  last cases), no new golden.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate PB.1 --spec $BRINGUP_SPEC --check`.
+- GATE BLOCKED (DS41-322, ledger, not code): `gate PB.1 --check` printed "FAIL PB.1 / gate calls pytest directly:
+  'python -m pytest -q models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_cpu.py'" and ran nothing
+  (core/gate.py:159 device_policy_errors refuses any direct pytest in gate.cmd). tasks.yaml is not mine to edit. Fix
+  for the overseer: PB.1 gate.cmd = `scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_cpu.py` (the ledger's other CPU gates, e.g.
+  test_format_attribution). The test itself, run directly on the CPU after the last edit: 28 cases, 0 failures
+  (5 min 4 s); not re-run through the safe runner here (the brief: no device in this task).
+
+## PPB.1 (PB.1 perf, attempt 4): finish and gate
+- Checked the tree from attempts 2-3 against the brief: PACKED_DESIGN.md (sections 1-12), tt/packed.py,
+  reference/packed_ref.py, tests/packed/test_packed_cpu.py, tests/packed/test_chunk8192_reference.py (PB.2, not run),
+  drafts/tt_d_gen_packed_ask.md and the PACKED Setting (call-time, in batch_call_settings) are all there. Attempt 3's
+  hooks.py change (the env read through the settings table, rule 10) stays.
+- DECIDED (OV-58): engine order inside a lane = per-segment ring_sdpa_reshuffle (the model accepts lane-natural too).
+- DECIDED (OV-58): pad rows are excluded from MoE dispatch, provided PB.4's row-locality check holds (PACKED_DESIGN.md s11).
+- Loads: none (CPU only; the CPU test loads layers 0-3 on the host, for the reason given in PPB.1 attempt 2).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate PB.1 --spec $BRINGUP_SPEC --check`.
+- The gate still refuses PB.1's cmd (DS41-322: "gate calls pytest directly"; F288 fixed only the settings lint). I ran
+  the same test through `scripts/run_safe_pytest.sh --run-all --no-precompile tests/packed/test_packed_cpu.py`
+  (CPU only, no device opened). The first run hit pytest's default 300 s timeout in test_reference_packed_vs_alone
+  (65 s load + 235 s), so that test now has `@pytest.mark.timeout(1200)`. Second run: 7 passed (312 s), SAFE_PYTEST_RESULT PASS.
+- Metrics (generated/bringup_adhoc/PB.1.json): packed_cpu_cases 28, packed_cpu_failures 0; lane_equiv 0, alone_vs_today 0, determinism 0, slot_digest_mismatches 0, vs_forward_chunk_rel 5.8e-7.

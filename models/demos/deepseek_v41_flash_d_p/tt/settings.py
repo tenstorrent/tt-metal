@@ -1347,6 +1347,16 @@ TABLE = {
         "actual_end // kv_block_size x kv_block_size (tt/attention.snapshot_cap); a one-token prompt (actual_end 1) "
         "gives 0 both ways. Set it to the deployed worker's value",
     ),
+    "PACKED": Setting(
+        "off",
+        ("off", "on"),
+        "OWNER 2026-11-19 (PB.1, bringup/PACKED_DESIGN.md): packed prefill, read per chunk (CALL-TIME, listed in "
+        "bringup/hooks.py batch_call_settings, so both sides run in one load). on = a chunk carries up to 4 segments "
+        "(tt/packed.ChunkDescriptor: lane i = rows [2048 i, 2048 i + 2048) of an 8192 chunk, each its own slot, start, "
+        "end, global_write_start): token-wise work once over every row, attention per segment. off = today's single "
+        "request per chunk. PB.1 adds the descriptor, the CPU rung and the design; no device path reads it yet "
+        "(PB.3 wires it: a single segment through on stays bit-identical to off)",
+    ),
     "PREFILL_END": Setting(
         "cap",
         ("cap", "end"),

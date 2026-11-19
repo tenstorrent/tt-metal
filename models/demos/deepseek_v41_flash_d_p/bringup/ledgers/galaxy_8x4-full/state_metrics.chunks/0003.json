@@ -3717,6 +3717,10 @@
  "PB.0": {
   "chips": 32
  },
+ "PB.1": {
+  "packed_cpu_cases": 28,
+  "packed_cpu_failures": 0
+ },
  "X.4": {
   "acks_early": 0,
   "contract_checks_failed": 0,

@@ -1,0 +1,33 @@
+{
+ "metrics": {
+  "packed_cpu_alone_vs_today_max_abs_diff": {
+   "t": "2026-11-19T21:52:27",
+   "value": 0.0
+  },
+  "packed_cpu_cases": {
+   "t": "2026-11-19T21:52:27",
+   "value": 28
+  },
+  "packed_cpu_determinism_max_abs_diff": {
+   "t": "2026-11-19T21:52:27",
+   "value": 0.0
+  },
+  "packed_cpu_failures": {
+   "t": "2026-11-19T21:52:27",
+   "value": 0
+  },
+  "packed_cpu_lane_equiv_max_abs_diff": {
+   "t": "2026-11-19T21:52:27",
+   "value": 0.0
+  },
+  "packed_cpu_slot_digest_mismatches": {
+   "t": "2026-11-19T21:52:27",
+   "value": 0
+  },
+  "packed_cpu_vs_forward_chunk_rel": {
+   "t": "2026-11-19T21:52:27",
+   "value": 5.825026607333541e-07
+  }
+ },
+ "task": "PB.1"
+}

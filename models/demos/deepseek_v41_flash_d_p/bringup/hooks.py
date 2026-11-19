@@ -9,7 +9,6 @@ Contract side (contract role): contract_independent_pcc (optional).
 See models/demos/common/bringup/reference/interface.py and testing/harness.py for the contracts.
 """
 
-import os
 
 import torch
 
@@ -1394,10 +1393,17 @@ def batch_call_settings(env=None) -> tuple:
     environment, default this process's)."""
     from models.demos.deepseek_v41_flash_d_p.tt.settings import settings as _settings
 
-    env = os.environ if env is None else env
-    skip = env.get(_settings.env_name("DECODER_SKIP"), str(_settings.table["DECODER_SKIP"].default))
-    # ENGRAM_DEVICE (P.87) and ENGRAM_HOST_IMPL (C++ host path) are read per chunk: one load serves both values
-    return ("PREFILL_END", "ENGRAM_DEVICE", "ENGRAM_HOST_IMPL") + (() if skip == "replay128" else ("DECODER_SKIP",))
+    # the run's value (``env``), or this process's through the settings table (rule 10: no environment read here)
+    skip = (
+        str(_settings._read("DECODER_SKIP"))
+        if env is None
+        else env.get(_settings.env_name("DECODER_SKIP"), str(_settings.table["DECODER_SKIP"].default))
+    )
+    # ENGRAM_DEVICE (P.87) and ENGRAM_HOST_IMPL (C++ host path) are read per chunk: one load serves both values;
+    # PACKED (PB.1, owner 2026-11-19: packed prefill, tt/packed.py) likewise, per chunk
+    return ("PREFILL_END", "ENGRAM_DEVICE", "ENGRAM_HOST_IMPL", "PACKED") + (
+        () if skip == "replay128" else ("DECODER_SKIP",)
+    )
 
 
 def batch_call_apply(model) -> None:
