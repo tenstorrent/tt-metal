@@ -1,0 +1,39 @@
+
+{
+ "op": "ttnn.operations.all_gather_rms_norm",
+ "summary": {
+  "total": 49317,
+  "supported_pass": 10503,
+  "supported_fail": 0,
+  "supported_marked_xfail": 0,
+  "supported_skipped": 0,
+  "supported_other": 0,
+  "xfail_expected": 3000,
+  "xpass_drift": 0,
+  "xfail_wrong_mode": 0,
+  "xfail_other": 0,
+  "invalid_skipped": 35568,
+  "invalid_unexpected": 0,
+  "infeasible_skipped": 180,
+  "no_axes_found": 66
+ },
+ "xfail_expected_by_exclusion": {
+  "{dtype: float32, fp32_dest_acc_en: False}": 2280,
+  "{dtype: bfloat8_b, alignment: w_non_aligned}": 720
+ },
+ "infeasible_skipped_by_shape": {
+  "1x32x4096 HEIGHT_SHARDED": 20,
+  "128x8192 HEIGHT_SHARDED": 60,
+  "1x1x32x4096 HEIGHT_SHARDED": 20,
+  "1x1x32x8192 HEIGHT_SHARDED": 60,
+  "1x1x128x4096 HEIGHT_SHARDED": 20
+ },
+ "run": {
+  "date": "2026-11-07",
+  "box": "Blackhole QuietBox 2 (4x p300c), system mesh 2x2 (golden test_op: Linear, cluster_axis 0/1); 1x4 ring mock for test_ring_mock + LOOSE_CASES",
+  "how": "eval/eval_test_runner.sh in 13 shape chunks (-k by shape) + one chunk for test_ring_mock/test_regression, merged; EVAL_CAPTURE_L1=0 (see verification_report.md: graph capture records no CB allocations for this mesh generic_op)",
+  "code": "after verifier commits 525edc1e4d3 (partial-combine semaphore race fix) and ffc870ca837",
+  "full_artifacts": "/tmp/agrms_v/golden_merged/{test_results.json,test_axes.json,verifier_report.json} (38 MB, not committed)",
+  "no_axes_found_note": "66 = test_ring_mock (48 incl. perf-shape rings) + test_regression; not registry cells, all passed"
+ }
+}

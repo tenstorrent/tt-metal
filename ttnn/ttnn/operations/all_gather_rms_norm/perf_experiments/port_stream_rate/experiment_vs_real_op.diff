@@ -1,0 +1,574 @@
+diff -ru '--exclude=__pycache__' '--exclude=__init__.py' -x '*.md' -x '*.json*' -x agent_logs -x perf_experiments -x l1_ledger.md ./all_gather_rms_norm_program_descriptor.py perf_experiments/port_stream_rate/agrms_copy/all_gather_rms_norm_program_descriptor.py
+--- a/all_gather_rms_norm_program_descriptor.py	2026-11-13 15:43:05.578349379 +0000
++++ b/all_gather_rms_norm_program_descriptor.py	2026-11-13 16:38:47.920478963 +0000
+@@ -111,6 +111,20 @@
+ PERF_ABLATE = os.environ.get("AGRMS_ABLATE", "")
+ # Perf probes only: AGRMS_PROFILE_ZONES=1 compiles the per-stage device zones in (kernels: AGRMS_ZONE).
+ PROFILE_ZONES = os.environ.get("AGRMS_PROFILE_ZONES", "") == "1"
++# port_stream_rate experiment: extra defines on the PORT kernels only, env AGRMS_PSR_DEFINES="NAME[=VAL],..."
++# port_stream_rate experiment: JIT optimization level of the port sender / reader (env AGRMS_PSR_SOPT / AGRMS_PSR_ROPT =
++# O1 | O2 | O3 | Os; unset = the JIT default, -Os). An in-kernel #pragma / attribute has no effect (LTO link at -Os).
++PSR_SOPT = os.environ.get("AGRMS_PSR_SOPT", "")
++PSR_ROPT = os.environ.get("AGRMS_PSR_ROPT", "")
++
++
++def _psr_opt(v):
++    return getattr(ttnn.experimental.fabric_mux.KernelBuildOptLevel, v) if v else None
++
++
++PSR_DEFINES = [
++    tuple((d.split("=", 1) + ["1"])[:2]) for d in os.environ.get("AGRMS_PSR_DEFINES", "").split(",") if d.strip()
++]
+ # Test hook only (debug tests pin a split): AGRMS_FORCE_K = k restricts select_split to that candidate.
+ FORCE_K = int(os.environ.get("AGRMS_FORCE_K", "0"))
+ # Perf A/B only: AGRMS_NATIVE_SHARD=0 sends sharded tensors down the TensorAccessor fallback (the Phase 0 path).
+@@ -977,6 +991,9 @@
+         "all_gather_rms_norm",
+         PERF_ABLATE,
+         PROFILE_ZONES,
++        tuple(PSR_DEFINES),
++        PSR_SOPT,
++        PSR_ROPT,
+         FORCE_K,
+         NATIVE_SHARD,
+         PRESCALE_GAMMA,
+@@ -1152,7 +1169,8 @@
+                 kernel_source=str(KERNEL_DIR / "all_gather_rms_norm_port_reader.cpp"),
+                 core_ranges=port_crs,
+                 compile_time_args=reader_port_ct,
+-                defines=ablate,
++                defines=ablate + PSR_DEFINES,
++                opt_level=_psr_opt(PSR_ROPT),
+                 runtime_args=preader_rt,
+                 common_runtime_args=noc_xy,
+                 config=dm(ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_0),
+@@ -1161,7 +1179,8 @@
+                 kernel_source=str(KERNEL_DIR / "all_gather_rms_norm_port_sender.cpp"),
+                 core_ranges=port_crs,
+                 compile_time_args=sender_port_ct,
+-                defines=ablate,
++                defines=ablate + PSR_DEFINES,
++                opt_level=_psr_opt(PSR_SOPT),
+                 runtime_args=psender_rt,
+                 common_runtime_args=noc_xy,
+                 config=dm(ttnn.DataMovementProcessor.RISCV_0, ttnn.NOC.NOC_1),
+diff -ru '--exclude=__pycache__' '--exclude=__init__.py' -x '*.md' -x '*.json*' -x agent_logs -x perf_experiments -x l1_ledger.md ./kernels/all_gather_rms_norm_common.hpp perf_experiments/port_stream_rate/agrms_copy/kernels/all_gather_rms_norm_common.hpp
+--- a/kernels/all_gather_rms_norm_common.hpp	2026-11-13 13:40:42.714745605 +0000
++++ b/kernels/all_gather_rms_norm_common.hpp	2026-11-13 16:28:00.320105788 +0000
+@@ -16,6 +16,12 @@
+ #else
+ #define AGRMS_ZONE(name)
+ #endif
++// port_stream_rate experiment: per-packet / per-batch zones on the port kernels (AGRMS_PSR_PKT_ZONES, with zones on)
++#if defined(AGRMS_PROFILE_ZONES) && defined(AGRMS_PSR_PKT_ZONES)
++#define AGRMS_PZONE(name) DeviceZoneScopedN(name)
++#else
++#define AGRMS_PZONE(name)
++#endif
+
+ namespace agrms_cb {
+ constexpr uint32_t cb_x_landing = 0;       // resident landing tiles (all blocks of the core); FIRST, on workers + ports
+diff -ru '--exclude=__pycache__' '--exclude=__init__.py' -x '*.md' -x '*.json*' -x agent_logs -x perf_experiments -x l1_ledger.md ./kernels/all_gather_rms_norm_port_reader.cpp perf_experiments/port_stream_rate/agrms_copy/kernels/all_gather_rms_norm_port_reader.cpp
+--- a/kernels/all_gather_rms_norm_port_reader.cpp	2026-11-13 16:24:28.291642747 +0000
++++ b/kernels/all_gather_rms_norm_port_reader.cpp	2026-11-13 17:12:34.180020429 +0000
+@@ -143,11 +143,74 @@
+             notify_rows(next_notify++);
+         }
+     };
++#ifdef AGRMS_PSR_IDLE_NOTIFY
++    // port_stream_rate: the landing notifications are drained one tile-row at a time while the reader would otherwise
++    // wait (CB space, read barrier, upstream arrival), so the fan-out never delays a read the sender is waiting for.
++    // Rows go out in ascending order as before; notify_allowed = the upstream step known complete.
++    int32_t notify_allowed = -1;
++    uint32_t nn_r = 0;
++    auto notify_one_row = [&]() -> bool {
++        if (!has_in || nn_r >= R_t || static_cast<int32_t>(nn_r / xfer_rows + static_cast<uint32_t>(last_in) * relay_lag) >
++                               notify_allowed) {
++            return false;
++        }
++        uint32_t grp, li;
++        g.place(nn_r, grp, li);
++        for (uint32_t m = 0; m < k; ++m) {
++            const uint32_t c = get_arg_val<uint32_t>(cnt_idx + m);
++            if (c != 0) {
++                const uint32_t xy = get_common_arg_val<uint32_t>(grp * k + m);
++                noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, landed_addr), c);
++            }
++        }
++        ++nn_r;
++        return true;
++    };
++    auto reserve_idle = [&](uint32_t pages) {
++        while (!cb_pages_reservable_at_back(cb, pages)) {
++            notify_one_row();
++        }
++        cb_reserve_back(cb, pages);
++    };
++    auto barrier_idle = [&]() {
++        while (!ncrisc_noc_reads_flushed(noc_index)) {
++            notify_one_row();
++        }
++        invalidate_l1_cache();
++    };
++    auto arrival_idle = [&](uint32_t target) {
++        while (true) {
++            invalidate_l1_cache();
++            if (*arrived >= target) {
++                break;
++            }
++            notify_one_row();
++        }
++    };
++#define AGRMS_PSR_RESERVE(pages) reserve_idle(pages)
++#define AGRMS_PSR_BARRIER() barrier_idle()
++#else
++#define AGRMS_PSR_RESERVE(pages) cb_reserve_back(cb, pages)
++#define AGRMS_PSR_BARRIER() noc_async_read_barrier()
++#endif
+
+     // Batches end at the next multiple of `group` chunks in the CB (2 x group chunks: a reservation never wraps) or
+     // at the end of an item (a relay waits on its upstream; an unpushed tail would hold every downstream back).
+     uint32_t batch = 0, need = 0, pos = 0, wptr = 0;
+-    auto stream_item = [&](const Entry& e, uint32_t xb, bool from_input) {
++    // port_stream_rate (AGRMS_PSR_RELAY_OVERLAP): an item's last batch may be left in flight (`pend` chunks read, not yet
++    // barriered / pushed) so the landing notifications go out while its reads complete; finish_pending() closes it
++    // before anything else touches the CB.
++    uint32_t pend = 0;
++    auto finish_pending = [&]() {
++        if (pend) {
++            noc_async_read_barrier();
++            cb_push_back(cb, run_pages * pend);
++            pos += pend;
++            pend = 0;
++        }
++    };
++    auto stream_item = [&](const Entry& e, uint32_t xb, bool from_input, bool defer = false) {
++        finish_pending();
+         for_each_chunk_of_item(
+             g,
+             e,
+@@ -155,15 +218,41 @@
+             [&](uint32_t w, uint32_t addr, uint32_t bytes, bool last) {
+                 if (batch == 0) {
+                     need = group - pos % group;
+-                    cb_reserve_back(cb, run_pages * need);
++                    {
++                        AGRMS_PZONE("AG_R_RESV");
++                        AGRMS_PSR_RESERVE(run_pages * need);
++                    }
+                     wptr = get_write_ptr(cb);
+                 }
+                 const uint32_t xy = get_common_arg_val<uint32_t>(w);
++#ifdef AGRMS_PSR_CHUNK_PUSH
++                noc_async_read_set_trid(batch + 1);  // one transaction id per chunk slot of the batch
++#endif
+ #ifndef AGRMS_ABLATE_NOREAD
+                 noc_async_read(get_noc_addr(xy & 0xFFFF, xy >> 16, addr), wptr + batch * chunk_bytes, bytes);
+ #endif
++#ifdef AGRMS_PSR_CHUNK_PUSH
++                // port_stream_rate: the batch's reads are all in flight; each chunk is pushed as soon as ITS read lands
+                 if (++batch == need || last) {
+-                    noc_async_read_barrier();
++                    noc_async_read_set_trid(0);
++                    AGRMS_PZONE("AG_R_BAR");
++                    for (uint32_t i = 0; i < batch; ++i) {
++                        noc_async_read_barrier_with_trid(i + 1);
++                        cb_push_back(cb, run_pages);
++                    }
++                    pos += batch;
++                    batch = 0;
++                }
++                return;
++#endif
++                if (last && defer) {
++                    pend = batch + 1;
++                    batch = 0;
++                } else if (++batch == need || last) {
++                    {
++                        AGRMS_PZONE("AG_R_BAR");
++                        AGRMS_PSR_BARRIER();
++                    }
+                     cb_push_back(cb, run_pages * batch);
+                     pos += batch;
+                     batch = 0;
+@@ -175,10 +264,11 @@
+     // own item from the input tensor (same chunks, same order as the sender's walk over the landing slots)
+     const auto x_acc = TensorAccessor(x_args, x_addr, page_bytes);
+     auto stream_item_input = [&](const Entry& e, uint32_t xb) {
++        finish_pending();
+         for_each_chunk_of_item_src(g, e, xb, [&](uint32_t r, uint32_t col, uint32_t bytes, bool last) {
+             if (batch == 0) {
+                 need = group - pos % group;
+-                cb_reserve_back(cb, run_pages * need);
++                AGRMS_PSR_RESERVE(run_pages * need);
+                 wptr = get_write_ptr(cb);
+             }
+             uint32_t dst = wptr + batch * chunk_bytes;
+@@ -189,7 +279,7 @@
+ #endif
+             }
+             if (++batch == need || last) {
+-                noc_async_read_barrier();
++                AGRMS_PSR_BARRIER();
+                 cb_push_back(cb, run_pages * batch);
+                 pos += batch;
+                 batch = 0;
+@@ -197,6 +287,61 @@
+         });
+     };
+
++#ifdef AGRMS_PSR_DESC
++    // port_stream_rate: chunk descriptors for the sender, one per cb_port_chunks slot (2 x group), in the port core's
++    // own cb_x_landing (allocated on the ports for its address only: nothing lands on a port core). Slot i of the
++    // ring belongs to CB chunk slot i, so the CB's own flow control orders the writes against the sender's reads.
++    // Word 0: destination L1 address (landing slot on the downstream member), word 1: member NoC xy, word 2: bytes |
++    // last-chunk-of-item << 31. The sender then walks nothing.
++    volatile tt_l1_ptr uint32_t* desc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(agrms_cb::cb_x_landing));
++    auto put_desc = [&](uint32_t slot, uint32_t land, uint32_t xy, uint32_t bytes, bool last) {
++        volatile tt_l1_ptr uint32_t* d = desc + 3 * slot;
++        d[0] = land;
++        d[1] = xy;
++        d[2] = bytes | (last ? 0x80000000u : 0u);
++    };
++    auto stream_item_desc = [&](const Entry& e, uint32_t xb, bool from_input, bool from_tensor) {
++        for_each_chunk_of_item_full(
++            g, e, xb, [&](uint32_t w, uint32_t land, uint32_t in, uint32_t r, uint32_t col, uint32_t bytes, bool last) {
++                if (batch == 0) {
++                    need = group - pos % group;
++                    {
++                        AGRMS_PZONE("AG_R_RESV");
++                        AGRMS_PSR_RESERVE(run_pages * need);
++                    }
++                    wptr = get_write_ptr(cb);
++                }
++                const uint32_t xy = get_common_arg_val<uint32_t>(w);
++                uint32_t dst = wptr + batch * chunk_bytes;
++#ifndef AGRMS_ABLATE_NOREAD
++                if (from_tensor) {
++                    const uint32_t page0 = r * Wt_lp + col;
++                    for (uint32_t b = 0; b < bytes; b += page_bytes, dst += page_bytes) {
++                        noc_async_read(x_acc.get_noc_addr(page0 + b / page_bytes), dst, page_bytes);
++                    }
++                } else {
++                    noc_async_read(get_noc_addr(xy & 0xFFFF, xy >> 16, from_input ? in : land), dst, bytes);
++                }
++#endif
++                const uint32_t slot = (pos + batch) % (2 * group);
++                put_desc(slot, land, xy, bytes, last);
++                if (++batch == need || last) {
++                    {
++                        AGRMS_PZONE("AG_R_BAR");
++                        AGRMS_PSR_BARRIER();
++                    }
++                    cb_push_back(cb, run_pages * batch);
++                    pos += batch;
++                    batch = 0;
++                }
++            });
++    };
++#ifndef AGRMS_PSR_DESC_HYBRID  // hybrid: the input items keep the source-only walk; the sender walks those itself
++#define stream_item_input(en, xb) stream_item_desc(en, xb, false, true)
++#endif
++#define stream_item(en, xb, fi, ...) stream_item_desc(en, xb, fi, false)
++#endif
++
+     if (has_out) {
+         // the own slice is in the members' landing slots once every local member has loaded it
+         bool local_ready = false;
+@@ -211,8 +356,27 @@
+         };
+         const uint32_t steps = n_xb + (E_out - 1) * relay_lag;
+         const Entry own = out_entry(0);
++#ifdef AGRMS_PSR_OWN_AHEAD
++        // port_stream_rate: own item t + 1 is read before step t's landing notifications (they wait one own item)
++        auto read_own = [&](uint32_t t) {
++            if (t < n_xb && !own.empty()) {
++                if (t < dram_items) {
++                    AGRMS_ZONE("AG_INPUT_ITEM");
++                    stream_item_input(own, t);
++                } else {
++                    await_local();
++                    stream_item(own, t, own_from_input);
++                }
++            }
++        };
++        read_own(0);
++#endif
+         for (uint32_t t = 0; t < steps; ++t) {
++#ifdef AGRMS_PSR_OWN_AHEAD
++            if (false) {
++#else
+             if (t < n_xb && !own.empty()) {
++#endif
+                 if (t < dram_items) {
+                     AGRMS_ZONE("AG_INPUT_ITEM");
+                     stream_item_input(own, t);
+@@ -225,10 +389,17 @@
+                 const int32_t s = static_cast<int32_t>(t - relay_lag);
+                 {
+                     AGRMS_ZONE("AG_ARRIVAL_WAIT");  // wait only (the notify fan-out has its own zone)
++#ifdef AGRMS_PSR_IDLE_NOTIFY
++                    arrival_idle(upstream_through(s));
++                    notify_allowed = s;
++#else
+                     noc_semaphore_wait_min(arrived, upstream_through(s));
++#endif
+                 }
++#if !defined(AGRMS_PSR_RELAY_FIRST) && !defined(AGRMS_PSR_RELAY_OVERLAP) && !defined(AGRMS_PSR_IDLE_NOTIFY)
+                 AGRMS_ZONE("AG_STEP_NOTIFY");
+                 notify_until(s);
++#endif
+             }
+             for (uint32_t e = 1; e < E_out; ++e) {
+                 if (t < e * relay_lag) {
+@@ -238,19 +409,54 @@
+                 if (xb < n_xb) {
+                     const Entry en = out_entry(e);
+                     if (!en.empty()) {
++#ifdef AGRMS_PSR_RELAY_OVERLAP
++                        stream_item(en, xb, false, true);
++#else
+                         stream_item(en, xb, false);
++#endif
+                     }
+                 }
+             }
++#ifdef AGRMS_PSR_RELAY_OVERLAP
++            // port_stream_rate: the relay reads of this step are issued; the notifications go out while they complete
++            if (has_in && t >= relay_lag) {
++                AGRMS_ZONE("AG_STEP_NOTIFY");
++                notify_until(static_cast<int32_t>(t - relay_lag));
++            }
++            finish_pending();
++#endif
++#ifdef AGRMS_PSR_OWN_AHEAD
++            read_own(t + 1);
++#endif
++#ifdef AGRMS_PSR_RELAY_FIRST
++            // port_stream_rate: the relay items of this step go to the sender before the members' landing
++            // notifications (the fan-out no longer delays the next packets)
++            if (has_in && t >= relay_lag) {
++                AGRMS_ZONE("AG_STEP_NOTIFY");
++                notify_until(static_cast<int32_t>(t - relay_lag));
++            }
++#endif
+         }
+     }
++    finish_pending();
+     if (has_in) {
++#ifdef AGRMS_PSR_IDLE_NOTIFY
++        {
++            AGRMS_ZONE("AG_FINAL_ARRIVAL");  // the last relayed items from upstream (earlier rows notified meanwhile)
++            arrival_idle(total_in);
++        }
++        AGRMS_ZONE("AG_FINAL_NOTIFY");
++        notify_allowed = 0x7FFFFFFF;
++        while (notify_one_row()) {
++        }
++#else
+         {
+             AGRMS_ZONE("AG_FINAL_ARRIVAL");  // the last relayed items from upstream (wait only)
+             noc_semaphore_wait_min(arrived, total_in);
+         }
+         AGRMS_ZONE("AG_FINAL_NOTIFY");
+         notify_until(0x7FFFFFFF);
++#endif
+     }
+     noc_async_atomic_barrier();
+ }
+diff -ru '--exclude=__pycache__' '--exclude=__init__.py' -x '*.md' -x '*.json*' -x agent_logs -x perf_experiments -x l1_ledger.md ./kernels/all_gather_rms_norm_port_sender.cpp perf_experiments/port_stream_rate/agrms_copy/kernels/all_gather_rms_norm_port_sender.cpp
+--- a/kernels/all_gather_rms_norm_port_sender.cpp	2026-11-13 15:54:53.432750311 +0000
++++ b/kernels/all_gather_rms_norm_port_sender.cpp	2026-11-13 17:08:58.980555895 +0000
+@@ -163,9 +163,24 @@
+     if (chunks_left > 0) {
+         const uint64_t arrival_noc = get_noc_addr(peer_x, peer_y, get_semaphore(sem_arrival_id), 0);
+         uint32_t h = 0, unflushed = 0;
++#ifdef AGRMS_PSR_CACHED_SLOTS
++        uint32_t free_slots = 0;
++#endif
++#ifdef AGRMS_PSR_STATEFUL
++        conn.setup_stateful_send_cmd_bufs();
++#endif
+         auto send_item = [&](const Entry& e, uint32_t xb) {
+             for_each_chunk_of_item(g, e, xb, [&](uint32_t w, uint32_t addr, uint32_t bytes, bool last) {
+-                cb_wait_front(cb, run_pages * (unflushed + 1));
++#ifdef AGRMS_PSR_DUMMY_ZONE
++                { AGRMS_PZONE("AG_P_DUMMY"); }
++#endif
++                {
++                    AGRMS_PZONE("AG_P_CBW");
++                    cb_wait_front(cb, run_pages * (unflushed + 1));
++                }
++#ifdef AGRMS_PSR_HDR_ZONE
++                DeviceZoneScopedN("AG_P_HDR");  // closes at the end of the chunk body (includes ISSUE/FLUSH)
++#endif
+                 const uint32_t src = get_read_ptr(cb) + unflushed * chunk_bytes;
+                 const uint32_t xy = get_common_arg_val<uint32_t>(w);
+                 const uint64_t dst = get_noc_addr(xy & 0xFFFF, xy >> 16, addr, 0);
+@@ -177,10 +192,27 @@
+                 } else {
+                     hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, bytes);
+                 }
+-                conn.wait_for_empty_write_slot();
+-                conn.send_current_slot_non_blocking(src, bytes, reinterpret_cast<uint32_t>(hdr));
++                {
++                    AGRMS_PZONE("AG_P_ISSUE");
++#ifdef AGRMS_PSR_CACHED_SLOTS
++                    // poll the router's free-slot count only when the cached count runs out
++                    while (free_slots == 0) {
++                        free_slots = conn.get_num_free_write_slots();
++                    }
++                    --free_slots;
++#else
++                    conn.wait_for_empty_write_slot();
++#endif
++#ifdef AGRMS_PSR_STATEFUL
++                    // payload + header through the pre-programmed write_reg cmd buf, credit through write_at's
++                    conn.send_current_slot_stateful_non_blocking(src, bytes, reinterpret_cast<uint32_t>(hdr));
++#else
++                    conn.send_current_slot_non_blocking(src, bytes, reinterpret_cast<uint32_t>(hdr));
++#endif
++                }
+                 --chunks_left;
+                 if (++unflushed == group || chunks_left == 0) {
++                    AGRMS_PZONE("AG_P_FLUSH");
+                     noc_async_writes_flushed();  // sources + headers of the in-flight chunks have left L1
+                     cb_pop_front(cb, run_pages * unflushed);
+                     unflushed = 0;
+@@ -188,6 +220,70 @@
+             });
+         };
+         AGRMS_ZONE("AG_SEND");  // every packet of the call (own + relayed items)
++#ifdef AGRMS_PSR_DESC
++        // port_stream_rate: the port reader hands over each chunk's destination with the chunk (descriptor ring in
++        // this core's cb_x_landing, slot = CB chunk slot); no walk, no item boundaries here.
++        volatile tt_l1_ptr uint32_t* desc =
++            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(agrms_cb::cb_x_landing));
++        uint32_t slot = 0;
++#ifdef AGRMS_PSR_DESC_HYBRID
++        {
++            // the first own items come from the input tensor (port reader, no descriptors): walk them here. Steps
++            // t < dram_items carry only own items (dram_items <= relay_lag, host-checked)
++            const Entry own = out_entry(0);
++            const uint32_t before = chunks_left;
++            for (uint32_t t = 0; t < AGRMS_PSR_DESC_HYBRID && t < n_xb && !own.empty(); ++t) {
++                send_item(own, t);
++            }
++            slot = (before - chunks_left) % (2 * group);
++        }
++#endif
++        while (chunks_left > 0) {
++            {
++                AGRMS_PZONE("AG_P_CBW");
++                cb_wait_front(cb, run_pages * (unflushed + 1));
++            }
++            invalidate_l1_cache();
++            volatile tt_l1_ptr uint32_t* d = desc + 3 * slot;
++            const uint32_t addr = d[0], xy = d[1], bw = d[2];
++            slot = (slot + 1 == 2 * group) ? 0 : slot + 1;
++            const uint32_t bytes = bw & 0x7FFFFFFFu;
++            const uint32_t src = get_read_ptr(cb) + unflushed * chunk_bytes;
++            const uint64_t dst = get_noc_addr(xy & 0xFFFF, xy >> 16, addr, 0);
++            volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[h];
++            h = (h + 1 == num_headers) ? 0 : h + 1;
++            if (bw >> 31) {
++                hdr->to_noc_fused_unicast_write_atomic_inc(
++                    NocUnicastAtomicIncFusedCommandHeader{dst, arrival_noc, 1, true}, bytes);
++            } else {
++                hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, bytes);
++            }
++            {
++                AGRMS_PZONE("AG_P_ISSUE");
++#ifdef AGRMS_PSR_CACHED_SLOTS
++                while (free_slots == 0) {
++                    free_slots = conn.get_num_free_write_slots();
++                }
++                --free_slots;
++#else
++                conn.wait_for_empty_write_slot();
++#endif
++#ifdef AGRMS_PSR_STATEFUL
++                conn.send_current_slot_stateful_non_blocking(src, bytes, reinterpret_cast<uint32_t>(hdr));
++#else
++                conn.send_current_slot_non_blocking(src, bytes, reinterpret_cast<uint32_t>(hdr));
++#endif
++            }
++            --chunks_left;
++            if (++unflushed == group || chunks_left == 0) {
++                AGRMS_PZONE("AG_P_FLUSH");
++                noc_async_writes_flushed();
++                cb_pop_front(cb, run_pages * unflushed);
++                unflushed = 0;
++            }
++        }
++        (void)send_item;
++#else
+         const uint32_t steps = n_xb + (E_out - 1) * relay_lag;
+         const Entry own = out_entry(0);
+         for (uint32_t t = 0; t < steps; ++t) {
+@@ -207,6 +303,7 @@
+                 }
+             }
+         }
++#endif
+     }
+     AGRMS_ZONE("AG_CLOSE");
+     conn.close();
+diff -ru '--exclude=__pycache__' '--exclude=__init__.py' -x '*.md' -x '*.json*' -x agent_logs -x perf_experiments -x l1_ledger.md ./kernels/all_gather_rms_norm_port_walk.hpp perf_experiments/port_stream_rate/agrms_copy/kernels/all_gather_rms_norm_port_walk.hpp
+--- a/kernels/all_gather_rms_norm_port_walk.hpp	2026-11-13 15:42:49.395940384 +0000
++++ b/kernels/all_gather_rms_norm_port_walk.hpp	2026-11-13 17:05:37.452089777 +0000
+@@ -196,4 +196,54 @@
+     }
+ }
+
++// port_stream_rate: the port reader's single walk when it also hands the sender each chunk's destination
++// (AGRMS_PSR_DESC). Same chunks, same order as for_each_chunk_of_item; reports every source the reader may use:
++// f(worker_index, landing_addr, input_shard_addr (native HEIGHT own slice), tile_row r, slice column, bytes, last).
++template <typename F>
++FORCE_INLINE void for_each_chunk_of_item_full(const Geom& g, const Entry& e, uint32_t xb, F&& f) {
++    const uint32_t r0 = xb * g.xfer_rows;
++    const uint32_t rows = g.item_rows(xb);
++    if (e.nseg == 0 || e.rows_in(r0, rows) == 0) {
++        return;
++    }
++    const uint32_t q_base = e.q * g.Wt_lp;
++    uint32_t r_last = r0 + rows - 1;
++    if (!e.has_row(r_last)) {
++        --r_last;
++    }
++    uint32_t grp0, li0;
++    g.place(r0, grp0, li0);
++    const uint32_t land_pitch = g.w_pitch * g.page_bytes;
++    const uint32_t in_pitch = g.Wt_lp * g.page_bytes;
++    uint32_t col0 = e.c0;
++    for (uint32_t s = 0; s < e.nseg; ++s) {
++        const uint32_t v = get_arg_val<uint32_t>(e.seg + s);
++        const uint32_t m = v >> 24, off = (v >> 12) & 0xFFF, len = v & 0xFFF;
++        const uint32_t nch = g.chunks_of(len);
++        const uint32_t base_n = len / nch, rem = len - base_n * nch;
++        const uint32_t land0 = g.landing_base + off * g.page_bytes;
++        const uint32_t in0 = g.x_base + (off - q_base) * g.page_bytes;
++        const bool last_seg = s + 1 == e.nseg;
++        uint32_t grp = grp0, li = li0;
++        for (uint32_t r = r0; r < r0 + rows; ++r) {
++            if (e.has_row(r)) {
++                uint32_t land = land0 + li * land_pitch;
++                uint32_t in = in0 + li * in_pitch;
++                const uint32_t w = grp * g.k + m;
++                const bool last_row = last_seg && r == r_last;
++                uint32_t col = col0;
++                for (uint32_t c = 0; c < nch; ++c) {
++                    const uint32_t n = base_n + (c < rem ? 1 : 0);
++                    f(w, land, in, r, col, n * g.page_bytes, last_row && c + 1 == nch);
++                    land += n * g.page_bytes;
++                    in += n * g.page_bytes;
++                    col += n;
++                }
++            }
++            g.advance(grp, li);
++        }
++        col0 += len;
++    }
++}
++
+ }  // namespace agrms_port

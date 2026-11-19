@@ -1,0 +1,480 @@
+--- a/kernels/all_gather_rms_norm_port_sender.cpp
++++ b/kernels/all_gather_rms_norm_port_sender.cpp
+@@ -66,6 +66,7 @@
+     const uint32_t n_segs = get_arg_val<uint32_t>(a++);
+     const uint32_t segs_idx = a;  // member segments of the send entries (see Entry)
+     a += n_segs;
++    [[maybe_unused]] const uint32_t host_chunks = get_arg_val<uint32_t>(a++);  // presend: host chunk count
+     const uint32_t ready_addr = get_arg_val<uint32_t>(a++);  // global semaphore (same address on every port core)
+     const uint32_t send_ready = get_arg_val<uint32_t>(a++);  // 1: the peer's port that sends to me waits for my ready
+     const uint32_t ready_x = get_arg_val<uint32_t>(a++);
+@@ -96,53 +97,146 @@
+         return unpack_entry(get_arg_val<uint32_t>(out_idx + e), get_arg_val<uint32_t>(segidx_idx + e), segs_idx);
+     };
+
+-    uint32_t chunks_left = 0;
++    auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);  // appended last
++#ifdef AGRMS_PRESEND_EARLY_OPEN
++    // presend lever (c): the connection handshake's NoC reads (router cursor + free slots) are in flight while
++    // header 0 is routed; open_finish() barriers on them just before the ready goes out
+     {
+-        AGRMS_ZONE("AG_SETUP_COUNT");  // pre-fence setup (pre-send critical path): chunk count of the send entries
++        AGRMS_ZONE("AG_OPEN_START");
++        conn.open_start();
++    }
++#endif
++    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[num_headers];
++    uint32_t chunks_left = 0;
++    auto count_chunks = [&]() {
++        AGRMS_ZONE("AG_SETUP_COUNT");  // chunk count of the send entries
++#ifdef AGRMS_PRESEND_HOSTCOUNT
++        chunks_left = host_chunks;
++        return;
++#endif
+         for (uint32_t e = 0; e < E_out; ++e) {
+             const Entry en = out_entry(e);
+             chunks_left += en.rows_in(0, R_t) * g.chunks_per_row(en);
+         }
+-    }
+-
+-    auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);  // appended last
+-    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[num_headers];
+-    {
+-        AGRMS_ZONE("AG_SETUP_HDRS");  // pre-fence setup: the pre-routed header ring
+-        for (uint32_t h = 0; h < num_headers; ++h) {
++    };
++    // presend_critical_path lever (a): fabric_set_unicast_route costs ~0.36 us per header (2D route-table decode);
++    // every header of the ring goes to the same one-hop destination, so route header 0 once and copy its bytes
++    // (routing fields, route buffer, destination node) to the others. The command fields are rewritten per packet.
++    [[maybe_unused]] auto copy_hdr = [&](volatile tt_l1_ptr PACKET_HEADER_TYPE* dst) {
++        constexpr uint32_t n_words = sizeof(PACKET_HEADER_TYPE) / sizeof(uint32_t);
++        tt_l1_ptr uint32_t* d = reinterpret_cast<tt_l1_ptr uint32_t*>(const_cast<PACKET_HEADER_TYPE*>(dst));
++        const tt_l1_ptr uint32_t* s0 =
++            reinterpret_cast<const tt_l1_ptr uint32_t*>(const_cast<PACKET_HEADER_TYPE*>(hdrs[0]));
++#pragma GCC unroll 64
++        for (uint32_t i = 0; i < n_words; ++i) {
++            d[i] = s0[i];
++        }
++    };
++    auto route_rest = [&]() {
++        AGRMS_ZONE("AG_SETUP_HDRS_REST");
++        for (uint32_t h = 1; h < num_headers; ++h) {
+             hdrs[h] = PacketHeaderPool::allocate_header();
++#if defined(AGRMS_PRESEND_LAZY)
++            // copied from header 0 at its first use (send loop)
++#elif defined(AGRMS_PRESEND_DMA_COPY)
++            // the copy as a local NoC write (DMA): the RISC only issues it; completed before the send loop
++            noc_async_write(
++                reinterpret_cast<uint32_t>(hdrs[0]),
++                get_noc_addr(reinterpret_cast<uint32_t>(hdrs[h])),
++                sizeof(PACKET_HEADER_TYPE));
++#elif defined(AGRMS_PRESEND_A)
++            // plain (non-volatile) word copy, unrolled: the loads issue back to back instead of one L1 round trip
++            // per word (a volatile word loop measured ~0.2 us per 96 B header)
++            constexpr uint32_t n_words = sizeof(PACKET_HEADER_TYPE) / sizeof(uint32_t);
++            tt_l1_ptr uint32_t* d = reinterpret_cast<tt_l1_ptr uint32_t*>(const_cast<PACKET_HEADER_TYPE*>(hdrs[h]));
++            const tt_l1_ptr uint32_t* s0 =
++                reinterpret_cast<const tt_l1_ptr uint32_t*>(const_cast<PACKET_HEADER_TYPE*>(hdrs[0]));
++            uint32_t tmp[n_words];
++#pragma GCC unroll 64
++            for (uint32_t i = 0; i < n_words; ++i) {
++                tmp[i] = s0[i];
++            }
++#pragma GCC unroll 64
++            for (uint32_t i = 0; i < n_words; ++i) {
++                d[i] = tmp[i];
++            }
++#else
+             route_one_hop(hdrs[h], dst_chip_id, dst_mesh_id);
++#endif
+         }
++    };
++#ifndef AGRMS_PRESEND_SPLIT_FENCE
++    count_chunks();
++#endif
++    {
++        AGRMS_ZONE("AG_SETUP_HDR0");
++        hdrs[0] = PacketHeaderPool::allocate_header();
++        route_one_hop(hdrs[0], dst_chip_id, dst_mesh_id);
+     }
++#ifndef AGRMS_PRESEND_SPLIT_FENCE
++    route_rest();
++#endif
+     {
+         AGRMS_ZONE("AG_FENCE");  // open + ready out + own ready in
+-        conn.open();
++        {
++            AGRMS_ZONE("AG_OPEN");
++#ifdef AGRMS_PRESEND_EARLY_OPEN
++            conn.open_finish();
++#else
++            conn.open();
++#endif
++        }
+         // Fence between calls: this program running here means every earlier command on this chip is done, so the
+         // peer may now write into my members' L1: say so. Then send nothing until the peer has said the same.
+         if (send_ready) {
++            AGRMS_ZONE("AG_READY_OUT");
+             hdrs[0]->to_noc_unicast_atomic_inc(
+                 NocUnicastAtomicIncCommandHeader{get_noc_addr(ready_x, ready_y, ready_addr), 1, true});
+             conn.wait_for_empty_write_slot();
+             conn.send_payload_flush_blocking_from_address(
+                 reinterpret_cast<uint32_t>(hdrs[0]), sizeof(PACKET_HEADER_TYPE));
+         }
++#ifdef AGRMS_PRESEND_SPLIT_FENCE
++        // lever (c): the ready leaves first; the chunk count and the other headers overlap the peer's ready
++        count_chunks();
++        route_rest();
++#endif
+         if (chunks_left > 0) {
++            AGRMS_ZONE("AG_READY_WAIT");
+             volatile tt_l1_ptr uint32_t* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_addr);
+             noc_semaphore_wait_min(ready, 1);
+             noc_semaphore_inc(get_noc_addr(ready_addr), 0u - 1u);
+             noc_async_atomic_barrier();
+         }
+     }
++#ifdef AGRMS_PRESEND_DMA_COPY
++    noc_async_write_barrier();  // header copies landed
++#endif
+     if (chunks_left > 0) {
+         const uint64_t arrival_noc = get_noc_addr(peer_x, peer_y, get_semaphore(sem_arrival_id), 0);
+         uint32_t h = 0, unflushed = 0;
++        [[maybe_unused]] uint32_t n_init = 1;
++        [[maybe_unused]] bool first = true;
+         auto send_item = [&](const Entry& e, uint32_t xb) {
+             for_each_chunk_of_item(g, e, xb, [&](uint32_t w, uint32_t addr, uint32_t bytes, bool last) {
++#ifdef AGRMS_PROFILE_ZONES
++                if (first) {
++                    AGRMS_ZONE("AG_FIRST_CHUNK_WAIT");  // the first chunk's staging (the reader's first push)
++                    cb_wait_front(cb, run_pages);
++                    first = false;
++                }
++#endif
+                 cb_wait_front(cb, run_pages * (unflushed + 1));
+                 const uint32_t src = get_read_ptr(cb) + unflushed * chunk_bytes;
+                 const uint32_t xy = get_common_arg_val<uint32_t>(w);
+                 const uint64_t dst = get_noc_addr(xy & 0xFFFF, xy >> 16, addr, 0);
+                 volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[h];
++#ifdef AGRMS_PRESEND_LAZY
++                if (h == n_init) {  // first use of header h (h cycles 0, 1, ...): copy the routed header 0
++                    copy_hdr(hdr);
++                    ++n_init;
++                }
++#endif
+                 h = (h + 1 == num_headers) ? 0 : h + 1;
+                 if (last) {
+                     hdr->to_noc_fused_unicast_write_atomic_inc(
+--- a/kernels/all_gather_rms_norm_port_reader.cpp
++++ b/kernels/all_gather_rms_norm_port_reader.cpp
+@@ -42,6 +42,14 @@
+     constexpr uint32_t sem_local_loaded_id = get_compile_time_arg_val(11);
+     constexpr uint32_t rows_per_group = get_compile_time_arg_val(12);   // 0: round-robin rows (see Geom::place)
+     constexpr bool own_from_input = get_compile_time_arg_val(13) != 0;  // native HEIGHT: own slice in the input shard
++    constexpr auto x_args = TensorAccessorArgs<14>();  // presend (b): the input tensor (own items from DRAM)
++#ifndef AGRMS_PRESEND_DRAM_ITEMS
++#define AGRMS_PRESEND_DRAM_ITEMS 0
++#endif
++    // presend_critical_path lever (b): own items xb < dram_items are read straight from the input tensor in DRAM
++    // (no wait on the members' own-slice load, whose launch skew is ~1.1 us); later own items from the members'
++    // landing slots after sem_local_loaded, as before. Native HEIGHT (own slice resident in L1) keeps its path.
++    constexpr uint32_t dram_items = own_from_input ? 0 : AGRMS_PRESEND_DRAM_ITEMS;
+     constexpr uint32_t chunk_bytes = run_pages * page_bytes;
+     constexpr uint32_t cb = agrms_cb::cb_port_chunks;
+
+@@ -62,6 +70,9 @@
+     const uint32_t cnt_idx = a;
+     a += k;
+     const uint32_t x_addr = get_arg_val<uint32_t>(a++);
++    const uint32_t n_early = get_arg_val<uint32_t>(a++);  // presend (b1): own items with their own readiness
++    const uint32_t sem_early = get_arg_val<uint32_t>(a++);
++    const uint32_t early_idx = a;  // expected count per early item
+
+     const Geom g{
+         page_bytes,
+@@ -166,19 +177,73 @@
+             from_input);
+     };
+
++    [[maybe_unused]] const auto x_acc = TensorAccessor(x_args, x_addr, page_bytes);
++    auto stream_item_dram = [&](const Entry& e, uint32_t xb) {
++        for_each_chunk_of_item_src(g, e, xb, [&](uint32_t r, uint32_t col, uint32_t bytes, bool last) {
++            if (batch == 0) {
++                need = group - pos % group;
++                cb_reserve_back(cb, run_pages * need);
++                wptr = get_write_ptr(cb);
++            }
++            uint32_t dst = wptr + batch * chunk_bytes;
++            const uint32_t page0 = r * Wt_lp + col;
++            for (uint32_t b = 0; b < bytes; b += page_bytes, dst += page_bytes) {
++                noc_async_read(x_acc.get_noc_addr(page0 + b / page_bytes), dst, page_bytes);
++            }
++#ifdef AGRMS_PRESEND_DRAM_PUSH1
++            // DRAM latency is the cost here: publish each chunk as it lands (the sender's first packet waits on one
++            // chunk, not a whole batch); the reservation still spans the batch, so the CB never wraps mid-chunk
++            noc_async_read_barrier();
++            cb_push_back(cb, run_pages);
++            if (++batch == need || last) {
++                pos += batch;
++                batch = 0;
++            }
++            return;
++#endif
++            if (++batch == need || last) {
++                noc_async_read_barrier();
++                cb_push_back(cb, run_pages * batch);
++                pos += batch;
++                batch = 0;
++            }
++        });
++    };
++
+     if (has_out) {
+         // the own slice is in the members' landing slots once every local member has loaded it
+-        {
+-            AGRMS_ZONE("AG_LOCAL_WAIT");
+-            noc_semaphore_wait_min(
+-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_local_loaded_id)),
+-                local_loaded_expected);
++        bool local_ready = false;
++        auto await_local = [&]() {
++            if (!local_ready) {
++                AGRMS_ZONE("AG_LOCAL_WAIT");
++                noc_semaphore_wait_min(
++                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_local_loaded_id)),
++                    local_loaded_expected);
++                local_ready = true;
++            }
++        };
++        if (dram_items == 0 && n_early == 0) {
++            await_local();
+         }
+         const uint32_t steps = n_xb + (E_out - 1) * relay_lag;
+         const Entry own = out_entry(0);
+         for (uint32_t t = 0; t < steps; ++t) {
+             if (t < n_xb && !own.empty()) {
+-                stream_item(own, t, own_from_input);
++                if (t < dram_items) {
++                    AGRMS_ZONE("AG_DRAM_ITEM");
++                    stream_item_dram(own, t);
++                } else if (t < n_early && !local_ready) {
++                    {
++                        AGRMS_ZONE("AG_EARLY_WAIT");
++                        noc_semaphore_wait_min(
++                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_early + t)),
++                            get_arg_val<uint32_t>(early_idx + t));
++                    }
++                    stream_item(own, t, own_from_input);
++                } else {
++                    await_local();
++                    stream_item(own, t, own_from_input);
++                }
+             }
+             if (has_in && t >= relay_lag) {
+                 const int32_t s = static_cast<int32_t>(t - relay_lag);
+--- a/kernels/all_gather_rms_norm_port_walk.hpp
++++ b/kernels/all_gather_rms_norm_port_walk.hpp
+@@ -160,4 +160,41 @@
+     }
+ }
+
++// presend_critical_path lever (b): the same chunk walk (same order, same chunk sizes as for_each_chunk_of_item, so the
++// sender's walk over the landing addresses pairs with it chunk for chunk), reporting each chunk's source in the
++// INPUT tensor instead: f(tile_row r, slice column of the chunk's first tile, bytes, is_last_chunk). The segments of
++// an entry tile its column range [c0, c1) contiguously in member order, so segment s starts at c0 + sum(len < s).
++template <typename F>
++FORCE_INLINE void for_each_chunk_of_item_src(const Geom& g, const Entry& e, uint32_t xb, F&& f) {
++    const uint32_t r0 = xb * g.xfer_rows;
++    const uint32_t rows = g.item_rows(xb);
++    if (e.nseg == 0 || e.rows_in(r0, rows) == 0) {
++        return;
++    }
++    uint32_t r_last = r0 + rows - 1;
++    if (!e.has_row(r_last)) {
++        --r_last;
++    }
++    uint32_t col0 = e.c0;
++    for (uint32_t s = 0; s < e.nseg; ++s) {
++        const uint32_t v = get_arg_val<uint32_t>(e.seg + s);
++        const uint32_t len = v & 0xFFF;
++        const uint32_t nch = g.chunks_of(len);
++        const uint32_t base_n = len / nch, rem = len - base_n * nch;
++        const bool last_seg = s + 1 == e.nseg;
++        for (uint32_t r = r0; r < r0 + rows; ++r) {
++            if (e.has_row(r)) {
++                const bool last_row = last_seg && r == r_last;
++                uint32_t col = col0;
++                for (uint32_t c = 0; c < nch; ++c) {
++                    const uint32_t n = base_n + (c < rem ? 1 : 0);
++                    f(r, col, n * g.page_bytes, last_row && c + 1 == nch);
++                    col += n;
++                }
++            }
++        }
++        col0 += len;
++    }
++}
++
+ }  // namespace agrms_port
+--- a/kernels/all_gather_rms_norm_reader.cpp
++++ b/kernels/all_gather_rms_norm_reader.cpp
+@@ -135,6 +135,8 @@
+     const uint32_t ports_idx = a;
+     a += n_ports;
+     const uint32_t streams_idx = a;  // n_s for s in [0, num_streams)
++    a += num_streams;
++    const uint32_t early_sem = get_arg_val<uint32_t>(a++);  // presend (b1): signal after local row 0, or ~0
+
+     const uint32_t landing = get_write_ptr(cb_x_landing);
+     const auto x_acc = TensorAccessor(x_args, x_addr, page_bytes);
+@@ -162,6 +164,15 @@
+             for (uint32_t t = own_lo; t < own_hi; ++t, dst += page_bytes) {
+                 noc_async_read(x_acc.get_noc_addr(r * Wt_lp + (t - s_lo)), dst, page_bytes);
+             }
++            if (i == 0 && early_sem != 0xFFFFFFFFu) {
++                // presend (b1): local row 0 is in an early own item: publish it to the ports now
++                noc_async_read_barrier();
++                const uint32_t early_addr = get_semaphore(early_sem);
++                for (uint32_t pi = 0; pi < n_ports; ++pi) {
++                    const uint32_t xy = get_arg_val<uint32_t>(ports_idx + pi);
++                    noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, early_addr), 1);
++                }
++            }
+         }
+         if constexpr (!own_in_shard) {
+             noc_async_read_barrier();
+--- a/all_gather_rms_norm_program_descriptor.py
++++ b/all_gather_rms_norm_program_descriptor.py
+@@ -110,6 +110,18 @@
+ FORCE_K = int(os.environ.get("AGRMS_FORCE_K", "0"))
+ # Perf A/B only: AGRMS_NATIVE_SHARD=0 sends sharded tensors down the TensorAccessor fallback (the Phase 0 path).
+ NATIVE_SHARD = os.environ.get("AGRMS_NATIVE_SHARD", "1") == "1"
++# presend_critical_path experiment knobs (port kernels; perf_presend.py).
++PRESEND_A = os.environ.get("AGRMS_PRESEND_A", "0") == "1"  # route one header, copy the rest
++PRESEND_DRAM_ITEMS = int(os.environ.get("AGRMS_PRESEND_DRAM_ITEMS", "0"))  # own items read from DRAM by the port
++PRESEND_SPLIT_FENCE = os.environ.get("AGRMS_PRESEND_SPLIT_FENCE", "0") == "1"  # ready out before everything else
++PRESEND_HOSTCOUNT = os.environ.get("AGRMS_PRESEND_HOSTCOUNT", "0") == "1"  # sender's chunk count from the host
++PRESEND_LAZY = os.environ.get("AGRMS_PRESEND_LAZY", "0") == "1"  # headers 1.. copied at their first use
++PRESEND_DMA_COPY = os.environ.get("AGRMS_PRESEND_DMA_COPY", "0") == "1"  # header copies by local NoC writes
++PRESEND_DRAM_PUSH1 = os.environ.get("AGRMS_PRESEND_DRAM_PUSH1", "0") == "1"  # DRAM items: push every chunk
++# lever (b1): per-item readiness of the first own items: the members of the groups of own item j < EARLY_ITEMS
++# signal semaphore SEM_EARLY + j after their local row 0 (round-robin rows only)
++PRESEND_EARLY_ITEMS = int(os.environ.get("AGRMS_PRESEND_EARLY_ITEMS", "0"))
++PRESEND_EARLY_OPEN = os.environ.get("AGRMS_PRESEND_EARLY_OPEN", "0") == "1"  # open_start before routing header 0
+
+
+ def _div_up(a, b):
+@@ -863,6 +875,13 @@
+     SEM_INV = n_streams + 3  # owner combine: inv_rms returns
+     SEM_PARTIALS_ODD = n_streams + 4  # partials of odd blocks (writer: one counter per block parity)
+     NUM_SEMS = n_streams + 5
++    SEM_EARLY = NUM_SEMS
++    # early items: item j's rows [j * xfer_rows, (j + 1) * xfer_rows) all on local row 0 (round-robin, row r -> group r)
++    n_early = 0
++    if PRESEND_EARLY_ITEMS > 0 and native is None:
++        n_early = min(PRESEND_EARLY_ITEMS, split.n_groups // xfer_rows, _div_up(geo.R_t, xfer_rows))
++        n_early = min(n_early, 16 - NUM_SEMS)
++    NUM_SEMS += n_early
+
+     all_cores = sorted(set(workers) | port_union, key=lambda c: (c[1], c[0]))
+     all_crs = _rects(all_cores)
+@@ -875,7 +894,22 @@
+     defines = [("AGRMS_HAS_GAMMA", "1")] if has_gamma else []
+     ablate = [(f"AGRMS_ABLATE_{PERF_ABLATE}", "1")] if PERF_ABLATE else []
+     ablate += [("AGRMS_PROFILE_ZONES", "1")] if PROFILE_ZONES else []
+-    defines += ablate
++    defines += [d for d in ablate if not (d[0] == "AGRMS_PROFILE_ZONES" and os.environ.get("AGRMS_PROFILE_PORT_ONLY") == "1")]
++    if PRESEND_A:
++        ablate += [("AGRMS_PRESEND_A", "1")]
++    if PRESEND_SPLIT_FENCE:
++        ablate += [("AGRMS_PRESEND_SPLIT_FENCE", "1")]
++    ablate += [("AGRMS_PRESEND_DRAM_ITEMS", str(PRESEND_DRAM_ITEMS))]
++    if PRESEND_HOSTCOUNT:
++        ablate += [("AGRMS_PRESEND_HOSTCOUNT", "1")]
++    if PRESEND_LAZY:
++        ablate += [("AGRMS_PRESEND_LAZY", "1")]
++    if PRESEND_DMA_COPY:
++        ablate += [("AGRMS_PRESEND_DMA_COPY", "1")]
++    if PRESEND_DRAM_PUSH1:
++        ablate += [("AGRMS_PRESEND_DRAM_PUSH1", "1")]
++    if PRESEND_EARLY_OPEN:
++        ablate += [("AGRMS_PRESEND_EARLY_OPEN", "1")]
+
+     ready_sem = ready_semaphore(mesh_device, port_union)
+     ready_addr = int(ttnn.get_global_semaphore_address(ready_sem))
+@@ -983,6 +1017,15 @@
+         ITEM_MIN_CHUNKS,
+         FAR_ROW_SPLIT,
+         PORT_CB_BYTES,
++        PRESEND_A,
++        PRESEND_DRAM_ITEMS,
++        PRESEND_SPLIT_FENCE,
++        PRESEND_HOSTCOUNT,
++        PRESEND_LAZY,
++        PRESEND_EARLY_OPEN,
++        PRESEND_DMA_COPY,
++        PRESEND_DRAM_PUSH1,
++        PRESEND_EARLY_ITEMS,
+         tuple(input_tensor.shape),
+         str(x_dtype),
+         str(gamma.dtype) if has_gamma else None,
+@@ -1066,7 +1109,8 @@
+                 if max(wst, p * geo.Wt_lp) < min(wst + cw, (p + 1) * geo.Wt_lp):
+                     own_members += 1
+                 streams = [stream_cnt[(d, l)][1][m] for d in DIRS for l in range(L)]
+-                reader_rt[x][y] = [x_addr, gi, n_rows, wst, cw, p, len(port_xy)] + port_xy + streams
++                early = SEM_EARLY + gi // xfer_rows if gi // xfer_rows < n_early else 0xFFFFFFFF
++                reader_rt[x][y] = [x_addr, gi, n_rows, wst, cw, p, len(port_xy)] + port_xy + streams + [early]
+                 # native: a ragged last WIDTH member pads each output row up to the shard pitch
+                 t_cnt = geo.out_w_tiles if geo.regime_n else cw
+                 out_pad = native.out_pitch - t_cnt if native is not None else 0
+@@ -1100,6 +1144,13 @@
+             ),
+         ]
+
++        # members with own columns in the groups of early item j
++        early_expected = [0] * n_early
++        for gi in range(n_groups):
++            if gi // xfer_rows < n_early:
++                for m in range(k):
++                    if max(ws[m], p * geo.Wt_lp) < min(ws[m + 1], (p + 1) * geo.Wt_lp):
++                        early_expected[gi // xfer_rows] += 1
+         # ---- port kernels ----
+         preader_rt, psender_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+         for d in DIRS:
+@@ -1121,11 +1172,27 @@
+                     + [_pack_entry(*e) for e in in_all]
+                     + cnt
+                     + [x_addr]
++                    + [n_early, SEM_EARLY]
++                    + [early_expected[j] for j in range(n_early)]
+                 )
+                 sending = has_sends(coord, d, l)
+                 # the peer's opposite-direction port (same link) sends into me: it waits for my ready
+                 send_ready = peer is not None and has_sends(peer, _OPP[d], l)
+                 args = [len(out_ents)] + [_pack_entry(*e) for e in out_ents] + seg_args
++                # presend: the sender's total chunk count (kernel walk: rows_in(0, R_t) * chunks_per_row per entry)
++                n_chunks = 0
++                for q_, c0_, c1_, rf_ in out_ents:
++                    if c1_ <= c0_:
++                        continue
++                    rows_ = geo.R_t if rf_ == 0 else ((geo.R_t + 1) // 2 if rf_ == 1 else geo.R_t // 2)
++                    t0_, t1_ = q_ * geo.Wt_lp + c0_, q_ * geo.Wt_lp + c1_
++                    cpr_ = sum(
++                        _div_up(min(t1_, ws[m + 1]) - max(t0_, ws[m]), run_pages)
++                        for m in range(k)
++                        if max(t0_, ws[m]) < min(t1_, ws[m + 1])
++                    )
++                    n_chunks += rows_ * cpr_
++                args += [n_chunks]
+                 if peer is not None and (sending or send_ready):
+                     rc = virt(chips[peer].ports[(_OPP[d], l)])
+                     pc = virt(chips[peer].ports[(d, l)])
+@@ -1139,6 +1206,7 @@
+                     args += [ready_addr, 0, 0, 0, 0, 0, 0, 0, 0]
+                 psender_rt[x][y] = args
+         reader_port_ct = port_ct + [SEM_ARRIVAL, SEM_LOCAL_LOADED, rows_per_group, 1 if native_h else 0]
++        reader_port_ct += list(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+         sender_port_ct = port_ct + [SEM_ARRIVAL, rows_per_group]
+         kernels += [
+             ttnn.KernelDescriptor(

@@ -9,6 +9,7 @@ from typing import Optional
 import torch
 from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
+from ttnn.operations.all_gather_rms_norm import all_gather_rms_norm
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
@@ -1210,13 +1211,21 @@ class ttMLA:
                 topology=self.tp_ccl_topology,
                 num_links=self.ccl_num_links,
             )
-            qr = self._tp_all_gather(qr, self._q_a_latent_gather_output, seq_len_local)
-        else:
-            qr = ttnn.linear(
-                hidden_states,
-                self.q_a_proj_weight,
-                **self._get_mm_kwargs("q_a_proj", seq_len_local),
+            # Fused TP all-gather of the scattered shards + q_a_layernorm (one generic_op).
+            return all_gather_rms_norm(
+                qr,
+                cluster_axis=self.tp_axis,
+                gamma=self.q_a_layernorm_weight,
+                epsilon=self.config.rms_norm_eps,
+                topology=self.tp_ccl_topology,
+                num_links=self.ccl_num_links,
+                memory_config=norm_memory_config,
             )
+        qr = ttnn.linear(
+            hidden_states,
+            self.q_a_proj_weight,
+            **self._get_mm_kwargs("q_a_proj", seq_len_local),
+        )
         return self._q_a_norm(qr, norm_memory_config)
 
     def _tp_all_reduce(self, x: ttnn.Tensor, gather_output: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
