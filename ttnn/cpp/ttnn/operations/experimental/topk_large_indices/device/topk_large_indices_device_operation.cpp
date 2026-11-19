@@ -303,7 +303,7 @@ ttsl::hash::hash_t TopkLargeIndicesDeviceOperation::compute_program_hash(
     return tt::tt_metal::operation::hash_operation<TopkLargeIndicesDeviceOperation>(
         base,
         *attrs.block_select,
-        // The bitmap and the maxima row pitch are sized from the width, the program's own maxima tensor from the
+        // The block flags and the maxima row pitch are sized from the width, the program's own maxima tensor from the
         // width and the row count.
         input_last_dim,
         num_rows,

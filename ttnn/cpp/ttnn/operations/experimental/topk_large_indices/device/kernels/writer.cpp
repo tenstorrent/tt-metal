@@ -161,64 +161,91 @@ FORCE_INLINE void two_level_unit(
 }
 
 // Stage 2 of one of this core's rows: the selected blocks, in any order, become the ascending block table the reader
-// gathers by, sentinels last, and this core's own copy for stage 3's remap. For a split row the table's second half
-// also goes to the partner, which gathers by it.
+// gathers by, sentinels last; stage 3's remap reads it too. The table goes out a chunk's page at a
+// time, so the reader gathers each chunk as soon as its blocks are known. For a split row the pages of the table's
+// second half also go to the partner, which gathers by them.
 FORCE_INLINE void two_level_table(const Noc& noc, CircularBuffer& indices_cb, uint32_t search_len, bool split) {
     using namespace topk_two_level;
     CircularBuffer table_cb(get_named_compile_time_arg_val("tl_cb_table"));
-    CircularBuffer bitmap_cb(get_named_compile_time_arg_val("tl_cb_bitmap"));
-    CircularBuffer own_table_cb(get_named_compile_time_arg_val("tl_cb_own_table"));
     const uint32_t num_blocks = div_up(search_len, block_keys);
-    const uint32_t bitmap_words = div_up(num_blocks, 32);
-    auto* bitmap = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(bitmap_cb.get_write_ptr());
-    const uint32_t own_table_addr = own_table_cb.get_write_ptr();
-    auto* own_table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(own_table_addr);
-
-    for (uint32_t word = 0; word < bitmap_words; ++word) {
-        bitmap[word] = 0;
-    }
+    // The partner's remote-table CB sits at the same address as this core's.
+    const uint32_t remote_table_addr =
+        CircularBuffer(get_named_compile_time_arg_val("tl_cb_remote_table")).get_write_ptr();
+    // A byte per block: setting one is a single store, with no read-modify-write to wait on.
+    auto* flags =
+        reinterpret_cast<uint8_t*>(CircularBuffer(get_named_compile_time_arg_val("tl_cb_block_flags")).get_write_ptr());
     indices_cb.wait_front(1);
-    const auto* selected = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(indices_cb.get_read_ptr());
-    for (uint32_t i = 0; i < selected_blocks; ++i) {
-        const uint32_t block = selected[i];
-        if (block < num_blocks) {
-            bitmap[block >> 5] |= 1u << (block & 31);
+    invalidate_l1_cache();
+    const auto* selected = reinterpret_cast<const uint32_t*>(indices_cb.get_read_ptr());
+    constexpr uint32_t batch = 8;
+    for (uint32_t i = 0; i < selected_blocks; i += batch) {
+        // The loads go first, so their latencies overlap.
+        uint32_t blocks[batch];
+#pragma GCC unroll 8
+        for (uint32_t j = 0; j < batch; ++j) {
+            blocks[j] = selected[i + j];
+        }
+#pragma GCC unroll 8
+        for (uint32_t j = 0; j < batch; ++j) {
+            if (blocks[j] < num_blocks) {
+                flags[blocks[j]] = 1;
+            }
         }
     }
     indices_cb.pop_front(1);
-    table_cb.reserve_back(1);
-    auto* table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(table_cb.get_write_ptr());
-    uint32_t count = 0;
-    for (uint32_t word = 0; word < bitmap_words; ++word) {
-        uint32_t bits = bitmap[word];
-        while (bits != 0) {
-            const uint32_t bit = __builtin_ctz(bits);
-            bits &= bits - 1;
-            const uint32_t block = (word << 5) + bit;
-            table[count] = block;
-            own_table[count] = block;
-            ++count;
+
+    table_cb.reserve_back(table_pages);
+    const uint32_t table_addr = table_cb.get_write_ptr();
+    auto* table = reinterpret_cast<uint32_t*>(table_addr);
+    const uint32_t partner_x = split ? get_arg_val<uint32_t>(topk_core_args::writer_partner_noc_x) : 0;
+    const uint32_t partner_y = split ? get_arg_val<uint32_t>(topk_core_args::writer_partner_noc_y) : 0;
+    uint32_t pushed = 0;
+    const auto publish = [&](uint32_t entries) {
+        asm volatile("" ::: "memory");
+        for (; (pushed + 1) * table_page_entries <= entries; ++pushed) {
+            if (split && pushed >= table_pages / 2) {
+                const uint32_t offset = pushed * table_page_bytes;
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(table_addr + offset),
+                    UnicastEndpoint{},
+                    table_page_bytes,
+                    {},
+                    {.noc_x = partner_x,
+                     .noc_y = partner_y,
+                     .addr = remote_table_addr + offset - table_pages / 2 * table_page_bytes});
+                noc.async_writes_flushed();
+                Semaphore<>(get_named_compile_time_arg_val("tl_half_sem")).up(noc, partner_x, partner_y, 1);
+            }
+            table_cb.push_back(1);
         }
+    };
+    // Four flag words at a time; each nonzero one is cleared for the next table.
+    auto* packed = reinterpret_cast<uint32_t*>(flags);
+    uint32_t count = 0;
+    const uint32_t words = flag_words(search_len);
+    for (uint32_t word = 0; word < words; word += 4) {
+        uint32_t set[4];
+#pragma GCC unroll 4
+        for (uint32_t j = 0; j < 4; ++j) {
+            set[j] = packed[word + j];
+        }
+#pragma GCC unroll 4
+        for (uint32_t j = 0; j < 4; ++j) {
+            if (set[j] != 0) {
+                packed[word + j] = 0;
+                do {
+                    table[count++] = ((word + j) << 2) + (__builtin_ctz(set[j]) >> 3);
+                    set[j] &= set[j] - 1;
+                } while (set[j] != 0);
+            }
+        }
+        publish(count);
     }
     for (; count < selected_blocks; ++count) {
         table[count] = sentinel;
-        own_table[count] = sentinel;
     }
-    table_cb.push_back(1);
-    if (split) {
-        // The partner's own-table CB sits at the same address; its remote half goes past its own table.
-        const uint32_t partner_x = get_arg_val<uint32_t>(topk_core_args::writer_partner_noc_x);
-        const uint32_t partner_y = get_arg_val<uint32_t>(topk_core_args::writer_partner_noc_y);
-        constexpr uint32_t half_bytes = selected_blocks / 2 * sizeof(uint32_t);
-        noc.async_write(
-            CoreLocalMem<uint32_t>(own_table_addr + half_bytes),
-            UnicastEndpoint{},
-            half_bytes,
-            {},
-            {.noc_x = partner_x, .noc_y = partner_y, .addr = own_table_addr + remote_table_offset});
-        noc.async_write_barrier();
-        Semaphore<>(get_named_compile_time_arg_val("tl_half_sem")).up(noc, partner_x, partner_y, 1);
-    }
+    publish(selected_blocks);
+    noc.async_write_barrier();
 }
 
 // Stage 3's output for one of this core's rows: candidate positions in rank order, mapped through the table to key
@@ -232,19 +259,39 @@ FORCE_INLINE void two_level_output(
     uint32_t row_bytes,
     uint32_t row) {
     using namespace topk_two_level;
-    const auto* own_table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-        CircularBuffer(get_named_compile_time_arg_val("tl_cb_own_table")).get_write_ptr());
+    // The row's block table: the table CB cycles a whole table at a time, so it starts at the CB's base, and the next
+    // table is built only after this output.
+    const auto* table = reinterpret_cast<const uint32_t*>(
+        CircularBuffer(get_named_compile_time_arg_val("tl_cb_table")).get_write_ptr());
     indices_cb.wait_front(1);
     indices_scratch_cb.reserve_back(1);
     copy_row_to_scratch<source_slices_per_row, output_slices_per_row, slice_bytes>(indices_cb, indices_scratch_cb, noc);
     indices_cb.pop_front(1);
-    auto* ranked = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(indices_scratch_cb.get_write_ptr());
-    for (uint32_t i = 0; i < output_slices_per_row * slice_bytes / sizeof(uint32_t); ++i) {
-        const uint32_t position = ranked[i];
-        if (position != sentinel) {
-            ranked[i] = own_table[position / block_keys] * block_keys + position % block_keys;
+    invalidate_l1_cache();
+    auto* ranked = reinterpret_cast<uint32_t*>(indices_scratch_cb.get_write_ptr());
+    constexpr uint32_t ranks = output_slices_per_row * slice_bytes / sizeof(uint32_t);
+    constexpr uint32_t batch = 8;
+    static_assert(ranks % batch == 0);
+    for (uint32_t i = 0; i < ranks; i += batch) {
+        // Loads first, so their latencies overlap: the positions, then their blocks.
+        uint32_t position[batch];
+        uint32_t block[batch];
+#pragma GCC unroll 8
+        for (uint32_t j = 0; j < batch; ++j) {
+            position[j] = ranked[i + j];
+        }
+#pragma GCC unroll 8
+        for (uint32_t j = 0; j < batch; ++j) {
+            block[j] = position[j] != sentinel ? table[position[j] / block_keys] : 0;
+        }
+#pragma GCC unroll 8
+        for (uint32_t j = 0; j < batch; ++j) {
+            if (position[j] != sentinel) {
+                ranked[i + j] = block[j] * block_keys + position[j] % block_keys;
+            }
         }
     }
+    asm volatile("" ::: "memory");
     indices_scratch_cb.push_back(1);
     indices_scratch_cb.wait_front(1);
     noc.async_write(indices_scratch_cb, indices, row_bytes, {.offset_bytes = 0}, {.page_id = row, .offset_bytes = 0});
@@ -314,7 +361,7 @@ void kernel_main() {
             if (start_row == 0 && num_rows > 0) {
                 constexpr auto mode_args = TensorAccessorArgs<get_named_compile_time_arg_val("tl_mode_args_offset")>();
                 const auto mode_out = TensorAccessor(mode_args, mode_addr, sizeof(uint32_t));
-                CircularBuffer scratch(get_named_compile_time_arg_val("tl_cb_bitmap"));
+                CircularBuffer scratch(get_named_compile_time_arg_val("tl_cb_block_flags"));
                 const uint32_t word_addr = scratch.get_write_ptr();
                 *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(word_addr) = two_level_mode ? 1u : 0u;
                 noc.async_write(CoreLocalMem<uint32_t>(word_addr), mode_out, sizeof(uint32_t), {}, {.page_id = 0});
@@ -322,6 +369,12 @@ void kernel_main() {
             }
         }
         if (two_level_mode) {
+            // The block flags start clear; each table's scan clears the flags it finds.
+            auto* packed = reinterpret_cast<uint32_t*>(
+                CircularBuffer(get_named_compile_time_arg_val("tl_cb_block_flags")).get_write_ptr());
+            for (uint32_t word = 0; word < flag_words(search_len); ++word) {
+                packed[word] = 0;
+            }
             // The reader announces each item: a phase-1 unit, one of this core's rows, or the end.
             const auto units = Units::of(
                 search_len,

@@ -37,6 +37,9 @@ constexpr uint32_t writer_mailbox_search_length_word = 1;
 
 constexpr uint32_t div_up(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 
+// The writer's stage-2 block flags: a byte per block, scanned four 32-bit words at a time.
+constexpr uint32_t flag_words(uint32_t search_len) { return div_up(div_up(search_len, block_keys), 16) * 4; }
+
 // The phase-1 units: 32-tile batches of the rows' keys. Cores claim them one at a time from a counter on the
 // coordinator, so a core that streams faster does more of them. Units are numbered in waves of wave_rows rows,
 // across the rows first within a wave: each input row is one DRAM page in one bank, so the units in flight at once
@@ -84,9 +87,10 @@ constexpr RowOwner row_owner(uint32_t row, uint32_t num_rows, uint32_t split_row
     }
     return {2 * (row - whole_rows), whole_rows / num_cores};
 }
-// The remote table: the second half of a split row's block table, written by the owner's writer into its
-// partner's own-table CB after the owner's own copy.
-constexpr uint32_t remote_table_offset = selected_blocks * sizeof(uint32_t);
+// The block table goes from the writer to the reader a candidate chunk's blocks at a time: 2048 keys, 64 blocks.
+constexpr uint32_t table_page_entries = 2048 / block_keys;
+constexpr uint32_t table_page_bytes = table_page_entries * sizeof(uint32_t);
+constexpr uint32_t table_pages = selected_blocks / table_page_entries;
 
 // What the reader sends the compute (a header page in the stage-1 CB, then 32 tile pages) and the writer (its
 // mailbox) next: a phase-1 unit's number, one of this core's rows, or the end.

@@ -97,12 +97,14 @@ FORCE_INLINE void two_level_unit(
 // range into a staging area, then copied to their slots by local L1 reads.
 // The staging area is the stage-1 CB, idle while a row gathers: reserving all of it waits until the compute has
 // consumed every page there, and nothing is pushed.
-// One read of the gather, out of line: each inlined NoC read is a few hundred bytes of a tight kernel config buffer.
-__attribute__((noinline)) void gather_read(uint64_t src, uint32_t dst, uint32_t bytes, uint8_t noc_id) {
-    noc_async_read(src, dst, bytes, noc_id);
+// One read of the gather from the source set by noc_async_read_set_state (the row's DRAM bank, or this core's L1 for
+// the staged copies). Out of line: each inlined NoC read is a few hundred bytes of a tight kernel config buffer.
+__attribute__((noinline)) void gather_read(uint32_t src, uint32_t dst, uint32_t bytes, uint8_t noc_id) {
+    noc_async_read_with_state(src, dst, bytes, noc_id);
 }
 
-// Out of line: two call sites, and the kernel config buffer is tight.
+// Out of line: two call sites, and the kernel config buffer is tight. Each chunk waits for its page of the table: from
+// this core's writer through the table CB, or (from_partner) from the split pair's first core, counted by half_sem.
 template <typename InputAccessor>
 __attribute__((noinline)) void two_level_gather(
     const Noc& noc,
@@ -110,12 +112,14 @@ __attribute__((noinline)) void two_level_gather(
     uint32_t search_len,
     uint32_t row,
     const volatile tt_l1_ptr uint32_t* table,
-    uint32_t num_chunks) {
+    uint32_t num_chunks,
+    bool from_partner) {
     using namespace topk_two_level;
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
     constexpr uint32_t chunk_bytes = get_compile_time_arg_val(1);
     constexpr uint32_t tiles_per_chunk = get_compile_time_arg_val(3);
     constexpr uint32_t blocks_per_chunk = chunk_bytes / block_bytes;
+    static_assert(blocks_per_chunk == table_page_entries);
     constexpr uint32_t stage1_batch = get_named_compile_time_arg_val("tl_stage1_batch");
     constexpr uint32_t span_blocks = 32;  // the largest span, 2 KB
     CircularBuffer input_cb(cb_in);
@@ -133,8 +137,8 @@ __attribute__((noinline)) void two_level_gather(
     const uint32_t span_shift = num_blocks > 8 * selected_blocks ? 4 : 5;
     const uint8_t noc_id = noc.get_noc_id();
     const uint64_t row_noc_addr = input.get_noc_addr(row, 0, noc_id);
-    // This core's own L1, for the staged copies.
-    const uint64_t local_noc_base = get_noc_addr(0, noc_id);
+    // The row is one page in one DRAM bank: its reads differ only in the low address word.
+    const uint32_t row_addr = static_cast<uint32_t>(row_noc_addr);
     // A slot's staged source address, with bit 31 set; 0 for a slot read in place. Zeroed by a loop, not an
     // initialiser, which would pull in memset.
     uint32_t copy_from[blocks_per_chunk];
@@ -142,10 +146,23 @@ __attribute__((noinline)) void two_level_gather(
         copy_from[slot] = 0;
     }
     for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+        if (from_partner) {
+            Semaphore<>(get_named_compile_time_arg_val("tl_half_sem")).wait_min(chunk + 1);
+        } else {
+            CircularBuffer(get_named_compile_time_arg_val("tl_cb_table")).wait_front(chunk + 1);
+        }
+        invalidate_l1_cache();
         input_cb.reserve_back(tiles_per_chunk);
         const uint32_t chunk_base = input_cb.get_write_ptr();
         ASSERT((chunk_base & (block_bytes - 1)) == 0);
-        const auto* chunk_table = table + chunk * blocks_per_chunk;
+        // The chunk's blocks, read from L1 once.
+        uint32_t chunk_table[blocks_per_chunk];
+        const auto* page = const_cast<const uint32_t*>(table) + chunk * blocks_per_chunk;
+#pragma GCC unroll 8
+        for (uint32_t i = 0; i < blocks_per_chunk; ++i) {
+            chunk_table[i] = page[i];
+        }
+        noc_async_read_set_state(row_noc_addr, noc_id);
         uint32_t partial_slot = blocks_per_chunk;
         uint32_t staged = staging;
         uint32_t copies = 0;
@@ -173,13 +190,12 @@ __attribute__((noinline)) void two_level_gather(
                 if (block <= last_block && last_block < block + run) {
                     partial_slot = slot + (last_block - block);
                 }
-                gather_read(
-                    row_noc_addr + block * block_bytes, chunk_base + slot * block_bytes, run * block_bytes, noc_id);
+                gather_read(row_addr + block * block_bytes, chunk_base + slot * block_bytes, run * block_bytes, noc_id);
                 slot += run;
                 continue;
             }
             const uint32_t span_bytes = (chunk_table[slot + group - 1] - block + 1) * block_bytes;
-            gather_read(row_noc_addr + block * block_bytes, staged, span_bytes, noc_id);
+            gather_read(row_addr + block * block_bytes, staged, span_bytes, noc_id);
             for (uint32_t i = 0; i < group; ++i) {
                 const uint32_t member = chunk_table[slot + i];
                 if (member == last_block) {
@@ -193,6 +209,8 @@ __attribute__((noinline)) void two_level_gather(
         }
         noc.async_read_barrier();
         if (copies) {
+            // This core's own L1.
+            noc_async_read_set_state(get_noc_addr(0, noc_id), noc_id);
             for (slot = 0; slot < blocks_per_chunk;) {
                 const uint32_t from = copy_from[slot];
                 if (!(from >> 31)) {
@@ -206,11 +224,7 @@ __attribute__((noinline)) void two_level_gather(
                     ++count;
                 }
                 copy_from[slot] = 0;
-                gather_read(
-                    local_noc_base | (from & 0x7FFFFFFFu),
-                    chunk_base + slot * block_bytes,
-                    count * block_bytes,
-                    noc_id);
+                gather_read(from & 0x7FFFFFFFu, chunk_base + slot * block_bytes, count * block_bytes, noc_id);
                 slot += count;
             }
             noc.async_read_barrier();
@@ -321,15 +335,15 @@ FORCE_INLINE void two_level_run(
                 two_level_push_stage1();
                 two_level_stage2(noc, block_max, search_len, row);
                 if (!is_split_row) {
-                    table_cb.wait_front(1);
                     two_level_gather(
                         noc,
                         input,
                         search_len,
                         row,
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(table_cb.get_read_ptr()),
-                        2 * half_chunks);
-                    table_cb.pop_front(1);
+                        2 * half_chunks,
+                        false);
+                    table_cb.pop_front(table_pages);
                 }
                 ++local_row;
                 continue;
@@ -358,20 +372,21 @@ FORCE_INLINE void two_level_run(
     two_level_push_stage1();
     if (has_split) {
         // This core's half of the split row's candidates: the first core's by its own writer's table, the second
-        // core's by the table half the first core's writer sent.
-        uint32_t table_addr;
-        if (split_owner) {
-            table_cb.wait_front(1);
-            table_addr = table_cb.get_read_ptr();
-        } else {
-            Semaphore<>(get_named_compile_time_arg_val("tl_half_sem")).wait_min(1);
-            table_addr =
-                CircularBuffer(get_named_compile_time_arg_val("tl_cb_own_table")).get_write_ptr() + remote_table_offset;
-        }
+        // core's by the table half the first core's writer sends into its remote-table CB.
+        const uint32_t table_addr =
+            split_owner ? table_cb.get_read_ptr()
+                        : CircularBuffer(get_named_compile_time_arg_val("tl_cb_remote_table")).get_write_ptr();
         two_level_gather(
-            noc, input, search_len, split_row, reinterpret_cast<volatile tt_l1_ptr uint32_t*>(table_addr), half_chunks);
+            noc,
+            input,
+            search_len,
+            split_row,
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(table_addr),
+            half_chunks,
+            !split_owner);
         if (split_owner) {
-            table_cb.pop_front(1);
+            table_cb.wait_front(table_pages);
+            table_cb.pop_front(table_pages);
         }
     }
 }

@@ -452,8 +452,8 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     constexpr uint32_t cb_red = tt::CBIndex::c_10;
     constexpr uint32_t cb_max = tt::CBIndex::c_11;
     constexpr uint32_t cb_table = tt::CBIndex::c_12;
-    constexpr uint32_t cb_bitmap = tt::CBIndex::c_13;
-    constexpr uint32_t cb_own_table = tt::CBIndex::c_14;
+    constexpr uint32_t cb_block_flags = tt::CBIndex::c_13;
+    constexpr uint32_t cb_remote_table = tt::CBIndex::c_14;
     constexpr uint32_t cb_writer_mailbox = tt::CBIndex::c_15;
     constexpr uint32_t stage1_batch = 32;
     if (two_level) {
@@ -479,13 +479,15 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         create_cb(cb_red, 16, input_tile_bytes, tt::DataFormat::Float16_b);
         // The writer's phase-1 staging: one unit of block maxima.
         create_cb(cb_max, 1, stage1_batch * 32 * input.element_size(), tt::DataFormat::Float16_b);
-        create_cb(cb_table, 1, table_bytes, tt::DataFormat::UInt32);
-        const uint32_t bitmap_bytes =
-            tt::round_up(tt::div_up(tt::div_up(input_width, two_level_block_keys), 32) * sizeof(uint32_t), 64);
-        create_cb(cb_bitmap, 1, bitmap_bytes, tt::DataFormat::UInt32);
-        // The writer's copy of its row's table, then (with split rows) the half of a split row's table its pair's
-        // first core sends.
-        create_cb(cb_own_table, 1, row_split ? table_bytes + table_bytes / 2 : table_bytes, tt::DataFormat::UInt32);
+        // The block table, a candidate chunk's page at a time, from the writer to the reader.
+        create_cb(cb_table, topk_two_level::table_pages, topk_two_level::table_page_bytes, tt::DataFormat::UInt32);
+        // The writer's per-block flags, from which it builds the table.
+        const uint32_t flag_bytes = tt::round_up(topk_two_level::flag_words(input_width) * sizeof(uint32_t), 64);
+        create_cb(cb_block_flags, 1, flag_bytes, tt::DataFormat::UInt32);
+        // With split rows, the half of a split row's table its pair's first core sends.
+        if (row_split) {
+            create_cb(cb_remote_table, 1, table_bytes / 2, tt::DataFormat::UInt32);
+        }
         // The mode and search length, then a header per item (see topk_two_level::header_row).
         create_cb(cb_writer_mailbox, 4, 64, tt::DataFormat::UInt32);
     }
@@ -507,8 +509,8 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         {"tl_cb_red", cb_red},
         {"tl_cb_max", cb_max},
         {"tl_cb_table", cb_table},
-        {"tl_cb_bitmap", cb_bitmap},
-        {"tl_cb_own_table", cb_own_table},
+        {"tl_cb_block_flags", cb_block_flags},
+        {"tl_cb_remote_table", cb_remote_table},
         {"tl_cb_writer_mailbox", cb_writer_mailbox},
         {"tl_stage1_batch", stage1_batch},
         {"tl_block_max_input", tensor_args.block_max_tensor.has_value() ? 1u : 0u},
