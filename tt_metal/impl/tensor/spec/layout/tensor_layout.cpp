@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <limits>
 #include <numeric>
 
 #include <tt_stl/fmt.hpp>
@@ -103,7 +104,14 @@ void TensorLayoutImpl::initialize_alignment() {
         size_t result_idx = i + result.size() - default_alignment.size();
         // lcm, not rounding up: the padded dimension must be a multiple of both alignments, and rounding the custom one
         // up to the default isn't always a multiple of the custom one (32 with 48 gives 48).
-        result[result_idx] = std::lcm(result[result_idx], default_alignment[i]);
+        const uint64_t combined =
+            std::lcm(static_cast<uint64_t>(result[result_idx]), static_cast<uint64_t>(default_alignment[i]));
+        TT_FATAL(
+            combined <= std::numeric_limits<uint32_t>::max(),
+            "Alignment {} combined with the default alignment {} doesn't fit into 32 bits",
+            result[result_idx],
+            default_alignment[i]);
+        result[result_idx] = static_cast<uint32_t>(combined);
     }
     alignment_ = Alignment(std::move(result));
 }

@@ -523,6 +523,19 @@ TEST(TensorLayoutTests, FromPaddedShapePadsShardedRowMajorWidthToShard) {
     EXPECT_EQ(wide_layout.impl().compute_padded_shape(Shape{2, 30}), Shape({2, 96}));
 }
 
+// A custom alignment whose lcm with the default one doesn't fit into 32 bits is rejected.
+TEST(TensorLayoutTests, CustomAlignmentRejectsLcmOutside32Bits) {
+    const MemoryConfig memory_config(
+        BufferType::L1,
+        NdShardSpec{.shard_shape = Shape{1, 65536}, .grid = NodeRangeSet(NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}})});
+    EXPECT_THAT(
+        [&] {
+            tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
+                DataType::UINT32, PageConfig(Layout::ROW_MAJOR), memory_config, tt::tt_metal::Alignment({65537}));
+        },
+        ::testing::ThrowsMessage<std::exception>(::testing::HasSubstr("doesn't fit into 32 bits")));
+}
+
 // A sharded memory config without a shard spec is rejected, not dereferenced.
 TEST(TensorLayoutTests, FromPaddedShapeRejectsShardedRowMajorWithoutShardSpec) {
     const MemoryConfig memory_config{TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1, std::nullopt};
