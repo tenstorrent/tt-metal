@@ -579,6 +579,9 @@ class SlotState:
     max_new_tokens: int = 0
     generated: list = field(default_factory=list)
     finished: bool = False
+    # the seed this request's RNG streams were started from (_new_request_rng; None = not seeded yet): a decode's
+    # reset_sampling_state re-seeds only a row whose request was never seeded or whose seed changed
+    rng_seed: Optional[tuple] = None
 
 
 @dataclass
@@ -1723,6 +1726,7 @@ class Glm53Generator(_ReadinessGenerator):
     def _new_request_rng(self, b: _CacheBinding, slot: int, params: SamplingParams):
         self.host_sampler.reset_slot(slot, params.seed)
         self._write_seed(b, slot, params.seed)
+        b.slots[slot].rng_seed = (params.seed,)
 
     # ================================================================================================ prefill
     def _count_slice(self, branch: str) -> None:
@@ -2695,8 +2699,13 @@ class Glm53Generator(_ReadinessGenerator):
             if pt is not None:
                 page_rows[s], used[s] = pt[r], p + 1
         if reset_sampling_state and sampling_params is not None:
+            # the plugin resets on every decode layout change (a request joins / leaves): a slot keeps its request for
+            # the request's life, so a continuing request's device / host RNG streams already hold its draws --
+            # restarting them at draw 0 would make a seeded request's tokens depend on its co-requests' arrivals
+            # (the plugin's batch-invariance sampling suite); only a request not seeded yet (or with a new seed) is
             for s in want:
-                self._new_request_rng(b, s, b.slots[s].params)
+                if b.slots[s].rng_seed != (b.slots[s].params.seed,):
+                    self._new_request_rng(b, s, b.slots[s].params)
         mark("rows")
         if page_rows:
             self._write_page_rows(b, page_rows, used)

@@ -832,10 +832,12 @@ def test_zz_no_ttnn_was_imported_by_the_suite():
 
 def test_sampled_rows_take_the_device_route():
     """With the device sampler (the default construction) a sampled row -- temperature 1.0 / top-p 0.95 and no top-k,
-    GLM's generation config -- is passed to the generator on the device route instead of refused."""
+    GLM's generation config -- is passed to the generator on the device route instead of refused. A decode layout
+    change (the plugin's reset_sampling_state) re-seeds only a request not seeded yet: a continuing seeded request
+    keeps its RNG stream, so its draws do not depend on when other requests join."""
     ad, backend, gen, kv = _adapter()
     p = _prompt(10, 1)
-    sampled = SimpleNamespace(temperature=[1.0], top_k=[0], top_p=[0.95], seed=[None])
+    sampled = SimpleNamespace(temperature=[1.0], top_k=[0], top_p=[0.95], seed=[5])
     out = ad.prefill_forward(
         _history([p]),
         page_table=_table([_blocks(0, 10)], 1),
@@ -847,6 +849,22 @@ def test_sampled_rows_take_the_device_route():
     )
     assert isinstance(out, tuple) and out[0].shape == (1, 1)
     assert gen.live_slots(kv) == [0]
+    w0 = gen.counters["seed_writes"]
+    assert w0 >= 1 and gen._binding(kv).slots[0].rng_seed == (5,)  # seeded at its prefill
+    rows = SimpleNamespace(temperature=[1.0] * B, top_k=[0] * B, top_p=[0.95] * B, seed=[5] + [None] * (B - 1))
+    for step in range(2):  # two layout changes: the continuing request is not re-seeded
+        ad.decode_forward(torch.tensor([int(out[0][0, 0])] + [0] * (B - 1), dtype=torch.int32).reshape(B, 1),
+                          torch.tensor([10 + step] + [-1] * (B - 1), dtype=torch.int32),
+                          page_table=_table([_blocks(0, 12)], B), kv_cache=kv, sampling_params=rows,
+                          reload_inputs=True, reload_page_table=False, reload_sampling_params=True,
+                          reset_sampling_state=True)  # fmt: skip
+    assert gen.counters["seed_writes"] == w0
+    gen._binding(kv).slots[0].rng_seed = None  # (a request whose seeding was never recorded: seeded at the reset)
+    ad.decode_forward(torch.tensor([0] * B, dtype=torch.int32).reshape(B, 1),
+                      torch.tensor([12] + [-1] * (B - 1), dtype=torch.int32), page_table=_table([_blocks(0, 13)], B),
+                      kv_cache=kv, sampling_params=rows, reload_inputs=True, reload_page_table=False,
+                      reload_sampling_params=True, reset_sampling_state=True)  # fmt: skip
+    assert gen.counters["seed_writes"] == w0 + 1 and gen._binding(kv).slots[0].rng_seed == (5,)
 
 
 def test_device_top_k_follows_the_head_gather(monkeypatch):
