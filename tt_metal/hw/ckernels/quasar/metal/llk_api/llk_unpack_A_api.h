@@ -172,8 +172,10 @@ inline void llk_unpack_A(
     const std::uint32_t operand_id = get_operand_id(operand);
     const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(operand_id);
     // Consecutive tiles of a batch are stride_size_tiles entries apart, as on the pack side (#56194).
-    const std::uint32_t l1_tile_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].cursor_entry_idx +
-                                      tile_index * local_dfb_interface.stride_size_tiles;
+    const std::uint32_t l1_tile_idx = dfb_ring_entry(
+        local_dfb_interface,
+        local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].cursor_entry_idx +
+            tile_index * local_dfb_interface.stride_size_tiles);
 
     if constexpr (BType == BroadcastType::NONE) {
         if constexpr (unpack_to_dest) {
@@ -253,15 +255,25 @@ inline void llk_unpack_A_block(
             "DEST width");
         // Consecutive tiles of a batch are stride_size_tiles entries apart, as on the pack side (#56194), so the block
         // primitive is given the stride and places each tile at its own L1 index.
-        _llk_unpack_unary_operand_to_dest_block_(
-            rd_entry_idx + start_tile_index * stride_size_tiles, start_dst_tile_index, ntiles, stride_size_tiles);
+        if (dfb_block_is_permuted(local_dfb_interface)) {
+            // A permuted block's entries are not one stride apart, so unpack them one tile at a time.
+            for (std::uint32_t i = 0; i < ntiles; i++) {
+                _llk_unpack_unary_operand_to_dest_tile_(
+                    dfb_ring_entry(local_dfb_interface, rd_entry_idx + (start_tile_index + i) * stride_size_tiles),
+                    start_dst_tile_index + i);
+            }
+        } else {
+            _llk_unpack_unary_operand_to_dest_block_(
+                rd_entry_idx + start_tile_index * stride_size_tiles, start_dst_tile_index, ntiles, stride_size_tiles);
+        }
         WAYPOINT("UPAD");
     } else {
         [[maybe_unused]] const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
         for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
             WAYPOINT("UPAW");
             // Consecutive tiles of a batch are stride_size_tiles entries apart, as on the pack side (#56194).
-            const std::uint32_t l1_tile_idx = rd_entry_idx + tile_index * stride_size_tiles;
+            const std::uint32_t l1_tile_idx =
+                dfb_ring_entry(local_dfb_interface, rd_entry_idx + tile_index * stride_size_tiles);
             if constexpr (BType == BroadcastType::NONE) {
                 _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest>(l1_tile_idx, tensor_shape);
             } else {

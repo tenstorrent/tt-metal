@@ -528,13 +528,169 @@ void verify_dfb_global_header_participation(
 bool has_dm_risc(uint16_t risc_mask);
 bool has_tensix_risc(uint16_t risc_mask);
 
-// Entries this side moves in one NoC transaction: its block size when the side is BLOCKED, else 1.
+// Entries one op of this side covers: its block size when the side is BLOCKED, else 1.
 static uint32_t dfb_effective_block_entries(const DataflowBufferImpl& dfb, bool is_producer) {
     const DataflowBufferConfig& config = dfb.config;
     if ((is_producer ? config.pap : config.cap) != ::dfb::AccessPattern::BLOCKED) {
         return 1u;
     }
     return std::max<uint32_t>(is_producer ? config.producer_block_size : config.consumer_block_size, 1u);
+}
+
+// DRAM banks of the device.
+static uint32_t dfb_num_dram_banks(ContextId context_id) {
+    const auto& cluster = MetalContext::instance(context_id).get_cluster();
+    const auto chips = cluster.all_chip_ids();
+    if (chips.empty()) {
+        return 1u;
+    }
+    return static_cast<uint32_t>(cluster.get_soc_desc(*chips.begin()).get_num_dram_views());
+}
+
+// An implicit-sync DM side whose op is a block of more than one entry.
+static bool dfb_dm_side_implicit_blocked(const DataflowBufferImpl& dfb, bool is_producer) {
+    const DataflowBufferConfig& config = dfb.config;
+    const bool implicit_sync =
+        is_producer ? config.enable_producer_implicit_sync : config.enable_consumer_implicit_sync;
+    const bool has_dm = has_dm_risc(is_producer ? config.producer_risc_mask : config.consumer_risc_mask);
+    return implicit_sync && has_dm && dfb_effective_block_entries(dfb, is_producer) > 1u;
+}
+
+// NoC transactions per block on this side.
+static uint32_t dfb_dm_side_runs_per_block(const DataflowBufferImpl& dfb, bool is_producer) {
+    if (!dfb_dm_side_implicit_blocked(dfb, is_producer)) {
+        return 1u;
+    }
+    const uint8_t runs = is_producer ? dfb.producer_runs_per_block : dfb.consumer_runs_per_block;
+    TT_FATAL(runs != 0u, "DFB {}: transactions per block used before finalize chose them", dfb.id);
+    return runs;
+}
+
+// What the DM kernels of one side bind: a DRAM-interleaved tensor, an L1-interleaved one, or something
+// contiguous (a sharded tensor, or no tensor). Metal 1.0, an unknown layout or any DRAM-interleaved
+// binding counts as DRAM-interleaved.
+enum class DfbSideTensors { DRAM_INTERLEAVED, L1_INTERLEAVED, CONTIGUOUS };
+
+static DfbSideTensors dfb_dm_side_tensors(
+    const std::vector<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>>& kernels,
+    const tt::tt_metal::detail::ProgramImpl& program,
+    const DataflowBufferImpl& dfb,
+    bool is_producer) {
+    const uint16_t side_mask = is_producer ? dfb.config.producer_risc_mask : dfb.config.consumer_risc_mask;
+    bool any_kernel = false;
+    bool layout_unknown = false;
+    bool any_dram_interleaved = false;
+    bool any_l1_interleaved = false;
+    for (const auto& kernels_of_type : kernels) {
+        for (const auto& [id, kernel] : kernels_of_type) {
+            auto* dm_kernel = dynamic_cast<experimental::quasar::QuasarDataMovementKernel*>(kernel.get());
+            if (dm_kernel == nullptr) {
+                continue;
+            }
+            uint16_t kernel_mask = 0;
+            for (const auto proc : dm_kernel->get_dm_processors()) {
+                kernel_mask |= static_cast<uint16_t>(1u << static_cast<uint32_t>(proc));
+            }
+            if ((kernel_mask & side_mask) == 0) {
+                continue;
+            }
+            bool binds_dfb = false;
+            kernel->process_dataflow_buffer_binding_handles(
+                [&](const std::string&,
+                    uint16_t logical_dfb_id,
+                    bool,
+                    uint8_t,
+                    const std::optional<LLKMetadata>&,
+                    uint8_t,
+                    uint8_t) { binds_dfb |= logical_dfb_id == dfb.device_slot; });
+            if (!binds_dfb) {
+                continue;
+            }
+            any_kernel = true;
+            for (const auto& binding : kernel->tensor_binding_handles()) {
+                const TensorSpec* spec = program.get_tensor_parameter_layout(binding.tensor_parameter_name);
+                if (spec == nullptr) {
+                    layout_unknown = true;
+                } else if (spec->memory_config().is_sharded()) {
+                    continue;
+                } else if (spec->memory_config().buffer_type() == BufferType::DRAM) {
+                    any_dram_interleaved = true;
+                } else {
+                    any_l1_interleaved = true;
+                }
+            }
+        }
+    }
+    if (!any_kernel || layout_unknown || any_dram_interleaved) {
+        return DfbSideTensors::DRAM_INTERLEAVED;
+    }
+    return any_l1_interleaved ? DfbSideTensors::L1_INTERLEAVED : DfbSideTensors::CONTIGUOUS;
+}
+
+// Picks each side's NoC transactions per block and, from them, the ring order: bank-major when a side
+// moves a DRAM-interleaved tensor one bank at a time, else page order.
+static void dfb_choose_block_layout(
+    const std::vector<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>>& kernels,
+    const tt::tt_metal::detail::ProgramImpl& program,
+    DataflowBufferImpl& dfb,
+    uint32_t num_dram_banks) {
+    TT_FATAL(num_dram_banks <= 0xFFu, "DFB {}: {} DRAM banks do not fit the init entry", dfb.id, num_dram_banks);
+    const auto& hal = MetalContext::instance(dfb.get_context_id()).hal();
+    const uint32_t noc_max_burst_bytes = hal.get_noc_max_burst_size_bytes();
+    const auto side_tensors = [&](bool is_producer) {
+        return dfb_dm_side_implicit_blocked(dfb, is_producer) ? dfb_dm_side_tensors(kernels, program, dfb, is_producer)
+                                                              : DfbSideTensors::CONTIGUOUS;
+    };
+    const DfbSideTensors producer_tensors = side_tensors(/*is_producer=*/true);
+    const DfbSideTensors consumer_tensors = side_tensors(/*is_producer=*/false);
+    // A ring that borrows a tensor's memory keeps page order.
+    const bool bank_major = !dfb.borrows_memory() && (producer_tensors == DfbSideTensors::DRAM_INTERLEAVED ||
+                                                      consumer_tensors == DfbSideTensors::DRAM_INTERLEAVED);
+    const uint32_t ring_banks = bank_major ? num_dram_banks : 1u;
+    const auto side_runs = [&](bool is_producer, DfbSideTensors tensors) {
+        if (!dfb_dm_side_implicit_blocked(dfb, is_producer)) {
+            return static_cast<uint8_t>(1u);
+        }
+        const uint32_t block = dfb_effective_block_entries(dfb, is_producer);
+        const bool dram = tensors == DfbSideTensors::DRAM_INTERLEAVED;
+        const uint32_t burst = dram ? (bank_major ? ::dfb::bank_major_run_length(block, num_dram_banks, 0) : 1u)
+                               : (tensors == DfbSideTensors::CONTIGUOUS && (ring_banks == 1u || block <= ring_banks))
+                                   ? block
+                                   : 1u;
+        TT_FATAL(
+            !(dram && burst > 1u) || dfb.config.entry_size % hal.get_alignment(HalMemType::DRAM) == 0u,
+            "DFB {}: entry_size {} is not a multiple of the DRAM alignment ({} B), so the pages of one DRAM bank are "
+            "not entry_size apart and the implicit-sync BLOCKED {} cannot move a block one bank at a time",
+            dfb.id,
+            dfb.config.entry_size,
+            hal.get_alignment(HalMemType::DRAM),
+            is_producer ? "producer" : "consumer");
+        TT_FATAL(
+            burst * dfb.config.entry_size <= noc_max_burst_bytes,
+            "DFB {}: implicit-sync BLOCKED {} moves {} entries ({} B) in one NoC transaction, more than one NoC "
+            "packet ({} B). Use a smaller block or explicit sync.",
+            dfb.id,
+            is_producer ? "producer" : "consumer",
+            burst,
+            burst * dfb.config.entry_size,
+            noc_max_burst_bytes);
+        const uint32_t runs = (dram && bank_major) ? ::dfb::bank_major_num_runs(block, num_dram_banks)
+                              : burst == block     ? 1u
+                                                   : block;
+        TT_FATAL(
+            runs <= 0xFFu,
+            "DFB {}: the implicit-sync BLOCKED {} moves its block of {} entries one page at a time, more than the {} "
+            "transactions the init entry can count. Use a smaller block, a DRAM-interleaved or sharded tensor, or "
+            "explicit sync.",
+            dfb.id,
+            is_producer ? "producer" : "consumer",
+            block,
+            0xFFu);
+        return static_cast<uint8_t>(runs);
+    };
+    dfb.producer_runs_per_block = side_runs(/*is_producer=*/true, producer_tensors);
+    dfb.consumer_runs_per_block = side_runs(/*is_producer=*/false, consumer_tensors);
+    dfb.block_banks = static_cast<uint8_t>(ring_banks);
 }
 
 // BLOCKED <-> STRIDED rings: every (producer, consumer) pair shares one tile counter.
@@ -557,7 +713,7 @@ static uint32_t dfb_dm_side_counter_share(const DataflowBufferImpl& dfb, bool is
     return dfb_dm_side_credits_split(dfb, is_producer) ? 0u : 1u;
 }
 
-// A block must fit one NoC packet, or the ISR would fire on the first fragment.
+// Each transaction must fit one NoC packet.
 static void validate_implicit_burst_fits_one_packet(const DataflowBufferImpl& dfb) {
     const auto& hal = MetalContext::instance(dfb.get_context_id()).hal();
     if (!hal.has_tile_counter_registers()) {
@@ -568,24 +724,22 @@ static void validate_implicit_burst_fits_one_packet(const DataflowBufferImpl& df
         return;
     }
     const uint32_t noc_max_burst_bytes = hal.get_noc_max_burst_size_bytes();
+    const uint32_t num_dram_banks = dfb_num_dram_banks(dfb.get_context_id());
     const auto check_side = [&](bool is_producer) {
-        const bool implicit_sync =
-            is_producer ? config.enable_producer_implicit_sync : config.enable_consumer_implicit_sync;
-        const bool has_dm = has_dm_risc(is_producer ? config.producer_risc_mask : config.consumer_risc_mask);
-        const uint32_t burst = dfb_effective_block_entries(dfb, is_producer);
-        if (!(implicit_sync && has_dm && burst > 1)) {
+        if (!dfb_dm_side_implicit_blocked(dfb, is_producer)) {
             return;
         }
+        const uint32_t block = dfb_effective_block_entries(dfb, is_producer);
+        const uint32_t burst = ::dfb::bank_major_run_length(block, num_dram_banks, 0);
         TT_FATAL(
             burst * config.entry_size <= noc_max_burst_bytes,
-            "DFB {}: implicit-sync BLOCKED {} requires block_size * entry_size <= {} bytes (one NoC "
-            "packet); got {} B ({} x {}). Use explicit sync for larger blocks.",
+            "DFB {}: implicit-sync BLOCKED {} moves {} entries ({} B) in one NoC transaction, more than one NoC "
+            "packet ({} B). Use a smaller block or explicit sync.",
             dfb.id,
             is_producer ? "producer" : "consumer",
-            noc_max_burst_bytes,
-            burst * config.entry_size,
             burst,
-            config.entry_size);
+            burst * config.entry_size,
+            noc_max_burst_bytes);
     };
     check_side(/*is_producer=*/true);
     check_side(/*is_producer=*/false);
@@ -826,7 +980,7 @@ size_t serialize_dfb_config_for_core(
             const uint32_t entry_sz = dfb_hart_init_entry_byte_size(num_tcs);
             TT_FATAL(offset + entry_sz <= out.size(), "DFB config overflow (init entry dfb={} hart={})", dfb->id, h);
 
-            // Header (32B fixed). capacity is uint16 at bytes 26-27 (HW BUFFER_CAPACITY width).
+            // Header (36B fixed). capacity is uint16 at bytes 26-27 (HW BUFFER_CAPACITY width).
             dfb_hart_init_entry_t entry = {};
             entry.logical_dfb_id = dfb_narrow_field<uint8_t>(dfb->device_slot, dfb->id, "logical_dfb_id");
             entry.num_tcs = num_tcs;
@@ -874,7 +1028,17 @@ size_t serialize_dfb_config_for_core(
                 }
             }
             entry.block_size = dfb_narrow_field<uint16_t>(block_out, dfb->id, "block_size");
+            // Where in its block this hart's first slot is.
+            const uint32_t alloc_addr = dfb->core_lookup_.at(core).second;
+            const uint32_t first_entry_in_block =
+                (block_out > 1u && num_tcs > 0u)
+                    ? ((rc.config.base_addr[0] - alloc_addr) / dfb->config.entry_size) % block_out
+                    : 0u;
             entry.split_tc = dfb_dm_side_credits_split(*dfb, rc.is_producer) ? 1u : 0u;
+            entry.first_entry_in_block =
+                dfb_narrow_field<uint8_t>(first_entry_in_block, dfb->id, "first_entry_in_block");
+            entry.runs_per_block = rc.is_producer ? dfb->producer_runs_per_block : dfb->consumer_runs_per_block;
+            entry.block_banks = dfb->block_banks;
             entry.entries_to_jump = dfb_narrow_field<uint16_t>(jump_entries, dfb->id, "entries_to_jump");
             entry.capacity = rc.is_producer ? dfb_narrow_field<uint16_t>(dfb->capacity, dfb->id, "capacity")
                                             : static_cast<uint16_t>(0);
@@ -955,7 +1119,7 @@ size_t serialize_dfb_config_for_core(
                     entry.remapper_pair_index);
             }
 
-            // Write AoP TC tail: dfb_blob_tc_pair_t[num_tcs] immediately after the 32B header,
+            // Write AoP TC tail: dfb_blob_tc_pair_t[num_tcs] immediately after the 36B header,
             // followed by uint8_t packed_tile_counter[num_tcs] padded to 4B.
             // Each pair is {base_addr(4B), limit(4B)} = 8B; ptc bytes are packed contiguously.
             // Total TC section = (num_tcs*9 + 3) & ~3 — identical to original SoA byte count.
@@ -1328,6 +1492,7 @@ static std::optional<std::string> dfb_txn_descriptor_violation(
     uint8_t num_tcs_per_risc,
     bool consumes_all,
     uint32_t block_size,
+    uint32_t runs_per_block,
     bool credits_split,
     uint32_t counter_share) {
     const uint32_t required_divisor = consumes_all
@@ -1343,17 +1508,17 @@ static std::optional<std::string> dfb_txn_descriptor_violation(
     const uint32_t entry_threshold = consumes_all ? (num_prods_or_cons * per_txn_all) : per_txn_all;
     if (block_size == 0 || entry_threshold % block_size != 0) {
         return fmt::format(
-            "Implicit-sync BLOCKED DFB: entries per txn ID {} must be divisible by block_size {}. Each NoC "
-            "transaction retires a whole block, so the transaction threshold is (entries per txn ID) / "
-            "block_size; an inexact division would make the ISR fire early or never.",
+            "Implicit-sync BLOCKED DFB: entries per txn ID {} must be divisible by block_size {}. Each op "
+            "retires a whole block, so the transaction threshold is (entries per txn ID) / block_size times "
+            "the transactions per block; an inexact division would make the ISR fire early or never.",
             entry_threshold,
             block_size);
     }
-    if (entry_threshold / block_size > 0xFFu || per_txn_all > 0xFFu) {
+    if ((entry_threshold / block_size) * runs_per_block > 0xFFu || per_txn_all > 0xFFu) {
         return fmt::format(
             "Implicit-sync DFB descriptor overflow: threshold {} / per_txn {} exceed uint8_t (num_entries {}, "
             "num_txn_ids {}, num_prods_or_cons {}). Reduce num_entries or use explicit sync.",
-            entry_threshold / block_size,
+            (entry_threshold / block_size) * runs_per_block,
             per_txn_all,
             num_entries,
             num_txn_ids,
@@ -1412,6 +1577,7 @@ static dfb_txn_id_descriptor_t compute_txn_descriptor(
     uint8_t num_tcs_per_risc,
     ::dfb::AccessPattern access_pattern,
     uint32_t block_size,
+    uint32_t runs_per_block,
     bool credits_split,
     uint32_t counter_share) {
     const uint8_t num_prods_or_cons = is_producer ? num_producers : num_consumers;
@@ -1424,19 +1590,20 @@ static dfb_txn_id_descriptor_t compute_txn_descriptor(
         num_tcs_per_risc,
         consumes_all,
         block_size,
+        runs_per_block,
         credits_split,
         counter_share);
     TT_FATAL(!violation, "{}", *violation);
 
-    // The threshold counts transactions (one per block), credits count entries. ALL consumers
-    // share one wr_sent counter, so their threshold covers all num_consumers of them.
+    // The threshold counts transactions (runs_per_block per block), credits count entries. ALL
+    // consumers share one wr_sent counter, so their threshold covers all num_consumers of them.
     const uint32_t per_txn_all = num_entries / num_txn_ids;
     const uint32_t entry_threshold = consumes_all ? (num_prods_or_cons * per_txn_all) : per_txn_all;
 
     dfb_txn_id_descriptor_t desc = {};
     desc.num_txn_ids = num_txn_ids;
-    desc.num_entries_to_process_threshold = static_cast<uint8_t>(entry_threshold / block_size);
-    // Transactions each DM producer/consumer contributes per txn id, and each of its TCs.
+    desc.num_entries_to_process_threshold = static_cast<uint8_t>((entry_threshold / block_size) * runs_per_block);
+    // Entries each DM producer/consumer contributes per txn id, and each of its TCs.
     desc.num_entries_per_txn_id = static_cast<uint8_t>(consumes_all ? per_txn_all : per_txn_all / num_prods_or_cons);
     desc.num_entries_per_txn_id_per_tc = static_cast<uint8_t>(desc.num_entries_per_txn_id / num_tcs_per_risc);
     for (uint8_t i = 0; i < num_txn_ids; i++) {
@@ -1455,6 +1622,7 @@ static uint8_t compute_optimal_txn_id_count(
     uint8_t num_tcs_per_risc,
     bool consumes_all,
     uint32_t block_size,
+    uint32_t runs_per_block,
     bool credits_split,
     uint32_t counter_share) {
     for (uint8_t n = 2; n <= ::dfb::NUM_TXN_IDS; n++) {
@@ -1465,6 +1633,7 @@ static uint8_t compute_optimal_txn_id_count(
                 num_tcs_per_risc,
                 consumes_all,
                 block_size,
+                runs_per_block,
                 credits_split,
                 counter_share)) {
             return n;
@@ -1571,6 +1740,12 @@ static std::pair<uint16_t, uint32_t> compute_capacity_and_stride(const DataflowB
                 stride_in_entries = config.num_producers;
                 break;
             }
+            TT_FATAL(
+                config.pap != ::dfb::AccessPattern::BLOCKED || config.producer_block_size == config.consumer_block_size,
+                "BLOCKED -> BLOCKED DFB {}: producer_block_size {} must equal consumer_block_size {}",
+                dfb.id,
+                config.producer_block_size,
+                config.consumer_block_size);
             TT_FATAL(
                 config.num_entries % (static_cast<uint64_t>(block) * L) == 0,
                 "BLOCKED DFB {} num_entries {} must be divisible by block_size * lcm(P, C) = {} * {} "
@@ -1679,6 +1854,7 @@ static dfb_txn_id_descriptor_t make_txn_descriptor(
         num_tcs,
         is_producer ? config.pap : config.cap,
         effective_block_size,
+        dfb_dm_side_runs_per_block(dfb, is_producer),
         dfb_dm_side_credits_split(dfb, is_producer),
         dfb_dm_side_counter_share(dfb, is_producer));
 }
@@ -2433,6 +2609,7 @@ void ProgramImpl::finalize_single_dfb_config(
     std::shared_ptr<DataflowBufferImpl>& dfb, const CoreCoord& core, bool core_has_remapper) {
     const auto& config = dfb->config;
     std::vector<DFBRiscConfig> new_hw_risc_configs;
+    dfb_choose_block_layout(kernels_, *this, *dfb, dfb_num_dram_banks(context_id_));
 
     // Finds the DfbGroup whose hw_risc_configs match new_hw_risc_configs (creating one
     // if none exists), extends its core_ranges to include `core`, and appends an
@@ -2935,6 +3112,7 @@ void ProgramImpl::finalize_single_dfb_config(
     if (dfb->groups.empty()) {
         if (config.enable_producer_implicit_sync && !producer_is_tensix_only) {
             const uint32_t producer_block_size = dfb_effective_block_entries(*dfb, /*is_producer=*/true);
+            const uint32_t producer_runs_per_block = dfb_dm_side_runs_per_block(*dfb, /*is_producer=*/true);
             const bool producer_credits_split = dfb_dm_side_credits_split(*dfb, /*is_producer=*/true);
             const uint32_t producer_counter_share = dfb_dm_side_counter_share(*dfb, /*is_producer=*/true);
             uint8_t num_prod_txn_ids = compute_optimal_txn_id_count(
@@ -2943,6 +3121,7 @@ void ProgramImpl::finalize_single_dfb_config(
                 num_producer_tcs,
                 /*consumes_all=*/false,
                 producer_block_size,
+                producer_runs_per_block,
                 producer_credits_split,
                 producer_counter_share);
             auto producer_txn_ids = txn_id_allocator_.allocate(num_prod_txn_ids);
@@ -2955,6 +3134,7 @@ void ProgramImpl::finalize_single_dfb_config(
                 num_producer_tcs,
                 config.pap,
                 producer_block_size,
+                producer_runs_per_block,
                 producer_credits_split,
                 producer_counter_share);
             log_debug(
@@ -2970,6 +3150,7 @@ void ProgramImpl::finalize_single_dfb_config(
         if (config.enable_consumer_implicit_sync && !consumer_is_tensix_only) {
             const bool consumes_all = (config.cap == ::dfb::AccessPattern::ALL);
             const uint32_t consumer_block_size = dfb_effective_block_entries(*dfb, /*is_producer=*/false);
+            const uint32_t consumer_runs_per_block = dfb_dm_side_runs_per_block(*dfb, /*is_producer=*/false);
             const bool consumer_credits_split = dfb_dm_side_credits_split(*dfb, /*is_producer=*/false);
             const uint32_t consumer_counter_share = dfb_dm_side_counter_share(*dfb, /*is_producer=*/false);
             uint8_t num_cons_txn_ids = compute_optimal_txn_id_count(
@@ -2978,6 +3159,7 @@ void ProgramImpl::finalize_single_dfb_config(
                 num_consumer_tcs,
                 /*consumes_all=*/consumes_all,
                 consumer_block_size,
+                consumer_runs_per_block,
                 consumer_credits_split,
                 consumer_counter_share);
             auto consumer_txn_ids = txn_id_allocator_.allocate(num_cons_txn_ids);
@@ -2990,6 +3172,7 @@ void ProgramImpl::finalize_single_dfb_config(
                 num_consumer_tcs,
                 config.cap,
                 consumer_block_size,
+                consumer_runs_per_block,
                 consumer_credits_split,
                 consumer_counter_share);
             log_debug(

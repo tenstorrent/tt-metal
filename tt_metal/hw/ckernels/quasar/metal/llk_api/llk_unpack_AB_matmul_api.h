@@ -189,11 +189,15 @@ inline void llk_unpack_AB_matmul(
 
     const LocalDFBInterface& local_dfb_interface_a = get_local_dfb_interface(operandA_id);
     const LocalDFBInterface& local_dfb_interface_b = get_local_dfb_interface(operandB_id);
+    ASSERT((rt_dim == 1 || ct_dim == 1) || !dfb_block_is_permuted(local_dfb_interface_a));
+    ASSERT((rt_dim == 1 || ct_dim == 1) || !dfb_block_is_permuted(local_dfb_interface_b));
 
-    const std::uint32_t l1_tile_idx_0 =
-        local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].cursor_entry_idx + tile_index_a;
-    const std::uint32_t l1_tile_idx_1 =
-        local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].cursor_entry_idx + tile_index_b;
+    const std::uint32_t l1_tile_idx_0 = dfb_ring_entry(
+        local_dfb_interface_a,
+        local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].cursor_entry_idx + tile_index_a);
+    const std::uint32_t l1_tile_idx_1 = dfb_ring_entry(
+        local_dfb_interface_b,
+        local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].cursor_entry_idx + tile_index_b);
 
     WAYPOINT("UPMW");
     _llk_unpack_matmul_(ct_dim, rt_dim, kt_dim, l1_tile_idx_0, l1_tile_idx_1, src_b_shape, src_a_shape);

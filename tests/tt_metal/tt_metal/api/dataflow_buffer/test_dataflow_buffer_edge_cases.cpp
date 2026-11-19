@@ -1276,6 +1276,13 @@ TEST_F(UnitMeshFixture, A1Fanout_DMTensixDM_BLOCKED_1Bx4_blk4) {
 TEST_F(UnitMeshFixture, A1Fanout_DMTensixDM_BLOCKED_1Bx2_blk4_impl) {
     run_a1_fanout_blocked_pipeline(this->device(), 2, 4, 16, /*implicit=*/true);
 }
+// Each STRIDED Tensix consumer starts part-way into the producer's block.
+TEST_F(UnitMeshFixture, A1Fanout_DMTensixDM_STRIDED_1Bx2_blk4_impl) {
+    run_a1_fanout_blocked_pipeline(this->device(), 2, 4, 16, /*implicit=*/true, DFBAccessPattern::STRIDED);
+}
+TEST_F(UnitMeshFixture, A1Fanout_DMTensixDM_STRIDED_1Bx4_blk4_impl) {
+    run_a1_fanout_blocked_pipeline(this->device(), 4, 4, 16, /*implicit=*/true, DFBAccessPattern::STRIDED);
+}
 
 // DM -> Tensix BLOCKED producers -> DM ALL consumers, with the Tensix side packing real data.
 // Every consumer must see every block in order; the expected output is computed by the helper.
@@ -1290,6 +1297,16 @@ TEST_F(UnitMeshFixture, TensixBlockedOut_DMTensixDM_2Bx2A_blk4) {
 }
 TEST_F(UnitMeshFixture, TensixBlockedOut_DMTensixDM_2Bx1A_blk4) {
     run_tensix_blocked_out_pipeline(this->device(), /*P=*/2, /*C=*/1, /*block_size=*/4, /*num_entries=*/16);
+}
+// Same with implicit-sync BLOCKED DM consumers. With fewer DRAM banks than the block the output ring
+// is bank-major, so the Tensix packers write each tile to the slot the ring keeps for it.
+TEST_F(UnitMeshFixture, TensixBlockedOut_DMTensixDM_1Bx2B_blk4_impl) {
+    run_tensix_blocked_out_pipeline(
+        this->device(), /*P=*/1, /*C=*/2, /*block_size=*/4, /*num_entries=*/16, /*implicit=*/true);
+}
+TEST_F(UnitMeshFixture, TensixBlockedOut_DMTensixDM_2Bx2B_blk4_impl) {
+    run_tensix_blocked_out_pipeline(
+        this->device(), /*P=*/2, /*C=*/2, /*block_size=*/4, /*num_entries=*/16, /*implicit=*/true);
 }
 
 }  // namespace tt::tt_metal

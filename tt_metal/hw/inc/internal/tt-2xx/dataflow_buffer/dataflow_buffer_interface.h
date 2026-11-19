@@ -84,7 +84,8 @@ struct LocalDFBInterface {
     uint8_t num_tcs_to_rr;
     uint8_t tc_idx;
     uint16_t block_size;  // entries in one block; 1 unless the ring is BLOCKED
-    uint16_t split_tc;    // one op (a whole block) is split across all of this hart's TCs
+    uint8_t split_tc;     // one op (a whole block) is split across all of this hart's TCs
+    uint8_t block_banks;  // amount of DRAM banks (1 = page order)
     uint16_t jump;        // cursor jump in entries, taken on each TC rotation
     DFBTCSlotSpan tc_slots;
 } __attribute__((packed));
@@ -99,7 +100,8 @@ struct LocalDFBInterface {
     uint8_t tc_idx;
     uint8_t tensix_trisc_mask;
     uint16_t block_size;
-    uint16_t split_tc;
+    uint8_t split_tc;
+    uint8_t block_banks;
     uint16_t jump;
     DFBTCSlotSpan tc_slots;
 } __attribute__((packed));
@@ -122,9 +124,12 @@ struct LocalDFBInterface {
 
     uint16_t num_entries;
     uint16_t block_size;  // entries in one block; 1 unless the ring is BLOCKED
-    uint16_t split_tc;    // one op (a whole block) belongs to every one of this hart's TCs,
+    uint8_t split_tc;     // one op (a whole block) belongs to every one of this hart's TCs,
                           // so each TC gets its share of the credits instead of one TC
                           // everything: Blocked->Strided producers, Strided->Blocked consumers
+    uint8_t first_entry_in_block;  // where in its block this hart's first slot is
+    uint8_t runs_per_block;        // NoC transactions per block on this side
+    uint8_t block_banks;           // amount of DRAM banks (1 = page order)
     uint32_t jump;        // cursor jump in bytes, taken on each TC rotation
 
     DFBTCSlot tc_slots[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
@@ -165,6 +170,17 @@ constexpr uint32_t DFB_EXIT_RECORD_NONE = 0xFFFFFFFFu;
 
 #endif
 
+// Whether the ring's blocks are out of page order (bank-major with more pages than DRAM banks).
+inline __attribute__((always_inline)) bool dfb_block_is_permuted(const LocalDFBInterface& intf) {
+    return intf.block_banks > 1 && intf.block_size > intf.block_banks;
+}
+
+// Where the ring really keeps page-order entry entry_idx.
+inline __attribute__((always_inline)) uint32_t dfb_ring_entry(const LocalDFBInterface& intf, uint32_t entry_idx) {
+    return dfb_block_is_permuted(intf) ? dfb::bank_major_entry(intf.block_size, intf.block_banks, entry_idx)
+                                       : entry_idx;
+}
+
 #if defined(COMPILE_FOR_TRISC)
 // Byte-offset (L1 units) of the current FIFO cursor from slot.base_addr.
 // cursor_entry_idx and the former byte offset advance in lockstep:
@@ -174,6 +190,19 @@ inline __attribute__((always_inline)) uint32_t
 dfb_slot_cursor_offset_units(const LocalDFBInterface& intf, const DFBTCSlot& slot, uint32_t entry_idx) {
     const uint32_t delta_entries = entry_idx - static_cast<uint32_t>(slot.base_entry_idx);
     return (delta_entries / static_cast<uint32_t>(intf.stride_size_tiles)) * static_cast<uint32_t>(intf.stride_size);
+}
+
+// L1 base of ring entry 0.
+inline __attribute__((always_inline)) uint32_t dfb_ring_base_addr(const LocalDFBInterface& intf) {
+    return intf.tc_slots[0].base_addr -
+           static_cast<uint32_t>(intf.tc_slots[0].base_entry_idx) * static_cast<uint32_t>(intf.entry_size);
+}
+
+// L1 address of tile tile_index of the current counter's window.
+inline __attribute__((always_inline)) uint32_t
+dfb_window_tile_addr_units(const LocalDFBInterface& intf, uint32_t tile_index) {
+    const uint32_t entry_idx = intf.tc_slots[intf.tc_idx].cursor_entry_idx + tile_index * intf.stride_size_tiles;
+    return dfb_ring_base_addr(intf) + dfb_ring_entry(intf, entry_idx) * static_cast<uint32_t>(intf.entry_size);
 }
 #endif
 

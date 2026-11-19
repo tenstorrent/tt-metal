@@ -79,12 +79,15 @@ struct dfb_init_entry_hdr_t {
     uint8_t intra_shadow_tc_id;   // TRISC byte 23: intra-tensix ClientR shadow TC; 0xFF / unused on DM
     uint16_t block_size;          // bytes 28-29: how many tiles exist in one block
     uint8_t split_tc;             // byte 3: tiles are split across all tile counters (1) or not (0)
+    uint8_t first_entry_in_block;  // byte 32: where in its block this hart's first slot is
+    uint8_t runs_per_block;        // byte 33: NoC transactions per block on this side
+    uint8_t block_banks;           // byte 34: amount of DRAM banks (1 = page order)
     uint16_t entries_to_jump;     // bytes 30-31: tiles to jump on each rotation of tile counters
 };
-static_assert(sizeof(dfb_init_entry_hdr_t) == 36, "dfb_init_entry_hdr_t must pack to 36B with no padding");
+static_assert(sizeof(dfb_init_entry_hdr_t) == 36, "dfb_init_entry_hdr_t must be 36B");
 static_assert(alignof(dfb_init_entry_hdr_t) == 4, "dfb_init_entry_hdr_t alignment should follow uint32_t");
 
-// Read the entire 32B dfb_hart_init_entry_t (__attribute__((packed))) as 8 u32s.
+// Read the entire 36B dfb_hart_init_entry_t (__attribute__((packed))) as 9 u32s.
 // Two variants with identical unpack logic; only the pointer type differs:
 //   - dfb_read_init_entry_header        — uncached alias (TRISC path, no L2 coherency)
 //   - dfb_read_init_entry_header_cached — cached TL1 pointer (DM path, after L2 invalidate)
@@ -99,16 +102,20 @@ static_assert(alignof(dfb_init_entry_hdr_t) == 4, "dfb_init_entry_hdr_t alignmen
 //      [31:24]=intra_shadow_tc_id (TRISC) / remapper_pair_index (DM pack)
 //   w6 [15:0]=num_entries  [31:16]=capacity
 //   w7 [15:0]=block_size  [31:16]=entries_to_jump (u16)
+//   w8 [7:0]=first_entry_in_block  [15:8]=runs_per_block  [23:16]=block_banks
 
 // TRISC unpack: w3–w5 carry the blob's SoA byte layout.
 template <typename PtrT>
 FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header(PtrT s) {
-    const uint32_t w0 = s[0], w1 = s[1], w2 = s[2], w3 = s[3], w4 = s[4], w5 = s[5], w6 = s[6], w7 = s[7];
+    const uint32_t w0 = s[0], w1 = s[1], w2 = s[2], w3 = s[3], w4 = s[4], w5 = s[5], w6 = s[6], w7 = s[7], w8 = s[8];
     dfb_init_entry_hdr_t h;
     h.logical_dfb_id = static_cast<uint8_t>(w0);
     h.num_tcs = static_cast<uint8_t>(w0 >> 8);
     h.flags = static_cast<uint8_t>(w0 >> 16);
     h.split_tc = static_cast<uint8_t>(w0 >> 24);
+    h.first_entry_in_block = static_cast<uint8_t>(w8);
+    h.runs_per_block = static_cast<uint8_t>(w8 >> 8);
+    h.block_banks = static_cast<uint8_t>(w8 >> 16);
     h.entry_size = w1;
     h.stride_size_precomp = w2;
     h.stride_size_tiles = static_cast<uint8_t>(w3);
@@ -135,12 +142,15 @@ FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header(PtrT s) {
 // See dfb_write_dm_scalar_pack_to_blob.
 template <typename PtrT>
 FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header_dm(PtrT s) {
-    const uint32_t w0 = s[0], w1 = s[1], w2 = s[2], w3 = s[3], w4 = s[4], w5 = s[5], w6 = s[6], w7 = s[7];
+    const uint32_t w0 = s[0], w1 = s[1], w2 = s[2], w3 = s[3], w4 = s[4], w5 = s[5], w6 = s[6], w7 = s[7], w8 = s[8];
     dfb_init_entry_hdr_t h;
     h.logical_dfb_id = static_cast<uint8_t>(w0);
     h.num_tcs = static_cast<uint8_t>(w0 >> 8);
     h.flags = static_cast<uint8_t>(w0 >> 16);
     h.split_tc = static_cast<uint8_t>(w0 >> 24);
+    h.first_entry_in_block = static_cast<uint8_t>(w8);
+    h.runs_per_block = static_cast<uint8_t>(w8 >> 8);
+    h.block_banks = static_cast<uint8_t>(w8 >> 16);
     h.entry_size = w1;
     h.stride_size_precomp = w2;
     h.stride_size_tiles = 0;
@@ -182,6 +192,9 @@ FORCE_INLINE void dfb_write_dm_iface_scalars_from_hdr(LocalDFBInterface& iface, 
     // These live outside the 12B [8,20) scalar span, so they need their own stores.
     iface.block_size = eh.block_size;
     iface.split_tc = eh.split_tc;
+    iface.first_entry_in_block = eh.first_entry_in_block;
+    iface.runs_per_block = eh.runs_per_block;
+    iface.block_banks = eh.block_banks;
     // The wire carries the jump in tiles; a DM cursor is a raw byte address.
     iface.jump = static_cast<uint32_t>(eh.entries_to_jump) * eh.entry_size;
     iface.tc_idx = 0;
@@ -724,7 +737,7 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
     uint32_t total_hw_reg_writes = 0;
     // Sub-breakdown metrics (g–j):
     //   g: pre-loop fixed overhead (3 uncached header reads before the loop)
-    //   h: time in dfb_read_init_entry_header (8 u32 reads × N entries)
+    //   h: time in dfb_read_init_entry_header (9 u32 reads × N entries)
     //   i: time in TC-slot read+write loop (all entries)
     //   j: sig_slot address compute + uncached store (producers only)
     uint32_t total_entry_hdr = 0;
@@ -754,7 +767,7 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
     // DM: invalidate L2 over this hart's init blob so subsequent reads go through
     // L1 D$ + L2. Global header fields and the signal region stay on the uncached
     // alias (cross-hart visibility without cache management). The range is the blob's
-    // exact extent: bounding it by num_init × the largest entry size (6 TCs → 84B)
+    // exact extent: bounding it by num_init × the largest entry size (6 TCs → 92B)
     // overshoots more than 2x for the common 1-2 TC entry and spills into the
     // neighbouring harts' blobs, discarding lines those harts are concurrently walking.
 #ifndef COMPILE_FOR_TRISC
@@ -779,11 +792,11 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
 
         const uint32_t num_tcs = eh.num_tcs;
 
-        // Advance to the next entry: 32B header + ((num_tcs*9 + 3) & ~3).
+        // Advance to the next entry: 36B header + ((num_tcs*9 + 3) & ~3).
         const uint32_t entry_bytes = dfb_hart_init_entry_byte_size(num_tcs);
         p = reinterpret_cast<const volatile uint8_t*>(e_addr + entry_bytes);
 
-        // AoP TC tail starts right after the 32B header: pairs first, ptc bytes after all pairs.
+        // AoP TC tail starts right after the 36B header: pairs first, ptc bytes after all pairs.
         const uintptr_t tc_base_addr = e_addr + sizeof(dfb_hart_init_entry_t);
 
         WAYPOINT("L1");
@@ -818,6 +831,7 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
         iface.stride_size_tiles = eh.stride_size_tiles;
         iface.block_size = eh.block_size;
         iface.split_tc = eh.split_tc;
+        iface.block_banks = eh.block_banks;
         iface.jump = eh.entries_to_jump;
         ASSERT(iface.stride_size_tiles != 0 && iface.block_size != 0);
 #if defined(UCK_CHLKC_PACK)
@@ -840,7 +854,7 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
 
         // --- TC slot population ---
         // AoP TC tail: dfb_blob_tc_pair_t[num_tcs] (8B each, base+limit adjacent per slot)
-        // immediately after the 32B header, then uint8_t ptc[num_tcs] padded to 4B.
+        // immediately after the 36B header, then uint8_t ptc[num_tcs] padded to 4B.
         // Preload ptc as 1–2 word reads before the loop; in-loop ptc is a register bit-extract.
         // Running pair pointer advances 8B per slot. DM uses a cached pointer (blob already
         // invalidated into L2); TRISC uses the uncached alias.
@@ -868,8 +882,8 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
             // ring_size is uint32 L1 units (full Quasar L1). Cursor byte-offset is derived
             // from cursor_entry_idx (not stored).
             iface.tc_slots[t].ring_size = limit - base;
-            iface.tc_slots[t].base_entry_idx =
-                static_cast<uint16_t>((base - iface.tc_slots[0].base_addr) / iface.entry_size);
+            iface.tc_slots[t].base_entry_idx = static_cast<uint16_t>(
+                eh.first_entry_in_block + (base - iface.tc_slots[0].base_addr) / iface.entry_size);
             iface.tc_slots[t].cursor_entry_idx = iface.tc_slots[t].base_entry_idx;
 #else  // DM
             iface.tc_slots[t].base_addr = base;
@@ -991,7 +1005,7 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
         start_time,
         end_time,
         pre_loop,          // METRIC_G: pre_loop overhead (3 uncached header loads)
-        total_entry_hdr,   // METRIC_H: entry_hdr (8 u32 bulk reads × N entries)
+        total_entry_hdr,   // METRIC_H: entry_hdr (9 u32 bulk reads × N entries)
         total_tc_slots,    // METRIC_I: tc_slots (base/limit/ptc reads + iface writes)
         total_sig_write);  // METRIC_J: sig_write (uncached store to signal region)
     return packer_rmp;
