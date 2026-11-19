@@ -22,12 +22,16 @@ template <
     uint32_t core_chunks,
     uint32_t final_stride,
     uint32_t streamed,
-    uint32_t sp_rank,
     uint32_t sp_size,
     uint32_t local_rows,
     uint32_t has_actual_end>
 TT_KERNEL void reader(
-    uint32_t head, uint32_t first_chunk, uint32_t last_chunk, uint32_t final_row, uint32_t seed_sender) {
+    uint32_t head,
+    uint32_t first_chunk,
+    uint32_t last_chunk,
+    uint32_t final_row,
+    uint32_t seed_sender,
+    uint32_t sp_rank) {
     constexpr uint32_t state_tiles = kt * kt;
     // final_row: the first tile row of the final state this core forms (kt: none).
     const bool owns_final = final_row < kt;
