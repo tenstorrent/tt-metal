@@ -123,3 +123,11 @@ jobs:
               | while IFS= read -r f; do cp --sparse=never "$f" "$f.dense" && mv "$f.dense" "$f"; done
             # An unchanged restored tree is already stored; skip re-uploading it.
             - if [ -f /tmp/cpm-unchanged ]; then rm -rf .cpmcache; fi
+
+# Shadow PR Gate: passive view, publishes no check; the merge-queue trigger
+# targets it. Moves to Gates/ once torrentci#3178 is deployed.
+dashboards:
+  - id: shadow-pr-gate
+    description: "Shadow PR Gate: a non-blocking shadow of the PR Gate, run on each merge-queue entry; it publishes no check"
+    members:
+      - job: asan-build

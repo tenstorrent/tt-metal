@@ -1,0 +1,18 @@
+---
+triggers:
+  - id: shadow-pr-gate-merge-queue
+    kind: automatic
+    events: [push]
+    # Each queue entry gets its own gh-readonly-queue branch. `*` spans `/`.
+    pattern: refs/heads/gh-readonly-queue/main/*
+    # One commit per entry: nothing to supersede.
+    concurrency:
+      group: ref
+      supersede: never
+    # Entries that leave the queue burn no CPU.
+    on-ref-retired: cancel
+    # Below pull request work (default 100): nothing waits on this run.
+    priority: 160
+    targets:
+      jobs: []
+      dashboards: [shadow-pr-gate]
