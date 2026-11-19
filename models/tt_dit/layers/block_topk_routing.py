@@ -178,7 +178,7 @@ class BlockTopKRouting:
         for r in range(TILE):
             consts[3 + r, :, r] = 1.0
         self.consts = from_torch(
-            consts.reshape(1, 1, N_CONST_TILES * TILE, TILE), device=mesh_device, dtype=ttnn.float32
+            consts.reshape(1, 1, N_CONST_TILES * TILE, TILE), device=mesh_device, dtype=ttnn.bfloat16
         )
 
         self._q_bar: ttnn.Tensor | None = None
@@ -324,7 +324,6 @@ class BlockTopKRouting:
         nx, ny, cores = self._cores()
         units = H * NBPT
         scale = _f32_bits(1.0 / math.sqrt(D))
-        ct = [H, NBPT, NBGT, DT, KT, MC, nx, ny, units, int(coarse), scale, self.rows // TILE]
         ins = self._route_inputs(q_bar, kv_g)
         acc_in = self._accessor_args(*ins)
         outs = [mask, coarse_out, self.kth_index.value]
@@ -334,11 +333,11 @@ class BlockTopKRouting:
         sizes = [
             (0, DT, bf16),
             (1, 2 * DT, bf16),
-            (2, N_CONST_TILES, f32),
+            (2, N_CONST_TILES, bf16),
             (7, 2, f32),
             (8, 2, f32),
             (9, 1, f32),
-            (19, KT, f32),
+            (19, 1, f32),
             (20, 1, f32),
             (24, NBGT, f32),
             (25, KT, f32),
@@ -347,13 +346,30 @@ class BlockTopKRouting:
         ]
         if coarse:
             sizes += [(10, 2, f32), (11, 2 * DT, bf16), (12, 1, f32), (13, 1, f32), (14, 1, f32), (15, 1, f32)]
-            sizes += [(17, 2 * DT, bf16), (18, 1, f32), (22, DT, bf16), (29, NBGT, f32)]
+            sizes += [(17, 2 * DT, bf16), (18, 1, f32), (22, DT, bf16)]
+
+        # p = exp(...) is produced and consumed in chunks of PC column tiles; between chunks the DT + 1 partial
+        # sums spill to cb 30.
+        def chunk_sizes(pc: int) -> list[tuple]:
+            if not coarse:
+                return []
+            return [(29, pc, f32)] + ([(30, DT + 1, f32)] if pc < NBGT else [])
+
+        def total(pc: int) -> int:
+            cb_bytes = sum(
+                n * (TILE_BYTES_FP32 if dt == f32 else TILE_BYTES_BF16) for _, n, dt in sizes + chunk_sizes(pc)
+            )
+            return cb_bytes + 2 * mask_page
+
+        chunks = [pc for pc in range(NBGT, 0, -4) if NBGT % pc == 0]
+        PC = next((pc for pc in chunks if total(pc) <= L1_CB_BUDGET), chunks[-1])
+        if total(PC) > L1_CB_BUDGET:
+            raise ValueError(f"block_topk_route circular buffers need {total(PC)} B of L1 (> {L1_CB_BUDGET})")
+        sizes += chunk_sizes(PC)
+        ct = [H, NBPT, NBGT, DT, KT, MC, nx, ny, units, int(coarse), scale, self.rows // TILE, PC]
         cbs = [self._cb(i, n, cores, TILE_BYTES_FP32 if dt == f32 else TILE_BYTES_BF16, dt) for i, n, dt in sizes]
         cbs.append(self._cb(16, 2, cores, mask_page, ttnn.uint32))
         cbs.append(self._cb(21, 1, cores, KTH_INDEX_WORDS * 4, ttnn.uint32))
-        total = sum(n * (TILE_BYTES_FP32 if dt == f32 else TILE_BYTES_BF16) for _, n, dt in sizes) + 2 * mask_page
-        if total > L1_CB_BUDGET:
-            raise ValueError(f"block_topk_route circular buffers need {total} B of L1 (> {L1_CB_BUDGET})")
         reader = self._kernel(
             "block_topk_route_reader.cpp", cores, ct + acc_in, [0] * len(ins), ttnn.ReaderConfigDescriptor()
         )
@@ -361,9 +377,10 @@ class BlockTopKRouting:
             "block_topk_route_writer.cpp", cores, ct + acc_out, [0] * len(outs), ttnn.WriterConfigDescriptor()
         )
         config = self._compute_config(full_sync=True)
-        # Exact fp32 copies and transposes for every tile the selection reads (scores, sort buffers, biases).
+        # Exact fp32 copies and transposes for every tile the selection reads (scores, sort buffers, biases) and for
+        # the reloaded coarse partial sums.
         modes = [ttnn.UnpackToDestMode.Default] * 64
-        for i in (7, 8, 9, 19, 20, 24, 25, 26, 28):
+        for i in (7, 8, 9, 19, 20, 24, 25, 26, 28, 30):
             modes[i] = ttnn.UnpackToDestMode.UnpackToDestFp32
         config.unpack_to_dest_mode = modes
         compute = self._kernel("block_topk_route_compute.cpp", cores, ct, [], config)

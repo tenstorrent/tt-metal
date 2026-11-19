@@ -5,11 +5,11 @@
 // block_topk_route reader. Once per core: the constant tiles (eye, SENTINEL, ones, the 32 row selectors). Per unit
 // (head h, Q-block tile row it), in the order compute consumes them: the DT q_bar tiles of (h, it); the gathered pooled
 // K of head h column by column (DT tiles per column tile); the transposed candidate bias per column tile; the row bias
-// of it; the column bias per column tile; with COARSE, the pad row per column tile twice (row max, then exponent) and
-// the gathered pooled V of head h column by column.
+// of it; the column bias per column tile; with COARSE, the pad row per column tile (row max), then per chunk of PC
+// column tiles the pad row per column tile (exponent) and the gathered pooled V of head h column by column.
 //
-// Compile-time args: 0 H, 1 NBPT, 2 NBGT, 3 DT, 4 KT, 5 MC, 6 NX, 7 NY, 8 UNITS, 9 COARSE, 10 SCALE, 11 RT, then
-// TensorAccessorArgs of q_bar, kv_g, consts, cand_t, col_bias, row_bias, pad_row.
+// Compile-time args: 0 H, 1 NBPT, 2 NBGT, 3 DT, 4 KT, 5 MC, 6 NX, 7 NY, 8 UNITS, 9 COARSE, 10 SCALE, 11 RT, 12 PC,
+// then TensorAccessorArgs of q_bar, kv_g, consts, cand_t, col_bias, row_bias, pad_row.
 // Common runtime args: the seven buffer addresses in the same order.
 
 #include <cstdint>
@@ -35,7 +35,8 @@ void kernel_main() {
     constexpr uint32_t NY = get_compile_time_arg_val(7);
     constexpr uint32_t UNITS = get_compile_time_arg_val(8);
     constexpr bool COARSE = get_compile_time_arg_val(9) == 1;
-    constexpr auto q_args = TensorAccessorArgs<12>();
+    constexpr uint32_t PC = get_compile_time_arg_val(12);
+    constexpr auto q_args = TensorAccessorArgs<13>();
     constexpr auto kv_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto const_args = TensorAccessorArgs<kv_args.next_compile_time_args_offset()>();
     constexpr auto cand_args = TensorAccessorArgs<const_args.next_compile_time_args_offset()>();
@@ -74,7 +75,7 @@ void kernel_main() {
         }
     };
 
-    read_pages(consts, cb_const, FP32_TILE, 0, N_CONST);
+    read_pages(consts, cb_const, BF16_TILE, 0, N_CONST);
 
     for (uint32_t u = unit_start; u < unit_start + unit_count; ++u) {
         const uint32_t h = u / NBPT, it = u % NBPT;
@@ -87,9 +88,13 @@ void kernel_main() {
         read_column_tiles(col_bias, cb_colbias);
         if constexpr (COARSE) {
             read_column_tiles(pad_row, cb_pad);
-            read_column_tiles(pad_row, cb_pad);
-            for (uint32_t c = 0; c < NBGT; ++c) {
-                read_pages(kv_g, cb_v, BF16_TILE, ((H + h) * NBGT + c) * DT, DT);
+            for (uint32_t c0 = 0; c0 < NBGT; c0 += PC) {
+                for (uint32_t c = c0; c < c0 + PC; ++c) {
+                    read_pages(pad_row, cb_pad, FP32_TILE, c, 1);
+                }
+                for (uint32_t c = c0; c < c0 + PC; ++c) {
+                    read_pages(kv_g, cb_v, BF16_TILE, ((H + h) * NBGT + c) * DT, DT);
+                }
             }
         }
     }

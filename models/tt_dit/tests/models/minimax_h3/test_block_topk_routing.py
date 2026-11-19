@@ -27,6 +27,7 @@ from ....parallel.manager import CCLManager
 from ....pipelines.minimax_h3.vsa_geometry import VSA_TILE_TOKENS, build_vsa_geometry
 from ....utils.tensor import from_torch
 from .common import GALAXY_RING
+from .test_vsa_attention_minimax_h3 import REF2VA_H_15S_SEGMENTS
 
 HEADS = 14
 HEAD_DIM = 128
@@ -41,6 +42,8 @@ QUICK = [
 LARGE = [
     pytest.param((39, 0, 414), (37, 24, 42), 45312, id="5s-1344x768"),
     pytest.param((39, 0, 1206), (107, 24, 42), 120320, id="15s-1344x768"),
+    pytest.param(REF2VA_H_15S_SEGMENTS, (107, 24, 42), 240640, id="ref2va-h-15s"),
+    pytest.param(REF2VA_H_15S_SEGMENTS, (107, 24, 42), 326656, id="ref2va-top"),
 ]
 
 

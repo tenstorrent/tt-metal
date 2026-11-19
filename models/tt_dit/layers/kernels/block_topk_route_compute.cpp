@@ -18,15 +18,17 @@
 //            columns EXCLUDED; typecast to uint32 and packed untilized into row-major pages of MC tiles.
 //   coarse : (COARSE) m = row max of S + pad over all columns (elementwise max over the column tiles, then the same
 //            sort on the transposed max tile and a row broadcast), p = exp(scale (S + pad - m)), l = p @ ones,
-//            out = (p @ v_bar) / l; then for each real block r of the unit, row_sel[r] @ out (every row = row r) is
-//            packed bf16 for the writer, which stores it at both 32-row tile rows of that block.
+//            out = (p @ v_bar) / l; p is produced in chunks of PC column tiles, and l and p @ v_bar are accumulated
+//            chunk by chunk, their partial sums spilled to cb_part (fp32, reloaded exactly) between chunks. Then for
+//            each real block r of the unit, row_sel[r] @ out (every row = row r) is packed bf16 for the writer, which
+//            stores it at both 32-row tile rows of that block.
 //
 // The tiles the selection reads are unpacked straight to DST (UnpackToDestFp32, set by the host), so the sort, the
 // threshold and the compare see the fp32 scores unrounded. Unary SFPU ops only touch DST tiles 0..3; the binary
 // SFPU ops use 4 and 5 as scratch.
 //
 // Compile-time args: 0 H, 1 NBPT, 2 NBGT, 3 DT, 4 KT, 5 MC, 6 NX, 7 NY, 8 UNITS, 9 COARSE, 10 SCALE (fp32 bits),
-// 11 RT (32-row tile rows per shard).
+// 11 RT (32-row tile rows per shard), 12 PC (column tiles per chunk of p).
 
 #include <cstdint>
 
@@ -50,7 +52,7 @@ namespace {
 constexpr uint32_t cb_q = 0, cb_k = 1, cb_const = 2, cb_cand_t = 7, cb_colbias = 8, cb_rowbias = 9, cb_pad = 10,
                    cb_v = 11, cb_x = 12, cb_y = 13, cb_mb = 14, cb_l = 15, cb_mask = 16, cb_co = 17, cb_mx = 18,
                    cb_fin = 19, cb_thr_raw = 20, cb_cot = 22, cb_s = 24, cb_acc = 25, cb_loser = 26, cb_thr = 28,
-                   cb_p = 29;
+                   cb_p = 29, cb_part = 30;
 // Constant tiles: eye, SENTINEL, ones, then row_sel[r] (column r ones: row_sel[r] @ T copies row r of T to every row).
 constexpr uint32_t EYE = 0, SENT = 1, ONES = 2, ROW_SEL = 3, N_CONST = ROW_SEL + 32;
 constexpr uint32_t QUAD = 4;
@@ -92,9 +94,11 @@ void kernel_main() {
     constexpr bool COARSE = get_compile_time_arg_val(9) == 1;
     constexpr uint32_t SCALE = get_compile_time_arg_val(10);
     constexpr uint32_t RT = get_compile_time_arg_val(11);
+    constexpr uint32_t PC = get_compile_time_arg_val(12);
     constexpr uint32_t NB = (RT + 1) / 2;
     static_assert(NBGT % 8 == 0 && MC % QUAD == 0 && NBGT % MC == 0, "column tiles go in batches of 8 and 4");
     static_assert(DT < 8, "the coarse output and its row sum share DST");
+    static_assert(PC % QUAD == 0 && NBGT % PC == 0, "p is produced in quads and in whole chunks");
     static_assert(NBPT > 0);
 
     constexpr uint32_t NCORES = NX * NY;
@@ -107,7 +111,8 @@ void kernel_main() {
     }
     CircularBuffer cq(cb_q), ck(cb_k), cconst(cb_const), ccand(cb_cand_t), ccol(cb_colbias), crow(cb_rowbias),
         cpad(cb_pad), cv(cb_v), cx(cb_x), cy(cb_y), cmb(cb_mb), cl(cb_l), cmask(cb_mask), cco(cb_co), ccot(cb_cot),
-        cmx(cb_mx), cthr_raw(cb_thr_raw), cs(cb_s), cacc(cb_acc), closer(cb_loser), cthr(cb_thr), cp(cb_p);
+        cmx(cb_mx), cthr_raw(cb_thr_raw), cs(cb_s), cacc(cb_acc), closer(cb_loser), cthr(cb_thr), cp(cb_p),
+        cpart(cb_part);
     cconst.wait_front(N_CONST);
 
     for (uint32_t u = unit_start; u < unit_start + unit_count; ++u) {
@@ -320,85 +325,113 @@ void kernel_main() {
             pack_one(0, cb_mb);
             tile_regs_release();
 
-            // ---- p = exp(scale (S + pad - m))
+            // ---- per chunk of PC columns: p = exp(scale (S + pad - m)), then l += p @ ones and acc += p @ v_bar
             cmb.wait_front(1);
-            cp.reserve_back(NBGT);
-            for (uint32_t c0 = 0; c0 < NBGT; c0 += QUAD) {
+            for (uint32_t c0 = 0; c0 < NBGT; c0 += PC) {
+                const bool last = c0 + PC == NBGT;
+                cp.reserve_back(PC);
+                for (uint32_t cc = 0; cc < PC; cc += QUAD) {
+                    tile_regs_acquire();
+                    copy_begin(cb_s);
+                    for (uint32_t i = 0; i < QUAD; ++i) {
+                        copy_tile(cb_s, c0 + cc + i, i);
+                    }
+                    copy_begin(cb_mb);
+                    copy_tile(cb_mb, 0, 5);
+                    for (uint32_t i = 0; i < QUAD; ++i) {
+                        cpad.wait_front(1);
+                        copy_begin(cb_pad);
+                        copy_tile(cb_pad, 0, 4);
+                        cpad.pop_front(1);
+                        add_binary_tile_init();
+                        add_binary_tile(i, 4, i);
+                        sub_binary_tile_init();
+                        sub_binary_tile(i, 5, i);
+                    }
+                    binop_with_scalar_tile_init();
+                    for (uint32_t i = 0; i < QUAD; ++i) {
+                        mul_unary_tile(i, SCALE);
+                    }
+                    exp_tile_init();
+                    for (uint32_t i = 0; i < QUAD; ++i) {
+                        exp_tile(i);
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t i = 0; i < QUAD; ++i) {
+                        pack_tile<true>(i, cb_p, cc + i);
+                    }
+                    tile_regs_release();
+                }
+                cp.push_back(PC);
+                cp.wait_front(PC);
+
+                // l = p @ ones (row sums in every column); the final l goes to cb_l
                 tile_regs_acquire();
-                copy_begin(cb_s);
-                for (uint32_t i = 0; i < QUAD; ++i) {
-                    copy_tile(cb_s, c0 + i, i);
+                if (c0 > 0) {
+                    cpart.wait_front(1);
+                    copy_begin(cb_part);
+                    copy_tile(cb_part, 0, 0);
+                    cpart.pop_front(1);
                 }
-                copy_begin(cb_mb);
-                copy_tile(cb_mb, 0, 5);
-                for (uint32_t i = 0; i < QUAD; ++i) {
-                    cpad.wait_front(1);
-                    copy_begin(cb_pad);
-                    copy_tile(cb_pad, 0, 4);
-                    cpad.pop_front(1);
-                    add_binary_tile_init();
-                    add_binary_tile(i, 4, i);
-                    sub_binary_tile_init();
-                    sub_binary_tile(i, 5, i);
-                }
-                binop_with_scalar_tile_init();
-                for (uint32_t i = 0; i < QUAD; ++i) {
-                    mul_unary_tile(i, SCALE);
-                }
-                exp_tile_init();
-                for (uint32_t i = 0; i < QUAD; ++i) {
-                    exp_tile(i);
+                mm_begin(cb_p, cb_const, 0);
+                for (uint32_t c = 0; c < PC; ++c) {
+                    matmul_tiles(cb_p, cb_const, c, ONES, 0);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-                for (uint32_t i = 0; i < QUAD; ++i) {
-                    pack_tile<true>(i, cb_p, c0 + i);
+                pack_one(0, last ? cb_l : cb_part);
+                tile_regs_release();
+
+                // acc = p @ v_bar; after the last chunk, out = acc / l
+                tile_regs_acquire();
+                if (c0 > 0) {
+                    cpart.wait_front(DT);
+                    copy_begin(cb_part);
+                    for (uint32_t n = 0; n < DT; ++n) {
+                        copy_tile(cb_part, n, n);
+                    }
+                    cpart.pop_front(DT);
                 }
+                mm_begin(cb_p, cb_v, 0);
+                for (uint32_t c = 0; c < PC; ++c) {
+                    cv.wait_front(DT);
+                    for (uint32_t n = 0; n < DT; ++n) {
+                        matmul_tiles(cb_p, cb_v, c, n, n);
+                    }
+                    cv.pop_front(DT);
+                }
+                cp.pop_front(PC);
+                if (!last) {
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    cpart.reserve_back(DT);
+                    for (uint32_t n = 0; n < DT; ++n) {
+                        pack_tile(n, cb_part);
+                    }
+                    cpart.push_back(DT);
+                    tile_regs_release();
+                    continue;
+                }
+                cl.wait_front(1);
+                copy_begin(cb_l);
+                copy_tile(cb_l, 0, DT);
+                cl.pop_front(1);
+                div_binary_tile_init();
+                for (uint32_t n = 0; n < DT; ++n) {
+                    div_binary_tile(n, DT, n);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_reconfig_data_format(cb_cot);
+                ccot.reserve_back(DT);
+                for (uint32_t n = 0; n < DT; ++n) {
+                    pack_tile(n, cb_cot);
+                }
+                ccot.push_back(DT);
                 tile_regs_release();
             }
-            cp.push_back(NBGT);
-            cp.wait_front(NBGT);
             cmb.pop_front(1);
-
-            // ---- l = p @ ones (row sums in every column)
-            tile_regs_acquire();
-            mm_begin(cb_p, cb_const, 0);
-            for (uint32_t c = 0; c < NBGT; ++c) {
-                matmul_tiles(cb_p, cb_const, c, ONES, 0);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_one(0, cb_l);
-            tile_regs_release();
-
-            // ---- out = (p @ v_bar) / l
-            tile_regs_acquire();
-            mm_begin(cb_p, cb_v, 0);
-            for (uint32_t c = 0; c < NBGT; ++c) {
-                cv.wait_front(DT);
-                for (uint32_t n = 0; n < DT; ++n) {
-                    matmul_tiles(cb_p, cb_v, c, n, n);
-                }
-                cv.pop_front(DT);
-            }
-            cl.wait_front(1);
-            copy_begin(cb_l);
-            copy_tile(cb_l, 0, DT);
-            cl.pop_front(1);
-            div_binary_tile_init();
-            for (uint32_t n = 0; n < DT; ++n) {
-                div_binary_tile(n, DT, n);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_reconfig_data_format(cb_cot);
-            ccot.reserve_back(DT);
-            for (uint32_t n = 0; n < DT; ++n) {
-                pack_tile(n, cb_cot);
-            }
-            ccot.push_back(DT);
-            tile_regs_release();
-            cp.pop_front(NBGT);
 
             // ---- every block's row copied to all rows of its tiles
             const uint32_t it = u % NBPT;

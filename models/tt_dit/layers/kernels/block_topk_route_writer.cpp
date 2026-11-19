@@ -3,14 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // block_topk_route writer. Per unit (head h, Q-block tile row it): first the threshold tile, built from the KT sorted
-// tiles compute hands over (cb_fin, transposed domain: row j of tile p = position 32 p + j, column r = Q block r) as
-// thr[r, :] = position k - 1 of Q block r, with k - 1 read once from kth_index; then NBGT / MC row-major uint32 pages
-// from compute, each the 32 mask rows of the unit over MC column tiles, stored as 32 partial rows (MC * 32 words at
-// word offset chunk * MC * 32) of mask rows h * NBP + 32 it + r of block_mask [1, H, NBP, NBG]; with COARSE, for each
-// real block b = 32 it + r, its DT row-broadcast coarse tiles at tile rows 2b and 2b + 1 (when below RT), tile
+// tiles compute hands over one at a time (cb_fin, transposed domain: row j of tile p = position 32 p + j, column r = Q
+// block r) as thr[r, :] = position k - 1 of Q block r, with k - 1 read once from kth_index; then NBGT / MC row-major
+// uint32 pages from compute, each the 32 mask rows of the unit over MC column tiles, stored as 32 partial rows (MC * 32
+// words at word offset chunk * MC * 32) of mask rows h * NBP + 32 it + r of block_mask [1, H, NBP, NBG]; with COARSE,
+// for each real block b = 32 it + r, its DT row-broadcast coarse tiles at tile rows 2b and 2b + 1 (when below RT), tile
 // columns h * DT + n of coarse_out [1, 1, rows, H * D].
 //
-// Compile-time args: 0..11 as the compute kernel, then TensorAccessorArgs of block_mask, coarse_out and kth_index.
+// Compile-time args: 0..12 as the compute kernel, then TensorAccessorArgs of block_mask, coarse_out and kth_index.
 // Common runtime args: 0 block_mask address, 1 coarse_out address, 2 kth_index address.
 
 #include <cstdint>
@@ -23,7 +23,7 @@
 
 namespace {
 constexpr uint32_t cb_mask = 16, cb_co = 17, cb_fin = 19, cb_thr_raw = 20, cb_kidx = 21;
-constexpr uint32_t BF16_TILE = 2048, FP32_TILE = 4096, KTH_INDEX_BYTES = 64;
+constexpr uint32_t BF16_TILE = 2048, KTH_INDEX_BYTES = 64;
 
 // Word index of (r, c) in a 32x32 fp32 tile (four 16x16 faces in row-major face order).
 inline uint32_t tile_word(uint32_t r, uint32_t c) {
@@ -45,7 +45,7 @@ void kernel_main() {
     constexpr bool COARSE = get_compile_time_arg_val(9) == 1;
     constexpr uint32_t RT = get_compile_time_arg_val(11);
     constexpr uint32_t NB = (RT + 1) / 2;
-    constexpr auto mask_args = TensorAccessorArgs<12>();
+    constexpr auto mask_args = TensorAccessorArgs<13>();
     constexpr auto co_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
     constexpr auto kidx_args = TensorAccessorArgs<co_args.next_compile_time_args_offset()>();
     constexpr uint32_t ROW_BYTES = MC * 32 * 4;
@@ -71,20 +71,22 @@ void kernel_main() {
 
     for (uint32_t u = unit_start; u < unit_start + unit_count; ++u) {
         const uint32_t h = u / NBPT, it = u % NBPT;
-        cfin.wait_front(KT);
-        cthr.reserve_back(1);
-        {
-            CoreLocalMem<volatile uint32_t> src(cfin.get_read_ptr() + kth_tile * FP32_TILE);
-            CoreLocalMem<volatile uint32_t> dst(cthr.get_write_ptr());
-            for (uint32_t r = 0; r < 32; ++r) {
-                const uint32_t value = src[tile_word(kth_row, r)];
-                for (uint32_t c = 0; c < 32; ++c) {
-                    dst[tile_word(r, c)] = value;
+        for (uint32_t p = 0; p < KT; ++p) {
+            cfin.wait_front(1);
+            if (p == kth_tile) {
+                cthr.reserve_back(1);
+                CoreLocalMem<volatile uint32_t> src(cfin.get_read_ptr());
+                CoreLocalMem<volatile uint32_t> dst(cthr.get_write_ptr());
+                for (uint32_t r = 0; r < 32; ++r) {
+                    const uint32_t value = src[tile_word(kth_row, r)];
+                    for (uint32_t c = 0; c < 32; ++c) {
+                        dst[tile_word(r, c)] = value;
+                    }
                 }
+                cthr.push_back(1);
             }
+            cfin.pop_front(1);
         }
-        cthr.push_back(1);
-        cfin.pop_front(KT);
         for (uint32_t chunk = 0; chunk < NBGT / MC; ++chunk) {
             cm.wait_front(1);
             const uint32_t base = cm.get_read_ptr();
