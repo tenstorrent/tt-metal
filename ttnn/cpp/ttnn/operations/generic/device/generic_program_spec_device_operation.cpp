@@ -535,7 +535,7 @@ void GenericProgramSpecDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     check_mesh_ranges(operation_attributes, tensor_args);
     check_tensors_on_program_devices(operation_attributes, tensor_args);
-    // SetProgramRunArgs checks the nodes too, but only after the kernels compile.
+    // Program::set_program_run_args checks the nodes too, but only after the kernels compile.
     for (const auto& program : operation_attributes.programs) {
         check_program(program.spec, program.run_args, tensor_args.io_tensors, /*check_nodes=*/true);
     }
