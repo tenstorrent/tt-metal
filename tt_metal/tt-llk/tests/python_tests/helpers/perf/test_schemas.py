@@ -591,6 +591,34 @@ PERF_TEST_SCHEMAS = {
             "perf_fast_tilize_metal_api": "perf_fast_tilize_metal_api"
         },
     },
+    "perf_fast_tilize_tiny_tiles": {
+        "version": 1,
+        "columns": [
+            "block_ct_dim",
+            "block_rt_dim",
+            "dest_acc",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "full_ct_dim",
+            "full_rt_dim",
+            "loop_factor",
+            "marker",
+            "num_faces",
+            "num_faces_A",
+            "num_faces_B",
+            "tile_cnt",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {
+            "perf_fast_tilize_tiny_tiles": "perf_fast_tilize_tiny_tiles"
+        },
+    },
     "perf_fast_untilize": {
         "version": 5,
         "columns": [
