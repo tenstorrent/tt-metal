@@ -379,6 +379,8 @@ def compare(dump_dir: Path) -> None:
 
     if num_layers_override() is not None:
         raise ValueError("the official dump is full depth; unset ALPAMAYO_NUM_LAYERS")
+    # The dump records the official stack's `torch.__version__`, a TorchVersion, which weights_only refuses; it is
+    # written by this script's `dump` into the user's own cache directory.
     off = torch.load(dump_dir / DUMP_FILE, weights_only=False)
     log(f"official dump: {off['versions']}, snapshot {off['snapshot']}")
     failures = []
@@ -418,12 +420,15 @@ def compare(dump_dir: Path) -> None:
 
         def check(name: str, ours: torch.Tensor, official: torch.Tensor) -> None:
             stats = tensor_stats(ours, official)
-            ok = stats["pcc"] >= PCC_MIN and stats["max_rel"] <= MAX_REL
+            # Written so that NaN fails both checks.
+            pcc_ok = stats["pcc"] >= PCC_MIN
+            rel_ok = stats["max_rel"] <= MAX_REL
+            ok = pcc_ok and rel_ok
             rows.append({"name": name, "shape": list(ours.shape), **stats, "pass": ok})
-            if stats["pcc"] < PCC_MIN:
-                failures.append(f"{name}: PCC {stats['pcc']:.7f} < {PCC_MIN}")
-            if stats["max_rel"] > MAX_REL:
-                failures.append(f"{name}: max_rel {stats['max_rel']:.3e} > {MAX_REL}")
+            if not pcc_ok:
+                failures.append(f"{name}: PCC {stats['pcc']:.7f} is not >= {PCC_MIN}")
+            if not rel_ok:
+                failures.append(f"{name}: max_rel {stats['max_rel']:.3e} is not <= {MAX_REL}")
             log(
                 f"{name:<48} 1 - pcc {1 - stats['pcc']:.1e}  max_abs {stats['max_abs']:.3e}  "
                 f"max_rel {stats['max_rel']:.3e}  {'ok' if ok else 'FAIL'}"
