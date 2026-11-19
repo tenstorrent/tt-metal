@@ -134,6 +134,12 @@ def get_model_config(batch, device_grid_size, model_config_str):
     else:
         raise NotImplementedError(f"Model config {model_config_str} is not supported!")
 
+    # The L1 configs interleave every activation over the L1 of the 8 x batch cores they were sized
+    # for; a smaller grid does not hold them, so its activations go to DRAM instead.
+    if mem_config == L1_MEMCFG and device_grid_size.x * device_grid_size.y < 8 * batch:
+        logger.info(f"Grid {device_grid_size} has fewer than 8 x {batch} cores; {model_config_str} activations in DRAM")
+        mem_config = DRAM_MEMCFG
+
     # Set defaults for dtype and mem_config for all ops
     model_config = {
         "DEFAULT_DTYPE": dtype,
