@@ -39,6 +39,10 @@
 #include <tt_stl/reflection.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
+namespace ttnn::command_list {
+struct CmdListBindings;
+}  // namespace ttnn::command_list
+
 namespace ttnn::device_operation {
 
 template <typename T>
@@ -1039,7 +1043,38 @@ public:
             // Factories with per-device run args: the state of the range the factory returned, shared by its
             // cached programs (see MeshWorkloadSpecFactoryAdapter).
             std::shared_ptr<per_device_run_args::RangeState> per_device;
+            // What a TTNN command-list recording may bind in this program. Set on the cache miss when the factory
+            // defines map_cmd_list_parameters.
+            std::shared_ptr<const ttnn::command_list::CmdListBindings> cmd_list_bindings;
         };
+
+        // The tensor at `tensor_idx` of the cache-miss enumeration: this call's io tensors, then the parked
+        // op-owned tensors (stable addresses, retrieved from the cache). Shared so the cache-hit refresh and
+        // command-list recording cannot drift apart.
+        static const tt::tt_metal::MeshTensor& bound_mesh_tensor(
+            const SpecSharedVariables& sv,
+            const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& io_mesh_tensors,
+            std::size_t tensor_idx) {
+            return tensor_idx < io_mesh_tensors.size() ? io_mesh_tensors[tensor_idx].get()
+                                                       : (*sv.op_owned_tensors)[tensor_idx - io_mesh_tensors.size()];
+        }
+
+        // What a TTNN command-list recording may bind in a program built from `spec` and `run_params`: the
+        // factory's map_cmd_list_parameters, or null if it defines none. Called on the cache miss.
+        template <typename Factory>
+        static std::shared_ptr<const ttnn::command_list::CmdListBindings> make_cmd_list_bindings(
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            const tt::tt_metal::ProgramSpec& spec,
+            const tt::tt_metal::ProgramRunArgs& run_params) {
+            if constexpr (requires { &Factory::map_cmd_list_parameters; }) {
+                auto bindings = Factory::map_cmd_list_parameters(attrs, tensor_args, spec, run_params);
+                bindings.factory_name = ttsl::long_type_name<Factory>;
+                return std::make_shared<const ttnn::command_list::CmdListBindings>(std::move(bindings));
+            } else {
+                return nullptr;
+            }
+        }
 
         // Cache-hit tensor refresh, shared so the two adapters' hit paths cannot drift apart.
         template <typename CachedWorkload>
@@ -1051,19 +1086,11 @@ public:
             const bool skip_validation = !ttnn::CONFIG.get<"validate_program_args">();
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
                 const auto& sv = cached_workload.shared_variables.at(coordinate_range);
-
-                // Reproduce the cache-miss enumeration: fresh io tensors, then the
-                // parked op-owned tensors (stable addresses, retrieved from the cache).
-                auto mesh_tensors = io_mesh_tensors;
-                if (sv.op_owned_tensors) {
-                    for (const auto& op_owned_tensor : *sv.op_owned_tensors) {
-                        mesh_tensors.push_back(std::cref(op_owned_tensor));
-                    }
-                }
-
                 tt::tt_metal::Table<TensorParamName, TensorArgument> fresh_tensor_args;
                 for (const auto& b : sv.bindings) {
-                    fresh_tensor_args.emplace(b.tensor_parameter_name, TensorArgument{mesh_tensors[b.tensor_idx]});
+                    fresh_tensor_args.emplace(
+                        b.tensor_parameter_name,
+                        TensorArgument{std::cref(bound_mesh_tensor(sv, io_mesh_tensors, b.tensor_idx))});
                 }
                 tt::tt_metal::experimental::UpdateTensorArgs(program, fresh_tensor_args, skip_validation);
             }
@@ -1217,6 +1244,10 @@ public:
         }
     };
 
+    // The shared variables of a workload built by a spec adapter, keyed by coordinate range.
+    using SpecSharedVariablesMap =
+        std::unordered_map<ttnn::MeshCoordinateRange, typename SpecBindingSupport::SpecSharedVariables>;
+
     // -----------------------------------------------------------------------
     template <typename SpecFactory>
     struct ProgramSpecMeshWorkloadFactoryAdapter : SpecBindingSupport {
@@ -1281,6 +1312,8 @@ public:
             // are identical for every program built from it.
             auto artifacts = SpecFactory::create_program_artifacts(attrs, tensor_args, tensor_return_value);
             auto sv = make_shared_variables(attrs, artifacts, io_mesh_tensors);
+            sv.cmd_list_bindings = SpecBindingSupport::template make_cmd_list_bindings<SpecFactory>(
+                attrs, tensor_args, artifacts.spec, artifacts.run_params);
             for (const auto& range : tensor_coords.ranges()) {
                 shared_variables.emplace(range, sv);
                 program_specs.emplace(range, artifacts.spec);
@@ -1638,7 +1671,8 @@ public:
             if constexpr (uses_per_device_run_args()) {
                 return create_per_device_mesh_workload(*mesh_device, attrs, tensor_coords, artifacts, mesh_tensors);
             } else {
-                return create_plain_mesh_workload(*mesh_device, attrs, tensor_coords, artifacts, mesh_tensors);
+                return create_plain_mesh_workload(
+                    *mesh_device, attrs, tensor_coords, tensor_args, artifacts, mesh_tensors);
             }
         }
 
@@ -1646,6 +1680,7 @@ public:
             tt::tt_metal::distributed::MeshDevice& mesh_device,
             const operation_attributes_t& attrs,
             const ttnn::MeshCoordinateRangeSet& tensor_coords,
+            const tensor_args_t& tensor_args,
             MeshWorkloadArtifacts& artifacts,
             const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& mesh_tensors) {
             std::unordered_map<ttnn::MeshCoordinateRange, tt::tt_metal::ProgramSpec> program_specs;
@@ -1667,6 +1702,12 @@ public:
                         coord,
                         tensor_coords);
                 }
+                shared_variables_t sv{
+                    .bindings = SpecBindingSupport::resolve_bindings(per_coord.run_params.tensor_args, mesh_tensors),
+                    .pipe_bindings = SpecBindingSupport::resolve_pipe_bindings(
+                        per_coord.run_params.advanced_options.prefetcher_pipe_args, attrs)};
+                sv.cmd_list_bindings = SpecBindingSupport::template make_cmd_list_bindings<WorkloadSpecFactory>(
+                    attrs, tensor_args, per_coord.spec, per_coord.run_params);
                 const auto [_, inserted] = program_specs.emplace(per_coord.range, std::move(per_coord.spec));
                 TT_FATAL(inserted, "create_mesh_workload_artifacts returned range {} twice", per_coord.range);
                 TT_FATAL(
@@ -1674,13 +1715,7 @@ public:
                     "create_mesh_workload_artifacts returned per-device run args for range {}, but the factory does "
                     "not declare `uses_per_device_run_args`",
                     per_coord.range);
-                shared_variables.emplace(
-                    per_coord.range,
-                    shared_variables_t{
-                        .bindings =
-                            SpecBindingSupport::resolve_bindings(per_coord.run_params.tensor_args, mesh_tensors),
-                        .pipe_bindings = SpecBindingSupport::resolve_pipe_bindings(
-                            per_coord.run_params.advanced_options.prefetcher_pipe_args, attrs)});
+                shared_variables.emplace(per_coord.range, std::move(sv));
                 run_params.emplace(per_coord.range, std::move(per_coord.run_params));
             }
 
