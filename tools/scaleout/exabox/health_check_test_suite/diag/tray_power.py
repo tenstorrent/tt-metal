@@ -12,8 +12,8 @@ The tray CPLD's reg 0x1E reads ff while the tray is up. Together they tell a
 tray lost to its power feed from one lost to a chip or board fault.
 
 The latches hold until the tray is re-powered (a power cycle or a glx_reset), so
-the phase runs on pre_reboot only, right after the snapshot and before anything
-that could reset the unit.
+the phase runs on pre_bmc_reboot and post_bmc_reboot only (neither resets the
+unit), right after the snapshot.
 
 Reads only, in-band through the BMC's I2C master (`ipmitool raw 0x06 0x52`).
 Every transaction is checked against READS before ipmitool runs; nothing is

@@ -336,7 +336,8 @@ void init_unary_sfpu_operation_quasar()
     }
     else if constexpr (OPERATION == SfpuType::hardmish)
     {
-        hardmish_init();
+        // The Compute API's hardmish_tile_init expression, so the bare init's dispatch to hardmish_init is what runs.
+        SFPU_UNARY_INIT(hardmish);
     }
     else if constexpr (OPERATION == SfpuType::mish)
     {

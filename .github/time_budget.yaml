@@ -154,6 +154,8 @@ ttnn:
 train:
   merge_gate:
     bh_p150b_civ2: 60
+  pr_gate:
+    bh_p150b_civ2: 10
   unit:
     bh_p100: 105
     bh_p150b_civ2: 90
@@ -198,14 +200,16 @@ shield:
   demo:
     bh_sc4: 380
     bh_sc1: 120
-    bh_sc1_high_power: 210
+    # 210 -> 240 (+30): the Kimi-K3.1 L24 runner leg (60) and the GLM-5.3 2x[4,4] SC1 leg (40, #61481) each
+    # fit the 70 min of headroom over GLM-5.3 SC1 (80) + Kimi-K3 L24 SC1 (60), but not together.
+    bh_sc1_high_power: 240
 
 scaleout:
   merge_gate:
     cpu_medium: 10
     wh_n300_civ2: 10
   unit:
-    cpu_medium: 275
+    cpu_medium: 276
     wh_llmbox: 60
     wh_galaxy: 75
     wh_n300_civ2: 15
@@ -386,7 +390,7 @@ models:
     wh_n300: 6
     bh_p150: 35
     bh_p300: 42
-    bh_quietbox_2: 186
+    bh_quietbox_2: 191
   e2e_tier3:
     wh_llmbox_perf: 200
     wh_galaxy_perf: 55
@@ -438,7 +442,9 @@ models:
     bh_quietbox_2: 80
   demo:
     bh_galaxy: 470
-    bh_sc1: 2385
+    # 2385 -> 2463 (+78, PR #64830): K3.1 synthetic suite 47 (traced DSA replay 12 of it), K3.1 L24 / L24-128k
+    # depth 45, K3 / K3.1 KV table rows 2 (94 min, 16 of it from existing headroom).
+    bh_sc1: 2463
     bh_sc1_high_power: 500
     bh_sc4: 60
     wh_n150: 500

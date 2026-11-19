@@ -270,8 +270,10 @@ class TestTrayPowerPhase(unittest.TestCase):
         self.assertEqual(statuses(checks), [WARN, PASS, FAIL, PASS])
         self.assertIn(f"no reply in {CALL_TIMEOUT_S:g} s", checks[1].details)
 
-    def test_only_pre_reboot_runs_the_phase_and_dry_run_sends_nothing(self):
-        self.assertEqual([name for name, tier in TIERS.items() if tier.tray_power], ["pre_reboot"])
+    def test_only_the_bmc_reboot_tiers_run_the_phase_and_dry_run_sends_nothing(self):
+        self.assertEqual(
+            [name for name, tier in TIERS.items() if tier.tray_power], ["pre_bmc_reboot", "post_bmc_reboot"]
+        )
         bmc = FakeBmc()
         self.assertEqual([c.status for c in run_phase(bmc, dry_run=True).checks], [SKIP])
         self.assertEqual(bmc.calls, [])
@@ -352,7 +354,7 @@ class TestPlumbing(unittest.TestCase):
         )
 
     def test_skip_flag(self):
-        args = build_diag_arg_parser().parse_args(["--tier", "pre_reboot", "--skip-tray-power"])
+        args = build_diag_arg_parser().parse_args(["--tier", "pre_bmc_reboot", "--skip-tray-power"])
         self.assertTrue(args.skip_tray_power)
 
 
@@ -382,6 +384,7 @@ class TestRunDiagWiring(unittest.TestCase):
                 mock.patch.object(diag_runner, "run_triage", noop),
                 mock.patch.object(diag_runner, "run_qsfp_tests", noop),
                 mock.patch.object(diag_runner, "run_sys_triage", noop),
+                mock.patch.object(diag_runner, "run_eth_status", noop),
                 mock.patch.object(diag_runner, "run_tray_power", side_effect=reader),
             ]
             with contextlib.ExitStack() as stack:
@@ -397,11 +400,11 @@ class TestRunDiagWiring(unittest.TestCase):
             )
         return code, report, tray_mock
 
-    def test_pre_reboot_runs_tray_power_right_after_snapshot_before_resets(self):
+    def test_pre_bmc_reboot_runs_tray_power_right_after_snapshot_before_resets(self):
         def reader(phase, dry_run):
             phase.add(Check(name="tray1_12v_feed", status=PASS, details="clean", ip="board"))
 
-        code, report, tray_mock = self.run_diag("pre_reboot", reader)
+        code, report, tray_mock = self.run_diag("pre_bmc_reboot", reader)
         names = list(report["phases"])
         self.assertEqual(names[:2], ["snapshot", "tray_power"])
         self.assertLess(names.index("tray_power"), names.index("reset_loop"))
@@ -411,7 +414,7 @@ class TestRunDiagWiring(unittest.TestCase):
         self.assertEqual((phase["error"], phase["status"], phase["gates"]), ("", PASS, False))
 
     def test_skip_flag_gives_one_skip_check_and_the_phase_stays_skip(self):
-        code, report, tray_mock = self.run_diag("pre_reboot", skip_tray_power=True)
+        code, report, tray_mock = self.run_diag("pre_bmc_reboot", skip_tray_power=True)
         tray_mock.assert_not_called()
         phase = report["phases"]["tray_power"]
         self.assertEqual(
@@ -424,7 +427,7 @@ class TestRunDiagWiring(unittest.TestCase):
         def boom(phase, dry_run):
             raise RuntimeError("bmc went away")
 
-        code, report, _ = self.run_diag("pre_reboot", boom)
+        code, report, _ = self.run_diag("pre_bmc_reboot", boom)
         phase = report["phases"]["tray_power"]
         self.assertEqual([(c["name"], c["status"]) for c in phase["checks"]], [("tray_12v_feed", SKIP)])
         self.assertIn("bmc went away", phase["error"])
@@ -433,7 +436,7 @@ class TestRunDiagWiring(unittest.TestCase):
 
     def test_other_tiers_have_no_tray_power_phase(self):
         for tier in TIERS:
-            if tier == "pre_reboot":
+            if TIERS[tier].tray_power:
                 continue
             with self.subTest(tier=tier):
                 _, report, tray_mock = self.run_diag(tier)
