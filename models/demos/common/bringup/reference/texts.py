@@ -146,6 +146,93 @@ def _prose(spec: Spec) -> tuple[str, str]:
     return text, f"the canonical prompt's source {path.name}"
 
 
+# F287 (owner 2026-11-19): public coding-agent traces (nvidia/Open-SWE-Traces, CC-BY-4.0, already on /data), rendered as
+# the model sees them: the checkpoint's own chat template with the system prompt, tool schemas, tool calls, tool
+# results and reasoning. Sessions in a fixed shuffled order; a text holds whole sessions up to TARGET_TOKENS, its record
+# lists each session (repo, language, start, n) so a pick can be split by repo. "<name>_s<k>" is the k-th such slice.
+TRACES_DIR = os.environ.get("BRINGUP_TRACES_DIR", "/data/dnijemcevic/bringup/agent_texts_20261119")
+TRACES = {
+    "agentic_cc": "claudecode_sample.parquet",
+    "agentic_ds": "openhands_deepseek_v4_flash_0731_scale-swe_train-00000-of-00011.parquet",
+    "agentic_ds_ml": "openhands_dsv4flash_swerebench_sample.parquet",
+}
+
+
+def _tool_schema(t):
+    t = json.loads(t) if isinstance(t, str) else t
+    if "function" in t:
+        return t
+    params = t.get("input_schema") or t.get("parameters") or {"type": "object", "properties": {}}
+    return {
+        "type": "function",
+        "function": {"name": t["name"], "description": t.get("description", ""), "parameters": params},
+    }
+
+
+def _render_session(tok, row) -> str:
+    msgs = []
+    for m in row["messages"]:
+        m = dict(m)
+        calls = []
+        for c in m.get("tool_calls") or []:
+            fn = dict(c.get("function") or {})
+            if isinstance(fn.get("arguments"), str):
+                try:
+                    fn["arguments"] = json.loads(fn["arguments"])
+                except ValueError:
+                    pass
+            calls.append({**c, "function": fn})
+        if calls:
+            m["tool_calls"] = calls
+        else:
+            m.pop("tool_calls", None)
+        if not m.get("reasoning_content"):
+            m.pop("reasoning_content", None)
+        msgs.append({k: v for k, v in m.items() if v is not None})
+    tools = [_tool_schema(t) for t in (row.get("tools") or [])]
+    return tok.apply_chat_template(msgs, tools=tools or None, tokenize=False)
+
+
+def _traces(spec, which: str, tok):
+    import random
+
+    import pyarrow.parquet as pq
+
+    base, _, k = which.partition("_s")
+    k = int(k or 0)
+    table = pq.read_table(
+        Path(TRACES_DIR) / TRACES[base], columns=["instance_id", "repo", "language", "messages", "tools"]
+    )
+    order = list(range(table.num_rows))
+    random.Random(f"{base}-F287").shuffle(order)
+    ids, sessions, used = [], [], 0
+    for i in order:
+        row = table.slice(i, 1).to_pylist()[0]
+        n_ids = tok(_render_session(tok, row), add_special_tokens=False)["input_ids"]
+        if used < k * TARGET_TOKENS:  # earlier slices
+            used += len(n_ids)
+            continue
+        if len(ids) + len(n_ids) > TARGET_TOKENS:
+            if sessions:
+                break
+            n_ids = n_ids[:TARGET_TOKENS]
+        sessions.append(
+            {
+                "instance_id": row["instance_id"],
+                "repo": row["repo"],
+                "language": row["language"],
+                "start": len(ids),
+                "n": len(n_ids),
+            }
+        )
+        ids += n_ids
+    return (
+        ids,
+        sessions,
+        f"{len(sessions)} sessions of {TRACES[base]} (nvidia/Open-SWE-Traces, CC-BY-4.0), slice {k}, chat template",
+    )
+
+
 BUILDERS = {"prose": _prose, "agentic": _agentic, "code": _code, "math": _math, "multilingual": _multilingual}
 
 
@@ -161,13 +248,17 @@ def build(spec: Spec, which: str, tok=None) -> dict:
         if hashlib.sha256(json.dumps(rec["token_ids"]).encode()).hexdigest() != rec["sha256"]:
             raise ValueError(f"{p}: token ids do not match their recorded hash")
         return rec
-    if which not in BUILDERS:
-        raise ValueError(f"{ENV}={which!r}: use one of {sorted(BUILDERS)} or random")
     from models.demos.common.bringup.reference.golden import tokenizer
 
-    text, source = BUILDERS[which](spec)
     tok = tok or tokenizer(spec)
-    ids = tok(text[: TARGET_TOKENS * 8], add_special_tokens=False)["input_ids"][:TARGET_TOKENS]
+    sessions = None
+    if which.partition("_s")[0] in TRACES:  # F287
+        ids, sessions, source = _traces(spec, which, tok)
+    elif which in BUILDERS:
+        text, source = BUILDERS[which](spec)
+        ids = tok(text[: TARGET_TOKENS * 8], add_special_tokens=False)["input_ids"][:TARGET_TOKENS]
+    else:
+        raise ValueError(f"{ENV}={which!r}: use one of {sorted(BUILDERS) + sorted(TRACES)} (+ _s<k>) or random")
     rec = {
         "name": which,
         "source": source,
@@ -175,6 +266,7 @@ def build(spec: Spec, which: str, tok=None) -> dict:
         "sha256": hashlib.sha256(json.dumps(ids).encode()).hexdigest(),
         "token_ids": ids,
         "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        **({"sessions": sessions} if sessions is not None else {}),
     }
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".tmp")

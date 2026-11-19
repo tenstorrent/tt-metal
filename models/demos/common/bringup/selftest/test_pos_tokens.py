@@ -41,3 +41,36 @@ def test_named_text_tags_metrics(monkeypatch):
     assert metrics.suffixed("steady_wall_ms_p1") == "steady_wall_ms_p1"
     monkeypatch.setenv(texts.ENV, "agentic")
     assert metrics.suffixed("steady_wall_ms_p1") == "steady_wall_ms_p1_tagentic"
+
+
+def test_trace_tool_schemas_and_calls():
+    """F287: Anthropic-style tool schemas become function schemas; tool-call arguments are parsed for the template."""
+    t = texts._tool_schema(
+        '{"name": "Bash", "description": "run", "input_schema": {"type": "object", "properties": {}}}'
+    )
+    assert t == {
+        "type": "function",
+        "function": {"name": "Bash", "description": "run", "parameters": {"type": "object", "properties": {}}},
+    }
+    assert texts._tool_schema({"type": "function", "function": {"name": "x"}})["function"]["name"] == "x"
+
+    class Tok:
+        def apply_chat_template(self, msgs, tools=None, tokenize=False):
+            return json.dumps([msgs, tools])
+
+    import json
+
+    row = {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": "",
+                "reasoning_content": None,
+                "tool_calls": [{"function": {"name": "Bash", "arguments": '{"command": "ls"}'}}],
+            }
+        ],
+        "tools": [],
+    }
+    msgs, tools = json.loads(texts._render_session(Tok(), row))
+    assert msgs[0]["tool_calls"][0]["function"]["arguments"] == {"command": "ls"} and "reasoning_content" not in msgs[0]
+    assert tools is None
