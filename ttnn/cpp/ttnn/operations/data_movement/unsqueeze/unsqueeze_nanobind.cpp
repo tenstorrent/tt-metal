@@ -49,6 +49,8 @@ void bind_unsqueeze(nb::module_& mod) {
                * - UINT16, UINT8
                  - TILE, ROW_MAJOR
 
+            On Blackhole, the input can also be an ``FP8_E4M3`` tensor in ROW_MAJOR layout, when the new dimension comes before the last two dimensions of the output.
+
         Memory Support:
             - Interleaved: DRAM and L1
             - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1, when the new dimension comes before the last two dimensions of the output
