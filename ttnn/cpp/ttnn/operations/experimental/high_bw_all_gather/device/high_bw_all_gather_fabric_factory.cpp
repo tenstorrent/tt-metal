@@ -575,7 +575,8 @@ GatherPlan build_gather_plan(
     // Words per link worker: logical core (2), translated core (2), has_fabric_connection, fabric_link_index.
     const uint32_t num_link_workers = plan.num_rings * 2 * L;
     const auto place_link_workers_of_chip =
-        [&plan, &forwarding_links, &allowed_cores, &allowed_core_ranges, mesh_device, mesh_cols, L](const Coord& chip) {
+        [&plan, &forwarding_links, &allowed_cores, &allowed_core_ranges, mesh_device, mesh_cols, L, num_link_workers](
+            const Coord& chip) {
             const uint32_t chip_index = chip[0] * mesh_cols + chip[1];
             auto* device = tt::tt_metal::internal::get_device(*mesh_device, chip);
             std::vector<FabricLinkWorker> fabric_link_workers(plan.num_rings * 2 * L);
