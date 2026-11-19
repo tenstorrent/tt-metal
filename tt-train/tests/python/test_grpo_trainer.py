@@ -1828,7 +1828,7 @@ def _async_rollout_server(bridge, queue, sampler, reward_funcs):
 def test_async_rollout_server_rejects_an_empty_dataset(expect_error):
     config = _remote_grpo_config(rollout_backend="ttt_remote_async")
     with expect_error(ValueError, "needs a non-empty dataset"):
-        GRPOTrainer._build_rollout_server(SimpleNamespace(config=config), lambda: [])
+        GRPOTrainer._build_rollout_server(SimpleNamespace(config=config), None, lambda: [])
 
 
 def test_async_rollout_server_walks_prompts_with_the_newest_weights(monkeypatch):
@@ -1972,6 +1972,7 @@ def async_rollout_over_blocking_sends(request, monkeypatch):
     monkeypatch.setattr(ttnn, "record_event", lambda mesh, cq_id: None)
     monkeypatch.setattr(ttnn, "wait_for_event", lambda cq_id, event: None)
     monkeypatch.setattr(ttnn, "to_torch", lambda pad, cq_id: pad.value.clone())
+    monkeypatch.setattr(ttnn, "get_device_tensors", lambda pad: [pad])
     monkeypatch.setattr(ttnn, "from_torch", lambda tensor, **k: tensor)
     monkeypatch.setattr(ttnn, "copy_host_to_device_tensor", lambda host, pad, cq_id: setattr(pad, "value", host))
     monkeypatch.setattr(threaded_weight_bridge, "_validate_source_tensor", lambda key, tensor: None)
