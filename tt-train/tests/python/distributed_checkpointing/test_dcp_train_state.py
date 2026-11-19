@@ -340,11 +340,14 @@ def test_a_tuple_comes_back_as_a_list_and_the_refusal_says_so(expect_error):
         restore_train_state(stored, dataloader=_TupleLoader())
 
 
-class _IntKeyLoader(Loader):
+class _IntKeyScheduler:
+    """A scheduler whose state keys its LRs by param group index, which JSON would hand back as strings."""
+
     def get_state_dict(self) -> dict:
-        return {"per_shard": {0: 7}}
+        return {"group_lrs": {0: 1e-3}}
 
 
 def test_state_that_would_not_read_back_as_written_is_refused(expect_error):
-    with expect_error(CheckpointError, "dataloader state at /per_shard: key 0 is a int"):
-        capture_train_state(dataloader=_IntKeyLoader(), rng=False)
+    # The scheduler's state goes through the same check as the dataloader's (test_state_that_is_not_json_is_refused).
+    with expect_error(CheckpointError, "scheduler state at /group_lrs: key 0 is a int"):
+        capture_train_state(scheduler=_IntKeyScheduler(), rng=False)
