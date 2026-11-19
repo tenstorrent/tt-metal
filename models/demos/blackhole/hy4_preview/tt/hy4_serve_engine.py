@@ -480,7 +480,7 @@ class Hy4Engine:
             self.pipe_discards += 1
 
     # ------------------------------------------------------------------------------------------------ prefill
-    def prefill(self, prompts_by_row, sampling=None, rids=None):
+    def prefill(self, prompts_by_row, sampling=None, rids=None, _sub=False):
         """prompts_by_row {mesh row: list[int]} -> {row: first token}. ``sampling`` {row: (temperature, top_k, top_p, seed)}. Direct-to-pool chunked prefill (+ MTP prompt KV + seed round in spec mode).
         The other mesh rows keep their pool pages (masked writes) and their decode state."""
         t0 = time.perf_counter()
@@ -506,13 +506,43 @@ class Hy4Engine:
                 sc = plan.get(r)
                 if sc is not None and self.xrow is not None:
                     self._xrow_copy(sc[0], r, sc[1])
-            if self.blocks is not None and self._blocks_live() and self._pfx_on():
+            if not _sub and self.blocks is not None and self._blocks_live() and self._pfx_on():
                 for r in rows:
                     self._blocks_pre_prefill(r, torch.as_tensor(prompts_by_row[r], dtype=torch.int32).numpy())
             for r in rows:
                 hits[r] = self.hit_len(r, torch.as_tensor(prompts_by_row[r], dtype=torch.int32).numpy())
             st = [(h - A if (self.pfx_redo and h > 0) else h) for h in hits.values()]
             start = max(0, min(st)) if st else 0
+            # HY4_PFX_SPLIT=1 (default off): a lock-step call starts at the COMMON MINIMUM start of its rows ('lockstep' loss: rows with a deeper hit recompute down to it). Rows whose starts differ by more than
+            # HY4_PFX_SPLIT_MIN tokens (default 8192) are prefilled in SEPARATE sub-calls (cheapest first); the other rows keep their pool pages / decode state exactly as in any call for a subset of the rows.
+            if os.environ.get("HY4_PFX_SPLIT", "0") == "1" and not _sub and len(rows) > 1:
+                thr = int(os.environ.get("HY4_PFX_SPLIT_MIN", "8192"))
+                srt = sorted(rows, key=lambda r: max(0, hits[r] - A if (self.pfx_redo and hits[r] > 0) else hits[r]))
+                groups, cur = [], [srt[0]]
+                sof = lambda r: max(0, hits[r] - A if (self.pfx_redo and hits[r] > 0) else hits[r])
+                for r in srt[1:]:
+                    if sof(r) - sof(cur[0]) > thr:
+                        groups.append(cur)
+                        cur = [r]
+                    else:
+                        cur.append(r)
+                groups.append(cur)
+                if len(groups) > 1:
+                    groups.sort(key=lambda g: max(len(prompts_by_row[r]) - sof(r) for r in g))
+                    logger.info(
+                        "HY4 pfx split: rows %s starts %s -> groups %s", rows, {r: sof(r) for r in rows}, groups
+                    )
+                    first = {}
+                    for g in groups:
+                        first.update(
+                            self.prefill(
+                                {r: prompts_by_row[r] for r in g},
+                                {r: v for r, v in (sampling or {}).items() if r in g} or None,
+                                {r: v for r, v in (rids or {}).items() if r in g} if rids else None,
+                                _sub=True,
+                            )
+                        )
+                    return first
             if self.loss_log:
                 live_before = list(self.live)
                 loss = self.classify_loss(prompts_by_row, hits, start, live_before, rids)
