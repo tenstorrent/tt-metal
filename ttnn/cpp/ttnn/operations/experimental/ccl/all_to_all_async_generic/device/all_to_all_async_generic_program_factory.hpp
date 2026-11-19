@@ -20,6 +20,11 @@ struct AllToAllAsyncGenericProgram {
         bool axis_is_straight;
     };
 
+    // The per-chip programs differ only in runtime-arg values: one program per range, with per-device runtime args.
+    static constexpr bool merge_per_device_programs = true;
+    // Edge chips have fewer targets; the kernels read their target counts from the args.
+    static constexpr bool pad_per_device_runtime_args = true;
+
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const AllToAllAsyncGenericParams& operation_attributes,
         const AllToAllAsyncGenericInputs& tensor_args,

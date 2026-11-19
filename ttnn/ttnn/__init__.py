@@ -82,7 +82,9 @@ from ttnn._ttnn.multi_device import (
     MeshComposerConfig,
     TensorTopology,
     get_device_tensors,
+    cpu_shards,
     from_host_shards,
+    from_local_host_shards,
     combine_device_tensors,
     replicate_tensor_to_mesh_mapper,
     shard_tensor_to_mesh_mapper,
@@ -412,6 +414,7 @@ from ttnn.core import (
 )
 
 tile_size = ttnn._ttnn.tensor.tile_size
+host_tensor_from_bytes = ttnn._ttnn.tensor.host_tensor_from_bytes
 experimental_create_sram_tensor_view = ttnn._ttnn.tensor.experimental_create_sram_tensor_view
 NodeLocalSpan = ttnn._ttnn.tensor.NodeLocalSpan
 PerNodeDeviceLocalMemorySpan = ttnn._ttnn.tensor.PerNodeDeviceLocalMemorySpan
@@ -643,9 +646,23 @@ experimental.create_prefetcher_pipe_spaces = _prefetcher_pipe.create_prefetcher_
 
 # Command lists (Metal 2.0 replacement for trace). Experimental-only surface.
 from ttnn._ttnn.operations import command_list as _command_list
+from ttnn.command_list import CmdListParam as _CmdListParam
 
 experimental.CommandListBuilder = _command_list.CommandListBuilder
 experimental.CommandList = _command_list.CommandList
+experimental.CmdListParam = _CmdListParam
+
+# Metal 2.0 ProgramSpec, ProgramRunArgs and the types they use, and generic_op's MeshProgramSpec and
+# MeshProgramRunArgs, for ttnn.experimental.generic_op.
+# Experimental-only surface.
+from ttnn._ttnn import program_spec as _program_spec
+
+for _name in dir(_program_spec):
+    if not _name.startswith("_"):
+        setattr(experimental, _name, getattr(_program_spec, _name))
+del _name
+# generic_op's program-cache hash; ttnn.experimental.generic_op itself is registered by its binding.
+experimental.compute_program_spec_hash = ttnn._ttnn.operations.experimental.compute_program_spec_hash
 
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
