@@ -3517,5 +3517,12 @@
  "X.7": {
   "device_ms_total_p145408_nonlast": 82.21,
   "op_rows_p145408_nonlast": 794
+ },
+ "X.8": {
+  "determinism_max_abs_diff": 0.0,
+  "device_ms_total_p145408_nonlast": 82.05,
+  "device_ms_total_p147456_nonlast": 118.3,
+  "steady_wall_ms_p145408": 108.3,
+  "steady_wall_ms_p147456": 149.3
  }
 }

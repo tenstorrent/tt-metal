@@ -1,0 +1,59 @@
+{
+ "used": [
+  {
+   "id": "DS41-279",
+   "how": "relied on test_skip_positions / test_profile raising target.seq in memory for p ~142k-147k at each chunk; no model change needed for the long points",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-296",
+   "how": "expected the position-profile metrics with the _nonlast suffix (BRINGUP_CHUNK_LAST=0); the task's thresholds already name them",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-284",
+   "how": "read the 1536 failure as a load-time AssertionError (tile split), not a fits / OOM verdict",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the smallest chunk the model accepts on a mesh: chunk % (32 x chips) == 0 (1024 on the 8x4), so the sweep's 1536 / 2560 do not load on galaxy_8x4 (DS41-297)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "1536 / 2560 give 48 / 80 rows a chip on 32 chips; the tile-aligned split is asserted in tt/model.py:1057, tt/attention.py:166, tt/indexer.py:144 and used across compressor / rope / engram / history_gather; padding each chip's rows to 64 / 96 would inflate the work (OV-3), so no padding was added and the limit is reported"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no op added or touched: X.8 is a measurement on the default tree, no code change"
+  }
+ ],
+ "cited_only": [
+  "DS41-297"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "X.8",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-19T00:33:40",
+  "head": "c997e1a0ca0",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/X.8.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/X.8_ops.json.gz",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/X.8_profile.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/X.8.perf.1.json"
+  ]
+ }
+}

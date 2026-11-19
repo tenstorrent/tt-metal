@@ -657,3 +657,41 @@
   timeline gap 143.6 ms, determinism_max_abs_diff 0.0.
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate X.7 --spec
   models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check` (after the tasks.yaml rename).
+
+## X.8 perf (attempt 1): chunk-size sweep at ~142k (1536 / 2560 / 5120 / 8192), default tree
+
+- Expected (written before any run; X.7 at p145408 / 5120: device 82.2 ms, of it ~18 ms weights read once a chunk
+  whatever its length, clean wall ~106 ms in skip_positions, host share ~24 ms roughly fixed a chunk (launch count
+  does not depend on the chunk)). Model: device(C) ~ 18 + 64.2 x C / 5120 ms, wall(C) ~ device(C) + 24 ms.
+  1536: device ~37 ms, wall ~61 ms, ~25 tok/ms (-48 % vs 5120); 2560: device ~50, wall ~74, ~35 tok/ms (-28 %);
+  5120: device ~82, wall ~106, ~48 tok/ms; 8192: device ~121, wall ~145, ~57 tok/ms (+17-20 %, more if the small-M
+  expert tiles gain at 256 rows a chip). Host per chunk ~0 change (same launches), so the host share falls a token
+  as the chunk grows. Risk: at 1536 / 2560 a chip owns 48 / 80 rows (< 128 window rows, not tile-aligned), a path
+  the 5120 tree never takes on the 4 boxes; at 8192 the L1 / DRAM of the larger chunk's buffers.
+- Result: no code change (a measurement). 1536 and 2560 do not load on the 8x4: tt/model.py:1057 asserts
+  chunk % (32 x 32 chips) == 0 (48 / 80 rows a chip; the same tile split in attention.py:166 WindowGeometry,
+  indexer.py:144, the OWN_ROWS streams, rope / compressor / history_gather); padding each chip's rows to a tile would
+  inflate the work (OV-3), so the limit is reported, DS41-297. On 8x4 the chunk is a multiple of 1024; 1536 / 2560
+  load on 2x2 / 2x4 / 4x4 (4 / 8 / 16 chips), not on the 32-chip mesh. In their place (not gate units, same test
+  by hand under run_safe_pytest): 2048 at p145408 and 3072 at p144384.
+- Steady chunk, test_skip_positions (clean wall median, DECODER_SKIP=decode, ~142k history, 8x4):
+  | chunk | p | wall ms (spread) | device ms | host ms | tok/s | vs 5120 | experts | attention | attn_res | indexer | ffn_res | q_a |
+  | 2048 | 145408 | 70.7 (3.9) | 50.9 | 19.8 | 28,967 | -39 % | 24.0 | 16.5 | 3.9 | 1.7 | 2.3 | 1.2 |
+  | 3072 | 144384 | 79.7 (15.5) | 60.3 | 19.4 | 38,545 | -18 % | 31.0 | 18.8 | 3.0 | 2.1 | 2.2 | 1.4 |
+  | 5120 | 145408 | 108.3 (8.3) | 80.6 | 27.7 | 47,276 | - | 45.0 | 21.3 | 4.3 | 2.9 | 4.3 | 1.7 |
+  | 8192 | 147456 | 150.2 (17.1) | 115.4 | 34.8 | 54,541 | +15.4 % | 65.9 | 28.2 | 6.3 | 5.5 | 4.8 | 2.4 |
+- test_profile (plain, BRINGUP_CHUNK_LAST=0), device_ms_total (slowest chip a section, summed): 5120 82.05 ms
+  (experts 43.7, attention 21.6, ffn_res 4.2, attn_res 3.5, indexer 3.0, q_a 1.7, compressor 1.4); 8192 118.3 ms
+  (experts 65.4, attention 28.5, attn_res 6.2, indexer 5.5, ffn_res 4.8, q_a 2.4, compressor 1.9); chips agree
+  within ~1 ms. Its clean wall (153.0 / 243.6 ms, spread 35 / 53, not settled) is noisier than skip_positions'.
+- Determinism at 8192: max_abs_diff 0.0 (state 0.0, 4 chunks x 3 runs).
+- Vs the expectation: 8192 +15.4 % tok/s (expected +17-20 %, roofline >= 20 %): device a token 15.7 -> 14.1 us
+  (-10 %): experts x1.46 and attention x1.32 for x1.6 tokens (the fixed weight read amortizes), but the indexer
+  grows x1.87 (scores = queries x history keys, plus top-k over larger rows) and attn_residual x1.47; host a chunk
+  27.7 -> 34.8 ms (+7 ms: not fixed, it grows with the chunk). Small chunks lose less than predicted at 2048 / 3072
+  (host ~19.5 ms, below 5120's 27.7). Serving chunk unchanged (5120; a larger one is an owner decision with tt-d-gen).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate X.8 --spec
+  models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check --unit <unit>` (the 1536 /
+  2560 units fail at load, DS41-297); the extra points: `BRINGUP_CHUNK=2048 DS41_DECODER_SKIP=decode SKIP_POS=145408
+  scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py`
+  (3072: SKIP_POS=144384).
