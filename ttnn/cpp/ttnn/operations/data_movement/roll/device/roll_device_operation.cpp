@@ -41,9 +41,9 @@ void validate_roll(const RollParams& operation_attributes, const RollInputs& ten
         !ttnn::prim::sharded_roll_input_has_padding(input),
         "Native sharded roll does not support tile or shard padding; ttnn::roll routes these through DRAM");
     if (input.layout() == Layout::TILE) {
-        // The factory derives cell_h/cell_w/cell_size from the architectural 32x32 constants, and the
-        // tile is absent from compute_program_hash, so a non-standard tile would both compile a
-        // mis-sized program and alias onto a cached 32x32 one.
+        // The factory derives cell_h/cell_w/cell_size from the architectural 32x32 constants, so a
+        // non-standard tile would compile a mis-sized program. (The tile is part of the page config,
+        // which compute_program_hash keys, so it would not alias onto a cached 32x32 program.)
         const auto tile = input.tensor_spec().tile();
         TT_FATAL(
             tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
