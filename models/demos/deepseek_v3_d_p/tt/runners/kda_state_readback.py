@@ -1,12 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Read the Kimi-K3 KDA state back through a published KV chunk table and score it against the golden.
+"""Read the Kimi-K3 / K3.1 KDA state back through a published KV chunk table and score it against the golden.
 
     python -m models.demos.deepseek_v3_d_p.tt.runners.kda_state_readback \
         --table /path/kv_chunk_table.pb --device-map /path/device_map[.rank0 ...] \
-        --real-len 56320 [--golden DIR] [--num-layers 93] [--slot 0] [--pcc 0.9] [--json out.json]
+        --real-len 56320 [--model kimi_k3] [--golden DIR] [--num-layers 93] [--slot 0] [--pcc 0.9] [--json out.json]
 
-Walks configs 1 (recurrent) and 2 (convolution) by model layer, reads every segment of every layer this
+Walks the configs the model's adapter names as KDA state (``cache_kind``: recurrent and convolution, configs
+1/2 on K3 and 2/3 on K3.1, after its DSA index cache) by model layer, reads every segment of every layer this
 host can reach with ``read_dram_umd`` (a UMD read is local-PCIe only, so run once per host of a
 multi-rank run), reassembles the per-layer state from the segment numbering alone, and compares it to
 the head/tail golden snapshot after ``real_len`` tokens. Exit status is non-zero when any layer misses
@@ -26,6 +27,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.common.prefill.adapter import get_adapter
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
     assemble_convolution,
@@ -34,7 +36,6 @@ from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
     recurrent_segment_to_torch,
 )
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.kda_geometry import kimi_k3_kda_geometry
-from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3 import KimiK3Adapter
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import kda_position, kda_segments_per_layer
 
 GOLDEN_PERIOD = 1024
@@ -120,7 +121,15 @@ def main(argv=None) -> int:
     parser.add_argument("--table", required=True)
     parser.add_argument("--device-map", required=True, nargs="+")
     parser.add_argument("--real-len", type=int, required=True, help="prefilled tokens (multiple of 1024)")
-    parser.add_argument("--golden", default=os.environ.get("PREFILL_KDA_GOLDEN_DIR", KimiK3Adapter.kda_golden_default))
+    parser.add_argument(
+        "--model",
+        default=os.environ.get("PREFILL_MODEL", "kimi_k3"),
+        choices=("kimi_k3", "kimi_k3_1"),
+        help="the model that published the table; its adapter names the KDA configs",
+    )
+    parser.add_argument(
+        "--golden", default=os.environ.get("PREFILL_KDA_GOLDEN_DIR"), help="default: the model's KDA golden"
+    )
     parser.add_argument(
         "--num-layers", type=int, default=int(os.environ.get("PREFILL_NUM_LAYERS", KimiK3Config.NUM_LAYERS))
     )
@@ -136,8 +145,11 @@ def main(argv=None) -> int:
     if args.real_len % GOLDEN_PERIOD:
         parser.error(f"--real-len {args.real_len} is not a multiple of the golden period {GOLDEN_PERIOD}")
     row = args.real_len // GOLDEN_PERIOD - 1
-    golden_dir = Path(args.golden)
-    adapter = KimiK3Adapter()
+    adapter = get_adapter(args.model)
+    golden_root = args.golden or adapter.kda_golden_default
+    if not golden_root:
+        parser.error(f"{args.model} has no default KDA golden; pass --golden or PREFILL_KDA_GOLDEN_DIR")
+    golden_dir = Path(golden_root)
     geometry = kimi_k3_kda_geometry((args.sp, args.tp), sp_axis=0, tp_axis=1)
 
     table = ttnn.experimental.disaggregation.import_from_protobuf_file(args.table)

@@ -272,12 +272,10 @@ _ARCH = get_chip_architecture()
     input_tile_dimensions=runtime(FULL_MATMUL_SHAPES),
     format=MATMUL_FORMAT,
     math_fidelity=lambda format: get_valid_math_fidelities(format),
-    dest_sync_mode=lambda: quasar_dest_sync_modes(),
+    dest_sync=lambda: quasar_dest_sync_modes(),
     dest_acc=matmul_dest_acc_modes,
     matmul_tile_dims=runtime(
-        lambda dest_acc, dest_sync_mode: matmul_tile_dimensions(
-            dest_acc, dest_sync_mode
-        )
+        lambda dest_acc, dest_sync: matmul_tile_dimensions(dest_acc, dest_sync)
     ),
     register_format_hint=matmul_register_format_hints,
     enable_direct_indexing=matmul_enable_direct_indexing,
@@ -290,7 +288,7 @@ def test_matmul(
     input_tile_dimensions,
     matmul_tile_dims,
     math_fidelity,
-    dest_sync_mode,
+    dest_sync,
     dest_acc,
     format,
     register_format_hint,
@@ -469,7 +467,7 @@ def test_matmul(
         MATH_FIDELITY(math_fidelity),
         ENABLE_2X_FORMAT(enable_2x_format),
         ENABLE_DIRECT_INDEXING(enable_direct_indexing),
-        DEST_SYNC(dest_sync_mode),
+        DEST_SYNC(dest_sync),
         UNPACK_TRANS_FACES(transpose),
         QUASAR_VARIANT(),
     ]
@@ -563,12 +561,10 @@ def test_matmul(
     input_tile_dimensions=runtime(TINY_MATMUL_SHAPE_CASES),
     format=NON_MX_MATMUL_FORMATS,
     math_fidelity=[MathFidelity.LoFi],
-    dest_sync_mode=[DestSync.Half],
+    dest_sync=[DestSync.Half],
     dest_acc=matmul_dest_acc_modes,
     matmul_tile_dims=runtime(
-        lambda dest_acc, dest_sync_mode: matmul_tile_dimensions(
-            dest_acc, dest_sync_mode
-        )
+        lambda dest_acc, dest_sync: matmul_tile_dimensions(dest_acc, dest_sync)
     ),
     register_format_hint=matmul_register_format_hints,
     enable_direct_indexing=matmul_enable_direct_indexing,
@@ -580,7 +576,7 @@ def test_matmul_tiny(
     input_tile_dimensions,
     matmul_tile_dims,
     math_fidelity,
-    dest_sync_mode,
+    dest_sync,
     dest_acc,
     format,
     register_format_hint,
@@ -593,7 +589,7 @@ def test_matmul_tiny(
         input_tile_dimensions,
         matmul_tile_dims,
         math_fidelity,
-        dest_sync_mode,
+        dest_sync,
         dest_acc,
         format,
         register_format_hint,
@@ -613,12 +609,10 @@ def test_matmul_tiny(
     input_tile_dimensions=runtime(FULL_MATMUL_SHAPES),
     format=[InputOutputFormat(DataFormat.Int8, DataFormat.Int32)],
     math_fidelity=[MathFidelity.LoFi],
-    dest_sync_mode=lambda: quasar_dest_sync_modes(),
+    dest_sync=lambda: quasar_dest_sync_modes(),
     dest_acc=[DestAccumulation.Yes],
     matmul_tile_dims=runtime(
-        lambda dest_acc, dest_sync_mode: matmul_tile_dimensions(
-            dest_acc, dest_sync_mode
-        )
+        lambda dest_acc, dest_sync: matmul_tile_dimensions(dest_acc, dest_sync)
     ),
     register_format_hint=[DataFormat.Int8_2x],
     enable_direct_indexing=[True, False],
@@ -630,7 +624,7 @@ def test_matmul_int8_2x(
     input_tile_dimensions,
     matmul_tile_dims,
     math_fidelity,
-    dest_sync_mode,
+    dest_sync,
     dest_acc,
     format,
     register_format_hint,
@@ -643,7 +637,7 @@ def test_matmul_int8_2x(
         input_tile_dimensions,
         matmul_tile_dims,
         math_fidelity,
-        dest_sync_mode,
+        dest_sync,
         dest_acc,
         format,
         register_format_hint,
@@ -654,12 +648,12 @@ def test_matmul_int8_2x(
     )
 
 
-def matmul_dest_depth_tile_dimensions(dest_acc, dest_sync_mode):
+def matmul_dest_depth_tile_dimensions(dest_acc, dest_sync):
     """(ct, rt, kt) whose output spans 4 and 8 full Dest sections, on both MOP reuse branches.
 
     The kernel splits rt into blocks that each fill one section (matmul_rows_per_dest_section).
     """
-    max_tiles = max_dest_tiles(dest_acc, dest_sync_mode)
+    max_tiles = max_dest_tiles(dest_acc, dest_sync)
     # The non-reuse branch needs rt_block > ct; a 4-tile section only fits that at ct=1.
     non_reuse_ct = 2 if max_tiles > 4 else 1
     return [
@@ -679,18 +673,18 @@ def matmul_dest_depth_tile_dimensions(dest_acc, dest_sync_mode):
         InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
         InputOutputFormat(DataFormat.Int8, DataFormat.Int32),
     ],
-    dest_sync_mode=lambda: quasar_dest_sync_modes(),
+    dest_sync=lambda: quasar_dest_sync_modes(),
     dest_acc=matmul_dest_acc_modes,
     matmul_tile_dims=runtime(
-        lambda dest_acc, dest_sync_mode: matmul_dest_depth_tile_dimensions(
-            dest_acc, dest_sync_mode
+        lambda dest_acc, dest_sync: matmul_dest_depth_tile_dimensions(
+            dest_acc, dest_sync
         )
     ),
 )
 def test_matmul_dest_depth(
     input_tile_dimensions,
     format,
-    dest_sync_mode,
+    dest_sync,
     dest_acc,
     matmul_tile_dims,
 ):
@@ -699,7 +693,7 @@ def test_matmul_dest_depth(
         input_tile_dimensions,
         matmul_tile_dims,
         MathFidelity.LoFi,
-        dest_sync_mode,
+        dest_sync,
         dest_acc,
         format,
         None,
@@ -822,12 +816,10 @@ MATMUL_INT4_FORMAT = InputOutputFormat(
 @pytest.mark.quasar
 @parametrize(
     input_tile_dimensions=runtime(FULL_MATMUL_SHAPES),
-    dest_sync_mode=lambda: quasar_dest_sync_modes(),
+    dest_sync=lambda: quasar_dest_sync_modes(),
     dest_acc=[DestAccumulation.Yes],
     matmul_tile_dims=runtime(
-        lambda dest_acc, dest_sync_mode: matmul_tile_dimensions(
-            dest_acc, dest_sync_mode
-        )
+        lambda dest_acc, dest_sync: matmul_tile_dimensions(dest_acc, dest_sync)
     ),
     register_format_hint=matmul_int4_register_format_hints(),
     enable_direct_indexing=matmul_enable_direct_indexing,
@@ -835,7 +827,7 @@ MATMUL_INT4_FORMAT = InputOutputFormat(
 def test_matmul_int4(
     input_tile_dimensions,
     matmul_tile_dims,
-    dest_sync_mode,
+    dest_sync,
     dest_acc,
     register_format_hint,
     enable_direct_indexing,
@@ -844,7 +836,7 @@ def test_matmul_int4(
         input_tile_dimensions,
         matmul_tile_dims,
         MathFidelity.LoFi,
-        dest_sync_mode,
+        dest_sync,
         dest_acc,
         MATMUL_INT4_FORMAT,
         register_format_hint,

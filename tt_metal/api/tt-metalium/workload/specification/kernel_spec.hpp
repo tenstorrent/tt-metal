@@ -17,6 +17,7 @@
 #include <tt-metalium/workload/specification/compute_hardware_config.hpp>
 #include <tt-metalium/workload/specification/data_movement_hardware_config.hpp>
 #include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/global_semaphore_parameter.hpp>
 #include <tt-metalium/workload/specification/semaphore_spec.hpp>
 #include <tt-metalium/workload/specification/scratchpad_spec.hpp>
 #include <tt-metalium/workload/utils/group.hpp>
@@ -186,6 +187,16 @@ struct KernelSpec {
     };
     Group<TensorBinding> tensor_bindings;
 
+    // GlobalSemaphore bindings (data-movement kernels only)
+    // Declares that this kernel uses a GlobalSemaphore parameter (declared at the ProgramSpec level)
+    // The kernel constructs a GlobalSemaphore from the binding token:
+    //   GlobalSemaphore(global_sem::<accessor_name>)
+    struct GlobalSemaphoreBinding {
+        GlobalSemaphoreParamName global_semaphore_parameter_name;  // identify the parameter within the ProgramSpec
+        std::string accessor_name;  // GlobalSemaphore accessor name (used in the kernel source code)
+    };
+    Group<GlobalSemaphoreBinding> global_semaphore_bindings;
+
     //////////////////////////////////////////////////////////////////////////////
     // Kernel arguments
     //////////////////////////////////////////////////////////////////////////////
@@ -265,6 +276,7 @@ using ArrayArgDecl = KernelSpec::RuntimeArgSchema::ArrayArgDecl;
 // These aliases lift the kernel resource-binding types to the namespace level
 using DFBBinding = KernelSpec::DFBBinding;
 using TensorBinding = KernelSpec::TensorBinding;
+using GlobalSemaphoreBinding = KernelSpec::GlobalSemaphoreBinding;
 using SemaphoreBinding = KernelSpec::SemaphoreBinding;
 using ScratchpadBinding = KernelSpec::ScratchpadBinding;
 
