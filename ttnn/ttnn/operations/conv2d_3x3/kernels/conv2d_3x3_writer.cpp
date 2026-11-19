@@ -546,8 +546,12 @@ void kernel_main() {
     // every batch over at its fill start, which waits on nothing of this writer, so the spin below ends. With a smaller
     // ring its first writer batch can wait for compute to free slots, i.e. for this writer's weights. Issued after the
     // hand-over in the weight-round wait instead, the reads went out ~0.5 us later and ran beside round 0's multicast
-    // on this core's NoC1 port (res2: 10.77 -> 10.47 us unzoned, with the cheaper hand-over above).
-    if constexpr (tile_fill_split && !ring_slab && input_tile_depth_batches >= fill_batches_per_block) {
+    // on this core's NoC1 port (res2: 10.77 -> 10.47 us unzoned, with the cheaper hand-over above). Carve-out: under
+    // the in-grid weight sender (no weight servers: stem.conv2 / conv3, input on the whole grid) round 0 is multicast
+    // early, right into these reads; there the early issue measured stem.conv2 @ LoFi 28.33 -> 27.42 us without it,
+    // @ HiFi4 76.09 -> 74.95, stem.conv3 48.31 -> 47.84 (unzoned, 2 alternating pairs).
+    if constexpr (
+        tile_fill_split && !ring_slab && input_tile_depth_batches >= fill_batches_per_block && weight_servers) {
         if (split_here) {
             MaybeDeviceZoneScope("writer_fill_early");
             if (fill_next()) {
