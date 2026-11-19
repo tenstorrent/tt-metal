@@ -3022,6 +3022,7 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
         leave_transpose_cfg_block();
 
         // Final A + B + C pass per column to finish the rebuild.
+#pragma GCC unroll 1
         for (int col = 0; col < 2; col++)
         {
             canonical_big_block_with_replay<4>(dir);
@@ -3053,8 +3054,10 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
         load_replay_buf<Exec>(0, 8, [] { load8_rows_x2_unfused<indices_offset, 8>(); });
         bitonic_sort_len_16_alt<fused>(dir);
         load_replay_buf<Exec>(8, 8, [] { store8_rows_x2_unfused<indices_offset, 8, 16>(); });
+#pragma GCC unroll 1
         for (int pass = 0; pass < 2; pass++)
         {
+#pragma GCC unroll 1
             for (int i = 1 - pass; i < 8; i++)
             {
                 lltt::replay(0, 8);
@@ -3080,11 +3083,13 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
             topk_xl_unfused_macro::program_templates<false>();
         }
 #endif
+#pragma GCC unroll 1
         for (int col = 0; col < 2; col++)
         {
 #if TOPK_XL_UNFUSED_MACRO
             // ── Stride-64 — 16-slot macro body, recording IS iter 0 ────────
             topk_xl_unfused_macro::record_ce_full<indices_offset, 64, 8>(dir);
+#pragma GCC unroll 1
             for (int i = 1; i < 8; i++)
             {
                 lltt::replay(0, 16);
@@ -3095,8 +3100,10 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
             // the last inner iter of each outer pair replays [0, 15) and
             // emits its own ADDR_MOD_3 (+40) tail, exactly the shipping
             // split-record fold.
+#pragma GCC unroll 1
             for (int i = 0; i < 2; i++)
             {
+#pragma GCC unroll 1
                 for (int j = 0; j < 4; j++)
                 {
                     if (i == 0 && j == 0)
@@ -3117,8 +3124,10 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
             TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
             // ── Stride-16 — same shape; fold iters take ADDR_MOD_2 (+24) ───
+#pragma GCC unroll 1
             for (int i = 0; i < 4; i++)
             {
+#pragma GCC unroll 1
                 for (int j = 0; j < 2; j++)
                 {
                     if (i == 0 && j == 0)
@@ -3142,6 +3151,7 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
             load_replay_buf<Exec>(0, 8, [] { load8_rows_x2_unfused<indices_offset, 64>(); });
             bitonic_sort_len_k<fused>(dir);
             load_replay_buf<Exec>(8, 8, [] { store8_rows_x2_unfused<indices_offset, 64, 8>(); });
+#pragma GCC unroll 1
             for (int i = 1; i < 8; i++)
             {
                 lltt::replay(0, 8);
@@ -3158,8 +3168,10 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
             //   inner == 3 (j=3 → ADDR_MOD_3  (incr = 40 = 32 + 8)
             // So we record the load (slots [0..7]) plus the first 7 stores
             // (slots [8..14]) and emit only the LREG7 store inline.
+#pragma GCC unroll 1
             for (int i = 0; i < 2; i++)
             {
+#pragma GCC unroll 1
                 for (int j = 0; j < 4; j++)
                 {
                     if (i == 0 && j == 0)
@@ -3192,8 +3204,10 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
             // immediates. LREG7 tail picks ADDR_MOD per inner iter:
             //   inner = 0 → ADDR_MOD_4  (incr = 8)
             //   inner = 1 → ADDR_MOD_2  (incr = 24 = 16 + 8)
+#pragma GCC unroll 1
             for (int i = 0; i < 4; i++)
             {
+#pragma GCC unroll 1
                 for (int j = 0; j < 2; j++)
                 {
                     if (i == 0 && j == 0)
@@ -3225,6 +3239,7 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
             load_replay_buf<Exec>(0, 8, [] { load8_rows_x2_unfused<indices_offset, 8>(); });
             bitonic_sort_len_16_alt<fused>(dir);
             load_replay_buf<Exec>(8, 8, [] { store8_rows_x2_unfused<indices_offset, 8, 16>(); });
+#pragma GCC unroll 1
             for (int i = 1; i < 8; i++)
             {
                 lltt::replay(0, 8);
