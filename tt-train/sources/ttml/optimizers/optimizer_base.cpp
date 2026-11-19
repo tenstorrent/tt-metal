@@ -35,13 +35,23 @@ void require_bf16_parameters(const serialization::NamedParameters& parameters, s
 OptimizerBase::OptimizerBase(serialization::NamedParameters&& parameters) : m_parameters(std::move(parameters)) {
 }
 
-void OptimizerBase::clear_gradients() {
+void OptimizerBase::drop_gradients(bool remember) {
     for (auto& [name, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad() && tensor_ptr->is_grad_initialized()) {
             tensor_ptr->set_grad(ttnn::Tensor());
-            m_cleared_gradients.insert(name);
+            if (remember) {
+                m_cleared_gradients.insert(name);
+            }
         }
     }
+}
+
+void OptimizerBase::clear_gradients() {
+    drop_gradients(/* remember */ false);
+}
+
+void OptimizerBase::clear_gradients_to_restore() {
+    drop_gradients(/* remember */ true);
 }
 
 void OptimizerBase::restore_cleared_gradients_as_zeros() {

@@ -40,7 +40,7 @@ SGD::SGD(
 }
 
 void SGD::zero_grad() {
-    clear_gradients();
+    clear_gradients_to_restore();
 }
 
 void SGD::step() {

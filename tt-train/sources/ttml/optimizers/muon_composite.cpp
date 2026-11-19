@@ -58,7 +58,7 @@ MuonComposite::MuonComposite(
 }
 
 void MuonComposite::zero_grad() {
-    clear_gradients();
+    clear_gradients_to_restore();
 }
 
 void MuonComposite::step() {

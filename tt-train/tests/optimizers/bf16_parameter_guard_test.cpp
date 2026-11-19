@@ -242,3 +242,38 @@ TEST_F(Fp32GradientIntoBf16OptimizerTest, ZeroGradTwiceBetweenStepsStillUpdatesT
         }
     }
 }
+
+// The AdamW family's zero_grad drops the gradients too, through the same loop, and its step leaves a parameter without
+// a gradient alone: no zero gradient is put back for it.
+TEST_F(Fp32GradientIntoBf16OptimizerTest, TheAdamWFamilyDropsGradientsAndSkipsAParameterWithoutOne) {
+    auto *device = &autograd::ctx().get_device();
+    const auto grad = core::from_xtensor(test_utils::make_uniform_xarray<float>(kShape, -1.0F, 1.0F, 16U), device);
+    const std::array<std::pair<const char *, OptimizerFactory>, 3> adamw_family = {{
+        {"AdamW",
+         [](const auto &p) { return std::make_unique<optimizers::AdamW>(p, optimizers::AdamWConfig{.lr = 0.05F}); }},
+        {"MorehAdamW",
+         [](const auto &p) {
+             return std::make_unique<optimizers::MorehAdamW>(p, optimizers::AdamWCompositeConfig{.lr = 0.05F});
+         }},
+        {"AdamWComposite",
+         [](const auto &p) {
+             return std::make_unique<optimizers::AdamWComposite>(p, optimizers::AdamWCompositeConfig{.lr = 0.05F});
+         }},
+    }};
+    for (const auto &[name, make_optimizer] : adamw_family) {
+        SCOPED_TRACE(name);
+        const auto parameters = parameter_with_grad(grad);
+        const auto &theta = parameters.at("theta");
+        const auto before = core::to_xtensor(theta->get_value());
+        auto optimizer = make_optimizer(parameters);
+        optimizer->step();
+        const auto after_first_step = core::to_xtensor(theta->get_value());
+        EXPECT_GT(test_utils::count_bit_mismatches(before, after_first_step), 0U) << "the step must move the parameter";
+
+        optimizer->zero_grad();
+        EXPECT_FALSE(theta->is_grad_initialized());
+        optimizer->step();
+        EXPECT_FALSE(theta->is_grad_initialized());
+        EXPECT_EQ(test_utils::count_bit_mismatches(after_first_step, core::to_xtensor(theta->get_value())), 0U);
+    }
+}

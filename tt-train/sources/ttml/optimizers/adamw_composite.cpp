@@ -53,12 +53,7 @@ MorehAdamW::MorehAdamW(
 }
 
 void MorehAdamW::zero_grad() {
-    for (auto& [key, tensor_ptr] : m_parameters) {
-        if (tensor_ptr->get_requires_grad() && tensor_ptr->is_grad_initialized()) {
-            // setting gradients to not initialized tensor
-            tensor_ptr->set_grad(ttnn::Tensor());
-        }
-    }
+    clear_gradients();
 }
 
 void MorehAdamW::step() {
@@ -183,12 +178,7 @@ AdamWComposite::AdamWComposite(
 }
 
 void AdamWComposite::zero_grad() {
-    for (auto& [key, tensor_ptr] : m_parameters) {
-        if (tensor_ptr->get_requires_grad() && tensor_ptr->is_grad_initialized()) {
-            // setting gradients to not initialized tensor
-            tensor_ptr->set_grad(ttnn::Tensor());
-        }
-    }
+    clear_gradients();
 }
 
 void AdamWComposite::step() {

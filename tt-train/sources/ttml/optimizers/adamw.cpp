@@ -64,11 +64,7 @@ AdamW::AdamW(
 }
 
 void AdamW::zero_grad() {
-    for (auto& [name, tensor_ptr] : m_parameters) {
-        if (tensor_ptr->get_requires_grad() && tensor_ptr->is_grad_initialized()) {
-            tensor_ptr->set_grad(ttnn::Tensor());
-        }
-    }
+    clear_gradients();
 }
 
 void AdamW::step() {
