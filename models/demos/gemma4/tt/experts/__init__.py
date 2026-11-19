@@ -19,7 +19,11 @@ from .prefill import create_prefill_sparsity, prefill_forward
 from .weights import ExpertWeights, load_expert_weights
 from models.common.utility_functions import is_blackhole
 from models.demos.gemma4.tt.ccl import ccl_allreduce, ccl_lane_gather_rows, ccl_lane_scatter_rows
-from models.demos.gemma4.tt.mesh_orientation import dispatch_min_tokens_default, dispatch_prefill_default
+from models.demos.gemma4.tt.mesh_orientation import (
+    dispatch_min_tokens_default,
+    dispatch_prefill_default,
+    local_routed_prefill_default,
+)
 
 _WARNED: set = set()
 
@@ -91,16 +95,24 @@ class Gemma4Experts:
         self.dispatch_min_tokens = dispatch_min_tokens_default(_shape, blackhole=is_blackhole())
         if dispatch_prefill_default(_shape, blackhole=is_blackhole()) and is_mesh and mesh_device.get_num_devices() > 1:
             # imported here: the DeepSeek dispatch/combine stack is only needed on this path
-            from models.demos.gemma4.tt.experts.dispatch_prefill import Gemma4DispatchExperts
+            from models.demos.gemma4.tt.experts.dispatch_prefill import Gemma4DispatchExperts, shared_weights_reason_for
 
             reason = Gemma4DispatchExperts.unsupported_reason(mesh_device)
             if reason is not None:
                 _warn_once("dispatch_prefill", f"dispatch prefill off, sparse_matmul experts: {reason}")
             else:
                 placeholder = bool(getattr(state_dict, "is_placeholder", False))
+                # One copy of the routed experts where the decode copy is already the dispatch layout (the whole-expert
+                # tp-only line, GEMMA4_MOE_DISPATCH_SHARED_WEIGHTS): the GeGLU experts read self.weights and no
+                # per-expert copy (nor its host list) is made.
+                shared = (
+                    self.weights
+                    if shared_weights_reason_for(mesh_device, mesh_config, self.weights, config.num_experts) is None
+                    else None
+                )
                 hf_list = (
                     None
-                    if placeholder
+                    if placeholder or shared is not None
                     else Gemma4DispatchExperts.hf_expert_list(state_dict["gate_up_proj"], state_dict["down_proj"])
                 )
                 self.dispatch_experts = Gemma4DispatchExperts(
@@ -110,34 +122,34 @@ class Gemma4Experts:
                     tensor_cache_path=tensor_cache_path,
                     weights_dtype=weight_dtype,
                     ccl_manager=self.ccl_manager,
+                    shared_weights=shared,
+                    mesh_config=mesh_config,
                 )
-        # Optional local token-sorted routed prefill (GEMMA4_MOE_LOCAL_ROUTED_PREFILL=1, experts/local_routed_prefill.py):
-        # on the whole-expert tp-only shapes every chip holds every token, so the routed (token, expert) pairs are
-        # sorted and computed locally (GeGLU routed-expert kernel) with no collective inside the experts; calls of at
-        # least GEMMA4_MOE_LOCAL_ROUTED_MIN_TOKENS rows (a multiple of 64) take it, shorter ones keep sparse_matmul.
+        # Local routed prefill (experts/local_routed_prefill.py): on the whole-expert tp-only line every chip holds
+        # every token of the call and 32 whole experts, so each chip gathers its own routed (token, expert) pairs,
+        # runs its experts on the decode copy (no copy of its own) and the TP all-reduce sums the partials: no token
+        # moves between chips. The default wherever the dispatch path was (GEMMA4_MOE_LOCAL_ROUTED_PREFILL, see
+        # tt/mesh_orientation.py; 0 returns to the dispatch path); it takes the prefill calls of at least
+        # GEMMA4_MOE_LOCAL_ROUTED_MIN_TOKENS rows (default: the dispatch threshold) that the small-row path does not.
         self.local_routed = None
         if (
-            os.environ.get("GEMMA4_MOE_LOCAL_ROUTED_PREFILL", "0") == "1"
-            and is_mesh
+            is_mesh
             and mesh_device.get_num_devices() > 1
-            and self.ep == 1
+            and local_routed_prefill_default(_shape, blackhole=is_blackhole())
         ):
-            from models.demos.gemma4.tt.experts.local_routed_prefill import Gemma4LocalRoutedExperts, hf_expert_list
+            from models.demos.gemma4.tt.experts.local_routed_prefill import (
+                Gemma4LocalRoutedExperts,
+                local_routed_reason_for,
+            )
 
-            reason = Gemma4LocalRoutedExperts.unsupported_reason(mesh_device)
+            reason = Gemma4LocalRoutedExperts.unsupported_reason(mesh_device) or local_routed_reason_for(
+                mesh_device, mesh_config, self.weights, config
+            )
             if reason is not None:
-                _warn_once("local_routed", f"local routed prefill off, sparse_matmul experts: {reason}")
+                _warn_once("local_routed", f"local routed prefill off: {reason}")
             else:
-                placeholder = bool(getattr(state_dict, "is_placeholder", False))
-                hf_list = None if placeholder else hf_expert_list(state_dict["gate_up_proj"], state_dict["down_proj"])
                 self.local_routed = Gemma4LocalRoutedExperts(
-                    mesh_device,
-                    config,
-                    hf_list,
-                    mesh_config=mesh_config,
-                    tensor_cache_path=tensor_cache_path,
-                    layer_idx=layer_idx,
-                    weights_dtype=weight_dtype,
+                    mesh_device, config, self.weights, mesh_config=mesh_config, min_tokens=self.dispatch_min_tokens
                 )
         # Optional decode MoE kernel for the lane decode frame (token dispatch within the column, moe_compute):
         # calls of at most the frame's rows take it; longer prefill calls keep the paths above.
@@ -366,12 +378,16 @@ class Gemma4Experts:
         return self.moe_decode is not None and 1 < int(hidden_states.shape[2]) <= self.moe_decode.frame_rows
 
     def _use_local_routed(self, hidden_states):
+        """A prefill call of at least the local path's min rows on the tp-only line, unless the dispatch stack's
+        small-row path takes it (<= 128 rows with GEMMA4_SMALL_ROW_EXPERTS, measured on the served 128 bucket)."""
         if self.local_routed is None:
             return False
         if bool(self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False)):
             return False
         rows = int(hidden_states.shape[2])
-        return rows >= self.local_routed.min_tokens() and rows % 64 == 0
+        if rows < self.local_routed.min_tokens():
+            return False
+        return self.dispatch_experts is None or not self.dispatch_experts._small_rows_call(rows, sparse=False)
 
     def _use_dispatch(self, hidden_states):
         return self.dispatch_experts is not None and int(hidden_states.shape[2]) >= self.dispatch_min_tokens
