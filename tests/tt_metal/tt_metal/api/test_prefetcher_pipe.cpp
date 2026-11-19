@@ -3526,15 +3526,12 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CommandList_PatchesPipeAndRelayAddr
     const auto expect_replay_uses = [&](CommandList& list,
                                         const std::vector<experimental::PrefetcherPipe>& used,
                                         const std::vector<experimental::PrefetcherPipe>& unused) {
+        std::vector<uint32_t> zeros(2, 0);
         for (size_t i = 0; i < used.size(); ++i) {
             prefetcher_pipe_test::zero_receiver_rings(device, used[i]);
             prefetcher_pipe_test::zero_receiver_rings(device, unused[i]);
             slow_dispatch::WriteToL1(
-                device,
-                mappings[i].second.ranges().front().start_coord,
-                result_addr,
-                std::vector<uint32_t>(2, 0),
-                CoreType::WORKER);
+                device, mappings[i].second.ranges().front().start_coord, result_addr, zeros, CoreType::WORKER);
         }
         EnqueueCommandList(cq, list, /*blocking=*/true);
         EXPECT_EQ(
