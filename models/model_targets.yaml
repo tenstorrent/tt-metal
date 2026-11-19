@@ -75,6 +75,25 @@ targets:
             accuracy: {}
             owner_id: U03HY7MK4BT
             team: models
+  glm53-flash:
+    # Tier 1, no measured targets yet (status TODO: the resolver skips the entries). The e2e row gates its own
+    # numerics (GLM53_MK_EXPECT_IDS / GLM53_MK_MIN_TOKS in tests/pipeline_reorg/models_e2e_tests.yaml); the perf
+    # and accuracy targets here fill in from the first Galaxy runs and the served evals (tt-inference-server).
+    skus:
+      bh_p150:
+        entries:
+          - status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U088413NP0Q
+            team: models
+      bh_galaxy:
+        entries:
+          - status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U088413NP0Q
+            team: models
   gemma4-26b-a4b-qb2:
     skus:
       p300x2:
