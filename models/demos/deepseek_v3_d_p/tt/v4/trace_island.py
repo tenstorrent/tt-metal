@@ -41,11 +41,12 @@ def any_captured() -> bool:
 
 
 class TraceIsland:
-    def __init__(self, mesh_device, fn: Callable, inputs: Sequence, *, moe=None, name: str = ""):
+    def __init__(self, mesh_device, fn: Callable, inputs: Sequence, *, moe=None, moes=None, name: str = ""):
         self.mesh_device = mesh_device
         self.fn = fn
         self.inputs = list(inputs)
         self.moe = moe  # a TtMoe inside fn: its sub-device swaps split the capture (SubDeviceTraceController)
+        self.moes = list(moes or [])  # several TtMoe inside fn (a V4.1 super-island spans several blocks)
         self.name = name
         self.outputs: Optional[tuple] = None
         self.controller: Optional[SubDeviceTraceController] = None
@@ -56,15 +57,16 @@ class TraceIsland:
         global _ANY_CAPTURED
         _ANY_CAPTURED = True
         controller = SubDeviceTraceController(self.mesh_device)
-        if self.moe is not None:
-            self.moe.set_trace_controller(controller)
+        moes = ([self.moe] if self.moe is not None else []) + self.moes
+        for m in moes:
+            m.set_trace_controller(controller)
         try:
             controller.begin_capture()
             out = self.fn(*self.inputs)
             controller.end_capture()
         finally:
-            if self.moe is not None:
-                self.moe.set_trace_controller(None)
+            for m in moes:
+                m.set_trace_controller(None)
         self.controller = controller
         self.outputs = tuple(out) if isinstance(out, (list, tuple)) else (out,)
         return self.outputs
