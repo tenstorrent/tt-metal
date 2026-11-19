@@ -384,9 +384,13 @@ def main():
             originalArgs = ["--no-capture-tool"] + originalArgs[1:]
             osCmd = " ".join(originalArgs)
 
-            testCommand = f"{sys.executable} -m tracy {osCmd}"
+            # TT_TRACY_CHILD_PYTHON: optional shell-quoted launcher used instead of `python` for the workload
+            # (run_safe_pytest.sh's warm path). The workload itself must not inherit it.
+            childPython = os.environ.get("TT_TRACY_CHILD_PYTHON") or sys.executable
+            testCommand = f"{childPython} -m tracy {osCmd}"
 
             envVars = dict(os.environ)
+            envVars.pop("TT_TRACY_CHILD_PYTHON", None)
             if options.device:
                 envVars["TT_METAL_DEVICE_PROFILER"] = "1"
             elif "TT_METAL_DEVICE_PROFILER" in envVars.keys():
