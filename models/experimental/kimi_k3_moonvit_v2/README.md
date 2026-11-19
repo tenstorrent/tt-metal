@@ -8,8 +8,8 @@ Layout: a ring of 4 Blackhole chips along mesh axis 1 (`(1, 4)` mesh, 2 links, `
 on a LoudBox (2x4) the tests use the first row. Patches are put in window order (each 2x2 merge
 window's four patches consecutive), padded to 67,584 rows and split along the ring, so the merger is a
 reshape on each chip. Attention is ring attention with the padding masked; everything else is
-sequence parallel. Weights are bf16 and replicated. Activations are bf16 in DRAM, except the encoder's
-residual stream, which is fp32 (`tt/vision_block.py`). Matmuls are HiFi4 with fp32 accumulation.
+sequence parallel. Weights are bf16 and replicated. Activations are currently bf16 in DRAM, except the encoder's
+residual stream, which is fp32 (`tt/vision_block.py`). Matmuls are currently HiFi4 with fp32 accumulation.
 
 ## Structure
 
