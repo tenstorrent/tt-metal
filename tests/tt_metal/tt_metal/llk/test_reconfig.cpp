@@ -1173,8 +1173,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixUnpackReconfigQuasarDfb) {
     }
 }
 
-// Disabled: packed output misses tolerance (~0.5% rel vs rtol 1e-3); no longer hangs.
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixPackReconfigQuasarDfb) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixPackReconfigQuasarDfb) {
     for (auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::reconfig::single_core_pack_reconfig_quasar(device));
     }
