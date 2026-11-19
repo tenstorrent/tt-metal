@@ -67,7 +67,7 @@ def get_valid_tilize_datacopy(formats):
     return [Tilize.No, Tilize.Yes]
 
 
-def get_valid_tile_dimensions_pack_dest_bank(tilize):
+def get_valid_tile_dimensions_pack_l1_acc(tilize):
     """Tilize needs full 32x32 tiles (software limitation of the datacopy); otherwise 32x32 or 16x32.
 
     16x32 is a two-face tile with face_r_dim 16.
@@ -77,19 +77,19 @@ def get_valid_tile_dimensions_pack_dest_bank(tilize):
     return [[32, 32], [16, 32]]
 
 
-# Shared with perf_pack_dest_bank.py so the two sweeps stay aligned.
-PACK_DEST_BANK_SWEEP = dict(
+# Shared with perf_pack_l1_acc.py so the two sweeps stay aligned.
+PACK_L1_ACC_SWEEP = dict(
     formats=InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     l1_acc=[L1Accumulation.No, L1Accumulation.Yes],
     tilize=get_valid_tilize_datacopy,
-    tile_dimensions=get_valid_tile_dimensions_pack_dest_bank,
+    tile_dimensions=get_valid_tile_dimensions_pack_l1_acc,
     dest_index=0,
     input_dimensions=[[32, 32], [32, 64], [128, 32], [128, 64], [128, 256]],
 )
 
 
-def _run_pack_dest_bank_test(
+def _run_pack_l1_acc_test(
     formats,
     dest_acc,
     l1_acc,
@@ -104,7 +104,7 @@ def _run_pack_dest_bank_test(
     run_types=None,
     loop_factor=1,
 ):
-    """Shared body for the functional and perf destination-bank tests.
+    """Shared body for the functional and perf L1-accumulation pack tests.
 
     ``blocks`` overrides the (num_blocks, num_tiles_in_block) split that Dest
     capacity would otherwise choose.
@@ -116,7 +116,7 @@ def _run_pack_dest_bank_test(
 
     # num_faces follows the tile shape: 32x32 is four faces, 16x32 is two (face_r_dim stays 16).
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
-    assert face_r_dim == 16, "pack_dest_bank runs full-face tiles only"
+    assert face_r_dim == 16, "pack_l1_acc runs full-face tiles only"
     num_faces = num_faces_r_dim * num_faces_c_dim
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -154,7 +154,7 @@ def _run_pack_dest_bank_test(
         is_perf=is_perf,
         run_types=run_types,
         test_config_kwargs={
-            "test_name": "sources/pack_dest_bank_test.cpp",
+            "test_name": "sources/pack_l1_acc_test.cpp",
             "formats": formats,
             "templates": [
                 TILIZE(tilize),
@@ -189,12 +189,12 @@ def _run_pack_dest_bank_test(
         configuration.run(perf_report)
         return
 
-    _run_functional_pack_dest_bank(
+    _run_functional_pack_l1_acc(
         configuration, formats, tile_cnt_A, num_faces, golden_tensor
     )
 
 
-def _run_functional_pack_dest_bank(
+def _run_functional_pack_l1_acc(
     configuration, formats, tile_count, num_faces, golden_tensor
 ):
     """Run after zero-filling every result tile so L1 accumulation starts from a known state."""
@@ -232,11 +232,11 @@ def _run_functional_pack_dest_bank(
     assert passed_test(golden_tensor, res_tensor, formats.output_format)
 
 
-@parametrize(**PACK_DEST_BANK_SWEEP)
-def test_pack_dest_bank(
+@parametrize(**PACK_L1_ACC_SWEEP)
+def test_pack_l1_acc(
     formats, dest_acc, l1_acc, tile_dimensions, tilize, dest_index, input_dimensions
 ):
-    _run_pack_dest_bank_test(
+    _run_pack_l1_acc_test(
         formats, dest_acc, l1_acc, tile_dimensions, tilize, dest_index, input_dimensions
     )
 
@@ -249,13 +249,13 @@ def test_pack_dest_bank(
     tilize=[Tilize.No],
     dest_index=0,
 )
-def test_pack_dest_bank_two_blocked_packs_of_4(
+def test_pack_l1_acc_two_blocked_packs_of_4(
     formats, dest_acc, l1_acc, tile_dimensions, tilize, dest_index
 ):
     if get_chip_architecture() != ChipArchitecture.WORMHOLE:
         pytest.skip("Wormhole-specific blocked pack regression")
 
-    _run_pack_dest_bank_test(
+    _run_pack_l1_acc_test(
         formats,
         dest_acc,
         l1_acc,

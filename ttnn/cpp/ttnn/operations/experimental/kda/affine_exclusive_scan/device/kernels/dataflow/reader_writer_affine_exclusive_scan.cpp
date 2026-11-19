@@ -120,10 +120,9 @@ template <
     uint32_t G,
     uint32_t has_tail,
     uint32_t has_actual_end,
-    uint32_t sp_rank,
     uint32_t sp_size,
     uint32_t local_rows>
-TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
+TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group, uint32_t sp_rank) {
     constexpr uint32_t affine_a_tiles = Kt * Kt;
     constexpr uint32_t affine_b_tiles = Kt * Vt;
     constexpr uint32_t worker_count = BH * G;

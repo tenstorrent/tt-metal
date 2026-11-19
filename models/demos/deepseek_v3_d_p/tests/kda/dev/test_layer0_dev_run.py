@@ -44,7 +44,7 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids, resolve_trace_dir
-from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_kda_config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     torus_xy_device_params,
@@ -111,14 +111,14 @@ def _override(config, overrides: dict[str, str]):
         pytest.param(
             (8, 4),
             1,
-            torus_xy_device_params(l1_small_size=_L1_SMALL_SIZE),
+            torus_xy_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE, l1_small_size=_L1_SMALL_SIZE),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-torus-xy",
         ),
         pytest.param(
             (8, 4),
             1,
-            fabric2d_device_params(l1_small_size=_L1_SMALL_SIZE),
+            fabric2d_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE, l1_small_size=_L1_SMALL_SIZE),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-fabric2d",
         ),

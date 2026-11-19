@@ -86,8 +86,8 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/workload/specification/kernel_spec.hpp
     api/tt-metalium/vocabulary/node_coord.hpp
     api/tt-metalium/experimental/metal2_host_api/prefetcher_pipe_parameter.hpp
-    api/tt-metalium/experimental/metal2_host_api/program.hpp
     api/tt-metalium/workload/run_args/program_run_args.hpp
+    api/tt-metalium/workload/run_args/validation_mode.hpp
     api/tt-metalium/workload/specification/program_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/sram_arena_parameter.hpp
     api/tt-metalium/workload/specification/scratchpad_spec.hpp
@@ -211,7 +211,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/tt_align.hpp
     api/tt-metalium/tt_backend_api_types.hpp
     api/tt-metalium/tt_metal.hpp
-    api/tt-metalium/tt_metal_profiler.hpp
     api/tt-metalium/uint8.hpp
     api/tt-metalium/work_split.hpp
 )
@@ -267,6 +266,7 @@ set(JITAPI_FILES
     impl/dispatch/kernels/cq_common.hpp
     impl/dispatch/kernels/cq_prefetch.hpp
     impl/dispatch/kernels/cq_relay.hpp
+    impl/dispatch/kernels/dispatch_noc_trids.hpp
     impl/dispatch/kernels/cq_helpers.hpp
     impl/dispatch/kernels/telemetry.hpp
     impl/dispatch/kernels/cq_telemetry_dispatch_subordinate.hpp
@@ -295,6 +295,7 @@ set(JITAPI_FILES
     impl/dispatch/kernels/device_print_dispatch.h
     impl/buffers/kernels/tensor_prefetcher.cpp
     impl/buffers/kernels/tensor_prefetcher_fifo_device.h
+    impl/buffers/kernels/tensor_prefetcher_groups.h
     impl/buffers/kernels/tensor_prefetcher_pusher.cpp
     impl/buffers/kernels/tensor_prefetcher_reader.cpp
     impl/buffers/kernels/tensor_prefetcher_reader.h

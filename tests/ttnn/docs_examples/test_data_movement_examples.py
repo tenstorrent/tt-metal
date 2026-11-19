@@ -72,7 +72,7 @@ def test_scatter(device):
 
     # Perform scatter operation
     output = ttnn.scatter(input_ttnn, dim, index_ttnn, source_ttnn)
-    logger.info(f"Scatter operation result: {output}")
+    logger.debug(f"Scatter operation result: {output}")
 
 
 def test_scatter_add(device):
@@ -88,7 +88,7 @@ def test_scatter_add(device):
 
     # Perform scatter_add operation (adds source values to input at specified indices)
     output = ttnn.scatter_add(input_ttnn, dim, index_ttnn, source_ttnn)
-    logger.info(f"Scatter add operation result: {output}")
+    logger.debug(f"Scatter add operation result: {output}")
 
 
 def test_repeat(device):

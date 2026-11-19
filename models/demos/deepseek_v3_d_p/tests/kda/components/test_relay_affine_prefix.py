@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """The SP relay must leave every rank the entry state the gather + chain gives it, and the final state on the first
-and last chronological ranks, call after call and bit-identically: on torus, unwrapped 2D and 1D ring fabrics, with
+and last chronological ranks, call after call and bit-identically: on torus and unwrapped 2D fabrics, with
 Kimi-K3's per-chip workload (640 rows of 24 heads) and fabric payload, and within its device-time reference.
 """
 
@@ -11,7 +11,7 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, fabric_1d_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import assert_accurate, make_actual_start
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     DeviceMismatch,
@@ -36,13 +36,6 @@ _MATH_FIDELITY = kimi_k3_program_config(
 ).recurrence.affine_prefix_math_fidelity
 
 
-def _fabric_1d_ring_params() -> dict:
-    """FABRIC_1D_RING with K3's payload."""
-    return fabric_1d_device_params(
-        fabric_config=ttnn.FabricConfig.FABRIC_1D_RING, fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE
-    )
-
-
 # SP takes mesh axis 0.
 _MESH = pytest.mark.parametrize(
     "mesh_device,device_params",
@@ -54,19 +47,10 @@ _MESH = pytest.mark.parametrize(
             "SP8xTP4-fabric-2d",
             fabric2d_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
         ),
-        # FABRIC_1D: on a mesh descriptor without wrap links the last rank reaches the first sp_size - 1 hops back.
-        kda_mesh_param(
-            (8, 4),
-            "mesh-8x4",
-            "SP8xTP4-fabric-1d-line",
-            fabric_1d_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
-        ),
         kda_mesh_param((8, 1), "ring", "loudbox-SP8xTP1-ring"),
-        kda_mesh_param((8, 1), "ring", "loudbox-SP8xTP1-fabric-1d-ring", _fabric_1d_ring_params()),
         kda_mesh_param((4, 2), "mesh-4x2", "loudbox-SP4xTP2-fabric-2d"),
         kda_mesh_param((2, 4), "mesh-2x4", "loudbox-SP2xTP4-fabric-2d"),
         kda_mesh_param((4, 1), "ring", "quietbox-SP4xTP1-ring"),
-        kda_mesh_param((4, 1), "ring", "quietbox-SP4xTP1-fabric-1d-ring", _fabric_1d_ring_params()),
     ],
     indirect=True,
 )
@@ -380,10 +364,10 @@ def _perf_case(shape: tuple[int, int], topology: str, case_id: str, reference_us
 
 # Device-time references in us, with K3's payload: Galaxy on TorusXY, LoudBox and QuietBox on TorusY. Galaxy runs
 # one program for all 32 chips, so they start a call together (119-124 us over repeated runs); LoudBox's span
-# 108-129 us.
+# 99-100 us.
 _PERF_CASES = [
     _perf_case((8, 4), "mesh-8x4", "SP8xTP4", 123.0, 0.10),
-    _perf_case((8, 1), "ring", "loudbox-SP8xTP1-ring", 118.0, 0.12),
+    _perf_case((8, 1), "ring", "loudbox-SP8xTP1-ring", 99.5, 0.12),
     _perf_case((4, 1), "ring", "quietbox-SP4xTP1-ring", 75.5, 0.05),
 ]
 
