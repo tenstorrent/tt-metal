@@ -37,6 +37,7 @@ from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
 
 S = spec()
 BATCH_SHARED = True
+BATCH_ITEM_VARS = ("IDLE_POS", "IDLE_RUNS", "IDLE_SWEEP")  # F279: per-run, not the model's configuration
 
 
 class Marks:

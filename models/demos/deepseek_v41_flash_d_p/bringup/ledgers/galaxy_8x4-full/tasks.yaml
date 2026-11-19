@@ -5428,6 +5428,24 @@ tasks:
       steady_wall_ms_p770048_tagentic: '> 0'
       steady_wall_ms_p145408_tprose: '> 0'
       steady_wall_ms_p1024000_tprose: '> 0'
+- id: X.10
+  title: 'OWNER 2026-11-19: host profile at 142k on the agentic text (one load): exposed host time split engram vs launch / other, and the estimate for an on-device engram table'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.84
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  brief:
+    prior_work: 'P.78 (HOST_HIDE: idle map at 142k, tests/perf/test_host_idle_map.py: layer 1''s engram wait ~11 ms, layers 2-4 contention ~15 ms, fixed by the numba hash + threaded gather + deferring layer 14''s job: wall 108.1 -> 93.4); P.6 ENGRAM_ASYNC (rows looked up and uploaded off the critical path); FIX.10 (ENGRAM_TABLE=resident on the Galaxy host); bringup/ENGRAM_HOST_PATH.md, engram_handoff.md; X.9 walls per text (agentic 79.7 ms, host ~14 ms).'
+    details: 'OWNER 2026-11-19. A measurement, no code change. At 142k (p145408, steady chunk, decoder skip) on the agentic text, ONE model load: break the exposed host time a chunk (wall - device, ~13-16 ms on X.9''s texts) into engram (per engram layer 1 and 14: n-gram hash, row gather from the host table, upload; and how much of each is exposed, i.e. the device idles for it) vs program launch / dispatch (ttnn op launches, CCL setup) vs other host work (Python glue, frees, chunk start / id readback). Use tests/perf/test_host_idle_map.py (P.78: device idle gaps charged to the host segment that launched the program ending them) with IDLE_POS=145408, and test_profile''s host cProfile (BRINGUP_PROFILE_HOST=1) at the same point. Then the estimate for moving the 98 GB engram table onto the Galaxy (~3.1 GB a chip, hash + row gather on device): exposed host ms removed a chunk, device ms added a chunk (the hash: ids x n-gram orders; the gather: rows a chunk x row bytes from DRAM, the all-gather / exchange to the rows'' owners over the 8x4 torus at the X.7 roofline''s link numbers), DRAM a chip (table shard + buffers; vs the 1M budget). Say whether it is worth building and what it would take (ops: hash on SFPU or host-precomputed ids, a sharded row gather; tt-d-gen impact: none if the ids come with the chunk, ask 2). Report a table; no code change to the model.'
+  gate:
+    cmd: BRINGUP_POS_TOKENS=agentic DS41_DECODER_SKIP=decode IDLE_POS=145408 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/perf/test_host_idle_map.py && BRINGUP_POS_TOKENS=agentic DS41_DECODER_SKIP=decode BRINGUP_CHUNK_LAST=0 BRINGUP_POS=145408 BRINGUP_PROFILE_HOST=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      device_ms_total_p145408_nonlast_tagentic: '> 0'
 - id: P.81
   title: 'OWNER 2026-11-18 perf: attention at its roofline (21.9 -> <= 13 ms a chunk at 142k)'
   step: perf
