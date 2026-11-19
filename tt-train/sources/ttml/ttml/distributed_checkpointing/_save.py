@@ -250,7 +250,7 @@ def save(
     check_threads(threads)
     if int(max_inflight_bytes) <= 0:
         raise ValueError(f"max_inflight_bytes must be positive, got {max_inflight_bytes}")
-    # The JSON state is checked before any device read (fsdp_gate may reshard) or file write.
+    # The JSON state is checked before any device read (the FSDP modules may be resharded) or file write.
     header = check_json("header", header or {})
     world = world_record()
     train_state = capture_train_state(

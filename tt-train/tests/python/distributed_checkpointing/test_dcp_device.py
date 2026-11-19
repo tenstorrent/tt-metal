@@ -25,7 +25,7 @@ import pytest
 import torch
 import ttnn
 from dcp_oracle import Loader, advance_generators
-from dcp_shards import assert_same_shards, assert_some_differ, model_shards, optimizer_shards, tensor_shards
+from dcp_shards import NATIVE, assert_same_shards, assert_some_differ, model_shards, optimizer_shards, tensor_shards
 from tp_block import TPBlock, fresh_tp, make_adamw, train_step
 
 import ttml
@@ -532,15 +532,15 @@ def test_damaged_rng_state_changes_nothing(tp_mesh, tmp_path, damage, expect_err
         json.dump(header, f)
 
     model2, params2, _ = fresh_tp(DIM)
-    before, generator = _model_shards(params2), ctx.get_generator_state()
+    before, generator = model_shards(params2), ctx.get_generator_state()
     with expect_error(dcp.CheckpointError, "the stored RNG state is malformed .*pass rng=False to load"):
         dcp.load(path, model=model2, rng=True)
-    _assert_same_shards(_model_shards(params2), before)
+    assert_same_shards(model_shards(params2), before)
     assert ctx.get_generator_state() == generator, "refused before any generator was set"
 
     loaded = dcp.load(path, model=model2, rng=False)
     assert loaded.restored == [] and ctx.get_generator_state() == generator
-    _assert_same_shards(_model_shards(params2), _model_shards(params))
+    assert_same_shards(model_shards(params2), model_shards(params))
 
 
 def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path, expect_error):
@@ -571,8 +571,8 @@ def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path, expect_er
 
     # The uninterrupted run continues for one step, a real one: this is what a resumed run must reproduce.
     train_step(model, opt, DIM, input_scale=0.5)
-    after_step = _model_shards(params)
-    after_state, after_scalars = _state(opt)
+    after_step = model_shards(params)
+    after_state, after_scalars = optimizer_shards(opt)
     sched.step()
     loader.advance()
     expected = {
@@ -604,9 +604,9 @@ def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path, expect_er
     assert loaded.train_state == stored and loaded.missing == [] and loaded.header == {"step": 3}
     assert sched2.get_last_lrs() == lrs_at_save and opt2.get_group_lrs() == opt_lrs_at_save
     train_step(model2, opt2, DIM, input_scale=0.5)
-    _assert_same_shards(_model_shards(params2), after_step)
-    _assert_same_shards(_state(opt2)[0], after_state)
-    assert _state(opt2)[1] == after_scalars
+    assert_same_shards(model_shards(params2), after_step)
+    assert_same_shards(optimizer_shards(opt2)[0], after_state)
+    assert optimizer_shards(opt2)[1] == after_scalars
     sched2.step()
     loader2.advance()
     assert sched2.get_last_lrs() == expected["lrs"]
@@ -621,7 +621,7 @@ def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path, expect_er
     ctx.set_seed(999)
     dcp.load(path, model=model3, optimizer=opt3, scheduler=sched3)
     train_step(model3, opt3, DIM, input_scale=0.5)
-    _assert_some_differ(_model_shards(params3), after_step)
+    assert_some_differ(model_shards(params3), after_step)
 
     # Not asked for, not touched: a plain load leaves the generators alone.
     before = ctx.get_generator_state()
@@ -632,11 +632,11 @@ def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path, expect_er
     bare = str(tmp_path / "bare")
     dcp.save(bare, model=model, rng=False)
     assert dcp.read_train_state(bare) == {}
-    untouched = _model_shards(params2), sched2.get_state_dict()
+    untouched = model_shards(params2), sched2.get_state_dict()
     with expect_error(dcp.MissingKeyError, r"the checkpoint holds no state for \['train_state/scheduler'\]"):
         dcp.load(bare, model=model2, scheduler=sched2)
     assert sched2.get_state_dict() == untouched[1]
-    _assert_same_shards(_model_shards(params2), untouched[0])
+    assert_same_shards(model_shards(params2), untouched[0])
     lenient = dcp.load(bare, model=model2, scheduler=sched2, rng=True, strict=False)
     assert lenient.missing == ["train_state/scheduler", "train_state/rng"] and lenient.restored == []
 
@@ -647,10 +647,10 @@ def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path, expect_er
     numpy_state["state"] = numpy_state["state"][:-8]  # 623 words
     with open(header_path, "w") as f:
         json.dump(header, f)
-    untouched = _model_shards(params2), ctx.get_generator_state(), random.getstate()
+    untouched = model_shards(params2), ctx.get_generator_state(), random.getstate()
     with expect_error(dcp.CheckpointError, "the stored RNG state is malformed"):
         dcp.load(path, model=model2, optimizer=opt2, rng=True)
-    _assert_same_shards(_model_shards(params2), untouched[0])
+    assert_same_shards(model_shards(params2), untouched[0])
     assert (ctx.get_generator_state(), random.getstate()) == untouched[1:]
 
     # And a save whose dataloader state is not JSON writes nothing.
