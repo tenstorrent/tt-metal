@@ -105,7 +105,7 @@ def test_vanilla_unet_perf_e2e(
     )
 
     configs = create_unet_configs_from_parameters(
-        parameters=parameters, input_height=input_height, input_width=input_width, batch_size=batch
+        parameters=parameters, input_height=input_height, input_width=input_width, batch_size=batch, device=device
     )
 
     model = create_unet_from_configs(configs, device)
@@ -222,7 +222,11 @@ def test_vanilla_unet_perf_e2e_multi_device(
     )
 
     configs = create_unet_configs_from_parameters(
-        parameters=parameters, input_height=input_height, input_width=input_width, batch_size=batch
+        parameters=parameters,
+        input_height=input_height,
+        input_width=input_width,
+        batch_size=batch,
+        device=mesh_device,
     )
 
     model = create_unet_from_configs(configs, mesh_device)

@@ -40,7 +40,11 @@ def test_vanilla_unet_model_multi_device(
         device=None,
     )
     configs = create_unet_configs_from_parameters(
-        parameters=parameters, input_height=input_height, input_width=input_width, batch_size=batch
+        parameters=parameters,
+        input_height=input_height,
+        input_width=input_width,
+        batch_size=batch,
+        device=mesh_device,
     )
 
     torch_input_tensor, ttnn_input_tensor = create_unet_input_tensors(
