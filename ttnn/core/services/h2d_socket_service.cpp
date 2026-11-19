@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/services/h2d_socket_service.hpp"
+#include "ttnn/core.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -342,6 +343,7 @@ volatile uint32_t* completion_word(void* base, uint32_t offset) {
 //   [13] completion_pcie_addr_hi          (uint32, high 32 bits of PCIe offset)
 //   [14] completion_src_l1_addr           (uint32, local service-core L1 scratch)
 Program build_persistent_h2d_program(
+    distributed::MeshDevice& mesh_device,
     const Buffer& device_buffer,
     const CoreCoord& recv_core,
     uint32_t socket_config_buffer_address,
@@ -352,7 +354,7 @@ Program build_persistent_h2d_program(
     const H2DWorkerSyncArgs& worker_sync,
     const MetadataArgs& metadata,
     const CompletionArgs& completion) {
-    auto program = CreateProgram();
+    auto program = CreateProgram(mesh_device);
 
     constexpr tt::CBIndex data_cb_index = tt::CBIndex::c_0;
     constexpr tt::CBIndex metadata_cb_index = tt::CBIndex::c_1;
@@ -730,6 +732,7 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
         }
 
         auto program = build_persistent_h2d_program(
+            *mesh_device_,
             *dbuf,
             core.core_coord,
             s->get_config_buffer_address(),
@@ -744,7 +747,7 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
         ++completion_index;
     }
 
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload_, /*blocking=*/false);
+    EnqueueMeshWorkload(ttnn::core::current_mesh_command_queue(*mesh_device_), *workload_, /*blocking=*/false);
     start_host_push_workers();
 }
 
@@ -826,7 +829,7 @@ H2DStreamService::~H2DStreamService() {
         signal_termination();
 
         if (mesh_device_) {
-            distributed::Finish(mesh_device_->mesh_command_queue());
+            distributed::Finish(ttnn::core::current_mesh_command_queue(*mesh_device_));
         }
 
         // Wait for each kernel to actually return (RUN_MSG_DONE), not just for
