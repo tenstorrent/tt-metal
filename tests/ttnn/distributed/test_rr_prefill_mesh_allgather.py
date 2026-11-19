@@ -94,8 +94,7 @@ def test_ring_all_gather_on_every_chip(rr_mesh, axis):
             if not view.is_local(coord):
                 continue
             shard = buffer.get_shard(coord)
-            if shard is None:
-                continue
+            assert shard is not None, f"rank {rank} has no output shard for local chip ({coord[0]},{coord[1]})"
             # The host buffer is exposed as raw bytes; the tensor is float32 row-major.
             got = np.ascontiguousarray(np.from_dlpack(shard)).view(np.float32).reshape(-1)
             want = expected_gather(axis, int(coord[0]), int(coord[1])).reshape(-1)
