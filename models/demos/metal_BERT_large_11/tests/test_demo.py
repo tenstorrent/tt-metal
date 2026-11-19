@@ -16,7 +16,6 @@ from models.demos.metal_BERT_large_11.demo.demo import test_demo_squadv2 as demo
     (("models/demos/metal_BERT_large_11/demo/input_data.json"),),
     ids=["default_input"],
 )
-@pytest.mark.skipif(is_blackhole(), reason="Not functional on BH yet")
 def test_demo_batch_7(batch, input_path, model_location_generator, device):
     expected_answers = {
         0: "scientific archaeology",
