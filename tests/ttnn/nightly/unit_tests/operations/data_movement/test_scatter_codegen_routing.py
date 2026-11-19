@@ -68,10 +68,24 @@ _DEMOTED = [
         ttnn.TILE_LAYOUT,
     ),
     ([100], {"dim": 0, "index": [80], "src": [80]}, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    (
+        [1, 1, 32, 64],
+        {"dim": -2, "index": [1, 1, 16, 64], "src": [1, 1, 16, 64]},
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [1, 1, 64, 128],
+        {"dim": -2, "index": [1, 1, 32, 128], "src": [1, 1, 32, 128]},
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
 ]
 _DEMOTED_IDS = [
     "[1, 2, 128, 1, 768]|dim=2&index=[1, 2, 8, 1, 768]&src=[1, 2, 8, 1, 768]|bfloat16|tile",
     "[100]|dim=0&index=[80]&src=[80]|bfloat16|tile",
+    "[1, 1, 32, 64]|dim=-2&index=[1, 1, 16, 64]&src=[1, 1, 16, 64]|bfloat16|row_major",
+    "[1, 1, 64, 128]|dim=-2&index=[1, 1, 32, 128]&src=[1, 1, 32, 128]|bfloat16|row_major",
 ]
 
 

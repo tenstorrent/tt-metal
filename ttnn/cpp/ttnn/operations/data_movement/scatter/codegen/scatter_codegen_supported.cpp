@@ -243,6 +243,9 @@ namespace {
 // with Ht=64 kept on the TILE path by the same measurement, and sticks past 32768 elements were
 // never measured to win untilized -- the chunked RM plan itself would admit far wider ones.
 constexpr uint32_t kRowMajorRerouteMaxHt = 32;
+// Input bytes at or below which a ROW_MAJOR scatter off the last axis stays native (is_demoted):
+// the measured cases at 4 and 16 KiB tie native on device and lose host wall clock.
+constexpr uint64_t kRowMajorDispatchBoundInputBytes = 16 * 1024;
 constexpr uint32_t kRowMajorRerouteMaxStickElems = 32768;
 // The untilized stick's raw byte width must sit on a 32 B boundary: the generator's own routing
 // term for the detour, kept so the detour serves exactly the cases it was measured on. Not a
@@ -468,6 +471,15 @@ bool is_demoted(
                     input_tensor, index_tensor, src_tensor, axis, working_input, working_index, Layout::TILE))) {
             return true;
         }
+    }
+
+    // A small ROW_MAJOR scatter off the last axis is dispatch-bound: both legs pay the same
+    // transposes around a scatter of a few microseconds, so the port's device win (5-12% on the
+    // measured cases) cannot show on wall clock, which the call loses by the same few percent under
+    // host noise. Below the bound the route is not worth a coin flip and stays native.
+    if (input_tensor.layout() == Layout::ROW_MAJOR && axis != rank - 1 &&
+        input_tensor.logical_shape().volume() * input_tensor.element_size() <= kRowMajorDispatchBoundInputBytes) {
+        return true;
     }
 
     return false;

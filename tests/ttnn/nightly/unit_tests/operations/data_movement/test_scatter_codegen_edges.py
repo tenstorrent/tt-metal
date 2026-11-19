@@ -83,15 +83,15 @@ def _run_auto_against_native(device, xt, it, st, dim, **kwargs):
 @pytest.mark.parametrize(
     "shape,index_shape,layout",
     [
-        ([1, 1, 32, 64], [1, 1, 16, 64], ttnn.ROW_MAJOR_LAYOUT),
         ([1, 1, 32, 64], [1, 1, 16, 64], ttnn.TILE_LAYOUT),
-        ([1, 1, 64, 128], [1, 1, 32, 128], ttnn.ROW_MAJOR_LAYOUT),
+        ([1, 1, 96, 128], [1, 1, 48, 128], ttnn.ROW_MAJOR_LAYOUT),
     ],
     ids=lambda v: str(v) if isinstance(v, list) else None,
 )
 def test_scatter_codegen_row_axis_small_shapes_route_to_codegen(device, shape, index_shape, layout):
-    # is_demoted() names no exact shape, so small bf16 row-axis scatters route to codegen and must
-    # match native.
+    # Small bf16 row-axis scatters route to codegen and must match native: TILE at any size, and
+    # ROW_MAJOR once the input passes the 16 KiB dispatch bound (96 rows of 128 bf16 is 24 KiB, and
+    # the 96-element transposed stick is 192 B, aligned on both architectures).
     xt, it, st = _make_case(shape, index_shape, -2, layout, device)
     _, added = _run_auto_against_native(device, xt, it, st, -2)
     assert added > 0, "auto fell back to native; expected codegen to serve this call"
@@ -108,6 +108,18 @@ def test_scatter_codegen_tile_dram_input_l1_output_runs_tile_factory(device):
     assert out.memory_config().buffer_type == ttnn.BufferType.L1
     assert out.layout == ttnn.TILE_LAYOUT
     assert added == 1, "expected the codegen TILE factory's one program beyond native's"
+
+
+@pytest.mark.parametrize("shape,index_shape", [([1, 1, 32, 64], [1, 1, 16, 64]), ([1, 1, 64, 128], [1, 1, 32, 128])])
+@pytest.mark.parametrize("dim", [-2, 2])
+def test_scatter_codegen_small_row_major_off_axis_scatter_stays_native(device, shape, index_shape, dim):
+    # A ROW_MAJOR scatter off the last axis with at most 16 KiB of input is dispatch-bound: a tie on
+    # device that loses host wall clock, so is_demoted() keeps it native. The rule reads the
+    # normalized axis, so both spellings of the dim route the same way; 64 rows of 128 bf16 sit
+    # exactly on the bound.
+    xt, it, st = _make_case(shape, index_shape, dim, ttnn.ROW_MAJOR_LAYOUT, device)
+    _, added = _run_auto_against_native(device, xt, it, st, dim)
+    assert added == 0, "auto routed a dispatch-bound row-major scatter to codegen; expected native"
 
 
 @pytest.mark.parametrize(
