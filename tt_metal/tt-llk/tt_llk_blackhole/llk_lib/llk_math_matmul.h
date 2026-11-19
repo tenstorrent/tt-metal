@@ -884,6 +884,9 @@ inline void _llk_math_matmul_init_(
 
     // in1=32x16 NOT supported with transpose (no addr_mod handling)
     LLK_ASSERT(!(transpose && (in1_tile_r_dim == TILE_R_DIM) && (in1_tile_c_dim == FACE_C_DIM)), "Transpose with input 1 dimensions 32x16 not supported");
+    // in1=16x32 with transpose: K is in1 columns, so the pair passes matmul_supports_tensor_shapes, but the addr mods
+    // step SrcA by 32 rows past the 16 the tile fills (stale SrcA, silently wrong)
+    LLK_ASSERT(!(transpose && (in1_tile_r_dim == FACE_R_DIM) && (in1_tile_c_dim == TILE_C_DIM)), "Transpose with input 1 dimensions 16x32 not supported");
 
     constexpr bool row_mop = matmul_runs_row_mop<THROTTLE_LEVEL, ROW_MOP>();
     if constexpr (row_mop)
