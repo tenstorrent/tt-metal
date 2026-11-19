@@ -1107,12 +1107,13 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
                             : std::numeric_limits<uint32_t>::max();  // inactive
         return l;
     };
+    const uint64_t cb_alignment = mesh_device->allocator()->get_alignment(tt::tt_metal::BufferType::DRAM);
     const auto cb_bytes_for_slots = [&](uint32_t slots, uint32_t kv_pages, bool pairs) -> uint64_t {
         uint64_t bytes = 0;
         uint32_t index = 0;
         lay_out_cbs(
             slots, kv_pages, pairs, [&](uint32_t page_size_bytes, uint32_t num_pages, tt::DataFormat) -> uint32_t {
-                bytes += static_cast<uint64_t>(page_size_bytes) * num_pages;
+                bytes += tt::align(static_cast<uint64_t>(page_size_bytes) * num_pages, cb_alignment);
                 return index++;
             });
         return bytes;
