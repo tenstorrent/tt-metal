@@ -446,9 +446,9 @@ def test_unaccounted_ram_and_the_reserve_before_a_device_open():
     gib = 1 << 30
     mi = {k: 0 for k in H.UNACCOUNTED} | {"MemTotal": 566 * gib, "MemFree": 200 * gib, "AnonPages": 40 * gib}
     assert H.unaccounted(mi) == 326.0
-    ok, line = H.reserve_check({}, dict(mi, MemAvailable=350 * gib))  # 350 - 200.2 (215 GB) < 150 GiB
+    ok, line = H.reserve_check({}, dict(mi, MemAvailable=230 * gib))  # 230 - 200.2 (215 GB) < 40 GiB (owner)
     assert not ok and line.startswith(H.INFRA_TAG) and "REBOOT" in line and "326.0 GiB" in line
-    assert H.reserve_check({}, dict(mi, MemAvailable=360 * gib))[0]
+    assert H.reserve_check({}, dict(mi, MemAvailable=350 * gib))[0]  # the node at 163 GiB unaccounted: fine
     assert H.reserve_check({H.LOAD_ENV: "10"}, dict(mi, MemAvailable=170 * gib))[0]
     assert H.reserve_check({H.RESERVE_ENV: "0"}, dict(mi, MemAvailable=1))[0]
 

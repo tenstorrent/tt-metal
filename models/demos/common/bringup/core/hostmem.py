@@ -42,11 +42,11 @@ MARGIN = 1.15  # a recorded need is a measurement of earlier runs: start only wi
 MARGIN_GB = 8.0
 # F284 (OWNER 2026-11-19, permanent): every device open leaks 10-27 GiB of host RAM in the driver; before any device
 # open, MemAvailable minus the expected host load of a model process (LOAD_ENV, default ~215 GB: DeepSeek-V4.1's host
-# RSS) must leave RESERVE_ENV (default 150 GiB); else the run is refused and the fix named: a reboot of the node.
+# RSS) must leave RESERVE_ENV (default 40 GiB, owner 2026-11-19); else the run is refused and the fix named: a reboot of the node.
 LOAD_ENV = "BRINGUP_HOST_MEM_LOAD_GB"
 LOAD_GB_DEFAULT = 215e9 / GB  # 215 GB (decimal, as the owner gave it) in GiB
 RESERVE_ENV = "BRINGUP_HOST_MEM_RESERVE_GB"  # 0 = off
-RESERVE_GB_DEFAULT = 150.0
+RESERVE_GB_DEFAULT = 40.0  # owner 2026-11-19: 150 was too conservative (MemAvailable ~350 GiB, a load ~200-215)
 UNACCOUNTED = ("MemFree", "Buffers", "Cached", "AnonPages", "Slab", "PageTables", "VmallocUsed", "Percpu", "Hugetlb",
                "KernelStack")  # fmt: skip
 INFRA_RC = 10  # preflight: not enough host memory (the safe runner exits 3 with a SAFE_PYTEST_INFRA line)
