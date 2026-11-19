@@ -294,22 +294,19 @@ void MPIContext::create(int argc, char** argv) {
     }
 }
 
-const ContextPtr& MPIContext::get_current_world() {
-    if (!current_world_) {
-        // Default initialization of MPIContext if not already initialized
-        MPIContext::create(0, nullptr);
-    }
-    return current_world_;
-}
-
-ContextPtr MPIContext::get_world_context() {
+ContextPtr MPIContext::job_world() const {
+    // Normally created by create(). Still needed when an application initialized MPI itself and installed its
+    // own MPIContext through set_current_world() without ever calling create().
     if (!mpi_job_world_) {
-        if (!current_world_) {
-            MPIContext::create(0, nullptr);
-        }
         mpi_job_world_ = std::make_shared<MPIContext>(MPI_COMM_WORLD);
     }
     return mpi_job_world_;
+}
+
+bool MPIContext::is_runtime_initialized() const {
+    int is_mpi_initialized;
+    MPI_CHECK(MPI_Initialized(&is_mpi_initialized));
+    return is_mpi_initialized != 0;
 }
 
 std::optional<SubcontextId> MPIContext::subcontext_id() const {
@@ -352,19 +349,6 @@ Rank MPIContext::local_to_world_rank(SubcontextId subcontext_id, Rank local_rank
         L.subcontext_sizes[*subcontext_id]);
     // World rank = start of this sub-context's block + offset within that block.
     return Rank{L.world_rank_prefix[*subcontext_id] + *local_rank};
-}
-
-void MPIContext::set_current_world(const ContextPtr& ctx) {
-    TT_FATAL(
-        ctx != nullptr && std::dynamic_pointer_cast<MPIContext>(ctx) != nullptr,
-        "MPIContext::set_current_world: context is not a MPIContext or a nullptr");
-    MPIContext::current_world_ = ctx;
-}
-
-bool MPIContext::is_initialized() {
-    int is_mpi_initialized;
-    MPI_CHECK(MPI_Initialized(&is_mpi_initialized));
-    return is_mpi_initialized != 0;
 }
 
 MPIContext::MPIContext(MPI_Comm comm) : comm_(comm) {
