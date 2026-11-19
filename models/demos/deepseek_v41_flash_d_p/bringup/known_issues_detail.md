@@ -1574,3 +1574,32 @@ teardown ("4B load took 55505 us"); tt-triage failed; the safe runner reset the 
 programs were not the only trigger: a chip drops with every program at or under 110. FIX.36's 41 clean rounds
 (STATIC_TABLES=on) were one sample; the rate at ~2,900 chunks is the rate it had before the caps (~2,400). Log:
 /scratch/dnijemcevic/phase_1117/p73a2/loop3.log (audit.log, loop2.log, coreaudit_on.log next to it).
+
+## The chunk's exposed host time was two engram stalls, not launch cost
+
+Method (tests/perf/test_host_idle_map.py, no device profiler for the walls): host marks at begin_chunk, embed, every
+layer, the engram waits; one extra run under the program real-time profiler with no op patching: each idle gap of a
+chip's timeline (a program starting after every earlier one ended) charged to the host segment that launched it. The
+rt run itself is slower (its receiver thread takes the GIL; worse at a 0.5 ms switch interval), so its segment sizes
+are indicative; the clean marks are the measure.
+
+| | off (P.77 tree) | HOST_HIDE=on |
+|---|---|---|
+| clean wall, median of 7 | 106.5 ms | 93.8 ms |
+| host done launching | 82.0 ms | 69.3 ms |
+| layer 1 rows ready (worker: hash / gather / upload) | ~19.7 (4.6 / 12.2 / 2.5) | ~6 (0.8 / 3.5 / 1.1) |
+| main thread blocked for the rows | 14.3 ms | ~0 |
+| layer 2 / 4 / 8 host | 10.1 / 6.9 / 6.5 | 10.2 / 2.0 / 7.2 |
+| device busy (slowest chip) | 80.7 | 80.7 |
+
+What is left (~13 ms): the host needs ~22 ms to launch embed, layers 0-2 and the P.75 / P.76 prefetches (~4 ms in
+take_engram_rows) for ~14 ms of device work. Layer 2 (the first KV / index source) alone takes 107 launches, 10.2 ms
+(ttnn.bringup.topk_large_indices 1.9 ms host in one call there, < 0.11 ms in layers 8 / 14). After layer 3 the host
+(~2 ms a layer) leads the device (~4 ms a layer) and the device never idles again. Next levers: host cost of the
+source layers' indexer / compressor launches, or a trace of the layers after the rows (blocked by the per-start host
+values P.21 lists).
+
+GIL: the worker thread runs a little Python between its GIL-free steps (numba with nogil, copy_host_to_device_tensor);
+while the main thread dispatches, each re-take waited up to the 5 ms switch interval (the torch hash read 3-4.6 ms
+in the worker for ~1 ms of work). numba's spinning OpenMP pool also slows torch ops next to it (token_map[ids] 0.2 ->
+1.7 ms): keep the worker's work inside the compiled kernels.

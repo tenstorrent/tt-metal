@@ -1,0 +1,89 @@
+{
+ "used": [
+  {
+   "id": "DS41-136",
+   "how": "kept the GIL-free staging pattern (dlpack views of the host shards, copy_host_to_device_tensor) for the new per-chip staging (tt/engram.py _staging_tp)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-133",
+   "how": "the new numba kernels (hash, tile_rows_chips) launch through engram_bfp8._run so torch's thread pool is restored",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-149",
+   "how": "take_engram_rows hands back the pinned load-time buffer object itself after high_bw_all_gather, never the op's new wrapper",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-261",
+   "how": "wait_engram submits the held (deferred) jobs before waiting, so a caller that waits before a capture still sees every upload done",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-245",
+   "how": "the idle-map probe sets DS41_ENGRAM_TABLE to the shipped default (resident) when unset, as test_skip_positions does",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-183",
+   "how": "every model run started through devjob and waited in short calls",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "a clean-run device idle map method (rt profiler without op patching, each gap charged to the host segment that launched the next program): now DS41-298 / tests/perf/test_host_idle_map.py",
+  "the GIL switch interval (5 ms) delays a worker thread's every re-take of the GIL while the main thread dispatches ttnn ops (DS41-298)",
+  "tasks.yaml ab values on / off reach the Setting as booleans True / False (YAML), so a Setting with choices ('on', 'off') fails switch_env; the brief says so but the Setting text of other switches uses strings"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding or duplicated work: each chip uploads its own 1/TP share and the device gathers it (data movement only); no kernel limit worked around"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched; the only device op added is ttnn.experimental.high_bw_all_gather (C++), one a engram layer"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork changed, no fork suite run; only the CPU test tests/test_engram_hash.py, the model probe tests/perf/test_host_idle_map.py and the measure parts"
+  }
+ ],
+ "cited_only": [
+  "DS41-298"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.78",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-19T02:02:09",
+  "head": "824d02b7b50",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.78.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.78.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_host_idle_map.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_engram_hash.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram_bfp8.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

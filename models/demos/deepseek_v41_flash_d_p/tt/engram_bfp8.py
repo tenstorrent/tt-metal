@@ -208,3 +208,131 @@ def tile_bytes(exps: torch.Tensor, mags: torch.Tensor) -> torch.Tensor:
     m = mags.view(tr, 2, 16, tc, 2, 16).permute(0, 3, 1, 4, 2, 5).reshape(tr, tc, 1024)
     x = exps.view(tr, 2, 16, tc, 2).permute(0, 3, 1, 4, 2).reshape(tr, tc, 64)
     return torch.cat([x, m], dim=-1).reshape(-1)
+
+
+# ---------------------------------------------------------------------- HOST_HIDE=on (P.78): the n-gram hash in numba
+def _hash_kernel():
+    import numba
+
+    @numba.njit(parallel=True, cache=True, nogil=True)
+    def hash_rows(ids, tail, token_map, s, mult, primes, offsets, pad_id, dead, out):
+        m = mult.shape[0]
+        heads = primes.shape[1]
+        tail_len = tail.shape[0]
+        for t in numba.prange(s):
+            blocked = False
+            rolling = 0
+            for shift in range(m):
+                j = tail_len - shift + t  # (position in [tail | token_map[ids]])
+                src = tail[j] if j < tail_len else token_map[ids[j - tail_len]]
+                if src == dead:
+                    blocked = True
+                tok = pad_id if blocked else src
+                prod = tok * mult[shift]  # (int64, wraps as torch's int64 multiply)
+                if shift == 0:
+                    rolling = prod
+                else:
+                    rolling = rolling ^ prod
+                    for h in range(heads):
+                        p = primes[shift - 1, h]
+                        r = rolling % p  # (Python / torch.remainder semantics: the divisor's sign)
+                        out[t, (shift - 1) * heads + h] = r + offsets[(shift - 1) * heads + h]
+
+    return hash_rows
+
+
+_HASH = None
+
+
+def ngram_hashes(hasher, tokens: torch.Tensor, layer: int, tail: torch.Tensor, threads: int | None = None):
+    """reference/ngram.EngramHasher.hashes(tokens, layer, tail) bit for bit (tests/test_engram_hash.py), in one
+    compiled loop over ``threads`` with the GIL released (P.78). Its cost is the int64 remainders (5120 x 24 a chunk:
+    0.7-1.5 ms on one thread of the Galaxy host); the torch form's small int64 ops cost 1-5 ms on a busy host."""
+    global _HASH
+
+    if _HASH is None:
+        _HASH = _hash_kernel()
+    from models.demos.deepseek_v41_flash_d_p.reference.ngram import DEAD
+
+    li = hasher.layer_ids.index(layer)
+    ids = tokens.reshape(-1).long().contiguous()
+    tail = tail.long().contiguous()
+    s = int(ids.shape[0])
+    m = hasher.max_ngram_size
+    assert tail.shape[0] == hasher.tail_len, (tail.shape, hasher.tail_len)
+    out = torch.empty(s, (m - 1) * hasher.n_heads, dtype=torch.int64)
+    _run(
+        threads,
+        _HASH,
+        ids.numpy(),
+        tail.numpy(),
+        hasher.token_map.numpy(),
+        s,
+        hasher.multipliers[li].contiguous().numpy(),
+        hasher.primes[li].contiguous().numpy(),
+        hasher.offsets[li].contiguous().numpy(),
+        int(hasher.pad_id),
+        int(DEAD),
+        out.numpy(),
+    )
+    k = hasher.tail_len
+    new_tail = torch.cat([tail, hasher.token_map[ids[-k:]]])[-k:].clone()  # (= the reference's comp[-k:])
+    return out, new_tail
+
+
+def _tile_chips_kernel():
+    import numba
+
+    @numba.njit(parallel=True, cache=True, nogil=True)
+    def tile_chips(packed, ids, valid, outs, q):
+        g = packed.shape[1] // 17
+        slots = ids.shape[1]
+        tcols = slots * g // 2
+        s = q * len(outs)
+        bad = 0
+        for t in numba.prange(min(valid, s)):  # (the range check the reference path does with h.min / h.max)
+            for j in range(slots):
+                if ids[t, j] < 0 or ids[t, j] >= packed.shape[0]:
+                    bad += 1
+        if bad:
+            return bad
+        for t in numba.prange(s):
+            out = outs[t // q]
+            lt = t % q
+            tr, ri = lt // 32, lt % 32
+            fr, rr = ri // 16, ri % 16
+            for j in range(slots):
+                rid = ids[t, j] if t < valid else -1
+                for k in range(g):
+                    c0 = (j * g + k) * 16
+                    f = fr * 2 + (c0 % 32) // 16
+                    base = (tr * tcols + c0 // 32) * 1088
+                    mo = base + 64 + f * 256 + rr * 16
+                    if rid < 0:
+                        out[base + f * 16 + rr] = 0
+                        for v in range(16):
+                            out[mo + v] = 0
+                    else:
+                        out[base + f * 16 + rr] = packed[rid, k]
+                        for v in range(16):
+                            out[mo + v] = packed[rid, g + k * 16 + v]
+        return 0
+
+    return tile_chips
+
+
+_TILE_CHIPS = None
+
+
+def tile_rows_chips(packed, ids: torch.Tensor, valid: int, outs: tuple, q: int, threads: int | None = None) -> None:
+    """HOST_HIDE=on (P.78): ``tile_rows`` for consecutive q-row shares in ONE compiled call (one GIL release): rows
+    [k q, (k+1) q) of the chunk -> the TILE bytes of [q, slots * 256] in outs[k] (numpy uint8 arrays, a tuple; rows past
+    ``valid`` 0). Each outs[k] equals tile_rows(packed, ids[k q : (k+1) q], q) (tests/test_engram_hash.py). An id
+    outside the table raises (checked in the kernel, before any byte is written)."""
+    global _TILE_CHIPS
+
+    if _TILE_CHIPS is None:
+        _TILE_CHIPS = _tile_chips_kernel()
+    assert ids.shape[0] >= valid, (ids.shape, valid)
+    bad = _run(threads, _TILE_CHIPS, packed, ids.contiguous().numpy(), int(valid), outs, int(q))
+    assert bad == 0, f"engram row out of range ({bad} ids)"

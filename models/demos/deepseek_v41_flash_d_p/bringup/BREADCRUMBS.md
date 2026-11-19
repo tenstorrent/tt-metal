@@ -695,3 +695,66 @@
   2560 units fail at load, DS41-297); the extra points: `BRINGUP_CHUNK=2048 DS41_DECODER_SKIP=decode SKIP_POS=145408
   scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py`
   (3072: SKIP_POS=144384).
+
+## P.78 perf (attempt 1): hide the chunk's host time behind the device (HOST_HIDE off | on)
+
+- Idle map first (clean, no device profiler; tests/perf/test_host_idle_map.py, p145408 steady, DECODER_SKIP=decode,
+  the shipped tree, HOST_HIDE=off): clean wall median 106.5 ms; the host finished launching at 82.0 ms, the device
+  busy 80.4-80.7 ms a chip. Host marks: layer 1's engram wait 5.4 -> 19.7 ms (worker: hash 4.6, lookup_pack 12.2,
+  upload 2.5 ms); per layer host 1.9 ms, source layers (2 / 8 / 14 and layer 4) 6.5-10 ms. One rt-profiled run (no
+  op patching) charges each device idle gap to the host segment that launched the program ending it: idle 35 ms of a
+  116 ms span (that run's wall 119 ms): **layer 1's engram wait 11.4 ms**, **layer 2 11.5 ms + layer 3 2.6 + layer 4
+  1.3** (the host stalls there: layer 14's engram job runs on the worker right after layer 1's, its numba gather
+  (12 ms) slows the main thread's layer 2 from ~6.7 to 10.1 ms and its 134 MB upload (5 ms, CQ 0) blocks layer 4's
+  dispatch (6.9 ms); the device queue is empty since the wait), layer 0 2.2, layer 20 1.7, layer 8 1.6, the rest
+  < 1 each; start + end latency 3.2 ms. After layer ~5 the host leads (1.9 ms a layer vs ~4 device) and the device
+  never idles again. Host-only bench (/tmp, 16 GB synthetic table): torch hash 0.8-3 ms (cold first call), tile
+  gather 8 / 16 / 24 threads 4.0 / 1.8 / 1.5 ms warm.
+- Design (from the map, no trace: the gap is two host stalls at the chunk's start, not launch cost; the host
+  launches 68 ms of work for 80 ms of device): HOST_HIDE=on (1) layer 1's (the chunk's first engram layer) job hashes
+  with one numba kernel (bit-equal to reference/ngram.EngramHasher.hashes) and gathers on HOST_HIDE_THREADS threads;
+  (2) every later engram layer's job (layer 14) is submitted only once the main thread has launched
+  HOST_HIDE_DEFER layers past the first engram layer (the host then leads the device), not right after layer 1's.
+  Same bytes, same device ops: bit-identical.
+- Expected saving per chunk at 142k: device 0 (no device change); host-exposed time (wall - device, ~24 ms): layer
+  1's wait 14 -> ~5 ms (hash ~0.1, gather ~3-4, upload 2.5; the device has ~5 ms of layer 0 + prefetch) = ~-9 ms
+  idle; layers 2-4 contention ~-10 ms (layer 14's job then runs where the host leads by > 5 ms). Wall ~106.5 ->
+  ~88 ms. A further ~-2 ms if layer 1's upload (134 MB: rows replicated over TP) is cut (not in this design).
+- Built (HOST_HIDE=on, the default; off = P.6's worker exactly): tt/engram_bfp8.py `ngram_hashes` (numba, prange,
+  token map inside the kernel; bit-equal to reference/ngram.EngramHasher.hashes, tests/test_engram_hash.py) and
+  `tile_rows_chips` (one compiled call for every chip's share, range check in the kernel); tt/engram.py
+  `allocate_tp` / `_staging_tp` / `fill_tp` (each chip's own 1 / TP share of the rows: 33 MB on CQ 0 instead of
+  134 MB); tt/model.py: begin_chunk submits the first engram layer's job (HOST_HIDE_THREADS 24), holds the later ones
+  until layer first + HOST_HIDE_DEFER (3) returned (`_submit_pending`; `_wait_job` / `wait_engram` submit them
+  first if reached earlier); take_engram_rows gathers the shares over TP (ccl.all_gather -> high_bw_all_gather, dim 2)
+  into a load-time pinned buffer per engram layer; sys.setswitchinterval(HOST_HIDE_SWITCH_MS 0.5 ms) at load.
+  Settings HOST_HIDE, HOST_HIDE_THREADS, HOST_HIDE_SWITCH_MS, HOST_HIDE_DEFER.
+- Correctness: device byte check in the probe (fill_tp + TP gather vs fill's replicated rows): equal on 32 / 32
+  chips, layers 1 and 14. Same rows, same compute ops: bit-identical by construction. +1 CCL a engram layer
+  (high_bw_all_gather over TP, 2 links, its fabric workers only; no matmul, no Python-built op added: OV-23 n/a).
+- Measured (clean, p145408 steady, median of 7; probe idle0 / idle1 / idle2 / idle5): off 106.5 ms; numba hash +
+  24 threads + defer 98.7; + TP-sharded upload + switch interval 94.9; + parallel hash, map in kernel, range check in
+  kernel, later job at 24 threads 93.8 ms (93.0-95.7). Sweep (one load, median of 14): defer 1 / 3 / 5 / 7 at 24
+  threads 94.4 / 93.5 / 94.2 / 94.9; layer 14's job at 8 threads 96.0 (defer 3). Device unchanged (80.4-80.7 busy
+  a chip, + the two gathers). vs expected: -12.7 ms of the expected -18 ms: layer 1's wait went (14 -> ~0), but the
+  host still needs ~22 ms to launch embed + layers 0-2 + the prefetches for ~14 ms of device (layer 2 alone 10.2 ms,
+  107 launches): the target <= 86 ms needs the source layers' host cost cut or a trace (DS41-298, detail file).
+- Stop: one design, -12.7 ms (> 5); not a second design in this step: the rest is launch cost of the source layers
+  (a separate pick), and a trace of the layers after the rows is blocked by the per-start host values (P.21).
+- Re-run: `DS41_DECODER_SKIP=decode DS41_HOST_HIDE=True python -m models.demos.common.bringup.devjob start idle --
+  scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/perf/test_host_idle_map.py
+  -s` (IDLE_POS, IDLE_RUNS, IDLE_SWEEP="defer:threads,..."); CPU: `scripts/run_safe_pytest.sh --run-all
+  models/demos/deepseek_v41_flash_d_p/tests/test_engram_hash.py`.
+- Setting values: tasks.yaml ab on / off reach switch_env as YAML booleans, so HOST_HIDE is a bool Setting (True /
+  False; env DS41_HOST_HIDE=True / False). The first `measure --part test` refused 'on' / 'off' choices.
+- measure --task P.78 --part test (change on, HOST_HIDE=True): test_decoder_skip_decode, test_contract (failed 0 /
+  0), test_outside_history (shipped max_abs_diff 0.0), test_skip_positions all rc 0. test_skip_positions steady:
+  p145408 wall 93.4 ms (spread 7.9; P.77's on side 106.5), device 80.76 ms, host 12.6 ms, engram_rows section 1.01 ms
+  (the prefetches + the TP gather; P.77 0.92); p1024000 wall 105.2 ms (P.77 118.5), device 99.46, host 5.7 ms.
+  Resumed: 95.0 / 106.6 ms.
+- Final measure --task P.78 (change on): the four test parts reused; determinism rc 0 (max_abs_diff 0.0, state 0.0);
+  rung last rc 0, err_final_hidden 0.13463 (limit 0.2422; P.77's 0.1346: unchanged, bit-identical path), final
+  hidden PCC 0.991, top1 / top5 1.0. Gate check (shipped default HOST_HIDE=True, every unit): PASS, steady wall
+  p145408 93.7 ms, p1024000 105.8 ms.
+- Re-run the gate: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate P.78 --spec
+  models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`.

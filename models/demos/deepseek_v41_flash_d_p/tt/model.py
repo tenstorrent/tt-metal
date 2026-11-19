@@ -1106,6 +1106,33 @@ class TtDS41Model:
 
             self._engram_pool = ThreadPoolExecutor(1, thread_name_prefix="engram-async")
         self.engram_times = {}
+        # HOST_HIDE=on (P.78; with ENGRAM_ASYNC=on): every engram layer's job hashes in numba and gathers on
+        # HOST_HIDE_THREADS threads (the device idles for the first one after layer 0); every later engram layer's job is held
+        # (_engram_pending) until the main thread has launched HOST_HIDE_DEFER layers past the first engram layer, so
+        # its gather and upload no longer stall the dispatch of the layers right after the wait
+        self._host_hide = self._engram_pool is not None and bool(settings.get("HOST_HIDE"))
+        self._hide_threads = int(settings.get("HOST_HIDE_THREADS"))
+        self._hide_defer = int(settings.get("HOST_HIDE_DEFER"))
+        self._engram_pending = {}
+        self._hide_trigger = None
+        # ... and every engram layer's rows go up sharded over TP (each chip its own 1 / TP share: 1 / TP of the
+        # replicated upload's bytes on CQ 0) and are gathered over TP on the device into a load-time buffer per layer
+        self._engram_full = {}
+        if self._host_hide:
+            import sys
+
+            sys.setswitchinterval(float(settings.get("HOST_HIDE_SWITCH_MS")) / 1e3)
+            if self.mesh.shape[TP_AXIS] > 1 and all(r.format == "bfp8" for r in self.engram.values()):
+                for i, r in self.engram.items():
+                    t = ttnn.allocate_tensor_on_device(
+                        ttnn.Shape([1, 1, self.chunk // self.mesh.shape[SP_AXIS], r.width]),
+                        ttnn.bfloat8_b,
+                        ttnn.TILE_LAYOUT,
+                        mesh,
+                        DRAM,
+                    )
+                    ccl.pin(mesh, t)  # (persistent: the block's freeing skips it)
+                    self._engram_full[i] = t
         # HISTORY_GATHER_HIDE=on (P.75): the chunk's start until prefetch_history ran (begin_chunk -> take_engram_rows)
         self._hide = (
             settings.get("HISTORY_GATHER_HIDE") == "on"
@@ -1605,6 +1632,7 @@ class TtDS41Model:
         order the off path allocates in); the hash, lookup, pack and upload go to the worker, layer order."""
         st = self.state
         ids = tokens.reshape(-1).clone()  # (the caller may reuse its tensor while the worker reads it)
+        first = None
         for i, rows in self.engram.items():
             tail = rows.new_tail() if start == 0 or st is None else st.tail[i]
             tail = tail.long().clone()
@@ -1612,16 +1640,44 @@ class TtDS41Model:
             if st is not None:
                 st.tail[i] = new_tail
             _free(self._engram_dev.pop(i, None))
-            dev = rows.allocate(ids.numel())
+            if not self._host_hide:
+                dev = rows.allocate(ids.numel())
+                self._engram_dev[i] = dev
+                self._engram_jobs[i] = self._engram_pool.submit(rows.fill, dev, ids, tail, None, new_tail)
+                continue
+            # HOST_HIDE=on (P.78): the first engram layer's job now (numba hash, HOST_HIDE_THREADS), the later ones
+            # (likewise) once the main thread leads the device (_submit_pending)
+            th = self._hide_threads
+            if i in self._engram_full:  # (the TP-sharded rows, gathered in take_engram_rows)
+                dev = rows.allocate_tp(ids.numel())
+                job = (rows.fill_tp, dev, ids, tail, None, new_tail, th)
+            else:
+                dev = rows.allocate(ids.numel())
+                job = (rows.fill, dev, ids, tail, None, new_tail, th, True)
             self._engram_dev[i] = dev
-            self._engram_jobs[i] = self._engram_pool.submit(rows.fill, dev, ids, tail, None, new_tail)
+            if first is None:
+                first = i
+                self._engram_jobs[i] = self._engram_pool.submit(*job)
+            else:
+                self._engram_pending[i] = job
+        self._hide_trigger = None if first is None else first + self._hide_defer
+
+    def _submit_pending(self) -> None:
+        """HOST_HIDE=on (P.78): every held engram job to the worker, layer order."""
+        for i in sorted(self._engram_pending):
+            fn, *args = self._engram_pending.pop(i)
+            self._engram_jobs[i] = self._engram_pool.submit(fn, *args)
+        self._hide_trigger = None
 
     def wait_engram(self) -> None:
         """ENGRAM_ASYNC=on: every engram job of this chunk done (its rows enqueued on CQ 0)."""
+        self._submit_pending()
         for i in list(self._engram_jobs):
             self._wait_job(i)
 
     def _wait_job(self, layer: int) -> None:
+        if layer in self._engram_pending:  # HOST_HIDE=on: reached before its trigger layer (a shorter layer list)
+            self._submit_pending()
         job = self._engram_jobs.pop(layer, None)
         if job is None:
             return
@@ -1673,7 +1729,17 @@ class TtDS41Model:
         self._wait_job(layer)  # ENGRAM_ASYNC=on: layer 1 waits for its own job only, layer 14 for its own
         t = self._engram_dev.pop(layer, None)
         assert t is not None, f"layer {layer}: no engram rows for this chunk (begin_chunk(tokens, start) first)"
-        return t
+        full = self._engram_full.get(layer)
+        if full is None or t.shape[-2] == full.shape[-2]:
+            return t
+        # HOST_HIDE=on (P.78): each chip's 1 / TP share gathered over TP (rows, dim 2) into the layer's load-time buffer
+        if ccl.fabric() and ccl._fits(t, 2):
+            ccl.all_gather(t, 2, TP_AXIS, out=full)  # (high_bw_all_gather into ``full``: hand back that very object)
+            dealloc(t)
+            return full
+        out = ccl.all_gather(t, 2, TP_AXIS)  # (no fabric gather here: a fresh tensor, freed by the block)
+        dealloc(t)
+        return out
 
     def embed(self, tokens: torch.Tensor, start: int = 0) -> DevH:
         """Natural-order ids of one chunk (PAD_ID past actual_end clamped into the vocabulary, K-72: those rows are pad
@@ -1716,6 +1782,12 @@ class TtDS41Model:
         return DevH(streams, ttnn.clone(self.pre0, memory_config=DRAM))
 
     def layer(self, i: int, h: DevH, start: int, state: DS41DeviceState, end: int | None = None) -> DevH:
+        out = self._layer(i, h, start, state, end)
+        if self._hide_trigger is not None and i >= self._hide_trigger:  # HOST_HIDE=on (P.78): the held engram jobs
+            self._submit_pending()
+        return out
+
+    def _layer(self, i: int, h: DevH, start: int, state: DS41DeviceState, end: int | None = None) -> DevH:
         if i in self._decoder_set:  # DECODER_SKIP=exact (P.30) / replay128 (P.31)
             if self._skip:  # not the request's last chunk: layer 20's KV projection only, the rest skipped
                 state.window[i].skip(start, start + self.chunk)

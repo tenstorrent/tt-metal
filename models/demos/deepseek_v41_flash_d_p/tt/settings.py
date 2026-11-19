@@ -260,6 +260,46 @@ TABLE = {
         "buffer per gathered source instead of one per size. off = P.74 (the whole [0, nb S) gathered at the source's "
         "layer into the buffer shared by every source of a size)",
     ),
+    "HOST_HIDE": Setting(
+        True,
+        (True, False),
+        "P.78 (OWNER 2026-11-18; with ENGRAM_ASYNC=on): hide the chunk's host time behind the device. The idle map at "
+        "142k (tests/perf/test_host_idle_map.py): the device idled ~11 ms for layer 1's engram rows (worker: hash "
+        "4.6 + gather 12.2 + upload 2.5 ms after layer 0's ~5 ms) and ~15 ms in layers 2-4, whose dispatch layer 14's "
+        "engram job (gather, then a 134 MB upload on CQ 0) stalled right after the wait. True = the chunk's first "
+        "engram layer's job hashes in numba (tt/engram_bfp8.ngram_hashes, bit-equal) and gathers on "
+        "HOST_HIDE_THREADS threads; every later engram layer's job is submitted once the main thread has launched "
+        "HOST_HIDE_DEFER layers past the first engram layer (the host then leads the device); every engram layer's "
+        "rows go up sharded over TP (each chip its own 1 / TP share, one compiled tiling call: 1 / TP of the bytes "
+        "on CQ 0) and are gathered over TP on the device (high_bw_all_gather into a load-time buffer a layer: a data "
+        "move, +1 CCL a layer); GIL switch interval HOST_HIDE_SWITCH_MS. Same rows, same compute ops "
+        "(bit-identical). False = P.6's worker: every job at begin_chunk, layer order, torch hash, "
+        "ENGRAM_GATHER_THREADS, the rows replicated over TP by the upload",
+    ),
+    "HOST_HIDE_THREADS": Setting(
+        24,
+        None,
+        "P.78, HOST_HIDE=on: numba threads of every engram layer's hash and gather + tiling (layer 1's job is the one "
+        "the device waits for). Host bench (16 GB table, 5120 rows x 24 slots): 8 / 16 / 24 / 32 threads 4.0 / 1.8 / "
+        "1.5 / 1.7 ms; in the model (95 GB table) 24 threads 3.4-4.0 ms. Layer 14's job at 8 vs 24 threads: chunk "
+        "wall 96.0 vs 93.5 ms (median of 14, 142k). The Galaxy host has 64 logical CPUs",
+    ),
+    "HOST_HIDE_SWITCH_MS": Setting(
+        0.5,
+        None,
+        "P.78, HOST_HIDE=on: the interpreter's GIL switch interval (sys.setswitchinterval, process-wide, set at the "
+        "model's load; Python's default 5 ms). The engram worker re-takes the GIL after each GIL-free step (hash, "
+        "gather, upload) while the main thread dispatches; at 5 ms each re-take waited up to 5 ms (layer 1's 4.6 ms "
+        "'hash' while the main thread launched layer 0)",
+    ),
+    "HOST_HIDE_DEFER": Setting(
+        3,
+        None,
+        "P.78, HOST_HIDE=on: the later engram layers' jobs are submitted after the main thread launched the first "
+        "engram layer + this many layers (layer 4 with layer 1 first): past the source layer 2 (10.7 ms of host), "
+        "where the host starts to lead the device. Sweep at 142k (median of 14): 1 / 3 / 5 / 7 -> 94.4 / 93.5 / 94.2 "
+        "/ 94.9 ms (within noise)",
+    ),
     "HISTORY_FORMAT": Setting(
         "bfp4",
         ("bf16", "bfp4"),

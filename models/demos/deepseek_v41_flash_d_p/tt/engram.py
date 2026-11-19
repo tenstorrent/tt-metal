@@ -218,6 +218,7 @@ class TtEngramRows:
         self.format = rows_format or settings.get("ENGRAM_ROWS")
         self.weight, self.scale, self._packed = table.weight, table.scale, None
         self._staged = None  # ENGRAM_ASYNC: the bfp8 staging host tensor (_staging)
+        self._staged_tp = None  # HOST_HIDE=on (P.78): the per-chip staging host tensor (_staging_tp)
         ck = getattr(table, "ckpt", None)
         if self.mode == "mmap":
             madvise_random(ck, layer)
@@ -281,6 +282,15 @@ class TtEngramRows:
     def new_tail(self) -> torch.Tensor:
         return self.hasher.new_tail()
 
+    def _hashes(self, ids: torch.Tensor, tail: torch.Tensor, fast: bool = False, threads: int | None = None):
+        """The table rows of ids [valid] with the carried tail -> (rows [valid, slots] int64, new tail). ``fast``
+        (HOST_HIDE=on, P.78): the numba form (tt/engram_bfp8.ngram_hashes, bit-equal; tests/test_engram_hash.py)."""
+        if fast:
+            from .engram_bfp8 import ngram_hashes
+
+            return ngram_hashes(self.hasher, ids, self.layer, tail.long(), threads or self.threads)
+        return self.hasher.hashes(ids, self.layer, tail.long())
+
     def _valid(self, ids: torch.Tensor, valid: int | None) -> int:
         s = ids.shape[0]
         if valid is None:  # the engine pads past actual_end with 0xFFFFFFFF (or any id outside the vocabulary)
@@ -314,10 +324,19 @@ class TtEngramRows:
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh, mesh_shape=tuple(self.mesh.shape), dims=(2, None)),
         )
 
-    def host_bfp8(self, tokens: torch.Tensor, tail: torch.Tensor, valid: int | None = None, times: dict | None = None):
+    def host_bfp8(
+        self,
+        tokens: torch.Tensor,
+        tail: torch.Tensor,
+        valid: int | None = None,
+        times: dict | None = None,
+        threads: int | None = None,
+        fast: bool = False,
+    ):
         """tokens [S], tail [3] -> (exponents [S, width / 16] uint8, magnitudes [S, width] uint8, new tail): the rows
         as bfloat8_b (tt/engram_bfp8.py), from the table's bytes by integer operations only; pad rows are 0.
-        ``times``: ms of hash / lookup / pack added (ENGRAM_ASYNC's report)."""
+        ``times``: ms of hash / lookup / pack added (ENGRAM_ASYNC's report). ``threads`` / ``fast``: HOST_HIDE (P.78),
+        the pack's thread count (default ENGRAM_GATHER_THREADS) and the numba hash."""
         from .engram_bfp8 import pack_rows
 
         t0 = time.perf_counter()
@@ -328,11 +347,11 @@ class TtEngramRows:
         mags = torch.zeros(s, self.width, dtype=torch.uint8)
         if valid == 0:
             return exps, mags, tail.clone()
-        h, new_tail = self.hasher.hashes(ids[:valid], self.layer, tail.long())
+        h, new_tail = self._hashes(ids[:valid], tail, fast, threads)
         t1 = time.perf_counter()
         w, sc = self.gather(h)
         t2 = time.perf_counter()
-        e, m = pack_rows(w, sc, threads=self.threads)
+        e, m = pack_rows(w, sc, threads=threads or self.threads)
         exps[:valid], mags[:valid] = e.view(valid, -1), m.view(valid, -1)
         if times is not None:
             times.update(hash=(t1 - t0) * 1e3, lookup=(t2 - t1) * 1e3, pack=(time.perf_counter() - t2) * 1e3)
@@ -356,12 +375,20 @@ class TtEngramRows:
         return ttnn.to_device(host, self.mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     def tiles_from_packed(
-        self, tokens: torch.Tensor, tail: torch.Tensor, valid: int | None = None, times=None, outs=None
+        self,
+        tokens: torch.Tensor,
+        tail: torch.Tensor,
+        valid: int | None = None,
+        times=None,
+        outs=None,
+        threads: int | None = None,
+        fast: bool = False,
     ):
         """Resident bfp8 table: tokens [S], tail [3] -> (per mesh row the TILE bytes of its [S/SP, width] rows, new
         tail); the bytes equal tile_bytes(*host_bfp8(...)) of each mesh row's share. ``times``: ms of hash and of
         lookup + pack (one numba pass: the resident rows are already bfloat8_b) added; ``outs``: per mesh row the
-        uint8 tensor to write the bytes into (ENGRAM_ASYNC's staging)."""
+        uint8 tensor to write the bytes into (ENGRAM_ASYNC's staging). ``threads`` / ``fast``: HOST_HIDE (P.78), the
+        gather's thread count (default ENGRAM_GATHER_THREADS) and the numba hash."""
         from .engram_bfp8 import tile_rows
 
         t0 = time.perf_counter()
@@ -374,13 +401,14 @@ class TtEngramRows:
         assert s % (32 * rows_ax) == 0, f"{s} rows do not split into tiles over {rows_ax} mesh rows"
         n = s // rows_ax
         if valid:
-            h, new_tail = self.hasher.hashes(ids[:valid], self.layer, tail.long())
+            h, new_tail = self._hashes(ids[:valid], tail, fast, threads)
         else:
             h, new_tail = torch.empty(0, self.width // self.table.dim, dtype=torch.int64), tail.clone()
         assert valid == 0 or (int(h.min()) >= 0 and int(h.max()) < self.table.num_rows), "engram row out of range"
         t1 = time.perf_counter()
         outs = outs or [None] * rows_ax
-        tiles = [tile_rows(packed, h[r * n : (r + 1) * n], n, self.threads, outs[r]) for r in range(rows_ax)]
+        th = threads or self.threads
+        tiles = [tile_rows(packed, h[r * n : (r + 1) * n], n, th, outs[r]) for r in range(rows_ax)]
         if times is not None:
             times.update(
                 build_wait=(t0b - t0) * 1e3, hash=(t1 - t0b) * 1e3, lookup_pack=(time.perf_counter() - t1) * 1e3
@@ -438,9 +466,18 @@ class TtEngramRows:
             self._staged = (n, host, views, (rows, bufs))
         return self._staged[1], self._staged[2]
 
-    def host_tensor(self, tokens: torch.Tensor, tail: torch.Tensor, valid: int | None = None, times=None):
+    def host_tensor(
+        self,
+        tokens: torch.Tensor,
+        tail: torch.Tensor,
+        valid: int | None = None,
+        times=None,
+        threads: int | None = None,
+        fast: bool = False,
+    ):
         """Everything but the upload: (the multi-device host tensor of the chunk's rows, new tail); the bytes the off
-        path's ``__call__`` sends. ``times``: per phase ms added (hash, lookup, pack / lookup_pack, wrap)."""
+        path's ``__call__`` sends. ``times``: per phase ms added (hash, lookup, pack / lookup_pack, wrap).
+        ``threads`` / ``fast``: HOST_HIDE (P.78; the bfp8 rows only): the gather / pack threads and the numba hash."""
         s = tokens.reshape(-1).shape[0]
         rows_ax = tuple(self.mesh.shape)[0]
         if self.format != "bfp8":
@@ -458,11 +495,11 @@ class TtEngramRows:
         assert s % (32 * rows_ax) == 0, f"{s} rows do not split into tiles over {rows_ax} mesh rows"
         host, views = self._staging(s // rows_ax)
         if self._packed is not None:
-            _, new_tail = self.tiles_from_packed(tokens, tail, valid, times, outs=views)
+            _, new_tail = self.tiles_from_packed(tokens, tail, valid, times, outs=views, threads=threads, fast=fast)
         else:
             from .engram_bfp8 import tile_bytes
 
-            exps, mags, new_tail = self.host_bfp8(tokens, tail, valid, times)
+            exps, mags, new_tail = self.host_bfp8(tokens, tail, valid, times, threads=threads, fast=fast)
             t0 = time.perf_counter()
             n = s // rows_ax
             for r in range(rows_ax):
@@ -471,13 +508,88 @@ class TtEngramRows:
                 times["pack"] = times.get("pack", 0.0) + (time.perf_counter() - t0) * 1e3
         return host, new_tail
 
-    def fill(self, dev: ttnn.Tensor, tokens, tail, valid=None, want_tail=None) -> dict:
+    def fill(self, dev: ttnn.Tensor, tokens, tail, valid=None, want_tail=None, threads=None, fast=False) -> dict:
         """Worker thread: the chunk's rows into ``dev`` (allocated by ``allocate`` on the main thread) -> per phase
         ms. The write goes into CQ 0 (every mesh this model opens has one CQ: the harness's device_params,
         tt-d-gen's runner_utils.open_mesh_device), in order, so it lands before the ops the main thread enqueues
-        after waiting for this job. ``want_tail``: the tail begin_chunk already stored (checked)."""
+        after waiting for this job. ``want_tail``: the tail begin_chunk already stored (checked). ``threads`` /
+        ``fast``: HOST_HIDE (P.78), see host_tensor."""
         times = {}
-        host, new_tail = self.host_tensor(tokens, tail, valid, times)
+        host, new_tail = self.host_tensor(tokens, tail, valid, times, threads=threads, fast=fast)
+        assert want_tail is None or torch.equal(new_tail.long(), want_tail.long()), (self.layer, new_tail, want_tail)
+        t0 = time.perf_counter()
+        _COPY_TO_DEVICE(host, dev)  # (GIL released for the copy)
+        times["upload"] = (time.perf_counter() - t0) * 1e3
+        return times
+
+    # ------------------------------------------------------------------ HOST_HIDE=on (P.78): rows sharded over TP
+    def allocate_tp(self, s: int) -> ttnn.Tensor:
+        """Main thread, in begin_chunk: the chunk's device rows, each chip its own share [1, 1, S/(SP TP), width]
+        bfloat8_b (chip (r, c): rows [(r TP + c) q, (r TP + c + 1) q) of the chunk, q = S / (SP TP)); ``fill_tp``
+        writes them, the model gathers them over TP into the replicated layout ``allocate`` gives (a data move)."""
+        rows_ax, cols_ax = tuple(self.mesh.shape)
+        assert self.format == "bfp8", "HOST_HIDE's sharded upload sends bfloat8_b rows (ENGRAM_ROWS=bfp8)"
+        assert s % (32 * rows_ax * cols_ax) == 0, f"{s} rows do not split into tiles over {rows_ax} x {cols_ax} chips"
+        return ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, s // (rows_ax * cols_ax), self.width]),
+            ttnn.bfloat8_b,
+            ttnn.TILE_LAYOUT,
+            self.mesh,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _staging_tp(self, q: int):
+        """HOST_HIDE=on: (the mesh host tensor of [1, 1, q, width] bfloat8_b per chip, every chip its own bytes; per chip
+        in row-major mesh order a writable uint8 view, and the same views as a tuple of numpy arrays), made once a
+        layer (as ``_staging``: no copy a chunk)."""
+        if self._staged_tp is None or self._staged_tp[0] != q:
+            n_chips = int(self.mesh.get_num_devices())
+            nbytes = q * self.width * 17 // 16
+            wrap = ttnn.experimental.disaggregation.tensor_from_bfp8_bytes
+            shards = [wrap(bytes(nbytes), [1, 1, q, self.width]) for _ in range(n_chips)]
+            host = ttnn.from_host_shards(shards, self.mesh.shape)
+            dist = host.host_buffer()
+            rows_ax, cols_ax = tuple(self.mesh.shape)
+            bufs = [dist.get_shard(ttnn.MeshCoordinate(r, c)) for r in range(rows_ax) for c in range(cols_ax)]
+            views = [torch.from_dlpack(b) for b in bufs]  # (the shard's own bytes, no copy)
+            assert all(v.numel() == nbytes and v.dtype == torch.uint8 for v in views), [v.shape for v in views]
+            assert len({v.data_ptr() for v in views}) == n_chips, "a chip's staging bytes are shared"
+            self._staged_tp = (q, host, views, tuple(v.numpy() for v in views), (shards, bufs))
+        return self._staged_tp[1:4]
+
+    def fill_tp(self, dev: ttnn.Tensor, tokens, tail, valid=None, want_tail=None, threads=None) -> dict:
+        """Worker thread, HOST_HIDE=on (P.78): ``fill`` into ``allocate_tp``'s rows: the numba hash, one compiled
+        gather + tiling call for every chip's share (resident table; mmap: host_bfp8 then the tile bytes per share)
+        and one upload of 1 / TP of ``fill``'s bytes (each chip its own share; ``fill`` sends every mesh row's rows to
+        all TP chips of the row). The bytes of chip (r, c) are ``fill``'s rows [c q, (c+1) q) of mesh row r."""
+        from .engram_bfp8 import tile_bytes, tile_rows_chips
+
+        times = {}
+        t0 = time.perf_counter()
+        ids = tokens.reshape(-1).long()
+        s = ids.shape[0]
+        valid = self._valid(ids, valid)
+        n_chips = int(self.mesh.get_num_devices())
+        q = s // n_chips
+        host, views, outs = self._staging_tp(q)
+        if self._packed is not None:
+            packed = self.packed
+            t0b = time.perf_counter()
+            if valid:
+                h, new_tail = self._hashes(ids[:valid], tail, fast=True, threads=threads)
+            else:
+                h, new_tail = torch.empty(0, self.width // self.table.dim, dtype=torch.int64), tail.clone()
+            t1 = time.perf_counter()
+            tile_rows_chips(packed, h, valid, outs, q, threads or self.threads)  # (the row range check: in the kernel)
+            times.update(
+                build_wait=(t0b - t0) * 1e3, hash=(t1 - t0b) * 1e3, lookup_pack=(time.perf_counter() - t1) * 1e3
+            )
+        else:
+            exps, mags, new_tail = self.host_bfp8(tokens, tail, valid, times, threads=threads, fast=True)
+            t1 = time.perf_counter()
+            for k in range(n_chips):
+                views[k].copy_(tile_bytes(exps[k * q : (k + 1) * q], mags[k * q : (k + 1) * q]))
+            times["pack"] = times.get("pack", 0.0) + (time.perf_counter() - t1) * 1e3
         assert want_tail is None or torch.equal(new_tail.long(), want_tail.long()), (self.layer, new_tail, want_tail)
         t0 = time.perf_counter()
         _COPY_TO_DEVICE(host, dev)  # (GIL released for the copy)
