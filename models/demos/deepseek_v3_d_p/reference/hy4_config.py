@@ -78,6 +78,12 @@ class Hy4Config(GLM53Config):
     # moe_fused_swiglu has no ClampedSiluGlu, so the routed-expert hybrid split (GLM: 320) must stay off:
     # every expert runs through unified_routed_expert_moe.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = None
+    # The checkpoint stores e_score_correction_bias in fp32; keep it fp32 on device (bf16 rounds it by up to 2.2e-4,
+    # layer 40, the size of the score margins that decide near-tie expert picks). moe_grouped_topk takes it as is.
+    MOE_GATE_BIAS_FP32 = True
+    # Shared expert / dense layer-0 FFN placement (#65890). Off here: the dev SP8 x TP4 layout keeps GLM-5.3's TP-only
+    # TtSharedExpert / TtFfn and their caches. The SC1 layout runs Hy4TP32Config, which turns it on (TtMlp2D).
+    FFN_2D_TP = False
 
     # --- Indexer delta -------------------------------------------------------------------------
     INDEX_TOPK_PATTERN = _HY4_INDEX_PATTERN
@@ -123,6 +129,17 @@ class Hy4Config(GLM53Config):
         return ["dense"] * cls.NUM_DENSE_LAYERS + ["sparse"] * (cls.NUM_LAYERS - cls.NUM_DENSE_LAYERS)
 
 
+class Hy4TP32Config(Hy4Config):
+    """Hy4 on the SC1 TP32 / DP1 layout (#65884): the shared expert and the dense layer-0 FFN are 2D tensor parallel
+    (``TtMlp2D``; every weight sharded once over the 32 chips), not TP-only and replicated over the SP rows."""
+
+    FFN_2D_TP = True
+    # The 8x4 Galaxy mesh with the hidden over mesh axis 1 (TP 4) and the intermediate over axis 0 (SP 8). The 2D
+    # cache names carry it (tt_mlp_2d.cache_names: *_8x4_h4ax1_i8ax0), so caches from another split never load.
+    FFN_2D_MESH = (8, 4)
+    FFN_2D_HIDDEN_AXIS = 1
+
+
 # ---------------------------------------------------------------------------------------------------
 # config.json parsing
 # ---------------------------------------------------------------------------------------------------
@@ -130,6 +147,7 @@ class Hy4Config(GLM53Config):
 # config.json key -> Hy4Config constant. The TT stack sizes buffers, weight caches and the KV cache from
 # the CONSTANTS (the adapter's ``model_config``), so a checkpoint whose config.json disagrees with any of
 # these must fail at load, not produce a mis-sized model.
+
 _JSON_TO_CONSTANT = {
     "hidden_size": "EMB_SIZE",
     "num_hidden_layers": "NUM_LAYERS",

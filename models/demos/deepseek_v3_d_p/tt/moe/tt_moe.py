@@ -39,6 +39,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombine2dModule, TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatch2dModule, TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_latent_proj import TtLatentMoeProjections
+from models.demos.deepseek_v3_d_p.tt.moe.tt_mlp_2d import TtMlp2D
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, TtMoEGateConfig, TtMoEGatePrefill
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_intermediates import TtMoEIntermediates
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
@@ -86,8 +87,15 @@ class TtMoe(LightweightModule):
         latent_use_norm: bool = True,
         routed_expert_weights_dtype: ttnn.DataType = DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
         gate_bias_centered: bool = False,
+        gate_bias_fp32: bool = False,
+        shared_expert_2d_tp: bool = False,
+        shared_expert_2d_layout=None,
     ) -> bool:
         """Check if MoE cache is complete (gate + routed experts + shared expert [+ latent proj]).
+
+        ``shared_expert_2d_tp`` must match the model's (``tt_mlp_2d.ffn_2d_tp``): the 2D-TP shared expert caches
+        under other file names (``TtMlp2D``), which name the mesh layout (``shared_expert_2d_layout``, the model's
+        ``tt_mlp_2d.ffn_2d_layout``; required with ``shared_expert_2d_tp``).
 
         ``gate_bias_centered`` (MOE_GATE_BIAS_CENTERED) must match the model's, or a cache missing the
         centred gate bias reports complete.
@@ -101,13 +109,21 @@ class TtMoe(LightweightModule):
         complete and the empty placeholder is loaded as the weights.
         """
         prefix = f"layer_{layer_idx}"
-        if not TtMoEGatePrefill.check_cache_complete(cache_path, f"{prefix}.gate", bias_centered=gate_bias_centered):
+        if not TtMoEGatePrefill.check_cache_complete(
+            cache_path, f"{prefix}.gate", bias_centered=gate_bias_centered, bias_fp32=gate_bias_fp32
+        ):
             return False
         if not TtRoutedExpert.check_cache_complete(
             cache_path, f"{prefix}.routed_expert", experts_per_chip, routed_expert_weights_dtype
         ):
             return False
-        if not TtSharedExpert.check_cache_complete(cache_path, f"{prefix}.shared_expert"):
+        if shared_expert_2d_tp:
+            if shared_expert_2d_layout is None:
+                raise ValueError("shared_expert_2d_tp needs shared_expert_2d_layout: it names the cache files")
+            shared_ok = TtMlp2D.check_cache_complete(cache_path, f"{prefix}.shared_expert", shared_expert_2d_layout)
+        else:
+            shared_ok = TtSharedExpert.check_cache_complete(cache_path, f"{prefix}.shared_expert")
+        if not shared_ok:
             return False
         if use_latent_moe and not TtLatentMoeProjections.check_cache_complete(
             cache_path, f"{prefix}.latent_proj", use_norm=latent_use_norm
@@ -133,9 +149,14 @@ class TtMoe(LightweightModule):
         latent_weights: dict | None = None,
         latent_use_norm: bool = True,
         gate_bias_centered: bool = False,
+        gate_bias_fp32: bool = False,
         sp_axis: int = 0,
+        shared_expert_2d_tp: bool = False,
     ):
         """Build TTNN cache for MoE (gate + routed experts + shared expert) without device copy.
+
+        ``shared_expert_2d_tp``: cache the shared expert as ``TtMlp2D`` (hidden over the TP axis, intermediate over
+        the SP axis, no replication) instead of ``TtSharedExpert``.
 
         ``shared_hidden_dim`` defaults to ``hidden_dim``; pass it separately when the shared expert's
         intermediate differs from the routed experts' (Kimi-K3: 6144 vs 3072). Note the routed-expert
@@ -158,6 +179,7 @@ class TtMoe(LightweightModule):
                 dim=emb_dim,
                 n_routed_experts=gate_weights["weight"].shape[0],
                 bias_centered=gate_bias_centered,
+                bias_fp32=gate_bias_fp32,
             )
             gate_config.ccl_config["DISPATCH_AXIS"] = sp_axis
             gate_config.ccl_config["TP_AXIS"] = tp_axis
@@ -184,7 +206,18 @@ class TtMoe(LightweightModule):
             )
 
         # Build shared expert cache
-        if shared_expert_weights:
+        if shared_expert_weights and shared_expert_2d_tp:
+            TtMlp2D.build_ttnn_cache(
+                shared_expert_weights,
+                emb_dim=emb_dim,
+                hidden_dim=shared_hidden_dim,
+                mesh_device=mesh_device,
+                hidden_axis=tp_axis,
+                weights_dtype=shared_expert_weights_dtype,
+                cache_path=cache_path,
+                cache_name_prefix=f"layer_{layer_idx}.shared_expert",
+            )
+        elif shared_expert_weights:
             TtSharedExpert.build_ttnn_cache(
                 shared_expert_weights,
                 emb_dim,
@@ -263,7 +296,9 @@ class TtMoe(LightweightModule):
         overlap_routed_expert_with_combine: Optional[bool] = False,
         moe_transport: Optional[str] = "direct",
         gate_bias_centered: bool = False,
+        gate_bias_fp32: bool = False,
         sp_axis: int = 0,
+        shared_expert_2d_tp: bool = False,
     ):
         """
         Initialize TtMoe module.
@@ -381,6 +416,8 @@ class TtMoe(LightweightModule):
                 for the routed expert overlapped with combine.
             gate_bias_centered: cache and use the gate's correction bias mean-centred (the model config's
                 MOE_GATE_BIAS_CENTERED, see tt_moe_gate_prefill.centre_gate_bias).
+            gate_bias_fp32: keep the gate's correction bias fp32 on device (the model config's
+                MOE_GATE_BIAS_FP32, see tt_moe_gate_prefill.gate_bias_fp32).
             sp_axis: Mesh axis the dispatch groups (SP) run along; TP is the other axis. 0 (default)
                 is the 8x4 Galaxy layout; 1 puts SP on the 4-wide ring axis for the 4x4 prefill
                 stages. Dispatch / combine run on sp_axis; the gate all-reduce, shared expert, latent
@@ -441,7 +478,12 @@ class TtMoe(LightweightModule):
                     num_experts_per_tok=num_experts_per_tok,
                 )
 
-        self.overlap_shared_expert_with_dispatch = overlap_shared_expert_with_dispatch
+        # 2D-TP shared expert (TtMlp2D): its collectives run on both mesh axes, including the SP axis dispatch
+        # uses, so it runs on the full grid before dispatch instead of overlapped with it on a sub-device.
+        self.shared_expert_2d_tp = shared_expert_2d_tp
+        if shared_expert_2d_tp and overlap_shared_expert_with_dispatch:
+            logger.info("TtMoe: 2D-TP shared expert runs before dispatch, not overlapped with it")
+        self.overlap_shared_expert_with_dispatch = overlap_shared_expert_with_dispatch and not shared_expert_2d_tp
         # Optional SubDeviceTraceController (capture phase): the shared-expert/dispatch overlap's
         # sub-device load/clear go through it so the trace can be split at those boundaries instead of
         # resetting worker state mid-capture. None => load/clear the mesh device directly.
@@ -463,6 +505,7 @@ class TtMoe(LightweightModule):
             route_scale=route_scale,
             max_sp_dim=max_gate_seq_len_per_chip,
             bias_centered=gate_bias_centered,
+            bias_fp32=gate_bias_fp32,
         )
         gate_config.ccl_config["DISPATCH_AXIS"] = self.sp_axis
         gate_config.ccl_config["TP_AXIS"] = self.tp_axis
@@ -753,27 +796,46 @@ class TtMoe(LightweightModule):
             sp_axis=self.sp_axis,
         )
 
-        # Initialize shared expert (TP axis)
-        self.shared_expert = TtSharedExpert(
-            mesh_device=mesh_device,
-            # The shared expert reads the pre-projection hidden, so it stays at the full emb_dim.
-            emb_dim=emb_dim,
-            hidden_dim=self.shared_hidden_dim,
-            torch_weights=shared_expert_weights,
-            num_links=self.tp_num_links,
-            topology=self.shared_expert_topology,
-            activations_dtype=shared_expert_activations_dtype,
-            weights_dtype=shared_expert_weights_dtype,
-            weight_cache_path=weight_cache_path,
-            cache_name_prefix=f"layer_{layer_idx}.shared_expert",
-            subdevice_id=self.shared_sd_id,
-            subdevice_cores=self.shared_sd_cores,
-            activation=shared_expert_activation,
-            situ_beta=shared_expert_situ_beta,
-            situ_linear_beta=shared_expert_situ_linear_beta,
-            clamped_silu_glu_limit=shared_expert_clamped_silu_glu_limit,
-            tp_axis=self.tp_axis,
-        )
+        # Initialize shared expert: 2D TP (TtMlp2D, every weight sharded once; hidden over the TP axis, the
+        # intermediate over the SP axis) or 1D TP (TtSharedExpert, replicated over the SP axis).
+        if shared_expert_2d_tp:
+            self.shared_expert = TtMlp2D(
+                mesh_device,
+                emb_dim=emb_dim,
+                hidden_dim=self.shared_hidden_dim,
+                hidden_axis=self.tp_axis,
+                torch_weights=shared_expert_weights,
+                weights_dtype=shared_expert_weights_dtype,
+                activations_dtype=shared_expert_activations_dtype,
+                activation=shared_expert_activation,
+                clamped_silu_glu_limit=shared_expert_clamped_silu_glu_limit,
+                # Indexed by mesh axis: the gather / reduce-scatter run on the SP axis, the all-reduce on TP.
+                num_links=tuple(self.sp_num_links if a == self.sp_axis else self.tp_num_links for a in (0, 1)),
+                topology=tuple(self.sp_topology if a == self.sp_axis else self.tp_topology for a in (0, 1)),
+                weight_cache_path=weight_cache_path,
+                cache_name_prefix=f"layer_{layer_idx}.shared_expert",
+            )
+        else:
+            self.shared_expert = TtSharedExpert(
+                mesh_device=mesh_device,
+                # The shared expert reads the pre-projection hidden, so it stays at the full emb_dim.
+                emb_dim=emb_dim,
+                hidden_dim=self.shared_hidden_dim,
+                torch_weights=shared_expert_weights,
+                num_links=self.tp_num_links,
+                topology=self.shared_expert_topology,
+                activations_dtype=shared_expert_activations_dtype,
+                weights_dtype=shared_expert_weights_dtype,
+                weight_cache_path=weight_cache_path,
+                cache_name_prefix=f"layer_{layer_idx}.shared_expert",
+                subdevice_id=self.shared_sd_id,
+                subdevice_cores=self.shared_sd_cores,
+                activation=shared_expert_activation,
+                situ_beta=shared_expert_situ_beta,
+                situ_linear_beta=shared_expert_situ_linear_beta,
+                clamped_silu_glu_limit=shared_expert_clamped_silu_glu_limit,
+                tp_axis=self.tp_axis,
+            )
 
         self.latent_projections = (
             TtLatentMoeProjections(
@@ -1096,6 +1158,10 @@ class TtMoe(LightweightModule):
         # Input x is sharded: (dispatch_group_size over the SP axis, seq_len_per_chip, emb_dim over the TP axis)
         # Both shared_expert and dispatch need full emb_dim, so all-gather first
         # Only needed if there are multiple devices in the TP axis
+        #
+        # The 2D-TP shared expert (TtMlp2D) instead takes x as it arrives -- hidden over TP, tokens over SP -- and
+        # returns that layout, so it runs here, on the un-gathered x, before dispatch (not overlapped with it).
+        shared_output_2d = self.shared_expert(x) if self.shared_expert_2d_tp else None
         if self.mesh_device.shape[self.tp_axis] > 1:
             x = ttnn.experimental.all_gather_async(
                 x,
@@ -1170,7 +1236,7 @@ class TtMoe(LightweightModule):
         # ========================================
         # Shared expert expects replicated input (full emb_dim)
         # Convert x to TILE_LAYOUT for shared expert
-        shared_output = self.shared_expert(x)
+        shared_output = shared_output_2d if self.shared_expert_2d_tp else self.shared_expert(x)
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] Shared expert output shape: {shared_output.shape}")
         fold_residual = residual is not None

@@ -348,7 +348,7 @@ def test_layouts_and_heads_per_chip():
     assert dev.heads_per_chip(64) == 16  # heads over the 4-chip TP axis, with the hidden
     # TP32 is blocked until the shared stack has its placement; every blocker names its owning issue.
     assert not tp32.runnable
-    assert {issue for _, issue in tp32.blockers} == {"#65885", "#65887", "#65890", "#65892"}
+    assert {issue for _, issue in tp32.blockers} == {"#65885", "#65887", "#65892"}
 
 
 def test_layout_cache_keys_differ():
@@ -362,7 +362,7 @@ def test_resolve_layout(monkeypatch, expect_error):
     monkeypatch.delenv(hy4_layout.LAYOUT_ENV, raising=False)
     # Unset on a full Galaxy means tp32, which fails fast naming its blockers and the dev override.
     for mesh in ((4, 8, 0), (8, 4, 0)):
-        with expect_error(NotImplementedError, "tp32 .*#65885, #65887, #65890, #65892.*glm_prefill_sp8_tp4"):
+        with expect_error(NotImplementedError, "tp32 .*#65885, #65887, #65892.*glm_prefill_sp8_tp4"):
             hy4_layout.resolve_layout(*mesh, 64)
     assert hy4_layout.resolve_layout(2, 4, 0, 64) is None  # small test mesh, nothing requested
     monkeypatch.setenv(hy4_layout.LAYOUT_ENV, "tp32")

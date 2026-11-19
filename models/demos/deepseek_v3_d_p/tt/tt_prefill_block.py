@@ -21,8 +21,9 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     moe_transport_arg,
     routed_expert_combine_overlap_arg,
 )
+from models.demos.deepseek_v3_d_p.tt.moe.tt_mlp_2d import Mlp2DLayout, TtMlp2D, ffn_2d_layout, ffn_2d_tp
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, gate_bias_centered
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, gate_bias_centered, gate_bias_fp32
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import (
     DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
     ROUTED_EXPERT_ACTIVATION_BY_NAME,
@@ -56,6 +57,19 @@ def get_block_timings() -> dict[int, dict[str, list[float]]]:
 # FABRIC_2D_TORUS_Y, where only the SP axis is wrapped into a ring.
 PerAxisTopology = Tuple[ttnn.Topology, ttnn.Topology]
 TopologyArg = Union[ttnn.Topology, PerAxisTopology]
+
+
+def _check_ffn_2d_axis(model_cfg, mesh_device, tp_axis: int) -> None:
+    """A FFN_2D_TP model's 2D caches are named for its FFN_2D_MESH / FFN_2D_HIDDEN_AXIS; the block puts H on its TP
+    axis of this mesh."""
+    if not ffn_2d_tp(model_cfg):
+        return
+    want, have = ffn_2d_layout(model_cfg), Mlp2DLayout.of(mesh_device, tp_axis)
+    if want != have:
+        raise ValueError(
+            f"{model_cfg.__name__} runs its 2D FFN as {want.tag} (FFN_2D_MESH / FFN_2D_HIDDEN_AXIS), but this block "
+            f"is {have.tag} (TP axis {tp_axis})"
+        )
 
 
 class TtPrefillBlock(LightweightModule):
@@ -128,7 +142,12 @@ class TtPrefillBlock(LightweightModule):
             return False
 
         if is_dense:
-            if not TtFfn.check_cache_complete(cache_path, f"{prefix}.ffn"):
+            # FFN_2D_TP (Hy4 SC1, #65890): the dense FFN caches as TtMlp2D, under its own file names.
+            if ffn_2d_tp(model_cfg):
+                ffn_ok = TtMlp2D.check_cache_complete(cache_path, f"{prefix}.ffn", ffn_2d_layout(model_cfg))
+            else:
+                ffn_ok = TtFfn.check_cache_complete(cache_path, f"{prefix}.ffn")
+            if not ffn_ok:
                 return False
         else:
             if not TtMoe.check_cache_complete(
@@ -140,6 +159,9 @@ class TtPrefillBlock(LightweightModule):
                 latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True),
                 routed_expert_weights_dtype=routed_expert_weights_dtype,
                 gate_bias_centered=gate_bias_centered(model_cfg),
+                gate_bias_fp32=gate_bias_fp32(model_cfg),
+                shared_expert_2d_tp=ffn_2d_tp(model_cfg),
+                shared_expert_2d_layout=ffn_2d_layout(model_cfg) if ffn_2d_tp(model_cfg) else None,
             ):
                 return False
 
@@ -242,6 +264,7 @@ class TtPrefillBlock(LightweightModule):
         )
 
         # Build FFN or MoE cache
+        _check_ffn_2d_axis(model_cfg, mesh_device, tp_axis)
         if is_moe:
             # Use static method (no device copy!)
             mesh_config = extract_mesh_config(mesh_device, sp_axis)
@@ -275,7 +298,21 @@ class TtPrefillBlock(LightweightModule):
                 latent_weights=state_dict.get("latent_weights"),
                 latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True),
                 gate_bias_centered=gate_bias_centered(model_cfg),
+                gate_bias_fp32=gate_bias_fp32(model_cfg),
                 sp_axis=sp_axis,
+                shared_expert_2d_tp=ffn_2d_tp(model_cfg),
+            )
+        elif ffn_2d_tp(model_cfg):
+            # 2D TP: hidden over the TP axis (where the residual keeps it), intermediate over the SP axis.
+            TtMlp2D.build_ttnn_cache(
+                state_dict.get("ffn_weights"),
+                emb_dim=emb_dim,
+                hidden_dim=config.intermediate_size,
+                mesh_device=mesh_device,
+                hidden_axis=tp_axis,
+                weights_dtype=ttnn.bfloat8_b,
+                cache_path=cache_path,
+                cache_name_prefix=f"layer_{layer_idx}.ffn",
             )
         else:
             # Use static method (no device copy!)
@@ -348,6 +385,7 @@ class TtPrefillBlock(LightweightModule):
         tp_topology = topology[tp_axis] if isinstance(topology, tuple) else topology
         self.topology = tp_topology  # forward()'s dense-FFN all-gather is on the TP axis
         self.tp_axis = tp_axis
+        _check_ffn_2d_axis(model_cfg, mesh_device, tp_axis)
         self.kv_only = kv_only
         self.is_moe = layer_idx >= model_cfg.NUM_DENSE_LAYERS
 
@@ -476,23 +514,41 @@ class TtPrefillBlock(LightweightModule):
             _dense_ffn_kwargs = {}
             if getattr(config, "intermediate_size", None):
                 _dense_ffn_kwargs["hidden_dim"] = config.intermediate_size
-            self.ffn = TtFfn(
-                mesh_device=mesh_device,
-                torch_weights=state_dict.get("ffn_weights"),  # None if cache exists
-                emb_dim=emb_dim,
-                num_links=num_links,
-                topology=tp_topology,  # dense FFN all-gather/reduce-scatter run on the TP axis
-                tp_axis=tp_axis,
-                weight_cache_path=weight_cache_path,
-                cache_name_prefix=f"layer_{layer_idx}.ffn",
-                # Same rule as the MoE shared expert in _build_moe: only Kimi-K3 names a
-                # non-SiLU activation here (#53625).
-                activation=getattr(model_cfg, "DENSE_FFN_ACTIVATION", ACTIVATION_SILU),
-                situ_beta=getattr(model_cfg, "ACTIVATION_SITU_BETA", None),
-                situ_linear_beta=getattr(model_cfg, "ACTIVATION_SITU_LINEAR_BETA", None),
-                clamped_silu_glu_limit=getattr(model_cfg, "SWIGLU_LIMIT", None),
-                **_dense_ffn_kwargs,
-            )
+            self.ffn_2d_tp = ffn_2d_tp(model_cfg)
+            if self.ffn_2d_tp:
+                # FFN_2D_TP (Hy4 SC1, #65890): every weight sharded once; takes the block's [S/sp, H/tp] layout
+                # as is (no TP all-gather in _dense_ffn_path) and returns it.
+                self.ffn = TtMlp2D(
+                    mesh_device,
+                    emb_dim=emb_dim,
+                    hidden_dim=config.intermediate_size,
+                    hidden_axis=tp_axis,
+                    torch_weights=state_dict.get("ffn_weights"),
+                    activation=getattr(model_cfg, "DENSE_FFN_ACTIVATION", ACTIVATION_SILU),
+                    clamped_silu_glu_limit=getattr(model_cfg, "SWIGLU_LIMIT", None),
+                    num_links=num_links,
+                    topology=topology,
+                    weight_cache_path=weight_cache_path,
+                    cache_name_prefix=f"layer_{layer_idx}.ffn",
+                )
+            else:
+                self.ffn = TtFfn(
+                    mesh_device=mesh_device,
+                    torch_weights=state_dict.get("ffn_weights"),  # None if cache exists
+                    emb_dim=emb_dim,
+                    num_links=num_links,
+                    topology=tp_topology,  # dense FFN all-gather/reduce-scatter run on the TP axis
+                    tp_axis=tp_axis,
+                    weight_cache_path=weight_cache_path,
+                    cache_name_prefix=f"layer_{layer_idx}.ffn",
+                    # Same rule as the MoE shared expert in _build_moe: only Kimi-K3 names a
+                    # non-SiLU activation here (#53625).
+                    activation=getattr(model_cfg, "DENSE_FFN_ACTIVATION", ACTIVATION_SILU),
+                    situ_beta=getattr(model_cfg, "ACTIVATION_SITU_BETA", None),
+                    situ_linear_beta=getattr(model_cfg, "ACTIVATION_SITU_LINEAR_BETA", None),
+                    clamped_silu_glu_limit=getattr(model_cfg, "SWIGLU_LIMIT", None),
+                    **_dense_ffn_kwargs,
+                )
 
     @staticmethod
     def _build_moe(
@@ -588,6 +644,7 @@ class TtPrefillBlock(LightweightModule):
             gate_score_func=getattr(model_cfg, "SCORE_FUNC", None),
             gate_weights=state_dict.get("gate_weights"),  # None if cache exists
             gate_bias_centered=gate_bias_centered(model_cfg),
+            gate_bias_fp32=gate_bias_fp32(model_cfg),
             # DeepSeek-V4 hash layers route via a frozen tid2eid[input_ids] table; None elsewhere.
             gate_hash_table=state_dict.get("hash_table"),
             gate_fallback_mode=gate_fallback_mode,
@@ -600,6 +657,7 @@ class TtPrefillBlock(LightweightModule):
             routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
             is_balanced=is_balanced,
             sp_axis=sp_axis,
+            shared_expert_2d_tp=ffn_2d_tp(model_cfg),
         )
 
     def set_trace_controller(self, controller):
@@ -871,7 +929,10 @@ class TtPrefillBlock(LightweightModule):
         return moe_out
 
     def _dense_ffn_path(self, ffn_norm_out: ttnn.Tensor) -> ttnn.Tensor:
-        """Dense FFN path: all_gather to get full emb_dim → TtFfn (does reduce_scatter internally)."""
+        """Dense FFN path: all_gather to get full emb_dim → TtFfn (does reduce_scatter internally). The 2D-TP FFN
+        (TtMlp2D) takes the block's [S/sp, H/tp] layout as is and returns it."""
+        if getattr(self, "ffn_2d_tp", False):
+            return self.ffn(ffn_norm_out)
         if self.mesh_device.shape[self.tp_axis] > 1:
             gathered = ttnn.all_gather(
                 ffn_norm_out,
