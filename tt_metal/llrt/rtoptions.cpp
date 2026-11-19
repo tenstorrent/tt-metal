@@ -225,6 +225,7 @@ enum class EnvVarID {
     TT_METAL_DPRINT_FILE,                           // Debug print output file
     TT_METAL_DPRINT_ONE_FILE_PER_RISC,              // Separate file per RISC-V processor
     TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC,       // Prepend device/core/RISC info
+    TT_METAL_DPRINT_TAG_FIRMWARE,                   // Tag the lines that firmware printed
     TT_METAL_DEVICE_PRINT_DISPATCH_STALL_US,        // dispatch_s DevicePrintDispatch stall-detection period (us)
     TT_METAL_DEVICE_PRINT_DISPATCH_FULL_US,         // dispatch_s DevicePrintDispatch full-dispatch period (us)
     TT_METAL_DEVICE_PRINT_DISPATCH_L1_CACHE_BYTES,  // dispatch_s DevicePrintDispatch L1 cache size override (bytes)
@@ -1865,6 +1866,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             // Handled by ParseFeatureEnv() - this is for documentation
             break;
 
+        // TT_METAL_DPRINT_TAG_FIRMWARE
+        // Starts each line that firmware printed, rather than a kernel, with "[FW] ". Set to '1' to enable.
+        // Default: false (no tag)
+        // Usage: export TT_METAL_DPRINT_TAG_FIRMWARE=1
+        case EnvVarID::TT_METAL_DPRINT_TAG_FIRMWARE:
+            // Handled by ParseFeatureEnv() - this is for documentation
+            break;
+
         // TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS
         // Enables lightweight kernel assertions. If watcher asserts are enabled, they take precedence.
         // Default: false (disabled)
@@ -2323,6 +2332,7 @@ void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_meta
     ParseFeatureFileName(feature, feature_env_prefix + "_FILE");
     ParseFeatureOneFilePerRisc(feature, feature_env_prefix + "_ONE_FILE_PER_RISC");
     ParseFeaturePrependDeviceCoreRisc(feature, feature_env_prefix + "_PREPEND_DEVICE_CORE_RISC");
+    ParseFeatureTagFirmware(feature, feature_env_prefix + "_TAG_FIRMWARE");
 
     // Set feature enabled if the user asked for any feature cores, chips, or nodes
     feature_targets[feature].enabled = false;
@@ -2564,6 +2574,11 @@ void RunTimeOptions::ParseFeaturePrependDeviceCoreRisc(RunTimeDebugFeatures feat
     char* env_var_str = std::getenv(env_var.c_str());
     feature_targets[feature].prepend_device_core_risc =
         (env_var_str != nullptr) ? (strcmp(env_var_str, "1") == 0) : true;
+}
+
+void RunTimeOptions::ParseFeatureTagFirmware(RunTimeDebugFeatures feature, const std::string& env_var) {
+    char* env_var_str = std::getenv(env_var.c_str());
+    feature_targets[feature].tag_firmware = (env_var_str != nullptr) && (strcmp(env_var_str, "1") == 0);
 }
 
 std::string RunTimeOptions::get_watcher_hash() const {

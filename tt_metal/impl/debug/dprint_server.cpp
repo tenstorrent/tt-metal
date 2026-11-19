@@ -263,6 +263,7 @@ private:
         std::string kernel_elf_path;
         std::shared_ptr<DevicePrintParser> kernel_elf_parser;
         std::string message_buffer;
+        std::string firmware_message_buffer;
         std::optional<std::string> line_prefix;
         int last_loaded_kernel_id = -1;
         bool warned_missing_parser = false;
@@ -488,8 +489,9 @@ void DPrintServer::Impl::print_buffer_data(
                 auto formatted_message =
                     elf_parser->format_message(header->info_id, payload_bytes, format_message_buffer);
                 if (!formatted_message.empty()) {
-                    // Append onto any buffered partial line and work in message_buffer;
-                    std::string& buffer = risc_data.message_buffer;
+                    // Append onto any buffered partial line of the same source (kernel or firmware) and work there;
+                    std::string& buffer =
+                        header->is_kernel ? risc_data.message_buffer : risc_data.firmware_message_buffer;
                     buffer.append(formatted_message);
 
                     // DEVICE_PRINT will output '\r' when it wants to open a new line without
@@ -522,6 +524,10 @@ void DPrintServer::Impl::print_buffer_data(
                             risc_data.line_prefix = line_prefix;
                         } else {
                             line_prefix = risc_data.line_prefix.value();
+                        }
+                        if (!header->is_kernel &&
+                            env_.get_rtoptions().get_feature_tag_firmware(tt::llrt::RunTimeDebugFeatureDprint)) {
+                            line_prefix.insert(0, DPrintServer::kFirmwareLineTag);
                         }
 
                         // Are we printing the whole string, or we need to split it into multiple lines because of
@@ -1368,6 +1374,7 @@ void DPrintServer::Impl::reset_for_new_run() {
     // Reset per-risc decode state.
     for (auto& [risc_key, risc_data] : risc_data_) {
         risc_data.message_buffer.clear();
+        risc_data.firmware_message_buffer.clear();
         risc_data.line_prefix.reset();
         risc_data.kernel_elf_path.clear();
         risc_data.kernel_elf_parser.reset();

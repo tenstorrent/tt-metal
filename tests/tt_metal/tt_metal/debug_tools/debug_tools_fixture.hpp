@@ -312,6 +312,7 @@ protected:
 
         rtoptions.set_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint, true);
         rtoptions.set_feature_prepend_device_core_risc(tt::llrt::RunTimeDebugFeatureDprint, false);
+        rtoptions.set_feature_tag_firmware(tt::llrt::RunTimeDebugFeatureDprint, true);
         rtoptions.set_feature_all_cores(
             tt::llrt::RunTimeDebugFeatureDprint, CoreType::WORKER, tt::llrt::RunTimeDebugClassWorker);
         rtoptions.set_feature_all_cores(

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <tt-metalium/host_api.hpp>
+#include <impl/debug/dprint_server.hpp>
 #include "llrt.hpp"
 #include <fmt/format.h>
 
@@ -42,6 +43,17 @@ inline void DumpFile(const std::string& file_name) {
     while (getline(log_file, line)) {
         log_info(tt::LogTest, "{}", line);
     }
+}
+
+// getline for the checks below: skips the lines that firmware printed, which the DPRINT server tags for
+// DevicePrintFixture, so that the checks see only what kernels printed. DumpFile shows every line.
+inline bool GetLineSkippingFirmware(std::istream& stream, std::string& line) {
+    while (std::getline(stream, line)) {
+        if (!line.starts_with(tt::tt_metal::DPrintServer::kFirmwareLineTag)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 std::string_view::size_type FloatingGlobEndsAt(std::string_view haystack, std::string_view needle, unsigned globs);
@@ -155,7 +167,7 @@ inline bool FileContainsAllStrings(const std::string& file_name, const std::vect
         }
 
         std::string line;
-        if (!getline(log_file, line)) {
+        if (!GetLineSkippingFirmware(log_file, line)) {
             break;
         }
 
@@ -197,7 +209,7 @@ inline bool FileContainsNoneOfStrings(const std::string& file_name, const std::v
     }
 
     std::string line;
-    while (getline(log_file, line)) {
+    while (GetLineSkippingFirmware(log_file, line)) {
         for (const auto& forbidden : must_not_contain) {
             if (StringContainsGlob(line, forbidden)) {
                 log_info(
@@ -235,7 +247,7 @@ inline bool FileContainsAllStringsInOrder(const std::string& file_name, const st
         }
 
         std::string line;
-        if (!getline(log_file, line)) {
+        if (!GetLineSkippingFirmware(log_file, line)) {
             break;
         }
 
@@ -300,7 +312,7 @@ inline bool FilesMatchesString(const std::string& file_name, const std::string& 
     std::string line_a, line_b;
     int line_num = 0;
     for (;;) {
-        const bool has_line_a = static_cast<bool>(getline(file, line_a));
+        const bool has_line_a = GetLineSkippingFirmware(file, line_a);
         const bool has_line_b = static_cast<bool>(getline(expect_stream, line_b));
         if (!has_line_a && !has_line_b) {
             // If no checks failed, then the file matches expected.
@@ -394,7 +406,7 @@ inline std::map<std::string, std::vector<std::string>> ReadLinesPerRisc(const st
         return lines_per_risc;
     }
     std::string line;
-    while (getline(file, line)) {
+    while (GetLineSkippingFirmware(file, line)) {
         const auto [prefix, text] = SplitDevicePrintPrefix(line);
         lines_per_risc[std::string(prefix)].emplace_back(text);
     }

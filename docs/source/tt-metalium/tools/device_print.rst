@@ -50,6 +50,7 @@ start at (0,0).
     export TT_METAL_DPRINT_FILE=log.txt                 # optional: write to this file instead of stdout
     export TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC=0   # optional: on by default; starts each line with <device>:<x>-<y>:<RISC>:
     export TT_METAL_DPRINT_ONE_FILE_PER_RISC=1          # optional: one file per RISC (see Output); ignores TT_METAL_DPRINT_FILE, turns the prefix off
+    export TT_METAL_DPRINT_TAG_FIRMWARE=1               # optional: off by default; starts each line that firmware printed with [FW]
 
 - Each core list selects cores of its own type, and setting any of them turns DPRINT on. ``all`` selects every
   core of that type, ``worker`` every core that doesn't run fast-dispatch kernels, and ``dispatch`` the cores that
@@ -398,14 +399,16 @@ sanitizer uses this in its reports.
 Output
 ------
 
-- Each RISC's text is kept apart: lines from different RISCs never mix within a line, but the order of lines from
-  different RISCs is not defined.
+- Each RISC's text is kept apart, and so are its kernel's and its firmware's: lines from different RISCs, or from a
+  RISC's kernel and firmware, never mix within a line, but the order of lines from different RISCs is not defined.
 - With the prefix on (the default), each line starts with ``<device>:<x>-<y>:<RISC>:`` and a space, in logical
   core coordinates. For example, ``DPRINT("Hello\n")`` on TRISC0 of core (1,2) on device 0 prints
   ``0:1-2:TR0: Hello``. The RISC names are ``BR``, ``NC``, ``TR0``-``TR2`` and ``DR``. An Ethernet RISC is ``ER``
   on a core that runs one ERISC (Wormhole, and Blackhole active Ethernet cores in single-ERISC mode), and
   ``ER0``/``ER1`` on a core that runs two. On Quasar the names are ``DM0``-``DM7`` and ``N0TR0``-``N3TR3`` on Tensix
   cores, and ``DE-DM0``-``DE-DM7`` on dispatch-engine cores.
+- With ``TT_METAL_DPRINT_TAG_FIRMWARE=1``, each line that firmware printed starts with ``[FW]`` and a space, ahead
+  of the prefix: ``[FW] 0:1-2:DM0: <text>``.
 - With ``TT_METAL_DPRINT_ONE_FILE_PER_RISC``, each RISC writes
   ``generated/dprint/device-<id>_<core type>-core-<x>-<y>_<RISC>.txt`` under ``TT_METAL_LOGS_PATH`` (the current
   directory if that isn't set). The core type is ``worker``, ``ethernet``, ``DRAM`` or ``dispatch``. The RISC name

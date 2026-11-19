@@ -101,6 +101,7 @@ protected:
         rtoptions.set_feature_mesh_coords(kFeature, {});
         rtoptions.set_feature_chip_ids(kFeature, {});
         rtoptions.set_feature_prepend_device_core_risc(kFeature, true);
+        rtoptions.set_feature_tag_firmware(kFeature, false);
         rtoptions.set_feature_file_name(kFeature, dprint_file_name);
         rtoptions.set_test_mode_enabled(true);
         rtoptions.set_watcher_enabled(false);

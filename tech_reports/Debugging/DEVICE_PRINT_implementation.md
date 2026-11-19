@@ -208,8 +208,9 @@ The print regions that the memory map gives DPRINT:
   message with the RISC's firmware ELF, whose path the build environment gives.
 - `DevicePrintParser` (`dprint_parser.cpp`) reads the two sections from that ELF, parses the rewritten formats, reads
   enum names and call stacks from DWARF, and formats each value with fmt.
-- Per RISC, the server assembles lines, holds `\r` blocks until the next `\n`, adds the prefix, and writes to stdout,
-  a file or one file per RISC.
+- Per RISC, the server assembles lines, the kernel's and the firmware's apart, holds `\r` blocks until the next `\n`,
+  adds the prefix (and `[FW] ` ahead of it on a firmware line with `TT_METAL_DPRINT_TAG_FIRMWARE=1`, which the
+  DEVICE_PRINT tests turn on to check kernel lines only), and writes to stdout, a file or one file per RISC.
 
 ## 5. Library
 
