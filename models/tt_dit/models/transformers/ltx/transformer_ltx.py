@@ -30,7 +30,6 @@ from .quant_config import LtxQuantProfile
 
 
 def _fuse_norm_adaln_enabled() -> bool:
-    """LTX_FUSE_NORM_ADALN=1 opts in to the fused RMSNorm+AdaLN route; off by default."""
     return os.environ.get("LTX_FUSE_NORM_ADALN", "0") in ("1", "true", "True")
 
 
@@ -150,8 +149,7 @@ class LTXTransformerBlock(Module):
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
-        # Construction-time opt-in: captured graphs cannot switch arithmetic
-        # routes after creation. Shared A<->V normalization stays unfused below.
+        # Read once at construction: captured traces cannot switch routes afterwards.
         self._fuse_norm_adaln = _fuse_norm_adaln_enabled()
 
         rms_norm_kwargs = {

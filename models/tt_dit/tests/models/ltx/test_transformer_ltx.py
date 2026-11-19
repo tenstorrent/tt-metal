@@ -20,11 +20,13 @@ from safetensors.torch import load_file
 from tracy import signpost
 
 import ttnn
+from models.tt_dit.layers.normalization import DistributedRMSNorm
 from models.tt_dit.models.transformers.ltx.quant_config import LtxQuantProfile
 from models.tt_dit.models.transformers.ltx.rope_ltx import LTXRopeType, precompute_freqs_cis
 from models.tt_dit.models.transformers.ltx.transformer_ltx import (
     LTXTransformerBlock,
     LTXTransformerModel,
+    _norm_adaln,
     build_audio_masks,
     build_video_pad_mask,
 )
@@ -2112,3 +2114,28 @@ def test_ltx_transformer_block_trace_perf(
 
     tracer.release_trace()
     del tt_block
+
+
+@pytest.mark.parametrize("mesh_device, device_params", [((1, 1), {"fabric_config": None})], indirect=True)
+def test_norm_adaln_fused_matches_unfused(mesh_device):
+    """LTX_FUSE_NORM_ADALN=1 output matches the default norm-then-addcmul path."""
+    norm = DistributedRMSNorm(
+        embedding_dim=DIM,
+        norm_eps=1e-6,
+        norm_elementwise_affine=False,
+        bias=False,
+        mesh_axis=0,
+        mesh_device=mesh_device,
+        ccl_manager=CCLManager(mesh_device=mesh_device, topology=ttnn.Topology.Linear),
+    )
+    torch.manual_seed(0)
+    x, shift, scale_p1 = (
+        bf16_tensor(torch.randn(shape), device=mesh_device)
+        for shape in [(1, 1, 256, DIM), (1, 1, 1, DIM), (1, 1, 1, DIM)]
+    )
+
+    fused = _norm_adaln(norm, x, shift, scale_p1, fuse=True)
+    unfused = _norm_adaln(norm, x, shift, scale_p1, fuse=False)
+
+    to_torch = lambda t: ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))  # noqa: E731
+    assert_quality(to_torch(unfused), to_torch(fused), pcc=0.9999)

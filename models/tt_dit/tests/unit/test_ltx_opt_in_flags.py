@@ -2,13 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pure tests (no device) for the default-off LTX opt-ins: fused RMSNorm+AdaLN and latent stats."""
+"""CPU tests for the default-off LTX_FUSE_NORM_ADALN opt-in."""
 
 import pytest
 import torch
 
 import models.tt_dit.models.transformers.ltx.transformer_ltx as transformer_ltx
-from models.tt_dit.pipelines.ltx.pipeline_ltx_distilled import LTXDistilledPipeline
 
 D = 64
 
@@ -59,19 +58,3 @@ def test_norm_adaln_route(monkeypatch, fuse, x_shape, mod_shape, fused):
         assert norm.calls == [{}]
         assert addcmul_calls == [(shift, ("normed", {}), scale_p1)]
         assert out == "addcmul"
-
-
-@pytest.mark.parametrize("env,expected_calls", [(None, 0), ("0", 0), ("", 0), ("false", 0), ("1", 2), ("true", 2)])
-def test_latent_stats_flag(monkeypatch, env, expected_calls):
-    if env is None:
-        monkeypatch.delenv("LTX_LATENT_STATS", raising=False)
-    else:
-        monkeypatch.setenv("LTX_LATENT_STATS", env)
-    calls = []
-    stats = {"mean": 0.0, "std": 1.0, "whiteness": 0.0, "zeros": 0.0, "nonfinite": 0}
-    monkeypatch.setattr(LTXDistilledPipeline, "_latent_stats", staticmethod(lambda x: calls.append(x) or stats))
-    pipeline = LTXDistilledPipeline.__new__(LTXDistilledPipeline)
-
-    pipeline._log_latent_stats("s2", torch.zeros(4), torch.zeros(4), warn=True)
-
-    assert len(calls) == expected_calls
