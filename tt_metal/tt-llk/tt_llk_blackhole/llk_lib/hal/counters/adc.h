@@ -15,8 +15,8 @@
 
 #include "../utils/gpr.h"
 #include "../utils/helpers.h"
+#include "../utils/validate.h"
 #include "ckernel.h"
-#include "llk_assert.h"
 
 /** @brief Address counters for unpackers and packers on the issuing Tensix thread. */
 namespace hal::counters::adc
@@ -258,30 +258,6 @@ inline __attribute__((always_inline)) constexpr bool is_valid(const AddrCounter&
 }
 
 /**
- * @brief Reject an invalid constant expression or diagnose an invalid runtime request.
- *
- * @param valid: Condition required by the descriptor or instruction encoding.
- * @note False makes constant evaluation fail. Runtime checking uses LLK_ASSERT and is omitted
- *       when LLK assertions are disabled; callers must still satisfy the condition.
- */
-inline __attribute__((always_inline)) constexpr void require(const bool valid)
-{
-    if (!valid)
-    {
-        if (__builtin_is_constant_evaluated())
-        {
-            __builtin_trap();
-        }
-        else
-        {
-            // Keep assertion assembly outside the C++17 constexpr body. Valid constants never
-            // enter this path, so operation() can fold even when runtime assertions are enabled.
-            [valid] { LLK_ASSERT(valid, "invalid address-counter descriptor or value outside the selected instruction's field width"); }();
-        }
-    }
-}
-
-/**
  * @brief Encode a full-width assignment to one counter with SETADC.
  *
  * @param clients: Destination client bitmask.
@@ -297,7 +273,8 @@ inline __attribute__((always_inline)) constexpr std::uint32_t single(
     const auto dimension = static_cast<std::uint32_t>((zw ? 2 : 0) + index % 2);
     // SETADC's top two operand bits select a thread; Y/Z/W storage is narrower still.
     const auto value_max = dimension == 0 ? SingleXCounterValueMax : SingleYZWCounterValueMax;
-    require(value <= value_max && TT_SETADC_VALID(clients, channel, dimension, value));
+    hal::detail::require(
+        value <= value_max && TT_SETADC_VALID(clients, channel, dimension, value), "SETADC value must be in [0, 65535] for X or [0, 8191] for Y/Z/W");
     return TT_OP_SETADC(clients, channel, dimension, value);
 }
 
@@ -312,7 +289,8 @@ inline __attribute__((always_inline)) constexpr std::uint32_t single(
 inline __attribute__((always_inline)) constexpr std::uint32_t xx(const std::uint8_t clients, const Group& group)
 {
     // SETADCXX takes Channel1 first, then Channel0.
-    require(group.value(2) <= DualXCounterValueMax && TT_SETADCXX_VALID(clients, group.value(2), group.value(0)));
+    hal::detail::require(
+        group.value(2) <= DualXCounterValueMax && TT_SETADCXX_VALID(clients, group.value(2), group.value(0)), "SETADCXX X values must be in [0, 1023]");
     return TT_OP_SETADCXX(clients, group.value(2), group.value(0));
 }
 
@@ -335,7 +313,7 @@ inline __attribute__((always_inline)) constexpr std::uint32_t packed(const std::
     const auto d    = group.value(3);
     const auto mask = group.mask();
     // All counter values are three bits. Higher bits of the final slot encode a thread override.
-    require(d <= PackedCounterValueMax && TT_SETADCXY_VALID(clients, d, c, b, a, mask));
+    hal::detail::require(d <= PackedCounterValueMax && TT_SETADCXY_VALID(clients, d, c, b, a, mask), "packed address-counter values must be in [0, 7]");
     if (action == Action::Set)
     {
         return zw ? TT_OP_SETADCZW(clients, d, c, b, a, mask) : TT_OP_SETADCXY(clients, d, c, b, a, mask);
@@ -484,7 +462,7 @@ constexpr Sequence plan_group(const std::uint8_t clients, const bool zw, const A
  */
 constexpr Sequence plan(const AddrCounter& descriptor)
 {
-    require(is_valid(descriptor));
+    hal::detail::require(is_valid(descriptor), "address-counter descriptor requires valid clients, an action, and at least one field");
     const Group xy {{descriptor.channel0.x, descriptor.channel0.y, descriptor.channel1.x, descriptor.channel1.y}};
     const Group zw {{descriptor.channel0.z, descriptor.channel0.w, descriptor.channel1.z, descriptor.channel1.w}};
     auto result = plan_group(descriptor.clients, false, descriptor.action, xy);
@@ -539,7 +517,7 @@ inline __attribute__((always_inline)) void emit_runtime(const std::uint8_t clien
 inline constexpr __attribute__((always_inline)) std::uint32_t AddrCounter::operation() const
 {
     const auto sequence = detail::plan(*this);
-    detail::require(sequence.count == 1);
+    hal::detail::require(sequence.count == 1, "AddrCounter::operation() requires an update that encodes as one instruction; issue it with set()");
     return sequence.words[0];
 }
 
@@ -571,7 +549,7 @@ inline __attribute__((always_inline)) void set()
  */
 inline __attribute__((always_inline)) void set(const AddrCounter descriptor)
 {
-    detail::require(detail::is_valid(descriptor));
+    hal::detail::require(detail::is_valid(descriptor), "address-counter descriptor requires valid clients, an action, and at least one field");
     const detail::Group xy {{descriptor.channel0.x, descriptor.channel0.y, descriptor.channel1.x, descriptor.channel1.y}};
     const detail::Group zw {{descriptor.channel0.z, descriptor.channel0.w, descriptor.channel1.z, descriptor.channel1.w}};
     detail::emit_runtime<false>(descriptor.clients, descriptor.action, xy);
