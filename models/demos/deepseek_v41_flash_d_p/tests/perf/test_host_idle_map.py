@@ -38,6 +38,7 @@ from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
 S = spec()
 BATCH_SHARED = True
 BATCH_ITEM_VARS = ("IDLE_POS", "IDLE_RUNS", "IDLE_SWEEP")
+BATCH_POS_VARS = ("IDLE_POS",)  # F288: the plan's model is loaded for the furthest point (core/batch.hints)
 BATCH_LAYERS = "executed"  # F285: a performance measurement: the layers it executes, in the resident runner  # F279: per-run, not the model's configuration
 
 

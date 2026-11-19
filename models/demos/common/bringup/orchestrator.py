@@ -1892,15 +1892,37 @@ class Orchestrator:
             tests = [x for x in tests if B.DETERMINISM_TEST not in x]
         else:
             det = []  # a gate without the model check (no model-level test), or one naming the model's own test
-        items = det + [
-            (Path(next((w for w in c.split() if w.endswith(".py")), f"test{i}")).stem, "test", c, {})
-            for i, c in enumerate(tests)
-        ]
+        items = det + [(n, "test", c, {}) for n, c in self.ab_test_names(tests)]
         ladder = f"scripts/run_safe_pytest.sh --no-precompile --run-all {LADDER_TEST}"
         items += [(r, "ladder", ladder, {"BRINGUP_RUNG": r}) for r in self.ab_rungs(task)]
         prof = " && ".join(re.sub(r"\bBRINGUP_PROFILE_OPS=\S+\s*", "", x) for x in segs if "test_profile.py" in x)
         items += ([("profile", "profile", prof, {})] if prof else []) + self.ab_position_items(task)
         return self.ab_timing_only(items)
+
+    @staticmethod
+    def ab_test_names(tests: list[str]) -> list[tuple[str, str]]:
+        """(name, command) of each frozen test segment of the gate: the test file's stem, and when several segments run
+        the same file (F288, P.84: two test_skip_positions units, one a text) the segment's own variables after it
+        (``test_skip_positions__BRINGUP_POS_TOKENS-agentic``), so every unit is an A/B item of its own on both sides."""
+        stems = [Path(next((w for w in c.split() if w.endswith(".py")), f"test{i}")).stem for i, c in enumerate(tests)]
+
+        def prefix(c):
+            m = B.SAFE_RUN.match(c.strip())
+            return dict(w.split("=", 1) for w in (m.group(1).split() if m else []) if "=" in w)
+
+        envs = [prefix(c) for c in tests]
+        out = []
+        for i, (stem, c) in enumerate(zip(stems, tests)):
+            name = stem
+            same = [envs[j] for j, st in enumerate(stems) if st == stem]
+            if len(same) > 1:  # the variables these units differ in (their order in the gate's command)
+                diff = [k for k in envs[i] if k != "BRINGUP_TASK" and len({e.get(k) for e in same}) > 1]
+                tag = "__".join(re.sub(r"[^A-Za-z0-9_.-]", "-", f"{k}-{envs[i][k]}") for k in diff) or str(i)
+                name = f"{stem}__{tag}"
+            while name in {n for n, _ in out}:
+                name = f"{name}.{i}"
+            out.append((name, c))
+        return out
 
     def ab_timing_only(self, items: list) -> list:
         """F285 (OWNER 2026-11-19: "accuracy loads the whole model; performance does not"): while a resident runner

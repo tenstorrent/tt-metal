@@ -422,6 +422,12 @@ class Server:
             return self.restart(req, [reloaded["restart"]])
         plan_path = Path(req["plan"])
         plan = json.loads(plan_path.read_text())
+        # F288 (P.84, 2026-11-19: restarts with "switches [] differ"): a plan's model key is computed over that plan's
+        # own variable names (core/batch.model_key), so two requests of the same model carried different keys. Here the
+        # held model is compared on what it was loaded with (testing/batch.shared_model: switch values, layers, seq,
+        # LM head, config): the key is the runner's one
+        for e in plan["entries"]:
+            e["key"] = "resident"
         only = req.get("only")
         run_path = plan_path
         if only:  # F269: the runs an earlier process left for this one, in a plan of their own; results merged

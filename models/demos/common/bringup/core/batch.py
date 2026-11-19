@@ -103,6 +103,10 @@ ITEM_VARS = {
 # positions / text / chunk count it measures; the model does not read them) with a module-level line
 # ``BATCH_ITEM_VARS = ("SKIP_POS", ...)``; runs differing only in those share one process. Collected by ``parse``.
 ITEM_MARK = re.compile(r"^BATCH_ITEM_VARS\s*=\s*\(([^)]*)\)", re.M)
+# F288 (P.84: a process loaded for 770048 then restarted for 1024000): a position test names the variables holding
+# the chunk starts it measures (comma-separated) with ``BATCH_POS_VARS = ("SKIP_POS",)``; a plan's model is loaded
+# for the furthest of them (``hints``), never past deploy.seq (where such a test stops itself)
+POS_MARK = re.compile(r"^BATCH_POS_VARS\s*=\s*\(([^)]*)\)", re.M)
 DECLARED_ITEM_VARS: set = set()
 SAFE_RUN = re.compile(r"^((?:\w+=\S*\s+)*)scripts/run_safe_pytest\.sh\s+(.+)$", re.S)
 ASSIGN = re.compile(r"^(\w+)=(\S*)$")
@@ -141,6 +145,15 @@ def unit_class(runs: list[dict] | None) -> str | None:
     if not runs:
         return None
     return "executed" if all(layer_class(t) == "executed" for r in runs for t in r["args"]) else "full"
+
+
+def declared_pos_vars(test: str, repo: Path | None = None) -> set:
+    """F288: the variables a model test file names as its chunk starts (``BATCH_POS_VARS = (...)``)."""
+    try:
+        m = POS_MARK.search(((repo or _REPO) / test.split("::")[0]).read_text(errors="replace"))
+    except OSError:
+        return set()
+    return set(re.findall(r"[\"']([A-Z0-9_]+)[\"']", m.group(1))) if m else set()
 
 
 def declared_item_vars(test: str, repo: Path | None = None) -> set:
@@ -205,9 +218,17 @@ def hints(runs: list[dict], spec) -> dict:
     if any(t.endswith(("test_ladder.py", "test_smoke.py")) for t in tests):
         out[LM_HEAD_ENV] = "1"
     pos = [int(r["env"]["BRINGUP_POS"]) for r in runs if r["env"].get("BRINGUP_POS")]
-    need = pos or any(t.endswith("test_positions.py") for t in tests)
+    deploy = int(spec.get("deploy.seq") or 0) or None
+    starts = [  # F288: the chunk starts a position test declares (BATCH_POS_VARS), as far as the deployment reaches
+        int(p)
+        for r in runs
+        for v in sorted(set().union(*(declared_pos_vars(t) for t in r["args"])))
+        for p in str(r["env"].get(v) or "").split(",")
+        if p.strip().isdigit()
+    ]
+    need = pos or starts or any(t.endswith("test_positions.py") for t in tests)
     chunk = int(spec.get("target.chunk")) if need else 0  # (only then: FIX.25's determinism run needs no hint)
-    seqs = [p + chunk for p in pos]
+    seqs = [p + chunk for p in pos] + [p + chunk for p in starts if deploy is None or p + chunk <= deploy]
     if len(runs) > 1:  # (a process of one run loads what it needs)
         seqs += [int(spec.get("target.seq", 0) or 0)]
         seqs += [int(r.get("seq", 0) or 0) for key in ("ladder", "scaled.ladder") for r in (spec.get(key) or [])]

@@ -49,7 +49,10 @@ class FP:
 
 def fake_run(calls, rc=0, deferred=(), first=1.5, hang=False):
     def run(mesh, shape, plan, path, keep=False, after_run=None):
-        calls.append({"env": dict(os.environ), "names": [e["name"] for e in plan["entries"]], "keep": keep})
+        calls.append(
+            {"env": dict(os.environ), "names": [e["name"] for e in plan["entries"]], "keep": keep,
+             "keys": [e.get("key") for e in plan["entries"]]}  # fmt: skip
+        )
         out = {"running": None, "runs": {}}
         TB.DEFERRED.clear()
         failed = []
@@ -464,3 +467,16 @@ def test_a_reply_carries_the_requests_accounting(tmp_path, monkeypatch):
     a = json.loads((d / "done" / "r1.json").read_text())["accounting"]
     assert a["ram_unaccounted_before_gib"] == 163.0 and a["ram_unaccounted_after_gib"] == 164.5
     assert a["device_opens"] == 0 and a["model_loads"] == 0 and "accounting" in R.describe({"accounting": a})
+
+
+def test_the_runner_compares_models_on_what_they_were_loaded_with_not_a_plans_key(tmp_path):
+    """F288 (P.84): two requests of one model carried different plan-local keys (core/batch.model_key over each plan's
+    own variable names), and the runner restarted with "switches [] differ"."""
+    calls = []
+    s, d = server(tmp_path, calls)
+    for i, key in enumerate(('{"DS41_MOE_REPLICAS": "off"}', '{"DS41_MOE_REPLICAS": "off", "SKIP_POS": null}')):
+        plan = tmp_path / f"p{i}.json"
+        plan.write_text(json.dumps({"entries": [{"name": "run0", "env": {}, "args": ["t.py"], "key": key}]}))
+        queue(d, plan, rid=f"r{i}")
+    assert s.serve(poll=0.01, max_idle=0.2) == "idle"
+    assert [c["keys"] for c in calls] == [["resident"], ["resident"]]

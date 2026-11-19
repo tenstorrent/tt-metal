@@ -320,3 +320,50 @@ def test_ab_sides_with_the_same_run_name_and_another_load_switch_go_to_a_new_pro
         assert "fresh process" in (tmp_path / "on.log").read_text()
     finally:
         TB.release()
+
+
+def test_ab_items_keep_every_unit_of_the_same_test_file(monkeypatch):
+    """F288 (P.84 attempt 2): two test_skip_positions units differing only in BRINGUP_POS_TOKENS were one A/B item
+    (keyed by the file's stem): each side measured a different text. Now one item a unit, the same names on both
+    sides, and both units of a side in one process (one model configuration)."""
+    from types import SimpleNamespace
+
+    from models.demos.common.bringup.orchestrator import Orchestrator
+
+    skip = "models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py"
+    a = f"BRINGUP_POS_TOKENS=agentic DS41_DECODER_SKIP=decode SKIP_POS=145408 {R} {skip}"
+    p = f"BRINGUP_POS_TOKENS=prose DS41_DECODER_SKIP=decode SKIP_POS=145408 {R} {skip}"
+    o = SimpleNamespace(
+        ab_quick=lambda t: False,
+        ab_rungs=lambda t: [],
+        ab_position_items=lambda t: [],
+        ab_timing_only=lambda items: items,
+        resident_serves=lambda: False,
+        ab_test_names=Orchestrator.ab_test_names,
+    )
+    task = {"id": "P.84", "gate": {"cmd": f"{a} && {p}"}}
+    items = [x for x in Orchestrator.ab_items(o, task) if x[1] == "test"]
+    names = [n for n, _, _, _ in items]
+    assert len(items) == 2 and len(set(names)) == 2, names
+    assert any("agentic" in n for n in names) and any("prose" in n for n in names)
+    assert names == ["test_skip_positions__BRINGUP_POS_TOKENS-agentic", "test_skip_positions__BRINGUP_POS_TOKENS-prose"]
+    assert names == [x[0] for x in Orchestrator.ab_items(o, task) if x[1] == "test"]  # (the same on both sides)
+    runs = [B.parse_all(c) for _, _, c, _ in items]
+    keys = {B.model_key(r[0]["env"], {k for rs in runs for k in rs[0]["env"]}) for r in runs}
+    assert len(keys) == 1  # one model configuration: both units in one runner request a side
+
+
+def test_a_plans_model_is_loaded_for_its_furthest_declared_position(tmp_path, monkeypatch):
+    """F288 (P.84: run0 at 770048 loaded the model, run1 at 1024000 then needed a new process)."""
+    from types import SimpleNamespace
+
+    t = tmp_path / "models/x/tests/test_pts.py"
+    t.parent.mkdir(parents=True)
+    t.write_text('BATCH_SHARED = True\nBATCH_POS_VARS = ("SKIP_POS",)\n')
+    monkeypatch.setattr(B, "_REPO", tmp_path)
+    spec = SimpleNamespace(get=lambda k, d=None: {"target.chunk": 5120, "deploy.seq": 1044480}.get(k, d))
+    runs = [
+        {"env": {"SKIP_POS": "145408,770048"}, "args": ["models/x/tests/test_pts.py"]},
+        {"env": {"SKIP_POS": "145408,1024000,2000000"}, "args": ["models/x/tests/test_pts.py"]},  # (past deploy)
+    ]
+    assert B.hints(runs, spec)[B.MAX_SEQ_ENV] == str(1024000 + 5120)
