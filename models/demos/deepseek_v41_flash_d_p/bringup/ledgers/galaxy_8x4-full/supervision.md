@@ -501,3 +501,8 @@
   restarted once for the off side (MOE_REPLICAS=off, layers 0-20) and once for the on side (MOE_REPLICAS=on is a
   load-time switch: the 13th slot is filled at load), i.e. 2 opens / 2 loads of 0-20; the accept gate's fresh full
   process later if accepted. RAM unaccounted before: 167.7 GiB.
+- 09:56 UTC P.84 A/B rerun FAILED both sides (one device open, one load of 0-20 as planned; RAM
+  unaccounted 167.3 -> 168.3 GiB): off side = the agent's moe_head kernel does not compile with replicas off
+  (routing_planner.hpp division by zero); on side = the runner refused the MOE_REPLICAS=on model instead of restarting
+  (framework bug, to the runner agent). P.84 reset to TODO for another attempt with note OV-50 (tree kept); it
+  starts when the runner fix lands.

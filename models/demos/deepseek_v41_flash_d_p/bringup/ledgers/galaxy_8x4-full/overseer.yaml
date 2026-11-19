@@ -514,6 +514,18 @@ notes:
   t: '2026-11-18T21:54:10'
   text: 'The overseer stopped attempt 1 (fix): overseer: X.6''s units all passed; the gate failed on metric names the overseer
     wrote wrong in tasks.yaml (framework/ledger), nothing to fix in code'
+- id: OV-50
+  tasks:
+  - P.84
+  status: open
+  t: '2026-11-19T09:56:49'
+  text: 'Overseer 2026-11-19 10:00: your previous attempt''s tree is kept. Its A/B failed on BOTH sides: (1) MOE_REPLICAS=off
+    (the old path!) no longer compiles: ttnn/ttnn/bringup/moe_block_ttnn/moe_head/device/kernels/routing_planner.hpp:483/498/519
+    ''division by zero [-Werror=div-by-zero]'' (a compile-time replica count 0 when replicas are off; JIT kernel build of
+    router_output_writer.cpp); off must be exactly today''s kernels (bit-identical). (2) the on side needs the runner to
+    restart with MOE_REPLICAS=on (a load-time switch): being fixed in the framework now. Run model-level checks ONLY through
+    the resident runner (resident submit), both values of MOE_REPLICAS, before you finish; op-level kernel tests through
+    the safe runner. One open per configuration.'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
