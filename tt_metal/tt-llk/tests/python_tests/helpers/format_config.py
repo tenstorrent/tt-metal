@@ -8,7 +8,6 @@ from fractions import Fraction
 from typing import List, Optional, Tuple, Union
 
 import ml_dtypes
-import numpy as np
 
 from .tile_constants import SRCS_SLICE_32B_ELEMENT_COUNT, SRCS_SLICE_ELEMENT_COUNT
 
@@ -389,9 +388,9 @@ def encode_e8m0_scale(max_abs_value, element_max_normal):
         E8M0 encoded scale (0-255), where 255 = NaN
     """
     # Handle special cases
-    if max_abs_value == 0 or np.isnan(max_abs_value):
+    if max_abs_value == 0 or math.isnan(max_abs_value):
         return 127  # Scale = 2^0 = 1 (neutral scale)
-    if np.isinf(max_abs_value):
+    if math.isinf(max_abs_value):
         return 254  # Max representable scale
 
     # Calculate exponent: ceil(log2(max_value / element_max)) per OCP spec

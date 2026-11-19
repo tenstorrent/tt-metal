@@ -4,10 +4,10 @@
 
 """Hardware-free test: LAST_LOADED_ELFS names a variant only while all its ELFs are on the core."""
 
+import struct
 from pathlib import Path
 from types import SimpleNamespace
 
-import numpy as np
 import pytest
 from helpers import test_config as test_config_module
 from helpers.chip_architecture import ChipArchitecture
@@ -256,7 +256,7 @@ class _Signals:
         return self._next(self.soft_reset)
 
     def read_mailboxes(self, location, addr, num_bytes):
-        return np.array(self.mailboxes, dtype=np.uint32).tobytes()
+        return struct.pack(f"<{len(self.mailboxes)}I", *self.mailboxes)
 
 
 @pytest.fixture

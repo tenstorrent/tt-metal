@@ -25,50 +25,71 @@ from .tile_constants import (
 )
 
 
+def _from_bytes(packed_list, dtype: torch.dtype) -> torch.Tensor:
+    """The bytes of *packed_list* reinterpreted as a 1-D tensor of *dtype*."""
+    data = bytearray(packed_list)
+    if not data:
+        return torch.empty(0, dtype=dtype)
+    return torch.frombuffer(data, dtype=dtype)
+
+
 def unpack_fp16(packed_list):
-    return np.frombuffer(bytes(packed_list), dtype=np.float16).tolist()
+    bits = _from_bytes(packed_list, torch.int16)
+    values = bits.view(torch.float16).to(torch.float64)
+    # Widening a NaN through float32 would set its quiet bit; keep the payload as stored.
+    wide = bits.to(torch.int64)
+    nan_bits = ((wide & 0x8000) << 48) | (0x7FF << 52) | ((wide & 0x03FF) << 42)
+    return torch.where(
+        torch.isnan(values), nan_bits.view(torch.float64), values
+    ).tolist()
 
 
 def unpack_bfp16(packed_list):
-    return (
-        np.frombuffer(bytes(packed_list), dtype=ml_dtypes.bfloat16)
-        .astype(np.float32)
-        .tolist()
-    )
+    return _from_bytes(packed_list, torch.bfloat16).to(torch.float32).tolist()
 
 
 def unpack_fp32(packed_list):
-    return np.frombuffer(bytes(packed_list), dtype=np.float32).tolist()
+    return _from_bytes(packed_list, torch.float32).tolist()
+
+
+def _unpack_sign_magnitude(packed_list, dtype: torch.dtype):
+    """Sign-magnitude integers of *dtype*'s width as Python ints."""
+    bits = torch.iinfo(dtype).bits
+    raw = _from_bytes(packed_list, dtype).to(torch.int64)
+    magnitude = raw & ((1 << (bits - 1)) - 1)
+    return torch.where(raw < 0, -magnitude, magnitude).tolist()
+
+
+def _unpack_unsigned(packed_list, dtype: torch.dtype):
+    """Unsigned integers of the width of the signed *dtype* as Python ints."""
+    bits = torch.iinfo(dtype).bits
+    return (
+        _from_bytes(packed_list, dtype).to(torch.int64) & ((1 << bits) - 1)
+    ).tolist()
 
 
 def unpack_int32(packed_list, twos_complement=False):
     if twos_complement:
-        return np.frombuffer(bytes(packed_list), dtype=np.int32).tolist()
+        return _from_bytes(packed_list, torch.int32).tolist()
     # INT32 uses sign-magnitude format in hardware (not two's complement)
     # Format: bit 31 = sign, bits 30:0 = magnitude
-    uint32_array = np.frombuffer(bytes(packed_list), dtype=np.uint32)
-    sign = (uint32_array & 0x80000000).astype(bool)
-    magnitude = (uint32_array & 0x7FFFFFFF).astype(np.int64)
-    return np.where(sign, -magnitude, magnitude).astype(np.int32).tolist()
+    return _unpack_sign_magnitude(packed_list, torch.int32)
 
 
 def unpack_uint32(packed_list):
-    return np.frombuffer(bytes(packed_list), dtype=np.uint32).tolist()
+    return _unpack_unsigned(packed_list, torch.int32)
 
 
 def unpack_int16(packed_list, twos_complement=False):
     if twos_complement:
-        return np.frombuffer(bytes(packed_list), dtype=np.int16).tolist()
+        return _from_bytes(packed_list, torch.int16).tolist()
     # INT16 uses sign-magnitude format in hardware (not two's complement)
     # Format: bit 15 = sign, bits 14:0 = magnitude
-    uint16_array = np.frombuffer(bytes(packed_list), dtype=np.uint16)
-    sign = (uint16_array & 0x8000).astype(bool)
-    magnitude = (uint16_array & 0x7FFF).astype(np.int16)
-    return np.where(sign, -magnitude, magnitude).tolist()
+    return _unpack_sign_magnitude(packed_list, torch.int16)
 
 
 def unpack_uint16(packed_list):
-    return np.frombuffer(bytes(packed_list), dtype=np.uint16).tolist()
+    return _unpack_unsigned(packed_list, torch.int16)
 
 
 def unpack_fp8_e4m3(packed_list):
@@ -81,17 +102,14 @@ def unpack_fp8_e4m3(packed_list):
 
 def unpack_int8(packed_list, twos_complement=False):
     if twos_complement:
-        return np.frombuffer(bytes(packed_list), dtype=np.int8).tolist()
+        return _from_bytes(packed_list, torch.int8).tolist()
     # INT8 uses sign-magnitude format in hardware (not two's complement)
     # Format: bit 7 = sign, bits 6:0 = magnitude
-    uint8_array = np.frombuffer(bytes(packed_list), dtype=np.uint8)
-    sign = (uint8_array & 0x80).astype(bool)
-    magnitude = (uint8_array & 0x7F).astype(np.int8)
-    return np.where(sign, -magnitude, magnitude).tolist()
+    return _unpack_sign_magnitude(packed_list, torch.int8)
 
 
 def unpack_uint8(packed_list):
-    return np.frombuffer(bytes(packed_list), dtype=np.uint8).tolist()
+    return _from_bytes(packed_list, torch.uint8).tolist()
 
 
 # ============================================================================
@@ -112,12 +130,12 @@ def _expand_bfp_datums(packed_mantissas, bits_per_datum):
     multiple datums, lowest-order bits first (matching the hardware packing in
     pack_bfp4_b / pack_bfp2_b).
     """
-    packed = np.frombuffer(bytes(packed_mantissas), dtype=np.uint8)
+    packed = _from_bytes(packed_mantissas, torch.uint8)
     if bits_per_datum == 8:
         return packed
     datums_per_byte = 8 // bits_per_datum
     mask = (1 << bits_per_datum) - 1
-    datums = np.empty(len(packed) * datums_per_byte, dtype=np.uint8)
+    datums = torch.empty(len(packed) * datums_per_byte, dtype=torch.uint8)
     for k in range(datums_per_byte):
         datums[k::datums_per_byte] = (packed >> (bits_per_datum * k)) & mask
     return datums
@@ -147,15 +165,16 @@ def _unpack_bfp_b(bfp_block, magnitude_bits, sfpu=False, num_faces=4, face_r_dim
 
     blocks = datums[: len(exponents) * BFP_BLOCK].reshape(len(exponents), BFP_BLOCK)
     sign_mask = 1 << magnitude_bits
-    magnitudes = (blocks & (sign_mask - 1)).astype(np.float64)
-    signed = np.where(blocks & sign_mask, -magnitudes, magnitudes)
+    magnitudes = (blocks & (sign_mask - 1)).to(torch.float64)
+    signed = torch.where((blocks & sign_mask) != 0, -magnitudes, magnitudes)
     shifts = (
-        np.frombuffer(bytes(exponents), dtype=np.uint8).astype(np.int32)
-        - 127
-        - (magnitude_bits - 1)
+        _from_bytes(exponents, torch.uint8).to(torch.int64) - 127 - (magnitude_bits - 1)
     )
-    values = np.ldexp(signed, shifts[:, None])
-    return torch.from_numpy(values.reshape(-1)).to(torch.bfloat16)
+    # 2 ** shift from its float64 encoding (a shift is within [-133, 128], so it is a
+    # normal number): exact, where a float pow may round.
+    scales = ((shifts + 1023) << 52).view(torch.float64)
+    values = signed * scales[:, None]
+    return values.reshape(-1).to(torch.bfloat16)
 
 
 def unpack_bfp8_b(bfp8_block, sfpu=False, num_faces=4, face_r_dim=16):

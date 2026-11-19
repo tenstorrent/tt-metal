@@ -24,54 +24,169 @@ from .tile_constants import (
 )
 
 
+def tensor_bytes(tensor: torch.Tensor) -> bytes:
+    """The elements of *tensor* as raw bytes, in element order and host byte order."""
+    return bytes(tensor.contiguous().reshape(-1).view(torch.uint8).tolist())
+
+
+# Halfway between the largest finite float16 (65504) and the next power of two: the
+# smallest magnitude that rounds to infinity.
+FP16_OVERFLOW_THRESHOLD = 65520.0
+
+
+def _fp32_bits(values: torch.Tensor) -> torch.Tensor:
+    return values.contiguous().view(torch.int32)
+
+
 def pack_bfp16(torch_tensor):
-    fp32_array = torch_tensor.cpu().to(torch.float32).numpy()
-    bfp16_array = fp32_array.astype(ml_dtypes.bfloat16)
-    return bfp16_array.tobytes()
+    values = torch_tensor.cpu().to(torch.float32).contiguous()
+    packed = values.to(torch.bfloat16).view(torch.int16)
+    # A NaN packs as the quiet NaN 0x7FC0 with the sign of the input. torch's own cast
+    # writes 0xFFFF for every NaN, so those lanes are set from the float32 bits.
+    quiet_nan = torch.where(_fp32_bits(values) < 0, -0x0040, 0x7FC0).to(torch.int16)
+    return tensor_bytes(torch.where(torch.isnan(values), quiet_nan, packed))
+
+
+def _fp64_to_fp16_bits(values: torch.Tensor) -> torch.Tensor:
+    """float64 -> float16 bits, rounded to nearest-even in one step.
+
+    torch narrows float64 through float32, which rounds twice: a value just off a
+    float16 tie lands on the tie in float32 and then goes to the even neighbour. The
+    float32 result is therefore either the nearest float16 or the one next to it.
+    """
+    values = values.contiguous()
+    narrowed = values.to(torch.float16)
+    as_fp64 = narrowed.to(torch.float64)
+    # The neighbour on the side of the value: one step in the sign-magnitude encoding.
+    bits = narrowed.view(torch.int16).to(torch.int32) & 0xFFFF
+    magnitude = bits & 0x7FFF
+    away = values.abs() > as_fp64.abs()
+    neighbour_magnitude = torch.where(away, magnitude + 1, magnitude - 1)
+    has_neighbour = (
+        torch.isfinite(values)
+        & torch.isfinite(as_fp64)
+        & (values != as_fp64)
+        & (neighbour_magnitude >= 0)
+    )
+    neighbour_bits = (bits & 0x8000) | neighbour_magnitude.clamp(min=0)
+    neighbour = _int_bits_to_int16(neighbour_bits).view(torch.float16).to(torch.float64)
+    # A float16 at the top of the range has +-inf as its neighbour, and inf - value is inf,
+    # so that neighbour is never the closer one.
+    closer = (values - neighbour).abs() < (values - as_fp64).abs()
+    result = torch.where(has_neighbour & closer, neighbour_bits, bits)
+    # Below the float16 overflow threshold but rounded past it in float32: the largest finite.
+    overflowed = torch.isinf(as_fp64) & (values.abs() < FP16_OVERFLOW_THRESHOLD)
+    result = torch.where(overflowed, (bits & 0x8000) | 0x7BFF, result)
+
+    # A NaN keeps the top ten bits of its payload; if they are all zero the lowest is set,
+    # so that the result is still a NaN.
+    raw = values.view(torch.int64)
+    payload = (raw >> 42) & 0x3FF
+    payload = torch.where(payload == 0, 1, payload)
+    nan_bits = torch.where(raw < 0, 0x8000, 0) | 0x7C00 | payload
+    result = torch.where(torch.isnan(values), nan_bits.to(torch.int32), result)
+    return _int_bits_to_int16(result)
+
+
+def _int_bits_to_int16(bits: torch.Tensor) -> torch.Tensor:
+    """Integers in [0, 65535] as the int16 with the same 16 bits."""
+    return torch.where(bits >= 0x8000, bits - 0x10000, bits).to(torch.int16)
 
 
 def pack_fp16(torch_tensor):
-    return torch_tensor.cpu().numpy().astype(np.float16).tobytes()
+    values = torch_tensor.cpu()
+    if values.dtype == torch.float16:
+        return tensor_bytes(values)
+    if values.dtype == torch.float32:
+        values = values.contiguous()
+        packed = values.to(torch.float16).view(torch.int16)
+        # A NaN keeps the top ten bits of its payload; if they are all zero the lowest is
+        # set, so that the result is still a NaN.
+        raw = _fp32_bits(values)
+        payload = (raw >> 13) & 0x3FF
+        payload = torch.where(payload == 0, 1, payload)
+        nan_bits = torch.where(raw < 0, 0x8000, 0) | 0x7C00 | payload
+        return tensor_bytes(
+            torch.where(torch.isnan(values), _int_bits_to_int16(nan_bits), packed)
+        )
+    return tensor_bytes(_fp64_to_fp16_bits(values.to(torch.float64)))
 
 
 def pack_fp32(torch_tensor):
-    return torch_tensor.cpu().numpy().astype(np.float32).tobytes()
+    values = torch_tensor.cpu()
+    if values.dtype != torch.float16:
+        return tensor_bytes(values.to(torch.float32))
+    # float16 widens exactly, a NaN keeping its payload: torch would set the quiet bit.
+    raw = values.contiguous().view(torch.int16).to(torch.int32)
+    nan_bits = ((raw & 0x8000) << 16) | 0x7F800000 | ((raw & 0x03FF) << 13)
+    return tensor_bytes(
+        torch.where(torch.isnan(values), nan_bits, _fp32_bits(values.to(torch.float32)))
+    )
+
+
+def _wrap_to(values: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+    """*values* as *dtype*, keeping the low bits of an integer that does not fit.
+
+    A float is truncated to int32 first, the width a C cast to a narrower integer converts in.
+    """
+    if values.dtype.is_floating_point:
+        values = values.to(torch.int32)
+    return values.to(dtype)
+
+
+def _clip_to_sign_magnitude(values: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+    """*values* clipped to the range a sign-magnitude integer of *dtype*'s width holds."""
+    iinfo = torch.iinfo(dtype)
+    if not values.dtype.is_floating_point:
+        # In int64, so the bounds fit whatever the width of the input.
+        values = values.to(torch.int64)
+    elif values.dtype == torch.float16 and dtype == torch.int32:
+        # The int32 bounds overflow float16; float32 holds them and every float16.
+        values = values.to(torch.float32)
+    return torch.clamp(values, iinfo.min + 1, iinfo.max).to(dtype)
+
+
+def _sign_magnitude_bytes(clipped: torch.Tensor) -> bytes:
+    """Sign bit plus magnitude, in the width of *clipped*'s dtype."""
+    bits = torch.iinfo(clipped.dtype).bits
+    wide = clipped.to(torch.int64)
+    magnitude = wide.abs() & ((1 << bits) - 1)
+    sign = torch.where(wide < 0, 1 << (bits - 1), 0)
+    return tensor_bytes((sign | magnitude).to(clipped.dtype))
 
 
 def pack_int32(torch_tensor, twos_complement=False):
     if twos_complement:
-        return torch_tensor.cpu().numpy().astype(np.int32).tobytes()
+        return tensor_bytes(_wrap_to(torch_tensor.cpu(), torch.int32))
     # INT32 uses sign-magnitude format in hardware (not two's complement)
     # Format: bit 31 = sign, bits 30:0 = magnitude
     # Sign-magnitude INT32 cannot represent -2147483648, so clip to [min+1, max]
-    iinfo = torch.iinfo(torch.int32)
-    array = torch_tensor.cpu().numpy()
-    clipped = np.clip(array, iinfo.min + 1, iinfo.max).astype(np.int32)
-    sign = clipped.view(np.uint32) & 0x80000000
-    magnitude = np.abs(clipped).astype(np.uint32)
-    return (sign | magnitude).tobytes()
+    return _sign_magnitude_bytes(
+        _clip_to_sign_magnitude(torch_tensor.cpu(), torch.int32)
+    )
 
 
 def pack_uint32(torch_tensor):
-    return torch_tensor.cpu().numpy().astype(np.uint32).tobytes()
+    values = torch_tensor.cpu()
+    if values.dtype.is_floating_point:
+        # Truncated in int64, which holds the whole uint32 range.
+        values = values.to(torch.int64)
+    return tensor_bytes(values.to(torch.int32))
 
 
 def pack_int16(torch_tensor, twos_complement=False):
     if twos_complement:
-        return torch_tensor.cpu().numpy().astype(np.int16).tobytes()
+        return tensor_bytes(_wrap_to(torch_tensor.cpu(), torch.int16))
     # INT16 uses sign-magnitude format in hardware (not two's complement)
     # Format: bit 15 = sign, bits 14:0 = magnitude
     # Sign-magnitude INT16 cannot represent -32768, so clip to [min+1, max]
-    iinfo = torch.iinfo(torch.int16)
-    array = torch_tensor.cpu().numpy()
-    clipped = np.clip(array, iinfo.min + 1, iinfo.max).astype(np.int16)
-    sign = clipped.view(np.uint16) & 0x8000
-    magnitude = np.abs(clipped).astype(np.uint16)
-    return (sign | magnitude).tobytes()
+    return _sign_magnitude_bytes(
+        _clip_to_sign_magnitude(torch_tensor.cpu(), torch.int16)
+    )
 
 
 def pack_uint16(torch_tensor):
-    return torch_tensor.cpu().numpy().astype(np.uint16).tobytes()
+    return tensor_bytes(_wrap_to(torch_tensor.cpu(), torch.int16))
 
 
 def pack_fp8_e4m3(torch_tensor):
@@ -81,30 +196,29 @@ def pack_fp8_e4m3(torch_tensor):
 
 def pack_int8(torch_tensor, twos_complement=False):
     if twos_complement:
-        return torch_tensor.cpu().numpy().astype(np.int8).tobytes()
+        return tensor_bytes(_wrap_to(torch_tensor.cpu(), torch.int8))
     # INT8 uses sign-magnitude format in hardware (not two's complement)
     # Format: bit 7 = sign, bits 6:0 = magnitude
     # Sign-magnitude INT8 cannot represent -128, so clip to [min+1, max]
-    iinfo = torch.iinfo(torch.int8)
-    array = torch_tensor.cpu().numpy()
-    clipped = np.clip(array, iinfo.min + 1, iinfo.max).astype(np.int8)
-    sign = clipped.view(np.uint8) & 0x80
-    magnitude = np.abs(clipped).astype(np.uint8)
-    return (sign | magnitude).tobytes()
+    return _sign_magnitude_bytes(
+        _clip_to_sign_magnitude(torch_tensor.cpu(), torch.int8)
+    )
 
 
 def pack_uint8(torch_tensor):
-    return torch_tensor.cpu().numpy().astype(np.uint8).tobytes()
+    return tensor_bytes(_wrap_to(torch_tensor.cpu(), torch.uint8))
 
 
 def _pack_4bit_integer_datums(
-    datums: np.ndarray, face_r_dim: int | None = None
+    datums: torch.Tensor, face_r_dim: int | None = None
 ) -> bytes:
     """Pack 4-bit integer datums two per byte, even index in the low nibble."""
-    datums = datums.flatten().astype(np.uint8)
-    if datums.size % 2:
-        raise ValueError(f"4-bit packing needs an even datum count, got {datums.size}")
-    packed = (((datums[1::2] & 0x0F) << 4) | (datums[0::2] & 0x0F)).tobytes()
+    datums = datums.flatten().to(torch.uint8)
+    if datums.numel() % 2:
+        raise ValueError(
+            f"4-bit packing needs an even datum count, got {datums.numel()}"
+        )
+    packed = tensor_bytes(((datums[1::2] & 0x0F) << 4) | (datums[0::2] & 0x0F))
     if face_r_dim is None:
         return packed
     # Tiles other than 32x32 start each face on a 16 B L1 boundary.
@@ -116,20 +230,26 @@ def _pack_4bit_integer_datums(
     )
 
 
+def _clip_4bit(torch_tensor: torch.Tensor, data_format: DataFormat) -> torch.Tensor:
+    values = torch_tensor.cpu()
+    if not values.dtype.is_floating_point:
+        values = values.to(torch.int64)
+    return _wrap_to(
+        torch.clamp(values, *FOUR_BIT_INTEGER_RANGE[data_format]), torch.int8
+    )
+
+
 def pack_int4(torch_tensor, num_faces=None, face_r_dim=None):
     # INT4 uses sign-magnitude format in hardware: bit 3 = sign, bits 2:0 = magnitude
-    array = np.clip(
-        torch_tensor.cpu().numpy(), *FOUR_BIT_INTEGER_RANGE[DataFormat.Int4]
-    ).astype(np.int8)
-    sign = (array < 0).astype(np.uint8) << 3
-    return _pack_4bit_integer_datums(sign | np.abs(array).astype(np.uint8), face_r_dim)
+    array = _clip_4bit(torch_tensor, DataFormat.Int4)
+    sign = (array < 0).to(torch.uint8) << 3
+    return _pack_4bit_integer_datums(sign | array.abs().to(torch.uint8), face_r_dim)
 
 
 def pack_uint4(torch_tensor, num_faces=None, face_r_dim=None):
-    array = np.clip(
-        torch_tensor.cpu().numpy(), *FOUR_BIT_INTEGER_RANGE[DataFormat.UInt4]
-    ).astype(np.uint8)
-    return _pack_4bit_integer_datums(array, face_r_dim)
+    return _pack_4bit_integer_datums(
+        _clip_4bit(torch_tensor, DataFormat.UInt4), face_r_dim
+    )
 
 
 # ============================================================================
@@ -259,8 +379,8 @@ def pack_bfp4_b(tensor, block_size=16, num_faces=4, face_r_dim=16):
         flattened_tensor, block_size, magnitude_bits=3
     )
 
-    mantissas = np.asarray(
-        all_mantissas + [0] * (-len(all_mantissas) % 2), dtype=np.uint8
+    mantissas = torch.tensor(
+        all_mantissas + [0] * (-len(all_mantissas) % 2), dtype=torch.uint8
     ).reshape(-1, 2)
     packed_mantissas = (mantissas[:, 0] | (mantissas[:, 1] << 4)).tolist()
 
@@ -289,8 +409,8 @@ def pack_bfp2_b(tensor, block_size=16, num_faces=4, face_r_dim=16):
         flattened_tensor, block_size, magnitude_bits=1
     )
 
-    mantissas = np.asarray(
-        all_mantissas + [0] * (-len(all_mantissas) % 4), dtype=np.uint8
+    mantissas = torch.tensor(
+        all_mantissas + [0] * (-len(all_mantissas) % 4), dtype=torch.uint8
     ).reshape(-1, 4)
     packed_mantissas = (
         mantissas[:, 0]
@@ -334,10 +454,12 @@ def pack_dense_tiles(tensor, tile_count, pack_function, num_faces, face_r_dim):
 
     exponents, mantissas = _bfp_collect_blocks(values, FACE_C_DIM, magnitude_bits)
     blocks_per_tile = tile_elements // FACE_C_DIM
-    exponents = np.asarray(
-        exponents[: tile_count * blocks_per_tile], dtype=np.uint8
+    exponents = torch.tensor(
+        exponents[: tile_count * blocks_per_tile], dtype=torch.uint8
     ).reshape(tile_count, blocks_per_tile)
-    mantissas = np.asarray(mantissas, dtype=np.uint8).reshape(tile_count, tile_elements)
+    mantissas = torch.tensor(mantissas, dtype=torch.uint8).reshape(
+        tile_count, tile_elements
+    )
     if magnitude_bits == 3:
         mantissas = mantissas[:, 0::2] | (mantissas[:, 1::2] << 4)
     elif magnitude_bits == 1:
@@ -349,10 +471,12 @@ def pack_dense_tiles(tensor, tile_count, pack_function, num_faces, face_r_dim):
         )
 
     exponent_bytes = max(MIN_BFP_EXPONENTS, blocks_per_tile)
-    packed = np.zeros((tile_count, exponent_bytes + mantissas.shape[1]), dtype=np.uint8)
+    packed = torch.zeros(
+        (tile_count, exponent_bytes + mantissas.shape[1]), dtype=torch.uint8
+    )
     packed[:, :blocks_per_tile] = exponents
     packed[:, exponent_bytes:] = mantissas
-    return packed.tobytes()
+    return tensor_bytes(packed)
 
 
 # ============================================================================

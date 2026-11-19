@@ -32,6 +32,7 @@ from helpers.llk_params import (
     Transpose,
     format_dict,
 )
+from helpers.pack import tensor_bytes
 from helpers.param_config import (
     build_param_id,
     input_output_formats,
@@ -1512,7 +1513,7 @@ def test_eltwise_unary_sfpu_compare_zero_bit_patterns(
         fast_mode=FastMode.No,
         input_dimensions=input_dimensions,
         # raw words: the bf16 host packer would rewrite every NaN payload to 0x7FC0/0xFFC0
-        src_A=input_bits.numpy().tobytes(),
+        src_A=tensor_bytes(input_bits),
         src_B=torch.zeros_like(src_A),
         check_golden=False,
     )

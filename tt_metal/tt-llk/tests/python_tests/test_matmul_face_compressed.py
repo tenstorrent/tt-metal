@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-import numpy as np
+import struct
+
 import pytest
 from conftest import blackhole_only
 from helpers.compressed_utils import (
@@ -223,7 +224,7 @@ def encode_meta(assignment, ct, kt, chunk_info):
         index_words[w] |= first_in_blocks << base
 
     words = math_words + [iters] + address_words + index_words
-    return np.array(words, dtype=np.uint32).tobytes()
+    return struct.pack(f"<{len(words)}I", *words)
 
 
 COMPRESSION_GRANULARITY = FACE_C_DIM

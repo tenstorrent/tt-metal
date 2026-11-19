@@ -21,7 +21,6 @@ from pathlib import Path
 from typing import Any, ClassVar, List
 from uuid import uuid4
 
-import numpy as np
 import pytest
 from filelock import FileLock
 from ttexalens.tt_exalens_lib import (
@@ -2247,10 +2246,8 @@ class TestConfig:
         word_index = {mailbox: (mailbox.value - base) // 4 for mailbox in mailboxes}
 
         def completed_mailboxes():
-            words = np.frombuffer(
-                read_from_device(TestConfig.TENSIX_LOCATION, base, num_bytes=span),
-                dtype=np.uint32,
-            )
+            data = read_from_device(TestConfig.TENSIX_LOCATION, base, num_bytes=span)
+            words = struct.unpack(f"<{len(data) // 4}I", data)
             return {
                 mailbox
                 for mailbox in mailboxes
@@ -2521,20 +2518,20 @@ class TestConfig:
             self.wait_for_tensix_operations_finished(poll_callback=poll_callback)
 
             for region, current in self._read_output_regions().items():
-                diff_offsets = np.flatnonzero(reference[region] != current)
-                if diff_offsets.size == 0:
+                diff_offsets = _differing_offsets(reference[region], current)
+                if not diff_offsets:
                     continue
 
-                unstable_offsets[region].update(diff_offsets.tolist())
-                first = int(diff_offsets[0])
+                unstable_offsets[region].update(diff_offsets)
+                first = diff_offsets[0]
                 mismatches.append(
                     (
                         run_idx,
                         region,
                         first,
-                        int(reference[region][first]),
-                        int(current[first]),
-                        int(diff_offsets.size),
+                        reference[region][first],
+                        current[first],
+                        len(diff_offsets),
                     )
                 )
 
@@ -2555,7 +2552,7 @@ class TestConfig:
             f"in {', '.join(affected)}."
         ]
         lines.extend(
-            f"  {region}: {len(unstable_offsets[region])} of {reference[region].size} "
+            f"  {region}: {len(unstable_offsets[region])} of {len(reference[region])} "
             "byte(s) ever differed."
             for region in affected
         )
@@ -2579,15 +2576,9 @@ class TestConfig:
         """
         stimuli = self.variant_stimuli
         location = TestConfig.TENSIX_LOCATION
-        regions = {
-            "result buffer": np.frombuffer(
-                stimuli.collect_raw_result_bytes(location), dtype=np.uint8
-            )
-        }
+        regions = {"result buffer": stimuli.collect_raw_result_bytes(location)}
         if stimuli.buffer_C is not None:
-            regions["buffer_C"] = np.frombuffer(
-                stimuli.collect_raw_buffer_c_bytes(location), dtype=np.uint8
-            )
+            regions["buffer_C"] = stimuli.collect_raw_buffer_c_bytes(location)
         return regions
 
     def _describe_input_integrity(self) -> str:
@@ -2603,25 +2594,49 @@ class TestConfig:
         and it restores the stimuli as a side effect.
         """
         stimuli = self.variant_stimuli
-        actual = np.frombuffer(
-            stimuli.read_input_region(TestConfig.TENSIX_LOCATION), dtype=np.uint8
-        )
+        actual = stimuli.read_input_region(TestConfig.TENSIX_LOCATION)
         stimuli.write(TestConfig.TENSIX_LOCATION)
-        expected = np.frombuffer(
-            stimuli.read_input_region(TestConfig.TENSIX_LOCATION), dtype=np.uint8
-        )
+        expected = stimuli.read_input_region(TestConfig.TENSIX_LOCATION)
 
-        modified = int(np.count_nonzero(actual != expected))
+        modified = len(_differing_offsets(actual, expected))
         if not modified:
             return (
                 "  Input operands in L1 were unchanged, so every run saw identical "
                 "input: the divergence is in the hardware/kernel output itself."
             )
         return (
-            f"  WARNING: {modified} of {actual.size} input byte(s) in L1 no longer "
+            f"  WARNING: {modified} of {len(actual)} input byte(s) in L1 no longer "
             "match the stimuli, so the kernel writes to its own input and later runs "
             "did not see the same input. Fix that before suspecting the hardware."
         )
+
+
+def _differing_offsets(reference: bytes, current: bytes) -> list[int]:
+    """Offsets at which two equally long byte strings differ, ascending."""
+    if len(reference) != len(current):
+        raise ValueError(
+            f"regions differ in length: {len(reference)} vs {len(current)} bytes"
+        )
+    if reference == current:
+        return []
+    return [
+        offset
+        for offset, (expected, actual) in enumerate(zip(reference, current))
+        if expected != actual
+    ]
+
+
+def _split_evenly(items: list, parts: int) -> list[list]:
+    """*items* in order as *parts* consecutive lists whose lengths differ by at most one,
+    the longer ones first."""
+    size, extra = divmod(len(items), parts)
+    chunks = []
+    start = 0
+    for index in range(parts):
+        end = start + size + (1 if index < extra else 0)
+        chunks.append(items[start:end])
+        start = end
+    return chunks
 
 
 def process_coverage_run_artefacts() -> bool:
@@ -2669,7 +2684,7 @@ def process_coverage_run_artefacts() -> bool:
     with ThreadPoolExecutor(max_workers=worker_num) as executor:
         futures = [
             executor.submit(process_variants, work)
-            for work in np.array_split(compiled_variants, worker_num)
+            for work in _split_evenly(compiled_variants, worker_num)
         ]
         for fut in futures:
             fut.result()
@@ -2716,7 +2731,7 @@ def process_coverage_run_artefacts() -> bool:
     with ThreadPoolExecutor(max_workers=worker_num) as executor:
         futures = [
             executor.submit(combine_files, i, work)
-            for i, work in enumerate(np.array_split(info_files, worker_num))
+            for i, work in enumerate(_split_evenly(info_files, worker_num))
         ]
         for fut in futures:
             fut.result()

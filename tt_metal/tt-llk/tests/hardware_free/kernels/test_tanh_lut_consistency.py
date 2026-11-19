@@ -40,10 +40,10 @@ bfloat16 out there while being ~2048 fp32 ulp of non-monotonicity.
 from __future__ import annotations
 
 import re
+import struct
 from dataclasses import dataclass
 from pathlib import Path
 
-import numpy as np
 import pytest
 from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
 
@@ -104,7 +104,7 @@ def _fp16(value: float) -> float:
     Rounding first restores it. `test_coefficients_are_halves` is what makes this
     safe to do -- it pins that the truncation is all that is being undone.
     """
-    return float(np.float16(value))
+    return struct.unpack("<e", struct.pack("<e", value))[0]
 
 
 def _init_body(source: str, init: str) -> str:

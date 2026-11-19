@@ -28,7 +28,8 @@ Reference: tanh(+-inf) = +-1, tanh(NaN) = NaN, tanh(+-0.0) = +-0.0 (sign kept).
 
 from __future__ import annotations
 
-import numpy as np
+import math
+
 import pytest
 import torch
 from helpers.data_format_inference import unpacks_to_dest
@@ -111,7 +112,7 @@ def _run(values_by_face, out_fmt, dest_acc, in_fmt=DataFormat.Float16_b, floats=
         check_golden=False,
     )
     hw = torch.tensor(res, dtype=format_dict[formats.output_format])
-    return src_A.to(torch.float32).numpy(), hw.to(torch.float32).numpy()
+    return src_A.to(torch.float32).flatten(), hw.to(torch.float32).flatten()
 
 
 @pytest.mark.parametrize(
@@ -126,13 +127,14 @@ def test_tanh_specials(out_fmt, dest_acc):
     x, hw = _run({0: POS_SPECIALS, 1: NEG_SPECIALS, 2: ZEROS}, out_fmt, dest_acc)
 
     groups = {}
-    for xv, hv in zip(x, hw):
-        if np.isnan(xv):
-            key = "NaN" + ("(-)" if np.signbit(xv) else "(+)")
-        elif np.isinf(xv):
+    for xv, hv in zip(x.tolist(), hw.tolist()):
+        negative = math.copysign(1.0, xv) < 0
+        if math.isnan(xv):
+            key = "NaN" + ("(-)" if negative else "(+)")
+        elif math.isinf(xv):
             key = "+inf" if xv > 0 else "-inf"
         elif xv == 0.0:
-            key = "-0.0" if np.signbit(xv) else "+0.0"
+            key = "-0.0" if negative else "+0.0"
         else:
             continue
         groups.setdefault(key, {}).setdefault(classify_special(hv), 0)
@@ -235,8 +237,9 @@ def test_tanh_fp32_bound():
     """
     # Up to the last fp32 value below 3.0, not 2.99999 -- roughly 40 representable
     # values sit above that, and they are the tightest part of the range.
-    top = np.nextafter(np.float32(3.0), np.float32(0.0))
-    xs = list(np.linspace(np.float32(2.9953), top, 256).astype(np.float32))
+    top = torch.nextafter(torch.tensor(3.0), torch.tensor(0.0))
+    low = torch.tensor(2.9953)
+    xs = torch.linspace(low.item(), top.item(), 256, dtype=torch.float32).tolist()
     _, hw = _run(
         {0: xs},
         DataFormat.Float32,
@@ -244,9 +247,9 @@ def test_tanh_fp32_bound():
         in_fmt=DataFormat.Float32,
         floats=True,
     )
-    got = np.abs(hw[: len(xs)])
+    got = hw[: len(xs)].abs()
     over = got > 1.0
-    worst = got.max()
+    worst = got.max().item()
 
     # Pin that the probes actually arrived. |y| <= 1 is satisfied by anything small,
     # so a stimuli path that misplaced these or zeroed them would return tanh(0) = 0
@@ -260,7 +263,7 @@ def test_tanh_fp32_bound():
     assert not over.any(), (
         "approximate tanh returned |y| > 1 on %d of %d fp32 inputs in "
         "(2.99532, 3.0); worst |y| = %.9f. No LUT segment may exceed 1.0 inside "
-        "its own range." % (over.sum(), len(xs), worst)
+        "its own range." % (int(over.sum()), len(xs), worst)
     )
 
 
@@ -278,14 +281,12 @@ def test_tanh_fp32_monotone_across_breakpoints():
     """
     xs = []
     for bp in (0.5, 1.0, 1.5, 2.0, 3.0):
-        b = np.float32(bp)
-        below = b
+        below = torch.tensor(bp, dtype=torch.float32)
         for _ in range(16):
-            below = np.nextafter(below, np.float32(0.0))
+            below = torch.nextafter(below, torch.tensor(0.0))
         for _ in range(32):
-            xs.append(below)
-            below = np.nextafter(below, np.float32(8.0))
-    xs = list(np.array(xs, dtype=np.float32))
+            xs.append(below.item())
+            below = torch.nextafter(below, torch.tensor(8.0))
 
     _, hw = _run(
         {0: xs},
@@ -294,20 +295,20 @@ def test_tanh_fp32_monotone_across_breakpoints():
         in_fmt=DataFormat.Float32,
         floats=True,
     )
-    got = hw[: len(xs)].astype(np.float64)
+    got = hw[: len(xs)].to(torch.float64)
 
     # The probes straddle 0.5 upward, so nothing here should be near zero.
     assert got.min() > 0.4, (
         "the fp32 probes did not reach the kernel: min y = %.9f over %d inputs "
         "straddling the breakpoints, where the smallest should be tanh(~0.5) ~ 0.46."
-        % (got.min(), len(xs))
+        % (got.min().item(), len(xs))
     )
 
     # Each breakpoint contributes one contiguous run of 32 ascending inputs.
     for start, bp in zip(range(0, len(xs), 32), (0.5, 1.0, 1.5, 2.0, 3.0)):
         block = got[start : start + 32]
-        steps = np.diff(block)
-        worst = steps.min()
+        steps = torch.diff(block)
+        worst = steps.min().item()
         assert worst >= 0.0, (
             "approximate tanh steps down by %.6g across |x| = %s: y goes %.9f -> %.9f. "
             "No LUT segment may sit below its predecessor where they meet -- a bfloat16 "
@@ -315,7 +316,7 @@ def test_tanh_fp32_monotone_across_breakpoints():
             % (
                 -worst,
                 bp,
-                block[int(np.argmin(steps))],
-                block[int(np.argmin(steps)) + 1],
+                block[int(torch.argmin(steps))].item(),
+                block[int(torch.argmin(steps)) + 1].item(),
             )
         )

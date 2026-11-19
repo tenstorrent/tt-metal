@@ -18,8 +18,8 @@ Inputs are written as raw bit patterns through an integer view, so both NaN sign
 reach L1 as asked -- torch's float -> bfloat16 conversion would collapse every NaN
 onto one positive pattern. The two extreme payloads (0x7F800001 / 0xFFFFFFFF) also
 survive for fp32; the bfloat16 rows (0x7F81 / 0xFFFF) are packed through float32
-and ml_dtypes, which keep the sign but canonicalise the payload, so there they
-repeat the plain +-NaN rows.
+and the bfloat16 packer, which keeps the sign but canonicalises the payload, so there
+they repeat the plain +-NaN rows.
 
 The probes and controls repeat across the whole tile, so every SFPU iteration --
 every copy of the unrolled loop -- sees all of them, and every lane is checked.
@@ -29,7 +29,8 @@ Reference: GELU'(+inf) = 1, GELU'(-inf) = 0, GELU'(+-0) = 0.5, GELU'(NaN) = NaN.
 
 from __future__ import annotations
 
-import numpy as np
+import math
+
 import pytest
 import torch
 from conftest import skip_for_quasar
@@ -82,6 +83,14 @@ CONTROL_ATOL = 0.02
 PERIOD = len(SPECIALS) + len(CONTROLS)
 
 
+def _bit_patterns(patterns, dtype: torch.dtype) -> torch.Tensor:
+    """Unsigned bit patterns as the signed integers of *dtype* with the same bits."""
+    bits = torch.iinfo(dtype).bits
+    return torch.tensor(
+        [p - (1 << bits) if p >> (bits - 1) else p for p in patterns], dtype=dtype
+    )
+
+
 def _run(in_fmt, out_fmt, dest_acc, approx):
     formats = InputOutputFormat(in_fmt, out_fmt)
     dims = [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1]]
@@ -102,12 +111,10 @@ def _run(in_fmt, out_fmt, dest_acc, approx):
     is_special = ~is_control
     if in_fmt == DataFormat.Float32:
         bits = flat.view(torch.int32)
-        patterns = np.array([fp32 for fp32, _ in SPECIALS.values()], dtype=np.uint32)
-        patterns = torch.from_numpy(patterns.view(np.int32))
+        patterns = _bit_patterns([fp32 for fp32, _ in SPECIALS.values()], torch.int32)
     else:
         bits = flat.view(torch.int16)
-        patterns = np.array([bf16 for _, bf16 in SPECIALS.values()], dtype=np.uint16)
-        patterns = torch.from_numpy(patterns.view(np.int16))
+        patterns = _bit_patterns([bf16 for _, bf16 in SPECIALS.values()], torch.int16)
     bits[is_special] = patterns[lane[is_special]]
 
     res = eltwise_unary_sfpu(
@@ -127,9 +134,9 @@ def _run(in_fmt, out_fmt, dest_acc, approx):
     )
     hw = torch.tensor(res, dtype=format_dict[formats.output_format])
     return (
-        flat.to(torch.float32).numpy(),
-        hw.to(torch.float32).numpy(),
-        lane.numpy(),
+        flat.to(torch.float32).tolist(),
+        hw.to(torch.float32).tolist(),
+        lane.tolist(),
     )
 
 
@@ -198,7 +205,7 @@ def test_gelu_derivative_specials(in_fmt, out_fmt, dest_acc, approx):
             else:
                 ref = golden(float(xv))
                 want = "%.9g +- %g" % (ref, CONTROL_ATOL)
-                ok = bool(np.isfinite(hv)) and abs(float(hv) - ref) <= CONTROL_ATOL
+                ok = math.isfinite(hv) and abs(float(hv) - ref) <= CONTROL_ATOL
         if not ok:
             entry = wrong.setdefault(key, {"want": want, "got": set(), "lanes": 0})
             entry["got"].add(got)

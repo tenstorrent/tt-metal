@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import os
 import shlex
 import subprocess
@@ -167,12 +168,12 @@ def classify_special(value) -> str:
     "+0.0" / "-0.0" (the sign of a zero kept), or the value to nine significant digits.
     Turns a dict of per-probe results into something an expected-results dict can compare
     with ==, and a failure message can print readably."""
-    if np.isnan(value):
+    if math.isnan(value):
         return "NaN"
-    if np.isinf(value):
+    if math.isinf(value):
         return "+inf" if value > 0 else "-inf"
     if value == 0.0:
-        return "-0.0" if np.signbit(value) else "+0.0"
+        return "-0.0" if math.copysign(1.0, value) < 0 else "+0.0"
     return "%.9g" % value
 
 
