@@ -494,7 +494,7 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
             const auto* kernel = command_queue_program.impl().kernels_on_core(logical_dispatch_core, index);
             dev_msgs::launch_msg_t msg = kernel->launch_msg;  // copy
             if (kernel_config_buffer != nullptr) {
-                msg.view().kernel_config().kernel_config_base()[index] = slow_dispatch::KernelConfigBase(
+                msg.view().kernel_config().kernel_config_base()[index] = slow_dispatch::GetKernelConfigBase(
                     hal, index, this->id(), logical_dispatch_core, kernel_config_buffer);
             }
             dev_msgs::go_msg_t::ConstView go_msg = kernel->go_msg.view();
