@@ -14,7 +14,9 @@
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn_test_fixtures.hpp"
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 
 using namespace tt::tt_metal;
 
@@ -69,6 +71,25 @@ TEST_F(UncheckedReinterpretLayoutDeviceTest, BufferPageSizeFollowsNewLayout) {
     EXPECT_EQ(
         tile_tensor.device_storage().get_mesh_buffer().page_size(),
         tile_tensor.tensor_spec().compute_page_size_bytes());
+}
+
+// As above for a sharded tensor whose ROW_MAJOR row is larger than a tile, as in moe_compute's tilized output.
+TEST_F(UncheckedReinterpretLayoutDeviceTest, ShardedBufferPageSizeFollowsNewLayout) {
+    MemoryConfig mem_cfg{
+        TensorMemoryLayout::HEIGHT_SHARDED,
+        BufferType::L1,
+        ShardSpec{NodeRangeSet(NodeRange({0, 0}, {0, 0})), {32, 2048}, ShardOrientation::ROW_MAJOR}};
+    ttnn::Shape shape({1, 1, 32, 2048});
+    tt::tt_metal::TensorSpec spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
+
+    Tensor tile_tensor = ttnn::create_device_tensor(spec, device_);
+    Tensor rm_tensor = unchecked_reinterpret_layout(tile_tensor, Layout::ROW_MAJOR);
+
+    EXPECT_EQ(
+        rm_tensor.device_storage().get_mesh_buffer().page_size(), rm_tensor.tensor_spec().compute_page_size_bytes());
+    EXPECT_EQ(
+        rm_tensor.device_storage().get_mesh_buffer().address(),
+        tile_tensor.device_storage().get_mesh_buffer().address());
 }
 
 TEST_F(UncheckedReinterpretLayoutDeviceTest, AliasesTheSameDeviceAddress) {
