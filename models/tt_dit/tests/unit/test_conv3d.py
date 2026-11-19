@@ -294,3 +294,94 @@ def test_sharding(mesh_device, input_shape, out_channels, kernel_size, stride):
     logger.info("reorder")
     tt_input_NTHWC_rm = ttnn.to_layout(tt_input_NTHWC, ttnn.ROW_MAJOR_LAYOUT)
     print_tensor_mem_info(tt_input_NTHWC_rm)
+
+
+D2S_C_IN = 32
+D2S_KERNEL = (3, 3, 3)
+D2S_PADDING = (1, 1, 1)
+D2S_INPUT_THW = (6, 8, 8)
+
+
+def _run_d2s_conv3d(device, c_out, c_out_block, blocking=(2, 4, 4), **kwargs):
+    torch.manual_seed(0)
+    x = torch.randn(1, D2S_C_IN, *D2S_INPUT_THW)
+    # Output channels are read as (p1, p2, p3, C) by the depth-to-space path.
+    conv = torch.nn.Conv3d(D2S_C_IN, c_out, D2S_KERNEL, padding=D2S_PADDING)
+
+    t_blk, h_blk, w_blk = blocking
+    config = ttnn.Conv3dConfig(
+        weights_dtype=ttnn.bfloat16,
+        output_layout=ttnn.ROW_MAJOR_LAYOUT,
+        T_out_block=t_blk,
+        H_out_block=h_blk,
+        W_out_block=w_blk,
+        C_out_block=c_out_block,
+        C_in_block=D2S_C_IN,
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+    )
+    tt_x = ttnn.from_torch(x.permute(0, 2, 3, 4, 1), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    tt_w = ttnn.experimental.prepare_conv3d_weights(
+        weight_tensor=ttnn.from_torch(conv.weight.data, dtype=ttnn.bfloat16),
+        groups=1,
+        C_in_block=D2S_C_IN,
+        alignment=32,
+        device=device,
+    )
+    tt_b = ttnn.from_torch(conv.bias.data.reshape(1, -1), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_out = ttnn.experimental.conv3d(
+        input_tensor=tt_x,
+        weight_tensor=tt_w,
+        bias_tensor=tt_b,
+        device=device,
+        dtype=ttnn.bfloat16,
+        output_channels=c_out,
+        kernel_size=D2S_KERNEL,
+        stride=(1, 1, 1),
+        padding=D2S_PADDING,
+        padding_mode="zeros",
+        groups=1,
+        config=config,
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+        ),
+        **kwargs,
+    )
+    return ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
+
+
+def _ref_depth_to_space(out, d2s, trim_t):
+    # (N, T, H, W, p1 * p2 * p3 * C) -> (N, T * p1 - trim_t, H * p2, W * p3, C)
+    p1, p2, p3 = d2s
+    N, T, H, W, C_out = out.shape
+    C = C_out // (p1 * p2 * p3)
+    x = out.reshape(N, T, H, W, p1, p2, p3, C).permute(0, 1, 4, 2, 5, 3, 6, 7)
+    return x.reshape(N, T * p1, H * p2, W * p3, C)[:, trim_t:]
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 8)], ids=["4x8"], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    "d2s, trim_t, C, c_out_block",
+    [
+        ((2, 2, 2), 1, 32, 256),  # all 8 groups in one C_out block
+        ((2, 2, 2), 1, 64, 32),  # each group spans 2 C_out blocks
+    ],
+    ids=["s222_trim1", "group_spans_blocks"],
+)
+def test_conv3d_depth_to_space_bit_exact(mesh_device, d2s, trim_t, C, c_out_block):
+    device = mesh_device.create_submesh(ttnn.MeshShape(2, 4))
+    c_out = C * d2s[0] * d2s[1] * d2s[2]
+
+    ref = _run_d2s_conv3d(device, c_out, c_out_block)
+    out = _run_d2s_conv3d(device, c_out, c_out_block, output_depth_to_space=list(d2s), output_trim_t_front=trim_t)
+
+    expected = _ref_depth_to_space(ref, d2s, trim_t)
+    assert out.shape == expected.shape
+    assert torch.equal(out, expected)
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 8)], ids=["4x8"], indirect=["mesh_device"])
+def test_conv3d_depth_to_space_refuses_vol2col_overrun(mesh_device, expect_error):
+    device = mesh_device.create_submesh(ttnn.MeshShape(2, 4))
+    # Unaligned with more than 64 patches per block (5*4*4 = 80) overruns the vol2col CB ring.
+    with expect_error(RuntimeError, "vol2col CB ring"):
+        _run_d2s_conv3d(device, 256, 256, blocking=(5, 4, 4), output_depth_to_space=[2, 2, 2], output_trim_t_front=1)
