@@ -8,9 +8,9 @@
 namespace ttnn {
 
 Tensor moreh_arange(
-    float start,
-    float end,
-    float step,
+    double start,
+    double end,
+    double step,
     ttnn::MeshDevice* mesh_device,
     const std::optional<Tensor>& output = std::nullopt,
     bool untilize_out = false,

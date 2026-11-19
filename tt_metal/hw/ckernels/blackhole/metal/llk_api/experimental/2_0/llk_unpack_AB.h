@@ -27,6 +27,16 @@ inline void llk_unpack_AB_init(const ckernel::Transpose transpose = ckernel::Tra
     llk_unpack_AB_init_impl<BType>(DESC_A.shape, transpose);
 }
 
+// Operand B with its own geometry, e.g. a [1,32] ROW/SCALAR broadcast operand.
+template <
+    ckernel::experimental::LLKMemDescriptor DESC_A,
+    ckernel::experimental::LLKMemDescriptor DESC_B,
+    BroadcastType BType = BroadcastType::NONE>
+inline void llk_unpack_AB_init(const ckernel::Transpose transpose = ckernel::Transpose::None) {
+    SAN_HOOK(unsupported());
+    llk_unpack_AB_init_impl<BType>(DESC_A.shape, DESC_B.shape, transpose);
+}
+
 template <
     ckernel::experimental::LLKMemDescriptor DESC_A,
     BroadcastType BType = BroadcastType::NONE,

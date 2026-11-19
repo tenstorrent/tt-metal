@@ -63,7 +63,8 @@ VECTOR_LOAD_FILTER_POLICIES = {
 # Multiple logical test groups may point at the same profile, which avoids
 # repeating ``runs_on``, ``runner_label``, ``tt_smi_cmd``, and ``arch``.
 
-MATRIX_OUTPUT_KEYS = ("n150", "n300", "p150b", "p100a", "p300a", "t3k", "galaxy")
+# MINFRA-2135: "p300a" is left out to disable sweeps on p300 runners
+MATRIX_OUTPUT_KEYS = ("n150", "n300", "p150b", "p100a", "t3k", "galaxy")  # , "p300a"
 
 # Each profile references an ``sku`` by name; the actual ``runs_on`` runner-label
 # set lives in the shared .github/sku_config.yaml (single source of truth for HW
