@@ -54,7 +54,7 @@ jobs:
             - >-
               cat cmake/CPM.cmake third_party/CMakeLists.txt tt_metal/third_party/CMakeLists.txt
               tt_metal/third_party/umd/third_party/CMakeLists.txt tt-train/cmake/dependencies.cmake
-              .gitmodules | sha256sum | cut -d' ' -f1 > /tmp/cpm-deps.sha256
+              third_party/*.patch tt-train/cmake/*.patch .gitmodules | sha256sum | cut -d' ' -f1 > /tmp/cpm-deps.sha256
             - >-
               if [ ! -f .cpmcache/.deps.sha256 ]; then echo "CPM cache: miss";
               elif cmp -s .cpmcache/.deps.sha256 /tmp/cpm-deps.sha256; then
