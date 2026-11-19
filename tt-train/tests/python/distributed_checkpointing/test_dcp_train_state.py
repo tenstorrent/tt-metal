@@ -239,8 +239,7 @@ def test_rng_state_is_checked_whole_before_any_generator_is_set(expect_error):
     newer = dict(block, format=2)
     with expect_error(VersionError, "newer than this reader"):
         check_train_state({"rng": newer}, rng=True, world_rank=0)
-    # The whole train state passed where its RNG block belongs, or a block with a bad format, restores nothing
-    # silently no more.
+    # The whole train state passed where its RNG block belongs, and a block whose format is not a number, are refused.
     with expect_error(CheckpointError, r"not an RNG block \(found \['dataloader', 'rng'\]\)"):
         restore_rng({"dataloader": {"position": 1}, "rng": block}, world_rank=0)
     with expect_error(CheckpointError, "RNG state format 'x' is not a version number"):
@@ -266,8 +265,7 @@ def _shorten_hex(text: str, nbytes: int) -> str:
     ],
 )
 def test_rng_state_of_the_wrong_length_changes_no_generator(damage, expect_error):
-    # Valid JSON and hex, the wrong length: what each setter, not the decoder, used to find out, after the generators
-    # before it in the restore order were already set.
+    # Valid JSON and hex of the wrong length for its generator: refused while decoding, before any generator is set.
     ctx = ttml.autograd.AutoContext.get_instance()
     block = capture_rng(world_rank=0)
     broken = json.loads(json.dumps(block))
