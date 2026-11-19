@@ -1076,11 +1076,6 @@ def _validate_remote_inputs(config: GRPOConfig, transformer_config: Any, device_
             f"GRPOTrainer: rollout_backend={config.rollout_backend!r} does not support FSDP: "
             "the weight push needs replicated parameters."
         )
-    if config.rollout_backend == "ttt_remote_async" and device_config.total_devices() != 1:
-        raise ValueError(
-            f"GRPOTrainer: rollout_backend={config.rollout_backend!r} trains on one device, "
-            f"got {device_config.total_devices()}."
-        )
     if os.path.exists(model_source):
         raise ValueError(
             f"GRPOTrainer: rollout_backend={config.rollout_backend!r} needs a HuggingFace Hub model id, "
@@ -1179,7 +1174,7 @@ class GRPOTrainer:
         if is_rollout_rank(config):
             # Rank 0 is blocked waiting for the handshake, terminating processes on a failure before handshake.
             with exit_on_error():
-                self._init_remote_rollout(dataset_func)
+                self._init_remote_rollout(device_config, dataset_func)
         else:
             self._build_policy(transformer_config, device_config, dataset_func)
 
@@ -1246,7 +1241,7 @@ class GRPOTrainer:
                 )
         raise ValueError(f"unsupported rollout_backend {cfg.rollout_backend!r}")
 
-    def _init_remote_rollout(self, dataset_func: Callable[[], Any]) -> None:
+    def _init_remote_rollout(self, device_config: Any, dataset_func: Callable[[], Any]) -> None:
         cfg = self.config
         rr = cfg.remote_rollout
         self._rollout_mesh = ttnn.open_mesh_device(
@@ -1263,9 +1258,9 @@ class GRPOTrainer:
             temperature=cfg.temperature,
             completions_per_prompt=cfg.num_generations,
         )
-        self._rollout_server = self._build_rollout_server(dataset_func)
+        self._rollout_server = self._build_rollout_server(device_config, dataset_func)
 
-    def _build_rollout_server(self, dataset_func: Callable[[], Any]) -> Any:
+    def _build_rollout_server(self, device_config: Any, dataset_func: Callable[[], Any]) -> Any:
         from transformers import AutoTokenizer
 
         from .remote_rollout.async_rollout import AsyncRolloutServer
@@ -1288,7 +1283,8 @@ class GRPOTrainer:
                     raise ValueError(f"GRPOTrainer: rollout_backend={cfg.rollout_backend!r} needs a non-empty dataset.")
                 ttml.autograd.AutoContext.get_instance().initialize_distributed_context(*sys.argv)
                 self.tokenizer = AutoTokenizer.from_pretrained(self.model_source, trust_remote_code=True)
-                prompts, extra_columns, batch_prompts = self._prompt_batches(dataset, self.tokenizer, num_devices=1)
+                num_devices = device_config.total_devices() if device_config.enable_ddp else 1
+                prompts, extra_columns, batch_prompts = self._prompt_batches(dataset, self.tokenizer, num_devices)
                 return AsyncRolloutServer(
                     bridge=ThreadedWeightBridge.receiver(peer_rank=TTML_RANK, submeshes=self.rollout_sampler.submeshes),
                     queue=RolloutQueue.producer(

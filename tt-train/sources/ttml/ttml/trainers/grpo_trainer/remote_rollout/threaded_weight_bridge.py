@@ -217,7 +217,7 @@ class ThreadedWeightBridge:
         manifest = {"weight_version": self._version, "entries": _manifest_entries(self._pads, keys)}
         self._send_blob(json.dumps(manifest).encode("utf-8"), _TAG_MANIFEST_LEN, _TAG_MANIFEST_BODY)
         for k in keys:
-            blob = _torch_save_bytes(ttnn.to_torch(self._pads[k], cq_id=1))
+            blob = _torch_save_bytes(ttnn.to_torch(ttnn.get_device_tensors(self._pads[k])[0], cq_id=1))
             self._send_blob(blob, _TAG_WEIGHT_LEN, _TAG_WEIGHT_BODY)
 
     def _send_blob(self, blob: bytes, len_tag: int, body_tag: int) -> None:

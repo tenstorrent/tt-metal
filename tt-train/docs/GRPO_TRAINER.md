@@ -205,7 +205,7 @@ Rules and limitations of `ttt_remote_async`, on top of those of `ttt_remote_sync
   effects or state see rank 1's copy of the script. A reward function that
   raises ends the job from rank 1 with `os._exit(1)`. In `ttt_remote_sync` the
   reward functions run on rank 0, so the exception is raised there.
-- **Rank 0 trains on one device.** Both meshes are opened with 2 command queues.
+- **Both meshes are opened with 2 command queues.**
   On rank 0 the training thread copies the weights into staging pads on CQ0,
   and the bridge thread reads the pads to host on CQ1. On rank 1 the bridge
   thread writes the received weights on CQ1 while generation uses CQ0.
