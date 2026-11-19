@@ -251,3 +251,11 @@ Owner rule (2026-11-19): a gap that needs a kernel change (a fork's kernel, a fu
 the work, not a reason to stop. "At its floor as a separate pass", "needs a kernel redesign" or "not a config" never
 end a perf step: build it in a fork (the bringup-fork-op skill), measure it, and revert only what measures below the
 brief's threshold.
+
+Owner rule (2026-11-19), iteration time: before you load ANYTHING big, think whether you need all of it. A model, an
+engram hash table, a weight cache, a KV history: is there a piece that answers the question just as well (one layer,
+the layers the question touches, one head, a slice of rows, a synthetic table in the same format, a short history)?
+Plan the work so the iteration loop uses the smallest piece that exercises the code path: correctness, kernel
+development and hang debugging on the piece (seconds); the full size only once, for the final measurement. Write the
+check in one line in BREADCRUMBS before any full load ("needs the full X because ..."). A full load that a piece
+would have answered is a wasted iteration and counts against the step.
