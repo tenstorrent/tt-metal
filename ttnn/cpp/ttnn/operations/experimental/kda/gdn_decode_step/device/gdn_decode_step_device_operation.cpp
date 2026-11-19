@@ -77,6 +77,9 @@ void GdnDecodeStepOperation::validate_on_program_cache_miss(const operation_attr
         Dk > 0 && Dv > 0 && Dk % tt::constants::TILE_WIDTH == 0 && Dv % tt::constants::TILE_WIDTH == 0,
         "{}: key_dim and value_dim must be tile aligned",
         kOp);
+    // The compute's `tmp` DFB (max(Kt, Vt) tiles) takes Kt- and Vt-tile blocks; a block must not straddle the DFB's
+    // ring end, which holds for any push order only when Kt == Vt.
+    TT_FATAL(Dk == Dv, "{}: key_dim ({}) must equal value_dim ({})", kOp, Dk, Dv);
     TT_FATAL(std::isfinite(a.scale) && a.l2_epsilon > 0.0f && a.norm_epsilon > 0.0f, "{}: bad scale/epsilon", kOp);
     const auto& qs = in.qkv.logical_shape();
     const uint32_t C = 2 * Nk * Dk + Nv * Dv;

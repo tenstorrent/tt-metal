@@ -107,6 +107,12 @@ void GdnSpecStepOperation::validate_on_program_cache_miss(const operation_attrib
         B * Nv,
         grid.x * grid.y);
     TT_FATAL(Dk > 0 && Dv > 0 && Dk % TW == 0 && Dv % TW == 0, "{}: key_dim and value_dim must be tile aligned", kOp);
+    // The compute's `tmp` DFB (max(Kt, Vt) tiles) takes Kt- and Vt-tile blocks; a block must not straddle the DFB's
+    // ring end, which holds for any push order only when Kt == Vt.
+    TT_FATAL(Dk == Dv, "{}: key_dim ({}) must equal value_dim ({})", kOp, Dk, Dv);
+    // row_times_matrix_acc keeps all Vs <= Vt output tiles in one DST acquire, and fp32 DST under the half-DST sync
+    // holds 4 tiles. value_blocks does not lift this: the program factory falls back to VB = 1 when the grid is full.
+    TT_FATAL(Dv <= 4 * TW, "{}: value_dim ({}) must be <= {}", kOp, Dv, 4 * TW);
     TT_FATAL(std::isfinite(a.scale) && a.l2_epsilon > 0.0f && a.norm_epsilon > 0.0f, "{}: bad scale/epsilon", kOp);
     TT_FATAL(T >= 1 && B >= 1, "{}: need T >= 1, B >= 1", kOp);
     TT_FATAL(a.value_blocks <= 4, "{}: value_blocks must be in [0, 4] (got {})", kOp, a.value_blocks);
