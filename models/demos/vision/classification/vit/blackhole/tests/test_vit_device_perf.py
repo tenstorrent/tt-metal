@@ -51,6 +51,10 @@ def test_vit_device_ops(
     ttnn.synchronize_device(device)
 
 
+@pytest.mark.skip(
+    reason="CI's P150 exposes an 11-column grid, on which the model runs on 6 columns and misses the "
+    "12-column target; skipped as on main (github issue #38877)"
+)
 @pytest.mark.parametrize("batch_size", [10])
 @pytest.mark.models_device_performance_bare_metal
 # Three profiled runs of the model take close to the default 300 s.
