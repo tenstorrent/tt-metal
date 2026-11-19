@@ -905,7 +905,7 @@ def test_ep4_disp_shared(mesh_device):
                 ws.append((time.perf_counter() - t0) * 1e3)
         return statistics.median(ws)
 
-    shv = lambda: max(shared_span_us([b[2]], ci, clk) for ci in range(N)) / 1e3
+    shv = lambda: max(shared_span_us(b[2], ci, clk) for ci in range(N)) / 1e3
     t = {}
     t["shared"] = wall(sh)
     t["shared_dev"] = shv()
