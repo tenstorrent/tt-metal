@@ -5685,7 +5685,7 @@ tasks:
       i+1''s lookup / gather / prep runs while segment i computes (fused with or concurrent to attention, the indexer or the token-wise work, as P.87 fused the engram lookup with the history prefetch; or
       hidden behind the engram lookups as today). Judge by the device profile and the exposed-host breakdown; report exposed vs hidden gather time per segment.'
   gate:
-    cmd: python -m pytest -q models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_cpu.py
+    cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_cpu.py
     metrics:
       packed_cpu_cases: '>= 1'
       packed_cpu_failures: == 0

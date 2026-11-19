@@ -682,3 +682,8 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   call over all segments = the design's v2) after PB.3H and before PB.4: the owner made it part of the goal if the loop
   misses the targets, and the design projects the loop at 121-145 ms vs the 122 ms bar; if PB.3H already meets both
   targets, PB.3A keeps v2 only at >= 1 ms device. Orchestrator relaunched without --until, --attempts 20 (F290 in).
+- 22:02 UTC relaunch corrected to --until PB.5 --attempts 20 (without --until the old open FIX.11 / FIX.13 / O.1 / Z.1 / F.1 would run); the unbounded one was killed during its startup, before any task.
+- 22:07 UTC PB.1 gate FAIL: my task error: the gate called pytest directly (the framework requires scripts/run_safe_pytest.sh,
+  also for a CPU test; `validate` does not check it, only the gate). Fixed PB.1's cmd. Follow-up (not tonight): make
+  `validate` run the gate's device policy (it would also flag the old F.1: `python -m ...fork_suite` on a device task).
+  Re-running PB.1's gate (CPU test, seconds; the safe runner holds the cards briefly, no model load).
