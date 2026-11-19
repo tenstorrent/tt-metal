@@ -1150,6 +1150,7 @@ def test_minimax_h3_transformer_block_dynamic_length(
 
 @GALAXY_RING
 @pytest.mark.parametrize("dynamic_length", [False, True], ids=["static", "dynamic"])
+@pytest.mark.parametrize("use_persistent_ccl_buffers", [True, False], ids=["persistent", "op_allocated"])
 def test_minimax_h3_transformer_block_ff1_bf8(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
@@ -1158,6 +1159,7 @@ def test_minimax_h3_transformer_block_ff1_bf8(
     is_fsdp: bool,
     topology: ttnn.Topology,
     dynamic_length: bool,
+    use_persistent_ccl_buffers: bool,
     reset_seeds,
 ) -> None:
     """A bfloat8_b ff1 -> ff2 intermediate (`ff1_output_dtype`) stays close to the reference and changes the output."""
@@ -1165,10 +1167,10 @@ def test_minimax_h3_transformer_block_ff1_bf8(
 
     skip_if_unsupported_num_links(mesh_device, num_links)
     fixture = _block_setup(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, 512, 256, 1280)
-    extra = {}
+    extra = {"use_persistent_ccl_buffers": use_persistent_ccl_buffers}
     if dynamic_length:
         capacity = padded_sequence_length(fixture.seq_len, fixture.sp_factor)
-        extra = dict(dynamic_length=True, kv_gather_capacity=capacity, norm_row_capacity=capacity // fixture.sp_factor)
+        extra |= dict(dynamic_length=True, kv_gather_capacity=capacity, norm_row_capacity=capacity // fixture.sp_factor)
 
     def run(ff1_output_dtype) -> torch.Tensor:
         tt_model = MiniMaxH3TransformerBlock(**fixture.block_kwargs, **extra, ff1_output_dtype=ff1_output_dtype)

@@ -119,6 +119,7 @@ def run_test_linear_impl(
     persistent_output_buffers=None,
     ag_buffer_rows=None,
     host_tilize=False,
+    output_dtype=None,
 ):
     ccl_cores = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
@@ -313,6 +314,7 @@ def run_test_linear_impl(
                 chunk_sizes=list(chunk_sizes) if chunk_sizes else [],
                 fuse_swiglu=fuse_swiglu,
                 transpose_core_grid=transpose_core_grid,
+                dtype=output_dtype,
             )
 
         return tt_output
@@ -454,6 +456,7 @@ def run_test_linear(
     host_tilize=False,
     batch=None,
     per_batch_gate=False,
+    output_dtype=None,
 ):
     logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
     torch_dtype = torch.float32
@@ -574,6 +577,7 @@ def run_test_linear(
         persistent_output_buffers=persistent_output_buffers,
         ag_buffer_rows=ag_buffer_rows,
         host_tilize=host_tilize,
+        output_dtype=output_dtype,
     )
 
 
@@ -1618,6 +1622,93 @@ def test_linear_k_tail(
         for i in range(submesh.get_num_devices()):
             assert check_result[0][c][i]["pcc"] > 0.999_500
             assert check_result[0][c][i]["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, topology, num_links, num_workers_per_link, sp_axis, tp_axis, core_grid_x, core_grid_y, cluster_axis",
+    [
+        [
+            (4, 8),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(4096),
+                "trace_region_size": 90112,
+            },
+            ttnn.Topology.Ring,
+            2,
+            4,
+            1,
+            0,
+            8,
+            8,
+            0,
+        ],
+        [
+            (4, 8),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(4096),
+                "trace_region_size": 90112,
+            },
+            ttnn.Topology.Ring,
+            2,
+            6,
+            1,
+            0,
+            12,
+            9,
+            0,
+        ],
+    ],
+    ids=["wh4x8links2", "bh4x8links2"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "input_dtype, output_dtype",
+    [(ttnn.bfloat16, ttnn.bfloat8_b), (ttnn.bfloat8_b, ttnn.bfloat16)],
+    ids=["bf16_in_bf8_out", "bf8_in_bf16_out"],
+)
+@pytest.mark.parametrize("use_persistent_buffers", [True, False], ids=["persistent", "op_allocated"])
+def test_linear_output_dtype(
+    mesh_device,
+    topology,
+    core_grid_x,
+    core_grid_y,
+    num_workers_per_link,
+    num_links,
+    sp_axis,
+    tp_axis,
+    cluster_axis,
+    input_dtype,
+    output_dtype,
+    use_persistent_buffers,
+):
+    """An output dtype other than the input's, with the gather buffer passed in or allocated by the op."""
+    submesh = _create_cluster_submesh(mesh_device, cluster_axis)
+    check_result = run_test_linear(
+        submesh,
+        3072,
+        5120,
+        3840,
+        8,
+        8,
+        8,
+        2,
+        2,
+        topology,
+        core_grid=ttnn.CoreCoord(core_grid_x, core_grid_y),
+        num_workers_per_link=num_workers_per_link,
+        num_links=num_links,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        cluster_axis=cluster_axis,
+        dtype=input_dtype,
+        output_dtype=output_dtype,
+        use_persistent_buffers=use_persistent_buffers,
+    )
+    for i in range(submesh.get_num_devices()):
+        assert check_result[0][0][i]["pcc"] > 0.999_500
+        assert check_result[0][0][i]["relative_rmse"] < 0.02
 
 
 @pytest.mark.parametrize(
