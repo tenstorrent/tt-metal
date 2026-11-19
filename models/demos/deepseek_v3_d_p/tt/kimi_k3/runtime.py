@@ -18,6 +18,7 @@ from __future__ import annotations
 import inspect
 
 import ttnn
+from models.demos.common.prefill.prefill_chunk import validate_chunks
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import validate_kda_bounds
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
@@ -165,7 +166,8 @@ class TtKimiK3Runtime(TtPrefillRuntime):
                 raise RuntimeError(f"no KVPE cache allocated but layers {my_slots} own MLA slabs")
             token_stages = [KvCacheStage(0, first_slot, 0)] * (1 + self._has_index_cache)
         else:
-            slabs_per_user = kv_caches.kvpe.storage.shape[0] // self.config.num_users
+            # The KVPE cache also holds a traced packed forward's scratch slot (cache_num_users); the KDA slabs do not.
+            slabs_per_user = kv_caches.kvpe.storage.shape[0] // self.config.cache_num_users
             if slabs_per_user != len(my_slots):
                 raise RuntimeError(
                     f"KVPE cache holds {slabs_per_user} slabs per slot but layers "
@@ -311,6 +313,8 @@ class TtKimiK3Runtime(TtPrefillRuntime):
             sp_axis=self.config.sp_axis,
             tp_axis=self.config.tp_axis,
             num_users=self.config.num_users,
+            # The KVPE cache also holds a traced packed forward's scratch slot, which the table does not publish.
+            cache_num_users=self.config.cache_num_users,
             chunk_size_global=self.config.chunk_size,
             path=path,
             first_layer_idx=first_layer_idx,
@@ -334,3 +338,24 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         # aligned-start, nonempty-interval contract.
         validate_kda_bounds(bound.arguments.get("actual_start"), bound.arguments.get("actual_end"))
         return super().prefill_chunk(*args, **kwargs)
+
+    def prefill_forward(self, input_tensor, kv_caches, chunks, *args, **kwargs):
+        """Validate the chunks, then run the shared packed forward.
+
+        The chunks are checked against the shared chunk rules (validate_chunks) and each non-empty chunk against the
+        KDA bounds contract (32-aligned start, end past it), all before any device work. A chunk at
+        `actual_start == 0` starts its request from zero KDA state on device: each chunk position's start scalar is
+        the `zero_fill_at_zero` of its state import (#62926), so no host reset is needed, traced or eager.
+        """
+        cfg = self.config
+        validate_chunks(
+            chunks,
+            chunk_size=cfg.chunk_size,
+            forward_chunks=cfg.forward_chunks,
+            num_users=cfg.num_users,
+            max_seq_len=cfg.max_seq_len,
+        )
+        for c in chunks:
+            if not c.is_empty:
+                validate_kda_bounds(c.actual_start, c.actual_end)
+        return super().prefill_forward(input_tensor, kv_caches, chunks, *args, **kwargs)

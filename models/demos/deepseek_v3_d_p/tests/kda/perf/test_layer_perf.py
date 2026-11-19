@@ -41,11 +41,14 @@ pytestmark = [
 
 _TIMING_SAMPLES = 5
 # Host-time targets (ms) per (layout, mode), as tests/measure measures them: untraced fastest of 10 after 10 warm-up,
-# traced one replay, both with the CPU clock held. LoudBox SP8xTP1 and QuietBox SP4xTP1 report until a CI run gives
-# their targets.
+# traced one replay, both with the CPU clock held.
 _TARGETS_MS = {
-    ("SP8xTP4", "untraced"): 1.33,
-    ("SP8xTP4", "traced"): 1.244,
+    ("SP8xTP4", "untraced"): 1.276,
+    ("SP8xTP4", "traced"): 1.175,
+    ("SP8xTP1", "untraced"): 1.20,
+    ("SP8xTP1", "traced"): 1.142,
+    ("SP4xTP1", "untraced"): 1.216,
+    ("SP4xTP1", "traced"): 1.150,
 }
 # Galaxy-equivalent layouts outside CI: they report wall time but are not gated.
 _REPORT_ONLY_LAYOUTS = ("SP4xTP2", "SP2xTP2")
@@ -54,8 +57,8 @@ _ACTUAL_START_OVERRIDE = os.environ.get("KDA_PERF_ACTUAL_START")
 _GALAXY_TP = 4
 _GALAXY_HEADS_PER_CHIP = KimiK3Config.KDA_NUM_HEADS // _GALAXY_TP
 # Galaxy target: a full chunk whose start falls mid-device. A resumed request starts at an arbitrary aligned
-# prefix, and every full chunk of it then wraps onto its first rank, which adds the final-carry barrier and
-# broadcast that a rank-aligned start skips. Production always passes actual_end, so the gate does too.
+# prefix, and every full chunk of it then wraps onto its first rank, whose separated tail the relay applies before it
+# sends the final carry, a step a rank-aligned start skips. Production always passes actual_end, so the gate does too.
 _GALAXY_ACTUAL_START = 4 * PREFILL_CHUNK_TOKENS_PER_CHIP + 320
 # QuietBox SP2xTP2 runs Galaxy's per-chip workload: 640 rows and 24 heads per chip, so the chunk shrinks to 1280
 # tokens and the synthetic config halves the global head count. Every per-chip shape, L1 placement and program
