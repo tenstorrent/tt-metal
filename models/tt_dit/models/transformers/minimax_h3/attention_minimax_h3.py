@@ -240,7 +240,7 @@ class MiniMaxH3Attention(Module):
         sol_tau: float = 1.0,
         sol_thresh_type: str = "diag",
         sol_band: int = 1,
-        sol_prefix_mode: str = "separate",
+        sol_prefix_mode: str = "fused",
         sol_dense_prefix: bool | None = None,
         sol_mode: str = "gather",
         sol_fused: bool = False,
