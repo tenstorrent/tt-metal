@@ -104,11 +104,12 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 bool should_use_pinned_write_path(
     distributed::MeshDevice& mesh_device,
     distributed::MeshCommandQueue& cq,
+    const distributed::MeshBuffer& buffer,
     size_t local_bytes,
     size_t max_shard_bytes) {
     const auto* queue = dynamic_cast<const distributed::MeshCommandQueueBase*>(&cq);
     TT_FATAL(queue != nullptr, "MeshCommandQueue is not a MeshCommandQueueBase");
-    if (!queue->should_pin_write(local_bytes, max_shard_bytes)) {
+    if (!queue->should_pin_write(buffer, local_bytes, max_shard_bytes)) {
         return false;
     }
     const auto params = experimental::GetMemoryPinningParameters(mesh_device);
@@ -234,7 +235,7 @@ void h2d_as_replicate_tensor_on_1x1_mesh(
 
     const bool use_pinned =
         ::tt::tt_metal::CMAKE_UNIQUE_NAMESPACE::should_use_pinned_write_path(
-            *mesh_device, command_queue, data_to_write.size(), data_to_write.size());
+            *mesh_device, command_queue, *mesh_buffer, data_to_write.size(), data_to_write.size());
 
     if (use_pinned) {
         // Replication fans a single 1x1 host shard out to the whole mesh, but only the chips owned
@@ -325,7 +326,7 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
 
     const bool use_pinned =
         ::tt::tt_metal::CMAKE_UNIQUE_NAMESPACE::should_use_pinned_write_path(
-            *cq.device(), cq, local_shards.size_bytes, local_shards.max_shard_bytes);
+            *cq.device(), cq, *mesh_buffer, local_shards.size_bytes, local_shards.max_shard_bytes);
 
     if (use_pinned) {
         std::vector<distributed::ShardDataTransfer> transfers;

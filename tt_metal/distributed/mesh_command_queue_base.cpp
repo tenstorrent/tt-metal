@@ -120,7 +120,8 @@ uint64_t MeshCommandQueueBase::host_bytes_written(
     return pages * shard_view.page_size();
 }
 
-bool MeshCommandQueueBase::should_pin_write(size_t local_bytes, size_t /*max_shard_bytes*/) const {
+bool MeshCommandQueueBase::should_pin_write(
+    const MeshBuffer& /*buffer*/, size_t local_bytes, size_t /*max_shard_bytes*/) const {
     return local_bytes > pinned_upload::k_pin_write_threshold_bytes;
 }
 
