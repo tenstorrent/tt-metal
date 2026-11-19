@@ -1769,3 +1769,18 @@ speed-of-light ep4_targets.py.
   gave them; the model scores every rectangle 0.75 (no asymmetry): it ranks the shared links, it does not predict times.
 - G 4 on this grid: two muxes a column (40 GB/s north) and their rectangles' row writes (~54 GB/s at 8 ms) do not fit
   the column's NOC1 links; without the row writes the phase is 8.6 ms.
+- Harvest mask bits are UMD's HARVESTING_NOC_LOCATIONS order (1, 16, 2, 15, ... 7, 10), not left to right: on this
+  Galaxy 13 of the 32 chips have the harvested column in x 1-7 (logical column 6 = NoC x 10). noc_flow_model.py
+  decodes it that way.
+- Per-rectangle core stamps (test_ep4_experts): the slow rectangles' compute is slow (MATH up, waits on landing or
+  weights), the output path backing up into the packer. Each layout has had one slow side:
+| b08u02, G 4, 302K uniform | experts | west (0 / 1) end | east (2 / 3) end | west / east MATH gate-up us |
+|---|---|---|---|---|
+| baseline (collectors, east NOC0 writes) | 12.75 | 9.3 / 12.3 | 7.9 / 7.8 | 3197, 4726 / 2706, 2743 |
+| no collectors (yc 0) | 12.68 | 9.1 / 8.8 | 12.1 / 12.1 | 2992, 2929 / 4118, 4203 |
+| no collectors, rows in the side's DRAM column (EP4_OSIDE) | 11.88 | 9.3 / 8.9 | 11.3 / 11.2 | 3070, 2986 / 4834, 4963 |
+  EP4_OSIDE: west rows at pages (d >> 2) 8 + (d & 3) (banks 0-3), east at (d >> 2) 8 + 4 + (d & 3) (banks 4-7), the
+  combine reads each pair's row by its local expert's side (run record word 16 + j, a 160-bit mask a chip). Layer
+  24.32 ms (experts 12.06, combine 5.11 - all 8 banks still serve it), y min PCC 0.99988, two layers bit-identical.
+  The east rectangles' compute waits ~3.3 ms on weights there (west 0.4-0.5); the LoudBox's collector-free Galaxy run
+  (test_ws_lane5_glx_oneway_cols) had the same east slowdown. Not explained yet.

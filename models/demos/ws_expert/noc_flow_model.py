@@ -5,7 +5,7 @@ wrapping). A layout gives each flow its source, destination, NoC and rate (GB/s 
 sums the rates on every directed link and reports the busiest links with what loads them, and per lane the busiest
 link its weight traffic crosses.
 
-Logical -> physical: the Tensix columns a chip has enabled (ENABLED_TENSIX_COL, bit i = the i-th of NoC x 1-7, 10-16),
+Logical -> physical: the Tensix columns a chip has enabled (ENABLED_TENSIX_COL, bit i = NoC x HARVEST_X[i]),
 logical column c = the c-th enabled one; logical row r = NoC y r + 2. Ethernet cores at y 1 (channel -> x BH_ETH_X).
 DRAM: channel c's three endpoints (blackhole_140_arch.yaml), the NoC's endpoint by the legacy or relocated view.
 """
@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 
 W, H = 17, 12
 TENSIX_X = [1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 13, 14, 15, 16]
+HARVEST_X = [1, 16, 2, 15, 3, 14, 4, 13, 5, 12, 6, 11, 7, 10]  # (harvest mask bit i -> NoC x: UMD HARVESTING_NOC_LOCATIONS)
 DRAM = [
     [(0, 0), (0, 1), (0, 11)],
     [(0, 2), (0, 10), (0, 3)],
@@ -60,7 +61,7 @@ class Chip:
     eth_out: tuple = (3, 2, 14, 15)  # lane -> its ethernet core's NoC x (lanes 0 / 1 link 0 fwd / rev, 2 / 3 link 1)
 
     def cols(self):
-        return [x for i, x in enumerate(TENSIX_X) if self.mask >> i & 1]
+        return sorted(x for i, x in enumerate(HARVEST_X) if self.mask >> i & 1)
 
     def phys(self, lx, ly):
         return (self.cols()[lx], ly + 2)
