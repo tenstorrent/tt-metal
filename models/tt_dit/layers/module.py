@@ -328,9 +328,9 @@ class Module(ABC):
         for t in defer_free:
             ttnn.deallocate(t)
         for module in modules:
-            module._set_evicted()  # noqa: SLF001
+            module._set_evicted()
 
-    def gather(self, ccl_manager: Any) -> None:  # noqa: ANN401
+    def gather(self, ccl_manager: Any) -> None:
         """Undo `shard`: all-gather every transiently sharded parameter; the module is loaded again."""
         defer_free: list[ttnn.Tensor] = []
         for parameter in self._all_parameters():
@@ -345,7 +345,7 @@ class Module(ABC):
 
     def _all_modules(self) -> Iterator[Module]:
         for _, child in self.named_children():
-            yield from child._all_modules()  # noqa: SLF001
+            yield from child._all_modules()
         yield self
 
     def _all_parameters(self) -> Iterator[Parameter]:
@@ -661,7 +661,7 @@ class Parameter:
         self.data = ttnn.reshape(piece, self.local_shape)
         defer_free.append(full)
 
-    def gather(self, ccl_manager: Any, /, *, defer_free: list[ttnn.Tensor]) -> None:  # noqa: ANN401
+    def gather(self, ccl_manager: Any, /, *, defer_free: list[ttnn.Tensor]) -> None:
         """Undo `shard`: all-gather the transiently split dim, back to the durable layout (`durable_mesh_axes`).
 
         After gathering, the parameter holds the full tensor again, and the sharded tensor is appended to

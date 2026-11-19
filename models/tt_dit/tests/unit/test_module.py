@@ -109,7 +109,7 @@ class ShardableModule(Module):
     ids=mesh_device_config_to_string,
     indirect=True,
 )
-def test_shard_and_gather(mesh_device: ttnn.MeshDevice, expect_error) -> None:  # noqa: ANN001
+def test_shard_and_gather(mesh_device: ttnn.MeshDevice, expect_error) -> None:
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
     model = ShardableModule(device=mesh_device)
     state = {name: torch.randn([512, 256], dtype=torch.bfloat16) for name in ("replicated", "tensor_parallel")}
@@ -119,8 +119,8 @@ def test_shard_and_gather(mesh_device: ttnn.MeshDevice, expect_error) -> None:  
 
     def assert_layout_matches_data() -> None:
         for name, p in params.items():
-            assert tuple(p._data.shape) == p.local_shape, name  # noqa: SLF001
-            assert torch.equal(to_torch(p._data, mesh_axes=p.mesh_axes), state[name]), name  # noqa: SLF001
+            assert tuple(p._data.shape) == p.local_shape, name
+            assert torch.equal(to_torch(p._data, mesh_axes=p.mesh_axes), state[name]), name
 
     # Axis 0 is in `tensor_parallel`'s durable layout: the call refuses and changes nothing.
     with expect_error(ValueError, "durable layout"):
@@ -135,7 +135,7 @@ def test_shard_and_gather(mesh_device: ttnn.MeshDevice, expect_error) -> None:  
     assert not params["small"].is_transiently_sharded()  # no dim splits into whole tiles
     assert_layout_matches_data()
     with expect_error(RuntimeError, "gather it first"):
-        params["replicated"].data  # noqa: B018
+        params["replicated"].data
     with expect_error(RuntimeError, "ShardableModule has weights with a transient split"):
         model()
 
@@ -201,9 +201,7 @@ class FreesExtraState(ShardableModule):
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-def test_shard_refuses_a_deallocate_weights_override(
-    mesh_device: ttnn.MeshDevice, expect_error
-) -> None:  # noqa: ANN001
+def test_shard_refuses_a_deallocate_weights_override(mesh_device: ttnn.MeshDevice, expect_error) -> None:
     model = FreesExtraState(device=mesh_device)
     with expect_error(TypeError, "FreesExtraState overrides deallocate_weights"):
         model.shard(1)
