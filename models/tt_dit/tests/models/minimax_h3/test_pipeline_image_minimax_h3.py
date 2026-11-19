@@ -718,3 +718,27 @@ def test_step_slowdown_cause(mesh_device, guide_examples):
     for ts, cmin, cmax, pmed, pmax in samples:
         span = next((s[0] for s in spans if s[1] <= ts <= s[2]), "between")
         logger.info(f"RESULT telem t={ts - base:6.1f}s [{span}]: aiclk {cmin}-{cmax}, power med {pmed} max {pmax}")
+
+
+@pytest.mark.timeout(7200)
+@pytest.mark.parametrize(("mesh_device", "device_params"), [MESH_4X8_RING], indirect=["mesh_device", "device_params"])
+def test_warmup_covers_long_class_small_limit(mesh_device, guide_examples):
+    """With a 16 MP reference-area limit, the warm-up's square references stay in the DiT's short length class, but an
+    admitted edit with wide references and a long prompt reaches the long class. `warmup()` must have compiled it:
+    three 1024x4096 references and one 1024x3328 (15.99 MP effective), a ~4k-token prompt, a 4096^2 target."""
+    _, edit_prompt, reference = guide_examples
+    pipe = MiniMaxH3ImagePipeline(mesh_device=mesh_device, weights_dir=_weights_dir(), reference_area_limit=16_000_000)
+    logger.info(f"RESULT warmup (16 MP limit): {pipe.warmup():.1f}s")
+    base = reference.convert("RGB")
+    refs = [base.resize((1024, 4096))] * 3 + [base.resize((1024, 3328))]
+    prompt = ((edit_prompt + " ") * 40)[:20000]
+    before = mesh_device.num_program_cache_entries()
+    result = pipe(prompt, width=4096, height=4096, seed=1, images=refs)
+    misses = mesh_device.num_program_cache_entries() - before
+    rows = result.rung // pipe.sp_factor
+    logger.info(
+        f"RESULT long_class_small_limit: packed {result.packed_length} -> {result.rung} ({rows} rows a device) | "
+        f"misses {misses} by stage {result.timings.program_misses}"
+    )
+    assert rows > 6144, f"the case did not reach the long length class ({rows} rows a device)"
+    assert misses == 0, f"JIT on the serving path after warmup: {result.timings.program_misses}"
