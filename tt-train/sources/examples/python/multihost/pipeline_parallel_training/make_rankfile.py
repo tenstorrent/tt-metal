@@ -11,8 +11,11 @@ Usage:
 """
 
 import argparse
+import logging
 import re
 import sys
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_host(hostname):
