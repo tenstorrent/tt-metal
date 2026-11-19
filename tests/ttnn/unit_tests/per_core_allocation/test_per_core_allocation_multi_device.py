@@ -720,6 +720,7 @@ def test_divergent_multi_core_per_device_then_lockstep(mesh_device):
         )
 
 
+@requires_hybrid_allocator
 def test_per_core_address_resolves_per_device_after_skew(mesh_device):
     """A per-core tensor whose L1 address diverges across devices must report each device's OWN
     address — both when the device is named explicitly and when it comes from ``device_coords()``
