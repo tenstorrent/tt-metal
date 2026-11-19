@@ -12,6 +12,7 @@
 #include "tt_metal/distributed/hd_socket_connector_state.hpp"
 #include <tt-metalium/experimental/sockets/hd_socket_descriptor.hpp>
 #include "tt_metal/distributed/pcie_core_writer.hpp"
+#include "tt_metal/distributed/noc_pinned_buffer.hpp"
 #include <tt-metalium/experimental/sockets/shm_resource_tracker.hpp>
 #include <tt-umd/driver_atomics.hpp>
 #include "tt_metal/impl/buffers/d2h_socket_internal.hpp"
@@ -128,23 +129,18 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
         "System Memory Allocation Error: D2H socket buffer must be aligned to the PCIe alignment.");
     bytes_sent_ptr_ = host_buffer_.get() + (fifo_size_ / sizeof(uint32_t));
 
-    tt::tt_metal::HostBuffer host_buffer_view(
-        ttsl::Span<uint32_t>(host_buffer_.get(), total_buffer_size_words), tt::tt_metal::MemoryPin(host_buffer_));
-    pinned_memory_ =
-        tt::tt_metal::experimental::PinnedMemory::Create(*mesh_device, device_range, host_buffer_view, true);
-
-    const auto& noc_addr =
-        pinned_memory_->get_noc_addr(internal::get_device(*mesh_device, sender_core_.device_coord)->id());
-    TT_FATAL(noc_addr.has_value(), "Failed to get NOC address for D2H socket pinned memory.");
-    TT_FATAL(
-        noc_addr.value().device_id == internal::get_device(*mesh_device, sender_core_.device_coord)->id(),
-        "Pinned Memory used for D2H sockets must be mapped to the same device as the sender core. D2H Sockets cannot "
-        "communicate with remote devices.");
-
+    const NocPinnedBuffer pinned = pin_host_memory_for_noc(
+        *mesh_device,
+        device_range,
+        host_buffer_,
+        total_buffer_size_words,
+        internal::get_device(*mesh_device, sender_core_.device_coord)->id(),
+        "D2H socket");
+    pinned_memory_ = pinned.pinned_memory;
     return PinnedBufferInfo{
-        .pcie_xy_enc = noc_addr.value().pcie_xy_enc,
-        .addr_lo = static_cast<uint32_t>(noc_addr.value().addr & 0xFFFFFFFFull),
-        .addr_hi = static_cast<uint32_t>(noc_addr.value().addr >> 32)};
+        .pcie_xy_enc = pinned.pcie_xy_enc,
+        .addr_lo = static_cast<uint32_t>(pinned.addr & 0xFFFFFFFFull),
+        .addr_hi = static_cast<uint32_t>(pinned.addr >> 32)};
 }
 
 D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer_hugepage(const std::shared_ptr<MeshDevice>& mesh_device) {

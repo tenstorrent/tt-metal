@@ -388,6 +388,9 @@ class RunTimeOptions {
     // Enable fabric VC2 (neighbour exchange, single-hop)
     bool enable_fabric_vc2 = false;
 
+    // Add a host_rdma sender channel to every fabric router's VC0 (host-initiated RDMA)
+    bool enable_fabric_host_rdma = false;
+
     // EXPERIMENTAL: Enable VC1 inter-mesh pass-through routing (A->B->C). Not deadlock-safe.
     bool enable_fabric_mesh_pass_through = false;
 
@@ -966,6 +969,10 @@ public:
     // Fabric VC2 enable
     bool get_enable_fabric_vc2() const { return enable_fabric_vc2; }
     void set_enable_fabric_vc2(bool enable) { enable_fabric_vc2 = enable; }
+
+    // Fabric host_rdma sender channel enable
+    bool get_enable_fabric_host_rdma() const { return enable_fabric_host_rdma; }
+    void set_enable_fabric_host_rdma(bool enable) { enable_fabric_host_rdma = enable; }
 
     // EXPERIMENTAL: Fabric VC1 inter-mesh pass-through enable (A->B->C). Not deadlock-safe.
     bool get_enable_fabric_mesh_pass_through() const { return enable_fabric_mesh_pass_through; }

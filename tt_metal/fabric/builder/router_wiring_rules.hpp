@@ -112,6 +112,20 @@ struct RouterVcShape {
     std::array<uint32_t, builder_config::MAX_NUM_VCS> receiver_counts{};
     std::array<uint32_t, builder_config::MAX_NUM_VCS> receiver_flat_base{};
 
+    // The host_rdma channel's VC0 index, where the fabric builds one (IntermeshVCConfig::requires_host_rdma): the last
+    // VC0 sender. VC0 is its only VC, so its VC0 index is also its flat index.
+    std::optional<uint32_t> host_rdma_channel;
+
+    // The sender counts the producer slots map (builder::RouterProducerSlots): every channel but the host_rdma one,
+    // which no router feeds.
+    std::array<uint32_t, builder_config::MAX_NUM_VCS> producer_sender_counts() const {
+        auto counts = sender_counts;
+        if (host_rdma_channel.has_value()) {
+            counts[0] -= 1;
+        }
+        return counts;
+    }
+
     // Bounds-checked (vc, channel) to flat-index conversion.
     uint32_t flat_sender_id(uint32_t vc, uint32_t channel) const {
         TT_FATAL(

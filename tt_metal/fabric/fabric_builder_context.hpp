@@ -54,6 +54,9 @@ struct IntermeshVCConfig {
     bool requires_vc1_full_mesh = false;            // True if VC1 needed throughout mesh (not just edges)
     bool requires_vc1_mesh_pass_through = false;    // True if VC1 must support inter-mesh pass-through
     bool requires_vc2 = false;                      // True if VC2 needed (Blackhole + 2D + no UDM/mux)
+    // TT_METAL_ENABLE_FABRIC_HOST_RDMA=1: every router gets one more VC0 sender channel, the host_rdma channel, which
+    // the host writes packets into directly. It sits after the VC0 worker and forwarding channels.
+    bool requires_host_rdma = false;
     // TT_METAL_FABRIC_DISABLE_INTERMESH_VC=1: inter-mesh traffic lands on VC0 and goes only N or S from the
     // landing chip. Deadlock-free only for traffic that cannot form a buffer cycle across meshes.
     bool intermesh_vc_disabled = false;
@@ -212,6 +215,7 @@ public:
     bool requires_intermesh_vc_full_mesh() const { return intermesh_vc_config_.requires_vc1_full_mesh; }
     bool requires_intermesh_vc_mesh_pass_through() const { return intermesh_vc_config_.requires_vc1_mesh_pass_through; }
     bool requires_vc2() const { return intermesh_vc_config_.requires_vc2; }
+    bool requires_host_rdma() const { return intermesh_vc_config_.requires_host_rdma; }
 
 private:
 
