@@ -13,6 +13,31 @@ inputs:
     required: false
     default: "true"
     description: "Whether to look for profiler-enabled artifacts"
+  # The patterns select one build of a run that holds several (for example a
+  # Merge Gate run holds Release, ASan, and TSan packages). Each is an extended
+  # regex for the whole artifact name. When a pattern is set, the artifact must
+  # match exactly once, or the step fails. When it is empty, the step uses the
+  # first name that matches the old loose filter.
+  build-artifact-pattern:
+    required: false
+    default: ""
+    description: "Regex for the build tarball artifact (TTMetal_build_any_...)"
+  require-build-artifact:
+    required: false
+    default: "true"
+    description: "Fail when no build tarball is found. Set false for a build that publishes no tarball"
+  packages-artifact-pattern:
+    required: false
+    default: ""
+    description: "Regex for the packages artifact (packages-...)"
+  wheel-artifact-pattern:
+    required: false
+    default: ""
+    description: "Regex for the wheel artifact (ttnn-dist-...)"
+  ttnn-import-artifact-name:
+    required: false
+    default: ""
+    description: "Exact name of the ttnn-import artifact to download into <working-directory>/ttnn-import"
 
 outputs:
   build-artifact-name:
@@ -24,6 +49,9 @@ outputs:
   packages-artifact-name:
     description: "Name of the downloaded packages artifact"
     value: ${{ steps.download.outputs.packages-artifact-name }}
+  ttnn-import-artifact-name:
+    description: "Name of the downloaded ttnn-import artifact"
+    value: ${{ steps.download.outputs.ttnn-import-artifact-name }}
 
 runs:
   using: composite
@@ -70,7 +98,7 @@ runs:
       shell: bash
       run: |
         WORKFLOW_RUN_ID="${{ inputs.workflow_run_id }}"
-        ARTIFACTS=$(gh api --paginate repos/${{ github.repository }}/actions/runs/"$WORKFLOW_RUN_ID"/artifacts --jq '.artifacts[].name' 2>&1)
+        ARTIFACTS=$(gh api --paginate repos/${{ github.repository }}/actions/runs/"$WORKFLOW_RUN_ID"/artifacts --jq '.artifacts[] | select(.expired | not) | .name' 2>&1)
 
         if [ $? -ne 0 ]; then
           echo "ERROR: Failed to list artifacts for run $WORKFLOW_RUN_ID"
@@ -91,12 +119,30 @@ runs:
         WORKFLOW_RUN_ID="${{ inputs.workflow_run_id }}"
         WORK_DIR="${{ inputs.working-directory }}"
         TRACY_ENABLED="${{ inputs.tracy }}"
+        BUILD_PATTERN="${{ inputs.build-artifact-pattern }}"
+        REQUIRE_BUILD="${{ inputs.require-build-artifact }}"
+        PACKAGES_PATTERN="${{ inputs.packages-artifact-pattern }}"
+        WHEEL_PATTERN="${{ inputs.wheel-artifact-pattern }}"
+        TTNN_IMPORT_NAME="${{ inputs.ttnn-import-artifact-name }}"
 
         mkdir -p "$WORK_DIR"
         cd "$WORK_DIR"
 
         # Parse artifact names from previous step
         ARTIFACTS="${{ steps.list-artifacts.outputs.artifacts }}"
+
+        # Exactly one artifact must match a set pattern.
+        pick() {
+          local pattern="$1" what="$2" found count
+          found=$(echo "$ARTIFACTS" | grep -E -- "$pattern" || true)
+          count=$(echo "$found" | grep -c . || true)
+          if [ "$count" -gt 1 ]; then
+            echo "ERROR: $count $what artifacts match '$pattern':" >&2
+            echo "$found" >&2
+            return 1
+          fi
+          echo "$found"
+        }
 
         # Find build artifact (ttm_any.tar.zst)
         BUILD_ARTIFACT=""
@@ -116,7 +162,48 @@ runs:
         # Find packages artifact (optional)
         PACKAGES_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "packages-" | head -1 || true)
 
-        if [ -z "$BUILD_ARTIFACT" ]; then
+        # Pattern mode: when one pattern is set, the patterns replace the loose
+        # filters above. An artifact with an empty pattern is not downloaded, and an
+        # artifact with a set pattern is required.
+        PATTERN_MODE=false
+        if [ -n "$BUILD_PATTERN$PACKAGES_PATTERN$WHEEL_PATTERN" ]; then
+          PATTERN_MODE=true
+          BUILD_ARTIFACT=""
+          WHEEL_ARTIFACT=""
+          PACKAGES_ARTIFACT=""
+          if [ -n "$BUILD_PATTERN" ]; then
+            BUILD_ARTIFACT=$(pick "$BUILD_PATTERN" build) || exit 1
+          fi
+          if [ -n "$WHEEL_PATTERN" ]; then
+            WHEEL_ARTIFACT=$(pick "$WHEEL_PATTERN" wheel) || exit 1
+            if [ -z "$WHEEL_ARTIFACT" ]; then
+              echo "ERROR: No wheel artifact matches '$WHEEL_PATTERN'"
+              echo "Available artifacts:"; echo "$ARTIFACTS"
+              exit 1
+            fi
+          fi
+          if [ -n "$PACKAGES_PATTERN" ]; then
+            PACKAGES_ARTIFACT=$(pick "$PACKAGES_PATTERN" packages) || exit 1
+            if [ -z "$PACKAGES_ARTIFACT" ]; then
+              echo "ERROR: No packages artifact matches '$PACKAGES_PATTERN'"
+              echo "Available artifacts:"; echo "$ARTIFACTS"
+              exit 1
+            fi
+          fi
+        fi
+        TTNN_IMPORT_ARTIFACT=""
+        if [ -n "$TTNN_IMPORT_NAME" ]; then
+          if ! echo "$ARTIFACTS" | grep -qxF -- "$TTNN_IMPORT_NAME"; then
+            echo "ERROR: No ttnn-import artifact named '$TTNN_IMPORT_NAME'"
+            echo "Available artifacts:"; echo "$ARTIFACTS"
+            exit 1
+          fi
+          TTNN_IMPORT_ARTIFACT=$TTNN_IMPORT_NAME
+        fi
+
+        if [ -z "$BUILD_ARTIFACT" ] && [ "$REQUIRE_BUILD" != "true" ]; then
+          echo "No build artifact found; none is required."
+        elif [ -z "$BUILD_ARTIFACT" ]; then
           echo "ERROR: Could not find build artifact matching expected pattern"
           echo "TRACY_ENABLED (requested): $TRACY_ENABLED"
 
@@ -139,31 +226,34 @@ runs:
           exit 1
         fi
 
-        echo "Found build artifact: $BUILD_ARTIFACT"
+        echo "Found build artifact: ${BUILD_ARTIFACT:-none}"
         echo "Found wheel artifact: ${WHEEL_ARTIFACT:-none}"
         echo "Found packages artifact: ${PACKAGES_ARTIFACT:-none}"
+        echo "Found ttnn-import artifact: ${TTNN_IMPORT_ARTIFACT:-none}"
 
-        # Download build artifact to a temp directory first
-        TEMP_DIR=$(mktemp -d)
-        echo "Downloading $BUILD_ARTIFACT to $TEMP_DIR..."
-        if ! gh run download "$WORKFLOW_RUN_ID" --repo "${{ github.repository }}" --name "$BUILD_ARTIFACT" --dir "$TEMP_DIR" 2>&1; then
-          echo "ERROR: Failed to download build artifact"
-          exit 1
-        fi
+        if [ -n "$BUILD_ARTIFACT" ]; then
+          # Download build artifact to a temp directory first
+          TEMP_DIR=$(mktemp -d)
+          echo "Downloading $BUILD_ARTIFACT to $TEMP_DIR..."
+          if ! gh run download "$WORKFLOW_RUN_ID" --repo "${{ github.repository }}" --name "$BUILD_ARTIFACT" --dir "$TEMP_DIR" 2>&1; then
+            echo "ERROR: Failed to download build artifact"
+            exit 1
+          fi
 
-        # Move ttm_any.tar.zst to work directory (keep it compressed for re-upload)
-        if [ -f "$TEMP_DIR/ttm_any.tar.zst" ]; then
-          mv "$TEMP_DIR/ttm_any.tar.zst" "$WORK_DIR/"
-          echo "Build artifact ready at $WORK_DIR/ttm_any.tar.zst"
-        elif [ -f "$TEMP_DIR/ttm_any.tar" ]; then
-          mv "$TEMP_DIR/ttm_any.tar" "$WORK_DIR/"
-          echo "Build artifact ready at $WORK_DIR/ttm_any.tar"
-        else
-          echo "ERROR: No ttm_any.tar.zst or ttm_any.tar found after download"
-          ls -la "$TEMP_DIR"
-          exit 1
+          # Move ttm_any.tar.zst to work directory (keep it compressed for re-upload)
+          if [ -f "$TEMP_DIR/ttm_any.tar.zst" ]; then
+            mv "$TEMP_DIR/ttm_any.tar.zst" "$WORK_DIR/"
+            echo "Build artifact ready at $WORK_DIR/ttm_any.tar.zst"
+          elif [ -f "$TEMP_DIR/ttm_any.tar" ]; then
+            mv "$TEMP_DIR/ttm_any.tar" "$WORK_DIR/"
+            echo "Build artifact ready at $WORK_DIR/ttm_any.tar"
+          else
+            echo "ERROR: No ttm_any.tar.zst or ttm_any.tar found after download"
+            ls -la "$TEMP_DIR"
+            exit 1
+          fi
+          rm -rf "$TEMP_DIR"
         fi
-        rm -rf "$TEMP_DIR"
 
         # Download wheel artifact if found
         if [ -n "$WHEEL_ARTIFACT" ]; then
@@ -175,6 +265,9 @@ runs:
               mv "$WHEEL_FILE" "$WORK_DIR/"
               echo "Wheel file ready at $WORK_DIR/$(basename "$WHEEL_FILE")"
             fi
+          elif [ "$PATTERN_MODE" = "true" ]; then
+            echo "ERROR: Failed to download wheel artifact"
+            exit 1
           else
             echo "WARNING: Failed to download wheel artifact (non-fatal)"
           fi
@@ -186,17 +279,30 @@ runs:
           TEMP_DIR=$(mktemp -d)
           echo "Downloading $PACKAGES_ARTIFACT..."
           if gh run download "$WORKFLOW_RUN_ID" --repo "${{ github.repository }}" --name "$PACKAGES_ARTIFACT" --dir "$TEMP_DIR" 2>&1; then
-            # Move any .deb files to work directory
-            find "$TEMP_DIR" -name "*.deb" -exec mv {} "$WORK_DIR/" \;
+            # Move the .deb files and their .ddeb debug-symbol packages to work directory
+            find "$TEMP_DIR" \( -name "*.deb" -o -name "*.ddeb" \) -exec mv {} "$WORK_DIR/" \;
+          elif [ "$PATTERN_MODE" = "true" ]; then
+            echo "ERROR: Failed to download packages artifact"
+            exit 1
           else
             echo "WARNING: Failed to download packages artifact (non-fatal)"
           fi
           rm -rf "$TEMP_DIR"
         fi
 
+        # Download the ttnn-import tree (build/lib + runtime) if requested
+        if [ -n "$TTNN_IMPORT_ARTIFACT" ]; then
+          echo "Downloading $TTNN_IMPORT_ARTIFACT to $WORK_DIR/ttnn-import..."
+          if ! gh run download "$WORKFLOW_RUN_ID" --repo "${{ github.repository }}" --name "$TTNN_IMPORT_ARTIFACT" --dir "$WORK_DIR/ttnn-import" 2>&1; then
+            echo "ERROR: Failed to download ttnn-import artifact"
+            exit 1
+          fi
+        fi
+
         # Set outputs - use the original artifact names so downstream jobs can reference them
         echo "build-artifact-name=$BUILD_ARTIFACT" >> $GITHUB_OUTPUT
         echo "wheel-artifact-name=${WHEEL_ARTIFACT:-}" >> $GITHUB_OUTPUT
         echo "packages-artifact-name=${PACKAGES_ARTIFACT:-}" >> $GITHUB_OUTPUT
+        echo "ttnn-import-artifact-name=${TTNN_IMPORT_ARTIFACT:-}" >> $GITHUB_OUTPUT
 
         echo "✓ Artifacts downloaded successfully to $WORK_DIR"
