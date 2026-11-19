@@ -299,7 +299,10 @@ sizes:
     aliases: ["llama3.3-70b-galaxy"]
     skus:
       wh_galaxy_perf:
-        trace_region_size: 216580672
+        # Reserved budget for the default prefill path (tt-ops run 20261116-tp32-sla): sp0/sp1 traces for
+        # the 3072/5120/6144 buckets plus the CPF ring and replica read/write traces of prefix 2048.
+        # The serving runs used 800 MB; the high-water trace bytes were not measured.
+        trace_region_size: 800000000
 
   llama3.3-70b-galaxy-decode:
     aliases: ["llama3.3-70b-galaxy-decode"]
