@@ -238,6 +238,22 @@
   budget_type: unit
   owner_id: U06US5C7M7X # Sean Nijjar
 
+# The same infra sanity and 1D/2D fixture tests, with routers built by the graph builder (opt-in, so stock CI never runs it).
+- name: BH fabric graph builder tests
+  cmd: |
+    TT_METAL_FABRIC_GRAPH_BUILDER=1 ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_common.yaml
+    TT_METAL_FABRIC_GRAPH_BUILDER=1 ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_at_least_2x2_mesh.yaml
+    TT_METAL_FABRIC_GRAPH_BUILDER=1 ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_vc2_at_least_2x2_mesh.yaml
+    TT_METAL_FABRIC_GRAPH_BUILDER=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1DFixture.*:Fabric2DFixture.*"
+  skus:
+    bh_loudbox:
+      timeout: 20
+    bh_quietbox_2:
+      timeout: 20
+  team: scaleout
+  budget_type: unit
+  owner_id: U06US5C7M7X # Sean Nijjar
+
 - name: BH fabric infra unit tests
   cmd: |
     ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_common.yaml
