@@ -33,12 +33,18 @@ import sys
 import traceback
 from typing import Callable
 
+# Run as a script, the driver has only its own directory on sys.path; the shared test helpers (tp_block) are one up.
+_TESTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _TESTS not in sys.path:
+    sys.path.insert(0, _TESTS)
+
 import numpy as np
 import ttnn
 
 import ttml
 import ttml.distributed_checkpointing as dcp
-from dcp_shards import shard_arrays
+from dcp_shards import model_shards, shard_arrays
+from tp_block import TPBlock
 from ttml.common.schedulers import CosineAnnealingScheduler
 from ttml.models import EmbeddingPlacement, WeightTyingType
 from ttml.models.llama import Llama, LlamaConfig
@@ -590,11 +596,6 @@ def load_tp_block(directory: str) -> list[str]:
     TPBlock on this process's single device, and compare every parameter with the global array rebuilt from the
     shards the two ranks dumped next to it (``shards_<rank>.npz``): sharded parameters by concatenating the four
     devices' shards in TP order, replicated ones from the first device. Nothing here goes through DCP's topology."""
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from tp_block import TPBlock
-
-    from dcp_shards import model_shards
-
     shards: dict[str, dict[tuple[int, ...], np.ndarray]] = {}
     for rank in (0, 1):
         with np.load(os.path.join(directory, f"shards_{rank}.npz")) as part:

@@ -13,6 +13,7 @@ import threading
 import ttnn
 from dcp_oracle import tp_split_of
 
+import ttml.distributed_checkpointing as dcp
 from ttml.distributed_checkpointing._boxes import Box
 from ttml.distributed_checkpointing import _coordinator, _state_dict
 from ttml.distributed_checkpointing._coordinator import (
@@ -535,8 +536,6 @@ def test_interrupt_is_exchanged_before_it_propagates():
 
 
 def test_every_exported_error_class_crosses_the_ranks():
-    import ttml.distributed_checkpointing as dcp
-
     exported = {name for name in dcp.__all__ if name.endswith("Error")} - {"CheckpointFatalError"}
     assert {cls.__name__ for cls in _coordinator.ERROR_CLASSES} == exported
     assert _coordinator.ERROR_CLASSES[0] is CheckpointError, "status 1, the class of anything else"

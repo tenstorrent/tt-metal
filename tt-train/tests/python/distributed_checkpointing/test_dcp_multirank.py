@@ -32,6 +32,7 @@ from tp_block import TPBlock, fresh_tp, train_step
 import ttml
 import ttml.distributed_checkpointing as dcp
 from ttml.common.schedulers import CosineAnnealingScheduler
+from ttml.distributed_checkpointing import _save
 
 pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(1800)]
 
@@ -208,8 +209,6 @@ def test_a_failure_on_one_rank_stops_every_rank_and_names_it(two_ranks, monkeypa
     """The one-rank failures save and load must turn into the same error on every rank: a header that is not JSON
     on rank 1, a data file rank 1 cannot create (the staging directory is then removed), and ranks that load with
     different strictness."""
-    from ttml.distributed_checkpointing import _save
-
     rank, local, root = two_ranks
     model, params, opt = fresh_tp(DIM)
     path = os.path.join(root, "one_rank")

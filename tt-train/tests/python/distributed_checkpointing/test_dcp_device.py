@@ -18,6 +18,7 @@ import glob
 import json
 import os
 import random
+import secrets
 import shutil
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -34,6 +35,7 @@ import ttml
 import ttml.distributed_checkpointing as dcp
 from ttml.common.schedulers import CosineAnnealingScheduler
 from ttml.distributed_checkpointing import _load, _save
+from ttml.distributed_checkpointing._index import staging_dir
 from ttml.distributed_checkpointing._layouts import Pad, fused_segments
 from ttml.distributed_checkpointing._state_dict import collect_model
 from ttml.fsdp import _ShardedState
@@ -260,10 +262,6 @@ def test_incomplete_directory_and_existing_directory_are_refused(tp_mesh, tmp_pa
 def test_save_refuses_a_staging_directory_it_did_not_create(tp_mesh, tmp_path, monkeypatch, expect_error):
     """A staging directory that already exists belongs to another save of the same step that drew the same nonce, or
     to one that died: the save is refused before writing anything, and the directory is left as it was."""
-    import secrets
-
-    from ttml.distributed_checkpointing._index import staging_dir
-
     model, params, opt = fresh_tp(DIM)
     path = str(tmp_path / "step_0000002")
     monkeypatch.setattr(secrets, "randbits", lambda bits: 12345)
