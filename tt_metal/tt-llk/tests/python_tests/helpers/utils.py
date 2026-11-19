@@ -288,6 +288,15 @@ def calculate_pcc(golden, input):
     Handles special cases like NaN/Inf values and returns correlation coefficient.
     1.0 indicates perfect correlation, 0.0 indicates no correlation.
 
+    NaN/Inf lanes are zeroed before the correlation is taken. A constant tensor (zero
+    standard deviation) has no defined correlation, so:
+
+    - one side constant, the other varying: 0.0, since a constant cannot follow the
+      other side's variation;
+    - both sides constant: 1.0 regardless of their values (1.0 vs 1.0078125 included).
+      This is not a measured perfect correlation; how far apart the two constants are
+      is left to a tolerance check.
+
     Args:
         golden: Reference tensor
         input: Tensor to compare against golden
@@ -1150,8 +1159,14 @@ def passed_test(
 
     # A constant golden has no variation for PCC to measure: calculate_pcc calls it
     # uncorrelated with any result that varies, even within tolerance. As with the
-    # floor above, the per-element tolerance check is the verdict.
-    if _is_constant(golden_tensor):
+    # floor above, the per-element tolerance check is the verdict. Constancy is judged
+    # on the golden's finite lanes, since calculate_pcc zeroes NaN/Inf before it looks.
+    # An all-zero result on those lanes still goes to calculate_pcc, whose all-zero
+    # check fails it: a stuck-at-zero output must not pass on a small constant golden.
+    finite_lanes = torch.isfinite(golden_tensor)
+    if _is_constant(golden_tensor[finite_lanes]) and torch.any(
+        res_tensor[finite_lanes].bool()
+    ):
         return bool(is_within_tolerance)
 
     pcc = calculate_pcc(res_tensor, golden_tensor)
