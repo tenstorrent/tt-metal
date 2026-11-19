@@ -97,6 +97,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/semaphore.h"
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
@@ -782,8 +783,68 @@ void kernel_main() {
         }
     };
 #endif
+#ifdef CONV2D_3X3_HOST_FILL
+    // Host-planned writer fill (descriptor _host_fill_args, after the server args): [batches],
+    // then per batch [pieces] and (owner x << 16 | y, offset, slab row << 16 | rows) per piece. One M-block per core
+    // and the whole slab in the ring (empty at kernel start), so every batch is issued from kernel start (up to the
+    // window in flight) without the reader's hand-over, and counted in slab_fwd_done in order as it lands.
+    uint32_t hf_arg = server_arg + 3;
+    const uint32_t hf_batches = split_here ? get_arg_val<uint32_t>(hf_arg) : 0;
+    ++hf_arg;
+    uint32_t hf_issued = 0;
+    uint32_t hf_served = 0;
+    // Batches still to issue or count: the waits that serve the fill stop calling it once it is done (a call in every
+    // poll iteration of the walk's waits measured +1.6% on res4.x even with nothing to read).
+    bool hf_live = hf_batches > 0;
+    auto hf_serve = [&]() {
+        while (hf_served < hf_issued &&
+               ncrisc_noc_read_with_transaction_id_flushed(
+                   fill_reads.noc.get_noc_id(), TRID_WFILL_BASE + hf_served % fill_writer_window)) {
+            Semaphore<>(slab_fwd_done_sem_id).up(1);
+            ++hf_served;
+        }
+        hf_live = hf_served < hf_batches;
+        if (hf_issued < hf_batches && hf_issued - hf_served < fill_writer_window) {
+            MaybeDeviceZoneScope("writer_fill");
+            do {
+                const uint32_t pieces = get_arg_val<uint32_t>(hf_arg++);
+                fill_reads.begin(TRID_WFILL_BASE + hf_issued % fill_writer_window);
+                for (uint32_t i = 0; i < pieces; ++i, hf_arg += 3) {
+                    const uint32_t xy = get_arg_val<uint32_t>(hf_arg);
+                    const uint32_t dst = get_arg_val<uint32_t>(hf_arg + 2);
+                    const uint64_t src =
+                        get_noc_addr(xy >> 16, xy & 0xFFFF, input_addr + get_arg_val<uint32_t>(hf_arg + 1));
+                    const uint32_t l1 = fill_ring_base + (dst >> 16) * fill_row_bytes;
+                    if constexpr (fill_zero_lanes) {
+                        // Short last slice: each row's real tiles, its padding tiles from the zero block.
+                        constexpr uint32_t real_row_bytes = (c_in / 32) * input_page_bytes;
+                        for (uint32_t r = 0; r < (dst & 0xFFFF); ++r) {
+                            fill_reads.read(src + r * fill_row_bytes, l1 + r * fill_row_bytes, real_row_bytes);
+                            fill_reads.read(
+                                fill_zero_noc,
+                                l1 + r * fill_row_bytes + real_row_bytes,
+                                fill_row_bytes - real_row_bytes);
+                        }
+                    } else {
+                        fill_reads.read(src, l1, (dst & 0xFFFF) * fill_row_bytes);
+                    }
+                }
+                ++hf_issued;
+            } while (hf_issued < hf_batches && hf_issued - hf_served < fill_writer_window);
+            dataflow_kernel_lib::set_read_trid(fill_reads.noc, 0);
+        }
+    };
+#endif
     // Every batch the reader has handed over so far (windowed: retire the landed ones, issue up to the window).
     [[maybe_unused]] auto serve_fill = [&]() {
+#ifdef CONV2D_3X3_HOST_FILL
+        if constexpr (tile_fill_split) {
+            if (hf_live) {
+                hf_serve();
+            }
+            return;
+        }
+#endif
         if constexpr (slab_direct) {
 #ifdef SD_STREAM
             if (sd_slab_pending) {
@@ -857,6 +918,12 @@ void kernel_main() {
             if (!split_here) {
                 return;
             }
+#ifdef CONV2D_3X3_HOST_FILL
+            while (hf_live) {
+                hf_serve();
+            }
+            return;
+#endif
 #ifdef CONV2D_3X3_KW_FOLD
             while (!kwf_fill_done()) {
                 kwf_serve_fill(false);
@@ -909,6 +976,21 @@ void kernel_main() {
         }
     }
 
+#ifdef CONV2D_3X3_HOST_FILL
+    // Host-planned fill: this writer's part goes out now (the slab ring is empty at kernel start).
+    if constexpr (tile_fill_split) {
+        if (hf_live) {
+            MaybeDeviceZoneScope("writer_fill_early");
+            if constexpr (fill_zero_lanes) {
+                // The padding lanes' zero block: the reader zeroes it at its start too, but this writer reads it now.
+                fill_reads.noc.async_write_zeros(
+                    CircularBuffer(cb_zero_src), fill_row_bytes - (c_in / 32) * input_page_bytes);
+                fill_reads.noc.write_zeros_l1_barrier();
+            }
+            hf_serve();
+        }
+    }
+#endif
     Noc noc;
     auto weight_sender = weight_mcast.optional_sender(noc);
     auto weight_receiver = weight_mcast.optional_receiver(noc);

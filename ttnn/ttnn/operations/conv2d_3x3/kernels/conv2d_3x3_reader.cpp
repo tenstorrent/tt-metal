@@ -347,6 +347,10 @@ void kernel_main() {
 #else
     auto r0_try = [&]() {};
 #endif
+#ifdef CONV2D_3X3_HOST_FILL
+    // Host-planned fill (descriptor _host_fill_args): its words follow the slab rows.
+    [[maybe_unused]] uint32_t host_fill_arg = slab_rows_arg + (rt_valid ? get_arg_val<uint32_t>(3) : 0);
+#endif
 
     constexpr uint32_t pixel_bytes = c_in_p * ELEM_BYTES;
     constexpr int32_t num_in_px = input_height * input_width;
@@ -848,6 +852,82 @@ void kernel_main() {
                     row_lo += group_rows[grp];
                 }
                 while (pushed < num_groups) {
+                    retire();
+                }
+            }
+#elif defined(CONV2D_3X3_HOST_FILL)
+            // Host-planned fill (the descriptor's BLOCK_HOST_FILL, _host_fill_args; one M-block per core, the whole
+            // slab in the ring). Per batch: (writer flag << 31 | this RISC's pieces), then (owner x << 16 | y, offset
+            // in the owner's shard, slab row << 16 | rows) per piece. The reads go out first; the device plan (center
+            // taps, band pages) is computed under them. A split core's writer issued its pieces at kernel start and
+            // counts each batch in slab_fwd_done as it lands. Raw reads instead of a TensorAccessor lookup per run: the
+            // accessor has no precomputed-run form, and the device-side plan cost the writer ~0.4 us before its first
+            // read and ~0.27 us per 4-row batch (res4.0, identical on every core: control-bound).
+            {
+                constexpr uint32_t batch_pages = untilize_batch_rows * c_in_tiles;
+                constexpr uint32_t max_batches = slab_tile_rows / untilize_batch_rows;
+                constexpr uint32_t TRID_FILL_BASE = 8;
+                const uint32_t num_batches = slab_rows_m / untilize_batch_rows;
+                ASSERT(num_batches <= max_batches && m_block_idx == 0);
+                {
+                    MaybeDeviceZoneScope("reader_fill_reserve");
+                    cb_reserve_back(cb_input_tiles, num_batches * batch_pages);
+                }
+                const uint32_t hf_slab = get_write_ptr(cb_input_tiles);
+                bool hf_writer_of[max_batches];
+                uint32_t pushed = 0;
+                auto retire = [&]() {
+                    reads.wait(TRID_FILL_BASE + pushed % fill_window);
+                    if constexpr (tile_fill_split) {
+                        if (hf_writer_of[pushed]) {
+                            MaybeDeviceZoneScope("reader_fill_fwd_wait");
+                            Semaphore<>(slab_fwd_done_sem_id).wait_min(++fill_batches_handed);
+                        }
+                    }
+                    cb_push_back(cb_input_tiles, batch_pages);
+                    ++pushed;
+                };
+                uint32_t batch = 0;
+                auto issue_through = [&](uint32_t end) {
+                    for (; batch < end; ++batch) {
+                        if (batch - pushed == fill_window) {
+                            retire();
+                        }
+                        const uint32_t word = get_arg_val<uint32_t>(host_fill_arg++);
+                        hf_writer_of[batch] = (word >> 31) != 0;
+                        const uint32_t pieces = word & 0x7FFFFFFFu;
+                        reads.begin(TRID_FILL_BASE + batch % fill_window);
+                        for (uint32_t i = 0; i < pieces; ++i, host_fill_arg += 3) {
+                            const uint32_t xy = get_arg_val<uint32_t>(host_fill_arg);
+                            const uint32_t dst = get_arg_val<uint32_t>(host_fill_arg + 2);
+                            const uint64_t src = get_noc_addr(
+                                xy >> 16, xy & 0xFFFF, input_addr + get_arg_val<uint32_t>(host_fill_arg + 1));
+                            const uint32_t l1 = hf_slab + (dst >> 16) * row_bytes;
+                            if constexpr (zero_slab_lanes) {
+                                // Short last slice: each row's real tiles, its padding tiles from the zero block.
+                                for (uint32_t r = 0; r < (dst & 0xFFFF); ++r) {
+                                    reads.read(src + r * row_bytes, l1 + r * row_bytes, real_row_bytes);
+                                    reads.read(
+                                        zero_src_noc, l1 + r * row_bytes + real_row_bytes, row_bytes - real_row_bytes);
+                                }
+                            } else {
+                                reads.read(src, l1, (dst & 0xFFFF) * row_bytes);
+                            }
+                        }
+                    }
+                };
+                issue_through(num_batches < fill_window ? num_batches : fill_window);
+                conv2d_3x3::TileSlabPlan plan;
+                conv2d_3x3::tile_slab_plan<input_width, num_in_px, dilation, c_in_tiles>(footprint, slab_x_base, plan);
+                if constexpr (nslice_center) {
+                    center_plan = plan;
+                }
+                for (int32_t kh = 0; kh < 3; ++kh) {
+                    slab_ready_pages[kh] = plan.ready_pages[kh];
+                }
+                issue_through(num_batches);
+                dataflow_kernel_lib::set_read_trid(reads.noc, 0);
+                while (pushed < num_batches) {
                     retire();
                 }
             }
