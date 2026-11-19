@@ -147,7 +147,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 // Both operations use unpack MOP bank 0 and replay buffer 0, so
                 // initialize each immediately before its execute.
-                _llk_unpack_AB_custom_mm_init_<false /* transpose */, true /* clear_src */>(
+                _llk_unpack_AB_custom_mm_init_<false /* transpose */, false /* clear_src */>(
                     IN0_TILE_R_DIM, formats.unpack_B_dst /* weights land in SrcA */, REUSE_KT /* producer ct_dim */);
 
                 // Signature: (base_address_a, base_address_b, tile_index_a, tile_index_b,

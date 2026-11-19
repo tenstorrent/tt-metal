@@ -26,14 +26,14 @@
  * @brief Configure the unpack thread for a compressed custom_mm block matmul.
  *
  * @tparam transpose: Transpose the SrcA read, values = <true/false>
- * @tparam clear_src: Zero both SrcB banks once here, values = <true/false>
+ * @tparam clear_src: Zero both SrcB banks once here (power only), values = <true/false>, default false
  * @param operand0: CB of the activations, whose face_r_dim this reads. Its data goes to SrcB.
  * @param operand1: CB of the compressed weights, unused here.
  * @note Call this before @ref llk_unpack_AB_compressed_custom_mm, and again after any other op has run, in
  *       particular one that writes SrcB, SCRATCH_SEC0-2 or GPRs PERF_UNPACK_NUM_TILES_1-3.
  * @note On the math thread, pair with @ref llk_math_compressed_custom_mm_init.
  */
-template <bool transpose = false, bool clear_src = true>
+template <bool transpose = false, bool clear_src = false>
 inline void llk_unpack_AB_compressed_custom_mm_init(const std::uint32_t operand0, const std::uint32_t operand1) {
     SAN_HOOK(unsupported());
     // Swap operands, for matmul operand0 goes to SrcB and operand1 goes to SrcA
