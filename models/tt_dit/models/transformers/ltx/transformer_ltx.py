@@ -29,10 +29,6 @@ from .attention_ltx import LTXAttention
 from .quant_config import LtxQuantProfile
 
 
-def _fuse_norm_adaln_enabled() -> bool:
-    return os.environ.get("LTX_FUSE_NORM_ADALN", "0") in ("1", "true", "True")
-
-
 def _norm_adaln(norm, x, shift, scale_p1, *, fuse: bool):
     """Scalar B=1 AdaLN, optionally folded into the existing RMSNorm op.
 
@@ -150,7 +146,7 @@ class LTXTransformerBlock(Module):
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
         # Read once at construction: captured traces cannot switch routes afterwards.
-        self._fuse_norm_adaln = _fuse_norm_adaln_enabled()
+        self._fuse_norm_adaln = os.environ.get("LTX_FUSE_NORM_ADALN", "0") in ("1", "true", "True")
 
         rms_norm_kwargs = {
             "norm_eps": eps,
