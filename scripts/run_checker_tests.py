@@ -22,7 +22,13 @@ RUNNER = "scripts/run_checker_tests.py"
 CHECKS = (
     (
         "scripts/test_run_checker_tests.py",
-        frozenset({RUNNER, "scripts/test_run_checker_tests.py"}),
+        frozenset(
+            {
+                RUNNER,
+                "scripts/test_run_checker_tests.py",
+                "scripts/validate_no_global_torch_imports.py",
+            }
+        ),
     ),
     (
         "scripts/test_check_bool_from_arithmetic.py",

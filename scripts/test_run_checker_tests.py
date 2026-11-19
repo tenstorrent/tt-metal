@@ -73,28 +73,33 @@ def test_main_skips_pytest_when_nothing_matches(monkeypatch):
     assert runner.main(["README.md"]) == 0
 
 
-def _hook_body():
+def _hook_body(hook_id="checker-tests"):
     lines = open(CONFIG).read().splitlines()
-    start = next(i for i, line in enumerate(lines) if line.strip() == "- id: checker-tests")
+    start = next(i for i, line in enumerate(lines) if line.strip() == f"- id: {hook_id}")
     body = []
     for line in lines[start + 1 :]:
-        if line.startswith("- id:") or line.startswith("- repo:"):
+        if line.lstrip().startswith("- id:") or line.startswith("- repo:"):
             break
         body.append(line)
     return "\n".join(body)
 
 
-def _files_regex():
+def _files_regex(hook_id="checker-tests"):
     """The hook's `files` pattern, as pre-commit compiles it (block indent stripped)."""
-    body = _hook_body().splitlines()
-    idx = next(i for i, line in enumerate(body) if line.strip() == "files: |")
-    indent = len(body[idx + 1]) - len(body[idx + 1].lstrip(" "))
-    parts = []
-    for line in body[idx + 1 :]:
-        if line.strip() and (len(line) - len(line.lstrip(" "))) < indent:
-            break
-        parts.append(line[indent:])
-    return re.compile("\n".join(parts))
+    body = _hook_body(hook_id).splitlines()
+    for idx, line in enumerate(body):
+        stripped = line.strip()
+        if stripped == "files: |":
+            indent = len(body[idx + 1]) - len(body[idx + 1].lstrip(" "))
+            parts = []
+            for block_line in body[idx + 1 :]:
+                if block_line.strip() and (len(block_line) - len(block_line.lstrip(" "))) < indent:
+                    break
+                parts.append(block_line[indent:])
+            return re.compile("\n".join(parts))
+        if stripped.startswith("files:"):
+            return re.compile(stripped[len("files:") :].strip())
+    raise AssertionError(f"hook {hook_id!r} has no files filter")
 
 
 def test_hook_receives_every_trigger_path():
@@ -109,3 +114,25 @@ def test_hook_receives_every_trigger_path():
             assert pattern.search(path), path
     assert not pattern.search("tt_metal/tt-llk/tt_llk_blackhole/common/inc/ckernel.h")
     assert not pattern.search("scripts/check_format_field_mask.py")
+
+
+def test_torch_imports_hook_matches_ttnn_python_and_checker():
+    """The torch-import hook's `files` filter matches ttnn/ttnn/*.py and its own script."""
+    body = _hook_body("check-torch-imports-in-ttnn")
+    assert "entry: python3 scripts/validate_no_global_torch_imports.py" in body
+    assert "pass_filenames: false" not in body
+    pattern = _files_regex("check-torch-imports-in-ttnn")
+    for path in (
+        "ttnn/ttnn/__init__.py",
+        "ttnn/ttnn/device.py",
+        "ttnn/ttnn/operations/unary.py",
+        "scripts/validate_no_global_torch_imports.py",
+    ):
+        assert pattern.search(path), path
+    for path in (
+        "ttnn/cpp/ttnn/device.cpp",
+        "ttnn/tutorials/basic_python/ttnn_intro.ipynb",
+        "models/demos/bert/bert.py",
+        "scripts/check_redefined_helpers.py",
+    ):
+        assert not pattern.search(path), path

@@ -185,6 +185,7 @@ repos:
         (?x)^(
           scripts/(test_)?run_checker_tests\.py|
           scripts/precommit_common\.py|
+          scripts/validate_no_global_torch_imports\.py|
           scripts/(test_)?check_bool_from_arithmetic\.py|
           scripts/(test_)?check_redefined_helpers\.py|
           tt_metal/tt-llk/infra/check_dest_to_src_wait\.py|
