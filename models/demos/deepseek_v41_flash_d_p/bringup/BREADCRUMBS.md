@@ -758,3 +758,21 @@
   p145408 93.7 ms, p1024000 105.8 ms.
 - Re-run the gate: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate P.78 --spec
   models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`.
+
+## P.79 perf (attempt 1): MoE routed experts + combine at the DRAM roofline - stopped, the bound is the busiest chip's FPU
+- Expected before measuring (from the brief's roofline): device -11 ms a chunk (26.4 -> ~15) if the weight stream
+  was the bound; host 0.
+- Measured first (tests/perf/test_expert_load_census.py, one model load, p145408, the measurement's random ids):
+  routed_experts_combine 27.06 ms a chunk = 20 x (205 us + 6.77 us x the busiest chip's 32-row tiles), R^2 0.979
+  (DS41-299). The busiest chip holds 91-321 row tiles a layer (mean 36), mostly one expert of 1.2k-5.1k rows; its
+  gate/up cores run at 84 % of the LoFi FPU peak; its weights are 7-35 % of its time. The weight stream is not the
+  bound; the light chips finish at their DRAM floor and wait in the combine.
+- Bound (no op change reaches 15 ms): all 110 cores at 100 % LoFi = 16.7 ms; gate/up at 100 % saves at most 3.7 ms
+  (realistic < 3); 72 gate/up cores need a new weight layout (cache rebuild, forbidden here) and do not fit the
+  rectangles (70 max at 11 x 10). Only balancing rows over chips (replicas, ~13.4 ms by the fit) reaches the
+  target, and replication is off this branch (DS41-278, owner).
+- Stop rule applied (brief: report the bound with evidence). No model or fork change; no MOE_EXPERT_STREAM Setting
+  added (a switch with nothing behind it would only measure noise). OV-23: no Python-built op added or touched.
+- Re-run: `DS41_DECODER_SKIP=decode CENSUS_OUT=/tmp/c.json python -m models.demos.common.bringup.devjob start census
+  -- scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/perf/test_expert_load_census.py -s`
+  (CENSUS_POS picks the point).

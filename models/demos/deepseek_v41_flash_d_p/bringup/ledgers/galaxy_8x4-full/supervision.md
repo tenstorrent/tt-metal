@@ -263,3 +263,19 @@
 - RAM unaccounted after P.78: 117.1 GiB (94.9 after X.7, 104.6 after X.8): climbing ~10 GiB a task, no reboot since
   09:17 on 11-18.
 - Next: P.79 (MoE experts + combine to the DRAM roofline).
+
+## 2026-11-19 02:50 UTC: MoE experts task rejected (P.79); position runs now use real text (F275)
+
+- P.79's agent stopped on its stop rule, no code change: routed_experts_combine = 205 us + 6.77 us x the busiest
+  chip's 32-row tiles a layer (R^2 0.979, DS41-299); the busiest chip's FPU (84 % of LoFi on gate/up), not the weight
+  stream. The roofline's 11 ms DRAM floor assumed uniform routing. Balanced rows over chips would give ~13.4 ms; that
+  needs expert replicas (off this branch, owner). Rejected; its census test (tests/perf/test_expert_load_census.py)
+  and notes kept.
+- Cause found in our measurement: every position run (X.6, X.7, X.8, the A/B steady walls) fed random token ids
+  over a zero history, assuming the work does not depend on the values. For an MoE it does. Census at 142k: random
+  ids 27.1 ms a chunk, real text (the canonical 56k prompt repeated) 22.3 ms. Real text is still skewed (the hottest
+  expert 1.5k-5.0k of 5120 tokens in many layers). F275: BRINGUP_POS_TOKENS=text is now the default (random on
+  request); selftest. Walls from here on are not comparable 1:1 with the earlier random-id ones (expect ~-5 ms a chunk
+  at 142k from the experts alone); the next A/B measures both sides on text.
+- RAM unaccounted after the census: 119.3 GiB.
+- Next: P.80 (fp8 dispatch).

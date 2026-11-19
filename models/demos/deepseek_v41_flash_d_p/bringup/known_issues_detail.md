@@ -1603,3 +1603,24 @@ GIL: the worker thread runs a little Python between its GIL-free steps (numba wi
 while the main thread dispatches, each re-take waited up to the 5 ms switch interval (the torch hash read 3-4.6 ms
 in the worker for ~1 ms of work). numba's spinning OpenMP pool also slows torch ops next to it (token_map[ids] 0.2 ->
 1.7 ms): keep the worker's work inside the compiled kernels.
+
+## At 142k (random ids) routed_experts_combine is the busiest chip's FPU time, not the weight stream
+P.79 (8x4, MOE_BLOCK_SRC=block, DECODER_SKIP=decode, p145408 steady, random ids seed 0 as test_skip_positions /
+test_profile; tests/perf/test_expert_load_census.py: every layer's per-chip routed counts read after the chunk, and
+the program's per-chip time in a separate rt-profiled run with no reads in it). Data: /scratch/dnijemcevic/bringup/p79_census.json.
+
+- Total 27.06 ms a chunk (X.7 26.4). Every chip ends within ~10 % of the slowest (the combine's barrier), so the
+  per-chip times do not show the light chips.
+- Fit over the 20 layers: program us = 205.2 + 6.77 x tiles_max (busiest chip's sum of ceil(count / 32) over its 12
+  experts), R^2 0.979, rmse 62 us. C0 part 4.1 ms, tile part 23.0 ms (sum tiles_max 3389).
+- Routing: the busiest chip 91-321 tiles (mean chip 32-37); its hottest expert 1.2k-5.1k rows (uniform: 80) = 44-98 %
+  of its tiles; active experts a chip 8.1 on average.
+- The busiest chip's weights are 0.06-0.24 GB a layer (0.12-0.47 ms at 512 GB/s) against 0.6-2.2 ms of compute:
+  the weight stream is not its bound. A 32-row tile = 2.265 GFLOP (gate/up 2/3 on 48 cores, down 1/3 on 32): gate/up
+  31.5 MFLOP a core = 5.69 us at LoFi peak (4096 FLOP / cycle, 1.35 GHz) = 84 % of B; down 4.27 us (63 %).
+- Bounds: gate/up at 100 % FPU -3.7 ms (not reachable); all 110 cores at 100 % LoFi 3.72 us a tile -> 12.6 + 4.1 =
+  16.7 ms (> 15 even then); the rows balanced over the chips (each chip max(B x mean tiles, 12 x 38.9 us) + C0):
+  13.4 ms. More gate/up cores (72 x 2 pairs instead of 48 x 3 units) needs another weight layout (a rebuild of the
+  laid-out expert cache) and 72 cores in the two rectangles, which hold at most 70 under the 11 x 10 cap.
+- The X.7 roofline's "170 GB/s = 33 % of peak" is the chunk's weight bytes over a time set by the busiest chip's
+  compute; its 11 ms floor assumes uniform routing.

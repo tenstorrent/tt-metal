@@ -126,6 +126,7 @@ def profile_rung(s) -> str:
 
 POS_ENV = "BRINGUP_POS"  # F230: profile one chunk starting at this token position (timing only)
 HOST_ENV = "BRINGUP_PROFILE_HOST"  # F230: the wall run adds HOST_RUNS chunk runs under cProfile
+POS_TOKENS_ENV = "BRINGUP_POS_TOKENS"  # F275: text (default: the canonical prompt, repeated) | random (seed 0)
 HOST_RUNS = 5
 
 
@@ -136,15 +137,25 @@ def position() -> int | None:
 
 class PositionGolden:
     """F230 (owner 2026-10-27 / 10-30: device and host time of one chunk at 0, 50k, 500k): one chunk at start ``pos``,
-    every layer, timing only, as testing/positions.py: the KV prefix is the fresh state's zeros and the tokens random
-    ids (the work does not depend on the values). Nothing is compared: no golden exists at such a position."""
+    every layer, timing only: the KV prefix is the fresh state's zeros; the tokens real text (F275, BRINGUP_POS_TOKENS:
+    an MoE's work depends on them). Nothing is compared: no golden exists at such a position."""
 
     def __init__(self, s, pos: int, chunk: int):
         self.layers = list(s.layers())
         self.n_chunks = (pos + chunk) // chunk
         self.dir = None
-        vocab = int(s.get("checkpoint.config.vocab_size", 32000) or 32000)
-        self._tokens = torch.randint(0, vocab, (pos + chunk,), generator=torch.Generator().manual_seed(0))
+        n = pos + chunk
+        if os.environ.get(POS_TOKENS_ENV, "text") == "text":
+            # F275: real text: the canonical prompt, repeated to the length. Random ids are not neutral for an MoE:
+            # with a zero history they collapse the routing onto a few experts (DeepSeek-V4.1 P.79: one expert of
+            # 1.2k-5.1k of a chunk's 5120 rows, the busiest chip's experts 2x the balanced time)
+            from models.demos.common.bringup.reference import prompt
+
+            ids = prompt.tokens(s, min(n, len(prompt.load(s)["token_ids"])))
+            self._tokens = ids.repeat((n + len(ids) - 1) // len(ids))[:n]
+        else:
+            vocab = int(s.get("checkpoint.config.vocab_size", 32000) or 32000)
+            self._tokens = torch.randint(0, vocab, (n,), generator=torch.Generator().manual_seed(0))
 
     def tokens(self):
         return self._tokens
