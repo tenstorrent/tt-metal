@@ -136,6 +136,22 @@ def test_sum_uint32(device, input_shape, dim):
     assert_equal(ttnn_output.to(torch.int64).reshape(torch_output.shape), torch_output)
 
 
+@pytest.mark.parametrize("dim", [0, 1, None])
+def test_sum_uint32_row_major(device, dim):
+    torch.manual_seed(0)
+    torch_input = torch.randint(0, 2**32, (2, 3, 17, 19), dtype=torch.int64)
+    torch_input.view(-1)[:4] = torch.tensor([0, 2**31 - 1, 2**31, 2**32 - 1])
+    torch_output = torch.sum(torch_input, dim=dim) % 2**32
+
+    ttnn_input = ttnn.from_torch(
+        torch_input.to(torch.uint32), layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.uint32
+    )
+    ttnn_output = ttnn.to_torch(ttnn.sum(ttnn_input, dim=dim))
+
+    assert ttnn_output.dtype == torch.uint32
+    assert_equal(ttnn_output.to(torch.int64).reshape(torch_output.shape), torch_output)
+
+
 @pytest.mark.parametrize("scale", [2.0, 0.5, 0.1, -3.0])
 @pytest.mark.parametrize(
     "input_shape, dim",
