@@ -4,11 +4,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary.hpp"
-<<<<<<< HEAD
 #include <algorithm>
-=======
 #include <bit>
->>>>>>> 8fcda9eede2 (#66106: Widen the scalar type in the bitwise_and/or/xor tensor- scalar)
 #include <cmath>
 #include <limits>
 #include <enchantum/enchantum.hpp>
