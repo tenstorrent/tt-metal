@@ -594,6 +594,14 @@ notes:
     by the device profile; keep a change at >= 1 ms device a chunk. If host RAM runs low, run with DS41_ENGRAM_DEVICE=on
     and DS41_ENGRAM_DEVICE_TABLES=on and DS41_ENGRAM_TABLE=mmap (the tables on the mesh, the host copy not resident) for
     the measurement; the owner may reset the device in about an hour: keep work committed / recoverable.'
+- id: OV-57
+  tasks:
+  - PB.1
+  status: open
+  t: '2026-11-19T20:43:00'
+  text: 'The overseer stopped attempt 1 (perf): OWNER 20:45 clarifications (perf targets, no shortcuts: per-chunk history
+    from each slot''s served cache, all segments'' buffers in the 1M DRAM budget, tt-d-gen-like inputs, real texts/positions,
+    padded/empty lanes). The task brief and the notes now carry them; start from them. Your edits so far stay in the tree.'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'

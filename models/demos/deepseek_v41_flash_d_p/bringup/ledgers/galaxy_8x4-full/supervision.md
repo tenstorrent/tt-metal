@@ -628,3 +628,26 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   geometries; the 5120 accept units (ladder last, contract, outside history) are not re-run tonight; PACKED=off at 8192
   == today is in the oracle. Gate commands of PB.2-PB.5 name the tests PB.1 designs; I refine them from
   PACKED_DESIGN.md after PB.1 (run is --until PB.1).
+- 20:38 UTC orchestrator started (tmux orch_pb, resume --until PB.1). PB.0 gate PASS -> 39723b96d76 (test_box, 23 s;
+  one device open, reason: PB.0's own gate). PB.1 attempt 1 started (agent, CPU only, no device).
+- 20:45-21:00 UTC OWNER clarifications (binding): (1) all work as ledger tasks run by the orchestrator / agents; the
+  overseer writes, orders and accepts. (2) Goal at PERF TARGETS (agentic, steady, serving-equivalent): 4 x 2k over ~139k
+  >= 67k new tok/s (<= ~122 ms a chunk), mixed 61k/139k/308k/547k >= 64k; if missed: gather hiding, then one attention
+  call over all segments, as tasks. (3) No shortcuts: each segment's history from its own slot's served cache every
+  chunk (nothing per-slot persists on the device; slots arbitrary, changing every chunk), DRAM budget with all segments'
+  history buffers resident at 1M, tt-d-gen-like inputs (device ids, per-segment descriptor), real texts / positions,
+  padded and empty lanes; a shortcut is an owner decision. (4) 20:55: the per-segment history all-gather HIDDEN (fused /
+  concurrent, as P.87), designed in from the start, exposed vs hidden per segment; a task right after the looped
+  attention (replaces B.6). (5) 21:00: pipeline segment i+1's lookups / gathers / launches / host prep while segment i
+  computes; judge by device profile and exposed-host breakdown.
+- 20:50 UTC PB.1 attempt 1 aborted (pause + overseer abort, note OV-57; the agent had changed nothing in the tree) so it
+  restarts on the new brief. Orchestrator stopped at the pause.
+- 21:10 UTC tasks rewritten (PB.0 kept): every brief carries the owner text above. PB.1 design now also covers the
+  pipelining / hiding plan and the 1M DRAM budget; the walls test's cases are fixed (4x2k_p139264, mixed, 1x2k_p139264,
+  4xp50_p139264 padded, 4x2k_p1m memory; each lane a different agentic_cc session, slots changed every chunk) with
+  serving tok/s, exposed host, exposed / hidden gather per segment, DRAM headroom. PB.3 builds the pipelining it can
+  (gathers at least hidden behind the engram lookups as today). New PB.3H: gather hiding kernel behind
+  PACKED_GATHER_HIDE (gate: exposed fraction <= 0.25 at 4x2k and mixed, my bar from the projection's engineered case;
+  impossible -> owner decision). PB.4 bulk MoE after PB.3H. PB.5 accept gate holds the targets (>= 67000 / >= 64000
+  serving tok/s, DRAM headroom > 0 at 4 x 1M). The one-call attention task is queued before PB.5 only if the targets
+  are missed. Validated.
