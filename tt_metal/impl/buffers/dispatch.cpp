@@ -20,6 +20,7 @@
 #include "device/device_manager.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "hal_types.hpp"
@@ -471,7 +472,7 @@ BufferDispatchConstants generate_buffer_dispatch_constants(
 
     buf_dispatch_constants.issue_queue_cmd_limit = sysmem_manager.get_issue_queue_limit(cq_id);
     buf_dispatch_constants.max_prefetch_cmd_size =
-        MetalContext::instance(sysmem_manager.get_context_id()).dispatch_mem_map().max_prefetch_command_size();
+        sysmem_manager.metal_context().dispatch_mem_map().max_prefetch_command_size();
 
     return buf_dispatch_constants;
 }
@@ -1435,10 +1436,7 @@ BufferReadDispatchParams initialize_interleaved_buf_read_dispatch_params(
 // Issue dispatch commands for forwarding device buffer data to the Completion Queue
 template <typename T>
 void issue_read_buffer_dispatch_command_sequence(
-    Buffer& buffer,
-    T& dispatch_params,
-    ttsl::Span<const SubDeviceId> sub_device_ids,
-    CoreType /*dispatch_core_type*/) {
+    Buffer& buffer, T& dispatch_params, ttsl::Span<const SubDeviceId> sub_device_ids, CoreType /*dispatch_core_type*/) {
     if (tt::tt_metal::GraphTracker::instance().hook_read_from_device(&buffer)) {
         return;
     }
@@ -1450,7 +1448,7 @@ void issue_read_buffer_dispatch_command_sequence(
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
 
     // Mock/emulated devices don't have real hardware to read from, skip actual dispatch
-    if (tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id()).get_cluster().is_mock_or_emulated()) {
+    if (sysmem_manager.env_impl().get_cluster().is_mock_or_emulated()) {
         return;
     }
 
@@ -1652,18 +1650,16 @@ void read_completion_queue(
     uint32_t completion_q_data_offset,
     const SystemMemoryManager& sysmem_manager) {
     if (sysmem_manager.is_dram_backed()) {
-        const uint32_t dram_channel = tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id())
+        const uint32_t dram_channel = sysmem_manager.metal_context()
                                           .device_manager()
                                           ->get_active_device(device_id)
                                           ->allocator_impl()
                                           ->get_dram_channel_from_bank_id(sysmem_manager.get_dram_region_bank_id());
-        tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id())
-            .get_cluster()
-            .read_dram_vec(dst, size_bytes, device_id, dram_channel, completion_q_read_ptr + completion_q_data_offset);
+        sysmem_manager.env_impl().get_cluster().read_dram_vec(
+            dst, size_bytes, device_id, dram_channel, completion_q_read_ptr + completion_q_data_offset);
     } else {
-        tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id())
-            .get_cluster()
-            .read_sysmem(dst, size_bytes, completion_q_read_ptr + completion_q_data_offset, device_id, channel);
+        sysmem_manager.env_impl().get_cluster().read_sysmem(
+            dst, size_bytes, completion_q_read_ptr + completion_q_data_offset, device_id, channel);
     }
 }
 
@@ -1870,8 +1866,7 @@ void copy_completion_queue_data_into_user_space(
     }
 }
 
-ttsl::Span<const SubDeviceId> select_sub_device_ids(
-    IDevice* device, ttsl::Span<const SubDeviceId> sub_device_ids) {
+ttsl::Span<const SubDeviceId> select_sub_device_ids(IDevice* device, ttsl::Span<const SubDeviceId> sub_device_ids) {
     if (sub_device_ids.empty()) {
         return device->get_sub_device_stall_group();
     }

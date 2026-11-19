@@ -9,13 +9,13 @@
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include "tt_metal/fabric/builder/protected_domain_effect.hpp"
+#include "tt_metal/fabric/graph/graph_fabric_build_session.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include "llrt/tt_cluster.hpp"
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/fmt.hpp>
 #include <set>
-#include <string>
 
 namespace tt::tt_fabric {
 
@@ -123,10 +123,7 @@ void FabricBuilder::create_routers() {
 
             cluster.register_sim_fabric_endpoint_direction(
                 device_->id(), eth_chan, control_plane.routing_direction_to_eth_direction(direction));
-
-            auto router_builder = FabricRouterBuilder::create(
-                fabric_context_, dispatch_core_type_, device_, program_, local_node_, location, chip_facts_);
-            routers_.insert({eth_chan, std::move(router_builder)});
+            routers_.insert({eth_chan, make_router(location)});
         }
     }
 
@@ -137,12 +134,25 @@ void FabricBuilder::create_routers() {
         }
     }
 
+    for (const auto& [eth_chan, router] : routers_) {
+        if (auto layout = router->get_channel_layout()) {
+            builder_context_.publish_router_channel_layout(local_node_, eth_chan, *layout);
+        }
+    }
+
     // Record build state
     builder_context_.set_num_fabric_initialized_routers(device_->id(), routers_.size());
     if (!routers_.empty()) {
-        master_router_chan_ = routers_.begin()->first;
+        master_router_chan_ = pick_master_router_chan();
         builder_context_.set_fabric_master_router_chan(device_->id(), master_router_chan_);
     }
+}
+
+chan_id_t FabricBuilder::pick_master_router_chan() const { return routers_.begin()->first; }
+
+std::unique_ptr<FabricRouterBuilder> FabricBuilder::make_router(const RouterLocation& location) {
+    return FabricRouterBuilder::create(
+        fabric_context_, dispatch_core_type_, device_, program_, local_node_, location, chip_facts_);
 }
 
 std::vector<FabricBuilder::RouterConnectionPair> FabricBuilder::get_router_connection_pairs() const {
@@ -276,22 +286,40 @@ void FabricBuilder::compile_kernels_for_missing_directions() {
     }
 }
 
-void FabricBuilder::create_kernels() {
+KernelCreationContext FabricBuilder::kernel_creation_context() const {
     uint32_t router_channels_mask = 0;
     for (const auto& [router_chan, _] : routers_) {
         router_channels_mask |= (1 << static_cast<uint32_t>(router_chan));
     }
 
-    KernelCreationContext ctx{
+    return KernelCreationContext{
         .is_2D_routing = fabric_context_.is_2D_routing_enabled(),
         .master_router_chan = master_router_chan_,
         .num_local_fabric_routers = routers_.size(),
         .router_channels_mask = router_channels_mask,
     };
+}
 
+void FabricBuilder::create_kernels() {
+    const KernelCreationContext ctx = kernel_creation_context();
     for (auto& [eth_chan, router_builder] : routers_) {
         router_builder->create_kernel(program_, ctx);
     }
+}
+
+std::unique_ptr<FabricBuilder> FabricBuildSession::make_device_builder(
+    tt::tt_metal::IDevice* device,
+    tt::tt_metal::Program& program,
+    FabricContext& fabric_context,
+    CoreType dispatch_core_type) const {
+    return std::make_unique<FabricBuilder>(device, program, fabric_context, dispatch_core_type);
+}
+
+std::unique_ptr<FabricBuildSession> create_fabric_build_session(FabricContext& fabric_context) {
+    if (fabric_context.get_rtoptions().get_fabric_graph_builder()) {
+        return std::make_unique<graph::GraphFabricBuildSession>(fabric_context);
+    }
+    return std::make_unique<FabricBuildSession>();
 }
 
 }  // namespace tt::tt_fabric

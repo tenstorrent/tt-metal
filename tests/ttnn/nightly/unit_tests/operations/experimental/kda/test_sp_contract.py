@@ -12,7 +12,7 @@ import torch
 
 import ttnn
 from tt_py_test_utils_common.utility_functions import run_for_blackhole
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import encode_tail, make_actual_start
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_scan_test_utils import (
     device_protocol,
     host_protocol,
@@ -20,7 +20,9 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_s
     recurrent_oracle,
     group_summary_nd_sharded,
     summary_oracle,
+    pack_summary,
     to_device,
+    unpack_summary,
 )
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     qkv_device_inputs,
@@ -41,7 +43,7 @@ def test_reset_replaces_large_carry_exactly(mesh_device):
     for tensor in host:
         tensor.zero_()
     host[2][:] = torch.eye(32)
-    host[5].fill_(1)
+    host[5].fill_(0)  # complement form: final_decay = expm1(0) means no decay
     host[6][:] = torch.eye(32)
     inputs = device_protocol(host, mesh_device)
     seed = to_device(torch.full((1, 32, 32), float(2**26)), mesh_device)
@@ -52,7 +54,7 @@ def test_reset_replaces_large_carry_exactly(mesh_device):
     for index, (y, state) in enumerate(zip(_shards(output), _shards(final_state), strict=True)):
         expected = 1.0 if _rank(index, mesh_device, 0) == 0 else float(2**26)
         assert torch.equal(state, torch.full_like(state, expected))
-        assert torch.equal(y[:, 1], torch.full_like(y[:, 1], expected))
+        assert torch.equal(y[:, 32:], torch.full_like(y[:, 32:], expected))
 
 
 def _shards(tensor: ttnn.Tensor) -> list[torch.Tensor]:
@@ -174,11 +176,11 @@ def test_sp_summary_prefix_and_scan(mesh_device: ttnn.MeshDevice, axis: int, gro
         assert entries.dtype == final.dtype == ttnn.float32
         assert output.dtype == ttnn.bfloat16
         assert all(t.memory_config() == ttnn.DRAM_MEMORY_CONFIG for t in (entries, output, final))
-        # Per device: head A, head B, tail A, tail B from the packed [2, N, K, 2K] rows.
+        # Per device: head A, head B, tail A, tail B from the packed complement-form [2, N, K, 2K] rows.
         # Every expected value depends only on a rank's split, so each distinct split is computed once.
         oracles = {}
         got_summaries = list(
-            zip(*((s[0, ..., :dim], s[0, ..., dim:], s[1, ..., :dim], s[1, ..., dim:]) for s in _shards(summaries)))
+            zip(*((*unpack_summary(s[0].float()), *unpack_summary(s[1].float())) for s in _shards(summaries)))
         )
         for shard, (got_entries, got_output, got_final) in enumerate(
             zip(_shards(entries), _shards(output), _shards(final), strict=True)
@@ -275,16 +277,31 @@ def test_sp_rectangular_recurrent_reset(mesh_device, axis, key_dim, value_dim):
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize("axis", [0, 1])
-def test_sp_convolution_rebinds_histories(mesh_device, axis):
-    widths = (32, 32, 32)
+@pytest.mark.parametrize(
+    ("widths", "page_channels", "channel_chunk_size"),
+    [
+        pytest.param((32, 32, 32), None, 96, id="token-paged"),
+        # 3-tile blocks over 2-tile pages: the predecessor read starts and ends inside a page.
+        pytest.param((128, 128, 128), 64, 96, id="channel-paged-64"),
+        pytest.param((64, 64, 128), 32, 128, id="channel-paged-32"),
+    ],
+)
+def test_sp_convolution_rebinds_histories(mesh_device, axis, widths, page_channels, channel_chunk_size):
     previous = []
     cache_entries = None
     for actual_start_value in (0, 32, 64, 96, 32):
         (host, history, taps), (input_tt, history_tt, taps_tt) = qkv_device_inputs(
-            mesh_device, widths=widths, sequence=64, history_rows=3, seed=2011 + actual_start_value
+            mesh_device,
+            widths=widths,
+            sequence=64,
+            history_rows=3,
+            seed=2011 + actual_start_value,
+            page_channels=page_channels,
         )
         predecessor = history + 2
-        predecessor_tt = to_device(predecessor, mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        predecessor_tt = to_device(
+            encode_tail(predecessor, page_channels), mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
         # Match the BF16 payload used by the native operation exactly.
         predecessor = predecessor.bfloat16()
         actual_start = make_actual_start(mesh_device, actual_start_value)
@@ -295,10 +312,11 @@ def test_sp_convolution_rebinds_histories(mesh_device, axis):
             history_tt,
             *taps_tt,
             *widths,
-            program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=96),
+            program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=channel_chunk_size),
             actual_start=actual_start,
             sequence_parallel_axis=axis,
             predecessor_carry=predecessor_tt,
+            page_channels=page_channels,
         )
         ttnn.synchronize_device(mesh_device)
         if cache_entries is None:
@@ -349,8 +367,6 @@ def test_sp_payload_contracts(mesh_device, expect_error):
     head_only = ttnn.experimental.kda.summarize_chunk_recurrence(*inputs, actual_start=actual_start)
     with expect_error(TypeError, "incompatible function arguments"):
         ttnn.experimental.kda.summarize_chunk_recurrence(*inputs, actual_start=None)
-    with expect_error(TypeError, "incompatible function arguments"):
-        ttnn.experimental.kda.reduce_affine_transforms(summaries, 1, actual_start=None, local_rows=128)
     with expect_error(TypeError, "incompatible function arguments"):
         ttnn.experimental.kda.affine_exclusive_scan(summaries, seed, 1, local_rows=128, tail_entry_states=seed)
     # A sequence-parallel mesh can split at runtime, so the scan needs the tail slot and its seed.
@@ -447,11 +463,12 @@ def test_sp_affine_rectangular_live_slots(mesh_device, axis, dtype):
                             ranks[rank][2][folded] = ranks[rank][3][folded] = torch.nan
                 expected.append(torch.stack(entries))
             dims = [None, None]
-            # Packed [2, N, K, K+V] summaries of every rank, concatenated along N and sharded back by SP rank.
+            # Packed complement-form [2, N, K, K+V] summaries ([E | B], E = A - I, exact for these values) of every
+            # rank, concatenated along N and sharded back by SP rank.
             packed = torch.cat(
-                [torch.stack([torch.cat(rank[0:2], dim=-1), torch.cat(rank[2:4], dim=-1)]) for rank in ranks],
+                [torch.stack([pack_summary(rank[0], rank[1]), pack_summary(rank[2], rank[3])]) for rank in ranks],
                 dim=1,
-            )
+            ).to(host_dtype)
             dims[axis] = 1
             summaries = ttnn.from_torch(
                 packed,
@@ -491,11 +508,12 @@ def test_sp_chain_affine_transforms_order(mesh_device, axis):
     generator = torch.Generator().manual_seed(4127)
     eye = torch.eye(key_dim).expand(sp_size, heads, -1, -1)
     # Non-commuting, BF16-representable transitions: a reordered chain fails loudly.
-    a = (0.9 * eye + 0.05 * torch.randn(sp_size, heads, key_dim, key_dim, generator=generator)).bfloat16().float()
+    # Complement form: the op takes E = A - I.
+    e = (-0.1 * eye + 0.05 * torch.randn(sp_size, heads, key_dim, key_dim, generator=generator)).bfloat16().float()
     b = (0.05 * torch.randn(sp_size, heads, key_dim, value_dim, generator=generator)).bfloat16().float()
     seed = initial_state(heads, key_dim, value_dim)
     transforms = ttnn.from_torch(
-        torch.cat([a, b], dim=-1),
+        torch.cat([e, b], dim=-1),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
@@ -519,7 +537,7 @@ def test_sp_chain_affine_transforms_order(mesh_device, axis):
         for step in range(sp_size):
             rank = (first_rank + step) % sp_size
             entries[rank] = carry
-            carry = a[rank] @ carry + b[rank]
+            carry = carry + (e[rank] @ carry + b[rank])
         entry, final = ttnn.experimental.kda.chain_affine_transforms(
             transforms,
             initial,

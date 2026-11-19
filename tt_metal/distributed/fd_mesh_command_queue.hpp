@@ -6,6 +6,7 @@
 
 #include "mesh_command_queue_base.hpp"
 
+#include <functional>
 #include <unordered_map>
 
 #include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
@@ -37,6 +38,8 @@ class SubDeviceSetupCacheTestAccessor;
 struct MeshReadEventDescriptor;
 struct MeshBufferReadDescriptor;
 struct MeshCoreDataReadDescriptor;
+struct PerDeviceRuntimeArgs;
+struct ResolvedPerDeviceRuntimeArgsField;
 
 using MeshCompletionReaderVariant =
     std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor, MeshCoreDataReadDescriptor>;
@@ -70,12 +73,22 @@ private:
     MeshEvent enqueue_record_event_helper(
         ttsl::Span<const SubDeviceId> sub_device_ids,
         bool notify_host,
-        const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
+        const std::optional<MeshCoordinateRange>& device_range = std::nullopt,
+        ThreadPool::AfterFanOut after = ThreadPool::AfterFanOut::Spin);
     void write_program_commands_to_devices(
         const std::vector<Device*>& devices,
         ProgramCommandSequence& program_cmd_seq,
         bool stall_first,
         bool stall_before_program);
+    // As above for a program with per-device runtime args: each local device of `device_range` gets the sequence
+    // with its own values patched in.
+    void write_program_commands_to_devices(
+        const MeshCoordinateRange& device_range,
+        ProgramCommandSequence& program_cmd_seq,
+        bool stall_first,
+        bool stall_before_program,
+        const PerDeviceRuntimeArgs& per_device_runtime_args,
+        const std::vector<ResolvedPerDeviceRuntimeArgsField>& resolved);
     // For a given MeshWorkload, a subgrid is unused if no programs are run on it. Dispatch sequences
     // must be sent to this subgrid to ensure consistent global state across the Virtual Mesh.
     // This function generates and writes dispatch commands forwarding go signal sequences to
@@ -89,13 +102,8 @@ private:
         const program_dispatch::ProgramDispatchMetadata& dispatch_md);
     // Clear the num_workers_completed counter on the dispatcher cores corresponding to this CQ.
     void clear_expected_num_workers_completed();
-    // Access a reference system memory manager, which acts as a global host side state manager for
-    // specific MeshCommandQueue attributes.
-    // TODO: All Mesh level host state managed by this class should be moved out, since its not
-    // tied to system memory anyway. Move out:
-    // 1. Event ID management.
-    // 2. Bypass mode tracker.
-    SystemMemoryManager& reference_sysmem_manager();
+    // The CQs share the worker launch message state, so no CQ may reset it while any of them records a trace.
+    bool any_cq_capturing_trace() const;
     MultiProducerSingleConsumerQueue<CompletionReaderVariant>& get_read_descriptor_queue(IDevice* device);
 
     void submit_core_data_memcpy_request(
@@ -128,12 +136,10 @@ private:
     // launch.
     DispatchArray<std::unordered_map<uint64_t, uint32_t>> cross_node_program_completion_counts_;
 
-    DispatchArray<LaunchMessageRingBufferState> worker_launch_message_buffer_state_reset_;
-    DispatchArray<uint32_t> expected_num_workers_completed_reset_{};
-    DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_reset_;
-
     struct MeshTraceNode {
         std::vector<std::pair<MeshCoordinateRange, TraceNode>> trace_nodes;
+        // Per trace_nodes entry: a capture-time snapshot of the program's per-device runtime args, or null.
+        std::vector<std::shared_ptr<const PerDeviceRuntimeArgs>> per_device_runtime_args;
         bool multicast_go_signals{false};
         SubDeviceId sub_device_id;
     };
@@ -176,6 +182,8 @@ private:
     // Used to Maintain state: Mark/Check if this data structure is being used for dispatch.
     // This is temporary - will not be needed when we MeshCommandQueue is the only dispatch interface.
     std::atomic<bool> in_use_ = false;
+    // Last event ID this CQ handed out, shared by all devices in the mesh.
+    std::atomic<uint32_t> last_event_id_ = 0;
 
     const uint32_t prefetcher_dram_aligned_block_size_;
     const uint64_t prefetcher_cache_sizeB_;
@@ -216,7 +224,28 @@ private:
     // Distributed context used to synchronize operations done by all active ranks on the given mesh device.
     std::shared_ptr<distributed::multihost::DistributedContext> active_distributed_context_;
 
+    // Records a host-notify event; the completion queue reader calls `on_complete` once it has read the event.
+    MeshEvent record_event_to_host_nolock(
+        ttsl::Span<const SubDeviceId> sub_device_ids,
+        const std::optional<MeshCoordinateRange>& device_range,
+        std::function<void(std::chrono::steady_clock::time_point)> on_complete,
+        ThreadPool::AfterFanOut after = ThreadPool::AfterFanOut::Spin);
+
+    // Whether the open transfer records start and end events. Set and read under lock_api_function_().
+    bool transfer_stats_events_ = false;
+    // When the open transfer's start event completed. Set and read only by the completion queue reader.
+    std::chrono::steady_clock::time_point transfer_stats_start_;
+
 protected:
+    void begin_transfer_stats(
+        HostTransferCategory category,
+        const std::optional<MeshCoordinateRange>& device_range,
+        ttsl::Span<const SubDeviceId> sub_device_ids) override;
+    void end_transfer_stats(
+        HostTransferCategory category,
+        uint64_t bytes,
+        const std::optional<MeshCoordinateRange>& device_range,
+        ttsl::Span<const SubDeviceId> sub_device_ids) override;
     bool write_shard_to_device(
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,
@@ -298,13 +327,16 @@ public:
     void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) override;
     void record_end() override;
     void enqueue_trace(const MeshTraceId& trace_id, bool blocking) override;
-    // Enqueue a command list without entering the mesh-trace lifecycle.
+    // Enqueue a command list without entering the mesh-trace lifecycle. `before_submit`, if set, runs under the API
+    // lock after the list is accepted and before its commands are submitted, so work it queues elsewhere is ordered
+    // with these commands against concurrent replays. It must not take the API lock.
     void enqueue_command_list(
         const std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& worker_descriptors,
         const std::vector<SubDeviceId>& sub_device_ids,
         const MeshBuffer& buffer,
         SubDeviceManagerId sub_device_manager_id,
-        bool blocking);
+        bool blocking,
+        const std::function<void()>& before_submit);
     // Overwrite parts of a command-list buffer. Ordered after earlier replays, and later replays read the new bytes.
     void enqueue_command_list_patch(const MeshBuffer& buffer, ttsl::Span<const MeshBufferPatch> patches);
     // Wait until this host's queued device work completes.
