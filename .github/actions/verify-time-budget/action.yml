@@ -16,6 +16,9 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - name: Test time-budget validation
+      shell: bash
+      run: python3 -m unittest discover -s "${GITHUB_ACTION_PATH}/../../scripts/utils" -p 'test_verify_time_budget.py'
     - name: Verify test timeouts against budget
       shell: bash
       run: |

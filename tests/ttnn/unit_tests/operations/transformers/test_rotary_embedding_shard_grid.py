@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc, is_blackhole, nearest_32
+from tt_py_test_utils_common.utility_functions import comp_pcc, is_blackhole, nearest_32
 from ttnn.types import BlackholeComputeKernelConfig
 
 

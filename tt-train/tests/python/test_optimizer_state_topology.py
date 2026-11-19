@@ -11,7 +11,7 @@ mesh: every moment reports its parameter's placements and distribution shape, a 
 device-for-device into a fresh model, and (TP) an optimizer step cannot relabel a parameter through a mislabelled
 gradient.
 
-Every optimizer with per-parameter state is covered. The fused kernels (``AdamW``, ``AdamWFullPrecision``, ``SGD``)
+Every optimizer with per-parameter state is covered. The fused kernels (``AdamW``, also on fp32 parameters, and ``SGD``)
 and ``MuonComposite`` have Python classes; ``MorehAdamW``, ``AdamWComposite`` and ``SGDComposite`` have none, but
 ``ttml.optimizers.create_optimizer`` reaches them through the C++ ``OptimizerRegistry`` and hands back an
 ``OptimizerBase`` whose ``step`` / ``get_state_dict`` dispatch virtually (nanobind falls back to the registered base
@@ -41,7 +41,7 @@ import ttml
 import ttnn
 from ttml import checkpointing
 from ttml.modules import AbstractModuleBase, LinearLayer
-from tp_block import fresh_tp, make_adamw, train_step, trained_tp
+from tp_block import assert_identical_across_devices, device_slices, fresh_tp, make_adamw, train_step, trained_tp
 
 pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(1800)]
 
@@ -49,7 +49,7 @@ DIM = 64  # tile-aligned per device after a 2-way split (32 rows / cols per shar
 NATIVE = ttml.autograd.PreferredPrecision.NATIVE
 
 # Fused-kernel optimizers with a Python class.
-OPTIMIZERS = ["AdamW", "AdamWFullPrecision", "SGD"]
+OPTIMIZERS = ["AdamW", "AdamW+fp32", "SGD"]
 
 # Composite optimizers, reachable only through ``create_optimizer`` (registry keys in optimizer_registry.cpp). The
 # weight-decay default (0.01) is kept on the AdamW variants so ``AdamWComposite::step``'s weight-decay write is among
@@ -76,11 +76,10 @@ ALL_OPTIMIZERS = SHARDED_PARAM_OPTIMIZERS + ["MuonComposite"]
 def _make_optimizer(name: str, params: "ttml.NamedParameters") -> "ttml.optimizers.OptimizerBase":
     if name == "AdamW":
         return make_adamw(params)
-    if name == "AdamWFullPrecision":
-        cfg = ttml.optimizers.AdamWFullPrecisionConfig.make(
-            lr=1e-3, beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.0
-        )
-        return ttml.optimizers.AdamWFullPrecision(params, cfg)
+    if name == "AdamW+fp32":
+        # fp32 master weights: the trainable parameters are stored in fp32, and fused AdamW keeps fp32 moments.
+        ttml.core.store_trainable_parameters_as(params, ttnn.DataType.FLOAT32)
+        return _make_optimizer("AdamW", params)
     if name == "SGD":
         cfg = ttml.optimizers.SGDConfig.make(lr=1e-3, momentum=0.9, dampening=0.0, weight_decay=0.0, nesterov=False)
         return ttml.optimizers.SGD(params, cfg)
@@ -135,20 +134,6 @@ def _moment_mismatches(opt, expected: dict) -> list:
     return mismatches
 
 
-def _device_slices(tensor: ttml.autograd.Tensor) -> list:
-    """Each device's slice of ``tensor`` as a numpy array, in mesh order. No composer is involved, so nothing here
-    trusts the tensor's topology label."""
-    value = tensor.get_value(NATIVE)
-    return [ttnn.to_torch(shard).float().numpy() for shard in ttnn.get_device_tensors(value)]
-
-
-def _assert_identical_across_devices(tensor: ttml.autograd.Tensor, what: str) -> None:
-    """Every device holds the same bytes of ``tensor``; read through ``_device_slices``, so no label is trusted."""
-    slices = _device_slices(tensor)
-    for dev, other in enumerate(slices[1:], start=1):
-        assert np.array_equal(slices[0], other), f"{what}: device {dev} differs from device 0"
-
-
 def _checkpointed_tensors(params, opt):
     yield from ((("model", name), t) for name, t in params.items())
     yield from ((("optimizer", *path, name), m) for path, name, m in _state_tensors(opt.get_state_dict()))
@@ -156,7 +141,7 @@ def _checkpointed_tensors(params, opt):
 
 def _snapshot(params: "ttml.NamedParameters", opt) -> dict:
     """{("model", name) | ("optimizer", *path, name): per-device slices} for everything a checkpoint of them holds."""
-    return {key: _device_slices(t) for key, t in _checkpointed_tensors(params, opt)}
+    return {key: device_slices(t.get_value(NATIVE)) for key, t in _checkpointed_tensors(params, opt)}
 
 
 def _assert_checkpoint_round_trips(path: str, params: "ttml.NamedParameters", opt, fresh) -> None:
@@ -226,11 +211,12 @@ class TestTP:
             mismatches
         )
 
-    def test_checkpoint_round_trips_at_full_shape(self, tp_mesh, tmp_path):
-        params, opt = _trained_tp("AdamW")
-        path = str(tmp_path / "tp_adamw.ckpt")
+    @pytest.mark.parametrize("opt_name", ["AdamW", "AdamW+fp32"])
+    def test_checkpoint_round_trips_at_full_shape(self, tp_mesh, tmp_path, opt_name):
+        params, opt = _trained_tp(opt_name)
+        path = str(tmp_path / "tp.ckpt")
         checkpointing.save_checkpoint(path, header={}, model_params=params, optimizer=opt)
-        _assert_checkpoint_round_trips(path, params, opt, fresh=lambda: _fresh_tp("AdamW")[1:])
+        _assert_checkpoint_round_trips(path, params, opt, fresh=lambda: _fresh_tp(opt_name)[1:])
 
     @pytest.mark.parametrize("param_label", ["nd", "collapsed_1d"])
     @pytest.mark.parametrize("opt_name", ALL_OPTIMIZERS)
@@ -288,7 +274,7 @@ class TestTP:
                     mislabel,
                 )
                 assert list(grad.get_value(NATIVE).shape) == local_shape
-                _assert_identical_across_devices(grad, f"precondition: gradient of {name}")
+                assert_identical_across_devices(grad.get_value(NATIVE), f"precondition: gradient of {name}")
                 grad_layout = _layout(grad)
                 assert grad_layout[0][tp_axis] == ("shard", 3), f"precondition: Shard(3) gradient, got {grad_layout}"
                 assert grad_layout != before[name], "precondition: gradient label must differ from the parameter's"
@@ -310,9 +296,9 @@ class TestTP:
             # The Replicate label stays true: identical gradients on every device leave identical parameters and
             # state on every device.
             for name, t in params.items():
-                _assert_identical_across_devices(t, f"step {step}: parameter {name}")
+                assert_identical_across_devices(t.get_value(NATIVE), f"step {step}: parameter {name}")
             for path, name, m in _state_tensors(opt.get_state_dict()):
-                _assert_identical_across_devices(m, f"step {step}: state {'/'.join(path)}[{name}]")
+                assert_identical_across_devices(m.get_value(NATIVE), f"step {step}: state {'/'.join(path)}[{name}]")
 
 
 # --- FSDP -----------------------------------------------------------------------------------------------------
@@ -391,20 +377,21 @@ class TestFSDP:
             mismatches
         )
 
+    @pytest.mark.parametrize("opt_name", ["AdamW", "AdamW+fp32"])
     @pytest.mark.parametrize("init", ["eager", "lazy"])
-    def test_checkpoint_round_trips_at_full_shape(self, fsdp_mesh, tmp_path, init):
+    def test_checkpoint_round_trips_at_full_shape(self, fsdp_mesh, tmp_path, init, opt_name):
         model = _build_fsdp_model(init)
         params = model.parameters()
-        opt = _make_optimizer("AdamW", params)
+        opt = _make_optimizer(opt_name, params)
         train_step(model, opt, DIM, input_scale=FSDP_INPUT_SCALE)
         _assert_fsdp_layout(model, fsdp_mesh)  # steady state: the parameters are the shards again
 
-        path = str(tmp_path / f"fsdp_adamw_{init}.ckpt")
+        path = str(tmp_path / f"fsdp_{init}.ckpt")
         checkpointing.save_checkpoint(path, header={}, model_params=params, optimizer=opt)
 
         def fresh():
             fresh_params = _build_fsdp_model(init).parameters()
-            return fresh_params, _make_optimizer("AdamW", fresh_params)
+            return fresh_params, _make_optimizer(opt_name, fresh_params)
 
         _assert_checkpoint_round_trips(path, params, opt, fresh)
 

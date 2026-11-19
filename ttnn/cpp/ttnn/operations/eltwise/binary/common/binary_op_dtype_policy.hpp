@@ -35,7 +35,7 @@ inline constexpr std::array int32_only{DT::INT32};
 // uint8/int8 quantized tile that reaches DST as a zero-extended byte before the SFPU casts it
 // to fp32. int8 is deliberately read through the UInt8 unpacker, so the byte in DST holds raw 2's
 // complement. QUANT is intentionally NOT mapped to this set: its input A is the original floating-point
-// tensor (float_only), and only its *output* can be uint8/int8. Both round via FP32_TO_UINT8.
+// tensor (float_only), and only its *output* can be uint8/int8. Both round to nearest even and saturate.
 // Do not add BinaryOpType::QUANT here - that would wrongly accept integer inputs.
 inline constexpr std::array requant_dequant{DT::INT32, DT::UINT8, DT::INT8};
 

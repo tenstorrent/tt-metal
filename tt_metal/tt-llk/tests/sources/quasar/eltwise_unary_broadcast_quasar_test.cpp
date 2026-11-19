@@ -195,7 +195,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
 
-        _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(math_format, math_format);
+        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
 
         if constexpr (unpack_to_dest)
         {
@@ -203,7 +203,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            _configure_default_alu_data_format_state_<false, is_fp32_dest_acc_en>(math_format, math_format);
+            _configure_default_alu_data_format_state_<is_fp32_dest_acc_en>(math_format, math_format);
         }
         _llk_math_eltwise_unary_broadcast_init_<BROADCAST_TYPE, is_fp32_dest_acc_en, unpack_to_dest>(tensor_shape);
 
@@ -215,7 +215,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             if constexpr (!unpack_to_dest)
             {
@@ -295,9 +295,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         START_PERF_MEASURE("INIT")
-        // PACK_ISOLATE and L1_CONGESTION pack without a math↔pack handshake.
+        // PACK_ISOLATE packs without a math↔pack handshake.
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             set_up_zero_dest_dvalid_handshake_for_pack();
         }
@@ -328,7 +328,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             // No dest-dvalid section_done: WH/BH isolate packs without math handshake.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)

@@ -15,8 +15,8 @@ namespace ttnn::experimental::prim {
 // Unlike the other KDA ops this factory builds legacy program descriptors: the metal2 ProgramSpec cannot yet open
 // fabric connections, which the owner's multicast needs.
 struct SelectFinalCarryProgramFactory {
-    // Allocates the line barrier and arrival semaphores once per workload, then one program per coordinate:
-    // each program's fabric routes depend on the device's place on the sequence-parallel line.
+    // One program per coordinate: each program's fabric routes depend on the device's place on the
+    // sequence-parallel line.
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const SelectFinalCarryParams&,
         const SelectFinalCarryInputs&,

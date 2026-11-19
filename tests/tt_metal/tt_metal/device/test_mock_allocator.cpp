@@ -18,7 +18,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
 
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 #include "impl/device/mock_device_util.hpp"
 

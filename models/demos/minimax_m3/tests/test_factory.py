@@ -2,12 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import json
 import os
 
 import pytest
 import torch
-from transformers import AutoConfig
 
 import ttnn
 
@@ -15,17 +13,14 @@ from ..config import MeshConfig
 from ..tt.ccl import L1_SMALL_SIZE, CCLManager
 from ..tt.model_config import ModelArgs
 from ..utils.general_utils import get_default_num_links
-
-# Bundled MiniMax-M3 config.json (dims only — no model code is vendored). HF-reference
-# tests that need the actual modeling classes load them from a real checkpoint via
-# HF_MODEL (see requires_hf_reference below).
-_CONFIG_JSON = os.path.join(os.path.dirname(__file__), "..", "configs", "MiniMax-M3", "config.json")
+from ..utils.model_variant import load_config
 
 
 def minimax_config_dims() -> dict:
-    """Load MiniMax-M3 dimension constants from the bundled config.json (no HF needed)."""
-    with open(_CONFIG_JSON) as f:
-        return json.load(f)
+    """The selected variant's bundled config.json (dims only — no model code is vendored; M3_MODEL_VARIANT /
+    HF_MODEL pick the variant, see utils/model_variant.py). HF-reference tests that need the actual modeling
+    classes load them from a real checkpoint via HF_MODEL (see requires_hf_reference below)."""
+    return load_config()
 
 
 _HF_MODEL = os.getenv("HF_MODEL")
@@ -69,7 +64,7 @@ class TestFactory:
         # Setup CCL
         ccl_manager = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device))
 
-        config = AutoConfig.from_pretrained(model_args.model_path, trust_remote_code=True)
+        config = model_args.hf_config
 
         # Only cache tensors to disk when using real weights; with dummy (random) weights
         # there is nothing to persist and the model_path may not be a writable local directory.

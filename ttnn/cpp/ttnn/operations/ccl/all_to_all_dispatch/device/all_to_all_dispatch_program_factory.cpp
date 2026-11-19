@@ -25,11 +25,13 @@ namespace ttnn::operations::ccl {
 
 namespace detail {
 
-uint32_t get_num_pages(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->num_pages(); }
+uint32_t get_num_pages(const ttnn::Tensor& tensor) { return (uint32_t)tensor.mesh_buffer().num_pages(); }
 
-uint32_t get_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->page_size(); }
+uint32_t get_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.mesh_buffer().page_size(); }
 
-uint32_t get_aligned_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->aligned_page_size(); }
+uint32_t get_aligned_page_size(const ttnn::Tensor& tensor) {
+    return (uint32_t)tensor.mesh_buffer().aligned_page_size();
+}
 
 uint32_t get_num_rows(const ttnn::Tensor& tensor) {
     auto logical_volume = tensor.logical_shape().volume();
@@ -59,7 +61,8 @@ std::pair<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_cb_sizes(
         axis.has_value() ? (axis.value() == 0 ? mesh_view.num_rows() : mesh_view.num_cols()) : num_devices;
 
     constexpr uint32_t buffering_factor = 2;
-    constexpr uint32_t num_packet_headers = 2;
+    // Headers: payload, metadata (Ring: also the positive-arc completion credit), negative-arc completion credit.
+    constexpr uint32_t num_packet_headers = 3;
 
     auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
@@ -443,11 +446,11 @@ tt::tt_metal::ProgramDescriptor build_dispatch_program_descriptor(
         // 0..4 swapped to Buffer*'s for BufferBinding.  Semaphore addresses remain plain
         // uint32_t (stable across cache hits).
         std::vector<uint32_t> writer_runtime_args = {
-            input_tensor.buffer()->address(),     // placeholder
-            indices_tensor.buffer()->address(),   // placeholder
-            mapping_tensor.buffer()->address(),   // placeholder
-            output_tensor.buffer()->address(),    // placeholder
-            metadata_tensor.buffer()->address(),  // placeholder
+            input_tensor.mesh_buffer().address(),     // placeholder
+            indices_tensor.mesh_buffer().address(),   // placeholder
+            mapping_tensor.mesh_buffer().address(),   // placeholder
+            output_tensor.mesh_buffer().address(),    // placeholder
+            metadata_tensor.mesh_buffer().address(),  // placeholder
             (uint32_t)cross_device_semaphore.address(),
             (uint32_t)init_semaphore.address(),
             token_range_start,
@@ -467,6 +470,7 @@ tt::tt_metal::ProgramDescriptor build_dispatch_program_descriptor(
                 token_range_start,
                 token_range_end);
             tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
+                *mesh_device,
                 src_fabric_node_id,
                 mesh_device->get_fabric_node_id(neighbor_coordinate),
                 link_id,
