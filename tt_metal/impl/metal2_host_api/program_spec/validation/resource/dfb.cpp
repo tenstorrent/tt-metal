@@ -102,7 +102,7 @@ void ValidateBorrowedMemory(
 //  - range-lockstep properties cover every node occupied by the DFB; all-bank lockstep needs
 //    no additional coverage check,
 //  - offset + entry_size * num_entries fits within the declared per-bank size, including equality.
-// Occupied nodes are the union of the producer and consumer kernels' placements. Capacity is
+// Occupied nodes are the DFB's allocation placement (override_placement when set). Capacity is
 // checked per node against the requested extent, without counting allocator alignment padding;
 // the entry-size product and offset sum use 64-bit arithmetic to avoid 32-bit overflow.
 // SRAM arena parameter properties are validated before resource allocations.
@@ -113,7 +113,7 @@ void ValidateAllocationOverride(
             SRAMArenaSource{.arena = allocation->arena, .offset = allocation->offset},
             collected,
             fmt::format("DFB '{}'", dfb.unique_id),
-            collected.dfb_node_set.at(dfb.unique_id),
+            collected.dfb_placements.at(dfb.unique_id).allocation,
             uint64_t{dfb.entry_size} * dfb.num_entries,
             l1_alignment);
     }
@@ -137,6 +137,22 @@ void ValidateDFBSpec(
         dfb.num_entries > 0,
         "DataflowBufferSpec '{}' has num_entries = 0. num_entries must be set to a non-zero value.",
         dfb.unique_id);
+
+    if (dfb.advanced_options.override_placement) {
+        TT_FATAL(
+            !dfb.advanced_options.override_placement->empty(),
+            "DataflowBufferSpec '{}' has an empty override_placement",
+            dfb.unique_id);
+        TT_FATAL(
+            !dfb.borrowed_from.has_value(),
+            "DataflowBufferSpec '{}' sets both override_placement and borrowed_from; this combination is not supported",
+            dfb.unique_id);
+        TT_FATAL(
+            dfb.advanced_options.prefetcher_pipe_relays.empty(),
+            "DataflowBufferSpec '{}' sets both override_placement and prefetcher_pipe_relays; this combination is not "
+            "supported",
+            dfb.unique_id);
+    }
 
     // Data format must be valid for the architecture
     if (dfb.data_format_metadata.has_value()) {
@@ -445,38 +461,28 @@ void ValidateDFBBlockedBindings(const DataflowBufferSpec& dfb, const CollectedSp
     }
 }
 
-// Validate local DFB endpoint placement and multi-binding consistency.
-//
-// The hardware invariant is local: a local DFB lives in shared SRAM on each node, so at every
-// node where the DFB is instantiated, exactly one producer kernel instance and exactly one
-// consumer kernel instance must run on that node. Metal 2.0 permits multiple PRODUCER
-// KernelSpecs (and multiple CONSUMER KernelSpecs) per DFB, so we enforce that invariant directly
-// as a per-node census, plus per-role uniformity of the binding-site config:
-//   1./2. Placement: every node hosting the DFB runs exactly one producer instance and exactly
-//         one consumer instance (the per-node census below). This subsumes both "no node has two
-//         same-role instances" and "producer and consumer node coverage coincide".
-//   3. All bindings on the same role have matching `access_pattern` (the DFB scheduler
-//      config is shared per role).
-//   4. All KernelSpecs on the same role have matching `num_threads` (the per-side
-//      credit-tracking config is shared per role).
-// Self-loop (a kernel that appears in both producers and consumers of a DFB) is currently
-// restricted to the simple single-producer-single-consumer case.
-void ValidateDFBEndpointPlacement(const DataflowBufferSpec& dfb, const CollectedSpecData& collected, tt::ARCH arch) {
-    const auto& endpoints = collected.dfb_endpoints.at(dfb.unique_id);
+using DFBEndpointsByNode = std::unordered_map<NodeCoord, std::vector<const KernelSpec*>>;
 
-    // allow_instance_multi_binding (Gen1-only; rejected on Gen2 in ValidateDFBSpec) turns
-    // the per-node DFB into a plain shared circular buffer, which has no per-role hardware config
-    // to share — no processor mask, DFB scheduler, or credit machinery. Every per-role uniformity
-    // requirement below exists solely to guarantee such a shared config, so none apply under the
-    // flag: the role-uniformity checks are skipped and the per-node census relaxes its "exactly
-    // one" counts to "at least one".
-    const bool allow_multi = dfb.advanced_options.allow_instance_multi_binding;
+DFBEndpointsByNode CollectDFBEndpointsByNode(
+    const std::vector<CollectedSpecData::DFBEndpointInfo::EndpointRecord>& records,
+    const CollectedSpecData& collected,
+    const NodeRangeSet& placement) {
+    DFBEndpointsByNode on_node;
+    for (const auto& rec : records) {
+        const auto nodes = collected.kernel_node_set.at(rec.kernel->unique_id).intersection(placement);
+        for (const NodeCoord& node : corerange_to_cores(nodes)) {
+            on_node[node].push_back(rec.kernel);
+        }
+    }
+    return on_node;
+}
 
+void ValidateDFBRoleUniformity(const DataflowBufferSpec& dfb, const CollectedSpecData::DFBEndpointInfo& endpoints) {
     // (3) and (4): per-role uniformity of binding-site parameters, plus kernel kind.
     // Kind (compute vs DM) must agree because the DFB's hardware config carries a single
     // processor mask per role, and compute / DM masks live in disjoint bit ranges (bits
     // 0-7 vs 8-15 on Gen2; orthogonal RISC encodings on Gen1) — mismatched kinds cannot
-    // share a mask. (All three are skipped under allow_multi — see above.)
+    // share a mask. (These checks are skipped under allow_multi.)
     auto check_role_uniformity = [&](const auto& records, std::string_view role) {
         if (records.size() < 2) {
             return;
@@ -526,47 +532,31 @@ void ValidateDFBEndpointPlacement(const DataflowBufferSpec& dfb, const Collected
                 first_is_compute ? "data-movement" : "compute");
         }
     };
-    if (!allow_multi) {
-        check_role_uniformity(endpoints.producers, "PRODUCER");
-        check_role_uniformity(endpoints.consumers, "CONSUMER");
-    }
+    check_role_uniformity(endpoints.producers, "PRODUCER");
+    check_role_uniformity(endpoints.consumers, "CONSUMER");
+}
 
-    // block_size validity and cross-role BLOCKED legality.
-    ValidateDFBBlockedBindings(dfb, endpoints);
+void ValidateDFBEndpointCoverage(const DataflowBufferSpec& dfb, const CollectedSpecData& collected) {
+    const auto& endpoints = collected.dfb_endpoints.at(dfb.unique_id);
+    const bool allow_multi = dfb.advanced_options.allow_instance_multi_binding;
 
     // (1)/(2) Placement — per-node census. A local DFB lives in shared SRAM on each node, so
-    // every node it is instantiated on must run exactly one producer instance and exactly one
-    // consumer instance. Tally instances per node directly from the bindings: this subsumes the
-    // old within-role disjointness check (a node with >1 same-role instance) and the cross-role
-    // coverage check (a node with one role but not the other), and reports the offending node in
+    // every reserved node must run exactly one producer instance and exactly one consumer instance. Tally instances on
+    // the effective placement: this checks within-role disjointness (a node with >1 same-role instance)
+    // and cross-role coverage (a node with one role but not the other), and reports the offending node in
     // node terms rather than WorkUnitSpec terms. It counts actual node occupancy, so overlapping
     // same-role placements are caught regardless of how the WorkUnitSpec bookkeeping produced
     // them. (Self-loops fall out naturally: a self-looping kernel tallies as one producer AND
     // one consumer on each of its nodes.)
-    std::unordered_map<NodeCoord, std::vector<const KernelSpec*>> producers_on_node;
-    std::unordered_map<NodeCoord, std::vector<const KernelSpec*>> consumers_on_node;
-    auto tally_role = [&](const auto& records, auto& on_node) {
-        for (const auto& rec : records) {
-            for (const NodeCoord& node : corerange_to_cores(collected.kernel_node_set.at(rec.kernel->unique_id))) {
-                on_node[node].push_back(rec.kernel);
-            }
-        }
-    };
-    tally_role(endpoints.producers, producers_on_node);
-    tally_role(endpoints.consumers, consumers_on_node);
+    const auto& placement = collected.dfb_placements.at(dfb.unique_id).allocation;
+    const auto producers_on_node = CollectDFBEndpointsByNode(endpoints.producers, collected, placement);
+    const auto consumers_on_node = CollectDFBEndpointsByNode(endpoints.consumers, collected, placement);
 
-    // Footprint = every node hosting any instance of either role. A std::set gives deterministic
-    // iteration order, hence deterministic error messages.
-    std::set<NodeCoord> footprint;
-    for (const auto& [node, kernels] : producers_on_node) {
-        footprint.insert(node);
-    }
-    for (const auto& [node, kernels] : consumers_on_node) {
-        footprint.insert(node);
-    }
+    // A sorted node set gives deterministic error messages.
+    const auto nodes = corerange_to_cores(placement);
+    const std::set<NodeCoord> footprint(nodes.begin(), nodes.end());
 
-    auto names_at = [](const std::unordered_map<NodeCoord, std::vector<const KernelSpec*>>& on_node,
-                       const NodeCoord& node) -> std::string {
+    auto names_at = [](const DFBEndpointsByNode& on_node, const NodeCoord& node) -> std::string {
         auto it = on_node.find(node);
         if (it == on_node.end() || it->second.empty()) {
             return "none";
@@ -578,7 +568,7 @@ void ValidateDFBEndpointPlacement(const DataflowBufferSpec& dfb, const Collected
         return names;
     };
 
-    // Per-node census. Under allow_multi (see top of function) the "exactly one" upper bound relaxes
+    // Per-node census. Under allow_instance_multi_binding the "exactly one" upper bound relaxes
     // to "at least one": a node may host multiple instances of a role, but must still host at
     // least one producer AND one consumer, or the FIFO is half-wired.
     for (const NodeCoord& node : footprint) {
@@ -592,7 +582,9 @@ void ValidateDFBEndpointPlacement(const DataflowBufferSpec& dfb, const Collected
             continue;
         }
         std::string_view guidance;
-        if (num_producers == 0) {
+        if (num_producers == 0 && num_consumers == 0) {
+            guidance = "This node has no producer or consumer; remove it from the DFB placement.";
+        } else if (num_producers == 0) {
             guidance =
                 "This node has a consumer but no producer — ensure a producer kernel covers it "
                 "(via its WorkUnitSpec membership).";
@@ -608,8 +600,8 @@ void ValidateDFBEndpointPlacement(const DataflowBufferSpec& dfb, const Collected
         TT_FATAL(
             false,
             "Local DFB '{}' is malformed at node {}: {} producer instance(s) ({}) and {} consumer "
-            "instance(s) ({}). A local DFB lives in shared SRAM on each node, so every node it is "
-            "instantiated on must run exactly one producer and one consumer kernel instance. {}",
+            "instance(s) ({}). A local DFB lives in shared SRAM on each node, so every node where it "
+            "reserves memory must run exactly one producer and one consumer kernel instance. {}",
             dfb.unique_id,
             node.str(),
             num_producers,
@@ -618,7 +610,10 @@ void ValidateDFBEndpointPlacement(const DataflowBufferSpec& dfb, const Collected
             names_at(consumers_on_node, node),
             guidance);
     }
+}
 
+void ValidateDFBSelfLoop(
+    const DataflowBufferSpec& dfb, const CollectedSpecData::DFBEndpointInfo& endpoints, tt::ARCH arch) {
     // Find a self-loop participant: a kernel bound to this DFB as both producer and consumer.
     // Stays nullptr if the DFB is not self-looped. Iterating producers in vector order keeps the
     // pick — and any resulting error message — deterministic across runs.
@@ -672,11 +667,13 @@ void ValidateDFBEndpointPlacement(const DataflowBufferSpec& dfb, const Collected
             "participant (i.e. a kernel that appears on both sides).",
             dfb.unique_id);
     }
+}
 
+void ValidateDFBRoleProcessors(const DataflowBufferSpec& dfb, const CollectedSpecData::DFBEndpointInfo& endpoints) {
     // (5) Gen1: same-role DM kernels must share config_1xx->processor. The DFB's hardware config
     // carries a single processor per role, and on Gen1 the processor is user-specified (compute
     // kernels are always placed on the same Tensix processor, and kinds agree by (3)).
-    // (Skipped under allow_multi — see above.)
+    // (Skipped when allow_instance_multi_binding is enabled.)
     auto check_role_processor = [&](const auto& records, std::string_view role) {
         if (records.size() < 2 || !records[0].kernel->is_data_movement_kernel()) {
             return;
@@ -700,9 +697,46 @@ void ValidateDFBEndpointPlacement(const DataflowBufferSpec& dfb, const Collected
                 static_cast<int>(processor));
         }
     };
+    check_role_processor(endpoints.producers, "PRODUCER");
+    check_role_processor(endpoints.consumers, "CONSUMER");
+}
+
+// Validate local DFB endpoint placement and multi-binding consistency.
+//
+// The hardware invariant is local: a local DFB lives in shared SRAM on each node, so at every
+// reserved node, exactly one producer kernel instance and exactly one consumer kernel instance must run.
+// Metal 2.0 permits
+// multiple PRODUCER KernelSpecs (and multiple CONSUMER KernelSpecs) per DFB, so we enforce that invariant directly
+// as a per-node census, plus per-role uniformity of the binding-site config:
+//   1./2. Placement: every reserved node runs exactly one producer instance and exactly
+//         one consumer instance (the per-node census). This subsumes both "no node has two
+//         same-role instances" and "producer and consumer node coverage coincide".
+//   3. All bindings on the same role have matching `access_pattern` (the DFB scheduler
+//      config is shared per role).
+//   4. All KernelSpecs on the same role have matching `num_threads` (the per-side
+//      credit-tracking config is shared per role).
+// Self-loop (a kernel that appears in both producers and consumers of a DFB) is currently
+// restricted to the simple single-producer-single-consumer case.
+void ValidateDFBEndpointPlacement(const DataflowBufferSpec& dfb, const CollectedSpecData& collected, tt::ARCH arch) {
+    const auto& endpoints = collected.dfb_endpoints.at(dfb.unique_id);
+
+    // allow_instance_multi_binding (Gen1-only; rejected on Gen2 in ValidateDFBSpec) turns
+    // the per-node DFB into a plain shared circular buffer, which has no per-role hardware config
+    // to share — no processor mask, DFB scheduler, or credit machinery. Every per-role uniformity
+    // requirement below exists solely to guarantee such a shared config, so none apply under the
+    // flag: the role-uniformity checks are skipped and the per-node census relaxes its "exactly
+    // one" counts to "at least one".
+    const bool allow_multi = dfb.advanced_options.allow_instance_multi_binding;
+
+    if (!allow_multi) {
+        ValidateDFBRoleUniformity(dfb, endpoints);
+    }
+    // block_size validity and cross-role BLOCKED legality.
+    ValidateDFBBlockedBindings(dfb, endpoints);
+    ValidateDFBEndpointCoverage(dfb, collected);
+    ValidateDFBSelfLoop(dfb, endpoints, arch);
     if (!allow_multi && is_gen1_arch(arch)) {
-        check_role_processor(endpoints.producers, "PRODUCER");
-        check_role_processor(endpoints.consumers, "CONSUMER");
+        ValidateDFBRoleProcessors(dfb, endpoints);
     }
 }
 
@@ -747,7 +781,7 @@ void ValidateDFBAliasing(const ValidationContext& ctx) {
         }
         const size_t total_size_a = static_cast<size_t>(dfb.entry_size) * static_cast<size_t>(dfb.num_entries);
         const auto group_a = extended_group(dfb);
-        const auto& nodes_a = collected.dfb_node_set.at(dfb.unique_id);
+        const auto& nodes_a = collected.dfb_placements.at(dfb.unique_id).allocation;
 
         for (const auto& alias_name : dfb_alias_with(dfb)) {
             const DataflowBufferSpec* alias_spec = collected.dfb_by_name.at(alias_name);
@@ -774,13 +808,12 @@ void ValidateDFBAliasing(const ValidationContext& ctx) {
                 total_size_a,
                 total_size_b);
 
-            // Rule 3: same node coverage.
-            const auto& nodes_b = collected.dfb_node_set.at(alias_name);
+            // Rule 3: same backing-memory node coverage.
+            const auto& nodes_b = collected.dfb_placements.at(alias_name).allocation;
             TT_FATAL(
                 nodes_a == nodes_b,
                 "Aliased DFBs '{}' and '{}' cover different sets of nodes. Aliased DFBs must "
-                "cover the same node coverage (their bound kernels' WorkUnitSpec membership "
-                "must yield identical target_nodes unions) — the shared L1 region must be "
+                "have identical effective placements — the shared L1 region must be "
                 "reserved at the same cores for all members.",
                 dfb.unique_id,
                 alias_name);
