@@ -21,8 +21,10 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <iterator>
+#include <limits>
 #include <numeric>
 #include <optional>
 #include <unordered_set>
@@ -962,11 +964,7 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(
 std::array<uint32_t, 2> FabricEriscDatamoverBuilder::get_downstream_edm_array_sizes() const {
     // Size = position of highest set bit + 1 (e.g., mask 0x5 = size 3, mask 0x3 = size 2)
     auto calc_array_size_from_mask = [](uint32_t mask) -> uint32_t {
-        if (mask == 0) {
-            return 0;
-        }
-        // Find position of most significant bit + 1
-        return 32 - __builtin_clz(mask);
+        return std::numeric_limits<uint32_t>::digits - std::countl_zero(mask);
     };
 
     const bool needs_vc1 = config.num_used_receiver_channels_per_vc[1] > 0;
