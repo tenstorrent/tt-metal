@@ -316,19 +316,6 @@ def resolve_fabric_test_visible_devices_slices(
     return visible
 
 
-# ASIC locations and UBB tray ids of each 2x4 slice, as in the Generate2x4SliceToPCIeDeviceMapping gtest.
-# Rev C swaps UBB trays 2 and 3 relative to Rev A/B.
-SLICE_ASIC_LOCATIONS = {0: (1, 2, 5, 6), 1: (3, 4, 7, 8), 2: (3, 4, 7, 8), 3: (1, 2, 5, 6)}
-SLICE_TRAYS_REV_AB = {0: (1, 3), 1: (1, 3), 2: (2, 4), 3: (2, 4)}
-SLICE_TRAYS_REV_C = {0: (1, 2), 1: (1, 2), 2: (3, 4), 3: (3, 4)}
-
-
-def slice_positions(slice_id, rev_c):
-    """(tray_id, asic_location) of the 8 chips of a 2x4 slice."""
-    trays = (SLICE_TRAYS_REV_C if rev_c else SLICE_TRAYS_REV_AB)[slice_id]
-    return [(tray, asic) for tray in trays for asic in SLICE_ASIC_LOCATIONS[slice_id]]
-
-
 def build_split_ring_rank_table(hosts, num_stages):
     """Rank table for a pipeline of 4x4 stages alternating single-host and split-host meshes.
 

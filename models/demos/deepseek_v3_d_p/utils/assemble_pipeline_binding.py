@@ -133,9 +133,6 @@ class Galaxy:
             raise SystemExit(f"{self.name}: not 4 trays of ASICs 1..8 by bus id; the Rev C model does not apply")
         self.trays = [trays[k] for k in sorted(trays)]
         self.bus = bus
-        # Board revision: bits [35:32] of the UBB board id, Rev C from 3 (physical_system_discovery.cpp).
-        board_ids = [x["board_id"] for board in d.get("boards", []) for x in board if "board_id" in x]
-        self.rev_c = bool(board_ids) and ((int(board_ids[0]) >> 32) & 0xF) >= 3
         self.links = collections.Counter()
         for a, b in d["ethernet_connections"]:
             self.links[frozenset((a["chip"], b["chip"]))] += 1

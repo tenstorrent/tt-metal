@@ -13,12 +13,13 @@ tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py (shared with the blitz 
 
     generate  on hardware: discover the 2x4 slice -> device map with one local rank (needs a build with
               test_physical_discovery) and fill the binding template. Every Galaxy of a pod is wired
-              identically, so one host's map serves all.
-    predict   from cabling descriptors (tt-cluster-descriptors submodule), no devices needed: fill the
-              binding, and report per stage whether its 16 chips hold a C4xC4 torus at 2 links (or 1) per
-              edge and how many links each stage boundary has. Fails when a torus edge has a single link.
+              identically, so one host's map serves all. The gtest picks the slice composition for the
+              board revision it discovers; nothing here restates it.
+    check     with the cluster descriptors of the candidate hosts and that discovery's slice map: report per
+              stage whether its 16 chips hold a C4xC4 torus at 2 links (or 1) per edge and how many links each
+              stage boundary has, and search the host orders. --print-order prints the lines a job script reads.
 
-Both write a rankfile (`rank i=host slot=<n>`, n counting the ranks on that host), the placement the binding needs: tt-run takes no host
+generate writes a rankfile (`rank i=host slot=<n>`, n counting the ranks on that host), the placement the binding needs: tt-run takes no host
 field, so launch with `--mpi-args "--map-by rankfile:file=<rankfile>"`.
 """
 import argparse
@@ -29,6 +30,8 @@ import itertools
 import os
 import sys
 from pathlib import Path
+
+import yaml
 
 REPO = Path(__file__).resolve().parents[4]
 
@@ -64,27 +67,22 @@ grb = _load_rank_table_module(REPO)
 TEMPLATE_SC4 = TOPO / "pipeline_prefill_request_sc4_rr_12rank_4x4_sp1.yaml"
 TEMPLATE_SC2 = TOPO / "pipeline_prefill_request_sc2_rr_4rank_4x4_sp1.yaml"
 TORUS_SIDE = 4
-# UBB tray id = index of the bus high nibble + 1 (control_plane.cpp ubb_bus_ids for Blackhole).
-_BH_UBB_TRAY_BUS = (0x00, 0x40, 0xC0, 0x80)
 
 
 # --- descriptor model -----------------------------------------------------------------------------
 
 
-def chip_position(g, chip):
-    """(tray_id, asic_location) of a chip, as the MGD's physical_asic_position names them."""
-    return _BH_UBB_TRAY_BUS.index(g.bus[chip] & 0xF0) + 1, g.bus[chip] & 0x0F
+def load_slices(path):
+    """slice id -> set of UMD logical ids, from the slice_to_pcie_device_mapping.yaml the discovery gtest writes.
+
+    Every Galaxy of a pod is wired identically, so the first host's map applies to all."""
+    device_mapping = yaml.safe_load(Path(path).read_text())["device_mapping"]
+    return {int(s): set(ids) for s, ids in next(iter(device_mapping.values())).items()}
 
 
-def slice_chips(g, slice_id):
-    """The 8 chips of a 2x4 slice of galaxy g, as descriptor chip ids."""
-    by_position = {chip_position(g, c): c for c in g.bus}
-    return [by_position[pos] for pos in grb.slice_positions(slice_id, g.rev_c)]
-
-
-def slice_logical_ids(g):
-    """slice id -> TT_VISIBLE_DEVICES ids (UMD logical ids, BDF-sorted indices) of g."""
-    return {s: sorted(g.logical[c] for c in slice_chips(g, s)) for s in grb.SLICE_ASIC_LOCATIONS}
+def slice_chips(g, slice_id, slices):
+    """The chips of galaxy g (descriptor chip ids) in a 2x4 slice."""
+    return {c for c, logical in g.logical.items() if logical in slices[slice_id]}
 
 
 def link_counts(galaxies):
@@ -106,14 +104,14 @@ def link_counts(galaxies):
     return counts
 
 
-def stage_chips(galaxies, table, host_index):
-    """mesh id -> set of (host index, chip), from the rank table's (mesh, host_rank, host, slices) rows.
+def stage_chips(galaxies, table, host_index, slices):
+    """mesh id -> set of (host index, chip), from the rank table's (mesh, host_rank, host, slice ids) rows.
 
     host_index maps a host name to the index link_counts() used for it."""
     by_name = {g.name: g for g in galaxies}
     stages = collections.defaultdict(set)
-    for mesh_id, _, host, slices in table:
-        stages[mesh_id].update((host_index[host], c) for s in slices for c in slice_chips(by_name[host], s))
+    for mesh_id, _, host, slice_ids in table:
+        stages[mesh_id].update((host_index[host], c) for s in slice_ids for c in slice_chips(by_name[host], s, slices))
     return stages
 
 
@@ -182,7 +180,7 @@ def boundary_links(a, b, counts):
     return sum(n for pair, n in counts.items() if len(pair & a) == 1 and len(pair & b) == 1 and pair <= a | b)
 
 
-def ring_orders(galaxies, num_stages):
+def ring_orders(galaxies, num_stages, slices):
     """Host orders whose stages all hold a torus: [(min torus edge links, order)], best first.
 
     The order sets which host pairs form seam stages, and the cabling is directional: host i's slice 3 is
@@ -207,16 +205,16 @@ def ring_orders(galaxies, num_stages):
     for permutation in orders:
         order = [galaxies[i] for i in permutation]
         table = grb.build_split_ring_rank_table([g.name for g in order], num_stages)
-        links = min(torus_links(chips) for chips in stage_chips(order, table, host_index).values())
+        links = min(torus_links(chips) for chips in stage_chips(order, table, host_index, slices).values())
         if links:
             found.append((links, order))
     return sorted(found, key=lambda f: -f[0])
 
 
-def stage_report(galaxies, table):
+def stage_report(galaxies, table, slices):
     """(per-stage [(mesh id, kind, hosts, torus min links)], per-boundary [(from, to, links)])."""
     counts = link_counts(galaxies)
-    stages = stage_chips(galaxies, table, {g.name: i for i, g in enumerate(galaxies)})
+    stages = stage_chips(galaxies, table, {g.name: i for i, g in enumerate(galaxies)}, slices)
     hosts_of = collections.defaultdict(list)
     for mesh_id, _, host, _ in table:
         hosts_of[mesh_id].append(host)
@@ -268,25 +266,6 @@ def rankfile(rank_table):
     return "".join(lines)
 
 
-def mock_mapping(rank_table, descriptors):
-    """A per-rank mock cluster mapping: each rank points at its host's descriptor."""
-    lines = ["# GENERATED by rr_pipeline_binding.py: one entry per rank, in rank order.\n"]
-    lines.append("rank_to_cluster_mock_cluster_desc:\n")
-    for i, r in enumerate(rank_table):
-        desc = descriptors[r["host"]]
-        lines.append(f'  {i}: "{desc}"\n')
-    return "".join(lines)
-
-
-def predicted_rank_table(galaxies, num_stages):
-    table = grb.build_split_ring_rank_table([g.name for g in galaxies], num_stages)
-    by_name = {g.name: slice_logical_ids(g) for g in galaxies}
-    ranks = []
-    for entry in table:
-        ranks += grb.resolve_rank_table_devices([entry], by_name[entry[2]], f"descriptor of {entry[2]}")
-    return table, ranks
-
-
 # --- CLI ------------------------------------------------------------------------------------------
 
 
@@ -309,10 +288,9 @@ def cmd_generate(args):
     return 0
 
 
-def cmd_predict(args):
-    descriptors = load_mapping(args.mapping)
-    galaxies = [Galaxy(d) for d in descriptors]
-    descriptor_of = {g.name: d for g, d in zip(galaxies, descriptors)}
+def cmd_check(args):
+    galaxies = [Galaxy(d) for d in load_mapping(args.mapping)]
+    slices = load_slices(args.slice_mapping)
     if args.host:
         by_name = {g.name: g for g in galaxies}
         missing = [h for h in args.host if h not in by_name]
@@ -324,7 +302,7 @@ def cmd_predict(args):
         counts = link_counts(galaxies)
         print(f"RR_CROSS_LINKS {sum(n for pair, n in counts.items() if len({host for host, _ in pair}) > 1)}")
     if args.auto_order:
-        orders = ring_orders(galaxies, num_stages)
+        orders = ring_orders(galaxies, num_stages, slices)
         if args.print_order and not orders:
             print("RR_ORDER none")
             return 3
@@ -336,16 +314,9 @@ def cmd_predict(args):
         if not orders:
             raise SystemExit("no host order gives a torus on every stage")
         galaxies = orders[0][1]
-    table, rank_table = predicted_rank_table(galaxies, num_stages)
-    hosts = [g.name for g in galaxies]
-    revs = {g.rev_c for g in galaxies}
-    if len(revs) != 1:
-        raise SystemExit("hosts mix Rev C and Rev A/B boards")
-
-    print(f"hosts (ring order): {', '.join(hosts)}   board revision: {'C' if revs.pop() else 'A/B'}")
-    for i, r in enumerate(rank_table):
-        print(f"rank {i:2d}  mesh {r['mesh_id']} host_rank {r['host_rank']}  {r['host']:20} {r['devices']}")
-    rows, boundaries = stage_report(galaxies, table)
+    table = grb.build_split_ring_rank_table([g.name for g in galaxies], num_stages)
+    print(f"hosts (ring order): {', '.join(g.name for g in galaxies)}")
+    rows, boundaries = stage_report(galaxies, table, slices)
     print("\nstages (torus = C4xC4 on the stage's 16 chips; edge links = fewest links on any torus edge):")
     for mesh_id, kind, stage_hosts, min_links in rows:
         found = f"edges >= {min_links} link(s)" if min_links else "NO TORUS"
@@ -355,20 +326,8 @@ def cmd_predict(args):
         print(f"  {a} -> {b}  {n}")
     if any(n == 0 for _, _, n in boundaries) or any(m == 0 for *_, m in rows):
         raise SystemExit("a stage has no torus or a boundary has no links: wrong host order for this cabling?")
-    template = args.template or default_template(num_stages)
-    mgd = args.mgd
-    if not mgd:
-        mgd = next(
-            l.split(": ", 1)[1] for l in Path(template).read_text().splitlines() if l.startswith("mesh_graph_desc_path")
-        )
-        if min(m for *_, m in rows) < 2:
-            raise SystemExit("a torus has 1-link edges; the descriptors need 2 links on every torus edge")
-    print(f"\ndescriptor: {mgd}")
-    print(f'launch: --mpi-args "--map-by rankfile:file=<rankfile>"')
-    write_outputs(args, render(template, rank_table, f"predicted from {args.mapping}", hosts, mgd), rank_table)
-    if args.mock_mapping_out:
-        Path(args.mock_mapping_out).write_text(mock_mapping(rank_table, descriptor_of))
-        print(f"wrote {args.mock_mapping_out}")
+    if min(m for *_, m in rows) < 2:
+        raise SystemExit("a torus has 1-link edges; the descriptors need 2 links on every torus edge")
     return 0
 
 
@@ -380,30 +339,34 @@ def main(argv=None):
     g.add_argument("--mpi-if", help="network interface for the discovery mpirun")
     g.add_argument("--no-discovery", action="store_true", help="use slice_to_pcie_device_mapping.yaml in --work-dir")
     g.add_argument("--work-dir", type=Path)
-    p = sub.add_parser("predict", help="fill the binding from cabling descriptors and report tori and seams")
-    p.add_argument("--mapping", default=str(SC4_MAPPING), help="mock mapping yaml listing one descriptor per host")
-    p.add_argument(
+    c = sub.add_parser("check", help="report tori and seams of a host order from cluster descriptors")
+    c.add_argument("--mapping", default=str(SC4_MAPPING), help="mapping yaml listing one cluster descriptor per host")
+    c.add_argument(
+        "--slice-mapping",
+        default=grb.SLICE_MAPPING_FILE,
+        help="slice -> device map written by the discovery gtest (generate leaves it in its work dir)",
+    )
+    c.add_argument(
         "--host", action="append", help="host to use, repeated in cabling ring order (default: the mapping's)"
     )
-    p.add_argument("--auto-order", action="store_true", help="search the host orders for the ring order")
-    p.add_argument(
+    c.add_argument("--auto-order", action="store_true", help="search the host orders for the ring order")
+    c.add_argument(
         "--print-order",
         action="store_true",
         help="print RR_CROSS_LINKS and RR_ORDER lines for scripts; exit 3 if no order",
     )
-    p.add_argument("--mock-mapping-out", help="also write a per-rank mock cluster mapping here")
-    for s in (g, p):
-        s.add_argument("--stages", type=int, default=None, help="pipeline stages (default 2 per host)")
-        s.add_argument("--template")
-        s.add_argument("--mgd", help="mesh graph descriptor to name instead of the template's")
-        s.add_argument("--out", help="binding to write")
-        s.add_argument("--rankfile-out", help="rankfile to write")
+    c.add_argument("--stages", type=int, default=None, help="pipeline stages (default 2 per host)")
+    g.add_argument("--stages", type=int, default=None, help="pipeline stages (default 2 per host)")
+    g.add_argument("--template")
+    g.add_argument("--mgd", help="mesh graph descriptor to name instead of the template's")
+    g.add_argument("--out", help="binding to write")
+    g.add_argument("--rankfile-out", help="rankfile to write")
     args = ap.parse_args(argv)
     if args.cmd == "generate":
         if not args.stages:
             args.stages = 2 * len([h for h in args.hosts.split(",") if h])
         return cmd_generate(args)
-    return cmd_predict(args)
+    return cmd_check(args)
 
 
 if __name__ == "__main__":
