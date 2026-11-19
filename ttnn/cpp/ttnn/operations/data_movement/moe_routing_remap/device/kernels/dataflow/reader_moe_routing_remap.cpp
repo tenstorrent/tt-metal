@@ -48,7 +48,8 @@ void kernel_main() {
 
     noc.async_read_barrier();
     // Mask off the IEEE-754 sign bit so -0.0 (bf16 0x8000 / fp32 0x80000000) is treated as zero.
-    constexpr weight_addr_t magnitude_mask = static_cast<weight_addr_t>(~weight_addr_t{0} >> 1);
+    constexpr weight_addr_t magnitude_mask =
+        static_cast<weight_addr_t>(static_cast<weight_addr_t>(~weight_addr_t{0}) >> 1);
     for (uint32_t i = 0, weight_offset_count = 0, device_weights_count = 0; i < num_cluster_experts; ++i) {
         const auto& val = routing_weights_ptr[i];
         if ((val & magnitude_mask) != 0) {
