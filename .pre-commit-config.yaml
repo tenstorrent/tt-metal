@@ -307,7 +307,9 @@ repos:
       # scattered. Bans the THCON_UNPACKER{0,1} UNPACR_STRIDE_SET_STRIDE config field and
       # UNPACR_TILE_MISC Unpack_Type 001 (SrcA) / 010 (SrcB) given as a literal. Plain UNPACR_STRIDE
       # (strided L1 read) is fine.
-      entry: '(UNPACR_STRIDE_SET_STRIDE|UNPACR_TILE_MISC\(\s*(0b0*1|0b0*10|0x0*[12]|[12])\s*(/\*[^*]*\*/\s*)?[,)])'
+      entry: '(UNPACR_STRIDE_SET_STRIDE|UNPACR_TILE_MISC\s*\(\s*(0[bB]0*1|0[bB]0*10|0[xX]0*[12]|0*[12])[uUlL]*\s*(/\*[^*]*\*/\s*)?[,)])'
+      # Multiline so a call clang-format wraps after "(" is still matched.
+      args: [--multiline]
       files: |
         (?x)^(
           tt_metal/tt-llk/tt_llk_quasar/.*|
