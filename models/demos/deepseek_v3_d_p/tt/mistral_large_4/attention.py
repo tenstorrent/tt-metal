@@ -151,6 +151,7 @@ class TtAttention:
         # layer (the ``kvpe`` argument), until its next call (chunk_kv_start: that chunk's start); set by the all-device
         # model
         self.keep_chunk_kv, self.chunk_kv, self.chunk_kv_start = False, None, None
+        self.mirror_layer = None  # a shared-KV layer's own kvpe region (KV_MIRRORS), set by the all-device model
         wdt = ttnn.bfloat8_b  # rule 7: weights bfp8
         shape = tuple(mesh.shape)
 
@@ -262,19 +263,20 @@ class TtAttention:
                 SP_AXIS,
                 self.cache_layers,
                 num_users=self.num_users,
-                dtype=ttnn.bfloat8_b,
+                dtype=kv_cache_storage()[0],
+                layout=kv_cache_storage()[1],
             )
             _stamp_sp_topology(self.cache, mesh)
         # the SP gather's persistent output: one slot's rows of every SP row, rank-major (block-cyclic physical)
-        dt = self.cache.dtype
+        dt, lay = self.cache.dtype, self.cache.layout
         self.kv_full = seqbuf.get(
             mesh,
-            ("kv_full", max_seq, self.width, str(dt)),
+            ("kv_full", max_seq, self.width, str(dt), str(lay)),
             lambda: ttnn.from_torch(
                 torch.zeros(1, 1, max_seq, self.width),
                 device=mesh,
                 dtype=dt,
-                layout=ttnn.TILE_LAYOUT,
+                layout=lay,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
             ),
@@ -372,34 +374,56 @@ class TtAttention:
         else:
             kvpe = self._pad_pe(latn)  # [latent | 0]
         ttnn.deallocate(latn)
-        kc = ttnn.typecast(kvpe, self.cache.dtype)
+        self.write_rows(kvpe, self.cache_layer, start, slot, end, meta=meta)
+        return kvpe
+
+    def write_rows(self, kvpe, layer: int, start: int, slot: int, end: int, meta=None) -> None:
+        """bf16 TILE kvpe rows of this chunk -> cache region ``layer`` at [start, end). A ROW_MAJOR cache keeps its
+        pad rows as written (zero_padded_kv_cache takes TILE caches only), as the DSA models' bf16 caches do."""
+        if self.cache.layout == ttnn.ROW_MAJOR_LAYOUT:
+            kc = ttnn.to_layout(kvpe, ttnn.ROW_MAJOR_LAYOUT)
+        else:
+            kc = ttnn.typecast(kvpe, self.cache.dtype)
+        tiled = self.cache.layout == ttnn.TILE_LAYOUT
         if meta is not None:
-            _write_cache_meta(self.cache, kc, meta, self.cache_layer, self.cache_layers, self.chunk)
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                self.cache,
+                kc,
+                meta.slot,
+                meta.start,
+                layer_idx=layer,
+                num_layers=self.cache_layers,
+                cluster_axis=SP_AXIS,
+                valid_global=meta.end,
+            )
+            if tiled:
+                ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+                    self.cache, meta.slot, meta.end, layer, self.cache_layers, self.chunk, SP_AXIS, pad_align=ttnn.TILE_SIZE
+                )
             ttnn.deallocate(kc)
-            return kvpe
+            return
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
             self.cache,
             kc,
             slot_idx=slot,
-            layer_idx=self.cache_layer,
+            layer_idx=layer,
             num_layers=self.cache_layers,
             kv_actual_global=start,
             cluster_axis=SP_AXIS,
             valid_global=end,
         )
         ttnn.deallocate(kc)
-        if end < start + self.chunk and end % ttnn.TILE_SIZE:
+        if tiled and end < start + self.chunk and end % ttnn.TILE_SIZE:
             ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
                 self.cache,
                 slot,
-                self.cache_layer,
+                layer,
                 self.cache_layers,
                 end,
                 self.chunk,
                 SP_AXIS,
                 pad_align=ttnn.TILE_SIZE,
             )
-        return kvpe
 
     def _pad_pe(self, t):
         """[..., lora] -> [..., lora + pe], the pe columns exact zeros (NoPE layers)."""
@@ -482,6 +506,8 @@ class TtAttention:
             num_links=settings.get("NUM_LINKS"),
             **where,
         )
+        if gathered.layout == ttnn.ROW_MAJOR_LAYOUT:
+            return gathered  # the persistent scratch itself: callers free only what is not self.kv_full
         g = min(self.max_seq, -(-end // slab) * slab)
         if meta is None and settings.get("ATTN_KV_ROWS") == "gathered" and g < self.max_seq and gathered.dtype == ttnn.bfloat8_b:
             # long ISL 3: only the gathered slabs (g / 8 rows of each rank's max_seq / 8) -> bf16 ROW_MAJOR
@@ -702,7 +728,7 @@ class TtAttention:
         q_seq = self._to_seq(q)  # [1, Hq, 160, 576]
         ttnn.deallocate(q)
         kv = self._gather_kv(slot, end, meta=meta)
-        if kvpe is not None and settings.get("ATTN_CHUNK_KV") == "bfloat16":
+        if kvpe is not None and settings.get("ATTN_CHUNK_KV") == "bfloat16" and self.cache.dtype != ttnn.bfloat16:
             if meta is None:
                 self._paste_chunk(kv, kvpe, start)
             else:
@@ -716,7 +742,8 @@ class TtAttention:
         if self.composed:
             o_t = self._attend_composed(q_seq, kv, topk)
             ttnn.deallocate(q_seq)
-            ttnn.deallocate(kv)
+            if kv is not self.kv_full:
+                ttnn.deallocate(kv)
             return self._out_proj(o_t)
         q_rm = ttnn.to_layout(q_seq, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(q_seq)
@@ -735,7 +762,8 @@ class TtAttention:
             block_cyclic_cache_tp_sharded=False,
         )  # [1, Hq, 160, 512] ROW_MAJOR
         ttnn.deallocate(q_rm)
-        ttnn.deallocate(kv)
+        if kv is not self.kv_full:
+            ttnn.deallocate(kv)
         o_t = ttnn.to_layout(out, ttnn.TILE_LAYOUT)
         ttnn.deallocate(out)
         return self._out_proj(o_t)
@@ -767,6 +795,13 @@ class TtAttention:
             ttnn.deallocate(y)
             y = yb
         return y
+
+
+def kv_cache_storage():
+    """(dtype, layout) of the served kvpe cache (KV_CACHE_FORMAT)."""
+    if settings.get("KV_CACHE_FORMAT") == "bf16_rm":
+        return ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT
+    return ttnn.bfloat8_b, ttnn.TILE_LAYOUT
 
 
 def _write_cache_meta(cache, rows, meta, layer: int, layers: int, chunk: int) -> None:
@@ -833,7 +868,7 @@ def kvpe_cache_load(mod: TtAttention, latent, rope, length: int, mesh, slot: int
             rows.reshape(1, 1, mod.chunk, -1),
             device=mesh,
             dtype=mod.cache.dtype,
-            layout=ttnn.TILE_LAYOUT,
+            layout=mod.cache.layout,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=dims),
         )

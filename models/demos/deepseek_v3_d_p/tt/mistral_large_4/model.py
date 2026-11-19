@@ -38,7 +38,7 @@ from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 
 from models.demos.deepseek_v3_d_p.reference.mistral_large_4._bringup_interface import Ctx, run_block
-from models.demos.deepseek_v3_d_p.tt.mistral_large_4.attention import _stamp_sp_topology
+from models.demos.deepseek_v3_d_p.tt.mistral_large_4.attention import _stamp_sp_topology, kv_cache_storage
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4.layout import SP_AXIS, TP_AXIS, residual_to_device, residual_to_host
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4.settings import settings
 
@@ -49,8 +49,17 @@ def alloc_caches(mesh, cfg, max_seq: int, kv_regions: int, index_regions: int, n
     """The served caches (module docstring): kvpe [num_users * kv_regions, 1, max_seq / SP, 576] and index
     [num_users * index_regions, 1, max_seq / SP, 128] per chip, bfloat8_b, one region per layer that owns the cache."""
     shape = tuple(mesh.shape)
+    dtype, layout = kv_cache_storage()
     kvpe = init_kvpe_cache(
-        cfg.kv_lora + cfg.qk_rope, mesh, max_seq, shape, SP_AXIS, max(1, kv_regions), num_users=num_users
+        cfg.kv_lora + cfg.qk_rope,
+        mesh,
+        max_seq,
+        shape,
+        SP_AXIS,
+        max(1, kv_regions),
+        num_users=num_users,
+        dtype=dtype,
+        layout=layout,
     )
     index = init_kvpe_cache(cfg.index_dim, mesh, max_seq, shape, SP_AXIS, max(1, index_regions), num_users=num_users)
     return kvpe, index
@@ -92,7 +101,7 @@ class State:
                 blk.reshape(1, 1, m.chunk, -1),
                 device=m.mesh,
                 dtype=cache.dtype,
-                layout=ttnn.TILE_LAYOUT,
+                layout=cache.layout,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ShardTensor2dMesh(m.mesh, mesh_shape=tuple(m.mesh.shape), dims=dims),
             )
@@ -113,7 +122,7 @@ class State:
         m = self.model
         if not length:
             return
-        if layer in m.kv_region:
+        if layer in m.kv_region and tensors["kv_latent"].shape[-1]:  # a shared-KV layer's golden holds no KV
             lat, rope = tensors["kv_latent"][:length].float(), tensors["k_rope"][:length].float()
             rows = torch.nn.functional.pad(
                 torch.cat([lat, rope], dim=-1), (0, m.kvpe_width - lat.shape[1] - rope.shape[1])
@@ -144,7 +153,7 @@ class State:
         m = self.model
         none = torch.zeros(length, 0)
         out = {"kv_latent": none, "k_rope": none.clone(), "index_key": none.clone()}
-        if layer in m.kv_region:
+        if layer in m.kv_region and m.cfg.owns_kv(layer):  # a shared-KV layer's region is a copy of its source's
             kv = self._read(m.kvpe, len(m.kv_region), m.kv_region[layer], length)
             out["kv_latent"] = kv[:, : m.cfg.kv_lora]
             out["k_rope"] = kv[:, m.cfg.kv_lora : m.cfg.kv_lora + m.cfg.rope_dim(layer)]
@@ -183,7 +192,7 @@ class TtModel:
         self.rows = chunk // self.sp
         self._build, self._graph = build, block_graph
         # regions of the served caches: one per layer that owns the cache, in layer order
-        owners = [i for i in self.layers if cfg.owns_kv(i)]
+        owners = [i for i in self.layers if cfg.owns_kv(i) or settings.get("KV_MIRRORS")]
         self.kv_region = {i: k for k, i in enumerate(owners)}
         for i in self.layers:
             if not cfg.owns_kv(i):
@@ -246,6 +255,8 @@ class TtModel:
             m["attention"] = self._build(
                 i, "attention", cache=self.kvpe, cache_layer=self.kv_region[src], cache_layers=len(self.kv_region)
             )
+            # a shared-KV layer with its own region (KV_MIRRORS) copies its source's rows there
+            m["attention"].mirror_layer = self.kv_region[i] if src != i and i in self.kv_region else None
             # a KV source layer keeps its chunk's bf16 kvpe rows for the shared-KV layers that read them
             m["attention"].keep_chunk_kv = any(cfg.kv_source(j) == i and j != i for j in self.layers)
             if cfg.is_full(i):
@@ -298,6 +309,8 @@ class TtModel:
             assert (
                 srcmod.chunk_kv_start == c.start
             ), f"layer {i} reads layer {cfg.kv_source(i)}'s KV, not run on this chunk"
+            if mod.mirror_layer is not None:
+                mod.write_rows(srcmod.chunk_kv, mod.mirror_layer, c.start, slot, end, meta=meta)
             return mod(x, tk, c.start, slot, end, srcmod.chunk_kv, meta=meta)
 
         add = m["residual"]

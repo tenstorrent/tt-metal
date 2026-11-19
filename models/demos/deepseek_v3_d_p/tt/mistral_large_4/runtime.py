@@ -72,10 +72,10 @@ class MistralLarge4PrefillRuntime:
         are built on); then the state over them (State zeroes them: a fresh engine cache)."""
         m = self.model
         if self.state is not None:
-            assert m.kvpe is kv.tensor("00") and m.index is kv.tensor("01"), "one engine cache per runtime"
+            assert m.kvpe is kv.tensor(KT.KV) and m.index is kv.tensor(KT.INDEX), "one engine cache per runtime"
             return
         assert m.kvpe is None and m.index is None and not m.mods, "the device model was built on other caches"
-        m.kvpe, m.index = kv.tensor("00"), kv.tensor("01")
+        m.kvpe, m.index = kv.tensor(KT.KV), kv.tensor(KT.INDEX)
         self.state = m.new_state(self.geo.max_seq)
 
     def _zero_ids(self):

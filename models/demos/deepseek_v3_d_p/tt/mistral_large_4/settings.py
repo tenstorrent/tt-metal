@@ -96,7 +96,7 @@ TABLE = {
         "default, -0.2 to -0.5 s per chunk, logits PCC -0.001 (PERF.md)",
     ),
     "INDEXER_HADAMARD": Setting(
-        False,
+        True,
         None,
         "index keys and queries rotated by the orthonormal Walsh-Hadamard H128 / sqrt(128) after RoPE (the scores are "
         "unchanged): the served index cache then holds the keys the Reload decode's DsaIndexerKBranch writes, so the KV "
@@ -329,6 +329,19 @@ TABLE = {
         "chunk, so the one-capture trace keeps max_seq); extent (long context fix 1, needs the tt-metal untilize with "
         "gathered_prefix_tensor): the metadata path untilizes only the gathered slabs, the extent read on the device "
         "from the chunk start (one capture for every chunk), full-size output; the eager path as max_seq",
+    ),
+    "KV_CACHE_FORMAT": Setting(
+        "bf16_rm",
+        ("bf16_rm", "bfp8_tile"),
+        "served kvpe cache encoding. bf16_rm: bfloat16 ROW_MAJOR, one 32 x 576 record (36,864 B) per ND shard, the "
+        "tt-blaze decode ring's format, so the KV manager copies records unchanged; bfp8_tile: bfloat8_b TILE records "
+        "(19,584 B), half the DRAM, not migratable to the ring",
+    ),
+    "KV_MIRRORS": Setting(
+        True,
+        None,
+        "every layer gets a kvpe region; a shared-KV layer writes its source layer's rows into its own region, as the "
+        "decode ring's table expects one KV entry per layer. False: shared-KV layers own no region",
     ),
     "EXPERTS_TOPOLOGY": Setting(
         "Ring", ("Linear", "Ring"), "experts' dispatch / combine (axis 0) topology; Ring: bit-identical, -5% (fast-01)"

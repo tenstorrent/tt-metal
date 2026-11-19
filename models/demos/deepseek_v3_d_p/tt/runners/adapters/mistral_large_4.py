@@ -44,7 +44,9 @@ class MistralLarge4KvCaches(KvCaches):
     """The served caches {"00": kvpe, "01": index} (tt/runners/kv_table.py)."""
 
     def __init__(self, kvpe, index):
-        self._caches = {"00": kvpe, "01": index}
+        from models.demos.deepseek_v3_d_p.tt.mistral_large_4 import kv_table as KT
+
+        self._caches = {KT.KV: kvpe, KT.INDEX: index}
 
     def tensor(self, name: str):
         return self._caches[name]
@@ -118,7 +120,7 @@ class MistralLarge4PrefillAdapter(PrefillModelAdapter):
 
         geo = self._geometry(hf_config, params)
         kvpe, index = alloc_caches(
-            mesh_device, hf_config.cfg, geo.max_seq, geo.regions("00"), geo.regions("01"), geo.slots
+            mesh_device, hf_config.cfg, geo.max_seq, geo.regions(KT.KV), geo.regions(KT.INDEX), geo.slots
         )
         return MistralLarge4KvCaches(kvpe, index)
 
@@ -147,9 +149,16 @@ class MistralLarge4PrefillAdapter(PrefillModelAdapter):
         from models.demos.deepseek_v3_d_p.tt.mistral_large_4 import kv_table as KT
 
         cfg = Config(hf_model_dir(self))
-        n = table.config(table.config_id_of("00")).num_layers if num_layers is None else int(num_layers)
+        n = table.config(table.config_id_of(KT.KV)).num_layers if num_layers is None else int(num_layers)
         return KT.read_slot_kv_and_check_pcc(
-            table, device_map, slot_id, real_len, trace_dir, list(range(n)), cfg.kv_lora + cfg.qk_rope
+            table,
+            device_map,
+            slot_id,
+            real_len,
+            trace_dir,
+            list(range(n)),
+            cfg.kv_lora + cfg.qk_rope,
+            kv_source=cfg.kv_source,
         )
 
 

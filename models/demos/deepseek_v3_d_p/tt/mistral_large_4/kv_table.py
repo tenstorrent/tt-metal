@@ -35,9 +35,11 @@ import torch
 import ttnn
 
 RECORD_TOKENS = 32
-CONFIGS = ("00", "01")  # table config names, in id order
-KINDS = {"00": "kvpe", "01": "index"}
+KV, INDEX = "0", "1"  # table config names, as the tt-blaze decode ring names them
+CONFIGS = (KV, INDEX)  # in id order
+KINDS = {KV: "kvpe", INDEX: "index"}
 _TILE_BYTES = {"BFLOAT8_B": 1088, "BFLOAT16": 2048}
+_ELEMENT_BYTES = {"BFLOAT16": 2}
 
 
 @dataclass(frozen=True)
@@ -61,7 +63,9 @@ class Geometry:
         """cfg: reference/model.py Config."""
         layers = tuple(layers)
         assert layers == tuple(range(layers[0], layers[0] + len(layers))), f"served layers must be contiguous: {layers}"
-        owners = tuple(i for i in layers if cfg.owns_kv(i))
+        from models.demos.deepseek_v3_d_p.tt.mistral_large_4.settings import settings
+
+        owners = tuple(i for i in layers if cfg.owns_kv(i) or settings.get("KV_MIRRORS"))
         for i in layers:
             assert cfg.owns_kv(i) or cfg.kv_source(i) in owners, f"layer {i} reads layer {cfg.kv_source(i)}'s KV"
         assert chunk % (sp * RECORD_TOKENS) == 0 and max_seq % chunk == 0, (sp, chunk, max_seq)
@@ -101,8 +105,11 @@ class Geometry:
 
 
 def record_bytes(cache) -> int:
-    """Bytes of one 32-token record (one [32, width] shard) of a TILE cache."""
-    return int(cache.shape[-1]) // ttnn.TILE_SIZE * _TILE_BYTES[str(cache.dtype).split(".")[-1]]
+    """Bytes of one 32-token record (one [32, width] shard): 32 rows of a ROW_MAJOR cache, or the width's tiles."""
+    dtype = str(cache.dtype).split(".")[-1]
+    if cache.layout == ttnn.ROW_MAJOR_LAYOUT:
+        return RECORD_TOKENS * int(cache.shape[-1]) * _ELEMENT_BYTES[dtype]
+    return int(cache.shape[-1]) // ttnn.TILE_SIZE * _TILE_BYTES[dtype]
 
 
 def record_addr(geo: Geometry, name: str, k: int, pos: int, slot: int, base: int, banks: int, size: int):
@@ -173,26 +180,38 @@ def config_rows(st: dict, n: int, kvpe_width: int) -> dict:
     out = {}
     lat, kr = st["kv_latent"][:n].float(), st["k_rope"][:n].float()
     if lat.shape[-1]:
-        out["00"] = torch.nn.functional.pad(torch.cat([lat, kr], -1), (0, kvpe_width - lat.shape[1] - kr.shape[1]))
+        out[KV] = torch.nn.functional.pad(torch.cat([lat, kr], -1), (0, kvpe_width - lat.shape[1] - kr.shape[1]))
     ik = st["index_key"][:n].float()
     if ik.shape[-1]:
         from models.demos.deepseek_v3_d_p.tt.mistral_large_4.indexer import hadamard_matrix
         from models.demos.deepseek_v3_d_p.tt.mistral_large_4.settings import settings
 
         # INDEXER_HADAMARD: the cache holds the keys rotated (tt/indexer.py TtIndexer._rotate)
-        out["01"] = ik @ hadamard_matrix(ik.shape[-1]) if settings.get("INDEXER_HADAMARD") else ik
+        out[INDEX] = ik @ hadamard_matrix(ik.shape[-1]) if settings.get("INDEXER_HADAMARD") else ik
     return out
 
 
-def read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len: int, trace_dir, layers, kvpe_width):
+def _decode_record(raw: bytes, width: int) -> torch.Tensor:
+    """One 32-token record -> [32, width] fp32: bfloat16 ROW_MAJOR rows, or bfloat8_b tiles."""
+    from models.demos.common.prefill.runners.prefill_producer import _decode_bfp8_chunk
+
+    if len(raw) == RECORD_TOKENS * width * 2:
+        return torch.frombuffer(bytearray(raw), dtype=torch.bfloat16).reshape(RECORD_TOKENS, width).float()
+    return _decode_bfp8_chunk(raw, width)
+
+
+def read_slot_kv_and_check_pcc(
+    table, device_map: dict, slot_id: int, real_len: int, trace_dir, layers, kvpe_width, kv_source=None
+):
     """The slot's records of positions [0, real_len) through the table, each from the first chip of its device group
     in device_map ({(mesh_id, chip_id): unique id}), decoded and compared with the golden state in trace_dir
     (kv_cache/layer_<i>.safetensors: <name>_cache_layer_<i> for kv_latent, k_rope, index_key) -> {kind: min PCC over
-    the layers}. layers: model layer of table layer k."""
+    the layers}. layers: model layer of table layer k. kv_source: model layer -> the layer whose KV it reads; a
+    shared-KV layer's region is compared with its source's golden."""
     from loguru import logger
     from safetensors.torch import load_file
 
-    from models.demos.common.prefill.runners.prefill_producer import _decode_bfp8_chunk
+    from models.demos.deepseek_v3_d_p.tt.mistral_large_4.settings import settings
     from tests.ttnn.utils_for_testing import comp_pcc
 
     D = ttnn.experimental.disaggregation
@@ -204,6 +223,11 @@ def read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len: 
         st = {
             n: d.get(f"{n}_cache_layer_{layer}", torch.zeros(real_len, 0)) for n in ("kv_latent", "k_rope", "index_key")
         }
+        src = kv_source(layer) if kv_source is not None else layer
+        if src != layer and settings.get("KV_MIRRORS"):
+            ds = load_file(str(Path(trace_dir) / "kv_cache" / f"layer_{src}.safetensors"))
+            for n in ("kv_latent", "k_rope"):
+                st[n] = ds[f"{n}_cache_layer_{src}"]
         for name, gold in config_rows(st, real_len, kvpe_width).items():
             recs = []
             for pos in range(0, end, RECORD_TOKENS):
@@ -214,9 +238,7 @@ def read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len: 
                     for key in ((int(f.mesh_id), int(f.chip_id)) for f in fnids)
                     if key in device_map
                 )
-                recs.append(
-                    _decode_bfp8_chunk(bytes(D.read_dram_umd(uid, loc.noc_addr, loc.size_bytes)), gold.shape[-1])
-                )
+                recs.append(_decode_record(bytes(D.read_dram_umd(uid, loc.noc_addr, loc.size_bytes)), gold.shape[-1]))
             dev = torch.cat(recs)[:real_len]
             pcc = float(comp_pcc(gold, dev.float(), 0.0)[1])
             kind = KINDS[name]
