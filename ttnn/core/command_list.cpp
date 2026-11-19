@@ -489,7 +489,10 @@ ScopeGuard CommandListBuilder::record_scope() {
 CommandList CommandListBuilder::build(std::optional<QueueId> cq_id) const {
     ZoneScoped;
     const QueueId queue = cq_id.value_or(get_current_command_queue_id_for_thread());
-    return CommandList(metal_builder_.build(device().mesh_command_queue(queue.get())), layout_, op_owned_tensors_);
+    return CommandList(
+        metal_builder_.build(device().mesh_command_queue(queue.get())),
+        layout_,
+        detail::CmdListOpOwnedTensors(op_owned_tensors_.begin(), op_owned_tensors_.end()));
 }
 
 void CommandListBuilder::clear() {
@@ -556,7 +559,7 @@ void CommandListBuilder::record(
     }
     metal_builder_.add(device().mesh_command_queue(binary_upload_cq_id.get()), workload, metal_parameters);
     layout_ = std::move(layout);
-    op_owned_tensors_.insert(op_owned_tensors_.end(), op_owned_tensors.begin(), op_owned_tensors.end());
+    op_owned_tensors_.insert(op_owned_tensors.begin(), op_owned_tensors.end());
     for (ActiveBind* active : matched) {
         active->claimed = true;
     }

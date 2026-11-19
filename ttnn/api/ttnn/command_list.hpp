@@ -10,6 +10,7 @@
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <tt-metalium/experimental/command_list.hpp>
@@ -120,7 +121,8 @@ private:
     std::vector<BindScope> bind_scopes_;
     std::vector<ActiveBind> binds_;  // the binds of every scope in bind_scopes_, in push order
     detail::CmdListLayout layout_;
-    detail::CmdListOpOwnedTensors op_owned_tensors_;
+    // A set, so an op recorded many times on cache hits is held once.
+    std::unordered_set<std::shared_ptr<const std::vector<tt::tt_metal::MeshTensor>>> op_owned_tensors_;
     // Numbers each recorded program in its Metal names, so two programs never share an encoding.
     std::size_t recorded_programs_ = 0;
 };

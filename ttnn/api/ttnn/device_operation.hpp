@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <algorithm>
 #include <concepts>
 #include <exception>
 #include <memory>
@@ -221,9 +220,7 @@ template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
     std::vector<std::shared_ptr<const std::vector<tt::tt_metal::MeshTensor>>> op_owned_tensors;
     if (spec_shared_variables != nullptr) {
         for (const auto& [_, sv] : *spec_shared_variables) {
-            if (sv.op_owned_tensors && !sv.op_owned_tensors->empty() &&
-                std::find(op_owned_tensors.begin(), op_owned_tensors.end(), sv.op_owned_tensors) ==
-                    op_owned_tensors.end()) {
+            if (sv.op_owned_tensors && !sv.op_owned_tensors->empty()) {
                 op_owned_tensors.push_back(sv.op_owned_tensors);
             }
         }
