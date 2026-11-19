@@ -824,8 +824,7 @@ class LTXPipeline:
             latent_frames, latent_h, latent_w: Spatial dimensions
             output_type: "float" → (B, 3, F, H, W) torch in [-1, 1] (for in-pipeline export);
                          "rgb"   → (B, 3, F, H, W) uint8 numpy, RGB planar
-            defer_yuv: with "yuv", return a ``DeferredYuvPlanar`` whose host assembly runs on ``result()``,
-                if the decoder supports it (``supports_defer_yuv``); otherwise the finished array
+            defer_yuv: with "yuv", return a ``DeferredYuvPlanar`` whose host assembly runs on ``result()``
 
         Returns:
             decoded video in the requested format
@@ -839,10 +838,8 @@ class LTXPipeline:
         latent_spatial = latent.reshape(B, latent_frames, latent_h, latent_w, self.in_channels)
         latent_spatial = latent_spatial.permute(0, 4, 1, 2, 3)  # BCTHW
 
-        # A decoder without a deferred form returns the finished array, which callers also accept.
-        extra = {"defer_yuv": True} if defer_yuv and getattr(self.vae_decoder, "supports_defer_yuv", False) else {}
         with Watchdog("vae decode"):
-            video = self.vae_decoder(latent_spatial, output_type=output_type, **extra)
+            video = self.vae_decoder(latent_spatial, output_type=output_type, defer_yuv=defer_yuv)
         if output_type == "yuv":
             return video  # already a numpy (T, H*3//2, W) uint8 yuv420p planar array (or its deferred form)
         if output_type != "float":

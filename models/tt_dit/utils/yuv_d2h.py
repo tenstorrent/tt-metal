@@ -14,6 +14,7 @@ import math
 import os
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 
 import numpy as np
 import torch
@@ -499,24 +500,13 @@ def fast_device_to_host_yuv(
     return out
 
 
+@dataclass
 class DeferredYuvPlanar:
-    """A yuv420p planar array whose host assembly runs on :meth:`result`.
+    """A yuv420p planar array of ``shape`` whose host assembly runs on ``result()``, so the mp4 export
+    worker can take the frame geometry up front and assemble the frames off the caller's thread."""
 
-    Wraps the callable ``fast_device_to_host_yuv(..., defer=True)`` returns, plus the ``shape`` the result
-    will have, so a consumer that needs the frame geometry up front (the mp4 export worker) can take it
-    in place of the array and resolve it off the caller's thread.
-    """
-
-    def __init__(self, produce: Callable[[], np.ndarray], shape: tuple[int, ...]) -> None:
-        self._produce = produce
-        self.shape = tuple(int(d) for d in shape)
-
-    def result(self) -> np.ndarray:
-        out = self._produce()
-        if tuple(out.shape) != self.shape:
-            msg = f"deferred YUV produced {tuple(out.shape)}, expected {self.shape}"
-            raise RuntimeError(msg)
-        return out
+    result: Callable[[], np.ndarray]
+    shape: tuple[int, int, int]
 
 
 def replicated_to_host_yuv(

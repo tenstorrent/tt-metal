@@ -785,6 +785,18 @@ def test_prof_vae_ltx_devicetime(mesh_device, device_params):
     ttnn.ReadDeviceProfiler(mesh)
 
 
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+def test_ltx_video_decoder_deferred_yuv(mesh_device, device_params):
+    """The deferred YUV readback (LTX_ASYNC_EXPORT) assembles the same frames as the direct one."""
+    tt_decoder = _build_tt_decoder(mesh_device)
+    latent = _latent()
+    direct = tt_decoder(latent, output_type="yuv")
+    deferred = tt_decoder(latent, output_type="yuv", defer_yuv=True)
+    assert deferred.shape == direct.shape
+    assert (deferred.result() == direct).all()
+
+
 @pytest.mark.parametrize("num_frames, height, width", _LTX_DECODER_2K_SHAPE_PARAMS)
 @pytest.mark.parametrize("mean, std", [(0, 1)])
 @pytest.mark.parametrize(

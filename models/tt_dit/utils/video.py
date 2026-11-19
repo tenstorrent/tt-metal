@@ -158,33 +158,8 @@ def export_video_audio_yuv(yuv_planar, output_path: str, fps: int = 24, audio: A
         fps: frame rate
         audio: decoded ``Audio``, or None
     """
-    import av
-
-    t, h32, width = yuv_planar.shape
-    height = h32 * 2 // 3
-
-    container = av.open(output_path, mode="w")
-    stream = container.add_stream("libx264", rate=int(fps))
-    stream.width = width
-    stream.height = height
-    stream.pix_fmt = "yuv420p"
-    stream.options = {"preset": "veryfast", "crf": "23"}
-    stream.thread_type = "AUTO"
-
-    audio_stream = _add_audio_stream(container, audio)
-
-    for frame_array in yuv_planar:
-        frame = av.VideoFrame.from_ndarray(frame_array, format="yuv420p")
-        for packet in stream.encode(frame):
-            container.mux(packet)
-    for packet in stream.encode():
-        container.mux(packet)
-
-    if audio is not None and audio_stream is not None:
-        _mux_audio(container, audio_stream, audio)
-
-    container.close()
-    logger.info(f"Saved: {output_path} ({t}f @ {fps}fps, yuv420p fast path)")
+    rate = audio.sampling_rate if audio is not None else None
+    YuvVideoExport(yuv_planar, output_path, fps=fps, audio_sampling_rate=rate).finish(audio)
 
 
 class YuvVideoExport:
@@ -192,8 +167,7 @@ class YuvVideoExport:
     produce the audio (e.g. decode it on device) while libx264 runs; :meth:`finish` then muxes the audio.
 
     The audio stream is declared up front from its sampling rate because PyAV forbids adding streams once
-    muxing starts. Streams are added and packets muxed in the same order as the serial export, so the file is
-    byte-identical to one. PyAV encodes with the GIL released, so the worker does not stall the caller.
+    muxing starts. PyAV encodes with the GIL released, so the worker does not stall the caller.
 
     ``yuv_planar`` is read until :meth:`finish` returns: the caller must not reuse its buffer before then. It
     may also be a deferred array (with ``shape`` and ``result()``), which the worker resolves before encoding.
@@ -206,7 +180,6 @@ class YuvVideoExport:
         self._output_path = output_path
         self._fps = fps
         self._frames = t
-        self._audio_sampling_rate = audio_sampling_rate
 
         self._container = av.open(output_path, mode="w")
         stream = self._container.add_stream("libx264", rate=int(fps))
@@ -246,11 +219,6 @@ class YuvVideoExport:
             self._thread.join()
             if self._error is not None:
                 raise self._error
-            if (audio is None) != (self._audio_stream is None) or (
-                audio is not None and audio.sampling_rate != self._audio_sampling_rate
-            ):
-                msg = f"audio {audio!r} does not match the declared rate {self._audio_sampling_rate}"
-                raise ValueError(msg)
             if audio is not None:
                 _mux_audio(self._container, self._audio_stream, audio)
         finally:

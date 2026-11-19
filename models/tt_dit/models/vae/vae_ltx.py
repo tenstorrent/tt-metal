@@ -762,9 +762,6 @@ def _compute_ltx_decoder_dims(
 class LTXVideoDecoder(Module):
     """LTX-2 Video VAE decoder (TTNN): (B, 128, F', H', W') latent → (B, 3, F, H, W) pixels."""
 
-    #: ``forward`` takes ``defer_yuv``; the pipeline passes it only when this is set.
-    supports_defer_yuv = True
-
     def __init__(
         self,
         *,
