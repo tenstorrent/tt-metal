@@ -2847,3 +2847,9 @@ third started. F106 exempted only forks' committed reads; model code stayed stri
 (its reads of a run's environment are plumbing every call-time switch must touch), so its committed reads are now
 exempt as for forks; a read a change adds still counts; tt/ stays strict. Selftest:
 test_model_settings.py::test_lint_skips_committed_env_reads_in_hooks_but_not_in_tt.
+
+## F290 (owner 2026-11-19): no cap on the overseer's aborts of a task
+"Fuck the 3 aborts rule, you need to be persistent. Worst thing that can happen is me waking up and seeing everything
+has stalled for 6 hours because of some stupid rule." overseer.MAX_ABORTS = inf: an abort always leads to the next
+attempt with its note. Attempt budgets stay in defaults.yaml but the overseer launches long unattended runs with
+`--attempts <large>` and overrides any cap tripped by failures that are not the agent's (skill, standing decisions).

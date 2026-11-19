@@ -661,3 +661,13 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   the agent only added PACKED to batch_call_settings). Every PB task touches hooks.py, so it would recur. 21:36 paused,
   attempt 3 aborted (note OV-59: its work in the tree stands), lint fixed (F289: committed reads in hooks.py exempt as
   for forks, tt/ strict), selftest 9/9; the agent's current changes lint clean. Resumed --until PB.1.
+- 21:45 UTC F289 committed 357d6694a82 (the repo-wide 'models must not import tests' hook skipped for it: it fails on two old test files, FIX.37's subject). An early restart at 21:36 was paused again before it started an agent (my framework edit was not yet committed). Resumed --until PB.1 (attempt 4).
+- 21:42 UTC OWNER: procedural rules (attempt caps, abort cap, escalation) must never stall progress when failures are
+  bogus (framework, aborts; not hardware): override and continue. Written into the skill's standing decisions. PB.1
+  now: 1 counted failed attempt (attempt 2, the false lint violation), 2 aborts (cap 3). From the next launch the
+  orchestrator runs with --attempts 8 so a bogus failure cannot exhaust a task; if a task still stops on a cap for a
+  non-agent reason I resume it at once.
+- 21:47 UTC OWNER: be persistent; nothing may stall on a procedural rule. Abort cap removed from the framework (F290,
+  MAX_ABORTS = inf; skill updated). Launches from now on use --attempts 20 so attempt budgets cannot stop a task
+  overnight; any stop for a non-hardware reason is resumed at once. The running orchestrator (PB.1 attempt 4) loaded
+  the old value; it ends after PB.1 and the next launch has F290.

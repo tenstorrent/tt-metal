@@ -341,8 +341,8 @@ done reaches the agents as a note, so the fix and its lesson land where the next
 - **Stop a step that goes the wrong way: abort.** `overseer abort --spec <spec> --reason "..."` ends the agent at
   work, records the attempt as aborted (no gate, not counted against the task's attempts), and turns the reason into
   a note for that task's next attempt. A running agent cannot take messages; abort plus a note is how one reaches it.
-  Use it for an agent working around a spec or framework error, one in a dead end, or cheating in progress; after
-  three aborts of one task it stops for a person.
+  Use it for an agent working around a spec or framework error, one in a dead end, or cheating in progress; there is
+  no cap on aborts (F290, owner 2026-11-19: be persistent).
 - **What you change yourself.** The owner-delegated decisions (spec, plan, approvals: edit, re-approve, regenerate
   the ledger with ledger_gen); framework fixes (models/demos/common/bringup, at a pause, with a selftest, F-entry in
   dev/BREADCRUMBS.md); pause, resume, and reject (revert + note). Never the model's code, its knowledge files,

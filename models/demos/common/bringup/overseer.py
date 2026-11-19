@@ -63,7 +63,9 @@ FILE = "overseer.yaml"
 AGENT_FILE = "AGENT.json"  # in the run dir while an agent works: {pid, pgid, task, role, attempt}
 ABORT_FILE = "ABORT.json"  # in the run dir: the overseer's abort of the agent at work
 ANSWERS = ("done", "n/a", "disagree")
-MAX_ABORTS = 3  # per task: after this many, an abort stops the task for a person instead of retrying
+# F290 (owner 2026-11-19: "be persistent"; a run must never stall for hours on a procedural rule): no cap on the
+# overseer's aborts of one task; every abort is followed by the next attempt with its note
+MAX_ABORTS = float("inf")
 
 
 def now() -> str:
