@@ -32,6 +32,18 @@ constexpr auto init_args = TensorAccessorArgs<packed_args.next_compile_time_args
 constexpr auto start_args = TensorAccessorArgs<init_args.next_compile_time_args_offset()>();
 constexpr auto slab_index_args = TensorAccessorArgs<start_args.next_compile_time_args_offset()>();
 constexpr uint32_t state_tiles = kt * kt;
+// The final carry: the first rank streams the relayed final state into compute's second pass, with the final
+// transition's E and B when the interval ends in a separated tail.
+constexpr uint32_t carry_ct = slab_index_args.next_compile_time_args_offset();
+constexpr uint32_t cb_fe = get_compile_time_arg_val(carry_ct);
+constexpr uint32_t cb_fb = get_compile_time_arg_val(carry_ct + 1);
+constexpr uint32_t cb_p = get_compile_time_arg_val(carry_ct + 2);
+constexpr uint32_t cb_p_exact = get_compile_time_arg_val(carry_ct + 3);
+constexpr uint32_t cb_ctl = get_compile_time_arg_val(carry_ct + 4);
+constexpr bool has_actual_end = get_compile_time_arg_val(carry_ct + 5);
+constexpr auto fe_args = TensorAccessorArgs<carry_ct + 6>();
+constexpr auto fb_args = TensorAccessorArgs<fe_args.next_compile_time_args_offset()>();
+constexpr auto end_args = TensorAccessorArgs<fb_args.next_compile_time_args_offset()>();
 
 // Head core: this rank's complement-form [E | B] rows of the head (E = A - I), then its entry state column by column
 // (the initial state on the chronologically first rank, else the predecessor's landed columns) in both of its views.
@@ -43,6 +55,7 @@ void kernel_main() {
     const uint32_t slab_index_address = get_common_arg_val<uint32_t>(3);
     const uint32_t head = get_arg_val<uint32_t>(arg++);
     const uint32_t arrival_semaphore = get_arg_val<uint32_t>(arg++);
+    const uint32_t final_semaphore = get_arg_val<uint32_t>(arg++);
     const uint32_t sp_rank = get_arg_val<uint32_t>(arg++);
 
     cb_reserve_back(cb_chron, 1);
@@ -83,6 +96,35 @@ void kernel_main() {
     cb_push_back(cb_e, state_tiles);
     cb_push_back(cb_b, state_tiles);
 
+    // The first rank holds the carry; it applies the final transition when the interval ends in a separated tail.
+    const bool holder = position == 0;
+    cb_reserve_back(cb_ctl, 1);
+    auto* ctl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_ctl));
+    bool split = topology.split;
+    if constexpr (has_actual_end) {
+        const auto end = TensorAccessor(end_args, get_common_arg_val<uint32_t>(6));
+        noc_async_read(end.get_noc_addr(0), get_write_ptr(cb_ctl), sizeof(uint32_t));
+        noc_async_read_barrier();
+        split = kda_chronology::derive_interval(actual_start, ctl[0], sp_rank, sp_size, local_rows).split;
+    }
+    if (holder && split) {
+        const auto fe = TensorAccessor(fe_args, get_common_arg_val<uint32_t>(4));
+        const auto fb = TensorAccessor(fb_args, get_common_arg_val<uint32_t>(5));
+        const uint32_t state_tile = get_tile_size(cb_fe);
+        cb_reserve_back(cb_fe, state_tiles);
+        cb_reserve_back(cb_fb, state_tiles);
+        for (uint32_t i = 0; i < state_tiles; ++i) {
+            noc_async_read_page(head * state_tiles + i, fe, get_write_ptr(cb_fe) + i * state_tile);
+            noc_async_read_page(head * state_tiles + i, fb, get_write_ptr(cb_fb) + i * state_tile);
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_fe, state_tiles);
+        cb_push_back(cb_fb, state_tiles);
+    }
+    ctl[0] = holder;
+    ctl[1] = split;
+    cb_push_back(cb_ctl, 1);
+
     // The entry state is stored column-major by tile, so each tile column (all the next state's column needs) can
     // land, be computed and leave on its own.
     cb_reserve_back(cb_ein, state_tiles);
@@ -118,5 +160,18 @@ void kernel_main() {
             cb_push_back(cb_ein_exact, kt);
         }
         kda_counter::consume(arrival_semaphore, kt);
+    }
+
+    if (holder) {
+        // The last rank's sender writes each tile column of the final state into the landing buffer's final
+        // slot, then counts it.
+        cb_reserve_back(cb_p, state_tiles);
+        cb_reserve_back(cb_p_exact, state_tiles);
+        for (uint32_t j = 0; j < kt; ++j) {
+            kda_counter::wait(final_semaphore, j + 1);
+            cb_push_back(cb_p, kt);
+            cb_push_back(cb_p_exact, kt);
+        }
+        kda_counter::consume(final_semaphore, kt);
     }
 }
