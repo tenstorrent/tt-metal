@@ -254,6 +254,25 @@ def test_ws_lane5_tray_oneway_rings(mesh_device, M, place):
     assert M == 0 or min(pcs.values()) > 0.999
 
 
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [TORUS], indirect=True)
+@pytest.mark.parametrize("M", [0, 586], ids=["mzero", "m586"])
+def test_ws_lane5_glx_oneway_cols(mesh_device, M):
+    """EP-4's experts on the Galaxy: one-way lanes on the four 8-chip Y rings (mesh columns, torus wrap; LCfg.subcycles),
+    2 links x 2 directions = G 4, 160 experts a column (40 a lane, 5 a chip a lane), lanes placed by each chip's
+    ethernet cores (L5Cfg.place). M 0: weights only. WS_L5 overrides L5Cfg fields (e.g. why=1)."""
+    cfg, lc, l5 = configs(int(os.environ.get("WS_NEXP", "160")), 4, 8192)
+    R, C = tuple(mesh_device.shape)
+    lc.oneway = True
+    lc.subcycles = True
+    lc.cycles = [[(r, c) for r in range(R)] for c in range(C)]
+    lc.slots = os.environ.get("WS_ONEWAY_SLOTS", "d0,d0,any,any")
+    l5 = L5Cfg(hmc=2, **{k: int(v) for k, v in env_kv("WS_L5").items()})
+    Ms = [M] * cfg.nexp
+    rows, pcs = run5(mesh_device, cfg, lc, l5, Ms, f"glx one-way columns G 4 M {M}", warm=3, meas=3)
+    assert M == 0 or min(pcs.values()) > 0.999
+
+
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize("device_params", [FAB], indirect=True)
 def test_ws_lane5_tray_oneway_link0(mesh_device):
