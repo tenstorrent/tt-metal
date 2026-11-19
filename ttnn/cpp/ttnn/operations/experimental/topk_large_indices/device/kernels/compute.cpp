@@ -544,9 +544,9 @@ FORCE_INLINE void reduce_split_segmented_row(
     }
 }
 
-// Arms the untilize pack of a row's indices. Out of line in two-level programs: four call sites, all with the same
-// constant arguments, so the one copy loses no folding.
-// The caller's line goes on to the compute-kernel sentinel's diagnostics.
+// Arms the untilize pack of a row's indices. Out of line in two-level programs: four call sites, all passing the same
+// constant CB, so the one copy loses no folding. Each passes its own line on to the compute-kernel sentinel's
+// diagnostics.
 #ifdef TOPK_TWO_LEVEL
 template <uint32_t K>
 __attribute__((noinline)) void arm_untilize_pack(uint32_t indices_cb, uint32_t call_line = __builtin_LINE()) {
@@ -758,8 +758,7 @@ void kernel_main() {
         // A two-level core runs its items until the reader's end header: two per row, between phase-1 units.
         const bool half_in_split = segmented_split && has_split && split_num_chunks >= min_split_chunks &&
                                    (split_first_chunk & fused_chunk_id_mask) == 0;
-        const uint32_t items =
-            two_level_rows ? 0xFFFFFFFFu : num_whole_rows + (!two_level_rows && half_in_split ? 1 : 0);
+        const uint32_t items = two_level_rows ? 0xFFFFFFFFu : num_whole_rows + (half_in_split ? 1 : 0);
         const uint32_t maxima_chunks = topk_two_level::stage2_chunks(two_level_search_length);
         const uint32_t total_units =
             topk_two_level::Units::of(
@@ -768,7 +767,7 @@ void kernel_main() {
                 get_common_arg_val<uint32_t>(topk_common_args::compute_two_level_num_input_rows))
                 .total;
         bool split_on = false;
-        if (two_level_rows || (!two_level_rows && half_in_split) ||
+        if (two_level_rows || half_in_split ||
             (num_whole_rows > 0 && num_chunks >= min_split_chunks &&
              (num_chunks <= max_fused_chunks || segmented_split))) {
             if (!two_level_rows) {
@@ -788,7 +787,9 @@ void kernel_main() {
                         if constexpr (!segmented_split) {
                             break;
                         }
-                        // The pair's first core sorts the first half of the split row's 32 candidate chunks here.
+                        // The pair's first core sorts the first half of the split row's 32 candidate chunks here: it
+                        // starts on chunk 0 and is at least min_split_chunks long, as half_in_split requires.
+                        static_assert(topk_two_level::candidate_keys / K / 2 >= min_split_chunks);
                         if (!has_split || second_half) {
                             break;
                         }
@@ -899,7 +900,8 @@ void kernel_main() {
                     return;
                 }
                 if (!half_done) {
-                    // The second core's half of the split row's 32 candidate chunks, on the split-row path.
+                    // This core's half of the split row's 32 candidate chunks, on the split-row path: the second
+                    // core's, or either core's in a program without the segmented split body.
                     num_chunks = topk_two_level::candidate_keys / K;
                     tail_elements = K;
                     const auto half = half_bounds({num_chunks, tail_elements}, K, second_half);
