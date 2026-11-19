@@ -1,0 +1,84 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Host-only checks of the sparse-MLA geometry and goldens (no device)."""
+
+import torch
+
+from models.experimental.hy4_preview.fused.sparse_mla import layout as lo
+
+
+def test_tiny_tile_codec():
+    x = torch.randn(8, 576)
+    flat = lo.pack_tiny(x)
+    assert torch.equal(lo.unpack_tiny(flat, 8), x)
+    # element (row, col) of tile t sits at t * 256 + (col // 16) * 128 + row * 16 + col % 16
+    assert flat[3 * 256 + 1 * 128 + 5 * 16 + 2] == x[5, 3 * 32 + 16 + 2]
+
+
+def test_partials_merge_to_the_reference_core():
+    """The partial contract: chips' partials, an empty chip and the sink merge to the reference's absorbed ctx."""
+    cfg = lo.SparseMlaConfig(rows_per_slot=4096)
+    gen = torch.Generator().manual_seed(0)
+    q = torch.randn(cfg.heads, cfg.width, generator=gen)
+    rows = torch.randn(300, cfg.width, generator=gen)
+    sink = torch.randn(cfg.heads, generator=gen)
+    parts = [lo.partial(q, rows[i::5], cfg) for i in range(5)] + [lo.partial(q, rows[:0], cfg)]
+    assert (lo.merge(parts, sink, cfg) - lo.reference_ctx(q, rows, sink, cfg)).abs().max() < 1e-12
+    # two empty peers and the sink: ctx = 0, not NaN
+    empty = lo.partial(q, rows[:0], cfg)
+    assert torch.equal(lo.merge([empty, empty], sink, cfg), torch.zeros(cfg.heads, cfg.latent, dtype=torch.float64))
+
+
+def test_reference_ctx_is_the_reference():
+    """layout.reference_ctx is reference/attention_decode.py absorbed_stages' ctx (same lines, no weights)."""
+    from models.experimental.hy4_preview.reference.attention_decode import additive_mask
+
+    cfg = lo.SparseMlaConfig(rows_per_slot=4096)
+    gen = torch.Generator().manual_seed(1)
+    q = torch.randn(cfg.heads, cfg.width, generator=gen)
+    rows = torch.randn(77, cfg.width, generator=gen)
+    sink = torch.randn(cfg.heads, generator=gen)
+    logits = torch.matmul(q, rows.t()) * cfg.scale + additive_mask(torch.ones(77, dtype=torch.bool))
+    combined = torch.cat([logits, sink.reshape(-1, 1)], dim=-1)
+    probs = torch.softmax(combined - combined.max(dim=-1, keepdim=True).values, dim=-1)[:, :-1]
+    want = torch.matmul(probs, rows[:, : cfg.latent])
+    assert (lo.reference_ctx(q, rows, sink, cfg) - want).abs().max() < 1e-5
+
+
+def test_every_chunk_has_one_block_and_users_spread():
+    cfg = lo.SparseMlaConfig(rows_per_slot=4096)
+    # one chunk per user: 8 users on 8 different S-blocks
+    assert sorted(cfg.block_of(u, 0) for u in range(cfg.users)) == list(range(cfg.groups))
+    # 2048 rows per user: every S-block gets topk / chunk / groups chunks of every user
+    per_block = cfg.topk // cfg.chunk_rows // cfg.groups
+    for u in range(cfg.users):
+        blocks = [cfg.block_of(u, c) for c in range(cfg.chunks(cfg.topk))]
+        assert all(blocks.count(b) == per_block for b in range(cfg.groups))
+
+
+def test_merge_tree_reaches_the_root_once():
+    for n_act in range(1, 9):
+        have = {r: {r} for r in range(n_act)}  # which blocks' partials relative block r holds
+        for s in range(lo.MERGE_STEPS):
+            for r in range(1, n_act):
+                if lo.send_step(r) == s:
+                    assert lo.receives(r - (1 << s), n_act, s), (n_act, r, s)
+                    have[r - (1 << s)] |= have.pop(r)
+            for r in range(n_act):
+                if lo.receives(r, n_act, s):
+                    assert r + (1 << s) < n_act and lo.send_step(r + (1 << s)) == s
+        assert have == {0: set(range(n_act))}, (n_act, have)
+
+
+def test_row_location_matches_the_accessor_rule():
+    """page -> (bank, offset): shard = page // 32, round-robin over 8 banks (tensor_accessor.h)."""
+    cfg = lo.SparseMlaConfig(rows_per_slot=32768)
+    seen = set()
+    for slot, row in [(0, 0), (0, 31), (0, 32), (0, 255), (0, 256), (1, 0), (623, 32767), (77, 12345)]:
+        bank, off = lo.kv_row_location(cfg, slot, row)
+        page = slot * cfg.rows_per_slot + row
+        assert bank == (page // 32) % 8 and off % cfg.row_stride == 0
+        assert off // cfg.row_stride == (page // 256) * 32 + page % 32
+        seen.add((bank, off))
+    assert len(seen) == 8 and cfg.row_stride == 704 and cfg.row_bytes == 656
