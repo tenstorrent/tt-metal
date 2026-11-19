@@ -201,6 +201,7 @@ def _traced_replay_ms(mesh_device, fn) -> list[float]:
         pytest.param((39, 0, 414), (37, 24, 42), 45312, id="5s-1344x768"),
         pytest.param(REF2VA_M_10S_SEGMENTS, (72, 24, 42), 147712, id="ref2va-m-10s"),
         pytest.param(REF2VA_H_15S_SEGMENTS, (107, 24, 42), 240640, id="ref2va-h-15s"),
+        pytest.param(REF2VA_H_15S_SEGMENTS, (107, 24, 42), 326656, id="ref2va-top"),
     ],
 )
 @pytest.mark.parametrize("case", ["check", "logical_n_ab"])

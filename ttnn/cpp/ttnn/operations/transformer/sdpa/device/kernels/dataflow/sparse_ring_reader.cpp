@@ -164,6 +164,7 @@ void kernel_main() {
     // Words of per-shard kept-block bits in every plan record (block-form mask).
     constexpr uint32_t plan_block_words = get_named_compile_time_arg_val("plan_block_words");
     static_assert(plan_block_words * 32 >= mask_nb, "block words cover the shard");
+    constexpr uint32_t plan_header_bytes = get_named_compile_time_arg_val("plan_header_words") * sizeof(uint32_t);
     // Head group delivery: one producer per head group reads each piece from DRAM and multicasts it to every other
     // member (no forwarding). The head chain's membership and semaphores are reused: sender = the producer's credit
     // count (+1 per consumer per piece), receiver = each consumer's delivered count (set to the running piece count
@@ -271,7 +272,7 @@ void kernel_main() {
         counts_table = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(cb_counts.get_write_ptr());
         CircularBuffer cb_plan(cb_sparse_plan);
         cb_plan.reserve_back(1);
-        const uint32_t stage = cb_plan.get_write_ptr() + 64;
+        const uint32_t stage = cb_plan.get_write_ptr() + plan_header_bytes;
         noc.async_read(
             TensorAccessor(block_counts_args, block_counts_addr),
             CoreLocalMem<uint32_t>(stage),
@@ -384,11 +385,11 @@ void kernel_main() {
                 }
                 q_pushed = true;
             }
-            // 2. Kept bits and plans. The plan page's scratch (past its 64-byte header) holds one mask read at a
-            //    time: a chunk's shard slice here, its whole row (n_blocks_pad words) for the pooled bias.
+            // 2. Kept bits and plans. The plan page's scratch (past its header) holds one mask read at a time: a
+            //    chunk's shard slice here, its whole row (n_blocks_pad words) for the pooled bias.
             CircularBuffer cb_plan(cb_sparse_plan);
             cb_plan.reserve_back(1);
-            uint32_t scratch = cb_plan.get_write_ptr() + 64;
+            uint32_t scratch = cb_plan.get_write_ptr() + plan_header_bytes;
             const auto read_chunk_row = [&](uint32_t nq, uint32_t qc) {
                 noc.async_read(
                     mask_reader,
@@ -518,7 +519,7 @@ void kernel_main() {
                 for (uint32_t i = 0; i < n_res; ++i) {
                     if (i > 0) {
                         cb_plan.reserve_back(1);  // one page: waits for compute to pop the previous plan
-                        scratch = cb_plan.get_write_ptr() + 64;
+                        scratch = cb_plan.get_write_ptr() + plan_header_bytes;
                     }
                     // The chunk's own block bits, from its slice again (the scratch holds the last chunk's).
                     read_shard_slice(res_nq[i], res_qc[i]);
@@ -835,7 +836,7 @@ void kernel_main() {
                         // (compute holds this iteration's page, reading its records in place, until the iteration
                         // ends). The next iteration's reserve returns the same page.
                         cb_plan.reserve_back(1);
-                        scratch = cb_plan.get_write_ptr() + 64;
+                        scratch = cb_plan.get_write_ptr() + plan_header_bytes;
                     }
                     constexpr uint32_t pooled_rows_t = mask_n_blocks_pad / 32;
                     for (uint32_t i0 = 0; i0 < n_res;) {

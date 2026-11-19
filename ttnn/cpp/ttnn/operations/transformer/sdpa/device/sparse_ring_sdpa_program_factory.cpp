@@ -444,12 +444,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
 
     log_debug(tt::LogOp, "max_q_per_core: {}", max_q_per_core);
 
-    // The plan page's 16-word header carries the shard's kept-block bits (one word per 32 blocks) plus the union
-    // piece bits (2 words) and the pooled flag.
-    TT_FATAL(
-        tt::div_up(mask_nb, 32u) + 3 <= 16,
-        "SparseRingSDPA: {} blocks per shard exceed the plan header (at most 416)",
-        mask_nb);
+    // The plan page's header carries the shard's kept-block bits (one word per 32 blocks) plus the union piece bits
+    // (2 words) and the pooled flag. A multiple of 16 words keeps the mask-row scratch after it 64 B aligned.
+    const uint32_t plan_header_words = tt::round_up(tt::div_up(mask_nb, 32u) + 3, 16u);
     // Group delivery: one producer per head group multicasts each piece. The K/V CBs hold 3 pieces with it (the
     // producer sends the next piece while members compute), 2 without.
     const bool group_mcast = use_head_chain;
@@ -923,9 +920,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         l.prev_out = tile_cb(out_im_tiles * slots, state_tile_size, state_df);
         l.recip_scratch = tile_cb(1, im_tile_size, im_df);  // 1-tile recip scratch for res_normalize_slot
         l.sum_in = tile_cb(statistics_tiles * slots, state_tile_size, state_df);
-        // Plan pages: a 16-word summary [kept-block words][union piece bits lo, hi][do_pooled], then the Q block's
-        // mask row. Two pages: compute reads one iteration's records while the reader fills the next.
-        l.sparse_plan = alloc(64 + mask_row_bytes, 2, tt::DataFormat::UInt32);
+        // Plan pages: a header [kept-block words][union piece bits lo, hi][do_pooled], then the Q block's mask row.
+        // Two pages: compute reads one iteration's records while the reader fills the next.
+        l.sparse_plan = alloc(plan_header_words * sizeof(uint32_t) + mask_row_bytes, 2, tt::DataFormat::UInt32);
         // One pooled chunk of bias tiles in flight; only with the pooled route.
         l.pooled_bias = pooled_route ? tile_cb(Sk_chunk_t, mask_tile_size, mask_df)
                                      : std::numeric_limits<uint32_t>::max();  // inactive
@@ -1070,12 +1067,13 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const uint32_t cb_sum_out = inactive_cb;
     const uint32_t cb_signal = inactive_cb;
     const uint32_t cb_kv_pad_derived = inactive_cb;
-    // All Q blocks' plan records go in one page per ring iteration, after the 16-word header and the shard slice
+    // All Q blocks' plan records go in one page per ring iteration, after the header and the shard slice
     // (mask_nb_pad words), when they fit in the page; otherwise each block gets its own page (plan_rec_base = 0).
     const uint32_t plan_rec_words = tt::div_up(mask_nb, 32u) + 3;
     const bool plan_fits_one_page =
-        (16 + mask_nb_pad + resident_slots * plan_rec_words) * sizeof(uint32_t) <= 64 + mask_row_bytes;
-    const uint32_t plan_rec_base = plan_fits_one_page ? 16 + mask_nb_pad : 0;
+        (plan_header_words + mask_nb_pad + resident_slots * plan_rec_words) * sizeof(uint32_t) <=
+        plan_header_words * sizeof(uint32_t) + mask_row_bytes;
+    const uint32_t plan_rec_base = plan_fits_one_page ? plan_header_words + mask_nb_pad : 0;
     {
         uint64_t cb_bytes = 0;
         for (const auto& cb : desc.cbs) {
@@ -1290,6 +1288,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         {"kv_cb_pages", kv_cb_pages},
         // Words of per-shard kept-block bits in each plan page (block b: word b/32, bit b%32).
         {"plan_block_words", tt::div_up(mask_nb, 32u)},
+        // Words of the plan page header, a multiple of 16 (see plan_header_words above).
+        {"plan_header_words", plan_header_words},
         // Group delivery by multicast (see group_mcast above).
         {"group_mcast", group_mcast ? 1u : 0u},
         // The one-page plan's record base word (0 = a page per block); see plan_rec_base above.
