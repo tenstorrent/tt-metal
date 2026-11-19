@@ -20,6 +20,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_add.cpp
     test_scalar_lhs_binary.cpp
     test_add_int.cpp
+    test_bitwise_scalar_overloads.cpp
     test_broadcast_to.cpp
     test_command_list.cpp
     test_command_list_tensor_prefetcher.cpp
