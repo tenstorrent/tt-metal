@@ -425,7 +425,8 @@ class MiniMaxH3Residency:
     The tasks in `coresident_tasks` keep every stage loaded across requests; every other task evicts each stage
     before the next one loads. `vae_residency_mode` says what a coresident task does with the video VAE before each
     denoise: "keep" leaves it loaded, and "deallocate" frees its loaded modules (the decoder, and for fl2va the
-    keyframe encoder), which reload from the host when they are next needed.
+    keyframe encoder), which reload from the host when they are next needed. "shard_decoder" frees the other modules
+    the same way but shards the decoder over the SP axis, so the decode gathers it back over the fabric instead.
     """
 
     coresident_tasks: tuple[str, ...] = ("t2va", "ref2va")
@@ -436,8 +437,8 @@ class MiniMaxH3Residency:
 
 
 def _check_vae_residency_mode(mode: str) -> None:
-    if mode not in ("keep", "deallocate"):
-        msg = f"vae_residency_mode must be 'keep' or 'deallocate', got {mode!r}"
+    if mode not in ("keep", "deallocate", "shard_decoder"):
+        msg = f"vae_residency_mode must be 'keep', 'deallocate' or 'shard_decoder', got {mode!r}"
         raise ValueError(msg)
 
 
@@ -498,9 +499,8 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
 # per-chip -- but these differ:
 #
 #   * `residency`: a Wormhole chip has 12 GB of DRAM against Blackhole's 32 GB. t2va keeps its stages loaded across
-#     requests except the video VAE, which is freed before each denoise; ref2va's 61440-token prompt encode fits
-#     beside no other stage, so it evicts each stage before the next loads. With `park_vae_decoder` each device
-#     keeps 1/SP of the decoder's weights through the denoise and the decode gathers them back over the fabric.
+#     requests except the video VAE, whose decoder each device keeps 1/SP of through the denoise; ref2va's
+#     61440-token prompt encode fits beside no other stage, so it evicts each stage before the next loads.
 #   * `dit_fsdp: True`: the DiT weights are sharded across the SP axis too and gathered layer by layer.
 #   * `num_links: 4`, matching the 4 KB router payload the Wormhole Galaxy meshes open with.
 #
@@ -511,8 +511,7 @@ _PRESETS_WH: dict[tuple[int, ...], dict] = {
         "sp_axis": 1,
         "num_links": 4,
         "topology": ttnn.Topology.Ring,
-        "residency": MiniMaxH3Residency(coresident_tasks=("t2va",), vae_residency_mode="deallocate"),
-        "park_vae_decoder": True,
+        "residency": MiniMaxH3Residency(coresident_tasks=("t2va",), vae_residency_mode="shard_decoder"),
         "dit_fsdp": True,
         # Dynamic length by default, as on the Blackhole 4x8; the bucket ladder stays as the backup path and the
         # admission cap.
@@ -747,10 +746,6 @@ class MiniMaxH3Pipeline:
         vae_mode = residency.vae_residency_mode if vae_residency_mode is None else vae_residency_mode
         _check_vae_residency_mode(vae_mode)
         self.vae_residency_mode = vae_mode if coresident else "keep"
-        self.park_vae_decoder = (
-            self.vae_residency_mode == "deallocate"
-            and os.environ.get("MINIMAX_H3_PARK_VAE", "1" if preset.get("park_vae_decoder", False) else "0") == "1"
-        )
         self.use_persistent_ccl_buffers = (
             preset.get("use_persistent_ccl_buffers", True)
             if use_persistent_ccl_buffers is None
@@ -1851,7 +1846,7 @@ class MiniMaxH3Pipeline:
             dtype="fp32",  # the whole VAE checkpoint is fp32 and the port keeps it there
             get_torch_state_dict=lambda: state,
         )
-        if self.park_vae_decoder and module is self._vae.decoder:
+        if self.vae_residency_mode == "shard_decoder" and module is self._vae.decoder:
             # Shard and gather once at each host load, so the shard and gather programs compile with the load (the
             # warmup) rather than at the first request's decode.
             module.shard(self.sp_axis)
@@ -2436,11 +2431,11 @@ class MiniMaxH3Pipeline:
         transformer = self._prepare_transformer()
         if self.dynamic_length and self.resident_kv_gather_pair:
             self._bind_kv_gather_pair(transformer)
-        if self.vae_residency_mode == "deallocate":
+        if self.vae_residency_mode != "keep":
             for module in self._vae.modules:
                 if not module.is_loaded():
                     continue
-                if self.park_vae_decoder and module is self._vae.decoder:
+                if self.vae_residency_mode == "shard_decoder" and module is self._vae.decoder:
                     module.shard(self.sp_axis)
                 else:
                     module.deallocate_weights()
