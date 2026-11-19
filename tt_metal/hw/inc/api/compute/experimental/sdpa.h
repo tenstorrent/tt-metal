@@ -231,6 +231,16 @@ inline void init_fast_approx_exp_constants() {
 inline void fast_approx_exp(std::uint32_t dst_index) {
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index + get_dest_buffer_base());
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+#ifdef ARCH_BLACKHOLE
+    // This runs on PACK while MATH's FPU writes the same half of Dst. On Blackhole an SFPLOADMACRO-scheduled store
+    // that lands late is not serialised against those writes and silently wins over them (tt-metal#64475). The
+    // clamped exp is safe here because its stores are scheduled 2 and 4 cycles out with cycle-based delays: a
+    // store delay of 0 to 6 was confirmed never to meet a following FPU or MOV write, while a delay of 7 or an
+    // instruction-dependent delay does. Misc is cleared first so that another op's instruction-dependent setting
+    // cannot leak in. Do not add a low-half MOVA2D writeback (Fp32_enabled = 0) into rows 256 to 511 on MATH in
+    // this section: that write is not serialised against any SFPU store into the upper half.
+    TTI_SFPCONFIG(0, 8, 1);
+#endif
     ckernel::sfpu::calculate_exponential<true, DST_ACCUM_MODE, true, 8, true>();
 }
 

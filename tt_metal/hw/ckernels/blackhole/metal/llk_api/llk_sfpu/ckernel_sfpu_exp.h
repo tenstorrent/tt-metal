@@ -704,12 +704,47 @@ sfpi_inline sfpi::vFloat _ckernel_sfpu_exp_accurate_(sfpi::vFloat val, const std
     return result;
 }
 
+// The clamped Schraudolph approximation as plain SFPLOAD/SFPSTORE, with no SFPLOADMACRO. Uses the LREG12..14
+// constants exp_init<true, scale, true, ...> programs; the macro registers that init also programs are left unused.
+template <int ITERATIONS>
+sfpi_inline void _sfpu_exp_approx_clamped_no_loadmacro_() {
+    for (int d = 0; d < ITERATIONS; d++) {
+        TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
+        TTI_SFPSWAP(0, p_sfpu::LREG14, p_sfpu::LREG0, 9);
+        TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG0, 0);
+        TTI_SFP_STOCH_RND(0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
+        TTI_SFPSHFT(15, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+        TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
+        sfpi::dst_reg++;
+    }
+}
+
+// calculate_exponential takes USE_LOADMACRO. Lets a kernel source that builds against several tt-metal versions
+// test for the parameter.
+#define SFPU_EXP_HAS_USE_LOADMACRO 1
+
+#ifdef DISABLE_SFPLOADMACRO
+inline constexpr bool SFPU_EXP_LOADMACRO_DEFAULT = false;
+#else
+inline constexpr bool SFPU_EXP_LOADMACRO_DEFAULT = true;
+#endif
+
+/**
+ * @tparam USE_LOADMACRO Clamped approximation only: false selects the form with no SFPLOADMACRO, about three times
+ *         slower. On Blackhole a macro-scheduled Dst store that lands late (a store delay of 7, or an
+ *         instruction-dependent delay) is not serialised against FPU or MOV writes to the same half of Dst and
+ *         silently wins over them (tt-metal#64475). This macro form schedules its stores 2 and 4 cycles out with
+ *         cycle-based delays, which is inside the range confirmed safe, provided LoadMacroConfig Misc is clear when
+ *         it runs (exp_init clears it). Pass false where that cannot be guaranteed. The init is the same for both
+ *         forms.
+ */
 template <
     bool APPROXIMATION_MODE,
     bool is_fp32_dest_acc_en,
     bool SCALE_EN = false,
     int ITERATIONS = 8,
-    bool CLAMP_NEGATIVE = true>
+    bool CLAMP_NEGATIVE = true,
+    bool USE_LOADMACRO = SFPU_EXP_LOADMACRO_DEFAULT>
 void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
     if constexpr (!APPROXIMATION_MODE) {
         if constexpr (!is_fp32_dest_acc_en) {
@@ -736,17 +771,12 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
         }
     } else if constexpr (APPROXIMATION_MODE && CLAMP_NEGATIVE) {
 #ifdef DISABLE_SFPLOADMACRO
-        for (int d = 0; d < ITERATIONS; d++) {
-            TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
-            TTI_SFPSWAP(0, p_sfpu::LREG14, p_sfpu::LREG0, 9);
-            TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG0, 0);
-            TTI_SFP_STOCH_RND(
-                0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
-            TTI_SFPSHFT(15, p_sfpu::LREG0, p_sfpu::LREG0, 1);
-            TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
-            sfpi::dst_reg++;
-        }
+        _sfpu_exp_approx_clamped_no_loadmacro_<ITERATIONS>();
 #else
+        if constexpr (!USE_LOADMACRO) {
+            _sfpu_exp_approx_clamped_no_loadmacro_<ITERATIONS>();
+            return;
+        }
         // Code below is hand-unrolled for 8 iterations
         // so it doesn't respect ITERATIONS. TODO: tt-llk#1486
         // static_assert(ITERATIONS == 8);

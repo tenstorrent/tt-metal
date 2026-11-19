@@ -112,6 +112,11 @@ ALWI void exp_packthread_tile_init() {
 /**
  * Pack-thread variant of exp_tile. Runs the exp computation on the pack thread
  * to enable FPU/SFPU overlap with math-thread matmul operations.
+ *
+ * On Blackhole the approx forms use SFPLOADMACRO stores, and a macro store that lands late is not serialised
+ * against the math thread's writes to the same half of DEST: the math write is silently lost when the two land in
+ * one cycle (tt-metal#64475). Call this only on tiles the math thread has committed (tile_regs_commit) while it
+ * works in the other half.
  */
 template <
     bool approx = false,
