@@ -64,15 +64,33 @@ struct Units {
     }
 };
 
-// Row r belongs to core r % num_cores, as that core's local row r / num_cores. A core's row semaphore counts the
-// finished phase-1 units of each local row in its own byte (a row has at most 64 units); a row is ready when its
-// count reaches per_row.
+// Row ownership, like the single-level op's split: the first rows - num_rows minus split_rows, a whole number of
+// rounds over the cores - are whole rows, row r on core r % num_cores as its local row r / num_cores. The last
+// split_rows rows are halved across core pairs (as the single-level assignment pairs them): split row
+// whole_rows + u belongs to core 2u, which runs its stage 2 and the first half of its stage 3 and merges in the
+// second half that core 2u + 1 sorts. A core's row semaphore counts the finished phase-1 units of each local row in
+// its own byte (a row has at most 64 units); a row is ready when its count reaches per_row.
 constexpr uint32_t max_local_rows = 4;
 constexpr uint32_t ready_increment(uint32_t local_row) { return 1u << (8 * local_row); }
 constexpr uint32_t ready_count(uint32_t word, uint32_t local_row) { return (word >> (8 * local_row)) & 0xFFu; }
+struct RowOwner {
+    uint32_t core;
+    uint32_t local_row;
+};
+constexpr RowOwner row_owner(uint32_t row, uint32_t num_rows, uint32_t split_rows, uint32_t num_cores) {
+    const uint32_t whole_rows = num_rows - split_rows;
+    if (row < whole_rows) {
+        return {row % num_cores, row / num_cores};
+    }
+    return {2 * (row - whole_rows), whole_rows / num_cores};
+}
+// The remote table: the second half of a split row's block table, written by the owner's writer into its
+// partner's own-table CB after the owner's own copy.
+constexpr uint32_t remote_table_offset = selected_blocks * sizeof(uint32_t);
 
 // What the reader sends the compute (a header page in the stage-1 CB, then 32 tile pages) and the writer (its
 // mailbox) next: a phase-1 unit's number, one of this core's rows, or the end.
+constexpr uint32_t header_split = 0xFFFFFFFDu;  // a split row's stage 2; its halves of stage 3 follow the end
 constexpr uint32_t header_row = 0xFFFFFFFEu;
 constexpr uint32_t header_end = 0xFFFFFFFFu;
 constexpr uint32_t writer_header_code_word = 0;

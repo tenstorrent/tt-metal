@@ -616,7 +616,6 @@ FORCE_INLINE uint32_t two_level_next_row(uint32_t input_cb, uint32_t total_units
         }
         if (split_on) {
             topk_xl_split_end();
-            settle_next_program(input_cb);
             split_on = false;
         }
         two_level_unit();
@@ -753,16 +752,22 @@ void kernel_main() {
             }
             const bool prefetch = !two_level_rows && !segmented_split && num_chunks <= max_fused_chunks &&
                                   topk_xl_split_can_prefetch<K>(num_chunks);
+            // A split row's stage 2 runs here and its stage 3 in halves on the split-row path below.
+            bool stage2_only = false;
             for (uint32_t row = 0; row < items; ++row) {
                 const bool maxima_item = two_level_rows && (row & 1) == 0;
                 if (maxima_item) {
-                    if (two_level_next_row(input_cb, total_units, split_on) == topk_two_level::header_end) {
+                    const uint32_t next = two_level_next_row(input_cb, total_units, split_on);
+                    if (next == topk_two_level::header_end) {
                         break;
                     }
+                    stage2_only = next == topk_two_level::header_split;
                     if (!split_on) {
                         begin_thread_split();
                         split_on = true;
                     }
+                } else if (two_level_rows && stage2_only) {
+                    continue;
                 }
                 // Shadow the row bounds with this item's: the call below is the single-level loop's.
                 const uint32_t num_chunks = !two_level_rows
@@ -832,7 +837,16 @@ void kernel_main() {
                 }
             }
             if (two_level_rows) {
-                return;
+                if (!has_split) {
+                    return;
+                }
+                // This core's half of the split row's 32 candidate chunks, on the single-level split-row path.
+                num_chunks = topk_two_level::candidate_keys / K;
+                tail_elements = K;
+                const auto half = half_bounds({num_chunks, tail_elements}, K, second_half);
+                split_num_chunks = half.num_chunks;
+                split_tail_elements = half.tail_elements;
+                split_first_chunk = half.first_chunk;
             }
 #endif
             if (!has_split) {

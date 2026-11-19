@@ -24,7 +24,9 @@ enum Reader {
     two_level_num_input_rows = 8,
     two_level_num_cores = 9,
     reader_coordinator_noc_x = 10,
-    reader_coordinator_noc_y = 11
+    reader_coordinator_noc_y = 11,
+    // The rows halved across core pairs (see topk_two_level::row_owner); 0 without pairs.
+    two_level_split_rows = 12
 };
 enum Compute { compute_search_length = 0, compute_two_level_num_input_rows = 1 };
 // Two-level programs only: two_level_max_address is the maxima tensor phase 1 writes, mode_output_address a test
@@ -37,7 +39,8 @@ enum Writer {
     writer_two_level_max_row_bytes = 3,
     writer_two_level_num_input_rows = 4,
     writer_two_level_num_cores = 5,
-    writer_two_level_core_coords = 6
+    writer_two_level_split_rows = 6,
+    writer_two_level_core_coords = 7
 };
 }  // namespace topk_common_args
 

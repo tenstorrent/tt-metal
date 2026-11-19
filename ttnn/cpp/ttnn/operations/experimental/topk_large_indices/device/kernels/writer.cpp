@@ -144,41 +144,36 @@ FORCE_INLINE void two_level_unit(
         {},
         {.page_id = row, .offset_bytes = first_block * sizeof(uint16_t)});
     noc.async_write_barrier();
-    const uint32_t num_cores = get_common_arg_val<uint32_t>(topk_common_args::writer_two_level_num_cores);
-    const uint32_t owner =
-        get_common_arg_val<uint32_t>(topk_common_args::writer_two_level_core_coords + row % num_cores);
+    const RowOwner owner = row_owner(
+        row,
+        units.num_rows,
+        get_common_arg_val<uint32_t>(topk_common_args::writer_two_level_split_rows),
+        get_common_arg_val<uint32_t>(topk_common_args::writer_two_level_num_cores));
+    const uint32_t coords = get_common_arg_val<uint32_t>(topk_common_args::writer_two_level_core_coords + owner.core);
     noc_semaphore_inc(
         get_noc_addr(
-            owner & 0xFFFFu,
-            owner >> 16,
+            coords & 0xFFFFu,
+            coords >> 16,
             get_semaphore(get_named_compile_time_arg_val("tl_ready_sem")),
             noc.get_noc_id()),
-        ready_increment(row / num_cores),
+        ready_increment(owner.local_row),
         noc.get_noc_id());
 }
 
-// Stages 2 and 3 of one of this core's rows: turn the stage-2 selection into the ascending block table the reader
-// gathers by, and map the stage-3 candidate positions back to key indices.
-template <uint32_t source_slices_per_row, uint32_t output_slices_per_row, uint32_t slice_bytes, typename IndicesT>
-FORCE_INLINE void two_level_row(
-    const Noc& noc,
-    CircularBuffer& indices_cb,
-    CircularBuffer& indices_scratch_cb,
-    const IndicesT& indices,
-    uint32_t row_bytes,
-    uint32_t search_len,
-    uint32_t row) {
+// Stage 2 of one of this core's rows: the selected blocks, in any order, become the ascending block table the reader
+// gathers by, sentinels last, and this core's own copy for stage 3's remap. For a split row the table's second half
+// also goes to the partner, which gathers by it.
+FORCE_INLINE void two_level_table(const Noc& noc, CircularBuffer& indices_cb, uint32_t search_len, bool split) {
     using namespace topk_two_level;
     CircularBuffer table_cb(get_named_compile_time_arg_val("tl_cb_table"));
     CircularBuffer bitmap_cb(get_named_compile_time_arg_val("tl_cb_bitmap"));
     CircularBuffer own_table_cb(get_named_compile_time_arg_val("tl_cb_own_table"));
-
     const uint32_t num_blocks = div_up(search_len, block_keys);
     const uint32_t bitmap_words = div_up(num_blocks, 32);
     auto* bitmap = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(bitmap_cb.get_write_ptr());
-    auto* own_table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(own_table_cb.get_write_ptr());
+    const uint32_t own_table_addr = own_table_cb.get_write_ptr();
+    auto* own_table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(own_table_addr);
 
-    // Stage 2: the selected blocks, in any order, become an ascending table with sentinels last.
     for (uint32_t word = 0; word < bitmap_words; ++word) {
         bitmap[word] = 0;
     }
@@ -210,8 +205,35 @@ FORCE_INLINE void two_level_row(
         own_table[count] = sentinel;
     }
     table_cb.push_back(1);
+    if (split) {
+        // The partner's own-table CB sits at the same address; its remote half goes past its own table.
+        const uint32_t partner_x = get_arg_val<uint32_t>(topk_core_args::writer_partner_noc_x);
+        const uint32_t partner_y = get_arg_val<uint32_t>(topk_core_args::writer_partner_noc_y);
+        constexpr uint32_t half_bytes = selected_blocks / 2 * sizeof(uint32_t);
+        noc.async_write(
+            CoreLocalMem<uint32_t>(own_table_addr + half_bytes),
+            UnicastEndpoint{},
+            half_bytes,
+            {},
+            {.noc_x = partner_x, .noc_y = partner_y, .addr = own_table_addr + remote_table_offset});
+        noc.async_write_barrier();
+        Semaphore<>(get_named_compile_time_arg_val("tl_half_sem")).up(noc, partner_x, partner_y, 1);
+    }
+}
 
-    // Stage 3: candidate positions in rank order, mapped through the table to key indices.
+// Stage 3's output for one of this core's rows: candidate positions in rank order, mapped through the table to key
+// indices.
+template <uint32_t source_slices_per_row, uint32_t output_slices_per_row, uint32_t slice_bytes, typename IndicesT>
+FORCE_INLINE void two_level_output(
+    const Noc& noc,
+    CircularBuffer& indices_cb,
+    CircularBuffer& indices_scratch_cb,
+    const IndicesT& indices,
+    uint32_t row_bytes,
+    uint32_t row) {
+    using namespace topk_two_level;
+    const auto* own_table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+        CircularBuffer(get_named_compile_time_arg_val("tl_cb_own_table")).get_write_ptr());
     indices_cb.wait_front(1);
     indices_scratch_cb.reserve_back(1);
     copy_row_to_scratch<source_slices_per_row, output_slices_per_row, slice_bytes>(indices_cb, indices_scratch_cb, noc);
@@ -315,16 +337,46 @@ void kernel_main() {
                 mailbox_cb.wait_front(1);
                 const auto* header = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailbox_cb.get_read_ptr());
                 const uint32_t code = header[writer_header_code_word];
-                const uint32_t row = header[writer_header_row_word];
+                uint32_t row = header[writer_header_row_word];
                 mailbox_cb.pop_front(1);
-                if (code == header_end) {
-                    break;
-                }
-                if (code == header_row) {
-                    two_level_row<source_slices_per_row, output_slices_per_row, indices_slice_bytes>(
-                        noc, indices_cb, indices_scratch_cb, indices, indices_page_bytes, search_len, row);
+                const bool end = code == header_end;
+                if (end) {
+                    // The split row: the second core sends its half's survivor into the first core's landing CB,
+                    // as the single-level split does; the first core merges it and writes the row below.
+                    if (sends_survivor) {
+                        credit_sem.wait_min(1);
+                        send_cb.wait_front(survivor_tiles);
+                        noc.async_write(
+                            send_cb,
+                            UnicastEndpoint{},
+                            survivor_bytes,
+                            {.offset_bytes = 0},
+                            {.noc_x = partner_noc_x, .noc_y = partner_noc_y, .addr = landing_base});
+                        noc.async_write_barrier();
+                        send_cb.pop_front(survivor_tiles);
+                        data_sem.up(noc, partner_noc_x, partner_noc_y, 1);
+                    }
+                    if (!receives_survivor) {
+                        break;
+                    }
+                    landing_cb.reserve_back(survivor_tiles);
+                    credit_sem.up(noc, partner_noc_x, partner_noc_y, 1);
+                    data_sem.wait_min(1);
+                    landing_cb.push_back(survivor_tiles);
+                    row = split_row;
+                } else if (code == header_row || code == header_split) {
+                    two_level_table(noc, indices_cb, search_len, code == header_split);
+                    if (code == header_split) {
+                        continue;
+                    }
                 } else {
                     two_level_unit(noc, max_out, search_len, units, code);
+                    continue;
+                }
+                two_level_output<source_slices_per_row, output_slices_per_row, indices_slice_bytes>(
+                    noc, indices_cb, indices_scratch_cb, indices, indices_page_bytes, row);
+                if (end) {
+                    break;
                 }
             }
             noc.async_write_barrier();

@@ -189,6 +189,9 @@ void set_two_level_common_args(
     reader_args[topk_common_args::two_level_max_row_bytes] = row_bytes;
     reader_args[topk_common_args::two_level_num_input_rows] = num_rows;
     reader_args[topk_common_args::two_level_num_cores] = num_cores;
+    // The rows the single-level assignment halves across core pairs; stage 3 of each runs in halves on its pair.
+    const uint32_t split_rows = shared.row_split && row_split_possible(num_rows, num_cores) ? num_rows % num_cores : 0;
+    reader_args[topk_common_args::two_level_split_rows] = split_rows;
     auto& compute_args = tt::tt_metal::GetCommonRuntimeArgs(program, shared.compute_kernel_id);
     compute_args[topk_common_args::compute_two_level_num_input_rows] = num_rows;
     auto& writer_args = tt::tt_metal::GetCommonRuntimeArgs(program, shared.writer_kernel_id);
@@ -201,6 +204,7 @@ void set_two_level_common_args(
     reader_args[topk_common_args::reader_coordinator_noc_x] = static_cast<uint32_t>(coordinator.x);
     reader_args[topk_common_args::reader_coordinator_noc_y] = static_cast<uint32_t>(coordinator.y);
     writer_args[topk_common_args::writer_two_level_num_cores] = num_cores;
+    writer_args[topk_common_args::writer_two_level_split_rows] = split_rows;
     for (uint32_t core = 0; core < num_cores; ++core) {
         const auto noc = input.device()->worker_core_from_logical_core(shared.cores[core]);
         writer_args[topk_common_args::writer_two_level_core_coords + core] =
@@ -479,7 +483,8 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         const uint32_t bitmap_bytes =
             tt::round_up(tt::div_up(tt::div_up(input_width, two_level_block_keys), 32) * sizeof(uint32_t), 64);
         create_cb(cb_bitmap, 1, bitmap_bytes, tt::DataFormat::UInt32);
-        create_cb(cb_own_table, 1, table_bytes, tt::DataFormat::UInt32);
+        // The writer's copy of its row's table, then the half of a split row's table its pair's first core sends.
+        create_cb(cb_own_table, 1, table_bytes + table_bytes / 2, tt::DataFormat::UInt32);
         // The mode and search length, then a header per item (see topk_two_level::header_row).
         create_cb(cb_writer_mailbox, 4, 64, tt::DataFormat::UInt32);
     }
@@ -488,10 +493,13 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     const uint32_t unit_semaphore_id = two_level ? tt::tt_metal::CreateSemaphore(program, all_cores, 0) : 0;
     const uint32_t claim_semaphore_id = two_level ? tt::tt_metal::CreateSemaphore(program, all_cores, 0) : 0;
     const uint32_t ready_semaphore_id = two_level ? tt::tt_metal::CreateSemaphore(program, all_cores, 0) : 0;
+    // half: on the second core of a split pair, set once its half of the split row's table has arrived.
+    const uint32_t half_semaphore_id = two_level ? tt::tt_metal::CreateSemaphore(program, all_cores, 0) : 0;
     const std::vector<std::pair<std::string, uint32_t>> two_level_named_args = {
         {"tl_unit_sem", unit_semaphore_id},
         {"tl_claim_sem", claim_semaphore_id},
         {"tl_ready_sem", ready_semaphore_id},
+        {"tl_half_sem", half_semaphore_id},
         {"tl_cb_stage1", cb_stage1},
         {"tl_cb_tiled", cb_tiled},
         {"tl_cb_scaler", cb_scaler},
@@ -649,7 +657,7 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     std::vector<uint32_t> reader_common = {input.mesh_buffer().address(), meta_addr, 0, 0, valid_end_addr};
     std::vector<uint32_t> writer_common = {indices.mesh_buffer().address()};
     if (two_level) {
-        reader_common.resize(topk_common_args::reader_coordinator_noc_y + 1, 0);
+        reader_common.resize(topk_common_args::two_level_split_rows + 1, 0);
         writer_common.resize(topk_common_args::writer_two_level_core_coords + cores.size(), 0);
     }
     tt::tt_metal::SetCommonRuntimeArgs(program, reader_kernel, reader_common);
