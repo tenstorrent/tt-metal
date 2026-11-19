@@ -38,6 +38,7 @@ import torch
 import ttnn
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
 from models.demos.gemma4.tt.ccl import ccl_allgather
+from models.demos.gemma4.tt.kv_pair_shard import KV_PAIR_SHARD_ENV, kv_pair_shard_enabled
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
@@ -133,8 +134,22 @@ class Gemma4AssistantModel:
                 max_seq_len=self.text_args.max_seq_len,
                 max_local_batch_size=max_local_batch_size,
                 bounded_sliding_kv_cache=bounded_sliding_kv_cache,
+                # KV-shared layers: the 4-head decode path, no pair weights -- except under GEMMA4_KV_PAIR_SHARD,
+                # where the target's global KV is split over each chip pair and only the pair view reads it
+                sdpa_pair_split=kv_pair_shard_enabled(),
             )
             self.layers.append(layer)
+        if kv_pair_shard_enabled():
+            missing = [
+                i
+                for i, layer in enumerate(self.layers)
+                if layer.self_attn.weights.is_global and layer.self_attn.weights.pair is None
+            ]
+            if missing:
+                raise ValueError(
+                    f"{KV_PAIR_SHARD_ENV}=1: the assistant's global layers {missing} have no pair view; their KV-shared "
+                    "reads of the target's half-block caches would attend only this chip's half of the keys"
+                )
 
         # Final norm (model.norm)
         self.norm = RMSNorm(

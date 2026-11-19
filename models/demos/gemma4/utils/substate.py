@@ -17,6 +17,12 @@ if TYPE_CHECKING:
     import torch
 
 
+class _PlaceholderSubstate(dict):
+    """A substate of a warm-cache placeholder state dict (``is_placeholder``): its tensors are dataless too."""
+
+    is_placeholder = True
+
+
 def substate(state: dict[str, torch.Tensor], key: str) -> dict[str, torch.Tensor]:
     """
     Extract a sub-dictionary from a state dict based on a key prefix.
@@ -26,12 +32,15 @@ def substate(state: dict[str, torch.Tensor], key: str) -> dict[str, torch.Tensor
         key: The prefix key to filter by (e.g., "q_proj" to get all "q_proj.*" entries)
 
     Returns:
-        A dictionary with the prefix removed from keys
+        A dictionary with the prefix removed from keys. A substate of a warm-cache placeholder state dict is a
+        placeholder too: the expert loaders read ``is_placeholder`` to load from the cache instead of converting
+        the dataless tensors (fp32 copies of every expert, ~3 GB of host memory per 26B layer).
     """
     prefix = f"{key}."
     prefix_len = len(prefix)
 
-    return {k[prefix_len:]: v for k, v in state.items() if k.startswith(prefix)}
+    sub = {k[prefix_len:]: v for k, v in state.items() if k.startswith(prefix)}
+    return _PlaceholderSubstate(sub) if getattr(state, "is_placeholder", False) else sub
 
 
 def has_substate(state: dict[str, torch.Tensor], key: str) -> bool:
