@@ -135,6 +135,9 @@ def test_another_tasks_gate_of_the_same_runs_is_reused_not_another_switch(sandbo
     other = f"{LADDER.replace('resident', 'mmap')} && {contract}"
     f2 = task("F.2", other, step="overseer_fix", device=True, paths=["src"], metrics={"ladder_failed": "== 0"})
     led = sandbox.tasks(x1, f1, f2)
+    # (the ladder's DS41_ENGRAM_TABLE=resident is a second model load in these gates: F283 would refuse them; this
+    # test is about reuse across tasks, so the one-load rule is off here)
+    sandbox.write_spec(tests={**(sandbox.spec_data.get("tests") or {}), "one_load": False})
     assert run_gate(sandbox.spec, led, "X.1").verdict == "PASS"
     n = len(calls.read_text().splitlines())
     assert len(_ladders(calls)) == 1 and "--no-precompile" in G.gate_command(x1, led.tasks())
@@ -180,7 +183,11 @@ def _edit(repo: Path, path: str, old: str, new: str):
 BOOKKEEPING_EDITS = [
     (stamps.GATE_PY, "  units passed: ", "  units that passed: "),  # progress_lines (reporting)
     (stamps.GATE_PY, 'f"# {u}: reused: {how}, not run\\n"', 'f"# {u}: reused ({how}), not run\\n"'),  # run_units log
-    (stamps.BATCH_PY, "out[-1].append((u, forms[u]))", "out[-1] += [(u, forms[u])]"),  # gate_groups (launch)
+    (
+        stamps.BATCH_PY,
+        "out[keys.index(key)].append((u, forms[u]))",
+        "out[keys.index(key)] += [(u, forms[u])]",
+    ),  # gate_groups (launch)
     (stamps.SAFE_PYTEST_SH, 'echo "SAFE_PYTEST_RESULT: INFRA', 'echo "SAFE_PYTEST_RESULT: INFRA!'),  # memory pre-flight
     (stamps.SAFE_RUN_SH, "SAFE_PYTEST_TOTAL_RUNTIME", "SAFE_PYTEST_TOTAL_WALL"),  # the total-runtime line
     (stamps.SAFE_RUN_SH, '--state "$TTRUN_RUNREC_STATE" --rc "$ec"', '--rc "$ec" --state "$TTRUN_RUNREC_STATE"'),

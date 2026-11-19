@@ -352,6 +352,15 @@ emit_profiler_csv() {
 # --- Total-run timer: always the last line, on every exit path ---
 ttrun_on_exit ttrun_print_total_runtime
 
+# --- A resident bring-up runner holds the device while it runs (F281, models/demos/common/bringup/resident.py) ---
+# Any other run asks it to step aside first: it finishes its current request, releases the model and the mesh, and
+# ends (its own device process carries BRINGUP_RESIDENT_DIR and skips this). Standard library only (python3 -I).
+if [[ "$SIM_MODE" == false && -z "${BRINGUP_RESIDENT_DIR:-}" && -f "$REPO_DIR/generated/resident/holder.json" ]] \
+    && command -v python3 >/dev/null 2>&1; then
+    python3 -I "$REPO_DIR/models/demos/common/bringup/resident.py" yield --why="$*" \
+        || echo "SAFE_PYTEST: WARNING: the resident runner did not step aside in time; waiting for the cards"
+fi
+
 # --- Acquire a card (hardware only; no-op on sim) ---
 # mesh (default) = every card; auto = lowest free card; N = that card. Exports the per-card env,
 # re-points the triage / watcher paths, resets the card if a previous run left it dirty.

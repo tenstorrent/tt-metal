@@ -170,7 +170,11 @@ def _run(spec, ledger, members: list, d: Path, echo) -> tuple[dict, int]:
                 c, shell=True, cwd=spec.repo, env=penv, stdout=bf, stderr=subprocess.STDOUT
             ).returncode
 
-    prc = batch.drive(plan_path, proc)
+    def say(text):  # F281: the resident runner's output, where the process's would have gone
+        with open(blog, "a") as bf:
+            bf.write(text)
+
+    prc = batch.drive(plan_path, proc, env=penv, echo=say)
     got = batch.load_results(plan_path)
     runs, running = got.get("runs") or {}, got.get("running")
     btext = blog.read_text(errors="replace")

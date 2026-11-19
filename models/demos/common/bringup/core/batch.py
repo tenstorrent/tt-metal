@@ -26,6 +26,13 @@ model load per gate and model configuration (``gate_model_loads``, counted from 
 F269 (owner 2026-11-18): a process holds one model. A run that needs another one (the device side finds out at its
 load: testing/batch.shared_model) ends its process there, it and the runs after it left to a fresh process
 (``deferred``): ``drive`` runs a plan's processes until every run has run, each run's result recorded once.
+F281 (owner 2026-11-19, iteration time): while a resident runner serves the spec (resident.py), ``drive`` submits the
+plan to it instead of starting a process (a plan with the model determinism check as a fresh-process request).
+F283 (owner 2026-11-19): a gate loads the model at most once (spec tests.one_load): ``one_load_errors`` refuses a gate
+whose shared-model runs need more than one process group (the cold determinism run alone aside), and a run that would
+need another model in its process fails instead of going to a fresh one (``ONE_LOAD_ENV``). A switch the model reads
+per run (hooks.batch_call_settings, e.g. DeepSeek-V4.1's DECODER_SKIP but replay128) is not its configuration
+(``call_vars``).
 """
 
 from __future__ import annotations
@@ -44,6 +51,7 @@ MAX_SEQ_ENV = "BRINGUP_BATCH_MAX_SEQ"  # load it with target.seq at least this (
 BATCH_TEST = "models/demos/common/bringup/tests/test_batch.py"
 KEEP_GOING_ENV = "BRINGUP_BATCH_KEEP_GOING"  # 1: a hand-run batch (BRINGUP_BATCH_CMD) runs every run past a failure
 DRIVEN_ENV = "BRINGUP_BATCH_DRIVEN"  # F269: 1: a driver (drive) runs the runs this process leaves to a fresh one
+ONE_LOAD_ENV = "BRINGUP_ONE_LOAD"  # F283: 1 (or a plan's "one_load"): a second model fails the run, no fresh process
 INJECT_ENV = "BRINGUP_INJECT"  # diagnostic (FIX.29): a mistake injected into the batch's model (testing/batch.inject)
 TESTS_DIR = "models/demos/common/bringup/tests/"
 SHARED_TESTS = (
@@ -301,18 +309,60 @@ def normalized(env: dict) -> dict:
     return out
 
 
+_CALL_HOOKS: list = []  # F283: [(settings prefix, hooks.batch_call_settings)] of the models in the repo
+
+
+def _call_hooks() -> list:
+    import importlib
+
+    if _CALL_HOOKS:
+        return _CALL_HOOKS[0]
+    out = []
+    for f in sorted(_REPO.glob("models/demos/*/bringup/hooks.py")):
+        if "def batch_call_settings" not in f.read_text(errors="replace"):
+            continue
+        name = f.parent.parent.name
+        try:
+            hooks = importlib.import_module(f"models.demos.{name}.bringup.hooks")
+            st = importlib.import_module(f"models.demos.{name}.tt.settings")
+        except Exception:  # noqa: BLE001 -- a model whose hooks do not import: its switches stay configuration
+            continue
+        prefix = next((v.prefix for v in vars(st).values() if isinstance(getattr(v, "prefix", None), str)), None)
+        if prefix:
+            out.append((prefix, hooks.batch_call_settings))
+    _CALL_HOOKS.append(out)
+    return out
+
+
+def call_vars(env: dict) -> set:
+    """F283: the variables (set in ``env`` or not) that are switches a model reads per run at ``env``'s values, not at
+    its load
+    (hooks.batch_call_settings(env): the batch's model is put to the run's value; DeepSeek-V4.1: DECODER_SKIP off /
+    exact / decode, FIX.28 use_decoder_skip): they never split a process."""
+    names = set()
+    for prefix, fn in _call_hooks():
+        try:
+            got = fn(env)
+        except TypeError:
+            got = fn()
+        names |= {prefix + n for n in got}
+    return names
+
+
 def model_key(env: dict, names: set) -> str:
     """The model configuration of a run: its effective value of every non-per-run variable any run sets (FIX.31: a
     switch at the value a test reads unset counts as unset). Only which runs share a process: the device side loads
-    again whenever a load-time switch value differs (testing/batch.shared_model)."""
-    item = ITEM_VARS | DECLARED_ITEM_VARS  # F279
+    again whenever a load-time switch value differs (testing/batch.shared_model). F283: a switch the model reads per
+    run is not configuration (``call_vars``)."""
+    item = ITEM_VARS | DECLARED_ITEM_VARS | call_vars(env)  # F279, F283
     env = normalized({k: v for k, v in env.items() if k in names - item})
     return json.dumps({k: env.get(k) for k in sorted(names - item)}, sort_keys=True)
 
 
 def gate_groups(units: list[tuple[str, str]], env: dict) -> list[list[tuple[str, str]]]:
-    """FIX.29: the gate units to run (unit, command), in gate order, as process groups: consecutive units whose every
-    run may share a process at one model configuration (``model_key`` over the gate's environment and the runs'
+    """FIX.29: the gate units to run (unit, command), in gate order, as process groups: units whose every
+    run may share a process at one model configuration (F283: also when other units stand between them: the group
+    runs at its first unit's turn, the units between keep their own processes; one model load per configuration) (``model_key`` over the gate's environment and the runs'
     prefixes) form one group (one batch process, one model load); any other unit is a group of its own (its command
     as written, or core/batch.unit_command). A single unit stays its own group.
     FIX.31: a unit whose runs ask for the precompile pass joins too, in its launch form (``launch_form``: the command a
@@ -328,8 +378,8 @@ def gate_groups(units: list[tuple[str, str]], env: dict) -> list[list[tuple[str,
         if runs:
             ks = {model_key({**env, **r["env"]}, names) for r in runs}
             key = ks.pop() if len(ks) == 1 else None
-        if key is not None and out and keys[-1] == key:
-            out[-1].append((u, forms[u]))
+        if key is not None and key in keys:  # F283: the gate's group of that model, wherever it started
+            out[keys.index(key)].append((u, forms[u]))
         else:
             out.append([(u, forms[u] if key is not None else c)])
             keys.append(key)
@@ -362,32 +412,107 @@ def gate_entries(group: list[tuple[str, str]], env: dict, unit_env: dict, logs: 
     return entries
 
 
-def write_plan(path: Path, entries: list[dict], stop_on_fail: bool = False) -> Path:
+def _determinism_only(runs: list[dict]) -> bool:
+    return bool(runs) and all(phase(r) == -1 for r in runs)
+
+
+def one_load_errors(units: list[tuple[str, str]], env: dict) -> list[str]:
+    """F283 (OWNER 2026-11-19: "a task may load the model at most once per gate; a plan that needs more loads is
+    refused before it runs"): the gate's units (unit, command) as gate_groups puts them in processes; every group of
+    runs that take the shared model is one model load, the model determinism check alone in its group aside (the one
+    cold run a gate may add). More than one: why, naming the groups' units and the variables they differ in."""
+    groups = gate_groups(units, env)
+    loads = []
+    for g in groups:
+        runs = [parse_all(launch_form(c)[0]) for _, c in g]
+        if not all(runs):
+            continue  # not a shared-model process (a component test, a CPU check): no model of the gate's
+        flat = [r for rs in runs for r in rs]
+        if _determinism_only(flat):
+            continue
+        loads.append((g, flat))
+    if len(loads) <= 1:
+        return []
+    names = {k for _, flat in loads for r in flat for k in r["env"]}
+    keys = [json.loads(model_key({**env, **flat[0]["env"]}, names)) for _, flat in loads]
+    diff = sorted(k for k in set().union(*keys) if len({json.dumps(x.get(k)) for x in keys}) > 1)
+    parts = [f"[{', '.join(u for u, _ in g)}]" for g, _ in loads]
+    why = f"they differ in {', '.join(diff)}" if diff else "their runs differ within a unit"
+    return [
+        f"the gate needs {len(loads)} model loads, one per process group {' '.join(parts)}: {why}. Owner rule "
+        "(2026-11-19, spec tests.one_load): one model load per gate (the cold determinism run aside); make the "
+        "units share one model configuration"
+    ]
+
+
+def write_plan(path: Path, entries: list[dict], stop_on_fail: bool = False, one_load: bool = False) -> Path:
     """entries: {name, group, env, args, run_all, log, key}. ``group``: runs that stand or fall together (an A/B item:
     its clean wall and its profiled run); a failed run skips the rest of its group, or of the plan with stop_on_fail."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"version": 1, "stop_on_fail": stop_on_fail, "entries": entries}, indent=1) + "\n")
+    data = {"version": 1, "stop_on_fail": stop_on_fail, "entries": entries}
+    if one_load:  # F283: a run needing another model fails here (testing/batch.run_plan), no fresh process
+        data["one_load"] = True
+    path.write_text(json.dumps(data, indent=1) + "\n")
     results_path(path).unlink(missing_ok=True)
     return path
 
 
-def unit_plan(cmd: str, path: Path, spec=None) -> Path:
+def unit_plan(cmd: str, path: Path, spec=None, one_load: bool = False) -> Path:
     """F269: a gate unit's command (unit_command) as a plan file (plan_from_cmd: its hints too), for ``drive``."""
     p = plan_from_cmd(cmd, spec)
+    if one_load:  # F283
+        p["one_load"] = True
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(p, indent=1) + "\n")
     results_path(path).unlink(missing_ok=True)
     return path
 
 
-def drive(plan: Path, run) -> int:
+def _drive_resident(d: Path, plan: Path, env: dict, echo) -> int:
+    """F281: the plan on the resident runner: a determinism check makes it a fresh-process request; runs without a log
+    of their own get one next to the plan, its text echoed after (as the batch process's output was). The reply's
+    rc: 0, 1, 2 (a hang); the plan's results file as a batch process writes it."""
+    from models.demos.common.bringup import resident
+
+    data = json.loads(plan.read_text())
+    own = []
+    for e in data["entries"]:
+        if not e.get("log"):
+            e["log"] = f"{plan}.{e['name']}.log"
+            own.append(e["log"])
+    plan.write_text(json.dumps(data, indent=1) + "\n")
+    fresh = any(phase(e) == -1 for e in data["entries"])
+    echo(f"# F281: the plan runs on the resident runner ({d}){' in a fresh process (determinism)' if fresh else ''}\n")
+    r = resident.submit_plan(d, plan, {**env, **(data.get("hints") or {})}, fresh=fresh)
+    for log in own:
+        if Path(log).exists():
+            echo(Path(log).read_text(errors="replace"))
+    echo(resident.describe(r) + "\n")
+    if r.get("error"):
+        echo(f"# F281: {r['error']}\n")
+        if not results_path(plan).exists():
+            results_path(plan).write_text(json.dumps({"running": None, "runs": {}, "error": r["error"]}) + "\n")
+    rc = int(r.get("rc") or 0)
+    return 2 if rc == 2 else (1 if rc else 0)
+
+
+def drive(plan: Path, run, env: dict | None = None, echo=None) -> int:
     """F269: the batch processes of ``plan`` until every run has run: ``run(cmd, k)`` runs the k-th process's command
     (k = 0: the plan's own; its exit code back). A process that ends at a run needing another model than it holds
     lists that run and the rest in its results' ``deferred``; they go to a fresh process (plan <plan>.fresh<k>.json:
     those entries only, the rest of the plan as it was), whose results join the plan's own: callers read
     load_results(plan) as from one process (a run ``running`` in the last process: it hung or died there). No new
     process after a hang or a death (``running`` set) or when a fresh process ran none of its runs. The exit code:
-    the last process's, else an earlier failing one's."""
+    the last process's, else an earlier failing one's.
+    F281: ``env`` (the process's environment, over this one's): when a resident runner serves its spec
+    (resident.for_env), the plan goes there instead (``echo(text)``: where the process's output would have gone)."""
+    full = dict(os.environ, **(env or {}))
+    from models.demos.common.bringup import resident
+
+    say = echo or (lambda t: print(t, end="", flush=True))
+    d = resident.for_env(full, echo=lambda t: say(t + "\n"))
+    if d is not None:
+        return _drive_resident(d, Path(plan), full, say)
     rcs = [run(f"{DRIVEN_ENV}=1 {command(plan)}", 0)]
     got = load_results(plan)
     cur, k = plan, 0

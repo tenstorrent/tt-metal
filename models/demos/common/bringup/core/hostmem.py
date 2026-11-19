@@ -40,6 +40,15 @@ FLOOR_ENV = "BRINGUP_HOST_MEM_FLOOR_GB"  # the least MemAvailable any device pro
 FLOOR_GB = 16.0
 MARGIN = 1.15  # a recorded need is a measurement of earlier runs: start only with 15 % above it, plus MARGIN_GB
 MARGIN_GB = 8.0
+# F284 (OWNER 2026-11-19, permanent): every device open leaks 10-27 GiB of host RAM in the driver; before any device
+# open, MemAvailable minus the expected host load of a model process (LOAD_ENV, default ~215 GB: DeepSeek-V4.1's host
+# RSS) must leave RESERVE_ENV (default 150 GiB); else the run is refused and the fix named: a reboot of the node.
+LOAD_ENV = "BRINGUP_HOST_MEM_LOAD_GB"
+LOAD_GB_DEFAULT = 215e9 / GB  # 215 GB (decimal, as the owner gave it) in GiB
+RESERVE_ENV = "BRINGUP_HOST_MEM_RESERVE_GB"  # 0 = off
+RESERVE_GB_DEFAULT = 150.0
+UNACCOUNTED = ("MemFree", "Buffers", "Cached", "AnonPages", "Slab", "PageTables", "VmallocUsed", "Percpu", "Hugetlb",
+               "KernelStack")  # fmt: skip
 INFRA_RC = 10  # preflight: not enough host memory (the safe runner exits 3 with a SAFE_PYTEST_INFRA line)
 INFRA_TAG = "SAFE_PYTEST_INFRA: host memory"  # the gate and the orchestrator stop on this, never count a failure
 
@@ -108,6 +117,36 @@ def snapshot(mi: dict | None = None, procs: dict | None = None) -> dict:
         "swap_used": g("SwapTotal") - g("SwapFree"),
     }
     return {k: round(v / GB, 1) for k, v in vals.items()}
+
+
+def unaccounted(mi: dict | None = None) -> float:
+    """F284: the owner's unaccounted host RAM (GiB): MemTotal minus MemFree, Buffers, Cached, AnonPages, Slab,
+    PageTables, VmallocUsed, Percpu, Hugetlb and KernelStack (what the driver's leaks of earlier device opens hold)."""
+    mi = mi if mi is not None else meminfo()
+    return round((mi.get("MemTotal", 0) - sum(mi.get(k, 0) for k in UNACCOUNTED)) / GB, 1)
+
+
+def reserve_check(env=None, mi: dict | None = None) -> tuple[bool, str]:
+    """F284: (ok, line): MemAvailable minus the expected load leaves the reserve; refused otherwise (fix: reboot)."""
+    env = os.environ if env is None else env
+    mi = mi if mi is not None else meminfo()
+    reserve = float(env.get(RESERVE_ENV) or RESERVE_GB_DEFAULT)
+    if reserve <= 0:
+        return True, "SAFE_PYTEST_HOST_MEM: reserve check off"
+    load = float(env.get(LOAD_ENV) or LOAD_GB_DEFAULT)
+    avail = mi.get("MemAvailable", 0) / GB
+    left = avail - load
+    line = (
+        f"MemAvailable {avail:.1f} GiB - expected load {load:.1f} GiB = {left:.1f} GiB left, reserve "
+        f"{reserve:.0f} GiB; "
+        f"unaccounted (driver leaks of earlier device opens) {unaccounted(mi):.1f} GiB"
+    )
+    if left >= reserve:
+        return True, f"SAFE_PYTEST_HOST_MEM: {line}: ok"
+    return False, (
+        f"{INFRA_TAG}: {line}. Not started (owner rule 2026-11-19: every device open leaks 10-27 GiB in the driver). "
+        "The fix is a REBOOT of the node (the leak is kernel / driver memory no process holds)."
+    )
 
 
 def oom_kills() -> int:
@@ -297,6 +336,9 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "preflight":
         ok, line = preflight(a.need_gb if a.need_gb is not None else need_gb())
         print(line, flush=True)
+        if ok:  # F284
+            ok, line = reserve_check()
+            print(line, flush=True)
         return 0 if ok else INFRA_RC
     if a.cmd == "watch":
         watch(a.pid, a.out, a.interval)

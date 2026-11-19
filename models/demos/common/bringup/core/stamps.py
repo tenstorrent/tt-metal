@@ -109,6 +109,9 @@ ENV_IGNORED = {  # where a gate files its results, not what it measures
     "BRINGUP_BATCH_KEEP_GOING",
     "BRINGUP_BATCH_DRIVEN",  # F269: a driver runs what the process leaves to a fresh one
     "BRINGUP_UNIT_CMD",  # F270: the command a safe-runner run was launched from (its prefix is in the run's key)
+    "BRINGUP_ONE_LOAD",  # F283: a second model load fails instead of a fresh process (launch policy)
+    "BRINGUP_RESIDENT",  # F281: whether a resident runner may take the run, and the runner's own state dir
+    "BRINGUP_RESIDENT_DIR",
 }
 ENV_IGNORED_PREFIXES = (
     "TT_METAL_JIT_SERVER",  # F170: where kernels compile (a JIT server or locally), not the result
@@ -238,6 +241,7 @@ BOOKKEEPING = {
         # FIX.31
         "_lookup", "_restore_found", "_live_gate", "PRE_RUN", "_pre_rec", "_gates_log_dir", "_gates_log",
         "OWN_STAMP",  # F270
+        "_run_group", "one_load", "one_load_errors",  # F281 / F283: launch (a resident runner or a process), refusal
     ),
     BATCH_PY: (
         # which units share a process (launch, F259 / FIX.29; the device side re-checks the switches) and its results
@@ -246,10 +250,13 @@ BOOKKEEPING = {
         "LAUNCH_FLAGS", "launch_form", "why_not", "_TEST_VALUES", "test_value", "normalized",
         # F269: the processes of a plan (a run needing another model goes to a fresh one)
         "DRIVEN_ENV", "unit_plan", "drive",
+        # F281 / F283: the resident runner's submission, the one-load rule, per-run switches (which share a process)
+        "_drive_resident", "ONE_LOAD_ENV", "_CALL_HOOKS", "_call_hooks", "call_vars", "_determinism_only",
+        "one_load_errors", "write_plan",
     ),
     SAFE_PYTEST_SH: (
         "section:Profiler CSV reporting", "section:Total-run timer", "section:Host memory pre-flight",
-        "section:Run record", "emit_profiler_csv",
+        "section:Run record", "emit_profiler_csv", "section:A resident bring-up runner holds the device",
     ),
     SAFE_RUN_SH: (
         "_ttrun_say", "_ttrun_emit_device_timing", "ttrun_print_mode_banner", "_ttrun_warn_missing_ttexalens",

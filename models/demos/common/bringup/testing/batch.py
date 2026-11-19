@@ -31,6 +31,15 @@ a later run whose values differ in a switch the model reads at load (all but hoo
 load with a warning, never a model of another configuration. After each run every model Settings snapshot is
 re-read (a run's monkeypatch is undone by then) and the run's metrics and result files are noted in the results
 (``metrics``, ``files``: what a gate keeps per unit).
+
+F282 (owner 2026-11-19, "load only the layers a measurement executes"): ``run_layers(s, layers, last_chunk)`` is the
+layers a measurement runs, as the model's optional hook ``run_layers(spec, layers, last_chunk)`` says (DeepSeek-V4.1:
+under DECODER_SKIP=decode, a measurement whose chunks are never a request's last runs layers 0-20 only); the test loads
+and loops those. A model already held with more layers (a superset within the full list) serves such a subset run;
+BRINGUP_RUN_LAYERS=all turns the subset off (an A/B of the full load against the subset).
+F281: inside the resident runner (testing/resident.py) a run's timing is noted (``TIMING``: the model ready, its first
+chunk: the first ``begin_chunk`` / ``embed`` call), the model build goes through the device-weight registry
+(testing/weights.py), and ``run_plan(.., keep=True)`` keeps the model past the plan.
 """
 
 from __future__ import annotations
@@ -52,6 +61,11 @@ _RUN = {"name": None}
 _LOADS = {"n": 0}  # FIX.29: real model loads in this process (metric model_loads)
 _LOADING = {"on": False}  # a load is running (a nested loader call is part of it)
 _FRESH: dict = {}  # F269: "why" (the run needs another model than this process holds), "by" (the run that loaded it)
+_SUBSETS: dict = {}  # F282: (a measurement's layers) -> (the full layer list it was taken from): run_layers
+TIMING: dict = {}  # F281: this run's times (time.time()): "model_ready", "first_chunk"; "loaded": the run loaded it
+RUN_LAYERS_ENV = "BRINGUP_RUN_LAYERS"  # F282: "all" = every layer of the test's list, never the model's subset
+RESIDENT_ENV = "BRINGUP_RESIDENT_DIR"  # F281: set in the resident runner's process (its state directory)
+REQUEST: dict = {}  # F281: the resident runner's request being served: "received" (time.time())
 
 
 class NeedsFreshProcess(RuntimeError):
@@ -130,6 +144,66 @@ def _hook(s, name: str, *args):
     return fn(*args) if callable(fn) else None
 
 
+def run_layers(s, layers, last_chunk: bool | None = None) -> list:
+    """F282: the layers a measurement loads and runs: the model hook ``run_layers(spec, layers, last_chunk)`` (a
+    subset, or None for all), ``last_chunk``: whether any chunk the measurement runs is a request's last (None: as
+    BRINGUP_CHUNK_LAST says, unset = last). BRINGUP_RUN_LAYERS=all: every layer of ``layers``."""
+    layers = list(layers)
+    if last_chunk is None:
+        last_chunk = os.environ.get("BRINGUP_CHUNK_LAST") != "0"
+    if os.environ.get(RUN_LAYERS_ENV) == "all":
+        return layers
+    sub = _hook(s, "run_layers", s, layers, bool(last_chunk))
+    if not sub:
+        return layers
+    keep = {int(i) for i in sub}
+    out = [i for i in layers if i in keep]
+    if out != layers:
+        _SUBSETS[tuple(out)] = tuple(layers)
+        print(
+            f"BATCH (F282): this measurement runs layers {out[0]}-{out[-1]} ({len(out)} of {len(layers)}): only those "
+            f"are loaded ({RUN_LAYERS_ENV}=all loads every one)",
+            flush=True,
+        )
+    return out
+
+
+def _serves_layers(held: list, want: list) -> bool:
+    """F282: the held model's layers serve ``want``: the same list, or ``want`` is a run_layers subset and the held
+    model's layers lie between it and the full list it came from."""
+    if held == want:
+        return True
+    full = _SUBSETS.get(tuple(want))
+    return full is not None and set(want) <= set(held) <= set(full)
+
+
+def _first_call_timed(m):
+    """F281 (resident runner only): the first ``begin_chunk`` / ``embed`` call of the run notes TIMING["first_chunk"]
+    (the measurement's first chunk starts). An instance attribute, removed after the run (``_untimed``)."""
+    if not os.environ.get(RESIDENT_ENV) or m is None or not hasattr(m, "__dict__"):
+        return m
+    for name in ("begin_chunk", "embed"):
+        if getattr(vars(m).get(name), "_bringup_timed", False):
+            continue
+        orig = getattr(m, name, None)
+        if not callable(orig):
+            continue
+
+        def timed(*a, _orig=orig, **kw):
+            TIMING.setdefault("first_chunk", time.time())
+            return _orig(*a, **kw)
+
+        timed._bringup_timed = True
+        setattr(m, name, timed)
+    return m
+
+
+def _untimed(m) -> None:
+    for name in ("begin_chunk", "embed"):
+        if m is not None and hasattr(m, "__dict__") and getattr(vars(m).get(name), "_bringup_timed", False):
+            delattr(m, name)
+
+
 def _load_settings(s) -> dict:
     """The model's switch values a load would read now (hooks.batch_settings: from the environment), minus the ones
     it reads per call (hooks.batch_call_settings)."""
@@ -178,37 +252,48 @@ def shared_model(mesh, layers, *, seq: int, lm_head: bool, load, config=None, sp
         m is not None
         and _MODELS["key"] == key
         and _MODELS["mesh"] is mesh
-        and _MODELS["layers"] == want
+        and _serves_layers(_MODELS["layers"], want)  # F282: or a held superset of a run_layers subset
         and _MODELS["config"] == config
         and _MODELS["settings"] == sw
         and (_MODELS["lm_head"] or not lm_head)
         and _MODELS["seq"] >= seq
     ):
         free_state(m)
+        if spec is not None:  # F283: the held model put to this run's per-run switch values (hooks.batch_call_apply)
+            _hook(spec, "batch_call_apply", m)
         metrics.record("model_shared", 1)
         print(f"BATCH (F259): model reused (loaded by {_MODELS['by']} in {_MODELS['load_s']:.0f} s)", flush=True)
-        return inject(m)
+        TIMING.setdefault("model_ready", time.time())
+        return _first_call_timed(inject(m))
     if m is not None:  # F269: never loaded again in place (the released model's device memory does not come back)
         diff = sorted(k for k in set(sw) | set(_MODELS["settings"]) if sw.get(k) != _MODELS["settings"].get(k))
         why = (
             f"{_RUN['name']} needs another model (layers / LM head / seq / config / switches {diff} differ from "
             f"{_MODELS['by']}'s)"
         )
-        _FRESH.update(why=why, by=_MODELS["by"])
+        _FRESH.update(why=why, by=_MODELS["by"], same_plan=_MODELS.get("plan") == _RUN.get("plan"))
         print(f"BATCH (F269): {why}: not loaded again in this process; the run goes to a fresh process", flush=True)
         raise NeedsFreshProcess(why)
     seq = max(int(seq), int(os.environ.get(B.MAX_SEQ_ENV) or 0))
     head = lm_head or os.environ.get(B.LM_HEAD_ENV) == "1"
     t0 = time.time()
     _LOADING["on"] = True
+    from models.demos.common.bringup.testing import weights
+
+    if weights.active():  # F281: the resident runner's build takes the device weights an earlier build loaded
+        weights.begin_build()
+    built = None
     try:
         m = load(seq, head)
     finally:
         _LOADING["on"] = False
+        if weights.active():
+            built = weights.end_build()
+            print(f"BATCH (F281): {weights.describe(built)}", flush=True)
     load_s = getattr(m, "load_seconds", time.time() - t0)
     _MODELS.update(
         model=m, key=key, mesh=mesh, layers=want, config=config, settings=sw, lm_head=head, seq=seq,
-        by=_RUN["name"], load_s=load_s,
+        by=_RUN["name"], load_s=load_s, weights=built, plan=_RUN.get("plan"),
     )  # fmt: skip
     n = _count_load(_RUN["name"])
     metrics.record("model_shared", 0)
@@ -217,7 +302,9 @@ def shared_model(mesh, layers, *, seq: int, lm_head: bool, load, config=None, sp
         f"process, {load_s:.0f} s)",
         flush=True,
     )
-    return inject(m)
+    TIMING["loaded"] = True
+    TIMING.setdefault("model_ready", time.time())
+    return _first_call_timed(inject(m))
 
 
 def device_model(s, mesh, layers, lm_head: bool = True):
@@ -328,11 +415,34 @@ def load_plan() -> tuple[dict, Path | None]:
 DEFERRED: list[str] = []  # F269: the runs the last run_plan left for a fresh process (in plan order)
 
 
-def run_plan(mesh, shape, plan: dict, plan_path: Path | None = None, main=None) -> list[str]:
+def _record_timing(t0: float) -> None:
+    """F281: the resident runner's per-run timing as the run's metrics (seconds): resident_model_s (run start ->
+    model ready), resident_first_chunk_s (run start -> its first chunk), resident_request_first_chunk_s (the
+    request's arrival -> this run's first chunk), resident_model_loaded (1: this run loaded the model)."""
+    if not os.environ.get(RESIDENT_ENV) or not TIMING:
+        return
+    from models.demos.common.bringup.core import metrics
+
+    try:
+        if TIMING.get("model_ready"):
+            metrics.record("resident_model_s", round(TIMING["model_ready"] - t0, 2))
+        if TIMING.get("first_chunk"):
+            metrics.record("resident_first_chunk_s", round(TIMING["first_chunk"] - t0, 2))
+            if REQUEST.get("received"):
+                metrics.record("resident_request_first_chunk_s", round(TIMING["first_chunk"] - REQUEST["received"], 2))
+        metrics.record("resident_model_loaded", int(bool(TIMING.get("loaded"))))
+    except Exception as e:  # noqa: BLE001 -- a record never fails a run
+        print(f"BATCH (F281): timing not recorded: {e}", flush=True)
+
+
+def run_plan(
+    mesh, shape, plan: dict, plan_path: Path | None = None, main=None, keep: bool = False, after_run=None
+) -> list[str]:
     """Run every entry of ``plan`` in this process; the names of the runs that failed. ``main``: pytest.main (tests).
     F269: a run that needs another model than this process holds, and every run after it (but a failed group's: those
     are skipped), get no result here: they are listed in the results' ``deferred`` (and ``DEFERRED``), for a fresh
-    process (core/batch.drive)."""
+    process (core/batch.drive). F281 (the resident runner): ``keep`` keeps the model past the plan; ``after_run(name,
+    rec)`` sees each run's record before it is saved and stops the plan when it returns True (a device hang: rc 2)."""
     main = main or pytest.main
     out = {"running": None, "runs": {}}
     res = B.results_path(plan_path) if plan_path else None
@@ -345,6 +455,7 @@ def run_plan(mesh, shape, plan: dict, plan_path: Path | None = None, main=None) 
 
     failed, dead_groups, stop = [], set(), False
     entries = plan["entries"]
+    _RUN["plan"] = object()  # F283: this plan (a model it loads carries it)
     _FRESH.clear()
     DEFERRED.clear()
     for k, v in (plan.get("hints") or {}).items():  # the load's LM head / sequence, unless the caller set them
@@ -372,14 +483,17 @@ def run_plan(mesh, shape, plan: dict, plan_path: Path | None = None, main=None) 
         task, root, m0, f0 = _results_view()
         loads0 = _LOADS["n"]
         t0 = time.time()
+        TIMING.clear()
         try:
             rc = int(_redirected(e.get("log"), lambda: main(args, plugins=[SharedMesh(mesh, shape)])))
         finally:
             m = _MODELS.get("model")
             if m is not None:
                 free_state(m)
+                _untimed(m)
                 uninject(m)
             gc.collect()  # (the run's own device tensors: an adapter's KV caches, its runtime's slot states)
+            _record_timing(t0)
             _, _, m1, f1 = _results_view()
             os.environ.clear()
             os.environ.update(saved)
@@ -387,6 +501,19 @@ def run_plan(mesh, shape, plan: dict, plan_path: Path | None = None, main=None) 
         rc = 0 if rc == 0 else 1  # a test failure; 2 stays the safe runner's HANG
         fresh = dict(_FRESH)
         _FRESH.clear()
+        # F283: a second load for this plan (a gate's units) is refused; a model an earlier plan left (the resident
+        # runner's previous request) is not this gate's load: that run goes to a new process as before
+        one = plan.get("one_load") or os.environ.get(B.ONE_LOAD_ENV) == "1"
+        if fresh and fresh["by"] != name and fresh.get("same_plan") and one:
+            note = (
+                f"\n# F283: {fresh['why']}: refused (owner rule 2026-11-19, spec tests.one_load: one model load per "
+                "gate); the run fails instead of going to a fresh process\n"
+            )
+            if e.get("log"):
+                with open(e["log"], "a") as f:
+                    f.write(note)
+            print(note.strip(), flush=True)
+            rc, fresh = 1, {}
         if fresh and fresh["by"] != name:  # F269: this run and the rest of the plan in a fresh process
             release()
             DEFERRED.append(name)
@@ -410,6 +537,12 @@ def run_plan(mesh, shape, plan: dict, plan_path: Path | None = None, main=None) 
             "metrics": {k: v for k, v in m1.items() if m0.get(k) != v},
             "files": sorted(k for k, t in f1.items() if f0.get(k) != t),
         }
+        if TIMING:  # F281: seconds from the run's start to its model and to its first chunk
+            tm = {k: round(TIMING[k] - t0, 2) for k in ("model_ready", "first_chunk") if TIMING.get(k)}
+            out["runs"][name]["timing"] = dict(tm, loaded=bool(TIMING.get("loaded")), t0=t0)
+        if after_run is not None and after_run(name, out["runs"][name]):  # F281: a hang; nothing more runs here
+            out["runs"][name]["rc"] = rc = 2
+            stop = True
         out["running"] = None
         save()
         print(f"BATCH (F259) run {name}: rc {rc} in {time.time() - t0:.0f} s", flush=True)
@@ -421,5 +554,6 @@ def run_plan(mesh, shape, plan: dict, plan_path: Path | None = None, main=None) 
         out["deferred"] = DEFERRED
         save()
         print(f"BATCH (F269): runs for a fresh process: {', '.join(DEFERRED)}", flush=True)
-    release()
+    if not keep:
+        release()
     return failed

@@ -148,6 +148,22 @@ On accept, ab.change becomes the setting's shipped default (F104). For a switch-
 the owner picks later from several tables, set `ab.keep_default: true`: the accept commits the switch value and the
 defaults stay (F241).
 
+## Resident runner (F281, owner 2026-11-19: iteration time)
+
+One long-lived device process keeps the mesh open and the model loaded and runs measurement requests as they come
+(`resident.py`, `testing/resident.py`, `tests/test_resident.py`, under the safe runner's locks and hang triage):
+
+    python -m models.demos.common.bringup.resident start --spec <spec.yaml>
+    python -m models.demos.common.bringup.resident submit --spec <spec.yaml> --cmd "<safe-runner command>" --task T
+    python -m models.demos.common.bringup.resident status|stop --spec <spec.yaml>
+
+While it is up, gate units and A/B sides that may share a process (core/batch.drive) go to it instead of a new
+process. A model python change rebuilds the model in place with the file-backed device weights kept
+(`testing/weights.py`); a C++ build, a kernel source, ttnn python or the runner's own code starts a new process. The
+model determinism check runs in a process that ran nothing before it, once per gate that has it. Any other device run
+makes the runner step aside first. A measurement loads only the layers it runs (`testing/batch.run_layers`, model
+hook `run_layers`; F282).
+
 ## Steps TTNN has no op for (F46)
 
 An implement agent that finds no TTNN op, composition or fork for a component step may defer it to op-gen

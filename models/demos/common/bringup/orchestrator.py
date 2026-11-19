@@ -1878,8 +1878,9 @@ class Orchestrator:
         """The A/B report's runs as (name, kind, command, extra env): each frozen test command of the gate (as the gate
         runs it, gate_command), the ladder at every A/B rung, and the plain profile (with F114's clean wall run)."""
         # FIX.25: the model determinism check on every side (first in the side's process: core/batch.phase); the
-        # accept gate needs it on the 'on' side (gate_on), quick or full
-        det = [("determinism", "determinism", B.DETERMINISM_CMD, {})]
+        # accept gate needs it on the 'on' side (gate_on), quick or full. F281: not while a resident runner serves the
+        # spec: the check needs a cold process, which the accept gate runs once (not one per side)
+        det = [] if self.resident_serves() else [("determinism", "determinism", B.DETERMINISM_CMD, {})]
         if self.ab_quick(task):  # F122: one process a side
             quick = f"BRINGUP_QUICK=1 BRINGUP_PROFILE_WALL=1 scripts/run_safe_pytest.sh --no-precompile --run-all {PROFILE_TEST}"
             if not any(DETERMINISM_IN.search(c) for _, c in gate_units(task)):  # not a model-level device gate
@@ -1899,6 +1900,19 @@ class Orchestrator:
         items += [(r, "ladder", ladder, {"BRINGUP_RUNG": r}) for r in self.ab_rungs(task)]
         prof = " && ".join(re.sub(r"\bBRINGUP_PROFILE_OPS=\S+\s*", "", x) for x in segs if "test_profile.py" in x)
         return items + ([("profile", "profile", prof, {})] if prof else []) + self.ab_position_items(task)
+
+    def resident_serves(self) -> bool:
+        """F281: a resident runner serves this spec (up, or stepped aside for another device run: core/batch.drive
+        starts it again)."""
+        from models.demos.common.bringup import resident
+
+        try:
+            d = resident.state_dir(self.spec)
+        except Exception:  # noqa: BLE001
+            return False
+        return os.environ.get(resident.OFF_ENV) != "off" and (
+            resident.healthy(d) or resident.info(d)["phase"] == "yielded"
+        )
 
     @staticmethod
     def ab_position_items(task: dict) -> list[tuple[str, str, str, dict]]:
@@ -2084,7 +2098,18 @@ class Orchestrator:
                 blog = d / f"batch{k}.log"
                 penv = {**base, **env, **B.hints(entries, self.spec)}
                 # F269: a run needing another model than the process holds goes to a fresh process (its own log)
-                rc = B.drive(plan, lambda c, j: self.run_cmd(c, penv, blog if j == 0 else d / f"batch{k}.fresh{j}.log"))
+                blog.write_text("")
+
+                def say(text, blog=blog):  # F281: the resident runner's output, where the process's would have gone
+                    with open(blog, "a") as bf:
+                        bf.write(text)
+
+                rc = B.drive(
+                    plan,
+                    lambda c, j: self.run_cmd(c, penv, blog if j == 0 else d / f"batch{k}.fresh{j}.log"),
+                    env=penv,
+                    echo=say,
+                )
                 got = B.load_results(plan)["runs"]
                 for e in todo_e:
                     state[e["name"]] = got.get(e["name"])
@@ -2124,6 +2149,8 @@ class Orchestrator:
         from models.demos.common.bringup.core.gate import check_metrics
 
         limits = gate_limits(task, self.led.tasks())  # FIX.25: with determinism_max_abs_diff == 0
+        if not any(k == "determinism" for _, k, _, _ in self.ab_items(task)):  # F281: the accept gate checks it
+            limits = {k: v for k, v in limits.items() if not k.startswith("determinism")}
         det = self.ab_determinism_failing(task, rec, d)
         if rec.get("quick"):  # F122: the thresholds the quick run measured; the full gate runs before the final task
             from models.demos.common.bringup.core.gate import measured_only

@@ -209,6 +209,23 @@ def gate_env(spec: Spec, ledger: Ledger, tid: str) -> dict:
     return env
 
 
+def one_load(spec: Spec) -> bool:
+    """F283 (OWNER 2026-11-19): one model load per gate, when the gate's units share processes (tests.one_process)."""
+    return bool(spec.get("tests.one_process")) and bool(spec.get("tests.one_load"))
+
+
+def one_load_errors(spec: Spec, task: dict, tasks: dict | None = None) -> list[str]:
+    """F283: why the gate would load the model more than once (core/batch.one_load_errors over its units, the
+    determinism check included), or []. Checked before any device work (run_gate) and by ``validate``."""
+    if not one_load(spec) or "gate" not in task:
+        return []
+    try:
+        units = with_determinism(task, gate_units(task, tasks))
+    except Exception:  # noqa: BLE001 -- a malformed gate is reported by the other checks
+        return []
+    return batch.one_load_errors(units, {})
+
+
 FULL_MODEL_STEPS = ("integrate", "assemble", "contract", "perf")
 
 
@@ -1024,7 +1041,7 @@ def run_units(
                 if run:  # F259: the unit's runs (a clean wall and its profiled run) in one process, the model once
                     # F269: as a plan file, so a run needing another model can go to a fresh process (batch.drive)
                     plan_f = log.parent / f"{log.stem}.{re.sub(r'[^A-Za-z0-9_.-]', '_', u)}.plan.json"
-                    batch.unit_plan(cmd, plan_f, spec)
+                    batch.unit_plan(cmd, plan_f, spec, one_load=one_load(spec))  # F283
                     f.write(f"# {u}: its runs in one process (F259, tests.one_process)\n$ {batch.command(plan_f)}\n")
                     f.flush()
                 # FIX.30; F270: the unit's command, so the safe runner files its runs under their command-line prefix
@@ -1038,8 +1055,12 @@ def run_units(
                         c, shell=True, cwd=spec.repo, env=penv, stdout=f, stderr=subprocess.STDOUT
                     ).returncode
 
-                if plan_f is not None:
-                    rc = batch.drive(plan_f, proc)
+                def say(text):
+                    f.write(text)
+                    f.flush()
+
+                if plan_f is not None:  # F281: on the resident runner when one serves the spec
+                    rc = batch.drive(plan_f, proc, env=penv, echo=say)
                     rest = batch.load_results(plan_f).get("deferred") or []
                     if rest:
                         f.write(f"\n# {u}: F269: runs never run (a fresh process ran none of them): {rest}\n")
@@ -1139,7 +1160,7 @@ def _run_group(spec: Spec, group: list, env: dict, log: Path, results: Path, tid
     for u, c in group:
         logs[u].write_text(f"$ {c}\n# FIX.29: in one process with {', '.join(x for x in names if x != u)}\n")
     entries = batch.gate_entries(group, env, {u: unit_env(u) for u in names}, logs)
-    plan = batch.write_plan(d / "plan.json", entries, stop_on_fail=True)
+    plan = batch.write_plan(d / "plan.json", entries, stop_on_fail=True, one_load=one_load(spec))  # F283
     hint = batch.hints([r for _, c in group for r in batch.parse_all(c)], spec)
     cmd = batch.command(plan)
     blog = d / "process.log"
@@ -1160,7 +1181,11 @@ def _run_group(spec: Spec, group: list, env: dict, log: Path, results: Path, tid
                 c, shell=True, cwd=spec.repo, env=penv, stdout=bf, stderr=subprocess.STDOUT
             ).returncode
 
-    prc = batch.drive(plan, proc)
+    def say(text):  # F281: the resident runner's output for this group, where the process's would have gone
+        with open(blog, "a") as bf:
+            bf.write(text)
+
+    prc = batch.drive(plan, proc, env=penv, echo=say)
     got = batch.load_results(plan)
     runs, running = got.get("runs") or {}, got.get("running")
     btext = blog.read_text(errors="replace")
@@ -1326,6 +1351,7 @@ def run_gate(
         + fixed_accuracy(task)
         + wall_only_device_metrics(task)
         + position_role_metrics(task)
+        + one_load_errors(spec, task, tasks)  # F283
     ]
     if pre:
         res = GateResult(tid, "FAIL", lines=pre)

@@ -101,7 +101,9 @@ def _gate(cmd):
 def test_the_planner_groups_shareable_units_and_keeps_others_apart():
     units = [("a", LADDER), ("b", CONTRACT), ("c", NOT_SHARED), ("d", OWN), ("e", f"DS41_X=on {OWN}")]
     got = [[u for u, _ in g] for g in B.gate_groups(units, {})]
-    assert got == [["a", "b"], ["c"], ["d"], ["e"]]  # a test of its own / another switch value: another process
+    # a test of its own / another switch value: another process; F283: a unit of the group's model joins it even
+    # with another unit between them (one load a configuration)
+    assert got == [["a", "b", "d"], ["c"], ["e"]]
     entries = B.gate_entries(
         [("a", LADDER), ("b", f"{R} models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py")],
         {},

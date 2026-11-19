@@ -56,6 +56,10 @@ tests:
   one_process: true           # F259 (on: device check 2026-11-06, 3 runs 393 s vs ~20 min, accuracy identical): the A/B side's / a gate unit's profile, ladder and position runs in ONE pytest
                               # process, the model loaded once (core/batch.py); false = a process each (until the
                               # device check in F259 shows the numbers agree)
+  one_load: true              # F283 (OWNER 2026-11-19): with one_process, a gate loads the model at most once (its cold
+                              # determinism run aside): a gate needing more is refused before it runs, and validate
+                              # fails a queued task whose gate does; a run needing a second model fails, never a
+                              # fresh process
 
 box:
   test_timeout_s: 3600     # one device test, seconds (hang guard)

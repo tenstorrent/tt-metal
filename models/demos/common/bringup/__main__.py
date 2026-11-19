@@ -141,8 +141,25 @@ def cmd_sweep(a):
 def cmd_validate(a):
     spec, led = load(a)
     errs = ([] if a.ledger_only else [f"spec: {e}" for e in spec.validate()]) + [f"ledger: {e}" for e in led.validate()]
+    errs += [f"ledger: {e}" for e in one_load_queued(spec, led)]  # F283
     print("\n".join(errs) if errs else "valid")
     return 1 if errs else 0
+
+
+def one_load_queued(spec, led) -> list[str]:
+    """F283 (owner 2026-11-19): a task not yet passed whose gate would load the model more than once (core/gate)."""
+    from models.demos.common.bringup.core.gate import one_load_errors
+
+    try:
+        tasks, state = led.tasks(), (led.state() if led.state_store.exists() else {})
+    except Exception:  # noqa: BLE001 -- led.validate reports a broken ledger
+        return []
+    out = []
+    for tid, t in tasks.items():
+        if (state.get(tid) or {}).get("status") in ("PASS", "REJECTED", "DEFERRED"):
+            continue
+        out += [f"{tid}: {e}" for e in one_load_errors(spec, t, tasks)]
+    return out
 
 
 @command(
