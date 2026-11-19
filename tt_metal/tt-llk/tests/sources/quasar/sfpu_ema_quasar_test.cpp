@@ -27,7 +27,7 @@ static_assert(EMA_TILE_PER_SECTION || !MATH_TRANSPOSE_FACES, "the transpose_dest
 #ifdef LLK_TRISC_UNPACK
 
 #include "cfg_defines.h"
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
@@ -38,8 +38,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const auto bfd_unpack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(
         ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src);
+    constexpr std::uint8_t bfd_unpack = ckernel::trisc::BFD_ID_UNP0;
 
     if constexpr (is_fp32_dest_acc_en)
     {
@@ -168,7 +169,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_PACK
 
 #include "cfg_defines.h"
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -178,8 +179,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(
         ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst);
+    constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
 
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
     // One tile per pack: outputs are interleaved with inputs in Dest.
