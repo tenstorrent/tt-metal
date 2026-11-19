@@ -75,7 +75,7 @@ from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_mini
 from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 from ...models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
 from ...models.transformers.minimax_h3.adaln_tilerow import DEFAULT_MAX_MIXED_TILES, tilerow_remap
-from ...models.transformers.minimax_h3.attention_minimax_h3 import VSA_K_CHUNK, VSA_MAX_K_PIECES, prepare_rope_tables
+from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
 from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from ...models.transformers.minimax_h3.vsa_prepass import MiniMaxH3VSAConfig, VSAPrepass
 from ...models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
@@ -1565,8 +1565,8 @@ class MiniMaxH3Pipeline:
             indices = vsa_geometry.untile_index[indices.long()].to(torch.int32)
         return self._replicated_indices(indices)
 
-    def _vsa_geometry(self, layout: MiniMaxH3PackedSequence, grid: tuple[int, int, int]) -> MiniMaxH3VSAGeometry | None:
-        """Select the request's rung and lay its VSA tiles out in it, or None past the sparse op's reach. Host only.
+    def _vsa_geometry(self, layout: MiniMaxH3PackedSequence, grid: tuple[int, int, int]) -> MiniMaxH3VSAGeometry:
+        """Select the request's rung and lay its VSA tiles out in it. Host only.
 
         Everything before the generated video is dense prefix: `[text | condition keyframes | audio]` for t2va /
         fl2va, `[text | reference blocks | target audio]` for ref2va. Each run of one modality is its own 1D segment,
@@ -1581,11 +1581,6 @@ class MiniMaxH3Pipeline:
         segments = tuple(int(run) for run in runs)
         min_len = vsa_min_padded_len(segments, grid, self.sp_factor)
         rung = self._select_bucket(min_len) if self.bucket_denoise else min_len
-        if rung // self.sp_factor > VSA_K_CHUNK * VSA_MAX_K_PIECES:
-            self._log(
-                f"VSA rung {rung} exceeds the sparse op's {VSA_MAX_K_PIECES} K pieces per device; dense attention"
-            )
-            return None
         geometry = build_vsa_geometry(segments, grid, sp_factor=self.sp_factor, padded_len=rung)
         self._log(f"VSA geometry: {geometry.n_real_tiles} tiles in {geometry.n_blocks} blocks at rung {rung}")
         return geometry
@@ -2861,8 +2856,6 @@ class MiniMaxH3Pipeline:
                 )
             state.vsa_prepass.update(vsa_geometry, traced=traced)
             transformer.set_vsa_prepass(state.vsa_prepass)
-        elif self.vsa_config is not None:
-            transformer.set_vsa_prepass(None)
 
         t_rope = time.time()
         rope_cos, rope_sin = self._device_metadata(layout, rung, vsa_geometry)

@@ -38,11 +38,18 @@ from tracy import signpost
 
 import ttnn
 
-from ....models.transformers.minimax_h3.attention_minimax_h3 import MiniMaxH3Attention, prepare_rope_tables
+from ....models.transformers.minimax_h3.attention_minimax_h3 import (
+    MiniMaxH3Attention,
+    prepare_rope_tables,
+    vsa_k_chunk_size,
+)
 from ....models.transformers.minimax_h3.vsa_prepass import MiniMaxH3VSAConfig, VSAPrepass, compute_topk
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
-from ....pipelines.minimax_h3.pipeline_minimax_h3 import MINIMAX_H3_BUCKET_LADDER_4X8
+from ....pipelines.minimax_h3.pipeline_minimax_h3 import (
+    MINIMAX_H3_BUCKET_LADDER_4X8,
+    MINIMAX_H3_REF2VA_BUCKET_LADDER_4X8,
+)
 from ....pipelines.minimax_h3.vsa_geometry import VSA_TILE_TOKENS, build_vsa_geometry, vsa_min_padded_len
 from ....utils.tensor import bf16_tensor_2dshard, from_torch
 from .common import (
@@ -71,11 +78,19 @@ QK_NORM_EPS = REAL_BLOCK_CONFIG["qk_norm_eps"]
 FINE_MIN_PCC = 0.999
 FINE_NUM_HEADS = 4
 FINE_HEAD_DIM = 128
-K_CHUNK = 256
 AB_REPS = 6
 AB_TRACE_REGION_BYTES = 50_000_000
 # A request the in-place check swaps in: 128 candidates, so a different top-k k than either case.
 SWAPPED_IN = ((300, 0, 200), (8, 32, 32))
+# Omni benchmark prefixes whose rungs exceed 64 K pieces of 256 rows per device, so k_chunk grows to 320 and 512.
+REF2VA_M_10S_SEGMENTS = (
+    6, 1010, 6, 1010, 6, 1010, 17, 1010, 6, 1010, 17, 1010, 6, 1010, 6, 1010, 6, 1010, 6, 1010, 123, 3024, 162, 12096,
+    402, 32256, 1370,
+)  # fmt: skip
+REF2VA_H_15S_SEGMENTS = (
+    6, 1010, 6, 1010, 6, 1010, 6, 1010, 6, 1010, 6, 1010, 12, 1010, 6, 1010, 12, 1010, 6, 1010, 6, 1010, 6, 1010, 6,
+    1010, 12, 1010, 6, 1010, 6, 1010, 6, 1010, 6, 1010, 6, 1010, 6, 1010, 6, 1010, 1533, 97776, 2330,
+)  # fmt: skip
 
 
 def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
@@ -184,6 +199,8 @@ def _traced_replay_ms(mesh_device, fn) -> list[float]:
         pytest.param((512, 0, 0), (8, 16, 16), 18944, id="quick-aligned"),
         pytest.param((70, 5, 130), (9, 10, 13), 20224, id="quick-ragged-straggler"),
         pytest.param((39, 0, 414), (37, 24, 42), 45312, id="5s-1344x768"),
+        pytest.param(REF2VA_M_10S_SEGMENTS, (72, 24, 42), 147712, id="ref2va-m-10s"),
+        pytest.param(REF2VA_H_15S_SEGMENTS, (107, 24, 42), 240640, id="ref2va-h-15s"),
     ],
 )
 @pytest.mark.parametrize("case", ["check", "logical_n_ab"])
@@ -201,13 +218,14 @@ def test_vsa_fine_attention(
     reset_seeds,
 ) -> None:
     ab = case == "logical_n_ab"
-    if ab and rung == 18944:
+    if ab and rung not in (20224, 45312):
         pytest.skip("the A/B shapes are the ragged straggler and 5 s")
     if not ab and rung == 45312:
         pytest.skip("5 s runs the A/B case only")
     sp = tuple(mesh_device.shape)[sp_axis]
     heads = NUM_HEADS // tuple(mesh_device.shape)[tp_axis] if ab else FINE_NUM_HEADS
-    assert rung in MINIMAX_H3_BUCKET_LADDER_4X8 and rung >= vsa_min_padded_len(prefix_segments, grid, sp)
+    assert rung in MINIMAX_H3_BUCKET_LADDER_4X8 + MINIMAX_H3_REF2VA_BUCKET_LADDER_4X8
+    assert rung >= vsa_min_padded_len(prefix_segments, grid, sp)
     geometry = build_vsa_geometry(prefix_segments, grid, sp_factor=sp, padded_len=rung)
     ragged = bool((geometry.valid_counts[geometry.valid_counts > 0] < VSA_TILE_TOKENS).any())
     logger.info(
@@ -249,7 +267,7 @@ def test_vsa_fine_attention(
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(grid_size.x - 1, grid_size.y),
         q_chunk_size=VSA_TILE_TOKENS,
-        k_chunk_size=K_CHUNK,
+        k_chunk_size=vsa_k_chunk_size(rows),
         exp_approx_mode=False,
     )
     compute_config = ttnn.init_device_compute_kernel_config(

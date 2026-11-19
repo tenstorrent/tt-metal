@@ -183,12 +183,14 @@ def ref2va_references(ref_set: str = "image") -> list[MiniMaxH3Reference]:
     raise ValueError(ref_set)
 
 
-def read_user_input() -> tuple[str, list[MiniMaxH3Reference], tuple[int, int], float, int] | None:
+def read_user_input(
+    default_num_steps: int = NUM_INFERENCE_STEPS,
+) -> tuple[str, list[MiniMaxH3Reference], tuple[int, int], float, int] | None:
     """An interactively entered `(prompt, references, aspect_ratio, duration_s, num_steps)` request.
 
     None when ENABLE_USER_INPUT is unset or the entry is aborted, which stops the REPL loop.
     """
-    spec = read_user_reference_spec(REF2VA_ASPECT_RATIO, REF2VA_DURATION_S, NUM_INFERENCE_STEPS)
+    spec = read_user_reference_spec(REF2VA_ASPECT_RATIO, REF2VA_DURATION_S, default_num_steps)
     if not spec:
         return None
     references: list[MiniMaxH3Reference] = []

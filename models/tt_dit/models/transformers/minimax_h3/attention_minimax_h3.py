@@ -23,9 +23,13 @@ from ....utils.tensor import bf16_tensor
 from .agmm_config import agmm_block_size
 from .vsa_prepass import MiniMaxH3VSAConfig, VSAPrepass, _timed
 
-# The sparse op's K piece, and the most pieces it takes per shard: VSA covers at most their product of rows per device.
+# The sparse op's smallest K piece. The piece grows with the rung so a shard never holds more than the 64 pieces the
+# op tracks.
 VSA_K_CHUNK = 256
-VSA_MAX_K_PIECES = 64
+
+
+def vsa_k_chunk_size(rows_per_device: int) -> int:
+    return max(VSA_K_CHUNK, math.ceil(math.ceil(rows_per_device / 64) / VSA_TILE_TOKENS) * VSA_TILE_TOKENS)
 
 
 def rope_channel_permutation(head_dim: int, rotary_dim: int) -> torch.Tensor:
@@ -486,13 +490,13 @@ class MiniMaxH3Attention(Module):
         assert self.vsa_config is not None, "set_vsa_prepass requires the attention to be built with vsa_config"
         self.vsa_prepass = prepass
 
-    def _vsa_program_config(self) -> ttnn.SDPAProgramConfig:
+    def _vsa_program_config(self, rows_per_device: int) -> ttnn.SDPAProgramConfig:
         # q_chunk is the op's 64-row block. k_chunk 256 measured fastest at both production rungs: fine attention
         # 5.21 / 24.59 ms at 5 s / 15 s, against 8.02 / 25.59 ms at 384 and 8.30 / 38.47 ms at 512.
         return ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(*self.sdpa_worker_grid),
             q_chunk_size=VSA_TILE_TOKENS,
-            k_chunk_size=VSA_K_CHUNK,
+            k_chunk_size=vsa_k_chunk_size(rows_per_device),
             exp_approx_mode=False,
         )
 
@@ -515,7 +519,7 @@ class MiniMaxH3Attention(Module):
                 v_BHNE.shape, 2, self.sp_mesh_axis, dtype=v_BHNE.dtype, capacity=self.kv_gather_capacity
             ),
             logical_n=rows * self.parallel_config.sequence_parallel.factor,
-            program_config=self._vsa_program_config(),
+            program_config=self._vsa_program_config(rows),
             compute_kernel_config=self.sdpa_compute_kernel_config,
             dim=2,
             multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.sp_mesh_axis),

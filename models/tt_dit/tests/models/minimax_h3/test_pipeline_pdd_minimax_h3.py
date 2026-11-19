@@ -70,8 +70,8 @@ def _reference() -> MiniMaxH3Reference:
 def test_pdd_ref2va_end_to_end(attention, num_frames, height, width, mesh_device, reset_seeds):
     """`vsa` is the export's trained attention; `dense` drops the trained gates and runs every block, as a baseline."""
     export = _export_dir()
-    # The init warmup walks the whole ref2va ladder; its top rungs exceed the sparse op's 64 K pieces per
-    # shard on 4x8, and the compile pass below already warms the one rung this case lands on.
+    # The init warmup walks the whole ref2va ladder; skipping it only saves warmup time, since the compile pass
+    # below already warms the one rung this case lands on.
     pipeline = MiniMaxH3PDDPipeline.create_pipeline(
         warmup=False,
         vae_output_type="float",
