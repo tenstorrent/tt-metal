@@ -2884,8 +2884,9 @@ PERF_TEST_SCHEMAS_QSR = {
         "test_name_aliases": {"perf_sfpu_reduce_quasar": "perf_sfpu_reduce_quasar"},
     },
     "perf_sfpu_where_quasar": {
-        "version": 2,
+        "version": 3,
         "columns": [
+            "approx_mode",
             "data_copy_type",
             "dest_acc",
             "dest_sync",
