@@ -1200,61 +1200,12 @@ class DeepseekV41ForCausalLM:
                 return k
         return None
 
-    def _padding_lengths(self, model: TtV41Transformer | None = None) -> list[int]:
-        """Every chunk valid length the served prefills will hand ``model``'s MoE (the full-chunk model, or a
-        short
-        chunk's view): the chunk, the warm-up prompt's, and each listed prompt length's single chunk or final
-        chunk
-        (a short chunk: the listed lengths it serves)."""
-        model = self.model if model is None else model
-        chunk = model.chunk
-        lengths = {chunk, WARMUP_PROMPT}
-        if model is self.model:  # the packed layouts' totals (the packed state runs on the full-chunk model), and
-            # their segment lengths: a packable prompt runs alone on this model when it is not a traced length
-            # (the join test's references; a queue of one in serving), and a config built lazily after the
-            # decode
-            # capture is overwritten by the decode replays (the join test's k=2
-            # references drifted, and its 40-layer traced run hung in the first eager chunk after the c1
-            # replays)
-            lengths |= {layout[-1][0] + layout[-1][1] for layout in self.pack_layouts}
-            lengths |= {n for layout in self.pack_layouts for _, n in layout}
-        for n in self.trace_lengths:
-            if model is self.model:
-                lengths.add(n if n <= chunk else n - (n - 1) // chunk * chunk)
-            elif self._short_chunk(n) is not None and self.short[self._short_chunk(n)][1] is model:
-                lengths.add(n)
-        return sorted(lengths)
-
-    def _prebuild_padding_configs(self) -> None:
-        """Build the MoE gates' memoized padding configs (``TtMoEGatePrefill.build_padding_config``, one
-        device
-        tensor per chunk valid length) before any capture, for the full-chunk model and every short chunk's
-        view.
-        Built lazily, a length's config was allocated the first time it ran, during the per-length captures
-        after
-        the decode capture, where a persistent buffer can take the addresses of a capture's freed
-        intermediates:
-        the decode replay then overwrote the config and the next prefill of that length dispatched pad rows (a
-        one-chunk replay 0.26 to 0.36 s by what the decode had written, the logits unchanged)."""
-        for model in [self.model] + [view for _, view, _ in self.short]:
-            t0 = time.time()
-            gates = [block.ffn.moe.gate for block in model.blocks if hasattr(getattr(block, "ffn", None), "moe")]
-            lengths = self._padding_lengths(model)
-            for gate in gates:
-                for n in lengths:
-                    gate.build_padding_config(n, "right", 0)
-            logger.info(
-                f"DeepSeek-V4.1-Flash warm-up: padding configs of {len(gates)} MoE gates (chunk {model.chunk}) for "
-                f"{len(lengths)} lengths {lengths} built in {time.time() - t0:.1f} s"
-            )
-
     def _warmup_join(self) -> None:
         """Prefill the warm-up prompt into every prefill state (the full-chunk states first: the shared
         expert's
         reduce-scatter intermediate is allocated at the first input's shape, ``with_chunk``) and join every
         decode
         slot from them."""
-        self._prebuild_padding_configs()
         prompt = self._warmup_prompt()
         for state in self.prefill_states + [state for _, _, state in self.short]:
             model = self.models[id(state)]
@@ -1279,7 +1230,7 @@ class DeepseekV41ForCausalLM:
         if self.pack_state is not None:
             # one eager pack of every listed layout: the chunk's programs at each pack's shapes and every
             # persistent
-            # tensor of the packed path (the layouts' tables and padding configs are built above) before any
+            # tensor of the packed path before any
             # capture (warming only the largest layout left other layouts' first runs after the captures);
             # the largest layout's segments join slots 0.. (the segment join's scatter programs compiled)
             for layout in self.pack_layouts:

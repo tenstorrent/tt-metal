@@ -21,6 +21,7 @@ index sources' sparse scoring above 327,680 (65+ chunks). ``V41_GENERIC_OUT`` wr
 import json
 import os
 import time
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -42,6 +43,37 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 TRACE_REGION = 2 * 1024 * 1024 * 1024  # the served configuration's
 DEFAULT_LAYERS = "0,2,3,20,21,24"
 CHUNK = 5120
+
+
+@pytest.mark.parametrize("mesh_device, device_params", galaxy_meshes(), indirect=True)
+def test_variable_length_padding_storage(mesh_device, device_params, monkeypatch):
+    """Stage more distinct lengths than the agent workload, with no model weights or time-based threshold."""
+    model = object.__new__(TtV41Transformer)
+    model.mesh_device, model.chunk = mesh_device, 10240
+    model.padding_config = ttnn.to_device(model._host_padding(model.chunk), mesh_device)
+    host = SimpleNamespace(
+        length=model.chunk, token_ids=model._token_ids(torch.zeros(model.chunk), device=False), engram={}
+    )
+    buffers = {}
+    model._stage(host, buffers)
+    ttnn.synchronize_device(mesh_device)
+    before = _dram_bytes(mesh_device)
+    assert before is not None
+    sp, tp = tuple(mesh_device.shape)
+    rows = model.chunk // sp
+    for batch in (False, True):
+        monkeypatch.setenv("TT_V41_PREFILL_HOST_BATCH", str(int(batch)))
+        for length in [*range(1, model.chunk, 5), rows - 1, rows, rows + 1, model.chunk]:
+            host.length = length
+            model._stage(host, buffers)
+            if length in (1, rows - 1, rows, rows + 1, model.chunk):
+                chips = ttnn.get_device_tensors(model.padding_config)
+                for r in range(sp):
+                    expected = [[max(0, min(rows, length - r * rows)), 0]]
+                    for c in range(tp):
+                        assert ttnn.to_torch(chips[r * tp + c]).tolist() == expected
+        ttnn.synchronize_device(mesh_device)
+        assert _dram_bytes(mesh_device) == before
 
 
 def _trace_bytes(mesh_device) -> int | None:
@@ -244,6 +276,14 @@ def test_v41_prefill_generic(mesh_device, device_params, monkeypatch):
         "dram_after_capture_bytes": _dram_bytes(mesh_device),
     }
     logger.info(f"generic prefill: {report['captures']} captures in {capture_s:.1f} s: {report}")
+    # Vary the final valid count after capture. An unlisted length must not
+    # leave a persistent device allocation in each layer's gate. The replay
+    # checks below also require that staging restored the captured counts.
+    gates = [block.ffn.moe.gate for block in model.blocks]
+    assert all(not gate._padding_config_cache for gate in gates)
+    for length in (CHUNK // 2 - 1, CHUNK // 2 + 1):
+        model.prefill_into(prompts[0][:length], gstate)
+    assert all(not gate._padding_config_cache for gate in gates)
     traced_s, phases = [], []
     for i in (0, 1, 0):
         (logits, _), s = timed(lambda: trace.run(prompts[i]))

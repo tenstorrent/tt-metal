@@ -216,6 +216,10 @@ class TtV41Transformer(LightweightModule):
             routed_expert_weights_dtype = routed_expert_dtype()
         self.routed_expert_weights_dtype = routed_expert_weights_dtype
         self.layers, self.chunk, self.max_seq_len = list(layers), chunk, max_seq_len
+        # Every prefill layer reads the same per-SP-rank counts. Keep one input
+        # at a fixed address before capture; _stage updates it on the same CQ
+        # as the chunk that consumes it, including on trace replay.
+        self.padding_config = ttnn.to_device(self._host_padding(chunk), mesh_device)
         # the compressed layers' KV row format of every state this model creates (``new_state`` /
         # ``prefill``):
         # the argument, else ``TT_V41_KV_FORMAT`` (``bf16_rm``, the default, or ``scaled_fp8``)
@@ -301,6 +305,7 @@ class TtV41Transformer(LightweightModule):
         assert chunk < self.chunk and max_seq_len % chunk == 0, (chunk, self.chunk, max_seq_len)
         view = copy.copy(self)
         view.chunk, view.max_seq_len = chunk, max_seq_len
+        view.padding_config = ttnn.to_device(view._host_padding(chunk), self.mesh_device)
         view.pre_mix = initial_pre_mix(self.mesh_device, self.config, chunk)
         view.blocks = []
         for layer, block in zip(self.layers, self.blocks):
@@ -327,6 +332,18 @@ class TtV41Transformer(LightweightModule):
             copied.ffn = moe
             view.blocks.append(copied)
         return view
+
+    def _host_padding(self, length: int):
+        """One [valid rows, right pad] pair per contiguous SP shard, replicated over TP."""
+        sp = self.mesh_device.shape[0]
+        rows = self.chunk // sp
+        valid = (length - torch.arange(sp, dtype=torch.int32) * rows).clamp(0, rows)
+        return ttnn.from_torch(
+            torch.stack((valid, torch.zeros_like(valid)), dim=1),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, tuple(self.mesh_device.shape), dims=(0, None)),
+        )
 
     def _token_ids(self, tokens: torch.Tensor, device=True):
         """[chunk] int -> [1, 1, chunk/sp] uint32 SP-sharded, replicated over TP (a host tensor unless
@@ -481,6 +498,9 @@ class TtV41Transformer(LightweightModule):
         dispatch round as the rest with ``TT_V41_PREFILL_HOST_BATCH=1``. A packed chunk's layout
         (``host.segments``,
         ``TT_V41_PACK``) goes to ``prepare_chunk`` with it."""
+        padding = self._host_padding(host.length)
+        if "token_ids" not in buffers or not prefill_host_batch():
+            ttnn.copy_host_to_device_tensor(padding, self.padding_config)
         if "token_ids" not in buffers:
             buffers["token_ids"] = ttnn.to_device(host.token_ids, self.mesh_device)
             buffers["engram"] = {l: e.to_device(self.mesh_device) for l, e in host.engram.items()}
@@ -493,7 +513,7 @@ class TtV41Transformer(LightweightModule):
             if tables is not None:
                 tables.prepare_chunk(host.start, host.length, host.tables, segments=host.segments)
             return buffers["token_ids"], engram
-        pairs = [(host.token_ids, buffers["token_ids"])]
+        pairs = [(host.token_ids, buffers["token_ids"]), (padding, self.padding_config)]
         engram = {}
         for l, e in host.engram.items():
             pairs += e.copy_pairs(buffers["engram"][l])
@@ -528,7 +548,7 @@ class TtV41Transformer(LightweightModule):
                 x = self.engram[layer](x, engram_inputs[layer])
             if self.dspark is not None and layer in self.config.DSPARK_TARGET_LAYER_IDS:
                 taps.append(self.dspark.tap(x))
-            x, pre = block(x, pre, state, length, image_rows)
+            x, pre = block(x, pre, state, length, image_rows, padding_config=self.padding_config)
             if on_block is not None:
                 on_block(layer, x, start, length)
         if mask_once:
