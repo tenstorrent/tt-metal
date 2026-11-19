@@ -1747,5 +1747,25 @@ speed-of-light ep4_targets.py.
 - Tried (EP4_OEAST=1, off by default): every collector in column 6 (2 a group), all row writes on NOC0 into banks 4-7
   (page (d >> 2) 8 + 4 + (d & 3), the combine reads the same). Experts 12.51 ms (now rectangles 0 / 2 slow, waiting on
   credits: rectangle 0's slices cross the chip west on rows 0 / 2), combine 6.24 ms (4 banks) vs 4.93, layer 25.88.
-- Next: a NoC flow model of the whole chip (muxes, ethernet, slices to the collectors, collectors to the DRAM
-  endpoints, both NoCs) to pick the G 4 layout before running it.
+- NoC flow model (noc_flow_model.py): every experts-phase flow (ethernet -> lane cores, lane cores -> mux -> ethernet,
+  x gathers, cores -> collectors, collectors -> DRAM) routed on the physical 17 x 12 NoC (NOC0 east then south, NOC1
+  north then west), per harvest mask (each chip here has one Tensix column harvested, ENABLED_TENSIX_COL: 12 different
+  masks over the 32 chips; logical column c = the c-th enabled one) and DRAM endpoint view (legacy / relocated). It
+  reproduces the baseline and the yc_sink runs (rectangles 0 / 1 at 0.85 of a link, 2 / 3 at ~0.5; 0.46 everywhere
+  with 0 / 1's row writes gone) and the oeast run's output bottleneck (the x 9 column, 0.70), not which rectangles
+  stall first.
+- The muxes' NOC1 path to the ethernet row and a mux column's NOC1 row writes share that column's top links in every
+  layout: channels 0 and 4 take NOC1 writes at y 1 (legacy view), and wrapping writes cross it. On 18 of the 32 chips
+  the harvested column is in the west half, so logical column 6 is NoC x 10: the baseline's NOC0 row writes from it
+  (yc_n0) cross rectangles 2 / 3 on every write, not only towards banks 0-3.
+- The model's best all-NOC1 layout (EP4_MUXTOP: muxes on rows 0 / 1, collectors below; no NOC0 row write, no multicast
+  rule break on any mask), b08u02, 302K uniform:
+| layout | experts | rectangles 0 / 1 end | 2 / 3 end |
+|---|---|---|---|
+| baseline | 12.75 | 9.2 / 12.4 | 7.9 |
+| muxtop, yc 3 | 12.37 | 9.9 | 11.5 |
+| muxtop, yc 2 | 11.86 | 9.3 | 11.0 |
+  layer (muxtop yc 3) 24.49 ms, y min PCC 0.99988, two layers bit-identical. Rectangles 2 / 3 lose what the NOC0 writes
+  gave them; the model scores every rectangle 0.75 (no asymmetry): it ranks the shared links, it does not predict times.
+- G 4 on this grid: two muxes a column (40 GB/s north) and their rectangles' row writes (~54 GB/s at 8 ms) do not fit
+  the column's NOC1 links; without the row writes the phase is 8.6 ms.
