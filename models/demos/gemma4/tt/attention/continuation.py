@@ -38,6 +38,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.gemma4.tt.kv_pair_shard import PAIR, half_block_write_table
 
 from .operations import PREFILL_CHUNK_SIZE
 
@@ -383,6 +384,31 @@ class PrefillContinuation:
             self._cache[cache_key] = dev
         return dev
 
+    def half_block_fill_table(self, layer_idx, first_col, cols, valid_cols=None):
+        """``fill_table`` of a pair-sharded global layer (``GEMMA4_KV_PAIR_SHARD``): the columns of its per-chip
+        write tables (``kv_pair_shard.half_block_write_table``: the group's logical table on the device page's
+        grid, the partner's half of every block into the null block) cut like ``fill_table`` on each half,
+        sharded column by column (one-row mesh: column ``c`` takes half ``c % 2``). None without a host table."""
+        group = self._group(layer_idx)
+        if group is None:
+            return None
+        key, table, _layout, _mapper = group
+        valid, cols = int(cols), pad_page_table_cols(cols)
+        if valid_cols is not None:
+            valid = max(0, min(int(valid_cols), valid))
+        cache_key = (key, "hbfill", int(first_col), cols, valid)
+        dev = self._cache.get(cache_key)
+        if dev is None:
+            halves = [
+                continuation_window_table(half_block_write_table(table, h), first_col, cols, valid_cols=valid)
+                for h in range(PAIR)
+            ]
+            n_cols = int(self.mesh_device.shape[1])
+            host = torch.cat([halves[c % PAIR] for c in range(n_cols)], dim=0)
+            dev = self._upload(host, ttnn.int32, ttnn.ShardTensorToMesh(self.mesh_device, dim=0))
+            self._cache[cache_key] = dev
+        return dev
+
     def padded_table(self, layer_idx, block_size):
         """The group's table for the global layers' chunked SDPA, ``continuation_sdpa_table_cols`` wide on the
         layer's ``block_size`` grid (the served context's blocks plus the chunk's): the host table's first columns,
@@ -484,6 +510,9 @@ class LayerContinuation:
 
     def fill_table(self, block_size, first_col, cols, valid_cols=None):
         return self._parent.fill_table(self.layer_idx, block_size, first_col, cols, valid_cols=valid_cols)
+
+    def half_block_fill_table(self, first_col, cols, valid_cols=None):
+        return self._parent.half_block_fill_table(self.layer_idx, first_col, cols, valid_cols=valid_cols)
 
     def sliding_inputs(self, block_size, sliding_window, align):
         return self._parent.sliding_inputs(self.layer_idx, block_size, sliding_window, align)

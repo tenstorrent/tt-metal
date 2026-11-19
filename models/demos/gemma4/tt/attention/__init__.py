@@ -141,6 +141,8 @@ class Gemma4Attention:
         bounded_sliding_kv_cache: bool = False,
         # Legacy parameter — ignored (no longer needed with HF-style RoPE)
         transformation_mats=None,
+        # False: no GEMMA4_SDPA_PAIR_SPLIT pair weights for this layer whatever the knob (load_attention_weights)
+        sdpa_pair_split: bool = True,
     ):
         self.mesh_device = mesh_device
         self.config = config
@@ -167,6 +169,7 @@ class Gemma4Attention:
             mesh_config=mesh_config,
             tensor_cache_path=tensor_cache_path,
             weight_dtype=weight_dtype,
+            allow_pair_split=sdpa_pair_split,
         )
 
         if create_kv_cache:
@@ -286,6 +289,7 @@ class Gemma4Attention:
         mm_attn_mask=None,
         traced_short_bucket=False,
         continuation=None,
+        kv_write_table=None,
     ):
         """
         Attention forward pass — dispatches to on-device decode or prefill.
@@ -303,7 +307,7 @@ class Gemma4Attention:
             is_kv_shared: if True, this layer shares KV from source (skip K/V proj + cache update)
             packed: optional packed-verify dict (decode only) — keys packed_p,
                 position_idx, kv_write_idxs, attn_mask, rope_packed, embed_idx,
-                hot_pt; routes to packed_decode_forward (P positions, one pass)
+                hot_pt, kv_modulo, multipos, prefix_lse; routes to packed_decode_forward (P positions, one pass)
         """
         cache = kv_cache or self.kv_cache
         cos_cache, sin_cache = rope_mats
@@ -337,6 +341,10 @@ class Gemma4Attention:
                 kv_staging=self.kv_staging,
                 embed_idx=packed.get("embed_idx"),
                 hot_pt=packed.get("hot_pt"),
+                kv_modulo=packed.get("kv_modulo"),
+                multipos=packed.get("multipos"),
+                prefix_lse=packed.get("prefix_lse"),
+                kv_write_table=kv_write_table,
             )
 
         if is_decode:
@@ -359,6 +367,7 @@ class Gemma4Attention:
                 sequential_kv_write=sequential_kv_write,
                 rope_presliced=rope_presliced,
                 rope_prepared=rope_prepared,
+                kv_write_table=kv_write_table,
             )
         else:
             # Sliding-window layers under generator-level chunked prefill carry a
@@ -412,6 +421,7 @@ class Gemma4Attention:
                 mm_attn_mask=mm_attn_mask,
                 traced_short_bucket=traced_short_bucket,
                 continuation=continuation,
+                kv_write_table=kv_write_table,
             )
             # prefill_forward consumed (deallocated) the incoming tail; stash the
             # new one for the next chunk under this request's key.

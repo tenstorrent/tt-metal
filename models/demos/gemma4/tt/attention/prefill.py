@@ -14,7 +14,12 @@ from loguru import logger
 
 import ttnn
 from models.demos.gemma4.custom_ops.qkv_norm_rope_prefill import QkvNormRopePrefill
-from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
+from models.demos.gemma4.tt.compute_config import (
+    global_prefill_sdpa_fidelity,
+    sdpa_fp32_dest_acc_en,
+    sdpa_math_fidelity,
+)
+from models.demos.gemma4.tt.kv_pair_shard import KV_PAIR_SHARD_ENV
 
 from .continuation import (
     align_sdpa_chunks,
@@ -970,6 +975,64 @@ def _recompute_vision_rows_paged(
     return merged
 
 
+def _recompute_vision_rows_pair(
+    q_tiles, tt_out, k_cache, v_cache, page_table, user_id, config, weights, mesh_config, ccl_manager, mesh_device
+):
+    """``GEMMA4_KV_PAIR_SHARD``: ``_recompute_vision_rows_paged`` on a pair-sharded global layer's pair view. Each
+    tile of rows holding image rows attends ``[0, cur_pos]`` per row (the image span past the row included) through
+    the decode pair split (``attention.decode.pair_split_sdpa``: ``SdpaDecodeLse(half_block=True)`` over this chip's
+    half of every block, merged with the partner by LSE), whose result is this chip's share like the rest of
+    ``tt_out`` (``pair_split_prefill_attention``); it is written over the causal rows. ``q_tiles`` from
+    ``_vision_q_tiles`` on the pair view's queries (the q heads of the chip's KV group)."""
+    from models.demos.gemma4.tt.attention.decode import _sdpa_max_cores_per_head_kwargs, pair_split_sdpa
+
+    nqh, head_dim = int(tt_out.shape[1]), int(tt_out.shape[-1])
+    rows = int(tt_out.shape[-2])
+    device_grid = mesh_device.compute_with_storage_grid_size()
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(device_grid.x, device_grid.y),
+        q_chunk_size=32,
+        k_chunk_size=int(os.environ.get("GEMMA4_SDPA_DECODE_K_CHUNK", "64")),
+        exp_approx_mode=False,
+        **_sdpa_max_cores_per_head_kwargs(),
+    )
+    mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    # the user's table row, one copy per row of a tile (one decode batch entry per row); a slice may be a view of
+    # the caller's table, so only the repeat is freed
+    table_row = ttnn.slice(page_table, [int(user_id), 0], [int(user_id) + 1, int(page_table.shape[-1])])
+    table_rows = ttnn.repeat(table_row, ttnn.Shape([TILE_ROWS, 1]))
+    pieces, cursor = [], 0
+    for r0, r1, cur_pos, q_dec in q_tiles:
+        n = r1 - r0
+        if r0 > cursor:
+            pieces.append(ttnn.slice(tt_out, [0, 0, cursor, 0], [1, nqh, r0, head_dim]))
+        positions = list(cur_pos) + [cur_pos[-1]] * (TILE_ROWS - n)  # padded rows: any valid position
+        pos = ttnn.from_torch(
+            torch.tensor(positions, dtype=torch.int32), device=mesh_device, dtype=ttnn.int32, mesh_mapper=mapper
+        )
+        share = pair_split_sdpa(
+            q_dec, k_cache, v_cache, pos, table_rows, config, weights, program_config, mesh_config, ccl_manager
+        )
+        q_dec.deallocate(True)
+        pos.deallocate(True)
+        out_rm = ttnn.to_layout(share, ttnn.ROW_MAJOR_LAYOUT)  # [1, 32, heads (padded), hd]
+        heads = ttnn.slice(out_rm, [0, 0, 0, 0], [1, TILE_ROWS, nqh, head_dim])
+        perm = ttnn.permute(heads, (0, 2, 1, 3))  # [1, nqh, 32, hd]
+        tile_out = ttnn.to_layout(perm, ttnn.TILE_LAYOUT)
+        if n < TILE_ROWS:
+            tile_out = ttnn.slice(tile_out, [0, 0, 0, 0], [1, nqh, n, head_dim])
+        pieces.append(tile_out)
+        cursor = r1
+    if cursor < rows:
+        pieces.append(ttnn.slice(tt_out, [0, 0, cursor, 0], [1, nqh, rows, head_dim]))
+    table_rows.deallocate(True)
+    if len(pieces) == 1:
+        return pieces[0]
+    merged = ttnn.concat(pieces, dim=2)
+    tt_out.deallocate(True)  # the causal shares; their slices in ``pieces`` go with it
+    return merged
+
+
 def _sdpa_single_chunk(tt_q, tt_k, tt_v, config, seq_len, sliding_window, compute_kernel_config, mm_attn_mask=None):
     """Single-chunk prefill SDPA. With ``mm_attn_mask`` (image-span bidirectional mask, see
     ``build_mm_prefill_masks`` above) the op takes the explicit additive mask instead of ``is_causal`` and
@@ -1077,6 +1140,169 @@ def _global_continuation_sdpa_inputs(continuation, page_table, block_size, chunk
     return page_table, chunk_offset
 
 
+def _lse_column(stats):
+    """``[1, H, S, 1]`` fp32 row LSE of ``SdpaPrefillSplitK`` statistics (``[1, H, S, 64]`` fp32, ``m`` at column 0,
+    ``l`` at column 32, scale 1.0): ``m + ln l``. Does not consume ``stats``."""
+    h, s = int(stats.shape[1]), int(stats.shape[2])
+    m = ttnn.slice(stats, [0, 0, 0, 0], [1, h, s, 1])
+    l = ttnn.slice(stats, [0, 0, 0, 32], [1, h, s, 33])
+    ln_l = ttnn.log(l)
+    lse = ttnn.add(m, ln_l)
+    for t in (m, l, ln_l):
+        t.deallocate(True)
+    return lse
+
+
+def pair_prefill_contribution(o_self, lse_self, lse_partner, o_chunk, lse_chunk):
+    """One chip's share of a pair-sharded global layer's prefill attention (``pair_split_prefill_attention``):
+    ``w_self * O_self + w_chunk / 2 * O_chunk`` with ``w_i = exp(lse_i - LSE)``, ``LSE`` over this chip's half of the
+    prefix, the partner's half and the chunk's own keys. ``O_*`` ``[1, H, S, D]`` bf16, each normalised over its own
+    keys; the LSEs ``[1, H, S, 1]`` fp32. The partner's share holds its half and the other half of the chunk term, so
+    the two add up to the attention over every key (the pair o_proj and the row all-reduce after it do the sum). The
+    weights stay fp32 up to the cast that scales the bf16 outputs (as the decode ``pair_merge``). Consumes every
+    input. Returns ``[1, H, S, D]`` bf16."""
+    top_sp = ttnn.maximum(lse_self, lse_partner)
+    top = ttnn.maximum(top_sp, lse_chunk)
+    top_sp.deallocate(True)
+    exps = []
+    for lse in (lse_self, lse_partner, lse_chunk):
+        shifted = ttnn.subtract(lse, top)
+        lse.deallocate(True)
+        exps.append(ttnn.exp(shifted, fast_and_approximate_mode=False))
+        shifted.deallocate(True)
+    top.deallocate(True)
+    a_self, a_partner, a_chunk = exps
+    sum_sp = ttnn.add(a_self, a_partner)
+    a_partner.deallocate(True)
+    total = ttnn.add(sum_sp, a_chunk)
+    sum_sp.deallocate(True)
+    terms = []
+    for a, o, factor in ((a_self, o_self, 1.0), (a_chunk, o_chunk, 0.5)):
+        w32 = ttnn.div(a, total)
+        a.deallocate(True)
+        if factor != 1.0:
+            scaled = ttnn.multiply(w32, factor)
+            w32.deallocate(True)
+            w32 = scaled
+        w = ttnn.typecast(w32, o.dtype)
+        w32.deallocate(True)
+        terms.append(ttnn.multiply(o, w, memory_config=ttnn.DRAM_MEMORY_CONFIG))  # w broadcast over head_dim
+        o.deallocate(True)
+        w.deallocate(True)
+    total.deallocate(True)
+    out = ttnn.add(terms[0], terms[1], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    for t in terms:
+        t.deallocate(True)
+    return out
+
+
+def _pair_partner_lse(lse_self, selector, mesh_config, ccl_manager):
+    """The partner's (column ``c ^ 1`` of the row) ``[1, H, S, 1]`` fp32 LSE, taken as the decode ``pair_merge`` takes
+    it: this chip's laid out wide (``[1, 1, H, S]``, H rows of S columns instead of H * S rows each padded to a tile
+    column), all-gathered over the row on dim 1, times ``relu(-selector) = e_{c^1}`` (the selector row is ``e_c -
+    e_{c^1}``) and summed over the device dim (one non-zero term: the partner's value exactly), then laid out as a
+    column again. Does not consume ``lse_self``."""
+    from models.demos.gemma4.tt.ccl import ccl_allgather
+
+    h, s = int(lse_self.shape[1]), int(lse_self.shape[2])
+    rows = ttnn.transpose(lse_self, -2, -1)  # [1, H, 1, S]
+    wide = ttnn.reshape(rows, (1, 1, h, s))
+    if int(wide.buffer_address()) == int(rows.buffer_address()):
+        wide = ttnn.clone(wide)  # the gather frees its input
+    rows.deallocate(True)
+    gathered = ccl_allgather(wide, mesh_config, ccl_manager, dim=1)  # [1, tp, H, S]; consumes wide
+    negated = ttnn.multiply(selector, -1.0)
+    partner = ttnn.relu(negated)  # e_{c^1}
+    negated.deallocate(True)
+    picked = ttnn.multiply(gathered, partner)
+    gathered.deallocate(True)
+    partner.deallocate(True)
+    summed = ttnn.sum(picked, dim=1, keepdim=True)  # [1, 1, H, S]
+    picked.deallocate(True)
+    back = ttnn.reshape(summed, (1, h, 1, s))
+    column = ttnn.transpose(back, -2, -1)  # [1, H, S, 1]
+    if int(back.buffer_address()) != int(summed.buffer_address()):
+        back.deallocate(True)
+    summed.deallocate(True)
+    return column
+
+
+def pair_split_prefill_attention(
+    tt_q,
+    tt_k,
+    tt_v,
+    k_cache,
+    v_cache,
+    logical_table,
+    row,
+    chunk_offset,
+    page,
+    head_dim,
+    selector,
+    mesh_config,
+    ccl_manager,
+):
+    """``GEMMA4_KV_PAIR_SHARD``: a pair-sharded global layer's attention for the chunk at ``chunk_offset`` on the
+    layer's pair view (``weights.pair``, as the decode pair split): ``tt_q`` holds the q heads of the chip's whole KV
+    group, the same on both chips of the pair, and each chip holds the ``page``-token half of every logical block in
+    the slot ``logical_table`` names. Each chip:
+
+    1. attends its half of the prefix ``[0, chunk_offset)`` with every head of the group, unmasked (every cached key
+       precedes the chunk), read straight from the paged cache, merged over the splits with statistics
+       (``SdpaPrefillSplitK``);
+    2. attends the chunk's own keys, causal: both chips hold the KV head's whole chunk (``tt_k`` / ``tt_v``, viewed as
+       ``page``-token pages through an identity table);
+    3. takes the partner's prefix LSE from the row (``_pair_partner_lse``) and returns its share of the three-way
+       merge (``pair_prefill_contribution``).
+
+    The pair o_proj and the row all-reduce after it add the two shares. The pair exchanges one fp32 LSE per head and
+    row (an all-gather of ``[1, 1, H, S]``), not the queries and partial outputs: those moved through 24 single-core
+    ``point_to_point`` calls per layer and chunk, 28.7 ms at a 4096-row chunk on the (1,8) row. Returns ``[1, H, S,
+    head_dim]`` bf16."""
+    from models.demos.gemma4.custom_ops.sdpa_prefill_splitk.op import SdpaPrefillSplitK
+    from models.demos.gemma4.tt.compute_config import global_prefill_sdpa_fidelity, sdpa_fp32_dest_acc_en
+
+    mesh_device = tt_q.device()
+    n = int(tt_q.shape[2])
+    if chunk_offset % (2 * page) or n % page:
+        raise ValueError(f"{KV_PAIR_SHARD_ENV}: chunk at {chunk_offset} (+{n}) off the {2 * page}-token blocks")
+    if int(tt_k.shape[1]) != 1:
+        raise ValueError(f"{KV_PAIR_SHARD_ENV}: one KV head per chip expected, got {int(tt_k.shape[1])}")
+    ckc = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=global_prefill_sdpa_fidelity(),
+        math_approx_mode=False,
+        fp32_dest_acc_en=sdpa_fp32_dest_acc_en(True),
+        packer_l1_acc=False,
+    )
+    width = int(logical_table.shape[-1])
+    table = logical_table if int(logical_table.shape[0]) == 1 else ttnn.slice(logical_table, [row, 0], [row + 1, width])
+    kw = dict(num_kv_heads=1, block_size=page, k_chunk_size=page, compute_kernel_config=ckc)
+
+    o_self, st_self = SdpaPrefillSplitK.op(
+        tt_q, k_cache, v_cache, table, 0, causal=False, k_chunks=chunk_offset // (2 * page), merge_stats=True, **kw
+    )
+    if table is not logical_table:
+        table.deallocate(True)
+
+    fresh = [ttnn.reshape(x, [n // page, 1, page, head_dim]) for x in (tt_k, tt_v)]
+    ident = ttnn.from_torch(
+        torch.arange(n // page, dtype=torch.int32).reshape(1, -1),
+        device=mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    o_chunk, st_chunk, _ = SdpaPrefillSplitK.op(tt_q, fresh[0], fresh[1], ident, 0, splits=1, merge=False, **kw)
+    ident.deallocate(True)
+
+    lse_self, lse_chunk = _lse_column(st_self), _lse_column(st_chunk)
+    st_self.deallocate(True)
+    st_chunk.deallocate(True)
+    lse_partner = _pair_partner_lse(lse_self, selector, mesh_config, ccl_manager)
+    return pair_prefill_contribution(o_self, lse_self, lse_partner, o_chunk, lse_chunk)
+
+
 def _prefill_forward_single(
     hidden_states,
     cos_cache,
@@ -1098,6 +1324,7 @@ def _prefill_forward_single(
     mm_attn_mask=None,
     traced_short_bucket=False,
     continuation=None,
+    kv_write_table=None,
 ):
     """Single-user prefill — matches arg/gemma4_optimizations.
 
@@ -1233,6 +1460,55 @@ def _prefill_forward_single(
                 _own_chunk_slice = ttnn.slice(page_table, [0, _c0], [_rows, _c0 + _cols])
                 fill_page_table = _own_chunk_slice
 
+    if kv_write_table is not None:
+        # GEMMA4_KV_PAIR_SHARD: a pair-sharded global layer writes through its per-chip write table (the device
+        # page's grid; its own half of every logical block, the partner's into the null block), the chunk's
+        # columns of it: the host cut on the eager continuation, else a device slice (chunk 0 / one chunk).
+        if _own_chunk_slice is not None:
+            _own_chunk_slice.deallocate(True)
+            _own_chunk_slice = None
+        if chunk_offset is None:
+            raise ValueError(f"{KV_PAIR_SHARD_ENV}: the traced multi-chunk prefill is not supported")
+        _bs = effective_block_size(kv_cache[0], config.head_dim, 1)
+        _n = int(hidden_states.shape[-2])
+        # the pair split's own checks (a later chunk), before the fill writes anything: whole logical blocks (two
+        # device pages) and the fresh-chunk SDPA's 128-row Q chunks
+        if chunk_offset % (2 * _bs) or (chunk_offset > 0 and (_n % _bs or _n % 128)):
+            raise ValueError(
+                f"{KV_PAIR_SHARD_ENV}: chunk at {chunk_offset} (+{_n} rows) off the {2 * _bs}-token blocks"
+            )
+        _c0 = chunk_offset // _bs
+        _cols = max(1, -(-_n // _bs))
+        _hb_cut = (
+            continuation.half_block_fill_table(
+                _c0, _cols, valid_cols=(-(-_valid_cols // _bs) if _valid_cols is not None else None)
+            )
+            if eager_continuation
+            else None
+        )
+        if _hb_cut is not None:
+            fill_page_table = _hb_cut
+        elif _c0 == 0 and not is_chunked:
+            fill_page_table = kv_write_table
+        else:
+            if _c0 + _cols > int(kv_write_table.shape[-1]):
+                raise ValueError(
+                    f"{KV_PAIR_SHARD_ENV}: chunk columns [{_c0}, {_c0 + _cols}) past the write table's "
+                    f"{int(kv_write_table.shape[-1])}"
+                )
+            _rows = int(kv_write_table.shape[0])
+            _own_chunk_slice = ttnn.slice(kv_write_table, [0, _c0], [_rows, _c0 + _cols])
+            fill_page_table = _own_chunk_slice
+
+    # GEMMA4_KV_PAIR_SHARD: a later chunk of a pair-sharded global layer runs on the layer's pair view (the pair QKV /
+    # o_proj of the decode pair split): every chip computes the q heads of its whole KV group, so the pair exchanges
+    # one LSE per head and row instead of the queries and outputs (pair_split_prefill_attention)
+    head_tp = tp
+    if kv_write_table is not None and need_cross_chunk:
+        if weights.pair is None:
+            raise ValueError(f"{KV_PAIR_SHARD_ENV}: a pair-sharded global layer without its pair view")
+        weights = weights.pair
+        head_tp = tp // 2
     xqkv = apply_qkv_projection(hidden_states, weights, prefill=True)
 
     # Short-lived prefill activations in L1 when GEMMA4_PREFILL_L1_ACT=1 (Qwen36
@@ -1242,7 +1518,7 @@ def _prefill_forward_single(
         xqkv,
         config,
         weights.is_global,
-        tp=tp,
+        tp=head_tp,
         kv_replicated=weights.kv_replicated,
         memory_config=act_mc,
     )
@@ -1755,22 +2031,60 @@ def _prefill_forward_single(
             sdpa_table, base_offset = _global_continuation_sdpa_inputs(
                 continuation, page_table, effective_block_size(k_cache, config.head_dim, nkv_local), chunk_offset
             )
-        tt_sdpa = chunked_prefill_sdpa(
-            tt_q,
-            k_cache,
-            v_cache,
-            sdpa_table,
-            user_id,
-            config.head_dim,
-            scale=1.0,
-            base_offset=base_offset,
-            num_kv_heads=nkv_local,
-            mesh_config=mesh_config,
-        )
-        if q_tiles:
-            tt_sdpa = _recompute_vision_rows_paged(
-                q_tiles, tt_sdpa, k_cache, v_cache, page_table, user_id, config, nkv_local, q_device
+        sdpa_user = user_id
+        if kv_write_table is not None:
+            # GEMMA4_KV_PAIR_SHARD: this chip holds half of the cached keys; on the pair view (above) the pair
+            # merges per-half attention by LSE instead of moving them (pair_split_prefill_attention)
+            if chunk_offset is None or not isinstance(chunk_offset, int):
+                raise ValueError(f"{KV_PAIR_SHARD_ENV}: the traced multi-chunk prefill is not supported")
+            tt_sdpa = pair_split_prefill_attention(
+                tt_q,
+                tt_k,
+                tt_v,
+                k_cache,
+                v_cache,
+                sdpa_table,
+                user_id if int(sdpa_table.shape[0]) > 1 else 0,
+                chunk_offset,
+                effective_block_size(k_cache, config.head_dim, 1),
+                config.head_dim,
+                weights.pair_selector,
+                mesh_config,
+                ccl_manager,
             )
+            if q_tiles:
+                # image rows: their bidirectional span on top of the causal prefix, on the pair view
+                tt_sdpa = _recompute_vision_rows_pair(
+                    q_tiles,
+                    tt_sdpa,
+                    k_cache,
+                    v_cache,
+                    page_table,
+                    user_id,
+                    config,
+                    weights,
+                    mesh_config,
+                    ccl_manager,
+                    q_device,
+                )
+        else:
+            tt_sdpa = chunked_prefill_sdpa(
+                tt_q,
+                k_cache,
+                v_cache,
+                sdpa_table,
+                sdpa_user,
+                config.head_dim,
+                scale=1.0,
+                base_offset=base_offset,
+                num_kv_heads=nkv_local,
+                mesh_config=mesh_config,
+                host_offset=chunk_offset if isinstance(chunk_offset, int) else None,
+            )
+            if q_tiles:
+                tt_sdpa = _recompute_vision_rows_paged(
+                    q_tiles, tt_sdpa, k_cache, v_cache, page_table, user_id, config, nkv_local, q_device
+                )
     elif long_seq and config.is_sliding and sliding_window is not None:
         tt_sdpa = chunked_prefill_sdpa_sliding(
             tt_q,
@@ -1783,6 +2097,8 @@ def _prefill_forward_single(
             abs_start=chunk_offset or 0,
         )
     elif long_seq and not config.is_sliding and page_table is not None and kv_cache is not None:
+        if kv_write_table is not None:
+            raise ValueError(f"{KV_PAIR_SHARD_ENV}: a single {seq_len}-row prefill call reads the cache unsharded")
         # Full-attention long context (incl. KV-shared layers whose kv_cache is
         # the source layer's already-filled pool).
         k_cache, v_cache = kv_cache
@@ -1817,7 +2133,9 @@ def _prefill_forward_single(
         # prefill SDPA op (unlike the decode op, where it halves dest for head_dim=512).
         sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             tt_q.device().arch(),
-            math_fidelity=sdpa_math_fidelity(ttnn.MathFidelity.HiFi4),
+            math_fidelity=(
+                global_prefill_sdpa_fidelity() if not config.is_sliding else sdpa_math_fidelity(ttnn.MathFidelity.HiFi4)
+            ),
             math_approx_mode=False,
             fp32_dest_acc_en=sdpa_fp32_dest_acc_en(True),
             packer_l1_acc=False,
@@ -1910,6 +2228,7 @@ def prefill_forward(
     mm_attn_mask=None,
     traced_short_bucket=False,
     continuation=None,
+    kv_write_table=None,
 ):
     """
     Multi-token prefill attention, fully on device.
@@ -1954,8 +2273,11 @@ def prefill_forward(
             mm_attn_mask=mm_attn_mask,
             traced_short_bucket=traced_short_bucket,
             continuation=continuation,
+            kv_write_table=kv_write_table,
         )
 
+    if kv_write_table is not None:
+        raise ValueError(f"{KV_PAIR_SHARD_ENV}: the batched prefill does not write a pair-sharded global layer")
     tp = mesh_config.tp if mesh_config else 1
     hidden_states = ttnn.reshape(
         hidden_states, [1, 1, hidden_states.shape[-2] * hidden_states.shape[-3] * hidden_states.shape[0], -1]
@@ -2175,7 +2497,10 @@ def prefill_forward(
     # (forced-FP32 reduce accumulation removed).
     sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
         tt_q.device().arch(),
-        math_fidelity=sdpa_math_fidelity(ttnn.MathFidelity.HiFi4),
+        # global layers take GEMMA4_PREFILL_SDPA_GLOBAL_FIDELITY as the single-user paths do (hifi4 unless set)
+        math_fidelity=global_prefill_sdpa_fidelity()
+        if not config.is_sliding
+        else sdpa_math_fidelity(ttnn.MathFidelity.HiFi4),
         math_approx_mode=False,
         fp32_dest_acc_en=sdpa_fp32_dest_acc_en(True),
         packer_l1_acc=False,
