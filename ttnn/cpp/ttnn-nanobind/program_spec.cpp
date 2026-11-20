@@ -10,6 +10,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -1178,14 +1179,58 @@ void bind_mesh_programs(nb::module_& mod) {
 
 }  // namespace
 
-nb::object python_tensor_args(const m2::ProgramRunArgs& run_args) {
-    const nb::object self = nb::find(run_args);
-    return self.is_valid() ? nb::getattr(self, TENSOR_ARGS_ATTRIBUTE, nb::none()) : nb::none();
+namespace {
+
+// The tensors of a run args object made in Python, as its _tensor_args attribute holds them, or None for run args made
+// in C++, which Python cannot have given tensors.
+nb::object tensor_owners(nb::handle python_object) {
+    return python_object.is_valid() ? nb::getattr(python_object, TENSOR_ARGS_ATTRIBUTE, nb::none()) : nb::none();
 }
 
-nb::object python_tensor_args(const ttnn::experimental::MeshProgramRunArgs& run_args) {
-    const nb::object self = nb::find(run_args);
-    return self.is_valid() ? nb::getattr(self, TENSOR_ARGS_ATTRIBUTE, nb::none()) : nb::none();
+// The tensor arguments in one of those dicts. ProgramRunArgs and MeshProgramRunArgs write the dicts themselves, from
+// str keys and ttnn.Tensor values, so a dict that holds anything else was edited in place, and its tensors may no
+// longer be the ones the C++ object refers to.
+std::vector<PythonTensorArg> tensor_args_in(nb::handle owners) {
+    TT_FATAL(nb::isinstance<nb::dict>(owners), "generic_op: the tensors that a ProgramRunArgs keeps were replaced");
+    std::vector<PythonTensorArg> tensor_args;
+    tensor_args.reserve(nb::len(owners));
+    for (const auto& [key, value] : nb::borrow<nb::dict>(owners)) {
+        TT_FATAL(
+            nb::isinstance<nb::str>(key) && nb::isinstance<ttnn::Tensor>(value),
+            "generic_op: the tensors that a ProgramRunArgs keeps were edited in place; set its tensor_args again");
+        // Length-aware: a name may hold a NUL character. The str object keeps the UTF-8 text.
+        Py_ssize_t size = 0;
+        const char* text = PyUnicode_AsUTF8AndSize(key.ptr(), &size);
+        if (text == nullptr) {
+            throw nb::python_error();
+        }
+        tensor_args.emplace_back(
+            std::string_view(text, static_cast<std::size_t>(size)), &nb::cast<const ttnn::Tensor&>(value));
+    }
+    return tensor_args;
+}
+
+}  // namespace
+
+std::vector<PythonTensorArg> python_tensor_args(const m2::ProgramRunArgs& run_args) {
+    const nb::object owners = tensor_owners(nb::find(run_args));
+    return owners.is_none() ? std::vector<PythonTensorArg>{} : tensor_args_in(owners);
+}
+
+std::vector<std::vector<PythonTensorArg>> python_tensor_args(const ttnn::experimental::MeshProgramRunArgs& run_args) {
+    const nb::object owners = tensor_owners(nb::find(run_args));
+    if (owners.is_none()) {
+        return {};
+    }
+    TT_FATAL(
+        nb::isinstance<nb::list>(owners) && nb::len(owners) == run_args.programs.size(),
+        "generic_op: the tensors that a MeshProgramRunArgs keeps were edited in place; set its programs again");
+    std::vector<std::vector<PythonTensorArg>> programs;
+    programs.reserve(run_args.programs.size());
+    for (const nb::handle program_owners : nb::borrow<nb::list>(owners)) {
+        programs.push_back(tensor_args_in(program_owners));
+    }
+    return programs;
 }
 
 void py_module_types(nb::module_& mod) {

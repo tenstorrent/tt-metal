@@ -1043,8 +1043,8 @@ def test_a_range_over_a_device_without_a_tensor_is_rejected(mesh_device, expect_
 @pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
 def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expect_error):
     """Per-device views of one tensor share its MeshTensor, which is all Metal binds, so on each device a program runs
-    on it reads that device's part of the tensor. A tensor argument that is a view missing one of those devices is
-    rejected."""
+    on it reads that device's part of the tensor. A tensor argument that misses one of those devices, such as a
+    per-device view, is rejected."""
     torch.manual_seed(23)
     torch_input = torch.rand([2, 1, 32, 32]).to(torch.bfloat16)
     input_tensor = ttnn.from_torch(
@@ -1055,12 +1055,14 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
     first_output, second_output = ttnn.get_device_tensors(output_tensor)
 
     # The program runs on the first device, and the run args name the second device's view of the input.
-    message = "tensor parameter 'input' is bound to a view that holds devices"
+    message = r"tensor_args\['input'\] holds devices"
     spec, run_args = exp_program(second_input, first_output)
     with expect_error(
         RuntimeError,
-        r"tensor parameter 'input' is bound to a view that holds devices MeshCoordinate\(\[0, 1\]\), but its program "
-        r"runs on device MeshCoordinate\(\[0, 0\]\), which the view does not hold",
+        r"tensor_args\['input'\] holds devices MeshCoordinate\(\[0, 1\]\), but its program runs on device "
+        r"MeshCoordinate\(\[0, 0\]\), which it does not hold. On each device it runs on, a program reads that "
+        r"device's part of a tensor, so to read the data of a per-device view, run the program only on the view's "
+        r"devices",
     ):
         E.generic_op([first_input, first_output], spec, run_args)
     with expect_error(RuntimeError, message):
@@ -1094,28 +1096,39 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
             E.MeshProgramSpec(programs=[(one_device(0), first_spec), (one_device(1), other_spec)]),
             E.MeshProgramRunArgs(programs=[(one_device(0), first_run_args), (one_device(1), other_run_args)]),
         )
-    # generic_op pairs run args with the spec's programs by range, so run args in another order are checked too. The
-    # second program names its input differently, so pairing by position would skip its view as undeclared.
-    rename_tensor_parameter(other_spec, other_run_args, "input", "source")
-    with expect_error(RuntimeError, "tensor parameter 'source' is bound to a view that holds devices"):
+    # Each range's run args are checked against their own range, so run args in another order are checked too.
+    with expect_error(RuntimeError, message):
         E.generic_op(
             [input_tensor, output_tensor],
             E.MeshProgramSpec(programs=[(one_device(0), first_spec), (one_device(1), other_spec)]),
             E.MeshProgramRunArgs(programs=[(one_device(1), other_run_args), (one_device(0), first_run_args)]),
         )
 
-    # A call that generic_op rejects for another reason keeps generic_op's own message: a view of a tensor that
-    # io_tensors does not list (which misses a device of the program too), a tensor under a name the spec does not
-    # declare, and run args for a range the spec has no program on.
+    # Every tensor in the run args is checked, whatever else is wrong with the call: a view of a tensor that io_tensors
+    # does not list, a view under a name the spec does not declare, and a view in run args for a range the spec has no
+    # program on. A tensor that holds the program's devices leaves such a call to generic_op's own message.
     unlisted = ttnn.allocate_tensor_on_device(input_tensor.spec, mesh_device)
     spec, run_args = exp_program(ttnn.get_device_tensors(unlisted)[1], output_tensor)
+    with expect_error(RuntimeError, message):
+        E.generic_op([input_tensor, output_tensor], spec, run_args)
+    spec, run_args = exp_program(unlisted, output_tensor)
     with expect_error(RuntimeError, "tensor of tensor parameter 'input' is not in io_tensors"):
         E.generic_op([input_tensor, output_tensor], spec, run_args)
     spec, run_args = exp_program(first_input, first_output)
     run_args.tensor_args = {"input": first_input, "output": first_output, "extra": second_input}
+    with expect_error(RuntimeError, r"tensor_args\['extra'\] holds devices"):
+        E.generic_op([first_input, first_output], spec, run_args)
+    run_args.tensor_args = {"input": first_input, "output": first_output, "extra": first_input}
     with expect_error(RuntimeError, "has a tensor for 'extra', which the ProgramSpec does not declare"):
         E.generic_op([first_input, first_output], spec, run_args)
     spec, run_args = exp_program(second_input, first_output)
+    with expect_error(RuntimeError, message):
+        E.generic_op(
+            [input_tensor, output_tensor],
+            E.MeshProgramSpec(programs=[(one_device(1), spec)]),
+            E.MeshProgramRunArgs(programs=[(one_device(0), run_args)]),
+        )
+    spec, run_args = exp_program(first_input, first_output)
     with expect_error(RuntimeError, "has no run args for mesh range"):
         E.generic_op(
             [input_tensor, output_tensor],
@@ -1133,11 +1146,10 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
             E.MeshProgramRunArgs(programs=[(past_the_mesh, run_args)]),
         )
 
-    # The check compares whole names, so a tensor parameter whose name holds a NUL character is checked too. Its message
-    # writes the NUL as \0.
+    # A name may hold a NUL character, which the message writes as \0.
     spec, run_args = exp_program(second_input, first_output)
     rename_tensor_parameter(spec, run_args, "input", "in\x00put")
-    with expect_error(RuntimeError, r"tensor parameter 'in\\0put' is bound to a view that holds devices"):
+    with expect_error(RuntimeError, r"tensor_args\['in\\0put'\] holds devices"):
         E.generic_op([first_input, first_output], spec, run_args)
 
     # A view, or the whole tensor, that holds the program's device reads that device's part.
