@@ -17,7 +17,10 @@ Each Python class has the fields of the C++ struct with the same name, whose com
 advanced_options.hpp_. Of the advanced options, Python
 binds only ``DFBAdvancedOptions.alias_with``, which lets buffers of the same total size share memory; the others are
 C++ only. So far the GlobalSemaphore fields are C++ only too: ``ProgramSpec.global_semaphore_parameters``,
-``KernelSpec.global_semaphore_bindings`` and ``ProgramRunArgs.global_semaphore_args``.
+``KernelSpec.global_semaphore_bindings`` and ``ProgramRunArgs.global_semaphore_args``. One field differs in type: the
+``data_format_metadata`` of a ``DataflowBufferSpec`` or ``ScratchpadSpec`` takes a ttnn data type, such as
+``ttnn.bfloat16``, so a format without one, such as Float16, cannot be set, and ``ttnn.int8`` reads back as
+``ttnn.uint8``.
 
 An example
 **********
@@ -126,21 +129,20 @@ running it.
 The cache key is a hash of the whole ``ProgramSpec``, combined with the devices it runs on, apart from
 ``ProgramSpec.name``, ``WorkUnitSpec.name`` and the tensor fields that a parameter's ``TensorSpecRelaxations`` allow
 to differ. So renaming or reordering kernels or buffers gives a new cache entry. ``generic_op`` computes that hash on
-every call while the program cache is on. The key holds a kernel's source path, not the file's contents, and so
-does Metal's kernel build cache, so after you edit a kernel file, run it in a new process, or first call
-``device.clear_program_cache()`` and ``ttnn.device.ClearKernelCache()``. A kernel given as ``KernelSpec.SourceCode`` is
-keyed on its code. Unlike the
+every call while the program cache is on. The key holds a kernel's source path, not the file's contents, and so do
+Metal's caches of compiled and loaded kernels within a process, so after you edit a kernel file, run it in a new
+process. A kernel given as ``KernelSpec.SourceCode`` is keyed on its code. Unlike the
 ``ProgramDescriptor`` form, the ``ProgramSpec`` form takes no ``custom_program_hash``, because a key the caller picks
 could give two different programs the same cache entry.
 
 Every call checks its run args against the spec before Metal sees them: each kernel gets exactly the runtime arguments
 and arrays it declares, each array with its declared length, each tensor parameter gets a tensor from ``io_tensors``
-that matches it, and each DFB size override names a buffer of the spec, at most once and with no size of 0. Whether
-every core got its values is checked on later calls only when ``ttnn.CONFIG.validate_program_args`` is on, which it is
-not by default; with it off, a core that a later call leaves out keeps its previous values. A DFB size override in
-``ProgramRunArgs.dfb_run_overrides`` stays in effect for later calls that reuse the cached program, including calls with
-an equal spec from other code, until a call changes it. ``prepare_generic_op`` with a program that is already cached
-applies its run args to it the same way, even if the preparation then fails.
+that matches it, and each dataflow buffer (DFB) size override names a buffer of the spec, at most once and with no size
+of 0. Whether every core got its values is checked on later calls only when ``ttnn.CONFIG.validate_program_args`` is on,
+which it is not by default; with it off, a core that a later call leaves out keeps its previous values. A DFB size
+override in ``ProgramRunArgs.dfb_run_overrides`` stays in effect for later calls that reuse the cached program,
+including calls with an equal spec from other code, until a call changes it. ``prepare_generic_op`` with a program that
+is already cached applies its run args to it the same way, even if the preparation then fails.
 
 Running on a mesh
 *****************
@@ -176,10 +178,10 @@ reader_unary_interleaved_start_id_metal2.cpp_).
   ``get_arg(args::<name>)`` with the name in ``KernelSpec.compile_time_args``. A read by position that is left in may
   still compile and read whatever value is at that position, so change every one.
 - Circular buffers by index become dataflow buffers by name: ``tt::CBIndex::c_0`` becomes ``dfb::in``, with ``in`` the
-  accessor name of the kernel's binding to a ``DataflowBufferSpec``. Compute calls such as
-  ``copy_tile(dfb::in, 0, 0)`` take it directly. To wait for, reserve, push or pop entries, a kernel wraps it as
-  ``DataflowBuffer(dfb::in)``, as both kernels above do, and a data-movement kernel reads its page size with
-  ``get_entry_size()``.
+  accessor name of the kernel's binding to a ``DataflowBufferSpec``. Calls such as ``copy_tile(dfb::in, 0, 0)`` take it
+  directly, and so do the circular-buffer calls on Wormhole and Blackhole. The ``DataflowBuffer`` calls, which Quasar
+  needs, take it wrapped as ``DataflowBuffer(dfb::in)``, as both kernels above do, and a data-movement kernel reads its
+  page size with ``get_entry_size()``.
 - Tensor addresses passed as arguments become bound tensors: ``TensorAccessor`` built from an address and
   ``TensorAccessorArgs`` becomes ``TensorAccessor(tensor::src)``.
 - On the host, each ``CBDescriptor`` becomes a ``DataflowBufferSpec`` with its bindings, and a kernel's runtime
