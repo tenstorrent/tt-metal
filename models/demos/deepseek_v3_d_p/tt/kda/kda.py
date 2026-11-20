@@ -322,11 +322,13 @@ class ttKDA:
             and self.tensor_parallel_size > 1
             and tuned is not None
             and self._matmul_grid.x < grid.x
-            and ttnn.get_fabric_config().name.startswith("FABRIC_2D")
+            and ttnn.get_fabric_config(mesh_device).name.startswith("FABRIC_2D")
         )
         if fuse:
             topology = ttnn.get_usable_topology(
-                self.weights.input_projection, per_axis_topology()[self.tensor_parallel_axis], self.tensor_parallel_axis
+                self.weights.input_projection,
+                per_axis_topology(mesh_device=mesh_device)[self.tensor_parallel_axis],
+                self.tensor_parallel_axis,
             )
             # The tuned K block must fit the local K shard, and a Ring needs it to divide the shard (no tail block).
             local_k_tiles = self._tp_input_width // ttnn.TILE_SIZE
@@ -404,7 +406,7 @@ class ttKDA:
             ring = (
                 block_tiles >= 2
                 and self.tp_ccl_topology == ttnn.Topology.Ring
-                and per_axis_topology()[self.tensor_parallel_axis] == ttnn.Topology.Ring
+                and per_axis_topology(mesh_device=mesh_device)[self.tensor_parallel_axis] == ttnn.Topology.Ring
                 and ttnn.get_usable_topology(
                     self.weights.output_projection, ttnn.Topology.Ring, self.tensor_parallel_axis
                 )

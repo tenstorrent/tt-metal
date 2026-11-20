@@ -707,16 +707,20 @@ _FABRIC_PER_AXIS_TOPOLOGY = {
 
 def per_axis_topology(
     fabric_config: Optional[ttnn.FabricConfig] = None,
+    *,
+    mesh_device: Optional[ttnn.MeshDevice] = None,
 ) -> tuple[ttnn.Topology, ttnn.Topology]:
     """Return the per-axis CCL topology ``(dim0_topology, dim1_topology)`` for the fabric.
 
     Entry ``i`` drives cluster_axis=i collectives (0 = rows / Y, 1 = cols / X), so the SP and TP
     topologies are ``result[sp_axis]`` and ``result[tp_axis]``. Ring is returned only for an axis the
-    fabric physically wraps; every other axis is Linear. When ``fabric_config`` is None the
-    currently-active fabric is queried so the result always matches the opened fabric.
+    fabric physically wraps; every other axis is Linear. When ``fabric_config`` is None the fabric
+    opened for ``mesh_device`` is queried so the result always matches it; one of the two must be given.
     """
     if fabric_config is None:
-        fabric_config = ttnn.get_fabric_config()
+        if mesh_device is None:
+            raise ValueError("per_axis_topology needs fabric_config or mesh_device")
+        fabric_config = ttnn.get_fabric_config(mesh_device)
     mapped = _FABRIC_PER_AXIS_TOPOLOGY.get(fabric_config)
     if mapped is not None:
         return mapped

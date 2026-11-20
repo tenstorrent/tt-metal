@@ -487,7 +487,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     uint32_t out_cb_num_tiles = fuse_swiglu ? (out_block_num_tiles / 2) : out_block_num_tiles;  // single-buffered
     // Fabric2D / TorusXY: the kernels route by fabric node (chip, mesh) with HybridMeshPacketHeader instead of
     // by hop count. get_forward_backward_line_unicast_configuration already returns (mesh, chip) on 2D.
-    const bool fabric_2d = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+    const bool fabric_2d = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(*device));
     // Fabric2D Linear: the 1D path's one-way ring (each rank sends to rank - 1, rank 0 to the last rank), routed by
     // fabric node. The two ends of the line reach each other through it (linear_far_end_coord).
     const bool linear_2d = fabric_2d && topology == ttnn::ccl::Topology::Linear;
@@ -1999,8 +1999,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     // Fabric2D Linear: the two ends of the line send to each other (factory helper, linear_far_end_coord).
     std::optional<MeshCoordinate> linear_far_end_coord;
     if (attributes.topology == ttnn::ccl::Topology::Linear &&
-        tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) && attributes.ring_size > 1 &&
-        (device_index == 0 || device_index == attributes.ring_size - 1)) {
+        tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(*tensor_args.input_tensor.device())) &&
+        attributes.ring_size > 1 && (device_index == 0 || device_index == attributes.ring_size - 1)) {
         const int far_end_offset = static_cast<int>(attributes.ring_size) - 1;
         linear_far_end_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
             tensor_args.input_tensor,
@@ -2028,7 +2028,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     const auto& bias_tensor = tensor_args.bias_tensor;
     const auto& ag_output_tensor = output_tensor.at(0);
     const uint32_t M = operations::common::folded_rows(act_tensor);
-    const bool transpose_core_grid = resolve_transpose_core_grid(attributes, M, weight_tensor.padded_shape()[-1]);
+    const bool transpose_core_grid =
+        resolve_transpose_core_grid(attributes, M, weight_tensor.padded_shape()[-1], *act_tensor.device());
 
     // Output layout: [ag_output, (optional: persistent_weight_buffer), chunks...]
     // Strip ag_output (always) and persistent_weight_buffer (if FSDP) from mm_output_tensors.

@@ -281,7 +281,7 @@ def test_synthetic_kimi_k3_perf(
             {
                 "layout": layout,
                 "mode": mode,
-                "fabric_config": ttnn.get_fabric_config().name,
+                "fabric_config": ttnn.get_fabric_config(mesh_device).name,
                 "sequence": sequence,
                 "actual_start": actual_start,
                 "samples_ms": samples,
