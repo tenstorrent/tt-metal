@@ -36,6 +36,15 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
 
     auto output_memory_layout = output.memory_config().memory_layout();
     bool is_sharded = output_memory_layout != TensorMemoryLayout::INTERLEAVED;
+    // The sharded kernels walk the shard resident in the core's own L1, so they only apply when both
+    // sides are L1-sharded. DRAM shards go through the TensorAccessor (page-id) kernels instead.
+    bool shards_in_l1 = is_sharded && input.memory_config().is_l1() && output.memory_config().is_l1();
+    if (is_sharded && !shards_in_l1 && !tilized) {
+        // A row-major sharded page is one shard-width stick, not a full tensor row.
+        input_unit_size = input.buffer()->page_size();
+        output_unit_size = output.buffer()->page_size();
+        num_units = output.buffer()->num_pages();
+    }
 
     uint32_t num_cores;
     CoreRangeSet all_cores;
@@ -45,7 +54,7 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
     uint32_t num_units_per_core_group_2;
     std::vector<CoreCoord> cores;
 
-    if (is_sharded) {
+    if (shards_in_l1) {
         auto shard_spec = output.buffer()->shard_spec();
         all_cores = shard_spec.grid();
         num_cores = all_cores.num_cores();
@@ -152,7 +161,7 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
     // ---------------------------------------------------------------------
     const char* read_kernel_path;
     const char* write_kernel_path;
-    if (is_sharded) {
+    if (shards_in_l1) {
         read_kernel_path =
             tilized ? "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/read_kernel_sharded.cpp"
                     : "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/read_kernel_rm_sharded.cpp";
@@ -167,13 +176,13 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
     }
 
     // Reader / writer runtime-arg schema (buffer addresses now ride the TensorBinding;
-    // the interleaved paths carry a per-node start_id, the sharded paths do not).
+    // the TensorAccessor paths carry a per-node start_id, the L1-sharded paths do not).
     Group<std::string> rta_names;
     if (tilized) {
-        rta_names = is_sharded ? Group<std::string>{"num_tiles"} : Group<std::string>{"num_tiles", "start_id"};
+        rta_names = shards_in_l1 ? Group<std::string>{"num_tiles"} : Group<std::string>{"num_tiles", "start_id"};
     } else {
-        rta_names = is_sharded ? Group<std::string>{"stick_size", "num_sticks"}
-                               : Group<std::string>{"stick_size", "num_sticks", "start_id"};
+        rta_names = shards_in_l1 ? Group<std::string>{"stick_size", "num_sticks"}
+                                 : Group<std::string>{"stick_size", "num_sticks", "start_id"};
     }
 
     // ---------------------------------------------------------------------
@@ -270,7 +279,7 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
         const auto& core = cores[i];
         uint32_t num_units_per_core = i < num_cores_group_1 ? num_units_per_core_group_1 : num_units_per_core_group_2;
 
-        if (is_sharded) {
+        if (shards_in_l1) {
             if (tilized) {
                 AddRuntimeArgsForNode(reader_ra.runtime_arg_values, core, {{"num_tiles", num_units_per_core}});
                 AddRuntimeArgsForNode(writer_ra.runtime_arg_values, core, {{"num_tiles", num_units_per_core}});
