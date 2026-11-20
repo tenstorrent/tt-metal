@@ -8,6 +8,7 @@ Prompt construction and audio preprocessing stay in upstream vLLM's Qwen3-ASR
 processor; this class registers that processor and serves the model through
 ``Qwen3ASRGenerator``.
 """
+import torch
 from huggingface_hub import snapshot_download
 from vllm.model_executor.models.interfaces import SupportsMultiModal
 from vllm.model_executor.models.qwen3_asr import (
@@ -46,3 +47,14 @@ class Qwen3ASRForConditionalGeneration(Qwen3ASRGenerator, SupportsMultiModal):
             text_decoder_dir=find_text_decoder(snap_dir),
             optimizations=opt,
         )
+
+    def prefill_forward(self, *args, **kwargs):
+        """vLLM runs Qwen3-ASR with M-RoPE, so it takes one position delta per request. Audio
+        and text positions are both linear, so every delta is 0."""
+        tokens = kwargs["tokens"] if "tokens" in kwargs else args[0]
+        return super().prefill_forward(*args, **kwargs), torch.zeros(tokens.shape[0], dtype=torch.long)
+
+    def decode_forward(self, *args, rope_deltas_all_users=None, **kwargs):
+        if rope_deltas_all_users is not None and any(int(d) != 0 for d in rope_deltas_all_users):
+            raise ValueError(f"Qwen3-ASR positions are linear; got M-RoPE deltas {rope_deltas_all_users}")
+        return super().decode_forward(*args, **kwargs)
