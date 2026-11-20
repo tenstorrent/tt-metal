@@ -10,7 +10,7 @@
 #include <tt_stl/joined_tasks.hpp>
 #include "bfp_simd.hpp"
 #include "common/executor.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal::detail {

@@ -1339,6 +1339,7 @@ jobs:
                           "deepseek-v3-tg",
                           "deepseek-v3-b1",
                           "z-image-turbo",
+                          "ideogram-4",
                           "resnet50"
                         ],
                         "type": "string"
@@ -2810,8 +2811,8 @@ jobs:
                         "type": "string"
                       },
                       "platform": {
-                        "default": "Ubuntu 22.04",
-                        "description": "Platform to build and test",
+                        "default": "Ubuntu 24.04",
+                        "description": "Platform to build and test. vllm-tt-plugin on vLLM 0.32 or later needs Ubuntu 24.04 (Python 3.12).",
                         "enum": [
                           "Ubuntu 22.04",
                           "Ubuntu 24.04"
