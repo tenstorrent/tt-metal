@@ -1109,11 +1109,11 @@ inline void _bitonic_topk_phases_steps(
     }
 
     // Fused keys: phases 0..4 run in the 32-datum register window (topk_fused_ph0_to_4_pair), then
-    // phase 5 (if requested) runs as a single-phase pass, which records the replay windows it needs.
-    // Every other mode and phase range runs phases 0..3 in the 16-datum group pass
-    // (bitonic_topk_ph0_to_3_group) and phases >= 4 as step passes.
+    // phase 5 (if requested) runs as a single-phase pass, which records the replay windows it needs;
+    // other end phases take the stock path. Every other mode and phase range runs phases 0..3 in
+    // the 16-datum group pass (bitonic_topk_ph0_to_3_group) and phases >= 4 as step passes.
     if constexpr (FUSED) {
-        if (i_start_phase == 0 && i_end_phase >= 4) {
+        if (i_start_phase == 0 && (i_end_phase == 4 || i_end_phase == 5)) {
             const bool argmin = (static_cast<bool>(idir) == static_cast<bool>(SortDir::ArgMin));
             std::uint32_t dst_addr_offset = 0;
             for (int face = 0; face < 2; face++) {
@@ -1127,7 +1127,7 @@ inline void _bitonic_topk_phases_steps(
                 dst_addr_offset = 16;
                 set_dst_write_addr(dst_addr_offset);
             }
-            if (i_end_phase > 4) {
+            if (i_end_phase == 5) {
                 set_dst_write_addr(0);
                 _bitonic_topk_phases_steps<
                     APPROXIMATION_MODE,
