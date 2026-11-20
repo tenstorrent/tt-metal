@@ -295,7 +295,9 @@ def pytest_collection_modifyitems(config, items):
             continue
 
         # this opens a device
-        num_devices = ttnn.get_num_devices()
+        # get_num_devices counts the chips this process can open. A mesh that several hosts share has the
+        # chips of all of them, so a job that launches such a mesh says how many hosts hold one.
+        num_devices = ttnn.get_num_devices() * int(os.getenv("PREFILL_HOSTS_PER_MESH", "1"))
 
         # Extract marker arguments
         mesh_shape = marker.kwargs.get("mesh_shape") or (marker.args[0] if marker.args else None)
