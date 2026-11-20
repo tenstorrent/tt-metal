@@ -107,11 +107,11 @@ FORCE_INLINE void write_row_indices(
 }
 
 #ifdef TOPK_TWO_LEVEL
-// Phase 1 of a two-level program (see topk_large_indices_two_level.hpp), one unit: the max reduce leaves each tile's 32
-// row maxima in column 0 (rows 0-15 in face 0, 16-31 in face 2). The unit's 32 tiles were tilized as one 32-row
-// block, so row r of tile t holds block r * 32 + t of the unit; its 1024 maxima go to the maxima tensor in block
-// order. Once they are written, the unit's done word on the row's owner goes up. `cleared`: whether every core has
-// cleared its done words for this run, which the first unit waits for.
+// Phase 1 of a two-level program (see topk_large_indices_two_level.hpp), one unit: the compute's two_level_unit sends
+// four tiles of maxima, each holding 256 consecutive blocks of the unit, 16 per row in rows 0, 4, 8, ... (the other
+// rows are zero). Its 1024 maxima go to the maxima tensor in block order. Once they are written, the unit's done word
+// on the row's owner goes up. `cleared`: whether every core has cleared its done words for this run, which the first
+// unit waits for.
 template <typename MaxOutT>
 FORCE_INLINE void two_level_unit(
     const Noc& noc,
@@ -129,22 +129,28 @@ FORCE_INLINE void two_level_unit(
     const uint32_t row = units.row(unit);
     const uint32_t first_block = units.part(unit) * unit_blocks;
     const uint32_t live = num_blocks - first_block < unit_blocks ? num_blocks - first_block : unit_blocks;
-    auto* dense = reinterpret_cast<uint16_t*>(staging);
-    for (uint32_t t = 0; t < stage1_batch; ++t) {
+    // A packed tile row is 16 bf16 maxima, 8 words; the maxima rows are every fourth.
+    constexpr uint32_t group_tiles = 8;
+    constexpr uint32_t row_words = 8;
+    constexpr uint32_t rows_per_tile = group_tiles * 2;
+    auto* dense = reinterpret_cast<uint32_t*>(staging);
+    for (uint32_t g = 0; g < stage1_batch / group_tiles; ++g) {
         red_cb.wait_front(1);
         // Plain loads, fenced on both sides: after the compute's pack, before the slot is released.
         asm volatile("" ::: "memory");
-        const auto* reduced = reinterpret_cast<const uint16_t*>(red_cb.get_read_ptr());
-#pragma GCC unroll 16
-        for (uint32_t r = 0; r < 16; ++r) {
-            dense[r * stage1_batch + t] = reduced[r * 16];
-            dense[(r + 16) * stage1_batch + t] = reduced[512 + r * 16];
+        const auto* reduced = reinterpret_cast<const uint32_t*>(red_cb.get_read_ptr());
+#pragma GCC unroll 4
+        for (uint32_t j = 0; j < rows_per_tile; ++j) {
+#pragma GCC unroll 8
+            for (uint32_t w = 0; w < row_words; ++w) {
+                dense[(g * rows_per_tile + j) * row_words + w] = reduced[4 * j * row_words + w];
+            }
         }
         asm volatile("" ::: "memory");
         red_cb.pop_front(1);
     }
-    // The last maxima stored are those of the last tile's row 31.
-    wait_l1_store(reinterpret_cast<uint32_t>(&dense[31 * stage1_batch + stage1_batch - 1]));
+    // The last word stored.
+    wait_l1_store(reinterpret_cast<uint32_t>(&dense[unit_blocks / 2 - 1]));
     noc.async_write(
         CoreLocalMem<uint16_t>(staging),
         max_out,

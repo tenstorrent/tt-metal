@@ -573,40 +573,58 @@ FORCE_INLINE void settle_next_program(uint32_t input_cb) {
 }
 
 #ifdef TOPK_TWO_LEVEL
-// Phase 1 of a two-level program (see topk_large_indices_two_level.hpp): one unit's 32 tiles, tilized as one 32-row
-// block so every tile row holds 32 consecutive keys, and every row reduced to its maximum; the writer sends those to
-// the maxima tensor.
+#ifdef TRISC_MATH
+// The block maxima of one tile unpacked for a max row reduce (data transposed within each face, one face per
+// handoff), pooled into DEST rows `row` (rows 0-15 of the tile, faces 0 and 1) and `row + 4` (rows 16-31, faces 2 and
+// 3) of the current tile. GMPOOL max-accumulates into the top row of an aligned 4-row block and zeroes the other three;
+// DEST rows start undefined, which it reads as -inf. Unlike reduce_tile, the result row stays a row: no transpose
+// back into a column.
+inline void two_level_pool_tile(uint32_t row) {
+    TT_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, row);
+    TT_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, row);
+    TT_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, row + 4);
+    TT_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, row + 4);
+}
+#endif
+
+// Phase 1 of a two-level program (see topk_large_indices_two_level.hpp): one unit's 32 tiles, tilized one tile wide so
+// tile t holds the unit's keys from 1024 t and its row r is block 32 t + r. Every row is reduced to its maximum, eight
+// tiles per output tile: tile i of a group leaves its 32 maxima in DEST rows 8 i and 8 i + 4, 16 each, so the output
+// tile's rows 4 j hold blocks 16 j .. 16 j + 15 of the group, in block order. The writer sends them to the maxima
+// tensor.
 FORCE_INLINE void two_level_unit() {
     constexpr uint32_t cb_stage1 = get_named_compile_time_arg_val("tl_cb_stage1");
     constexpr uint32_t cb_tiled = get_named_compile_time_arg_val("tl_cb_tiled");
     constexpr uint32_t cb_scaler = get_named_compile_time_arg_val("tl_cb_scaler");
     constexpr uint32_t cb_red = get_named_compile_time_arg_val("tl_cb_red");
     constexpr uint32_t stage1_batch = get_named_compile_time_arg_val("tl_stage1_batch");
-    // The max reduce is batched by hand: kernel_lib's REDUCE_ROW takes one DEST acquire per output tile, which
-    // under this kernel's full-sync DEST serializes math and pack.
-    constexpr uint32_t dest_tiles = 8;
-    static_assert(stage1_batch % dest_tiles == 0);
+    constexpr uint32_t group_tiles = 8;
+    static_assert(stage1_batch % group_tiles == 0);
     CircularBuffer tiled(cb_tiled);
     CircularBuffer reduced(cb_red);
     CircularBuffer(cb_scaler).wait_front(1);
-    compute_kernel_lib::tilize<stage1_batch, cb_stage1, cb_tiled>(1);
+    compute_kernel_lib::tilize<1, cb_stage1, cb_tiled>(stage1_batch);
     reconfig_data_format(cb_tiled, cb_scaler);
     pack_reconfig_data_format(cb_red);
-    reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_tiled, cb_scaler, cb_red);
+    // reduce_init without its pack edge mask, which would keep only column 0.
+    state_configure(cb_tiled, cb_scaler, cb_red, __builtin_LINE());
+    UNPACK((llk_unpack_AB_reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_tiled, cb_scaler)));
+    MATH((llk_math_reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW, DST_ACCUM_MODE, MATH_FIDELITY>(
+        cb_tiled, cb_scaler)));
     tiled.wait_front(stage1_batch);
-    for (uint32_t group = 0; group < stage1_batch; group += dest_tiles) {
-        reduced.reserve_back(dest_tiles);
+    for (uint32_t group = 0; group < stage1_batch; group += group_tiles) {
+        reduced.reserve_back(1);
         tile_regs_acquire();
-        for (uint32_t i = 0; i < dest_tiles; ++i) {
-            reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_tiled, cb_scaler, group + i, 0, i);
+        MATH((math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(0)));
+        for (uint32_t i = 0; i < group_tiles; ++i) {
+            UNPACK((llk_unpack_AB_reduce<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_tiled, cb_scaler, group + i, 0)));
+            MATH((two_level_pool_tile(8 * i)));
         }
         tile_regs_commit();
         tile_regs_wait();
-        for (uint32_t i = 0; i < dest_tiles; ++i) {
-            pack_tile(i, cb_red);
-        }
+        pack_tile(0, cb_red);
         tile_regs_release();
-        reduced.push_back(dest_tiles);
+        reduced.push_back(1);
     }
     tiled.pop_front(stage1_batch);
     reduce_uninit();

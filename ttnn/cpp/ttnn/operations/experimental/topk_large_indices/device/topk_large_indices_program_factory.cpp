@@ -475,8 +475,8 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         create_cb(cb_stage1, 2 * (1 + stage1_batch), input_tile_bytes, tt::DataFormat::Float16_b);
         create_cb(cb_tiled, stage1_batch, input_tile_bytes, tt::DataFormat::Float16_b);
         create_cb(cb_scaler, 1, input_tile_bytes, tt::DataFormat::Float16_b);
-        // The compute packs eight reduced tiles per DEST acquire; the writer drains them one at a time.
-        create_cb(cb_red, 16, input_tile_bytes, tt::DataFormat::Float16_b);
+        // A unit's block maxima: one packed tile per eight input tiles, drained by the writer one at a time.
+        create_cb(cb_red, stage1_batch / 8, input_tile_bytes, tt::DataFormat::Float16_b);
         // The writer's phase-1 staging: one unit of block maxima.
         create_cb(cb_max, 1, stage1_batch * 32 * input.element_size(), tt::DataFormat::Float16_b);
         // The block table, a candidate chunk's page at a time, from the writer to the reader.
