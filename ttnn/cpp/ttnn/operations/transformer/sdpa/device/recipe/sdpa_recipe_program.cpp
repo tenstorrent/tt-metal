@@ -10,7 +10,9 @@
 #include <cmath>
 #include <cstdlib>
 #include <iterator>
+#include <mutex>
 #include <set>
+#include <unordered_map>
 
 #include <tt-metalium/allocator.hpp>
 #include <internal/kernel_build_options.hpp>
@@ -86,6 +88,24 @@ uint64_t recipe_free_l1(IDevice& device) {
     const auto lowest = device.lowest_occupied_compute_l1_address();
     const uint64_t top = lowest.has_value() ? static_cast<uint64_t>(*lowest) : device.l1_size_per_core();
     return top - device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+}
+
+RecipeResolution memoized_recipe_resolution(std::size_t key, const std::function<RecipeResolution()>& resolve) {
+    static std::mutex mutex;
+    static std::unordered_map<std::size_t, RecipeResolution> memo;
+    {
+        const std::lock_guard lock(mutex);
+        if (const auto it = memo.find(key); it != memo.end()) {
+            return it->second;
+        }
+    }
+    RecipeResolution resolution = resolve();
+    const std::lock_guard lock(mutex);
+    if (memo.size() >= 4096) {
+        memo.clear();
+    }
+    memo.emplace(key, resolution);
+    return resolution;
 }
 
 bool recipe_fused_cb(const CBDescriptor& cb) {

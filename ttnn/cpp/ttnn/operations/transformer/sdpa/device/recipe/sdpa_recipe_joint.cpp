@@ -27,22 +27,28 @@ PrecisionPolicy joint_recipe_policy(const JointSDPAParams& attrs, const JointSDP
 }
 
 void resolve_joint_recipe(JointSDPAParams& attrs, const JointSDPAInputs& tensors) {
-    const auto policy = joint_recipe_policy(attrs, tensors);
-    attrs.program_config = resolve_dense_recipe_blocking(
-        policy,
-        tensors.input_q,
-        tensors.input_k,
-        &tensors.joint_q,
-        &tensors.joint_k,
-        attrs.program_config,
-        nullptr,
-        0,
-        nullptr,
-        nullptr,
-        false,
-        recipe_kv_storage(tensors.input_v.dtype()));
-    attrs.recipe_l1_budget = recipe_l1_budget(
-        joint_segments(tensors), policy, attrs.program_config, std::nullopt, attrs.output_memory_config, {}, {});
+    const auto resolution = memoized_recipe_resolution(recipe_resolution_key(tensors.input_q, attrs, tensors), [&] {
+        const auto policy = joint_recipe_policy(attrs, tensors);
+        RecipeResolution r;
+        r.program_config = resolve_dense_recipe_blocking(
+            policy,
+            tensors.input_q,
+            tensors.input_k,
+            &tensors.joint_q,
+            &tensors.joint_k,
+            attrs.program_config,
+            nullptr,
+            0,
+            nullptr,
+            nullptr,
+            false,
+            recipe_kv_storage(tensors.input_v.dtype()));
+        r.l1_budget = recipe_l1_budget(
+            joint_segments(tensors), policy, r.program_config, std::nullopt, attrs.output_memory_config, {}, {});
+        return r;
+    });
+    attrs.program_config = resolution.program_config;
+    attrs.recipe_l1_budget = resolution.l1_budget;
 }
 
 std::vector<TensorSpec> joint_recipe_output_specs(const JointSDPAParams& attrs, const JointSDPAInputs& tensors) {

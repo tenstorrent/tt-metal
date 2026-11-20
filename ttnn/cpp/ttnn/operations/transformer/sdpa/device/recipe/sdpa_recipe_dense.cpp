@@ -116,7 +116,8 @@ void validate_dense_recipe(const SDPAParams& attrs, const SDPAInputs& tensors, c
 }
 }  // namespace
 
-void resolve_dense_recipe(SDPAParams& attrs, const SDPAInputs& tensors) {
+namespace {
+RecipeResolution resolve_dense_recipe_uncached(const SDPAParams& attrs, const SDPAInputs& tensors) {
     const auto call = dense_recipe_call(attrs, tensors);
     validate_dense_recipe(attrs, tensors, call);
     TT_FATAL(
@@ -130,20 +131,22 @@ void resolve_dense_recipe(SDPAParams& attrs, const SDPAInputs& tensors) {
     const auto& qs = q.padded_shape();
     const uint32_t out_head_dim = call.options.head_dim_v ? call.options.head_dim_v : qs[3];
     const Tensor& v = call.segments.front()[2];
-    if (attrs.program_config &&
-        (attrs.program_config->q_chunk_size > 1024 || attrs.program_config->q_chunk_size % 32 != 0 ||
-         attrs.program_config->k_chunk_size % 32 != 0)) {
+    RecipeResolution resolution;
+    resolution.program_config = attrs.program_config;
+    if (resolution.program_config &&
+        (resolution.program_config->q_chunk_size > 1024 || resolution.program_config->q_chunk_size % 32 != 0 ||
+         resolution.program_config->k_chunk_size % 32 != 0)) {
         // Chunk sizes the recipe kernels cannot run (tuned for the legacy kernels) are left to the op.
-        attrs.program_config->q_chunk_size = 0;
-        attrs.program_config->k_chunk_size = 0;
+        resolution.program_config->q_chunk_size = 0;
+        resolution.program_config->k_chunk_size = 0;
     }
-    attrs.program_config = resolve_dense_recipe_blocking(
+    resolution.program_config = resolve_dense_recipe_blocking(
         policy,
         q,
         tensors.k,
         nullptr,
         nullptr,
-        attrs.program_config,
+        resolution.program_config,
         tensors.attn_mask ? &*tensors.attn_mask : nullptr,
         recipe_output_l1_bytes(
             q, uint64_t{qs[0]} * qs[1] * (qs[2] / 32) * (out_head_dim / 32), 2048, attrs.output_mem_config),
@@ -151,14 +154,24 @@ void resolve_dense_recipe(SDPAParams& attrs, const SDPAInputs& tensors) {
         &call.options,
         false,
         recipe_kv_storage(v.dtype()));
-    attrs.recipe_l1_budget = recipe_l1_budget(
+    resolution.l1_budget = recipe_l1_budget(
         call.segments,
         policy,
-        attrs.program_config,
+        resolution.program_config,
         tensors.attn_mask,
         attrs.output_mem_config,
         call.key_range,
         call.options);
+    return resolution;
+}
+}  // namespace
+
+void resolve_dense_recipe(SDPAParams& attrs, const SDPAInputs& tensors) {
+    const auto resolution = memoized_recipe_resolution(recipe_resolution_key(tensors.q, attrs, tensors), [&] {
+        return resolve_dense_recipe_uncached(attrs, tensors);
+    });
+    attrs.program_config = resolution.program_config;
+    attrs.recipe_l1_budget = resolution.l1_budget;
 }
 
 TensorSpec dense_recipe_output_spec(const SDPAParams& attrs, const SDPAInputs& tensors) {

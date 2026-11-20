@@ -3,6 +3,8 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -16,6 +18,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
+#include <tt_stl/reflection.hpp>
 
 namespace ttnn::operations::transformer::sdpa::detail {
 
@@ -42,6 +45,24 @@ uint64_t recipe_cb_bytes(const tt::tt_metal::ProgramDescriptor& program);
 // CB budget below the lowest live L1 buffer: global semaphores and persistent buffers occupy the top of L1 in a
 // pipeline, and static CBs must not overlap them.
 uint64_t recipe_free_l1(tt::tt_metal::IDevice& device);
+
+// What a recipe call resolves before the program-cache lookup (both are part of the program hash): the blocking the
+// op chooses and the L1 its layout may use.
+struct RecipeResolution {
+    std::optional<SDPAProgramConfig> program_config;
+    uint64_t l1_budget = 0;
+};
+
+// The memo key of a call's resolution: everything it reads (the caller's attributes and the input tensor specs, as
+// the program hash sees them) plus the device and its free L1.
+template <typename... Inputs>
+std::size_t recipe_resolution_key(const Tensor& q, const Inputs&... inputs) {
+    return ttsl::hash::hash_objects_with_default_seed(q.device()->id(), recipe_free_l1(*q.device()), inputs...);
+}
+
+// The resolution for `key`, from `resolve` the first time the key is seen (a repeated call does no planning). Only
+// successful resolutions are kept; the memo is bounded.
+RecipeResolution memoized_recipe_resolution(std::size_t key, const std::function<RecipeResolution()>& resolve);
 
 // Fused STANDARD / FAST chunks add CBs 29-31 (recipe_compute_program).
 bool recipe_fused_cb(const tt::tt_metal::CBDescriptor& cb);

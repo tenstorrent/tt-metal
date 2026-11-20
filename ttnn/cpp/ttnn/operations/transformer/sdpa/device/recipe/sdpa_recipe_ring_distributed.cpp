@@ -57,12 +57,15 @@ void validate_ring_distributed(const RingDistributedSDPAParams& attrs, const Rin
 }
 }  // namespace
 
-void resolve_ring_distributed_recipe(RingDistributedSDPAParams& attrs, const RingDistributedSDPAInputs& tensors) {
+namespace {
+RecipeResolution resolve_ring_distributed_recipe_uncached(
+    const RingDistributedSDPAParams& attrs, const RingDistributedSDPAInputs& tensors) {
     validate_ring_distributed(attrs, tensors);
     const auto policy = ring_distributed_policy(attrs, tensors);
     const auto key_range = ring_distributed_key_range(attrs, tensors);
     const RecipeDenseOptions options{};
-    attrs.program_config = resolve_dense_recipe_blocking(
+    RecipeResolution resolution;
+    resolution.program_config = resolve_dense_recipe_blocking(
         policy,
         tensors.q,
         tensors.k,
@@ -75,14 +78,24 @@ void resolve_ring_distributed_recipe(RingDistributedSDPAParams& attrs, const Rin
         &options,
         false,
         recipe_kv_storage(tensors.v.dtype()));
-    attrs.recipe_l1_budget = recipe_l1_budget(
+    resolution.l1_budget = recipe_l1_budget(
         {{tensors.q, tensors.k, tensors.v}},
         policy,
-        attrs.program_config,
+        resolution.program_config,
         std::nullopt,
         attrs.output_mem_config,
         key_range,
         options);
+    return resolution;
+}
+}  // namespace
+
+void resolve_ring_distributed_recipe(RingDistributedSDPAParams& attrs, const RingDistributedSDPAInputs& tensors) {
+    const auto resolution = memoized_recipe_resolution(recipe_resolution_key(tensors.q, attrs, tensors), [&] {
+        return resolve_ring_distributed_recipe_uncached(attrs, tensors);
+    });
+    attrs.program_config = resolution.program_config;
+    attrs.recipe_l1_budget = resolution.l1_budget;
 }
 
 TensorSpec ring_distributed_recipe_output_spec(
