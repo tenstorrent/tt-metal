@@ -114,10 +114,12 @@ Tensors
 *******
 
 ``io_tensors`` lists the tensors the program uses, once for each tensor parameter a tensor is bound to, with the output
-last; ``generic_op`` returns the last entry, or, when the tensors are not all on the same devices, only its parts on
-the devices of the tensor that is on the fewest devices (see "Running on a mesh"). Each tensor must be on the device
-and match its parameter's
-``TensorSpec``, unless the parameter's ``TensorSpecRelaxations`` allow a difference, such as a dynamic shape.
+last; ``generic_op`` returns the last entry, or, when the tensors are not all on the same devices, only its parts on the
+devices of the tensor that is on the fewest devices (see "Running on a mesh"). Each tensor must be on the device and
+match its parameter's ``TensorSpec``, unless the parameter's ``TensorSpecRelaxations`` allow a difference, such as a
+dynamic shape. Bind each tensor parameter to a tensor that ``io_tensors`` lists, or to a view of one that holds every
+device its program runs on: the per-device views of a tensor, from ``ttnn.get_device_tensors``, share its
+``MeshTensor``, which is all Metal binds, so a view that misses one of those devices would read data it does not hold.
 
 Calls and the program cache
 ***************************
