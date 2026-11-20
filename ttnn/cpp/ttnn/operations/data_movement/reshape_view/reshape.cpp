@@ -674,6 +674,41 @@ ttnn::Tensor reshape_dispatch(
         return ttnn::experimental::view(tensor, logical_shape, padded_shape);
     }
 
+    // Views and the tiled reshape kernels address the input's tiles on the default tile grid of its logical
+    // shape. Whole padding tiles past it (e.g. from tilize_with_val_padding) shift every later tile off that
+    // grid, so such an input is first rebuilt on it.
+    if (layout == ttnn::TILE_LAYOUT && !tensor.is_sharded() && !same_logical_and_padded) {
+        const auto& tile = tensor.tensor_spec().tile();
+        const auto default_padded_shape =
+            operations::data_movement::compute_padded_shape(tensor_shape, tile.get_height(), tile.get_width());
+        if (tensor.padded_shape() != default_padded_shape) {
+            ttnn::Shape last_index = tensor_shape;
+            for (size_t i = 0; i < last_index.rank(); ++i) {
+                last_index[i] -= 1;
+            }
+            const Tensor row_major = ttnn::untilize_with_unpadding(
+                tensor, last_index, tensor.memory_config(), /*use_multicore=*/true, sub_core_grid);
+            const Tensor retiled = ttnn::tilize_with_val_padding(
+                row_major,
+                default_padded_shape,
+                pad_value.value_or(default_pad_value),
+                tensor.memory_config(),
+                tensor.dtype(),
+                /*use_multicore=*/true,
+                sub_core_grid);
+            return reshape_dispatch(
+                retiled,
+                logical_input_shape,
+                padded_input_shape,
+                memory_config,
+                pad_value,
+                reshape_map_mode,
+                sub_core_grid,
+                skip_padding_fill,
+                impl);
+        }
+    }
+
     // Same-shape config change: a pure memory-config conversion (ND, 2D-sharded, or DRAM<->L1), so
     // apply it directly instead of routing identical shapes through the reshape kernels. A layout-only
     // sharded config (no shard_spec/nd_shard_spec) is left to the auto-derive reshape path.

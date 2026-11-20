@@ -6,6 +6,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 #include <tt-metalium/hal.hpp>
 
 using namespace tt::tt_metal;
@@ -143,6 +144,13 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
             "Typecast operation requires input and output layouts to match. Input layout: {}, Output layout: {}",
             input_tensor.layout(),
             preallocated_output_tensor.value().layout());
+        TT_FATAL(
+            input_tensor.is_sharded() ||
+                preallocated_output_tensor.value().padded_shape() == input_tensor.padded_shape(),
+            "Typecast operation copies pages in order, so an interleaved preallocated output needs the input's padded "
+            "shape. Input padded shape: {}, Preallocated output padded shape: {}",
+            input_tensor.padded_shape(),
+            preallocated_output_tensor.value().padded_shape());
     }
 }
 
@@ -155,8 +163,20 @@ tt::tt_metal::TensorSpec TypecastDeviceOperation::compute_output_specs(
     const Layout output_layout = tensor_args.input.layout();
 
     const Shape output_shape = tensor_args.input.logical_shape();
+    if (args.output_memory_config.is_sharded()) {
+        return tt::tt_metal::TensorSpec(
+            output_shape, TensorLayout(args.output_dtype, output_layout, args.output_memory_config));
+    }
+    // Interleaved pages are copied in order, so the output keeps the input's padded shape: a padded shape
+    // with whole padding tiles past the logical one would otherwise shift every later tile row.
     return tt::tt_metal::TensorSpec(
-        output_shape, TensorLayout(args.output_dtype, output_layout, args.output_memory_config));
+        output_shape,
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
+            args.output_dtype,
+            PageConfig(output_layout),
+            args.output_memory_config,
+            output_shape,
+            tensor_args.input.padded_shape()));
 }
 
 Tensor TypecastDeviceOperation::create_output_tensors(const TypecastParams& args, const TypecastInputs& tensor_args) {
