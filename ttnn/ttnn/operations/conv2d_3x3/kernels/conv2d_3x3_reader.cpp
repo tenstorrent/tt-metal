@@ -102,7 +102,9 @@
 // end, a tile-row straddling two output rows), so the reader copies only those. With d = 1 and one kernel row per
 // K-block (no center slots) a unit of three slab runs is flagged as one strided window. The slab must outlive compute's
 // tilize: on TILE input compute itself is the slab's next writer (its untilize of the next M-block follows its tilize
-// of this one), on ROW_MAJOR the reader waits for compute to pop every entry before it refills the slab.
+// of this one), on ROW_MAJOR the reader waits for compute to pop every entry before it refills the slab, except on the
+// ROW_MAJOR ring slab (conv2d_3x3_rm_ring.hpp: DRAM-interleaved input), which frees ring slots K-block by K-block and
+// fills the next block's pixels while compute is behind.
 //
 // N-slice center taps (the descriptor's NSLICE_CENTER_TAPS; tap-direct N-slice prelude, the kw = 1 tap a whole-tile-row
 // shift, the whole slab in the input ring): the center taps of the three kernel rows are input tile-rows of the core's
@@ -151,6 +153,7 @@
 #include "conv2d_3x3_nslice_order.hpp"
 #include "conv2d_3x3_slab_direct.hpp"
 #include "conv2d_3x3_slab_stream.hpp"
+#include "conv2d_3x3_rm_ring.hpp"
 
 namespace {
 
@@ -159,6 +162,25 @@ constexpr uint32_t ELEM_BYTES = 2;        // bf16 slab and im2col rows
 constexpr uint32_t TRID_GATHER = 4;       // ROW_MAJOR bands use trids 1..3
 constexpr uint32_t TRID_INPUT_TILES = 5;  // TILE footprint batches
 constexpr uint32_t TRID_CENTER = 6;       // center-tap slots
+// ROW_MAJOR ring slab with the bank-run fill (conv2d_3x3_rm_ring.hpp): RM_RING_PX ring pixels, RM_RING_NSTG staging
+// chunks of RM_RING_CHUNK_PX pixels in CB_RM_STAGE; the next block's pixels are filled while the unit FIFO is full
+// (compute behind) and at each band's first K-block. The ring's de-interleave copies use trid 1 (the per-block bands'
+// trids 1..3 are unused there), its DRAM chunks trids 8 ...
+#ifdef RM_RING_PX
+constexpr bool rm_ring = true;
+constexpr int32_t rm_ring_px = RM_RING_PX;
+constexpr uint32_t rm_ring_nstg = RM_RING_NSTG;
+constexpr int32_t rm_ring_chunk = RM_RING_CHUNK_PX;
+constexpr uint32_t cb_rm_stage = CB_RM_STAGE;
+#else
+constexpr bool rm_ring = false;
+constexpr int32_t rm_ring_px = 1;
+constexpr uint32_t rm_ring_nstg = 1;
+constexpr int32_t rm_ring_chunk = 1;
+constexpr uint32_t cb_rm_stage = 0;
+#endif
+constexpr uint32_t TRID_RM_COPY = 1;
+constexpr uint32_t TRID_RM_STAGE = 8;
 
 }  // namespace
 
@@ -484,7 +506,7 @@ void kernel_main() {
         c_in_p,
         block_k_tiles,
         center_mode == 2 ? 1 : -1,
-        ring_slab ? static_cast<int32_t>(slab_tile_rows * TILE_DIM) : 0,
+        ring_slab ? static_cast<int32_t>(slab_tile_rows * TILE_DIM) : (rm_ring ? rm_ring_px : 0),
         im2col_rm_depth_rows * fifo_taps,
         (tap_direct_fifo_units > 0 ? tap_direct_fifo_units : 1),
         cb_im2col_rm,
@@ -710,6 +732,40 @@ void kernel_main() {
     [[maybe_unused]] uint32_t ring_sent = 0;
     [[maybe_unused]] const uint32_t ring_count_words = nslice_outer ? get_read_ptr(cb_ring_token) : 0;
     [[maybe_unused]] int32_t ring_pushed_hi = 0;
+    // ROW_MAJOR ring slab: the fill stream, this block's window, the lowest window pixel of every later block, and the
+    // lowest pixel the previous block's last K-block reads (live until this block's first K-block is reserved).
+    static_assert(
+        !rm_ring || (!tile_input && kb_tap_direct && !channel_slice && !slab_split && !face_direct && !ring_slab &&
+                     center_mode == 0 && !slab_direct && !padded_slab && !zero_slab_lanes),
+        "ROW_MAJOR ring slab: interleaved ROW_MAJOR input, the K-blocked tap-direct walk");
+    using RmB = conv2d_3x3::RmBlocks<
+        output_width,
+        input_width,
+        stride,
+        pad_top,
+        pad_left,
+        dilation,
+        band_last_tap,
+        num_in_px,
+        num_out_px,
+        block_m_tiles>;
+    static_assert(sizeof(RmB) >= 1, "RmB is used only on the ring path");
+    [[maybe_unused]] conv2d_3x3::
+        RmBankRing<rm_ring_px, pixel_bytes, NUM_DRAM_BANKS, rm_ring_nstg, rm_ring_chunk, TRID_RM_COPY, TRID_RM_STAGE>
+            rm;
+#ifdef RM_RING_STAGE_BYTES
+    static_assert(rm_ring_nstg * decltype(rm)::chunk_bytes <= RM_RING_STAGE_BYTES, "staging fits CB_RM_STAGE");
+#endif
+    [[maybe_unused]] conv2d_3x3::RmWindow rm_win{};
+    [[maybe_unused]] int32_t rm_keep_next = conv2d_3x3::RM_INF;
+    [[maybe_unused]] int32_t rm_prev_last_lo = conv2d_3x3::RM_INF;
+    // While the unit FIFO is full: one fill step, then the gather's transaction id and a clean command buffer.
+    [[maybe_unused]] auto rm_idle = [&]() {
+        if (rm.step(reads, input)) {
+            reads.begin(TRID_GATHER);
+            fifo.fixed_state = 0;
+        }
+    };
     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
         const uint32_t block_tiles_done = m_block_idx * block_m_tiles;
         const uint32_t block_valid_tiles =
@@ -1183,7 +1239,31 @@ void kernel_main() {
                     Semaphore<>(slab_free_sem_id).up(1);
                 }
             }
-#ifdef BANK_RUN_FILL
+#if defined(RM_RING_PX)
+            {
+                // ---- fill_halo_slab (ROW_MAJOR ring): this block's window; every band gathers at one base. The fill
+                // itself runs at the band waits and while the unit FIFO is full (conv2d_3x3_rm_ring.hpp).
+                rm_win = RmB::window(m_tile_start, actual_m_tiles, m_block_idx);
+                rm_keep_next = RmB::keep_lo(m_tile_start, actual_m_tiles, m_block_idx + 1, num_m_blocks_this_core);
+                if (m_block_idx == 0) {
+                    // The core's footprint: its first output pixel to its last.
+                    const uint32_t core_first = m_tile_start * TILE_DIM;
+                    const uint32_t core_end_tiles = (m_tile_start + actual_m_tiles) * TILE_DIM;
+                    const conv2d_3x3::SlabFootprint core_fp = conv2d_3x3::
+                        block_footprint<output_width, input_width, stride, pad_top, pad_left, dilation, band_last_tap>(
+                            core_first, core_end_tiles < num_out_px ? core_end_tiles : num_out_px);
+                    rm.template init<input_width, num_in_px, dilation>(
+                        slab_l1,
+                        get_write_ptr(cb_rm_stage),
+                        RmB::keep_lo(m_tile_start, actual_m_tiles, 0, num_m_blocks_this_core),
+                        core_fp);
+                }
+                const int32_t base = rm.base_for(rm_win.lo);
+                for (int32_t kh = 0; kh < 3; ++kh) {
+                    slab_x_base[kh] = base;
+                }
+            }
+#elif defined(BANK_RUN_FILL)
             {
                 // Bank-run fill. DRAM-interleaved pages p, p + NB, p + 2 NB, ... sit back to back in one bank
                 // (InterleavedAddrGen: bank offset (p / NB) * aligned page), so a chunk of BRF_CHUNK_PX consecutive
@@ -1726,7 +1806,24 @@ void kernel_main() {
                     continue;
                 }
             }
-            if (col_lo == 0) {
+            if constexpr (rm_ring) {
+                // The previous K-block's entries are all reserved, so compute popped every entry before it: the lowest
+                // live pixel is the first in-image band K-blocks >= k - 1 read, or a later block's window.
+                int32_t live = rm_keep_next;
+                if (k_block_idx == 0) {
+                    live = rm_prev_last_lo < rm_win.lo ? rm_prev_last_lo : rm_win.lo;
+                    live = rm_keep_next < live ? rm_keep_next : live;
+                } else {
+                    const int32_t lo = conv2d_3x3::rm_first_band_lo(
+                        rm_win, static_cast<int32_t>((k_block_idx - 1) * block_k_tiles / tensor_kkh_tiles));
+                    live = lo < live ? lo : live;
+                }
+                rm.release(live);
+                if (col_lo == 0 && rm_win.band_hi[kh] > 0) {
+                    MaybeDeviceZoneScope("reader_band_wait");
+                    rm.need(reads, input, rm_win.band_hi[kh]);
+                }
+            } else if (col_lo == 0) {
                 // The band's slab rows: compute's untilize (TILE) or this core's own band reads (ROW_MAJOR).
                 MaybeDeviceZoneScope("reader_band_wait");
                 for (int32_t band = kh; band < kh + static_cast<int32_t>(kh_per_k_block); ++band) {
@@ -1797,7 +1894,11 @@ void kernel_main() {
                 fifo.fixed_state = 0;
                 reads.begin(TRID_GATHER);
                 for (uint32_t tile_row = 0; tile_row < block_m_tiles; ++tile_row) {
-                    fifo.reserve(tap_direct_group, block_m_tiles - tile_row);
+                    if constexpr (rm_ring) {
+                        fifo.reserve(tap_direct_group, block_m_tiles - tile_row, rm_idle);
+                    } else {
+                        fifo.reserve(tap_direct_group, block_m_tiles - tile_row);
+                    }
                     if constexpr (center_mode == 2) {
                         if (tile_row == 0) {
                             issue_center_rows(
@@ -1865,13 +1966,19 @@ void kernel_main() {
         } else if constexpr ((window_direct && !s2_taps) || (tap_direct && nslice_outer)) {
             // Compute tilizes slab runs in place: the slab is dead only once compute popped every unit.
             cb_reserve_back(cb_im2col_rm, im2col_rm_depth_rows * block_k_tiles);
-        } else if constexpr (kb_tap_direct && !tile_input) {
+        } else if constexpr (kb_tap_direct && !tile_input && !rm_ring) {
             // ROW_MAJOR: this reader refills the slab for the next M-block itself, so it waits until compute popped
             // every entry pointing into it. TILE needs no wait: compute's untilize of the next block, the slab's only
-            // writer, runs after its own tilize of this one (same unpacker, in order).
+            // writer, runs after its own tilize of this one (same unpacker, in order). The ring slab instead frees
+            // ring slots K-block by K-block (rm.release).
             if (m_block_idx + 1 < num_m_blocks_this_core) {
                 cb_reserve_back(cb_src_table, tap_direct_fifo_units);
             }
+        }
+        if constexpr (rm_ring) {
+            // The last K-block's bands (live until the next block's first K-block is reserved).
+            rm_prev_last_lo = conv2d_3x3::rm_first_band_lo(
+                rm_win, static_cast<int32_t>((num_k_blocks - 1) * block_k_tiles / tensor_kkh_tiles));
         }
         if constexpr (tile_input && !ring_slab && !s2_taps) {
             const uint32_t slab_pages = slab_rows_m * c_in_tiles;

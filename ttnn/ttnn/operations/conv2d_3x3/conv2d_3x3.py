@@ -605,6 +605,13 @@ def conv2d_3x3(
         has_bias=bias is not None,
         sharded_output=input_memory_config.is_sharded(),
         k_cols=channel_slices(c_in, input_tensor.layout, input_memory_config),
+        bank_run_input=(
+            input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+            and input_memory_config.memory_layout == _ML.INTERLEAVED
+            and input_memory_config.buffer_type == ttnn.BufferType.DRAM
+            and c_in == c_in_p
+            and input_tensor.buffer_aligned_page_size() == c_in_p * 2
+        ),
     )
     if geometry.sharded_output:
         # Same shard grid and scheme as the input. HEIGHT: one M work index per shard, shard i on shard

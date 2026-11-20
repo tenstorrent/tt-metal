@@ -806,6 +806,21 @@ struct TapDirectFifo {
         cb_reserve_back(cb_table, g);
         tbl_reserved = g;
     }
+    // `idle` runs while the table is full (compute behind): the ROW_MAJOR ring slab issues its fill there.
+    template <typename Idle>
+    FORCE_INLINE void reserve(uint32_t group, uint32_t units_left, Idle&& idle) {
+        if (tbl_reserved > tbl_written) {
+            return;
+        }
+        const uint32_t to_end = table_units - tbl_head;
+        uint32_t g = group < units_left ? group : units_left;
+        g = g < to_end ? g : to_end;
+        while (!cb_pages_reservable_at_back(cb_table, g)) {
+            idle();
+        }
+        cb_reserve_back(cb_table, g);
+        tbl_reserved = g;
+    }
 
     // One tap's 32 rows across output-row runs (a tile-row straddling two output rows) into dst.
     template <typename Reads>

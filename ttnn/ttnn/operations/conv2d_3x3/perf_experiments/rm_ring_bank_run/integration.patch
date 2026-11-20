@@ -1,0 +1,858 @@
+diff -ruN a/conv2d_3x3.py b/conv2d_3x3.py
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3.py	2026-11-20 20:49:49.365774145 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3.py	2026-11-20 20:49:49.386774443 +0000
+@@ -633,6 +633,13 @@
+         sharded_output=input_memory_config.is_sharded(),
+         k_cols=channel_slices(c_in, input_tensor.layout, input_memory_config),
+         l1_small_bytes=ttnn.device.get_memory_view(device, ttnn.BufferType.L1_SMALL).total_bytes_per_bank,
++        bank_run_input=(
++            input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
++            and input_memory_config.memory_layout == _ML.INTERLEAVED
++            and input_memory_config.buffer_type == ttnn.BufferType.DRAM
++            and c_in == c_in_p
++            and input_tensor.buffer_aligned_page_size() == c_in_p * 2
++        ),
+     )
+     if geometry.sharded_output:
+         # Same shard grid and scheme as the input. HEIGHT: one M work index per shard, shard i on shard
+diff -ruN a/conv2d_3x3_program_descriptor.py b/conv2d_3x3_program_descriptor.py
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py	2026-11-20 20:49:49.366774159 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py	2026-11-20 20:49:49.386774443 +0000
+@@ -107,6 +107,27 @@
+     return None
+ 
+ 
++# ROW_MAJOR ring slab with the bank-run fill (perf experiment rm_ring_bank_run, kernels/conv2d_3x3_rm_ring.hpp). On the
++# K-blocked tap-direct walk over a DRAM-interleaved ROW_MAJOR input with one pixel per page, cb_halo_slab is a ring of
++# consecutive input pixels across a core's M-blocks: each input pixel is read from DRAM once per core (the per-M-block
++# slab re-reads the bands every block covers: ~3x where bm * 32 < W). The ring is filled in RM_RING_CHUNK_BYTES chunks of
++# consecutive pixels, one DRAM read per bank per chunk into a dedicated staging ring of RM_RING_NSTG chunks (CB_RM_STAGE,
++# counted in the L1 solve), de-interleaved into the ring with local NoC copies. RM_RING_OVERLAP: the next M-block's new
++# pixels are filled while compute works on this one (the reader fills while the unit FIFO is full); False: only at the
++# band waits. The ring keeps the slab solve's bk (bit-identical) and weight residency and takes the largest bm whose
++# ring fits; RM_RING_MIN_BM_FRAC (off): only where that bm is >= this fraction of the slab solve's, unless C_out is at
++# most RM_RING_NARROW_N_TILES tiles. Measured (Blackhole p150b, bit-identical, base -> ring us): 1026x2048 32->128
++# 2609 -> 1876, 1026x2048 128->3 5226 -> 2468, 514x1024 128->3 1408 -> 806; flat on 514x1024 128->256 (bm 10 -> 2,
++# +0.4%, median of 3), 514x1024 128->512 (streamed weights, bm 9 -> 4) +1.55% (median of 3).
++RM_RING = True
++RM_RING_OVERLAP = True
++RM_RING_NSTG = 2
++RM_RING_CHUNK_BYTES = 8192
++RM_RING_MIN_BM_FRAC = 0.0
++RM_RING_NARROW_N_TILES = 2
++CB_RM_STAGE = 16
++
++
+ # R4 reduce-scatter semaphores; the weight multicast channel allocates its own after them.
+ SEM_COMBINE_CREDIT = 0
+ SEM_COMBINE_ARRIVAL = 1
+@@ -551,6 +572,8 @@
+     block_rows: int = 0
+     # The device's L1_SMALL region size (l1_cb_budget_bytes).
+     l1_small_bytes: int = 0
++    # DRAM-interleaved ROW_MAJOR input with one pixel per page (no padded lanes): the bank-run reads apply (RM_RING).
++    bank_run_input: bool = False
+ 
+     @property
+     def pad_sides(self):
+@@ -663,11 +686,18 @@
+     ring: bool = False
+     # Weights resident (weights_resident_capable): cb_weights holds all num_k_blocks rounds (weight_depth = num_k_blocks).
+     weights_resident: bool = False
++    # ROW_MAJOR ring slab (rm_ring_capable): ring capacity in pixels (0: the per-M-block slab), and its staging ring
++    # (chunks, pixels per chunk).
++    rm_ring_px: int = 0
++    rm_stage_n: int = 0
++    rm_stage_px: int = 0
+ 
+     @property
+     def slab_px(self):
+         if self.slab_tile_rows:
+             return self.slab_tile_rows * TILE
++        if self.rm_ring_px:
++            return self.rm_ring_px
+         return 2 * self.band_stride_px + self.band_len_px
+ 
+ 
+@@ -1294,6 +1324,103 @@
+     )
+ 
+ 
++def rm_ring_capable(g: Conv3x3Geometry, bm, bk):
++    """ROW_MAJOR ring slab (RM_RING): a DRAM-interleaved ROW_MAJOR input with one pixel per page, on the K-blocked
++    tap-direct walk (the gather that wraps ring reads). Not on a TILE or sharded input (no pixel pages to bank-run; a
++    sharded slab fill reads owner shards), a K split, or slab-direct."""
++    return (
++        RM_RING
++        and g.bank_run_input
++        and not g.tile_input
++        and not g.sharded_output
++        and not g.k_split
++        and _tap_direct(g, bm, bk, False)
++        and _tap_direct_fifo_units(g, bm, bk, False) > 0
++        and not slab_direct_capable(g, bk)
++        and center_tap_mode(g, bm, bk) == CENTER_NONE
++    )
++
++
++def _rm_stage(g: Conv3x3Geometry):
++    """(chunks, pixels per chunk) of the ring fill's staging: RM_RING_CHUNK_BYTES of whole bank rows (8 pixels)."""
++    pixel_bytes = g.c_in_p * BF16_BYTES
++    return RM_RING_NSTG, max(8, RM_RING_CHUNK_BYTES // pixel_bytes // 8 * 8)
++
++
++_RM_INF = (1 << 31) - 1
++
++
++@functools.lru_cache(maxsize=1024)
++def rm_ring_plan(g: Conv3x3Geometry, core_m_tiles, bm, bk):
++    """Ring capacity in pixels (mirror of the reader's release / band-wait sequence, conv2d_3x3_rm_ring.hpp): over every
++    core's K-block walk, the most pixels from the lowest pixel still live (compute may still tilize from it) to the end
++    of the band a K-block waits for, and every M-block's window. The fill never writes past `allowed` (it cuts chunks
++    there and at the band a wait needs), so a band wait needs no slack. None when a block touches no in-image pixel."""
++    kkh = g.tensor_kkh_tiles
++    nkb = g.tensor_k_tiles // bk
++    worst = 0
++
++    def first_band_lo(bands, kh0):
++        for b in range(kh0, 3):
++            if bands[b] is not None:
++                return bands[b][0]
++        return _RM_INF
++
++    for start, actual in core_m_ranges(g, core_m_tiles):
++        wins = []
++        for block_start in range(0, actual, bm):
++            tiles = min(bm, actual - block_start)
++            o_first = (start + block_start) * TILE
++            o_end = min((start + block_start + tiles) * TILE, g.num_out_px)
++            band_len = _block_band_len(g, o_first, o_end - 1)
++            f = _block_first_tap(g, o_first)
++            bands = []
++            for kh in range(3):
++                v = f + kh * g.dilation * g.input_width
++                a, z = max(v, 0), min(v + band_len, g.num_in_px)
++                bands.append((a, z) if a < z else None)
++            if all(b is None for b in bands):
++                return None
++            lo = min(b[0] for b in bands if b is not None)
++            hi = max(b[1] for b in bands if b is not None)
++            worst = max(worst, hi - lo)
++            wins.append((lo, bands))
++        keep_after = [_RM_INF] * (len(wins) + 1)
++        for m in range(len(wins) - 1, -1, -1):
++            keep_after[m] = min(keep_after[m + 1], wins[m][0])
++        live_run = -_RM_INF
++        prev_last_lo = _RM_INF
++        for m, (lo, bands) in enumerate(wins):
++            keep_next = keep_after[m + 1]
++            for k in range(nkb):
++                kh = k * bk // kkh
++                if k == 0:
++                    live = min(prev_last_lo, lo, keep_next)
++                else:
++                    live = min(keep_next, first_band_lo(bands, (k - 1) * bk // kkh))
++                if live < _RM_INF:
++                    live_run = max(live_run, live)
++                if k * bk == kh * kkh and bands[kh] is not None:
++                    worst = max(worst, bands[kh][1] - live_run)
++            prev_last_lo = first_band_lo(bands, (nkb - 1) * bk // kkh)
++    return worst
++
++
++# The most DRAM banks a chunk's bank runs round up to (a staging chunk holds NB runs of ceil(chunk / NB) pixels).
++RM_MAX_DRAM_BANKS = 12
++
++
++def _rm_stage_bytes(g: Conv3x3Geometry):
++    nstg, chunk_px = _rm_stage(g)
++    return nstg * (chunk_px + RM_MAX_DRAM_BANKS - 1) * g.c_in_p * BF16_BYTES
++
++
++def _rm_ring_delta(g: Conv3x3Geometry, fit, ring_px):
++    """L1 the ring costs over the per-block slab: the ring for the slab, plus the staging."""
++    slab_px = 2 * fit["band_stride_px"] + fit["band_len_px"]
++    return (ring_px - slab_px) * g.c_in_p * BF16_BYTES + _rm_stage_bytes(g)
++
++
+ @functools.lru_cache(maxsize=256)
+ def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
+     """The one place block extents are chosen. Order of the L1 solve (op_design Mechanism caps #1):
+@@ -1328,9 +1455,17 @@
+     search = [(bm, bk) for bm in bm_candidates for bk in bk_above_floor]
+     search += [(bm_candidates[-1], bk) for bk in bk_below_floor]
+ 
+-    def solve(candidates, nslice, shared=False, wr_solve=False):
++    def solve(candidates, nslice, shared=False, wr_solve=False, rm=False):
+         for bm, bk in candidates:
+             resident = wr_solve and weights_resident_capable(g, core_m_tiles, bm, bk, nslice)
++            # ROW_MAJOR ring slab (rm): only candidates that take it (one M-block per core has nothing to reuse).
++            rm_px = None
++            if rm:
++                if nslice or _div_up(core_m_tiles, bm) < 2 or not rm_ring_capable(g, bm, bk):
++                    continue
++                rm_px = rm_ring_plan(g, core_m_tiles, bm, bk)
++                if rm_px is None:
++                    continue
+             # The untilize batch shrinks first: a smaller batch costs one more read fence per tile-row,
+             # a smaller bk costs a whole K-block (tilize, matmul init, L1-acc pass).
+             band_len, raw_slab_rows = _block_extents(g, core_m_tiles, bm)
+@@ -1339,6 +1474,18 @@
+                 fit = _footprint(g, core_m_tiles, bm, bk, bn, ub_cap, nslice, shared=shared, resident=resident)
+                 if resident:
+                     fit["weights_resident"] = True
++                rm_delta = 0
++                if rm_px:
++                    # The ring replaces the per-block slab before the deep im2col ring takes the L1 left.
++                    rm_delta = _rm_ring_delta(g, fit, rm_px)
++                    nstg, chunk_px = _rm_stage(g)
++                    fit = dict(
++                        fit,
++                        rm_ring_px=rm_px,
++                        rm_stage_n=nstg,
++                        rm_stage_px=chunk_px,
++                        footprint_bytes=fit["footprint_bytes"] + rm_delta,
++                    )
+                 if fit["footprint_bytes"] <= l1_budget:
+                     # The deeper im2col ring only takes L1 left at this (bm, bk, ub): it never costs a coarser block.
+                     for depth in range(_im2col_ring_target(g, bm, bk, nslice), IM2COL_RM_DEPTH_ROWS, -1):
+@@ -1354,6 +1501,14 @@
+                             shared=shared,
+                             resident=resident,
+                         )
++                        if rm_px:
++                            deep = dict(
++                                deep,
++                                rm_ring_px=fit["rm_ring_px"],
++                                rm_stage_n=fit["rm_stage_n"],
++                                rm_stage_px=fit["rm_stage_px"],
++                                footprint_bytes=deep["footprint_bytes"] + rm_delta,
++                            )
+                         if deep["footprint_bytes"] <= l1_budget:
+                             fit = dict(deep, weights_resident=True) if resident else deep
+                             break
+@@ -1389,6 +1544,18 @@
+         return None
+ 
+     blocking = solve(search, nslice=False, wr_solve=True) or solve(search, nslice=False)
++    if RM_RING and blocking is not None and not g.k_split and g.bank_run_input and blocking.max_m_blocks_per_core > 1:
++        # ROW_MAJOR ring slab at the slab solve's bk (a different K-block count changes the fp32 accumulation order) and
++        # its weight residency: the largest bm whose ring fits, if it keeps bm >= RM_RING_MIN_BM_FRAC of the slab's.
++        # Not where the slab solve runs one M-block per core: there every pixel is read once already.
++        bk0, bm0 = blocking.block_k_tiles, blocking.block_m_tiles
++        frac = 0.0 if g.tensor_n_tiles <= RM_RING_NARROW_N_TILES else RM_RING_MIN_BM_FRAC
++        ring_search = [(bm, bk) for bm, bk in search if bk == bk0 and bm <= bm0 and bm >= frac * bm0]
++        ring_blocking = solve(
++            ring_search, nslice=False, wr_solve=blocking.weights_resident, rm=True
++        )
++        if ring_blocking is not None:
++            blocking = ring_blocking
+     if blocking is not None and g.k_split:
+         # N-slice-outer at the K-blocked solve's bm, unless its resident [bm, K] in0 does not fit. There bk only sets
+         # the gather / tilize granularity and costs almost no L1, so the coarsest that fits wins.
+@@ -2806,6 +2973,9 @@
+         cbs.append(_cb(CB_SRC_TABLE, ttnn.float32, RING_TOKEN_BYTES, 1, cores))
+     elif tap_direct:
+         cbs.append(_cb(CB_SRC_TABLE, ttnn.bfloat16, 64, _src_table_bytes(b.im2col_rm_depth_rows) // 64, cores))
++    if b.rm_ring_px:
++        # ROW_MAJOR ring slab: the bank-run fill's staging ring (counted in the solve, _rm_ring_delta).
++        cbs.append(_cb(CB_RM_STAGE, ttnn.bfloat16, pixel_bytes, _rm_stage_bytes(g) // pixel_bytes, cores))
+     center_mode = b.center_mode
+     if center_mode == CENTER_K_BLOCK:
+         cbs.append(_cb(CB_CENTER_TILES, input_tensor.dtype, g.in0_tile_bytes, bm * bk, cores))
+@@ -3794,6 +3964,11 @@
+     _wr_defines = [("WEIGHTS_RESIDENT", "1")] if b.weights_resident else []
+     if b.weights_resident:
+         assert not (kwf or slab_direct or row_split or b.nslice or g.k_split or g.sharded_output or weight_servers)
++    if b.rm_ring_px:
++        # The ring slab replaces the bank-run fill (its own bank-run reads, into dedicated staging).
++        assert brf_fill and not (kwf or slab_direct or row_split or b.nslice or g.k_split or g.sharded_output)
++        assert tap_direct_fifo_units > 0 and center_mode == CENTER_NONE and not g.tile_input
++        brf_fill = False
+     _brf_defines = (
+         [
+             ("BANK_RUN_FILL", "1"),
+@@ -3803,6 +3978,18 @@
+         if brf_fill
+         else []
+     )
++    _rm_ring_defines = (
++        [
++            ("RM_RING_PX", str(b.rm_ring_px)),
++            ("RM_RING_OVERLAP", "1" if RM_RING_OVERLAP else "0"),
++            ("RM_RING_NSTG", str(b.rm_stage_n)),
++            ("RM_RING_CHUNK_PX", str(b.rm_stage_px)),
++            ("RM_RING_STAGE_BYTES", str(_rm_stage_bytes(g))),
++            ("CB_RM_STAGE", str(CB_RM_STAGE)),
++        ]
++        if b.rm_ring_px
++        else []
++    )
+     readers = [
+         ttnn.KernelDescriptor(
+             kernel_source=str(KERNEL_DIR / "conv2d_3x3_reader.cpp"),
+@@ -3815,7 +4002,8 @@
+             + _sd_dm_defines
+             + _s2_dm_defines
+             + _host_fill_defines
+-            + _brf_defines,
++            + _brf_defines
++            + _rm_ring_defines,
+             config=ttnn.ReaderConfigDescriptor(),
+         )
+         for slice_channels, (reader_cores, reader_rt) in reader_groups.items()
+diff -ruN a/kernels/conv2d_3x3_gather_dataflow.hpp b/kernels/conv2d_3x3_gather_dataflow.hpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_gather_dataflow.hpp	2026-11-20 20:49:49.378774329 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_gather_dataflow.hpp	2026-11-20 20:49:49.397774598 +0000
+@@ -806,6 +806,21 @@
+         cb_reserve_back(cb_table, g);
+         tbl_reserved = g;
+     }
++    // rm_ring_bank_run: `idle` runs while the table is full (compute behind), e.g. to issue the ring fill.
++    template <typename Idle>
++    FORCE_INLINE void reserve(uint32_t group, uint32_t units_left, Idle&& idle) {
++        if (tbl_reserved > tbl_written) {
++            return;
++        }
++        const uint32_t to_end = table_units - tbl_head;
++        uint32_t g = group < units_left ? group : units_left;
++        g = g < to_end ? g : to_end;
++        while (!cb_pages_reservable_at_back(cb_table, g)) {
++            idle();
++        }
++        cb_reserve_back(cb_table, g);
++        tbl_reserved = g;
++    }
+ 
+     // One tap's 32 rows across output-row runs (a tile-row straddling two output rows) into dst.
+     template <typename Reads>
+diff -ruN a/kernels/conv2d_3x3_reader.cpp b/kernels/conv2d_3x3_reader.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp	2026-11-20 20:49:49.380774358 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp	2026-11-20 20:49:49.400774641 +0000
+@@ -102,7 +102,9 @@
+ // end, a tile-row straddling two output rows), so the reader copies only those. With d = 1 and one kernel row per
+ // K-block (no center slots) a unit of three slab runs is flagged as one strided window. The slab must outlive compute's
+ // tilize: on TILE input compute itself is the slab's next writer (its untilize of the next M-block follows its tilize
+-// of this one), on ROW_MAJOR the reader waits for compute to pop every entry before it refills the slab.
++// of this one), on ROW_MAJOR the reader waits for compute to pop every entry before it refills the slab, except on the
++// ROW_MAJOR ring slab (conv2d_3x3_rm_ring.hpp: DRAM-interleaved input), which frees ring slots K-block by K-block and
++// fills the next block's pixels while compute is behind.
+ //
+ // N-slice center taps (the descriptor's NSLICE_CENTER_TAPS; tap-direct N-slice prelude, the kw = 1 tap a whole-tile-row
+ // shift, the whole slab in the input ring): the center taps of the three kernel rows are input tile-rows of the core's
+@@ -151,6 +153,7 @@
+ #include "conv2d_3x3_nslice_order.hpp"
+ #include "conv2d_3x3_slab_direct.hpp"
+ #include "conv2d_3x3_slab_stream.hpp"
++#include "conv2d_3x3_rm_ring.hpp"
+ 
+ namespace {
+ 
+@@ -159,6 +162,27 @@
+ constexpr uint32_t TRID_GATHER = 4;       // ROW_MAJOR bands use trids 1..3
+ constexpr uint32_t TRID_INPUT_TILES = 5;  // TILE footprint batches
+ constexpr uint32_t TRID_CENTER = 6;       // center-tap slots
++// ROW_MAJOR ring slab with the bank-run fill (perf experiment rm_ring_bank_run, conv2d_3x3_rm_ring.hpp): RM_RING_PX ring
++// pixels, RM_RING_NSTG staging chunks of RM_RING_CHUNK_PX pixels in CB_RM_STAGE; RM_RING_OVERLAP 1 fills the next
++// block's pixels while the unit FIFO is full (compute behind), 0 only at each band's first K-block. The ring's
++// de-interleave copies use trid 1 (the per-block bands' trids 1..3 are unused there), its DRAM chunks trids 8 ...
++#ifdef RM_RING_PX
++constexpr bool rm_ring = true;
++constexpr int32_t rm_ring_px = RM_RING_PX;
++constexpr bool rm_ring_overlap = RM_RING_OVERLAP != 0;
++constexpr uint32_t rm_ring_nstg = RM_RING_NSTG;
++constexpr int32_t rm_ring_chunk = RM_RING_CHUNK_PX;
++constexpr uint32_t cb_rm_stage = CB_RM_STAGE;
++#else
++constexpr bool rm_ring = false;
++constexpr int32_t rm_ring_px = 1;
++constexpr bool rm_ring_overlap = false;
++constexpr uint32_t rm_ring_nstg = 1;
++constexpr int32_t rm_ring_chunk = 1;
++constexpr uint32_t cb_rm_stage = 0;
++#endif
++constexpr uint32_t TRID_RM_COPY = 1;
++constexpr uint32_t TRID_RM_STAGE = 8;
+ 
+ }  // namespace
+ 
+@@ -484,7 +508,7 @@
+         c_in_p,
+         block_k_tiles,
+         center_mode == 2 ? 1 : -1,
+-        ring_slab ? static_cast<int32_t>(slab_tile_rows * TILE_DIM) : 0,
++        ring_slab ? static_cast<int32_t>(slab_tile_rows * TILE_DIM) : (rm_ring ? rm_ring_px : 0),
+         im2col_rm_depth_rows * fifo_taps,
+         (tap_direct_fifo_units > 0 ? tap_direct_fifo_units : 1),
+         cb_im2col_rm,
+@@ -710,6 +734,46 @@
+     [[maybe_unused]] uint32_t ring_sent = 0;
+     [[maybe_unused]] const uint32_t ring_count_words = nslice_outer ? get_read_ptr(cb_ring_token) : 0;
+     [[maybe_unused]] int32_t ring_pushed_hi = 0;
++    // ROW_MAJOR ring slab: the fill stream, this block's window, the lowest window pixel of every later block, and the
++    // lowest pixel the previous block's last K-block reads (live until this block's first K-block is reserved).
++    static_assert(
++        !rm_ring || (!tile_input && kb_tap_direct && !channel_slice && !slab_split && !face_direct && !ring_slab &&
++                     center_mode == 0 && !slab_direct && !padded_slab && !zero_slab_lanes),
++        "ROW_MAJOR ring slab: interleaved ROW_MAJOR input, the K-blocked tap-direct walk");
++    using RmB = conv2d_3x3::RmBlocks<
++        output_width,
++        input_width,
++        stride,
++        pad_top,
++        pad_left,
++        dilation,
++        band_last_tap,
++        num_in_px,
++        num_out_px,
++        block_m_tiles>;
++    static_assert(sizeof(RmB) >= 1, "RmB is used only on the ring path");
++    [[maybe_unused]] conv2d_3x3::RmBankRing<
++        rm_ring_px,
++        pixel_bytes,
++        NUM_DRAM_BANKS,
++        rm_ring_nstg,
++        rm_ring_chunk,
++        TRID_RM_COPY,
++        TRID_RM_STAGE>
++        rm;
++#ifdef RM_RING_STAGE_BYTES
++    static_assert(rm_ring_nstg * decltype(rm)::chunk_bytes <= RM_RING_STAGE_BYTES, "staging fits CB_RM_STAGE");
++#endif
++    [[maybe_unused]] conv2d_3x3::RmWindow rm_win{};
++    [[maybe_unused]] int32_t rm_keep_next = conv2d_3x3::RM_INF;
++    [[maybe_unused]] int32_t rm_prev_last_lo = conv2d_3x3::RM_INF;
++    // While the unit FIFO is full: one fill step, then the gather's transaction id and a clean command buffer.
++    [[maybe_unused]] auto rm_idle = [&]() {
++        if (rm.step(reads, input)) {
++            reads.begin(TRID_GATHER);
++            fifo.fixed_state = 0;
++        }
++    };
+     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
+         const uint32_t block_tiles_done = m_block_idx * block_m_tiles;
+         const uint32_t block_valid_tiles =
+@@ -1183,7 +1247,31 @@
+                     Semaphore<>(slab_free_sem_id).up(1);
+                 }
+             }
+-#ifdef BANK_RUN_FILL
++#if defined(RM_RING_PX)
++            {
++                // ---- fill_halo_slab (ROW_MAJOR ring): this block's window; every band gathers at one base. The fill
++                // itself runs at the band waits and while the unit FIFO is full (conv2d_3x3_rm_ring.hpp).
++                rm_win = RmB::window(m_tile_start, actual_m_tiles, m_block_idx);
++                rm_keep_next = RmB::keep_lo(m_tile_start, actual_m_tiles, m_block_idx + 1, num_m_blocks_this_core);
++                if (m_block_idx == 0) {
++                    // The core's footprint: its first output pixel to its last.
++                    const uint32_t core_first = m_tile_start * TILE_DIM;
++                    const uint32_t core_end_tiles = (m_tile_start + actual_m_tiles) * TILE_DIM;
++                    const conv2d_3x3::SlabFootprint core_fp = conv2d_3x3::
++                        block_footprint<output_width, input_width, stride, pad_top, pad_left, dilation, band_last_tap>(
++                            core_first, core_end_tiles < num_out_px ? core_end_tiles : num_out_px);
++                    rm.template init<input_width, num_in_px, dilation>(
++                        slab_l1,
++                        get_write_ptr(cb_rm_stage),
++                        RmB::keep_lo(m_tile_start, actual_m_tiles, 0, num_m_blocks_this_core),
++                        core_fp);
++                }
++                const int32_t base = rm.base_for(rm_win.lo);
++                for (int32_t kh = 0; kh < 3; ++kh) {
++                    slab_x_base[kh] = base;
++                }
++            }
++#elif defined(BANK_RUN_FILL)
+             {
+                 // Bank-run fill. DRAM-interleaved pages p, p + NB, p + 2 NB, ... sit back to back in one bank
+                 // (InterleavedAddrGen: bank offset (p / NB) * aligned page), so a chunk of BRF_CHUNK_PX consecutive
+@@ -1726,7 +1814,24 @@
+                     continue;
+                 }
+             }
+-            if (col_lo == 0) {
++            if constexpr (rm_ring) {
++                // The previous K-block's entries are all reserved, so compute popped every entry before it: the lowest
++                // live pixel is the first in-image band K-blocks >= k - 1 read, or a later block's window.
++                int32_t live = rm_keep_next;
++                if (k_block_idx == 0) {
++                    live = rm_prev_last_lo < rm_win.lo ? rm_prev_last_lo : rm_win.lo;
++                    live = rm_keep_next < live ? rm_keep_next : live;
++                } else {
++                    const int32_t lo = conv2d_3x3::rm_first_band_lo(
++                        rm_win, static_cast<int32_t>((k_block_idx - 1) * block_k_tiles / tensor_kkh_tiles));
++                    live = lo < live ? lo : live;
++                }
++                rm.release(live);
++                if (col_lo == 0 && rm_win.band_hi[kh] > 0) {
++                    MaybeDeviceZoneScope("reader_band_wait");
++                    rm.need(reads, input, rm_win.band_hi[kh]);
++                }
++            } else if (col_lo == 0) {
+                 // The band's slab rows: compute's untilize (TILE) or this core's own band reads (ROW_MAJOR).
+                 MaybeDeviceZoneScope("reader_band_wait");
+                 for (int32_t band = kh; band < kh + static_cast<int32_t>(kh_per_k_block); ++band) {
+@@ -1797,7 +1902,11 @@
+                 fifo.fixed_state = 0;
+                 reads.begin(TRID_GATHER);
+                 for (uint32_t tile_row = 0; tile_row < block_m_tiles; ++tile_row) {
+-                    fifo.reserve(tap_direct_group, block_m_tiles - tile_row);
++                    if constexpr (rm_ring_overlap) {
++                        fifo.reserve(tap_direct_group, block_m_tiles - tile_row, rm_idle);
++                    } else {
++                        fifo.reserve(tap_direct_group, block_m_tiles - tile_row);
++                    }
+                     if constexpr (center_mode == 2) {
+                         if (tile_row == 0) {
+                             issue_center_rows(
+@@ -1865,14 +1974,20 @@
+         } else if constexpr ((window_direct && !s2_taps) || (tap_direct && nslice_outer)) {
+             // Compute tilizes slab runs in place: the slab is dead only once compute popped every unit.
+             cb_reserve_back(cb_im2col_rm, im2col_rm_depth_rows * block_k_tiles);
+-        } else if constexpr (kb_tap_direct && !tile_input) {
++        } else if constexpr (kb_tap_direct && !tile_input && !rm_ring) {
+             // ROW_MAJOR: this reader refills the slab for the next M-block itself, so it waits until compute popped
+             // every entry pointing into it. TILE needs no wait: compute's untilize of the next block, the slab's only
+-            // writer, runs after its own tilize of this one (same unpacker, in order).
++            // writer, runs after its own tilize of this one (same unpacker, in order). The ring slab instead frees
++            // ring slots K-block by K-block (rm.release).
+             if (m_block_idx + 1 < num_m_blocks_this_core) {
+                 cb_reserve_back(cb_src_table, tap_direct_fifo_units);
+             }
+         }
++        if constexpr (rm_ring) {
++            // The last K-block's bands (live until the next block's first K-block is reserved).
++            rm_prev_last_lo = conv2d_3x3::rm_first_band_lo(
++                rm_win, static_cast<int32_t>((num_k_blocks - 1) * block_k_tiles / tensor_kkh_tiles));
++        }
+         if constexpr (tile_input && !ring_slab && !s2_taps) {
+             const uint32_t slab_pages = slab_rows_m * c_in_tiles;
+             cb_wait_front(cb_halo_slab, slab_pages);
+diff -ruN a/kernels/conv2d_3x3_rm_ring.hpp b/kernels/conv2d_3x3_rm_ring.hpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_rm_ring.hpp	1970-01-01 00:00:00.000000000 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_rm_ring.hpp	2026-11-20 20:49:49.400774641 +0000
+@@ -0,0 +1,325 @@
++// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
++// SPDX-License-Identifier: Apache-2.0
++
++// ROW_MAJOR ring slab with the bank-run fill (perf experiment rm_ring_bank_run; the descriptor's rm_ring_capable /
++// rm_ring_plan / RM_RING_*).
++//
++// cb_halo_slab is a ring of ring_px consecutive input pixels across a core's M-blocks: pixel v lives at ring slot
++// (v - origin) mod ring_px, origin being the core's lowest window pixel. The fill is one monotone stream over the core's
++// needed pixels (the union of its three kh bands), each read from DRAM once per core; the per-M-block slab re-reads the
++// bands every later block covers again (~3x where bm * 32 < W).
++//
++// Bank-run reads: the stream is cut into chunks of chunk_px consecutive pixels [a, e). DRAM-interleaved pages
++// p, p + NB, p + 2 NB, ... sit back to back in one bank, so a chunk is NB reads (one per bank) into a staging chunk
++// (bank s's run at s * slot_bytes), then de-interleaved into the ring with one self-aimed NoC read per pixel (a run
++// wraps at the ring end). nstg staging chunks: up to nstg chunks of DRAM reads stay in flight while the reader
++// de-interleaves or gathers. The staging is its own CB (counted in the L1 solve), so the fill can run while compute
++// tilizes from cb_im2col_rm.
++//
++// Cursors:
++//   copied   every needed pixel below it has its de-interleave copy issued;
++//   landed   ... and landed (a gather reads only those);
++//   allowed  pixels below it may be written: the slot they reuse belongs to pixel v - ring_px, which no K-block still
++//            ahead of compute reads. The reader learns compute's progress from the tap-direct entry FIFO (one K-block
++//            deep): once K-block k - 1's entries are all reserved, compute popped every entry of K-blocks < k - 1.
++// Chunks are cut at `allowed` (so every staged chunk can be copied) and, in a band wait, at the band's end. The host plan
++// (rm_ring_plan) sizes the ring so a band wait never needs a pixel past `allowed` (it would wait on a slot only it could
++// free: no deadlock), and a block's pixels are at most one wrap apart (the tap-direct gather reduces ring positions
++// once). Measured (Blackhole p150b, bit-identical): 1026x2048 32->128 2.61 -> 1.88 ms, 1026x2048 128->3 5.23 -> 2.47 ms,
++// 514x1024 128->3 1.41 -> 0.81 ms (perf_experiments/rm_ring_bank_run).
++//
++// Raw NoC (capability): dataflow_kernel_lib::read_with_state fixes the source address; the de-interleave changes both
++// addresses on every read (as the graduated bank-run fill).
++
++#pragma once
++
++#include <cstdint>
++
++#include "api/dataflow/dataflow_api.h"
++#include "conv2d_3x3_slab_dataflow.hpp"
++#include "conv2d_3x3_gather_dataflow.hpp"
++
++namespace conv2d_3x3 {
++
++constexpr int32_t RM_INF = 0x7FFFFFFF;
++
++// In-image pixel extent of one M-block's three bands: band kh is [band_lo[kh], band_hi[kh]) (empty: band_hi == 0),
++// the window [lo, hi) their union's hull.
++struct RmWindow {
++    int32_t lo;
++    int32_t hi;
++    int32_t band_lo[3];
++    int32_t band_hi[3];
++};
++
++template <int32_t input_width, int32_t num_in_px, int32_t dilation>
++FORCE_INLINE RmWindow rm_window(const SlabFootprint& fp) {
++    RmWindow w{RM_INF, 0, {0, 0, 0}, {0, 0, 0}};
++    for (int32_t kh = 0; kh < 3; ++kh) {
++        const int32_t v_lo = fp.f + kh * dilation * input_width;
++        const int32_t lo = v_lo > 0 ? v_lo : 0;
++        const int32_t hi = v_lo + fp.band_len < num_in_px ? v_lo + fp.band_len : num_in_px;
++        if (lo >= hi) {
++            continue;
++        }
++        w.band_lo[kh] = lo;
++        w.band_hi[kh] = hi;
++        w.lo = lo < w.lo ? lo : w.lo;
++        w.hi = hi > w.hi ? hi : w.hi;
++    }
++    return w;
++}
++
++// The lowest pixel of bands kh0.. of a window (RM_INF when they are all empty).
++FORCE_INLINE int32_t rm_first_band_lo(const RmWindow& w, int32_t kh0) {
++    for (int32_t b = kh0; b < 3; ++b) {
++        if (w.band_hi[b] > 0) {
++            return w.band_lo[b];
++        }
++    }
++    return RM_INF;
++}
++
++template <
++    uint32_t output_width,
++    int32_t input_width,
++    int32_t stride,
++    int32_t pad_top,
++    int32_t pad_left,
++    int32_t dilation,
++    int32_t band_last_tap,
++    int32_t num_in_px,
++    uint32_t num_out_px,
++    uint32_t block_m_tiles>
++struct RmBlocks {
++    static FORCE_INLINE RmWindow window(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t m) {
++        const uint32_t done = m * block_m_tiles;
++        const uint32_t valid = actual_m_tiles - done < block_m_tiles ? actual_m_tiles - done : block_m_tiles;
++        const uint32_t o_first = (m_tile_start + done) * 32;
++        const uint32_t o_end_tiles = o_first + valid * 32;
++        const SlabFootprint fp =
++            block_footprint<output_width, input_width, stride, pad_top, pad_left, dilation, band_last_tap>(
++                o_first, o_end_tiles < num_out_px ? o_end_tiles : num_out_px);
++        return rm_window<input_width, num_in_px, dilation>(fp);
++    }
++    // Lowest window pixel of M-blocks [m_first, num_blocks) (RM_INF when there is none). A block's window starts at or
++    // above its first tap's pixel (clamped at 0), which never decreases from block to block.
++    static FORCE_INLINE int32_t keep_lo(
++        uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t m_first, uint32_t num_blocks) {
++        int32_t lo = RM_INF;
++        for (uint32_t m = m_first; m < num_blocks; ++m) {
++            const uint32_t done = m * block_m_tiles;
++            const uint32_t o_first = (m_tile_start + done) * 32;
++            const int32_t ho = o_first / output_width;
++            const int32_t wo = o_first % output_width;
++            const int32_t f = (ho * stride - pad_top) * input_width + wo * stride - pad_left;
++            if ((f > 0 ? f : 0) >= lo) {
++                break;
++            }
++            const RmWindow w = window(m_tile_start, actual_m_tiles, m);
++            lo = w.lo < lo ? w.lo : lo;
++        }
++        return lo;
++    }
++};
++
++template <
++    int32_t ring_px,
++    uint32_t pixel_bytes,
++    uint32_t nb,
++    uint32_t nstg,
++    int32_t chunk_px,
++    uint32_t copy_trid,
++    uint32_t stage_trid0>
++struct RmBankRing {
++    static_assert(nstg >= 1 && stage_trid0 + nstg - 1 <= NOC_MAX_TRANSACTION_ID, "staging trids");
++    static_assert(chunk_px >= 1 && chunk_px <= ring_px, "a chunk fits the ring");
++    static constexpr uint32_t slot_bytes = (static_cast<uint32_t>(chunk_px) + nb - 1) / nb * pixel_bytes;
++    static constexpr uint32_t chunk_bytes = nb * slot_bytes;
++    static constexpr uint32_t ring_bytes = static_cast<uint32_t>(ring_px) * pixel_bytes;
++
++    uint32_t ring_l1 = 0;
++    uint32_t stage_l1 = 0;
++    int32_t origin = 0;
++    // The core's needed pixels: the union of its three kh bands, segments [seg_lo, seg_hi) in increasing order (gaps
++    // between them, when the core spans less than d image rows, are never read: their slots stay stale and nothing
++    // gathers them).
++    int32_t seg_lo[3] = {0, 0, 0};
++    int32_t seg_hi[3] = {0, 0, 0};
++    uint32_t num_segs = 0;
++    // DRAM issue cursor: the next chunk's segment and first pixel.
++    uint32_t iss_seg = 0;
++    int32_t iss_a = 0;
++    uint32_t n_issued = 0;
++    uint32_t n_proc = 0;
++    // Staged chunks: pixels [c_lo, c_hi), and the stream position once they are copied (the next segment's start
++    // when the chunk ends its segment).
++    int32_t c_lo[nstg];
++    int32_t c_hi[nstg];
++    int32_t c_after[nstg];
++    int32_t copied = 0;
++    int32_t landed = 0;
++    int32_t allowed = 0;
++    bool copies_out = false;
++
++    template <int32_t input_width, int32_t num_in_px, int32_t dilation>
++    FORCE_INLINE void init(uint32_t ring, uint32_t stage, int32_t first_px, const SlabFootprint& core_fp) {
++        ring_l1 = ring;
++        stage_l1 = stage;
++        allowed = first_px + ring_px;
++        num_segs = 0;
++        for (int32_t kh = 0; kh < 3; ++kh) {
++            const int32_t v_lo = core_fp.f + kh * dilation * input_width;
++            const int32_t lo = v_lo > 0 ? v_lo : 0;
++            const int32_t hi = v_lo + core_fp.band_len < num_in_px ? v_lo + core_fp.band_len : num_in_px;
++            if (lo >= hi) {
++                continue;
++            }
++            // Bands start in increasing order: merge into the last segment when they touch.
++            if (num_segs > 0 && lo <= seg_hi[num_segs - 1]) {
++                seg_hi[num_segs - 1] = hi > seg_hi[num_segs - 1] ? hi : seg_hi[num_segs - 1];
++            } else {
++                seg_lo[num_segs] = lo;
++                seg_hi[num_segs] = hi;
++                ++num_segs;
++            }
++        }
++        // Slots count from the lowest pixel either holds (they coincide on every geometry the plan covers).
++        origin = num_segs > 0 && seg_lo[0] < first_px ? seg_lo[0] : first_px;
++        iss_seg = 0;
++        iss_a = copied = landed = num_segs > 0 ? seg_lo[0] : RM_INF;
++        n_issued = n_proc = 0;
++    }
++
++    // Base the tap-direct gather adds to a pixel of a block whose lowest pixel is lo: v + base is v's ring slot or that
++    // plus ring_px (one wrap), for every v in [lo, lo + ring_px).
++    FORCE_INLINE int32_t base_for(int32_t lo) const {
++        const int32_t q = (lo - origin) / ring_px;
++        return -origin - q * ring_px;
++    }
++
++    FORCE_INLINE void release(int32_t live_lo) {
++        if (live_lo < RM_INF) {
++            const int32_t a = live_lo + ring_px;
++            allowed = a > allowed ? a : allowed;
++        }
++    }
++
++    template <typename Reads>
++    FORCE_INLINE void land_copies(Reads& reads) {
++        if (copies_out) {
++            reads.wait(copy_trid);
++            copies_out = false;
++        }
++        landed = copied;
++    }
++
++    FORCE_INLINE bool can_issue() const {
++        return n_issued - n_proc < nstg && iss_seg < num_segs && iss_a < allowed;
++    }
++
++    // The next chunk (at most to `to`, never past `allowed`, so every staged chunk can be copied): NB bank-run DRAM
++    // reads into its staging slot, whose previous chunk's copies must have landed.
++    template <typename Reads, typename Accessor>
++    FORCE_INLINE void issue(Reads& reads, const Accessor& input, int32_t to) {
++        const uint32_t slot = n_issued % nstg;
++        if (n_issued >= nstg) {
++            land_copies(reads);
++        }
++        const int32_t a = iss_a;
++        const int32_t s_hi = seg_hi[iss_seg];
++        int32_t e = a + chunk_px < s_hi ? a + chunk_px : s_hi;
++        e = e < to ? e : to;
++        e = e < allowed ? e : allowed;
++        ASSERT(a < e);
++        const uint32_t base = stage_l1 + slot * chunk_bytes;
++        reads.begin(stage_trid0 + slot);
++        for (int32_t s = 0; s < static_cast<int32_t>(nb) && a + s < e; ++s) {
++            const uint32_t run = static_cast<uint32_t>(e - a - s + nb - 1) / nb;
++            reads.read(input.get_noc_addr(a + s), base + s * slot_bytes, run * pixel_bytes);
++        }
++        c_lo[slot] = a;
++        c_hi[slot] = e;
++        iss_a = e;
++        if (e == s_hi) {
++            ++iss_seg;
++            iss_a = iss_seg < num_segs ? seg_lo[iss_seg] : RM_INF;
++        }
++        c_after[slot] = iss_a;
++        ++n_issued;
++    }
++
++    // The oldest staged chunk into its ring slots (blocking on its DRAM reads).
++    template <typename Reads>
++    FORCE_INLINE void process(Reads& reads) {
++        const uint32_t slot = n_proc % nstg;
++        const int32_t a = c_lo[slot];
++        const int32_t e = c_hi[slot];
++        ASSERT(e <= allowed);
++        reads.wait(stage_trid0 + slot);
++        const uint32_t base = stage_l1 + slot * chunk_bytes;
++        const uint32_t noc = reads.noc.get_noc_id();
++        reads.begin(copy_trid);
++        ncrisc_noc_read_set_state<DM_DEDICATED_NOC, true>(
++            noc, NCRISC_RD_CMD_BUF, get_noc_addr(base, noc), pixel_bytes);
++        const int32_t slot_px = (a - origin) % ring_px;
++        const uint32_t ring_end = ring_l1 + ring_bytes;
++        for (int32_t s = 0; s < static_cast<int32_t>(nb) && a + s < e; ++s) {
++            uint32_t src = base + s * slot_bytes;
++            int32_t x = slot_px + s;
++            if (x >= ring_px) {
++                x -= ring_px;
++            }
++            uint32_t dst = ring_l1 + static_cast<uint32_t>(x) * pixel_bytes;
++            for (int32_t q = a + s; q < e; q += nb) {
++                ncrisc_noc_read_with_state<DM_DEDICATED_NOC, true, true>(noc, NCRISC_RD_CMD_BUF, src, dst);
++                reads.count_packets(1);
++                src += pixel_bytes;
++                dst += nb * pixel_bytes;
++                if (dst >= ring_end) {
++                    dst -= ring_bytes;
++                }
++            }
++        }
++        reads.drop_fixed_state();
++        copies_out = true;
++        copied = c_after[slot];
++        ++n_proc;
++    }
++
++    // Opportunistic (compute is behind): one DRAM chunk issue, else one landed chunk's de-interleave. Returns true if it
++    // did anything; the caller then restores its own read transaction id and command-buffer state.
++    template <typename Reads, typename Accessor>
++    FORCE_INLINE bool step(Reads& reads, const Accessor& input) {
++        if (can_issue()) {
++            issue(reads, input, RM_INF);
++            return true;
++        }
++        if (n_proc < n_issued &&
++            ncrisc_noc_read_with_transaction_id_flushed(reads.noc.get_noc_id(), stage_trid0 + n_proc % nstg)) {
++            process(reads);
++            return true;
++        }
++        return false;
++    }
++
++    // Blocking: every needed pixel below x is in the ring. x is within the plan's capacity of the live pixels
++    // (x <= allowed), so the chunks it needs can be issued.
++    template <typename Reads, typename Accessor>
++    FORCE_INLINE void need(Reads& reads, const Accessor& input, int32_t x) {
++        if (x <= landed) {
++            return;
++        }
++        ASSERT(x <= allowed);
++        while (copied < x) {
++            if (can_issue() && iss_a < x) {
++                issue(reads, input, x);
++            } else {
++                process(reads);
++            }
++        }
++        land_copies(reads);
++    }
++};
++
++}  // namespace conv2d_3x3

@@ -86,6 +86,8 @@ CB_SRC_TABLE = 13
 # compute unpack (a neighbour's rows landed).
 CB_KWF_HALO_OUT = 14
 CB_KWF_HALO_IN = 15
+# ROW_MAJOR ring slab: the bank-run fill's staging (RM_RING_NSTG chunks).
+CB_RM_STAGE = 16
 # Bank-run fill: the ROW_MAJOR DRAM-interleaved slab fill reads each chunk of consecutive pixels as one run per DRAM
 # bank into a staging ring (BRF_NSTG chunks of up to BRF_CHUNK_BYTES), then de-interleaves it into the slab with local
 # NoC copies. One read per pixel page is DRAM-transaction-bound (~600 M reads/s across the chip); bank runs are
@@ -105,6 +107,20 @@ def _brf_staging(g, slack_bytes):
         if chunk_px * pixel_bytes >= 8 * BRF_MIN_READ_BYTES or (nstg == 2 and chunk_px >= 8):
             return nstg, chunk_px
     return None
+
+
+# ROW_MAJOR ring slab with the bank-run fill (kernels/conv2d_3x3_rm_ring.hpp). On the K-blocked tap-direct walk over a
+# DRAM-interleaved ROW_MAJOR input with one pixel per page and more than one M-block per core, cb_halo_slab is a ring of
+# consecutive input pixels across a core's M-blocks: each input pixel is read from DRAM once per core (the per-M-block
+# slab re-reads the bands every block covers: ~3x where bm * 32 < W). The ring is filled in RM_RING_CHUNK_BYTES chunks of
+# consecutive pixels, one DRAM read per bank per chunk into a dedicated staging ring of RM_RING_NSTG chunks (CB_RM_STAGE,
+# counted in the L1 solve), de-interleaved into the ring with local NoC copies; the next M-block's pixels are filled
+# while compute works on this one (the reader fills while the unit FIFO is full). The ring keeps the slab solve's bk
+# (the fp32 accumulation order) and weight residency and takes the largest bm whose ring fits. Measured (Blackhole
+# p150b, bit-identical, base -> ring us): 1026x2048 32->128 2609 -> 1876, 1026x2048 128->3 5226 -> 2468, 514x1024 128->3
+# 1408 -> 806 (perf_experiments/rm_ring_bank_run).
+RM_RING_NSTG = 2
+RM_RING_CHUNK_BYTES = 8192
 
 
 # R4 reduce-scatter semaphores; the weight multicast channel allocates its own after them.
@@ -544,6 +560,8 @@ class Conv3x3Geometry:
     # Spare-column M-groups (SPARE_MGROUPS): M-groups on grid rows, the others transposed in the spare columns
     # (spare_m_indices, block_spare_core). 0: every group is a grid row.
     block_rows: int = 0
+    # DRAM-interleaved ROW_MAJOR input with one pixel per page (no padded lanes): the bank-run reads apply (rm ring).
+    bank_run_input: bool = False
 
     @property
     def pad_sides(self):
@@ -656,11 +674,18 @@ class Conv3x3Blocking:
     ring: bool = False
     # Weights resident (weights_resident_capable): cb_weights holds all num_k_blocks rounds (weight_depth = num_k_blocks).
     weights_resident: bool = False
+    # ROW_MAJOR ring slab (rm_ring_capable): ring capacity in pixels (0: the per-M-block slab), and its staging ring
+    # (chunks, pixels per chunk).
+    rm_ring_px: int = 0
+    rm_stage_n: int = 0
+    rm_stage_px: int = 0
 
     @property
     def slab_px(self):
         if self.slab_tile_rows:
             return self.slab_tile_rows * TILE
+        if self.rm_ring_px:
+            return self.rm_ring_px
         return 2 * self.band_stride_px + self.band_len_px
 
 
@@ -1287,6 +1312,102 @@ def weights_resident_capable(g: Conv3x3Geometry, core_m_tiles, bm, bk, nslice=Fa
     )
 
 
+def rm_ring_capable(g: Conv3x3Geometry, bm, bk):
+    """ROW_MAJOR ring slab: a DRAM-interleaved ROW_MAJOR input with one pixel per page, on the K-blocked
+    tap-direct walk (the gather that wraps ring reads). Not on a TILE or sharded input (no pixel pages to bank-run; a
+    sharded slab fill reads owner shards), a K split, or slab-direct."""
+    return (
+        g.bank_run_input
+        and not g.tile_input
+        and not g.sharded_output
+        and not g.k_split
+        and _tap_direct(g, bm, bk, False)
+        and _tap_direct_fifo_units(g, bm, bk, False) > 0
+        and not slab_direct_capable(g, bk)
+        and center_tap_mode(g, bm, bk) == CENTER_NONE
+    )
+
+
+def _rm_stage(g: Conv3x3Geometry):
+    """(chunks, pixels per chunk) of the ring fill's staging: RM_RING_CHUNK_BYTES of whole bank rows (8 pixels)."""
+    pixel_bytes = g.c_in_p * BF16_BYTES
+    return RM_RING_NSTG, max(8, RM_RING_CHUNK_BYTES // pixel_bytes // 8 * 8)
+
+
+_RM_INF = (1 << 31) - 1
+
+
+@functools.lru_cache(maxsize=1024)
+def rm_ring_plan(g: Conv3x3Geometry, core_m_tiles, bm, bk):
+    """Ring capacity in pixels (mirror of the reader's release / band-wait sequence, conv2d_3x3_rm_ring.hpp): over every
+    core's K-block walk, the most pixels from the lowest pixel still live (compute may still tilize from it) to the end
+    of the band a K-block waits for, and every M-block's window. The fill never writes past `allowed` (it cuts chunks
+    there and at the band a wait needs), so a band wait needs no slack. None when a block touches no in-image pixel."""
+    kkh = g.tensor_kkh_tiles
+    nkb = g.tensor_k_tiles // bk
+    worst = 0
+
+    def first_band_lo(bands, kh0):
+        for b in range(kh0, 3):
+            if bands[b] is not None:
+                return bands[b][0]
+        return _RM_INF
+
+    for start, actual in core_m_ranges(g, core_m_tiles):
+        wins = []
+        for block_start in range(0, actual, bm):
+            tiles = min(bm, actual - block_start)
+            o_first = (start + block_start) * TILE
+            o_end = min((start + block_start + tiles) * TILE, g.num_out_px)
+            band_len = _block_band_len(g, o_first, o_end - 1)
+            f = _block_first_tap(g, o_first)
+            bands = []
+            for kh in range(3):
+                v = f + kh * g.dilation * g.input_width
+                a, z = max(v, 0), min(v + band_len, g.num_in_px)
+                bands.append((a, z) if a < z else None)
+            if all(b is None for b in bands):
+                return None
+            lo = min(b[0] for b in bands if b is not None)
+            hi = max(b[1] for b in bands if b is not None)
+            worst = max(worst, hi - lo)
+            wins.append((lo, bands))
+        keep_after = [_RM_INF] * (len(wins) + 1)
+        for m in range(len(wins) - 1, -1, -1):
+            keep_after[m] = min(keep_after[m + 1], wins[m][0])
+        live_run = -_RM_INF
+        prev_last_lo = _RM_INF
+        for m, (lo, bands) in enumerate(wins):
+            keep_next = keep_after[m + 1]
+            for k in range(nkb):
+                kh = k * bk // kkh
+                if k == 0:
+                    live = min(prev_last_lo, lo, keep_next)
+                else:
+                    live = min(keep_next, first_band_lo(bands, (k - 1) * bk // kkh))
+                if live < _RM_INF:
+                    live_run = max(live_run, live)
+                if k * bk == kh * kkh and bands[kh] is not None:
+                    worst = max(worst, bands[kh][1] - live_run)
+            prev_last_lo = first_band_lo(bands, (nkb - 1) * bk // kkh)
+    return worst
+
+
+# The most DRAM banks a chunk's bank runs round up to (a staging chunk holds NB runs of ceil(chunk / NB) pixels).
+RM_MAX_DRAM_BANKS = 12
+
+
+def _rm_stage_bytes(g: Conv3x3Geometry):
+    nstg, chunk_px = _rm_stage(g)
+    return nstg * (chunk_px + RM_MAX_DRAM_BANKS - 1) * g.c_in_p * BF16_BYTES
+
+
+def _rm_ring_delta(g: Conv3x3Geometry, fit, ring_px):
+    """L1 the ring costs over the per-block slab: the ring for the slab, plus the staging."""
+    slab_px = 2 * fit["band_stride_px"] + fit["band_len_px"]
+    return (ring_px - slab_px) * g.c_in_p * BF16_BYTES + _rm_stage_bytes(g)
+
+
 @functools.lru_cache(maxsize=256)
 def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
     """The one place block extents are chosen. Order of the L1 solve (op_design Mechanism caps #1):
@@ -1321,9 +1442,17 @@ def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
     search = [(bm, bk) for bm in bm_candidates for bk in bk_above_floor]
     search += [(bm_candidates[-1], bk) for bk in bk_below_floor]
 
-    def solve(candidates, nslice, shared=False, wr_solve=False):
+    def solve(candidates, nslice, shared=False, wr_solve=False, rm=False):
         for bm, bk in candidates:
             resident = wr_solve and weights_resident_capable(g, core_m_tiles, bm, bk, nslice)
+            # ROW_MAJOR ring slab (rm): only candidates that take it (one M-block per core has nothing to reuse).
+            rm_px = None
+            if rm:
+                if nslice or _div_up(core_m_tiles, bm) < 2 or not rm_ring_capable(g, bm, bk):
+                    continue
+                rm_px = rm_ring_plan(g, core_m_tiles, bm, bk)
+                if rm_px is None:
+                    continue
             # The untilize batch shrinks first: a smaller batch costs one more read fence per tile-row,
             # a smaller bk costs a whole K-block (tilize, matmul init, L1-acc pass).
             band_len, raw_slab_rows = _block_extents(g, core_m_tiles, bm)
@@ -1332,6 +1461,18 @@ def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
                 fit = _footprint(g, core_m_tiles, bm, bk, bn, ub_cap, nslice, shared=shared, resident=resident)
                 if resident:
                     fit["weights_resident"] = True
+                rm_delta = 0
+                if rm_px:
+                    # The ring replaces the per-block slab before the deep im2col ring takes the L1 left.
+                    rm_delta = _rm_ring_delta(g, fit, rm_px)
+                    nstg, chunk_px = _rm_stage(g)
+                    fit = dict(
+                        fit,
+                        rm_ring_px=rm_px,
+                        rm_stage_n=nstg,
+                        rm_stage_px=chunk_px,
+                        footprint_bytes=fit["footprint_bytes"] + rm_delta,
+                    )
                 if fit["footprint_bytes"] <= l1_budget:
                     # The deeper im2col ring only takes L1 left at this (bm, bk, ub): it never costs a coarser block.
                     for depth in range(_im2col_ring_target(g, bm, bk, nslice), IM2COL_RM_DEPTH_ROWS, -1):
@@ -1347,6 +1488,14 @@ def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
                             shared=shared,
                             resident=resident,
                         )
+                        if rm_px:
+                            deep = dict(
+                                deep,
+                                rm_ring_px=fit["rm_ring_px"],
+                                rm_stage_n=fit["rm_stage_n"],
+                                rm_stage_px=fit["rm_stage_px"],
+                                footprint_bytes=deep["footprint_bytes"] + rm_delta,
+                            )
                         if deep["footprint_bytes"] <= l1_budget:
                             fit = dict(deep, weights_resident=True) if resident else deep
                             break
@@ -1382,6 +1531,15 @@ def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
         return None
 
     blocking = solve(search, nslice=False, wr_solve=True) or solve(search, nslice=False)
+    if blocking is not None and not g.k_split and g.bank_run_input and blocking.max_m_blocks_per_core > 1:
+        # ROW_MAJOR ring slab at the slab solve's bk (a different K-block count changes the fp32 accumulation order) and
+        # its weight residency: the largest bm whose ring fits. Not where the slab solve runs one M-block per core: there
+        # every pixel is read once already.
+        bk0, bm0 = blocking.block_k_tiles, blocking.block_m_tiles
+        ring_search = [(bm, bk) for bm, bk in search if bk == bk0 and bm <= bm0]
+        ring_blocking = solve(ring_search, nslice=False, wr_solve=blocking.weights_resident, rm=True)
+        if ring_blocking is not None:
+            blocking = ring_blocking
     if blocking is not None and g.k_split:
         # N-slice-outer at the K-blocked solve's bm, unless its resident [bm, K] in0 does not fit. There bk only sets
         # the gather / tilize granularity and costs almost no L1, so the coarsest that fits wins.
@@ -2799,6 +2957,9 @@ def create_program_descriptor(
         cbs.append(_cb(CB_SRC_TABLE, ttnn.float32, RING_TOKEN_BYTES, 1, cores))
     elif tap_direct:
         cbs.append(_cb(CB_SRC_TABLE, ttnn.bfloat16, 64, _src_table_bytes(b.im2col_rm_depth_rows) // 64, cores))
+    if b.rm_ring_px:
+        # ROW_MAJOR ring slab: the bank-run fill's staging ring (counted in the solve, _rm_ring_delta).
+        cbs.append(_cb(CB_RM_STAGE, ttnn.bfloat16, pixel_bytes, _rm_stage_bytes(g) // pixel_bytes, cores))
     center_mode = b.center_mode
     if center_mode == CENTER_K_BLOCK:
         cbs.append(_cb(CB_CENTER_TILES, input_tensor.dtype, g.in0_tile_bytes, bm * bk, cores))
@@ -3787,6 +3948,11 @@ def create_program_descriptor(
     _wr_defines = [("WEIGHTS_RESIDENT", "1")] if b.weights_resident else []
     if b.weights_resident:
         assert not (kwf or slab_direct or row_split or b.nslice or g.k_split or g.sharded_output or weight_servers)
+    if b.rm_ring_px:
+        # The ring slab replaces the bank-run fill (its own bank-run reads, into dedicated staging).
+        assert brf_fill and not (kwf or slab_direct or row_split or b.nslice or g.k_split or g.sharded_output)
+        assert tap_direct_fifo_units > 0 and center_mode == CENTER_NONE and not g.tile_input
+        brf_fill = False
     _brf_defines = (
         [
             ("BANK_RUN_FILL", "1"),
@@ -3794,6 +3960,17 @@ def create_program_descriptor(
             ("BRF_CHUNK_PX", str(brf_stage[1])),
         ]
         if brf_fill
+        else []
+    )
+    _rm_ring_defines = (
+        [
+            ("RM_RING_PX", str(b.rm_ring_px)),
+            ("RM_RING_NSTG", str(b.rm_stage_n)),
+            ("RM_RING_CHUNK_PX", str(b.rm_stage_px)),
+            ("RM_RING_STAGE_BYTES", str(_rm_stage_bytes(g))),
+            ("CB_RM_STAGE", str(CB_RM_STAGE)),
+        ]
+        if b.rm_ring_px
         else []
     )
     readers = [
@@ -3808,7 +3985,8 @@ def create_program_descriptor(
             + _sd_dm_defines
             + _s2_dm_defines
             + _host_fill_defines
-            + _brf_defines,
+            + _brf_defines
+            + _rm_ring_defines,
             config=ttnn.ReaderConfigDescriptor(),
         )
         for slice_channels, (reader_cores, reader_rt) in reader_groups.items()

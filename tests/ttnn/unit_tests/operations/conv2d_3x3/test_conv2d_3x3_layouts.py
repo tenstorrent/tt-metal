@@ -210,6 +210,7 @@ def test_conv2d_3x3_multi_m_block_relu(dtype, layout, with_bias, device, monkeyp
         weight_tile_bytes=ttnn.tile_size(ttnn.bfloat16),
         out_tile_bytes=ttnn.tile_size(dtype),
         has_bias=with_bias,
+        bank_run_input=layout == ttnn.ROW_MAJOR_LAYOUT and c_in == c_in_p,
     )
     core_m_tiles = -(-geometry.tensor_m_tiles // (grid.x * grid.y))
     assert core_m_tiles >= 2, "shape too small to give a core more than one M-block on this grid"

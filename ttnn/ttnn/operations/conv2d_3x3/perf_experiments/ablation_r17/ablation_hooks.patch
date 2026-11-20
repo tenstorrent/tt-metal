@@ -1,0 +1,163 @@
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py	2026-11-20 18:16:42.020506641 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py	2026-11-20 18:17:23.601100815 +0000
+@@ -3803,6 +3803,9 @@
+         if brf_fill
+         else []
+     )
++    import os as _os
++
++    _abl = [(f"CONV2D_3X3_ABLATE_{t.upper()}", "1") for t in _os.environ.get("CONV2D_3X3_ABLATE", "").split(",") if t]
+     readers = [
+         ttnn.KernelDescriptor(
+             kernel_source=str(KERNEL_DIR / "conv2d_3x3_reader.cpp"),
+@@ -3815,7 +3818,8 @@
+             + _sd_dm_defines
+             + _s2_dm_defines
+             + _host_fill_defines
+-            + _brf_defines,
++            + _brf_defines
++            + _abl,
+             config=ttnn.ReaderConfigDescriptor(),
+         )
+         for slice_channels, (reader_cores, reader_rt) in reader_groups.items()
+@@ -3835,6 +3839,7 @@
+             + slot_ack_defines
+             + _host_fill_defines
+             + _wr_defines
++            + _abl
+             + ([("NSLICE_ROUND0", "1")] if round0_args else [])
+             + (
+                 [
+@@ -3863,7 +3868,8 @@
+         + _wide_short_defines
+         + _s2_compute_defines
+         + _ring_arrival_defines
+-        + _wr_defines,
++        + _wr_defines
++        + _abl,
+         config=ttnn.ComputeConfigDescriptor(
+             math_fidelity=compute_kernel_config.math_fidelity,
+             math_approx_mode=compute_kernel_config.math_approx_mode,
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp	2026-11-20 18:16:42.022506669 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp	2026-11-20 18:17:23.603100844 +0000
+@@ -1185,6 +1185,7 @@
+             }
+ #ifdef BANK_RUN_FILL
+             {
++#ifndef CONV2D_3X3_ABLATE_FILL
+                 // Bank-run fill. DRAM-interleaved pages p, p + NB, p + 2 NB, ... sit back to back in one bank
+                 // (InterleavedAddrGen: bank offset (p / NB) * aligned page), so a chunk of BRF_CHUNK_PX consecutive
+                 // input pixels [a, e) is NB reads (one per bank) instead of e - a one-page reads: one read per page is
+@@ -1287,6 +1288,7 @@
+                     pc.a += brf_ch;
+                     settle(pc);
+                 }
++#endif
+                 // The staging overwrote any canonical zero rows the block FIFO kept (zero-once): forget them.
+                 for (uint32_t blk = 0; blk < sizeof(fifo.blk_zkw); ++blk) {
+                     fifo.blk_zkw[blk] = 0;
+@@ -1296,7 +1298,11 @@
+             conv2d_3x3::slab_bands<input_width, num_in_px, dilation, band_stride_px>(
+                 footprint, slab_x_base, [&](int32_t kh, int32_t x_lo, int32_t x_hi, int32_t v_minus_x) {
+                     reads.begin(kh + 1);
++#ifdef CONV2D_3X3_ABLATE_FILL
++                    if (false) {
++#else
+                     if (x_lo < x_hi) {
++#endif
+                         // Each core starts its band at a different pixel so the cores do not all open on one bank.
+                         const int32_t x_split =
+                             x_lo + static_cast<int32_t>(read_rotation % static_cast<uint32_t>(x_hi - x_lo));
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp	2026-11-20 18:16:42.022506669 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp	2026-11-20 18:17:23.604100858 +0000
+@@ -1426,6 +1426,10 @@
+         const uint32_t l1 = get_write_ptr(cb_weights);
+         // DRAM read (+ multicast) on a sender or own-stream core; the multicast wait on a receiver.
+         MaybeDeviceZoneScope("writer_weight_fetch");
++#ifdef CONV2D_3X3_ABLATE_WEIGHTS
++        if (true) {
++        } else
++#endif
+         if (server_receiver) {
+             // Weight server round (see the file comment); serves the fill hand-overs while it waits.
+             if (k_blocks_issued >= nslice_weight_depth &&
+@@ -2642,9 +2646,11 @@
+                     const uint32_t local_tile_row = block_tile0 + row_group * out_subblock_h + r;
+                     if (local_tile_row < actual_m_tiles) {
+                         const uint32_t row_page = (m_tile_start + local_tile_row) * tensor_n_tiles + n_tile_start;
++#ifndef CONV2D_3X3_ABLATE_STORE
+                         for (uint32_t n = 0; n < block_n_tiles; ++n) {
+                             noc_async_write_page(row_page + n, output, l1 + n * out_tile_bytes);
+                         }
++#endif
+                     }
+                     l1 += block_n_tiles * out_tile_bytes;
+                 }
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp	2026-11-20 18:16:42.021506655 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp	2026-11-20 18:17:23.606100886 +0000
+@@ -681,6 +681,16 @@
+                 continue;
+             }
+         }
++#ifdef CONV2D_3X3_ABLATE_TILIZE
++        out.reserve_back(taps * tw);
++        out.push_back(taps * tw);
++        for (uint32_t p = 0; p < pages; p += tw) {
++            in.wait_front(tw);
++            in.pop_front(tw);
++        }
++        table.pop_front(1);
++        continue;
++#endif
+         for (uint32_t t = 0; t < taps; ++t) {
+             if constexpr (skip_center) {
+                 if (t == 1) {
+@@ -2217,6 +2227,14 @@
+             constexpr uint32_t wr_round_tiles = block_k_tiles * block_n_tiles;
+             using WrPre = ResidentWeightsPreKBlock<PreKBlockFn, cb_weights, wr_round_tiles>;
+             const WrPre wr_pre{pre_k_block, &wr_rounds_waited};
++#ifdef CONV2D_3X3_ABLATE_MATMUL
++            for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
++                wr_pre(kb, num_k_blocks, kb + 1 == num_k_blocks);
++                im2col_tiles.wait_front(block_m_tiles * block_k_tiles);
++                im2col_tiles.pop_front(block_m_tiles * block_k_tiles);
++            }
++            if constexpr (false)
++#endif
+             ckl::matmul_block<
+                 /*transpose=*/false,
+                 /*packer_l1_acc=*/true,
+@@ -2247,6 +2265,16 @@
+                 CenterTapIn0<center_mode, cb_center_tiles>{},
+                 ResidentIn1Offset<wr_round_tiles>{});
+ #else
++#ifdef CONV2D_3X3_ABLATE_MATMUL
++            for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
++                pre_k_block(kb, num_k_blocks, kb + 1 == num_k_blocks);
++                im2col_tiles.wait_front(block_m_tiles * block_k_tiles);
++                im2col_tiles.pop_front(block_m_tiles * block_k_tiles);
++                weights.wait_front(block_k_tiles * block_n_tiles);
++                weights.pop_front(block_k_tiles * block_n_tiles);
++            }
++            if constexpr (false)
++#endif
+             ckl::matmul_block<
+                 /*transpose=*/false,
+                 /*packer_l1_acc=*/true,
+@@ -2282,7 +2310,16 @@
+         }
+ 
+         if constexpr (has_bias && !k_split && in0_groups == 1 && !slab_direct) {
++#ifdef CONV2D_3X3_ABLATE_BIAS
++            partials.wait_front(partials_tiles);
++            partials.pop_front(partials_tiles);
++            for (uint32_t g = 0; g < in0_num_subblocks; ++g) {
++                output_tiles.reserve_back(out_subblock_h * block_n_tiles);
++                output_tiles.push_back(out_subblock_h * block_n_tiles);
++            }
++#else
+             add_bias(bias_shape);
++#endif
+         }
+         if constexpr (apply_relu) {
+             pack_relu_config(ReluConfig::none());
