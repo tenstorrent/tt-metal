@@ -49,6 +49,38 @@ def test_op_rejects_per_core_input(per_core_mesh_device, per_core_width_sharded_
 
 
 @requires_hybrid_allocator
+def test_generic_op_on_a_program_spec_rejects_per_core_input(
+    per_core_mesh_device, per_core_width_sharded_config, expect_error
+):
+    """ttnn.experimental.generic_op on a ProgramSpec has not opted in either."""
+    mem_config = per_core_width_sharded_config(GRID_START, GRID_END, (SHARD_HEIGHT, SHARD_WIDTH))
+    per_core = ttnn.from_torch(
+        torch.randn(SHARD_HEIGHT, SHARD_WIDTH * NUM_CORES, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(per_core_mesh_device),
+        device=per_core_mesh_device,
+    )
+    assert per_core.is_per_core_allocated(), "precondition failed: the input is not per-core"
+
+    E = ttnn.experimental
+    spec = E.ProgramSpec(
+        name="empty",
+        kernels=[
+            E.KernelSpec(
+                unique_id="kernel",
+                source=E.KernelSpec.SourceCode(code="void kernel_main() {}"),
+                hw_config=E.create_reader_datamovement_config(),
+            )
+        ],
+        work_units=[E.WorkUnitSpec(name="unit", kernels=["kernel"], target_nodes=ttnn.CoreCoord(0, 0))],
+    )
+    with expect_error(RuntimeError, "has not opted in to per-core allocation"):
+        E.generic_op([per_core], spec, E.ProgramRunArgs())
+
+
+@requires_hybrid_allocator
 def test_lockstep_input_unaffected(per_core_mesh_device, lockstep_width_sharded_config):
     """The check must be inert for ordinary lockstep tensors."""
     lockstep_config = lockstep_width_sharded_config(GRID_START, GRID_END, (SHARD_HEIGHT, SHARD_WIDTH))

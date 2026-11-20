@@ -253,4 +253,16 @@ void append_fabric_mux_connection_rt_args(
     tt::tt_metal::ProgramDescriptor& desc,
     tt::tt_metal::KernelDescriptor::RTArgList& worker_rt_args);
 
+// True if this line reduce-scatter takes its row count as a runtime arg, so one program serves any row count:
+// a dim-3 scatter of a tiled interleaved [1, 1, rows, W] input with pinned worker and chunk counts.
+// The op's hash and the line builder both call it, so they agree on which programs are row-free.
+bool reduce_scatter_line_runtime_rows(
+    ttnn::ccl::Topology topology,
+    uint32_t normalized_dim,
+    uint32_t input_tensor_B,
+    uint32_t slice_C,
+    bool tiled_interleaved,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_link);
+
 }  // namespace ttnn::experimental::ccl
