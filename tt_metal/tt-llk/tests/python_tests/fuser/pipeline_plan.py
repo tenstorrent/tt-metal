@@ -56,6 +56,27 @@ def _check_tile_bounds(tiles, capacity: int, label: str) -> None:
         raise ValueError(f"{label} accesses tile {invalid} outside [0, {capacity})")
 
 
+def _check_unpack_to_dest_order(operation: "L1Operation") -> None:
+    math_started = False
+    for index, node in enumerate(operation.math_nodes, start=1):
+        if (
+            not isinstance(node, FpuNode)
+            or node.unpacker is None
+            or (node.src_a is None and node.src_b is None)
+        ):
+            math_started = True
+            continue
+        location = f"Operation {operation.stage_id}, math node {index}"
+        if not node.unpack_to_dest.value:
+            raise ValueError(
+                f"{location}: SrcA/SrcB unpacking cannot share a Quasar unpack_to_dest pipeline."
+            )
+        if math_started:
+            raise ValueError(
+                f"{location}: unpack_to_dest copies must precede math/SFPU work in the section."
+            )
+
+
 @dataclass(frozen=True)
 class PlannedNode:
     node: Node
@@ -103,10 +124,7 @@ class PlannedNode:
         return result
 
     def check_bounds(self, banks, dest_capacity: int) -> None:
-        if (
-            self.role == "math"
-            or (self.role == "unpack" and self.node.unpack_to_dest.value)
-        ) and not self.unit.supports_dest_offset:
+        if self.role == "math" and not self.unit.supports_dest_offset:
             _check_tile_bounds(
                 (call.dest for bank in banks for call in self.loop.calls(bank)),
                 1,
@@ -356,8 +374,13 @@ def _num_banks(nodes) -> int:
 
 
 def plan_pipeline(
-    operation: "L1Operation", dest_acc: bool = False
+    operation: "L1Operation",
+    dest_acc: bool = False,
+    *,
+    unpack_to_dest_sync: bool = False,
 ) -> List[PlannedBlock]:
+    if unpack_to_dest_sync:
+        _check_unpack_to_dest_order(operation)
     dest_capacity = dest_tile_capacity(
         operation.tile_shape, operation.dest_sync, dest_acc
     )

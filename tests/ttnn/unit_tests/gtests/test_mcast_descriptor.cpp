@@ -331,7 +331,7 @@ TEST_F(McastHostFixture, NoHandshakeLeavesExchangeCreditAcrossConstructionPaths)
     for (const auto signal :
          {dataflow_kernel_lib::DataReadySignal::Flag, dataflow_kernel_lib::DataReadySignal::Counter}) {
         auto mcast = make_mcast(device_, {{participants, {{0, 0}}}}, {.handshake = false, .data_ready = signal});
-        Program program;
+        Program program = CreateProgram(*device_);
         ProgramDescriptor descriptor;
         auto spec = spec_pair();
         for (uint32_t id = 0; id < 14; ++id) {
@@ -355,7 +355,7 @@ TEST_F(McastHostFixture, NoHandshakeLeavesExchangeCreditAcrossConstructionPaths)
         for (const auto& target : spec.kernels) {
             EXPECT_EQ(target.semaphore_bindings.size(), 1u);
         }
-        mcast.append_semaphores(program);
+        attach_unplaced(mcast, program);
         ASSERT_EQ(program.impl().semaphores().size(), 15u);
         EXPECT_EQ(program.impl().semaphores().back().id(), 14u);
         // The final hardware slot remains available for the operation's exchange credit.

@@ -168,6 +168,7 @@ def test_adapter_allocates_the_runner_resolved_two_slot_cache():
         "num_layers": 32,
         "max_seq_len": 2048,
         "cache_dtype": dtype,
+        "bank_aligned": True,
     }
 
 

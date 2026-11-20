@@ -28,11 +28,11 @@ template <
     uint32_t exchange_core_x,
     uint32_t exchange_core_y,
     uint32_t max_staged_ct,
-    uint32_t sp_rank,
     uint32_t sp_size,
     uint32_t local_rows,
     uint32_t has_actual_end>
-TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count, uint32_t staged_ct_start, uint32_t staged_ct_count) {
+TT_KERNEL void writer(
+    uint32_t wi_start, uint32_t wi_count, uint32_t staged_ct_start, uint32_t staged_ct_count, uint32_t sp_rank) {
     const auto q = TensorAccessor(tensor::q);
     const auto k = TensorAccessor(tensor::k);
     const auto v = TensorAccessor(tensor::v);
@@ -53,7 +53,7 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count, uint32_t staged_ct_s
             const uint32_t base = align_up(scratch_base, read_alignment);
             const uint32_t offset = base - scratch_base;
 
-            const auto interval = read_chronology<has_actual_end, sp_rank, sp_size, local_rows>(noc, base);
+            const auto interval = read_chronology<has_actual_end, sp_size, local_rows>(noc, base, sp_rank);
             uint32_t source_rows[StagingScratch::rows];
             for (uint32_t i = 0; i < history_rows; ++i) {
                 source_rows[i] = interval.outgoing_rows_begin() + i;

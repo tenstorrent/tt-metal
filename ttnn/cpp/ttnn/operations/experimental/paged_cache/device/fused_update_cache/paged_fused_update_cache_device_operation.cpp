@@ -6,7 +6,9 @@
 #include "paged_fused_update_cache_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/program_cache_l1.hpp"
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 
 using namespace tt::tt_metal;
@@ -55,7 +57,7 @@ void PagedFusedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             input_tensor.device() == cache_tensor.device(), "Operands to update_cache need to be on the same device!");
         TT_FATAL(
-            input_tensor.buffer() != nullptr && cache_tensor.buffer() != nullptr,
+            input_tensor.is_allocated() && cache_tensor.is_allocated(),
             "Operands to update_cache need to be allocated in buffers on device!");
 
         // Layout and data type validation
@@ -157,13 +159,16 @@ void PagedFusedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
         } else {
             num_indices = operation_attributes.update_idxs.size();
         }
+        // Multi-row mode: one position per row, rows_per_user rows per user.
+        const uint32_t rows_per_user = operation_attributes.rows_per_user;
         if (update_idxs_tensor.has_value() && update_idxs_tensor.value().is_sharded()) {
             uint32_t in_num_cores_cur_pos = update_idxs_tensor.value().shard_spec().value().grid.num_cores();
             TT_FATAL(
-                input_tensor.logical_shape()[1] == num_indices,
-                "Number of update_idxs ({}) should match batch size ({}) if sharded",
+                input_tensor.logical_shape()[1] * rows_per_user == num_indices,
+                "Number of update_idxs ({}) should match batch size ({}) x rows_per_user ({}) if sharded",
                 num_indices,
-                input_tensor.logical_shape()[1]);
+                input_tensor.logical_shape()[1],
+                rows_per_user);
             TT_FATAL(
                 in_num_cores_cur_pos == num_cores_cur_pos,
                 "Number of cores sharded on L1 ({}) should match dimension of update_idxs at 0 ({})",
@@ -171,10 +176,34 @@ void PagedFusedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
                 num_cores_cur_pos);
         } else {
             TT_FATAL(
-                input_tensor.padded_shape()[1] == num_indices,
-                "Number of update_idxs ({}) should match batch size ({})",
+                input_tensor.padded_shape()[1] * rows_per_user == num_indices,
+                "Number of update_idxs ({}) should match batch size ({}) x rows_per_user ({})",
                 num_indices,
-                input_tensor.padded_shape()[1]);
+                input_tensor.padded_shape()[1],
+                rows_per_user);
+        }
+        if (rows_per_user > 1) {
+            TT_FATAL(
+                input_tensor.layout() == Layout::TILE, "rows_per_user > 1 requires TILE inputs (the tiled factory)");
+            TT_FATAL(
+                update_idxs_tensor.has_value(), "rows_per_user > 1 requires update_idxs_tensor (one entry per row)");
+            TT_FATAL(!operation_attributes.share_cache, "rows_per_user > 1 does not support share_cache");
+            TT_FATAL(input_tensor.is_sharded(), "rows_per_user > 1 requires a height-sharded input");
+            const uint32_t user_rows = rows_per_user * tt::constants::TILE_HEIGHT;
+            TT_FATAL(
+                input_tensor.shard_spec().value().shape[0] == user_rows && input_tensor.padded_shape()[-2] == user_rows,
+                "rows_per_user ({}) > 1 expects input [1, users, rows_per_user*32, head_dim] with one user per shard "
+                "(shard height {}); got padded height {} and shard height {}",
+                rows_per_user,
+                user_rows,
+                input_tensor.padded_shape()[-2],
+                input_tensor.shard_spec().value().shape[0]);
+            // The multi-row writer reads head h of row j at tile row h of input tile j.
+            TT_FATAL(
+                cache_tensor.padded_shape()[1] <= tt::constants::TILE_HEIGHT,
+                "rows_per_user > 1 supports at most {} cache heads, one input tile per row; got {} heads",
+                tt::constants::TILE_HEIGHT,
+                cache_tensor.padded_shape()[1]);
         }
 
         // Sharding validation
@@ -210,6 +239,11 @@ void PagedFusedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
 
         TT_FATAL(operation_attributes.batch_offset == 0, "batch_offset must be 0");
     }
+    TT_FATAL(
+        operation_attributes.rows_per_user >= 1 && operation_attributes.rows_per_user <= tt::constants::TILE_HEIGHT,
+        "rows_per_user must be in [1, {}], got {}",
+        tt::constants::TILE_HEIGHT,
+        operation_attributes.rows_per_user);
 
     // Fused update specific validation
     // Validate either both should be tiled or row-major
@@ -244,6 +278,22 @@ void PagedFusedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
         "input_tensor1 ({}) and input_tensor2 ({}) must have same number of cores",
         input1_cores,
         input2_cores);
+
+    if (operation_attributes.rows_per_user > 1) {
+        // The multi-row untilized-input buffer grows with rows_per_user * head_dim, so a valid shape can
+        // outgrow the L1 below the input shards; refuse it here instead of failing in buffer allocation.
+        const uint64_t needed_l1 =
+            PagedTiledFusedUpdateCacheProgramFactory::program_l1_bytes_per_core(operation_attributes, tensor_args);
+        const uint64_t free_l1 = ttnn::operations::core::available_program_l1_capacity(input_tensor1.device());
+        TT_FATAL(
+            needed_l1 <= free_l1,
+            "rows_per_user ({}) with head_dim {} needs {} B of L1 per core for the program's buffers, but only {} B "
+            "are free below the allocated L1 tensors",
+            operation_attributes.rows_per_user,
+            cache_tensor1.padded_shape()[-1],
+            needed_l1,
+            free_l1);
+    }
 }
 
 PagedFusedUpdateCacheDeviceOperation::spec_return_value_t PagedFusedUpdateCacheDeviceOperation::compute_output_specs(
@@ -270,10 +320,12 @@ ttsl::hash::hash_t PagedFusedUpdateCacheDeviceOperation::compute_program_hash(
     // - compute_kernel_config: affects compile-time args (fp32_dest_acc_en)
     // - share_cache: affects program structure (semaphore setup)
     // - mesh_coords: affects program factory selection
+    // - rows_per_user: selects the multi-row kernels and sizes their buffers
     return operation::hash_operation<PagedFusedUpdateCacheDeviceOperation>(
         operation_attributes.compute_kernel_config,
         operation_attributes.share_cache,
         operation_attributes.mesh_coords,
+        operation_attributes.rows_per_user,
         tensor_args,
         program_factory.index());
 }
@@ -293,7 +345,8 @@ ttnn::experimental::prim::PagedFusedUpdateCacheResult paged_fused_update_cache(
     const std::optional<const Tensor>& page_table,
     const uint32_t batch_offset,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords) {
+    const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords,
+    const uint32_t rows_per_user) {
     using OperationType = ttnn::experimental::prim::PagedFusedUpdateCacheDeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(input_tensor1.device()->arch(), compute_kernel_config);
@@ -304,7 +357,8 @@ ttnn::experimental::prim::PagedFusedUpdateCacheResult paged_fused_update_cache(
         .batch_offset = batch_offset,
         .compute_kernel_config = kernel_config_val,
         .share_cache = share_cache_arg,
-        .mesh_coords = mesh_coords};
+        .mesh_coords = mesh_coords,
+        .rows_per_user = rows_per_user};
 
     auto tensor_args = OperationType::tensor_args_t{
         .cache_tensor1 = cache_tensor1,

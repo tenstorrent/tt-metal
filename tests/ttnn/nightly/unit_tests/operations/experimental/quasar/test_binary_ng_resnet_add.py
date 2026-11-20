@@ -52,7 +52,7 @@ def _block_sharded_config(shard_shape, core_grid):
     )
 
 
-# PCC thresholds. We NEVER weaken these below what the descriptor path achieves for the same config.
+# PCC thresholds. Never weaken these.
 _PCC = {ttnn.bfloat16: 0.9997}
 
 
@@ -182,7 +182,7 @@ def test_resnet_add_uneven_block_sharded(device, dtype_tt, fuse_relu):
 def test_resnet_add_program_cache_hit(device):
     """
     A 2nd dispatch must hit the program cache and still be correct (the borrowed sharded DFB
-    addresses are refreshed on cache hit via the adapter's SetProgramRunArgs path). Run the same
+    addresses are refreshed on cache hit via the adapter's Program::set_program_run_args path). Run the same
     in-place add twice on freshly-allocated inputs and verify both dispatches.
     """
     torch.manual_seed(0)
