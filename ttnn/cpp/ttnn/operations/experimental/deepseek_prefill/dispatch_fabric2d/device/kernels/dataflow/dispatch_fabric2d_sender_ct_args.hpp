@@ -17,6 +17,7 @@ struct SenderCtArgs {
     enum Idx : uint32_t {
         kQueueDepth,
         kTokenSizeBytes,
+        kFirstPacketBytes,
         kForwardingMetadataSize,
         kDownstreamChipId,
         kDownstreamMeshId,
@@ -48,6 +49,7 @@ struct SenderCtArgs {
 
     uint32_t queue_depth;
     uint32_t token_size_bytes;
+    uint32_t first_packet_bytes;  // token_size_bytes, or the first part of a token split in two
     uint32_t forwarding_metadata_size;
     uint32_t downstream_chip_id;
     uint32_t downstream_mesh_id;
@@ -62,7 +64,7 @@ struct SenderCtArgs {
     uint32_t downstream_noc_x;  // the downstream stream core
     uint32_t downstream_noc_y;
     uint32_t final_sem_addr;  // the downstream reader's last-hop counter
-    uint32_t credit_noc_x;  // the downstream chip's stream core that sends back to this chip
+    uint32_t credit_noc_x;    // the downstream chip's stream core that sends back to this chip
     uint32_t credit_noc_y;
     uint32_t launch_credit_addr;
     uint32_t num_vcs;
@@ -78,6 +80,7 @@ struct SenderCtArgs {
     // it the launch credit. So placement must be decided on every chip before any kernel is built.
     SenderCtArgs(
         uint32_t token_bytes,
+        uint32_t first_packet,
         const op::StreamPlacement& self,
         const op::StreamPlacement& downstream,
         const op::StreamPlacement& returning,
@@ -85,6 +88,7 @@ struct SenderCtArgs {
         const op::KernelPlan& plan) :
         queue_depth(QUEUE_DEPTH),
         token_size_bytes(token_bytes),
+        first_packet_bytes(first_packet),
         forwarding_metadata_size(FORWARDING_METADATA_SIZE),
         downstream_chip_id(static_cast<uint32_t>(self.downstream_node.chip_id)),
         downstream_mesh_id(*self.downstream_node.mesh_id),
@@ -116,6 +120,7 @@ struct SenderCtArgs {
         std::vector<uint32_t> w(kCount, kUnset);
         w[kQueueDepth] = queue_depth;
         w[kTokenSizeBytes] = token_size_bytes;
+        w[kFirstPacketBytes] = first_packet_bytes;
         w[kForwardingMetadataSize] = forwarding_metadata_size;
         w[kDownstreamChipId] = downstream_chip_id;
         w[kDownstreamMeshId] = downstream_mesh_id;
@@ -158,6 +163,7 @@ struct SenderCtArgs {
     constexpr SenderCtArgs() :
         queue_depth(get_compile_time_arg_val(kQueueDepth)),
         token_size_bytes(get_compile_time_arg_val(kTokenSizeBytes)),
+        first_packet_bytes(get_compile_time_arg_val(kFirstPacketBytes)),
         forwarding_metadata_size(get_compile_time_arg_val(kForwardingMetadataSize)),
         downstream_chip_id(get_compile_time_arg_val(kDownstreamChipId)),
         downstream_mesh_id(get_compile_time_arg_val(kDownstreamMeshId)),
@@ -184,6 +190,7 @@ struct SenderCtArgs {
 #endif
 
     constexpr uint32_t entry_stride() const { return token_size_bytes + forwarding_metadata_size; }
+    constexpr uint32_t packets_per_token() const { return first_packet_bytes == token_size_bytes ? 1u : 2u; }
 
 #ifdef KERNEL_BUILD
     uint32_t vc_arrived_addr(uint32_t vc) const { return kernel_compile_time_args[vc_arrived_base + vc]; }

@@ -18,16 +18,7 @@ def test_pow_fractional_composite(device):
     W = 32
     x = torch.randn((N, C, H, W)).bfloat16().float()
 
-    xt = (
-        ttnn.Tensor(
-            x.reshape(-1).tolist(),
-            x.shape,
-            ttnn.bfloat16,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(device)
-    )
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT).to(ttnn.TILE_LAYOUT).to(device)
 
     y = 3 + torch.randn(1, 1, 1, 1).bfloat16().float()
     yt = y

@@ -31,7 +31,7 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type) 
     // Atomics have to use the cached alias. MEM_L1_UNCACHED_BASE is the alias this core's
     // mailbox pointer was built with.
     if (addr >= MEM_L1_UNCACHED_BASE) {
-        v = reinterpret_cast<debug_assert_msg_t*>(addr - MEM_L1_UNCACHED_BASE);
+        v = reinterpret_cast<debug_assert_msg_t*>(addr - MEM_L1_UNCACHED_OFFSET);
     }
     uint32_t old = __atomic_exchange_n(&v->claim, 0xDEADBEEF, __ATOMIC_ACQ_REL);
     if (!old)

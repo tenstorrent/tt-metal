@@ -18,10 +18,11 @@
 #include "api/tt-metalium/device.hpp"
 #include "impl/host_api/temp_quasar_api.hpp"
 #include "api/tt-metalium/experimental/offline_kernel_compile.hpp"
-#include <tt-metalium/experimental/metal2_host_api/scratchpad_spec.hpp>
+#include <tt-metalium/workload/specification/scratchpad_spec.hpp>
 #include "impl/context/metal_context.hpp"
-#include "core_coord.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include "impl/metal2_host_api/sram_arena_support.hpp"
 #include "jit_build/jit_build_settings.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel_source.hpp"
@@ -124,6 +125,10 @@ struct DataflowBufferBindingHandle {
     bool consumes = false;
     uint8_t pap = 0;
     uint8_t cap = 0;
+    // Watcher: the nodes the DFB's address is reserved on, as rectangles in NoC coordinates. Empty without Watcher NoC
+    // sanitizing, and for a DFB borrowed from an interleaved tensor: that tensor holds the address in every L1 bank, so
+    // no node set narrower than the whole grid limits a multicast into it.
+    std::vector<NodeRange> watcher_node_ranges;
 };
 using DataflowBufferBindingHandleMap = std::unordered_map<std::string, DataflowBufferBindingHandle>;
 
@@ -132,13 +137,15 @@ struct SemaphoreBindingHandle {
     uint16_t id = 0;
     SemScope scope = SemScope::LOCAL_NONATOMIC;
     uint32_t total_binder_harts = 0;
+    // Watcher: the nodes the semaphore exists on, as for DataflowBufferBindingHandle::watcher_node_ranges.
+    std::vector<NodeRange> watcher_node_ranges;
 };
 // Metal 2.0: semaphore accessor names -> {semaphore id, scope}
 using SemaphoreBindingHandleMap = std::unordered_map<std::string, SemaphoreBindingHandle>;
 
 // Metal 2.0: per-kernel resolved TensorBinding.
 // Carries the offsets the kernel-side codegen needs to emit a token, plus the program-level
-// TensorParameter name so SetProgramRunArgs can fill the binding's base-address slot
+// TensorParameter name so Program::set_program_run_args can fill the binding's base-address slot
 // (and any runtime accessor fields) from the corresponding TensorArgument at enqueue time.
 struct TensorBindingHandle {
     std::string accessor_name;          // user-facing identifier (kernel symbol in `tensor::`)
@@ -168,24 +175,25 @@ struct TensorBindingHandle {
 
 // Metal 2.0: per-kernel resolved scratchpad binding.
 // A scratchpad is an uninitialized, node-local L1 region, private to a kernel by default.
-//  - The base address is allocated at Program-compile time, and is passed to the kernel as an
-//    implicit CRTA.
+//  - The base address is allocated at Program-compile time or supplied through an SRAMArena
+//    argument, and is passed to the kernel as an implicit CRTA.
 //  - Since the address is persistent across enqueues, we store it on the Kernel object rather
-//    than rely on the statefulness of the CRTA buffer. (The invariant of SetProgramRunArgs is that
+//    than rely on the statefulness of the CRTA buffer. (The invariant of Program::set_program_run_args is that
 //    the CRTA and RTA buffers are completely overwritten when it's called.)
 //  - It is possible for DFB size overrides to be applied between enqueues. If this happens, the
 //    allocated scratchpad addresses will update between enqueues as well.
-//  - The allocated address is 0 until allocate_scratchpads runs.
+//  - The address is 0 until local memory is allocated or an SRAMArena argument is bound.
 //  - Unlike ScratchpadBindingHandle, TensorBindingHandle does NOT store the address, as for bound
 //    tensors the base address is strictly a user enqueue-time argument.
 struct ScratchpadBindingHandle {
     std::string accessor_name;                // user-facing identifier (kernel symbol in `scratch::`)
     uint32_t size_bytes = 0;                  // per-node size; emitted as the accessor's compile-time size
     uint32_t addr_crta_word = 0;              // word index of the base-address slot within the kernel's CRTA buffer
-    uint32_t allocated_address = 0;           // L1 base address; filled by allocate_scratchpads (0 until allocated)
+    uint32_t allocated_address = 0;           // L1 base address; 0 until allocated or bound
     std::optional<LLKMetadata> llk_metadata;  // LLK related metadata (dataformat/ tile format)
     // Present only if the binding handle could share it's allocation with another scratchpad.
-    // Configured in advanced options: ScratchpadAdvancedOptions::allow_instance_multi_binding.
+    // Set for allow_instance_multi_binding or override_placement. Grouping allocations
+    // does not itself permit multiple binding kernel instances on a reserved node.
     // For all the scratchpad binding handle sharing the same identifier,
     // the size_bytes are all equivalent.
     //
@@ -193,8 +201,20 @@ struct ScratchpadBindingHandle {
     // as the build artifact of 2 kernels with/without shared allocation is the same.
     //
     // The ScratchpadSpecName serves as an identifier & does not carry specific meaning.
-    using AllocationIdentifier = experimental::ScratchpadSpecName;
-    std::optional<experimental::ScratchpadSpecName> shared_allocation_identifier;
+    using AllocationIdentifier = ScratchpadSpecName;
+    std::optional<ScratchpadSpecName> shared_allocation_identifier;
+    std::optional<SRAMArenaSource> allocation_override;
+    // Resolved reservation nodes, excluded from the kernel hash.
+    // Invariant: Placement is non-empty and fixed for the Program's lifetime.
+    CoreRangeSet placement;
+};
+
+// Metal 2.0: per-kernel resolved GlobalSemaphore binding. The address is a run argument: Program::set_program_run_args
+// writes the bound GlobalSemaphore's address into the word at addr_crta_word.
+struct GlobalSemaphoreBindingHandle {
+    std::string accessor_name;                    // user-facing identifier (kernel symbol in `global_sem::`)
+    std::string global_semaphore_parameter_name;  // refers back to the program-level GlobalSemaphoreParameter
+    uint32_t addr_crta_word = 0;                  // word index of the address slot within the kernel's CRTA buffer
 };
 
 // Metal 2.0: per-kernel resolved PrefetcherPipe accessor (KernelAdvancedOptions::PrefetcherPipeBinding).
@@ -260,6 +280,8 @@ public:
     const CoreRangeSet& core_range_set() const { return core_range_set_; }
 
     const std::set<CoreCoord>& cores_with_runtime_args() const { return core_with_runtime_args_; }
+    // 1 when runtime-arg storage is prefixed with a watcher count word, else 0.
+    uint32_t watcher_count_word_offset() const { return watcher_count_word_offset_; }
 
     const std::map<std::string, std::string>& defines() const { return defines_; }
 
@@ -310,6 +332,10 @@ public:
     std::size_t logical_common_runtime_arg_count() const;
     RuntimeArgsData& common_runtime_args_data();
     void set_common_runtime_args_count(uint32_t count);
+    // Once a command sequence is assembled, the runtime-arg views point into it and hold the current values. Before
+    // the program's command sequences are discarded, copy the current values back into the kernel's own storage and
+    // point the views there again, so the next assembly starts from them.
+    void reclaim_runtime_args_from_command_sequence();
     uint32_t get_common_runtime_args_count() const { return this->common_runtime_args_count_; }
 
     virtual bool configure(
@@ -339,6 +365,11 @@ public:
         std::function<
             void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope, uint32_t total_binder_harts)>)
         const override;
+    void process_watcher_node_ranges(
+        const std::function<void(const std::string& accessor_name, const std::vector<NodeRange>& node_ranges)>&
+            dfb_callback,
+        const std::function<void(const std::string& accessor_name, const std::vector<NodeRange>& node_ranges)>&
+            semaphore_callback) const override;
     void process_tensor_binding_handles(const std::function<void(
                                             const std::string& accessor_name,
                                             uint32_t cta_offset,
@@ -360,6 +391,16 @@ public:
     std::vector<ScratchpadBindingHandle>& scratchpad_binding_handles() { return scratchpad_binding_handles_; }
     void set_scratchpad_binding_handles(std::vector<ScratchpadBindingHandle> handles) {
         scratchpad_binding_handles_ = std::move(handles);
+    }
+    // GlobalSemaphore binding handles are set post-construction (before compile: they are part of
+    // the kernel cache key and of kernel_bindings_generated.h).
+    void process_global_semaphore_binding_handles(
+        std::function<void(const std::string& accessor_name, uint32_t addr_crta_word)>) const override;
+    const std::vector<GlobalSemaphoreBindingHandle>& global_semaphore_binding_handles() const {
+        return global_semaphore_binding_handles_;
+    }
+    void set_global_semaphore_binding_handles(std::vector<GlobalSemaphoreBindingHandle> handles) {
+        global_semaphore_binding_handles_ = std::move(handles);
     }
     // PrefetcherPipe binding handles are set post-construction (before compile: they are part of
     // the kernel cache key and of kernel_bindings_generated.h).
@@ -405,6 +446,9 @@ public:
     HalProgrammableCoreType get_kernel_programmable_core_type() const { return this->programmable_core_type_; }
     HalProcessorClassType get_kernel_processor_class() const { return this->processor_class_; }
     virtual uint32_t get_kernel_processor_type(int index) const = 0;
+    // The build state (within the core type and class) that binary `index` is built by. It is the processor type,
+    // except on a core with per-CCE builds, where each CCE has its own block of build states.
+    virtual uint32_t get_kernel_build_processor(int index) const { return this->get_kernel_processor_type(index); }
 
     CoreType get_kernel_core_type() const;
     void set_full_name(const std::string& s) { kernel_full_name_ = s; }
@@ -444,9 +488,9 @@ public:
 
     // Resolve query_buf_rw's raw slots to bound objects (TensorParameter name + bound buffer address).
     // Non-const: reads the kernel's CRTA (where the runtime wrote the bound addresses), so the addresses are those
-    // of the last SetProgramRunArgs / UpdateTensorArgs -- call after the final run-args update for the enqueue being
-    // analyzed, and after the binary is compiled. A slot that can't be resolved marks the result opaque.
-    // `program` is the one this kernel belongs to: it holds the address each borrowed-memory DFB is bound to.
+    // of the last Program::set_program_run_args / Program::update_tensor_args -- call after the final run-args update
+    // for the enqueue being analyzed, and after the binary is compiled. A slot that can't be resolved marks the result
+    // opaque. `program` is the one this kernel belongs to: it holds the address each borrowed-memory DFB is bound to.
     ResolvedBufRw resolve_buf_rw(const IDevice& device, const detail::ProgramImpl& program);
 
     void set_precompiled_config(experimental::PrecompiledKernelConfig config);
@@ -502,6 +546,8 @@ protected:
     std::vector<ScratchpadBindingHandle> scratchpad_binding_handles_;
     // Metal 2.0: tensor binding sequences (set post-construction, like scratchpads).
     std::vector<TensorBindingSequenceHandle> tensor_binding_sequences_;
+    // Metal 2.0: GlobalSemaphore bindings (set post-construction, like scratchpads).
+    std::vector<GlobalSemaphoreBindingHandle> global_semaphore_binding_handles_;
     // Metal 2.0: PrefetcherPipe accessors -> program slot (set post-construction, like scratchpads).
     std::vector<PrefetcherPipeBindingHandle> prefetcher_pipe_binding_handles_;
     // Metal 2.0: number of user CTA-vararg words at the start of compile_time_args_.
@@ -542,6 +588,11 @@ protected:
 private:
     void register_kernel_with_watcher();
 };
+
+// Set the address used by a scratchpad binding.
+// precondition: binding belongs to kernel, and address is a nonzero L1 address.
+// side-effect: Update the kernel's common runtime argument slot if storage exists.
+void SetScratchpadBindingAddress(Kernel& kernel, ScratchpadBindingHandle& binding, DeviceAddr address);
 
 class DataMovementKernel : public Kernel {
 public:
@@ -629,6 +680,7 @@ public:
     ~EthernetKernel() override = default;
 
     uint32_t get_kernel_processor_type(int index) const override;
+    uint32_t get_kernel_build_processor(int index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
     void read_binaries(IDevice* device, const std::string& binary_root) override;
 
