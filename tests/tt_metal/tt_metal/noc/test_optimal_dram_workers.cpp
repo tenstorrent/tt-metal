@@ -39,7 +39,8 @@ namespace {
 class OptimalDramWorkers : public ::testing::TestWithParam<DispatchCoreAxis> {};
 
 // Supported axes follow the per-arch core descriptor YAMLs (tt_metal/core_descriptors/):
-// Blackhole defines only a col axis (without fabric tensix) and Quasar only a row axis.
+// Blackhole defines only a col axis and Quasar only a row axis. This assumes fabric tensix
+// is disabled; Blackhole's fabric-mux descriptor also defines a row axis.
 bool is_axis_supported(tt::ARCH arch, DispatchCoreAxis axis) {
     switch (arch) {
         case tt::ARCH::BLACKHOLE: return axis == DispatchCoreAxis::COL;
