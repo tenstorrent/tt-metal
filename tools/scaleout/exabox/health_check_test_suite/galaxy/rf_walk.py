@@ -3,7 +3,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""rf_walk.py: N7, run.sh's copy-only register-file walk, right after N2 (hc/fleet/chunk_load.py rw_after).
+"""rf_walk.py: N7, run.sh's copy-only register-file walk, right after N2 (chunk_load.py rw_after).
 
 Root cause: a matmul mismatch can be a Dest/Src register bit or the FPU's math. N7 moves data through the
 plainest unpack -> Src -> Dest -> pack path and nothing else, so a bit it finds wrong is the register file's (or the

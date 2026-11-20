@@ -85,7 +85,7 @@ BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
 | `daily` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | host_side + device_side | — | yes, if installed | — | ~5 min + triage + ~7 min | The scheduled fleet run |
 | `weekly` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, bf16 and bf8 variants, ~12 min measured) + fabric_all_gather_matmul_galaxy (pytest, ~1 min measured) + HSC input-voltage and chip recount around the tests | host_side + device_side | — | yes, if installed | — | ~17 min measured + triage + ~7 min | Every test, less often |
 | `full` | as `weekly` | as `weekly` | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | `weekly` + sys-triage | A unit with an issue: everything, for the logs on its DIIM ticket |
-| `galaxy` | `tt-smi -glx_reset` only (`-r` is rejected) | — | host_side | — | — | — | snapshot + one reset + triage | A caller that runs its own load and needs the unit's health: chips by BDF, tray and ASIC, thermal, telemetry |
+| `galaxy` | `tt-smi -glx_reset` only (`-r` is rejected) | — | host_side + AER diff over the whole run (marked before each reset) | yes | — | — | snapshot + one reset + triage; with `--mode` plus the bus-bar and links phases (plain ~30 min) | A caller that runs its own load and needs the unit's health: chips by BDF, tray and ASIC, thermal, telemetry |
 | `pre_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data before a BMC reboot |
 | `post_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data after a BMC reboot; for now the same as `pre_bmc_reboot` |
 
@@ -639,6 +639,10 @@ whose baked-in suite predates the phase has the `--skip-sys-triage` and
 | Flag | Default | Purpose |
 |---|---|---|
 | `--tier {flash,daily,weekly,full,galaxy,pre_bmc_reboot,post_bmc_reboot}` | required | Selects reset cadence + gtest matrix |
+| `--mode {plain,full,smoke}` | off | `galaxy` tier: run the bus-bar phase (`diag/busbar.py`: quiet clocks, CCL mix, G3/G3b numeric, N1/N2, step, heavy, code readback) and then the links phase (`diag/links.py`: pair link test, sweep on a fault, fabric open/close) at this length. Not given: neither runs. |
+| `--plan` | off | Print the bus-bar step list for `--mode` (default plain) and exit. Use with `--tier galaxy`. |
+| `--smoke-s N` | 2 | `--mode smoke`: the longest any part's length (s). |
+| `--mix-min A,B,..` | the mode's | The mix part's chunk lengths in minutes, instead of the mode's. |
 | `--dry-run` | off | Print intended subprocess calls; skip destructive steps |
 | `--skip-reset` | off | Skip the reset loop phase entirely |
 | `--skip-tests` | off | Skip the gtest phase entirely |
@@ -687,6 +691,7 @@ The detected rev is also recorded at the top of the JSON report as `detected_boa
 |---|---|---|
 | `pcie_enum_count` | All 32 chips enumerated | **FAIL** |
 | `recount_N` (reset loop) | After reset N, `lspci` lists all 32 chips; each missing one is named by BDF, tray and ASIC (`data.missing`) | **FAIL** |
+| `pcie_aer_delta` (triage phase, `galaxy` tier) | New AER errors per chip over the whole run, from a mark taken before the first load and before each reset (a reset restarts the counters), so errors from the load survive the post-test reset. Any uncorrectable: **FAIL**. Correctable: **WARN** at 2 or more and 6 or more per hour. | **FAIL** / **WARN** |
 | `pcie_lane_width` | x8 on host-PCIe chips (`ASIC_LOCATION==0x6`); x1 elsewhere | **FAIL** |
 | `pcie_gen` | Host-PCIe (U6) chips trained to at least the rev's expected gen (Gen4 on RevA/B, Gen5 on RevC). Above-spec is rendered with `(^)` but doesn't degrade status; under-spec is rendered with `(!)` and WARNs. | **WARN** (known: occasional Gen1 fallback). **SKIP** when `board_rev` is indeterminate. |
 

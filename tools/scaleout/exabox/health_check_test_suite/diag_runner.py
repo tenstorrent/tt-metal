@@ -38,8 +38,11 @@ if _SUITE_DIR not in sys.path:
     sys.path.insert(0, _SUITE_DIR)
 
 from diag.common import default_tt_metal_path, log, print_phase_line, print_phase_summary  # noqa: E402
+from diag.aer import AerWindow  # noqa: E402
 from diag.device_tests import run_tests  # noqa: E402
+from diag.busbar import MODES, SMOKE_S, plan as busbar_plan, run_busbar  # noqa: E402
 from diag.eth_status import run_eth_status  # noqa: E402
+from diag.links import run_links  # noqa: E402
 from diag.eth_summary import SUMMARY_FILE, render_eth_summary  # noqa: E402
 from diag.hsc import judge_hsc, read_hsc_status  # noqa: E402
 from diag.model import FAIL, PASS, SKIP, WARN, Check, Phase  # noqa: E402
@@ -149,6 +152,24 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
         type=Path,
         default=default_tt_metal_path(),
         help="tt-metal repo root (contains build/test/tt_metal/unit_tests_deployment).",
+    )
+    ap.add_argument(
+        "--mode",
+        choices=MODES,
+        default=None,
+        help="Tiers with the galaxy load (galaxy): run the bus-bar and links phases at this length. Not given: neither runs.",
+    )
+    ap.add_argument(
+        "--plan", action="store_true", help="Print the bus-bar step list for --mode (default plain) and exit."
+    )
+    ap.add_argument(
+        "--smoke-s", type=int, default=SMOKE_S, help="--mode smoke: the longest any part's length may be (s)."
+    )
+    ap.add_argument(
+        "--mix-min",
+        type=lambda v: tuple(round(float(x) * 60) for x in v.split(",")),
+        default=None,
+        help="The mix part's chunk lengths in minutes, comma separated, instead of the mode's.",
     )
     ap.add_argument("--output", type=Path, default=Path("diag_report.json"))
     ap.add_argument("--snapshot-out", type=Path, default=Path("/tmp/diag_snapshot.json"))
@@ -281,6 +302,9 @@ def run_diag(
     bmc_password: str | None = None,
     output: Path = Path("diag_report.json"),
     snapshot_out: Path = Path("/tmp/diag_snapshot.json"),
+    mode: str | None = None,
+    smoke_s: int = SMOKE_S,
+    mix_s: tuple[int, ...] | None = None,
 ) -> tuple[int, dict]:
     """Run the full pipeline (snapshot → resets → gtests → triage → ETH status → QSFP tests → sys-triage).
 
@@ -369,6 +393,14 @@ def run_diag(
     _finish(report, reset_phase, t0, summary=False)
     fold_post_reset_snapshots(report, post_reset_phases)
 
+    # The AER errors over the run (pcie_aer_delta): counted from here, after the resets above, and marked before
+    # each reset below, which restarts the kernel's counts.
+    aer = AerWindow() if plan.aer_diff and not dry_run else None
+
+    def aer_mark() -> None:
+        if aer:
+            aer.mark()
+
     # Phase 3: gtest
     test_phase = Phase(name="tests")
     t0 = time.time()
@@ -392,6 +424,37 @@ def run_diag(
             test_phase.add(recount_after_tests(lambda: take_snapshot(resolve_tt_smi(tt_smi_path), after_out)))
     # tests phase prints its own per-test lines as they run — no inline summary.
     _finish(report, test_phase, t0, summary=False)
+
+    # Phase 3b: the galaxy load (--mode): the bus-bar parts, then the pair link
+    # test, its sweep on a fault and the fabric open/close. Inside the AER window.
+    if plan.busbar and mode:
+        load_dir = output.parent / "galaxy"
+        busbar_phase, fault = Phase(name="busbar"), []
+        t0 = time.time()
+        _guarded(
+            busbar_phase,
+            "busbar",
+            FAIL,
+            lambda: fault.append(run_busbar(busbar_phase, load_dir, mode, dry_run, smoke_s, mix_s)),
+        )
+        _finish(report, busbar_phase, t0, summary=True)
+        links_phase = Phase(name="links")
+        t0 = time.time()
+
+        def sweep_reset() -> None:
+            if not skip_reset:
+                aer_mark()
+                run_post_test_reset(tt_smi_path, ("-glx_reset",), links_phase, dry_run)
+
+        _guarded(
+            links_phase,
+            "links",
+            FAIL,
+            lambda: run_links(links_phase, load_dir, any(fault) or busbar_phase.error != "", sweep_reset, dry_run),
+        )
+        _finish(report, links_phase, t0, summary=True)
+
+    aer_mark()
 
     # Phase 4: post-test reset. Its job is to hand phase 5 a freshly reset unit
     # and to guarantee the triage probes, which open every chip read-write,
@@ -419,6 +482,8 @@ def run_diag(
             WARN,
             lambda: run_triage(triage_dir, plan.triage, triage_phase, dry_run, logs_dir, triage_gating, tt_metal_path),
         )
+    if aer and not skip_triage:
+        triage_phase.add(aer.check())
     _finish(report, triage_phase, t0, summary=True)
 
     # Phase 6: the ETH status read. After the post-test reset and the triage
@@ -539,6 +604,10 @@ def run_diag(
 
 def main() -> int:
     args = build_diag_arg_parser().parse_args()
+    if args.plan:
+        for step in busbar_plan(args.mode or "plain", args.smoke_s, args.mix_min):
+            print(step.line())
+        return 0
     rc, _report = run_diag(
         tier=args.tier,
         dry_run=args.dry_run,
@@ -562,6 +631,9 @@ def main() -> int:
         bmc_password=args.bmc_password,
         output=args.output,
         snapshot_out=args.snapshot_out,
+        mode=args.mode,
+        smoke_s=args.smoke_s,
+        mix_s=args.mix_min,
     )
     return rc
 

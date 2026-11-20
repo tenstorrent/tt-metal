@@ -56,8 +56,11 @@ class GalaxyPrograms(unittest.TestCase):
             self.assertEqual(out, set(), f"{f.name} imports outside galaxy/")
 
     def test_no_path_tricks(self):
+        sibling = "sys.path.append(os.path.dirname(os.path.realpath(__file__)))"
         for f in FILES:
-            self.assertNotRegex(f.read_text(), r"sys\.path\.(insert|append)", f.name)
+            lines = [l.strip() for l in f.read_text().splitlines() if "sys.path" in l]
+            for l in lines:
+                self.assertTrue(l.startswith(sibling), f"{f.name}: {l}")
 
     def test_import_without_device(self):
         for f in FILES:

@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """noc_a2a.py: N2, run.sh's on-chip network-on-chip all-to-all check,
-right after G3b (hc/fleet/chunk_load.py rw_after).
+right after G3b (chunk_load.py rw_after).
 
 Every pass moves one uint32 ROW_MAJOR tensor over the whole compute grid of every chip and reads it back after each leg:
   host>DRAM   host write to interleaved DRAM (page r in bank r % banks)

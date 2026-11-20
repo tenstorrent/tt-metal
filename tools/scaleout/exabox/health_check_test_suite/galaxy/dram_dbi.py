@@ -87,7 +87,7 @@ def inject(got, chips, k):
 
 def window_file():
     """The per-host window run counter, outside the run dir (like N3's code readback cursor)."""
-    d = f"/var/tmp/tray-test-dram-window.{os.getuid()}.{socket.gethostname().split('.')[0]}.json"
+    d = f"/var/tmp/health-check-dram-window.{os.getuid()}.{socket.gethostname().split('.')[0]}.json"
     return os.environ.get("FLEET_DRAM_WINDOW_FILE") or d
 
 

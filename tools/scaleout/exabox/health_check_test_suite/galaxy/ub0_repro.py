@@ -42,6 +42,7 @@ sys.path.append(os.path.dirname(os.path.realpath(__file__)))  # the sibling prog
 import threading
 import time
 from datetime import datetime, timezone
+from chunk_sched import tray_of  # noqa: E402  the one tray_of, bus & 0xF0 -> tray 1-4
 
 EXIT_NO_TRIP, EXIT_ERROR, EXIT_REFUSED, EXIT_TRIP, EXIT_CCL_HANG = 0, 1, 2, 3, 4
 EXIT_HELP = """exit codes:
@@ -53,7 +54,6 @@ EXIT_HELP = """exit codes:
 
 The verdict, the first lost chip, timings, a clock/power summary and versions go to the --result JSON on every exit."""
 
-BUS_TO_TRAY = {0x00: 1, 0x40: 2, 0xC0: 3, 0x80: 4}  # PCI bus & 0xF0 -> tray; BMC sensor UBB<tray-1>
 TRAYS, CHIPS_PER_TRAY = 4, 8
 CPLD_BUS = {1: 0x11, 2: 0x13, 3: 0x0D, 4: 0x0F}  # tray -> in-band tray CPLD I2C bus (addr 0x80); UBB0 0x11 and
 #                                                      UBB1 0x13 seen in drops, UBB2 0x0D, UBB3 0x0F
@@ -124,13 +124,6 @@ def chips():
     for d in glob.glob(os.path.join(tt_class(), "tenstorrent!*")):
         out[int(d.rsplit("!", 1)[1])] = os.path.basename(os.path.realpath(os.path.join(d, "device")))
     return dict(sorted(out.items()))
-
-
-def tray_of(pci):
-    try:
-        return BUS_TO_TRAY.get(int(pci.split(":")[-2], 16) & 0xF0)
-    except (IndexError, ValueError, AttributeError):
-        return None
 
 
 def fail_line(lost, total, trays, cls, pci=None):  # BDF + trays 1-4 only, never a UBB number

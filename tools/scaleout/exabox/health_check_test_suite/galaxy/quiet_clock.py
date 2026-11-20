@@ -18,6 +18,7 @@ Nothing here reads or changes a power limit: only the two clock-state messages a
 import os
 import threading
 import time
+from chunk_sched import tray_of  # noqa: E402  the one tray_of, bus & 0xF0 -> tray 1-4
 
 IDLE_MHZ = 800  # cold idle AICLK (ub0_repro.IDLE_MHZ)
 LOST_AICLK = 100000  # tt_aiclk reads 0xFFFFFFFF (or fails) once a chip is gone
@@ -28,14 +29,6 @@ SAY_S = 30.0  # a progress line naming the chips still above idle (the broker re
 POLL_S = 0.25
 BUSY_WAIT_S = 5.0  # after GO_BUSY: wait at most this long for the clocks to rise, then log them
 SEND_TIMEOUT_S = 60.0
-BUS_TO_TRAY = {0x00: 1, 0x40: 2, 0xC0: 3, 0x80: 4}  # PCI bus & 0xF0 -> tray 1-4 (ub0_repro.BUS_TO_TRAY)
-
-
-def tray_of(pci):
-    try:
-        return BUS_TO_TRAY.get(int(pci.split(":")[-2], 16) & 0xF0)
-    except (IndexError, ValueError, AttributeError):
-        return None
 
 
 def sysfs_aiclk(cid):

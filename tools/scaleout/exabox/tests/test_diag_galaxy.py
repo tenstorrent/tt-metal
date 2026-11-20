@@ -10,6 +10,7 @@ checks ignore garbage readings."""
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -21,6 +22,7 @@ sys.path.insert(0, str(SUITE_DIR))
 
 import tiers  # noqa: E402
 from diag import resets  # noqa: E402
+from diag.aer import AerWindow, aer_check, aer_new, read_aer  # noqa: E402
 from diag.galaxy import TRAY_TO_UBB_NIBBLE, expected_bdf  # noqa: E402
 from diag.model import FAIL, PASS, WARN, Phase  # noqa: E402
 from diag.naming import chip  # noqa: E402
@@ -128,7 +130,9 @@ class TestThermalAndTelemetry(unittest.TestCase):
 
     def test_garbage_readings_are_ignored_not_judged(self):
         devs = [_good(b) for b in all_bdfs()]
-        devs[0] = _dev(devs[0]["board_info"]["bus_id"], asic_temperature="65535", power="0", current="n/a", voltage="-1")
+        devs[0] = _dev(
+            devs[0]["board_info"]["bus_id"], asic_temperature="65535", power="0", current="n/a", voltage="-1"
+        )
         out = _checks(devs)
         self.assertEqual(out["asic_thermal_precheck"].status, PASS)
         self.assertEqual(out["c8_telemetry"].status, PASS)
@@ -152,13 +156,17 @@ class TestThermalAndTelemetry(unittest.TestCase):
 
     def test_within_20c_of_limit_warns(self):
         devs = [_good(b) for b in all_bdfs()]
-        devs[0] = _dev(devs[0]["board_info"]["bus_id"], asic_temperature="85.0", power="120", current="90", voltage="0.75")
+        devs[0] = _dev(
+            devs[0]["board_info"]["bus_id"], asic_temperature="85.0", power="120", current="90", voltage="0.75"
+        )
         self.assertEqual(_checks(devs)["asic_thermal_precheck"].status, WARN)
 
     def test_warm_lists_every_warm_chip(self):
         devs = [_good(b) for b in all_bdfs()]
         for i in (0, 9):
-            devs[i] = _dev(devs[i]["board_info"]["bus_id"], asic_temperature="85.0", power="120", current="90", voltage="0.75")
+            devs[i] = _dev(
+                devs[i]["board_info"]["bus_id"], asic_temperature="85.0", power="120", current="90", voltage="0.75"
+            )
         c = _checks(devs)["asic_thermal_precheck"]
         self.assertEqual(c.data["warm"], [all_bdfs()[0], all_bdfs()[9]])
         self.assertIn("0000:01:00.0 (UBB1/U1)", c.details)
@@ -173,6 +181,74 @@ class TestThermalAndTelemetry(unittest.TestCase):
             [(f["bdf"], f["tray"], f["asic"], f["why"]) for f in c.data["flagged"]],
             [("0000:01:00.0", 1, 1, w) for w in ("temperature", "power", "current", "vcore")],
         )
+
+
+class TestAer(unittest.TestCase):
+    def _sysfs(self, root: Path, bdf: str, vendor="0x1e52", **counts):
+        d = root / bdf
+        d.mkdir()
+        (d / "vendor").write_text(vendor + "\n")
+        for kind, fname in (
+            ("corr", "aer_dev_correctable"),
+            ("nonfatal", "aer_dev_nonfatal"),
+            ("fatal", "aer_dev_fatal"),
+        ):
+            if kind in counts:
+                (d / fname).write_text(f"RxErr 0\nTOTAL_ERR_{kind.upper()} {counts[kind]}\n")
+
+    def test_read_aer_only_tenstorrent_chips(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            self._sysfs(root, "0000:02:00.0", corr=3, nonfatal=0, fatal=1)
+            self._sysfs(root, "0000:05:00.0", vendor="0x8086", corr=9)
+            self.assertEqual(read_aer(root), {"0000:02:00.0": {"corr": 3, "nonfatal": 0, "fatal": 1}})
+
+    def test_unreadable_counter_is_left_out(self):
+        with tempfile.TemporaryDirectory() as t:
+            self._sysfs(Path(t), "0000:02:00.0", corr=3)
+            self.assertEqual(read_aer(Path(t)), {"0000:02:00.0": {"corr": 3}})
+
+    def test_no_change_passes(self):
+        a = {"0000:02:00.0": {"corr": 5, "nonfatal": 0, "fatal": 0}}
+        self.assertEqual(aer_check(aer_new(a, a), 1.0).status, PASS)
+
+    def test_uncorrectable_fails_with_tray_and_asic(self):
+        before = {"0000:c2:00.0": {"corr": 0, "nonfatal": 0, "fatal": 0}}
+        after = {"0000:c2:00.0": {"corr": 0, "nonfatal": 1, "fatal": 0}}
+        c = aer_check(aer_new(before, after), 0.01)
+        self.assertEqual(c.status, FAIL)
+        self.assertEqual(c.data["flagged"], [{"bdf": "0000:c2:00.0", "tray": 3, "asic": 2, "nonfatal": 1}])
+
+    def test_correctable_needs_both_thresholds(self):
+        before = {"0000:02:00.0": {"corr": 0}}
+        self.assertEqual(
+            aer_check(aer_new(before, {"0000:02:00.0": {"corr": 1}}), 0.1).status, PASS
+        )  # under the minimum
+        self.assertEqual(
+            aer_check(aer_new(before, {"0000:02:00.0": {"corr": 5}}), 1.0).status, PASS
+        )  # under 6 per hour
+        self.assertEqual(aer_check(aer_new(before, {"0000:02:00.0": {"corr": 6}}), 1.0).status, WARN)
+        self.assertEqual(aer_check(aer_new(before, {"0000:02:00.0": {"corr": 2}}), 0.1).status, WARN)
+
+    def test_chip_missing_from_before_is_not_judged(self):
+        self.assertEqual(aer_check(aer_new({}, {"0000:02:00.0": {"nonfatal": 4}}), 1.0).status, PASS)
+
+    def test_a_reset_restarts_the_counts_and_the_window_keeps_what_came_before(self):
+        reads = iter(
+            [
+                {"0000:02:00.0": {"nonfatal": 5}},  # window opens
+                {"0000:02:00.0": {"nonfatal": 6}},  # marked before a reset
+                {"0000:02:00.0": {"nonfatal": 0}},  # counts restarted by the reset
+                {"0000:02:00.0": {"nonfatal": 2}},  # the end
+            ]
+        )
+        w = AerWindow(lambda: next(reads))
+        w.mark()
+        w.mark()
+        self.assertEqual(w.new, {"0000:02:00.0": {"nonfatal": 1}})
+        c = w.check()
+        self.assertEqual(w.new, {"0000:02:00.0": {"nonfatal": 3}})
+        self.assertEqual(c.status, FAIL)
 
 
 if __name__ == "__main__":
