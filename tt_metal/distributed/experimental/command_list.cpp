@@ -7,16 +7,16 @@
 #include <algorithm>
 #include <bit>
 #include <cstring>
+#include <functional>
 #include <map>
 #include <optional>
-#include <stdexcept>
 #include <unordered_map>
 #include <utility>
 
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
+#include <tt-metalium/workload/specification/tensor_spec_relaxations.hpp>
 #include <tt_stl/fmt.hpp>
 #include <tt-logger/tt-logger.hpp>
 
@@ -26,6 +26,7 @@
 #include "tt_metal/distributed/mesh_workload_impl.hpp"
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
+#include "tt_metal/impl/buffers/tensor_prefetcher_manager.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tt_metal/impl/context/metal_env_impl.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
@@ -117,6 +118,9 @@ struct CapturedTensorPatch {
 struct CapturedProgram {
     MeshCoordinateRange device_range;
     TraceNode trace_node;
+    // The program's per-device runtime args as recorded (null when it has none). A program with them is serialized
+    // once per device, each stream carrying that device's values.
+    std::shared_ptr<const PerDeviceRuntimeArgs> per_device_runtime_args;
     std::vector<CapturedRuntimePatch> runtime_patches;
     std::vector<CapturedCommonRuntimePatch> common_runtime_patches;
     std::vector<CapturedTensorPatch> tensor_patches;
@@ -343,7 +347,11 @@ public:
     explicit CommandListBuilderImpl(MeshDevice& mesh_device);
     ~CommandListBuilderImpl();
 
-    void add(MeshWorkload& workload, const CmdListParameters& parameters);
+    void add(MeshCommandQueue& binary_upload_cq, MeshWorkload& workload, const CmdListParameters& parameters);
+    void add_tensor_prefetcher_request(
+        const std::vector<std::reference_wrapper<const PrefetcherPipe>>& prefetcher_pipes,
+        ttsl::optional_reference<const distributed::MeshCoordinateRangeSet> device_subset,
+        const std::vector<TensorPrefetcherInput>& input_tensors);
     CommandList build(MeshCommandQueue& cq) const;
     MeshDevice& device() const;
     void clear();
@@ -386,6 +394,7 @@ private:
     // Become CommandListParameterRegistry::tensor_regions and tensor_region_slots at build().
     std::vector<BoundTensorFootprint> tensor_regions;
     std::unordered_map<CmdListTensorArgName, std::vector<size_t>> tensor_region_slots;
+    distributed::TensorPrefetcherManager::CapturedRequests tensor_prefetcher_requests;
     bool valid = true;
     bool lock_held = false;
 };
@@ -400,6 +409,7 @@ public:
         std::shared_ptr<MeshBuffer> command_buffer,
         std::vector<std::shared_ptr<MeshBuffer>> retained_binary_buffers,
         detail::CommandListParameterRegistry registry,
+        distributed::TensorPrefetcherManager::CapturedRequests tensor_prefetcher_requests,
         uint8_t cq_id,
         SubDeviceManagerId sub_device_manager_id);
     ~Impl();
@@ -422,6 +432,8 @@ private:
     // Pins kernel-binary MeshBuffers referenced by the serialized commands.
     std::vector<std::shared_ptr<MeshBuffer>> retained_binary_buffers;
     detail::CommandListParameterRegistry registry;
+    // Re-queued on the Tensor prefetcher before each replay's commands.
+    distributed::TensorPrefetcherManager::CapturedRequests tensor_prefetcher_requests;
     uint8_t bound_cq_id = 0;
     SubDeviceManagerId sub_device_manager_id;
     bool valid = true;
@@ -433,6 +445,7 @@ CommandList::Impl::Impl(
     std::shared_ptr<MeshBuffer> command_buffer,
     std::vector<std::shared_ptr<MeshBuffer>> retained_binary_buffers,
     detail::CommandListParameterRegistry registry,
+    distributed::TensorPrefetcherManager::CapturedRequests tensor_prefetcher_requests,
     uint8_t cq_id,
     SubDeviceManagerId sub_device_manager_id) :
     mesh_device(&mesh_device),
@@ -440,6 +453,7 @@ CommandList::Impl::Impl(
     command_buffer(std::move(command_buffer)),
     retained_binary_buffers(std::move(retained_binary_buffers)),
     registry(std::move(registry)),
+    tensor_prefetcher_requests(std::move(tensor_prefetcher_requests)),
     bound_cq_id(cq_id),
     sub_device_manager_id(sub_device_manager_id) {
     mesh_device.impl().register_command_list();
@@ -470,6 +484,7 @@ void CommandList::Impl::release_resources() noexcept {
     descriptor = {};
     retained_binary_buffers.clear();
     registry = {};
+    tensor_prefetcher_requests = {};
     valid = false;
     mesh_device->impl().unregister_command_list();
 }
@@ -524,13 +539,23 @@ void CommandList::Impl::replay(bool blocking, bool check_dram_overlap) const {
     if (check_dram_overlap) {
         verify_no_dram_overlap();
     }
+    // Queued ahead of the commands, as trace replay does, so the prefetcher can start filling the pipes while the
+    // consumers are dispatched. Queued under the same API lock as the commands, after the list is accepted, so a
+    // rejected list sends nothing and concurrent replays reach the pipes in the order their consumers run.
+    std::function<void()> queue_prefetcher_requests;
+    if (!tensor_prefetcher_requests.requests.empty()) {
+        queue_prefetcher_requests = [this] {
+            mesh_device->impl().tensor_prefetcher(mesh_device).replay_captured_nolock(tensor_prefetcher_requests);
+        };
+    }
     as_fd_queue(mesh_device->mesh_command_queue(bound_cq_id))
         .enqueue_command_list(
             descriptor.worker_descriptors(),
             descriptor.sub_device_ids(),
             *command_buffer,
             sub_device_manager_id,
-            blocking);
+            blocking,
+            queue_prefetcher_requests);
 }
 
 void CommandList::Impl::update_args(const CmdListArgPatch& patch, bool blocking) {
@@ -669,6 +694,12 @@ std::vector<MeshCoordinateRange> CommandListBuilderImpl::compute_device_ranges(
             if (!local_device_range.has_value()) {
                 continue;
             }
+            if (program.per_device_runtime_args != nullptr) {
+                for (const auto& coord : *local_device_range) {
+                    partition_mesh_coordinate_ranges(device_ranges, MeshCoordinateRange(coord));
+                }
+                continue;
+            }
             partition_mesh_coordinate_ranges(device_ranges, *local_device_range);
         }
     }
@@ -728,6 +759,8 @@ CommandListData CommandListBuilderImpl::serialize_range(
     // is serialized from a clean prefetcher cache and launch state.
     dispatch_state.reset(mesh_device.num_sub_devices());
     std::vector<uint32_t> bytes;
+    // (stream byte offset, size) of every per-device runtime argument written into this range's stream
+    std::vector<std::pair<uint32_t, uint32_t>> per_device_words;
     auto& launch_state = dispatch_state.launch_state;
     DispatchArray<uint32_t> expected_workers{};
 
@@ -784,7 +817,17 @@ CommandListData CommandListBuilderImpl::serialize_range(
             ProgramBinaryStatus::Committed);
 
         const auto& captured = *programs[i];
+        // This device's values of the program's per-device runtime args (the range is one device; see
+        // compute_device_ranges), written over the serialized words.
+        std::vector<ResolvedPerDeviceRuntimeArgsField> per_device_fields;
+        uint32_t coord_index = 0;
+        if (captured.per_device_runtime_args != nullptr) {
+            TT_ASSERT(range.shape().mesh_size() == 1);
+            per_device_fields = resolve_per_device_runtime_args(*captured.per_device_runtime_args, command_sequence);
+            coord_index = coordinate_index_in_range(captured.device_range, range.start_coord());
+        }
         size_t num_recorded = 0;
+        size_t num_fields_written = 0;
         program_dispatch::for_each_program_command_sequence_chunk(
             command_sequence,
             node.dispatch_metadata.stall_first,
@@ -792,9 +835,30 @@ CommandListData CommandListBuilderImpl::serialize_range(
             node.dispatch_metadata.send_binary,
             [&](const void* chunk, uint32_t chunk_size) {
                 const uint32_t chunk_offset = append_command_bytes(bytes, chunk, chunk_size);
+                const auto* chunk_begin = static_cast<const uint8_t*>(chunk);
+                for (const auto& [location, field] : per_device_fields) {
+                    const auto* loc = reinterpret_cast<const uint8_t*>(location);
+                    const uint32_t field_bytes = field->num_words * sizeof(uint32_t);
+                    if (loc < chunk_begin || loc + field_bytes > chunk_begin + chunk_size) {
+                        continue;
+                    }
+                    const uint32_t stream_offset = chunk_offset + static_cast<uint32_t>(loc - chunk_begin);
+                    // A device without a value keeps the program's own words, which a parameter may patch.
+                    if (field->present[coord_index] != 0) {
+                        std::memcpy(
+                            reinterpret_cast<uint8_t*>(bytes.data()) + stream_offset,
+                            field->values.data() + static_cast<size_t>(coord_index) * field->num_words,
+                            field_bytes);
+                        per_device_words.push_back({stream_offset, field_bytes});
+                    }
+                    ++num_fields_written;
+                }
                 num_recorded += record_patch_targets(
                     captured, command_sequence, chunk, chunk_size, chunk_offset, range_index, registry);
             });
+        TT_FATAL(
+            num_fields_written == per_device_fields.size(),
+            "Failed to locate every per-device runtime argument in the serialized command stream");
         TT_FATAL(
             num_recorded == captured.runtime_patches.size() + captured.common_runtime_patches.size() +
                                 captured.tensor_patches.size(),
@@ -804,6 +868,33 @@ CommandListData CommandListBuilderImpl::serialize_range(
             worker_launch_state.inc_mcast_wptr(1);
         }
         expected_workers[*sub_device] += node.num_workers;
+    }
+
+    // A command-list parameter under a per-device runtime argument would overwrite that device's value with the one
+    // every device gets on update_args.
+    if (!per_device_words.empty()) {
+        auto check = [&](const PatchTarget& target) {
+            if (target.range_index != range_index) {
+                return;
+            }
+            const uint32_t end = target.stream_offset + target.num_words * static_cast<uint32_t>(sizeof(uint32_t));
+            for (const auto& [offset, size] : per_device_words) {
+                TT_FATAL(
+                    end <= offset || offset + size <= target.stream_offset,
+                    "A command list parameter overlaps a per-device runtime argument");
+            }
+        };
+        for (const auto& [_, targets] : registry.runtime_targets) {
+            std::ranges::for_each(targets, check);
+        }
+        for (const auto& [_, targets] : registry.common_runtime_targets) {
+            std::ranges::for_each(targets, check);
+        }
+        for (const auto& [_, targets] : registry.tensor_targets) {
+            for (const auto& target : targets) {
+                check(target.target);
+            }
+        }
     }
 
     // Returns the prefetcher from the exec buffer to the issue queue.
@@ -921,6 +1012,12 @@ void CommandListBuilderImpl::resolve_parameters(
             TT_FATAL(!info.nodes.empty(), "Command list runtime parameter '{}' must name at least one node", *name);
             auto& captured = find_captured_program(info.program.get());
             const auto* schema = rta_schema_of(captured, info.kernel_name);
+            TT_FATAL(
+                !schema->runtime_array_arg_slots.contains(info.arg_name),
+                "Runtime argument '{}' of kernel '{}' is an array argument, which command list parameters do not "
+                "support yet",
+                info.arg_name,
+                info.kernel_name);
             const auto slot = schema->runtime_arg_name_to_slot.find(info.arg_name);
             TT_FATAL(
                 slot != schema->runtime_arg_name_to_slot.end(),
@@ -941,6 +1038,12 @@ void CommandListBuilderImpl::resolve_parameters(
         for (const auto& info : infos) {
             auto& captured = find_captured_program(info.program.get());
             const auto* schema = rta_schema_of(captured, info.kernel_name);
+            TT_FATAL(
+                !schema->common_runtime_array_arg_slots.contains(info.arg_name),
+                "Common runtime argument '{}' of kernel '{}' is an array argument, which command list parameters do "
+                "not support yet",
+                info.arg_name,
+                info.kernel_name);
             const auto slot = schema->common_runtime_arg_name_to_slot.find(info.arg_name);
             TT_FATAL(
                 slot != schema->common_runtime_arg_name_to_slot.end(),
@@ -961,12 +1064,13 @@ void CommandListBuilderImpl::resolve_parameters(
             auto& program = *captured.trace_node.program;
             const auto* expected_spec = program.get_tensor_parameter_layout(*info.param_name);
             TT_FATAL(expected_spec != nullptr, "TensorParameter '{}' is not declared by the program", info.param_name);
-            for (const auto& [dfb_id, borrowed_param_name] : program.get_dfb_borrowed_bindings()) {
+            for (const auto& binding : program.get_dfb_storage_bindings()) {
+                const auto* tensor_name = std::get_if<tt::tt_metal::TensorParamName>(&binding.source);
                 TT_FATAL(
-                    borrowed_param_name != *info.param_name,
+                    tensor_name == nullptr || tensor_name->get() != *info.param_name,
                     "TensorParameter '{}' backs borrowed-memory DFB {}, which command lists cannot patch",
                     info.param_name,
-                    dfb_id);
+                    binding.dfb_id);
             }
             const auto relaxations = program.get_tensor_parameter_relaxations(*info.param_name);
             bool bound = false;
@@ -997,15 +1101,16 @@ void CommandListBuilderImpl::resolve_parameters(
     }
 }
 
-void CommandListBuilderImpl::add(MeshWorkload& workload, const CmdListParameters& parameters) {
+void CommandListBuilderImpl::add(
+    MeshCommandQueue& binary_upload_cq, MeshWorkload& workload, const CmdListParameters& parameters) {
     TT_FATAL(valid, "CommandListBuilder has been deallocated");
+    TT_FATAL(binary_upload_cq.device() == &mesh_device, "Command queue belongs to a different MeshDevice");
     TT_FATAL(
         mesh_device.get_active_sub_device_manager_id() == sub_device_manager_id,
         "The active sub-device manager changed while recording a command list");
     validate_no_service_cores(workload, mesh_device);
 
-    auto& binary_load_cq = mesh_device.mesh_command_queue();
-    auto binary_buffer = workload.impl().prepare_for_command_list(binary_load_cq);
+    auto binary_buffer = workload.impl().prepare_for_command_list(binary_upload_cq);
 
     StagedCommandListNode staged_node;
     staged_node.multicast_go_signals = workload.impl().runs_on_noc_multicast_only_cores();
@@ -1021,10 +1126,13 @@ void CommandListBuilderImpl::add(MeshWorkload& workload, const CmdListParameters
     const bool use_prefetcher_cache = max_program_kernels_size != 0 && max_program_kernels_size <= cache_size;
 
     for (auto& [device_range, program] : workload.get_programs()) {
+        const auto* per_device = workload.impl().per_device_runtime_args(device_range);
         staged_node.programs.push_back(
-            {device_range,
-             program_dispatch::create_trace_node(
-                 program.impl(), &mesh_device, staged_node.num_workers, use_prefetcher_cache)});
+            {.device_range = device_range,
+             .trace_node = program_dispatch::create_trace_node(
+                 program.impl(), &mesh_device, staged_node.num_workers, use_prefetcher_cache),
+             .per_device_runtime_args =
+                 per_device != nullptr ? snapshot_per_device_runtime_args(*per_device) : nullptr});
     }
     resolve_parameters(staged_node, parameters);
 
@@ -1036,7 +1144,8 @@ void CommandListBuilderImpl::add(MeshWorkload& workload, const CmdListParameters
             const auto* footprint = program_impl.get_bound_tensor_footprint(param_name);
             TT_FATAL(
                 footprint != nullptr,
-                "TensorParameter '{}' has no bound tensor. Call SetProgramRunArgs before recording the workload",
+                "TensorParameter '{}' has no bound tensor. Call Program::set_program_run_args before recording "
+                "the workload",
                 param_name);
             region_slot_of.emplace(std::pair{&program_impl, param_name}, tensor_regions.size() + new_regions.size());
             new_regions.push_back(*footprint);
@@ -1068,6 +1177,16 @@ void CommandListBuilderImpl::add(MeshWorkload& workload, const CmdListParameters
     }
 }
 
+void CommandListBuilderImpl::add_tensor_prefetcher_request(
+    const std::vector<std::reference_wrapper<const PrefetcherPipe>>& prefetcher_pipes,
+    ttsl::optional_reference<const distributed::MeshCoordinateRangeSet> device_subset,
+    const std::vector<TensorPrefetcherInput>& input_tensors) {
+    TT_FATAL(valid, "CommandListBuilder has been deallocated");
+    mesh_device.impl()
+        .tensor_prefetcher(&mesh_device)
+        .capture(tensor_prefetcher_requests, prefetcher_pipes, device_subset, input_tensors);
+}
+
 CommandList CommandListBuilderImpl::build(MeshCommandQueue& cq) const {
     TT_FATAL(valid, "CommandListBuilder has been deallocated");
     TT_FATAL(cq.device() == &mesh_device, "Command queue belongs to a different MeshDevice");
@@ -1087,6 +1206,7 @@ CommandList CommandListBuilderImpl::build(MeshCommandQueue& cq) const {
         std::move(command_buffer),
         retained_binary_buffers,
         std::move(assembly.registry),
+        tensor_prefetcher_requests,
         static_cast<uint8_t>(cq.id()),
         sub_device_manager_id));
 }
@@ -1103,6 +1223,7 @@ void CommandListBuilderImpl::clear() {
     retained_binary_buffers.clear();
     tensor_regions.clear();
     tensor_region_slots.clear();
+    tensor_prefetcher_requests = {};
 }
 
 void CommandListBuilderImpl::deallocate() {
@@ -1111,6 +1232,7 @@ void CommandListBuilderImpl::deallocate() {
     retained_binary_buffers.clear();
     tensor_regions.clear();
     tensor_region_slots.clear();
+    tensor_prefetcher_requests = {};
     valid = false;
     if (lock_held) {
         mesh_device.impl().release_command_list_builder();
@@ -1126,9 +1248,18 @@ CommandListBuilder::CommandListBuilder(CommandListBuilder&&) noexcept = default;
 CommandListBuilder& CommandListBuilder::operator=(CommandListBuilder&&) noexcept = default;
 CommandListBuilder::~CommandListBuilder() = default;
 
-void CommandListBuilder::add(MeshWorkload& workload, const CmdListParameters& parameters) {
+void CommandListBuilder::add(
+    MeshCommandQueue& binary_upload_cq, MeshWorkload& workload, const CmdListParameters& parameters) {
     TT_FATAL(impl_ != nullptr, "CommandListBuilder has been moved from");
-    impl_->add(workload, parameters);
+    impl_->add(binary_upload_cq, workload, parameters);
+}
+
+void CommandListBuilder::add_tensor_prefetcher_request(
+    const std::vector<std::reference_wrapper<const PrefetcherPipe>>& prefetcher_pipes,
+    ttsl::optional_reference<const distributed::MeshCoordinateRangeSet> device_subset,
+    const std::vector<TensorPrefetcherInput>& input_tensors) {
+    TT_FATAL(impl_ != nullptr, "CommandListBuilder has been moved from");
+    impl_->add_tensor_prefetcher_request(prefetcher_pipes, device_subset, input_tensors);
 }
 
 CommandList CommandListBuilder::build(MeshCommandQueue& cq) const {

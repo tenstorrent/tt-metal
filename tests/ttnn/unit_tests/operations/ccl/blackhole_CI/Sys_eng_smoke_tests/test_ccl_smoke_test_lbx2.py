@@ -71,7 +71,7 @@ def test_ccl_ddr_smoke_test_1x16(
     enable_trace,
     num_iters,
 ):
-    validate_test(num_devices, None, mesh_device.shape, cluster_axis)
+    validate_test(num_devices, None, mesh_device.shape, cluster_axis, mesh_device=mesh_device)
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
     run_all_gather_impl(
         submesh_device,

@@ -174,24 +174,53 @@ def packed_forward_refusals(
     use_trace: bool = False,
     d2h_acks: bool = False,
     indexer_indices: bool = False,
+    traced_forward: bool = False,
+    forward_d2h_acks: bool = False,
+    forward_indexer_indices: bool = False,
+    forward_mtp: bool = False,
 ) -> list:
-    """Why a configuration cannot run ``forward_chunks`` chunks per forward (empty list: it can)."""
+    """Why a configuration cannot run ``forward_chunks`` chunks per forward (empty list: it can).
+
+    The ``forward_*`` flags are the adapter's packed-forward capabilities:
+
+    - ``traced_forward`` (supports_packed_forward_trace): its prefill_forward stages each chunk's inputs before a
+      trace replay.
+    - ``forward_d2h_acks`` (supports_packed_forward_d2h_acks): it sends one 12-byte D2H ack record per chunk per
+      KV-writing layer, chunk by chunk.
+    - ``forward_indexer_indices`` (supports_packed_forward_indexer_indices): it takes and leaves a pipeline
+      boundary's indexer indices for every chunk of the forward, packed in one tensor of the runtime's
+      indexer_indices_shape().
+    - ``forward_mtp`` (supports_packed_forward_mtp): its prefill_forward takes one MTP lookahead block and one
+      provided-levels word per chunk (ADDING_A_PREFILL_MODEL.md), eager or traced (with ``traced_forward``)."""
     if forward_chunks == 1:
         return []
     reasons = []
-    if mtp_levels:
+    if mtp_levels and not (supports_packed_forward and forward_mtp):
         reasons.append("PREFILL_MTP_LEVELS > 0 (MTP lookahead is per chunk)")
     if dflash:
         reasons.append("PREFILL_DFLASH=1")
-    if use_trace:
+    if use_trace and not (supports_packed_forward and traced_forward):
         reasons.append("PREFILL_USE_TRACE=1 (per-chunk arguments are not trace inputs)")
-    if d2h_acks and supports_packed_forward:
+    if d2h_acks and supports_packed_forward and not forward_d2h_acks:
         reasons.append("PREFILL_LAYER_ACK_D2H=1 with the adapter's prefill_forward")
-    if indexer_indices:
+    if indexer_indices and not (supports_packed_forward and forward_indexer_indices):
         reasons.append(
-            "a multi-rank runtime passes indexer indices between ranks, which a packed forward does not carry"
+            "a multi-rank runtime passes indexer indices between ranks, which this adapter's packed forward does not "
+            "carry"
         )
     return reasons
+
+
+def packed_forward_capabilities(adapter) -> dict:
+    """The adapter's packed-forward capabilities as packed_forward_refusals() keywords, so every call site passes all
+    of them."""
+    return {
+        "supports_packed_forward": adapter.supports_packed_forward,
+        "traced_forward": adapter.supports_packed_forward_trace,
+        "forward_d2h_acks": adapter.supports_packed_forward_d2h_acks,
+        "forward_indexer_indices": adapter.supports_packed_forward_indexer_indices,
+        "forward_mtp": adapter.supports_packed_forward_mtp,
+    }
 
 
 def check_packed_forward_support(forward_chunks: int, **kwargs) -> None:

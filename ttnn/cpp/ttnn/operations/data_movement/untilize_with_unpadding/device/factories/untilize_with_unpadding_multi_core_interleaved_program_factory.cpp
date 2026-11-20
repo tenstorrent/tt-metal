@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "untilize_with_unpadding_multi_core_interleaved_program_factory.hpp"
+#include "ttnn/operations/data_movement/untilize_with_unpadding/device/untilize_with_unpadding_device_operation.hpp"
 
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
@@ -10,14 +11,15 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
+using tt::tt_metal::experimental::AdvancedKernelRunArgs;
 
 namespace ttnn::prim {
 
@@ -45,9 +47,10 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
     const auto& input_mesh_tensor = input.mesh_tensor();
     const auto& output_mesh_tensor = output.mesh_tensor();
 
-    tt::DataFormat input_dfb_data_format = datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat input_dfb_data_format = get_untilize_with_unpadding_dfb_data_format(a.dtype(), a.device()->arch());
     uint32_t input_single_tile_size = tt::tile_size(input_dfb_data_format);
-    tt::DataFormat output_dfb_data_format = datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat output_dfb_data_format =
+        get_untilize_with_unpadding_dfb_data_format(output.dtype(), a.device()->arch());
     uint32_t output_single_tile_size = tt::tile_size(output_dfb_data_format);
 
     const auto& input_shape = a.padded_shape();
@@ -142,6 +145,9 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
               (uint32_t)(input_dfb_data_format == tt::DataFormat::Float32 or
                          input_dfb_data_format == tt::DataFormat::UInt32 or
                          input_dfb_data_format == tt::DataFormat::Int32)},
+             {"one_byte_dtype",
+              (uint32_t)(input_dfb_data_format == tt::DataFormat::UInt8 ||
+                         input_dfb_data_format == tt::DataFormat::Int8)},
              {"unpadded_X_size", unpadded_row_size_bytes}},
         .runtime_arg_schema = {.runtime_arg_names = {"padded_X_size", "start_stick_id", "n_block_reps"}},
         .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
@@ -151,7 +157,7 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
      */
     KernelSpec::CompilerOptions::Defines compute_kernel_defines;
     ComputeHardwareConfig compute_hw_config{.enable_32_bit_dest = fp32_dest_acc_en};
-    if (fp32_dest_acc_en) {
+    if (operations::data_movement::needs_fp32_unpack_to_dest(fp32_dest_acc_en, a.dtype())) {
         compute_hw_config.unpack_modes = {{MCI_IN, UnpackMode::UnpackToDest}};
     }
     const std::string compute_kernel(

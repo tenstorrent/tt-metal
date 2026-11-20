@@ -643,3 +643,19 @@ def test_upsample_nearest_float_mixed_memory(
 
     assert list(output_torch.shape) == list(torch_result.shape)
     assert torch.equal(output_torch, torch_result)
+
+
+def test_upsample_nearest_float_rejects_empty_output(device, expect_error):
+    input_tensor = ttnn.from_torch(
+        torch.randn(1, 2, 2, 32, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "output shape must be non-empty"):
+        ttnn.upsample(input_tensor, [0.25, 1.0], mode="nearest")
+
+
+def test_upsample_nearest_float_rejects_uint32_overflow(device, expect_error):
+    input_tensor = ttnn.from_torch(
+        torch.randn(1, 2, 2, 32, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "overflows uint32"):
+        ttnn.upsample(input_tensor, [1e10, 1.0], mode="nearest")

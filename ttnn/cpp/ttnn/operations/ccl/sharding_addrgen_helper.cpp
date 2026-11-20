@@ -5,6 +5,7 @@
 #include <tt_stl/reflection.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
@@ -148,7 +149,7 @@ std::vector<uint32_t> generate_compile_time_args(const ttnn::Tensor& t) {
     // 1(4) if there is padding in the rightmost shard and target is L1(DRAM),
     // and 2(5) otherwise for L1(DRAM)
     shard_addr_gen_consts::ContiguityType contiguity;
-    if (t.buffer()->aligned_page_size() != t.buffer()->page_size()) {
+    if (t.mesh_buffer().aligned_page_size() != t.mesh_buffer().page_size()) {
         contiguity = is_dram ? shard_addr_gen_consts::ContiguityType::DRAM_PADDING_BETWEEN_PAGES
                              : shard_addr_gen_consts::ContiguityType::L1_PADDING_BETWEEN_PAGES;
     } else if (buf_shard_spec.tensor2d_shape_in_pages[1] == (pages_per_shard_x * get_sharding_core_count(t))) {
@@ -160,8 +161,9 @@ std::vector<uint32_t> generate_compile_time_args(const ttnn::Tensor& t) {
     }
     args.push_back(static_cast<uint32_t>(t.memory_config().memory_layout()));  // Memory layout
     args.push_back(static_cast<uint32_t>(get_sharding_core_count(t)));       // The number of sharding cores
-    args.push_back(static_cast<uint32_t>(t.buffer()->aligned_page_size()));  // The page size we offset each write to
-    TT_FATAL(t.buffer()->aligned_page_size() > 0, "aligned page size is 0");
+    args.push_back(
+        static_cast<uint32_t>(t.mesh_buffer().aligned_page_size()));  // The page size we offset each write to
+    TT_FATAL(t.mesh_buffer().aligned_page_size() > 0, "aligned page size is 0");
     TT_FATAL(buf_shard_spec.tensor2d_shape_in_pages[1] > 0, "the page is empty");
     args.push_back(static_cast<uint32_t>(
         buf_shard_spec

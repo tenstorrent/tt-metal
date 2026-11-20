@@ -45,7 +45,7 @@ from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import V4_MESH_CONFIGS
 from models.demos.deepseek_v3_d_p.tests.pcc.v4_test_utils import V4_CACHE_PCC, report_chunk_pccs
 from models.demos.deepseek_v3_d_p.tt.mla.compressed_sparse_attention import TtCSA
 from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtCSACompressor
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 _SEED = 42
 # PER-CHIP prompt length, not global: the test multiplies it by the mesh's SP factor, so every box runs
