@@ -28,6 +28,13 @@ sfpi_inline auto sfpu_operand_access(int index) {
     }
 }
 
+// MATH::single_instruction: apply() is one SFPU instruction. False when the math policy does not declare it.
+template <typename MATH, typename = void>
+inline constexpr bool is_single_instruction_math = false;
+template <typename MATH>
+inline constexpr bool is_single_instruction_math<MATH, std::void_t<decltype(MATH::single_instruction)>> =
+    MATH::single_instruction;
+
 }  // namespace detail
 
 /**
@@ -39,6 +46,8 @@ template <sfpi::DataLayout LAYOUT, typename VALUE, int STORE_ADDR_MODE = sfpi::S
 struct SfpiFormat {
     using value_type = VALUE;
     static constexpr sfpi::DataLayout layout = LAYOUT;
+    // store() is one SFPSTORE that leaves the register address alone (see calculate_binary_operands_two_rows).
+    static constexpr bool plain_store = STORE_ADDR_MODE == sfpi::SFPSTORE_ADDR_MODE_NOINC;
 
     template <SfpuReg REG>
     sfpi_inline static value_type load(int index) {
@@ -119,6 +128,42 @@ sfpi_inline void calculate_binary_operands(const Input0& input0, const Input1& i
     for (int d = 0; d < ITERATIONS; d++) {
         output.store(d, MATH::apply(input0.load(d), input1.load(d)));
     }
+}
+
+/**
+ * @brief Two rows together: a_output[0] = MATH::apply(a_input0[0], a_input1[0]) and the same for the b operands,
+ *        issued as load x4, op x2, store x2.
+ *
+ * One row at a time is load, load, op, store, and the SFPU stalls on the op -> store dependency of every row.
+ * Issuing two rows together lets the second row's op fill that stall. Same instructions on the same operands as
+ * two @ref calculate_binary_operands calls, only the issue order differs, so results are bit-identical.
+ *
+ * @tparam MATH: Math policy whose apply() is one SFPU instruction (MATH::single_instruction).
+ * @note The output format must be a plain store (FORMAT::plain_store): no software rounding, no address increment.
+ */
+template <typename MATH, typename Input0, typename Input1, typename Output>
+sfpi_inline void calculate_binary_operands_two_rows(
+    const Input0& a_input0,
+    const Input1& a_input1,
+    const Output& a_output,
+    const Input0& b_input0,
+    const Input1& b_input1,
+    const Output& b_output) {
+    static_assert(detail::is_single_instruction_math<MATH>, "two rows together need a single-instruction MATH");
+    static_assert(
+        std::is_same_v<
+            decltype(MATH::apply(
+                std::declval<typename Input0::value_type>(), std::declval<typename Input1::value_type>())),
+            typename Output::value_type>,
+        "MATH::apply must map the input operands' value types to the output operand's value type");
+    const typename Input0::value_type a_in0 = a_input0.load(0);
+    const typename Input1::value_type a_in1 = a_input1.load(0);
+    const typename Input0::value_type b_in0 = b_input0.load(0);
+    const typename Input1::value_type b_in1 = b_input1.load(0);
+    const typename Output::value_type a_res = MATH::apply(a_in0, a_in1);
+    const typename Output::value_type b_res = MATH::apply(b_in0, b_in1);
+    a_output.store(0, a_res);
+    b_output.store(0, b_res);
 }
 
 }  // namespace ckernel::sfpu

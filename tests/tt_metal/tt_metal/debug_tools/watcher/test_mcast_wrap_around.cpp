@@ -8,7 +8,8 @@
 // NoC torus architectures (WH/BH). On these architectures, multicasts can have
 // end < start in a dimension, allowing wrapping around grid edges.
 //
-// These tests verify the validation logic accepts all wrap-around coordinate patterns.
+// These tests verify the validation logic accepts all wrap-around coordinate patterns on a torus
+// and rejects them on a mesh.
 // Complementary device-side tests verify actual hardware behavior.
 
 #include <gtest/gtest.h>
@@ -30,14 +31,23 @@ namespace {
 
 // Helper to perform host noc_multicast_write with given coordinates.
 // Uses valid L1 address and small payload to only exercise the sanitize check.
+// On a mesh NoC (Quasar, Trinity) a wrapping multicast must be rejected.
 void DoHostMcastWrite(ChipId chip_id, CoreCoord core_start, CoreCoord core_end) {
-    const uint64_t l1_addr =
-        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
+    const auto& hal = MetalContext::instance().hal();
+    const uint64_t l1_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
     uint32_t payload = 0xdeadbeef;
     const uint32_t sz = 4;
+    auto write = [&] {
+        MetalContext::instance().get_cluster().noc_multicast_write(
+            &payload, sz, chip_id, core_start, core_end, l1_addr);
+    };
 
-    EXPECT_NO_THROW(MetalContext::instance().get_cluster().noc_multicast_write(
-        &payload, sz, chip_id, core_start, core_end, l1_addr));
+    const bool wraps = core_start.x > core_end.x || core_start.y > core_end.y;
+    if (wraps && hal.get_noc_topology() != NoCTopologyType::TORUS) {
+        EXPECT_THROW(write(), std::runtime_error);
+    } else {
+        EXPECT_NO_THROW(write());
+    }
 }
 
 }  // namespace
