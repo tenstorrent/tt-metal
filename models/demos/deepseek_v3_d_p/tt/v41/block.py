@@ -66,6 +66,16 @@ class V41HyperConnection(TtHyperConnection):
         self.mm_cfg = os.environ.get("V41_MHC_MM_CFG", "0") == "1"
         self.l1 = int(os.environ.get("V41_MHC_L1", "0") or 0)
         self._big_pcs: dict = {}
+        self.fused_tail = None
+        if (
+            os.environ.get("V41_MHC_FUSED_TAIL", "0") == "1"
+        ):  # WS2 lever D (mhc_fused_tail.py): the mixes tail as one program
+            from .mhc_fused_tail import FusedTail
+
+            Wt, Kt = M.prep_hyper_connection(fn, base, scale, int(hidden)), M.sinkhorn_constants(float(hc_eps))
+            hcon = {k: Wt[k] for k in ("SV", "BV", "COMB_MASK", "ONE_COL", "R_SOFT")}
+            hcon.update({k: Kt[k] for k in ("R_AUG", "C_AUG", "EPS_COMB")})
+            self.fused_tail = FusedTail(device, self, hcon, self.sinkhorn_iters)
         self.ONES_STACK = None
         if (
             self.mm_cfg and self.stacked
@@ -210,6 +220,8 @@ class V41HyperConnection(TtHyperConnection):
                 ttnn.deallocate(x)
         if self.host_sinkhorn:
             return self._mixes_host(mix)
+        if self.fused_tail is not None:
+            return self.fused_tail(mix)
         aff = ttnn.add(ttnn.multiply(mix, self.SV), self.BV)
         sig = ttnn.sigmoid(aff)
         omc = (
