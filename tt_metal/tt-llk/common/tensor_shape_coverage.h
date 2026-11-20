@@ -33,8 +33,14 @@ namespace ckernel::coverage
 // Named shapes referenced by the TRISC coverage tables. Keep this list limited
 // to shapes that appear in tensor_shape_coverage_{math,unpack}.h; add a new
 // entry only when a harvested shape needs a named constant.
-constexpr TensorShape TENSOR_SHAPE_FR1_NF1x1  = {1, MAX_FACE_C_DIM, 1, 1};  ///<  1x16
-constexpr TensorShape TENSOR_SHAPE_FR1_NF1x2  = {1, MAX_FACE_C_DIM, 1, 2};  ///<  1x32
+constexpr TensorShape TENSOR_SHAPE_FR1_NF1x1 = {1, MAX_FACE_C_DIM, 1, 1}; ///<  1x16
+constexpr TensorShape TENSOR_SHAPE_FR1_NF1x2 = {1, MAX_FACE_C_DIM, 1, 2}; ///<  1x32
+// Short-face dest geometry: pack dest init sets offsets on a full 2x2 face grid,
+// so a tile shorter than 16 rows yields face_r_dim < 16 with num_faces_r_dim == 2.
+constexpr TensorShape TENSOR_SHAPE_FR1_NF2x2  = {1, MAX_FACE_C_DIM, 2, 2};  ///<  2x32
+constexpr TensorShape TENSOR_SHAPE_FR2_NF2x2  = {2, MAX_FACE_C_DIM, 2, 2};  ///<  4x32
+constexpr TensorShape TENSOR_SHAPE_FR4_NF2x2  = {4, MAX_FACE_C_DIM, 2, 2};  ///<  8x32
+constexpr TensorShape TENSOR_SHAPE_FR8_NF2x2  = {8, MAX_FACE_C_DIM, 2, 2};  ///< 16x32
 constexpr TensorShape TENSOR_SHAPE_FR2_NF1x1  = {2, MAX_FACE_C_DIM, 1, 1};  ///<  2x16
 constexpr TensorShape TENSOR_SHAPE_FR2_NF1x2  = {2, MAX_FACE_C_DIM, 1, 2};  ///<  2x32
 constexpr TensorShape TENSOR_SHAPE_FR4_NF1x1  = {4, MAX_FACE_C_DIM, 1, 1};  ///<  4x16
@@ -45,6 +51,7 @@ constexpr TensorShape TENSOR_SHAPE_FR16_NF1x1 = {16, MAX_FACE_C_DIM, 1, 1}; ///<
 constexpr TensorShape TENSOR_SHAPE_FR16_NF1x2 = {16, MAX_FACE_C_DIM, 1, 2}; ///< 16x32
 constexpr TensorShape TENSOR_SHAPE_FR16_NF2x1 = {16, MAX_FACE_C_DIM, 2, 1}; ///< 32x16
 constexpr TensorShape TENSOR_SHAPE_FR16_NF2x2 = DEFAULT_TENSOR_SHAPE;       ///< 32x32
+constexpr TensorShape TENSOR_SHAPE_FR16_NF4x1 = {16, MAX_FACE_C_DIM, 4, 1}; ///< 64x16 (untilize dest-init stacks 4 faces along R)
 
 constexpr bool tensor_shape_eq(const TensorShape& lhs, const TensorShape& rhs)
 {
@@ -118,7 +125,7 @@ inline bool is_tensor_shape_covered_default_inline_(const TensorShape& tensor_sh
     LLK_VALIDATE_TENSOR_SHAPE_WITH_DEFAULT_CHECKER_(::ckernel::coverage::is_unpack_tensor_shape_covered, fn_name, ts)
 #define LLK_VALIDATE_TENSOR_SHAPE_MATH(fn_name, ts) \
     LLK_VALIDATE_TENSOR_SHAPE_WITH_DEFAULT_CHECKER_(::ckernel::coverage::is_math_tensor_shape_covered, fn_name, ts)
-#define LLK_VALIDATE_TENSOR_SHAPE_PACK(fn_name, ts)   LLK_VALIDATE_TENSOR_SHAPE_WITH_CHECKER(::ckernel::coverage::is_pack_tensor_shape_covered, fn_name, ts)
+#define LLK_VALIDATE_TENSOR_SHAPE_PACK(fn_name, ts) LLK_VALIDATE_TENSOR_SHAPE_WITH_CHECKER(::ckernel::coverage::is_pack_tensor_shape_covered, fn_name, ts)
 
 #else
 

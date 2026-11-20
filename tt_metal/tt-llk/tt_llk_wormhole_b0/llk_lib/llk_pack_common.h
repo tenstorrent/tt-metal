@@ -13,6 +13,7 @@
 #include "cpack_common.h"
 #include "llk_defs.h"
 #include "tensor_shape.h"
+#include "tensor_shape_coverage_pack.h"
 
 using namespace ckernel;
 using namespace ckernel::packer;
@@ -91,15 +92,18 @@ inline void _llk_pack_dest_section_done_()
  * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
  * @tparam pack_mode: Packing layout, values = <Default/Untilize>
  * @tparam diagonal: True to lay out dest offsets for diagonal (per-packer split) packing.
- * @param face_r_dim: Number of rows per face.
- * @param narrow_tile: True if the tile occupies fewer than the full set of packer interfaces.
+ * @param tensor_shape: Tile geometry. A tile one face wide (num_faces_c_dim == 1, i.e. 32x16 or
+ *        16x16) is what the legacy narrow_tile flag expressed.
  */
 template <DstSync Dst, PackMode pack_mode = PackMode::Default, bool diagonal = false>
-inline void _llk_init_packer_dest_offset_registers_(const std::uint32_t face_r_dim = FACE_R_DIM, const bool narrow_tile = false)
+inline void _llk_init_packer_dest_offset_registers_(const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize,
         "Wormhole B0 pack dest offset setup supports only PackMode::Default and PackMode::Untilize");
+    LLK_VALIDATE_TENSOR_SHAPE_PACK("_llk_init_packer_dest_offset_registers_", tensor_shape);
+    const std::uint32_t face_r_dim = tensor_shape.face_r_dim;
+    const bool narrow_tile         = (tensor_shape.num_faces_c_dim == 1);
     TTI_STALLWAIT(p_stall::STALL_TDMA | p_stall::STALL_THCON, p_stall::PACK); // wait for pack to finish
     if constexpr (pack_mode == PackMode::Untilize)
     {
@@ -168,17 +172,18 @@ inline void _llk_init_packer_dest_offset_registers_(const std::uint32_t face_r_d
  * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
  * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
  * @tparam pack_mode: Packing layout, values = <Default/Untilize>
- * @param face_r_dim: Number of rows per face.
- * @param narrow_tile: True if the tile occupies fewer than the full set of packer interfaces.
+ * @param tensor_shape: Tile geometry. A tile one face wide (num_faces_c_dim == 1) is what the
+ *        legacy narrow_tile flag expressed.
  * @ref _llk_init_packer_dest_offset_registers_ performs the dest-offset register setup.
  */
 template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
-inline void _llk_pack_dest_init_(const std::uint32_t face_r_dim = FACE_R_DIM, const bool narrow_tile = false)
+inline void _llk_pack_dest_init_(const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize, "Wormhole B0 pack dest init supports only PackMode::Default and PackMode::Untilize");
+    LLK_VALIDATE_TENSOR_SHAPE_PACK("_llk_pack_dest_init_", tensor_shape);
     reset_dest_offset_id();
-    _llk_init_packer_dest_offset_registers_<Dst, pack_mode>(face_r_dim, narrow_tile);
+    _llk_init_packer_dest_offset_registers_<Dst, pack_mode>(tensor_shape);
     packer_addr_counter_init();
     pack_sync_tile_dst_ptr = 0;
 }

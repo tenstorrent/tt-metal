@@ -14,6 +14,24 @@
 #include "llk_assert.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
+#include "tensor_shape.h"
+
+namespace ckernel
+{
+/**
+ * @brief Build a TensorShape from the legacy (face_r_dim, tile_c_dim, num_faces) pack geometry.
+ *
+ * The legacy Blackhole pack API carries a flat tile width and a flat face count; the face column
+ * dimension is fixed at 16, so the face grid is fully determined: num_faces_c_dim = tile_c_dim / 16,
+ * num_faces_r_dim = num_faces / num_faces_c_dim.
+ */
+inline TensorShape tensor_shape_from_legacy_pack_geometry(const std::uint32_t face_r_dim, const std::uint32_t tile_c_dim, const std::uint32_t num_faces)
+{
+    const std::uint32_t num_faces_c_dim = tile_c_dim / MAX_FACE_C_DIM;
+    LLK_ASSERT(num_faces % num_faces_c_dim == 0, "num_faces must divide evenly into the tile width's face columns");
+    return make_tensor_shape(face_r_dim, MAX_FACE_C_DIM, num_faces / num_faces_c_dim, num_faces_c_dim);
+}
+} // namespace ckernel
 
 namespace ckernel::packer
 {
@@ -510,11 +528,13 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size,
-    const std::uint32_t tile_c_dim,
-    const std::uint32_t num_faces,
-    const bool partial_face)
+    const ckernel::TensorShape tensor_shape,
+    const bool partial_face = false)
 {
+    const std::uint32_t tile_c_dim = tensor_shape.total_col_dim();
+    const std::uint32_t num_faces  = tensor_shape.total_num_faces();
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+
     const std::uint32_t pack_output_src_format = masked_data_format(pack_src_format);
     const std::uint32_t pack_output_dst_format = masked_data_format(pack_dst_format);
     // Gasket converts Float16_b -> Float16 before the packer, so hardware in_data_format must be Float16 for Fp8 output.
@@ -594,17 +614,32 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
     TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
 }
 
+// Legacy-argument overload: kept for the experimental/ callers that still pass a flat
+// tile width and face count. New code passes a TensorShape.
+template <bool is_fp32_dest_acc_en>
+__attribute__((noinline)) inline void reconfig_packer_data_format(
+    const std::uint32_t pack_src_format,
+    const std::uint32_t pack_dst_format,
+    const std::uint32_t tile_size,
+    const std::uint32_t tile_c_dim,
+    const std::uint32_t num_faces,
+    const bool partial_face)
+{
+    reconfig_packer_data_format<is_fp32_dest_acc_en>(
+        pack_src_format, pack_dst_format, tile_size, ckernel::tensor_shape_from_legacy_pack_geometry(FACE_R_DIM, tile_c_dim, num_faces), partial_face);
+}
+
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void configure_pack(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size,
-    [[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM,
-    const std::uint32_t tile_c_dim                  = TILE_C_DIM,
-    const std::uint32_t num_faces                   = 4,
-    const bool partial_face                         = false,
-    const std::uint32_t relu_config                 = 0)
+    const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE,
+    const bool partial_face                 = false,
+    const std::uint32_t relu_config         = 0)
 {
+    const std::uint32_t tile_c_dim = tensor_shape.total_col_dim();
+    const std::uint32_t num_faces  = tensor_shape.total_num_faces();
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(
         is_packer_to_L1_conversion_supported(static_cast<DataFormat>(pack_src_format & 0xF), static_cast<DataFormat>(pack_dst_format & 0xF)),
