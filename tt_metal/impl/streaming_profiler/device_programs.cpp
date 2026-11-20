@@ -4,6 +4,8 @@
 
 #include "impl/streaming_profiler/device_programs.hpp"
 
+#include "impl/drisc_service/service.hpp"
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -129,9 +131,10 @@ void compile_resident(IDevice* device, Program& program) {
 
 }  // namespace
 
+// The DRISCs are reached through the DRISC service, not metal's DRAM programmable cores, which metal turns off under
+// the streaming profiler (should_enable_blackhole_dram_programmable_cores).
 bool can_capture(const Hal& hal, const llrt::RunTimeOptions& rtoptions) {
-    return rtoptions.get_streaming_profiler_enabled() && hal.get_arch() == tt::ARCH::BLACKHOLE &&
-           hal.has_programmable_core_type(HalProgrammableCoreType::DRAM);
+    return rtoptions.get_streaming_profiler_enabled() && hal.get_arch() == tt::ARCH::BLACKHOLE;
 }
 
 bool can_capture(const MetalContext& mc) { return can_capture(mc.hal(), mc.rtoptions()); }
@@ -185,19 +188,23 @@ void DevicePrograms::carve_l1() {
     const uint32_t cfg_bytes =
         tt::align(distributed::D2HSocket::required_config_buffer_size(hal.get_alignment(HalMemType::L1)), kCtrlBytes);
     const uint32_t slot_bytes = kernel_profiler::spsc_span_slot_words(kLanesPerTile) * sizeof(uint32_t);
-    const uint32_t base = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
-    const uint32_t region = hal.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
-    drisc_l1_.stage_base = base;
-    drisc_l1_.core_records = drisc_l1_.stage_base + kStageSlots * slot_bytes;
-    drisc_l1_.ctrl = drisc_l1_.core_records + kCoreRecordsBytes;
-    drisc_l1_.cfg = base + region - cfg_bytes;
-    drisc_l1_.host_ctrl = drisc_l1_.ctrl + hal.get_l1_noc_offset(HalProgrammableCoreType::DRAM);
-    TT_FATAL(
-        drisc_l1_.ctrl + kCtrlBytes <= drisc_l1_.cfg,
-        "streaming profiler: DRISC L1 ({} B unreserved) cannot hold a relay's {} staging slots, core records and "
-        "socket config",
-        region,
-        kStageSlots);
+    // The DRISCs run the DRISC service under the streaming profiler, so metal's HAL has no DRAM core type and the
+    // relay's L1 is laid out by the service instead (step 2b).
+    if (hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+        const uint32_t base = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+        const uint32_t region = hal.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+        drisc_l1_.stage_base = base;
+        drisc_l1_.core_records = drisc_l1_.stage_base + kStageSlots * slot_bytes;
+        drisc_l1_.ctrl = drisc_l1_.core_records + kCoreRecordsBytes;
+        drisc_l1_.cfg = base + region - cfg_bytes;
+        drisc_l1_.host_ctrl = drisc_l1_.ctrl + hal.get_l1_noc_offset(HalProgrammableCoreType::DRAM);
+        TT_FATAL(
+            drisc_l1_.ctrl + kCtrlBytes <= drisc_l1_.cfg,
+            "streaming profiler: DRISC L1 ({} B unreserved) cannot hold a relay's {} staging slots, core records and "
+            "socket config",
+            region,
+            kStageSlots);
+    }
 
     const uint32_t eth_base = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
     const uint32_t eth_size = hal.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
@@ -282,14 +289,8 @@ bool DevicePrograms::boot(const std::shared_ptr<distributed::MeshDevice>& mesh_d
         return false;
     }
     const auto start_device = [&](DeviceCtx& ctx) {
-        for (uint32_t relay_index = 0; relay_index < ctx.relays.size(); relay_index++) {
-            start_resident(
-                ctx,
-                ctx.relays[relay_index],
-                HalProgrammableCoreType::DRAM,
-                {{.cfg = drisc_l1_.cfg, .fifo_bytes = relay_fifo_bytes}},
-                relay_program(ctx, relay_index));
-        }
+        // First, so the service's host pages are pinned before the sockets' FIFOs (it needs IOVAs below 4 GiB).
+        attach_service(ctx);
         if (capture_.devices[ctx.index].fallback_wall_clock_core) {
             write_producers_armed(ctx, 1);
             return;
@@ -476,11 +477,39 @@ void DevicePrograms::choose_relay_cores(DeviceCtx& ctx) {
             noc2axi_mask);
         relay.name = fmt::format("relay {}", relay_index);
         relay.ctrl = drisc_l1_.host_ctrl;
-        // The relay is built with PROFILE_KERNEL and nothing drains its own profiler ring, which fills after about 74
-        // launches since the last board reset and hangs the RISC in firmware init.
-        relay.stale_l1 = L1Range{
-            .addr = mc_->hal().get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::PROFILER),
-            .bytes = kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE};
+    }
+    ctx.relay_banks = std::move(banks);
+}
+
+void DevicePrograms::attach_service(DeviceCtx& ctx) {
+    if (ctx.relay_banks.empty()) {
+        return;
+    }
+    auto& cluster = mc_->get_cluster();
+    ctx.service = std::make_unique<drisc_service::Client>(
+        *cluster.get_driver(), static_cast<ChipId>(ctx.chip_id), ctx.relay_banks);
+    // The drainer runs on each bank's free DRISC, which the service names as the bank's NoC1 seat.
+    for (uint32_t relay_index = 0; relay_index < ctx.relays.size(); relay_index++) {
+        const drisc_service::SeatClient& seat = ctx.service->seat(ctx.relay_banks[relay_index], 1);
+        const CoreCoord& relay_core = ctx.relays[relay_index].core.virt;
+        TT_FATAL(
+            seat.seat().translated.x == relay_core.x && seat.seat().translated.y == relay_core.y,
+            "streaming profiler: device {} relay {} (DRAM view {}) is on DRISC {}, but the DRISC service's NoC1 seat "
+            "of "
+            "that bank is {}",
+            ctx.chip_id,
+            relay_index,
+            ctx.relay_banks[relay_index],
+            relay_core.str(),
+            seat.seat().translated.str());
+        log_info(
+            tt::LogMetal,
+            "[streaming profiler] device {} relay {}: attached to the DRISC service on {} (slot {}, {})",
+            ctx.chip_id,
+            relay_index,
+            relay_core.str(),
+            seat.slot(),
+            seat.launched() ? "launched it" : "joined it");
     }
 }
 
@@ -672,7 +701,10 @@ std::unique_ptr<Program> DevicePrograms::eth_relay_program(const DeviceCtx& ctx)
 
 void DevicePrograms::write_producers_armed(const DeviceCtx& ctx, uint32_t armed) {
     auto& cluster = mc_->get_cluster();
-    for (const Producer& producer : ctx.producers) {
+    // Until the drainer runs as a job of the DRISC service (step 2b), nothing drains the worker cores, so they stay
+    // unarmed and never block on a full ring.
+    const size_t first = armed != 0 ? ctx.worker_count : 0;
+    for (const Producer& producer : std::span(ctx.producers).subspan(first)) {
         write_u32(cluster, ctx.chip_id, producer.virt, producer.control_vector_l1 + kArmedOffset, armed);
     }
 }
@@ -940,8 +972,10 @@ void DevicePrograms::quiesce(const RelayStateFn& on_state) {
             await_stop(*ctx, *resident, on_state);
         }
     }
-    for (const DeviceCtx& ctx : devices_) {
+    for (DeviceCtx& ctx : devices_) {
         write_producers_armed(ctx, 0);
+        // Detaches from the DRISC service; the last client to leave a seat stops its kernel.
+        ctx.service.reset();
     }
 }
 

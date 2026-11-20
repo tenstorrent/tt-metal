@@ -36,6 +36,9 @@ class Program;
 class IDevice;
 class Hal;
 class MetalContext;
+namespace drisc_service {
+class Client;
+}  // namespace drisc_service
 
 namespace streaming_profiler {
 
@@ -139,6 +142,10 @@ private:
         // cores the eth relay drains.
         std::vector<Producer> producers;
         std::vector<ResidentCore> relays;
+        // The DRAM view each relay drains from, in relay order.
+        std::vector<uint32_t> relay_banks;
+        // This process's attachment to the DRISC service on the relay banks; reset at quiesce, which detaches.
+        std::unique_ptr<drisc_service::Client> service;
         ResidentCore wall_clock;
         ResidentCore eth_relay;
 
@@ -174,6 +181,8 @@ private:
     void enumerate_eth_cores(DeviceCtx& ctx);
     Producer& add_producer(DeviceCtx& ctx, const CoreCoords& core, CoreType type, uint64_t control_vector_l1);
     void choose_relay_cores(DeviceCtx& ctx);
+    // Attaches to the DRISC service on both seats of each relay bank, launching its kernels where none runs.
+    void attach_service(DeviceCtx& ctx);
     void start_resident(
         DeviceCtx& ctx,
         ResidentCore& resident,

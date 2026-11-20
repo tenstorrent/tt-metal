@@ -127,6 +127,15 @@ namespace {
 // GCB credit targets resolve sender coordinates from each device's SOC descriptor.
 bool should_enable_blackhole_dram_programmable_cores(const Cluster& cluster, const llrt::RunTimeOptions& rtoptions) {
     const auto override = rtoptions.get_blackhole_dram_programmable_cores_override();
+    // The streaming profiler drains through the DRISC service, which must own the DRISCs, so metal leaves them alone.
+    if (rtoptions.get_streaming_profiler_enabled()) {
+        TT_FATAL(
+            !override.value_or(false),
+            "TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1 conflicts with TT_METAL_STREAMING_PROFILER, whose "
+            "drainers run in the DRISC service on the DRISCs");
+        log_info(tt::LogMetal, "Streaming profiler: DRAM programmable cores off, the DRISC service owns the DRISCs");
+        return false;
+    }
     if (override.has_value()) {
         log_info(
             tt::LogMetal,
