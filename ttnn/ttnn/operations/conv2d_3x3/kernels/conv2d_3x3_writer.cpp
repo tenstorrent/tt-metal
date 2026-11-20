@@ -1165,8 +1165,9 @@ void kernel_main() {
     auto khx_send =
         [&](uint64_t noc_base, uint32_t src_row, uint32_t dst_row, uint32_t rows, uint32_t sem_id, uint32_t sem_value) {
             MaybeDeviceZoneScope("writer_khx_send");
-            for (uint32_t p = 0; p < KWF_PLANES; ++p) {
-                const uint32_t plane = khx_acc + p * KWF_PLANE_BYTES;
+            // Each plane's two half-planes (face-split ACC, conv2d_3x3_kw_fold.hpp).
+            for (uint32_t h = 0; h < 2 * KWF_PLANES; ++h) {
+                const uint32_t plane = khx_acc + h * (KWF_PLANE_BYTES / 2);
                 noc_async_write(
                     plane + src_row * KWF_PITCH, noc_base | (plane + dst_row * KWF_PITCH), rows * KWF_PITCH);
             }

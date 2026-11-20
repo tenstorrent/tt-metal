@@ -1931,8 +1931,12 @@ def _work_items(input_tensor, g: Conv3x3Geometry, b: Conv3x3Blocking):
 # 12.1, inst res2.fuse_conv.0 44.4 -> 33.3, inst res2.fuse_conv.1 34.7 -> 28.1, inst res3.fuse_conv.0 29.0 -> 25.6,
 # res2 16.7 -> 13.7 us. Where it does not pay (_kw_fold_pays) the K-blocked walk runs.
 KW_FOLD = True
-# kw-fold's final pass adds the bias as 8 srcB rows: 4 copies of the fp32 bias row of one output column tile.
-KWF_BIAS_ROWS_BYTES = 4 * TILE * 4
+# kw-fold's final pass adds the bias as srcB rows 0 and 1 (row-broadcast): the fp32 bias row [b_0 .. b_31] of one output
+# column tile.
+KWF_BIAS_ROWS_BYTES = TILE * 4
+# The final pass reaches a tile's right half-plane in at most two srcA Z steps of the unpacker's 16-bit x_dim (fp32
+# datums): an ACC plane of at most 8191 rows (1 MB, more than a core's L1 holds with the rest of kw-fold's CBs).
+KWF_MAX_PLANE_BYTES = 8191 * TILE * 4
 IM2COL_NS_PER_TILE = 25
 # With more than one M-block per core either form recomputes the two halo tile-rows' products, about 6 * Ct * N extra
 # tile-MACs per M-block, at the user's fidelity, to save the im2col (tilized taps plus the untilized slab, ~25 ns per
@@ -1971,6 +1975,8 @@ def kw_fold_plan(g, b, has_bias, l1_budget, math_fidelity):
     if g.input_width % TILE or g.c_in % TILE or g.c_in_p != g.c_in:
         return None
     for bm in (d for d in range(b.core_m_tiles, 0, -1) if b.core_m_tiles % d == 0):
+        if _kw_fold_plane_bytes(g, bm) > KWF_MAX_PLANE_BYTES:
+            continue
         kb = _kw_fold_blocking(g, b, bm)
         if _kw_fold_cb_bytes(g, kb) <= l1_budget:
             # K-blocked rounds: a third weight slot where it fits at this bm (never at the cost of a smaller bm).
@@ -2237,7 +2243,8 @@ def _kw_fold_blocking(g, b, bm):
 
 
 def _kw_fold_plane_bytes(g, bm):
-    """One ACC plane, one output column tile wide: [rows, 32] fp32; rows bound every core's rowbase(bm + 1) + 32 + d."""
+    """One ACC plane, one output column tile wide: [rows, 32] fp32 as two [rows, 16] half-planes (face-split, see
+    conv2d_3x3_kw_fold.hpp); rows bound every core's rowbase(bm + 1) + 32 + d."""
     tpr = g.input_width // TILE
     rows = TILE * (bm + 3) + g.dilation * ((bm + 2) // tpr + 3)
     return rows * TILE * 4
@@ -3524,7 +3531,8 @@ def create_program_descriptor(
                 ("KWF_CB_ACC", str(CB_MATMUL_PARTIALS)),
                 ("KWF_D", str(g.dilation)),
                 # ACC: one n-group's planes, one output column tile wide each (conv2d_3x3_kw_fold.hpp).
-                ("KWF_PITCH", str(TILE * 4)),
+                # A half-plane row (the face-split ACC: each plane is two [rows, 16] fp32 half-planes).
+                ("KWF_PITCH", str(16 * 4)),
                 ("KWF_PLANE_BYTES", str(_kw_fold_plane_bytes(g, bm))),
                 ("KWF_PLANES", str(_kw_fold_group(g.tensor_n_tiles))),
                 ("KWF_NG", str(g.tensor_n_tiles // _kw_fold_group(g.tensor_n_tiles))),

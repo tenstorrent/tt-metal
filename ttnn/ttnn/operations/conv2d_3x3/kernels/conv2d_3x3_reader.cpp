@@ -1260,10 +1260,11 @@ void kernel_main() {
 #ifdef CONV2D_3X3_KW_FOLD
         // kw-fold (conv2d_3x3_kw_fold.hpp): no gather, and no accumulator seed (compute packs Q_1 as an overwrite).
         if (m_block_idx == 0) {
-            // kw-fold's final pass adds the bias as srcB rows: per output column tile n, 4 copies of the fp32 row
-            // [b_0 .. b_31] (KWF_CB_BIAS_ROWS page n), decoded from the bias tiles the writer reads into cb_bias after
-            // its first M-block's weights. Done after the first block's fill, not at kernel end: a later block's fill
-            // can wait for the first block's slab, which compute frees only after the final pass that adds this bias.
+            // kw-fold's final pass adds the bias as srcB rows: per output column tile n, the fp32 row [b_0 .. b_31]
+            // (KWF_CB_BIAS_ROWS page n: srcB rows 0 and 1, each broadcast to its faces' rows), decoded from the bias
+            // tiles the writer reads into cb_bias after its first M-block's weights. Done after the first block's fill,
+            // not at kernel end: a later block's fill can wait for the first block's slab, which compute frees only
+            // after the final pass that adds this bias.
             // Row 0 of a tile is row 0 of faces 0 and 1: bf16 at datum c % 16 (+ 256 for face 1); bf8_b
             // (KWF_BIAS_BFP8): 64 exponent bytes, one per face row (face f row 0 at byte 16 f), then sign-magnitude
             // bytes m, value (-1)^s (m & 127) 2^(e - 133), from byte 64 (+ 256 for face 1).
@@ -1274,7 +1275,7 @@ void kernel_main() {
             const uint32_t raw = get_read_ptr(KWF_CB_BIAS);
             const uint32_t tile_bytes = get_tile_size(KWF_CB_BIAS);
             uint32_t* rows = reinterpret_cast<uint32_t*>(get_write_ptr(KWF_CB_BIAS_ROWS));
-            for (uint32_t n = 0; n < KWF_N; ++n, rows += 128) {
+            for (uint32_t n = 0; n < KWF_N; ++n, rows += 32) {
                 const uint32_t t = raw + n * tile_bytes;
                 for (uint32_t c = 0; c < 32; ++c) {
 #if KWF_BIAS_BFP8
@@ -1297,9 +1298,6 @@ void kernel_main() {
                         static_cast<uint32_t>(reinterpret_cast<const uint16_t*>(t)[256 * (c / 16) + c % 16]) << 16;
 #endif
                     rows[c] = v;
-                    rows[32 + c] = v;
-                    rows[64 + c] = v;
-                    rows[96 + c] = v;
                 }
             }
             cb_push_back(KWF_CB_BIAS_ROWS, KWF_N);
