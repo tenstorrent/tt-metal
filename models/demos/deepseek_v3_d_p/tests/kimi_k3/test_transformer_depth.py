@@ -23,6 +23,7 @@ plane now picks its direction from the forwarding table rather than from rank or
 arms are green upstream and this is a choice rather than a constraint.
 """
 
+import os
 from pathlib import Path
 
 import pytest
@@ -47,6 +48,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import (
     TRACE_1M,
     TRACE_100K,
     TRACE_K31,
+    TRACE_K31_1M,
     TRACE_K31_128K,
     load_checkpoint_tensors,
     resolve_checkpoint,
@@ -461,7 +463,7 @@ def k31_layer_pcc(layer: int) -> float:
 # LoFi), 0.944 / 0.952 at 10K (0.929 / 0.936). The 128K floor is 0.85, ~1.7 points under them, as 0.9 sits ~1.3
 # under the 10K minimum (layer 51, LoFi-measured; HiFi2 raised every measured layer); a fallback to LoFi fails it.
 # Unlike 0.9, 0.85 comes from this measurement alone, not from an external reference (the LoFi-era floor was 0.8).
-K31_TOPK_RECALL = {TRACE_K31: 0.9, TRACE_K31_128K: 0.85}
+K31_TOPK_RECALL = {TRACE_K31: 0.9, TRACE_K31_128K: 0.85, TRACE_K31_1M: 0.85}
 
 
 def k31_topk_rows(mesh_device, indices, rows: int, sp_axis: int, tp_axis: int) -> torch.Tensor:
@@ -505,7 +507,10 @@ def test_topk_recall_counts_each_trace_key_once():
 # rung -> golden; both run all of PP4 stage 0. "L24-128k" is K3's long-context check (test_chunked_prefill.py's L24:
 # layers 0-23 over every chunk) on the 128K trace. Both rungs run in one test on one build of the stage, sized for the
 # longer golden, each from fresh caches: the weight load, not the chunks, is most of a rung's time.
-K31_RUNGS = {"L24": TRACE_K31, "L24-128k": TRACE_K31_128K}
+K31_ALL_RUNGS = {"L24": TRACE_K31, "L24-128k": TRACE_K31_128K, "L24-1m": TRACE_K31_1M}
+# $K31_LADDER_RUNGS (comma list) picks the rungs; the default is the two CI rungs. L24-1m scores the residual
+# stream at layers 0 and 12 only (all its trace records), and top-k recall and KV at every DSA layer.
+K31_RUNGS = {r: K31_ALL_RUNGS[r] for r in os.environ.get("K31_LADDER_RUNGS", "L24,L24-128k").split(",")}
 
 
 def _k31_sequence(trace) -> tuple[list[int], int]:
@@ -551,6 +556,9 @@ def _k31_rung(rung, trace, mesh_device, hf_config, params, runtime) -> list[str]
 
     # Scored chunk by chunk on the prompt rows, so host memory holds one chunk's taps.
     scores = {}  # (global layer, chunk) -> PCC
+    # The layers whose residual stream the trace records (every layer, except on the 1M trace); only these are
+    # read back from the device.
+    scored_layers = {l for l in range(KimiK3Config.NUM_LAYERS) if trace.has("decoder_io", f"decoder_output_layer_{l}")}
 
     def score(c, taps):
         lo = c * chunk
@@ -602,7 +610,9 @@ def _k31_rung(rung, trace, mesh_device, hf_config, params, runtime) -> list[str]
     forward = runtime.model.forward
 
     def tapped(*args, **kwargs):
-        tap = lambda idx, h: taps.__setitem__(first + idx, compose(mesh_device, h, chunk))
+        tap = lambda idx, h: (
+            taps.__setitem__(first + idx, compose(mesh_device, h, chunk)) if first + idx in scored_layers else None
+        )
         return forward(*args, layer_tap=tap, **kwargs)
 
     runtime.model.forward = tapped
