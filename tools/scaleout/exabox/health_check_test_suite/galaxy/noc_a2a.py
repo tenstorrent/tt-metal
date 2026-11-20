@@ -30,7 +30,10 @@ BDF, tray 1-4 and ASIC. Passes loop until the wall cap. If this ttnn cannot buil
 """
 import os
 import sys
-sys.path.append(os.path.dirname(os.path.realpath(__file__)))  # the sibling programs, also when run or imported through a link
+
+sys.path.append(
+    os.path.dirname(os.path.realpath(__file__))
+)  # the sibling programs, also when run or imported through a link
 import re
 import time
 

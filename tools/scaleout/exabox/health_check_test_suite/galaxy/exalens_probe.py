@@ -15,7 +15,10 @@ import argparse
 import json
 import os
 import sys
-sys.path.append(os.path.dirname(os.path.realpath(__file__)))  # the sibling programs, also when run or imported through a link
+
+sys.path.append(
+    os.path.dirname(os.path.realpath(__file__))
+)  # the sibling programs, also when run or imported through a link
 import time
 
 ETH_HEARTBEAT_BH = 0x7CC70  # check_eth_status.py (Blackhole): heartbeat[0], 0xABCD base FW / 0xDCBA router

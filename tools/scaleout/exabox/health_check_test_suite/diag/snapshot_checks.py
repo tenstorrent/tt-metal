@@ -134,7 +134,11 @@ def _thermal_and_telemetry(devs: list[dict], phase: Phase) -> None:
                     f"{format_bdf(r['bdf'])} {r['asic_temperature']:.1f}C at limit {r['thm_limit']:.0f}C; "
                     for r in over + warm
                 )
-                or (f"hottest {top['bdf']} {top['asic_temperature']:.1f}C" if top else "no plausible temperature reading")
+                or (
+                    f"hottest {top['bdf']} {top['asic_temperature']:.1f}C"
+                    if top
+                    else "no plausible temperature reading"
+                )
             ).rstrip("; ")
             + (f"; {len(ignored)} implausible readings ignored" if ignored else ""),
             data={

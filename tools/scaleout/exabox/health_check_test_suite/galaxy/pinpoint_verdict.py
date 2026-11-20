@@ -61,7 +61,10 @@ import json
 import os
 import re
 import sys
-sys.path.append(os.path.dirname(os.path.realpath(__file__)))  # the sibling programs, also when run or imported through a link
+
+sys.path.append(
+    os.path.dirname(os.path.realpath(__file__))
+)  # the sibling programs, also when run or imported through a link
 
 import numeric_capture as nc  # standard library only too
 from chunk_sched import tray_of  # noqa: E402  the one tray_of, bus & 0xF0 -> tray 1-4

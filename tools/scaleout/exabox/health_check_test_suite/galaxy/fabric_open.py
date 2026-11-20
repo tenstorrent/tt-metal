@@ -17,7 +17,10 @@ import argparse
 import json
 import os
 import sys
-sys.path.append(os.path.dirname(os.path.realpath(__file__)))  # the sibling programs, also when run or imported through a link
+
+sys.path.append(
+    os.path.dirname(os.path.realpath(__file__))
+)  # the sibling programs, also when run or imported through a link
 import time
 
 from chunk_sched import tray_of
@@ -60,7 +63,9 @@ def chip_name(m, i, r, c):
         return f"chip {i} (mesh r{r} c{c})"
     if not bdf:
         return f"chip {i} (mesh r{r} c{c}, device id {did}, not in the map)"
-    return f"{bdf[5:]} (tray {tray_of(bdf)}, ASIC {int(bdf.split(':')[-2], 16) & 0x0F}, device id {did}, mesh r{r} c{c})"
+    return (
+        f"{bdf[5:]} (tray {tray_of(bdf)}, ASIC {int(bdf.split(':')[-2], 16) & 0x0F}, device id {did}, mesh r{r} c{c})"
+    )
 
 
 def beat(s):
