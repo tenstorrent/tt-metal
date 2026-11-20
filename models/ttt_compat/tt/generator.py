@@ -4236,7 +4236,13 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         if use_batched_prefill:
             batch_dim = padded_batch_size if padded_batch_size is not None else self.model_args[0].max_batch_size
             num_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
-            page_table = page_table[:, :num_blocks]
+            # As in the single-user branch: a reused row keeps old block IDs past each prompt, and the padded
+            # prefill would write the pad tail into them. -1 makes paged_fill_cache skip the column.
+            page_table = page_table[:, :num_blocks].clone()
+            # qwen25_vl passes one padded length for every row
+            row_lens = [prefill_len] * page_table.shape[0] if isinstance(prefill_len, int) else prefill_len
+            for row, row_len in enumerate(row_lens):
+                page_table[row, num_blocks_in_seq(int(row_len), block_size) :] = -1
             if trace_enabled:
                 if page_table.shape[1] < num_blocks:
                     padding = torch.ones(page_table.shape[0], num_blocks - page_table.shape[1], dtype=torch.int32) * -1

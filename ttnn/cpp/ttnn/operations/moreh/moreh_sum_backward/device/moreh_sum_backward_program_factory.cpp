@@ -15,7 +15,6 @@
 namespace ttnn::operations::moreh::moreh_sum_backward {
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 void get_tensor_dim(ttsl::SmallVector<uint32_t>& dim, const ttnn::Shape& padded_shape, uint32_t rank) {
     TT_FATAL(rank <= padded_shape.rank(), "rank {} must be <= padded rank {}", rank, padded_shape.rank());

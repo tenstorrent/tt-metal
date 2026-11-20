@@ -112,15 +112,6 @@ public:
     void attach(ProfilerStateManager& profiler_state_manager);
     void detach(ProfilerStateManager& profiler_state_manager);
 
-    // Calls f(ProfilerStateManager&) on every attached state manager, holding the registry lock.
-    template <typename F>
-    void for_each_attached(const F& f) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        for (ProfilerStateManager* profiler_state_manager : attached_) {
-            f(*profiler_state_manager);
-        }
-    }
-
     // Calls f(ProfilerStateManager*) with the attached state manager, or nullptr if none, holding the registry lock.
     template <typename F>
     auto with_sole_attached(F&& f) {

@@ -40,7 +40,7 @@ inline void llk_unpack_AB_init(
         StateVal<Operand<Exu::Unpack>::FaceHeightB>(get_operand_face_r_dim(operandB_id)),
         StateVal<Operand<Exu::Unpack>::NumFacesB>(get_operand_num_faces(operandB_id))));
 
-    _llk_unpack_AB_init_<BType>(tensor_shape, transpose);
+    _llk_unpack_AB_init_<BType>(tensor_shape, get_operand_tensor_shape(operandB_id), transpose);
 }
 
 template <BroadcastType BType = BroadcastType::NONE>
