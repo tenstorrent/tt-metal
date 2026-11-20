@@ -417,6 +417,14 @@
 #elif !defined(MEM_L1_UNCACHED_BASE)
 #define MEM_L1_UNCACHED_BASE MEM_WORKER_UNCACHED_BASE
 #endif
+// Distance from a cached address to its uncached alias: uncached = cached + MEM_L1_UNCACHED_OFFSET. A core whose own
+// cached view starts at 0 has MEM_L1_UNCACHED_OFFSET == MEM_L1_UNCACHED_BASE. A Keraunos CCE's own cached view starts at
+// ETH_CCE_LOCAL_BASE (CCE1: 4 MiB), so subtracting MEM_L1_UNCACHED_BASE there would land in the sibling CCE's SRAM.
+#if defined(COMPILE_FOR_IDLE_ERISC)
+#define MEM_L1_UNCACHED_OFFSET MEM_IERISC_UNCACHED_BASE
+#else
+#define MEM_L1_UNCACHED_OFFSET MEM_L1_UNCACHED_BASE
+#endif
 #define MEM_IERISC_LOCAL_SIZE MEM_DM_LOCAL_SIZE
 #define MEM_SUBORDINATE_IERISC_LOCAL_SIZE MEM_IERISC_LOCAL_SIZE
 #define MEM_IERISC_LOCAL_HARTS 8

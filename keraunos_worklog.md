@@ -240,3 +240,33 @@ UMD: baremetal 543/543, `api_tests` 17 pass + 9 skipped (`EmuTTDevice.*` need th
 - **Emulator:** two runs hung in firmware load on ZeBu (once on mmk, once on mm) and had to be released and retried. They were not test failures; the retries passed.
 
 - **Cleanup check (2026-11-17):** after moving the KeraunosEmu tests to test_keraunos_emu.cpp, KeraunosEmu.* (4), KeraunosFromMimir.* (6), MimirEmu.* (3) and the Mimir CCE SRAM round trips (8) pass, 21/21. Commit 2d71a4b3ca7 was made before this run.
+
+## Rebase onto main and watcher support (2026-11-19/20)
+
+Rebase (all branches force-pushed with lease after verification):
+- tt-metal kstevens/enable_keraunos onto main (716 commits), tt-umd kstevens/grendel-emu-additions onto tt-umd main
+  (28 commits), chippy kstevens/metal_bringup onto main (214 commits, needs git-lfs, so done on the host).
+  grendelemulation was already current.
+- Adjustments: main moved MEM_L1_SIZE / MEM_L1_UNCACHED_BASE into overlay_addresses.h (#64015), so idle-eth keeps its
+  per-CCE alias from dev_mem_map.h; tt-umd moved SoC descriptors to descriptors/soc_descs (#3935) and renamed the test
+  helper to get_soc_desc_path (#3936), so `emu test` needs `--soc-desc .../umd/descriptors/soc_descs/mmk.yaml`; ring
+  buffer and watcher reader merged with main's dispatch-engine head.
+- Verified on mmk: 44/44 (KeraunosEmu, KeraunosCce1, KeraunosFromMimir, KeraunosApi, KeraunosFabric, MimirEmu,
+  MimirCceSramRoundTrip, KeraunosPaths own-SRAM). UMD baremetal 546/546; api_tests (Grendel/emu/descriptor) 17 pass,
+  22 skipped (need a live emulator server).
+
+Watcher (TT_METAL_WATCHER=1):
+- Host NOC sanitizer accepts both CCE windows of a tile (CCE1 firmware loads at native 0x408080).
+- Device eth-address and L1-access checks fold the uncached alias and require one CCE.
+- Ring buffer on Keraunos CCEs uses an SRAM lock (as Mimir CCEs); host reader keeps the head in the mailbox for them.
+- MEM_L1_UNCACHED_OFFSET: uncached = cached + offset. On idle-eth it is 8 MiB; subtracting MEM_L1_UNCACHED_BASE (12 MiB
+  on CCE1) sent CCE1's assert and sanitize records into CCE0's mailbox. Used by assert.h, sanitize.h and noc.h.
+- Watcher reader names the eight Keraunos harts ierisc0..7.
+- Verified on mmk with the watcher on: KeraunosEmu (2, CCE0), KeraunosCce1 7/7, KeraunosWatcher 4/4, MimirWatcher 1/1.
+  Each test takes 1-4 min with the watcher (its device reads are slow on the emulator).
+
+Emulator notes: jobs stop after 1 hour; the home/proj_sw cluster filesystem returned ENOSPC for a while, which killed
+the emu tool's output pump, so EMU_STATE_DIR and run logs now live under /localdev.
+
+Atomics: posted noc_semaphore_inc from a CCE issues one increment and never completes (the destination is unchanged and
+the command buffer stays busy); KeraunosNocAtomic times out. See the atomics section for follow-up.

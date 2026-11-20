@@ -70,6 +70,19 @@ const char* get_riscv_name(const Hal& hal, HalProgrammableCoreType core_type, ui
             return names[processor_index];
         }
         case HalProgrammableCoreType::IDLE_ETH: {
+            if (hal.get_arch() == tt::ARCH::QUASAR) {
+                // A Keraunos CCE runs eight harts.
+                static const char* const names[] = {
+                    "ierisc0", "ierisc1", "ierisc2", "ierisc3", "ierisc4", "ierisc5", "ierisc6", "ierisc7"};
+                const auto num_processors = hal.get_num_risc_processors(core_type);
+                TT_FATAL(
+                    processor_index < num_processors && processor_index < std::size(names),
+                    "Watcher data corrupted, unexpected processor index {} on core {} (max {})",
+                    processor_index,
+                    core_type,
+                    num_processors - 1);
+                return names[processor_index];
+            }
             static const char* const names[] = {"ierisc", "subordinate_ierisc"};
             TT_FATAL(
                 processor_index < 2,

@@ -395,7 +395,7 @@ void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
     // TODO: Remove this check once mailbox is accessed via cached memory (see dm.cc UNCACHED_MEM_MAILBOX_BASE)
     uintptr_t addr = reinterpret_cast<uintptr_t>(san);
     if (addr >= MEM_L1_UNCACHED_BASE) {
-        san = reinterpret_cast<volatile debug_sanitize_addr_msg_t*>(addr - MEM_L1_UNCACHED_BASE);
+        san = reinterpret_cast<volatile debug_sanitize_addr_msg_t*>(addr - MEM_L1_UNCACHED_OFFSET);
     }
     static volatile uint32_t s_sanitize_lock = 0;
     uint32_t old = __atomic_exchange_n(&s_sanitize_lock, 0xDEADBEEFu, __ATOMIC_ACQ_REL);
@@ -841,6 +841,9 @@ void debug_sanitize_l1_access(uint64_t addr, uint32_t len) {
     bool illegal = (addr + len <= addr);  // zero length / wraparound
 #if defined(COMPILE_FOR_ERISC)
     illegal = illegal || (addr + len > MEM_ETH_SIZE);
+#elif defined(ARCH_QUASAR) && defined(COMPILE_FOR_IDLE_ERISC)
+    // Either CCE of the tile, in its cached view or its uncached alias, within one CCE (see debug_valid_eth_addr).
+    illegal = illegal || (debug_valid_eth_addr(addr, len, false) != DebugSanitizeOK);
 #elif defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
     // Ahead of the DRISC case: CCE is a DM-class core, so it is built with COMPILE_FOR_DM and its
     // SRAM aliases like worker L1. Access must lie wholly within the cached view or the uncached

@@ -143,7 +143,7 @@ private:
     static FORCE_INLINE uint32_t l1_cached_view(uint32_t addr) {
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
         return (addr >= MEM_L1_UNCACHED_BASE && addr < MEM_L1_UNCACHED_BASE + MEM_L1_SIZE)
-                   ? addr - MEM_L1_UNCACHED_BASE
+                   ? addr - MEM_L1_UNCACHED_OFFSET
                    : addr;
 #else
         return addr;
