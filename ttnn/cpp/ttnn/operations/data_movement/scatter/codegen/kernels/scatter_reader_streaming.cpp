@@ -71,7 +71,7 @@ void kernel_main() {
     constexpr uint32_t src_df_size = src_tile_bytes / get_tile_hw(cb_src);
 
     // The tile is the default 32x32 in 2x2 faces of 16, pinned by the gate's has_default_tile(); the
-    // runtime tile dims above only size the valid-extent masks of the last tile row and column.
+    // runtime tile dims above size the valid-extent masks, the tile shift and the in-tile index.
     constexpr uint32_t face_size = 16;
     constexpr uint32_t face_size_mask = face_size - 1;
     constexpr uint32_t tile_faces = 2;

@@ -107,8 +107,9 @@ def test_pc_scatter_codegen(device, shape, index_shape, layout, kwargs, index_ma
     [
         # 40 tile rows over the 35 cores: the row split reaches into the second range.
         pytest.param([1, 1, 1280, 200], [1, 1, 1280, 32], ttnn.TILE_LAYOUT, {}, None, id="tile_row_split"),
-        # One tile row with 36 output columns: the column split reaches into the second range.
-        pytest.param([1, 1, 32, 1152], [1, 1, 32, 32], ttnn.TILE_LAYOUT, {}, None, id="tile_column_split"),
+        # One tile row with 36 output columns: the column split reaches into the second range. The
+        # 2288 B stick is not a multiple of 32 B, which keeps the call off the row-major detour.
+        pytest.param([1, 1, 32, 1144], [1, 1, 32, 32], ttnn.TILE_LAYOUT, {}, None, id="tile_column_split"),
         pytest.param([1, 1, 64, 200], [1, 1, 64, 100], ttnn.ROW_MAJOR_LAYOUT, {}, None, id="row_major"),
         pytest.param(
             [1, 1, 64, 200], [1, 1, 64, 100], ttnn.ROW_MAJOR_LAYOUT, {"reduce": "add"}, 8, id="row_major_bf16_reduce"

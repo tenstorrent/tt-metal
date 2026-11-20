@@ -151,8 +151,8 @@ bool supported_by_codegen(
         !has_standard_padding(src_tensor)) {
         return false;
     }
-    // scatter.cpp's scatter_reduction_mode() throws on any reduce string other than add/multiply
-    // before routing reaches this gate, so reduction_mode is one of the three named modes here.
+    // scatter.cpp routes any reduce string other than add/multiply native before this gate, so
+    // reduction_mode is one of the three named modes here.
     // BFLOAT16 reduction is only correct through the dedicated ROW_MAJOR accumulator (add/multiply,
     // full-stick FP32 accumulation): the generic readers overwrite and static_assert
     // reduction_mode == 0, so a TILE reduce -- or any reduce on the plain (non-bf16-reduce)
@@ -264,11 +264,11 @@ constexpr uint32_t kRowMajorRerouteMaxHt = 32;
 // host wall clock. The index counts because it, not the input, can carry the work.
 constexpr uint64_t kRowMajorDispatchBoundOperandBytes = 48 * 1024;
 constexpr uint32_t kRowMajorRerouteMaxStickElems = 32768;
-// The untilized stick's raw byte width must sit on a 32 B boundary: the generator's own routing
-// term for the detour, kept so the detour serves exactly the cases it was measured on. Not a
-// transport requirement -- the ROW_MAJOR factory serves unaligned sticks for direct ROW_MAJOR
-// callers through the same page-aligned accessors.
-constexpr uint32_t kRowMajorRerouteNocAlign = 32;
+// The untilized stick's raw byte width must be a multiple of this: the routing term the detour was
+// measured with, kept so it serves exactly those cases. Not a transport requirement -- the
+// ROW_MAJOR factory serves any stick width for direct ROW_MAJOR callers through the same
+// page-aligned accessors.
+constexpr uint32_t kRowMajorRerouteWidthMultiple = 32;
 
 // L1 bytes on the fullest bank that a tensor of `shape`, `dtype` and `layout` placed per
 // `mem_config` takes once allocated; 0 unless it lands in L1. `device_tensor` only names the device.
@@ -358,10 +358,11 @@ bool prefers_row_major_strategy(
         return false;
     }
     // Checked against the RAW (unaligned) byte width, not the device-aligned page, as the generator's
-    // routing term is defined (see kRowMajorRerouteNocAlign).
+    // routing term is defined (see kRowMajorRerouteWidthMultiple).
     const uint64_t raw_input_page_bytes = static_cast<uint64_t>(stick_elems) * input_tensor.element_size();
     const uint64_t raw_index_page_bytes = static_cast<uint64_t>(index_w) * index_tensor.element_size();
-    if (raw_input_page_bytes % kRowMajorRerouteNocAlign != 0 || raw_index_page_bytes % kRowMajorRerouteNocAlign != 0) {
+    if (raw_input_page_bytes % kRowMajorRerouteWidthMultiple != 0 ||
+        raw_index_page_bytes % kRowMajorRerouteWidthMultiple != 0) {
         return false;
     }
     // Only take the detour when the untilized RM plan fits the L1 the factory will find: what is

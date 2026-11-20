@@ -164,6 +164,14 @@ TEST_F(ScatterCodegenPrimFixture, SelectsTheFactoryByTheColumnSplitCost) {
         make_operands_of(device_, ttnn::Shape({1, 1, 1280, 3200}), ttnn::Shape({1, 1, 1280, 256}), 3200);
     EXPECT_TRUE(
         std::holds_alternative<ttnn::prim::ScatterCodegenProgramFactoryInterleaved>(factory_on(wide, std::nullopt)));
+    // The merge-gate two-range grid case: one tile row, 36 output columns over 35 cores, so the
+    // column split reaches the second range; its 2288 B stick keeps the dispatch off the detour.
+    const Operands two_range =
+        make_operands_of(device_, ttnn::Shape({1, 1, 32, 1144}), ttnn::Shape({1, 1, 32, 32}), 1144);
+    const CoreRangeSet two_ranges(std::vector<CoreRange>{
+        CoreRange(CoreCoord(1, 0), CoreCoord(3, 6)), CoreRange(CoreCoord(5, 0), CoreCoord(6, 6))});
+    EXPECT_TRUE(
+        std::holds_alternative<ttnn::prim::ScatterCodegenProgramFactoryStreaming>(factory_on(two_range, two_ranges)));
     // The same pair's 400 B stick is not 32 B aligned, which is what keeps it off the row-major
     // detour; a 128 B stick with one tile row is served by it.
     const auto detour = [&](const Operands& o) {
@@ -178,6 +186,7 @@ TEST_F(ScatterCodegenPrimFixture, SelectsTheFactoryByTheColumnSplitCost) {
     };
     EXPECT_FALSE(detour(ops));
     EXPECT_TRUE(detour(make_operands(device_, 64)));
+    EXPECT_FALSE(detour(two_range));
 }
 
 TEST(ScatterCodegenFactorySelection, ColumnSplitCostFollowsTheRescans) {
