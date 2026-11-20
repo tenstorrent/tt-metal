@@ -17,10 +17,11 @@ Each Python class has the fields of the C++ struct with the same name, whose com
 advanced_options.hpp_. Of the advanced options, Python
 binds only ``DFBAdvancedOptions.alias_with``, which lets buffers of the same total size share memory; the others are
 C++ only. So far the GlobalSemaphore fields are C++ only too: ``ProgramSpec.global_semaphore_parameters``,
-``KernelSpec.global_semaphore_bindings`` and ``ProgramRunArgs.global_semaphore_args``. One field differs in type: the
-``data_format_metadata`` of a ``DataflowBufferSpec`` or ``ScratchpadSpec`` takes a ttnn data type, such as
-``ttnn.bfloat16``, so a format without one, such as Float16, cannot be set, and ``ttnn.int8`` reads back as
-``ttnn.uint8``.
+``KernelSpec.global_semaphore_bindings`` and ``ProgramRunArgs.global_semaphore_args``. Two fields differ in type:
+``ProgramRunArgs.tensor_args`` takes a ``ttnn.Tensor`` for each name and keeps it alive, where C++ holds the tensor's
+``MeshTensor``; and the ``data_format_metadata`` of a ``DataflowBufferSpec`` or ``ScratchpadSpec`` takes a ttnn data
+type, such as ``ttnn.bfloat16``, so a format without one, such as Float16, cannot be set, and ``ttnn.int8`` reads back
+as ``ttnn.uint8``. In Python, argument values are integers from 0 to 2**32 - 1.
 
 An example
 **********
@@ -164,7 +165,8 @@ programs on different devices, give a program for each mesh coordinate range. On
     )
 
 The ranges must stay inside the mesh and must not overlap, every device in them must hold every tensor, and the run args
-must have the same ranges as the spec.
+must have the same ranges as the spec. The ranges need not cover every device: the output's parts on a device that no
+range covers are not written.
 
 Moving a kernel from the ProgramDescriptor form
 ***********************************************
