@@ -1457,6 +1457,21 @@ class TestJobOwnership:
         assert f"rank 1 on nodeB (pid 4242): {reason}; the other ranks were sent SIGTERM and exited" in text, text
         assert f"job end: outcome=failed exit={code} cause=rank failure" in text and "origin=rank 1 on nodeB" in text
 
+    def test_run_launcher_names_the_dead_rank_not_the_peer_that_saw_it_fail(self):
+        from ttnn.distributed.ttrun import run_launcher
+
+        # Across hosts the survivor's MPI can report the dead peer before the dead rank's wrapper line arrives. A stop
+        # whose reason is a failed peer is a symptom: the dead rank's own line replaces it, whatever the order.
+        first = (
+            "[1,0]<stderr>: [tt-stop] rank 0 on nodeA (pid 11): Python exception RuntimeError: MPI_Test failed: "
+            "MPI_ERR_PROC_FAILED: Process Failure (closing the mesh); stopping the job (exit 1)"
+        )
+        second = "[1,1]<stderr>: [tt-stop] rank 1 on nodeB (pid 22): was killed by signal 11 (SIGSEGV); stopping the job (exit 139)"
+        script = f"echo {shlex.quote(first)} >&2; sleep 0.3; echo {shlex.quote(second)} >&2; exit 1"
+        text, rc = self._logged_rc(lambda: run_launcher(["bash", "-c", script], cwd=Path.cwd()))
+        assert rc == 139, text
+        assert "origin=rank 1 on nodeB" in text and "was killed by signal 11 (SIGSEGV)" in text, text
+
     def test_run_launcher_forces_a_job_a_rank_stopped_when_the_ranks_do_not_exit(self, monkeypatch):
         import time
 

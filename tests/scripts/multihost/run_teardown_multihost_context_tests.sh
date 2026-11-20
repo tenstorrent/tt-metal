@@ -73,9 +73,10 @@ run() {
       sleep 1
     done
     sleep 3
+    local pid; pid=$(pgrep -P "$tt" | head -1)  # tt-run itself, under timeout (which takes one signal only)
     case "$action" in
-      INT|TERM) kill -"$action" "$tt" ;;
-      INT+INT) kill -INT "$tt"; sleep 3; kill -INT "$tt" ;;
+      INT|TERM) kill -"$action" "$pid" ;;
+      INT+INT) kill -INT "$pid"; sleep 3; kill -INT "$pid" ;;
       rank1:TERM) remote_sh "$H1" "kill -TERM \$(cat $PIDDIR/rank_1.pid)" ;;
     esac
   fi

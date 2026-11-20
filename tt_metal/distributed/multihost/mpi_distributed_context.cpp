@@ -483,6 +483,13 @@ std::optional<Status> MPIRequest::test() {
     int flag = 0;
     MPI_CHECK(MPI_Test(&req_, &flag, &status));
     if (!flag) {
+        // A caller that polls test() in its own loop (the control plane's exchanges do) leaves it the way a wait does
+        // once the job is stopping.
+        if (DistributedContext::is_terminating()) {
+            MPI_Cancel(&req_);
+            MPI_Request_free(&req_);
+            throw std::runtime_error("[MPIContext] a pending request was abandoned, the job is stopping");
+        }
         return std::nullopt;
     }
 

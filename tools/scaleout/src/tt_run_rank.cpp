@@ -7,8 +7,8 @@
 //   tt-run-rank -- <program> [args...]
 //
 // It runs the program as its child and passes it every signal the launcher sends. When the program ends:
-//   - with 0, or after a signal from the launcher (the job is being stopped), or after it stopped the job itself
-//     (tt-metal's context writes "stopped" to TT_RUN_RANK_FD): exit with the program's code;
+//   - with 0, or after it stopped the job itself (tt-metal's context writes "stopped" to TT_RUN_RANK_FD), or after a
+//     stop signal from the launcher it did not crash on: exit with the program's code;
 //   - otherwise (a segfault, a SIGKILL, an exit with an error from a program that did not stop the job): print one
 //     "[tt-stop] rank R on HOST (pid P): <how it ended>; stopping the job (exit CODE)" line, which tt-run reads to
 //     name the rank and return CODE, then send SIGTERM to every rank through the launcher (PMIx job control) and
@@ -26,6 +26,7 @@
 #include <string>
 
 #include <fcntl.h>
+#include <sys/prctl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -73,6 +74,7 @@ int main(int argc, char** argv) {
         ::sigaction(s, &action, nullptr);
     }
 
+    const pid_t wrapper = ::getpid();
     const pid_t child = ::fork();
     if (child < 0) {
         std::perror("tt-run-rank: fork");
@@ -81,6 +83,12 @@ int main(int argc, char** argv) {
     if (child == 0) {
         for (const int s : kForwarded) {
             ::signal(s, SIG_DFL);
+        }
+        // The launcher kills the process it started, this wrapper, not its child: without this a program the
+        // launcher's SIGKILL reached only through the wrapper would outlive the job.
+        ::prctl(PR_SET_PDEATHSIG, SIGKILL);
+        if (::getppid() != wrapper) {
+            ::_exit(128 + SIGKILL);  // the wrapper is already gone
         }
         if (status_pipe[1] >= 0) {
             const int fd = ::dup(status_pipe[1]);  // without O_CLOEXEC, so the program inherits it
@@ -107,7 +115,12 @@ int main(int argc, char** argv) {
         (void)!::read(status_pipe[0], note, sizeof note - 1);
     }
     const bool stopped_by_program = std::strstr(note, "stopped") != nullptr;
-    if (code == 0 || g_stop_signal != 0 || stopped_by_program) {
+    // A program killed by a signal other than a stop signal died on its own (a SIGKILL, a segfault), even when a
+    // stop reached this wrapper first: across hosts a peer's MPI can see the death and stop the job before this
+    // wrapper does, and the job must still name this rank.
+    const bool crashed = signalled && WTERMSIG(status) != SIGTERM && WTERMSIG(status) != SIGINT &&
+                         WTERMSIG(status) != SIGHUP;
+    if (code == 0 || stopped_by_program || (g_stop_signal != 0 && !crashed)) {
         return code;
     }
 
@@ -151,11 +164,17 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "[tt-stop] tt-run-rank: PMIx_Job_control: %s\n", PMIx_Error_string(rc));
         return code;
     }
-    // Stay up in the dead program's place while the other ranks close: this rank's exit would make the launcher kill
-    // them mid-close. When they have exited (non-zero, so the launcher ends the job) the launcher ends this wrapper
-    // too; otherwise it leaves after TT_METAL_STOP_TIMEOUT_S. A PMIx fence cannot hold it here: with this rank's
-    // own client gone, the fence returns at once.
+    // Stand in for the dead program at the other ranks' exit fence (DistributedContext::leave_stopped_job), so they
+    // leave as soon as they have closed, then stay up: this rank's exit would make the launcher kill a rank that is
+    // still closing. When they have exited (non-zero, so the launcher ends the job) the launcher ends this wrapper
+    // too; otherwise it leaves after TT_METAL_STOP_TIMEOUT_S. The fence alone cannot hold it: with this rank's own
+    // client gone it may return at once.
     const double timeout = stop_timeout_s();
+    int seconds = static_cast<int>(timeout);
+    pmix_info_t bound;
+    PMIX_INFO_LOAD(&bound, PMIX_TIMEOUT, &seconds, PMIX_INT);
+    (void)PMIx_Fence(&all, 1, timeout > 0.0 ? &bound : nullptr, timeout > 0.0 ? 1 : 0);
+    PMIX_INFO_DESTRUCT(&bound);
     for (double waited = 0.0; timeout <= 0.0 || waited < timeout; waited += 0.1) {
         ::usleep(100000);
     }

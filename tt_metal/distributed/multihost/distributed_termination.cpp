@@ -52,9 +52,10 @@ std::atomic<bool> g_watcher_running{false};
 void (*g_force_abort)(int) = nullptr;
 
 constexpr double kDefaultStopTimeoutS = 30.0;
+constexpr double kWatchdogMarginS = 10.0;
 
-// TT_METAL_STOP_TIMEOUT_S: how long a stopping rank may take to close and reach the exit before the watchdog ends the
-// job (MPI_Abort), and the bound on the exit's wait for the other ranks. 0 turns both bounds off.
+// TT_METAL_STOP_TIMEOUT_S: the bound on a stopping rank's wait for the other ranks at its exit; the watchdog ends the
+// job (MPI_Abort) if the rank is still running kWatchdogMarginS after that. 0 turns both bounds off.
 double stop_timeout_s() {
     const char* v = std::getenv("TT_METAL_STOP_TIMEOUT_S");
     if (v == nullptr || *v == '\0') {
@@ -156,8 +157,10 @@ void arm_watchdog() {
     if (timeout <= 0.0) {
         return;
     }
+    // Later than the exit fence's own bound (the same timeout), so a rank that closed and waited out the fence for a
+    // peer that never came still leaves through the exit, not through the watchdog.
     std::thread([timeout] {
-        std::this_thread::sleep_for(std::chrono::duration<double>(timeout));
+        std::this_thread::sleep_for(std::chrono::duration<double>(timeout + kWatchdogMarginS));
         const int code = g_exit_code.load() != 0 ? g_exit_code.load() : 128 + SIGTERM;
         std::fprintf(
             stderr,

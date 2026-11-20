@@ -105,6 +105,11 @@ def find_rank_wrapper() -> Optional[str]:
 _STOP_LINE = re.compile(r"\[tt-stop\] rank (\S+) on (\S+) \(pid (\d+)\): (.*?); stopping the job \(exit (\d+)\)")
 
 
+def _is_peer_failure(m: re.Match) -> bool:
+    """A [tt-stop] line whose reason is MPI reporting a failed peer: the consequence of another rank's death."""
+    return "MPI_ERR_PROC_FAILED" in m.group(4)
+
+
 def prterun_tool_uri(prterun_pid: int) -> Optional[str]:
     """The PMIx server URI prterun publishes for tools: the first line of
     ``<tmpdir>/prterun.<host>.<pid>.<uid>/pmix.<host>.tool.<pid>``, or None while it is not there yet."""
@@ -282,7 +287,7 @@ class LaunchedJob:
         self.stop_sent = False  # the ranks were sent SIGTERM through PRRTE job control
         self.forced_why = ""  # set once tt-run forced the job down (SIGTERM to the launcher)
         self._force_t0: Optional[float] = None
-        self.rank_stop: Optional[re.Match] = None  # the first rank that stopped the job (its [tt-stop] line)
+        self.rank_stop: Optional[re.Match] = None  # the rank that stopped the job (its [tt-stop] line)
         self.stopped_by_rank = False  # a rank stopped the job before tt-run was stopped: its code is the job's
 
     def __enter__(self) -> "LaunchedJob":
@@ -332,7 +337,7 @@ class LaunchedJob:
                 del self._stderr_tail[:-400]
                 if _MPI_ABORT_BANNER in line:
                     self._abort_seen = True
-                if self.rank_stop is None and "[tt-stop]" in line:
+                if "[tt-stop]" in line:
                     m = _STOP_LINE.search(line)
                     if m:
                         self._rank_stopped(m)
@@ -347,8 +352,15 @@ class LaunchedJob:
 
     def _rank_stopped(self, m: re.Match) -> None:
         """A rank stopped the job (every rank was sent SIGTERM): from now on the stop grace applies as if tt-run had
-        been stopped, so a rank that does not exit is forced after it."""
+        been stopped, so a rank that does not exit is forced after it. The first line names the rank, except that a
+        rank stopping because MPI reported a failed peer is only a symptom: the dead rank's own line (from its
+        wrapper, which can reach tt-run later from another host) replaces it."""
+        if self.rank_stop is not None and not (_is_peer_failure(self.rank_stop) and not _is_peer_failure(m)):
+            return
+        replaced = self.rank_stop is not None
         self.rank_stop = m
+        if replaced:
+            return
         if self.stop_t0 is None:
             self.stopped_by_rank = True
             self.stop_t0 = time.time()

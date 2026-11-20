@@ -141,7 +141,7 @@ def test_prte_timeout():
         assert f"[probe r={rank} " in r.log and any(
             f"[probe r={rank} " in line and "] coll_" in line for line in r.log.splitlines()
         ), f"rank {rank} had not reached the collective when the wall clock fired: {r}"
-        assert "close_done" in r.reached.get(rank, ""), f"rank {rank} did not close its device on PRRTE's SIGTERM: {r}"
+    closed(r)  # PRRTE's --timeout sends SIGTERM first: both ranks leave the collective and close their mesh
     clean(r)
 
 
