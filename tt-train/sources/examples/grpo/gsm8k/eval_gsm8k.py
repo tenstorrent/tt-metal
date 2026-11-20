@@ -160,6 +160,11 @@ def main() -> None:
     args = ap.parse_args()
     if args.temperature < 0.0:
         ap.error("--temperature must be >= 0.")
+    if args.temperature == 0.0 and args.n_samples > 1:
+        print(
+            f"[info] At --temperature 0 the {args.n_samples} samples of each question are identical; "
+            "-n 1 gives the same pass@1 in less time."
+        )
 
     models = parse_models(args.models)
 
