@@ -17,6 +17,24 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
+// setexp keeps a NaN's mantissa and forces its exponent, so a NaN base or exponent comes out of the log2 / exp2
+// steps as a finite value. IEEE (and torch): pow(NaN, +-0) = pow(1, NaN) = 1, every other NaN operand gives NaN.
+// base == 1 and |pow| != 0 are bit-exact compares, so they are false for a NaN.
+sfpi_inline sfpi::vFloat _sfpu_binary_power_propagate_nan_(sfpi::vFloat y, sfpi::vFloat base, sfpi::vFloat pow) {
+    v_if(sfpi::is_nan(base)) {
+        v_if(sfpi::abs(pow) != 0.f) { y = std::numeric_limits<float>::quiet_NaN(); }
+        v_endif;
+    }
+    v_endif;
+    v_if(sfpi::is_nan(pow)) {
+        y = std::numeric_limits<float>::quiet_NaN();
+        v_if(base == 1.0f) { y = 1.0f; }
+        v_endif;
+    }
+    v_endif;
+    return y;
+}
+
 /**
  * @brief Computes base raised to the power of pow (base**pow)
  *
@@ -155,6 +173,8 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
         v_endif;
     }
     v_endif;
+
+    y = _sfpu_binary_power_propagate_nan_(y, base, pow);
 
     if constexpr (!is_fp32_dest_acc_en) {
         // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it.
@@ -386,6 +406,8 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
         v_endif;
     }
     v_endif;
+
+    y = _sfpu_binary_power_propagate_nan_(y, base, pow);
 
     return y;
 }
