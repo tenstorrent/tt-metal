@@ -23,6 +23,7 @@ from transformers.configuration_utils import PretrainedConfig
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tt.hy4 import ihc as hy4_ihc
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
@@ -50,6 +51,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbe
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TopologyArg, TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat
+from models.experimental.hy4_preview.tt.ihc import TtIHCHead, ihc_expand
 
 
 def _row_fold_width(n: int, max_cols: int = 2048) -> int:
@@ -94,6 +96,7 @@ class TtPrefillTransformer(LightweightModule):
         model_cfg: type | None = None,
         routed_expert_weights_dtype: ttnn.DataType = DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
         mtp_levels: int = 0,
+        hf_config=None,
     ) -> bool:
         """
         Top-level cache completeness check for the full transformer.
@@ -117,14 +120,19 @@ class TtPrefillTransformer(LightweightModule):
             is_first_rank: a pipeline-parallel rank builds the embedding only on the
                 first rank, so check it only there. True for single-rank.
             is_last_rank / kv_only_last_layer: the rank's position and last-layer mode, passed by
-                the runtime alongside the model's own construction arguments. There is no final
-                norm / LM-head cache to gate on them any more, so they do not change what is checked.
+                the runtime alongside the model's own construction arguments. On the last rank of a
+                kv_only_last_layer model the last layer is checked kv-only (attn_norm + KV projections,
+                + its indexer on a ``full`` indexer layer), which is all such a model loads and all a
+                runner-built cache holds for it. A fully built cache still passes.
             model_cfg: Variant static-constants class, forwarded to the per-block check. Optional
                 so existing callers are unaffected, but MUST be passed for a LatentMoE model
                 (Kimi-K3): without it the block check cannot know to look for the
                 latent-projection cache files and reports a cache missing them as complete.
             mtp_levels: K, the MTP levels this model runs (0 = none). A last rank running MTP loads
                 the embedding table too, so pass the config value and let rank_loads_embedding() decide.
+            hf_config: the HF config, for the per-layer indexer map (``indexer_types``) the kv-only
+                last-layer check needs. Optional: without it the kv-only check cannot require a
+                ``full`` last layer's indexer cache.
 
         Returns:
             True if all expected cache files exist, False otherwise
@@ -152,8 +160,18 @@ class TtPrefillTransformer(LightweightModule):
                 experts_per_chip,
                 model_cfg=model_cfg,
                 routed_expert_weights_dtype=routed_expert_weights_dtype,
+                kv_only=kv_only_last_layer and is_last_rank and local_idx == num_layers - 1,
+                hf_config=hf_config,
             ):
                 return False
+
+        if (
+            hy4_ihc.ihc_enabled(model_cfg)
+            and is_last_rank
+            and not kv_only_last_layer
+            and not hy4_ihc.head_cache_complete(cache_path)
+        ):
+            return False
 
         if mtp_levels and is_last_rank and not kv_only_last_layer:
             if not TtDistributedRmsNorm.check_cache_complete(cache_path, "norm"):
@@ -307,6 +325,29 @@ class TtPrefillTransformer(LightweightModule):
                 use_fused_rmsnorm=use_fused_rmsnorm,
             )
             self.layers.append(layer)
+
+        # --- iHC (Hy4-preview, #65891) ---
+        # The embedding is expanded to n fp32 streams before the first layer (first rank), and the last rank collapses
+        # them back to one with TtIHCHead before the final norm. A kv-only last layer produces no streams to collapse.
+        self.ihc = hy4_ihc.ihc_enabled(model_cfg)
+        self.ihc_head = None
+        if self.ihc:
+            # MTP (Hy4: vLLM hy_v4) is seeded by norm(hc_head(streams)): the head below runs before self.norm on a
+            # last rank with a tail, and the MTP block itself is built without iHC (tt/hy4/ihc.py without_ihc).
+            self.ihc_n = int(model_cfg.HC_MULT)
+            if is_last_rank and not kv_only_last_layer:
+                ihc_cfg = hy4_ihc.ihc_config(config, model_cfg)
+                head_w = hy4_ihc.resolve_weights(
+                    state_dict.get("ihc_head_weights"),
+                    hy4_ihc.head_cache_file(weight_cache_path) if weight_cache_path else None,
+                    "iHC head",
+                )
+                self.ihc_head = TtIHCHead(
+                    hy4_ihc.ihc_plan(mesh_device, tp_axis, num_links=num_links, topology=tp_topology),
+                    ihc_cfg,
+                    **head_w,
+                    dtype=hy4_ihc.STREAM_DTYPE,
+                )
 
         build_tail = mtp_predictor is not None and is_last_rank and not kv_only_last_layer
         self.norm = (
@@ -473,6 +514,12 @@ class TtPrefillTransformer(LightweightModule):
             host = host.squeeze(0)
         return host
 
+    def _streams_to_host(self, tt_tensor):
+        """iHC streams -> [S, n, emb] fp32 on host, in the reference order."""
+        return hy4_ihc.streams_to_host(
+            tt_tensor, self.mesh_device, sp_axis=self.sp_axis, tp_axis=self.tp_axis, n=self.ihc_n
+        )
+
     @property
     def receives_indexer_indices(self) -> bool:
         return self.indexer_types is not None and self.indexer_types[self.first_layer_idx] == "shared"
@@ -612,6 +659,12 @@ class TtPrefillTransformer(LightweightModule):
                 intermediates["embed"] = self._to_host(h)
         else:
             h = token_ids
+        if self.ihc and self.is_first_rank:
+            # iHC: the embedding -> n identical fp32 streams [1, 1, seq_per_chip, n * emb_dim/tp]. A non-first rank
+            # receives the streams themselves.
+            h_f = ttnn.typecast(h, hy4_ihc.STREAM_DTYPE)
+            h = ihc_expand(h_f, self.ihc_n)
+            ttnn.deallocate(h_f)
 
         # GLM-5.3 reuse: hold the most recent "full" layer's top-k indices and inject them into the
         # following "shared" layers. reuse=False (no indexer_types) leaves the call + 2-tuple return
@@ -665,7 +718,7 @@ class TtPrefillTransformer(LightweightModule):
                 return intermediates
             if return_intermediates:
                 ttnn.synchronize_device(self.mesh_device)
-                intermediates[f"layer_{i}"] = self._to_host(h)
+                intermediates[f"layer_{i}"] = self._streams_to_host(h) if self.ihc else self._to_host(h)
             if read_profiler:
                 ttnn.ReadDeviceProfiler(self.mesh_device)
         if self.forwards_indexer_indices:
@@ -678,6 +731,15 @@ class TtPrefillTransformer(LightweightModule):
         # handed to the next rank, which continues from this hidden state.
         if not self.is_last_rank:
             return h
+
+        if self.ihc_head is not None:
+            # iHC: collapse the n streams to one hidden state, before the final norm (HF HYV4HyperHead).
+            h_f = self.ihc_head(h)
+            h = ttnn.typecast(h_f, ttnn.bfloat16)
+            ttnn.deallocate(h_f)
+            if return_intermediates:
+                ttnn.synchronize_device(self.mesh_device)
+                intermediates["ihc_head"] = self._to_host(h)
 
         if self.norm is not None:
             h = self.norm(h)
@@ -692,7 +754,12 @@ class TtPrefillTransformer(LightweightModule):
             for key, tensor in intermediates.items():
                 if isinstance(tensor, torch.Tensor):
                     logger.debug(f"Reordering intermediate {key} with shape {tensor.shape}")
-                    intermediates[key] = reverse_reorder_tensor_chunks(tensor, self.chunk_order, seq_dim=-2)
+                    # iHC stream snapshots are [S, n, emb], the sequence on dim -3. iHC itself is per token, so the
+                    # zigzag order never reaches it on device.
+                    if self.ihc and key.startswith("layer_"):
+                        intermediates[key] = hy4_ihc.unbalance_streams(tensor, self.chunk_order)
+                    else:
+                        intermediates[key] = reverse_reorder_tensor_chunks(tensor, self.chunk_order, seq_dim=-2)
 
         if mtp_union is not None and mtp_geometry is not None:
             self.run_mtp_traced(

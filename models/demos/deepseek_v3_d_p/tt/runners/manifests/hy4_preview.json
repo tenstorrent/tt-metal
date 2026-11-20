@@ -1,0 +1,24 @@
+{
+  "_comment": [
+    "Hy4-preview prefill. The layout is TP32 / DP1 (tp32: the SC1 placement of #65884, one engine on the 8x4 Galaxy",
+    "mesh, every weight sharded once over 32 chips; hidden over the 4-chip axis 1 = PREFILL_TP, heads and sequence over",
+    "the 8-chip axis 0 = PREFILL_SP). The shared prefill stack cannot run it yet, so this manifest fails at",
+    "runner start naming the blocking issues (tt/hy4/layout.py TP32_BLOCKERS).",
+    "DEV / NUMERICS layout, for per-layer PCC bring-up only: PREFILL_HY4_LAYOUT=glm_prefill_sp8_tp4 PREFILL_SP=8",
+    "PREFILL_TP=4 PREFILL_SP_AXIS=0 (GLM-5.3's SP 8 x TP 4, 16 heads per chip, attention replicated over 8 rows).",
+    "PREFILL_CHUNK_SIZE=4096 in every layout: the KV cache stripes 128-token blocks over 32 chips and the prefill",
+    "chunk writes chunk / 32 tokens per chip (tt/hy4/kv_cache.py, #65886)."
+  ],
+  "env": {
+    "PREFILL_MODEL": "hy4_preview",
+    "PREFILL_HY4_LAYOUT": "tp32",
+    "PREFILL_SP": "8",
+    "PREFILL_TP": "4",
+    "PREFILL_SP_AXIS": "0",
+    "PREFILL_CHUNK_SIZE": "4096",
+    "PREFILL_SCALED_FP8_KV_CACHE": "1",
+    "PREFILL_MAX_SEQ_LEN": "1064960",
+    "PREFILL_NUM_USERS": "4",
+    "TT_PREFILL_CHUNK_TIMEOUT_SECONDS": "10"
+  }
+}

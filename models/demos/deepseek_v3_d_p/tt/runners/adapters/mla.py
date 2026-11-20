@@ -133,7 +133,7 @@ class MLAPrefillAdapter(PrefillModelAdapter):
         passes it into each runtime call; the runtime knows the layout to read/write it."""
         from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
         from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
-        from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
+        from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntimeConfig
 
         # Per-axis CCL topology derived from the opened fabric: Ring on a physically-wrapped axis
         # (FABRIC_2D_TORUS_{X,Y,XY}), Linear otherwise. Querying the active fabric keeps topology
@@ -173,9 +173,16 @@ class MLAPrefillAdapter(PrefillModelAdapter):
             or os.environ.get(self.env_var, "")
             or self.hf_model_default,
         )
-        return TtPrefillRuntime(
+        return self._runtime_cls()(
             mesh_device=mesh_device,
             hf_config=hf_config,
             state_dict={},
             config=runtime_config,
         )
+
+    def _runtime_cls(self) -> type:
+        """The runtime class ``build_runtime`` constructs. A model that extends ``TtPrefillRuntime`` (Hy4-preview's
+        checkpoint reader) overrides this; it is a method so the heavy import stays lazy."""
+        from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
+
+        return TtPrefillRuntime

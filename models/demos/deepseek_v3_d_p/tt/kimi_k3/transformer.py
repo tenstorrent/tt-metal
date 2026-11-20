@@ -57,6 +57,7 @@ class TtKimiK3Transformer(LightweightModule):
         model_cfg: type | None = None,
         routed_expert_weights_dtype=None,
         mtp_levels: int = 0,  # TtKimiK3Runtime rejects nonzero before this runs
+        hf_config=None,  # TtPrefillTransformer's kv-only indexer check; unused here
     ) -> bool:
         """Whether this rank's whole slice is on disk, in the signature the runtime calls.
 

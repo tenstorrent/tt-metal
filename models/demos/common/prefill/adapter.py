@@ -139,6 +139,11 @@ class PrefillModelAdapter(ABC):
     # emb TP-sharded, [Shard(2), Shard(3)]. False: emb replicated across TP, [Shard(2), Replicate()].
     # Must match the layout the model's decoder layer consumes/produces.
     pipeline_activation_emb_tp_sharded: bool = True
+    # The cross-rank residual, per token: ``pipeline_activation_streams`` hidden-size streams packed on the last dim,
+    # in ``pipeline_activation_dtype`` (a ttnn dtype name). One bf16 hidden for every model except one whose residual
+    # is several streams: Hy4-preview's iHC hands the next rank 4 fp32 streams ([T, 4 * hidden / tp] per chip).
+    pipeline_activation_streams: int = 1
+    pipeline_activation_dtype: str = "bfloat16"
     # Whether this model ships a DFlash speculative drafter the prefill runner can build during prefill
     supports_dflash: bool = False
     # The drafter checkpoint trained against THIS verifier, and the context-KV golden for it. A drafter has
@@ -367,6 +372,8 @@ ADAPTER_PATHS = {
     "glm_5_3": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3:GLM53Adapter",
     # GPT-OSS-120B: GQA (not MLA) + attention sinks + sliding/full alternation + EP MoE.
     "gpt_oss_d_p": "models.demos.gpt_oss_d_p.tt.runners.adapters.gpt_oss:GptOssPrefillAdapter",
+    # Hy4-preview: GLM-5.3's MLA + DSA + MoE dims plus output gate / sink / iHC deltas (adapters/hy4_preview.py).
+    "hy4_preview": "models.demos.deepseek_v3_d_p.tt.runners.adapters.hy4_preview:Hy4Adapter",
     # Kimi-K2.7-Code: DeepSeek-V3 architecture (MLA + MoE), single expert group (adapters/kimi_k2_7.py).
     "kimi_k2_7": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_7:KimiK27Adapter",
     "kimi_k3": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3:KimiK3Adapter",
