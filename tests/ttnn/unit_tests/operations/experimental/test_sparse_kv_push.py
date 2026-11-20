@@ -421,20 +421,7 @@ _PERF_STEPS = {
 }
 _PERF_SAMPLES = 7
 
-_SUBTORUS_4X4_PERF_FABRICS = [
-    pytest.param(
-        {**_device_params(), "require_exact_physical_num_devices": True},
-        id="ring_ring",
-    ),
-    pytest.param(
-        {
-            **_device_params(),
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
-            "require_exact_physical_num_devices": True,
-        },
-        id="line_ring",
-    ),
-]
+_RING_RING_4X4_PERF_DEVICE_PARAMS = {**_device_params(), "require_exact_physical_num_devices": True}
 
 
 def _stage_topk(source):
@@ -465,13 +452,7 @@ def _device_ns_by_step(mesh_device, run):
     return totals
 
 
-@pytest.mark.parametrize("device_params", _SUBTORUS_4X4_PERF_FABRICS, indirect=True)
-@pytest.mark.parametrize("mesh_device", [(4, 4)], ids=["4x4"], indirect=True)
-@pytest.mark.parametrize("sp_axis", [1], ids=["sp1"])
-@pytest.mark.parametrize("source", ["random", "14", "62"], ids=["random", "glm_l14", "glm_l62"])
-def test_sparse_kv_push_subtorus_4x4_perf(mesh_device, monkeypatch, sp_axis, source):
-    """Device time of the plan, its table all-gather and the push (all rows, prefix, rest) at the stage's 1M cache, on
-    the 16-chip [RING, RING] carve and on one [LINE, RING] tray half. Record-only: prints the median and the samples."""
+def _stage_push_perf(mesh_device, monkeypatch, sp_axis, source):
     monkeypatch.setitem(globals(), "N_DEV", 16)
     monkeypatch.setitem(globals(), "SP_AXIS", sp_axis)
     sc, page_bytes = 160, 704
@@ -497,11 +478,32 @@ def test_sparse_kv_push_subtorus_4x4_perf(mesh_device, monkeypatch, sp_axis, sou
             samples[name].append(_device_ns_by_step(mesh_device, lambda: push.push(out, part, batch_index=1))["push"])
     for name, values in samples.items():
         print(
-            f"SPARSE_KV_PUSH_PERF fabric={ttnn.get_fabric_config()} sp_axis={sp_axis} topk={source} step={name} "
+            f"SPARSE_KV_PUSH_PERF mesh={tuple(mesh_device.shape)} sp_axis={sp_axis} topk={source} step={name} "
             f"median={statistics.median(values) / 1e3:.1f}us min={min(values) / 1e3:.1f}us max={max(values) / 1e3:.1f}us "
             f"samples_us={[round(v / 1e3, 1) for v in values]}"
         )
     assert all(statistics.median(v) > 0 for v in samples.values()), "a step recorded no device program"
+
+
+_STAGE_PUSH_SOURCES = pytest.mark.parametrize("source", ["random", "14", "62"], ids=["random", "glm_l14", "glm_l62"])
+
+
+@pytest.mark.parametrize("device_params", [_RING_RING_4X4_PERF_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 4)], ids=["4x4"], indirect=True)
+@_STAGE_PUSH_SOURCES
+def test_sparse_kv_push_ring_ring_4x4_perf(mesh_device, monkeypatch, source):
+    """Device time of the plan, its table all-gather and the push (all rows, prefix, rest) at a 4x4 stage's 1M cache with
+    SP on axis 1, on the 16-chip [RING, RING] carve. Record-only: prints the median and the samples."""
+    _stage_push_perf(mesh_device, monkeypatch, 1, source)
+
+
+@pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
+@_STAGE_PUSH_SOURCES
+def test_sparse_kv_push_cylinder_4x4_perf(mesh_device, monkeypatch, source):
+    """test_sparse_kv_push_ring_ring_4x4_perf's measurement on a 4x4 submesh of the 8x4 TorusXY Galaxy: axis 1 rings,
+    axis 0 (four of eight rows) is a line. The push needs the TorusXY fabric, so this is the [LINE, RING] comparison."""
+    _stage_push_perf(mesh_device.create_submesh(ttnn.MeshShape(4, 4)), monkeypatch, 1, source)
 
 
 @galaxy
