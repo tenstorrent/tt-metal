@@ -166,7 +166,7 @@ class AgmmPin(NamedTuple):
 
 def _pin_override(k: int, n: int, pin: AgmmLayerPin) -> AgmmLayerPin:
     """For sweeping: `MINIMAX_H3_AGMM_PIN_<K>_<N>="M,K,N"` replaces the layer's blocking at every length class and
-    keeps its subblock and Dst accumulation; `"M,K,N,subblock_h,subblock_w"` also sets the subblock, with fp32 dest
+    keeps its subblock (2x2 if it has one per class) and Dst accumulation; `"M,K,N,subblock_h,subblock_w"` also sets the subblock, with fp32 dest
     accumulation off above 4 tiles."""
     name = f"MINIMAX_H3_AGMM_PIN_{k}_{n}"
     value = os.environ.get(name)
@@ -177,7 +177,8 @@ def _pin_override(k: int, n: int, pin: AgmmLayerPin) -> AgmmLayerPin:
         raise ValueError(f"{name}={value!r}: expected M,K,N or M,K,N,subblock_h,subblock_w")
     blockings = {cls.name: fields[:3] for cls in LENGTH_CLASSES}
     if len(fields) == 3:
-        return pin._replace(blockings=blockings)
+        subblock = (2, 2) if isinstance(pin.subblock, dict) else pin.subblock
+        return pin._replace(blockings=blockings, subblock=subblock)
     subblock_h, subblock_w = fields[3:]
     return pin._replace(
         blockings=blockings, subblock=(subblock_h, subblock_w), fp32_dest_acc_en=subblock_h * subblock_w <= 4
