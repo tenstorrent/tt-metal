@@ -21,6 +21,13 @@ namespace tt::tt_metal::distributed {
 struct MeshTraceData {
     MeshCoordinateRange device_range = MeshCoordinateRange(MeshShape(0, 0));
     std::vector<uint32_t> data;
+    // Per-device runtime args: words of `data` that differ on one device of the range (byte offset in `data`).
+    struct DevicePatch {
+        MeshCoordinate device;
+        uint32_t byte_offset;
+        std::vector<uint32_t> words;
+    };
+    std::vector<DevicePatch> device_patches;
 };
 
 // Wrapper around the MeshTraceData. Captures the complete state of a MeshTrace

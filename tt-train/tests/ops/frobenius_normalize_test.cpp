@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <array>
@@ -347,4 +348,14 @@ TEST_F(FrobeniusNormalizeCacheHitTest, InPlaceAndPreallocatedOutputAlternate) {
             }
         }
     }
+}
+
+class FrobeniusNormalizeValidationTest : public ttml::test_utils::DeviceSuiteTest {};
+
+TEST_F(FrobeniusNormalizeValidationTest, RejectsTilesOtherThan32x32) {
+    // In 16x32 tiles a 32x32 input is 2 tiles, where the compute kernels' count, in 32x32 tiles, is 1.
+    const auto input = ttml::test_utils::filled_on_device_in_tiles({1, 1, 32, 32}, 0.5F, {16, 32});
+    EXPECT_THAT(
+        [&] { ttml::metal::frobenius_normalize(input, 1e-7F); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("tiles must be 32x32, got 16x32")));
 }

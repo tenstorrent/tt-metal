@@ -51,10 +51,10 @@ L1_PACKERS = {
 }
 
 
-class BfdResource(Enum):
-    UNP0 = "ckernel::trisc::BfdResource::Unp0"
-    UNP1 = "ckernel::trisc::BfdResource::Unp1"
-    PACK0 = "ckernel::trisc::BfdResource::Pack0"
+class BfdId(Enum):
+    UNP0 = "ckernel::trisc::BFD_ID_UNP0"
+    UNP1 = "ckernel::trisc::BFD_ID_UNP1"
+    PACK0 = "ckernel::trisc::BFD_ID_PACK0"
 
 
 class L1AccessMode(Enum):
@@ -225,25 +225,27 @@ class Operand:
         )
         return f"[[maybe_unused]] const Operand {self.cpp_name}({hex(self.l1_address)}, {buffer_size});\n"
 
-    def bfd_alloc_and_program(
+    def program_bfd(
         self,
-        engine: BfdResource,
+        engine: BfdId,
         mode: L1AccessMode = L1AccessMode.CONTINUOUS,
         *,
         result_name: Optional[str] = None,
     ) -> str:
-        assignment = f"const auto {result_name} = " if result_name else ""
         data_format = (
             DataFormat.Int16
             if self.data_format == DataFormat.UInt16
             else self.data_format
         )
-        return (
-            f"{assignment}ckernel::trisc::bfd_alloc_and_program<{engine.value}, {mode.value}>("
+        code = (
+            f"ckernel::trisc::program_bfd<{engine.value}, {mode.value}>("
             f"{self.tile_shape.cpp_value}, "
             f"{hex(self.l1_address)} / 16, "
             f"{data_format.cpp_underlying_value});\n"
         )
+        if result_name:
+            code += f"constexpr std::uint8_t {result_name} = {engine.value};\n"
+        return code
 
 
 class OperandRegistry:
