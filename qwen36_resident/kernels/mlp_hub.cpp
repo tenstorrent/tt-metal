@@ -125,7 +125,8 @@ constexpr uint32_t tap_rounds[5] = {
     get_compile_time_arg_val(26),
     get_compile_time_arg_val(27)};
 constexpr uint32_t hidden_tiles = get_compile_time_arg_val(28);
-constexpr uint32_t kHubTs = 8;                               // timeline words per round
+constexpr uint32_t kHubTs = 8;  // timeline words per round (sub-round with groups)
+static_assert(groups == 1 || n_taps == 0, "row groups: no drafter taps (verify runs one group)");
 // fabric links to each neighbour: with 2, the odd packets of a vector go over the second link
 constexpr uint32_t links = get_compile_time_arg_val(29);
 static_assert(links == 1 || links == 2, "one or two fabric links");
@@ -413,14 +414,18 @@ void kernel_main() {
         invalidate_l1_cache();
         launch = *launch_word;
         // (an odd round count puts the extra round on parity 0)
-        expected[0] = launch * ((layers + 1) / 2) * (num_chips - 1) * packets_per_vector;
-        expected[1] = launch * (layers / 2) * (num_chips - 1) * packets_per_vector;
+        // (row groups: every round is `groups` sub-rounds through the same slots, parity = sub-round & 1)
+        expected[0] = launch * ((layers * groups + 1) / 2) * (num_chips - 1) * packets_per_vector;
+        expected[1] = launch * (layers * groups / 2) * (num_chips - 1) * packets_per_vector;
     }
-    for (uint32_t l = 0; l < layers; l++) {
-        const uint32_t par = l & 1;
+    // sub-round s = round l, row group g (groups == 1: s == l): group g's partials all-reduced through slot[s & 1],
+    // its x multicast to the streamers' x at group offset g
+    for (uint32_t s = 0; s < layers * groups; s++) {
+        const uint32_t l = s / groups, g = s % groups;
+        const uint32_t par = s & 1;
         const uint32_t base = slots + par * num_chips * vector_bytes;
-        noc_semaphore_wait_min(gather, num_streamers * (l + 1));
-        mark(l, 0);
+        noc_semaphore_wait_min(gather, num_streamers * (s + 1));
+        mark(s, 0);
         if constexpr (num_chips > 1) {
             for (uint32_t p = 0; p < packets_per_vector; p++) {
                 const uint32_t src = base + chip * vector_bytes + p * packet_bytes;
@@ -434,11 +439,11 @@ void kernel_main() {
                     perform_payload_send(f.get_backward_connection(), src, bytes, hdr[par][p][1]);
                 }
             }
-            mark(l, 1);
+            mark(s, 1);
             expected[par] += (num_chips - 1) * packets_per_vector;
             noc_semaphore_wait_min(ccl_sem[par], expected[par]);
         }
-        mark(l, 2);
+        mark(s, 2);
         // published: the compute sums the slots into x
         uint32_t src = base, bytes = num_chips * vector_bytes;
         if constexpr (published) {
@@ -446,28 +451,28 @@ void kernel_main() {
             cb_reserve_back(0, num_chips * views);
             cb_push_back(0, num_chips * views);
             cb_wait_front(2, views);
-            mark(l, 3);
+            mark(s, 3);
             src = get_read_ptr(2);
             bytes = vector_bytes;
             if (l + 1 == layers && arg0 != 0) {
                 const InterleavedAddrGen<true> dump{.bank_base_address = arg0, .page_size = vector_bytes};
-                noc_async_write(src, dump.get_noc_addr(0), vector_bytes);
+                noc_async_write(src, dump.get_noc_addr(g), vector_bytes);
             }
         }
         if (l + 1 < layers || mcast_last) {
             // (mc_nocs == 2: the second half of x over NOC 1, whose rectangles run corner to corner the other way)
             const uint32_t half = mc_nocs > 1 ? (bytes / 2 + 31) & ~31u : bytes;
+            const uint32_t x_dst = streamer_slots + g * vector_bytes;  // the streamers' x of group g
             for (uint32_t r = 0; r < rects; r++) {
                 noc_async_write_multicast(
                     src,
-                    get_noc_multicast_addr(rect(r, 0), rect(r, 1), rect(r, 2), rect(r, 3), streamer_slots),
+                    get_noc_multicast_addr(rect(r, 0), rect(r, 1), rect(r, 2), rect(r, 3), x_dst),
                     half,
                     rect(r, 4));
                 if constexpr (mc_nocs > 1) {
                     noc_async_write_multicast(
                         src + half,
-                        get_noc_multicast_addr(
-                            rect(r, 2), rect(r, 3), rect(r, 0), rect(r, 1), streamer_slots + half, 1),
+                        get_noc_multicast_addr(rect(r, 2), rect(r, 3), rect(r, 0), rect(r, 1), x_dst + half, 1),
                         bytes - half,
                         rect(r, 4),
                         false,
@@ -478,7 +483,7 @@ void kernel_main() {
             if constexpr (mc_nocs > 1) {
                 noc_async_write_barrier(1);
             }
-            *flag = l + 1;
+            *flag = s + 1;
             for (uint32_t r = 0; r < rects; r++) {
                 noc_semaphore_set_multicast(
                     flag_addr,
@@ -487,22 +492,22 @@ void kernel_main() {
             }
             noc_async_write_barrier();
         }
-        mark(l, 4);
+        mark(s, 4);
         if constexpr (published) {
             for (uint32_t i = 0; i < n_taps; i++) {
-                if (l == tap_rounds[i]) {
+                if (l == tap_rounds[i] && g == 0) {
                     write_tap(src, tap_addr[i]);
                 }
             }
             noc_async_write_barrier();
             cb_pop_front(2, vector_bytes / 2048);
         }
-        mark(l, 5);
+        mark(s, 5);
     }
     noc_async_write_barrier();
     if constexpr (feed) {
         // this step's records: one more gather count per streamer after its argmax write
-        noc_semaphore_wait_min(gather, num_streamers * (layers + 1));
+        noc_semaphore_wait_min(gather, num_streamers * (layers * groups + 1));
         invalidate_l1_cache();
         volatile tt_l1_ptr uint32_t* rec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(argmax_addr);
         volatile tt_l1_ptr uint32_t* cand = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cand_addr);

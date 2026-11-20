@@ -987,8 +987,8 @@ class ResidentModel:
 
         self.ts_t = ts_buf(grid, S, layers * 32) if timeline else None
         ts_addr = self.ts_t.buffer_address() if timeline else 0
-        # the hub's: per round 8 words (mlp_hub.cpp kHubTs)
-        self.hub_ts_t = ts_buf(hub_grid, 1, (2 * layers + int(self.fc)) * 8) if timeline else None
+        # the hub's: per round (per sub-round with row groups) 8 words (mlp_hub.cpp kHubTs)
+        self.hub_ts_t = ts_buf(hub_grid, 1, (2 * layers + int(self.fc)) * self.groups * 8) if timeline else None
         self.l1_addrs += [ts_addr, self.hub_ts_t.buffer_address()] if timeline else []
 
         # ---- per sub-batch decode state (sub-batch 0's is above)
@@ -1540,7 +1540,13 @@ class ResidentModel:
                     kernel("streamer_writer.cpp", grid, ct, wr, dm(BRISC, NOC1)),
                     kernel("streamer_compute.cpp", grid, ct, cr, streamer_compute),
                     kernel("mlp_hub.cpp", hub_grid, hub_ct, hub_rt, dm(BRISC, NOC0)),
-                    kernel("hub_compute.cpp", hub_grid, [n, x_views, rounds], ttnn.RuntimeArgs(), streamer_compute),
+                    kernel(
+                        "hub_compute.cpp",
+                        hub_grid,
+                        [n, x_views, rounds * self.groups],
+                        ttnn.RuntimeArgs(),
+                        streamer_compute,
+                    ),
                 ]
                 if self.n_gdn:
                     kernels += [

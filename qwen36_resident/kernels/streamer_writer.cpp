@@ -106,24 +106,33 @@ void kernel_main() {
     const bool preserve = rows_mode && ((*ring_sem >> 16) & 1);
 
     // x of round 0 (x0) is seeded and released by the reader; the hub multicasts x of the later rounds
+    // (row groups: the hub runs `groups` sub-rounds per round and counts the slots semaphore per sub-round; x of
+    // every group is in before the round's compute starts, group g at tile offset g * Ht)
     auto take_slots = [&](uint32_t round) {
         if (round > 0) {
-            noc_semaphore_wait_min(slots_sem, round);
-            cb_reserve_back(cb_x, Ht);
-            cb_push_back(cb_x, Ht);
+            noc_semaphore_wait_min(slots_sem, round * groups);
+            cb_reserve_back(cb_x, groups * Ht);
+            cb_push_back(cb_x, groups * Ht);
         }
     };
+    // group g's partial goes to the hub's slot of sub-round s = round * groups + g (parity s & 1). Two parities keep
+    // a slot free for up to 2 groups: a group's slot is summed before the round's last multicast, which the next
+    // round's partials wait for. More groups need a slot-free signal from the hub (static_assert below).
+    static_assert(groups <= 2, "row groups > 2 reuse a hub slot within a round: needs a slot-free handshake");
     auto send_partial = [&](uint32_t round) {
-        cb_wait_front(cb_pout, nd_max);
-        while (hub_slots == 0) {
-            invalidate_l1_cache();
-            hub_slots = *hub_addr_sem;
+        for (uint32_t g = 0; g < groups; g++) {
+            cb_wait_front(cb_pout, nd_max);
+            while (hub_slots == 0) {
+                invalidate_l1_cache();
+                hub_slots = *hub_addr_sem;
+            }
+            const uint32_t sr = round * groups + g;
+            const uint32_t dst = hub_slots + (((sr & 1) * num_chips + chip) * Ht + pout_off) * kTileBytes;
+            noc_async_write(get_read_ptr(cb_pout), get_noc_addr(hub_x, hub_y, dst), nd * kTileBytes);
+            noc_async_write_barrier();
+            noc_semaphore_inc(hub_gather_sem, 1);
+            cb_pop_front(cb_pout, nd_max);
         }
-        const uint32_t dst = hub_slots + (((round & 1) * num_chips + chip) * Ht + pout_off) * kTileBytes;
-        noc_async_write(get_read_ptr(cb_pout), get_noc_addr(hub_x, hub_y, dst), nd * kTileBytes);
-        noc_async_write_barrier();
-        noc_semaphore_inc(hub_gather_sem, 1);
-        cb_pop_front(cb_pout, nd_max);
     };
     auto send_row = [&](uint32_t first, uint32_t count, uint32_t nq, uint32_t q_off) {
         const uint32_t row = get_read_ptr(cb_qkvz_out);
