@@ -149,6 +149,64 @@ ALWI void sub_unary_tile_int32(uint32_t idst, uint32_t param1) {
         VectorMode::RC,
         param1));
 }
+
+// clang-format off
+/**
+* Performs element-wise add operation with uint32 scalar, wrapping modulo 2^32. The DST
+* register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available on the
+* compute engine.
+*
+* Two's-complement addition produces the same 32-bit result for signed and unsigned operands, so this shares the
+* int32 kernel.
+*
+* Return value: None
+*
+* | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+* |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+* | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+* | param1          | uint32 value scalar                                                        | uint32_t |                                                       | True     |
+*/
+// clang-format on
+
+ALWI void add_unary_tile_uint32(uint32_t idst, uint32_t param1) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_add_int32,
+        (APPROX, 8 /* ITERATIONS */),
+        idst,
+        VectorMode::RC,
+        param1));
+}
+
+// clang-format off
+/**
+* Performs element-wise sub operation with uint32 scalar, wrapping modulo 2^32. The DST
+* register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available on the
+* compute engine.
+*
+* Two's-complement subtraction produces the same 32-bit result for signed and unsigned operands, so this shares the
+* int32 kernel.
+*
+* Return value: None
+*
+* | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+* |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+* | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+* | param1          | uint32 value scalar                                                        | uint32_t |                                                       | True     |
+*/
+// clang-format on
+
+ALWI void sub_unary_tile_uint32(uint32_t idst, uint32_t param1) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sub_int32,
+        (APPROX, 8 /* ITERATIONS */),
+        idst,
+        VectorMode::RC,
+        param1));
+}
 #endif
 
 /**
