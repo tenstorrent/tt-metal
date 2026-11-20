@@ -173,11 +173,12 @@ TEST_F(CommandListTest, LegacyOpIsRejected) {
 
 TEST_F(CommandListTest, ExceptionLeavingRecordScopeRequiresClear) {
     CommandListBuilder builder(*device_);
-    try {
-        auto recording = builder.record_scope();
-        throw std::runtime_error("user error");
-    } catch (const std::runtime_error&) {
-    }
+    EXPECT_THAT(
+        [&] {
+            auto recording = builder.record_scope();
+            throw std::runtime_error("user error");
+        },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("user error")));
     EXPECT_THAT(
         [&] { (void)builder.build(); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("An error interrupted recording")));
