@@ -303,7 +303,7 @@ public:
     size_t get_memory_map_end_address() const;
 
     // The get_memory_map_end_address() a config built with these arguments against `mesh_device` would have, without
-    // building one, so a caller can size a mux to fit L1 before committing to its channel counts.
+    // building one.
     static size_t compute_memory_map_end_address(
         const tt::tt_metal::distributed::MeshDevice& mesh_device,
         uint8_t num_full_size_channels,
@@ -384,6 +384,9 @@ private:
         MemoryRegion buffer_index;
         MemoryRegion full_size_channels;
         MemoryRegion header_only_channels;
+
+        // The end of the last region (header-only channels)
+        size_t get_end_address() const;
     };
 
     // Lays out the mux's L1 regions from `base_l1_address`. The constructor and compute_memory_map_end_address() both
@@ -413,9 +416,6 @@ private:
     size_t buffer_size_bytes_full_size_channel_ = 0;
     size_t buffer_size_bytes_header_only_channel_ = 0;
 
-    size_t full_size_channel_size_bytes_ = 0;
-    size_t header_only_channel_size_bytes_ = 0;
-
     size_t num_full_size_channel_iters_ = default_num_full_size_channel_iters;
     size_t num_iters_between_teardown_checks_ = default_num_iters_between_teardown_checks;
     // The fabric endpoints the mux can connect to, read from the fabric context when the config is built. A channel
@@ -425,18 +425,7 @@ private:
     size_t fabric_tensix_channel_num_buffers_ = 0;
     size_t fabric_endpoint_status_address_ = 0;
 
-    // memory regions
-    MemoryRegion status_region_{};
-    MemoryRegion local_fabric_router_status_region_{};
-    MemoryRegion termination_signal_region_{};
-    MemoryRegion connection_info_region_{};
-    MemoryRegion connection_handshake_region_{};
-    MemoryRegion flow_control_region_{};
-    MemoryRegion buffer_index_region_{};
-    MemoryRegion full_size_channels_region_{};
-    MemoryRegion header_only_channels_region_{};
-
-    size_t memory_map_end_address_;
+    MemoryMap memory_map_{};
 
     // Set by place_in_program_local_l1.
     bool in_program_local_l1_ = false;

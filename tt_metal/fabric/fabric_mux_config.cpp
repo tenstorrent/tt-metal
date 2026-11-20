@@ -66,6 +66,8 @@ size_t FabricMuxConfig::MemoryRegion::get_end_address() const { return base_addr
 
 size_t FabricMuxConfig::MemoryRegion::get_total_size() const { return num_units * unit_size; }
 
+size_t FabricMuxConfig::MemoryMap::get_end_address() const { return header_only_channels.get_end_address(); }
+
 /*
     Channel layout: Each channel consists of buffers/slots
     ┌──────────────────────────┐
@@ -175,7 +177,7 @@ FabricMuxConfig::FabricMuxConfig(
         sizeof(tt::tt_fabric::SenderChannelProducerCursor),
         noc_aligned_address_size_bytes_);
 
-    const MemoryMap memory_map = lay_out_memory_map(
+    memory_map_ = lay_out_memory_map(
         base_l1_address,
         noc_aligned_address_size_bytes_,
         num_full_size_channels_,
@@ -184,29 +186,16 @@ FabricMuxConfig::FabricMuxConfig(
         num_buffers_header_only_channel_,
         buffer_size_bytes_full_size_channel_,
         buffer_size_bytes_header_only_channel_);
-    status_region_ = memory_map.status;
-    local_fabric_router_status_region_ = memory_map.local_fabric_router_status;
-    termination_signal_region_ = memory_map.termination_signal;
-    connection_info_region_ = memory_map.connection_info;
-    connection_handshake_region_ = memory_map.connection_handshake;
-    flow_control_region_ = memory_map.flow_control;
-    buffer_index_region_ = memory_map.buffer_index;
-    full_size_channels_region_ = memory_map.full_size_channels;
-    header_only_channels_region_ = memory_map.header_only_channels;
-    full_size_channel_size_bytes_ = full_size_channels_region_.unit_size;
-    header_only_channel_size_bytes_ = header_only_channels_region_.unit_size;
-    memory_map_end_address_ = header_only_channels_region_.get_end_address();
 
     const tt_metal::HalProgrammableCoreType hal_core_type = get_mux_hal_core_type(core_type_);
     core_type_index_ = hal.get_programmable_core_type_index(hal_core_type);
     const size_t physical_l1_end_address = compute_physical_l1_end_address(hal, hal_core_type);
     const size_t l1_end_address = compute_mux_l1_end_address(physical_l1_end_address, usable_l1_end_address);
 
-    // The memory map ends at the end of the last region (header-only channels)
     TT_FATAL(
-        memory_map_end_address_ <= l1_end_address,
+        get_memory_map_end_address() <= l1_end_address,
         "Memory map end address: {} is greater than L1 end address: {} (physical L1 end: {})",
-        memory_map_end_address_,
+        get_memory_map_end_address(),
         l1_end_address,
         physical_l1_end_address);
 
@@ -235,13 +224,13 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_main_args(
         static_cast<uint32_t>(buffer_size_bytes_full_size_channel_),
         num_header_only_channels_,
         num_buffers_header_only_channel_,
-        static_cast<uint32_t>(status_region_.get_address()),
-        static_cast<uint32_t>(termination_signal_region_.get_address()),
-        static_cast<uint32_t>(connection_info_region_.get_address()),
-        static_cast<uint32_t>(connection_handshake_region_.get_address()),
-        static_cast<uint32_t>(flow_control_region_.get_address()),
-        static_cast<uint32_t>(full_size_channels_region_.get_address()),
-        static_cast<uint32_t>(local_fabric_router_status_region_.get_address()),
+        static_cast<uint32_t>(memory_map_.status.get_address()),
+        static_cast<uint32_t>(memory_map_.termination_signal.get_address()),
+        static_cast<uint32_t>(memory_map_.connection_info.get_address()),
+        static_cast<uint32_t>(memory_map_.connection_handshake.get_address()),
+        static_cast<uint32_t>(memory_map_.flow_control.get_address()),
+        static_cast<uint32_t>(memory_map_.full_size_channels.get_address()),
+        static_cast<uint32_t>(memory_map_.local_fabric_router_status.get_address()),
         static_cast<uint32_t>(fabric_endpoint_status_address_),
         static_cast<uint32_t>(fabric_endpoint_channel_num_buffers),
         static_cast<uint32_t>(num_full_size_channel_iters_),
@@ -367,9 +356,9 @@ size_t FabricMuxConfig::get_buffer_size_bytes(FabricMuxChannelType channel_type)
                                                                    : buffer_size_bytes_header_only_channel_;
 }
 
-size_t FabricMuxConfig::get_status_address() const { return status_region_.get_address(); }
+size_t FabricMuxConfig::get_status_address() const { return memory_map_.status.get_address(); }
 
-size_t FabricMuxConfig::get_termination_signal_address() const { return termination_signal_region_.get_address(); }
+size_t FabricMuxConfig::get_termination_signal_address() const { return memory_map_.termination_signal.get_address(); }
 
 size_t FabricMuxConfig::get_channel_credits_stream_id(FabricMuxChannelType channel_type, uint8_t channel_id) const {
     validate_channel_id(channel_type, channel_id);
@@ -381,32 +370,32 @@ size_t FabricMuxConfig::get_channel_base_address(FabricMuxChannelType channel_ty
     validate_channel_id(channel_type, channel_id);
 
     return channel_type == FabricMuxChannelType::FULL_SIZE_CHANNEL
-               ? full_size_channels_region_.get_address(channel_id)
-               : header_only_channels_region_.get_address(channel_id);
+               ? memory_map_.full_size_channels.get_address(channel_id)
+               : memory_map_.header_only_channels.get_address(channel_id);
 }
 
 size_t FabricMuxConfig::get_connection_info_address(FabricMuxChannelType channel_type, uint8_t channel_id) const {
     validate_channel_id(channel_type, channel_id);
 
-    return connection_info_region_.get_address(get_channel_global_offset(channel_type, channel_id));
+    return memory_map_.connection_info.get_address(get_channel_global_offset(channel_type, channel_id));
 }
 
 size_t FabricMuxConfig::get_connection_handshake_address(FabricMuxChannelType channel_type, uint8_t channel_id) const {
     validate_channel_id(channel_type, channel_id);
 
-    return connection_handshake_region_.get_address(get_channel_global_offset(channel_type, channel_id));
+    return memory_map_.connection_handshake.get_address(get_channel_global_offset(channel_type, channel_id));
 }
 
 size_t FabricMuxConfig::get_flow_control_address(FabricMuxChannelType channel_type, uint8_t channel_id) const {
     validate_channel_id(channel_type, channel_id);
 
-    return flow_control_region_.get_address(get_channel_global_offset(channel_type, channel_id));
+    return memory_map_.flow_control.get_address(get_channel_global_offset(channel_type, channel_id));
 }
 
 size_t FabricMuxConfig::get_buffer_index_address(FabricMuxChannelType channel_type, uint8_t channel_id) const {
     validate_channel_id(channel_type, channel_id);
 
-    return buffer_index_region_.get_address(get_channel_global_offset(channel_type, channel_id));
+    return memory_map_.buffer_index.get_address(get_channel_global_offset(channel_type, channel_id));
 }
 
 void FabricMuxConfig::set_num_full_size_channel_iters(size_t new_val) {
@@ -415,7 +404,7 @@ void FabricMuxConfig::set_num_full_size_channel_iters(size_t new_val) {
     num_full_size_channel_iters_ = new_val;
 }
 
-size_t FabricMuxConfig::get_memory_map_end_address() const { return memory_map_end_address_; }
+size_t FabricMuxConfig::get_memory_map_end_address() const { return memory_map_.get_end_address(); }
 
 size_t FabricMuxConfig::compute_memory_map_end_address(
     const tt::tt_metal::distributed::MeshDevice& mesh_device,
@@ -435,7 +424,7 @@ size_t FabricMuxConfig::compute_memory_map_end_address(
         num_buffers_or_default(num_buffers_header_only_channel),
         buffer_size_bytes_full_size_channel,
         fabric_context.get_fabric_packet_header_size_bytes());
-    return memory_map.header_only_channels.get_end_address();
+    return memory_map.get_end_address();
 }
 
 size_t FabricMuxConfig::compute_l1_end_address(
@@ -511,11 +500,11 @@ uint32_t FabricMuxConfig::validate_program_local_l1_placement() const {
         "Only a worker-core fabric mux can be placed in program-local L1, not a {} mux",
         enchantum::to_string(core_type_));
     TT_FATAL(
-        status_region_.base_address == 0,
+        memory_map_.status.base_address == 0,
         "A fabric mux placed in program-local L1 must be configured with base_l1_address = 0 so its addresses are "
         "offsets into the map, but base_l1_address is {}",
-        status_region_.base_address);
-    return static_cast<uint32_t>(tt::align(memory_map_end_address_, noc_aligned_address_size_bytes_));
+        memory_map_.status.base_address);
+    return static_cast<uint32_t>(tt::align(get_memory_map_end_address(), noc_aligned_address_size_bytes_));
 }
 
 void FabricMuxConfig::place_in_program_local_l1(
@@ -545,10 +534,10 @@ uint32_t FabricMuxConfig::get_l1_base_semaphore_id() const {
 
 std::vector<std::pair<size_t, size_t>> FabricMuxConfig::get_memory_regions_to_clear() const {
     return {
-        {termination_signal_region_.get_address(), termination_signal_region_.get_total_size()},
-        {connection_handshake_region_.get_address(), connection_handshake_region_.get_total_size()},
-        {flow_control_region_.get_address(), flow_control_region_.get_total_size()},
-        {buffer_index_region_.get_address(), buffer_index_region_.get_total_size()}};
+        {memory_map_.termination_signal.get_address(), memory_map_.termination_signal.get_total_size()},
+        {memory_map_.connection_handshake.get_address(), memory_map_.connection_handshake.get_total_size()},
+        {memory_map_.flow_control.get_address(), memory_map_.flow_control.get_total_size()},
+        {memory_map_.buffer_index.get_address(), memory_map_.buffer_index.get_total_size()}};
 }
 
 void FabricMuxConfig::append_default_stream_ids_to_ct_args(std::vector<uint32_t>& ct_args) const {
