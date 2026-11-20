@@ -89,8 +89,9 @@ optimizer state follows. It is applied once per run, where the optimizer is buil
   `training_config.precision` as a dict, whose values may also be `ttnn.DataType.BFLOAT16`/`FLOAT32`). `SFTTrainer`
   applies it after the LoRA wrapping and before it builds the optimizer from a dict or its default; given a ready
   optimizer it applies nothing, and a block passed with one raises. `GRPOTrainer` applies it right after it builds the
-  model, before the weights or a trainer checkpoint load. `None` means no block everywhere, as a config without one:
-  the parameters keep their dtype and no reduce dtype is stored, clearing one stored earlier in the process.
+  model, and under FSDP shards it, before the weights or a trainer checkpoint load. `None` means no block everywhere,
+  as a config without one: the parameters keep their dtype and no reduce dtype is stored, clearing one stored earlier
+  in the process.
 - **C++.** The `nano_gpt` runner and the 3-tier optimizer worker apply it.
 - **Checking.** `ttml.core.validate_precision_config()` (C++ `core::validate_precision_config()`) checks the block
   without applying it. Python's `ttml.common.config.TrainingConfig`, which also exposes the block as `.precision`, and

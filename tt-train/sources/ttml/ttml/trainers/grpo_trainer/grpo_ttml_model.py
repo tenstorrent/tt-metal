@@ -35,11 +35,8 @@ transport accepts it without changes.
 
 from __future__ import annotations
 
-import glob
-import json
 import logging
 import os
-import struct
 from typing import Any, Optional, Tuple
 
 import torch
@@ -48,7 +45,7 @@ import ttnn
 import ttml
 from ttml.checkpointing import load_checkpoint
 from ttml.common.config import DeviceConfig, TransformerConfig
-from ttml.common.utils import _precision_block_as_yaml, apply_precision, build_mesh
+from ttml.common.utils import apply_precision, build_mesh
 from ttml.models import RunnerType, WeightTyingType
 from ttml.models.llama import Llama, LlamaConfig, compute_swiglu_intermediate_size, load_from_safetensors
 from ttml.models.qwen3 import Qwen3, create_qwen3_config_from_hf
@@ -85,34 +82,6 @@ def _reject_old_checkpoint_format(model_source: str) -> None:
                 f"{path} holds ttml parameter names, the old GRPO checkpoint format, which is not loaded. "
                 f"Pass a directory with {CHECKPOINT_FILE}, or a HuggingFace model ID or directory."
             )
-
-
-def _asks_for_fp32_master_weights(precision: Optional[dict]) -> bool:
-    block = _precision_block_as_yaml(precision)
-    return block is not None and block.get("master_dtype") == "float32"
-
-
-def _hf_weights_are_wider_than_bf16(model_source: str) -> bool:
-    """Whether the HF checkpoint of ``model_source`` stores a float tensor wider than 16 bits, read from the
-    safetensors headers alone. A checkpoint without safetensors files counts as wider, since its dtype is unknown."""
-    path = model_source if os.path.isdir(model_source) else _download_hf_repo(model_source)
-    files = sorted(glob.glob(os.path.join(path, "*.safetensors")))
-    for file in files:
-        with open(file, "rb") as f:
-            header = json.loads(f.read(struct.unpack("<Q", f.read(8))[0]))
-        if any(entry.get("dtype") in ("F32", "F64") for name, entry in header.items() if name != "__metadata__"):
-            return True
-    return not files
-
-
-def _converts_after_the_shard(model_source: str, precision: Optional[dict]) -> bool:
-    """For the eager FSDP build, whether the precision block can be applied after the shard instead of before the
-    weights load. Loading into bf16 parameters and widening them later keeps the values only if the source holds nothing
-    wider than bf16. A trainer checkpoint, or an fp32 HF file when the block asks for fp32 master weights, may hold
-    values bf16 can't, so there the conversion comes first, as everywhere else."""
-    if os.path.isfile(os.path.join(model_source, CHECKPOINT_FILE)):
-        return False
-    return not (_asks_for_fp32_master_weights(precision) and _hf_weights_are_wider_than_bf16(model_source))
 
 
 def load_hf_state_dict(model_source: str) -> dict:
@@ -249,26 +218,19 @@ def _build_qwen3(
         "Building ttml Qwen3 model (hidden=%d, layers=%d)", qwen_config.hidden_size, qwen_config.num_hidden_layers
     )
 
+    # One order for every build: shard, apply the precision block, load. Under FSDP the block then converts the shards,
+    # so no device holds the whole model in fp32, and the weights or a trainer checkpoint load into the stored dtype.
     if fsdp_enabled and bool(device_config.lazy_parameter_init):
         with ttml.lazy_init():
             tt_model = Qwen3(qwen_config)
         _fully_shard(tt_model, device_config.fsdp_replicate_params)
         ttml.materialize_module(tt_model)
-        apply_precision(tt_model, precision)  # the shards, before the weights load
-        _load_qwen3_weights(tt_model, model_source, qwen_config, tie, sharded=True)
     else:
         tt_model = Qwen3(qwen_config)
-        # With FSDP, HF weights load into the replicated model, so converting after the shard keeps every device from
-        # holding the whole model in fp32 (see _converts_after_the_shard for when that keeps the values).
-        convert_after_shard = fsdp_enabled and _converts_after_the_shard(model_source, precision)
-        if not convert_after_shard:
-            apply_precision(tt_model, precision)
-        _load_qwen3_weights(tt_model, model_source, qwen_config, tie, sharded=False)
-
         if fsdp_enabled:
             _fully_shard(tt_model, device_config.fsdp_replicate_params)
-        if convert_after_shard:
-            apply_precision(tt_model, precision)
+    apply_precision(tt_model, precision)
+    _load_qwen3_weights(tt_model, model_source, qwen_config, tie, sharded=fsdp_enabled)
 
     return tt_model, tokenizer
 

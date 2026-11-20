@@ -255,9 +255,9 @@ For Qwen3, `setup_ttml_model` opens a **named** mesh via
 model is wrapped with `fully_shard`, the parameters are materialized
 already-sharded, and the HuggingFace weights are then streamed in sharded (the
 full unsharded model is never materialized on one chip). With
-`lazy_parameter_init=False` it instead loads the (still replicated) weights
-first and then wraps with `fully_shard`. Either way, parameters, gradients, and
-optimizer state end up sharded `1/N` across the FSDP axis.
+`lazy_parameter_init=False` it builds the model replicated, wraps it with
+`fully_shard`, and then streams the weights in sharded the same way. Either way,
+parameters, gradients, and optimizer state end up sharded `1/N` across the FSDP axis.
 
 ### TTTRolloutSampler
 
@@ -612,13 +612,12 @@ trainer = GRPOTrainer(..., optimizer_dict=raw["training_config"]["optimizer"], p
 ```
 
 The trainer applies it once, right after it builds the model and before the weights or a trainer checkpoint load, so
-fp32 master weights resume from a checkpoint bit for bit and the optimizer state follows the stored dtype. Qwen3 under
-eager FSDP loads the HF weights into the replicated model and converts after sharding, so no device holds the whole
-model in fp32; that keeps the values when the HF file is bf16. When the file is fp32 and the block asks for fp32 master
-weights, or a trainer checkpoint loads, the conversion comes first. `None` (default) means no block: the parameters
-keep their dtype and no reduce dtype is stored. fp32 master weights (`master_dtype: float32`) need `"type": "AdamW"`,
-because `MorehAdamW` takes bf16 parameters only. `reduce_dtype: float32` works with either optimizer and also adds up
-the micro-batches' gradients in fp32.
+fp32 master weights resume from a checkpoint bit for bit and the optimizer state follows the stored dtype. Under FSDP
+Qwen3 is sharded before that, in the lazy and the eager build alike, so the block converts the shards and no device
+holds the whole model in fp32. `None` (default) means no block: the parameters keep their dtype and no reduce dtype is
+stored. fp32 master weights (`master_dtype: float32`) need `"type": "AdamW"`, because `MorehAdamW` takes bf16
+parameters only. `reduce_dtype: float32` works with either optimizer and also adds up the micro-batches' gradients in
+fp32.
 
 ---
 

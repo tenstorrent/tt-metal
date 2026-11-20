@@ -39,6 +39,7 @@ import queue
 import threading
 from types import SimpleNamespace
 
+import ml_dtypes
 import numpy as np
 import pytest
 import torch
@@ -558,46 +559,6 @@ def test_grpo_trainer_rejects_a_whole_config_as_optimizer_dict(expect_error):
             config=None,
             optimizer_dict=whole_config,
         )
-
-
-def _write_safetensors(directory, stored_dtype: str) -> None:
-    """A one-tensor ``model.safetensors`` whose header says ``stored_dtype`` (the header is all the trainer reads)."""
-    size = {"BF16": 2, "F16": 2, "F32": 4}[stored_dtype]
-    header = json.dumps({"w": {"dtype": stored_dtype, "shape": [2], "data_offsets": [0, 2 * size]}}).encode()
-    with open(directory / "model.safetensors", "wb") as f:
-        f.write(len(header).to_bytes(8, "little") + header + bytes(2 * size))
-
-
-@pytest.mark.parametrize(
-    "stored_dtype, precision, after_the_shard",
-    [
-        ("BF16", FP32_PRECISION, True),
-        ("F16", FP32_PRECISION, True),
-        ("F32", FP32_PRECISION, False),
-        ("F32", {"master_dtype": ttnn.DataType.FLOAT32}, False),
-        ("F32", {"reduce_dtype": "float32"}, True),
-        ("F32", None, True),
-        (None, FP32_PRECISION, False),
-    ],
-)
-def test_eager_fsdp_converts_first_when_fp32_values_would_be_rounded(
-    tmp_path, stored_dtype, precision, after_the_shard
-):
-    """Qwen3's eager FSDP build converts after the shard to save memory, which keeps the values only if the HF file
-    holds nothing wider than bf16. An fp32 file with fp32 master weights asked for, or a directory whose dtype can't be
-    read, is converted before it loads. No device needed."""
-    if stored_dtype is not None:
-        _write_safetensors(tmp_path, stored_dtype)
-    assert grpo_ttml_model._converts_after_the_shard(str(tmp_path), precision) is after_the_shard
-
-
-def test_eager_fsdp_converts_before_a_trainer_checkpoint_loads(tmp_path):
-    """A trainer checkpoint may hold fp32 master weights, so the block is applied before it loads whatever the HF file
-    next to it holds. No device needed."""
-    _write_safetensors(tmp_path, "BF16")
-    assert grpo_ttml_model._converts_after_the_shard(str(tmp_path), FP32_PRECISION)
-    (tmp_path / grpo_ttml_model.CHECKPOINT_FILE).write_bytes(b"")
-    assert not grpo_ttml_model._converts_after_the_shard(str(tmp_path), FP32_PRECISION)
 
 
 @pytest.mark.requires_device
@@ -1626,3 +1587,90 @@ def test_grpo_gradients_match_across_device_counts(fresh_device_mesh, parallelis
     for name, grad in expected.items():
         error = np.linalg.norm(actual[name] - grad) / np.linalg.norm(grad)
         assert error < 2e-2, f"{name}: relative gradient error {error:.3g}"
+
+
+QWEN3_BUILDS = {
+    "one_device": {"mesh_shape": [1, 1]},
+    "fsdp_lazy": {"enable_fsdp": True, "mesh_shape": [1, 2]},
+    "fsdp_eager": {"enable_fsdp": True, "mesh_shape": [1, 2], "lazy_parameter_init": False},
+}
+
+
+def _tiny_fp32_qwen3_checkpoint(directory) -> str:
+    """A two-layer random Qwen3 in HF format, saved in fp32, with Qwen3-0.6B's tokenizer next to it."""
+    from transformers import Qwen3Config, Qwen3ForCausalLM
+
+    torch.manual_seed(0)
+    config = Qwen3Config(
+        vocab_size=256,
+        hidden_size=128,
+        intermediate_size=256,
+        num_hidden_layers=2,
+        num_attention_heads=2,
+        num_key_value_heads=1,
+        head_dim=64,
+        max_position_embeddings=256,
+        tie_word_embeddings=True,
+    )
+    Qwen3ForCausalLM(config).save_pretrained(directory)
+    AutoTokenizer.from_pretrained(QWEN3_MODEL_ID).save_pretrained(directory)
+    return str(directory)
+
+
+def _gathered(model) -> dict:
+    """Every parameter as one host array in its stored dtype, whatever its mesh layout."""
+    return {name: ttml.Sharding.from_tensor(param).gather(param) for name, param in model.parameters().items()}
+
+
+def _assert_same_values(actual: dict, expected: dict) -> None:
+    assert sorted(actual) == sorted(expected)
+    for name, values in expected.items():
+        np.testing.assert_array_equal(actual[name], values, err_msg=name)
+
+
+@pytest.mark.requires_device
+@pytest.mark.parametrize("build", list(QWEN3_BUILDS))
+def test_qwen3_builds_load_and_resume_fp32_master_weights(fresh_device_mesh, tmp_path, gradient_reduce_default, build):
+    """Every Qwen3 build shards, applies the precision block and then loads: one device, FSDP built lazily (the
+    default) and FSDP built eagerly. From an fp32 HF file each gets fp32 master weights with the file's values
+    unrounded, the FSDP builds hold what the one-device build holds, and a trainer checkpoint resumes bit for bit."""
+    hf_dir = _tiny_fp32_qwen3_checkpoint(tmp_path / "hf")
+
+    def setup(device_config, model_source):
+        return grpo_ttml_model.setup_ttml_model(
+            QWEN3_TRANSFORMER_CONFIG, device_config, model_source, precision=FP32_PRECISION
+        )
+
+    def on_fresh_mesh(device_config):
+        mesh = build_mesh(device_config)
+        return fresh_device_mesh(mesh.shape, mesh.axis_names, what=f"Qwen3 with fp32 master weights ({build})")
+
+    one_device_values = None
+    if build != "one_device":
+        one_device = DeviceConfig({"device_config": QWEN3_BUILDS["one_device"]})
+        with on_fresh_mesh(one_device):
+            model, _ = setup(one_device, hf_dir)
+            one_device_values = _gathered(model)
+            del model
+            ttml.autograd.AutoContext.get_instance().reset_graph()
+
+    device_config = DeviceConfig({"device_config": QWEN3_BUILDS[build]})
+    with on_fresh_mesh(device_config):
+        model, tokenizer = setup(device_config, hf_dir)
+        assert _stored_dtypes(model) == {ttnn.DataType.FLOAT32}
+        loaded = _gathered(model)
+        # Rounded to bf16 on the way in, the random weights would all be bf16 values. The norm weights are ones.
+        random_weights = {name: values for name, values in loaded.items() if np.ptp(values) > 0}
+        assert len(random_weights) > len(loaded) // 2
+        for name, values in random_weights.items():
+            assert not np.array_equal(values, values.astype(ml_dtypes.bfloat16).astype(np.float32)), name
+        if one_device_values is not None:
+            _assert_same_values(loaded, one_device_values)
+
+        save_checkpoint(model, 1, str(tmp_path), tokenizer=tokenizer, model_source=hf_dir)
+        del model
+        resumed, _ = setup(device_config, str(tmp_path / "checkpoints" / "grpo_step_1"))
+        assert _stored_dtypes(resumed) == {ttnn.DataType.FLOAT32}
+        _assert_same_values(_gathered(resumed), loaded)
+        del resumed
+        ttml.autograd.AutoContext.get_instance().reset_graph()
