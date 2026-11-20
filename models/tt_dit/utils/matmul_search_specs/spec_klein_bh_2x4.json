@@ -1,0 +1,133 @@
+{
+ "arch": "blackhole",
+ "grid": [
+  11,
+  10
+ ],
+ "variables": {
+  "M": {
+   "start": 2048,
+   "stop": 16384,
+   "step": 32
+  }
+ },
+ "constants": {
+  "T": 256
+ },
+ "matmuls": [
+  {
+   "name": "transformer_blocks.*.attn.to_add_out + transformer_blocks.*.attn.to_out",
+   "K": 3072,
+   "N": 768,
+   "op": "addcmul",
+   "calls": [
+    [
+     "M",
+     5
+    ],
+    [
+     "T",
+     5
+    ]
+   ]
+  },
+  {
+   "name": "x_embedder",
+   "K": 128,
+   "N": 768,
+   "calls": [
+    [
+     "M",
+     1
+    ]
+   ]
+  },
+  {
+   "name": "transformer_blocks.*.ff.ff2 + transformer_blocks.*.ff_context.ff2",
+   "K": 2304,
+   "N": 3072,
+   "calls": [
+    [
+     "M",
+     5
+    ],
+    [
+     "T",
+     5
+    ]
+   ]
+  },
+  {
+   "name": "proj_out",
+   "K": 3072,
+   "N": 128,
+   "calls": [
+    [
+     "M",
+     1
+    ]
+   ]
+  },
+  {
+   "name": "single_transformer_blocks.*.proj_out",
+   "K": 3072,
+   "N": 3072,
+   "concat": [
+    768,
+    2304
+   ],
+   "calls": [
+    [
+     "M",
+     1
+    ],
+    [
+     "M + T",
+     19
+    ]
+   ]
+  },
+  {
+   "name": "single_transformer_blocks.*.proj_mlp + transformer_blocks.*.ff.ff1 + transformer_blocks.*.ff_context.ff1",
+   "K": 3072,
+   "N": 4608,
+   "fuse_swiglu": true,
+   "calls": [
+    [
+     "M",
+     6
+    ],
+    [
+     "M + T",
+     19
+    ],
+    [
+     "T",
+     5
+    ]
+   ]
+  },
+  {
+   "name": "single_transformer_blocks.*.attn.to_qkv + transformer_blocks.*.attn.add_qkv_proj + transformer_blocks.*.attn.to_qkv",
+   "K": 3072,
+   "N": 2304,
+   "op": "split",
+   "math_approx_mode": true,
+   "calls": [
+    [
+     "M",
+     5
+    ],
+    [
+     "M + T",
+     20
+    ],
+    [
+     "T",
+     5
+    ]
+   ]
+  }
+ ],
+ "l1_limit": 1497344
+}
