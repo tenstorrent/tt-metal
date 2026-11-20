@@ -299,6 +299,10 @@ push_current_command_queue_id_for_thread = ttnn._ttnn.core.push_current_command_
 pop_current_command_queue_id_for_thread = ttnn._ttnn.core.pop_current_command_queue_id_for_thread
 get_current_command_queue_id_for_thread = ttnn._ttnn.core.get_current_command_queue_id_for_thread
 
+push_current_sub_device_id_for_thread = ttnn._ttnn.core.push_current_sub_device_id_for_thread
+pop_current_sub_device_id_for_thread = ttnn._ttnn.core.pop_current_sub_device_id_for_thread
+get_current_sub_device_id_for_thread = ttnn._ttnn.core.get_current_sub_device_id_for_thread
+
 
 @contextmanager
 def register_pre_operation_hook(hook):
@@ -355,6 +359,46 @@ def command_queue(cq_id: int):
                 f"Restoring to original value {cq_id}."
             )
         pop_current_command_queue_id_for_thread()
+
+
+@contextmanager
+def sub_device(sub_device_id):
+    """Experimental: run the TTNN operations launched inside this context on one sub-device.
+
+    While the context is active, the device pretends to be just the sub-device you picked.
+    ``compute_with_storage_grid_size()`` returns a grid only large enough to cover that sub-device's cores, and the
+    device lists it as its only sub-device.
+
+    Most operations use one of those to decide which cores to run on, so they end up on your sub-device without any
+    changes. An operation that picks its cores some other way is not affected by the context.
+
+    There is no list of operations that work. If an operation would put a kernel, semaphore or buffer on another
+    sub-device, it raises when it is launched.
+
+    This is a best-effort helper, not a guarantee. Read the known limitations in
+    ``tech_reports/SubDevices/SubDevices.md`` (section 1.5) before using it.
+
+    Args:
+        sub_device_id (ttnn.SubDeviceId or int): a sub-device of the loaded sub-device manager.
+
+    Example::
+
+        with ttnn.experimental.sub_device(0):
+            y = ttnn.matmul(a, b)  # runs on sub-device 0, or raises
+    """
+    if isinstance(sub_device_id, int):
+        sub_device_id = ttnn.SubDeviceId(sub_device_id)
+    push_current_sub_device_id_for_thread(sub_device_id)
+    try:
+        yield
+    finally:
+        current = get_current_sub_device_id_for_thread()
+        if current != sub_device_id:
+            logger.warning(
+                f"Leaving sub_device({sub_device_id}), but the innermost open scope is {current}. "
+                f"Some code opened a scope inside this one and never closed it, so it is being closed now."
+            )
+        pop_current_sub_device_id_for_thread()
 
 
 @contextmanager

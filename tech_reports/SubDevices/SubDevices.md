@@ -8,6 +8,9 @@
 - [1. Sub-Devices](#1-sub-devices)
   - [1.1 Sub-Devices and Sub-Device Managers](#11-sub-devices-and-sub-device-managers)
   - [1.2 Allocators](#12-allocators)
+  - [1.3 Programs](#13-programs)
+  - [1.4 Synchronization](#14-synchronization)
+  - [1.5 Sub-Device Scope (experimental)](#15-sub-device-scope-experimental)
 - [2. Global Semaphores](#2-global-semaphores)
 - [3. Global Circular Buffers](#3-global-circular-buffers)
   - [3.1 Host APIs](#31-host-apis)
@@ -121,6 +124,44 @@ The following are some examples of the different python level APIs that take in 
 * `ttnn.record_event(..., sub_device_ids=[sub_device_id_0, sub_device_id_1])`
 
   This will stall the device waiting for completion of the specified sub-device's programs before recording that the event has occurred. Not specifying any sub-device ids means we will stall waiting for all sub-devices set by `set_sub_device_stall_group` to complete.
+
+### 1.5 Sub-Device Scope (experimental)
+
+A sub-device scope makes the TTNN operations you launch run on one sub-device, without changing the operations themselves.
+
+```python
+with ttnn.experimental.sub_device(0):
+    y = model(x)  # each operation launched here runs on sub-device 0, or raises
+```
+
+In C++, create a `tt::tt_metal::experimental::SubDeviceScope scope(SubDeviceId{0});` from `tt-metalium/experimental/sub_device_scope.hpp`.
+
+**This is a best-effort helper, not a guarantee about where operations run.** It lets two sub-devices run different work at the same time without changing every operation. It may change or be removed.
+
+#### How it works
+
+Operations do not have fixed positions. Each one asks the device where it may run. Most call `compute_with_storage_grid_size()` and fill that grid starting at (0, 0). A few (unary, binary, ternary and the collectives) call `get_sub_device_ids()` and use the cores of the first sub-device in the list.
+
+While a scope is open, the device pretends to be just the sub-device you picked:
+
+- `compute_with_storage_grid_size()` returns a grid only large enough to cover that sub-device's Tensix cores;
+- `get_sub_device_ids()` returns only its id.
+
+So an operation that uses either call ends up on your sub-device.
+
+There is also a safety net. When a program is enqueued inside a scope, or recorded into a command list, it is checked before it is compiled. If it has a kernel, semaphore, circular buffer or dataflow buffer on another sub-device's cores, it is rejected with an error. This check is the only thing the scope guarantees.
+
+#### Known limitations
+
+Fixing these is out of scope for this helper.
+
+1. **You only find out whether an operation works by running it.** No operation declares that it supports scopes, and none has been audited. An operation that does not work raises when it is launched. If it is a composite operation, some of its steps may already have run by then.
+2. **General compute only works on a sub-device that is a rectangle starting at (0, 0).** For any other sub-device, the grid that covers it also covers cores that belong to someone else. Operations that fill the grid will then be rejected.
+3. **Some operations ignore the scope.** If an operation takes its cores from an argument, from the shard layout of an input, or from the DRAM-bank worker assignment, the scope has no effect on it. It is rejected unless those cores happen to be on your sub-device.
+4. **The check only looks at kernels, semaphores and buffers.** It does not look at what kernels write over the NoC. It does not look at where output tensors are stored either, and an interleaved L1 tensor uses cores of every sub-device.
+5. **Nothing is ordered between sub-devices.** Work on one sub-device does not wait for work on another. If one sub-device reads what another wrote, or reuses memory another one freed, you have to synchronize them yourself.
+6. **A scope only covers operations launched from its own thread.** Other threads are not affected. A trace or command list that was recorded outside the scope runs where it was recorded, even when replayed inside it. Workloads on service cores are not checked.
+7. **Inside a scope, the compute grid only describes your sub-device.** Anything you size from it will be too small for the whole device. For example, a global semaphore that every worker core needs must be created before the scope is opened. A device report captured inside a scope will also show the smaller grid.
 
 ## 2. Global Semaphores
 

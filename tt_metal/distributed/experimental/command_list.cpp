@@ -41,6 +41,7 @@
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
+#include "tt_metal/impl/sub_device/sub_device_scope.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "tt_metal/impl/trace/trace_node.hpp"
 #include <internal/service/service_core_manager.hpp>
@@ -1109,6 +1110,8 @@ void CommandListBuilderImpl::add(
         mesh_device.get_active_sub_device_manager_id() == sub_device_manager_id,
         "The active sub-device manager changed while recording a command list");
     validate_no_service_cores(workload, mesh_device);
+    validate_sub_device_scope(workload.impl(), &mesh_device);
+    const SuspendSubDeviceScope whole_device;
 
     auto binary_buffer = workload.impl().prepare_for_command_list(binary_upload_cq);
 

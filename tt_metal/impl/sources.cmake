@@ -11,6 +11,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_manager_tracker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_manager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_scope.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/context/metal_context.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/context/metal_env.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/context/simulator_termination.cpp

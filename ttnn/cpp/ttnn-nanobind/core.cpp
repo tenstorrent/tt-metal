@@ -25,6 +25,7 @@
 #include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
 #include <tt-metalium/experimental/lightmetal/lightmetal_replay.hpp>
 #include <tt-metalium/experimental/lightmetal/lightmetal_api.hpp>
+#include <tt-metalium/experimental/sub_device_scope.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tile.hpp>
 #include <enchantum/enchantum.hpp>
@@ -208,6 +209,13 @@ void py_module(nb::module_& mod) {
     mod.def("get_current_command_queue_id_for_thread", &ttnn::core::get_current_command_queue_id_for_thread);
     mod.def("push_current_command_queue_id_for_thread", &ttnn::core::push_current_command_queue_id_for_thread);
     mod.def("pop_current_command_queue_id_for_thread", &ttnn::core::pop_current_command_queue_id_for_thread);
+
+    mod.def(
+        "push_current_sub_device_id_for_thread",
+        &tt::tt_metal::experimental::PushCurrentSubDeviceIdForThread,
+        nb::arg("sub_device_id"));
+    mod.def("pop_current_sub_device_id_for_thread", &tt::tt_metal::experimental::PopCurrentSubDeviceIdForThread);
+    mod.def("get_current_sub_device_id_for_thread", &tt::tt_metal::experimental::GetCurrentSubDeviceIdForThread);
 }
 
 }  // namespace ttnn::core

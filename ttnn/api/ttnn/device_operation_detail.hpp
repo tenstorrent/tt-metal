@@ -27,6 +27,10 @@ class MeshDevice;
 class MeshWorkload;
 }  // namespace tt::tt_metal::distributed
 
+namespace tt::tt_metal::program_cache::detail {
+struct ProgramCacheKey;
+}  // namespace tt::tt_metal::program_cache::detail
+
 namespace ttnn::device_operation::detail {
 
 /**
@@ -84,6 +88,12 @@ std::vector<tt::tt_metal::distributed::MeshCoordinate> extract_tensor_coordinate
  * therefore still drop the per-core bit unnoticed; tracked in #51482.
  */
 void validate_no_per_core_allocation(const ttnn::Tensor& tensor, std::string_view operation_name, size_t input_index);
+
+// Returns `key` with the cores of the current sub-device scope added to it. A program built inside a scope is laid
+// out for that sub-device's cores, so it must not be reused outside the scope or for a different sub-device. Returns
+// `key` unchanged when the thread is not in a scope or no sub-device manager is loaded.
+tt::tt_metal::program_cache::detail::ProgramCacheKey cache_key_with_scoped_cores(
+    tt::tt_metal::program_cache::detail::ProgramCacheKey key, const tt::tt_metal::distributed::MeshDevice& mesh_device);
 
 // True while a ttnn::experimental::CommandListBuilder records on the calling thread (ttnn/command_list.hpp).
 bool is_recording_command_list();

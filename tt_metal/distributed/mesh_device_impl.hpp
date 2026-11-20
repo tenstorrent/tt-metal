@@ -349,6 +349,8 @@ public:
     std::vector<CoreCoord> get_ethernet_sockets(ChipId connected_chip_id) const override;
     bool is_inactive_ethernet_core(CoreCoord logical_core) const override;
     CoreCoord compute_with_storage_grid_size() const override;
+    // Returns the smallest grid, starting at (0, 0), that covers all of the sub-device's Tensix cores.
+    CoreCoord sub_device_tensix_extent(SubDeviceId sub_device_id) const;
     CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     const std::unique_ptr<Allocator>& allocator() const override;

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <cstdint>
@@ -14,9 +15,13 @@
 #include <memory>
 #include <numeric>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
+
+#include <fmt/format.h>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
@@ -24,6 +29,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/experimental/sub_device_scope.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
@@ -40,6 +46,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
+#include "tt_metal/impl/dataflow_buffer/dataflow_buffer.hpp"
 #include "tt_metal/impl/program/sub_device_setup_batch.hpp"
 
 namespace tt::tt_metal::distributed {
@@ -416,6 +423,221 @@ TEST_F(MeshSubDeviceTestSuite, SubDeviceBasicProgramsReuse) {
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_mesh_workload, false);
         mesh_device_->reset_sub_device_stall_group();
     }
+    Finish(mesh_device_->mesh_command_queue());
+}
+
+TEST_F(MeshSubDeviceTestSuite, SubDeviceScopeDescribesTheScopedSubDevice) {
+    const CoreCoord device_grid = mesh_device_->compute_with_storage_grid_size();
+    const std::vector<SubDeviceId> first{SubDeviceId{0}};
+    const std::vector<SubDeviceId> second{SubDeviceId{1}};
+
+    // With no manager loaded, sub-device 0 is the whole grid, so the scope changes nothing.
+    {
+        experimental::SubDeviceScope scope(SubDeviceId{0});
+        EXPECT_EQ(mesh_device_->compute_with_storage_grid_size(), device_grid);
+        EXPECT_EQ(mesh_device_->get_sub_device_ids(), first);
+    }
+
+    SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
+    SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
+    auto sub_device_manager = mesh_device_->create_sub_device_manager({sub_device_1, sub_device_2}, 3200);
+    mesh_device_->load_sub_device_manager(sub_device_manager);
+
+    EXPECT_EQ(experimental::GetCurrentSubDeviceIdForThread(), std::nullopt);
+    EXPECT_EQ(mesh_device_->compute_with_storage_grid_size(), device_grid);
+    EXPECT_EQ(mesh_device_->get_sub_device_ids().size(), 2u);
+    {
+        experimental::SubDeviceScope scope(SubDeviceId{0});
+        EXPECT_EQ(experimental::GetCurrentSubDeviceIdForThread(), SubDeviceId{0});
+        EXPECT_EQ(mesh_device_->compute_with_storage_grid_size(), CoreCoord(3, 3));
+        const auto& listed = mesh_device_->get_sub_device_ids();
+        EXPECT_EQ(listed, first);
+        {
+            // Sub-device 1 does not start at (0, 0), so the grid that covers it is bigger than it is.
+            experimental::SubDeviceScope nested(SubDeviceId{1});
+            EXPECT_EQ(mesh_device_->compute_with_storage_grid_size(), CoreCoord(5, 5));
+            EXPECT_EQ(mesh_device_->get_sub_device_ids(), second);
+            // The list from the outer scope must still be usable while the nested scope is open.
+            EXPECT_EQ(listed, first);
+        }
+        EXPECT_EQ(mesh_device_->get_sub_device_ids(), first);
+        // Asking about a specific sub-device still works as usual.
+        EXPECT_EQ(mesh_device_->num_sub_devices(), 2u);
+        EXPECT_EQ(mesh_device_->num_worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{1}), 2u);
+    }
+    {
+        // The manager has no sub-device 2, so the first call that needs it fails.
+        experimental::SubDeviceScope scope(SubDeviceId{2});
+        const auto refused = ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("is for sub-device 2, but the loaded sub-device manager only has 2 sub-device(s)"));
+        EXPECT_THAT([&] { mesh_device_->compute_with_storage_grid_size(); }, refused);
+        EXPECT_THAT([&] { mesh_device_->get_sub_device_ids(); }, refused);
+    }
+    EXPECT_EQ(experimental::GetCurrentSubDeviceIdForThread(), std::nullopt);
+    EXPECT_EQ(mesh_device_->compute_with_storage_grid_size(), device_grid);
+    EXPECT_ANY_THROW(experimental::PopCurrentSubDeviceIdForThread());
+}
+
+TEST_F(MeshSubDeviceTestSuite, SubDeviceScopeRefusesAProgramOnAnotherSubDevice) {
+    const CoreRangeSet first_cores(CoreRange({0, 0}, {2, 2}));
+    const CoreRangeSet second_cores(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})});
+    auto sub_device_manager = mesh_device_->create_sub_device_manager(
+        {SubDevice(std::array{first_cores}), SubDevice(std::array{second_cores})}, 3200);
+    mesh_device_->load_sub_device_manager(sub_device_manager);
+
+    const auto workload_on = [&](const CoreRangeSet& cores) {
+        Program program = CreateProgram(*mesh_device_);
+        CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
+            cores,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        MeshWorkload workload;
+        workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program));
+        return workload;
+    };
+    auto on_first = workload_on(first_cores);
+    auto on_second = workload_on(second_cores);
+    auto on_both = workload_on(first_cores.merge(second_cores));
+    auto& cq = mesh_device_->mesh_command_queue();
+    const auto refused = [](std::string_view scoped, std::string_view ran_on) {
+        return ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr(fmt::format("cannot run inside the scope for sub-device {}", scoped)),
+            ::testing::HasSubstr("(kernels: blank)"),
+            ::testing::HasSubstr(fmt::format("belong to sub-device(s) {},", ran_on))));
+    };
+    {
+        experimental::SubDeviceScope scope(SubDeviceId{0});
+        EnqueueMeshWorkload(cq, on_first, false);
+        EXPECT_THAT([&] { EnqueueMeshWorkload(cq, on_second, false); }, refused("0", "1"));
+        EXPECT_THAT([&] { EnqueueMeshWorkload(cq, on_both, false); }, refused("0", "0, 1"));
+        {
+            // The workload rejected above was never compiled, so it can still run here.
+            experimental::SubDeviceScope nested(SubDeviceId{1});
+            EnqueueMeshWorkload(cq, on_second, false);
+            EXPECT_THAT([&] { EnqueueMeshWorkload(cq, on_first, false); }, refused("1", "0"));
+        }
+        EnqueueMeshWorkload(cq, on_first, false);
+    }
+    // With no scope open, both workloads are accepted.
+    EnqueueMeshWorkload(cq, on_first, false);
+    EnqueueMeshWorkload(cq, on_second, false);
+    Finish(cq);
+}
+
+// Checks that a program is rejected if one of its semaphores or buffers sits on another sub-device, even when all of
+// its kernels are in the right place. Cores that belong to no sub-device are allowed.
+TEST_F(MeshSubDeviceTestSuite, SubDeviceScopeRefusesObjectsOnAnotherSubDevice) {
+    // Sub-device 0 is (0, 0)-(2, 2), sub-device 1 is (3, 3)-(4, 4), and (5, 5) is in neither.
+    auto sub_device_manager = mesh_device_->create_sub_device_manager(
+        {SubDevice(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))}),
+         SubDevice(std::array{CoreRangeSet(CoreRange({3, 3}, {4, 4}))})},
+        3200);
+    mesh_device_->load_sub_device_manager(sub_device_manager);
+    const CoreRangeSet into_sub_device_1(std::vector{CoreRange({0, 0}, {0, 0}), CoreRange({3, 3}, {3, 3})});
+    const CoreRangeSet within_sub_device_0(CoreRange({0, 0}, {2, 2}));
+    const CoreRangeSet into_no_sub_device(std::vector{CoreRange({0, 0}, {0, 0}), CoreRange({5, 5}, {5, 5})});
+
+    // Builds a workload with a blank kernel on core (0, 0) and one object placed on `object_cores`.
+    const std::string blank = "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp";
+    const CoreRange kernel_core({0, 0}, {0, 0});
+    const auto workload_with = [&](std::string_view object, const CoreRangeSet& object_cores) {
+        Program program = CreateProgram(*mesh_device_);
+        const KernelHandle kernel = CreateKernel(
+            program,
+            blank,
+            kernel_core,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        if (object == "semaphore") {
+            CreateSemaphore(program, object_cores, 0);
+        } else if (object == "circular buffer") {
+            CreateCircularBuffer(
+                program,
+                object_cores,
+                CircularBufferConfig(2048, {{::tt::CBIndex::c_0, ::tt::DataFormat::Float16_b}})
+                    .set_page_size(::tt::CBIndex::c_0, 2048));
+        } else {
+            const KernelHandle consumer = CreateKernel(
+                program,
+                blank,
+                kernel_core,
+                DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+            const uint32_t dataflow_buffer = experimental::dfb::CreateDataflowBuffer(
+                program, object_cores, experimental::dfb::DataflowBufferConfig{.entry_size = 1024, .num_entries = 2});
+            experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program, dataflow_buffer, kernel, consumer);
+        }
+        MeshWorkload workload;
+        workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program));
+        return workload;
+    };
+
+    std::vector<std::string_view> objects = {"semaphore", "circular buffer"};
+    if (mesh_device_->arch() != ::tt::ARCH::QUASAR) {  // not dispatched this way on Quasar yet
+        objects.push_back("dataflow buffer");
+    }
+    auto& cq = mesh_device_->mesh_command_queue();
+    for (const auto object : objects) {
+        SCOPED_TRACE(object);
+        auto stray = workload_with(object, into_sub_device_1);
+        auto within = workload_with(object, within_sub_device_0);
+        auto unowned = workload_with(object, into_no_sub_device);
+        {
+            experimental::SubDeviceScope scope(SubDeviceId{0});
+            EXPECT_THAT(
+                [&] { EnqueueMeshWorkload(cq, stray, false); },
+                ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+                    ::testing::HasSubstr("(kernels: blank)"),
+                    ::testing::HasSubstr(object),
+                    ::testing::HasSubstr("cannot run inside the scope for sub-device 0"))));
+            EnqueueMeshWorkload(cq, within, false);
+            EnqueueMeshWorkload(cq, unowned, false);
+        }
+        // With no scope open, the same workload is accepted.
+        EnqueueMeshWorkload(cq, stray, false);
+        Finish(cq);
+    }
+
+    // Load a different manager, with sub-device 1 at (5, 5). Now (3, 3) is free and (5, 5) is off limits.
+    auto moved_manager = mesh_device_->create_sub_device_manager(
+        {SubDevice(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))}),
+         SubDevice(std::array{CoreRangeSet(CoreRange({5, 5}, {5, 5}))})},
+        3200);
+    mesh_device_->load_sub_device_manager(moved_manager);
+    auto was_stray = workload_with("semaphore", into_sub_device_1);
+    auto was_unowned = workload_with("semaphore", into_no_sub_device);
+    experimental::SubDeviceScope scope(SubDeviceId{0});
+    EnqueueMeshWorkload(cq, was_stray, false);
+    EXPECT_THAT(
+        [&] { EnqueueMeshWorkload(cq, was_unowned, false); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("and {[5-5 - 5-5]} of those belong to another sub-device")));
+    Finish(cq);
+}
+
+TEST_F(MeshSubDeviceTestSuite, SubDeviceScopeLeavesMetalTheDeviceGrid) {
+    const CoreCoord device_grid = mesh_device_->compute_with_storage_grid_size();
+    const CoreRangeSet corner(CoreRange({0, 0}, {1, 1}));
+    const CoreRangeSet whole_grid(CoreRange({0, 0}, {device_grid.x - 1, device_grid.y - 1}));
+    auto corner_manager = mesh_device_->create_sub_device_manager({SubDevice(std::array{corner})}, 3200);
+    mesh_device_->load_sub_device_manager(corner_manager);
+
+    experimental::SubDeviceScope scope(SubDeviceId{0});
+    ASSERT_EQ(mesh_device_->compute_with_storage_grid_size(), CoreCoord(2, 2));
+
+    // The scope only covers a 2x2 corner, but Metal must still accept a manager for the whole grid and run on it.
+    auto whole_grid_manager = mesh_device_->create_sub_device_manager({SubDevice(std::array{whole_grid})}, 3200);
+    mesh_device_->load_sub_device_manager(whole_grid_manager);
+    EXPECT_EQ(mesh_device_->compute_with_storage_grid_size(), device_grid);
+
+    Program program = CreateProgram(*mesh_device_);
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
+        whole_grid,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    MeshWorkload workload;
+    workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program));
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
     Finish(mesh_device_->mesh_command_queue());
 }
 }  // namespace tt::tt_metal

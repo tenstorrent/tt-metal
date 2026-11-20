@@ -68,6 +68,7 @@
 #include "debug/inspector/inspector.hpp"
 #include "sub_device/sub_device_manager.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
+#include "sub_device/sub_device_scope.hpp"
 #include <map>
 #include <set>
 #include "llrt/metal_soc_descriptor.hpp"
@@ -411,6 +412,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     const DispatchCoreConfig& dispatch_core_config,
     ttsl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
+    const SuspendSubDeviceScope whole_device;
     return MeshDeviceImpl::create(
         config,
         l1_small_size,
@@ -562,6 +564,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     const DispatchCoreConfig& dispatch_core_config,
     ttsl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
+    const SuspendSubDeviceScope whole_device;
     return MeshDeviceImpl::create_unit_meshes(
         device_ids,
         l1_small_size,
@@ -671,6 +674,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create_unit_mesh(
     const DispatchCoreConfig& dispatch_core_config,
     ttsl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
+    const SuspendSubDeviceScope whole_device;
     return MeshDeviceImpl::create_unit_mesh(
         device_id,
         l1_small_size,
@@ -757,6 +761,7 @@ private:
 
 std::shared_ptr<MeshDevice> MeshDevice::open_mesh_device(
     MetalEnv& env, const MeshDeviceConfig& config, const OpenMeshDeviceOptions& options) {
+    const SuspendSubDeviceScope whole_device;
     // Associate a context ID for the mesh device's dependencies to easily access the MetalContext::instance(contextId)
     // TODO: Remove this and directly pass in the MetalEnv reference
     TransitContextGuard context_guard(env);
@@ -778,6 +783,7 @@ std::shared_ptr<MeshDevice> MeshDevice::open_mesh_device(
 
 std::shared_ptr<MeshDevice> MeshDevice::open_unit_mesh(
     MetalEnv& env, ChipId device_id, const OpenMeshDeviceOptions& options) {
+    const SuspendSubDeviceScope whole_device;
     TransitContextGuard context_guard(env);
     auto mesh_device = MeshDeviceImpl::create_unit_mesh(
         context_guard.context_id(),
@@ -797,6 +803,7 @@ std::shared_ptr<MeshDevice> MeshDevice::open_unit_mesh(
 
 std::map<ChipId, std::shared_ptr<MeshDevice>> MeshDevice::open_unit_meshes(
     MetalEnv& env, ttsl::Span<const ChipId> device_ids, const OpenMeshDeviceOptions& options) {
+    const SuspendSubDeviceScope whole_device;
     TransitContextGuard context_guard(env);
     auto result = MeshDeviceImpl::create_unit_meshes(
         context_guard.context_id(),
@@ -1630,6 +1637,23 @@ std::vector<CoreCoord> MeshDeviceImpl::get_ethernet_sockets(ChipId /*connected_c
     TT_THROW("get_ethernet_sockets() is not supported on MeshDevice - use individual devices instead");
 }
 
+CoreCoord MeshDeviceImpl::sub_device_tensix_extent(SubDeviceId sub_device_id) const {
+    validate_sub_device_manager_tracker();
+    validate_scoped_sub_device(*this, sub_device_id);
+    const auto& cores = sub_device_manager_tracker_->get_active_sub_device_manager()
+                            ->sub_device(sub_device_id)
+                            .impl()
+                            ->cores(HalProgrammableCoreType::TENSIX);
+    TT_FATAL(
+        !cores.empty(), "A scope cannot be used with sub-device {} because it has no Tensix cores", *sub_device_id);
+    CoreCoord extent{0, 0};
+    for (const auto& range : cores.ranges()) {
+        extent.x = std::max(extent.x, range.end_coord.x + 1);
+        extent.y = std::max(extent.y, range.end_coord.y + 1);
+    }
+    return extent;
+}
+
 // Core and worker management methods (These are OK)
 CoreRangeSet MeshDeviceImpl::worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const {
     validate_sub_device_manager_tracker();
@@ -2261,7 +2285,12 @@ std::vector<CoreCoord> MeshDevice::get_ethernet_sockets(ChipId connected_chip_id
 bool MeshDevice::is_inactive_ethernet_core(CoreCoord logical_core) const {
     return pimpl_->is_inactive_ethernet_core(logical_core);
 }
-CoreCoord MeshDevice::compute_with_storage_grid_size() const { return pimpl_->compute_with_storage_grid_size(); }
+CoreCoord MeshDevice::compute_with_storage_grid_size() const {
+    if (const auto* scoped = scoped_sub_device_ids_for_thread()) [[unlikely]] {
+        return pimpl_->sub_device_tensix_extent(scoped->front());
+    }
+    return pimpl_->compute_with_storage_grid_size();
+}
 CoreRangeSet MeshDevice::worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const {
     return pimpl_->worker_cores(core_type, sub_device_id);
 }
@@ -2337,10 +2366,14 @@ bool MeshDevice::initialize(
     size_t worker_l1_size,
     ttsl::Span<const std::uint32_t> l1_bank_remap,
     bool minimal) {
+    const SuspendSubDeviceScope whole_device;
     return pimpl_->initialize_impl(
         this, num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap, minimal);
 }
-bool MeshDevice::close() { return pimpl_->close_impl(this); }
+bool MeshDevice::close() {
+    const SuspendSubDeviceScope whole_device;
+    return pimpl_->close_impl(this);
+}
 void MeshDevice::enable_program_cache() { pimpl_->enable_program_cache(); }
 void MeshDevice::clear_program_cache() { pimpl_->clear_program_cache(); }
 void MeshDevice::disable_and_clear_program_cache() { pimpl_->disable_and_clear_program_cache(); }
@@ -2360,23 +2393,36 @@ SubDeviceManagerId MeshDevice::get_default_sub_device_manager_id() const {
 }
 SubDeviceManagerId MeshDevice::create_sub_device_manager(
     std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) {
+    const SuspendSubDeviceScope whole_device;
     return pimpl_->create_sub_device_manager(sub_devices, local_l1_size);
 }
 SubDeviceManagerId MeshDevice::create_sub_device_manager(
     ttsl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
+    const SuspendSubDeviceScope whole_device;
     return pimpl_->create_sub_device_manager(sub_devices, local_l1_size);
 }
 void MeshDevice::remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
+    const SuspendSubDeviceScope whole_device;
     pimpl_->remove_sub_device_manager(sub_device_manager_id);
 }
 void MeshDevice::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
+    const SuspendSubDeviceScope whole_device;
     pimpl_->load_sub_device_manager(sub_device_manager_id);
 }
-void MeshDevice::clear_loaded_sub_device_manager() { pimpl_->clear_loaded_sub_device_manager(); }
+void MeshDevice::clear_loaded_sub_device_manager() {
+    const SuspendSubDeviceScope whole_device;
+    pimpl_->clear_loaded_sub_device_manager();
+}
 CoreCoord MeshDevice::virtual_program_dispatch_core(uint8_t cq_id) const {
     return pimpl_->virtual_program_dispatch_core(cq_id);
 }
-const std::vector<SubDeviceId>& MeshDevice::get_sub_device_ids() const { return pimpl_->get_sub_device_ids(); }
+const std::vector<SubDeviceId>& MeshDevice::get_sub_device_ids() const {
+    if (const auto* scoped = scoped_sub_device_ids_for_thread()) [[unlikely]] {
+        validate_scoped_sub_device(*pimpl_, scoped->front());
+        return *scoped;
+    }
+    return pimpl_->get_sub_device_ids();
+}
 const std::vector<SubDeviceId>& MeshDevice::get_sub_device_stall_group() const {
     return pimpl_->get_sub_device_stall_group();
 }
@@ -2401,19 +2447,27 @@ size_t MeshDevice::num_cols() const { return pimpl_->num_cols(); }
 IDevice* MeshDevice::get_device(size_t row_idx, size_t col_idx) const { return pimpl_->get_device(row_idx, col_idx); }
 bool MeshDevice::is_local(const MeshCoordinate& coord) const { return pimpl_->is_local(coord); }
 const MeshShape& MeshDevice::shape() const { return pimpl_->shape(); }
-void MeshDevice::reshape(const MeshShape& new_shape) { pimpl_->reshape(new_shape); }
+void MeshDevice::reshape(const MeshShape& new_shape) {
+    const SuspendSubDeviceScope whole_device;
+    pimpl_->reshape(new_shape);
+}
 const MeshDeviceView& MeshDevice::get_view() const { return pimpl_->get_view(); }
 uint32_t MeshDevice::get_system_mesh_id() const { return *get_view().mesh_id(); }
 std::string MeshDevice::to_string() const { return pimpl_->to_string(); }
 bool MeshDevice::is_parent_mesh() const { return pimpl_->is_parent_mesh(); }
 const std::shared_ptr<MeshDevice>& MeshDevice::get_parent_mesh() const { return pimpl_->get_parent_mesh(); }
 std::vector<std::shared_ptr<MeshDevice>> MeshDevice::get_submeshes() const { return pimpl_->get_submeshes(); }
-void MeshDevice::quiesce_devices() { pimpl_->quiesce_devices(); }
+void MeshDevice::quiesce_devices() {
+    const SuspendSubDeviceScope whole_device;
+    pimpl_->quiesce_devices();
+}
 std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
     const MeshShape& submesh_shape, const std::optional<MeshCoordinate>& offset) {
+    const SuspendSubDeviceScope whole_device;
     return pimpl_->create_submesh(shared_from_this(), submesh_shape, offset);
 }
 std::vector<std::shared_ptr<MeshDevice>> MeshDevice::create_submeshes(const MeshShape& submesh_shape) {
+    const SuspendSubDeviceScope whole_device;
     return pimpl_->create_submeshes(shared_from_this(), submesh_shape);
 }
 MeshCommandQueue& MeshDevice::mesh_command_queue(std::optional<uint8_t> cq_id) const {

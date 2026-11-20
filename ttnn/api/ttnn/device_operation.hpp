@@ -433,6 +433,7 @@ ProgramCacheLookup look_up_program_cache(
         ttsl::get_type_name<typename mesh_device_operation_t::device_operation_t>(),
         operation_attributes,
         tensor_args);
+    lookup.key = cache_key_with_scoped_cores(std::move(lookup.key), *mesh_device);
     lookup.hit = program_cache.contains(lookup.key);
     if (!lookup.hit && !program_cache.cache_misses_allowed()) {
         auto op_name = get_operation_name<mesh_device_operation_t>(operation_attributes);

@@ -21,6 +21,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/program/slow_dispatch.hpp"
+#include "impl/sub_device/sub_device_scope.hpp"
 #include "llrt/tt_cluster.hpp"
 #ifdef TT_METAL_USE_EMULE
 #include "emule_mesh_command_queue.hpp"
@@ -127,6 +128,8 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
     // Emulated devices have no dispatch firmware: tt-emule's queue compiles and launches each program itself
     // through the slow-dispatch path, so the fast-dispatch compile, binary upload and command generation are skipped.
     const bool emulated = env.get_cluster().get_target_device_type() == tt::TargetDevice::Emule;
+    validate_sub_device_scope(mesh_workload.impl(), mesh_cq.device());
+    const SuspendSubDeviceScope whole_device;
     if (env.get_rtoptions().get_fast_dispatch() && !emulated) {
         mesh_workload.impl().compile(mesh_cq.device());
         mesh_workload.impl().load_binaries(mesh_cq);
