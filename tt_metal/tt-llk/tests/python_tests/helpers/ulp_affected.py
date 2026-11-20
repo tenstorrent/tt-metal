@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The sweep cells a change can move, for PR Gate (llk-sfpu-ulp-pr-check.yaml): those
+"""The sweep cells a change can move, for PR Gate (tests/run_sfpu_ulp_pr_check.sh): those
 whose kernel builds differently from the change's first parent, and those whose row in
 the table changed. Builds are compared by what the card loads, the ELFs' allocated
 sections: debug info names the build directory.

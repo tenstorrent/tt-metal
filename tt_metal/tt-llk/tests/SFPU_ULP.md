@@ -178,9 +178,10 @@ fp16 subnormals the pack does not reproduce.
   re-emit in a change of its own; `python -m helpers.ulp_budget_diff diff --base <old>
   --head <new>` lists every cell a change loosens, judged under the architecture the
   `--head` file's name says (`--arch` to name it).
-- **CI.** PR Gate's `llk-sfpu-ulp-pr-check` sweeps the cells a change can move (its
+- **CI.** PR Gate's `llk_sfpu_ulp_pr_check` legs (`tests/run_sfpu_ulp_pr_check.sh`, rows of
+  `tests/pipeline_reorg/llk_pr_gate_tests.yaml`) sweep the cells a change can move (its
   kernel builds differently, or its row changed), on a Wormhole and a Blackhole card, and
-  fails one that measures worse than its row. The cells are the sweep's: the unary ops
+  fail one that measures worse than its row. The cells are the sweep's: the unary ops
   with a block in the table. It runs for a change to an SFPU kernel (a file named
   `*sfpu*`, or under a directory so named, in either architecture's `tt-llk` or
   `hw/ckernels` tree) or to a table; a change to the harness, the golden, SFPI or any
@@ -190,9 +191,9 @@ fp16 subnormals the pack does not reproduce.
   (`_UNMEASURABLE_CELLS_ACKNOWLEDGED*` and `ONLY_EVER_TOLERANCE`). A new row's recorded
   figure is never a loosening; its declared `atol`/`rtol` is, for a new op too, since it
   replaces the per-format default the functional drivers held the variant to. A change
-  to the check itself (its workflow, `ulp_affected.py` or `test_unary_sfpu_ulp.py`)
-  sweeps every cell. Every cell, on both cards, runs nightly
-  (`llk-sfpu-ulp-sweep.yaml`).
+  to the check itself (its script, `ulp_affected.py` or `test_unary_sfpu_ulp.py`)
+  sweeps every cell. Every cell, on both cards, runs nightly (the `llk_sfpu_ulp_sweep`
+  rows of `llk_e2e_tests.yaml`).
 - **Most specific key wins.** Key fields are `input`, `output`, `approx`, `dest` and
   `arch`, all optional; two rows matching one variant equally specifically are refused.
 - **A row holds for the configuration it was measured in**: `FAST_MODE(No)` and
@@ -253,8 +254,8 @@ two others are gated at 3. `log` answers nothing below 0 and is 1 step from 0 up
 
 - **Any host pytest run in `tests/` wipes `/tmp/tt-llk-build`**: chain
   `--compile-producer` and `--compile-consumer`, and run host suites afterwards.
-- **The sweep is marked `accuracy`**, which the general LLK workflows deselect; only the
-  `llk-sfpu-ulp-*` workflows run it. Locally, run it by name or `-m accuracy`.
+- **The sweep is marked `accuracy`**, which the general LLK legs deselect; only the
+  `llk_sfpu_ulp_*` legs run it, by file. Locally, run it by name or `-m accuracy`.
 - **Both runs take the same op set**: every unary op with a block in the table, whatever
   its rows say. `--ulp-emit` changes what is written, not what is collected.
 - **A plain gate run does not judge tolerance cells**: it skips them with the measured
