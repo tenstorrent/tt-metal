@@ -49,6 +49,10 @@ IDS_COL0 = os.environ.get("V41_PREFILL_IDS_COL0", "0") == "1"  # prefill TTFT pl
 HOST_IDS = (
     os.environ.get("V41_PREFILL_HOST_IDS", "0") == "1"
 )  # WS13: next-chunk Engram prefetch from the engine's host ids
+# WS13 after a skipped / restored chunk too (1 = val2's behaviour). Off by default: restores come in runs (median 24 on AgentX),
+# so 84 % of those prefetches were never used, and each one hashed on the restore path and started gathers that slowed the
+# restores ~2x (12.6 -> 24.2 ms mean, tt-blaze DS41F-0163 val2). Computed chunks still start the next chunk's from their hook.
+HOST_IDS_AFTER_SKIP = os.environ.get("V41_PREFILL_HOST_IDS_AFTER_SKIP", "0") == "1"
 DECODER_CONE = int(os.environ.get("V41_PREFILL_DECODER_CONE", str(CONE)))
 
 
@@ -364,7 +368,10 @@ class V41PrefillRuntime:
                     int(slot_id), int(actual_start), int(actual_end), int(request_id), t_skip, reuse.last_restored
                 )
                 reuse.after_acks(int(slot_id), last)  # H2: a burst's last chunk -> the tips of the prompts it left
-                self._prefetch_next(hcur)  # WS13: this chunk's history is in (restored); the next one may be computed
+                if HOST_IDS_AFTER_SKIP:
+                    self._prefetch_next(
+                        hcur
+                    )  # WS13: this chunk's history is in (restored); the next one may be computed
                 return None
             if getattr(reuse, "last_silent", 0):
                 # the resume recomputed chunks counted as reused above: they were computed after all

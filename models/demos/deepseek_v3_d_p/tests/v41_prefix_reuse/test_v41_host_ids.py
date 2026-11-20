@@ -263,3 +263,23 @@ def test_runtime_matches_the_chunk_and_prefetches_the_next():
         marked | last | dec | 5, 32, 42, [9] * 10
     )  # the device read other ids: counted, never trusted
     assert cur2 == 1 and rt._hi["ids_differ"] == 1
+
+
+def test_no_prefetch_after_a_skipped_chunk_by_default(monkeypatch):
+    """DS41F-0163 val2: a prefetch after every skipped / restored chunk slowed AgentX's restore runs ~2x (84 % unused); the
+    skip path starts one only with V41_PREFILL_HOST_IDS_AFTER_SKIP=1."""
+    import importlib
+    import sys
+
+    sys.path.insert(0, HERE)
+    sys.path.insert(0, ROOT)
+    import fake_v41  # noqa: F401 -- installs the fake ttnn before runtime.py imports it
+
+    import models.demos.deepseek_v3_d_p.tt.v41.runtime as rtm
+
+    monkeypatch.delenv("V41_PREFILL_HOST_IDS_AFTER_SKIP", raising=False)
+    assert importlib.reload(rtm).HOST_IDS_AFTER_SKIP is False
+    monkeypatch.setenv("V41_PREFILL_HOST_IDS_AFTER_SKIP", "1")
+    assert importlib.reload(rtm).HOST_IDS_AFTER_SKIP is True
+    monkeypatch.delenv("V41_PREFILL_HOST_IDS_AFTER_SKIP")
+    importlib.reload(rtm)
