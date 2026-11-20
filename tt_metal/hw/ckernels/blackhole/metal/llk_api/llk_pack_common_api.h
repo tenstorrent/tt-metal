@@ -200,7 +200,10 @@ constexpr bool llk_pack_reconfig_table_ok() {
          ckernel::packer::LLK_PACK_RECONFIG_SKIP_ALL) != 0;
     constexpr ckernel::packer::llk_pack_reconfig_profiles_t prof =
         ckernel::packer::llk_pack_reconfig_profiles(pack_src_format, pack_dst_format, pack_tile_num_faces);
-    return !LLK_SIZE_MODE && imm.ok && !skip_all && prof.n >= 1 && prof.n <= 8;
+    // SDPA kernels keep the full reconfigure: at k512 the immediates' RMWCIBs after the packer-idle stall cost the pack thread
+    // more than the GPR writes they replace (pack stalls +23 %, joint_sdpa k512 q32 bfp8 +0.3 %).
+    return !LLK_SIZE_MODE && !ckernel::packer::llk_pack_sdpa_api<is_fp32_dest_acc_en * 0 + 1>::value && imm.ok && !skip_all &&
+           prof.n >= 1 && prof.n <= 8;
 }
 
 template <bool is_fp32_dest_acc_en, std::uint32_t k, bool gate = true>
@@ -449,7 +452,7 @@ __attribute__((always_inline)) inline void llk_pack_reconfig_data_format_ct_gate
 
 template <bool is_fp32_dest_acc_en, std::uint32_t new_output>
 __attribute__((always_inline)) inline void llk_pack_reconfig_data_format_ct() {
-    if constexpr (LLK_SIZE_MODE) {
+    if constexpr (LLK_SIZE_MODE || ckernel::packer::llk_pack_sdpa_api<new_output * 0 + 1>::value) {
         llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(new_output);
     } else if constexpr (
         ckernel::packer::llk_pack_reconfig_u2d_half<is_fp32_dest_acc_en, DST_SYNC_MODE>() &&
