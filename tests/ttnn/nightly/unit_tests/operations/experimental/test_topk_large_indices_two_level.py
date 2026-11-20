@@ -285,6 +285,29 @@ def test_two_level_supplied_block_maxima(device, rows, columns):
     assert first_maxima.buffer_address() != second_maxima.buffer_address()
 
 
+@pytest.mark.parametrize("cutover,expected_mode", [(FORCE_TWO_LEVEL, 1), (FORCE_SINGLE_LEVEL, 0)])
+def test_supplied_block_maxima_many_rows_on_one_core(device, cutover, expected_mode):
+    """The caller's maxima with 33 rows on one core, in both modes: with supplied maxima a core's rows are not limited
+    to the four phase 1 allows, nor to a 32-row mask."""
+    rows, width, n = 33, 65_536, 65_536
+    blocks = width // BLOCK
+    torch_input = generate("iid", rows, width, 23, n=n)
+    maxima = torch.stack([_block_maxima(torch_input[row], n) for row in range(rows)])
+    mode = _scalar(device, 7)
+    out = ttnn.experimental.topk_large_indices(
+        _dev(torch_input.reshape(1, 1, rows, width), device),
+        k=K,
+        valid_length=n,
+        block_select=32,
+        two_level_cutover=cutover,
+        block_max_tensor=_dev(maxima.to(torch.bfloat16).reshape(1, 1, rows, blocks), device),
+        sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(0, 1))]),
+        mode_output=mode,
+    )
+    assert _mode(mode) == expected_mode
+    _check_rows(torch_input, _indices(out, rows), n, range(rows))
+
+
 @pytest.mark.parametrize("n,cutover,expected_mode", [(200_000, 200_001, 0), (200_001, 200_001, 1), (5_000, 0, 1)])
 def test_two_level_cutover_selects_mode(device, n, cutover, expected_mode):
     rows, width = 2, 262_144
