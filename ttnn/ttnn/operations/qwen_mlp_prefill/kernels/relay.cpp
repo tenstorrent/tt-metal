@@ -32,21 +32,22 @@ void kernel_main() {
     {
         const uint32_t self_x = RT_ARG("self_x");
         const uint32_t self_y = RT_ARG("self_y");
-        volatile tt_l1_ptr uint32_t* arrivals =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(RT_ARG("arrival_address"));
+        const uint32_t arrival_addresses[2] = {RT_ARG("arrival_address_1"), RT_ARG("arrival_address_2")};
         volatile tt_l1_ptr uint32_t* launches =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(RT_ARG("launch_address"));
-        const uint64_t remote_arrivals = safe_get_noc_addr(self_x, self_y, RT_ARG("arrival_address"), 0);
         for (uint32_t hops = 1; hops <= 2; hops++) {
             linear_fabric::fabric_unicast_noc_unicast_atomic_inc(
                 &sender,
                 packet_headers[hops - 1],
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{remote_arrivals, 1},
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                    safe_get_noc_addr(self_x, self_y, arrival_addresses[hops - 1], 0), 1},
                 hops);
         }
         noc_async_writes_flushed();
-        *launches += 2;
-        noc_semaphore_wait_min(arrivals, *launches);
+        *launches += 1;
+        for (uint32_t hops = 0; hops < 2; hops++) {
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_addresses[hops]), *launches);
+        }
     }
     uint32_t consumed[sources] = {};
     uint32_t sent = 0;
@@ -92,5 +93,7 @@ void kernel_main() {
                 .up(noc, get_arg_val<uint32_t>(table), get_arg_val<uint32_t>(table + 1), 1);
         }
     }
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
     fabric.close();
 }

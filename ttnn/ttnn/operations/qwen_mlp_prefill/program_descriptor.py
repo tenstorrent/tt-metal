@@ -383,8 +383,9 @@ def create_program_descriptor(h, w_norm, w_gate_up, w_down, y, chip, chips, grou
                 [
                     ("self_x", self_x),
                     ("self_y", self_y),
-                    ("arrival_address", startup[0]),
-                    ("launch_address", startup[1]),
+                    ("arrival_address_1", startup[0]),
+                    ("arrival_address_2", startup[1]),
+                    ("launch_address", startup[2]),
                     ("sources", table),
                 ]
             )

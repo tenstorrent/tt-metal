@@ -231,5 +231,6 @@ void kernel_main() {
     for (uint32_t port = 0; chips > 1 && port < (owner ? 2 : 1); port++) {
         ports[port].push(noc, MessageKind::End, 0, 0, 0, 0, 0, 0, 0);
     }
+    noc.async_write_barrier();
     noc.async_atomic_barrier();
 }
