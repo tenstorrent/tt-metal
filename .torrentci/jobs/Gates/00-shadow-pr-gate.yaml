@@ -1,0 +1,12 @@
+---
+# Shadow PR Gate: the PR Gate jobs TorrentCI runs on every merge-queue entry
+# (.torrentci/triggers/merge-queue.yaml targets it). It posts the check
+# `TorrentCI / shadow-pr-gate`, and each member job posts its own
+# `TorrentCI / <job>` check. These checks are visible but not required, so they
+# never block a merge. Members grow as more PR Gate jobs are ported.
+dashboards:
+  - id: shadow-pr-gate
+    description: "Shadow PR Gate: a non-blocking shadow of the PR Gate, run on each merge-queue entry; its checks are not required"
+    report: {check: true}
+    members:
+      - job: asan-build
