@@ -276,7 +276,13 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
                         ttnn.fill_cache(cache, chunk, 0, update_idx=r0)
                         ttnn.deallocate(chunk)
             attn = ttnn.transformer.scaled_dot_product_attention(
-                q, k, v, is_causal=True, scale=self.scale, compute_kernel_config=self.compute_kernel_config
+                q,
+                k,
+                v,
+                is_causal=True,
+                scale=self.scale,
+                compute_kernel_config=self.compute_kernel_config,
+                precision=ttnn.SDPAPrecision.ACCURATE,
             )
             attn = ttnn.reshape(ttnn.experimental.nlp_concat_heads(attn), (1, P, E))  # fused head-merge
             x = ttnn.add(x, self._linear(attn, b["attn_proj"]))
