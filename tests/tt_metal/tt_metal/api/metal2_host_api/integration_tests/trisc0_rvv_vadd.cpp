@@ -10,7 +10,6 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "llrt/rtoptions.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 using namespace tt;
@@ -18,11 +17,6 @@ using namespace tt::tt_metal;
 
 // TRISC0 computes c = a + b with RISC-V Vector instructions (enable_unpack_rvv).
 TEST_F(QuasarMeshDeviceSingleCardFixture, Trisc0RvvVectorAdd) {
-    // Skip if simulator is not available
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator.";
-    }
-
     auto mesh_device = devices_[0];
 
     // We are going to use the first device (0) and the first core (0, 0) on the device.
