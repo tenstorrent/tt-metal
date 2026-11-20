@@ -5,8 +5,8 @@
 #include "manual_seed_program_factory.hpp"
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/kernel_types.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -17,7 +17,6 @@
 
 namespace ttnn::prim {
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace {
 // Helper function to compute core grid from device and operation attributes
@@ -148,6 +147,12 @@ ttnn::device_operation::ProgramArtifacts ManualSeedSingleSeedSetCoresProgramFact
     // Tensor config info
     const auto& user_ids_mesh = tensor_args.user_ids.value().mesh_tensor();
     const auto number_of_ids = static_cast<uint32_t>(user_ids_mesh.logical_volume());
+    // The readers land all ids in one tile-sized dataflow buffer entry.
+    TT_FATAL(
+        number_of_ids <= user_ids_mesh.tensor_spec().tile().get_tile_hw(),
+        "manual_seed supports at most {} user_ids, got {}",
+        user_ids_mesh.tensor_spec().tile().get_tile_hw(),
+        number_of_ids);
 
     // Create core kernels
     const std::string reader_kernel_path =
@@ -258,6 +263,12 @@ ttnn::device_operation::ProgramArtifacts ManualSeedSetSeedsSetCoresProgramFactor
     // Tensor config info
     const auto& user_ids_mesh = tensor_args.user_ids.value().mesh_tensor();
     const auto number_of_ids = static_cast<uint32_t>(user_ids_mesh.logical_volume());
+    // The readers land all ids in one tile-sized dataflow buffer entry.
+    TT_FATAL(
+        number_of_ids <= user_ids_mesh.tensor_spec().tile().get_tile_hw(),
+        "manual_seed supports at most {} user_ids, got {}",
+        user_ids_mesh.tensor_spec().tile().get_tile_hw(),
+        number_of_ids);
 
     const auto& seeds_mesh = tensor_args.seeds.value().mesh_tensor();
 

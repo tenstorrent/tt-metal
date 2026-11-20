@@ -162,7 +162,7 @@ int run() {
         [&](const streaming_profiler::Batch<streaming_profiler::Zone>& batch) {
             dropped_bytes += batch.dropped_bytes();
             for (const streaming_profiler::Zone& zone : batch.records<streaming_profiler::Zone>()) {
-                if (zone.site().name == "HOST_RX") {
+                if (zone.descriptor().name == "HOST_RX") {
                     starts[zone.core().chip_id].push_back(zone.start_time());
                 }
             }
@@ -187,7 +187,7 @@ int run() {
     }
     clear_flags(worker_l1, cores);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
     const auto kernel = CreateKernel(
         program,
         std::string(kKernelDir) + "host_poke_dm.cpp",
@@ -310,7 +310,7 @@ distributed::MeshWorkload make_multicast(
     const CoreCoord virtual_low = mesh.worker_core_from_logical_core(low);
     const CoreCoord virtual_high = mesh.worker_core_from_logical_core(high);
     const uint32_t num_dests = static_cast<uint32_t>(cores.size() - 1);
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh);
     program.set_runtime_id(runtime_id);
     const auto kernel = CreateKernel(
         program,
@@ -540,7 +540,7 @@ distributed::MeshWorkload build_workload(
     uint32_t runtime_id) {
     std::map<ChipId, Program> programs;
     for (const ChipId chip : std::views::keys(chips)) {
-        programs.emplace(chip, CreateProgram()).first->second.set_runtime_id(runtime_id);
+        programs.emplace(chip, CreateProgram(mesh_device)).first->second.set_runtime_id(runtime_id);
     }
     for (const Pair& pair : pairs) {
         for (uint32_t index = 0; index < pair.size(); index++) {
@@ -561,7 +561,7 @@ distributed::MeshWorkload build_workload(
                 kRounds,
                 static_cast<uint32_t>(dst.chip_id),
                 static_cast<uint32_t>(dst.mesh_id.get())};
-            tt::tt_fabric::append_fabric_connection_rt_args(src, dst, self.link, program, self.core, args);
+            tt::tt_fabric::append_fabric_connection_rt_args(mesh_device, src, dst, self.link, program, self.core, args);
             SetRuntimeArgs(program, kernel, self.core, args);
         }
     }
@@ -790,7 +790,7 @@ public:
             [this](const streaming_profiler::Batch<streaming_profiler::Zone>& batch) {
                 dropped_bytes_ += batch.dropped_bytes();
                 for (const streaming_profiler::Zone& zone : batch.records<streaming_profiler::Zone>()) {
-                    const std::string_view name = zone.site().name;
+                    const std::string_view name = zone.descriptor().name;
                     const streaming_profiler::Core core = zone.core();
                     if (name == "MC_RX") {
                         arrivals_[zone.runtime_id()].push_back(multicast::Arrival{

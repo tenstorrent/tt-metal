@@ -146,9 +146,6 @@ class PrefillModelAdapter(ABC):
     # model declares no drafter of its own; DFLASH_HF_MODEL / PREFILL_DFLASH_GOLDEN_KV_DIR override.
     dflash_model_default: str = ""
     dflash_golden_default: str = ""
-    # Whether the runner may build the drafter with PREFILL_USE_TRACE=0. Off by default: DFlash is gated
-    # traced. A model whose trace serves one slot only turns it on for multi-user runs.
-    dflash_allows_eager: bool = False
     # The drafter partial travels as its own D2D plane next to the model's planes; False packs it beside the
     # hidden instead, widening the activation to 2H.
     dflash_partial_separate_plane: bool = False
@@ -156,9 +153,24 @@ class PrefillModelAdapter(ABC):
     dflash_rope_convention: str = "interleaved"
     supports_mtp: bool = False
     supports_tp_shard_kv: bool = False
+    # Builds any missing TTNN weight-cache pieces from the HF checkpoint (PREFILL_HF_MODEL) at start-up.
+    builds_missing_weight_cache: bool = False
     tp_shard_kv_default: bool = False
     # The runtime implements prefill_forward; without it a forward of several chunks runs prefill_chunk per chunk.
     supports_packed_forward: bool = False
+    # With supports_packed_forward, whether prefill_forward also serves PREFILL_USE_TRACE=1 (it stages each chunk's
+    # inputs before a trace replay) and PREFILL_LAYER_ACK_D2H=1 (it sends one 12-byte (slot, start, end) record per
+    # chunk per KV-writing layer, each chunk's records contiguous). Otherwise the runner refuses those at F > 1.
+    supports_packed_forward_trace: bool = False
+    supports_packed_forward_d2h_acks: bool = False
+    # With supports_packed_forward and passes_indexer_indices, whether prefill_forward takes a pipeline boundary's
+    # indexer indices for every chunk of the forward (indexer_indices=..., one tensor of indexer_indices_shape(), which
+    # covers all forward_chunks chunks) and leaves its own the same way (outbound_indexer_indices). Otherwise the runner
+    # refuses F > 1 on a split that passes indices.
+    supports_packed_forward_indexer_indices: bool = False
+    # Whether prefill_forward runs MTP over a packed forward (one lookahead block and one provided-levels count per
+    # chunk). Otherwise the runner refuses PREFILL_MTP_LEVELS > 0 at F > 1.
+    supports_packed_forward_mtp: bool = False
     # Whether a pipeline split can hand indexer indices from one rank to the next (cross-layer indexer reuse).
     passes_indexer_indices: bool = False
     # Fail PCC verification unless the producer drained exactly one completion per layer per chunk.
@@ -186,7 +198,7 @@ class PrefillModelAdapter(ABC):
     def layer_position_range(self, layer_idx: int, real_len: int) -> tuple[int, int]:
         """Table positions one /migrate of layer ``layer_idx`` covers after a ``real_len``-token prefill.
         A token cache migrates ``[0, real_len)``. A model whose layer holds a cache on another axis
-        (Kimi-K3's KDA state: one of decode's eight version windows) overrides this; the migration driver
+        (Kimi-K3's KDA state: one synthetic window per layer) overrides this; the migration driver
         issues one call per run of consecutive layers with equal ranges and byte-verifies that range."""
         return 0, real_len
 
@@ -226,9 +238,10 @@ class PrefillModelAdapter(ABC):
         return self.default_sparse_kv_cache_format if requested is None else requested
 
     @abstractmethod
-    def weight_cache_path(self, mesh_shape: tuple) -> Optional[Path]:
+    def weight_cache_path(self, mesh_shape: tuple, sp_axis: int = 0) -> Optional[Path]:
         """The TTNN weight-cache dir for this model + mesh, mirroring the layout
-        the cache-populate run wrote. None only if the cache is explicitly empty."""
+        the cache-populate run wrote. None only if the cache is explicitly empty.
+        ``sp_axis`` is the mesh axis SP runs on; a model that only supports axis 0 raises on any other."""
 
     @abstractmethod
     def allocate_kv_cache(self, *, mesh_device: "ttnn.MeshDevice", hf_config, params: PrefillRunParams) -> KvCaches:
@@ -365,6 +378,8 @@ ADAPTER_PATHS = {
     # Kimi-K2.7-Code: DeepSeek-V3 architecture (MLA + MoE), single expert group (adapters/kimi_k2_7.py).
     "kimi_k2_7": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_7:KimiK27Adapter",
     "kimi_k3": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3:KimiK3Adapter",
+    # Kimi-K3.1: K3 + DSA indexer on its 24 MLA layers; selected through K3's stack (adapters/kimi_k3_1.py).
+    "kimi_k3_1": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3_1:KimiK31Adapter",
     "minimax_m3": "models.demos.minimax_m3.tt.runners.adapters.minimax_m3:MiniMaxM3PrefillAdapter",
     # Mistral-Small-4-119B: dense MLA + MoE; config hand-built (transformers 5.x rope_parameters).
     "mistral_small_4": "models.demos.deepseek_v3_d_p.tt.runners.adapters.mistral_small_4:MistralSmall4Adapter",

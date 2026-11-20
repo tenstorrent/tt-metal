@@ -3,7 +3,21 @@ graph_templates {
   value {
     children {
       name: "node1"
-      node_ref { node_descriptor: "WH_GALAXY_X_TORUS" }
+      node_ref { node_descriptor: "WH_GALAXY" }
+    }
+    internal_connections {
+      key: "QSFP_DD"
+      value {
+        # X torus
+        connections { port_a { path: ["node1"] tray_id: 1 port_id: 3 } port_b { path: ["node1"] tray_id: 2 port_id: 3 } }
+        connections { port_a { path: ["node1"] tray_id: 1 port_id: 4 } port_b { path: ["node1"] tray_id: 2 port_id: 4 } }
+        connections { port_a { path: ["node1"] tray_id: 1 port_id: 5 } port_b { path: ["node1"] tray_id: 2 port_id: 5 } }
+        connections { port_a { path: ["node1"] tray_id: 1 port_id: 6 } port_b { path: ["node1"] tray_id: 2 port_id: 6 } }
+        connections { port_a { path: ["node1"] tray_id: 3 port_id: 6 } port_b { path: ["node1"] tray_id: 4 port_id: 6 } }
+        connections { port_a { path: ["node1"] tray_id: 3 port_id: 5 } port_b { path: ["node1"] tray_id: 4 port_id: 5 } }
+        connections { port_a { path: ["node1"] tray_id: 3 port_id: 4 } port_b { path: ["node1"] tray_id: 4 port_id: 4 } }
+        connections { port_a { path: ["node1"] tray_id: 3 port_id: 3 } port_b { path: ["node1"] tray_id: 4 port_id: 3 } }
+      }
     }
   }
 }

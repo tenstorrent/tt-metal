@@ -8,7 +8,6 @@
 
 #include <random>
 
-#include <tt_stl/aligned_allocator.hpp>
 #include <tt_stl/assert.hpp>
 #include "dispatch/dispatch_core_manager.hpp"
 #include "dispatch/dispatch_mem_map.hpp"
