@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
 
 namespace tt::tt_fabric {
@@ -87,36 +86,6 @@ struct EDMChannelWorkerLocationInfo {
 };
 
 static_assert(sizeof(EDMChannelWorkerLocationInfo) <= 64);
-
-// The host_rdma sender channel's connection info, in place of a worker's EDMChannelWorkerLocationInfo: where the router
-// writes the channel's credits for the host. The host fills the target and sets `credit_enabled` last; the router
-// zeroes the block at init. edm_read_counter stays where the worker layout has it: the absolute count of slots the
-// router has freed, which the router writes to the target on every credit.
-//
-// A producer opening the channel as a fabric connection (WorkerToFabricEdmSender, as the host_rdma service kernel does)
-// writes the worker fields: worker_semaphore_address, its credit word, lands on credit_addr_lo (the same address the
-// host publishes for a target on that producer's core); the others land in padding.
-struct HostRdmaChannelInfo {
-    uint32_t credit_addr_lo{};  // the credit word's address (the low half), as the target node decodes it
-    uint32_t credit_addr_hi{};  // its high half (nonzero for a 64-bit host address)
-    uint32_t credit_noc_xy{};   // the target node's NoC encoding (for host memory, the PCIe core's 64-bit encoding)
-    uint32_t credit_enabled{};  // nonzero once the target above is valid
-
-    uint32_t align_pad_0[8]{};
-
-    uint32_t edm_read_counter = 0;
-    uint32_t align_pad_1[3]{};
-};
-static_assert(sizeof(HostRdmaChannelInfo) == sizeof(EDMChannelWorkerLocationInfo));
-static_assert(
-    offsetof(HostRdmaChannelInfo, edm_read_counter) == offsetof(EDMChannelWorkerLocationInfo, edm_read_counter));
-static_assert(
-    offsetof(HostRdmaChannelInfo, credit_addr_lo) == offsetof(EDMChannelWorkerLocationInfo, worker_semaphore_address));
-static_assert(
-    offsetof(EDMChannelWorkerLocationInfo, worker_teardown_semaphore_address) >=
-        offsetof(HostRdmaChannelInfo, align_pad_0) &&
-    offsetof(EDMChannelWorkerLocationInfo, worker_xy) + sizeof(WorkerXY) <=
-        offsetof(HostRdmaChannelInfo, edm_read_counter));
 
 // Producer-owned cursor state for one sender channel, persisted in the *receiver's* L1
 // (router or mux) across connection open/close. The receiver only zeroes this at

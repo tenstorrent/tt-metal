@@ -13,10 +13,10 @@
 // a read is issued as soon as the channel has a free slot for the packet, the packet is sent as soon as the read lands,
 // and packets retire (in order) as their writes are acked. A request is consumed once its last packet has retired.
 //
-// Each channel is a fabric connection (WorkerToFabricEdmSender): it sends each packet into the router's next slot and
-// takes the slot on the router's free-slots register, keeps the slot cursor and the free-slot count, and hands its
-// cursor to the channel's next producer through the router (open/close). The router credits it in the channel's
-// `credits` word here (its host_rdma credit target).
+// Each channel is a fabric worker connection (WorkerToFabricEdmSender) to the router's host_rdma channel, a worker
+// channel the fabric's worker connection APIs do not hand out: it sends each packet into the router's next slot and
+// takes the slot on the router's free-slots register, keeps the slot cursor and the free-slot count, and opens and
+// closes as any worker. The router credits it in the channel's `credits` word here.
 
 #include <cstdint>
 #include <limits>
@@ -253,13 +253,10 @@ void open_channel(uint32_t c) {
     stateful_channel = NO_CHANNEL;  // the open's writes reprogram the command buffers
 }
 
-// Closes channel c's connection, leaving its producer cursor in the router for the next producer. Only the cursor
-// hand-off and the close request: the router does not acknowledge a host_rdma channel's teardown, so there is no ack
-// to wait for (close_finish).
+// Closes channel c's connection (and waits for the router's teardown ack).
 void close_channel(uint32_t c) {
-    state(c).conn.close_start();
-    noc_async_write_barrier();
-    stateful_channel = NO_CHANNEL;
+    state(c).conn.close();
+    stateful_channel = NO_CHANNEL;  // the close's writes reprogram the command buffers
 }
 
 // A channel becoming active is opened; one going inactive is closed.
