@@ -252,6 +252,9 @@ def test_the_ab_says_fail_when_a_side_of_its_test_failed(monkeypatch):
         ab_determinism_failing=lambda *a: [],
     )
     o.ab_failed_runs = lambda task, rec: Orchestrator.ab_failed_runs(o, task, rec)
+    o._gate_on = lambda *a: Orchestrator._gate_on(o, *a)
+    o.spec = None
+    monkeypatch.setattr("models.demos.common.bringup.core.gate.unit_states", lambda spec, led, tid: {})
     rec = {"tests": {"test_skip_positions": {"old": {"rc": 1}, "new": {"rc": 1}}}, "positions": {}}
     monkeypatch.setattr("models.demos.common.bringup.orchestrator.gate_limits", lambda task, tasks: {})
     got = Orchestrator.gate_on(o, {"id": "P.84"}, rec, Path("/nonexistent"))
@@ -261,6 +264,24 @@ def test_the_ab_says_fail_when_a_side_of_its_test_failed(monkeypatch):
     rec["tests"]["test_skip_positions"]["new"]["rc"] = 0
     rec["positions"]["p145408"] = {"new": {"rc": 0}}
     assert Orchestrator.gate_on(o, {"id": "P.84"}, rec, Path("/nonexistent"))["ok"]
+
+
+def test_the_ab_says_fail_when_a_gate_unit_of_the_task_failed(monkeypatch):
+    """F293 (PB.7): the quick A/B side passed, but the agent's own gate run had test_glued_oracle FAIL; the answer
+    'would the gate pass' must say no and name the unit."""
+    from types import SimpleNamespace
+
+    from models.demos.common.bringup.orchestrator import Orchestrator
+
+    o = SimpleNamespace(spec=None, led=None, _gate_on=lambda *a: {"ok": True, "failing": [], "partial": True})
+    monkeypatch.setattr(
+        "models.demos.common.bringup.core.gate.unit_states",
+        lambda spec, led, tid: {"PB.7#test_glued_oracle": "FAIL", "PB.7#test_packed_oracle": "PASS"},
+    )
+    got = Orchestrator.gate_on(o, {"id": "PB.7"}, {}, Path("/nonexistent"))
+    assert not got["ok"] and got["failing"] == ["PB.7#test_glued_oracle: FAIL in the task's last gate run"]
+    monkeypatch.setattr("models.demos.common.bringup.core.gate.unit_states", lambda spec, led, tid: {"u": "PASS"})
+    assert Orchestrator.gate_on(o, {"id": "PB.7"}, {}, Path("/nonexistent"))["ok"]
 
 
 def test_task_accounting_counts_safe_runner_processes_and_runner_restarts(tmp_path):

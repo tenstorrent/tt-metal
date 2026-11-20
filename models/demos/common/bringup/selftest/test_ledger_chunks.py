@@ -129,7 +129,19 @@ def test_duplicate_keys_across_chunks_are_an_error(tmp_path):
     store.write({"A": 1})
     (store.dir / "0002.json").write_text(json.dumps({"A": 2}))
     with pytest.raises(chunked.ChunkError, match="key 'A' in both 0001.json and 0002.json"):
-        store.read()
+        store.read(tries=2, wait_s=0.0)
+
+
+def test_a_torn_view_mid_write_is_retried_not_an_error(tmp_path):
+    """F291 (DeepSeek-V4.1 PB.5C): write() replaces chunk files one by one; a reader between two of them saw a moved
+    key in both and the orchestrator died. The duplicate is gone once the writer finishes: read() retries it."""
+    import threading
+
+    store = ChunkedJson(tmp_path / "x.json")
+    store.write({"A": 1})
+    (store.dir / "0002.json").write_text(json.dumps({"A": 2}))  # the writer is between its two file replaces
+    threading.Timer(0.1, lambda: (store.dir / "0002.json").unlink()).start()  # ... and finishes
+    assert store.read(tries=20, wait_s=0.05) == {"A": 1}
 
 
 # ---------------------------------------------------------------- migration

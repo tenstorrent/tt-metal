@@ -465,6 +465,9 @@ def outputs_in(results: Path, task: dict) -> list[Path]:
     tid = task["id"]
     out = [results / f"{tid}.json", *sorted(results.glob(f"{tid}_*.json"))]
     out += sorted(results.glob(f"{tid}_*.json.gz"))  # F148: a profile's gzipped per-op rows
+    # F292 (DeepSeek-V4.1 PB.5C / PB.6L, 2026-11-20): a test's report table (results/<task>_<name>.md, e.g. the packed
+    # walls table) is the gate's output too: two attempts failed only because the walls test wrote it
+    out += sorted(results.glob(f"{tid}_*.md"))
     if task.get("step") == "optests":
         out.append(results / "fork_calls.json")
         # F64 / F201: every other capture file the gate writes (the scaled run's, a settings variant's)

@@ -341,8 +341,8 @@ done reaches the agents as a note, so the fix and its lesson land where the next
 - **Stop a step that goes the wrong way: abort.** `overseer abort --spec <spec> --reason "..."` ends the agent at
   work, records the attempt as aborted (no gate, not counted against the task's attempts), and turns the reason into
   a note for that task's next attempt. A running agent cannot take messages; abort plus a note is how one reaches it.
-  Use it for an agent working around a spec or framework error, one in a dead end, or cheating in progress; after
-  three aborts of one task it stops for a person.
+  Use it for an agent working around a spec or framework error, one in a dead end, or cheating in progress; there is
+  no cap on aborts (F290, owner 2026-11-19: be persistent).
 - **What you change yourself.** The owner-delegated decisions (spec, plan, approvals: edit, re-approve, regenerate
   the ledger with ledger_gen); framework fixes (models/demos/common/bringup, at a pause, with a selftest, F-entry in
   dev/BREADCRUMBS.md); pause, resume, and reject (revert + note). Never the model's code, its knowledge files,
@@ -423,6 +423,24 @@ session's private memory (owner, said many times; 2026-10-30): memory stays on o
 next overseer never sees it.
 
 Standing owner decisions (moved here from private memory, 2026-10-30):
+- No infeasible shortcuts, checked BEFORE accepting (owner, 2026-11-20): before accepting any serving-path task, the
+  overseer checks the deliverable itself for host-side per-chunk derivation (tables, indices, masks built in Python),
+  per-layout / per-position program builds, caches that only repeated test traffic hits, and inputs tt-d-gen would not
+  send; a result that depends on one is rejected and reported as a shortcut, never accepted or quoted as a number
+  (DeepSeek-V4.1 PB.7 / PB.7B: glued numbers accepted while the host built per-layout tables and programs rebuilt).
+- Serving never rebuilds (owner, 2026-11-20): every program a server can need is built once at startup from a finite
+  set (chunk size, segment counts, the accepted switches, layer kinds); after warm-up nothing builds on the request
+  path: positions, history lengths, slots, segment boundaries and table contents are runtime args / device data, never
+  part of a program-cache key. A perf number counts only if measured with fresh positions / slots / layouts every timed
+  chunk and 0 program builds after warm-up (repeated-position walls are a best case and must be labelled so).
+- No minimum-gain line (owner, 2026-11-20): a perf pick that passes its gate, keeps every accuracy limit (or is
+  bit-identical) and wins on the device profile is accepted whatever its size; never reject a verified device win
+  against a "keep only at >= N ms" bar (DeepSeek-V4.1 PB.8: a bit-identical -0.6 ms mhc_post win was rejected against
+  ">= ~1 ms" and had to be re-applied). Walls alone (noisy) never decide.
+- Procedural limits never stall progress (owner, 2026-11-19): an attempt cap, the abort cap (MAX_ABORTS), a retry or
+  escalation rule that trips on failures that are not the agent's (a framework false violation, an overseer abort, a
+  bogus check; anything but the hardware) is overridden at once (`orchestrator resume --attempts <n>`, a fresh
+  attempt, classify as framework) and the run continues; the misfire is a framework bug to fix the same hour.
 - Perf picks (owner, 2026-10-28/29, DeepSeek-V4.1; apply to every model unless its owner says otherwise): accept a pick
   yourself when its gate passes, every accuracy metric is within its limit, and it wins on speed (device or wall) or
   on memory; also one that only removes work by construction (fewer ops, cached programs, work off the main thread)

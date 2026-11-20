@@ -201,6 +201,19 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    whole box is reset. Never trigger a reset yourself in any way: not `tt-smi -r`, not a `/tmp/tt-device-*.dirty` file,
    not a run started to make the runner reset. A board that does not open is a stop: report it and end the attempt.
 
+20. Serving reality (owner 2026-11-20; binding for every serving-path change, never a trade-off). (a) Serving never
+    rebuilds: after warm-up no program is built on the request path. A per-chunk value (a position, chunk start or end,
+    a slot, a write_start, a segment layout, a history length) is a runtime arg, a prepared-program value, a page copy
+    or device data, never an op attribute that enters a program-cache key (e.g. never `ttnn.slice` with a begin/end
+    taken from the chunk). (b) No host tables: per chunk the host writes only what the inference server sends (token ids
+    + the chunk header); every derived table, index, mask or scalar is computed on the device; no per-request host
+    caches standing in for it (the engram host lookup is an owner-approved exception, nothing else). (c) Measure as
+    serving runs: a perf number counts only from a fresh-traffic wall (new positions, slots and layouts every timed
+    chunk, program builds after warm-up counted and == 0, host ms a new layout ~0); a repeated-position wall is a best
+    case and must be labelled so. (d) No impractical shortcuts of any other kind: if your change would only work for
+    repeated or test traffic, it is wrong; say so and fix it. Before you finish, list in BREADCRUMBS every per-chunk
+    value your change touches and how it reaches the device.
+
 ## Roles
 
 - **reference**: write the model's standalone CPU reference in `<model_dir>/reference/` against

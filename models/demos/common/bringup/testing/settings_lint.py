@@ -51,13 +51,17 @@ def violations(
         in_fork = rel.startswith(FORKS) and "/tests/" not in rel
         if not (in_model or in_fork) or rel == model_dir + "tt/settings.py":
             continue
-        had = _base_lines(repo, rel, base) if in_fork else set()
+        hooks = rel == model_dir + "bringup/hooks.py"
+        # F289 (DeepSeek-V4.1 PB.1, 2026-11-19): bringup/hooks.py is the framework's interface; its committed reads
+        # of a run's environment (batch_call_settings(env)) are plumbing, not a switch the editing agent added: only
+        # the lines a change adds count there, as for forks (F106). tt/ stays strict.
+        had = _base_lines(repo, rel, base) if (in_fork or hooks) else set()
         for ref in (imports or []) if in_fork else []:
             had |= _base_lines(repo, rel, ref)
         for n, line in enumerate(p.read_text(errors="replace").splitlines(), 1):
             if not ENV_READ.search(line) or line.lstrip().startswith(("#", "//", "*")):
                 continue
-            if line.strip() in had:  # F106: the fork had this knob before the change
+            if line.strip() in had:  # F106 / F289: the fork (or hooks.py) had this read before the change
                 continue
             if in_model:
                 out.append(f"{rel}:{n}: reads the environment; put the switch in {model_dir}tt/settings.py")

@@ -2839,3 +2839,50 @@ Residual: a variable neither measuring, nor named by the test files, nor on the 
 launcher's shell) is not seen. Selftests: test_reuse_env_key.py (a: SKIP_POS exported / on the command line / FOO on a
 hand run's command line; b: a settings default; c: a model file; d: the same tree and env reused, the source named);
 test_count_runs_once.py (a hand run keyed with its command line).
+
+## F289 (DeepSeek-V4.1 PB.1, 2026-11-19): the settings lint charged hooks.py's committed env read to an agent
+PB.1 attempt 2 added PACKED to batch_call_settings' returned tuple in bringup/hooks.py; the orchestrator's settings lint
+flagged that function's committed `env = os.environ if env is None else env` (hooks.py:1397) and the attempt failed, a
+third started. F106 exempted only forks' committed reads; model code stayed strict. hooks.py is the framework's interface
+(its reads of a run's environment are plumbing every call-time switch must touch), so its committed reads are now
+exempt as for forks; a read a change adds still counts; tt/ stays strict. Selftest:
+test_model_settings.py::test_lint_skips_committed_env_reads_in_hooks_but_not_in_tt.
+
+## F290 (owner 2026-11-19): no cap on the overseer's aborts of a task
+"Fuck the 3 aborts rule, you need to be persistent. Worst thing that can happen is me waking up and seeing everything
+has stalled for 6 hours because of some stupid rule." overseer.MAX_ABORTS = inf: an abort always leads to the next
+attempt with its note. Attempt budgets stay in defaults.yaml but the overseer launches long unattended runs with
+`--attempts <large>` and overrides any cap tripped by failures that are not the agent's (skill, standing decisions).
+
+## F291 (DeepSeek-V4.1 PB.5C, 2026-11-20): a torn read of a chunked store killed the orchestrator
+After PB.5C's gate commit the orchestrator died in decided_picks -> Ledger.state() with "history_state.chunks: key
+'W.1' in both 0002.json and 0003.json"; seconds later the store read cleanly (no duplicate on disk). ChunkedJson.write
+replaces the chunk files one by one, so a reader between two replaces (another process, e.g. a decide / status call or
+the dashboard export) sees a key that moved chunks in both. read() now retries a torn view (duplicate key, a file gone
+mid-replace, half-written JSON) for ~5 s before raising; a duplicate that persists is still an error. Selftest:
+test_ledger_chunks.py::test_a_torn_view_mid_write_is_retried_not_an_error. Not done: a write that is atomic across
+files (a generation directory swapped in one rename).
+
+## F292 (DeepSeek-V4.1 PB.5C / PB.6L, 2026-11-20): a gate test's markdown table is the task's own output
+PB.5C attempt 1 and PB.6L attempt 1 failed only on the path check for results/<task>_packed_walls.md, which the packed
+walls test writes next to results/<task>.json. core.gate.outputs_in (F55: results/<task>.json and <task>_*.json are the
+gate's outputs: allowed for the agent, deleted before the gate, committed with it) now also lists results/<task>_*.md.
+Selftest: test_fork_capture_programs.py::test_a_tests_markdown_table_is_a_gate_output.
+
+## F293 (DeepSeek-V4.1 PB.7, 2026-11-20): "the gate would PASS" with a gate unit FAILED
+PB.7 stopped WAITING with "the gate with the change on would PASS" while its agent's own gate run had test_glued_oracle
+FAIL (glued_segment_equiv_max_abs_diff 1024, 684 slot digest mismatches): Orchestrator.gate_on judged only the quick A/B
+side (a task without an `ab` switch measures the change on only). gate_on now also fails on any unit whose last verdict
+in the task's gate is FAIL (core.gate.unit_states), naming it. Selftest:
+test_resident_gate.py::test_the_ab_says_fail_when_a_gate_unit_of_the_task_failed.
+
+## F294 (owner 2026-11-20): perf walls hid per-chunk program builds
+Every wall (testing/profile.py's clean wall, the model's skip-position / packed walls) re-runs one chunk at one position
+after a warm-up at that position, with program-cache misses refused (F196): proven warm for THAT position, so a program
+keyed on a per-chunk value (the chunk start, a slot, a segment layout) is built in the warm-up and never counted. In
+serving every chunk brings new values: a rebuild on the request path. Found 2026-11-20 by PB.7C (glued fresh layouts:
+0 builds after its fix; fixed lanes 21 builds over 10 fresh chunks). Rule (skill): serving never rebuilds; a perf number
+counts only from a fresh-traffic wall with program_builds_after_warmup == 0. The clean wall now records
+chunk_wall_fresh = 0 and prints "WARM, REPEATED POSITION: a best case". The fresh walls (WALLS_FRESH=1) and the
+per-path fixes are DeepSeek-V4.1 PB.9F / PB.9X; the fast tier of every accept gate carries the 0-builds check (PB.T).
+Not done: a generic fresh-traffic driver in the framework (each model's test still draws its own positions).

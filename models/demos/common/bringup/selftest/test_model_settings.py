@@ -177,3 +177,24 @@ def test_lint_counts_an_imported_branchs_knobs_as_the_forks_own(tmp_path):
     assert len(violations(tmp_path, MD, [rel])) == 2  # without the import both count
     got = violations(tmp_path, MD, [rel], imports=["drop"])
     assert len(got) == 1 and "op.py:3" in got[0], got
+
+
+def test_lint_skips_committed_env_reads_in_hooks_but_not_in_tt(tmp_path):
+    """F289 (DeepSeek-V4.1 PB.1 attempt 2, 2026-11-19): an agent adding a name to batch_call_settings' tuple was failed
+    for that function's committed read of the run's environment (hooks.py:1397); a read it adds still counts, and a
+    committed read in tt/ still counts (F106's model-code rule)."""
+    import subprocess
+
+    def git(*a):
+        subprocess.run(["git", *a], cwd=tmp_path, check=True, capture_output=True)
+
+    hooks, model = f"{MD}/bringup/hooks.py", f"{MD}/tt/attention.py"
+    for rel, text in ((hooks, "import os\nenv = os.environ\n"), (model, "import os\nos.getenv('Q')\n")):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text)
+    git("init", "-q")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "add", ".")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "base")
+    (tmp_path / hooks).write_text("import os\nenv = os.environ\nx = os.getenv('NEW')\n")
+    got = violations(tmp_path, MD, [hooks, model])
+    assert sorted(v.split(": ")[0] for v in got) == sorted([f"{hooks}:3", f"{model}:2"])

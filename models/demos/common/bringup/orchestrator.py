@@ -2182,7 +2182,26 @@ class Orchestrator:
         return {k: v["value"] for k, v in M.load(tid, d / side / name).items()}
 
     def gate_on(self, task: dict, rec: dict, d: Path) -> dict:
-        """Would the gate pass with the change on: every command exited 0 and every threshold holds on its metrics."""
+        """Would the gate pass with the change on: every command exited 0 and every threshold holds on its metrics.
+        F293 (DeepSeek-V4.1 PB.7, 2026-11-20: "the gate with the change on would PASS" while the agent's own gate run
+        had test_glued_oracle FAIL, segment equivalence 1024): a unit whose last verdict in this task's gate is FAIL
+        fails the answer too; the quick A/B side alone is never the whole gate."""
+        out = self._gate_on(task, rec, d)
+        from models.demos.common.bringup.core.gate import unit_states
+
+        try:
+            bad = [
+                f"{u}: FAIL in the task's last gate run"
+                for u, v in unit_states(self.spec, self.led, task["id"]).items()
+                if v == "FAIL"
+            ]
+        except Exception:  # noqa: BLE001 - no gate record yet
+            bad = []
+        if bad:
+            out = dict(out, ok=False, failing=list(out.get("failing") or []) + bad)
+        return out
+
+    def _gate_on(self, task: dict, rec: dict, d: Path) -> dict:
         from models.demos.common.bringup.core.gate import check_metrics
 
         limits = gate_limits(task, self.led.tasks())  # FIX.25: with determinism_max_abs_diff == 0

@@ -114,7 +114,20 @@ class ChunkedJson:
             out.append((p, obj))
         return out
 
-    def read(self) -> dict:
+    def read(self, tries: int = 20, wait_s: float = 0.25) -> dict:
+        # F291 (DeepSeek-V4.1 PB.5C, 2026-11-20): write() rewrites the chunk files one by one, so a reader between two
+        # of them can see a key that moved chunks in both (or a file mid-replace gone): the orchestrator died on
+        # "key 'W.1' in both 0002.json and 0003.json" after a gate commit. A torn view is retried; a duplicate that
+        # persists past the writer is a real error.
+        for i in range(tries):
+            try:
+                return self._read_once()
+            except (ChunkError, FileNotFoundError, json.JSONDecodeError):
+                if i == tries - 1:
+                    raise
+                time.sleep(wait_s)
+
+    def _read_once(self) -> dict:
         chunks = self.chunks()
         legacy = json.loads(self.legacy.read_text()) if self.legacy.exists() else None
         if not chunks:
