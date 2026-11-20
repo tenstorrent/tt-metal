@@ -1701,6 +1701,20 @@ class TestJobOwnership:
         assert time.time() - t0 < 30, f"took {time.time() - t0:.0f} s\n{text}"
         assert "job forced down" in text and "straggler" in text, text
 
+    def test_run_launcher_does_not_wait_for_a_zombie(self):
+        import time
+
+        from ttnn.distributed.ttrun import run_launcher
+
+        # The CI shape: a rank of the job has exited but its parent has not reaped it yet (state Z). It is not a
+        # survivor: the clean job ends at once instead of waiting the stop grace for it, and is not called a leak.
+        script = "python3 -c 'import os, time; os.fork() or os._exit(0); time.sleep(4)' & disown; sleep 0.5; exit 0"
+        t0 = time.time()
+        text, rc = self._logged_rc(lambda: run_launcher(["bash", "-c", script], cwd=Path.cwd()))
+        assert rc == 0, text
+        assert time.time() - t0 < 8, f"waited {time.time() - t0:.0f} s for a zombie\n{text}"
+        assert "a leak" not in text and "job end: outcome=clean exit=0" in text, text
+
     def test_timeout_is_made_graceful_with_prrte_as_the_backstop(self, monkeypatch):
         from ttnn.distributed.ttrun import job_timeout_s, with_timeout_backstop
 

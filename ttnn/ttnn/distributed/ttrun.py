@@ -565,6 +565,8 @@ class LaunchedJob:
                     fields = fh.read().rsplit(")", 1)[1].split()
                 pgrp, session = int(fields[2]), int(fields[3])  # after comm: state ppid pgrp session ...
                 pid = int(d)
+                if fields[0] == "Z":
+                    continue  # already exited, only waiting for its parent to reap it: not a survivor
                 if (session == self.sid or pgrp == self.pgid) and pid != os.getpid() and pid != self.proc.pid:
                     out.append(pid)
             except (OSError, IndexError, ValueError):
@@ -587,7 +589,8 @@ class LaunchedJob:
         if settle_s is None:
             # A clean finish (nothing stopped the job) gets the whole stop grace: a rank still in its exit path is not
             # a leftover. A job that was stopped, forced or aborted already had its grace; what is left is ended soon.
-            stopping = self.forwarded or self.forced_why or self.stop_sent or self._abort_seen
+            failed = self.proc is not None and self.proc.returncode not in (None, 0)
+            stopping = self.forwarded or self.forced_why or self.stop_sent or self._abort_seen or failed
             settle_s = STOPPED_JOB_SETTLE_S if stopping else _stop_grace_s()
         survivors = self._survivors()
         if survivors:

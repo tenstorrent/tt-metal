@@ -403,9 +403,11 @@ def test_late_rank():
     nonzero(r)
     # Bounded: rank 0 gives up on MPI_Init at 3 s and exits; the rest is the launcher tearing the late rank down.
     # Well under the ~35 s it takes when rank 0 waits out the 20 s late start (the unbounded behaviour this fixes).
+    m = re.search(r"job end: .* elapsed=([0-9.]+)s", r.log)  # tt-run's job time, not start-up on a loaded runner
+    assert m, r.log[-2000:]
     assert (
-        r.wall_s < 18
-    ), f"rank 0 waited {r.wall_s:.0f} s for the late rank with the init timeout at 3 s\n{r.log[-2000:]}"
+        float(m.group(1)) < 18
+    ), f"rank 0 waited {m.group(1)} s for the late rank with the init timeout at 3 s\n{r.log[-2000:]}"
     clean(r)
 
 
