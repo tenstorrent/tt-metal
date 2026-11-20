@@ -240,7 +240,7 @@ def test_d2d_socket_sync_rejects_an_aliased_backing(mesh_device, warm, expect_er
         with expect_error(RuntimeError, "more than one tensor slot"):
             ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(sender, backing, metadata=record)
         # Nothing was built for the rejected call. Warm, it has the valid call's specs and attributes, so it maps to
-        # that call's entry; the op has no hit validator, so the same check runs there.
+        # that call's entry and the cache-hit validator rejects it.
         assert sender_mesh.num_program_cache_entries() == entries
         assert not warm or entries > 0
     finally:

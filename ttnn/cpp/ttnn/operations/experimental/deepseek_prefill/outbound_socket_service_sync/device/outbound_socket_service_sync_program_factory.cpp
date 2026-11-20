@@ -23,8 +23,10 @@ ProgramDescriptor build_descriptor_at(
     const OutboundSocketServiceSyncInputs& tensor_args,
     Tensor& backing_out,
     const ttnn::MeshCoordinate& coord) {
-    const uint32_t idx = coord[0] * args.mesh_num_cols + coord[1];
-    TT_FATAL(idx < args.data_ready_addrs.size(), "outbound_socket_service_sync: mesh coordinate {} out of range", idx);
+    const auto& coords = *args.coords;
+    const uint32_t idx = coord[0] * coords.num_cols + coord[1];
+    TT_FATAL(
+        idx < coords.data_ready_addrs.size(), "outbound_socket_service_sync: mesh coordinate {} out of range", idx);
 
     // Metadata-only: no input or backing; the record stands in for the accessor args and the CB format, and the
     // kernel never reads the two base addresses.
@@ -33,11 +35,10 @@ ProgramDescriptor build_descriptor_at(
 
     // Per-coord service-core targeting (logical -> physical NoC coord).
     auto* mesh_device = backing_out.device();
-    const CoreCoord service_logical(args.service_core_x[idx], args.service_core_y[idx]);
-    const CoreCoord service_phys = mesh_device->worker_core_from_logical_core(service_logical);
-    const uint32_t data_ready_addr = args.data_ready_addrs[idx];
-    const uint32_t metadata_l1_addr = has_metadata ? args.metadata_addrs[idx] : 0;
-    const uint32_t termination_addr = args.termination_addrs.empty() ? 0 : args.termination_addrs[idx];
+    const CoreCoord service_phys = mesh_device->worker_core_from_logical_core(coords.service_cores[idx]);
+    const uint32_t data_ready_addr = coords.data_ready_addrs[idx];
+    const uint32_t metadata_l1_addr = has_metadata ? coords.metadata_addrs[idx] : 0;
+    const uint32_t termination_addr = args.metadata_ring_slots > 1 ? coords.termination_addrs[idx] : 0;
 
     const uint32_t page_size = args.page_size;
     const uint32_t num_pages = args.num_pages;

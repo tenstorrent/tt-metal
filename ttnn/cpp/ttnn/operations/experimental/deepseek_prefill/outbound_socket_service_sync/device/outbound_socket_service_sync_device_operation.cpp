@@ -20,6 +20,36 @@ using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
 
+namespace {
+
+// Each buffer in one tensor slot: the cached program binds every base address to the slot that held it on this call,
+// so an aliased call would leave a cache entry that patches two addresses from one slot on later hits. Checked on hits
+// too, since a hit's buffers are new.
+void check_distinct_buffers(const OutboundSocketServiceSyncInputs& tensor_args) {
+    std::vector<const Buffer*> slots;
+    for (const auto* t :
+         {tensor_args.input ? &*tensor_args.input : nullptr,
+          tensor_args.backing ? &*tensor_args.backing : nullptr,
+          tensor_args.metadata ? &*tensor_args.metadata : nullptr}) {
+        if (t != nullptr) {
+            slots.push_back(t->buffer());
+        }
+    }
+    for (const auto& t : tensor_args.extra_inputs) {
+        slots.push_back(t.buffer());
+    }
+    for (const auto& t : tensor_args.extra_backings) {
+        slots.push_back(t.buffer());
+    }
+    std::sort(slots.begin(), slots.end(), std::less<>{});
+    TT_FATAL(
+        std::adjacent_find(slots.begin(), slots.end()) == slots.end(),
+        "outbound_socket_service_sync: a buffer is passed in more than one tensor slot (an input that is also a "
+        "backing, the metadata or another segment); pass distinct tensors");
+}
+
+}  // namespace
+
 void OutboundSocketServiceSyncOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     TT_FATAL(
@@ -54,11 +84,13 @@ void OutboundSocketServiceSyncOperation::validate_on_program_cache_miss(
     }
     TT_FATAL(args.page_size > 0 && args.num_pages > 0, "outbound_socket_service_sync: backing tensor has no pages");
     TT_FATAL(
-        !args.data_ready_addrs.empty() && args.service_core_x.size() == args.data_ready_addrs.size() &&
-            args.service_core_y.size() == args.data_ready_addrs.size(),
+        args.coords != nullptr && !args.coords->data_ready_addrs.empty() &&
+            args.coords->service_cores.size() == args.coords->data_ready_addrs.size(),
         "outbound_socket_service_sync: per-coord sender-service state is missing or inconsistent (was the service "
-        "built with "
-        "sender_worker_cores?)");
+        "built with sender_worker_cores?)");
+    TT_FATAL(
+        args.metadata_ring_slots <= 1 || args.coords->termination_addrs.size() == args.coords->data_ready_addrs.size(),
+        "outbound_socket_service_sync: the metadata ring needs every coord's control words");
     TT_FATAL(
         tensor_args.extra_inputs.size() == tensor_args.extra_backings.size() &&
             args.extra_page_sizes.size() == tensor_args.extra_inputs.size() &&
@@ -113,34 +145,68 @@ void OutboundSocketServiceSyncOperation::validate_on_program_cache_miss(
             tensor_args.metadata->device() == anchor.device(),
             "outbound_socket_service_sync: metadata tensor must be on the sender backing's mesh device");
         TT_FATAL(
-            args.metadata_addrs.size() == args.data_ready_addrs.size(),
+            args.coords->metadata_addrs.size() == args.coords->data_ready_addrs.size(),
             "outbound_socket_service_sync: per-coord metadata addresses are inconsistent");
     }
-    // Each buffer in one tensor slot: the cached program binds every base address to the slot that held it on this
-    // call, so an aliased call would leave a cache entry that patches two addresses from one slot on later hits.
-    // (After the per-tensor checks, so a host or deallocated input, backing or extra input fails with its own message.)
-    {
-        std::vector<const Buffer*> slots;
-        for (const auto* t :
-             {tensor_args.input ? &*tensor_args.input : nullptr,
-              tensor_args.backing ? &*tensor_args.backing : nullptr,
-              tensor_args.metadata ? &*tensor_args.metadata : nullptr}) {
-            if (t != nullptr) {
-                slots.push_back(t->buffer());
-            }
-        }
-        for (const auto& t : tensor_args.extra_inputs) {
-            slots.push_back(t.buffer());
-        }
-        for (const auto& t : tensor_args.extra_backings) {
-            slots.push_back(t.buffer());
-        }
-        std::sort(slots.begin(), slots.end(), std::less<>{});
+    check_distinct_buffers(tensor_args);
+}
+
+// Cache hit: the hash fixes the attributes, the per-coord table and every tensor spec, which the miss checked. A hit's
+// tensors are new, so only that they are allocated on the cached mesh and in distinct buffers is re-checked.
+void OutboundSocketServiceSyncOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const Tensor& anchor = args.metadata_only ? *tensor_args.metadata : *tensor_args.backing;
+    const auto check = [&anchor](const Tensor& t, const char* role) {
         TT_FATAL(
-            std::adjacent_find(slots.begin(), slots.end()) == slots.end(),
-            "outbound_socket_service_sync: a buffer is passed in more than one tensor slot (an input that is also a "
-            "backing, the metadata or another segment); pass distinct tensors");
+            t.storage_type() == StorageType::DEVICE && t.is_allocated() && t.device() == anchor.device(),
+            "outbound_socket_service_sync: {} tensor must be allocated on the sender backing's mesh device",
+            role);
+    };
+    check(anchor, args.metadata_only ? "metadata" : "backing");
+    if (!args.metadata_only) {
+        check(*tensor_args.input, "input");
     }
+    if (args.metadata_size_bytes > 0 && !args.metadata_only) {
+        check(*tensor_args.metadata, "metadata");
+    }
+    for (const auto& t : tensor_args.extra_inputs) {
+        check(t, "extra input");
+    }
+    check_distinct_buffers(tensor_args);
+}
+
+// The per-coord table hashes once in the service, so a launch hashes one word for it, not every chip's state. As with
+// any custom hash, the cache keys on the 64-bit value alone (no exact comparison of the attributes).
+ttsl::hash::hash_t OutboundSocketServiceSyncOperation::compute_program_hash(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto spec_of = [](const std::optional<Tensor>& t) {
+        return t.has_value() ? std::optional<TensorSpec>(t->tensor_spec()) : std::nullopt;
+    };
+    std::vector<TensorSpec> extra_specs;
+    extra_specs.reserve(tensor_args.extra_inputs.size() + tensor_args.extra_backings.size());
+    for (const auto& t : tensor_args.extra_inputs) {
+        extra_specs.push_back(t.tensor_spec());
+    }
+    for (const auto& t : tensor_args.extra_backings) {
+        extra_specs.push_back(t.tensor_spec());
+    }
+    return tt::tt_metal::operation::hash_operation<OutboundSocketServiceSyncOperation>(
+        args.page_size,
+        args.num_pages,
+        args.extra_page_sizes,
+        args.extra_num_pages,
+        args.scratch_cb_index,
+        args.metadata_size_bytes,
+        args.metadata_only,
+        args.worker_cores,
+        args.coords != nullptr ? args.coords->hash : 0,
+        args.metadata_ring_slots,
+        args.metadata_slot_stride,
+        args.metadata_data_offset,
+        spec_of(tensor_args.input),
+        spec_of(tensor_args.backing),
+        spec_of(tensor_args.metadata),
+        extra_specs);
 }
 
 OutboundSocketServiceSyncOperation::spec_return_value_t OutboundSocketServiceSyncOperation::compute_output_specs(
@@ -237,7 +303,6 @@ ttnn::Tensor outbound_socket_service_sync_impl(
             service_metadata_size_bytes);
     }
     attrs.worker_cores = service.get_worker_cores();
-    attrs.mesh_num_cols = num_cols;
     const bool has_metadata = attrs.metadata_size_bytes > 0;
     if constexpr (std::is_same_v<ServiceT, tt::tt_metal::D2HStreamService>) {
         if (has_metadata) {
@@ -246,29 +311,12 @@ ttnn::Tensor outbound_socket_service_sync_impl(
             attrs.metadata_data_offset = service.get_metadata_data_offset();
         }
     }
-    attrs.data_ready_addrs.reserve(num_rows * num_cols);
-    attrs.service_core_x.reserve(num_rows * num_cols);
-    attrs.service_core_y.reserve(num_rows * num_cols);
-    if (has_metadata) {
-        attrs.metadata_addrs.reserve(num_rows * num_cols);
-    }
-    for (uint32_t row = 0; row < num_rows; ++row) {
-        for (uint32_t col = 0; col < num_cols; ++col) {
-            const ttnn::MeshCoordinate coord(row, col);
-            attrs.data_ready_addrs.push_back(static_cast<uint32_t>(service.get_data_ready_counter_addr(coord)));
-            const CoreCoord service_logical = service.get_service_core(coord);
-            attrs.service_core_x.push_back(static_cast<uint32_t>(service_logical.x));
-            attrs.service_core_y.push_back(static_cast<uint32_t>(service_logical.y));
-            if (has_metadata) {
-                attrs.metadata_addrs.push_back(static_cast<uint32_t>(service.get_metadata_addr(coord)));
-            }
-            if constexpr (std::is_same_v<ServiceT, tt::tt_metal::D2HStreamService>) {
-                if (attrs.metadata_ring_slots > 1) {
-                    attrs.termination_addrs.push_back(static_cast<uint32_t>(service.get_termination_addr(coord)));
-                }
-            }
-        }
-    }
+    attrs.coords = service.get_sender_coord_table();
+    TT_FATAL(
+        attrs.coords->num_cols == num_cols && attrs.coords->data_ready_addrs.size() == num_rows * num_cols,
+        "outbound_socket_service_sync: the service's per-coord table does not cover the {}x{} mesh",
+        num_rows,
+        num_cols);
     return ttnn::device_operation::launch<OperationType>(
         attrs,
         OperationType::tensor_args_t{
