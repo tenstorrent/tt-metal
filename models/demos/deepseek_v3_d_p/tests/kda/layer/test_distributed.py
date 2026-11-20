@@ -32,6 +32,8 @@ from models.tt_transformers.tt.ccl import TT_CCL
 
 # How much more NRMSE against the fp32 reference the SP-segmented output may have than the one-shot output.
 _CHUNKED_ERROR_MARGIN = 1e-4
+# The mesh whose SP axis has four ranks, where the segmented output departs further from the one-shot output.
+_SP4_MESH_SHAPE = (4, 4)
 
 pytestmark = run_for_blackhole()
 
@@ -306,48 +308,53 @@ def test_sp_segmented_prefill_matches_one_shot(
         config=config,
         page_channels=chunk_layer.convolution_page_channels,
     )
-    # The two runs reach a group's entry state through different compositions: the distributed prefix transports
-    # each rank's composed transform as BF16, while the local scan applies the same groups in FP32. Their outputs
-    # therefore differ by about one BF16 rounding of those entry states, and that difference grows with the number
-    # of SP ranks (output NRMSE between the two runs: 5.7e-5 on 2x4 1D, 2.0e-4 on 4x4), so it is not a fixed bound.
-    # What the segmented path must not do is be less accurate than the one-shot path: both are scored against the
-    # FP32 host reference of the whole sequence, and the chunked error may exceed the one-shot error only by the
-    # 1e-4 that bounded their difference on 2x4.
     label = f"tp_axis={tensor_parallel_axis} group={summary_group_chunks}"
-    for name, output in (("one-shot", one_shot), ("chunked", chunked)):
-        assert_accurate(
-            reference.to(output.dtype),
-            output,
-            name=f"{label} {name} output vs fp32 reference",
-            pcc_threshold=0.999,
-            nrmse_threshold=0.02,
+    if tuple(mesh_device.shape) != _SP4_MESH_SHAPE:
+        # The two runs reach a group's entry state through different compositions: the distributed prefix transports
+        # each rank's composed transform as BF16, while the local scan applies the same groups in FP32. With few SP
+        # ranks the outputs agree to one BF16 rounding of those entry states (output NRMSE on 2x4 1D: 5.7e-5 with an
+        # [A | B] transport, 8.9e-6 with the complement form [E | B]); the carried states stay bit-identical.
+        assert_accurate(one_shot, chunked, name=f"{label} chunked output", pcc_threshold=0.9999, nrmse_threshold=1e-4)
+        assert_bit_identical(one_shot_recurrent, chunked_recurrent, name=f"{label} chunked recurrent")
+    else:
+        # With four SP ranks that difference grows (output NRMSE between the two runs: 2.0e-4 on 4x4), so it is not a
+        # fixed bound. What the segmented path must not do is be less accurate than the one-shot path: both are scored
+        # against the FP32 host reference of the whole sequence, and the chunked error may exceed the one-shot error
+        # only by the 1e-4 that bounded their difference on 2x4.
+        for name, output in (("one-shot", one_shot), ("chunked", chunked)):
+            assert_accurate(
+                reference.to(output.dtype),
+                output,
+                name=f"{label} {name} output vs fp32 reference",
+                pcc_threshold=0.999,
+                nrmse_threshold=0.02,
+            )
+        one_shot_error = float(nrmse(reference, one_shot))
+        chunked_error = float(nrmse(reference, chunked))
+        logger.info(f"{label}: NRMSE vs fp32 reference, one-shot {one_shot_error:.3e}, chunked {chunked_error:.3e}")
+        assert chunked_error <= one_shot_error + _CHUNKED_ERROR_MARGIN, (
+            f"{label} chunked output NRMSE {chunked_error:.3e} vs the fp32 reference exceeds the one-shot "
+            f"{one_shot_error:.3e} by more than {_CHUNKED_ERROR_MARGIN:.0e}"
         )
-    one_shot_error = float(nrmse(reference, one_shot))
-    chunked_error = float(nrmse(reference, chunked))
-    logger.info(f"{label}: NRMSE vs fp32 reference, one-shot {one_shot_error:.3e}, chunked {chunked_error:.3e}")
-    assert chunked_error <= one_shot_error + _CHUNKED_ERROR_MARGIN, (
-        f"{label} chunked output NRMSE {chunked_error:.3e} vs the fp32 reference exceeds the one-shot "
-        f"{one_shot_error:.3e} by more than {_CHUNKED_ERROR_MARGIN:.0e}"
-    )
-    # The carried recurrent state takes the same BF16 entry-state roundings, so it is held to the same bound.
-    for name, state in (("one-shot", one_shot_recurrent), ("chunked", chunked_recurrent)):
-        assert_accurate(
-            reference_state.recurrent,
-            state,
-            name=f"{label} {name} recurrent vs fp32 reference",
-            pcc_threshold=0.999,
-            nrmse_threshold=0.03,
+        # The carried recurrent state takes the same BF16 entry-state roundings, so it is held to the same bound.
+        for name, state in (("one-shot", one_shot_recurrent), ("chunked", chunked_recurrent)):
+            assert_accurate(
+                reference_state.recurrent,
+                state,
+                name=f"{label} {name} recurrent vs fp32 reference",
+                pcc_threshold=0.999,
+                nrmse_threshold=0.03,
+            )
+        one_shot_state_error = float(nrmse(reference_state.recurrent, one_shot_recurrent))
+        chunked_state_error = float(nrmse(reference_state.recurrent, chunked_recurrent))
+        logger.info(
+            f"{label}: recurrent NRMSE vs fp32 reference, one-shot {one_shot_state_error:.3e}, "
+            f"chunked {chunked_state_error:.3e}"
         )
-    one_shot_state_error = float(nrmse(reference_state.recurrent, one_shot_recurrent))
-    chunked_state_error = float(nrmse(reference_state.recurrent, chunked_recurrent))
-    logger.info(
-        f"{label}: recurrent NRMSE vs fp32 reference, one-shot {one_shot_state_error:.3e}, "
-        f"chunked {chunked_state_error:.3e}"
-    )
-    assert chunked_state_error <= one_shot_state_error + _CHUNKED_ERROR_MARGIN, (
-        f"{label} chunked recurrent NRMSE {chunked_state_error:.3e} vs the fp32 reference exceeds the one-shot "
-        f"{one_shot_state_error:.3e} by more than {_CHUNKED_ERROR_MARGIN:.0e}"
-    )
+        assert chunked_state_error <= one_shot_state_error + _CHUNKED_ERROR_MARGIN, (
+            f"{label} chunked recurrent NRMSE {chunked_state_error:.3e} vs the fp32 reference exceeds the one-shot "
+            f"{one_shot_state_error:.3e} by more than {_CHUNKED_ERROR_MARGIN:.0e}"
+        )
     assert_bit_identical(one_shot_convolution, chunked_convolution, name=f"{label} chunked convolution")
 
 
