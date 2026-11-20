@@ -34,8 +34,8 @@ pytestmark = run_for_blackhole()
 
 _ROWS, _HEADS, _KEY = 640, 24, 128
 _CHUNKS = _ROWS // 32
-# The gated output norm: its gate starts a tile column into a [1, T, K + H*V] gate tensor.
-_GATE_OFFSET, _NORM_EPSILON = _KEY, 1e-6
+# The gated output norm, its gate x @ W at K3's width: x [B, T, 7168] BF16, W [7168, H*V] BFP8.
+_GATE_INPUT, _NORM_EPSILON = 7168, 1e-6
 # The model's relay runs at the affine prefix's fidelity, on the model's cores.
 _PROGRAM_CONFIG = kimi_k3_program_config(active_seq_len_local=_ROWS, tp_ccl_topology=ttnn.Topology.Linear).recurrence
 _MATH_FIDELITY = _PROGRAM_CONFIG.affine_prefix_math_fidelity
@@ -109,7 +109,7 @@ class _Transforms:
         ``batch`` batches in the norm's gate and output."""
         self.mesh_device = mesh_device
         self.sp_size, self.tp_size = _sp_tp(mesh_device)
-        self.batch, gate_width = batch, _GATE_OFFSET + _HEADS // batch * _KEY
+        self.batch, gate_width = batch, _HEADS // batch * _KEY
         if seed is None:
             shape = (self.sp_size, _HEADS, _KEY, _KEY)
             a, b = closed_form_tensor(*shape, offset=-0.125), closed_form_tensor(*shape, offset=0.0625)
@@ -118,7 +118,8 @@ class _Transforms:
             self.identity = self.zero.flip(-1)
             self.final_e = closed_form_tensor(_HEADS, _KEY, _KEY, offset=-0.1)
             self.final_b = closed_form_tensor(_HEADS, _KEY, _KEY, offset=0.05)
-            self.gate = closed_form_tensor(batch, _ROWS, gate_width, offset=0.2)
+            self.gate_input = closed_form_tensor(batch, _ROWS, _GATE_INPUT, offset=0.2)
+            self.gate_weight = closed_form_tensor(_GATE_INPUT, gate_width, offset=0.1) / _GATE_INPUT**0.5
             self.weight = closed_form_tensor(_KEY, offset=1.0)
         else:
             generator = torch.Generator().manual_seed(seed)
@@ -129,23 +130,33 @@ class _Transforms:
             self.identity = 0.1 * torch.randn(_HEADS, _CHUNKS, 32, _KEY, generator=generator)
             self.final_e = 0.1 * torch.randn(_HEADS, _KEY, _KEY, generator=generator)
             self.final_b = 0.1 * torch.randn(_HEADS, _KEY, _KEY, generator=generator)
-            self.gate = torch.randn(batch, _ROWS, gate_width, generator=generator)
+            self.gate_input = torch.randn(batch, _ROWS, _GATE_INPUT, generator=generator)
+            self.gate_weight = torch.randn(_GATE_INPUT, gate_width, generator=generator) / _GATE_INPUT**0.5
             self.weight = 1 + 0.1 * torch.randn(_KEY, generator=generator)
-        self.gate, self.weight = self.gate.bfloat16().float(), self.weight.bfloat16().float()
+        self.gate_input, self.gate_weight, self.weight = (
+            t.bfloat16().float() for t in (self.gate_input, self.gate_weight, self.weight)
+        )
+        # W is BFP8 on device, as in the model: the reference takes the same rounded values.
+        self.gate_weight = ttnn.to_torch(
+            ttnn.from_torch(self.gate_weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+        ).float()
+        self.gate = self.gate_input.double() @ self.gate_weight.double()
         # A BF16-representable E and B make the BF16 transport exact for both paths; A = E + I exactly.
         e, self.b = (a - torch.eye(_KEY)).bfloat16().float(), b.bfloat16().float()
         self.a = e + torch.eye(_KEY)
         self.packed = _pack(mesh_device, self.a, self.b)
         self.initial_tt = _replicated(mesh_device, self.initial)
         self.inputs = _inputs(mesh_device, relay, self.zero, self.identity, self.final_e, self.final_b)
+        gate_input, gate_local = _gate_inputs(mesh_device, self.gate_input)
         self.norm = OutputNorm(
-            gate=_replicated(mesh_device, self.gate, dtype=ttnn.bfloat16),
+            gate_input=gate_input,
+            gate_weight=_replicated(mesh_device, self.gate_weight, dtype=ttnn.bfloat8_b),
             weight=_replicated(mesh_device, self.weight, dtype=ttnn.bfloat16),
             num_heads=_HEADS // batch,
-            gate_column_offset=_GATE_OFFSET,
             norm_epsilon=_NORM_EPSILON,
             output_dtype=output_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            gate_local=gate_local,
         )
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(), math_fidelity=_MATH_FIDELITY, fp32_dest_acc_en=True, packer_l1_acc=False
@@ -162,7 +173,7 @@ class _Transforms:
 
     def normalize(self, x: torch.Tensor) -> torch.Tensor:
         """The gated output norm of [B*H, chunks, 32, V] chunk outputs."""
-        gate = self.head_major(self.gate[:, :, _GATE_OFFSET:])
+        gate = self.head_major(self.gate)
         return sigmoid_gated_rms_norm_reference(x, gate, self.weight, _NORM_EPSILON, dtype=torch.float64)
 
     def reference(self, start: int):
@@ -232,6 +243,35 @@ def _replicated(
         device=mesh_device,
         memory_config=memory_config,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+def _gate_inputs(mesh_device, gate_input: torch.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
+    """The gate's input as the layer hands it over with TP > 1: per TP rank, the gathered input with its own slice NaN
+    (the fused gather leaves it unwritten) and the slice itself; with one TP rank, the input."""
+    _, tp_size = _sp_tp(mesh_device)
+    if tp_size == 1:
+        return _replicated(mesh_device, gate_input, dtype=ttnn.bfloat16), None
+    width = gate_input.shape[-1] // tp_size
+    gathered, local = [], []
+    for tp in range(tp_size):
+        columns = slice(tp * width, (tp + 1) * width)
+        poisoned = gate_input.clone()
+        poisoned[..., columns] = float("nan")
+        gathered.append(poisoned)
+        local.append(gate_input[..., columns])
+    dims = (None, 0) if _sp_axis(mesh_device) == 0 else (0, None)
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=dims, mesh_shape=tuple(mesh_device.shape))
+    return tuple(
+        ttnn.from_torch(
+            torch.cat(slices),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+        for slices in (gathered, local)
     )
 
 
@@ -555,11 +595,12 @@ def _perf_case(shape: tuple[int, int], topology: str, case_id: str, reference_us
     return pytest.param(*case.values, reference_us, margin, marks=case.marks, id=case_id)
 
 
-# Device-time references in us, with K3's payload, two-sided (faster fails too: re-centre it): Galaxy on TorusXY and a
-# 4x4 stage on its X ring. LoudBox and QuietBox (TorusY) report until a CI run gives their references.
+# Device-time references in us, with K3's payload and its output gate, two-sided (faster fails too: re-centre it):
+# Galaxy on TorusXY and a 4x4 stage on its X ring. LoudBox and QuietBox (TorusY) report until a CI run gives their
+# references.
 _PERF_CASES = [
-    _perf_case((8, 4), "mesh-8x4", "SP8xTP4", 174.2, 0.05),
-    _perf_case((4, 4), "mesh-4x4", "galaxy4x4-SP4xTP4", 148.3, 0.05),
+    _perf_case((8, 4), "mesh-8x4", "SP8xTP4", 227.8, 0.05),
+    _perf_case((4, 4), "mesh-4x4", "galaxy4x4-SP4xTP4", 213.4, 0.05),
     _perf_case((8, 1), "ring", "loudbox-SP8xTP1-ring", None, 0.05),
     _perf_case((4, 1), "ring", "quietbox-SP4xTP1-ring", None, 0.05),
 ]

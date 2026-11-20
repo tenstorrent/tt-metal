@@ -14,6 +14,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
+#include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
@@ -21,6 +22,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/activations.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/matmul_subblock.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/relay_chunk_scan/device/kernels/compute/gate_matmul.hpp"
 
 namespace ckl = compute_kernel_lib;
 
@@ -55,8 +57,8 @@ constexpr uint32_t cores_per_head = get_compile_time_arg_val(19);
 constexpr uint32_t grid_x = get_compile_time_arg_val(20);
 constexpr uint32_t first_core = get_compile_time_arg_val(21);
 // The gated output norm of each chunk row x: x / sqrt(mean(x^2) + epsilon) * g with g = sigmoid(gate) * weight. The
-// squares, the mean's scaler, 1 / rms, the gate rows, the weight (row 0 of its tiles) and broadcast down every row,
-// each chunk's g (formed while the seeds are on their way: all in place, one streamed), and the result.
+// squares, the mean's scaler, 1 / rms, the gate rows (FP32, all of the core's chunks), the weight (row 0 of its tiles)
+// and broadcast down every row, each chunk's g (all in place, one streamed), and the result.
 constexpr uint32_t cb_square = get_compile_time_arg_val(22);
 constexpr uint32_t cb_scaler = get_compile_time_arg_val(23);
 constexpr uint32_t cb_inv_rms = get_compile_time_arg_val(24);
@@ -68,9 +70,22 @@ constexpr uint32_t cb_gate_factor = get_compile_time_arg_val(29);
 constexpr uint32_t epsilon_bits = get_compile_time_arg_val(30);
 // An FP32 output takes the FP32-accurate sigmoid; a BF16 one needs only the BF16-accurate exp and one reciprocal step.
 constexpr bool fp32_output = get_compile_time_arg_val(31);
+// The output gate x @ W of the core's chunks, on every core of a head but its first (a helper forms that one's): K
+// blocks of x and of W, at gate_fidelity.
+constexpr uint32_t cb_gin0 = get_compile_time_arg_val(32);
+constexpr uint32_t cb_gin1 = get_compile_time_arg_val(33);
+constexpr uint32_t gate_kb = get_compile_time_arg_val(34);
+constexpr uint32_t gate_blocks = get_compile_time_arg_val(35);
+constexpr auto gate_fidelity = static_cast<ckernel::MathFidelity>(get_compile_time_arg_val(36));
+// The partial sums of the pair's other head, and the pair's core's of this core's head (the output gate's heads pair
+// up, h with h + heads / 2, each core forming both over its head's half of K).
+constexpr uint32_t cb_gate_pair = get_compile_time_arg_val(37);
+constexpr uint32_t cb_gate_partial = get_compile_time_arg_val(38);
+constexpr uint32_t gate_heads = get_compile_time_arg_val(39);
+// 2 where the heads pair up, else 1 (each core its head over all of K).
+constexpr uint32_t gate_ways = get_compile_time_arg_val(40);
 constexpr uint32_t state_tiles = kt * kt;
-constexpr uint32_t dst_tiles =
-    ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
+constexpr uint32_t dst_tiles = compute_kernel_lib::DEST_AUTO_LIMIT;
 // A tile column of the next state is formed in one DST pass (the op checks K against the DST).
 static_assert(kt <= dst_tiles);
 // A DST pass of the carry or the norm takes `half_dst` tiles, with as many operand tiles beside them.
@@ -343,12 +358,12 @@ void correct(uint32_t begin, uint32_t end, uint32_t seed) {
     }
 }
 
-// Every core of a head corrects its chunks; the head's first core also runs the relay's hop first and, on the first
-// rank, the final carry between the chunks that start from the entry state and those of the separated tail, which
-// start from P.
+// Every core of a head corrects its chunks once their gate rows are formed: the head's other cores form them first,
+// the head's first core runs the relay's hop instead and, on the first rank, the final carry (from P, which lands after
+// the lap) before its chunks, whose rows its helper forms meanwhile.
 void kernel_main() {
-    const bool relay_head =
-        (get_absolute_logical_y() * grid_x + get_absolute_logical_x() - first_core) % cores_per_head == 0;
+    const uint32_t core = get_absolute_logical_y() * grid_x + get_absolute_logical_x() - first_core;
+    const bool relay_head = core % cores_per_head == 0;
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_terms, cb_seed, cb_out);
     cb_wait_front(cb_ctl, 1);
     const uint32_t holder = read_tile_value(cb_ctl, 0, 0);
@@ -357,28 +372,36 @@ void kernel_main() {
     const uint32_t group_chunks = read_tile_value(cb_ctl, 0, 3);
     cb_pop_front(cb_ctl, 1);
 
-    // The norm's weight rows and, in place, every chunk's g while the seeds are on their way; on a head core after
-    // the hop on the first rank, before it elsewhere (the entry state arrives after a share of the lap).
-    const auto prepare_norm = [&]() {
-        if (chunks != 0) {
-            cb_wait_front(cb_scaler, 1);
-            broadcast_weight();
-        }
-        if constexpr (!streamed) {
-            gate_factors(chunks);
-        }
-    };
-    if (relay_head && !holder) {
-        prepare_norm();
-    }
     if (relay_head) {
         relay_hop();
+        if (holder) {
+            carry_pass(split);
+        }
+    } else {
+        const uint32_t head = core / cores_per_head;
+        kda_gate::matmul<gate_fidelity>(
+            cb_gin0,
+            cb_gin1,
+            cb_gate,
+            cb_gate_pair,
+            gate_ways == 1 || head % gate_heads < gate_heads / 2,
+            gate_ways,
+            core_chunks,
+            kt,
+            gate_kb,
+            gate_blocks);
+        if constexpr (gate_ways == 2) {
+            kda_gate::add_pair(cb_gate_partial, cb_gate, core_chunks * kt);
+        }
     }
-    if (!relay_head || holder) {
-        prepare_norm();
+    // The norm's weight rows.
+    if (chunks != 0) {
+        cb_wait_front(cb_scaler, 1);
+        broadcast_weight();
     }
-    // In place, every chunk's difference while the seeds are on their way.
+    // In place, every chunk's g and difference while the seeds are on their way.
     if constexpr (!streamed) {
+        gate_factors(chunks);
         if (chunks != 0) {
             cb_wait_front(cb_terms, terms_tiles);
             cb_reserve_back(cb_diff, chunks * kt);
@@ -388,9 +411,6 @@ void kernel_main() {
         }
     }
     correct(0, group_chunks, cb_seed);
-    if (relay_head && holder) {
-        carry_pass(split);
-    }
     correct(group_chunks, chunks, cb_tail);
     if (group_chunks != 0) {
         cb_pop_front(cb_seed, state_tiles);
