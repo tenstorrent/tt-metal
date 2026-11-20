@@ -6358,23 +6358,25 @@ tasks:
       identical on both branches (overseer commit ef0b35dd8c6). CORRECTION (owner 2026-11-20 22:20, MB.1): PB.9F''s ''single
       request 8192: 0 builds'' was a test artefact (its walls did not go through adapter.prefill_chunk); through the adapter
       the 8192 single-request path rebuilds ~160-175 programs over fresh chunks (fresh 49.4k vs 72.8k warm).'
-    details: 'OWNER 2026-11-20 (binding): take the shipped branch''s fix as is into this branch. Do: `git merge --squash --no-commit
-      dnijemcevic/model_bringup` (squash: the orchestrator commits your tree as one commit; no merge commit), then `git checkout
-      HEAD -- models/demos/deepseek_v41_flash_d_p/bringup/ledgers models/demos/common/bringup` (this branch''s ledger and
-      framework stay exactly as they are: never take the other branch''s tasks.yaml, state, results or supervision.md), then
-      resolve every conflict in the model''s code, tests, hooks, BREADCRUMBS / known_issues / repo_map and ttnn/ttnn/bringup
-      so that BOTH sides'' behaviour survives: every packed / glued switch of this branch and MB.2''s POS_DYNAMIC (default
-      on, in batch_call_settings) and its device-side ids reorder. Where both sides changed the same per-chunk value (page_copy.py,
-      snapshot_send.py, served.py, rope.py, history_gather.py, attention.py, compressor.py, adapter.py), keep one implementation
-      that serves both paths (the glued path''s runtime-value pieces and MB.2''s are meant to be the same mechanism; no duplicate
-      helper). Keep MB.1''s test changes (fresh walls through adapter.prefill_chunk, fresh_common.py) and make them work beside
-      this branch''s tests/packed/fresh_common.py (one helper, not two diverging copies). test_no_rebuild.py must also run
-      at BRINGUP_CHUNK=8192 with the packed switches on (single-request chunks; extend it only if it does not). Gate (all
-      must pass): the packed and glued oracles bit-identical (0), the 8192 single-request reference, fresh walls through the
-      adapter at 8192 with program_builds_after_warmup == 0 and test_no_rebuild at 8192 (one model geometry a gate, F283:
-      the 5120 accept units, 5120 fresh walls and test_no_rebuild at 5120 run right after as the scripted PB.MB5; make sure
-      they pass too: run them yourself through the resident runner before you finish) (0 builds, 0 ids uploads). Report fresh
-      vs warm per case (8192 and 5120; next to PB.9F / PB.9F5 / MB.2) in models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.MB_fresh_walls.md.
+    details: 'OWNER 2026-11-20 (binding): take the shipped branch''s fix as is into this branch. Do (path-limited, never a
+      whole-tree git merge / checkout / stash: the orchestrator''s ledger files are live and dirty): `git diff bcab6af973b
+      dnijemcevic/model_bringup -- models/demos/deepseek_v41_flash_d_p/tt models/demos/deepseek_v41_flash_d_p/tests models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+      models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+      models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md ttnn/ttnn/bringup > $TMPDIR/mb.patch && git apply --3way $TMPDIR/mb.patch`
+      (the merge base is bcab6af973b; the framework is already identical; never take the other branch''s ledger: tasks.yaml,
+      state, results, supervision.md, overseer.yaml), then resolve every conflict in the model''s code, tests, hooks, BREADCRUMBS
+      / known_issues / repo_map and ttnn/ttnn/bringup so that BOTH sides'' behaviour survives: every packed / glued switch
+      of this branch and MB.2''s POS_DYNAMIC (default on, in batch_call_settings) and its device-side ids reorder. Where both
+      sides changed the same per-chunk value (page_copy.py, snapshot_send.py, served.py, rope.py, history_gather.py, attention.py,
+      compressor.py, adapter.py), keep one implementation that serves both paths (the glued path''s runtime-value pieces and
+      MB.2''s are meant to be the same mechanism; no duplicate helper). Keep MB.1''s test changes (fresh walls through adapter.prefill_chunk,
+      fresh_common.py) and make them work beside this branch''s tests/packed/fresh_common.py (one helper, not two diverging
+      copies). test_no_rebuild.py must also run at BRINGUP_CHUNK=8192 with the packed switches on (single-request chunks;
+      extend it only if it does not). Gate (all must pass): the packed and glued oracles bit-identical (0), the 8192 single-request
+      reference, fresh walls through the adapter at 8192 with program_builds_after_warmup == 0 and test_no_rebuild at 8192
+      (one model geometry a gate, F283: the 5120 accept units, 5120 fresh walls and test_no_rebuild at 5120 run right after
+      as the scripted PB.MB5; make sure they pass too: run them yourself through the resident runner before you finish) (0
+      builds, 0 ids uploads). Report fresh vs warm per case (8192 and 5120; next to PB.9F / PB.9F5 / MB.2) in models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.MB_fresh_walls.md.
       Fixed lanes are NOT in scope here (still rebuilding; the next task routes them through the glued path). If a 0-build
       gate fails at 8192 only, fix it at the cause (rule 20), never by keying a program on the chunk. OWNER RULES FOR EVERY
       PB TASK (binding): read models/demos/deepseek_v41_flash_d_p/bringup/PACKED_RULES.md first, and rule 20 of models/demos/common/bringup/agents/bringup-engineer.md
