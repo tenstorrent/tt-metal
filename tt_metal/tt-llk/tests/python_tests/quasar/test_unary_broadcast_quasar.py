@@ -106,7 +106,7 @@ def get_valid_dest_acc_unary_broadcast(formats):
     formats=UNARY_BROADCAST_FORMATS,
     dest_acc=lambda formats: get_valid_dest_acc_unary_broadcast(formats),
     broadcast_type=BROADCAST_TYPES,
-    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=False),
+    dest_sync=lambda: quasar_dest_sync_modes(is_perf=False),
     input_dimensions=runtime(INPUT_DIMENSIONS),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
@@ -115,7 +115,7 @@ def test_unary_broadcast_quasar(
     formats,
     dest_acc,
     broadcast_type,
-    dest_sync_mode,
+    dest_sync,
     input_dimensions,
     run_types,
     loop_factor,
@@ -141,7 +141,7 @@ def test_unary_broadcast_quasar(
     tile_cnt = (rows // tile_rows) * (cols // tile_cols)
 
     output_num_blocks, output_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        dest_sync_mode,
+        dest_sync,
         dest_acc,
         formats,
         input_dimensions,
@@ -192,7 +192,7 @@ def test_unary_broadcast_quasar(
     templates = [
         UNPACKER_ENGINE_SEL(unpacker_sel),
         BROADCAST_TYPE(broadcast_type),
-        DEST_SYNC(dest_sync_mode),
+        DEST_SYNC(dest_sync),
     ]
     if acc_to_dest is not None:
         templates.append(ACC_TO_DEST(acc_to_dest))
@@ -274,14 +274,14 @@ UNARY_BROADCAST_ACC_INPUT_DIMENSIONS = [256, 32]
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     broadcast_type=BROADCAST_TYPES,
     acc_to_dest=[False, True],
-    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=False),
+    dest_sync=lambda: quasar_dest_sync_modes(is_perf=False),
 )
 def test_unary_broadcast_acc_to_dest_quasar(
     formats,
     dest_acc,
     broadcast_type,
     acc_to_dest,
-    dest_sync_mode,
+    dest_sync,
 ):
     """Seed Dest with a plain broadcast of A, then broadcast B with acc_to_dest.
 
@@ -292,7 +292,7 @@ def test_unary_broadcast_acc_to_dest_quasar(
         formats,
         dest_acc,
         broadcast_type,
-        dest_sync_mode,
+        dest_sync,
         UNARY_BROADCAST_ACC_INPUT_DIMENSIONS,
         run_types=[PerfRunType.L1_TO_L1],
         loop_factor=1,

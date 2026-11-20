@@ -12,7 +12,7 @@ from models.demos.vision.segmentation.vgg_unet.common.common import load_torch_m
 from models.demos.vision.segmentation.vgg_unet.common.reference.vgg_unet import UNetVGG19
 from models.demos.vision.segmentation.vgg_unet.common.ttnn.model_preprocessing import create_vgg_unet_model_parameters
 from models.demos.vision.segmentation.vgg_unet.common.ttnn.ttnn_vgg_unet import Tt_vgg_unet
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(

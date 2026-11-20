@@ -19,6 +19,10 @@ void FusedRMSNormPreAllGatherDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(tensor.layout() == Layout::TILE, "Input tensor must have TILE layout, got: {}", tensor.layout());
     TT_FATAL(
+        tensor.padded_shape()[-1] > 0 && tensor.padded_shape()[-2] > 0,
+        "Input must have non-zero height and width, got shape {}",
+        tensor.padded_shape());
+    TT_FATAL(
         tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Input tensor must use INTERLEAVED memory layout, got: {}",
         tensor.memory_config().memory_layout());
