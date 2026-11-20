@@ -302,6 +302,25 @@ public:
 
     size_t get_memory_map_end_address() const;
 
+    // The get_memory_map_end_address() a config built with these arguments against `mesh_device` would have, without
+    // building one, so a caller can size a mux to fit L1 before committing to its channel counts.
+    static size_t compute_memory_map_end_address(
+        const tt::tt_metal::distributed::MeshDevice& mesh_device,
+        uint8_t num_full_size_channels,
+        uint8_t num_header_only_channels,
+        uint8_t num_buffers_full_size_channel,
+        uint8_t num_buffers_header_only_channel,
+        size_t buffer_size_bytes_full_size_channel,
+        size_t base_l1_address);
+
+    // The address a mux's memory map must end by on a `core_type` core of `mesh_device`: the physical end of L1, or
+    // usable_l1_end_address when that is lower (0 means no lower bound). The constructor fails when the map ends past
+    // it, so compare compute_memory_map_end_address() against it to size a mux that will build.
+    static size_t compute_l1_end_address(
+        const tt::tt_metal::distributed::MeshDevice& mesh_device,
+        CoreType core_type = CoreType::WORKER,
+        size_t usable_l1_end_address = 0);
+
     // Returns vector of pairs of base addresses and size to clear
     std::vector<std::pair<size_t, size_t>> get_memory_regions_to_clear() const;
 
@@ -353,6 +372,34 @@ private:
         size_t get_end_address() const;
         size_t get_total_size() const;
     };
+
+    // The mux's L1 regions, in address order from the base address.
+    struct MemoryMap {
+        MemoryRegion status;
+        MemoryRegion local_fabric_router_status;
+        MemoryRegion termination_signal;
+        MemoryRegion connection_info;
+        MemoryRegion connection_handshake;
+        MemoryRegion flow_control;
+        MemoryRegion buffer_index;
+        MemoryRegion full_size_channels;
+        MemoryRegion header_only_channels;
+    };
+
+    // Lays out the mux's L1 regions from `base_l1_address`. The constructor and compute_memory_map_end_address() both
+    // use it, so the end address a caller budgets with is the one the mux gets.
+    static MemoryMap lay_out_memory_map(
+        size_t base_l1_address,
+        size_t noc_aligned_address_size_bytes,
+        uint8_t num_full_size_channels,
+        uint8_t num_header_only_channels,
+        uint8_t num_buffers_full_size_channel,
+        uint8_t num_buffers_header_only_channel,
+        size_t buffer_size_bytes_full_size_channel,
+        size_t buffer_size_bytes_header_only_channel);
+
+    // A channel built with 0 buffers gets default_num_buffers, so its kernel compiles; it carries no traffic.
+    static uint8_t num_buffers_or_default(uint8_t num_buffers);
 
     CoreType core_type_ = CoreType::WORKER;
     uint8_t core_type_index_ = 0;
