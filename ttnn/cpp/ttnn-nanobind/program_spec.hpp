@@ -4,15 +4,19 @@
 
 #pragma once
 
-#include "ttnn-nanobind/nanobind_fwd.hpp"
+#include <string_view>
+#include <utility>
+#include <vector>
 
-namespace nanobind {
-class object;
-}  // namespace nanobind
+#include "ttnn-nanobind/nanobind_fwd.hpp"
 
 namespace tt::tt_metal {
 struct ProgramRunArgs;
 }  // namespace tt::tt_metal
+
+namespace ttnn {
+class Tensor;
+}  // namespace ttnn
 
 namespace ttnn::experimental {
 struct MeshProgramRunArgs;
@@ -25,13 +29,16 @@ namespace nb = nanobind;
 // MeshProgramSpec and MeshProgramRunArgs, re-exported under ttnn.experimental.
 void py_module_types(nb::module_& mod);
 
-// The tensor_args dict (tensor parameter name to ttnn.Tensor) of a ProgramRunArgs made in Python, or None for run
-// args made in C++. The C++ object keeps only the tensors' MeshTensors, which per-device views of one tensor share,
-// while the dict keeps the tensors themselves. Read it only, with the GIL held.
-nb::object python_tensor_args(const tt::tt_metal::ProgramRunArgs& run_args);
+// A tensor argument of run args made in Python: the tensor parameter's name and the ttnn.Tensor bound to it. The C++
+// run args keep only the tensor's MeshTensor, which the per-device views of one tensor share.
+using PythonTensorArg = std::pair<std::string_view, const ttnn::Tensor*>;
 
-// For a MeshProgramRunArgs made in Python, the list of those dicts, one per program in the order of its programs; None
-// for run args made in C++. Read it only, with the GIL held.
-nb::object python_tensor_args(const ttnn::experimental::MeshProgramRunArgs& run_args);
+// The tensor arguments of a ProgramRunArgs made in Python, in tensor_args order; none for run args made in C++. The
+// names and tensors belong to the Python object: use them only while holding the GIL, and run no Python code meanwhile.
+std::vector<PythonTensorArg> python_tensor_args(const tt::tt_metal::ProgramRunArgs& run_args);
+
+// The tensor arguments of each program of a MeshProgramRunArgs made in Python, in the order of its programs; none for
+// run args made in C++. The same rules apply.
+std::vector<std::vector<PythonTensorArg>> python_tensor_args(const ttnn::experimental::MeshProgramRunArgs& run_args);
 
 }  // namespace ttnn::program_spec
