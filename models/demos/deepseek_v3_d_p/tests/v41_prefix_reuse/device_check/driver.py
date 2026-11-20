@@ -142,9 +142,12 @@ def run_prompt(phase: str, name: str, arm: str, *, digest=False, mark=True, time
     base = acked
     marks = {base + (k + 1) * ACKS_PER_CHUNK: None for k in range(len(chunks))}
     t0 = time.perf_counter()
-    cone0 = max(0, (S - DECODER_CONE) // 128 * 128) if DECODER_CONE > 0 else S
+    # the P prompts run encoder-only unless PREFIX_CHECK_DECODER_CONE_P=1: a ragged decoder chunk at ~127k on the islands
+    # path with arm off asserted ("path A with islands needs the warm-up ...", WS1 run ws1_base1 11-19 23:16)
+    cone = DECODER_CONE if (phase != "P" or os.environ.get("PREFIX_CHECK_DECODER_CONE_P", "0") == "1") else 0
+    cone0 = max(0, (S - cone) // 128 * 128) if cone > 0 else S
     for k, (s, e) in enumerate(chunks):
-        push(toks, s, e, k == len(chunks) - 1, mark, dec=DECODER_CONE > 0 and e > cone0)
+        push(toks, s, e, k == len(chunks) - 1, mark, dec=cone > 0 and e > cone0)
     ok = wait_acks(base + len(chunks) * ACKS_PER_CHUNK, timeout_s, marks)
     done = [None if v is None else round(v - t0, 4) for v in marks.values()]
     r = {
