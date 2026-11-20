@@ -3,6 +3,8 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.runners import kv_chunk_table
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import assert_full_mesh_stripe_order
@@ -92,14 +94,20 @@ def test_kimi_k3_kda_config_names_match_decode(tmp_path, monkeypatch):
 
 # ---- Kimi-K3.1: DSA index cache next to the KDA slabs ------------------------------------------------
 # Host-only: the real populate walks run off gathered stage layouts, so no device is needed.
-_K31_MESH = (8, 4)
 # 7 model layers: MLA (kvpe + DSA index) at 2 and 6, KDA elsewhere; split over two pipeline stages.
 _K31_MLA_ROWS = [2, 6]
 _K31_KDA_ROWS = [0, 1, 3, 4, 5]
+# The stage layouts K3.1 runs: one 8x4 stage per galaxy (SP on axis 0, 5120-token chunks, TP-replicated table) and
+# the manifest's 4x4 stage (SP on the axis-1 ring, 2560-token chunks, KV TP-deduped over all 16 chips, as the
+# runner allocates it).
+_K31_LAYOUTS = [
+    pytest.param(SimpleNamespace(mesh=(8, 4), sp_axis=0, chunk=5120, tp_deduped=False), id="8x4-sp0"),
+    pytest.param(SimpleNamespace(mesh=(4, 4), sp_axis=1, chunk=2560, tp_deduped=True), id="4x4-sp1"),
+]
 
 
-def _k31_stage(rank, first_layer, count, base_addr):
-    rows, cols = _K31_MESH
+def _k31_stage(layout, rank, first_layer, count, base_addr):
+    rows, cols = layout.mesh
     return {
         "rank": rank,
         "first_layer": first_layer,
@@ -111,13 +119,14 @@ def _k31_stage(rank, first_layer, count, base_addr):
     }
 
 
-def _k31_table(tmp_path, monkeypatch, name, *, index, kda):
+def _k31_table(tmp_path, monkeypatch, layout, name, *, index, kda):
     """Build and round-trip a merged table over kvpe (+ the DSA index cache) (+ the KDA slabs)."""
     from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
     from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaContractGeometry
-    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import PREFILL_CHUNK_TOKENS
 
-    monkeypatch.setattr(kv_chunk_table, "is_tp_deduped_kv_cache", lambda *_: False)
+    sp_axis, tp_axis = layout.sp_axis, 1 - layout.sp_axis
+    # The table reads the dedup layout from the kvpe cache's declared topology, which these doubles do not carry.
+    monkeypatch.setattr(kv_chunk_table, "is_tp_deduped_kv_cache", lambda *_: layout.tp_deduped)
     monkeypatch.setattr(ttnn, "distributed_context_get_rank", lambda: 0)
     # Scaled-fp8 kvpe in decode's GLM format: one 704-byte row page per token, 22,528 B per 32 tokens.
     kvpe = SimpleNamespace(
@@ -127,7 +136,7 @@ def _k31_table(tmp_path, monkeypatch, name, *, index, kda):
         buffer_aligned_page_size=lambda: 704,
         buffer_address=lambda: 0x1000_0000,
     )
-    stage_layouts = [[_k31_stage(0, 0, 1, 0x1000_0000), _k31_stage(1, 1, 1, 0x1800_0000)]]
+    stage_layouts = [[_k31_stage(layout, 0, 0, 1, 0x1000_0000), _k31_stage(layout, 1, 1, 1, 0x1800_0000)]]
     index_kwargs = {}
     if index:
         index_kwargs = dict(
@@ -136,29 +145,35 @@ def _k31_table(tmp_path, monkeypatch, name, *, index, kda):
             ),
             index_layer_ids=_K31_MLA_ROWS,  # every MLA layer owns its indexer
         )
-        stage_layouts.append([_k31_stage(0, 0, 1, 0x2000_0000), _k31_stage(1, 1, 1, 0x2800_0000)])
+        stage_layouts.append([_k31_stage(layout, 0, 0, 1, 0x2000_0000), _k31_stage(layout, 1, 1, 1, 0x2800_0000)])
     kda_spec = None
     if kda:
         kda_spec = kv_chunk_table.KdaTableSpec(
             geometry=KdaContractGeometry.from_kda_config(
-                kimi_k3_kda_config(), mesh_shape=_K31_MESH, sp_axis=0, tp_axis=1
+                kimi_k3_kda_config(), mesh_shape=layout.mesh, sp_axis=sp_axis, tp_axis=tp_axis
             ),
             recurrent=None,
             convolution=None,
-            recurrent_layout=[_k31_stage(0, 0, 3, 0x3000_0000), _k31_stage(1, 3, 2, 0x3800_0000)],
-            convolution_layout=[_k31_stage(0, 0, 3, 0x4000_0000), _k31_stage(1, 3, 2, 0x4800_0000)],
+            recurrent_layout=[
+                _k31_stage(layout, 0, 0, 3, 0x3000_0000),
+                _k31_stage(layout, 1, 3, 2, 0x3800_0000),
+            ],
+            convolution_layout=[
+                _k31_stage(layout, 0, 0, 3, 0x4000_0000),
+                _k31_stage(layout, 1, 3, 2, 0x4800_0000),
+            ],
             layer_rows=_K31_KDA_ROWS,
         )
     path = kv_chunk_table.build_and_serialize_kv_chunk_table(
         mesh_device=None,
         kvpe_cache=SimpleNamespace(storage=kvpe),
-        seq_len=PREFILL_CHUNK_TOKENS,
+        seq_len=layout.chunk,
         num_layers=7,
-        mesh_shape=_K31_MESH,
-        sp_axis=0,
-        tp_axis=1,
+        mesh_shape=layout.mesh,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
         num_users=2,
-        chunk_size_global=PREFILL_CHUNK_TOKENS,
+        chunk_size_global=layout.chunk,
         path=str(tmp_path / f"{name}.pb"),
         stage_layouts=stage_layouts,
         layer_rows=_K31_MLA_ROWS,
@@ -198,12 +213,13 @@ def _config_contents(table, config_id):
     return geometry, rows
 
 
-def test_kimi_k31_index_and_kda_share_one_table(tmp_path, monkeypatch):
+@pytest.mark.parametrize("layout", _K31_LAYOUTS)
+def test_kimi_k31_index_and_kda_share_one_table(tmp_path, monkeypatch, layout):
     """K3.1 publishes 00 kvpe / 01 DSA index / 02 KDA recurrent / 03 KDA convolution, and each config is
     exactly what the kvpe+index (GLM-style DSA) table and the kvpe+KDA (K3) table publish on their own."""
-    k31 = _k31_table(tmp_path, monkeypatch, "k31", index=True, kda=True)
-    dsa = _k31_table(tmp_path, monkeypatch, "dsa", index=True, kda=False)
-    k3 = _k31_table(tmp_path, monkeypatch, "k3", index=False, kda=True)
+    k31 = _k31_table(tmp_path, monkeypatch, layout, "k31", index=True, kda=True)
+    dsa = _k31_table(tmp_path, monkeypatch, layout, "dsa", index=True, kda=False)
+    k3 = _k31_table(tmp_path, monkeypatch, layout, "k3", index=False, kda=True)
 
     assert [k31.config_name(i) for i in range(k31.num_configs())] == ["00", "01", "02", "03"]
     tensor_type = ttnn.experimental.disaggregation.KvChunkTensorType
@@ -222,6 +238,37 @@ def test_kimi_k31_index_and_kda_share_one_table(tmp_path, monkeypatch):
 
     for k31_id, (reference, ref_id) in enumerate([(dsa, 0), (dsa, 1), (k3, 1), (k3, 2)]):
         assert _config_contents(k31, k31_id) == _config_contents(reference, ref_id), f"config {k31_id:02d}"
+    _assert_token_runs_on_their_sp_tp_chips(k31, layout)
+
+
+def _assert_token_runs_on_their_sp_tp_chips(table, layout):
+    """Each 32-token run of kvpe and index sits on the chips of its SP index s, the run's 1/sp of the chunk, at
+    mesh coordinate s on the SP axis: all tp chips of that SP row when TP-replicated, and when TP-deduped only TP
+    index t, the run's 1/(sp*tp) of the chunk. On the 4x4 stage (SP on axis 1) that is chip (t, s); a builder
+    that read mesh rows as SP rows would put it on (s, t)."""
+    sp_axis = layout.sp_axis
+    sp, tp = layout.mesh[sp_axis], layout.mesh[1 - sp_axis]
+    run = 32
+
+    def label(rank, s, t):
+        coord = [0, 0]
+        coord[sp_axis], coord[1 - sp_axis] = s, t
+        return repr(ttnn.FabricNodeId(ttnn.MeshId(rank), coord[0] * layout.mesh[1] + coord[1]))
+
+    for config_id in (0, 1):
+        cfg = table.config(config_id)
+        assert (cfg.max_sequence_length, cfg.chunk_n_tokens) == (layout.chunk, run)
+        for layer, rank in zip(_K31_MLA_ROWS, (0, 1)):  # one MLA layer on each pipeline stage
+            for slot in range(cfg.num_slots):
+                locs = table.lookup_range(layer, 0, cfg.max_sequence_length, slot, config_id)
+                assert len(locs) == cfg.max_sequence_length // run
+                for position, loc in zip(range(0, cfg.max_sequence_length, run), locs):
+                    offset = position % layout.chunk
+                    s = offset // (layout.chunk // sp)
+                    t = (offset % (layout.chunk // sp)) // (layout.chunk // (sp * tp))
+                    expected = [label(rank, s, t)] if layout.tp_deduped else [label(rank, s, i) for i in range(tp)]
+                    chips = [repr(fid) for fid in table.get_device_group(loc.device_group_index).fabric_node_ids]
+                    assert sorted(chips) == sorted(expected), (config_id, layer, slot, position, chips)
 
 
 def _with_distribution_rank(rank):
