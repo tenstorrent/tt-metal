@@ -65,7 +65,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     std::optional<uint32_t> kv_cache_num_layers,
     std::optional<uint32_t> kv_cache_layer_idx,
     const std::optional<ttnn::Tensor>& kv_valid_end_tensor,
-    bool dynamic_local_n) {
+    bool dynamic_local_n,
+    bool output_concat_heads) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
 
@@ -108,7 +109,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         kv_cache_num_layers,
         kv_cache_layer_idx,
         kv_valid_end_tensor,
-        dynamic_local_n);
+        dynamic_local_n,
+        output_concat_heads);
     return outputs;
 }
 
@@ -872,7 +874,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("kv_cache_num_layers").noconvert() = nb::none(),
         nb::arg("kv_cache_layer_idx").noconvert() = nb::none(),
         nb::arg("kv_valid_end_tensor").noconvert() = nb::none(),
-        nb::arg("dynamic_local_n") = false);
+        nb::arg("dynamic_local_n") = false,
+        nb::arg("output_concat_heads") = false);
 
     ttnn::bind_function<"sparse_ring_sdpa", "ttnn.transformer.">(
         mod,

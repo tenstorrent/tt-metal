@@ -489,6 +489,15 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         !args.sliding_window_size.has_value() || args.has_sliding_window(),
         "RingJointSDPA sliding_window_size must be greater than zero when provided");
+    if (args.output_concat_heads) {
+        // the concat-heads output: plain self-attention only (the joint output and the metadata / cache paths
+        // keep the head-major layout)
+        TT_FATAL(!tensor_args.joint_q.has_value(), "RingJointSDPA output_concat_heads: no joint inputs");
+        TT_FATAL(
+            !args.has_sliding_window() && !args.kv_cache_batch_idx.has_value() && !tensor_args.has_metadata(),
+            "RingJointSDPA output_concat_heads: not with the sliding-window or KV-cache paths");
+        TT_FATAL(args.latent_v_head_dim == 0, "RingJointSDPA output_concat_heads: not with a latent V head dim");
+    }
     const auto& ag = args.all_gather_operation_attributes;
     if (ag.full_mesh) {
         TT_FATAL(!ag.cluster_axis.has_value(), "Full-mesh RingJointSDPA must not carry a cluster axis");
@@ -1286,6 +1295,10 @@ RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
     auto out_shape = input.logical_shape();
     // head dim as v head dim
     out_shape[3] = v_head_dim;
+    if (args.output_concat_heads) {  // [B, 1, N_local, NH * vDH]
+        out_shape[3] = v_head_dim * input.logical_shape()[1];
+        out_shape[1] = 1;
+    }
 
     return {
         tt::tt_metal::TensorSpec(
@@ -1355,7 +1368,8 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
             args.kv_cache_batch_idx.has_value(),
             args.has_kv_pad_rotation(),
             args.circular_kv_cache,
-            args.latent_v_head_dim);
+            args.latent_v_head_dim,
+            args.output_concat_heads);
     }
 
     std::vector<Tensor> input_tensors = {tensor_args.input_q, tensor_args.input_k};
@@ -1389,6 +1403,7 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         tensor_args.joint_is_sharded(),
         args.ring_size,
         args.kv_stripe_split,
+        args.output_concat_heads,
         args.compute_kernel_config,
         args.program_config,
         args.ccl_core_grid_offset,
@@ -1551,7 +1566,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& logical_n_tensor,
     const std::optional<ttnn::Tensor>& logical_l_tensor,
     const std::optional<ttnn::Tensor>& kv_valid_end_tensor,
-    const bool dynamic_local_n) {
+    const bool dynamic_local_n,
+    bool output_concat_heads) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -1777,7 +1793,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         sliding_window_size,
         circular_kv_cache,
         resolved_kv_stripe_split,
-        dynamic_local_n);
+        dynamic_local_n,
+        output_concat_heads);
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,
