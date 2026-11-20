@@ -41,14 +41,20 @@ def _run(
     subblock_w,
     rows_per_call=None,
     gelu=False,
+    use_mcast=True,
+    force_transpose=False,
 ):
     """Runs the calls (rows per device of each in rows_per_call) and returns how many programs they added."""
     rows_per_call = rows_per_call or [rows_per_device] * NUM_CALLS
     other_axis = 1 - gather_axis
     ring, others = mesh_device.shape[gather_axis], mesh_device.shape[other_axis]
     full_grid = mesh_device.compute_with_storage_grid_size()
-    grid = ttnn.CoreCoord(full_grid.x - 1, full_grid.y)
-    assert grid.y % NUM_LINKS == 0
+    # The in0 muxes take the column right of the grid, or the row below it when transposed (in0 senders along x).
+    if force_transpose:
+        grid, in0_senders = ttnn.CoreCoord(full_grid.x, full_grid.y - 1), full_grid.x
+    else:
+        grid, in0_senders = ttnn.CoreCoord(full_grid.x - 1, full_grid.y), full_grid.y
+    assert in0_senders % NUM_LINKS == 0
 
     torch.manual_seed(0)
     torch_inputs = [torch.randn(others * rows, K) for rows in rows_per_call]
@@ -118,10 +124,11 @@ def _run(
             topology=topology,
             cluster_axis=gather_axis,
             num_links=NUM_LINKS,
-            num_workers_per_link=grid.y // NUM_LINKS,
+            num_workers_per_link=in0_senders // NUM_LINKS,
             num_buffers_per_channel=24,
-            force_transpose=False,
+            force_transpose=force_transpose,
             fused_activation=(ttnn.UnaryOpType.GELU, False) if gelu else None,
+            use_mcast=use_mcast,
         )[0]
         for tt_input in tt_inputs
     ]
@@ -195,8 +202,9 @@ def _galaxy(fabric_config, id):
     "mesh_device, device_params", [_galaxy(ttnn.FabricConfig.FABRIC_2D_TORUS_XY, "SP8xTP4-torus-xy")], indirect=True
 )
 @pytest.mark.parametrize("case", _CASES)
-def test_all_gather_minimal_matmul_fabric2d(mesh_device, case):
-    _run(mesh_device, **case)
+@pytest.mark.parametrize("use_mcast", [True, False], ids=["mcast", "relay"])
+def test_all_gather_minimal_matmul_fabric2d(mesh_device, case, use_mcast):
+    _run(mesh_device, **case, use_mcast=use_mcast)
 
 
 @pytest.mark.parametrize(
@@ -250,3 +258,20 @@ def test_all_gather_minimal_matmul_fabric2d_linear_tp(mesh_device, case):
 def test_all_gather_minimal_matmul_fabric2d_linear_sp(mesh_device):
     # The SP axis (0) of 8 as a line: Torus X does not wrap it.
     _run(mesh_device, **dict(_LINEAR, gather_axis=0, rows_per_device=320, n_per_device=11 * 20 * 32, N_block=20))
+
+
+# A 1D fabric (hop-count routing), also on the transposed grid.
+_FABRIC_1D_CASES = [
+    pytest.param(_KDA, id="kda_input_projection"),
+    pytest.param(dict(_KDA, force_transpose=True), id="transposed"),
+    pytest.param(dict(_LINEAR, K=1024), id="linear"),
+]
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params", [_galaxy(ttnn.FabricConfig.FABRIC_1D_RING, "SP8xTP4-1d-ring")], indirect=True
+)
+@pytest.mark.parametrize("case", _FABRIC_1D_CASES)
+@pytest.mark.parametrize("use_mcast", [True, False], ids=["mcast", "relay"])
+def test_all_gather_minimal_matmul_fabric1d(mesh_device, case, use_mcast):
+    _run(mesh_device, **case, use_mcast=use_mcast)

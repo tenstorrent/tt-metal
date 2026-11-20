@@ -62,6 +62,25 @@ def test_manual_seed_scalar_seed_rejects_invalid_user_ids_tensor(device, expect_
         ttnn.manual_seed(seeds=42, device=device, user_ids=user_id_tensor)
 
 
+@pytest.mark.parametrize("seeds_as_tensor", [False, True], ids=["scalar_seed", "seed_tensor"])
+def test_manual_seed_rejects_more_user_ids_than_one_tile(device, expect_error, seeds_as_tensor):
+    """The readers land every id in one 32x32 uint32 dataflow buffer entry, so more than 1024 would read past it."""
+    num_ids = 32 * 32 + 1
+    user_id_tensor = ttnn.from_torch(
+        torch.arange(num_ids, dtype=torch.int64), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    seeds = 42
+    if seeds_as_tensor:
+        seeds = ttnn.from_torch(
+            torch.full((num_ids,), 42, dtype=torch.int64),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+        )
+    with expect_error(RuntimeError, "at most 1024 user_ids, got 1025"):
+        ttnn.manual_seed(seeds=seeds, device=device, user_ids=user_id_tensor)
+
+
 def test_manual_seed_base_functionality(device):
     """
     Test that manual_seed produces deterministic and reproducible results.

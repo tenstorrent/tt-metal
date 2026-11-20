@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 
 struct KVPadRotationContext {
@@ -282,7 +283,14 @@ template <
 inline bool chunked_kv_chunk_is_live(
     uint32_t ring_id, uint32_t k_chunk, uint32_t k_chunk_tiles, uint32_t logical_nt, uint32_t causal_end_nt) {
     return chunked_kv_chunk_is_live<kv_pad_rotation_enabled, chunked_enabled>(
-        ring_id, k_chunk, k_chunk_tiles, logical_nt, causal_end_nt, kv_local_padded_Nt, chunk_size_t, q_local_padded_Nt);
+        ring_id,
+        k_chunk,
+        k_chunk_tiles,
+        logical_nt,
+        causal_end_nt,
+        kv_local_padded_Nt,
+        chunk_size_t,
+        q_local_padded_Nt);
 }
 
 constexpr uint32_t KV_PAD_ROTATION_INVALID_TILE = 0xFFFFFFFFu;
@@ -305,3 +313,17 @@ inline uint32_t q_global_tile_for_mask_row(
         return q_start_tile + q_tile;
     }
 }
+
+// Real tokens of padded block b of shard s from the geometry: kBlockTokens, a shard or logical_n tail, or 0 for
+// padding blocks (b >= nb). Shared by the sparse reader and compute.
+namespace sparse_blocks {
+template <uint32_t kBlockTokens>
+inline uint32_t geometric_len(uint32_t shard_tokens, uint32_t logical_n, uint32_t nb, uint32_t s, uint32_t b) {
+    if (b >= nb) {
+        return 0;
+    }
+    const uint32_t start = s * shard_tokens + b * kBlockTokens;
+    const uint32_t end = std::min({start + kBlockTokens, s * shard_tokens + shard_tokens, logical_n});
+    return end > start ? end - start : 0;
+}
+}  // namespace sparse_blocks

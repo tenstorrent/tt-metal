@@ -21,6 +21,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    flat_axes,
     generate_dest_depth_input_dimensions,
     input_output_formats,
     parametrize,
@@ -117,13 +118,17 @@ SFPU_FILL_INT_FORMATS = input_output_formats(
 )
 
 
+SFPU_FILL_FLAT_NAMES = ("formats", "dest_acc", "input_dimensions")
+
+
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_input_dims=generate_sfpu_fill_combinations(
-        SFPU_FILL_FLOAT_FORMATS, SFPU_FILL_INT_FORMATS
+    **flat_axes(
+        SFPU_FILL_FLAT_NAMES,
+        generate_sfpu_fill_combinations(SFPU_FILL_FLOAT_FORMATS, SFPU_FILL_INT_FORMATS),
     ),
 )
-def test_sfpu_fill_quasar(formats_dest_acc_input_dims):
+def test_sfpu_fill_quasar(formats, dest_acc, input_dimensions):
     """
     Test fill operation on Quasar architecture.
 
@@ -142,8 +147,6 @@ def test_sfpu_fill_quasar(formats_dest_acc_input_dims):
     Since fill ignores input values, the input stimuli are arbitrary —
     typed stimuli are still generated so the unpack path sees a valid buffer.
     """
-    formats, dest_acc, input_dimensions = formats_dest_acc_input_dims[0]
-
     is_int_fill = formats.input_format.is_integer()
 
     # Seed for reproducibility
