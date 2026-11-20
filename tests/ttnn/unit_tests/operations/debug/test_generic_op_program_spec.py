@@ -410,7 +410,6 @@ def guide_example(device):
     # [guide-example-start]
     E = ttnn.experimental
     KERNELS = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels"
-    TILE_BYTES = 2 * 32 * 32  # one bfloat16 tile
 
     num_tiles = 8
     torch_input = torch.rand([1, num_tiles, 32, 32]).to(torch.bfloat16)
@@ -455,8 +454,12 @@ def guide_example(device):
             ),
         ],
         dataflow_buffers=[
+            # Each entry holds one tile of the input's data type.
             E.DataflowBufferSpec(
-                unique_id=name, entry_size=TILE_BYTES, num_entries=2, data_format_metadata=ttnn.bfloat16
+                unique_id=name,
+                entry_size=ttnn.tile_size(input_tensor.dtype),
+                num_entries=2,
+                data_format_metadata=input_tensor.dtype,
             )
             for name in ("in", "out")
         ],
