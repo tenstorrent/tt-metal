@@ -116,7 +116,9 @@ def test_kimi_k3_1_manifest_deploys_k31_as_k3_is_deployed(monkeypatch):
     sp_axis = int(k31["PREFILL_SP_AXIS"])
     assert (sp_axis, int(k31["PREFILL_CHUNK_SIZE"])) == (SP_AXIS_4X4, CHUNK_4X4)
     assert tuple(sp if axis == sp_axis else tp for axis in (0, 1)) == MESH_4X4
-    own = {"PREFILL_MODEL", "PREFILL_NUM_USERS", "PREFILL_SCALED_FP8_KV_CACHE"}
+    # PREFILL_HF_MODEL: K3 names its checkpoint (it keys K3's weight cache); K3.1's is the adapter default.
+    own = {"PREFILL_MODEL", "PREFILL_HF_MODEL", "PREFILL_NUM_USERS", "PREFILL_SCALED_FP8_KV_CACHE"}
+    assert "PREFILL_HF_MODEL" not in k31, "K3.1 must not inherit K3's checkpoint"
     assert {k: v for k, v in k31.items() if k not in own} == {k: v for k, v in k3.items() if k not in own}
     assert get_adapter(k31["PREFILL_MODEL"]) is K31
 
