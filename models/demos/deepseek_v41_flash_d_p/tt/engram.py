@@ -230,6 +230,7 @@ class TtEngramRows:
         self.weight, self.scale, self._packed = table.weight, table.scale, None
         self._staged = None  # ENGRAM_ASYNC: the bfp8 staging host tensor (_staging)
         self._staged_tp = None  # HOST_HIDE=on (P.78): the per-chip staging host tensor (_staging_tp)
+        self._lane_outs = {}  # PB.3 (PACKED=on): (id(outs), first chip, chips) -> (outs, the lane's share views)
         ck = getattr(table, "ckpt", None)
         if self.mode == "mmap":
             madvise_random(ck, layer)
@@ -619,6 +620,55 @@ class TtEngramRows:
                 views[k].copy_(tile_bytes(exps[k * q : (k + 1) * q], mags[k * q : (k + 1) * q]))
             times["pack"] = times.get("pack", 0.0) + (time.perf_counter() - t1) * 1e3
         assert want_tail is None or torch.equal(new_tail.long(), want_tail.long()), (self.layer, new_tail, want_tail)
+        t0 = time.perf_counter()
+        _COPY_TO_DEVICE(host, dev)  # (GIL released for the copy)
+        times["upload"] = (time.perf_counter() - t0) * 1e3
+        return times
+
+    def fill_tp_lanes(self, dev: ttnn.Tensor, lanes: list, threads=None) -> dict:
+        """Worker thread, PB.3 (PACKED=on): ``fill_tp`` of a packed chunk. ``lanes``: per lane (first chip, chips,
+        the lane's ids [lane rows], its slot's tail, valid rows, the tail it leaves or None): each lane hashed with its
+        own tail into its chips' shares (rows past valid zero, as a single chunk's pad rows), by ``fill_tp``'s own
+        branch (ENGRAM_HOST_IMPL=cpp with the resident table: the C++ job; resident: numba hash + tile_rows_chips;
+        mmap: host_bfp8 + tile_bytes); then one upload, as ``fill_tp``."""
+        from .engram_bfp8 import tile_bytes
+        from .engram_host_cpp import fill_job
+
+        cpp = self._packed is not None and settings.get("ENGRAM_HOST_IMPL") == "cpp"
+        times = {}
+        t0 = time.perf_counter()
+        n_chips = int(self.mesh.get_num_devices())
+        assert sum(nc for _, nc, *_ in lanes) == n_chips, [(c0, nc) for c0, nc, *_ in lanes]
+        q = lanes[0][2].numel() // lanes[0][1]
+        host, views, outs = self._staging_tp(q)
+        packed = self.packed if self._packed is not None else None
+        t0b = time.perf_counter()
+        agg = {}
+        for c0, nc, ids, tail, valid, want in lanes:
+            assert ids.numel() == nc * q, (ids.numel(), nc, q)
+            key = (id(outs), c0, nc)
+            sub = self._lane_outs.get(key)
+            if sub is None or sub[0] is not outs:
+                sub = self._lane_outs[key] = (outs, tuple(outs[c0 : c0 + nc]))
+            if cpp:
+                _, t = fill_job(
+                    self.hasher, self.layer, ids, tail, packed, sub[1], q, threads or self.threads, valid, want
+                )
+                for k, v in t.items():
+                    agg[k] = agg.get(k, 0.0) + v
+                continue
+            if packed is not None:
+                if valid:
+                    h, new_tail = self._hashes(ids[:valid], tail, fast=True, threads=threads)
+                else:
+                    h, new_tail = torch.empty(0, self.width // self.table.dim, dtype=torch.int64), tail.clone()
+                _host_impl().tile_rows_chips(packed, h, valid, sub[1], q, threads or self.threads)
+            else:
+                exps, mags, new_tail = self.host_bfp8(ids, tail, valid, None, threads=threads, fast=True)
+                for j in range(nc):
+                    views[c0 + j].copy_(tile_bytes(exps[j * q : (j + 1) * q], mags[j * q : (j + 1) * q]))
+            assert want is None or torch.equal(new_tail.long(), want.long()), (self.layer, new_tail, want)
+        times.update(build_wait=(t0b - t0) * 1e3, **agg)
         t0 = time.perf_counter()
         _COPY_TO_DEVICE(host, dev)  # (GIL released for the copy)
         times["upload"] = (time.perf_counter() - t0) * 1e3

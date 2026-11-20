@@ -1354,8 +1354,9 @@ TABLE = {
         "bringup/hooks.py batch_call_settings, so both sides run in one load). on = a chunk carries up to 4 segments "
         "(tt/packed.ChunkDescriptor: lane i = rows [2048 i, 2048 i + 2048) of an 8192 chunk, each its own slot, start, "
         "end, global_write_start): token-wise work once over every row, attention per segment. off = today's single "
-        "request per chunk. PB.1 adds the descriptor, the CPU rung and the design; no device path reads it yet "
-        "(PB.3 wires it: a single segment through on stays bit-identical to off)",
+        "request per chunk. PB.3 (v1, tt/packed_device.py): read per chunk by the adapter's prefill_packed and the "
+        "harness (packed_device.run_chunk); each segment's attention runs today's steps on its rows moved to lane 0's "
+        "chips (one call a segment a layer); a lone segment in lane 0 is today's chunk, bit-identical",
     ),
     "PREFILL_END": Setting(
         "cap",

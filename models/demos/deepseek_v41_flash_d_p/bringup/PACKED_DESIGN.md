@@ -12,8 +12,13 @@ them; the model does not know the next chunk.
 
 Status of this file: PB.1 (CPU only). Built here: `tt/packed.py` (descriptor + index math), `reference/packed_ref.py`
 (the packed forward on the CPU reference), `tests/packed/test_packed_cpu.py` (the CPU rung, gated),
-`tests/packed/test_chunk8192_reference.py` (PB.2's accuracy test, not run), `drafts/tt_d_gen_packed_ask.md`. Nothing
-on the device reads `PACKED` yet.
+`tests/packed/test_chunk8192_reference.py` (PB.2's accuracy test, not run), `drafts/tt_d_gen_packed_ask.md`.
+PB.3 (v1 on the device, gate passed): `tt/packed_device.py` + `TtDS41Model.begin_packed / layer_packed`, the adapter's
+`prefill_packed`, tests `test_packed_oracle.py` / `test_packed_reference.py` / `test_packed_walls.py`. v1 deviates from
+s5 v1 in one point (BREADCRUMBS PPB.3, DECIDED): today's attention steps are reused unchanged by moving each lane >= 1
+to lane 0's chips and back (the code computes positions as start + q R + d), so each segment's call covers the full
+8192-row geometry; engine input lane-natural (s2's alternative). Measured walls in BREADCRUMBS PPB.3 (4 x 2k @ 139k:
+294.5 ms with the resident engram table): v2 (s5) is what reaches the bar.
 
 Contents: 1 geometry and the key fact, 2 the descriptor, 3 per-chunk quantities, 4 non-row-local ops, 5 attention and
 the cross-chip pieces, 6 pipelining and hiding per-segment costs, 7 DRAM at 1M, 8 8192 on today's tree, 9 test plan,

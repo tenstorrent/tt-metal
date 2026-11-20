@@ -1036,6 +1036,82 @@ class TtDS41Block:
                 state.memo.drop(slot)
         return out
 
+    # ------------------------------------------------------------------ PACKED=on (PB.3)
+    def packed(self, h: DevH, pk) -> DevH:
+        """PB.3 (PACKED=on): this layer over a packed chunk (tt/packed_device.PackedChunk): every token-wise step once
+        over all rows (the same step functions and freeing as __call__'s LEAN_PY path), the attention steps (q_a, kv,
+        compressor, indexer, attention) once per segment at q_a's place (PackedChunk.attention), their output handed
+        to attn_residual as attn_out."""
+        rows = h.streams.shape[-2] * self.mesh.shape[SP_AXIS] * (self.mesh.shape[TP_AXIS] if self.own else 1)
+        assert rows == self.model.chunk, f"chunk of {rows} rows; the model was built for {self.model.chunk}"
+        r0 = pk.segs[0]
+        ctx = Ctx(self.layer, r0.start, rows, r0.state, extra={"end": r0.run_end, "packed": pk})
+        held = h.tensors()
+        self._protect = {id(t) for t in held}
+        try:
+            out = run_block(self.steps, _no_cpu, ctx, h, overrides=self._packed_overrides())
+        finally:
+            self._protect = _NO_IDS
+        del held
+        return out
+
+    def _packed_overrides(self) -> dict:
+        """PB.3: the LEAN_PY step wrappers (each frees its dead inputs) over the packed step functions."""
+        ov = self.__dict__.get("_packed_ov")
+        if ov is not None:
+            return ov
+        fns = dict(self.fns)
+
+        def attn(ctx, x):  # (q_a's place: every segment's attention steps; the rest of them pass)
+            ctx.extra["packed_out"] = ctx.extra["packed"].attention(self, x)
+            return Keep()
+
+        def passed(ctx, *args):
+            return Keep()
+
+        def out(ctx, *args):
+            return ctx.extra.pop("packed_out")
+
+        fns.update(q_a=attn, kv=passed, compressor=passed, indexer=passed, attention=out)
+        saved, saved_ov = self.fns, self.__dict__.pop("_lean_ov", None)
+        self.fns = fns
+        try:
+            ov = self._lean_overrides()
+        finally:
+            self.fns = saved
+            self.__dict__.pop("_lean_ov", None)
+            if saved_ov is not None:
+                self._lean_ov = saved_ov
+        self._packed_ov = ov
+        return ov
+
+    def kv_only_packed(self, h: DevH, pk) -> Skipped:
+        """PB.3: kv_only over a packed chunk: attn_hc, attn_collapse, attn_norm once over all rows, the compressor per
+        segment (PackedChunk.compress_only). Does not consume ``h``."""
+        assert self.compressor is not None and not self.cfg.is_engram(self.layer), self.layer
+        rows = h.streams.shape[-2] * self.mesh.shape[SP_AXIS] * (self.mesh.shape[TP_AXIS] if self.own else 1)
+        assert rows == self.model.chunk, (rows, self.model.chunk)
+        r0 = pk.segs[0]
+        ctx = Ctx(self.layer, r0.start, rows, r0.state, extra={"end": r0.run_end})
+        held = h.tensors()
+        protect = {id(t) for t in held}
+        steps = [s for s in self.steps if s.name in self.KV_STEPS[:3]]
+        from models.demos.common.bringup.testing import profiler
+
+        env = {"in": h}
+        for s in steps:
+            profiler.signpost(s.name)
+            env[s.output] = self.fns[s.name](ctx, *[env[n] for n in s.inputs])
+        profiler.signpost("compressor")
+        x = env["attn_norm"]
+        pk.compress_only(self, x)
+        for n, v in env.items():
+            if n != "in":
+                _free(v, protect)
+        ctx.extra.clear()
+        del held
+        return SKIPPED
+
     def _lean_overrides(self) -> dict:
         """LEAN_PY=on (P.66): the block's step wrappers, made once per layer. Each frees the same boundaries as
         __call__'s per-call ``wrap`` (its inputs whose last reader it is, ``self.dead``), protecting the caller's
@@ -1228,6 +1304,7 @@ class TtDS41Model:
             and settings.get("HISTORY_GATHER") == "rows"
         )
         self._pf_start = None
+        self._packed = None  # PB.3 (PACKED=on): the running packed chunk (tt/packed_device.PackedChunk), else None
         self._kpf_start = None  # P.76 (INDEX_K_SOURCE=served): the chunk's start until prefetch_index_keys ran
         # embedding: [V, H/TP] bf16 ROW_MAJOR per chip (the chip's hidden columns), replicated over SP
         if tail_of is not None:  # (P.31: the decoder tail takes its input from the main model's layers)
@@ -1471,8 +1548,10 @@ class TtDS41Model:
         write_start: int | None = None,
         device_ids=None,
         valid: int | None = None,
+        engram: bool = True,
     ) -> None:
-        """``device_ids`` / ``valid`` (P.87, ENGRAM_DEVICE=on): the engine's device input (uint32 [SP, 1, W], server
+        """``engram`` (PB.3, PACKED=on): False = begin_packed's per-segment call (the engram rows of the whole packed
+        chunk are begun once after, _begin_engram_packed). ``device_ids`` / ``valid`` (P.87, ENGRAM_DEVICE=on): the engine's device input (uint32 [SP, 1, W], server
         order) and the chunk's real positions; ``tokens`` may then be None (no host ids: the lookup and the embedding
         read the device ids). The host input of every engram layer: hash the chunk's ids (pad past actual_end skipped, DS41-26) with the
         active slot's tail, look the rows up (memory-mapped) and send them to the device once. Also empties the
@@ -1491,6 +1570,8 @@ class TtDS41Model:
         below it are an encoder replay: no history-cache row (compressed KV, index keys, layer 20's caches) below it is
         written, layer 20's KV head does not run on a chunk wholly below it, and the chunk is a replay (every window
         truncated at ``start``, as ``replay``) when it starts below it."""
+        if engram and self._packed is not None:  # (PB.3: a single-request chunk after a packed one)
+            self.end_packed()
         g = int(start) if write_start is None else int(write_start)
         if g > start:
             if self.skip_mode != "decode":
@@ -1534,6 +1615,8 @@ class TtDS41Model:
         index_keys.new_chunk()
         self._kpf_start = int(start)
         self._emb_ids = None
+        if not engram:  # (PB.3: begin_packed's per-segment fields only)
+            return
         if not self.engram:
             return
         self.wait_engram()  # a job of the last chunk whose layer did not run: done before its tensor is freed
@@ -1802,6 +1885,120 @@ class TtDS41Model:
                 self._engram_pending[i] = job
         self._hide_trigger = None if first is None else first + self._hide_defer
 
+    # ------------------------------------------------------------------ PACKED=on (PB.3, tt/packed_device.py)
+    def begin_packed(self, desc, tokens: torch.Tensor, states: list, last: bool | None = None) -> None:
+        """PB.3 (PACKED=on): begin a packed chunk. ``desc``: tt/packed.ChunkDescriptor (lanes of desc.lane_rows rows);
+        ``tokens``: the chunk's natural-order ids [chunk] (each lane its segment's ids, PAD_ID elsewhere: past a
+        segment's end and in empty lanes); ``states``: per lane the segment's slot state (None for an empty lane).
+        Host work per segment as the adapter's single-request chunk does it (the slot's id history and engram tails:
+        note_tokens; begin_chunk's per-chunk fields, kept per segment), then the engram rows of all lanes in one job a
+        layer (_begin_engram_packed). ``model.layer`` then runs the packed layer (layer_packed) until end_packed (or the
+        next begin_chunk / begin_packed)."""
+        from .attention import prefill_end
+        from .packed_device import FIELDS, PackedChunk, SegRun
+
+        assert self.tail_of is None and not self.replay and not self.deep, "PACKED=on: no decoder tail / deep layers"
+        assert self.own, "PACKED=on moves the chips' own rows (OWN_ROWS=on)"
+        assert int(desc.chunk) == self.chunk, (desc.chunk, self.chunk)
+        assert self.engram_dev is None or settings.get("ENGRAM_DEVICE") != "on", "PACKED=on: the host engram path"
+        self.end_packed()
+        self.wait_engram()  # (a job of the last chunk whose layer did not run)
+        ids = tokens.reshape(-1).long()
+        assert ids.numel() == self.chunk, (ids.numel(), self.chunk)
+        lr = desc.lane_rows
+        segs, idle = [], []
+        for lane, s in desc.live():
+            st = states[lane]
+            assert st is not None, f"lane {lane}: no slot state"
+            run_end = prefill_end(s.end)
+            if run_end <= s.start:  # (PREFILL_END=cap: nothing below cap: its snapshot at cap and its acks only)
+                idle.append(SegRun(lane, s, st, run_end))
+                continue
+            off = lane * lr
+            st.note_tokens(ids[off : off + lr], s.start, run_end)
+            self.state = st
+            self.begin_chunk(None, s.start, last=last, write_start=s.gws, engram=False)
+            segs.append(SegRun(lane, s, st, run_end, {f: getattr(self, f) for f in FIELDS}))
+        assert segs or idle, "an empty packed chunk"
+        pk = PackedChunk(self, desc, segs, idle)
+        pk.bind()
+        self._packed = pk
+        if segs:
+            pk.enter(segs[0])
+        if self.engram and segs:
+            self._begin_engram_packed(ids, desc, segs)
+
+    def end_packed(self) -> None:
+        """PB.3: the packed chunk is over (the slot caches' buffer keys back to today's)."""
+        pk, self._packed = self._packed, None
+        if pk is not None:
+            pk.unbind()
+
+    def _begin_engram_packed(self, ids: torch.Tensor, desc, segs: list) -> None:
+        """PB.3: every engram layer's rows of the packed chunk in one host job (as _begin_engram_async with HOST_HIDE):
+        each lane hashed with its own slot's tail over its own valid rows (an empty lane: zero rows), written into its
+        chips' shares of the TP-sharded upload (TtEngramRows.fill_tp_lanes)."""
+        assert self._engram_pool is not None and self._host_hide, "PACKED=on: ENGRAM_ASYNC=on with HOST_HIDE=on"
+        assert all(i in self._engram_full for i in self.engram), "PACKED=on: the TP-sharded engram rows (HOST_HIDE)"
+        by_lane = {r.lane: r for r in segs}
+        chips = desc.lane_chips(self.sp, self.tp)
+        lr = desc.lane_rows
+        first = None
+        for i, rows in self.engram.items():
+            lanes = []
+            for lane in range(desc.lanes):
+                lid = ids[lane * lr : (lane + 1) * lr].contiguous()
+                c0, nc = chips[lane][0], len(chips[lane])
+                r = by_lane.get(lane)
+                if r is None:  # (an empty lane, or one that computes nothing: zero rows)
+                    lanes.append((c0, nc, lid, rows.new_tail().long().contiguous(), 0, None))
+                    continue
+                tail = rows.new_tail() if r.start == 0 else r.state.tail[i]
+                tail = tail.long().clone().contiguous()
+                v = r.run_end - r.start
+                new_tail = rows.next_tail(lid, tail, v)
+                r.state.tail[i] = new_tail
+                lanes.append((c0, nc, lid, tail, v, new_tail.long().contiguous()))
+            _free(self._engram_dev.pop(i, None))
+            dev = rows.allocate_tp(ids.numel())
+            self._engram_dev[i] = dev
+            job = (rows.fill_tp_lanes, dev, lanes, self._hide_threads)
+            if first is None:
+                first = i
+                self._engram_jobs[i] = self._engram_pool.submit(*job)
+            else:
+                self._engram_pending[i] = job
+        self._hide_trigger = None if first is None else first + self._hide_defer
+
+    def layer_packed(self, i: int, h):
+        """PB.3: layer i of the packed chunk (begin_packed): the token-wise steps once over every row, the attention
+        steps per segment (TtDS41Block.packed), then each segment's served window snapshot; DECODER_SKIP=decode's
+        decoder as on a single-request chunk, per segment (layer 20: kv_only of every segment, 21-39 skipped)."""
+        pk = self._packed
+        segs = pk.segs
+        if i in self._decoder_set:
+            assert self.skip_mode == "decode", f"PACKED=on: DECODER_SKIP={self.skip_mode} is not packed"
+            for r in segs:
+                r.state.window[i].skip(r.start, r.start + self.chunk)
+            if i in self.kv_only and segs:
+                return self.blocks[i].kv_only_packed(h, pk)
+            assert isinstance(h, Skipped), f"layer {i}: DECODER_SKIP skips it on this chunk"
+            return h
+        if i in self._deep_set:
+            raise AssertionError("PACKED=on: DEEP_LAYERS=tail is not packed")
+        out = self.blocks[i].packed(h, pk) if segs else h
+        for j, r in enumerate(segs):  # (each its own broadcast instance: back-to-back sends, DS41-324)
+            pk.enter(r)
+            self._snapshot(i, r.start, r.state, r.run_end, send=j)
+            pk.leave(r)
+        for j, r in enumerate(pk.idle, len(segs)):  # (PREFILL_END=cap, cap <= start: the snapshot at cap, _acks_only)
+            c = r.state.window[i]
+            if c.snap is not None and not (self.skip_mode == "decode" and i in self.decoder):
+                c.write_snapshot(r.run_end, send=j)
+        if segs:
+            pk.enter(segs[0])
+        return out
+
     def _submit_pending(self) -> None:
         """HOST_HIDE=on (P.78): every held engram job to the worker, layer order."""
         for i in sorted(self._engram_pending):
@@ -1862,10 +2059,16 @@ class TtDS41Model:
                 index_keys.prefetch(c.index_k, start)
 
     def take_engram_rows(self, layer: int) -> ttnn.Tensor:
-        if self._pf_start is not None:  # P.75: before the wait (the first engram layer of the chunk)
-            self.prefetch_history()
-        if self._kpf_start is not None:  # P.76: likewise the served index keys' history
-            self.prefetch_index_keys()
+        pk = self._packed
+        if pk is not None:  # PB.3: every segment's prefetch, each into its lane's buffers (once a chunk)
+            if not pk.prefetched:
+                pk.prefetched = True
+                pk.prefetch()
+        else:
+            if self._pf_start is not None:  # P.75: before the wait (the first engram layer of the chunk)
+                self.prefetch_history()
+            if self._kpf_start is not None:  # P.76: likewise the served index keys' history
+                self.prefetch_index_keys()
         self._wait_job(layer)  # ENGRAM_ASYNC=on: layer 1 waits for its own job only, layer 14 for its own
         t = self._engram_dev.pop(layer, None)
         assert t is not None, f"layer {layer}: no engram rows for this chunk (begin_chunk(tokens, start) first)"
@@ -1931,6 +2134,11 @@ class TtDS41Model:
         return DevH(streams, ttnn.clone(self.pre0, memory_config=DRAM))
 
     def layer(self, i: int, h: DevH, start: int, state: DS41DeviceState, end: int | None = None) -> DevH:
+        if self._packed is not None:  # PB.3 (PACKED=on): begin_packed's segments (start / state / end unused)
+            out = self.layer_packed(i, h)
+            if self._hide_trigger is not None and i >= self._hide_trigger:
+                self._submit_pending()
+            return out
         out = self._layer(i, h, start, state, end)
         if self._hide_trigger is not None and i >= self._hide_trigger:  # HOST_HIDE=on (P.78): the held engram jobs
             self._submit_pending()
@@ -1965,13 +2173,13 @@ class TtDS41Model:
             return SKIPPED
         return out
 
-    def _snapshot(self, i: int, start: int, state: DS41DeviceState, end: int | None, src=None) -> None:
+    def _snapshot(self, i: int, start: int, state: DS41DeviceState, end: int | None, src=None, send: int = 0) -> None:
         """WINDOW_KV_KEEP=snapshot128 (P.42): layer i's served window snapshot after its window write of the chunk
         [start, end) (device ops; before the layer's ack), unless the caller marked the chunk not the request's last.
         ``src`` (P.43, replay128's tail): the window cache whose ring holds the rows (the tail state's)."""
         c = state.window[i]
         if c.snap is not None and self._snap:
-            c.write_snapshot(start + self.chunk if end is None else int(end), src=src)
+            c.write_snapshot(start + self.chunk if end is None else int(end), src=src, send=send)
 
     def _tail_layer(self, i: int, h, start: int, state: DS41DeviceState, end: int | None) -> TailH:
         """DECODER_SKIP=replay128 (P.31), the request's last chunk [start, end). The first decoder layer (20): its KV

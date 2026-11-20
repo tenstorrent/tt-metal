@@ -440,11 +440,21 @@ class WindowTables:
             self._snap_buf = (alloc(g.tp * RING) if g.tp > 1 else None, alloc(g.n * RING) if g.sp > 1 else None)
         return self._snap_buf
 
-    def snapshot_send(self):
+    def snapshot_send(self, index: int = 0):
         """CHEAP_CCL=on (P.65): the window snapshot's one-program broadcast (tt/snapshot_send.SnapshotSend), made at
-        load time (the first snapshot cache); None on one chip or under CHEAP_CCL=legacy."""
+        load time (the first snapshot cache); None on one chip or under CHEAP_CCL=legacy. ``index`` (PB.3, PACKED=on:
+        the segment's place among a layer's snapshots): its own instance (own arrival semaphores), since back-to-back
+        sends of different owners would share the per-block arrival counters (an increment of the next send's tree
+        taken for this one's: DS41-324); 0 is today's."""
         if self.geo.n < 2 or not cheap_snapshot():
             return None
+        if index:
+            sends = self.__dict__.setdefault("_snap_sends", {})
+            if index not in sends:
+                from .snapshot_send import SnapshotSend
+
+                sends[index] = SnapshotSend(self.mesh)
+            return sends[index]
         if self._snap_send is None:
             from .snapshot_send import SnapshotSend
 
@@ -1104,7 +1114,7 @@ class TtWindowCache:
         return (self.ring.nbytes if self.ring_owned else 0) + snap + pin
 
     # ------------------------------------------------------------------ WINDOW_KV_KEEP=snapshot128 (P.42)
-    def write_snapshot(self, end: int, src: "TtWindowCache | None" = None) -> None:
+    def write_snapshot(self, end: int, src: "TtWindowCache | None" = None, send: int = 0) -> None:
         """The served snapshot after a chunk ending at ``end`` (device ops only; after the layer's window write, before
         its ack): position p at row p % 128 for p in [cap - 128, cap), cap = snapshot_cap(end), read from the ring
         (``_snapshot_rows``: blocks held by one chip gathered from it, so every chip holds the same bytes); rows of no
@@ -1114,7 +1124,8 @@ class TtWindowCache:
         at a replay start, DECODER_SKIP=replay128 / exact) are zero (noted in ``snap_missing``).
         ``src`` (P.43, SKIP_TAIL_START=cap): the cache whose ring holds the rows, when not this one: DECODER_SKIP=
         replay128's decoder tail (the tail state's window cache of this layer, written by the tail's chunk; its ring
-        is the tail model's working ring, the same [1, 1, 192, 512] shape); this cache's gather buffers and slab."""
+        is the tail model's working ring, the same [1, 1, 192, 512] shape); this cache's gather buffers and slab.
+        ``send`` (PB.3): the snapshot broadcast instance (WindowTables.snapshot_send)."""
         src = self if src is None else src
         assert src.ring is not None, "write_snapshot: the source cache keeps no ring"
         assert src is self or src.keep != "none" or src.ring.writer is src, "the tail ring was written by another cache"
@@ -1123,7 +1134,7 @@ class TtWindowCache:
         while lo > max(0, cap - SNAP) and src.history and src.ring.holds(lo - 32, lo):
             lo -= 32
         self.snap_missing = (max(0, cap - SNAP), lo) if lo > max(0, cap - SNAP) else None
-        send = self.tables.snapshot_send()
+        send = self.tables.snapshot_send(send)
         if send is not None:  # CHEAP_CCL=on (P.65): one prepared program, the owner's rows only (tt/snapshot_send.py)
             ring = src.ring
             blocks = []

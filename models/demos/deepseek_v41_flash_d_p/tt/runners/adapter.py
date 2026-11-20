@@ -403,6 +403,72 @@ class DS41PrefillRuntime:
         )
         return None  # last / single rank: the populated cache is the output
 
+    # ------------------------------------------------------------------ PACKED=on (PB.3, bringup/PACKED_DESIGN.md)
+    def make_packed_input(self, descriptor, ids_per_lane):
+        """The engine's H2D payload of a packed chunk (tests and compile only): tt/packed_device.make_input."""
+        from ..packed_device import make_input
+
+        return make_input(self.mesh_device, descriptor, ids_per_lane)
+
+    def _host_ids_packed(self, inp, descriptor):
+        """Engine input (lane-natural order) -> the chunk's ids (tt/packed_device.ids_from_input)."""
+        from ..packed_device import ids_from_input
+
+        return ids_from_input(self.mesh_device, inp, descriptor)
+
+    def prefill_packed(self, input_tensor, kv_cache, descriptor, *, d2h_service=None, metadata_msg=None, acks=True):
+        """PB.3 (PACKED=on): one packed chunk (tt/packed.ChunkDescriptor: up to 4 segments, each its own slot, start,
+        end and global_write_start; the engine input in lane-natural order). Every served layer is acked once per
+        segment (host sink: sink.layers_completed(g, g + 1, slot, start, end) for each segment after the layer's
+        sync; D2H: one outbound_socket_service_sync a segment). PACKED=off refuses (prefill_chunk is today's path)."""
+        from ..packed_device import packed_on
+
+        if not packed_on():
+            raise ValueError("prefill_packed needs PACKED=on (PACKED=off: prefill_chunk, one request a chunk)")
+        c, m = self.config.chunk_size, self.config.max_seq_len
+        assert int(descriptor.chunk) == c, (descriptor.chunk, c)
+        assert self.gap_feed is None, "PACKED=on serves a contiguous layer range"
+        for _, s in descriptor.live():
+            assert s.start % 32 == 0 and s.start < s.end and s.start + descriptor.lane_rows <= m, (s, m)
+            assert 0 <= int(s.slot) < kv_cache.contract.num_users, (s.slot, kv_cache.contract.num_users)
+        ttnn = self._ttnn
+        model = self.model
+        sink = self._sink if acks else None
+        d2h = (d2h_service if d2h_service is not None else self._d2h) if acks else None
+        live = descriptor.live()
+        states = [None if s is None else self.state(kv_cache, s.slot) for s in descriptor.segments]
+        if acks:
+            from .kv_contract import SNAPSHOT_ENDS, WINDOW_UNWRITTEN
+
+            for _, s in live:
+                SNAPSHOT_ENDS[int(s.slot)] = int(s.end)
+                WINDOW_UNWRITTEN[int(s.slot)] = frozenset(model.decoder) if model.skip_mode == "decode" else frozenset()
+        ids = self._host_ids_packed(input_tensor, descriptor)
+        last = False if model.skip_mode == "decode" else None
+        model.begin_packed(descriptor, ids, states, last=last)
+        try:
+            from ..model import SKIPPED
+
+            h = model.embed(ids) if model._packed.segs else SKIPPED
+            for k, i in enumerate(self.layer_ids):
+                h2 = model.layer(i, h, 0, None)
+                if h2 is not h:
+                    model.free(h)
+                h = h2
+                if d2h is not None:
+                    for j, _ in enumerate(live):
+                        msg = metadata_msg[j] if isinstance(metadata_msg, (list, tuple)) else metadata_msg
+                        ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h, metadata=msg)
+                elif sink is not None:
+                    ttnn.synchronize_device(self.mesh_device)
+                    g = self.config.first_layer_idx + k
+                    for _, s in live:
+                        sink.layers_completed(g, g + 1, int(s.slot), int(s.start), int(s.end))
+            model.free(h)
+        finally:
+            model.end_packed()
+        return None
+
     # ------------------------------------------------------------------ migration hooks
     def kv_migration_stages(self, kv_cache, first_layer_idx, num_layers):
         """One stage per table config, in table order (the runner gathers each one's base address and chips)."""

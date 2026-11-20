@@ -68,3 +68,17 @@ Nothing changes for a request sent alone: a chunk with one segment is today's ch
   the engine layout).
 - With tt-d-gen: the same oracle driven through the engine's real packed header: served bytes of each slot identical
   to the slot's request sent alone.
+
+## What PB.3 (the first device path, 2026-11-19) learned
+
+- Built and tested: `DS41PrefillRuntime.prefill_packed(input, kv_cache, descriptor)` (tt/runners/adapter.py), the
+  descriptor = `tt/packed.ChunkDescriptor` (4 x `Segment(slot, start, end, write_start)`), the engine input in
+  **lane-natural order** (P2 (b)); the reshuffle order (P2 (a)) is not built yet. If tt-d-gen can send (b), nothing
+  else is needed for the input.
+- Acks: the model acks every served layer once per segment (`sink.layers_completed(g, g + 1, slot, start, end)` per
+  segment after the layer's sync; D2H: one `outbound_socket_service_sync` per segment, `metadata_msg` may be a list,
+  one per segment). An ack naming the 4 segments at once (P3) would save 3 host calls a layer.
+- A segment whose decode cap is at or below its start (PREFILL_END=cap) computes nothing, as today's `_acks_only`
+  chunk: its lane is pad, its snapshot is rewritten at cap and it is acked.
+- One readback of the input a chunk (the engram host step's ids), as today; P4 (host ids in the header) would remove
+  it for every segment at once.

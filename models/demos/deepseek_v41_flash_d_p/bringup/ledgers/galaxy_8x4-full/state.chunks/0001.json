@@ -6732,6 +6732,71 @@
   },
   "waiting": null
  },
+ "PB.3": {
+  "ab_pending": null,
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "d0abb91574d8cdcab1dda347ce09f24b4a450243",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "a72ff1beb2fa0ffd78ba8438f67599c498d8554b",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "e6413c1d49e3d144b0349ea968e1ea4d7d941470",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "5ac3f0ab-c004-44bc-9e30-a662f3fdb82e"
+  },
+  "attempt": 1,
+  "attempts": 0,
+  "duration_s": 3.0,
+  "history": [
+   {
+    "reused": [
+     "PB.3#test_determinism",
+     "PB.3#test_packed_oracle",
+     "PB.3#test_packed_reference",
+     "PB.3#test_packed_walls"
+    ],
+    "s": 3.0,
+    "status": "PASS",
+    "t": "2026-11-20T00:09:55"
+   }
+  ],
+  "last_run": "2026-11-20T00:09:53",
+  "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/PB.3.log",
+  "rc": 0,
+  "reason": [],
+  "role": "perf",
+  "stamp": {
+   "reused": [
+    "PB.3#test_determinism",
+    "PB.3#test_packed_oracle",
+    "PB.3#test_packed_reference",
+    "PB.3#test_packed_walls"
+   ],
+   "units": {
+    "PB.3#test_determinism": "7a4b23012a927c7e",
+    "PB.3#test_packed_oracle": "969a56065b8468fb",
+    "PB.3#test_packed_reference": "204b66cb3bb2b552",
+    "PB.3#test_packed_walls": "9a3bbfe1e62ad692"
+   }
+  },
+  "started": "2026-11-20T00:09:50",
+  "status": "PASS",
+  "units": {
+   "PB.3#test_determinism": "PASS",
+   "PB.3#test_packed_oracle": "PASS",
+   "PB.3#test_packed_reference": "PASS",
+   "PB.3#test_packed_walls": "PASS"
+  },
+  "waiting": null
+ },
  "W.1": {
   "agent": {
    "defs": {

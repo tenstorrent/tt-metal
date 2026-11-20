@@ -1368,3 +1368,73 @@
 - Risk for serving: at 8192 the deployment's tables (and anything sized from the model's max_seq) are one chunk longer
   (1,052,672 positions). The served-cache layout tt-d-gen reads should be checked before 8192 serves (PB.3+).
 - Re-run: `BRINGUP_CHUNK=8192 PYTHONPATH=$PWD python -m models.demos.common.bringup gate PB.2 --spec $BRINGUP_SPEC --check`.
+
+## PPB.3 (PB.3 perf, attempt 1): packed prefill v1 on the device (PACKED=on: token-wise once, attention per segment)
+
+- Expected (written before code, perf_guide s2): PACKED=on vs today's 4 separate padded 8192 chunks for 4 x 2k @ 139k:
+  token-wise work once instead of 4x (~-3 x 60 ms device a 4-request batch), attention 4 calls a layer each over the
+  full 8192-row geometry (v1 below: ~4 x today's ~28 ms attention a chunk = ~110 ms), plus the lane moves (one SP
+  all-gather of the attention input and one of each segment's output a layer, ~1 ms a layer, ~20 ms a chunk on layers
+  0-20). Projected v1 wall at 4 x 2k @ 139k: ~180-220 ms a chunk (~37-45k new tok/s): above the owner's 122 ms bar;
+  v1 is the correctness rung, v2 (PB.3H: per-chip lane arguments, one attention call a layer) is what reaches the bar.
+  Host: + ~4x the attention launches (~+10-15 ms), engram jobs unchanged in count (one per layer, 4 lanes inside).
+- DECIDED (OV-58) v1 attention = "rotate the lane to lane 0 and run today's attention": PACKED_DESIGN.md s5 v1 calls
+  sparse_sdpa per segment over the full geometry, but every position-dependent quantity in tt/ (~430 uses of
+  `start` in attention / compressor / indexer / sparse / history / index keys) derives chip q's positions as
+  start + q R + d. Lane k's rows sit on chips 8k..8k+7, so today's code computes them right only on chips 0..7. v1
+  moves lane k's attention input to lane 0's chips (SP all-gather + roll + mesh_partition, stock data moves, exact),
+  runs today's unchanged attention steps with the segment's slot state / start / end / write_start, and moves the
+  output back. Consequences: alone == today is bit-identical by construction (a lone segment in lane 0 is never
+  moved), lane equivalence depends only on the token-wise ops being row-local (MoE: PB.4's question). Cost: 4x
+  attention (each call computes 8192 rows; 6144 of them pad). The per-chip-argument path (v2) removes both.
+- DECIDED (OV-58): engine input order = lane-natural (lane i's ids at chunk rows [2048 i, 2048 i + 2048) of the
+  natural-order [SP, 1, W] input); the per-segment reshuffle of the design draft is not built (the ask lists both).
+- Per-lane device buffers (owner: all segments' history buffers resident at once): every lane >= 1 gets its own
+  history-gather buffer per source and its own decoded index-key buffer per source (keys (..., "lane", k)), bound to
+  the segment's slot caches for the chunk only; lane 0 keeps today's buffers.
+- Load reasons: (1) one-layer runs: "needs layers [0, 1, 2, 3] because they hold every per-chunk kind (window-only,
+  engram, KV + index source, reader)"; (2) characteristic layers [0, 1, 2, 3, 14, 20, 21, 24]; (3) the gate's own
+  loads (40 for accuracy, 0-20 for walls).
+- Load (oracle rung 1): "needs only the held 40-layer model rebuilt in place after the model python change; the test computes layers 0-3 (DS41_PACKED_LAYERS)".
+- Load (rungs 2-4): none: the held 40-layer model serves the characteristic-layer oracle (DS41_PACKED_LAYERS), the walls (layers 0-20) and the 40-layer tests.
+- Gotcha: the first walls submit set DS41_ENGRAM_TABLE in the test (copied from test_skip_positions): a load-time switch, so the runner sent it to a fresh process (F269, OV-61). Removed.
+- Built (v1): `tt/packed_device.py` (PackedChunk: per-segment model fields enter / leave, per-lane buffer binding,
+  prefetch of every segment at the first engram wait, the per-segment attention loop, LaneMover; run_chunk harness;
+  ids_from_input / make_input), `TtDS41Model.begin_packed / end_packed / layer_packed / _begin_engram_packed`,
+  `TtDS41Block.packed / kv_only_packed` (token-wise steps through the same LEAN_PY wrappers, the attention steps at
+  q_a's place per segment), `TtEngramRows.fill_tp_lanes` (each lane hashed with its own tail, one upload),
+  `DS41PrefillRuntime.prefill_packed` (acks per segment), `begin_chunk(engram=False)`. PACKED=off path unchanged
+  (the only edits on it: host-side checks of `_packed`, write_snapshot's default instance 0).
+- Not row-local, fixed at the cause (DS41-324): back-to-back snapshot broadcasts of different segments shared the
+  per-block arrival semaphores (F's layer-0 snapshot differed in packed1, deterministically): one SnapshotSend
+  instance per segment index; the same hazard on window_send's per-layer region: one region per segment index.
+- Oracle (test_packed_oracle, DS41_PACKED_LAYERS rungs, the held model): layers 0-3 and the characteristic layers
+  [0, 1, 2, 3, 14, 20, 21, 24]: alone vs today 0, lane equivalence 0 (MoE included: the device MoE is row-local on
+  these compositions), slot digest mismatches 0, determinism 0.
+- Walls (test_packed_walls, layers 0-20, decode, agentic; first run, resident engram table): 4 x 2k @ 139264 294.5 ms
+  (27.8k new tok/s; device 255.5, host 39.0), mixed 342.9 ms (23.9k; device 274.7, host 68.2), 1 x 2k 154.9 ms
+  (13.2k). Device: the attention loop (section q_a: 4 attention calls + the lane moves) 202 / 221 ms, experts 37.6.
+  The 1 x 2k case's experts 71.4 ms: 6144 pad rows of one id all route to the same experts (busiest chip,
+  DS41-299): the PB.1 decision "pad rows excluded from MoE dispatch" is PB.4's.
+- vs the bar (122 ms): v1 misses by 2.4x, as projected for this structure (the expected 180-220 ms was low: the moves
+  cost ~3.5 ms a layer, 5 SP gathers of 21 MB a layer, and the host 39 ms). What v2 must remove: 3 of the 4
+  attention calls (~100 ms: one call with per-chip lane arguments) and the moves (~70 ms).
+- Re-run: `BRINGUP_CHUNK=8192 PYTHONPATH=$PWD python -m models.demos.common.bringup gate PB.3 --spec $BRINGUP_SPEC --check`;
+  a rung: `python -m models.demos.common.bringup.resident submit --spec $BRINGUP_SPEC --cmd "BRINGUP_CHUNK=8192
+  DS41_PACKED_LAYERS=0,1,2,3 scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_oracle.py"`.
+- Gate (`gate PB.3 --check`, 2 runs; the first failed only on my list metric packed_wall_ms_runs_* matching the
+  `packed_wall_ms_*` > 0 glob: renamed packed_runs_ms_*): PASS. Determinism 0; oracle on 40 layers: lane equivalence
+  0, alone vs today 0, slot digests 0 mismatches, packed determinism 0; reference: every segment's every layer within
+  its limit, final hidden rel 0.131 / 0.131 / 0.131 / 0.132 (limit 0.242), top-5 1.0 on all four (>= 0.994), lane 0
+  and lane 1 (same request, other slot and lane) bit-identical. Walls (gate: ENGRAM_TABLE=mmap, DS41-325): 4 x 2k
+  398.1 ms (20.6k new tok/s; device 255.8, host 142.3), mixed 445.4 (18.4k; 276.2 / 169.2), 1 x 2k 206.1 (9.9k).
+  With the shipped resident table (my rung run): 294.5 / 342.9 / 154.9 ms, same device times.
+- Loads / opens this task: 4 device opens by the runner (3 model-python rebuilds whose memory did not come back,
+  1 fresh process for the walls' ENGRAM_TABLE), plus the gate's own (a fresh 40-layer process for determinism, a
+  21-layer one for the walls) x 2 gate runs.
+- For PB.3H (next): the attention loop is the cost (device q_a section 202 ms of 256 at 4 x 2k @ 139k): v2 = one
+  attention call a layer with per-chip lane arguments (positions / RoPE rows, carry source, history table and key
+  buffer per chip), which also removes the lane moves; the per-lane history / key buffers and the per-index snapshot
+  instances / regions of v1 stay usable there.
+- Final check `orchestrator measure --task PB.3` (quick, one process, the single-request path with PACKED=on): rc 0, chunk_wall_ms 233.7, min layer PCC 0.732 (L39), host_transfers_per_layer 0.
