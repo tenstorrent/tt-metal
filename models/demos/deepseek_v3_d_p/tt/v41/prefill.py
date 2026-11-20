@@ -86,6 +86,15 @@ DEVICE_EMBED_CHECK = int(os.environ.get("V41_PREFILL_DEVICE_EMBED_CHECK", "0"))
 # 30.1 ms on ragged chunks vs 3.9 ms on full ones).
 EMBED_RAGGED = os.environ.get("V41_PREFILL_EMBED_RAGGED", "0") == "1"
 
+# WS9 (11-20) V41_PREFILL_DEC_CONE=1: on the burst's LAST chunk when it is also the prompt's FIRST decoder chunk (policy L's one
+# decoder chunk: the export ends at its end S'), the decoder layers 21..39 mark every SP shard that lies wholly before the cone
+# (rows < S' - V41_PREFILL_DECODER_CONE) as MoE padding (their per-shard real-token count 0: sentinel-routed in the gate's top-k,
+# never dispatched). Those rows are outside every decoder layer's exact range (decoder_cone.py: the export reads layer l's rows
+# >= S' - 128 - (39 - l) x 127 >= S' - 2541 only), so their values may change; the cone's rows are the same per-row MoE math.
+# Layer 20 (the full ratio-1 source: entries / index keys / slab for every row) and the encoder are untouched. Default off.
+DEC_CONE = os.environ.get("V41_PREFILL_DEC_CONE", "0") == "1"
+DEC_CONE_ROWS = int(os.environ.get("V41_PREFILL_DECODER_CONE", "2541") or 2541)
+
 
 # tt-blaze DS41F-0163 (11-19, the Kernelize review's step 0): V41_PREFILL_DEVPROF=<jsonl> with V41_PREFILL_DEVPROF_STARTS=<chunk
 # start positions, comma list>: on the EAGER path (V41_PREFILL_ISLANDS=0) and the device profiler (TT_METAL_DEVICE_PROFILER=1
@@ -326,6 +335,7 @@ class V41Prefill:
         # DEVICE_EMBED: the table on device, allocated here -- before any trace-island capture (a buffer allocated after a
         # capture can sit in the islands' intermediates, DS41F-0037 10-10 21:25); _ids_dev = the current chunk's H2D ids
         self._ids_dev = None
+        self._cone_last = False  # WS9 DEC_CONE: the runtime sets it around a burst's last chunk
         self._embed_dev = self._device_embedding() if DEVICE_EMBED else None
         self._embed_checks = DEVICE_EMBED_CHECK
         self.kv_actuals = {s: 0 for s in range(self.num_users)}
@@ -956,6 +966,10 @@ class V41Prefill:
             rows = _fetch()
             mark("engram.host")
         owned = True
+        # WS9 DEC_CONE: rows of the decoder layers 21..39 that no exported row depends on (the shards wholly before the cone)
+        cone_drop = 0
+        if DEC_CONE and not kv_only20 and self.decoder_marked and self._cone_last and self.decoder_from == int(start):
+            cone_drop = max(0, real_len - DEC_CONE_ROWS)
         sup = getattr(self, "_super", None) or {}
         skip_until = -1
         pl = getattr(self, "_plan", None)
@@ -1023,7 +1037,12 @@ class V41Prefill:
                     HP.mark("kv_only20")
                 break
             streams, pre = blk.forward_islands(
-                streams, pre, real_len=real_len, owned=owned, owned_pre=blk is self.blocks[0] and cached is None
+                streams,
+                pre,
+                real_len=real_len,
+                owned=owned,
+                owned_pre=blk is self.blocks[0] and cached is None,
+                moe_drop=cone_drop if L > self.cfg.first_decoder_layer else 0,
             )
             owned = False
             mark(f"block.{type(blk.attn).__name__}")

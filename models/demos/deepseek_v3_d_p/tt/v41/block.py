@@ -614,18 +614,23 @@ class V41PrefillBlock(LightweightModule):
         self._island_chunk = int(chunk_tokens)
         return list(outs[:HC]), outs[HC]
 
-    def forward_islands(self, streams: list, pre_row, *, real_len: int, owned: bool, owned_pre: bool = False):
+    def forward_islands(
+        self, streams: list, pre_row, *, real_len: int, owned: bool, owned_pre: bool = False, moe_drop: int = 0
+    ):
         """The traced forward: copy the inputs in, replay A, run the attention eagerly, replay B. ``owned`` /
         ``owned_pre``: the streams / the pre row are eager tensors of the caller's, freed after the copy -- never a
         previous island's persistent outputs (an Engram layer gets eager streams but the previous block's persistent pre
         row: freeing that one freed block L-1's island-B output, 19:23)."""
         A, B, S_in, pre_in, y_buf = self._islands
         assert 0 < real_len <= self._island_chunk, (real_len, self._island_chunk)
-        if (
-            real_len != self._moe_pc_len
-        ):  # a ragged chunk, or the full one after it: the MoE's per-shard real-token counts
-            ttnn.copy_host_to_device_tensor(self._padding_rows_host(real_len), self._moe_pc)
-            self._moe_pc_len = int(real_len)
+        # a ragged chunk, or the full one after it: the MoE's per-shard real-token counts. WS9 DEC_CONE (``moe_drop`` > 0): the
+        # SP shards wholly before row ``moe_drop`` count 0 real tokens too (the key is then (real_len, shards dropped))
+        s_l = int(self.moe.gate.config.sp_dim)
+        n_drop = int(moe_drop) // s_l if moe_drop else 0
+        key = int(real_len) if n_drop == 0 else (int(real_len), n_drop)
+        if key != self._moe_pc_len:
+            ttnn.copy_host_to_device_tensor(self._padding_rows_host(real_len, n_drop), self._moe_pc)
+            self._moe_pc_len = key
         for dst, src in zip(S_in, streams):
             copy_into(dst, src)
         copy_into(pre_in, pre_row)
@@ -839,10 +844,12 @@ class V41PrefillBlock(LightweightModule):
             HP.mark("attn.epilogue")
         return a2[0]
 
-    def _padding_rows_host(self, real_len: int):
-        """The host twin of TtMoEGatePrefill.build_padding_config (sequential layout, right padding), same tensor spec."""
+    def _padding_rows_host(self, real_len: int, n_drop: int = 0):
+        """The host twin of TtMoEGatePrefill.build_padding_config (sequential layout, right padding), same tensor spec.
+        ``n_drop`` (WS9 DEC_CONE): the first ``n_drop`` SP shards count 0 real tokens (all their rows sentinel-routed).
+        """
         sp, s_l = int(self.mesh_device.shape[0]), int(self.moe.gate.config.sp_dim)
-        rows = [[min(s_l, max(0, int(real_len) - c * s_l)), 0] for c in range(sp)]
+        rows = [[0 if c < int(n_drop) else min(s_l, max(0, int(real_len) - c * s_l)), 0] for c in range(sp)]
         return ttnn.from_torch(
             torch.tensor(rows, dtype=torch.int32),
             dtype=ttnn.uint32,
