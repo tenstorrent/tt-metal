@@ -259,8 +259,17 @@ class Module(ABC):
         for name, parameter in self.named_parameters():
             parameter.save(directory / f"{prefix}{name}.tensorbin")
 
+    # Set False on a module class whose weights must load plainly (see utils/split_load.py).
+    split_load = True
+
     def load(self, directory: str | Path, /, *, prefix: str = "") -> None:
         directory = Path(directory)
+        if self.split_load is False:
+            from ..utils import split_load
+
+            if split_load.current() is not None:
+                with split_load.disabled():
+                    return self.load(directory, prefix=prefix)
 
         # Top-level only: announce the cache load and arm a timer watchdog so a slow/stalled
         # module load is never silent. Signature is left untouched — subclasses (Mochi/Wan)
@@ -589,6 +598,12 @@ class Parameter:
     def load(self, path: str | Path, /) -> None:
         if self.is_transiently_sharded():
             self.deallocate()
+        if not (self.on_host or _HOST_WEIGHT_CACHE):
+            from ..utils import split_load
+
+            active = split_load.current()
+            if active is not None and active.load(self, Path(path)):
+                return
         if _HOST_WEIGHT_CACHE and not self.on_host:
             # Materialize the host weights once and keep them; a dynamic_load reload then only
             # re-pushes them to device (~2.4s DMA for the 22B DiT) rather than re-reading and

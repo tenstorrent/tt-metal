@@ -192,6 +192,8 @@ def load_model(
     get_torch_state_dict: Callable[[], dict] | None = None,
     create_cache: bool = True,
     post_load_hook: Callable[[Module], None] | None = None,
+    split_load: bool | None = None,
+    ccl_manager=None,
 ) -> None:
     """
     Load model weights from cache or PyTorch state dict.
@@ -217,6 +219,9 @@ def load_model(
             evaluation - PyTorch model only loads if the cache does not exist. If `None`, cache
             must exist or `MissingCacheError` is raised.
         `create_cache`: Create cache after loading from PyTorch (default: True).
+        `split_load`, `ccl_manager`: a cache hit loads replicated tensors as 1/N slices of the cache file over each
+            chip's own link, then all-gathers them with `ccl_manager` (see `split_load.py`); the result equals a
+            plain load bit for bit. `None` means on when a `ccl_manager` is given and `TT_DIT_SPLIT_LOAD` is not `0`.
 
     Raises:
         `MissingCacheError`: Cache does not exist and `get_torch_state_dict` is `None`.
@@ -256,7 +261,9 @@ def load_model(
         get_torch_state_dict is not None and _set_aside_if_nonfinite(tt_model, cache_dir)
     ):
         logger.info(f"loading cache at '{cache_dir}'.")
-        with walltime.timed("weight_load", f"{model_name}/{subfolder}", cached=True):
+        with walltime.timed("weight_load", f"{model_name}/{subfolder}", cached=True), _split_loading(
+            ccl_manager, split_load, f"{model_name}/{subfolder}"
+        ):
             tt_model.load(cache_dir)
         if post_load_hook is not None:
             post_load_hook(tt_model)
@@ -293,6 +300,24 @@ def load_model(
         logger.info(f"Writing cache to '{cache_dir}'.")
         _publish_cache(tt_model, cache_dir, key)
         _place_like_a_cache_hit(tt_model, cache_dir, key, post_load_hook)
+
+
+@contextmanager
+def _split_loading(ccl_manager, requested: bool | None, label: str):
+    from . import split_load
+
+    on = requested if requested is not None else os.environ.get("TT_DIT_SPLIT_LOAD", "1") != "0"
+    if not on or ccl_manager is None:
+        yield
+        return
+    loader = split_load.SplitLoad(ccl_manager)
+    with loader.active():
+        yield
+    stats = loader.stats
+    logger.info(
+        f"split load {label}: {stats['split']} tensors split ({stats['bytes'] / 2**20:.0f} MiB per chip, "
+        f"{stats['seconds']:.2f} s), {stats['plain']} plain, {stats['fallback']} failed"
+    )
 
 
 def _place_like_a_cache_hit(
