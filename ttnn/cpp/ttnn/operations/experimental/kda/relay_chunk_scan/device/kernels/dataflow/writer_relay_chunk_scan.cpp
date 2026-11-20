@@ -12,13 +12,13 @@ constexpr uint32_t cb_norm = get_compile_time_arg_val(2);
 constexpr uint32_t kt = get_compile_time_arg_val(3);
 constexpr uint32_t num_chunks = get_compile_time_arg_val(4);
 constexpr uint32_t ack_semaphore_id = get_compile_time_arg_val(5);
-// The cores are heads x cores_per_head consecutive cores of the compute grid in row-major order, from first_core,
-// head by head.
+// Each core's index among the heads' cores (head * cores_per_head + its place in the head) is in the common args at
+// core_map, by the core's place in the compute grid (y * grid_x + x).
 constexpr uint32_t cores_per_head = get_compile_time_arg_val(6);
 constexpr uint32_t grid_x = get_compile_time_arg_val(7);
 constexpr uint32_t core_chunks = get_compile_time_arg_val(8);
 constexpr uint32_t num_links = get_compile_time_arg_val(9);
-constexpr uint32_t first_core = get_compile_time_arg_val(10);
+constexpr uint32_t core_map = get_compile_time_arg_val(10);
 // The normalized outputs are token-major [B, T, H*V]: head h's tiles of chunk c at tile row (h / heads) * num_chunks +
 // c, from tile column (h % heads) * kt.
 constexpr uint32_t heads = get_compile_time_arg_val(11);
@@ -45,7 +45,7 @@ constexpr uint32_t state_tiles = kt * kt;
 // head's sender, and on the first rank, before its chunk outputs, hands on and writes the final carry.
 void kernel_main() {
     // Every core takes the same args (common, per device): its head and share follow from its place in the grid.
-    const uint32_t core = get_absolute_logical_y() * grid_x + get_absolute_logical_x() - first_core;
+    const uint32_t core = get_common_arg_val<uint32_t>(core_map + get_absolute_logical_y() * grid_x + get_absolute_logical_x());
     const uint32_t head = core / cores_per_head;
     const uint32_t first_chunk = core % cores_per_head * core_chunks;
     const bool relay_head = core % cores_per_head == 0;

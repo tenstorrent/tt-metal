@@ -58,11 +58,11 @@ constexpr bool streamed = get_compile_time_arg_val(correction_ct + 4);
 constexpr uint32_t landed_semaphore_id = get_compile_time_arg_val(correction_ct + 5);
 // The head core's count of the sender's releases: 1 once the relay's last column has left, 2 once the carry's has.
 constexpr uint32_t ack_semaphore_id = get_compile_time_arg_val(correction_ct + 6);
-// The cores are heads x cores_per_head consecutive cores of the compute grid in row-major order, from first_core,
-// head by head.
+// Each core's index among the heads' cores (head * cores_per_head + its place in the head) is in the common args at
+// core_map, by the core's place in the compute grid (y * grid_x + x).
 constexpr uint32_t cores_per_head = get_compile_time_arg_val(correction_ct + 7);
 constexpr uint32_t grid_x = get_compile_time_arg_val(correction_ct + 8);
-constexpr uint32_t first_core = get_compile_time_arg_val(correction_ct + 9);
+constexpr uint32_t core_map = get_compile_time_arg_val(correction_ct + 9);
 constexpr auto terms_args = TensorAccessorArgs<correction_ct + 10>();
 // The gated output norm: the mean's scaler, the weight, and on a head core what its helper forms of its chunks: their
 // factors sigmoid(gate) * weight in place, their gate rows streamed.
@@ -89,7 +89,7 @@ constexpr uint32_t num_chunks = local_rows / tt::constants::TILE_HEIGHT;
 // well, which the final carry and a separated tail start from.
 void kernel_main() {
     // Every core takes the same args (common, per device): its head and share follow from its place in the grid.
-    const uint32_t core = get_absolute_logical_y() * grid_x + get_absolute_logical_x() - first_core;
+    const uint32_t core = get_common_arg_val<uint32_t>(core_map + get_absolute_logical_y() * grid_x + get_absolute_logical_x());
     const uint32_t head = core / cores_per_head;
     const uint32_t first_chunk = core % cores_per_head * core_chunks;
     const bool relay_head = core % cores_per_head == 0;

@@ -51,11 +51,11 @@ constexpr uint32_t cb_diff = get_compile_time_arg_val(15);
 constexpr uint32_t cb_out = get_compile_time_arg_val(16);
 constexpr uint32_t core_chunks = get_compile_time_arg_val(17);
 constexpr bool streamed = get_compile_time_arg_val(18);
-// The cores are heads x cores_per_head consecutive cores of the compute grid in row-major order, from first_core,
-// head by head.
+// Each core's index among the heads' cores (head * cores_per_head + its place in the head) is in the common args at
+// core_map, by the core's place in the compute grid (y * grid_x + x).
 constexpr uint32_t cores_per_head = get_compile_time_arg_val(19);
 constexpr uint32_t grid_x = get_compile_time_arg_val(20);
-constexpr uint32_t first_core = get_compile_time_arg_val(21);
+constexpr uint32_t core_map = get_compile_time_arg_val(21);
 // The gated output norm of each chunk row x: x / sqrt(mean(x^2) + epsilon) * g with g = sigmoid(gate) * weight. The
 // squares, the mean's scaler, 1 / rms, the gate rows (FP32, all of the core's chunks), the weight (row 0 of its tiles)
 // and broadcast down every row, each chunk's g (all in place, one streamed), and the result.
@@ -325,8 +325,8 @@ void correct(uint32_t begin, uint32_t end, uint32_t seed) {
 // the head's first core runs the relay's hop instead and, on the first rank, the final carry (from P, which lands after
 // the lap) before its chunks, whose rows its helper forms meanwhile (in place, their factors too).
 void kernel_main() {
-    const bool relay_head =
-        (get_absolute_logical_y() * grid_x + get_absolute_logical_x() - first_core) % cores_per_head == 0;
+    const uint32_t core = get_common_arg_val<uint32_t>(core_map + get_absolute_logical_y() * grid_x + get_absolute_logical_x());
+    const bool relay_head = core % cores_per_head == 0;
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_terms, cb_seed, cb_out);
     cb_wait_front(cb_ctl, 1);
     const uint32_t holder = read_tile_value(cb_ctl, 0, 0);
@@ -360,8 +360,7 @@ void kernel_main() {
             differences();
         }
     } else {
-        const uint32_t head =
-            (get_absolute_logical_y() * grid_x + get_absolute_logical_x() - first_core) / cores_per_head;
+        const uint32_t head = core / cores_per_head;
         kda_gate::matmul<gate_fidelity>(
             cb_gin0,
             cb_gin1,

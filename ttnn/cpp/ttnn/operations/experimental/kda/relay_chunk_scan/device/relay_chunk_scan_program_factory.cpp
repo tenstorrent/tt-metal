@@ -191,7 +191,6 @@ tt::tt_metal::ProgramDescriptor build_program(
     const uint32_t cores_per_head = relay_chunk_scan_cores_per_head(attrs.cores.size(), batch_heads, attrs.num_links);
     const uint32_t core_chunks = num_chunks / cores_per_head;
     const uint32_t grid_x = mesh->compute_with_storage_grid_size().x;
-    const uint32_t first_core = attrs.cores[0].y * grid_x + attrs.cores[0].x;
     // Sharded terms are read in place; interleaved ones stream a chunk row at a time.
     const bool streamed = !in.terms.memory_config().is_sharded();
 
@@ -562,6 +561,18 @@ tt::tt_metal::ProgramDescriptor build_program(
         tt::tt_metal::TensorAccessorArgs(gate_local.buffer()).append_to(ct);
         tt::tt_metal::TensorAccessorArgs(in.gate_weight.buffer()).append_to(ct);
     };
+    // Each heads' core's index (head * cores_per_head + its place in the head) by its place in the compute grid, which
+    // the correction kernels find their head and share by. In the reader's common args after the heads' and the
+    // helpers' NoC coordinates and the W directions, in the writer's after the W directions; the compute's own.
+    std::vector<uint32_t> core_map(grid_x * mesh->compute_with_storage_grid_size().y);
+    for (uint32_t i = 0; i < correction_cores.size(); ++i) {
+        core_map[correction_cores[i].y * grid_x + correction_cores[i].x] = i;
+    }
+    const uint32_t reader_helpers = 14 + static_cast<uint32_t>(correction_cores.size());
+    const uint32_t reader_north = reader_helpers + static_cast<uint32_t>(helper_cores.size());
+    const uint32_t reader_map = reader_north + static_cast<uint32_t>(north_bits.size());
+    const uint32_t writer_north = 3 + 2 * attrs.num_links;
+    const uint32_t writer_map = writer_north + static_cast<uint32_t>(north_bits.size());
     std::vector<uint32_t> reader_ct = {cb_e, cb_b, cb_ein, cb_chron};
     reader_ct.insert(reader_ct.end(), chronology.begin(), chronology.end());
     reader_ct.push_back(kt);
@@ -597,17 +608,15 @@ tt::tt_metal::ProgramDescriptor build_program(
          ack_semaphore_id,
          cores_per_head,
          grid_x,
-         first_core});
+         reader_map});
     tt::tt_metal::TensorAccessorArgs(in.terms.buffer()).append_to(reader_ct);
     reader_ct.insert(reader_ct.end(), {cb_scaler, cb_gate, cb_weight, attrs.num_heads, cb_gate_factor});
     tt::tt_metal::TensorAccessorArgs(in.norm_weight.buffer()).append_to(reader_ct);
     // The heads' W directions, then the output gate's operands, whose common args follow the cores' and the helpers'
     // NoC coordinates.
-    const uint32_t reader_helpers = 14 + static_cast<uint32_t>(correction_cores.size());
-    const uint32_t reader_north = reader_helpers + static_cast<uint32_t>(helper_cores.size());
     reader_ct.push_back(reader_north);
     reader_ct.push_back(reader_helpers);
-    append_gate_ct(reader_ct, reader_north + static_cast<uint32_t>(north_bits.size()));
+    append_gate_ct(reader_ct, reader_map + static_cast<uint32_t>(core_map.size()));
     std::vector<uint32_t> writer_ct = {
         cb_eout,
         cb_chron,
@@ -619,15 +628,14 @@ tt::tt_metal::ProgramDescriptor build_program(
         grid_x,
         core_chunks,
         attrs.num_links,
-        first_core,
+        writer_map,
         attrs.num_heads};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct);
     tt::tt_metal::TensorAccessorArgs(carry.buffer()).append_to(writer_ct);
     writer_ct.insert(writer_ct.end(), slab_ct.begin(), slab_ct.end());
     // The heads' W directions, then the output gate's operands, whose common args follow the senders'.
-    const uint32_t writer_north = 3 + 2 * attrs.num_links;
     writer_ct.push_back(writer_north);
-    append_gate_ct(writer_ct, writer_north + static_cast<uint32_t>(north_bits.size()));
+    append_gate_ct(writer_ct, writer_map + static_cast<uint32_t>(core_map.size()));
     std::vector<uint32_t> sender_ct = {cb_stage, cb_eout};
     sender_ct.insert(sender_ct.end(), chronology.begin(), chronology.end());
     sender_ct.insert(
@@ -685,7 +693,7 @@ tt::tt_metal::ProgramDescriptor build_program(
              uint32_t(streamed),
              cores_per_head,
              grid_x,
-             first_core,
+             0u,
              cb_square,
              cb_scaler,
              cb_inv_rms,
@@ -815,6 +823,7 @@ tt::tt_metal::ProgramDescriptor build_program(
         reader_args.push_back(xy(mesh->worker_core_from_logical_core(core)));
     }
     reader_args.append(north_bits);
+    reader_args.append(core_map);
     append_gate_args(reader_args);
     reader.emplace_common_runtime_args(reader_args);
     tt::tt_metal::KernelDescriptor::RTArgList writer_args;
@@ -825,6 +834,7 @@ tt::tt_metal::ProgramDescriptor build_program(
         writer_args.push_back(xy(mesh->worker_core_from_logical_core(core)));
     }
     writer_args.append(north_bits);
+    writer_args.append(core_map);
     append_gate_args(writer_args);
     writer.emplace_common_runtime_args(writer_args);
     tt::tt_metal::KernelDescriptor::RTArgList helper_args;
@@ -851,6 +861,9 @@ tt::tt_metal::ProgramDescriptor build_program(
     for (uint32_t h = 0; h < batch_heads; ++h) {
         helper_compute.emplace_runtime_args(helper_cores[h], {uint32_t{h % attrs.num_heads < attrs.num_heads / 2}});
     }
+    tt::tt_metal::KernelDescriptor::RTArgList compute_args;
+    compute_args.append(core_map);
+    compute.emplace_common_runtime_args(compute_args);
     desc.kernels = {
         std::move(sender), std::move(compute), std::move(helper_compute), std::move(reader), std::move(writer)};
     std::ranges::move(helpers, std::back_inserter(desc.kernels));
