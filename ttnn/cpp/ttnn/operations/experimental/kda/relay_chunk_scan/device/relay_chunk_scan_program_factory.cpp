@@ -189,8 +189,10 @@ tt::tt_metal::ProgramDescriptor build_program(
     const uint32_t num_chunks = attrs.local_rows / tt::constants::TILE_HEIGHT;
     const uint32_t cores_per_head = relay_chunk_scan_cores_per_head(attrs.cores.size(), batch_heads, attrs.num_links);
     const uint32_t core_chunks = num_chunks / cores_per_head;
-    const uint32_t grid_x = mesh->compute_with_storage_grid_size().x;
-    const uint32_t first_core = attrs.cores[0].y * grid_x + attrs.cores[0].x;
+    const uint32_t grid_y = mesh->compute_with_storage_grid_size().y;
+    // The correction cores' layout (kernels/correction_core.hpp): head h's are a column from row first_row.
+    const uint32_t first_row = attrs.cores[0].y;
+    const uint32_t heads_per_column = relay_chunk_scan_heads_per_column(grid_y, first_row, cores_per_head);
     // Sharded terms are read in place; interleaved ones stream a chunk row at a time.
     const bool streamed = !in.terms.memory_config().is_sharded();
 
@@ -356,16 +358,15 @@ tt::tt_metal::ProgramDescriptor build_program(
     while (gate_kb > 2 && fits(gate_kb / 2, gate_ways, gate_depth)) {
         gate_kb /= 2;
     }
-    // Paired, x is shared among the cores at a place of the pairs' first heads, and among those of their second.
+    // Paired, x is shared among the cores at a place of the pairs' first heads (even), and among those of their second.
     const uint32_t batches = batch_heads / attrs.num_heads;
     const uint32_t gate_x_groups = batches * cores_per_head * gate_ways;
     std::vector<std::vector<GateSet>> gate_groups;
     for (uint32_t b = 0; b < batches; ++b) {
         for (uint32_t group = 0; group < gate_ways * cores_per_head; ++group) {
             const uint32_t place = group / gate_ways;
-            const uint32_t first_head = b * attrs.num_heads + group % gate_ways * attrs.num_heads / gate_ways;
             std::vector<CoreCoord> members;
-            for (uint32_t h = first_head; h < first_head + attrs.num_heads / gate_ways; ++h) {
+            for (uint32_t h = b * attrs.num_heads + group % gate_ways; h < (b + 1) * attrs.num_heads; h += gate_ways) {
                 members.push_back(correction_cores[h * cores_per_head + place]);
             }
             auto& sets = gate_groups.emplace_back();
@@ -555,15 +556,15 @@ tt::tt_metal::ProgramDescriptor build_program(
          uint32_t(streamed),
          landed_semaphore_id,
          cores_per_head,
-         grid_x,
-         first_core});
+         heads_per_column,
+         first_row});
     tt::tt_metal::TensorAccessorArgs(in.terms.buffer()).append_to(reader_ct);
     reader_ct.insert(reader_ct.end(), {cb_scaler, cb_gate, cb_weight, attrs.num_heads});
     tt::tt_metal::TensorAccessorArgs(in.norm_weight.buffer()).append_to(reader_ct);
     // The output gate's operands, whose common args follow the cores' NoC coordinates.
     append_gate_ct(reader_ct, 6 + static_cast<uint32_t>(correction_cores.size()));
     std::vector<uint32_t> writer_ct = {
-        cb_chron, cb_norm, kt, num_chunks, cores_per_head, grid_x, core_chunks, first_core, attrs.num_heads};
+        cb_chron, cb_norm, kt, num_chunks, cores_per_head, heads_per_column, core_chunks, first_row, attrs.num_heads};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct);
     // The output gate's operands, whose common args follow the output.
     append_gate_ct(writer_ct, 1);
@@ -643,8 +644,8 @@ tt::tt_metal::ProgramDescriptor build_program(
              core_chunks,
              uint32_t(streamed),
              cores_per_head,
-             grid_x,
-             first_core,
+             heads_per_column,
+             first_row,
              cb_square,
              cb_scaler,
              cb_inv_rms,
@@ -662,7 +663,6 @@ tt::tt_metal::ProgramDescriptor build_program(
              static_cast<uint32_t>(attrs.gate_math_fidelity),
              cb_gate_pair,
              cb_gate_partial,
-             attrs.num_heads,
              gate_ways},
         .config = std::move(compute_config),
     };

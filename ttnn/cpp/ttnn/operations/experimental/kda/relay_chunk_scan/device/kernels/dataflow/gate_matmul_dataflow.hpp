@@ -269,10 +269,10 @@ FORCE_INLINE void swap_partials(
     noc_async_write_barrier();
 }
 
-// The output gate's operands as a kernel moves them. Where their buffers fit (`ways` 2) the heads of a batch pair up,
-// h with h + heads / 2: each core forms both heads' columns of its rows over its head's half of K (the first half for
-// a pair's first head), then swaps partial sums with the pair's core (swap_partials). Else (`ways` 1) each core forms
-// its head's columns over all of K.
+// The output gate's operands as a kernel moves them. Where their buffers fit (`ways` 2) the heads pair up, h with h ^
+// 1: each core forms both heads' columns of its rows over its head's half of K (the first half for a pair's first
+// head), then swaps partial sums with the pair's core (swap_partials). Else (`ways` 1) each core forms its head's
+// columns over all of K.
 //
 // Compile-time args from `ct`: x's, W's and the progress CBs; the rows and a head's columns (tiles) a core forms; the
 // K block and K (tiles); the K tiles of the local input (0: none); W's tile columns; the heads per batch; the x groups
@@ -308,10 +308,10 @@ struct Operands {
     // Each core's share of K.
     static constexpr uint32_t blocks = k / kb / ways;
 
-    static uint32_t half(uint32_t head) { return ways == 2 && head % heads >= heads / 2; }
+    static uint32_t half(uint32_t head) { return ways == 2 && head % 2 == 1; }
     // A pair's first head, and a head's pair.
-    static uint32_t first(uint32_t head) { return head - half(head) * (heads / 2); }
-    static uint32_t partner(uint32_t head) { return half(head) ? head - heads / 2 : head + heads / 2; }
+    static uint32_t first(uint32_t head) { return head - half(head); }
+    static uint32_t partner(uint32_t head) { return head ^ 1; }
 
     // x of a correction core's chunks (in the x group of the head batch's cores at its place), or its head's W.
     static void move_x(uint32_t group, uint32_t first_row, uint32_t head) {
@@ -374,7 +374,7 @@ struct Operands {
                 for (uint32_t pair = 0; pair < ways; ++pair) {
                     for (uint32_t j = 0; j < columns; ++j) {
                         noc_async_read_page(
-                            (k_begin + b * kb + i) * width + first_column + pair * (heads / 2) * columns + j,
+                            (k_begin + b * kb + i) * width + first_column + pair * columns + j,
                             weight,
                             slot + ((ways * i + pair) * columns + j) * tile);
                     }

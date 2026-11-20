@@ -146,23 +146,33 @@ void kernel_main() {
 
     // Each landed tile column of a K x K state (column-major by tile) goes into the seed buffer of a head's correction
     // cores [d_begin, d_end) (at the same address on each), counted there; compute starts the chunk outputs once the
-    // whole seed has landed.
+    // whole seed has landed. A head's correction cores are a column of the grid (correction_core.hpp): one multicast
+    // reaches them.
     const uint32_t landed = get_semaphore(landed_semaphore_id);
     const auto distribute = [&](uint32_t s, uint32_t source, uint32_t seed, uint32_t d_begin, uint32_t d_end) {
+        // NoC 0 multicasts from the column's top, NoC 1 from its bottom.
+        const uint32_t start = core_xy(s, noc_index == 0 ? d_begin : d_end - 1);
+        const uint32_t end = core_xy(s, noc_index == 0 ? d_end - 1 : d_begin);
+        const uint32_t cores = d_end - d_begin;
+        const auto address = [&](uint32_t local) {
+            return cores == 1 ? get_noc_addr(start & 0xFFFF, start >> 16, local)
+                              : get_noc_multicast_addr(start & 0xFFFF, start >> 16, end & 0xFFFF, end >> 16, local);
+        };
         for (uint32_t j = 0; j < kt; ++j) {
-            for (uint32_t d = d_begin; d < d_end; ++d) {
-                const uint32_t xy = core_xy(s, d);
-                noc_async_write(
-                    source + j * column_bytes,
-                    get_noc_addr(xy & 0xFFFF, xy >> 16, seed + j * column_bytes),
-                    column_bytes);
+            if (cores == 1) {
+                noc_async_write(source + j * column_bytes, address(seed + j * column_bytes), column_bytes);
+            } else {
+                noc_async_write_multicast(
+                    source + j * column_bytes, address(seed + j * column_bytes), column_bytes, cores);
             }
-            noc_async_write_barrier();
-            for (uint32_t d = d_begin; d < d_end; ++d) {
-                const uint32_t xy = core_xy(s, d);
-                noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, landed), 1);
+            noc_async_writes_flushed();
+            if (cores == 1) {
+                noc_semaphore_inc(address(landed), 1);
+            } else {
+                noc_semaphore_inc_multicast(address(landed), 1, cores);
             }
         }
+        noc_async_write_barrier();
     };
     const auto released = [](uint32_t s) {
         return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(first_ack_semaphore_id + s));
