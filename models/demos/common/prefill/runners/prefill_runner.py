@@ -30,6 +30,7 @@ from models.demos.common.prefill.prefill_chunk import (
     sentinel_words,
     validate_chunks,
 )
+from models.demos.common.prefill.runners.cpu_affinity import pin_runner_cpus
 from models.demos.common.prefill.runners.hang_detector import arm_hang_detector
 from models.demos.common.prefill.runners.layer_completion_layout import layer_completion_layout
 from models.demos.common.prefill.runners.layer_completion_ring_reader import scheduler_shm_name
@@ -1235,6 +1236,9 @@ def main() -> None:
     # PREFILL_HOLD_CPU_CLOCK=0 turns it off.
     if os.environ.get("PREFILL_HOLD_CPU_CLOCK", "1") == "1":
         print(f"[prefill] CPU clock: {hold_full_cpu_clock().status}", flush=True)
+    # tt-run binds each rank to one core, which can be a CPU Weka busy-polls: take this rank's share of the free cores.
+    # PREFILL_RUNNER_CPUS=off keeps the launcher's binding.
+    print(f"[prefill] CPUs: {pin_runner_cpus()}", flush=True)
     # Stacks on SIGUSR1 and an uncaught-exception marker for run_multirank_pcc.sh's watchdogs.
     install_crash_diagnostics()
 
