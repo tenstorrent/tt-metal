@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 
 #include "llrt/hal.hpp"
@@ -35,8 +36,15 @@ inline bool debug_valid_dram_addr(uint64_t addr, uint32_t len, uint64_t base, ui
 inline bool debug_valid_eth_addr(const tt::tt_metal::Hal& hal, uint64_t addr, uint32_t len) {
     const uint64_t base =
         hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::BASE);
-    const uint64_t size =
+    uint64_t size =
         hal.get_dev_size(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::BASE);
+    if (hal.get_arch() == tt::ARCH::QUASAR) {
+        // A Keraunos HSIO CCE is addressed in its native view as well as CCE-relative: CCE1's SRAM sits one window
+        // above CCE0's (firmware and kernels are linked there). The window count is the number of CCEs per tile.
+        size *= std::max<uint32_t>(
+            1, hal.get_processor_class_num_fw_binaries(
+                   hal.get_programmable_core_type_index(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH), 0));
+    }
     return (addr >= base && addr + len <= base + size) || debug_valid_reg_addr(hal, addr, len);
 }
 

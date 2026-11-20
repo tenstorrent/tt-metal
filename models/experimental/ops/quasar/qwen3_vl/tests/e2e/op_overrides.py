@@ -100,6 +100,31 @@ def _linear_from_interleaved(original, args, kwargs):
     return ttnn.to_memory_config(out, want if want.shard_spec is not None else _with_shard_spec(out, want))
 
 
+def _quasar_sharded_in0_matmul(args, kwargs):
+    import ttnn
+
+    x = args[0] if args else kwargs.get("input_tensor_a")
+    return x is not None and x.is_sharded() and x.device().arch() == ttnn.device.Arch.QUASAR
+
+
+def _matmul_from_interleaved(original, args, kwargs):
+    import ttnn
+
+    kwargs = dict(kwargs)
+    config = kwargs.pop("program_config", None)  # the program configs passed with a sharded input expect it sharded
+    if getattr(config, "fused_activation", None) is not None:
+        # ttnn's default program would silently skip it; no Qwen3-VL call passes one today.
+        raise NotImplementedError(f"quasar_unshard_*_in0 would drop fused_activation {config.fused_activation}")
+    x = ttnn.sharded_to_interleaved(args[0] if args else kwargs.pop("input_tensor_a"), ttnn.DRAM_MEMORY_CONFIG)
+    want = kwargs.get("memory_config")
+    out = original(x, *args[1:], **{**kwargs, "memory_config": ttnn.DRAM_MEMORY_CONFIG})
+    if want is None or not want.is_sharded():
+        return out
+    # Callers rely on the sharded output (they sharded_to_interleaved it and free the source), but ttnn's default
+    # matmul cannot fill in a missing shard spec, so complete it here.
+    return ttnn.to_memory_config(out, want if want.shard_spec is not None else _with_shard_spec(out, want))
+
+
 def _with_shard_spec(t, want):
     """`want` (sharded, no shard spec) with a spec spreading `t` over as many cores as divide its tiles."""
     import ttnn
@@ -180,6 +205,19 @@ WORKAROUNDS = [
         remove_when="decode norms and linears on small grids are configured interleaved end to end",
         applies=_small_grid_sharded_linear,
         rewrite=_linear_from_interleaved,
+    ),
+    *(
+        Workaround(
+            name=f"quasar_unshard_{op}_in0",
+            target=f"ttnn.{op}",
+            reason="matmul with a sharded in0 builds a dataflow buffer that a data-movement kernel both produces and "
+            "consumes, which Quasar rejects (QUASAR_GAPS Q4). Installed after small_grid_unshard_linear, so on Quasar "
+            "it sees the call first",
+            remove_when="the matmul factories take a sharded in0 on Quasar",
+            applies=_quasar_sharded_in0_matmul,
+            rewrite=_matmul_from_interleaved,
+        )
+        for op in ("linear", "matmul")
     ),
     Workaround(
         name="small_grid_untilize_single_core",

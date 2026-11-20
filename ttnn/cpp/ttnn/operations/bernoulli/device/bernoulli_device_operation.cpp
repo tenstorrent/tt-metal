@@ -29,9 +29,14 @@ void BernoulliDeviceOperation::validate_inputs(
         TT_FATAL(
             output.value().dtype() == DataType::BFLOAT16 || output.value().dtype() == DataType::FLOAT32,
             "Bernoulli: Output tensor must be Float32 or Bfloat16");
+        // The program walks output tiles and reads the input tile with the same index, so the shapes must match,
+        // not just the element counts.
         TT_FATAL(
-            input.logical_volume() == output.value().logical_volume(),
-            "Bernoulli: Output and input tensor shape must be equal");
+            input.logical_shape() == output.value().logical_shape() &&
+                input.padded_shape() == output.value().padded_shape(),
+            "Bernoulli: Output and input tensor shape must be equal, got {} and {}",
+            input.logical_shape(),
+            output.value().logical_shape());
     }
 }
 

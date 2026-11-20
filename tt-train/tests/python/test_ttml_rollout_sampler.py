@@ -1,0 +1,328 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Acceptance tests for ``TTMLRolloutSampler``.
+
+Follows the fixture and prompt patterns already in ``test_grpo_trainer.py``.
+Each test builds a model from real HuggingFace weights with ``setup_ttml_model``,
+wraps it in a ``TTMLRolloutSampler`` and asserts on the returned
+:class:`RolloutBatch`.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+import ttml
+import ttnn
+
+from ttml.common.config import DeviceConfig, TransformerConfig
+from ttml.common.utils import build_mesh, no_grad, run_mode
+from ttml.modules import RunMode
+from ttml.trainers.grpo_trainer import (
+    RolloutBatch,
+    grpo_ttml_model,
+    layout_microbatch,
+    place_old_nlog_probs,
+    policy_nlog_probs,
+    save_checkpoint,
+)
+from ttml.trainers.grpo_trainer.grpo_ttml_model import setup_ttml_model
+from ttml.trainers.grpo_trainer.ttml_rollout_sampler import TTMLRolloutSampler
+
+
+HF_LLAMA_MODEL_ID = "unsloth/Llama-3.2-1B-Instruct"  # not gated
+HF_QWEN3_MODEL_ID = "Qwen/Qwen3-0.6B"  # small Qwen3 for CI-friendly generation
+
+MAX_COMPLETION_LENGTH = 32
+
+
+# The architecture is read from the HF config of ``model_source``; these set only the run.
+LLAMA_1B_TRANSFORMER_CONFIG = TransformerConfig(
+    {
+        "transformer_config": {
+            "model_type": "llama",
+            "dropout_prob": 0.0,
+            "max_sequence_length": 1024,
+            "runner_type": "memory_efficient",
+        }
+    }
+)
+
+QWEN3_TRANSFORMER_CONFIG = TransformerConfig(
+    {
+        "transformer_config": {
+            "model_type": "qwen3",
+            "dropout_prob": 0.0,
+            "max_sequence_length": 512,
+            "runner_type": "memory_efficient",
+        }
+    }
+)
+
+DEVICE_CONFIG = DeviceConfig(
+    {
+        "device_config": {
+            "enable_ddp": False,
+            "mesh_shape": [1, 1],
+        }
+    }
+)
+
+
+CAPITALS_SYSTEM_PROMPT = (
+    "You are a precise geography assistant.\n"
+    "Given a country, reply with exactly one word: its capital city in English.\n"
+    "Feel free to describe the capital city or the country."
+)
+
+
+@pytest.fixture(autouse=True)
+def _reuse_open_device(monkeypatch):
+    """Override ``grpo_ttml_model.open_device`` to reuse an already-open
+    ``AutoContext`` device rather than calling ``open_device`` again.
+
+    Other tests in ``tests/python/`` lazily open the ``AutoContext`` device on
+    first tensor use and never close it. When pytest collects this file
+    alongside them, the device is already open by the time we get here, so a
+    real ``open_device`` would trip ``open_device was called after the device
+    was created``.
+
+    Llama just needs the current device. Qwen3 also needs a named mesh so the
+    ``ttml.mesh().has_axis`` checks work; mirror what ``ttml.open_device_mesh``
+    does at the Python level minus the ``open_device`` call.
+    """
+
+    def _open_current_device(model_kind, device_config):
+        if model_kind == "qwen3":
+            from ttml.common.utils import build_mesh
+            import ttml._mesh as _mesh_module
+
+            _mesh_module._mesh = build_mesh(device_config)
+        return ttml.autograd.AutoContext.get_instance().get_device()
+
+    monkeypatch.setattr(grpo_ttml_model, "open_device", _open_current_device)
+
+
+def _to_capitals_chat_prompt(tokenizer, user_text: str, **template_kwargs) -> str:
+    return tokenizer.apply_chat_template(
+        [
+            {"role": "system", "content": CAPITALS_SYSTEM_PROMPT},
+            {"role": "user", "content": user_text},
+        ],
+        tokenize=False,
+        add_generation_prompt=True,
+        **template_kwargs,
+    )
+
+
+def _assert_rollout_batch_ok(batch: RolloutBatch, *, expected_shape) -> None:
+    """Shared shape / sign / metadata invariants for the acceptance tests."""
+    assert isinstance(batch, RolloutBatch)
+    assert batch.weight_version == 0, f"expected weight_version=0 (default), got {batch.weight_version}"
+    assert batch.logprobs.shape == expected_shape, f"logprobs shape {batch.logprobs.shape} != expected {expected_shape}"
+    assert batch.logprobs.dtype == np.float32, f"logprobs dtype {batch.logprobs.dtype} != float32"
+
+    # Log-probs are non-positive by definition; using `<=` (not strict `<`)
+    # avoids a flaky failure when a near-certain pick rounds to 0.0.
+    lp = batch.logprobs
+    assert np.all(lp <= 0.0), (
+        f"all logprobs must be <= 0 (log-probs are non-positive); " f"found positive values (max = {lp.max():.4g})"
+    )
+
+    # Padded (post-completion) positions must be exactly 0.0 — the sampler
+    # right-pads with zeros so downstream masking treats them as ignored.
+    for b, completion in enumerate(batch.completions):
+        c_len = len(completion)
+        if c_len < expected_shape[1]:
+            pad_slice = lp[b, c_len:]
+            assert np.all(pad_slice == 0.0), (
+                f"row {b}: expected padded logprob positions [{c_len}:] to be 0.0, "
+                f"got nonzero max = {np.abs(pad_slice).max():.4g}"
+            )
+
+    # At least one non-padded position must be finite AND non-zero magnitude.
+    # This catches: (a) a sign flip that would forward `-log p` unchanged
+    # (values would be >= 0, failing the check above OR having only positive
+    # magnitudes never seen here), and (b) the degenerate case where every
+    # logprob is exactly 0.0 (which would silently pass the `<= 0` check).
+    saw_nontrivial = False
+    for b, completion in enumerate(batch.completions):
+        c_len = len(completion)
+        if c_len == 0:
+            continue
+        row_lp = lp[b, :c_len]
+        if np.any(np.isfinite(row_lp) & (np.abs(row_lp) > 1e-6)):
+            saw_nontrivial = True
+            break
+    assert saw_nontrivial, (
+        "expected at least one non-padded logprob to be finite and non-zero magnitude; "
+        "either every completion has length 0 or every captured logprob is zero"
+    )
+
+
+@pytest.mark.requires_device
+@pytest.mark.slow
+def test_llama_rollout_sampler_capital_of_france():
+    """Llama sampler answers "The capital of France is" with a completion
+    containing "Paris", and returns a well-formed :class:`RolloutBatch`.
+    """
+    model, tokenizer = setup_ttml_model(LLAMA_1B_TRANSFORMER_CONFIG, DEVICE_CONFIG, HF_LLAMA_MODEL_ID)
+    sampler = TTMLRolloutSampler(model, tokenizer, MAX_COMPLETION_LENGTH, 0.0, 1)
+
+    prompt_str = _to_capitals_chat_prompt(tokenizer, "The capital of France is")
+    prompt_ids = tokenizer.encode(prompt_str, add_special_tokens=False)
+
+    batch = sampler.generate([prompt_ids])
+    assert model.get_run_mode() == RunMode.TRAIN, "generate() must restore the model's run mode"
+
+    completion_str = tokenizer.decode(batch.completions[0], skip_special_tokens=True)
+    assert "paris" in completion_str.lower(), f"expected 'Paris' in Llama completion, got: {completion_str!r}"
+
+    _assert_rollout_batch_ok(batch, expected_shape=(1, MAX_COMPLETION_LENGTH))
+
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
+@pytest.mark.requires_device
+@pytest.mark.slow
+def test_qwen3_rollout_sampler_capital_of_france():
+    """Qwen3 sampler answers "The capital of France is" with a completion
+    containing "Paris". Exercises the Qwen3 dispatch end-to-end
+    (Qwen3 KV cache + ``past_key_values=`` forward + Qwen3-shaped decode mask).
+    """
+    model, tokenizer = setup_ttml_model(QWEN3_TRANSFORMER_CONFIG, DEVICE_CONFIG, HF_QWEN3_MODEL_ID)
+    sampler = TTMLRolloutSampler(model, tokenizer, MAX_COMPLETION_LENGTH, 0.0, 1)
+
+    prompt_str = _to_capitals_chat_prompt(tokenizer, "The capital of France is", enable_thinking=False)
+    prompt_ids = tokenizer.encode(prompt_str)
+
+    batch = sampler.generate([prompt_ids])
+    assert model.get_run_mode() == RunMode.TRAIN, "generate() must restore the model's run mode"
+
+    completion_str = tokenizer.decode(batch.completions[0], skip_special_tokens=True)
+    assert "paris" in completion_str.lower(), f"expected 'Paris' in Qwen3 completion, got: {completion_str!r}"
+
+    _assert_rollout_batch_ok(batch, expected_shape=(1, MAX_COMPLETION_LENGTH))
+
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
+def _assert_same_parameters(a, b):
+    pa, pb = a.parameters(), b.parameters()
+    assert sorted(pa) == sorted(pb)
+    for name in pa:
+        np.testing.assert_array_equal(
+            pa[name].to_numpy(ttnn.DataType.FLOAT32), pb[name].to_numpy(ttnn.DataType.FLOAT32), err_msg=name
+        )
+
+
+@pytest.mark.requires_device
+@pytest.mark.slow
+def test_save_checkpoint_round_trip_qwen3(tmp_path):
+    model, tokenizer = setup_ttml_model(QWEN3_TRANSFORMER_CONFIG, DEVICE_CONFIG, HF_QWEN3_MODEL_ID)
+    save_checkpoint(model, 1, str(tmp_path), tokenizer=tokenizer, model_source=HF_QWEN3_MODEL_ID)
+
+    ckpt_dir = str(tmp_path / "checkpoints" / "grpo_step_1")
+    loaded, _ = setup_ttml_model(QWEN3_TRANSFORMER_CONFIG, DEVICE_CONFIG, ckpt_dir)
+    _assert_same_parameters(model, loaded)
+
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
+DESCRIBE = " Name its capital and describe that city in two sentences."
+MIXED_LENGTH_QUESTIONS = [
+    "France." + DESCRIBE,
+    "Japan. I am planning a long trip there next spring and would like to visit the city where the government sits."
+    + DESCRIBE,
+    "Brazil. "
+    + "It is the largest country in South America and many people assume its capital is Rio. " * 4
+    + DESCRIBE,
+]
+
+
+def _teacher_forced_logprobs(model, sampler: TTMLRolloutSampler, batch: RolloutBatch, temperature: float):
+    inputs, targets, mask, Tp = layout_microbatch(batch.prompts, batch.completions, sampler._pad_token)
+    B = inputs.shape[0]
+    layout = sampler._batch_layout
+    with run_mode(model, RunMode.EVAL), no_grad():
+        nlog = policy_nlog_probs(model, inputs, targets, mapper=layout.mapper, temperature=temperature)
+        teacher = -np.asarray(nlog.to_numpy(ttnn.DataType.FLOAT32, composer=layout.composer), dtype=np.float32)
+        teacher = teacher.reshape(B, Tp)
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+    sampled = -place_old_nlog_probs(batch.prompts, batch.completions, batch.logprobs, Tp)
+    return teacher, sampled, mask
+
+
+def _rollout_vs_teacher_forced(
+    transformer_config, model_source, template_kwargs, device_config, temperature, completions_per_prompt=1
+):
+    """Per row: (padding gap, mean |diff|, max |diff|) of the sampler's log-probs against the teacher-forced pass."""
+    np.random.seed(0)  # the sampler draws its sampling seeds from np.random
+    model, tokenizer = setup_ttml_model(transformer_config, device_config, model_source)
+    sampler = TTMLRolloutSampler(model, tokenizer, MAX_COMPLETION_LENGTH, temperature, completions_per_prompt)
+    prompts = [
+        tokenizer.encode(_to_capitals_chat_prompt(tokenizer, q, **template_kwargs), add_special_tokens=False)
+        for q in MIXED_LENGTH_QUESTIONS
+    ]
+    gaps = max(len(p) for p in prompts) - np.array([len(p) for p in prompts])
+    assert gaps.max() >= 32, f"prompts are too close in length to exercise padding: {gaps}"
+
+    batch = sampler.generate(prompts)
+    teacher, sampled, mask = _teacher_forced_logprobs(model, sampler, batch, temperature)
+
+    lengths = np.array([len(p) for p in batch.prompts])
+    rows = []
+    for b, completion in enumerate(batch.completions):
+        assert len(completion) > 1, f"row {b}: need a multi-token completion, got {completion}"
+        row_mask = mask[b] > 0
+        diff = np.abs(teacher[b, row_mask] - sampled[b, row_mask])
+        rows.append((int(lengths.max() - lengths[b]), float(diff.mean()), float(diff.max())))
+    return rows
+
+
+def _assert_rows_match_teacher_forced(rows):
+    for b, (gap, mean, max_diff) in enumerate(rows):
+        assert max_diff < 0.5, (
+            f"row {b} (padding gap {gap}): sampler vs teacher-forced log-prob "
+            f"mean |diff| = {mean:.4f}, max |diff| = {max_diff:.4f}"
+        )
+
+
+@pytest.mark.requires_device
+@pytest.mark.slow
+@pytest.mark.parametrize("temperature", [0.0, 1.0, 0.7], ids=["greedy", "t1", "t0.7"])
+@pytest.mark.parametrize(
+    "transformer_config, model_source, template_kwargs",
+    [
+        (LLAMA_1B_TRANSFORMER_CONFIG, HF_LLAMA_MODEL_ID, {}),
+        (QWEN3_TRANSFORMER_CONFIG, HF_QWEN3_MODEL_ID, {"enable_thinking": False}),
+    ],
+    ids=["llama", "qwen3"],
+)
+def test_rollout_logprobs_match_teacher_forced_for_mixed_prompt_lengths(
+    transformer_config, model_source, template_kwargs, temperature
+):
+    rows = _rollout_vs_teacher_forced(transformer_config, model_source, template_kwargs, DEVICE_CONFIG, temperature)
+    _assert_rows_match_teacher_forced(rows)
+
+
+@pytest.mark.requires_device
+@pytest.mark.slow
+@pytest.mark.parametrize("parallelism", ["enable_ddp", "enable_fsdp"])
+def test_rollout_logprobs_match_teacher_forced_on_two_devices(fresh_device_mesh, parallelism):
+    """The batch is sharded over a [1, 2] mesh, so each device holds rows of mixed prompt lengths."""
+    device_config = DeviceConfig({"device_config": {parallelism: True, "mesh_shape": [1, 2]}})
+    mesh = build_mesh(device_config)
+    with fresh_device_mesh(mesh.shape, mesh.axis_names, what="per-row RoPE rollout on two devices"):
+        rows = _rollout_vs_teacher_forced(
+            QWEN3_TRANSFORMER_CONFIG,
+            HF_QWEN3_MODEL_ID,
+            {"enable_thinking": False},
+            device_config,
+            temperature=0.0,
+            completions_per_prompt=2,
+        )
+    _assert_rows_match_teacher_forced(rows)

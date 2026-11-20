@@ -21,10 +21,11 @@ namespace tt::tt_fabric::vcluster {
 // Why generate_descriptors() refused a manifest; the value is the row number of SPEC-0011's G table.
 enum class GenerationRefusal : uint32_t {
     NotALine = 1,             // G1: fabric_chip values are not 0..N-1, or the links are not one between i and i+1
-    RouterPortsNotDense = 2,  // G2: a device's router ports are not 0..k-1
+    RouterPortsNotDense = 2,  // G2: the ports of a device's router and idle slots are not 0..k-1
     TooFewDramViews = 3,      // G3: fewer DRAM views in the package than devices
-    RouterNotAnEthCore = 4,   // G4: a router slot's core is not an eth core of the package with a keraunos.cores entry
-    HasCapture = 5,           // G5: the manifest has a `capture` key
+    RouterNotAnEthCore =
+        4,           // G4: a router or idle slot's core is not an eth core of the package with a keraunos.cores entry
+    HasCapture = 5,  // G5: the manifest has a `capture` key
     DramViewNotProgrammable = 6,  // G6: a DRAM view of the package is not `programmable: true`
 };
 
@@ -61,7 +62,7 @@ struct GeneratedDescriptors {
 // Writes, into `out_dir` (created if missing, files replaced if present), chip_<fabric_chip>_soc_desc.yaml for each
 // device, cluster_desc.yaml, mesh_graph_descriptor.textproto, env.emu and env.mock, as SPEC-0011 § Descriptors
 // generated from the manifest specifies. `package_soc_desc` is the whole package's SoC descriptor (UMD
-// tests/soc_descs/mmk.yaml).
+// descriptors/soc_descs/mmk.yaml).
 //
 // Runs check_manifest(`manifest`, package_facts(`package_soc_desc`)) and the G1 to G6 refusals, and throws
 // DescriptorGenerationError, before creating or writing anything, when any row or refusal holds; it reports every
@@ -79,7 +80,7 @@ GeneratedDescriptors generate_descriptors(
 std::vector<std::pair<uint32_t, uint32_t>> noc_links(const Manifest& manifest);
 
 // The package facts check_manifest() takes, from the package SoC descriptor at `package_soc_desc`: its
-// keraunos.cores as (hsio, cce), MEM_IERISC_LOCAL_HARTS harts a CCE, eth_l1_size bytes of SRAM a CCE, and the
+// keraunos.cores as (hsio, eth_cce), MEM_IERISC_LOCAL_HARTS harts a CCE, eth_l1_size bytes of SRAM a CCE, and the
 // Ethernet tile pairs (0, 1) and (2, 3) the mmk 26ww45.eth-pcs-output-inter bring-up wires (chippy bringup_mmk.py
 // KER_ETH_LINKS). Throws std::runtime_error (TT_FATAL) when the file cannot be read, lacks keraunos.cores or
 // eth_l1_size, or holds a value of the wrong type there (naming the file).

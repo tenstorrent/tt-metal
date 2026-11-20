@@ -128,6 +128,7 @@ class MochiAttention(Module):
             q_chunk_size=256,
             k_chunk_size=512,
             exp_approx_mode=False,  # NOTE: False is more correct
+            min_blocked_pack_tiles=2,
         )
 
         ring_sdpa_chunk_size = self.sdpa_chunk_size_map.get(
@@ -143,6 +144,7 @@ class MochiAttention(Module):
             q_chunk_size=ring_sdpa_chunk_size[0],
             k_chunk_size=ring_sdpa_chunk_size[1],
             exp_approx_mode=False,  # NOTE: False is more correct
+            min_blocked_pack_tiles=2,
         )
 
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(

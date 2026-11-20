@@ -41,7 +41,7 @@ DescriptorGenerationError::DescriptorGenerationError(
 
 namespace {
 
-// keraunos_3chip_cluster_desc.yaml: ids carry UMD's mock Quasar board UPI (0x50) in bits 36 and up.
+// Chip ids carry UMD's mock Quasar board UPI (0x50) in bits 36 and up.
 constexpr uint64_t kQuasarBoardUpi = 0x50;
 constexpr uint32_t kBoardUpiShift = 36;
 constexpr uint64_t kFirstChipUniqueId = kQuasarBoardUpi << kBoardUpiShift;
@@ -74,7 +74,7 @@ YAML::Node package_key(const YAML::Node& package, const char* key, const std::fi
 // The package descriptor's keraunos.cores entry of `cce`, or an undefined node.
 YAML::Node keraunos_core_entry(const YAML::Node& cores, CceId cce) {
     for (const auto& entry : cores) {
-        if (entry["hsio"].as<uint32_t>() == cce.tile && entry["cce"].as<uint32_t>() == cce.cce) {
+        if (entry["hsio"].as<uint32_t>() == cce.tile && entry["eth_cce"].as<uint32_t>() == cce.cce) {
             return entry;
         }
     }
@@ -91,17 +91,18 @@ const Device* device_named(const Manifest& manifest, const std::string& name) {
     return it == manifest.devices.end() ? nullptr : &*it;
 }
 
-// A device's router slots in port order. Fatal when a router slot has no port, which parse_manifest() refuses.
-std::vector<Slot> routers_by_port(const Device& device) {
-    std::vector<Slot> routers;
+// A device's Ethernet cores, its router and idle slots, in port order. Fatal when one has no port, which
+// parse_manifest() refuses.
+std::vector<Slot> eth_slots_by_port(const Device& device) {
+    std::vector<Slot> slots;
     for (const Slot& slot : device.slots) {
-        if (slot.role == SlotRole::Router) {
-            TT_FATAL(slot.port.has_value(), "Device {} has a router slot without a port", device.name);
-            routers.push_back(slot);
+        if (slot.role != SlotRole::Worker) {
+            TT_FATAL(slot.port.has_value(), "Device {} has a router or idle slot without a port", device.name);
+            slots.push_back(slot);
         }
     }
-    std::sort(routers.begin(), routers.end(), [](const Slot& x, const Slot& y) { return *x.port < *y.port; });
-    return routers;
+    std::sort(slots.begin(), slots.end(), [](const Slot& x, const Slot& y) { return *x.port < *y.port; });
+    return slots;
 }
 
 bool is_programmable(const YAML::Node& view) { return view["programmable"] && view["programmable"].as<bool>(); }
@@ -152,7 +153,7 @@ std::vector<GenerationFinding> refusals(
 
     for (const Device& device : manifest.devices) {
         std::vector<uint32_t> ports;
-        for (const Slot& slot : routers_by_port(device)) {
+        for (const Slot& slot : eth_slots_by_port(device)) {
             ports.push_back(*slot.port);
         }
         for (std::size_t port = 0; port < ports.size(); port++) {
@@ -160,7 +161,7 @@ std::vector<GenerationFinding> refusals(
                 findings.push_back(
                     {GenerationRefusal::RouterPortsNotDense,
                      fmt::format(
-                         "device {} router ports {} are not 0 to {}",
+                         "device {} Ethernet ports {} are not 0 to {}",
                          device.name,
                          fmt::join(ports, ", "),
                          ports.size() - 1)});
@@ -176,13 +177,13 @@ std::vector<GenerationFinding> refusals(
     }
 
     for (const Device& device : manifest.devices) {
-        for (const Slot& slot : routers_by_port(device)) {
+        for (const Slot& slot : eth_slots_by_port(device)) {
             const YAML::Node entry = keraunos_core_entry(cores, CceId{slot.tile, slot.cce});
             if (!entry) {
                 findings.push_back(
                     {GenerationRefusal::RouterNotAnEthCore,
                      fmt::format(
-                         "device {} router on (tile {}, cce {}) has no keraunos.cores entry in the package",
+                         "device {} Ethernet core (tile {}, cce {}) has no keraunos.cores entry in the package",
                          device.name,
                          slot.tile,
                          slot.cce)});
@@ -190,7 +191,7 @@ std::vector<GenerationFinding> refusals(
                 findings.push_back(
                     {GenerationRefusal::RouterNotAnEthCore,
                      fmt::format(
-                         "device {} router core {} is not in the package's eth list",
+                         "device {} Ethernet core {} is not in the package's eth list",
                          device.name,
                          entry["core"].as<std::string>())});
             }
@@ -237,7 +238,7 @@ std::string soc_desc(
     YAML::Node desc = YAML::Clone(package);
     YAML::Node eth(YAML::NodeType::Sequence);
     YAML::Node device_cores(YAML::NodeType::Sequence);
-    for (const Slot& slot : routers_by_port(device)) {
+    for (const Slot& slot : eth_slots_by_port(device)) {
         const YAML::Node entry = keraunos_core_entry(cores, CceId{slot.tile, slot.cce});
         eth.push_back(entry["core"].as<std::string>());
         device_cores.push_back(YAML::Clone(entry));
@@ -245,21 +246,21 @@ std::string soc_desc(
     eth.SetStyle(YAML::EmitterStyle::Flow);
     desc["eth"] = eth;
     desc["keraunos"]["cores"] = device_cores;
-    // V views in list order, N devices: device 0 takes views 0 to V-N, device k >= 1 takes view V-N+k (SPEC-0011).
-    const std::size_t first_shared = views.size() - num_devices;
+    // V views in list order, N devices: device k takes V / N consecutive views, one more for k < V % N, device 0
+    // from view 0 (SPEC-0011).
+    const std::size_t share = views.size() / num_devices;
+    const std::size_t extra = views.size() % num_devices;
+    const std::size_t first = device.fabric_chip * share + std::min<std::size_t>(device.fabric_chip, extra);
+    const std::size_t count = share + (device.fabric_chip < extra ? 1 : 0);
     YAML::Node dram_views(YAML::NodeType::Sequence);
-    if (device.fabric_chip == 0) {
-        for (std::size_t i = 0; i <= first_shared; i++) {
-            dram_views.push_back(YAML::Clone(views[i]));
-        }
-    } else {
-        dram_views.push_back(YAML::Clone(views[first_shared + device.fabric_chip]));
+    for (std::size_t i = first; i < first + count; i++) {
+        dram_views.push_back(YAML::Clone(views[i]));
     }
     desc["dram_views"] = dram_views;
     return emit(desc);
 }
 
-// The keys and layout of keraunos_3chip_cluster_desc.yaml for N chips and the manifest's links.
+// N Quasar chips, each its own board and MMIO chip, with one Ethernet connection for each of the manifest's links.
 std::string cluster_desc(const Manifest& manifest) {
     const auto num_chips = static_cast<uint32_t>(manifest.devices.size());
     YAML::Emitter out;
@@ -330,7 +331,7 @@ std::string cluster_desc(const Manifest& manifest) {
     return std::string(out.c_str()) + "\n";
 }
 
-// keraunos_1x3_mesh_graph_descriptor.textproto with N chips.
+// One mesh, a line of N chips, with one channel a connection.
 std::string mesh_graph_desc(uint32_t num_chips) {
     return fmt::format(
         "mesh_descriptors {{\n"
@@ -353,7 +354,7 @@ PackageFacts facts_of(const YAML::Node& package, const std::filesystem::path& pa
     PackageFacts facts;
     for (const auto& entry :
          package_key(package_key(package, "keraunos", package_soc_desc), "cores", package_soc_desc)) {
-        facts.cores.push_back(CceId{entry["hsio"].as<uint32_t>(), entry["cce"].as<uint32_t>()});
+        facts.cores.push_back(CceId{entry["hsio"].as<uint32_t>(), entry["eth_cce"].as<uint32_t>()});
     }
     facts.harts_per_cce = MEM_IERISC_LOCAL_HARTS;
     facts.sram_bytes_per_cce = package_key(package, "eth_l1_size", package_soc_desc).as<uint64_t>();

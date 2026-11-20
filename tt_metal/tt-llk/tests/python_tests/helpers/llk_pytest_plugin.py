@@ -31,6 +31,7 @@ driver that lives outside ``tests/sources/``.
 import atexit
 import collections
 import datetime
+import gc
 import json
 import logging
 import os
@@ -41,6 +42,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import NoReturn, Optional
 
+from helpers.target_config import is_ttsim
 from ttsim_error import parse_ttsim_error
 
 # ttsim runs in-process (no SimulationServer). Its init must complete before the
@@ -61,7 +63,7 @@ _HARDWARE_FREE = os.environ.get("LLK_HARDWARE_FREE") == "1"
 _SHOULD_RUN_SIMULATOR = _IS_XDIST_WORKER or (
     "--run-simulator" in sys.argv and "--compile-producer" not in sys.argv
 )
-if _SHOULD_RUN_SIMULATOR and _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so"):
+if _SHOULD_RUN_SIMULATOR and is_ttsim(_SIMULATOR_PATH):
     from ttexalens import tt_exalens_init as _tt_exalens_init
 
     _tt_exalens_init.init_ttexalens(simulation_directory=_SIMULATOR_PATH)
@@ -582,7 +584,7 @@ def pytest_configure(config):
                     returncode=1,
                 )
 
-            if _SIMULATOR_PATH.endswith(".so"):
+            if is_ttsim(_SIMULATOR_PATH):
                 # ttsim: already initialized at module import above; runs in-process, no server.
                 # --reset-simulator-per-test restarts the SimulationServer, which ttsim doesn't use,
                 # so it would be a silent no-op. Fail fast to avoid confusing false-green runs.
@@ -619,10 +621,9 @@ def pytest_configure(config):
             tt_exalens_init.init_ttexalens()
             TestConfig.resolve_worker_tensix_location()
 
-        is_ttsim = _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so")
         # WH/BH only: ttsim or silicon. Quasar is skipped inside the helper
         # because ttexalens has no Tensix register description yet.
-        if is_ttsim or not TestConfig.TEST_TARGET.run_simulator:
+        if is_ttsim(_SIMULATOR_PATH) or not TestConfig.TEST_TARGET.run_simulator:
             override_gprs_used_by_tensix_dump()
 
 
@@ -757,11 +758,11 @@ def _select_node_list(config, items):
 def _split_by_cost(config, items):
     """Cut the tests, in collection order, into --perf-splits chunks of equal estimated time.
 
-    A test weighs its module's cost from perf_split_costs.json (perf_split_costs_sol.json with
-    --speed-of-light, which compiles every variant) divided by the module's test count. The
+    A test weighs its measured duration from LLK_SPLIT_DURATIONS, or, without that file, its
+    module's cost from the perf_split_costs table divided by the module's test count. The
     chunks are contiguous, so a module's tests, and the ELFs they share, stay in one shard
-    except at a cut point. build_perf_split_costs.py rebuilds both tables. This runs before
-    _collapse_runtime_only_variants, so the compile and run passes cut the same list.
+    except at a cut point. This runs before _collapse_runtime_only_variants, so the compile
+    and run passes cut the same list.
     """
     splits = config.getoption("--perf-splits")
     group = config.getoption("--perf-group")
@@ -772,26 +773,9 @@ def _split_by_cost(config, items):
             "--perf-splits N and --perf-group G go together, with 1 <= G <= N"
         )
 
-    arch = TestConfig.CHIP_ARCH.value
-    costs_file = (
-        "perf_split_costs_sol.json"
-        if TestConfig.SPEED_OF_LIGHT
-        else "perf_split_costs.json"
-    )
-    table = json.loads((Path(__file__).resolve().parents[2] / costs_file).read_text())
-    module_cost = table.get(arch)
-    if module_cost is None:
-        raise pytest.UsageError(f"{costs_file} has no costs for {arch}")
-
-    modules = [item.path.stem for item in items]
-    unknown = sorted(set(modules) - module_cost.keys())
-    if unknown:
-        logger.warning(
-            f"--perf-splits: {costs_file} has no cost for {', '.join(unknown)}; "
-            "each counts as 1 s"
-        )
-    tests_in = collections.Counter(modules)
-    weights = [module_cost.get(m, 1.0) / tests_in[m] for m in modules]
+    weights = _weights_from_durations(items)
+    if weights is None:
+        weights = _weights_from_table(items)
     total = sum(weights)
     if total == 0:
         weights, total = [1.0] * len(items), float(len(items))
@@ -805,6 +789,81 @@ def _split_by_cost(config, items):
         before += weight
     config.hook.pytest_deselected(items=deselected)
     items[:] = selected
+
+
+def _module_costs():
+    costs_file = (
+        "perf_split_costs_sol.json"
+        if TestConfig.SPEED_OF_LIGHT
+        else "perf_split_costs.json"
+    )
+    table = json.loads((Path(__file__).resolve().parents[2] / costs_file).read_text())
+    return costs_file, table.get(TestConfig.CHIP_ARCH.value)
+
+
+def _weights_from_table(items):
+    costs_file, module_cost = _module_costs()
+    if module_cost is None:
+        raise pytest.UsageError(
+            f"{costs_file} has no costs for {TestConfig.CHIP_ARCH.value}"
+        )
+    modules = [item.path.stem for item in items]
+    unknown = sorted(set(modules) - module_cost.keys())
+    if unknown:
+        logger.warning(
+            f"--perf-splits: {costs_file} has no cost for {', '.join(unknown)}; "
+            "each counts as 1 s"
+        )
+    tests_in = collections.Counter(modules)
+    return [module_cost.get(m, 1.0) / tests_in[m] for m in modules]
+
+
+def _weights_from_durations(items):
+    path = os.environ.get("LLK_SPLIT_DURATIONS")
+    if not path or not Path(path).is_file():
+        return None
+    try:
+        durations = json.loads(Path(path).read_text())
+    except (OSError, ValueError) as error:
+        logger.warning(
+            f"--perf-splits: {path} is unreadable ({error}); using the table"
+        )
+        return None
+    if not isinstance(durations, dict):
+        logger.warning(f"--perf-splits: {path} is not an object; using the table")
+        return None
+    known = [durations[item.nodeid] for item in items if item.nodeid in durations]
+    if not known:
+        return None
+    mean = sum(known) / len(known)
+    logger.info(
+        f"--perf-splits: {path} has durations for {len(known)} of {len(items)} tests"
+    )
+    return [durations.get(item.nodeid, mean) for item in items]
+
+
+def _store_split_durations(session):
+    config = session.config
+    if config.getoption("--perf-splits") is None:
+        return
+    workers = config.getoption("numprocesses", None)
+    workers = workers if isinstance(workers, int) and workers > 0 else 1
+    path = Path(".perf_split_durations")
+    durations = (
+        json.loads(path.read_text())
+        if TestConfig.BUILD_MODE == BuildMode.CONSUME and path.is_file()
+        else {}
+    )
+    reporter = config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is None:
+        return
+    for reports in reporter.stats.values():
+        for report in reports:
+            if isinstance(report, pytest.TestReport):
+                durations[report.nodeid] = (
+                    durations.get(report.nodeid, 0.0) + report.duration / workers
+                )
+    path.write_text(json.dumps(durations))
 
 
 def _restore_test_order(config, items):
@@ -1082,6 +1141,10 @@ def pytest_runtest_setup(item):
     """
     global _reset_simulator_pending
 
+    if item.config.getoption("forked", default=False):
+        # a forked test shares the worker heap copy on write, so keep full collections off it
+        gc.freeze()
+
     if _worker_fatal is not None:
         _fail_xdist_worker(item, _worker_fatal)
 
@@ -1126,6 +1189,37 @@ def pytest_configure_node(node):
         node.workerinput[_SIM_HOST_PID_KEY] = _sim_server.pid
 
 
+# Every chunk of a module this worker ran (worksteal can split a module). Only this worker writes its
+# <module>.<worker> files and the controller reads them after the workers end, so no other process races them.
+_MODULE_REPORTS: dict[str, PerfReport] = {}
+
+
+def _module_report(key: str, report: PerfReport, context: str) -> PerfReport:
+    """This chunk's rows added to the earlier chunks of the module, failing before any write if their column schemas
+    differ: a CSV must hold exactly one schema."""
+    # The chunk's own tests first, by test name: frame() below joins them and fills the columns a test lacks.
+    report.assert_single_schema(context=context)
+    merged = _MODULE_REPORTS.setdefault(key, PerfReport())
+    merged.append(report.frame(), label=context)
+    merged.assert_single_schema(context=context)
+    return merged
+
+
+def _dump_perf_report(test_module: str, worker_id: str, report: PerfReport):
+    """Write this worker's raw and post-processed CSVs of the module, over every chunk of it the worker ran."""
+    # More than one schema means two unrelated tests/ops share this module (split them into separate files) or one
+    # test emits inconsistent columns across its sweep.
+    merged = _module_report(
+        f"{test_module}.{worker_id}", report, f"{test_module} (worker {worker_id})"
+    )
+    merged.dump_csv(TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.csv")
+
+    post = PerfReport()
+    post.append(merged.frame().copy())
+    post.post_process()
+    post.dump_csv(TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.post.csv")
+
+
 @pytest.fixture(scope="module", autouse=True)
 def counter_report(request, worker_id):
     """Separate report for raw hardware counter CSV data (--dump-perf-counters)."""
@@ -1151,16 +1245,14 @@ def counter_report(request, worker_id):
     if PerfConfig.TEST_COUNTER == 0:
         return
 
-    temp_report.assert_single_schema(
-        context=f"{test_module} counters (worker {worker_id})"
+    merged = _module_report(
+        f"{test_module}.{worker_id}.counters",
+        temp_report,
+        f"{test_module} counters (worker {worker_id})",
     )
-
-    counters_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.counters.csv"
-
-    if counters_path.exists():
-        counters_path.unlink()
-
-    temp_report.dump_csv(counters_path)
+    merged.dump_csv(
+        TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.counters.csv"
+    )
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -1181,23 +1273,7 @@ def perf_report(request, worker_id):
     if PerfConfig.TEST_COUNTER == 0:
         return
 
-    # Fail loud before writing: a single CSV must hold exactly one column schema.
-    # More than one means two unrelated tests/ops share this module (split them
-    # into separate files) or one test emits inconsistent columns across its sweep.
-    temp_report.assert_single_schema(context=f"{test_module} (worker {worker_id})")
-
-    raw_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.csv"
-    post_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.post.csv"
-
-    if raw_path.exists():
-        raw_path.unlink()
-
-    if post_path.exists():
-        post_path.unlink()
-
-    temp_report.dump_csv(raw_path)
-    temp_report.post_process()
-    temp_report.dump_csv(post_path)
+    _dump_perf_report(test_module, worker_id, temp_report)
 
 
 @pytest.hookimpl(optionalhook=True)
@@ -1263,6 +1339,7 @@ def pytest_sessionfinish(session):
         return
 
     _finish_ulp_emit(session)
+    _store_split_durations(session)
 
     if not _HARDWARE_FREE and TestConfig.BUILD_MODE != BuildMode.PRODUCE:
         combine_perf_reports()
