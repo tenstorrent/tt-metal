@@ -9,6 +9,7 @@
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/chronology.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/dataflow/packed_summary.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/persistent_counter.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/relay_chunk_scan/device/kernels/dataflow/gate_matmul_dataflow.hpp"
 
 constexpr uint32_t cb_e = get_compile_time_arg_val(0);
 constexpr uint32_t cb_b = get_compile_time_arg_val(1);
@@ -63,17 +64,19 @@ constexpr uint32_t cores_per_head = get_compile_time_arg_val(correction_ct + 7);
 constexpr uint32_t grid_x = get_compile_time_arg_val(correction_ct + 8);
 constexpr uint32_t first_core = get_compile_time_arg_val(correction_ct + 9);
 constexpr auto terms_args = TensorAccessorArgs<correction_ct + 10>();
-// The gated output norm: the mean's scaler, each chunk's gate row and the weight. Head h's gate row of a chunk is tile
-// row (h / heads) * num_chunks + chunk of the [B, T, W] gate, from tile column gate_offset_tiles + (h % heads) * kt.
+// The gated output norm: the mean's scaler, each chunk's gate rows (g of the head's chunks, formed by the matmul on
+// the core, or on a head core by its helper) and the weight.
 constexpr uint32_t norm_ct = terms_args.next_compile_time_args_offset();
 constexpr uint32_t cb_scaler = get_compile_time_arg_val(norm_ct);
 constexpr uint32_t cb_gate = get_compile_time_arg_val(norm_ct + 1);
 constexpr uint32_t cb_weight = get_compile_time_arg_val(norm_ct + 2);
 constexpr uint32_t heads = get_compile_time_arg_val(norm_ct + 3);
-constexpr uint32_t gate_row_tiles = get_compile_time_arg_val(norm_ct + 4);
-constexpr uint32_t gate_offset_tiles = get_compile_time_arg_val(norm_ct + 5);
-constexpr auto gate_args = TensorAccessorArgs<norm_ct + 6>();
-constexpr auto weight_args = TensorAccessorArgs<gate_args.next_compile_time_args_offset()>();
+constexpr auto weight_args = TensorAccessorArgs<norm_ct + 4>();
+// The output gate's operands (gate_matmul_dataflow.hpp), and where the common args hold a bit per head: whether its W
+// moves north, on the writer's NoC 1 from its last core to a helper above (this kernel then moves x), or south, on this
+// kernel's NoC 0 from its second core to a helper below (the writer then moves x).
+constexpr uint32_t north_args = get_compile_time_arg_val(weight_args.next_compile_time_args_offset());
+using Gate = kda_gate::Operands<weight_args.next_compile_time_args_offset() + 1>;
 constexpr uint32_t num_chunks = local_rows / tt::constants::TILE_HEIGHT;
 
 // Every core of a head corrects its chunks of the head from the head's seeds; the head's first core is also the
@@ -90,9 +93,11 @@ void kernel_main() {
     // The landing buffer's slots, at the same address on every head core: the entry state (cb_ein's storage), then the
     // relayed final state.
     const uint32_t landing = get_common_arg_val<uint32_t>(8);
-    const uint32_t arrival_semaphore = get_common_arg_val<uint32_t>(11);
-    const uint32_t final_semaphore = get_common_arg_val<uint32_t>(12);
-    const uint32_t sp_rank = get_common_arg_val<uint32_t>(13);
+    const uint32_t arrival_semaphore = get_common_arg_val<uint32_t>(10);
+    const uint32_t final_semaphore = get_common_arg_val<uint32_t>(11);
+    const uint32_t sp_rank = get_common_arg_val<uint32_t>(12);
+    // On a head core, its helper's count of the head's g landed in cb_gate.
+    const uint32_t gate_landed = get_common_arg_val<uint32_t>(13);
     // Then every core's NoC x | y << 16, in order: this head's from head * cores_per_head.
     const size_t head_core_args = 14 + head * cores_per_head;
 
@@ -187,16 +192,29 @@ void kernel_main() {
     }
     const bool need_tail = reset != 0;
 
-    // The writer's chronology: this rank's position and this core's chunk counts.
+    // The writer's chronology: this rank's position and this core's chunk count.
     chron_words[0] = position;
     chron_words[1] = chunks;
-    chron_words[2] = group_chunks;
     cb_push_back(cb_chron, 1);
     ctl[0] = holder;
     ctl[1] = interval.split;
     ctl[2] = chunks;
     ctl[3] = group_chunks;
     cb_push_back(cb_ctl, 1);
+
+    // The output gate's operand this kernel moves for the core's matmul: x of its chunks (in the group of the head
+    // batch's cores at this place), or the head's W; then the partial sums with the core at this place of the pair's
+    // other head.
+    if (!relay_head) {
+        if (get_common_arg_val<uint32_t>(north_args + head / 32) >> head % 32 & 1) {
+            Gate::move_x((head / heads) * cores_per_head + place, (head / heads) * num_chunks + first_chunk, head);
+        } else {
+            Gate::move_w(head);
+        }
+        if constexpr (Gate::ways == 2) {
+            Gate::swap(get_common_arg_val<uint32_t>(14 + Gate::partner(head) * cores_per_head + place));
+        }
+    }
 
     // The head's first core copies each landed tile column of a K x K state (column-major by tile) into a seed buffer
     // of every core of the head (at the same address on each), then counts it there (a program semaphore, zero at
@@ -237,19 +255,7 @@ void kernel_main() {
         }
     };
 
-    // The norm's gate row of chunk c: in place all of them first, which compute turns into factors before the seeds
-    // land; streamed, each with its chunk's terms.
-    const auto gate = TensorAccessor(gate_args, get_common_arg_val<uint32_t>(9));
-    const uint32_t gate_tile = get_tile_size(cb_gate);
-    const auto read_gate = [&](uint32_t c) {
-        const uint32_t page =
-            ((head / heads) * num_chunks + first_chunk + c) * gate_row_tiles + gate_offset_tiles + (head % heads) * kt;
-        cb_reserve_back(cb_gate, kt);
-        for (uint32_t j = 0; j < kt; ++j) {
-            noc_async_read_page(page + j, gate, get_write_ptr(cb_gate) + j * gate_tile);
-        }
-    };
-    // The norm's scaler, weight and, in place, every gate row.
+    // The norm's scaler and weight.
     const auto read_norm_inputs = [&]() {
         if (chunks == 0) {
             return;
@@ -259,7 +265,7 @@ void kernel_main() {
             ckernel::PoolType::AVG,
             ckernel::ReduceDim::REDUCE_ROW,
             kt * tt::constants::TILE_WIDTH>();
-        const auto weight = TensorAccessor(weight_args, get_common_arg_val<uint32_t>(10));
+        const auto weight = TensorAccessor(weight_args, get_common_arg_val<uint32_t>(9));
         const uint32_t tile = get_tile_size(cb_weight);
         cb_reserve_back(cb_weight, kt);
         for (uint32_t j = 0; j < kt; ++j) {
@@ -267,13 +273,6 @@ void kernel_main() {
         }
         noc_async_read_barrier();
         cb_push_back(cb_weight, kt);
-        if constexpr (!streamed) {
-            for (uint32_t c = 0; c < chunks; ++c) {
-                read_gate(c);
-                noc_async_read_barrier();
-                cb_push_back(cb_gate, kt);
-            }
-        }
     };
 
     if (relay_head) {
@@ -327,10 +326,8 @@ void kernel_main() {
             }
             distribute_entry();
         } else {
-            // The entry state arrives after a share of the lap: the norm's inputs first, which compute prepares
-            // before the hop. The predecessor's sender writes each tile column of this head's entry state into
-            // cb_ein's storage, then counts it.
-            read_norm_inputs();
+            // The entry state arrives after a share of the lap. The predecessor's sender writes each tile column of
+            // this head's entry state into cb_ein's storage, then counts it.
             for (uint32_t j = 0; j < kt; ++j) {
                 kda_counter::wait(arrival_semaphore, j + 1);
                 cb_push_back(cb_ein, kt);
@@ -341,9 +338,7 @@ void kernel_main() {
         }
     }
 
-    if (!relay_head || holder) {
-        read_norm_inputs();
-    }
+    read_norm_inputs();
 
     // The chunks that start from the entry state. Their terms are in place, or streamed a chunk row at a time: head h's
     // F(0) rows are tile rows h * 2 * num_chunks + chunk of the terms, its F(I) rows num_chunks further.
@@ -357,10 +352,8 @@ void kernel_main() {
                 noc_async_read_page(zero_page + j, terms, get_write_ptr(cb_terms) + j * tile);
                 noc_async_read_page(zero_page + num_chunks * kt + j, terms, get_write_ptr(cb_terms) + (kt + j) * tile);
             }
-            read_gate(c);
             noc_async_read_barrier();
             cb_push_back(cb_terms, 2 * kt);
-            cb_push_back(cb_gate, kt);
         }
     };
     if (!streamed && chunks != 0) {
@@ -369,9 +362,6 @@ void kernel_main() {
     }
     if (group_chunks != 0) {
         receive(cb_seed, 0);
-    }
-    if constexpr (streamed) {
-        stream_terms(0, group_chunks);
     }
 
     if (relay_head && holder) {
@@ -394,6 +384,16 @@ void kernel_main() {
                 distribute(landing + state_tiles * state_tile, get_write_ptr(cb_tail), j, d_begin, d_end);
             }
         }
+    }
+    // A head core's g, which its helper writes into cb_gate's storage (after the hop and the final carry, which compute
+    // forms first).
+    if (relay_head) {
+        cb_reserve_back(cb_gate, core_chunks * kt);
+        kda_counter::wait_and_consume(gate_landed, 1);
+        cb_push_back(cb_gate, core_chunks * kt);
+    }
+    if constexpr (streamed) {
+        stream_terms(0, group_chunks);
     }
 
     // The separated tail's chunks start from P.
