@@ -25,10 +25,11 @@ namespace tt::tt_fabric::vcluster {
 // Why generate_descriptors() refused a manifest; the value is the G number its message cites.
 enum class GenerationRefusal : uint32_t {
     NotALine = 1,             // G1: fabric_chip values are not 0..N-1, or the links are not one between i and i+1
-    RouterPortsNotDense = 2,  // G2: a device's router ports are not 0..k-1
+    RouterPortsNotDense = 2,  // G2: the ports of a device's router and idle slots are not 0..k-1
     TooFewDramViews = 3,      // G3: fewer DRAM views in the package than devices
-    RouterNotAnEthCore = 4,   // G4: a router slot's core is not an eth core of the package with a keraunos.cores entry
-    HasCapture = 5,           // G5: the manifest has a `capture` key
+    RouterNotAnEthCore =
+        4,           // G4: a router or idle slot's core is not an eth core of the package with a keraunos.cores entry
+    HasCapture = 5,  // G5: the manifest has a `capture` key
     DramViewNotProgrammable = 6,  // G6: a DRAM view of the package is not `programmable: true`
 };
 

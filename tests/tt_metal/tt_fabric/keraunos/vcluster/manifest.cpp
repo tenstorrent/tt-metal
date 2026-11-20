@@ -142,6 +142,9 @@ std::optional<SlotRole> parse_role(const std::string& text) {
     if (text == "worker") {
         return SlotRole::Worker;
     }
+    if (text == "idle") {
+        return SlotRole::Idle;
+    }
     return std::nullopt;
 }
 
@@ -179,10 +182,11 @@ std::optional<Slot> parse_slot(const YAML::Node& node, const std::string& where,
     } else {
         check_keys(node, {"tile", "cce", "hart", "role", "port"}, where, errors);
     }
-    if (role == SlotRole::Router) {
+    const bool has_port = role && *role != SlotRole::Worker;
+    if (has_port) {
         port = read_value<uint32_t>(node, "port", where, errors);
     }
-    if (!tile || !cce || !hart || !role || (*role == SlotRole::Router && !port)) {
+    if (!tile || !cce || !hart || !role || (has_port && !port)) {
         return std::nullopt;
     }
     return Slot{.tile = *tile, .cce = *cce, .hart = *hart, .role = *role, .port = port};
@@ -307,11 +311,11 @@ void check_reserved_values(const Manifest& manifest, const PackageFacts& facts, 
                     {ManifestCheck::ReservedValue,
                      fmt::format("{}: cce {} is reserved for Phase 3", slot_label(device, i), slot.cce)});
             }
-            if (slot.role == SlotRole::Router && slot.hart != kRouterHart) {
+            if (slot.role != SlotRole::Worker && slot.hart != kRouterHart) {
                 findings.push_back(
                     {ManifestCheck::ReservedValue,
                      fmt::format(
-                         "{}: a router on a hart other than {} is reserved for Phase 3",
+                         "{}: a router or idle slot on a hart other than {} is not supported",
                          slot_label(device, i),
                          kRouterHart)});
             }
@@ -386,10 +390,10 @@ void check_duplicates(const Manifest& manifest, Findings& findings) {
         }
         std::set<uint32_t> ports;
         for (const Slot& slot : device.slots) {
-            if (slot.role == SlotRole::Router && slot.port && !ports.insert(*slot.port).second) {
+            if (slot.port && !ports.insert(*slot.port).second) {
                 findings.push_back(
                     {ManifestCheck::Duplicate,
-                     fmt::format("device {}: two routers on port {}", device.name, *slot.port)});
+                     fmt::format("device {}: two slots on port {}", device.name, *slot.port)});
             }
         }
     }

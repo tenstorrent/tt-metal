@@ -364,8 +364,7 @@ TEST(VclusterDescriptors, Line3) {
 // eth, keraunos.cores and dram_views.
 TEST(VclusterDescriptors, SocDescCopiesThePackage) {
     const TempDir out("copies");
-    const GeneratedDescriptors g =
-        generate_descriptors(checked(kLine), package_soc_desc(), out.path());
+    const GeneratedDescriptors g = generate_descriptors(checked(kLine), package_soc_desc(), out.path());
     const YAML::Node package = YAML::LoadFile(package_soc_desc().string());
     for (const auto& soc : g.soc_descs) {
         SCOPED_TRACE(soc.string());
@@ -383,8 +382,8 @@ TEST(VclusterDescriptors, SocDescCopiesThePackage) {
 TEST(VclusterDescriptors, BackendInNoFile) {
     const TempDir noc("noc");
     const GeneratedDescriptors ref = generate_descriptors(checked(kLine), package_soc_desc(), noc.path());
-    const std::string am = line_with(
-        {{"b: {device: B, port: 0}, backend: noc", "b: {device: B, port: 0}, backend: ethernet"}});
+    const std::string am =
+        line_with({{"b: {device: B, port: 0}, backend: noc", "b: {device: B, port: 0}, backend: ethernet"}});
     const std::string eth =
         replaced(am, "b: {device: M, port: 0}, backend: noc", "b: {device: M, port: 0}, backend: ethernet");
     for (const auto& text : {am, eth}) {
@@ -416,8 +415,7 @@ std::vector<std::string> env_lines(const fs::path& path) {
 // TT_MESH_GRAPH_DESC_PATH.
 TEST(VclusterDescriptors, EnvFiles) {
     const TempDir out("env");
-    const GeneratedDescriptors g =
-        generate_descriptors(checked(kLine), package_soc_desc(), out.path());
+    const GeneratedDescriptors g = generate_descriptors(checked(kLine), package_soc_desc(), out.path());
     EXPECT_EQ(g.env_emu, out.path() / "env.emu");
     EXPECT_EQ(g.env_mock, out.path() / "env.mock");
     const std::vector<std::string> after_the_cluster = {
@@ -454,15 +452,15 @@ TEST(VclusterDescriptors, ReplacesExistingFiles) {
     const TempDir out("replace");
     write_text(out.path() / "cluster_desc.yaml", "stale: true\n");
     write_text(out.path() / "env.emu", "STALE=1\n");
-    const GeneratedDescriptors g =
-        generate_descriptors(checked(kLine), package_soc_desc(), out.path());
+    const GeneratedDescriptors g = generate_descriptors(checked(kLine), package_soc_desc(), out.path());
     EXPECT_FALSE(YAML::LoadFile(g.cluster_desc.string())["stale"]);
     EXPECT_EQ(read_text(g.env_emu).find("STALE"), std::string::npos);
 }
 
 // A two-device manifest generates a [ 1, 2 ] mesh and two SoC descriptors whose DRAM views are
 // disjoint and together are the package's. With 4 programmable views and 2 devices, device 0 takes views 0 and 1 and
-// device 1 views 2 and 3: Metal takes a power of two of DRAM banks.
+// device 1 views 2 and 3: Metal takes a power of two of DRAM banks. Each device's idle slot is an Ethernet core of its
+// descriptor, after the router in port order, and is in no connection.
 TEST(VclusterDescriptors, TwoDevices) {
     const Manifest m = checked(R"yaml(
 version: 1
@@ -470,17 +468,19 @@ devices:
   - name: A
     fabric_chip: 0
     slots:
+      - {tile: 2, cce: 0, hart: 0, role: idle, port: 1}
       - {tile: 0, cce: 0, hart: 0, role: router, port: 0}
-      - {tile: 0, cce: 0, hart: 1, role: worker}
     regions:
       - {tile: 0, cce: 0, base: 0x0, size: 0x400000}
+      - {tile: 2, cce: 0, base: 0x0, size: 0x400000}
   - name: B
     fabric_chip: 1
     slots:
       - {tile: 1, cce: 0, hart: 0, role: router, port: 0}
-      - {tile: 1, cce: 0, hart: 1, role: worker}
+      - {tile: 3, cce: 0, hart: 0, role: idle, port: 1}
     regions:
       - {tile: 1, cce: 0, base: 0x0, size: 0x400000}
+      - {tile: 3, cce: 0, base: 0x0, size: 0x400000}
 links:
   - {a: {device: A, port: 0}, b: {device: B, port: 0}, backend: ethernet}
 )yaml");
@@ -499,8 +499,10 @@ links:
         EXPECT_EQ(yaml_difference(a["dram_views"][i], package_views[i]), "") << "device 0 view " << i;
         EXPECT_EQ(yaml_difference(b["dram_views"][i], package_views[2 + i]), "") << "device 1 view " << i;
     }
-    EXPECT_EQ(YAML::LoadFile(g.soc_descs[0].string())["eth"][0].Scalar(), "4-0");
-    EXPECT_EQ(YAML::LoadFile(g.soc_descs[1].string())["eth"][0].Scalar(), "4-1");
+    EXPECT_EQ(yaml_difference(a["eth"], YAML::Load("[4-0, 4-2]")), "");
+    EXPECT_EQ(yaml_difference(b["eth"], YAML::Load("[4-1, 4-3]")), "");
+    EXPECT_EQ(a["keraunos"]["cores"].size(), 2u);
+    EXPECT_EQ(b["keraunos"]["cores"][1]["hsio"].as<int>(), 3);
     const YAML::Node cluster = YAML::LoadFile(g.cluster_desc.string());
     EXPECT_EQ(cluster["arch"].size(), 2u);
     ASSERT_EQ(cluster["ethernet_connections"].size(), 1u);
@@ -585,9 +587,7 @@ TEST(VclusterDescriptors, G6ViewNotProgrammable) {
 // keraunos.cores still lists, so the checks still accept B on tile 3.
 TEST(VclusterDescriptors, G4NotAnEthernetCore) {
     const TempDir dir("g4");
-    write_text(
-        dir.path() / "package.yaml",
-        replaced(read_text(package_soc_desc()), "4-2, 4-3, 5-0", "4-2, 5-0"));
+    write_text(dir.path() / "package.yaml", replaced(read_text(package_soc_desc()), "4-2, 4-3, 5-0", "4-2, 5-0"));
     EXPECT_EQ(refusals(checked(kLine, dir.path() / "package.yaml"), dir.path() / "package.yaml"), Refusals{4});
 }
 
