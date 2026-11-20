@@ -52,6 +52,32 @@ ttrun_module = importlib.import_module("ttnn.distributed.ttrun")
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
+@pytest.fixture(autouse=True)
+def _no_rank_wrapper(monkeypatch):
+    """Launch lines here are compared verbatim, so they never depend on whether tt-run-rank happens to be built; the
+    wrapper's own tests set TT_RUN_RANK_WRAPPER themselves."""
+    monkeypatch.setenv("TT_RUN_RANK_WRAPPER", "none")
+
+
+@pytest.fixture
+def unreaped_orphans():
+    """The CI container's shape: its PID 1 (tail -f /dev/null) never reaps orphans, so a job's leftover that dies stays
+    a zombie with its /proc entry. Making this process a child subreaper that never waits does the same on any host; on
+    teardown the subreaper is turned off and the zombies are reaped."""
+    import ctypes
+
+    PR_SET_CHILD_SUBREAPER = 36
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0)
+    yield
+    libc.prctl(PR_SET_CHILD_SUBREAPER, 0, 0, 0, 0)
+    try:
+        while os.waitpid(-1, os.WNOHANG)[0] > 0:
+            pass
+    except ChildProcessError:
+        pass
+
+
 @pytest.fixture
 def runner():
     """Create a Click test runner."""
@@ -110,13 +136,13 @@ class TestCommandLineArguments:
             ],
         )
         assert result.exit_code != 0
-        assert "mutually exclusive" in result.output.lower()
+        assert "do not combine" in result.output.lower()
 
     def test_no_mode_specified(self, runner):
         """Test that at least one mode must be specified."""
         result = runner.invoke(main, ["echo", "test"])
         assert result.exit_code != 0
-        assert "must be specified" in result.output.lower()
+        assert "specify exactly one" in result.output.lower()
 
     def test_new_mode_not_implemented(self, runner, sample_mesh_graph_descriptor):
         """Test that new mode requires --hosts or --mock-cluster-rank-binding."""
@@ -1271,8 +1297,7 @@ class TestLauncherSelection:
         """Opting into ULFM stays possible through --mpi-args."""
         import subprocess
 
-        with patch.object(subprocess, "run") as mock_subprocess:
-            mock_subprocess.return_value.returncode = 0
+        with patch.object(ttrun_module, "run_launcher", return_value=0) as mock_launch:
             result = runner.invoke(
                 main,
                 [
@@ -1286,7 +1311,7 @@ class TestLauncherSelection:
                 ],
             )
             assert result.exit_code == 0, result.output
-            launched = mock_subprocess.call_args[0][0]
+            launched = mock_launch.call_args[0][0]
             assert Path(launched[0]).name != "mpirun-ulfm"
             assert launched[launched.index("--with-ft") + 1] == "ulfm"
 
@@ -1333,3 +1358,603 @@ class TestRankFailurePropagation:
     def test_all_ranks_succeed_passes(self, runner, sample_rank_binding_yaml):
         result = self._run(runner, sample_rank_binding_yaml, "pass")
         assert result.exit_code == 0, result.output
+
+
+class TestJobOwnership:
+    """tt-run owns the job (teardown plan P5, P6, P7, P19): the wall clock on the mpirun line when asked for, signals
+    forwarded to the launcher, leftovers ended and reported."""
+
+    def test_ttrun_adds_no_timeout_or_signal_forwarding_of_its_own(self, sample_rank_binding_yaml, tmp_path):
+        from ttnn.distributed.ttrun import (
+            build_generate_rank_bindings_mpi_cmd,
+            build_mpi_command,
+            parse_binding_config,
+        )
+
+        # The overall wall clock is PRRTE's own --timeout, reached only through --mpi-args; tt-run never adds one.
+        # A stop reaches the ranks through PRRTE job control (tt-run-signal), so neither launch line asks PRRTE to
+        # forward a signal (the SIGUSR1 relay is gone).
+        config = parse_binding_config(sample_rank_binding_yaml)
+        cmd = build_mpi_command(config, ["echo"], mpi_args=["--oversubscribe"])
+        assert "--timeout" not in cmd
+        executable, mgd_path = tmp_path / "generate_rank_bindings", tmp_path / "mesh.textproto"
+        executable.touch()
+        mgd_path.touch()
+        discovery = build_generate_rank_bindings_mpi_cmd(executable, mgd_path, ["node1"], tmp_path / "output")
+        for line in (cmd, discovery):
+            assert not any("forward_signals" in a for a in line), line
+
+    def test_user_timeout_in_mpi_args_is_passed_through(self, sample_rank_binding_yaml):
+        from ttnn.distributed.ttrun import build_mpi_command, parse_binding_config
+
+        # --mpi-args "--timeout N" reaches the mpirun line verbatim, exactly once, with nothing tt-run invents.
+        config = parse_binding_config(sample_rank_binding_yaml)
+        cmd = build_mpi_command(config, ["echo"], mpi_args=["--oversubscribe", "--timeout", "90"])
+        assert cmd.count("--timeout") == 1
+        assert cmd[cmd.index("--timeout") + 1] == "90"
+
+    def test_run_launcher_preserves_the_timeout_exit_code(self):
+        from ttnn.distributed.ttrun import PRTE_TIMEOUT_EXIT_CODE, run_launcher
+
+        # A launcher that exits with PRRTE's timeout code and leaves nothing: tt-run returns it unchanged, never
+        # reclassified as 0 or as a tt-run failure. The wall clock killed every rank, so tt-run says the job was
+        # forced down and that the devices may need a reset.
+        text, rc = self._logged_rc(
+            lambda: run_launcher(["bash", "-c", f"exit {PRTE_TIMEOUT_EXIT_CODE}"], cwd=Path.cwd())
+        )
+        assert rc == PRTE_TIMEOUT_EXIT_CODE
+        assert "job forced down" in text and "PRRTE --timeout" in text and "tt-smi -r" in text, text
+        assert f"job end: outcome=forced exit={PRTE_TIMEOUT_EXIT_CODE}" in text, text
+
+    # prterun's own banners, captured from Open MPI 5.0.7 / PRRTE 3.0.8 (line wrapping as printed).
+    _BANNER_SIGKILL = "prterun noticed that process rank 1 with PID 4242 on node nodeB exited on\nsignal 9 (Killed).\n"
+    _BANNER_EXIT_CODE = (
+        "prterun detected that one or more processes exited with non-zero status,\n"
+        "thus causing the job to be terminated. The first process to do so was:\n\n"
+        "   Process name: [prterun-nodeA-897012@1,1]\n   Exit code:    7\n"
+    )
+    _BANNER_MPI_ABORT = (
+        "MPI_ABORT was invoked on rank 1 in communicator MPI_COMM_WORLD\n  Proc: [[20522,1],1]\n  Errorcode: 7\n"
+        'prterun has exited due to process rank 1 with PID 0 on node nodeB calling\n"abort".\n'
+    )
+    _BANNER_NO_FINALIZE = (
+        "prterun has exited due to process rank 1 with PID 4242 on node nodeB exiting\nimproperly. There are three "
+        'reasons this could occur:\n2. this process called "init", but exited without calling "finalize".\n'
+    )
+
+    @pytest.mark.parametrize(
+        "banner,code,expected",
+        [
+            (_BANNER_SIGKILL, 137, r"rank 1 on nodeB \(pid 4242\) was killed by signal 9 \(SIGKILL\)"),
+            (_BANNER_EXIT_CODE, 7, r"rank 1 exited with code 7"),
+            (_BANNER_MPI_ABORT, 7, r"rank 1 on nodeB called MPI_Abort \(error code 7\)"),
+            (_BANNER_NO_FINALIZE, 1, r"rank 1 on nodeB \(pid 4242\) exited without calling MPI_Finalize"),
+            ("", 7, r"a rank failed \(launcher exit 7\)"),
+        ],
+        ids=["signal", "exit_code", "mpi_abort", "no_finalize", "no_banner"],
+    )
+    def test_run_launcher_passes_a_rank_failure_code_through_and_names_the_rank(self, banner, code, expected):
+        import re
+
+        from ttnn.distributed.ttrun import run_launcher
+
+        # A launcher that reports a rank's failure with nothing left: the code is the truth, returned as is. tt-run
+        # reads prterun's banner and says which rank failed (and where, when prterun says), how, and what happened
+        # to the others; with no banner it still says a rank failed and points at the launcher's output.
+        script = f"printf %s {shlex.quote(banner)} >&2; exit {code}"
+        text, rc = self._logged_rc(lambda: run_launcher(["bash", "-c", script], cwd=Path.cwd()))
+        assert rc == code
+        assert re.search(expected, text), text
+        if banner:
+            assert "the launcher then killed the other ranks" in text and "tt-smi -r" in text, text
+        assert f"job end: outcome=failed exit={code}" in text, text
+
+    # The line a rank (DistributedContext::request_job_stop) or its wrapper (tt-run-rank) prints when it stops the
+    # job, as prterun forwards it with --tag-output.
+    @pytest.mark.parametrize(
+        "reason,code",
+        [
+            ("sys.exit(3)", 3),
+            ("uncaught Python exception RuntimeError: boom on rank 1", 1),
+            ("uncaught C++ exception: TT_FATAL @ mesh_device.cpp: bad shape", 1),
+            ("exited with code 7", 7),
+            ("was killed by signal 9 (SIGKILL)", 137),
+            ("received SIGTERM from pid 999 (not from the launcher)", 143),
+        ],
+        ids=["sys_exit", "py_exception", "cpp_exception", "exit_code", "sigkill_via_wrapper", "outside_sigterm"],
+    )
+    def test_run_launcher_names_the_rank_that_stopped_the_job_and_returns_its_code(self, reason, code):
+        from ttnn.distributed.ttrun import run_launcher
+
+        # Every rank exits after the stop (143 for the ones told to stop), but the job's code is the stopping rank's
+        # and tt-run names it, even when prterun reports another rank first.
+        line = f"[1,1]<stderr>: [tt-stop] rank 1 on nodeB (pid 4242): {reason}; stopping the job (exit {code})"
+        script = f"echo {shlex.quote(line)} >&2; sleep 0.3; echo {shlex.quote(self._BANNER_EXIT_CODE)} >&2; exit 143"
+        text, rc = self._logged_rc(lambda: run_launcher(["bash", "-c", script], cwd=Path.cwd()))
+        assert rc == code, text
+        assert f"rank 1 on nodeB stopped the job ({reason})" in text, text
+        assert f"rank 1 on nodeB (pid 4242): {reason}; the other ranks were sent SIGTERM and exited" in text, text
+        assert f"job end: outcome=failed exit={code} cause=rank failure" in text and "origin=rank 1 on nodeB" in text
+
+    def test_run_launcher_names_the_dead_rank_not_the_peer_that_saw_it_fail(self):
+        from ttnn.distributed.ttrun import run_launcher
+
+        # Across hosts the survivor's MPI can report the dead peer before the dead rank's wrapper line arrives. A stop
+        # whose reason is a failed peer is a symptom: the dead rank's own line replaces it, whatever the order.
+        first = (
+            "[1,0]<stderr>: [tt-stop] rank 0 on nodeA (pid 11): Python exception RuntimeError: MPI_Test failed: "
+            "MPI_ERR_PROC_FAILED: Process Failure (closing the mesh); stopping the job (exit 1)"
+        )
+        second = "[1,1]<stderr>: [tt-stop] rank 1 on nodeB (pid 22): was killed by signal 11 (SIGSEGV); stopping the job (exit 139)"
+        script = f"echo {shlex.quote(first)} >&2; sleep 0.3; echo {shlex.quote(second)} >&2; exit 1"
+        text, rc = self._logged_rc(lambda: run_launcher(["bash", "-c", script], cwd=Path.cwd()))
+        assert rc == 139, text
+        assert "origin=rank 1 on nodeB" in text and "was killed by signal 11 (SIGSEGV)" in text, text
+
+    def test_run_launcher_forces_a_job_a_rank_stopped_when_the_ranks_do_not_exit(self, monkeypatch):
+        import time
+
+        from ttnn.distributed import ttrun as m
+
+        # A rank stopped the job but another rank never exits (stuck in a device wait): the stop grace applies as
+        # for a stop at tt-run, then tt-run forces through the launcher. The code is still the stopping rank's.
+        monkeypatch.setenv("TT_RUN_STOP_GRACE_S", "1")
+        line = "[1,0]<stderr>: [tt-stop] rank 0 on nodeA (pid 11): sys.exit(5); stopping the job (exit 5)"
+        script = f"echo {shlex.quote(line)} >&2; trap 'exit 143' TERM; while :; do sleep 0.1; done"
+        t0 = time.time()
+        text, rc = self._logged_rc(lambda: m.run_launcher(["bash", "-c", script], cwd=Path.cwd()))
+        assert rc == 5, text
+        assert time.time() - t0 < 10
+        assert "job forced down" in text and "ranks did not exit within 1 s" in text and "tt-smi -r" in text, text
+        assert "the other ranks did not all exit in time and were killed" in text, text
+        assert "job end: outcome=forced exit=5" in text, text
+
+    def test_build_mpi_command_runs_each_rank_in_the_wrapper(self, sample_rank_binding_yaml, tmp_path, monkeypatch):
+        # Each rank's program runs under tt-run-rank, which stops the job if the program dies; gdbserver launches
+        # and TT_RUN_RANK_WRAPPER=none run the program bare.
+        wrapper = tmp_path / "tt-run-rank"
+        wrapper.write_text("#!/bin/sh\n")
+        wrapper.chmod(0o755)
+        config = parse_binding_config(sample_rank_binding_yaml)
+        monkeypatch.setenv("TT_RUN_RANK_WRAPPER", str(wrapper))
+        cmd = build_mpi_command(config, ["python3", "train.py"])
+        n = len(config.rank_bindings)
+        assert cmd.count(str(wrapper)) == n, cmd
+        i = cmd.index(str(wrapper))
+        assert cmd[i : i + 4] == [str(wrapper), "--", "python3", "train.py"], cmd
+        assert str(wrapper) not in build_mpi_command(config, ["python3", "train.py"], debug_gdbserver=True)
+        monkeypatch.setenv("TT_RUN_RANK_WRAPPER", "none")
+        assert str(wrapper) not in build_mpi_command(config, ["python3", "train.py"])
+
+    # A fake prterun for the stop tests: it publishes the PMIx tool rendezvous file the way prterun does
+    # (<TMPDIR>/prterun.<host>.<pid>.<uid>/pmix.<host>.tool.<pid>, URI on the first line), then runs until its
+    # "ranks" are gone (the fake helper creates REC/ranks_gone) or it is signalled. Every signal it gets is
+    # recorded in REC/launcher.signals; IGNORE_TERM=1 makes it ignore SIGTERM like a wedged launcher.
+    _FAKE_PRTERUN = (
+        'd="$TMPDIR/prterun.fakehost.$$.$(id -u)"; mkdir -p "$d"; '
+        'printf "fake-uri-%s\\n5.0.5\\n%s\\n" $$ $$ > "$d/pmix.fakehost.tool.$$"; '
+        'if [ "$IGNORE_TERM" = 1 ]; then trap "echo TERM >> $REC/launcher.signals" TERM; '
+        'else trap "echo TERM >> $REC/launcher.signals; exit 143" TERM; fi; '
+        'while [ ! -e "$REC/ranks_gone" ]; do sleep 0.1; done; exit 143'
+    )
+
+    @pytest.mark.parametrize("ranks_exit", [True, False], ids=["graceful", "forced_after_grace"])
+    def test_run_launcher_stops_the_job_gracefully_at_its_timeout(self, ranks_exit, tmp_path, monkeypatch):
+        import tempfile
+
+        from ttnn.distributed import ttrun as m
+
+        # --timeout 1: at 1 s tt-run sends SIGTERM to every rank through job control (never the launcher). If the
+        # ranks exit, the job ends "stopped" with 241; if not, tt-run forces after the stop grace, with the warning.
+        rec = tmp_path / "rec"
+        rec.mkdir()
+        helper = tmp_path / "tt-run-signal"
+        helper.write_text(
+            f'#!/bin/bash\necho "$@" >> "{rec}/helper.args"\n' + (f'touch "{rec}/ranks_gone"\n' if ranks_exit else "")
+        )
+        helper.chmod(0o755)
+        monkeypatch.setenv("REC", str(rec))
+        monkeypatch.setenv("TMPDIR", str(tmp_path))
+        monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+        monkeypatch.setenv("TT_RUN_SIGNAL_HELPER", str(helper))
+        monkeypatch.setenv("TT_RUN_STOP_GRACE_S", "1")
+        monkeypatch.setenv("IGNORE_TERM", "0")
+        text, rc = self._logged_rc(
+            lambda: m.run_launcher(["bash", "-c", self._FAKE_PRTERUN, "--timeout", "1"], cwd=Path.cwd())
+        )
+        assert rc == 241, text
+        assert "the job reached its --timeout of 1 s: sent SIGTERM to all ranks" in text, text
+        assert "--signal 15" in (rec / "helper.args").read_text()
+        if ranks_exit:
+            assert "job stopped at its --timeout of 1 s" in text and "job end: outcome=stopped exit=241" in text, text
+            assert not (rec / "launcher.signals").exists(), "a graceful timeout must not signal the launcher"
+        else:
+            assert "job forced down" in text and "tt-smi -r" in text and "job end: outcome=forced exit=241" in text
+
+    @pytest.mark.parametrize(
+        "case",
+        ["graceful", "no_helper", "grace_expired", "second_signal", "launcher_ignores_force"],
+    )
+    def test_run_launcher_stops_the_ranks_with_sigterm(self, case, tmp_path, monkeypatch):
+        import signal
+        import tempfile
+        import threading
+        import time
+
+        from ttnn.distributed import ttrun as m
+
+        # A stop at tt-run (here SIGTERM) sends SIGTERM to every rank through PRRTE job control (the
+        # tt-run-signal helper, given the URI from prterun's rendezvous file) and never signals the launcher, so
+        # PRRTE's 250 ms SIGKILL clock is not started. If the helper cannot reach prterun, the ranks do not exit
+        # within the stop grace, or a second signal arrives, tt-run forces: SIGTERM to the launcher (PRRTE kills
+        # every rank), then SIGKILL if the launcher ignores that too. tt-run reports 128 + the original signal.
+        rec = tmp_path / "rec"
+        rec.mkdir()
+        helper = tmp_path / "tt-run-signal"
+        delivers = case == "graceful"  # the "ranks" exit on the SIGTERM only in the graceful case
+        helper.write_text(
+            "#!/bin/bash\n" f'echo "$@" >> "{rec}/helper.args"\n' + (f'touch "{rec}/ranks_gone"\n' if delivers else "")
+        )
+        helper.chmod(0o755)
+        monkeypatch.setenv("REC", str(rec))
+        monkeypatch.setenv("TMPDIR", str(tmp_path))
+        monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+        monkeypatch.setenv(
+            "TT_RUN_SIGNAL_HELPER",
+            "/nonexistent/tt-run-signal" if case in ("no_helper", "launcher_ignores_force") else str(helper),
+        )
+        monkeypatch.setenv("TT_RUN_STOP_GRACE_S", "1" if case == "grace_expired" else "60")
+        monkeypatch.setenv("IGNORE_TERM", "1" if case == "launcher_ignores_force" else "0")
+        monkeypatch.setattr(m, "SIGNAL_FORWARD_GRACE_S", 1.0)
+
+        running = threading.Event()  # signals go to this process only while run_launcher has its handlers installed
+
+        def stop():
+            for delay in (0.5, 1.0) if case == "second_signal" else (0.5,):
+                time.sleep(delay)
+                if running.is_set():
+                    os.kill(os.getpid(), signal.SIGTERM)
+
+        def launch():
+            running.set()
+            try:
+                return m.run_launcher(["bash", "-c", self._FAKE_PRTERUN], cwd=Path.cwd())
+            finally:
+                running.clear()
+
+        threading.Thread(target=stop, daemon=True).start()
+        t0 = time.time()
+        text, rc = self._logged_rc(launch)
+        elapsed = time.time() - t0
+        args = (rec / "helper.args").read_text() if (rec / "helper.args").exists() else ""
+        launcher_signals = (rec / "launcher.signals").read_text() if (rec / "launcher.signals").exists() else ""
+
+        assert rc == 128 + signal.SIGTERM, text
+        assert elapsed < 10, f"stop took {elapsed:.1f}s\n{text}"
+        if case in ("graceful", "grace_expired", "second_signal"):
+            assert "--signal 15" in args and "--uri fake-uri-" in args, f"helper not called with SIGTERM: {args!r}"
+            assert "sent SIGTERM to all ranks" in text, text
+        if case == "graceful":
+            assert launcher_signals == "", "a graceful stop must not signal the launcher (PRRTE's kill path)"
+            assert "job end: outcome=stopped exit=143" in text, text
+            return
+        # every other case ends in a force: the launcher is signalled and the user is told the devices may be unhealthy
+        assert "TERM" in launcher_signals, "the force path did not signal the launcher"
+        assert "job forced down" in text and "tt-smi -r" in text, text
+        assert "job end: outcome=forced exit=143" in text, text
+        why = {
+            "no_helper": "could not reach prterun",
+            "grace_expired": "ranks did not exit within 1 s",
+            "second_signal": "second SIGTERM",
+            "launcher_ignores_force": "could not reach prterun",
+        }[case]
+        assert why in text, text
+        if case == "launcher_ignores_force":
+            assert "did not exit" in text and "SIGKILL" in text, text
+
+    def test_run_launcher_ends_leftovers_and_fails_the_job(self, monkeypatch, unreaped_orphans):
+        import time
+
+        from ttnn.distributed.ttrun import run_launcher
+
+        # like PRRTE's ranks: a child that stays in the launcher's session (only the process group differs) and
+        # OUTLASTS the stop grace -> warned about, then SIGTERM, then (here unneeded) SIGKILL; a leak, the job fails.
+        monkeypatch.setenv("TT_RUN_STOP_GRACE_S", "2")
+        t0 = time.time()
+        text, rc = self._logged_rc(
+            lambda: run_launcher(["bash", "-c", "sleep 30 & disown; sleep 0.2; exit 0"], cwd=Path.cwd())
+        )
+        assert rc != 0
+        assert time.time() - t0 < 20
+        assert "still running" in text and "waiting up to 2 s (TT_RUN_STOP_GRACE_S)" in text, text
+        assert "a leak" in text and "job end: outcome=failed" in text, text
+        # the leftover dies on the SIGTERM; as an unreaped zombie it must count as ended at once, not after the SIGTERM
+        # grace and a SIGKILL to a corpse (2 s stop grace + well under the 10 s SIGTERM grace)
+        assert time.time() - t0 < 2 + 8, f"waited {time.time() - t0:.0f} s on a dead leftover\n{text}"
+
+    @pytest.mark.parametrize("exits_after", [1, 12])
+    def test_run_launcher_waits_for_a_rank_still_exiting_after_the_launcher(self, exits_after):
+        import time
+
+        from ttnn.distributed.ttrun import run_launcher
+
+        # The SC4 case: every rank finished, but one is still in its exit path (driver teardown) when the launcher
+        # returns. A clean finish is never killed: tt-run waits for it up to the stop grace (120 s by default; 12 s is
+        # longer than the 10 s tt-run used to allow) and the clean code is forwarded.
+        t0 = time.time()
+        text, rc = self._logged_rc(
+            lambda: run_launcher(["bash", "-c", f"sleep {exits_after} & disown; exit 0"], cwd=Path.cwd())
+        )
+        assert rc == 0, text
+        assert exits_after <= time.time() - t0 < exits_after + 8
+        assert "job end: outcome=clean exit=0" in text and "a leak" not in text, text
+
+    def test_run_launcher_ends_a_forced_jobs_leftovers_without_another_grace(self, monkeypatch, unreaped_orphans):
+        import signal
+        import threading
+        import time
+
+        from ttnn.distributed.ttrun import run_launcher
+
+        # The CI shape: tt-run forced the job (no tt-run-signal) and the launcher returned with a rank still alive. The
+        # stop grace was already spent, so the leftover is ended after the short settle, not after another grace.
+        monkeypatch.setenv("TT_RUN_SIGNAL_HELPER", "/nonexistent/tt-run-signal")
+        running = threading.Event()
+
+        def stop():
+            time.sleep(1.0)
+            if running.is_set():
+                os.kill(os.getpid(), signal.SIGTERM)
+
+        def launch():
+            running.set()
+            try:
+                return run_launcher(
+                    ["bash", "-c", "sleep 300 & disown; trap 'exit 143' TERM; while :; do sleep 0.1; done"],
+                    cwd=Path.cwd(),
+                )
+            finally:
+                running.clear()
+
+        threading.Thread(target=stop, daemon=True).start()
+        t0 = time.time()
+        text, rc = self._logged_rc(launch)
+        assert rc == 128 + signal.SIGTERM, text
+        assert time.time() - t0 < 30, f"took {time.time() - t0:.0f} s\n{text}"
+        assert "job forced down" in text and "straggler" in text, text
+
+    def test_run_launcher_does_not_wait_for_a_zombie(self, unreaped_orphans):
+        import time
+
+        from ttnn.distributed.ttrun import run_launcher
+
+        # The CI shape: a rank of the job has exited but its parent has not reaped it yet (state Z). It is not a
+        # survivor: the clean job ends at once instead of waiting the stop grace for it, and is not called a leak.
+        script = "python3 -c 'import os, time; os.fork() or os._exit(0); time.sleep(4)' & disown; sleep 0.5; exit 0"
+        t0 = time.time()
+        text, rc = self._logged_rc(lambda: run_launcher(["bash", "-c", script], cwd=Path.cwd()))
+        assert rc == 0, text
+        assert time.time() - t0 < 8, f"waited {time.time() - t0:.0f} s for a zombie\n{text}"
+        assert "a leak" not in text and "job end: outcome=clean exit=0" in text, text
+
+    def test_launch_env_drops_a_tcp_interface_variable_the_line_contradicts(self, monkeypatch):
+        from ttnn.distributed.ttrun import launch_env
+
+        # A site profile exports an exclude list; --tcp-interface (or --mpi-args) puts an include list on the line.
+        # Open MPI aborts on both, so the environment's one is dropped; an unrelated environment is left alone.
+        monkeypatch.setenv("OMPI_MCA_btl_tcp_if_exclude", "lo,docker0")
+        line = ["mpirun", "--mca", "btl", "self,tcp", "--mca", "btl_tcp_if_include", "eth0", "prog"]
+        assert "OMPI_MCA_btl_tcp_if_exclude" not in launch_env(line)
+        assert launch_env(["mpirun", "prog"])["OMPI_MCA_btl_tcp_if_exclude"] == "lo,docker0"
+        monkeypatch.delenv("OMPI_MCA_btl_tcp_if_exclude")
+        monkeypatch.setenv("OMPI_MCA_btl_tcp_if_include", "eth0")
+        assert "OMPI_MCA_btl_tcp_if_include" not in launch_env(["mpirun", "--mca", "btl_tcp_if_exclude", "lo", "p"])
+
+    def test_launch_presets_the_variables_mpi_init_would_add(self):
+        from ttnn.distributed.ttrun import MPI_INIT_PRESET_ENV, launch_env, with_mpi_init_preset_env
+
+        # tt-metal #64717: MPI_Init adding these to the environment races Tracy's getenv. Every rank gets them already
+        # set (remote ranks through -x), and a value the user set is left alone.
+        line = with_mpi_init_preset_env(["mpirun", "--tag-output", "-np", "1", "prog"])
+        assert line[:7] == [
+            "mpirun",
+            "-x",
+            "PMIX_MCA_psec=native",
+            "-x",
+            "IPATH_NO_BACKTRACE=1",
+            "-x",
+            "HFI_NO_BACKTRACE=1",
+        ], line
+        assert line[-4:] == ["--tag-output", "-np", "1", "prog"]
+        mine = ["mpirun", "-x", "HFI_NO_BACKTRACE=0", "prog"]
+        assert with_mpi_init_preset_env(mine).count("-x") == 3 and "HFI_NO_BACKTRACE=0" in with_mpi_init_preset_env(
+            mine
+        )
+        env = launch_env(["mpirun", "prog"])
+        assert all(env[k] == v for k, v in MPI_INIT_PRESET_ENV.items())
+
+    def test_timeout_is_made_graceful_with_prrte_as_the_backstop(self, monkeypatch):
+        from ttnn.distributed.ttrun import job_timeout_s, with_timeout_backstop
+
+        assert job_timeout_s(["mpirun", "--timeout", "20", "x"]) == 20.0
+        assert job_timeout_s(["mpirun", "--timeout=7", "x"]) == 7.0
+        assert job_timeout_s(["mpirun", "x"]) is None
+        assert with_timeout_backstop(["mpirun", "--timeout", "20", "x"], 110) == ["mpirun", "--timeout", "110", "x"]
+        assert with_timeout_backstop(["mpirun", "--timeout=7", "x"], 97) == ["mpirun", "--timeout=97", "x"]
+
+    @staticmethod
+    def _logged(fn):
+        """Run fn and return what tt-run logged (loguru, so caplog does not see it)."""
+        from loguru import logger
+
+        lines = []
+        sink = logger.add(lambda m: lines.append(str(m)), level="INFO")
+        try:
+            fn()
+        finally:
+            logger.remove(sink)
+        return "".join(lines)
+
+    @classmethod
+    def _logged_rc(cls, fn):
+        """Like _logged, but also return fn's result (run_launcher's exit code)."""
+        out = {}
+        text = cls._logged(lambda: out.setdefault("rc", fn()))
+        return text, out.get("rc")
+
+    def test_log_phase2_exit_reason_names_a_signal_death_and_skips_the_generic_hint(self):
+        import signal
+
+        from ttnn.distributed.ttrun import PRTE_TIMEOUT_EXIT_CODE, log_phase2_exit_reason
+
+        # A rank died by a signal: one line names the signal and the code; the cache / descriptor hint is not logged,
+        # because a dead rank is not a stale cache.
+        text = self._logged(lambda: log_phase2_exit_reason(128 + signal.SIGKILL, [], "legacy"))
+        assert "died by signal 9 (SIGKILL)" in text
+        assert "returns 137" in text
+        assert "golden" not in text.lower()
+        # The wall clock: run_launcher already said so; nothing more is logged.
+        assert self._logged(lambda: log_phase2_exit_reason(PRTE_TIMEOUT_EXIT_CODE, [], "legacy")) == ""
+
+    def test_log_phase2_exit_reason_names_a_missing_tcp_interface(self):
+        from ttnn.distributed.ttrun import log_phase2_exit_reason
+
+        ttrun_module = sys.modules["ttnn.distributed.ttrun"]
+        # The ranks were pinned to an interface this host does not have (a typo in --tcp-interface, or a hand-written
+        # --mca btl_tcp_if_include): MPI_Init fails on every rank and the launcher returns 14. tt-run says which
+        # interface, which ones exist, and what to change, instead of the generic hint.
+        with patch.object(ttrun_module, "get_local_network_interfaces", return_value={"eth0", "lo"}):
+            text = self._logged(
+                lambda: log_phase2_exit_reason(14, ["--mca", "btl_tcp_if_include", "nosuchif"], "legacy")
+            )
+            assert "TCP interface 'nosuchif'" in text
+            assert "eth0, lo" in text
+            assert "golden" not in text.lower()
+            # The same code with an interface that exists is not an interface problem: the generic hint stays.
+            text = self._logged(lambda: log_phase2_exit_reason(14, ["--mca", "btl_tcp_if_include", "eth0"], "legacy"))
+            assert "TCP interface" not in text
+            assert "golden" in text.lower()
+
+    def test_sweep_removes_a_stale_shm_segment_but_keeps_a_mapped_one(self):
+        import mmap
+        import socket
+        import time
+
+        from ttnn.distributed.ttrun import remove_stale_launcher_leftovers
+
+        # The third piece of P11: before launching, tt-run removes this user's Open MPI shared-memory segments
+        # that no live process maps (what a killed job leaves behind), and keeps the ones a running job still maps.
+        host, uid = socket.gethostname(), os.getuid()
+        stale = Path(f"/dev/shm/sm_segment.{host}.{uid}.ttrun_pytest_stale_{os.getpid()}")
+        live = Path(f"/dev/shm/sm_segment.{host}.{uid}.ttrun_pytest_live_{os.getpid()}")
+        fresh = Path(f"/dev/shm/sm_segment.{host}.{uid}.ttrun_pytest_fresh_{os.getpid()}")
+        mm = fd = None
+        try:
+            stale.write_bytes(b"\0" * 4096)  # a leftover nobody maps
+            os.utime(stale, (time.time() - 3600, time.time() - 3600))  # aged past SHM_MIN_STALE_AGE_S: a genuine leak
+            fresh.write_bytes(b"\0" * 4096)  # unmapped but just created, like a concurrent job before it maps it
+            fd = os.open(str(live), os.O_RDWR | os.O_CREAT, 0o600)  # a segment this process maps, like a live job
+            os.ftruncate(fd, 4096)
+            mm = mmap.mmap(fd, 4096)
+
+            remove_stale_launcher_leftovers()
+
+            assert not stale.exists(), "the aged, unmapped segment was not removed"
+            assert live.exists(), "a segment a live process maps must be kept"
+            assert fresh.exists(), "a just-created unmapped segment (uncertain ownership) must be preserved"
+        finally:
+            if mm is not None:
+                mm.close()
+            if fd is not None:
+                os.close(fd)
+            for p in (stale, live, fresh):
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
+
+    def test_sweep_removes_a_stale_prterun_session_dir_but_keeps_a_live_one(self):
+        import tempfile
+
+        from ttnn.distributed.ttrun import remove_stale_launcher_leftovers
+
+        # P25: a killed launcher never runs prterun's exit path, so its <tmp>/prterun.<host>.<pid>.<uid> directory
+        # stays. The same sweep removes the ones whose launcher pid is dead and keeps a live job's directory.
+        uid = os.getuid()
+        tmp = Path(tempfile.gettempdir())
+        dead = tmp / f"prterun.ttrun-pytest.2147483646.{uid}"  # a pid past pid_max: never alive
+        live = tmp / f"prterun.ttrun-pytest.{os.getpid()}.{uid}"  # this process: alive
+        try:
+            dead.mkdir()
+            (dead / "hwloc.sm").write_bytes(b"\0")
+            live.mkdir()
+            (live / "hwloc.sm").write_bytes(b"\0")
+
+            remove_stale_launcher_leftovers()
+
+            assert not dead.exists(), "a session dir whose launcher pid is dead was not removed"
+            assert live.exists(), "a session dir whose launcher pid is alive must be kept"
+        finally:
+            for p in (dead, live):
+                shutil.rmtree(p, ignore_errors=True)
+
+    def test_wait_does_not_force_down_a_running_job_with_no_forwarded_signal(self, monkeypatch, tmp_path):
+        import subprocess
+
+        from ttnn.distributed import ttrun as m
+
+        # The safety property: with no stop requested, wait() never force-kills and never sends a SIGTERM to the
+        # ranks — it just returns the launcher's own code. A healthy job (multi-host included) that nobody asked
+        # to stop is never touched, even past the stop grace.
+        calls = tmp_path / "helper.args"
+        helper = tmp_path / "tt-run-signal"
+        helper.write_text(f'#!/bin/bash\necho "$@" >> "{calls}"\n')
+        helper.chmod(0o755)
+        monkeypatch.setenv("TT_RUN_SIGNAL_HELPER", str(helper))
+        monkeypatch.setenv("TT_RUN_STOP_GRACE_S", "1")
+        monkeypatch.setattr(m, "SIGNAL_FORWARD_GRACE_S", 1.0)
+        job = m.LaunchedJob(["true"], Path("."))
+        job.proc = subprocess.Popen(["sleep", "3"], start_new_session=True)  # exits on its own; no stop requested
+        try:
+            rc = job.wait()
+            assert rc == 0, "a job nobody asked to stop must return the launcher's own code"
+            assert not calls.exists(), "the ranks were sent a SIGTERM although nobody asked to stop the job"
+        finally:
+            if job.proc.poll() is None:
+                job.proc.kill()
+                job.proc.wait()
+
+    def test_wait_ends_a_launcher_that_lingers_after_an_mpi_abort(self, monkeypatch):
+        import time
+
+        from ttnn.distributed import ttrun as m
+
+        # prrte#2815 guard: a launcher that printed the MPI_ABORT banner and then hangs (here: ignores SIGTERM and
+        # never exits) must be ended by wait(), which returns the rank's errorcode — not left to block forever.
+        monkeypatch.setattr(m, "ABORT_HANG_GRACE_S", 1.0)
+        fake = (
+            "import sys,signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            "sys.stderr.write('MPI_ABORT was invoked on rank 1 in communicator MPI_COMM_WORLD\\n'); "
+            "sys.stderr.flush(); time.sleep(600)"
+        )
+        with m.LaunchedJob([sys.executable, "-c", fake], Path(".")) as job:
+            t0 = time.time()
+            rc = job.wait()
+            assert rc != 0, f"a job whose launcher aborted-then-hung must fail, got {rc}"
+            assert job.proc.poll() is not None, "the lingering launcher was not ended"
+            assert time.time() - t0 < 20, "the abort guard did not fire promptly"
+
+    def test_wait_does_not_end_a_launcher_without_an_mpi_abort(self, monkeypatch):
+        import time
+
+        from ttnn.distributed import ttrun as m
+
+        # The safety property: no MPI_Abort banner → the abort guard never arms. A launcher that just runs a while
+        # and exits on its own (here past the grace, writing ordinary stderr) is returned, never force-ended.
+        monkeypatch.setattr(m, "ABORT_HANG_GRACE_S", 1.0)
+        fake = (
+            "import sys,time; sys.stderr.write('ordinary diagnostic, no abort\\n'); sys.stderr.flush(); time.sleep(3)"
+        )
+        with m.LaunchedJob([sys.executable, "-c", fake], Path(".")) as job:
+            rc = job.wait()
+            assert rc == 0, "a launcher that never aborted must return its own code, not be force-ended"
