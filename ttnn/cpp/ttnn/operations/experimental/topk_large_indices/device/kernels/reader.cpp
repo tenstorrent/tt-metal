@@ -65,7 +65,8 @@ FORCE_INLINE void two_level_push_stage1(uint32_t last_store) {
         .push_back(1 + get_named_compile_time_arg_val("tl_stage1_batch"));
 }
 
-// One phase-1 unit: its 32 tiles of 1024 keys, keys past the search length -inf.
+// One phase-1 unit: its 32 tiles of 1024 keys. The last live block's keys past the search length are -inf; the tiles
+// past it keep stale keys, whose maxima the writer does not send.
 template <typename InputAccessor>
 FORCE_INLINE void two_level_unit(
     const Noc& noc,

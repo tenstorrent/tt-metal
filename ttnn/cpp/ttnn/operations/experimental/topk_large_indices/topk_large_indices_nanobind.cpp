@@ -86,8 +86,9 @@ void bind_topk_large_indices(nb::module_& mod) {
                 and, unless the caller supplies block_max_tensor or block_max_output, holds its own
                 [rows, ceil(n/32)] BFLOAT16 DRAM maxima tensor for as long as it is cached (a captured trace
                 that runs it needs the program kept in the cache).
-            two_level_cutover: search length from which a two-level program runs two-level (default: 98304). 0 forces two-level; 0xFFFFFFFF forces single-level for every non-empty row (an
-                empty row always runs two-level, which returns sentinels).
+            two_level_cutover: search length from which a two-level program runs two-level (default: 98304).
+                0 forces two-level; 0xFFFFFFFF forces single-level for every non-empty row (an empty row always
+                runs two-level, which returns sentinels).
             block_max_tensor: optional [rows, ceil(n/32)] BFLOAT16 DRAM tensor of block maxima; skips the program's
                 own block-max stage. Only the first ceil(search_length/32) entries of each row are read.
             block_max_output: optional [rows, ceil(n/32)] BFLOAT16 DRAM tensor that receives the computed block
