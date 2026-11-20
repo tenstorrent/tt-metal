@@ -95,6 +95,7 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     reshape_on_device/reshape.cpp
     reshape_view/device/reshape_rm_program_factory.cpp
     reshape_view/device/reshape_tiled_program_factory.cpp
+    reshape_view/device/reshape_tiled_rows_program_factory.cpp
     reshape_view/device/reshape_device_operation.cpp
     reshape_view/codegen/reshape_codegen_device_operation.cpp
     reshape_view/codegen/reshape_codegen_plan.cpp

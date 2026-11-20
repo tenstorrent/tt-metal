@@ -11,9 +11,12 @@
 namespace ttnn::prim {
 
 ReshapeViewDeviceOperation::program_factory_t ReshapeViewDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
         return ReshapeViewRMProgramFactory{};
+    }
+    if (ReshapeViewTiledRowsProgramFactory::applies(operation_attributes, tensor_args)) {
+        return ReshapeViewTiledRowsProgramFactory{};
     }
     return ReshapeViewTiledProgramFactory{};
 }
@@ -51,6 +54,20 @@ ttsl::hash::hash_t ReshapeViewDeviceOperation::compute_program_hash(
     log_trace(tt::LogOp, "ReshapeViewDeviceOperation::compute_program_hash is called");
 
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
+
+    // The rows path takes every row count at run time: its program depends on the padded last dim, the
+    // dtype, the memory configs and the layout alignment (which its dynamic-shape tensor parameters must
+    // keep) only, so the key leaves the other dims out.
+    if (std::holds_alternative<ReshapeViewTiledRowsProgramFactory>(program_factory)) {
+        const auto& input = tensor_args.input;
+        return tt::tt_metal::operation::hash_operation<ReshapeViewDeviceOperation>(
+            program_factory.index(),
+            operation_attributes.output_mem_config,
+            input.dtype(),
+            input.memory_config(),
+            input.padded_shape()[-1],
+            input.tensor_spec().tensor_layout().get_alignment());
+    }
 
     // don't hash on operation_attributes_t::recreate_mapping_tensor
     return tt::tt_metal::operation::hash_operation<ReshapeViewDeviceOperation>(

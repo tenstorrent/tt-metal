@@ -1118,3 +1118,46 @@ def test_reshape_docstring_supported_inputs(dtype, layout, buffer_type, device):
     assert output.layout == layout
     assert output.memory_config().buffer_type == buffer_type
     assert_exact(ttnn.to_torch(input_tensor).reshape(1, 1, 100, 64), ttnn.to_torch(output))
+
+
+def _dram_allocated(device) -> int:
+    view = ttnn.get_memory_view(device, ttnn.BufferType.DRAM)
+    return view.total_bytes_allocated_per_bank * view.num_banks
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32])
+@pytest.mark.parametrize("channels", [512, 96, 40])
+def test_reshape_tile_keep_last_dim_one_program(device, dtype, channels):
+    """A TILE reshape that keeps the last dim, between [1, 1, H*W, C] and [1, H, W, C] (a conv output and a
+    group norm input), is exact at every H and W and builds one program for all of them, keeping no device
+    memory per shape. Its tile padding rows are zero. Heights and widths that are not whole tiles move
+    data; the last two are whole tiles (a view)."""
+    torch.manual_seed(0)
+    torch_dtype = {ttnn.float32: torch.float32, ttnn.int32: torch.int32}.get(dtype, torch.bfloat16)
+    sizes = [(26, 78), (39, 52), (24, 85), (13, 7), (1, 33), (208, 61), (32, 64), (64, 32)]
+
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    entries = []
+    for h, w in sizes:
+        if torch_dtype == torch.int32:
+            flat = torch.randint(1, 1000, (1, 1, h * w, channels), dtype=torch.int32)
+        else:
+            # Nonzero everywhere, so zero padding rows cannot come from the data.
+            flat = torch.rand(1, 1, h * w, channels, dtype=torch_dtype) + 1
+        tt_flat = ttnn.from_torch(flat, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        dram_before = _dram_allocated(device)
+        tt_image = ttnn.reshape(tt_flat, (1, h, w, channels))
+        tt_back = ttnn.reshape(tt_image, (1, 1, h * w, channels))
+        assert_exact(flat.reshape(1, h, w, channels), ttnn.to_torch(tt_image))
+        assert_exact(flat, ttnn.to_torch(tt_back))
+        padded = tt_image.cpu().to_torch_with_padded_shape()
+        assert torch.count_nonzero(padded[:, :, w:, :channels]) == 0, f"nonzero padding rows at {h}x{w}"
+        for t in (tt_back, tt_image):
+            if t.buffer_address() != tt_flat.buffer_address():
+                ttnn.deallocate(t)
+        # Anything left besides the program cache entry is memory kept per shape.
+        assert _dram_allocated(device) - dram_before <= 64 * 1024
+        ttnn.deallocate(tt_flat)
+        entries.append(device.num_program_cache_entries())
+    assert entries == [1] * len(sizes), entries

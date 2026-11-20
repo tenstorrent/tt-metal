@@ -565,6 +565,23 @@ ttnn::Tensor reshape_tiled(
 namespace ttnn::operations::data_movement::detail {
 namespace {
 
+// Whether the native rows path takes this reshape: a tiled reshape that keeps the last dim. It takes every
+// row count with one program and keeps no table per shape, so routing leaves it to native.
+bool takes_tiled_rows(
+    const ttnn::Tensor& tensor,
+    const ttnn::Shape& logical_shape,
+    const MemoryConfig& mem_config,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
+    if (tensor.layout() != ttnn::TILE_LAYOUT || is_block_float(tensor.dtype())) {
+        return false;
+    }
+    auto to_3d = [](const ttnn::Shape& shape) {
+        return shape.rank() > 3 ? squeeze_shape_to_3D(shape) : shape.rank() < 3 ? unsqueeze_shape_to_3D(shape) : shape;
+    };
+    return ttnn::prim::tiled_rows_reshape_applies(
+        tensor, to_3d(tensor.logical_shape()), to_3d(logical_shape), mem_config, sub_core_grid.has_value());
+}
+
 enum class ReshapeImpl { ROUTED, NATIVE, CODEGEN };
 
 // The codegen plan when routing should take it. The padded shape and pad_value are free-function arguments the prim
@@ -769,7 +786,7 @@ ttnn::Tensor reshape_dispatch(
         return operations::data_movement::PerformView(
             tensor, logical_shape, padded_shape, tile_first_dim, tile_second_dim);
     }
-    if (impl == ReshapeImpl::ROUTED) {
+    if (impl == ReshapeImpl::ROUTED && !takes_tiled_rows(tensor, logical_shape, mem_config, sub_core_grid)) {
         if (auto plan =
                 routed_codegen_plan(tensor, logical_shape, padded_shape, pad_value, mem_config, sub_core_grid)) {
             return ttnn::prim::reshape_codegen(tensor, logical_shape, mem_config, sub_core_grid, std::move(*plan));
