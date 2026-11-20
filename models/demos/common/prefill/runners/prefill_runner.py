@@ -42,6 +42,7 @@ from models.demos.common.prefill.runners.migration import (
 )
 from models.demos.common.prefill.runners.runner_utils import (
     MTP_PAD_TOKEN_ID,
+    SP_AXIS_ENV,
     activation_global_spec,
     axis_mapper_config,
     build_h2d_service,
@@ -111,8 +112,9 @@ MODEL_CFG = ADAPTER.model_config
 
 _sp = int(os.environ.get("PREFILL_SP", 8))
 _tp = int(os.environ.get("PREFILL_TP", 4))
-# Mesh axis SP runs on; TP takes the other. 1 for a 4x4 tray-half stage, whose only ring is axis 1.
-SP_AXIS = int(os.environ.get("PREFILL_SP_AXIS", 0))
+# Mesh axis SP runs on; TP takes the other. The SP-axis knob: the manifest gives the stage's default (1 for a 4x4
+# tray-half stage, whose only ring is axis 1), and an exported PREFILL_SP_AXIS overrides it.
+SP_AXIS = int(os.environ.get(SP_AXIS_ENV, 0))
 TP_AXIS = 1 - SP_AXIS
 GLOBAL_MESH_SHAPE = stage_mesh_shape(_sp, _tp, SP_AXIS)
 
@@ -1165,7 +1167,10 @@ def _print_config() -> None:
         ("PREFILL_NUM_USERS", str(NUM_USERS)),
         ("PREFILL_CAPACITY_FACTOR", str(CAPACITY_FACTOR)),
         ("PREFILL_GATE_FALLBACK_MODE", _gate_mode_name),
-        ("PREFILL_FABRIC_MODE", os.environ.get("PREFILL_FABRIC_MODE", "2d_torus_xy")),
+        (
+            "PREFILL_FABRIC_MODE",
+            os.environ.get("PREFILL_FABRIC_MODE", "<unset: the mesh graph descriptor's RING axes>"),
+        ),
         ("PREFILL_PP_D2D_FIFO_BYTES", str(D2D_FIFO_SIZE_BYTES)),
         (
             "TT_METAL_FABRIC_DISABLE_INTERMESH_VC",
