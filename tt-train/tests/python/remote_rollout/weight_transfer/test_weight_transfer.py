@@ -145,7 +145,7 @@ def _ttml_side() -> None:
         print(f"[TTML rank {TTML_RANK}] send_weights() complete", flush=True)
 
         # step 3: post-push remote generate, consistency check (submesh 0).
-        completions, _logprobs, version = client.remote_generate([prompt_ids] * POST_PUSH_BATCH)
+        completions, _logprobs, version, _loss_mask = client.remote_generate([prompt_ids] * POST_PUSH_BATCH)
         assert version == 1, f"expected weight_version 1 after one push, got {version}"
         for i in range(POST_PUSH_BATCH):
             assert completions[i] == completions[0], (
