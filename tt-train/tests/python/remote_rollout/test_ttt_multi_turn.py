@@ -222,3 +222,127 @@ def test_generate_tool_turns_stops_at_max_turns(qwen3_tokenizer):
     )
     assert len(sampler.calls) == 2
     assert qwen3_tokenizer.decode(completions[0]).count("<tool_call>") == 2
+
+
+# ---------------------------------------------------------------- device tests (one Blackhole chip)
+
+TASK = (
+    "Compute these five steps one at a time. Step 1: {a} multiplied by {b}. Step 2: add {c} to the result of step 1. "
+    "Step 3: subtract {d} from the result of step 2. Step 4: divide the result of step 3 by 2. "
+    "Step 5: multiply the result of step 4 by 3. For each step, call the calculator with only that step, "
+    "then wait for its result before the next step. After step 5, reply with 'ANSWER: ' followed by the five "
+    "results in order, separated by commas."
+)
+NUMBERS = dict(a=17, b=23, c=456, d=129)
+OTHER_NUMBERS = dict(a=1234, b=56, c=78901, d=2345)
+
+
+def _gold(numbers):
+    results = [numbers["a"] * numbers["b"]]
+    results.append(results[-1] + numbers["c"])
+    results.append(results[-1] - numbers["d"])
+    results.append(results[-1] // 2)
+    results.append(results[-1] * 3)
+    return results
+
+
+def _answer(tokenizer, completion):
+    text = tokenizer.decode(completion).rsplit("ANSWER:", 1)[-1]
+    return [int(float(x)) for x in re.findall(r"-?\d+(?:\.\d+)?", text)]
+
+
+@pytest.fixture(scope="module")
+def sampler():
+    import ttnn
+    from _ttt_sampler_utils import open_sampler
+
+    if not ttnn.get_device_ids():
+        pytest.skip("needs a Blackhole chip")
+    with open_sampler(dummy_weights=False, model_source=MODEL_ID, max_batch_size=2, max_seq_len=4096) as s:
+        yield s
+
+
+def _task_ids(tokenizer, numbers):
+    messages = [{"role": "user", "content": TASK.format(**numbers)}]
+    return tokenizer.apply_chat_template(
+        messages, tools=[CalculatorTool().schema()], add_generation_prompt=True, tokenize=True, return_dict=False
+    )
+
+
+def _tool_tokens(tokenizer, turn):
+    parser = Qwen3ToolCallParser(tokenizer)
+    results = run_tool_calls(parser.parse(turn), {"calculator": CalculatorTool()}, 2048)
+    return tokenizer.encode(parser.tool_response_text(results), add_special_tokens=False)
+
+
+def _record_start_pos(monkeypatch, sampler):
+    calls = []
+    prefill = sampler.generator.prefill_forward_text
+
+    def spy(*args, **kwargs):
+        calls.append(kwargs.get("start_pos"))
+        return prefill(*args, **kwargs)
+
+    monkeypatch.setattr(sampler.generator, "prefill_forward_text", spy)
+    return calls
+
+
+@pytest.mark.timeout(0)
+def test_append_to_previous_prefills_only_new_tokens(sampler, monkeypatch):
+    tok = sampler.tokenizer
+    W = 2048
+    prompts = [_task_ids(tok, NUMBERS), _task_ids(tok, OTHER_NUMBERS)]
+    first, _ = sampler.generate_and_get_log_probs(prompts, [W, W])
+    appended = [_tool_tokens(tok, turn) for turn in first]
+    assert all(len(a) > 0 for a in appended), "turn 1 of each row must end with a tool call"
+    start_pos = [len(p) + len(c) - 1 for p, c in zip(prompts, first)]
+    assert start_pos[0] != start_pos[1]
+    # The generator floors start_pos to a multiple of 64; from 128 on, the prefill skips cached tokens.
+    assert min(start_pos) >= 128
+    limits = [W - len(c) - len(a) for c, a in zip(first, appended)]
+
+    calls = _record_start_pos(monkeypatch, sampler)
+    second, second_lp = sampler.generate_and_get_log_probs(appended, limits, append_to_previous=True)
+    monkeypatch.undo()
+    assert calls == [start_pos]
+    assert [len(lp) for lp in second_lp] == [len(t) for t in second]
+
+    # Greedy tokens can differ from a full prefill at near-ties (cached K/V come from decode, not from prefill),
+    # so compare the answers.
+    full, _ = sampler.generate_and_get_log_probs([p + c + a for p, c, a in zip(prompts, first, appended)], limits)
+    gold = [_gold(NUMBERS), _gold(OTHER_NUMBERS)]
+    assert [_answer(tok, c) for c in second] == [_answer(tok, c) for c in full] == gold
+
+    # The prefill reads the earlier tokens from the KV cache: without them the result changes.
+    assert sampler.generate_and_get_log_probs(prompts, [W, W])[0] == first
+    sampler._reset_kv_cache()
+    assert sampler.generate_and_get_log_probs(appended, limits, append_to_previous=True)[0] != second
+
+
+@pytest.mark.timeout(0)
+def test_append_to_previous_rules(sampler, expect_error):
+    tok = sampler.tokenizer
+    prompts = [_task_ids(tok, NUMBERS), _task_ids(tok, OTHER_NUMBERS)]
+    sampler.generate_and_get_log_probs(prompts, [16, 16])
+    with expect_error(ValueError, "one non-negative limit for each of the 2 rows"):
+        sampler.generate_and_get_log_probs(prompts, [16])
+    with expect_error(ValueError, "rows; the previous call had 2"):
+        sampler.generate_and_get_log_probs([[1]], [4], append_to_previous=True)
+    with expect_error(ValueError, "at least one row"):
+        sampler.generate_and_get_log_probs([[], []], [0, 0], append_to_previous=True)
+    with expect_error(ValueError, r"max_new_tokens >= 1"):
+        sampler.generate_and_get_log_probs([[1], []], [0, 0], append_to_previous=True)
+    sampler.generate_and_get_log_probs(
+        [tok.encode("\nok", add_special_tokens=False), []], [4, 0], append_to_previous=True
+    )
+    with expect_error(ValueError, "row 1 is idle"):
+        sampler.generate_and_get_log_probs([[1], [1]], [4, 4], append_to_previous=True)
+
+
+@pytest.mark.timeout(0)
+def test_max_new_tokens_per_row(sampler):
+    tok = sampler.tokenizer
+    prompts = [_task_ids(tok, NUMBERS), _task_ids(tok, OTHER_NUMBERS)]
+    completions, logprobs = sampler.generate_and_get_log_probs(prompts, [5, 17])
+    assert [len(c) for c in completions] == [5, 17]
+    assert [len(lp) for lp in logprobs] == [5, 17]
