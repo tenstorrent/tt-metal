@@ -24,10 +24,8 @@
 // That path feeds the compile_stress_ci.py per-arch timing goldens; keep it as is.
 //
 // Quasar rejects the legacy kernel API, so it builds each program from a Metal 2.0
-// ProgramSpec instead (see create_quasar_compile_stress_program). Mock Quasar is
-// rejected (JIT compile is a no-op there), and real mode needs a silicon or simulator
-// target. Run Quasar with TT_METAL_COMPILE_STRESS_MOCK=0
-// TT_METAL_COMPILE_STRESS_ARCH=quasar on a simulator or device.
+// ProgramSpec instead (see create_quasar_compile_stress_program). Run Quasar with
+// TT_METAL_COMPILE_STRESS_MOCK=0 TT_METAL_COMPILE_STRESS_ARCH=quasar on a simulator or device.
 //
 // Configuration (env vars):
 //   TT_METAL_COMPILE_STRESS_NUM_KERNELS     total kernels                 (default 1000)
@@ -115,7 +113,6 @@ bool use_mock_mode() {
     return mock;
 }
 
-// Mock Quasar would time nothing: Program::compile returns early on a mock Quasar device.
 // Reads only env vars, so it can run before any device work.
 void reject_compile_stress_mock_quasar() {
     TT_FATAL(
@@ -187,7 +184,7 @@ Program create_compute_program(
 // Quasar (Metal 2.0) counterpart of create_compute_program. Each core gets its own
 // compute KernelSpec, with {id, seed} as compile-time varargs so every kernel hashes
 // uniquely. Gen2 DFBs need one producer and one consumer per node, so a shared
-// reader/writer pair feeds and drains the DFBs (layout from llk/single_node_dfb_program.hpp).
+// reader/writer pair feeds and drains the DFBs.
 // The reader/writer add two data-movement builds that WH/BH lack; the warmup program uses
 // this helper too, so they should be cached before the timed section. Built with
 // BuildProgramFromSpec (no eager compile), so the timed section still compiles in parallel.
@@ -331,8 +328,7 @@ TEST_F(CompileStressFixture, DISABLED_TensixCompileStress) {
             "CompileStressFixture expects mock device; got target_type={}.",
             target_device_type_to_string(target));
     } else {
-        // Real mode times compiles for the attached device. Mock and Emule have none, and
-        // Program::compile skips the JIT on Emule and on mock Quasar, so the run would time nothing.
+        // Program::compile skips the JIT on Emule and mock Quasar, so those would time nothing.
         TT_FATAL(
             target == tt::TargetDevice::Silicon || target == tt::TargetDevice::Simulator,
             "CompileStressFixture real mode needs a silicon or simulator target; got target_type={}. "

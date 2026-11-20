@@ -256,8 +256,7 @@ static_assert(get_named_compile_time_arg_val("value") == 42);
 void kernel_main() {}
 )";
     if (is_quasar()) {
-        // ProgramDescriptor lowers to a legacy kernel, which Quasar rejects, so build the same kernel from a
-        // ProgramSpec: compile_time_varargs become the positional CT args and compile_time_args the named ones.
+        // compile_time_varargs are the positional CT args, compile_time_args the named ones.
         KernelSpec kernel{
             .unique_id = KernelSpecName{"compute"},
             .source = KernelSpec::SourceCode{source},
@@ -334,8 +333,7 @@ TEST_F(NamedCtArgChannelsFixture, GeneratedDescriptorsCompileWithDuplicateBuilds
     ProgramDescriptor descriptor{.kernels = {kernel}};
     kernel.core_ranges = CoreRange(*second_core);
     descriptor.kernels.push_back(kernel);
-    // Quasar rejects the legacy kernels a ProgramDescriptor lowers to, and Metal 2.0 has no Blaze channel: use
-    // a Metal 2.0 named CT arg in its place (Metal 2.0 arg names must be C++ identifiers, hence no '.').
+    // Metal 2.0 has no Blaze channel, so Quasar uses a named CT arg; names must be C++ identifiers, hence no '.'.
     const ProgramSpec spec = duplicate_dm_kernels_spec("void kernel_main() {}", {{"typed_value", 7u}}, *second_core);
     const auto make_program = [&] {
         return is_quasar() ? build_program_from_spec(spec) : Program(*devices_.at(0), descriptor);
@@ -401,7 +399,6 @@ TEST_F(NamedCtArgChannelsFixture, SameProgramDuplicateDoesNotRetryFailedBuild) {
     ProgramDescriptor descriptor{.kernels = {kernel}};
     kernel.core_ranges = CoreRange(*second_core);
     descriptor.kernels.push_back(kernel);
-    // Quasar rejects the legacy kernels a ProgramDescriptor lowers to; build the same pair through Metal 2.0.
     Program program = is_quasar() ? build_program_from_spec(duplicate_dm_kernels_spec(source, {}, *second_core))
                                   : Program(*devices_.at(0), descriptor);
     JitBuildCache::inst().clear();

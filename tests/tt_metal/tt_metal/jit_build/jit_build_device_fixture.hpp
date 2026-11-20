@@ -78,7 +78,7 @@ protected:
     bool is_quasar() const { return devices_.at(0)->arch() == tt::ARCH::QUASAR; }
 
     // HAL processor type of each binary the kernel builds (BH compute: unpack, math, pack; Quasar
-    // compute: one per TRISC slot in use). Pass these to kernel_build_state().
+    // compute: one per TRISC slot in use).
     static std::vector<uint32_t> binary_processor_types(const Kernel& kernel) {
         std::vector<uint32_t> types;
         for (int i = 0; i < kernel.expected_num_binaries(); i++) {
@@ -87,13 +87,11 @@ protected:
         return types;
     }
 
-    // Metal 2.0 Program built from a spec but not compiled, so tests can drive compile themselves.
     Program build_program_from_spec(const ProgramSpec& spec) {
         return BuildProgramFromSpec(*devices_.at(0), spec);
     }
 
-    // Builds `kernel` alone on core {0, 0} through Metal 2.0, compiles it, and returns it. Plain compile is
-    // the first step of MakeProgramFromSpec's compile_and_allocate; allocation is not needed to read recipes.
+    // compile() alone: recipes need no allocation, so compile_and_allocate is not needed.
     std::shared_ptr<Kernel> compile_single_kernel_spec(KernelSpec kernel) {
         const KernelSpecName name = kernel.unique_id;
         Program program = build_program_from_spec(ProgramSpec{
@@ -117,7 +115,6 @@ protected:
             .get_kernel_build_state(device->build_id(), core_idx, class_idx, processor_id);
     }
 
-    // The kernel's exported compile recipe cflags for one of its processors (a binary_processor_types() value).
     std::string recipe_cflags(const std::shared_ptr<Kernel>& kernel, uint32_t processor_id) {
         return kernel_build_state(*kernel, processor_id).export_target_recipe(kernel.get()).cflags;
     }
@@ -135,8 +132,7 @@ private:
                 const std::filesystem::path sim_path = rtoptions.get_simulator_path();
                 const std::string soc_desc = find_simulator_soc_descriptor_path(sim_path);
                 if (soc_desc.empty()) {
-                    // A ttsim .so may omit it (WH/BH declare their arch through the image); an RTL
-                    // simulator must ship one, so its absence means a broken simulator.
+                    // ttsim .so may omit it; an RTL simulator must not.
                     TT_FATAL(
                         sim_path.extension() == ".so",
                         "JitBuildDeviceFixture: simulator {} has no soc_descriptor.yaml.",
@@ -152,11 +148,10 @@ private:
         }
     }
 
-    // Set per suite by SetUpTestSuite: the runner is a mock/emulated Quasar, where compile is a no-op.
+    // Set per suite by SetUpTestSuite.
     inline static bool skip_suite_ = false;
 };
 
-// GTEST_SKIP()s the current test on Quasar with the given reason.
 #define JIT_BUILD_SKIP_ON_QUASAR(reason)        \
     do {                                        \
         if (this->is_quasar()) {                \

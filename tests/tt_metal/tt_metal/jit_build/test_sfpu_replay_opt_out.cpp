@@ -11,9 +11,7 @@
 //    changes, and the kernel's JIT cache key changes. The kernel still compiles.
 //  - ProgramDescriptor: the define in KernelDescriptor::defines reaches the kernel.
 //
-// Compile-only; see jit_build_device_fixture.hpp for which device each runner uses. On Quasar only the
-// define-absent case runs, built through Metal 2.0: the opt-out is not implemented there, and Quasar
-// rejects the legacy and ProgramDescriptor kernel APIs.
+// On Quasar only the define-absent case runs; see jit_build_device_fixture.hpp.
 
 #include <gtest/gtest.h>
 
@@ -79,7 +77,6 @@ protected:
         return program.impl().get_kernel(handle);
     }
 
-    // Quasar: the blank compute kernel, without the define, built through Metal 2.0 and compiled.
     std::shared_ptr<Kernel> compile_blank_metal2() {
         return compile_single_kernel_spec(KernelSpec{
             .unique_id = KernelSpecName{"blank"},

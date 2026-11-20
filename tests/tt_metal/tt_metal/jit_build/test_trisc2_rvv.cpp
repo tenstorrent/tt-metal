@@ -16,9 +16,7 @@
 //    knob-off compile of the same source contains none. Gated on the bundled sfpi toolchain
 //    accepting the Zve32f march string (older sfpi releases skip rather than fail).
 //
-// See jit_build_device_fixture.hpp for which device each runner uses. On Quasar only the knob-off
-// recipe check runs, built through Metal 2.0: enable_trisc2_rvv is Blackhole-only (Quasar's opt-in is
-// enable_unpack_rvv on TRISC0).
+// On Quasar only the knob-off recipe check runs; see jit_build_device_fixture.hpp.
 
 #include <gtest/gtest.h>
 
