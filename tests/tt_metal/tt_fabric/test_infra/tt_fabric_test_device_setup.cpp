@@ -19,9 +19,9 @@ namespace tt::tt_fabric::fabric_tests {
 
 namespace {
 
-// Pages in flight between the payload generator and the sender. A batching sender (TT_FABRIC_TEST_SENDER_BATCH)
-// holds up to half of them until its next flush, so it gets a deeper ring.
-uint32_t sfpu_payload_ring_pages() { return perf_breakdown::sender_batch() ? 8 : 4; }
+// Pages in flight between the payload generator and the sender. The sender holds up to half of them until its next
+// flush.
+constexpr uint32_t sfpu_payload_ring_pages() { return 8; }
 
 // What makes two kernels on different cores the same kernel (TT_FABRIC_TEST_PERF_HOST_DETAIL kernel counts).
 size_t kernel_signature(
@@ -48,20 +48,12 @@ bool sender_config_carries_payload(const TestTrafficSenderConfig& config) {
            type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC;
 }
 
-// The end of real Tensix L1. The memory maps' highest usable addresses add get_l1_unreserved_size() (measured from
-// KERNEL_CONFIG) to the DEFAULT_UNRESERVED base, which overshoots it.
-uint32_t tensix_l1_end() {
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    return hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED) +
-           hal.get_dev_size(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
-}
-
 // Int32 tiles a payload of this size takes on the compute engine.
 uint32_t sfpu_payload_tiles(uint32_t payload_bytes) { return (payload_bytes + SFPU_TILE_BYTES - 1) / SFPU_TILE_BYTES; }
 
 // The sender kernel keeps one payload buffer per config, back to back from the payload region's start
 // (SenderKernelMemoryMap::get_payload_buffer_address), and only checks the end with a device ASSERT. Fails on the host
-// when they would run past real L1, for example when one core takes hundreds of configs.
+// when they would run past the end of L1, for example when one core takes hundreds of configs.
 void check_sender_payload_buffers_fit(const TestSender& sender, const SenderMemoryMap& memory_map) {
     uint32_t payload_bytes = 0;
     for (const auto& config_and_keys : sender.configs_) {
@@ -70,13 +62,12 @@ void check_sender_payload_buffers_fit(const TestSender& sender, const SenderMemo
             payload_bytes += config.parameters.payload_size_bytes;
         }
     }
-    const uint32_t region_end = std::min(memory_map.highest_usable_address, tensix_l1_end());
+    const uint32_t region_end = memory_map.highest_usable_address;
     const uint32_t region_bytes = region_end - memory_map.payload_buffers.start;
     TT_FATAL(
         payload_bytes <= region_bytes,
         "Sender core {} has {} configs whose payload buffers take {} B, more than the {} B payload region "
-        "[{:#x}, {:#x}). Spread the configs over more sender cores (TT_FABRIC_TEST_MAX_CONFIGS_PER_SENDER) or use "
-        "smaller packets.",
+        "[{:#x}, {:#x}). Spread the configs over more sender cores in the test or use smaller packets.",
         sender.get_core().str(),
         sender.configs_.size(),
         payload_bytes,
@@ -85,35 +76,22 @@ void check_sender_payload_buffers_fit(const TestSender& sender, const SenderMemo
         region_end);
 }
 
-// Every receive ring must end inside real L1. The receiver memory map checks against the highest usable address, which
-// overshoots real Tensix L1 (tensix_l1_end), so a ring sized near the top (TT_FABRIC_TEST_RECEIVER_RINGS_FILL_L1, or a
-// large yaml default_payload_chunk_size) could otherwise run past it unnoticed.
-void check_receiver_rings_fit(const tt::tt_metal::CoreCoord& core, const TestReceiver& receiver) {
-    for (const auto& config_and_key : receiver.configs_) {
-        const auto& config = config_and_key.first;
-        TT_FATAL(
-            config.target_address + config.payload_buffer_size <= tensix_l1_end(),
-            "Receiver core {}: a receive ring [{:#x}, {:#x}) runs past the end of L1 ({:#x})",
-            core.str(),
-            config.target_address,
-            config.target_address + config.payload_buffer_size,
-            tensix_l1_end());
-    }
-}
-
 // Base of a payload generator's page ring of pages of the given tiles, at the top of the sender's L1 region.
 uint32_t sfpu_payload_ring_base(const SenderMemoryMap& memory_map, uint32_t page_tiles) {
     const uint32_t ring_bytes = sfpu_payload_ring_pages() * page_tiles * SFPU_TILE_BYTES;
-    return (std::min(memory_map.highest_usable_address, tensix_l1_end()) - ring_bytes) & ~uint32_t{63};
+    return (memory_map.highest_usable_address - ring_bytes) & ~uint32_t{63};
 }
 
-// Which of the sender's configs take their payloads from the core's compute engine (TT_FABRIC_TEST_SFPU_PAYLOAD=1)
-// rather than the sender storing them: validated traffic, on a core with at most SFPU_PAYLOAD_MAX_CONFIGS configs whose
-// payload buffers stay below the generator's page ring. The others on the core are filled by the sender as before.
+// Which of the sender's configs take their payloads from the core's compute engine (the SFPU generates them) rather
+// than the sender (BRISC) filling them itself: validated traffic, on a core with at most SFPU_PAYLOAD_MAX_CONFIGS
+// configs whose payload buffers stay below the generator's page ring. The sender fills the others itself.
 std::vector<bool> sfpu_payload_configs(
     const TestSender& sender, bool benchmark_mode, const SenderMemoryMap& memory_map) {
     std::vector<bool> sfpu(sender.configs_.size(), false);
-    if (!perf_breakdown::sfpu_payload() || benchmark_mode || sender.configs_.size() > SFPU_PAYLOAD_MAX_CONFIGS) {
+
+    // SFPU not used in benchmark mode as no payloads are generated there. We also don't use SFPU if we can't fit
+    // the number of sender configs into the SFPU.
+    if (benchmark_mode || sender.configs_.size() > SFPU_PAYLOAD_MAX_CONFIGS) {
         return sfpu;
     }
     uint32_t page_tiles = 0;
@@ -127,29 +105,24 @@ std::vector<bool> sfpu_payload_configs(
             payload_buffers_end += config.parameters.payload_size_bytes;
         }
     }
+
+    // If we can't fit the number of sender configs into the dedicated SFPU page ring, fallback to
+    // sender (brisc) generating payload itself.
     if (page_tiles > 0 && payload_buffers_end > sfpu_payload_ring_base(memory_map, page_tiles)) {
         std::fill(sfpu.begin(), sfpu.end(), false);
     }
     return sfpu;
 }
 
-// Base of a compute verifier's request and flag pages: the top of real Tensix L1, above every receive ring. Each holds
-// as many pages as the receiver may have outstanding, so the verifier can always post a verdict for every request.
-uint32_t sfpu_verify_control_base() {
-    const uint32_t depth = perf_breakdown::sfpu_verify_depth();
-    return (tensix_l1_end() - depth * (SFPU_TILE_BYTES + SFPU_VERIFY_REQ_PAGE_BYTES)) & ~uint32_t{63};
-}
-
-// Which of the receiver's configs are verified on the core's compute engine (TT_FABRIC_TEST_SFPU_VERIFY=1) rather than
-// by the receiver: of its first TT_FABRIC_TEST_SFPU_VERIFY_MAX_CONFIGS configs (default 8, at most
-// SFPU_VERIFY_MAX_CONFIGS), those landing one payload slot per packet that the
-// verifier can check, a write, fused write or scatter write of at most SFPU_PAYLOAD_MAX_TILES tiles in at most
-// SFPU_VERIFY_MAX_SEGMENTS chunks, whose size keeps every slot 16 B aligned for the unpacker and whose ring has fewer
-// than 65536 slots (a CB's free-space count is 16-bit). None when a receive ring reaches the verifier's request and flag
+// Which of the receiver's configs are verified on the core's compute engine rather than by the receiver: of its first
+// SFPU_VERIFY_MAX_CONFIGS configs, those landing one payload slot per packet that the verifier can check, a write,
+// fused write or scatter write of at most SFPU_PAYLOAD_MAX_TILES tiles in at most SFPU_VERIFY_MAX_SEGMENTS chunks,
+// whose size keeps every slot 16 B aligned for the unpacker and whose ring has fewer than 65536 slots (a CB's
+// free-space count is 16-bit). None in benchmark mode, or when a receive ring reaches the verifier's request and flag
 // pages.
 std::vector<bool> sfpu_verify_configs(const TestReceiver& receiver, bool benchmark_mode) {
     std::vector<bool> sfpu(receiver.configs_.size(), false);
-    if (!perf_breakdown::sfpu_verify() || benchmark_mode) {
+    if (benchmark_mode) {
         return sfpu;
     }
     const uint32_t control_base = sfpu_verify_control_base();
@@ -158,9 +131,7 @@ std::vector<bool> sfpu_verify_configs(const TestReceiver& receiver, bool benchma
             return sfpu;
         }
     }
-    const size_t max_verified =
-        std::min<size_t>(perf_breakdown::sfpu_verify_max_configs(), SFPU_VERIFY_MAX_CONFIGS);
-    for (size_t i = 0; i < std::min(receiver.configs_.size(), max_verified); i++) {
+    for (size_t i = 0; i < std::min<size_t>(receiver.configs_.size(), SFPU_VERIFY_MAX_CONFIGS); i++) {
         const auto& config = receiver.configs_[i].first;
         const auto type = config.parameters.noc_send_type.type;
         const uint32_t bytes = config.parameters.payload_size_bytes;
@@ -349,10 +320,8 @@ void FabricConnectionManager::process(
                 all_mux_client_cores_.insert(client_core);
             }
 
-            // Prototype (TT_FABRIC_TEST_MUX_FULL_SIZE_ITERS=N): service the full-size (data) channels N times per sweep
-            // of the header-only (credit) channels, instead of once.
-            if (perf_breakdown::mux_full_size_iters() > 1 && num_full_size_channels > 0) {
-                mux_configs_.at(mux_core.value())->set_num_full_size_channel_iters(perf_breakdown::mux_full_size_iters());
+            if (num_full_size_channels > 0) {
+                mux_configs_.at(mux_core.value())->set_num_full_size_channel_iters(MUX_FULL_SIZE_CHANNEL_ITERS);
             }
 
             test_device_ptr->add_mux_worker_config(
@@ -564,22 +533,19 @@ void FabricConnectionManager::assign_and_validate_channels(Connection& conn, con
         }
     }
 
-    // Validate channel limits
+    // A mux past its channel budget overflows its stack at runtime (see get_max_mux_channels), so fail here instead.
+    const uint32_t max_channels = get_max_mux_channels();
     TT_FATAL(
-        next_full_size <= MAX_FULL_SIZE_CHANNELS,
-        "Exceeded full-size channel limit: {} for connection direction={} link={} (max={})",
+        next_full_size + next_header_only <= max_channels,
+        "Mux for connection direction={} link={} needs {} channels ({} full-size for senders, {} header-only for "
+        "receivers and sync), but a mux serves at most {} on this arch. Put more receive configs on each core "
+        "(receiver max_configs_per_core), use more links, or use fewer senders per link.",
+        static_cast<int>(key.direction),
+        key.link_idx,
+        next_full_size + next_header_only,
         next_full_size,
-        static_cast<int>(key.direction),
-        key.link_idx,
-        MAX_FULL_SIZE_CHANNELS);
-
-    TT_FATAL(
-        next_header_only <= MAX_HEADER_ONLY_CHANNELS,
-        "Exceeded header-only channel limit: {} for connection direction={} link={} (max={})",
         next_header_only,
-        static_cast<int>(key.direction),
-        key.link_idx,
-        MAX_HEADER_ONLY_CHANNELS);
+        max_channels);
 }
 
 // ====================================
@@ -622,74 +588,20 @@ void TestWorker::create_kernel(
         }
         perf_breakdown::Collector::get().add_kernel_created();
     }
-    if (perf_breakdown::fast_pattern()) {
-        defines["FABRIC_TEST_FAST_PATTERN"] = "1";
-    }
-    if (perf_breakdown::sender_hot_state()) {
-        defines["FABRIC_TEST_SENDER_HOT_STATE"] = "1";
-    }
-    if (perf_breakdown::sender_skip()) {
-        defines["FABRIC_TEST_SENDER_SKIP"] = "1";
-    }
-    if (perf_breakdown::sender_slot_cache() || perf_breakdown::sender_skip()) {
-        defines["FABRIC_TEST_SENDER_SLOT_CACHE"] = "1";
-    }
-    if (perf_breakdown::sender_batch()) {
-        defines["FABRIC_TEST_SENDER_BATCH"] = "1";
-        defines["FABRIC_TEST_SENDER_BATCH_PAGES"] = std::to_string(sfpu_payload_ring_pages() / 2);
-    }
-    if (perf_breakdown::sender_cmdbufs()) {
-        defines["FABRIC_TEST_SENDER_CMDBUFS"] = "1";
-    }
-    if (perf_breakdown::sender_credit_batch()) {
-        defines["FABRIC_TEST_SENDER_CREDIT_BATCH"] = "1";
-    }
-    if (perf_breakdown::atomic_inc_no_flush()) {
-        defines["FABRIC_TEST_ATOMIC_INC_NO_FLUSH"] = "1";
-    }
-    if (perf_breakdown::credit_return_no_flush()) {
-        defines["FABRIC_TEST_CREDIT_RETURN_NO_FLUSH"] = "1";
-    }
-    if (perf_breakdown::sender_rot_wait()) {
-        defines["FABRIC_TEST_SENDER_ROT_WAIT"] = "1";
-    }
-    if (perf_breakdown::sender_rot_burst() > 0) {
-        defines["FABRIC_TEST_SENDER_ROT_BURST"] = std::to_string(perf_breakdown::sender_rot_burst());
-    }
-    if (perf_breakdown::enabled() && perf_breakdown::host_detail()) {
+    defines["FABRIC_TEST_SENDER_BATCH_PAGES"] = std::to_string(sfpu_payload_ring_pages() / 2);
+    if (perf_breakdown::host_detail()) {
         perf_breakdown::Collector::get().add_kernel_signature(
             this->test_device_ptr_,
             this->kernel_src_,
             kernel_signature("dm", this->kernel_src_, static_cast<uint32_t>(noc_id), ct_args, defines));
     }
-    if (perf_breakdown::enabled() && perf_breakdown::host_detail()) {
+    if (perf_breakdown::host_detail()) {
         perf_breakdown::Collector::get().add_rt_args(rt_args.size());
     }
-    if (this->test_device_ptr_->collecting_shared_kernels()) {
-        // Created at the end of TestDevice::create_kernels(), together with the other cores running this kernel.
-        this->test_device_ptr_->add_shared_kernel_core(
-            {.src = this->kernel_src_, .noc = noc_id, .ct_args = ct_args, .defines = std::move(defines)},
-            this->logical_core_,
-            rt_args);
-    } else {
-        std::optional<perf_breakdown::ScopedDetail> kernel_phase(std::in_place, "sub_ck_create_kernel");
-        auto kernel_handle = tt::tt_metal::CreateKernel(
-            this->test_device_ptr_->get_program_handle(),
-            this->kernel_src_,
-            {this->logical_core_},
-            tt::tt_metal::DataMovementConfig{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = noc_id,
-                .compile_args = ct_args,
-                .defines = defines,
-                .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
-        kernel_phase.reset();
-
-        // Set fabric connection runtime args (for WorkerToFabricEdmSender::build_from_args)
-        perf_breakdown::ScopedDetail rt_args_phase("sub_ck_rt_args");
-        tt::tt_metal::SetRuntimeArgs(
-            this->test_device_ptr_->get_program_handle(), kernel_handle, this->logical_core_, rt_args);
-    }
+    this->test_device_ptr_->add_shared_kernel_core(
+        {.src = this->kernel_src_, .noc = noc_id, .ct_args = ct_args, .defines = std::move(defines)},
+        this->logical_core_,
+        rt_args);
 
     perf_breakdown::ScopedDetail host_writes_phase("sub_ck_host_writes");
 
@@ -1060,7 +972,6 @@ void TestDevice::create_kernels() {
 
     // Create local allocator for on-demand mux core allocation
     LocalDeviceCoreAllocator local_alloc(std::move(pristine_cores_));
-    collecting_shared_kernels_ = perf_breakdown::shared_kernels();
 
     {
         perf_breakdown::ScopedDetail phase("sub_ck_conn");
@@ -1073,6 +984,9 @@ void TestDevice::create_kernels() {
         }
     }
 
+    // Plan connections, then set up every core: circular buffers, their L1 buffers and local-args writes happen now,
+    // while each kernel's cores and runtime args are collected and the kernels themselves are created at the end.
+
     {
         perf_breakdown::ScopedDetail phase("sub_ck_mux");
         this->create_mux_kernels();
@@ -1083,21 +997,40 @@ void TestDevice::create_kernels() {
         this->create_sync_kernel();
     }
 
-    // Normal flow (benchmark_mode affects kernel behavior via compile-time args)
-    // Note: Latency tests call create_latency_sender_kernel() and create_latency_responder_kernel() directly
-    {
-        perf_breakdown::ScopedDetail phase("sub_ck_sender");
-        this->create_sender_kernels();
+    if (latency_sender_.has_value()) {
+        const auto& setup = latency_sender_.value();
+        this->create_latency_sender_kernel(
+            setup.core,
+            setup.responder_node,
+            setup.payload_size,
+            setup.num_samples,
+            setup.noc_send_type,
+            setup.responder_virtual_core);
+    } else if (latency_responder_.has_value()) {
+        const auto& setup = latency_responder_.value();
+        this->create_latency_responder_kernel(
+            setup.core,
+            setup.sender_node,
+            setup.payload_size,
+            setup.num_samples,
+            setup.noc_send_type,
+            setup.sender_send_buffer_address,
+            setup.sender_receive_buffer_address,
+            setup.sender_virtual_core);
+    } else {
+        {
+            perf_breakdown::ScopedDetail phase("sub_ck_sender");
+            this->create_sender_kernels();
+        }
+        {
+            perf_breakdown::ScopedDetail phase("sub_ck_receiver");
+            this->create_receiver_kernels();
+        }
     }
-    {
-        perf_breakdown::ScopedDetail phase("sub_ck_receiver");
-        this->create_receiver_kernels();
-    }
-    if (collecting_shared_kernels_) {
-        collecting_shared_kernels_ = false;
-        perf_breakdown::ScopedDetail phase("sub_ck_shared");
-        this->create_shared_kernels();
-    }
+
+    // Create the collected kernels: one per shared kernel key, over all of that key's cores
+    perf_breakdown::ScopedDetail phase("sub_ck_shared");
+    this->create_shared_kernels();
 }
 
 void TestDevice::add_shared_kernel_core(
@@ -1315,42 +1248,9 @@ void TestDevice::create_sender_kernels() {
     TT_FATAL(sender_memory_map_ != nullptr, "Sender memory map is required for creating sender kernels");
     TT_FATAL(sender_memory_map_->is_valid(), "Sender memory map is invalid");
 
-    if (perf_breakdown::sender_conn_order() != 0) {
-        // Each sender's configs round-robin over their (first) connections (order 1) or grouped by connection (order
-        // 2), in their order within a connection. The kernel args, the payload generator's page order and the result
-        // checks all follow configs_.
-        const bool grouped = perf_breakdown::sender_conn_order() == 2;
-        for (auto& [core, sender] : this->senders_) {
-            std::map<uint32_t, std::vector<size_t>> by_connection;
-            for (size_t i = 0; i < sender.configs_.size(); i++) {
-                by_connection[connection_manager_.get_connection_array_index_for_key(
-                                  core, TestWorkerType::SENDER, sender.configs_[i].second.front())]
-                    .push_back(i);
-            }
-            decltype(sender.configs_) ordered;
-            ordered.reserve(sender.configs_.size());
-            if (grouped) {
-                for (const auto& [connection, indices] : by_connection) {
-                    for (const size_t i : indices) {
-                        ordered.push_back(std::move(sender.configs_[i]));
-                    }
-                }
-            } else {
-                for (size_t round = 0; ordered.size() < sender.configs_.size(); round++) {
-                    for (const auto& [connection, indices] : by_connection) {
-                        if (round < indices.size()) {
-                            ordered.push_back(std::move(sender.configs_[indices[round]]));
-                        }
-                    }
-                }
-            }
-            sender.configs_ = std::move(ordered);
-        }
-    }
-
     // Sender cores without a payload generator get a placeholder payload CB, so a sender kernel builds the same
-    // whether or not its core has one.
-    const bool sfpu_placeholders = perf_breakdown::sfpu_payload() && !benchmark_mode_;
+    // whether or not its core has one. Benchmark mode generates no payloads, so no core there has the CB.
+    const bool sfpu_placeholders = !benchmark_mode_;
     std::vector<tt::tt_metal::CoreCoord> placeholder_cores;
     sfpu_coverage_.sender_configs = 0;
     sfpu_coverage_.generated = 0;
@@ -1410,8 +1310,8 @@ void TestDevice::create_sender_kernels() {
 
         check_sender_payload_buffers_fit(sender, *sender_memory_map_);
 
-        // Prototype (TT_FABRIC_TEST_SFPU_PAYLOAD=1): some configs' payloads come from the core's compute engine instead
-        // of the sender storing them (sfpu_payload_configs); the kernel follows each config's choice at runtime.
+        // Per config: true when its payloads come from the core's compute engine (sfpu_payload_configs), false when this
+        // kernel fills them. Passed as a runtime flag, so the kernel build doesn't depend on the choice.
         const std::vector<bool> sfpu_configs = sfpu_payload_configs(sender, benchmark_mode_, *sender_memory_map_);
         sfpu_coverage_.sender_configs += sfpu_configs.size();
         sfpu_coverage_.generated += std::count(sfpu_configs.begin(), sfpu_configs.end(), true);
@@ -1548,6 +1448,8 @@ uint32_t TestDevice::create_sfpu_payload_generator(
 
     const auto* fixture = dynamic_cast<const TestFixture*>(this->device_info_provider_.get());
     TT_FATAL(fixture != nullptr, "Failed to cast device_info_provider to TestFixture");
+
+    // Get the sfpu payload generator's ring buffer
     auto ring_buffer = [&] {
         perf_breakdown::ScopedDetail buf_phase("sub_ck_sfpu_bufs");
         return fixture->create_mesh_buffer_helper({core}, ring_base, ring_bytes);
@@ -1555,6 +1457,7 @@ uint32_t TestDevice::create_sfpu_payload_generator(
     auto* device_ring_buffer = ring_buffer->get_device_buffer(coord_);
     sfpu_payload_buffers_.push_back(std::move(ring_buffer));
 
+    // Create the circular buffer and place it over the ring buffer
     tt::tt_metal::CircularBufferConfig ring_config(
         ring_bytes, {{SFPU_PAYLOAD_CB_INDEX, tt::DataFormat::Int32}});
     ring_config.set_page_size(SFPU_PAYLOAD_CB_INDEX, page_bytes);
@@ -1574,23 +1477,14 @@ uint32_t TestDevice::create_sfpu_payload_generator(
     }
 
     const std::vector<uint32_t> gen_ct_args;
-    if (perf_breakdown::enabled() && perf_breakdown::host_detail()) {
+    if (perf_breakdown::host_detail()) {
         perf_breakdown::Collector::get().add_kernel_signature(
             this,
             default_payload_gen_kernel_src,
             kernel_signature("compute", default_payload_gen_kernel_src, 0, gen_ct_args, {}));
     }
-    if (collecting_shared_kernels_) {
-        add_shared_kernel_core(
-            {.src = default_payload_gen_kernel_src, .compute = true, .ct_args = gen_ct_args}, core, std::move(rt_args));
-    } else {
-        auto kernel_handle = tt::tt_metal::CreateKernel(
-            program_handle_,
-            default_payload_gen_kernel_src,
-            core,
-            tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = true, .compile_args = gen_ct_args});
-        tt::tt_metal::SetRuntimeArgs(program_handle_, kernel_handle, core, rt_args);
-    }
+    add_shared_kernel_core(
+        {.src = default_payload_gen_kernel_src, .compute = true, .ct_args = gen_ct_args}, core, std::move(rt_args));
 
     // One line per generator for post-mortem reads (ttexalens): where the ring and results live, and what the
     // first configs' first pages must hold (word i = seed + i).
@@ -1631,9 +1525,12 @@ void TestDevice::create_sfpu_payload_verifier(
     const auto* fixture = dynamic_cast<const TestFixture*>(this->device_info_provider_.get());
     TT_FATAL(fixture != nullptr, "Failed to cast device_info_provider to TestFixture");
 
-    // Requests and verdict flags at the top of real Tensix L1, above every config's receive ring.
-    const uint32_t flag_bytes = perf_breakdown::sfpu_verify_depth() * SFPU_TILE_BYTES;
-    const uint32_t req_bytes = perf_breakdown::sfpu_verify_depth() * SFPU_VERIFY_REQ_PAGE_BYTES;
+    // Requests and verdict flags at the top of Tensix L1, above every config's receive ring.
+    // Request cb is for the brisc (that is polling for incoming packets) to issue a request to the sfpu verifier. The
+    // flag cb is for the sfpu verifier to set a flag when it has verified a packet, where the flag indicates the
+    // verififcation result.
+    const uint32_t flag_bytes = SFPU_VERIFY_DEPTH * SFPU_TILE_BYTES;
+    const uint32_t req_bytes = SFPU_VERIFY_DEPTH * SFPU_VERIFY_REQ_PAGE_BYTES;
     const uint32_t control_base = sfpu_verify_control_base();
     uint32_t rings_end = 0;
     for (const auto& [config, _] : receiver.configs_) {
@@ -1695,22 +1592,14 @@ void TestDevice::create_sfpu_payload_verifier(
     }
 
     const std::vector<uint32_t> verify_ct_args;
-    if (perf_breakdown::enabled() && perf_breakdown::host_detail()) {
+    if (perf_breakdown::host_detail()) {
         perf_breakdown::Collector::get().add_kernel_signature(
             this,
             default_payload_verify_kernel_src,
             kernel_signature("compute", default_payload_verify_kernel_src, 0, verify_ct_args, {}));
     }
-    if (collecting_shared_kernels_) {
-        add_shared_kernel_core(
-            {.src = default_payload_verify_kernel_src, .compute = true, .ct_args = verify_ct_args}, core, {});
-        return;
-    }
-    tt::tt_metal::CreateKernel(
-        program_handle_,
-        default_payload_verify_kernel_src,
-        core,
-        tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = true, .compile_args = verify_ct_args});
+    add_shared_kernel_core(
+        {.src = default_payload_verify_kernel_src, .compute = true, .ct_args = verify_ct_args}, core, {});
 }
 
 void TestDevice::create_receiver_kernels() {
@@ -1720,16 +1609,15 @@ void TestDevice::create_receiver_kernels() {
     TT_FATAL(receiver_memory_map_->is_valid(), "Receiver memory map is invalid");
 
     // Receiver cores without a compute verifier get placeholder verifier CBs, so a receiver kernel builds the same
-    // whether or not its core has one.
-    const bool sfpu_placeholders = perf_breakdown::sfpu_verify() && !benchmark_mode_;
+    // whether or not its core has one. Benchmark mode checks no payloads, so no core there has the CBs.
+    const bool sfpu_placeholders = !benchmark_mode_;
     std::vector<tt::tt_metal::CoreCoord> placeholder_cores;
     sfpu_coverage_.receiver_configs = 0;
     sfpu_coverage_.verified = 0;
 
     for (const auto& [core, receiver] : this->receivers_) {
-        // Prototype (TT_FABRIC_TEST_SFPU_VERIFY=1): some configs' payloads are checked on the core's compute engine
-        // instead of by the receiver (sfpu_verify_configs); the kernel follows each config's choice at runtime.
-        check_receiver_rings_fit(core, receiver);
+        // Some configs' payloads are checked on the core's compute engine instead of by the receiver
+        // (sfpu_verify_configs); the kernel follows each config's choice at runtime.
         const std::vector<bool> sfpu_configs = sfpu_verify_configs(receiver, benchmark_mode_);
         sfpu_coverage_.receiver_configs += sfpu_configs.size();
         sfpu_coverage_.verified += std::count(sfpu_configs.begin(), sfpu_configs.end(), true);
@@ -1831,9 +1719,6 @@ void TestDevice::create_receiver_kernels() {
         } else if (sfpu_placeholders) {
             placeholder_cores.push_back(core);
         }
-        const std::map<std::string, std::string> receiver_defines = {
-            {"FABRIC_TEST_SFPU_VERIFY_DEPTH", std::to_string(perf_breakdown::sfpu_verify_depth())}};
-
         receiver.create_kernel(
             coord_,
             ct_args,
@@ -1841,9 +1726,7 @@ void TestDevice::create_receiver_kernels() {
             local_args,
             receiver_memory_map_->get_local_args_address(),
             receiver_memory_map_->get_local_args_size(),
-            addresses_and_size_to_clear,
-            tt::tt_metal::NOC::RISCV_0_default,
-            receiver_defines);
+            addresses_and_size_to_clear);
 
         log_debug(tt::LogTest, "Created receiver kernel on core {}", core);
     }
@@ -2196,17 +2079,17 @@ void TestDevice::flush_deferred_host_writes() {
     deferred_host_writes_.clear();
 }
 
-size_t TestDevice::get_latency_send_buffer_address() const {
+size_t TestDevice::get_latency_send_buffer_address(const SenderMemoryMap& sender_memory_map) {
     // Send buffer starts after the latency result buffer
     // Results are stored as uint32_t elapsed times (1 per sample)
-    return sender_memory_map_->get_result_buffer_address() + (TestDevice::MAX_LATENCY_SAMPLES * sizeof(uint32_t));
+    return sender_memory_map.get_result_buffer_address() + (TestDevice::MAX_LATENCY_SAMPLES * sizeof(uint32_t));
 }
 
-size_t TestDevice::get_latency_receive_buffer_address(uint32_t payload_size) const {
+size_t TestDevice::get_latency_receive_buffer_address(const SenderMemoryMap& sender_memory_map, uint32_t payload_size) {
     // Receive buffer starts after the send buffer
     // Send buffer size must accommodate the full message payload
     TT_FATAL(payload_size > 0, "Latency payload size must be greater than 0");
-    return get_latency_send_buffer_address() + payload_size;
+    return get_latency_send_buffer_address(sender_memory_map) + payload_size;
 }
 
 void TestDevice::create_latency_sender_kernel(
@@ -2265,10 +2148,10 @@ void TestDevice::create_latency_sender_kernel(
         num_samples,
         MAX_LATENCY_SAMPLES);
 
-    uint32_t send_buffer_address = get_latency_send_buffer_address();
-    uint32_t receive_buffer_address = get_latency_receive_buffer_address(payload_size);
+    uint32_t send_buffer_address = get_latency_send_buffer_address(*sender_memory_map_);
+    uint32_t receive_buffer_address = get_latency_receive_buffer_address(*sender_memory_map_, payload_size);
 
-    // responder_virtual_core is passed as parameter from TestContext
+    // responder_virtual_core comes from the latency setup (LatencySenderSetup)
     // Build runtime args - routing parameters differ between 1D and 2D
     std::vector<uint32_t> rt_args = {
         sender_memory_map_->get_result_buffer_address(),  // result buffer for latency samples
@@ -2373,10 +2256,9 @@ void TestDevice::create_latency_responder_kernel(
         num_samples,
         MAX_LATENCY_SAMPLES);
 
-    // Use sender's actual buffer addresses and coordinates passed from caller (no recomputation)
+    // The sender's buffer addresses and core come from the latency setup (LatencyResponderSetup)
     // Responder receives from sender's send buffer
     uint32_t responder_receive_buffer_address = sender_send_buffer_address;
-    // sender_virtual_core is passed as parameter from TestContext
 
     // Build runtime args - routing parameters differ between 1D and 2D
     std::vector<uint32_t> rt_args = {

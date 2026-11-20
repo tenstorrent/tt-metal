@@ -230,12 +230,6 @@ void TestContext::setup_latency_test_workers(TestConfig& config) {
     latency_test_manager_->setup_latency_test_workers(config, test_devices_);
 }
 
-// Create latency kernels for a device based on its role (sender, responder, or neither)
-void TestContext::create_latency_kernels_for_device(TestDevice& test_device) {
-    TT_FATAL(latency_test_manager_, "Latency manager not initialized");
-    latency_test_manager_->create_latency_kernels_for_device(test_device, test_devices_);
-}
-
 // Configures latency test mode - validates config and sets performance_test_mode flag
 void TestContext::setup_latency_test_mode(const TestConfig& config) {
     TT_FATAL(
@@ -305,6 +299,14 @@ void TestContext::init(
     latency_test_manager_ = std::make_unique<LatencyResultsManager>(*fixture_, sender_memory_map_);
 }
 
+void TestContext::split_senders_to_fit_core_limits(TestConfig& config) const {
+    const std::optional<uint32_t> fixed_receiver_configs_per_core =
+        use_dynamic_policies_ ? std::nullopt
+                              : std::optional<uint32_t>(allocation_policies_.receiver_config.max_configs_per_core);
+    tt::tt_fabric::fabric_tests::DynamicPolicyManager::split_senders_to_fit_core_limits(
+        config, *fixture_, fixed_receiver_configs_per_core);
+}
+
 void TestContext::prepare_for_test(const TestConfig& config) {
     if (!use_dynamic_policies_) {
         return;
@@ -321,8 +323,7 @@ void TestContext::prepare_for_test(const TestConfig& config) {
             *fixture_, *fixture_, new_policy.value(), sender_memory_map_, receiver_memory_map_);
     }
 
-    const auto& policy_to_validate = new_policy.has_value() ? new_policy.value() : policy_manager_->get_cached_policy();
-    validate_packet_sizes_for_policy(config, policy_to_validate.default_payload_chunk_size);
+    validate_packet_sizes_for_policy(config, receiver_memory_map_.get_payload_chunk_size());
 }
 
 void TestContext::setup_devices() {
@@ -405,11 +406,11 @@ void TestContext::compile_programs() {
     namespace perf_bd = tt::tt_fabric::fabric_tests::perf_breakdown;
     fixture_->setup_workload();
     const bool latency_mode = performance_test_mode_ == PerformanceTestMode::LATENCY;
+    const bool enable_kernel_benchmark =
+        skip_packet_validation_ || (performance_test_mode_ == PerformanceTestMode::BANDWIDTH);
     std::vector<TestDevice*> devices;
     devices.reserve(test_devices_.size());
     for (auto& [coord, test_device] : test_devices_) {
-        bool enable_kernel_benchmark =
-            skip_packet_validation_ || (performance_test_mode_ == PerformanceTestMode::BANDWIDTH);
         test_device.set_benchmark_mode(enable_kernel_benchmark);
         test_device.set_global_sync(global_sync_);
         test_device.set_progress_monitoring_enabled(progress_config_.enabled);
@@ -421,25 +422,18 @@ void TestContext::compile_programs() {
 
     auto build_device = [&](TestDevice& test_device) {
         const auto device_t0 = perf_bd::Clock::now();
-        // Create kernels (latency or normal)
-        if (latency_mode) {
-            create_latency_kernels_for_device(test_device);
-        } else {
-            // Normal mode: create standard kernels for all devices
-            test_device.create_kernels();
-        }
-        if (perf_bd::enabled() && perf_bd::host_detail()) {
+        test_device.create_kernels();
+        if (perf_bd::host_detail()) {
             perf_bd::Collector::get().add_device_build(perf_bd::ms_since(device_t0));
         }
     };
 
     // Each device's program is built from that device's own state, so the devices can be built on parallel threads.
     // Host writes go through the shared command queue: they are recorded during the build and issued afterwards in
-    // device order, the same order as a serial build. Latency kernels read other devices' state, and the dispatch
-    // data collection / inspector mesh-buffer logging debug options mutate shared state without a lock.
+    // device order, the same order as a serial build. The dispatch data collection / inspector mesh-buffer logging
+    // debug options mutate shared state without a lock, which is why they cannot run in a parallel build.
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    const bool parallel = perf_bd::parallel_build() && !latency_mode && devices.size() > 1 &&
-                          !rtoptions.get_dispatch_data_collection_enabled() &&
+    const bool parallel = devices.size() > 1 && !rtoptions.get_dispatch_data_collection_enabled() &&
                           !(rtoptions.get_inspector_enabled() && rtoptions.get_inspector_log_mesh_buffers());
     std::optional<perf_bd::ScopedDetail> devices_phase(std::in_place, "sub_ck_devices");
     if (parallel) {
@@ -469,14 +463,15 @@ void TestContext::compile_programs() {
             test_device->set_defer_host_writes(false);
             test_device->flush_deferred_host_writes();
         }
-    } else {
+    } else { // serial build
         for (auto* test_device : devices) {
             build_device(*test_device);
         }
     }
     devices_phase.reset();
 
-    if (!latency_mode && (perf_bd::sfpu_payload() || perf_bd::sfpu_verify())) {
+    // Benchmark runs generate and check no payloads, so there is nothing to report.
+    if (!latency_mode && !enable_kernel_benchmark) {
         TestDevice::SfpuCoverage total;
         for (const auto* test_device : devices) {
             const auto& coverage = test_device->get_sfpu_coverage();
@@ -528,8 +523,8 @@ void TestContext::compile_programs() {
         }
     }
 
-    // Batched host writes were issued non-blocking; make sure they have landed before the programs run.
-    if (tt::tt_fabric::fabric_tests::perf_breakdown::batched_host_writes()) {
+    // Host writes were issued non-blocking; make sure they have landed before the programs run.
+    {
         perf_bd::ScopedPhase phase("sub_write_flush");  // nested inside create_kernels
         fixture_->barrier_reads();
     }
@@ -623,24 +618,20 @@ void TestContext::setup_ci_artifacts() {
 
 void TestContext::initialize_memory_maps() { update_memory_maps(allocation_policies_); }
 
-// TT_FABRIC_TEST_RECEIVER_RINGS_FILL_L1=1: each receiver config's ring is as large as the receiver core's real L1 allows
-// (up to the compute verifier's request and flag pages at the top), instead of 1 MB split over max_configs_per_core.
-// The chunk size also sets each flow's credits (calculate_credit_config), so deeper rings mean more credits per flow.
+// Each receiver config's ring is as large as the receiver core's L1 allows: the receiver core's L1 from the end of
+// its fixed regions up to the compute verifier's request and flag pages at the top, split evenly over
+// max_configs_per_core. The rings are the last region of the receiver layout (ReceiverMemoryMap), so nothing follows
+// them. The chunk size also sets each flow's credits (calculate_credit_config), so deeper rings mean more credits per
+// flow. A default_payload_chunk_size set in the yaml is kept as is.
 tt::tt_fabric::fabric_tests::AllocatorPolicies TestContext::size_receiver_rings_to_fill_l1(
     tt::tt_fabric::fabric_tests::AllocatorPolicies policies) const {
-    namespace perf_bd = tt::tt_fabric::fabric_tests::perf_breakdown;
-    using tt::tt_fabric::fabric_tests::SFPU_TILE_BYTES;
-    using tt::tt_fabric::fabric_tests::SFPU_VERIFY_REQ_PAGE_BYTES;
-    if (!perf_bd::receiver_rings_fill_l1()) {
+    if (policies.payload_chunk_size_from_yaml) {
         return policies;
     }
+
     const uint32_t num_configs = std::max<uint32_t>(policies.receiver_config.max_configs_per_core, 1);
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    const uint32_t l1_end =
-        hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED) +
-        hal.get_dev_size(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
-    const uint32_t verifier_pages_bytes = perf_bd::sfpu_verify_depth() * (SFPU_TILE_BYTES + SFPU_VERIFY_REQ_PAGE_BYTES);
-    const uint32_t rings_end = (l1_end - verifier_pages_bytes) & ~uint32_t{63};
+    // The rings end where the compute verifier's request and flag pages begin.
+    const uint32_t rings_end = tt::tt_fabric::fabric_tests::sfpu_verify_control_base();
     // Where the rings start: the receiver layout with empty rings.
     const tt::tt_fabric::fabric_tests::ReceiverMemoryMap layout_without_rings(
         fixture_->get_l1_unreserved_base(), fixture_->get_l1_unreserved_size(), fixture_->get_l1_alignment(), 0, num_configs);
@@ -649,10 +640,8 @@ tt::tt_fabric::fabric_tests::AllocatorPolicies TestContext::size_receiver_rings_
     const uint32_t ring_bytes = ((rings_end - rings_base) / num_configs) & ~uint32_t{63};
     log_info(
         tt::LogTest,
-        "Receiver rings fill L1 (TT_FABRIC_TEST_RECEIVER_RINGS_FILL_L1): {} B per config instead of {} B, {} configs per "
-        "core from {:#x} to {:#x}",
+        "Receiver rings fill L1: {} B per config, {} configs per core from {:#x} to {:#x}",
         ring_bytes,
-        policies.default_payload_chunk_size,
         num_configs,
         rings_base,
         rings_end);

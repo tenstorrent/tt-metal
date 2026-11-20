@@ -27,9 +27,6 @@ static_assert(
 static_assert(
     NUM_CREDIT_CONNECTIONS <= MAX_NUM_FABRIC_CONNECTIONS, "NUM_CREDIT_CONNECTIONS exceeds MAX_NUM_FABRIC_CONNECTIONS");
 
-// Packets handed to the compute verifier (tt_fabric_test_payload_verify.cpp) whose verdicts are still outstanding.
-constexpr uint32_t SFPU_VERIFY_DEPTH = FABRIC_TEST_SFPU_VERIFY_DEPTH;
-
 // Hands the packet at config_idx's current ring slot to the core's compute engine without waiting for its verdict.
 inline void sfpu_verify_issue(uint8_t config_idx, const TrafficValidationConfigBase& config) {
     cb_reserve_back(SFPU_VERIFY_REQ_CB_INDEX, 1);

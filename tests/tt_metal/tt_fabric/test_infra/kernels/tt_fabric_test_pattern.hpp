@@ -4,12 +4,29 @@
 
 #pragma once
 
-// Payload pattern pieces shared by the data-movement kernels and the compute (TRISC) payload generator, so both
-// produce the same per-packet seeds. Freestanding: no dataflow or compute API.
+// Limits and payload pattern pieces shared by the host, the data-movement kernels and the compute (TRISC) payload
+// kernels, so all of them use the same per-core limits and per-packet seeds. Freestanding: no dataflow or compute API.
 
 #include <cstdint>
 
 namespace tt::tt_fabric::fabric_tests {
+
+// Most traffic configs a sender core runs from its hot path, which keeps per-config state on the BRISC stack. Stack
+// budget = BRISC local memory - firmware data - kernel globals. The sender's kernel_main frame is a fixed part (mostly
+// the local_connections copy) + 52 B per config (SenderHotState and a config pointer), and the functions kernel_main
+// calls need ~256 B more.
+// - Wormhole (4 KB local memory): ~2048 B for kernel_main and its callees and a 624 B fixed part, so ~22 configs can
+//   fit (2048 + 624 + (22 * 52) = 3816), 20 keeps a margin.
+// - Blackhole (8 KB local memory, ~3.2 KB of it firmware data): ~4.7 KB for kernel_main and its callees and a 736 B
+//   fixed part (five connections), so ~72 configs can fit (736 + (72 * 52) + 256 = 4736), 39 is the most validated
+//   (2768 B frame on a Blackhole Galaxy).
+// An overflow can build fine and overwrite firmware data at runtime, so re-measure when SenderHotState, the connection
+// array or the hot loop grows: build the sender at a few config counts and read kernel_main's frame from the
+// `addi sp,sp,-N` lines of `objdump -d brisc.elf` (a frame over 2 KB takes two). A core with more configs sends from
+// its L1 state instead (the slower path). The host splits senders to stay within this (split_senders_to_fit_core_limits
+// in tt_fabric_test_allocator.hpp).
+inline constexpr uint32_t HOT_STATE_MAX_CONFIGS_WORMHOLE = 20;
+inline constexpr uint32_t HOT_STATE_MAX_CONFIGS_BLACKHOLE = 39;
 
 // Per-packet seed step. Payload word i of a packet is seed + i.
 inline uint32_t prng_next(uint32_t n) {
@@ -31,9 +48,8 @@ inline constexpr uint32_t SFPU_PAYLOAD_MAX_TILES = 4;
 // each kernel serves every core. The CBs on a core are part of every kernel build there, so every sender core declares
 // the payload CB and every receiver core the request, flag and all SFPU_VERIFY_MAX_CONFIGS data CBs, as placeholders
 // where nothing uses them. Configs 0 .. SFPU_VERIFY_MAX_CONFIGS - 1 of a receiver can be verified on its compute
-// engine (the host takes the first TT_FABRIC_TEST_SFPU_VERIFY_MAX_CONFIGS of them, default 8); data CB c lies over
-// config c's receive ring. The verifier finds a config's data CB from the request at runtime, so the cap costs one CB
-// index per config and nothing else on the device.
+// engine; data CB c lies over config c's receive ring. The verifier finds a config's data CB from the request at
+// runtime, so the cap costs one CB index per config and nothing else on the device.
 inline constexpr uint32_t SFPU_PAYLOAD_CB_INDEX = 0;
 inline constexpr uint32_t SFPU_PAYLOAD_MAX_CONFIGS = 64;
 inline constexpr uint32_t SFPU_VERIFY_REQ_CB_INDEX = 0;
@@ -61,5 +77,8 @@ inline constexpr uint32_t SFPU_VERIFY_OP_CHECK = 1;
 inline constexpr uint32_t SFPU_VERIFY_OP_EXIT = 2;
 // The verdict page's flag lives in its even words 0, 2, ..., 62 (one per SFPU lane).
 inline constexpr uint32_t SFPU_VERIFY_FLAG_LANES = 32;
+// Packets a receiver may have handed to its compute verifier without a verdict yet. The request and flag CBs hold this
+// many pages each, so the verifier can always post a verdict for every request.
+inline constexpr uint32_t SFPU_VERIFY_DEPTH = 4;
 
 }  // namespace tt::tt_fabric::fabric_tests

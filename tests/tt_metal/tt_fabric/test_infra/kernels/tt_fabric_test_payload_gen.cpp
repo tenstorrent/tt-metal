@@ -32,7 +32,8 @@ constexpr uint32_t MAX_CONFIGS = tt::tt_fabric::fabric_tests::SFPU_PAYLOAD_MAX_C
 // Per-config state in each thread's local memory rather than on its small stack.
 uint32_t seeds[MAX_CONFIGS];
 uint32_t remaining[MAX_CONFIGS];
-uint32_t tiles[MAX_CONFIGS];
+uint8_t tiles[MAX_CONFIGS];
+static_assert(tt::tt_fabric::fabric_tests::SFPU_PAYLOAD_MAX_TILES <= UINT8_MAX);
 
 // LLK addresses tile t of a CB at t pages past its read/write pointer, but a payload's tiles are SFPU_TILE_BYTES apart
 // within one page. While one is alive, the CB's page is one tile (in the unpacker's or packer's CB interface; the math

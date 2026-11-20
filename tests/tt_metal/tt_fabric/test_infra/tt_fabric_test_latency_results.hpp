@@ -173,8 +173,6 @@ public:
 
     void setup_latency_test_mode(const TestConfig& config);
     void setup_latency_test_workers(TestConfig& config, std::unordered_map<MeshCoordinate, TestDevice>& test_devices);
-    void create_latency_kernels_for_device(
-        TestDevice& test_device, std::unordered_map<MeshCoordinate, TestDevice>& test_devices);
 
     LatencyWorkerLocation get_latency_sender_location(std::unordered_map<MeshCoordinate, TestDevice>& test_devices);
     LatencyWorkerLocation get_latency_receiver_location(std::unordered_map<MeshCoordinate, TestDevice>& test_devices);
