@@ -106,6 +106,7 @@
 #include "ckernel.h"
 #include "ckernel_template.h"
 #include "cmath_common.h"
+#include "llk_assert.h"
 #include "lltt.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
@@ -1290,10 +1291,34 @@ inline void store8_rows_x2_unfused()
 //     (values) participate, indices ride along through their parallel DST
 //     region.
 
+// Sort direction as Vector Unit state. Every SFPSWAP min/max compare is inverted while LaneConfig.EXCHANGE_SRCB_SRCC is
+// set (SFPSWAP.md), so a body written for ascending order sorts descending with the bit set, and one copy of a
+// sorting network serves both directions. This thread's copy of the bit; it is clear outside the topk_xl calls that
+// set it.
+inline bool topk_xl_swap_inverted = false;
+
+// Flips the bit in every lane, and this thread's copy of it.
+inline void flip_swap_direction()
+{
+    TTI_SFPCONFIG(0x0100, 0xF, 0x7); // IMM16_IS_VALUE | BITWISE_XOR: flip EXCHANGE_SRCB_SRCC in every lane
+    TTI_SFPNOP;
+    topk_xl_swap_inverted = !topk_xl_swap_inverted;
+}
+
+// Makes the swaps that follow compare for `ascending`. Only a change of direction issues instructions.
+inline void set_swap_ascending(const bool ascending)
+{
+    if (topk_xl_swap_inverted == ascending)
+    {
+        flip_swap_direction();
+    }
+}
+
 // Sort length-2: pairwise compare-exchange of 4 lane pairs.
 //
-// Direction is fixed (`MAX` into the second operand) — direction handling
-// is folded into the `bitonic_sort_len_4` call that always follows.
+// Direction is the swap state's (`MAX` into the second operand when ascending):
+// the K = 2048 sorts run it at their own direction, the rest ascending; the
+// sort's direction handling is folded into the `bitonic_sort_len_4` that follows.
 //
 // Skips the trailing `SFPTRANSP` because it fuses with `bitonic_sort_len_4`,
 // which expects the same SrcA layout.
@@ -1403,8 +1428,8 @@ inline void bitonic_sort_len_8(bool ascending)
 }
 
 // Sort length-16: two passes of (Step 4 + Step 3) separated by a transpose.
-// Direction is fixed (used only by the local sort's build phase where
-// direction comes from the surrounding loop's ascending/descending toggle).
+// Written ascending; it runs at the swap state's direction (used only by the
+// local sorts' build phase, which runs it at the sort's direction).
 inline void bitonic_sort_len_16()
 {
     // Step 4 — stride 8.
@@ -1704,37 +1729,24 @@ inline void len32_stores()
 constexpr int len32_loads_len  = 11;
 constexpr int len32_stores_len = 8;
 
-// Out of line: the K = 2048 math image has little room.
-inline NOINLINE void bitonic_sort_len_32_tail(bool ascending)
+// The stride-16 sort_32 groups of the K = 2048 sorts, in the ascending form: the direction is the swap state
+// (`set_swap_ascending`), set by the caller. Out of line: the K = 2048 math image has little room.
+inline NOINLINE void bitonic_sort_len_32_tail()
 {
-    bitonic_sort_len_32_steps_4_3(ascending);
+    bitonic_sort_len_32_steps_4_3(true);
 }
 
-inline NOINLINE void record_len32_group(const bool dir)
+inline NOINLINE void record_len32_group()
 {
-    if (dir)
-    {
-        load_replay_buf<Exec>(0, len32_loads_len, [] { len32_loads<true>(); });
-    }
-    else
-    {
-        load_replay_buf<Exec>(0, len32_loads_len, [] { len32_loads<false>(); });
-    }
-    bitonic_sort_len_32_tail(dir);
-    if (dir)
-    {
-        load_replay_buf<Exec>(len32_loads_len, len32_stores_len, [] { len32_stores<true>(); });
-    }
-    else
-    {
-        load_replay_buf<Exec>(len32_loads_len, len32_stores_len, [] { len32_stores<false>(); });
-    }
+    load_replay_buf<Exec>(0, len32_loads_len, [] { len32_loads<true>(); });
+    bitonic_sort_len_32_tail();
+    load_replay_buf<Exec>(len32_loads_len, len32_stores_len, [] { len32_stores<true>(); });
 }
 
-inline NOINLINE void replay_len32_group(const bool dir)
+inline NOINLINE void replay_len32_group()
 {
     lltt::replay(0, len32_loads_len);
-    bitonic_sort_len_32_tail(dir);
+    bitonic_sort_len_32_tail();
     lltt::replay(len32_loads_len, len32_stores_len);
 }
 
@@ -2167,10 +2179,11 @@ inline void canonical_big_block_with_replay_body(bool dir)
         // At K = 1024 each recording serves two groups only, too few for the macro loads to pay off.
         if constexpr (row_scale_factor >= 4)
         {
-            topk_xl_fused_macro::record_len32_group(dir);
+            // Reached only by the K = 2048 sorts (row_scale_factor 4), which pass the direction as swap state.
+            topk_xl_fused_macro::record_len32_group();
             for (int i = 1; i < row_scale_factor; i++)
             {
-                topk_xl_fused_macro::replay_len32_group(dir);
+                topk_xl_fused_macro::replay_len32_group();
             }
         }
         else
@@ -2200,10 +2213,11 @@ inline void canonical_big_block_with_replay_body(bool dir)
     }
 }
 
-// Out of line: its call sites are many, and the K = 2048 math image has little room.
-inline NOINLINE void canonical_big_block_2048(bool dir)
+// Out of line: its call sites are many, and the K = 2048 math image has little room. Ascending form: the K = 2048
+// sorts that call it pass the direction as swap state (`set_swap_ascending`).
+inline NOINLINE void canonical_big_block_2048()
 {
-    canonical_big_block_with_replay_body<4>(dir);
+    canonical_big_block_with_replay_body<4>(true);
 }
 
 template <int row_scale_factor>
@@ -2211,7 +2225,9 @@ inline void canonical_big_block_with_replay(bool dir)
 {
     if constexpr (row_scale_factor >= 4)
     {
-        canonical_big_block_2048(dir);
+        // The K = 2048 callers set the direction as swap state and pass true.
+        LLK_ASSERT(dir, "K = 2048 sorts take the direction as swap state: set_swap_ascending, then pass true");
+        canonical_big_block_2048();
     }
     else
     {
@@ -2277,24 +2293,25 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         // into replay slots [0..31] — an exact fit for the 32-slot replay
         // buffer. Iters 1..3 fire that body from the replay buffer.
         //
-        // `sort_4` is left inline because adding it to the recording would
-        // overflow the 32-slot buffer. `sort_32` is left inline because
-        // `dir` alternates per iter (replaying it would freeze the
-        // direction).
+        // `sort_4` and `sort_32` are left inline because adding them to the
+        // recording would overflow the 32-slot buffer.
 #pragma GCC unroll 1
         for (int i = 0; i < 4; i++)
         {
             load16_rows_x2<consecutive_32_offset>();
+            // A descending sort runs the ascending network mirrored: every swap at the opposite direction,
+            // the fixed-direction ones too (the words are unique, so the result is the same sort).
+            set_swap_ascending(ascending);
             bitonic_sort_len_2();
-            bitonic_sort_len_4(ascending);
+            bitonic_sort_len_4(true);
             if (i == 0)
             {
                 load_replay_buf<Exec>(
                     0,
                     32,
-                    [ascending]
+                    []
                     {
-                        bitonic_sort_len_8(ascending);
+                        bitonic_sort_len_8(true);
                         bitonic_sort_len_16();
                     });
             }
@@ -2302,7 +2319,8 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
             {
                 lltt::replay(0, 32);
             }
-            bitonic_sort_len_32(dir);
+            set_swap_ascending(dir);
+            bitonic_sort_len_32(true);
             store16_rows_x2<consecutive_32_offset, 32>();
             if constexpr (row_scale_factor > 1)
             {
@@ -2321,14 +2339,15 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         for (int i = 0; i < 2; i++)
         {
 #if TOPK_XL_FUSED_MACRO
-            // Pipelined within the pair, which share `dir`; a prefetch's `near` offset depends on the direction, so each pair re-prologues (see
-            // `step_group_pipelined`).
-            topk_xl_fused_macro::prologue_loads_rt<32>(dir);
-            topk_xl_fused_macro::step_group_pipelined_rt<32, 16>(dir);
-            topk_xl_fused_macro::step_group_pipelined_rt<32, 48>(dir);
+            // Pipelined within the pair, which share `dir`; each pair starts with its own prologue (see `step_group_pipelined`).
+            set_swap_ascending(dir);
+            topk_xl_fused_macro::prologue_loads_rt<32>(true);
+            topk_xl_fused_macro::step_group_pipelined_rt<32, 16>(true);
+            topk_xl_fused_macro::step_group_pipelined_rt<32, 48>(true);
 #else
-            fused_step_group<32, 16>(dir);
-            fused_step_group<32, 48>(dir);
+            set_swap_ascending(dir);
+            fused_step_group<32, 16>(true);
+            fused_step_group<32, 48>(true);
 #endif
             dir = !dir;
         }
@@ -2337,25 +2356,32 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         // ── Phase 3 — stride-16 sort_32 (4 effective iters) ────────────────
         // `dir` flips once per outer pass below.
 #if TOPK_XL_FUSED_MACRO
-        topk_xl_fused_macro::record_len32_group(dir);
-        topk_xl_fused_macro::replay_len32_group(dir);
+        // The recording is direction-free: the second pass replays it at the flipped direction.
+        set_swap_ascending(dir);
+        topk_xl_fused_macro::record_len32_group();
+        topk_xl_fused_macro::replay_len32_group();
         dir = !dir;
-        topk_xl_fused_macro::record_len32_group(dir);
-        topk_xl_fused_macro::replay_len32_group(dir);
+        set_swap_ascending(dir);
+        topk_xl_fused_macro::replay_len32_group();
+        topk_xl_fused_macro::replay_len32_group();
         dir = !dir;
 #else
         load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<consecutive_32_offset>(); });
-        bitonic_sort_len_32(dir);
+        set_swap_ascending(dir);
+        bitonic_sort_len_32(true);
         load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<consecutive_32_offset, 32>(); });
         lltt::replay(0, 8);
-        bitonic_sort_len_32(dir);
+        set_swap_ascending(dir);
+        bitonic_sort_len_32(true);
         lltt::replay(8, 8);
         dir = !dir;
         lltt::replay(0, 8);
-        bitonic_sort_len_32(dir);
+        set_swap_ascending(dir);
+        bitonic_sort_len_32(true);
         lltt::replay(8, 8);
         lltt::replay(0, 8);
-        bitonic_sort_len_32(dir);
+        set_swap_ascending(dir);
+        bitonic_sort_len_32(true);
         lltt::replay(8, 8);
         dir = !dir;
 #endif
@@ -2363,7 +2389,8 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
 
         // ── Phase 4 — build bitonic sequences of length 128 ────────────────
         // Canonical A + B + C big block (see above).
-        canonical_big_block_with_replay<4>(dir);
+        set_swap_ascending(dir);
+        canonical_big_block_with_replay<4>(true);
 
         // Switch from the even column group to the odd one (and back on
         // iter 2). Flipping `dir` here gives the next len-128 build pass an
@@ -2378,13 +2405,15 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     // instance's swap direction, so a single load+sort_k+store body covers
     // both halves of the merge.
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
-    TTI_SFPCONFIG(0x4444, 0xF, 8);
+    TTI_SFPCONFIG(0x4444, 0xF, 14); // IMM16_IS_LANE_MASK | BITWISE_XOR: flip the masked lanes
+    // The direction stays put from here to the end of the sort.
+    set_swap_ascending(dir);
 
     // Stride-2 (load + sort_k + store<2, 16>), N = 8. Recording IS iter 0.
 #if TOPK_XL_FUSED_MACRO
     // Pipelined; see `step_group_pipelined`. The last iteration prefetches one group past the end, which only writes LREGs that are dead by then.
-    topk_xl_fused_macro::prologue_loads_rt<2>(dir);
-    topk_xl_fused_macro::record_step_group_pipelined<2, 16>(dir);
+    topk_xl_fused_macro::prologue_loads_rt<2>(true);
+    topk_xl_fused_macro::record_step_group_pipelined<2, 16>(true);
 #pragma GCC unroll 1
     for (int i = 1; i < 8; i++)
     {
@@ -2392,13 +2421,13 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     }
 #else
     load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
-    bitonic_sort_len_k(dir);
+    bitonic_sort_len_k(true);
     load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
 #pragma GCC unroll 1
     for (int i = 1; i < 8; i++)
     {
         lltt::replay(0, 8);
-        bitonic_sort_len_k(dir);
+        bitonic_sort_len_k(true);
         lltt::replay(8, 8);
     }
 #endif
@@ -2406,10 +2435,11 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
 #pragma GCC unroll 1
     for (int col = 0; col < 2; col++)
     {
-        canonical_big_block_with_replay<4>(dir);
+        canonical_big_block_with_replay<4>(true);
         set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
     }
-    TTI_SFPCONFIG(0x0000, 0xF, 1); // restore default SFPU config
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
+    TTI_SFPCONFIG(0x4444, 0xF, 14); // flip them back
 
     // ── Phases 6–8 — build bitonic sequences of length 512 / 1024 / 2048 ──
     //
@@ -2430,14 +2460,14 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     // Stride-2 (load + TRANSP + sort_4 + store<2, 16>), N = 8.
     load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
     TTI_SFPTRANSP(0, 0, 0, 0);
-    bitonic_sort_len_4(dir);
+    bitonic_sort_len_4(true);
     load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
 #pragma GCC unroll 1
     for (int i = 1; i < 8; i++)
     {
         lltt::replay(0, 8);
         TTI_SFPTRANSP(0, 0, 0, 0);
-        bitonic_sort_len_4(dir);
+        bitonic_sort_len_4(true);
         lltt::replay(8, 8);
     }
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -2445,27 +2475,28 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
 
     // Flip SFPU swap direction for every 2 lanes.
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
-    TTI_SFPCONFIG(0x5050, 0xF, 8);
+    TTI_SFPCONFIG(0x5050, 0xF, 14); // IMM16_IS_LANE_MASK | BITWISE_XOR: flip the masked lanes
 #pragma GCC unroll 1
     for (int col = 0; col < 2; col++)
     {
-        canonical_big_block_with_replay<4>(dir);
+        canonical_big_block_with_replay<4>(true);
         set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
     }
-    TTI_SFPCONFIG(0x0000, 0xF, 1); // restore default SFPU config
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
+    TTI_SFPCONFIG(0x5050, 0xF, 14); // flip them back
 
     // ── Phase 7 — length 1024 ──────────────────────────────────────────────
     transpose_8_faces<true, 256, /*manage_outer_cfg=*/false>();
 
     // Stride-2 (load + sort_8 + store<2, 16>), N = 8.
     load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
-    bitonic_sort_len_8(dir);
+    bitonic_sort_len_8(true);
     load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
 #pragma GCC unroll 1
     for (int i = 1; i < 8; i++)
     {
         lltt::replay(0, 8);
-        bitonic_sort_len_8(dir);
+        bitonic_sort_len_8(true);
         lltt::replay(8, 8);
     }
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -2473,27 +2504,28 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
 
     // Flip SFPU swap direction for every 4 lanes.
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
-    TTI_SFPCONFIG(0x5500, 0xF, 8);
+    TTI_SFPCONFIG(0x5500, 0xF, 14); // IMM16_IS_LANE_MASK | BITWISE_XOR: flip the masked lanes
 #pragma GCC unroll 1
     for (int col = 0; col < 2; col++)
     {
-        canonical_big_block_with_replay<4>(dir);
+        canonical_big_block_with_replay<4>(true);
         set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
     }
-    TTI_SFPCONFIG(0x0000, 0xF, 1); // restore default SFPU config
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
+    TTI_SFPCONFIG(0x5500, 0xF, 14); // flip them back
 
     // ── Phase 8 — length 2048 ──────────────────────────────────────────────
     transpose_8_faces<true, 256, /*manage_outer_cfg=*/false>();
 
     // Stride-2 (load + sort_16_alt + store<2, 16>), N = 8.
     load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
-    bitonic_sort_len_16_alt(dir);
+    bitonic_sort_len_16_alt(true);
     load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
 #pragma GCC unroll 1
     for (int i = 1; i < 8; i++)
     {
         lltt::replay(0, 8);
-        bitonic_sort_len_16_alt(dir);
+        bitonic_sort_len_16_alt(true);
         lltt::replay(8, 8);
     }
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -2505,9 +2537,11 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
 #pragma GCC unroll 1
     for (int col = 0; col < 2; col++)
     {
-        canonical_big_block_with_replay<4>(dir);
+        canonical_big_block_with_replay<4>(true);
         set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
     }
+
+    set_swap_ascending(true);
 
     // Clear SrcA and SrcB valids — the next caller might issue a DST
     // transpose, which requires invalid SrcA/SrcB to be safe.
@@ -3003,16 +3037,17 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
         // Iter 0 is the recording itself (Exec mode); iters 1..7 fire from
         // a single TTI_MOP issue.
         topk_rebuild_build2048_mop_config();
+        set_swap_ascending(dir);
         load_replay_buf<Exec>(
             0,
             16,
-            [dir]
+            []
             {
                 load16_rows_x2<2>();
-                bitonic_sort_len_16_alt_swaps<true>(dir);
+                bitonic_sort_len_16_alt_swaps<true>(true);
             });
         TTI_SFPTRANSP(0, 0, 0, 0);
-        load_replay_buf<Exec>(16, 8, [dir] { bitonic_sort_len_16_alt_swaps<true>(dir); });
+        load_replay_buf<Exec>(16, 8, [] { bitonic_sort_len_16_alt_swaps<true>(true); });
         TTI_SFPTRANSP(0, 0, 0, 0);
         load_replay_buf<Exec>(24, 8, [] { store16_rows_x2<2, 16>(); });
         ckernel_unpack_template::run(7);
@@ -3025,13 +3060,14 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
 #pragma GCC unroll 1
         for (int col = 0; col < 2; col++)
         {
-            canonical_big_block_with_replay<4>(dir);
+            canonical_big_block_with_replay<4>(true);
             set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
         }
 
         // The build phase clobbered the MOP Expander config. Restore the
         // merge MOP setup (REPLAY(0, 16)) so the next `_topk_xl_merge_`
         // finds the programming `_topk_xl_init_` left at init time.
+        set_swap_ascending(true);
         topk_mop_config<true>();
     }
     else
@@ -4512,16 +4548,18 @@ inline void _topk_xl_split_sort_head_2048_(const std::uint32_t tile_offset, cons
         for (int i = 0; i < 4; i++)
         {
             load16_rows_x2<consecutive_32_offset>();
+            // Mirrored for a descending sort, as in `_topk_xl_local_sort_`.
+            set_swap_ascending(ascending);
             bitonic_sort_len_2();
-            bitonic_sort_len_4(ascending);
+            bitonic_sort_len_4(true);
             if (i == 0)
             {
                 load_replay_buf<Exec>(
                     0,
                     32,
-                    [ascending]
+                    []
                     {
-                        bitonic_sort_len_8(ascending);
+                        bitonic_sort_len_8(true);
                         bitonic_sort_len_16();
                     });
             }
@@ -4529,7 +4567,8 @@ inline void _topk_xl_split_sort_head_2048_(const std::uint32_t tile_offset, cons
             {
                 lltt::replay(0, 32);
             }
-            bitonic_sort_len_32(dir);
+            set_swap_ascending(dir);
+            bitonic_sort_len_32(true);
             store16_rows_x2<consecutive_32_offset, 32>();
             dir = !dir;
         }
@@ -4538,77 +4577,90 @@ inline void _topk_xl_split_sort_head_2048_(const std::uint32_t tile_offset, cons
         for (int i = 0; i < 2; i++)
         {
 #if TOPK_XL_FUSED_MACRO
-            // Pipelined within the pair, which share `dir`; a prefetch's `near` offset depends on the direction, so each pair re-prologues (see
-            // `step_group_pipelined`).
-            topk_xl_fused_macro::prologue_loads_rt<32>(dir);
-            topk_xl_fused_macro::step_group_pipelined_rt<32, 16>(dir);
-            topk_xl_fused_macro::step_group_pipelined_rt<32, 48>(dir);
+            // Pipelined within the pair, which share `dir`; each pair starts with its own prologue (see `step_group_pipelined`).
+            set_swap_ascending(dir);
+            topk_xl_fused_macro::prologue_loads_rt<32>(true);
+            topk_xl_fused_macro::step_group_pipelined_rt<32, 16>(true);
+            topk_xl_fused_macro::step_group_pipelined_rt<32, 48>(true);
 #else
-            fused_step_group<32, 16>(dir);
-            fused_step_group<32, 48>(dir);
+            set_swap_ascending(dir);
+            fused_step_group<32, 16>(true);
+            fused_step_group<32, 48>(true);
 #endif
             dir = !dir;
         }
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
 #if TOPK_XL_FUSED_MACRO
-        topk_xl_fused_macro::record_len32_group(dir);
-        topk_xl_fused_macro::replay_len32_group(dir);
+        // The recording is direction-free: the second pass replays it at the flipped direction.
+        set_swap_ascending(dir);
+        topk_xl_fused_macro::record_len32_group();
+        topk_xl_fused_macro::replay_len32_group();
         dir = !dir;
-        topk_xl_fused_macro::record_len32_group(dir);
-        topk_xl_fused_macro::replay_len32_group(dir);
+        set_swap_ascending(dir);
+        topk_xl_fused_macro::replay_len32_group();
+        topk_xl_fused_macro::replay_len32_group();
         dir = !dir;
 #else
         load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<consecutive_32_offset>(); });
-        bitonic_sort_len_32(dir);
+        set_swap_ascending(dir);
+        bitonic_sort_len_32(true);
         load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<consecutive_32_offset, 32>(); });
         lltt::replay(0, 8);
-        bitonic_sort_len_32(dir);
+        set_swap_ascending(dir);
+        bitonic_sort_len_32(true);
         lltt::replay(8, 8);
         dir = !dir;
         lltt::replay(0, 8);
-        bitonic_sort_len_32(dir);
+        set_swap_ascending(dir);
+        bitonic_sort_len_32(true);
         lltt::replay(8, 8);
         lltt::replay(0, 8);
-        bitonic_sort_len_32(dir);
+        set_swap_ascending(dir);
+        bitonic_sort_len_32(true);
         lltt::replay(8, 8);
         dir = !dir;
 #endif
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
-        canonical_big_block_with_replay<4>(dir);
+        set_swap_ascending(dir);
+        canonical_big_block_with_replay<4>(true);
         set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
         dir = !dir;
     }
 
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
-    TTI_SFPCONFIG(0x4444, 0xF, 8);
+    TTI_SFPCONFIG(0x4444, 0xF, 14); // IMM16_IS_LANE_MASK | BITWISE_XOR: flip the masked lanes
+    // The direction stays put from here to the end of the head.
+    set_swap_ascending(dir);
 #if TOPK_XL_FUSED_MACRO
     // Pipelined; see `step_group_pipelined`. The last iteration prefetches one group past the end, which only writes LREGs that are dead by then.
-    topk_xl_fused_macro::prologue_loads_rt<2>(dir);
-    topk_xl_fused_macro::record_step_group_pipelined<2, 16>(dir);
+    topk_xl_fused_macro::prologue_loads_rt<2>(true);
+    topk_xl_fused_macro::record_step_group_pipelined<2, 16>(true);
     for (int i = 1; i < 8; i++)
     {
         lltt::replay(0, topk_xl_fused_macro::pipelined_group_len);
     }
 #else
     load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
-    bitonic_sort_len_k(dir);
+    bitonic_sort_len_k(true);
     load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
     for (int i = 1; i < 8; i++)
     {
         lltt::replay(0, 8);
-        bitonic_sort_len_k(dir);
+        bitonic_sort_len_k(true);
         lltt::replay(8, 8);
     }
 #endif
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     for (int col = 0; col < 2; col++)
     {
-        canonical_big_block_with_replay<4>(dir);
+        canonical_big_block_with_replay<4>(true);
         set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
     }
-    TTI_SFPCONFIG(0x0000, 0xF, 1);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
+    TTI_SFPCONFIG(0x4444, 0xF, 14); // flip them back
+    set_swap_ascending(true);
 }
 
 template <int sort_len>
@@ -4642,6 +4694,7 @@ inline void _topk_xl_split_stride2_(const std::uint32_t tile_offset, const bool 
 {
     constexpr int n_iters = split_n_iters<K>;
     _topk_xl_split_begin_(tile_offset);
+    set_swap_ascending(dir);
 #if TOPK_XL_FUSED_MACRO
     if constexpr (macros && sort_len == 16)
     {
@@ -4649,21 +4702,14 @@ inline void _topk_xl_split_stride2_(const std::uint32_t tile_offset, const bool 
         // sort_len == 4 is deliberately absent: its dispatch issues an SFPTRANSP before the sort, so
         // the first thing after the load is a transpose and there is no swap for a macro to host.
         constexpr int stores_at = topk_xl_fused_macro::stride2_len16_loads_len;
-        if (dir)
-        {
-            topk_xl_fused_macro::stride2_len16_templates<true>();
-        }
-        else
-        {
-            topk_xl_fused_macro::stride2_len16_templates<false>();
-        }
-        topk_xl_fused_macro::record_stride2_len16_loads(dir);
-        bitonic_sort_len_16_alt_tail(dir);
+        topk_xl_fused_macro::stride2_len16_templates<true>();
+        topk_xl_fused_macro::record_stride2_len16_loads(true);
+        bitonic_sort_len_16_alt_tail(true);
         load_replay_buf<Exec>(stores_at, 8, [] { store16_rows_x2<2, 16>(); });
         for (int i = 1; i < n_iters; i++)
         {
             lltt::replay(0, topk_xl_fused_macro::stride2_len16_loads_len);
-            bitonic_sort_len_16_alt_tail(dir);
+            bitonic_sort_len_16_alt_tail(true);
             lltt::replay(stores_at, 8);
         }
         topk_xl_fused_macro::restore_step_group_templates();
@@ -4675,21 +4721,14 @@ inline void _topk_xl_split_stride2_(const std::uint32_t tile_offset, const bool 
         // load left to attach a macro to. See `stride2_len8_loads` for the two encoding facts it
         // needs, and note the templates must be put back before the next `step_group` runs.
         constexpr int stores_at = topk_xl_fused_macro::stride2_len8_loads_len;
-        if (dir)
-        {
-            topk_xl_fused_macro::stride2_len8_templates<true>();
-        }
-        else
-        {
-            topk_xl_fused_macro::stride2_len8_templates<false>();
-        }
-        topk_xl_fused_macro::record_stride2_len8_loads(dir);
-        bitonic_sort_len_8_tail(dir);
+        topk_xl_fused_macro::stride2_len8_templates<true>();
+        topk_xl_fused_macro::record_stride2_len8_loads(true);
+        bitonic_sort_len_8_tail(true);
         load_replay_buf<Exec>(stores_at, 8, [] { store16_rows_x2<2, 16>(); });
         for (int i = 1; i < n_iters; i++)
         {
             lltt::replay(0, topk_xl_fused_macro::stride2_len8_loads_len);
-            bitonic_sort_len_8_tail(dir);
+            bitonic_sort_len_8_tail(true);
             lltt::replay(stores_at, 8);
         }
         topk_xl_fused_macro::restore_step_group_templates();
@@ -4698,16 +4737,17 @@ inline void _topk_xl_split_stride2_(const std::uint32_t tile_offset, const bool 
 #endif
     {
         load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
-        _topk_xl_split_stride2_sort_<sort_len>(dir);
+        _topk_xl_split_stride2_sort_<sort_len>(true);
         load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
         for (int i = 1; i < n_iters; i++)
         {
             lltt::replay(0, 8);
-            _topk_xl_split_stride2_sort_<sort_len>(dir);
+            _topk_xl_split_stride2_sort_<sort_len>(true);
             lltt::replay(8, 8);
         }
     }
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    set_swap_ascending(true);
 }
 
 // The per-column passes between two transposes; a non-zero lane_mask flips the swap direction of those lanes.
@@ -4718,17 +4758,20 @@ inline void _topk_xl_split_columns_(const std::uint32_t tile_offset, const bool 
     if constexpr (lane_mask != 0)
     {
         TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
-        TTI_SFPCONFIG(lane_mask, 0xF, 8);
+        TTI_SFPCONFIG(lane_mask, 0xF, 14); // IMM16_IS_LANE_MASK | BITWISE_XOR: flip the masked lanes
     }
+    set_swap_ascending(dir);
     for (int col = 0; col < 2; col++)
     {
-        canonical_big_block_with_replay<split_row_scale<K>>(dir);
+        canonical_big_block_with_replay<split_row_scale<K>>(true);
         set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
     }
     if constexpr (lane_mask != 0)
     {
-        TTI_SFPCONFIG(0x0000, 0xF, 1);
+        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
+        TTI_SFPCONFIG(lane_mask, 0xF, 14); // flip them back
     }
+    set_swap_ascending(true);
 }
 
 // _topk_xl_merge_<K, true> of the runs at tile_offset and `distance` rows past it (mod 1024 rows), result at tile_offset.
@@ -4780,20 +4823,22 @@ inline void _topk_xl_split_rebuild_build_(const std::uint32_t tile_offset, const
 {
     _topk_xl_split_begin_(tile_offset);
     topk_rebuild_build2048_mop_config();
+    set_swap_ascending(dir);
     load_replay_buf<Exec>(
         0,
         16,
-        [dir]
+        []
         {
             load16_rows_x2<2>();
-            bitonic_sort_len_16_alt_swaps<true>(dir);
+            bitonic_sort_len_16_alt_swaps<true>(true);
         });
     TTI_SFPTRANSP(0, 0, 0, 0);
-    load_replay_buf<Exec>(16, 8, [dir] { bitonic_sort_len_16_alt_swaps<true>(dir); });
+    load_replay_buf<Exec>(16, 8, [] { bitonic_sort_len_16_alt_swaps<true>(true); });
     TTI_SFPTRANSP(0, 0, 0, 0);
     load_replay_buf<Exec>(24, 8, [] { store16_rows_x2<2, 16>(); });
     ckernel_unpack_template::run(split_n_iters<K> - 1);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    set_swap_ascending(true);
 }
 
 // MATH: one transpose of the K-word run at tile_offset; the caller holds the transpose CFG block open.
