@@ -132,6 +132,80 @@ def test_t2va_performance(mesh_device, reset_seeds, aspect_ratio, duration_s):
     pipeline.release_traces()
 
 
+# --------------------------------------------------------------------- fl2va perf
+
+FL2VA_ASPECT_RATIO = (16, 9)
+FL2VA_DURATIONS_S = [5, 10, 15]
+
+
+@pytest.mark.timeout(7200)
+@pytest.mark.parametrize("duration_s", FL2VA_DURATIONS_S, ids=[f"{s}s" for s in FL2VA_DURATIONS_S])
+@pytest.mark.parametrize(("mesh_device", "device_params"), GALAXY_MESHES, indirect=["mesh_device", "device_params"])
+def test_fl2va_performance(mesh_device, reset_seeds, duration_s):
+    """fl2va wall-clock with a fractal first and last keyframe, so it needs no earlier t2va artifact."""
+    weights = weights_dir("transformer", "text_encoder", "vae", "audio_vae")
+    prompt = PROMPT
+    aspect_ratio = FL2VA_ASPECT_RATIO
+
+    HEIGHT, WIDTH = resolve_canvas_size(*aspect_ratio)
+    NUM_FRAMES = get_num_frames(duration_s)
+    keyframe = create_fractal_image(WIDTH, HEIGHT)
+    if is_host():
+        logger.info(f"working point: {aspect_ratio[0]}:{aspect_ratio[1]} -> {WIDTH}x{HEIGHT}, {NUM_FRAMES} frames")
+
+    if is_host() and not os.environ.get("TT_DIT_CACHE_DIR"):
+        logger.warning(
+            "TT_DIT_CACHE_DIR is unset, so every weight load reads safetensors. Prepares are excluded "
+            "from the total either way, but the run will take far longer than the reported compute."
+        )
+
+    pipeline = MiniMaxH3Pipeline.create_pipeline(
+        mesh_device=mesh_device,
+        weights_dir=weights,
+        vae_output_type="yuv420",
+    )
+
+    benchmark_profiler = BenchmarkProfiler()
+    output = run_warm_generation(
+        pipeline,
+        prompt,
+        image=keyframe,
+        last_image=keyframe,
+        num_frames=NUM_FRAMES,
+        height=HEIGHT,
+        width=WIDTH,
+        num_inference_steps=NUM_INFERENCE_STEPS,
+        seed=SEED,
+        profiler=benchmark_profiler,
+    )
+
+    expected_frames = align_num_frames(NUM_FRAMES)
+    assert_generation_ok(output, expected_frames)
+
+    log_pipeline_perf(
+        benchmark_profiler,
+        label="fl2va",
+        pipeline=pipeline,
+        num_forwards=NUM_INFERENCE_STEPS - 1,
+        width=WIDTH,
+        height=HEIGHT,
+        num_frames=expected_frames,
+        fps=MINIMAX_H3_FPS,
+        aspect_ratio=aspect_ratio,
+        num_inference_steps=NUM_INFERENCE_STEPS,
+        extra_lines=("Conditioning: first+last anchors",),
+    )
+    if ttnn.using_distributed_env():
+        ttnn.distributed_context_barrier()
+    if is_host():
+        artifacts = artifact_dir("h3_fl2va_perf_artifacts")
+        stem = f"fl2va_{aspect_ratio[0]}x{aspect_ratio[1]}_{WIDTH}x{HEIGHT}_{duration_s}s"
+        frames = frames_for_export(output)
+        write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem)
+
+    pipeline.release_traces()
+
+
 # --------------------------------------------------------------------- ref2va perf
 
 REF2VA_ASPECT_RATIO = (16, 9)
@@ -142,7 +216,14 @@ REF2VA_DURATION_S = REF2VA_DURATIONS_S[0]  # the REPL's default duration
 # Wormhole runs untraced and unbucketed.
 # - The Wormhole preset is non-coresident, so the pipeline drops tracing anyway.
 # - Bucketing binds the whole ladder up front; the largest bucket OOMs on Wormhole's 12 GB chips. TODO: Fix
-REF2VA_SERVING_FLAGS = dict(trace_denoise=True, bucket_denoise=True) if is_blackhole() else {}
+# A traced denoise needs the persistent CCL buffers (the pipeline asserts it), and the 4x8 preset turns them off.
+# REF2VA_PRESET_DEFAULTS=1 keeps the mesh preset's own mode (dynamic length, untraced), which needs less DRAM: the
+# bucketed, traced mode does not fit a DRAM-harvested chip (7 of 8 banks) at 15 s.
+REF2VA_SERVING_FLAGS = (
+    dict(trace_denoise=True, bucket_denoise=True, use_persistent_ccl_buffers=True)
+    if is_blackhole() and os.environ.get("REF2VA_PRESET_DEFAULTS") != "1"
+    else {}
+)
 REF2VA_REFERENCE_SETS = ["image", "video_with_sound", "mixed"]
 
 # Unclear where this file exists, so we have a fallback. This should probably be deleted.
