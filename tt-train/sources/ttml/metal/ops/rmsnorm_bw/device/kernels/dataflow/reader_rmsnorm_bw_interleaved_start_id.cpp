@@ -62,9 +62,11 @@ void kernel_main() {
     uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
     // slice * St for this core's slice; 0 without slicing.
     uint32_t nominal_slice_start = get_arg_val<uint32_t>(runtime_args_counter++);
-    // The input in the overlap of a moved last slice reads as zeros, so the overlap adds nothing to the scale, and the
-    // writer skips it. dL_dout and gamma there are real and only ever multiplied by the input.
-    const auto [slice_start, num_overlap] = row_slice_tiles<Wt, St>(nominal_slice_start);
+    // The input in a moved last slice's overlap reads as zeros, so it adds nothing to the scale; the writer skips it.
+    // Not a structured binding: read_row_blocks captures num_overlap, which C++17 can't do for one.
+    const RowSliceTiles slice_tiles = row_slice_tiles<Wt, St>(nominal_slice_start);
+    const uint32_t slice_start = slice_tiles.start;
+    const uint32_t num_overlap = slice_tiles.num_overlap;
 
     constexpr uint16_t one = 0x00003F80;  // (bfloat16)1.0 -> uint16_t
     constexpr uint16_t zero = 0x0;
