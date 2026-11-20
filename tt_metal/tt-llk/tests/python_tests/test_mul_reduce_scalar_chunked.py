@@ -4,13 +4,10 @@
 """
 Chunked fused multiply + reduce-to-scalar LLK test (experimental, Blackhole only).
 
-This is a legacy standalone chunked driver for the experimental ``mul_reduce_scalar``
-LLKs. The non-chunked
-``mul_reduce_scalar_tile`` caps ``num_tiles`` at the DEST half-sync capacity
-(8 bf16 / 4 fp32) because every multiply product must be resident in DEST before
-the reduce phase consumes it. The chunked driver processes the tile stream in
-fixed-size chunks (each <= DEST capacity), reduces each chunk to a scalar, and
-accumulates the chunk scalars into a running total held in DEST[0] between reduces:
+The non-chunked ``mul_reduce_scalar_tile`` caps ``num_tiles`` at the DEST
+half-sync capacity. This driver follows ``mul_reduce_scalar_chunked_tile``:
+each chunk multiplies ``CHUNK_SIZE - 1`` tiles, reduces them to a scalar, and
+adds that scalar into a separate accumulator tile.
 
     result = sum_over_all_tiles_and_elements(A * B)
 
@@ -23,25 +20,17 @@ Kernel B is held at 1.0 (matching the on-silicon gtest and
 ``fuser_config/fpu_reduce_scalar.yaml``), so A * B == A and the fused op reduces
 to ``sum(A)`` over all tiles/elements.
 
-XFAIL: this standalone loop does not call the corrected compute-API
-``mul_reduce_scalar_chunked_tile`` in ``api/compute/experimental/rmsnorm.h``.
-That implementation clears reused product tiles while preserving a separate
-accumulator and restores initialization between chunks. This driver has not been
-updated to use that sequence and remains expected to fail numerically.
-The compute-API fix is covered by ``test_rmsnorm_chunked.cpp``; the targeted clear
-is also covered by ``test_rmsnorm_clear_product_tile.py``.
 """
 
-import pytest
 import torch
 from conftest import blackhole_only
 from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import MathFidelity, format_dict
 from helpers.param_config import parametrize
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     MATH_FIDELITY,
     MUL_REDUCE_SCALAR_CHUNK_SIZE,
@@ -78,23 +67,23 @@ def _num_tiles_for_format(formats):
 
 # mul_reduce_scalar is a Blackhole-only experimental LLK
 @blackhole_only
-@pytest.mark.xfail(
-    reason=(
-        "Legacy standalone chunk loop does not use the corrected compute-API "
-        "mul_reduce_scalar_chunked_tile sequence (targeted product clears, "
-        "separate accumulator, and per-chunk reinitialization). The compute-API "
-        "fix is covered by test_rmsnorm_chunked.cpp; this driver remains unfixed. "
-        "Not run: the loop hangs the TRISCs and leaves the core dirty for the next test."
-    ),
-    run=False,
-)
 @parametrize(
     formats=FORMATS,
     math_fidelity=[MathFidelity.HiFi2, MathFidelity.HiFi4],
     num_tiles=_num_tiles_for_format,
     tile_dimensions=TILE_DIMENSIONS,
 )
-def test_mul_reduce_scalar_chunked(formats, math_fidelity, num_tiles, tile_dimensions):
+def test_mul_reduce_scalar_chunked(
+    formats,
+    math_fidelity,
+    num_tiles,
+    tile_dimensions,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     tile_shape = construct_tile_shape(tile_dimensions)
     elements_per_tile = tile_shape.total_tile_size()
     dest_acc = dest_acc_for(formats.output_format)
@@ -117,44 +106,53 @@ def test_mul_reduce_scalar_chunked(formats, math_fidelity, num_tiles, tile_dimen
         tile_cnt_B * elements_per_tile, dtype=format_dict[formats.input_format]
     )
 
-    # Golden mirrors the non-chunked reference: the element-wise product summed
-    # over every element of every tile, in fp32. Chunking is a pure reordering of
-    # this sum, so the golden is unchanged from the non-chunked op.
-    golden_scalar = float(
-        (src_A.to(torch.float32) * src_B.to(torch.float32)).sum().item()
-    )
+    golden_scalar = None
+    if not is_perf:
+        # Golden mirrors the non-chunked reference: the element-wise product summed
+        # over every element of every tile, in fp32. Chunking is a pure reordering of
+        # this sum, so the golden is unchanged from the non-chunked op.
+        golden_scalar = float(
+            (src_A.to(torch.float32) * src_B.to(torch.float32)).sum().item()
+        )
 
-    configuration = TestConfig(
-        "sources/mul_reduce_scalar_chunked_test.cpp",
-        formats,
-        templates=[
-            MATH_FIDELITY(math_fidelity),
-        ],
-        runtimes=[
-            TILE_COUNT(num_tiles),
-            MUL_REDUCE_SCALAR_CHUNK_SIZE(CHUNK_SIZE),
-            NUM_FACES_R_DIM(tile_shape.num_faces_r_dim, tile_shape.num_faces_r_dim),
-            NUM_FACES_C_DIM(tile_shape.num_faces_c_dim, tile_shape.num_faces_c_dim),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=1,
-            num_faces=tile_shape.total_num_faces(),
-            face_r_dim=tile_shape.face_r_dim,
-            tile_dimensions=tile_dimensions,
-            use_dense_tile_dimensions=True,
-            sfpu=False,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/mul_reduce_scalar_chunked_test.cpp",
+            formats=formats,
+            templates=[
+                MATH_FIDELITY(math_fidelity),
+            ],
+            runtimes=[
+                TILE_COUNT(num_tiles),
+                MUL_REDUCE_SCALAR_CHUNK_SIZE(CHUNK_SIZE),
+                NUM_FACES_R_DIM(tile_shape.num_faces_r_dim, tile_shape.num_faces_r_dim),
+                NUM_FACES_C_DIM(tile_shape.num_faces_c_dim, tile_shape.num_faces_c_dim),
+            ],
+            variant_stimuli=StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt_A,
+                tile_count_B=tile_cnt_B,
+                tile_count_res=1,
+                num_faces=tile_shape.total_num_faces(),
+                face_r_dim=tile_shape.face_r_dim,
+                tile_dimensions=tile_dimensions,
+                use_dense_tile_dimensions=True,
+                sfpu=False,
+            ),
+            dest_acc=dest_acc,
         ),
-        dest_acc=dest_acc,
     )
-
-    res_from_L1 = configuration.run().result
+    if is_perf:
+        return
+    res_from_L1 = outcome.result
 
     assert (
         len(res_from_L1) == elements_per_tile

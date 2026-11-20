@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import os
 import statistics
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
@@ -21,6 +22,7 @@ from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
+    mesh_descriptor_topologies,
     torus_x_device_params,
     torus_xy_device_params,
     torus_y_device_params,
@@ -32,14 +34,20 @@ from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import (
     kda_state_dict_sha256,
     load_kda_layer_state_dict,
 )
-from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import assert_accurate, decode_tail
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import assert_accurate, decode_tail, encode_tail
+from models.demos.deepseek_v3_d_p.tests.measure.determinism import (
+    device_mismatch_marker,
+    marker_chips,
+    merge_device_mismatch_markers,
+)
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDAProgramConfig,
     KDARecurrenceProgramConfig,
     kimi_k3_program_config,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
-from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates, allocate_native_state, device_scalar
+from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaContractGeometry, KdaStates
+from models.demos.deepseek_v3_d_p.tt.kda.state_contract import KDA_CONVOLUTION_PAGE_CHANNELS
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
@@ -47,17 +55,30 @@ from models.tt_transformers.tt.ccl import TT_CCL
 from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program_merged
 
 
+def is_4x4_subtorus() -> bool:
+    """TT_MESH_GRAPH_DESC_PATH is the 4x4 Ring/Ring subtorus."""
+    descriptor = os.environ.get("TT_MESH_GRAPH_DESC_PATH")
+    if not descriptor:
+        return False
+    try:
+        topologies = mesh_descriptor_topologies(descriptor)
+    except AssertionError:  # e.g. no dim_types (defaults to LINE): not the subtorus
+        return False
+    return set(topologies) == {("4", "4", "RING", "RING")}
+
+
 def kda_device_params(mesh_shape: tuple[int, int], **overrides) -> dict:
     """The fabric a KDA test opens on ``mesh_shape``: a 2D fabric, as Kimi-K3 runs on, with K3's fabric payload.
 
     8x4 takes K3's TorusXY, a 4x4 prefill stage (a Galaxy tray half) its TorusX, a ring of chips the torus over its
     one axis (TorusY for Nx1, TorusX for 1xN), and 2x2, 2x4 and 4x2 an unwrapped Fabric2D.
+    The 4x4 subtorus takes TorusXY.
     """
     rows, columns = mesh_shape
     if (rows, columns) == (8, 4):
         profile = torus_xy_device_params
     elif (rows, columns) == (4, 4):
-        profile = torus_x_device_params
+        profile = torus_xy_device_params if is_4x4_subtorus() else torus_x_device_params
     elif columns == 1 and rows > 1:
         profile = torus_y_device_params
     elif rows == 1 and columns > 1:
@@ -96,14 +117,13 @@ class DeviceMismatch:
     def compare(self, reference: ttnn.Tensor, actual: ttnn.Tensor, name: str, ranks: set[int] | None = None):
         """Record whether ``actual`` differs from ``reference`` anywhere; only SP ``ranks`` count, if given (mesh axis
         0 is SP)."""
-        self._markers.append((name, ttnn.max(ttnn.ne(reference, actual, dtype=ttnn.bfloat16)), ranks))
+        self._markers.append((name, device_mismatch_marker(reference, actual), ranks))
 
     def assert_none(self) -> None:
         differing = []
         for name, marker, ranks in self._markers:
-            for index, shard in enumerate(ttnn.get_device_tensors(ttnn.from_device(marker))):
-                rank = index // self._tp_size
-                if (ranks is None or rank in ranks) and ttnn.to_torch(shard).float().item() != 0:
+            for index in marker_chips(marker):
+                if ranks is None or index // self._tp_size in ranks:
                     differing.append(f"{name} (device {index})")
             ttnn.deallocate(marker)
         self._markers.clear()
@@ -143,27 +163,16 @@ def assert_device_time(median_us: float, reference_us: float, margin: float, lab
     )
 
 
-@dataclass(frozen=True)
-class AffineTransform:
-    """State-space affine map ``state -> a @ state + b``."""
-
-    a: ttnn.Tensor
-    b: ttnn.Tensor
-
-
-def pack_transform(transform: AffineTransform) -> ttnn.Tensor:
-    """Pack a FP32 transform into the BF16 [1, BH, K, K+V] rows of [A | B] that the relay carries."""
-    batch_heads, key_dim = tuple(transform.a.shape)[0], tuple(transform.a.shape)[1]
-    value_dim = transform.b.shape[-1]
-    packed = ttnn.concat(
-        [
-            ttnn.reshape(transform.a, (1, batch_heads, key_dim, key_dim)),
-            ttnn.reshape(transform.b, (1, batch_heads, key_dim, value_dim)),
-        ],
-        dim=3,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+def pack_complement(a: torch.Tensor, b: torch.Tensor, mesh_device, mesh_mapper) -> ttnn.Tensor:
+    """Host transforms (A, B) as the packed summary publishes them: BF16 TILE rows of the complement form [E | B],
+    E = A - I."""
+    return ttnn.from_torch(
+        torch.cat([a - torch.eye(a.shape[-1]), b], dim=-1),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=mesh_mapper,
     )
-    return ttnn.typecast(packed, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
 def distributed_prefix(
@@ -176,7 +185,8 @@ def distributed_prefix(
     local_rows: int,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """The gathered SP prefix the relay replaces, as a reference: all-gather every rank's BF16 [1, BH, K, K+V]
-    transform and chain them in chronological order. Return the local entry state and the replicated final state."""
+    complement-form [E | B] transform and chain them in chronological order. Return the local entry state and the
+    replicated final state."""
     gathered = ttnn.all_gather(
         packed, dim=0, cluster_axis=sequence_parallel_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
@@ -248,20 +258,12 @@ def collect_mesh_accuracy_and_determinism_results(
                     ttnn.deallocate(repeat_output)
                 raise ValueError("run returned output with different metadata")
             mismatch = ttnn.ne(reference, output, dtype=ttnn.bfloat16)
-            if mask is not None:
-                # The 0/1 mismatch is finite, so masking it by multiplication is exact.
-                defined_mismatch = ttnn.multiply(mismatch, mask)
+            if mask is not None:  # exact: the mismatch is 0/1
+                masked = ttnn.multiply(mismatch, mask)
                 ttnn.deallocate(mismatch)
-                mismatch = defined_mismatch
-            current_marker = ttnn.max(mismatch)
+                mismatch = masked
+            mismatch_marker = merge_device_mismatch_markers(mismatch_marker, ttnn.max(mismatch))
             ttnn.deallocate(mismatch)
-            if mismatch_marker is None:
-                mismatch_marker = current_marker
-            else:
-                updated_marker = ttnn.maximum(mismatch_marker, current_marker)
-                ttnn.deallocate(mismatch_marker)
-                ttnn.deallocate(current_marker)
-                mismatch_marker = updated_marker
         for output in outputs:
             ttnn.deallocate(output)
 
@@ -559,7 +561,7 @@ def make_kimi_k3_device_case(
         tp_ccl_topology=(
             ttnn.Topology.Ring
             if tuple(mesh_device.shape)[sequence_parallel_axis] == 1
-            else per_axis_topology()[tensor_parallel_axis]
+            else per_axis_topology(mesh_device=mesh_device)[tensor_parallel_axis]
         ),
     )
     if summary_group_chunks is not None:
@@ -655,9 +657,14 @@ def mla_row_permutation(actual_start: int, sp_size: int, local_rows: int) -> tor
     return torch.tensor([position - actual_start for chip in positions for position in chip])
 
 
-def to_sp_input(hidden: torch.Tensor, mesh_device: ttnn.MeshDevice, sp_axis: int) -> ttnn.Tensor:
+def to_sp_input(
+    hidden: torch.Tensor, mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis: int | None = None
+) -> ttnn.Tensor:
+    """Shard [B, T, H] over SP along T, and with ``tp_axis`` also over TP along H (the model's residual layout)."""
     mesh_dims = [None, None]
     mesh_dims[sp_axis] = 1
+    if tp_axis is not None:
+        mesh_dims[tp_axis] = 2
     return ttnn.from_torch(
         hidden,
         dtype=ttnn.bfloat16,
@@ -776,10 +783,88 @@ def assert_matches_reference(
 
 
 def read_slab_layer(mesh_device, slabs: KdaStates, slot: int, layer_idx: int) -> KdaState:
-    """A copy of layer ``layer_idx``'s carry at host ``slot``, read through the device-slot import the
-    K3 layers use. OWNED: free it with ``deallocate_state``."""
-    state = allocate_native_state(mesh_device, slabs.geometry)
-    index = device_scalar(mesh_device, slot)
-    slabs.import_layer(state, index, layer_idx)
-    ttnn.deallocate(index)
-    return state
+    """A native copy of layer ``layer_idx``'s carry at host ``slot``. OWNED: free it with ``deallocate_state``."""
+    batch = slabs.batch_index(slot, layer_idx)
+
+    def entry(slab: ttnn.Tensor) -> ttnn.Tensor:
+        # Both may hand back their input: clone the entry, and free only an interleaved copy of the ND slab.
+        interleaved = ttnn.to_memory_config(slab, ttnn.DRAM_MEMORY_CONFIG)
+        ends = [batch + 1, *tuple(slab.shape)[1:]]
+        sliced = ttnn.slice(interleaved, [batch] + [0] * (len(ends) - 1), ends, [1] * len(ends))
+        copy = ttnn.clone(sliced, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if interleaved.buffer_address() != slab.buffer_address():
+            ttnn.deallocate(interleaved)
+        return copy
+
+    return KdaState(recurrent=entry(slabs.recurrent), convolution=entry(slabs.convolution))
+
+
+def upload_slab(slab: ttnn.Tensor, shards: list[torch.Tensor]) -> None:
+    """Overwrite ``slab`` in place with one host tensor per device, in row-major mesh order."""
+    mesh_device = slab.device()
+    rows, cols = tuple(mesh_device.shape)
+    staged = ttnn.from_torch(
+        torch.cat([torch.cat(shards[row * cols : (row + 1) * cols], dim=1) for row in range(rows)]),
+        dtype=slab.dtype,
+        layout=slab.layout,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(rows, cols)),
+    )
+    ttnn.to_memory_config(staged, slab.memory_config(), output_tensor=slab)
+    ttnn.deallocate(staged)
+
+
+def kda_state_patterns(geometry: KdaContractGeometry, slot: int, layer_idx: int):
+    """Global recurrent ``[H, D, D]`` and golden-order convolution ``[K-1, 3*H*D]`` with a per-(slot, layer) offset,
+    so a wrong head, band, branch, half, slot or layer reads back as a mismatch."""
+    tag = 1000.0 * (slot * 10 + layer_idx)
+    heads, dim = geometry.num_heads, geometry.head_dim
+    recurrent = (torch.arange(heads * dim * dim, dtype=torch.float32).reshape(heads, dim, dim) + tag).float()
+    width = 3 * heads * dim
+    convolution = (
+        torch.arange(geometry.conv_history * width, dtype=torch.int32).remainder(509) + slot * 7 + layer_idx
+    ).to(torch.bfloat16)
+    return recurrent, convolution.reshape(geometry.conv_history, width)
+
+
+def per_chip_convolution(geometry: KdaContractGeometry, convolution: torch.Tensor, tp_col: int) -> torch.Tensor:
+    """The chip's ``[q_local | k_local | v_local]`` row from the golden-order global tensor."""
+    heads, dim, local = geometry.num_heads, geometry.head_dim, geometry.local_heads
+    parts = [
+        convolution[:, branch * heads * dim + tp_col * local * dim : branch * heads * dim + (tp_col + 1) * local * dim]
+        for branch in range(3)
+    ]
+    return torch.cat(parts, dim=-1)
+
+
+def native_state_from_global(
+    mesh_device, geometry: KdaContractGeometry, recurrent, convolution, tp_axis: int
+) -> KdaState:
+    """TP-shard heads, replicate across SP, in the layout the layer itself produces."""
+    tp = geometry.tensor_parallel_size
+    rec_dims, conv_dims = [None, None], [None, None]
+    rec_dims[tp_axis], conv_dims[tp_axis] = 1, 1
+    stacked_conv = encode_tail(
+        torch.cat([per_chip_convolution(geometry, convolution, col) for col in range(tp)], dim=-1),
+        KDA_CONVOLUTION_PAGE_CHANNELS,
+    )
+    mesh_shape = tuple(mesh_device.shape)
+    return KdaState(
+        recurrent=ttnn.from_torch(
+            recurrent.unsqueeze(0),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=tuple(rec_dims), mesh_shape=mesh_shape),
+        ),
+        convolution=ttnn.from_torch(
+            stacked_conv.unsqueeze(0),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=tuple(conv_dims), mesh_shape=mesh_shape),
+        ),
+    )

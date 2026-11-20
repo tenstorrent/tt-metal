@@ -1667,6 +1667,47 @@ TEST(MultiHost, T3KAssignZConflictLosingBoundaryResolvesZero) {
         << pairs_0_to_2.size() << ", 1->2: " << pairs_1_to_2.size();
 }
 
+// Three one-chip meshes chained 0 - 1 - 2 over plain N/E/S/W links, one rank per mesh. Each chip's ports toward its
+// neighbour meshes must get routing planes even though every process sees a lone one-chip mesh.
+TEST(MultiHost, BHGalaxy1x1MeshChainRoutingPlanes) {
+    const auto world_ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_world_context();
+    if (*world_ctx->size() != 3) {
+        GTEST_SKIP() << "Requires 3 ranks, one per mesh";
+    }
+    // The mesh graph comes from the rank binding. The fabric config goes through the MetalContext, which marks the
+    // Ethernet cores as fabric routers; routing planes are counted from those. RELAXED reliability counts the planes
+    // in initialize_dynamic_routing_plane_counts; STRICT pre-fills them and would hide a miscount.
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+    auto* control_plane = &tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    const auto local_mesh_ids = control_plane->get_local_mesh_id_bindings();
+    ASSERT_EQ(local_mesh_ids.size(), 1u);
+    const MeshId mesh_id = local_mesh_ids.front();
+    const FabricNodeId local_node(mesh_id, 0);
+
+    std::vector<MeshId> neighbours;
+    if (*mesh_id > 0) {
+        neighbours.push_back(MeshId{*mesh_id - 1});
+    }
+    if (*mesh_id < 2) {
+        neighbours.push_back(MeshId{*mesh_id + 1});
+    }
+    std::set<RoutingDirection> directions;
+    for (const MeshId neighbour : neighbours) {
+        EXPECT_FALSE(
+            control_plane->get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(mesh_id, neighbour).empty())
+            << "mesh " << *mesh_id << " has no exit toward mesh " << *neighbour;
+        const auto direction = control_plane->get_forwarding_direction(local_node, FabricNodeId(neighbour, 0));
+        ASSERT_TRUE(direction.has_value()) << "mesh " << *mesh_id << " cannot route to mesh " << *neighbour;
+        EXPECT_GT(control_plane->get_num_usable_routing_planes(local_node, *direction), 0u)
+            << "mesh " << *mesh_id << " has no routing planes toward mesh " << *neighbour;
+        directions.insert(*direction);
+    }
+    EXPECT_EQ(directions.size(), neighbours.size()) << "each neighbour mesh needs its own direction";
+}
+
 TEST(MultiHost, T3K2x2AssignZDirectionFabric2DSanity) {
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);

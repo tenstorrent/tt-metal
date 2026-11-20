@@ -18,6 +18,10 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
+// L1_TO_L1 repeats the functional run LOOP_FACTOR times; the inits run once, in INIT, so TILE_LOOP
+// measures only the per-tile calls. An isolate run type keeps the measured thread's loop as is and
+// stubs out the other threads.
+
 #ifdef LLK_TRISC_UNPACK
 
 #include "experimental/llk_unpack_AB_sub_bcast_col_custom.h"
@@ -31,19 +35,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t loop_factor = params.LOOP_FACTOR;
-#else
-    constexpr std::uint32_t loop_factor = LOOP_FACTOR;
-#endif
-#ifdef LLK_PROFILER
-    constexpr std::uint32_t num_blocks         = 1;
-    constexpr std::uint32_t num_tiles_in_block = CT_DIM;
-    constexpr std::uint32_t test_face_r_dim    = FACE_R_DIM;
-    constexpr std::uint32_t test_num_faces     = TILE_NUM_FACES;
-#else
     const std::uint32_t num_blocks         = params.NUM_BLOCKS;
     const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
     const std::uint32_t test_face_r_dim    = params.TEST_FACE_R_DIM;
     const std::uint32_t test_num_faces     = params.num_faces;
+    const Operand& buffer_A         = params.buffer_A;
+    const Operand& buffer_B         = params.buffer_B;
+#else
+    constexpr std::uint32_t loop_factor = LOOP_FACTOR;
+    constexpr std::uint32_t num_blocks         = NUM_BLOCKS;
+    constexpr std::uint32_t num_tiles_in_block = NUM_TILES_IN_BLOCK;
+    constexpr std::uint32_t test_face_r_dim    = TEST_FACE_R_DIM;
+    constexpr std::uint32_t test_num_faces     = num_faces;
 #endif
     const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(test_face_r_dim, test_num_faces);
 
@@ -58,19 +61,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
             test_face_r_dim,
             test_num_faces,
             test_num_faces);
-#ifdef LLK_PROFILER
         _llk_unpack_AB_sub_bcast_col_init_custom_(tensor_shape);
-#endif
         PROFILER_SYNC();
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            return;
+            // Idle: pack runs on its own.
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
+            // Stand-in for unpack: post the source dvalids math consumes, SrcB once and SrcA per tile.
             for (std::uint32_t loop = 0; loop < loop_factor; ++loop)
             {
                 for (std::uint32_t block = 0; block < num_blocks; ++block)
@@ -85,19 +87,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-#ifdef LLK_PROFILER
             for (std::uint32_t loop = 0; loop < loop_factor; ++loop)
             {
-                _llk_unpack_AB_sub_bcast_col_custom_(PERF_ADDRESS(PERF_INPUT_A, 0), PERF_ADDRESS(PERF_INPUT_B, 0), num_tiles_in_block);
+                for (std::uint32_t block = 0; block < num_blocks; ++block)
+                {
+                    _llk_unpack_AB_sub_bcast_col_custom_(L1_ADDRESS(buffer_A[block * num_tiles_in_block]), L1_ADDRESS(buffer_B[0]), num_tiles_in_block);
+                }
             }
-#else
-            for (std::uint32_t block = 0; block < num_blocks; ++block)
-            {
-                _llk_unpack_AB_sub_bcast_col_init_custom_(tensor_shape);
-                _llk_unpack_AB_sub_bcast_col_custom_(
-                    L1_ADDRESS(params.buffer_A[block * num_tiles_in_block]), L1_ADDRESS(params.buffer_B[0]), num_tiles_in_block);
-            }
-#endif
         }
         PROFILER_SYNC();
     }
@@ -107,7 +103,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_MATH
 
-#include "experimental/llk_math_eltwise_binary_custom.h"
+#include "llk_lib_math_wrappers.h"
 #include "llk_math_common.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -118,19 +114,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t loop_factor = params.LOOP_FACTOR;
-#else
-    constexpr std::uint32_t loop_factor = LOOP_FACTOR;
-#endif
-#ifdef LLK_PROFILER
-    constexpr std::uint32_t num_blocks         = 1;
-    constexpr std::uint32_t num_tiles_in_block = CT_DIM;
-    constexpr std::uint32_t test_face_r_dim    = FACE_R_DIM;
-    constexpr std::uint32_t test_num_faces     = TILE_NUM_FACES;
-#else
     const std::uint32_t num_blocks         = params.NUM_BLOCKS;
     const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
     const std::uint32_t test_face_r_dim    = params.TEST_FACE_R_DIM;
     const std::uint32_t test_num_faces     = params.num_faces;
+#else
+    constexpr std::uint32_t loop_factor = LOOP_FACTOR;
+    constexpr std::uint32_t num_blocks         = NUM_BLOCKS;
+    constexpr std::uint32_t num_tiles_in_block = NUM_TILES_IN_BLOCK;
+    constexpr std::uint32_t test_face_r_dim    = TEST_FACE_R_DIM;
+    constexpr std::uint32_t test_num_faces     = num_faces;
 #endif
     const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(test_face_r_dim, test_num_faces);
 
@@ -138,30 +131,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-#ifdef LLK_PROFILER
-#ifdef ARCH_BLACKHOLE
-        _llk_math_eltwise_binary_init_custom_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY>(test_num_faces);
-#else
-        _llk_math_eltwise_binary_init_custom_<ELTWISE_BINARY_OP, BROADCAST_TYPE>(test_num_faces);
-#endif
-#else
         if constexpr (PRESERVE_SRC_ZERO_FLAG)
         {
             // A preceding copy_init leaves the Src zero flag at keep. The custom
             // init must restore the operand-driven state so denormal SrcB flushes.
             math::_configure_preserve_zero_flag_state_();
         }
-#endif
+        _llk_math_eltwise_binary_init_custom_wrapper_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY>(test_num_faces);
         PROFILER_SYNC();
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            return;
+            // Idle: pack runs on its own.
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
+            // Stand-in for math: clear the source dvalids unpack posts, SrcB once and SrcA per tile.
             for (std::uint32_t loop = 0; loop < loop_factor; ++loop)
             {
                 for (std::uint32_t block = 0; block < num_blocks; ++block)
@@ -176,37 +163,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-#ifdef LLK_PROFILER
             for (std::uint32_t loop = 0; loop < loop_factor; ++loop)
             {
-                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                for (std::uint32_t block = 0; block < num_blocks; ++block)
                 {
-                    _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-                }
-#ifdef ARCH_BLACKHOLE
-                _llk_math_bcast_cols_reuse_custom_<ELTWISE_BINARY_OP, MATH_FIDELITY>(num_tiles_in_block, tensor_shape);
-#else
-                _llk_math_sub_bcast_cols_reuse_custom_(num_tiles_in_block, tensor_shape);
-#endif
-                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-                {
-                    _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                    // MATH_ISOLATE runs the block without the Dest handshake with the idle pack.
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+                    }
+                    _llk_math_bcast_cols_reuse_custom_wrapper_<ELTWISE_BINARY_OP, MATH_FIDELITY>(num_tiles_in_block, tensor_shape);
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                    }
                 }
             }
-#else
-            for (std::uint32_t block = 0; block < num_blocks; ++block)
-            {
-                _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-#ifdef ARCH_BLACKHOLE
-                _llk_math_eltwise_binary_init_custom_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY>(test_num_faces);
-                _llk_math_bcast_cols_reuse_custom_<ELTWISE_BINARY_OP, MATH_FIDELITY>(num_tiles_in_block, tensor_shape);
-#else
-                _llk_math_eltwise_binary_init_custom_<ELTWISE_BINARY_OP, BROADCAST_TYPE>(test_num_faces);
-                _llk_math_sub_bcast_cols_reuse_custom_(num_tiles_in_block, tensor_shape);
-#endif
-                _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-            }
-#endif
         }
         PROFILER_SYNC();
     }
@@ -226,20 +198,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 
-#ifdef LLK_PROFILER
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t loop_factor = params.LOOP_FACTOR;
-#else
-    constexpr std::uint32_t loop_factor = LOOP_FACTOR;
-#endif
-    constexpr std::uint32_t num_tiles_in_block = CT_DIM;
-    constexpr std::uint32_t test_face_r_dim    = FACE_R_DIM;
-    constexpr std::uint32_t test_num_faces     = TILE_NUM_FACES;
-#else
     const std::uint32_t num_blocks         = params.NUM_BLOCKS;
     const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
     const std::uint32_t test_face_r_dim    = params.TEST_FACE_R_DIM;
     const std::uint32_t test_num_faces     = params.num_faces;
+    const Operand& buffer_Res       = params.buffer_Res;
+#else
+    constexpr std::uint32_t loop_factor = LOOP_FACTOR;
+    constexpr std::uint32_t num_blocks         = NUM_BLOCKS;
+    constexpr std::uint32_t num_tiles_in_block = NUM_TILES_IN_BLOCK;
+    constexpr std::uint32_t test_face_r_dim    = TEST_FACE_R_DIM;
+    constexpr std::uint32_t test_num_faces     = num_faces;
 #endif
 
     {
@@ -254,39 +225,31 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            return;
+            // Idle: unpack and math run without pack.
         }
         else
         {
-#ifdef LLK_PROFILER
             for (std::uint32_t loop = 0; loop < loop_factor; ++loop)
             {
-                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                for (std::uint32_t block = 0; block < num_blocks; ++block)
                 {
-                    _llk_packer_wait_for_math_done_();
-                }
-                for (std::uint32_t tile = 0; tile < num_tiles_in_block; ++tile)
-                {
-                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, PERF_ADDRESS(PERF_OUTPUT, tile));
-                }
-                // Wormhole: the isolate loops also release the dest section as production's tile_regs_release does
-                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_PACK_SECTION_RELEASE)
-                {
-                    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                    // PACK_ISOLATE packs without waiting for math; on Wormhole it still releases the Dest section.
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_packer_wait_for_math_done_();
+                    }
+                    for (std::uint32_t tile = 0; tile < num_tiles_in_block; ++tile)
+                    {
+                        const std::uint32_t result_tile = block * num_tiles_in_block + tile;
+                        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(buffer_Res[result_tile]));
+                    }
+                    // Wormhole: the PACK_ISOLATE loop also releases the dest section as production's tile_regs_release does
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_PACK_SECTION_RELEASE)
+                    {
+                        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                    }
                 }
             }
-#else
-            for (std::uint32_t block = 0; block < num_blocks; ++block)
-            {
-                _llk_packer_wait_for_math_done_();
-                for (std::uint32_t tile = 0; tile < num_tiles_in_block; ++tile)
-                {
-                    const std::uint32_t result_tile = block * num_tiles_in_block + tile;
-                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[result_tile]));
-                }
-                _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-            }
-#endif
         }
         PROFILER_SYNC();
     }

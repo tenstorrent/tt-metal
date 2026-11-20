@@ -18,12 +18,12 @@ set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"
 MODEL="${1:?${USAGE}}"
 RUN_NAME="${MODEL}${VARIANT}"
 # First entry is the default; membership is the validation. These models support sc1 only.
-# Kimi-K3's sc4 and sc1 are 4x4 stages, two per galaxy (its manifest's layout); its _8x4 configs keep the
-# one-stage-per-galaxy layout for hand comparisons. GLM-5.3's sc4 and sc1 are 8x4 stages, its production
-# layout; its _4x4 configs run 4x4 stages, two per galaxy.
+# Kimi-K3's and Kimi-K3.1's sc4 and sc1 are 4x4 stages, two per galaxy (their manifests' layout); their _8x4
+# configs keep the one-stage-per-galaxy layout for hand comparisons. GLM-5.3's sc4 and sc1 are 8x4 stages, its
+# production layout; its _4x4 configs run 4x4 stages, two per galaxy.
 case "${MODEL}" in
   mistral4|gptoss120b) MODEL_CONFIGS="sc1" ;;
-  kimi_k3)             MODEL_CONFIGS="sc4 sc1 sc4_8x4 sc1_8x4" ;;
+  kimi_k3|kimi_k3_1)   MODEL_CONFIGS="sc4 sc1 sc4_8x4 sc1_8x4" ;;
   glm53)               MODEL_CONFIGS="sc4 sc1 sc4_4x4 sc1_4x4" ;;
   *)                   MODEL_CONFIGS="sc4 sc1" ;;
 esac
@@ -46,9 +46,43 @@ manifest_env() {
   python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["env"][sys.argv[2]])' "${MANIFEST}" "$1"
 }
 
+# Kimi-K3's and Kimi-K3.1's stage layout for ${CONFIG}: <cache root> <cache model name> <8x4 slots>.
+# The manifests describe a 4x4 stage: SP=4 on mesh axis 1 (the tray half's ring), 2560-token chunks
+# (640 tokens per chip), and the slots that layout fits. Runner and producer both read them.
+kimi_layout() {
+  CHUNK_SIZE=$(manifest_env PREFILL_CHUNK_SIZE)
+  case "${CONFIG}" in
+    sc4|sc1)
+      # Two ranks per galaxy, one per tray half, bound by tt-run discovery against the 4x4
+      # descriptor: 8 stages of 12 layers (9 on the last) for sc4, and sc4's first two for sc1, at
+      # sc4's slot count.
+      PP_4X4_HOSTS=1
+      [ "${SCALE}" = sc4 ] && PP_4X4_HOSTS=4
+      PP_RANKS=$((2 * PP_4X4_HOSTS))
+      # The cache the runner resolves for a [4,4] SP-axis-1 stage on 16 visible chips. Checked
+      # non-empty: weight_cache_path mkdirs it, so a failed run leaves an empty one behind.
+      PP_CACHE_DIR="$1/$2_bh_16dev/4x4_sp1"
+      RUNNER_ENV+=" export PREFILL_TTNN_CACHE='$1';"
+      ;;
+    *_8x4)
+      # One 8x4 stage per galaxy, SP=8 on axis 0, at the 8x4 chunk and the slots measured for it.
+      # Exported to runner and producer, ahead of the manifest.
+      CHUNK_SIZE=5120
+      : "${PREFILL_NUM_USERS:=$3}"
+      export PREFILL_NUM_USERS
+      LAYOUT_8X4="export PREFILL_SP=8; export PREFILL_TP=4; export PREFILL_SP_AXIS=0; export PREFILL_CHUNK_SIZE=${CHUNK_SIZE};"
+      RUNNER_ENV+=" ${LAYOUT_8X4}"
+      PRODUCER_ENV+=" ${LAYOUT_8X4}"
+      ;;
+  esac
+  # sc1 opens sc4's slots.
+  SC1_NUM_USERS=${PREFILL_NUM_USERS:-$(manifest_env PREFILL_NUM_USERS)}
+}
+
 MGD="${MGD_DIR}/${SCALE}_mgd.textproto"
 
-CHUNK_SIZE=5120
+# Same value the runner and producer resolve: $PREFILL_CHUNK_SIZE, else chunk_config.py's default.
+CHUNK_SIZE="$(PYTHONPATH="${TT_METAL_HOME}" python3 -c 'from models.demos.deepseek_v3_d_p.utils.chunk_config import prefill_chunk_tokens; print(prefill_chunk_tokens())')"
 WARMUP_CHUNKS=10
 PCC_THRESHOLD=0.85
 GOLDEN_LEN=56320
@@ -75,6 +109,8 @@ VARIANT_MAX_SEQ_LEN=""
 MTP=0
 # The manifest that holds a 4x4 run's stage layout when it is not the run's own (GLM-5.3's MTP variants).
 LAYOUT_MANIFEST=""
+# 1 when the model's golden is a tail window of a longer request, which rejects a PREFILL_PCC_GOLDEN_LEN cap.
+TAIL_GOLDEN=0
 DFLASH=0
 # sc1 runs a single galaxy, so both of these exist to shrink the sc4 model down to what one fits.
 SC1_MAX_SEQ_LEN=""
@@ -114,6 +150,7 @@ case "${MODEL}" in
     PCC_THRESHOLD=0.82
     PRODUCER_ENV="export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/glm53-1020k-last5120;"
     REQUEST_LEN=1044480
+    TAIL_GOLDEN=1
     if [ "${VARIANT#_mtp}" != "${VARIANT}" ]; then
       MTP=1
       MANIFEST="${MANIFEST_DIR}/glm53${VARIANT}.json"
@@ -123,6 +160,11 @@ case "${MODEL}" in
       MTP_TRACE="${PREFILL_MTP_TRACE_DIR:-/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/mtp-tail-1M-last5120}"
       PRODUCER_ENV+=" export PREFILL_MTP_TRACE_DIR='${MTP_TRACE}'; export PREFILL_MTP_PCC=${MTP_PCC_THRESHOLD};"
       [ "${SCALE}" = sc1 ] && TABLE_WAIT_DEFAULT=5400
+    elif [ "${VARIANT}" = _packed ] || [ "${VARIANT}" = _packed4 ]; then
+      # Packed forwards, traced with D2H acks, every chunk's indexer indices crossing ranks: the producer packs the
+      # same golden request. 8x4: two 5,120-token chunks (glm53_packed.json). 4x4 (below): two (_packed) or four
+      # (_packed4) 2,560-token chunks. Same golden and PCC gate: packing moves the MoE output by rounding only.
+      MANIFEST="${MANIFEST_DIR}/glm53${VARIANT}.json"
     fi
     case "${CONFIG}" in
       *_4x4)
@@ -133,7 +175,9 @@ case "${MODEL}" in
         # The trunk runs that manifest; the MTP variants export its layout over their own, keeping their
         # slot counts.
         LAYOUT_MANIFEST="${MANIFEST_DIR}/glm53_4x4.json"
-        if [ "${MTP}" -eq 0 ]; then
+        if [ "${MTP}" -eq 0 ] && [ -n "${VARIANT}" ]; then
+          MANIFEST="${MANIFEST_DIR}/glm53_4x4${VARIANT}.json"  # glm53_4x4_packed.json: the layout, packed
+        elif [ "${MTP}" -eq 0 ]; then
           MANIFEST="${LAYOUT_MANIFEST}"
         else
           LAYOUT_4X4=""
@@ -183,36 +227,25 @@ case "${MODEL}" in
       PRODUCER_ENV="export PREFILL_DFLASH_PCC=${DFLASH_PCC_THRESHOLD};"
       TABLE_WAIT_DEFAULT=7200
     fi
-    # The manifests describe a 4x4 stage: SP=4 on mesh axis 1 (the tray half's ring), 2560-token chunks
-    # (640 tokens per chip), and the slots that layout fits. Runner and producer both read them.
-    CHUNK_SIZE=$(manifest_env PREFILL_CHUNK_SIZE)
-    case "${CONFIG}" in
-      sc4|sc1)
-        # Two ranks per galaxy, one per tray half, bound by tt-run discovery against the 4x4
-        # descriptor: 8 stages of 12 layers (9 on the last) for sc4, and sc4's first two for sc1, at
-        # sc4's slot count.
-        PP_4X4_HOSTS=1
-        [ "${SCALE}" = sc4 ] && PP_4X4_HOSTS=4
-        PP_RANKS=$((2 * PP_4X4_HOSTS))
-        # The cache the runner resolves for a [4,4] SP-axis-1 stage on 16 visible chips. Checked
-        # non-empty: weight_cache_path mkdirs it, so a failed run leaves an empty one behind.
-        K3_CACHE="${PREFILL_TTNN_CACHE:-/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill}"
-        PP_CACHE_DIR="${K3_CACHE}/kimi_k3_bh_16dev/4x4_sp1"
-        RUNNER_ENV+=" export PREFILL_TTNN_CACHE='${K3_CACHE}';"
-        ;;
-      *_8x4)
-        # One 8x4 stage per galaxy, SP=8 on axis 0, at the 8x4 chunk and the slots #63502 measured
-        # for it (34 with the drafter). Exported to runner and producer, ahead of the manifest.
-        CHUNK_SIZE=5120
-        : "${PREFILL_NUM_USERS:=$([ "${DFLASH}" = 1 ] && echo 34 || echo 100)}"
-        export PREFILL_NUM_USERS
-        LAYOUT_8X4="export PREFILL_SP=8; export PREFILL_TP=4; export PREFILL_SP_AXIS=0; export PREFILL_CHUNK_SIZE=${CHUNK_SIZE};"
-        RUNNER_ENV+=" ${LAYOUT_8X4}"
-        PRODUCER_ENV+=" ${LAYOUT_8X4}"
-        ;;
-    esac
-    # sc1 opens sc4's slots.
-    SC1_NUM_USERS=${PREFILL_NUM_USERS:-$(manifest_env PREFILL_NUM_USERS)}
+    # 8x4 slots as #63502 measured them: 100, 34 with the drafter.
+    kimi_layout "${PREFILL_TTNN_CACHE:-/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill}" \
+      kimi_k3 "$([ "${DFLASH}" = 1 ] && echo 34 || echo 100)"
+    ;;
+  kimi_k3_1)
+    # Kimi-K3 with its 24 MLA layers changed to DSA: kimi_k3's depths, gate and layouts. kimi_k3_1.json holds
+    # the 4x4 stage (SP=4 on mesh axis 1, 2560-token chunks); the *_8x4 configs run one 8x4 stage per galaxy.
+    # The adapter's defaults already name the K3.1 weights and golden, so only the 4x4 cache is resolved here.
+    export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/kimi_k3_1_prefill_runner_kv}"
+    MANIFEST="${MANIFEST_DIR}/kimi_k3_1.json"
+    SC1_NUM_LAYERS=24
+    RUNNER_ENV="export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
+    # The cache root is the adapter's ttnn_cache_default; 76 slots measured for the 8x4 stage.
+    kimi_layout "${PREFILL_TTNN_CACHE:-/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3.1-Cache/Kimi-K3.1-Cache-prefill}" \
+      kimi_k3_1 76
+    # The golden is the 8192-token prompt of a vLLM capture, and its span bounds the compare. 10240 tokens is
+    # whole chunks in both layouts (4 of 2560 at 4x4, 2 of 5120 at 8x4), so every one of the 8192 golden
+    # positions is compared, the gate reads earlier chunks' KV from later ones, and the tail past 8192 is timed.
+    REQUEST_LEN=10240
     ;;
   mistral4)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/mistral4_pp4_kv}"
@@ -240,11 +273,13 @@ case "${MODEL}" in
 esac
 
 if [ -n "${VARIANT}" ]; then
-  [ "${MANIFEST##*/}" = "${RUN_NAME}.json" ] || { echo "${MODEL} has no ${VARIANT#_} variant" >&2; exit 2; }
+  [ "${MANIFEST##*/}" = "${RUN_NAME}.json" ] || [ "${MANIFEST##*/}" = "${MODEL}_4x4${VARIANT}.json" ] ||
+    { echo "${MODEL} has no ${VARIANT#_} variant" >&2; exit 2; }
   [ -f "${MANIFEST}" ] || { echo "no manifest for ${RUN_NAME} at ${MANIFEST}" >&2; exit 2; }
   export PIPELINE_DIR="${PIPELINE_DIR}${VARIANT}"
-  # A windowed (tail) golden rejects a length cap, so MTP, which compares the 1M tail, takes none.
-  [ "${MTP}" = 1 ] || PRODUCER_ENV+=" export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN};"
+  # A windowed (tail) golden rejects a length cap, so a model whose golden is the 1M tail (GLM-5.3, every variant)
+  # takes none.
+  [ "${TAIL_GOLDEN}" = 1 ] || PRODUCER_ENV+=" export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN};"
   PRODUCER_ENV+=" export PREFILL_PRODUCER_MAX_REQUESTS=1; export PREFILL_PRODUCER_MULTI_TURN_PROB=0;"
   PERF_BASELINES=""
   REQUIRE_TPS=0
@@ -281,10 +316,18 @@ if [ -n "${PREFILL_SCALED_FP8_KV_CACHE:-}" ]; then
   RUNNER_OVERRIDES="${RUNNER_OVERRIDES} export PREFILL_SCALED_FP8_KV_CACHE=${PREFILL_SCALED_FP8_KV_CACHE};"
 fi
 
-SC1_REQUEST_LEN=${SC1_REQUEST_LEN:-${REQUEST_LEN:-${SC1_MAX_SEQ_LEN}}}
-SC4_REQUEST_LEN=${REQUEST_LEN:-${SC4_MAX_SEQ_LEN}}
+# Capacity probes replace the config's request with one of their own, e.g. a full context at a probed
+# PREFILL_NUM_USERS, resolved here so the perf probes cover that request: whole chunks, within the context the
+# slots are allocated for.
+SC1_REQUEST_LEN=${PREFILL_REQUEST_LEN:-${SC1_REQUEST_LEN:-${REQUEST_LEN:-${SC1_MAX_SEQ_LEN}}}}
+SC4_REQUEST_LEN=${PREFILL_REQUEST_LEN:-${REQUEST_LEN:-${SC4_MAX_SEQ_LEN}}}
 REQUEST_LEN=${SC4_REQUEST_LEN}
 [ "${SCALE}" = sc1 ] && REQUEST_LEN=${SC1_REQUEST_LEN}
+if [ -n "${PREFILL_REQUEST_LEN:-}" ]; then
+  [ "${REQUEST_LEN}" -gt 0 ] && [ $((REQUEST_LEN % CHUNK_SIZE)) -eq 0 ] && [ "${REQUEST_LEN}" -le "${MAX_SEQ_LEN}" ] || {
+    echo "PREFILL_REQUEST_LEN=${PREFILL_REQUEST_LEN} must be whole ${CHUNK_SIZE}-token chunks within max_seq_len=${MAX_SEQ_LEN}" >&2; exit 2;
+  }
+fi
 echo "resolved shape for ${RUN_NAME}/${CONFIG}: max_seq_len=${MAX_SEQ_LEN} request_len=${REQUEST_LEN} num_users=${NUM_USERS}"
 
 REAL_CHUNKS=$((REQUEST_LEN / CHUNK_SIZE))

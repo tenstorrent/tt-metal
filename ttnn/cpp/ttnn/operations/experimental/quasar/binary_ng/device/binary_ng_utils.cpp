@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <numeric>
 #include <string_view>
+#include <type_traits>
 
 #include <fmt/core.h>
 #include <fmt/format.h>
@@ -592,7 +593,16 @@ uint32_t pack_scalar_runtime_arg(const unary::ScalarVariant scalar, const DataTy
                 return static_cast<uint32_t>(v);
             }
             if (dtype == DataType::UINT16) {
-                auto val = static_cast<uint16_t>(static_cast<float>(v));
+                // Integer scalars convert modulo 2^16. Going through float would round values above 2^24 and make
+                // the narrowing conversion undefined for anything outside [0, 65535].
+                uint16_t val;
+                if constexpr (std::is_integral_v<decltype(v)>) {
+                    val = static_cast<uint16_t>(v);
+                } else {
+                    val = static_cast<uint16_t>(static_cast<float>(v));
+                }
+                // The low 16 bits are packed into both halves of the word
+                // e.g. 0x12345 -> 0x2345 -> 0x23452345; -1 -> 0xFFFF -> 0xFFFFFFFF; 0x1000001 -> 0x0001 -> 0x00010001
                 return (static_cast<uint32_t>(val) << 16) | val;
             }
             auto scalar_bf16 = bfloat16(static_cast<float>(v));

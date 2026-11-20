@@ -190,6 +190,15 @@ public:
         receiver_sem.wait(VALID);
     }
 
+    // receive() in two halves, so a member can signal its next ready early. At most one transfer may be outstanding
+    // per link, so when K and V share a link only the next handshake in order may be signalled early.
+    void signal_ready(Noc noc) const {
+        Semaphore<>(receiver_sem_id_).set(INVALID);
+        Semaphore<>(sender_sem_id_).up(noc, signal_target_x_, signal_target_y_, 1);
+    }
+
+    void wait_data() const { Semaphore<>(receiver_sem_id_).wait(VALID); }
+
     /**
      * Forward data to downstream link(s) using default chunk size.
      * In mcast mode: wait for all receivers, then broadcast.
@@ -250,6 +259,49 @@ public:
         }
     }
 
+    // forward() of a page already pushed: its address is captured, the CB's write pointer has moved on.
+    void forward_at(Noc noc, uint32_t cb_addr, uint32_t num_tiles, uint32_t tile_bytes) const {
+        Semaphore<> sender_sem(sender_sem_id_);
+        if constexpr (mcast_enabled) {
+            sender_sem.wait(sender_wait_count_);
+            sender_sem.set(0);
+            noc.async_write_multicast(
+                CoreLocalMem<uint32_t>(cb_addr),
+                MulticastEndpoint{},
+                num_tiles * tile_bytes,
+                mcast_num_dests_,
+                {},
+                {.noc_x_start = mcast_start_x_,
+                 .noc_y_start = mcast_start_y_,
+                 .noc_x_end = mcast_end_x_,
+                 .noc_y_end = mcast_end_y_,
+                 .addr = cb_addr},
+                /*linked=*/true);
+            Semaphore<>(valid_sem_id_)
+                .relay_multicast(
+                    noc,
+                    Semaphore<>(receiver_sem_id_),
+                    mcast_start_x_,
+                    mcast_start_y_,
+                    mcast_end_x_,
+                    mcast_end_y_,
+                    mcast_num_dests_,
+                    /*linked=*/false);
+            noc.async_writes_flushed();
+        } else {
+            sender_sem.wait(1);
+            sender_sem.set(0);
+            noc.async_write(
+                CoreLocalMem<uint32_t>(cb_addr),
+                UnicastEndpoint{},
+                num_tiles * tile_bytes,
+                {.offset_bytes = 0},
+                {.noc_x = next_core_x_, .noc_y = next_core_y_, .addr = cb_addr});
+            noc.async_writes_flushed();
+            Semaphore<>(valid_sem_id_).relay_unicast(noc, Semaphore<>(receiver_sem_id_), next_core_x_, next_core_y_);
+        }
+    }
+
 private:
     // Semaphore IDs (resolved to L1 addresses on use via Semaphore<>).
     uint32_t sender_sem_id_;
@@ -274,3 +326,61 @@ private:
     uint32_t chunk_tiles_;
     uint32_t tile_bytes_;
 };
+
+/**
+ * One chain's compile-time args at compile-time arg offset kOffset (ring_joint_chain_layout.hpp: sender / receiver /
+ * valid semaphore ids, then the multicast flag). An absent chain (kPresent false) has no args: ids 0, unicast.
+ */
+template <bool kPresent, uint32_t kIndex>
+constexpr uint32_t chain_compile_arg() {
+    if constexpr (kPresent) {
+        return get_compile_time_arg_val(kIndex);
+    } else {
+        return 0;
+    }
+}
+
+template <bool kPresent, uint32_t kOffset>
+struct ChainCompileArgs {
+    static constexpr uint32_t arg_count =
+        kPresent ? ttnn::operations::transformer::sdpa::ring_joint::kChainCompileArgCount : 0;
+    static constexpr uint32_t sender_semaphore_id = chain_compile_arg<
+        kPresent,
+        kOffset + ttnn::operations::transformer::sdpa::ring_joint::kChainSenderSemaphoreCompileArgOffset>();
+    static constexpr uint32_t receiver_semaphore_id = chain_compile_arg<
+        kPresent,
+        kOffset + ttnn::operations::transformer::sdpa::ring_joint::kChainReceiverSemaphoreCompileArgOffset>();
+    static constexpr uint32_t valid_semaphore_id = chain_compile_arg<
+        kPresent,
+        kOffset + ttnn::operations::transformer::sdpa::ring_joint::kChainValidSemaphoreCompileArgOffset>();
+    static constexpr bool mcast_enabled =
+        chain_compile_arg<
+            kPresent,
+            kOffset + ttnn::operations::transformer::sdpa::ring_joint::kChainMcastEnabledCompileArgOffset>() == 1;
+};
+
+// The ChainLink of a chain from its compile-time args (Args: ChainCompileArgs) and runtime config.
+template <typename Args, bool is_head_level>
+ChainLink<Args::mcast_enabled, is_head_level> make_chain_link(
+    const ChainConfig& cfg, uint32_t chunk_tiles, uint32_t tile_bytes, uint32_t chain_head) {
+    return ChainLink<Args::mcast_enabled, is_head_level>(
+        cfg.participates,
+        cfg.is_injector,
+        cfg.is_sink,
+        Args::sender_semaphore_id,
+        Args::receiver_semaphore_id,
+        Args::valid_semaphore_id,
+        cfg.template signal_target_x<Args::mcast_enabled>(),
+        cfg.template signal_target_y<Args::mcast_enabled>(),
+        cfg.next_physical_x,
+        cfg.next_physical_y,
+        cfg.mcast_start_x,
+        cfg.mcast_start_y,
+        cfg.mcast_end_x,
+        cfg.mcast_end_y,
+        cfg.mcast_num_dests,
+        chunk_tiles,
+        tile_bytes,
+        chain_head,
+        cfg.next_core_q_chunks);
+}

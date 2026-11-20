@@ -67,10 +67,10 @@ python tests/sweep_framework/sweeps_runner.py --module-name eltwise.unary.relu.r
 ```bash
 - `--module-name`: Module name or comma-separated list (comma-separated supported for `vectors_export` source)
 - `--suite-name`: Suite to run within a module
-- `--vector-source`: One of `file`, `vectors_export` (default: `vectors_export`)
+- `--vector-source`: Required. One of `file`, `vectors_export`
 - `--file-path`: Path to vectors JSON (required when `--vector-source file`)
 - `--vector-id`: Run a single vector by id (requires `--module-name`)
-- `--result-dest`: One of `results_export`, `superset` (default: `results_export`)
+- `--result-dest`: Required. One of `results_export`, `superset`
 - `--tag`: Tag for organizing test runs (defaults to `$USER`)
 - `--skip-modules`: Comma-separated modules to skip when running all modules
 - `--skip-on-timeout`: Skip remaining tests in a suite if a test times out

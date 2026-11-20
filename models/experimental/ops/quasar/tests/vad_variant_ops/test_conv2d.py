@@ -137,7 +137,7 @@ def _run_conv(
         packer_l1_acc=False,
     )
 
-    tt_out, [tt_out_h, tt_out_w] = ttnn.conv2d(
+    tt_out, [tt_out_h, tt_out_w] = U.op("conv2d")(
         input_tensor=tt_input,
         weight_tensor=tt_weight,
         bias_tensor=tt_bias,
