@@ -349,6 +349,11 @@ A3 = os.environ.get("PREFILL_V41_A3", "0") == "1"
 # core with each index row repacked to [valid window | valid top-k | sentinels], rate-aware) instead of the eager path B; every
 # prompt shorter than one chunk is chunk 0 alone. Default off until the export / e2e A/B lands. Needs A3.
 A3_CHUNK0 = os.environ.get("PREFILL_V41_A3_CHUNK0", "0") == "1"
+# WS6 (prefill TTFT): the decoder chunk's attention on trace islands too -- layer 20 as a ratio-1 source (static scorer over its
+# own score mask), the Reindex layers 24 / 28 / 32 / 36 (static scorer over layer 20's keys + mask, A1 / glue / A2 / epilogue
+# like a consumer's) and so the Reuse layers behind them. Default off: the decoder's attention runs eagerly between the mHC / MoE
+# islands (DS41F-0163 01:53: ~245 ms of eager issue per decoder chunk). Needs A3.
+DEC_A3 = os.environ.get("V41_PREFILL_DEC_A3", "0") == "1"
 # e2m1 magnitudes 0, .5, 1, 1.5, 2, 3, 4, 6 as a sum of steps at the midpoints; ties go to the even code (0.25 -> 0,
 # 0.75 -> 1, 1.25 -> 1, 1.75 -> 2, 2.5 -> 2, 3.5 -> 4, 5 -> 4): "gt" at a tie that rounds down, "ge" at one that rounds up
 _FP4_STEPS = (
@@ -584,6 +589,29 @@ def _precreate_shared_masks(self, state) -> None:
 V41CSA.precreate_shared_masks = _precreate_shared_masks
 
 
+def _source_precreate(self, state) -> None:
+    """V41CSA.precreate_shared_masks (runs for every block BEFORE the first capture, prefill.enable_islands) + WS6 DEC_A3: a
+    ratio-1 source's (decoder layer 20's) static-scorer constants -- its score mask, the mask's -inf reset constant, the
+    full-width cut block and the zeros block -- allocated here, before any island exists, not by its glue in the middle of the
+    captures (a buffer allocated after another island's capture can sit on that island's freed intermediates, DS4F-0248).
+    """
+    _precreate_shared_masks(self, state)
+    if DEC_A3 and A3 and self.compressor.compress_rate == 1 and self.sparse_path:
+        S_l = int(self._slab_chunk_tokens) // self.sp_factor
+        n = int(self._slab_chunk_tokens) // self.compressor.compress_rate
+        mask = self._score_mask(state, S_l)
+        key = (id(self.device), tuple(mask.shape))
+        if TtCSA._SHARED_NEG_INF.get(key) is None:
+            TtCSA._SHARED_NEG_INF[key] = self._from_torch(torch.full(tuple(mask.shape), float("-inf")))
+        self.indexer._chunk_cut_mask_tile(S_l, n)
+        self.indexer._zeros_block_tile(S_l, n)
+        if n * _MASK_OPEN_BIG <= int(mask.shape[3]):
+            self.indexer._zeros_block_tile(S_l, n * _MASK_OPEN_BIG)
+
+
+V41CSA.precreate_shared_masks = _source_precreate
+
+
 V41CSA.forward = _source_forward
 
 
@@ -610,8 +638,8 @@ def _a3_carry(attn, state, sliding_kv_g, next_carry, real_len: int) -> None:
 
 
 def _source_traceable(self) -> bool:
-    # DS41F-0073: layer 20 as a full decoder source (ratio 1) runs its attention eagerly for now, so its consumers do too
-    return A3 and self.sparse_path and self.fused_indexer and self.compressor.compress_rate > 1
+    # DS41F-0073: layer 20 as a full decoder source (ratio 1) runs its attention eagerly unless WS6's DEC_A3, so its consumers do
+    return A3 and self.sparse_path and self.fused_indexer and (self.compressor.compress_rate > 1 or DEC_A3)
 
 
 def _source_prepare_chunk(self, state, real_len: int) -> None:
@@ -695,6 +723,25 @@ V41SWA.epilogue_chunk = _swa_epilogue_chunk
 V41SWA.supports_chunk0_island = False
 V41SWA.capacity_buckets = lambda self, state, seq_local: []
 V41CSA.traceable = _source_traceable
+
+
+def _source_glue_chunk(self, state, outs, real_len: int, export=None) -> None:
+    """TtCSA.glue_chunk; under DEC_A3 a ratio-1 source (decoder layer 20) first opens the entry columns written since its last
+    traced chunk (KV-only chunks keep them current; H1 / H2 resumes do not) in fixed-width blocks, so TtCSA's catch-up finds
+    nothing to do (its zeros block would be a new [S_l, gap] tensor per distinct gap)."""
+    if DEC_A3 and self.compressor.compress_rate == 1:
+        mask = self._score_mask(state, int(outs[0].shape[2]))
+        # the reset's -inf constant of THIS mask shape (~1 GB per chip at 1M, ratio 1) before any capture: the first glue runs in
+        # the eager warm-ups, a constant first built by the post-capture reset could sit on a replay's intermediates (DS4F-0248)
+        key = (id(self.device), tuple(mask.shape))
+        if TtCSA._SHARED_NEG_INF.get(key) is None:
+            TtCSA._SHARED_NEG_INF[key] = self._from_torch(torch.full(tuple(mask.shape), float("-inf")))
+        if int(state.entry_count) > int(state.mask_zeroed_upto):
+            _open_mask_columns(self, state, int(state.entry_count))
+    return TtCSA.glue_chunk(self, state, outs, real_len, export)
+
+
+V41CSA.glue_chunk = _source_glue_chunk
 V41CSA.prepare_chunk = _source_prepare_chunk
 V41CSA.forward_attn = _source_forward_attn
 V41CSA.epilogue_chunk = _source_epilogue_chunk
@@ -839,7 +886,10 @@ class V41CSAConsumer(_V41QStem, TtCSA):
 
     def trace_ready(self, state) -> bool:
         rate = self.compressor.compress_rate
-        return int(state.kv_actual) >= max(self.sliding_window, self.indexer.topk * rate)
+        ok = int(state.kv_actual) >= max(self.sliding_window, self.indexer.topk * rate)
+        # WS6 DEC_A3: a decoder Reuse layer's source (layer 20 or a Reindex layer) may run eagerly in a chunk where this layer's
+        # own counter allows the islands: its A2c would read a stale persistent top-k -> trace only behind a traced source
+        return ok and (not DEC_A3 or getattr(self.source, "last_path", None) == "A3")
 
     def capacity_buckets(self, state, seq_local: int) -> list:
         return []  # no scorer: one A2c island
@@ -989,7 +1039,86 @@ class V41CSAReindex(_V41QStem, TtCSA):
         return state
 
     def traceable(self) -> bool:
-        return False  # eager attention between the mHC / MoE islands (no A3 for the decoder yet)
+        # WS6 DEC_A3: A1 / glue / A2 / epilogue like a consumer's, A2 = the static scorer over the KV source's (layer 20's) keys
+        # and score mask + the sparse gather over its slab; otherwise eager between the mHC / MoE islands
+        return A3 and DEC_A3 and self.sparse_path and self.source.traceable()
+
+    supports_chunk0_island = False  # chunk 0 of a decoder run stays eager (path B), as the source's
+
+    def trace_ready(self, state) -> bool:
+        """Path A (the eager forward's use_sparse) AND the KV source traced this chunk: its glue opened the score mask's columns
+        this layer's static scorer reads (an eager source chunk leaves the mask stale)."""
+        rate = self.compressor.compress_rate
+        return int(state.kv_actual) >= max(self.sliding_window, self.indexer.topk * rate) and (
+            getattr(self.source, "last_path", None) == "A3"
+        )
+
+    def capacity_buckets(self, state, seq_local: int) -> list:
+        """The KV source's scorer widths (its key cache; ``state`` here is that source's state, see block._capture_attn_islands)."""
+        return TtCSA.capacity_buckets(self, state, seq_local)
+
+    def bucket_need(self, state, chunk: int) -> int:
+        """The source's need for this chunk: the entries before it (this layer's own counter: E0 x rate == kv_actual) + the chunk's
+        full-width cut + the scorer's sp*S_l phantom columns -- the bucket the source picked for the same chunk."""
+        rate = self.compressor.compress_rate
+        return int(state.kv_actual) // rate + int(chunk) // rate + int(chunk)
+
+    def prepare_chunk(self, state, real_len: int) -> None:
+        self._push_scalar(self._slab_index[1], int(state.kv_actual))
+
+    def forward_pre(self, hidden_states, state, real_len: int, _t=None):
+        """-> (q, q_latent, sliding_kv_gathered, next_carry, cos, sin, kv_rm, carry_rm), all persistent island outputs."""
+        cos, sin = self._rope_gather(self._slab_rope, self._rope_index(self._slab_index, state.kv_actual))
+        q, q_latent = self._q_stem(hidden_states, cos, sin, return_latent=True)
+        sliding_kv = self._kv_stem(hidden_states, cos, sin)
+        if self.sp_factor > 1:
+            sliding_kv = ttnn.experimental.all_gather_async(
+                sliding_kv,
+                dim=2,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.sp_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.sp_axis),
+                num_links=self.ccl_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.tp_ccl_topology,
+                cluster_axis=self.sp_axis,
+            )
+        seq_len = hidden_states.shape[2] * self.sp_factor
+        start, end = self._carry_index[self._carry_key(real_len)]
+        next_carry = ttnn.slice(sliding_kv, start, end, slice_dim=2, num_devices=seq_len // self.sliding_window)
+        kv_rm = self._rm_pieces(sliding_kv, int(sliding_kv.shape[2]), ttnn.bfloat16)[0]
+        carry_rm = self._rm_pieces(state.sliding_carry, self.sliding_window, ttnn.bfloat16)[0]
+        return q, q_latent, sliding_kv, next_carry, cos, sin, kv_rm, carry_rm
+
+    def glue_chunk(self, state, outs, real_len: int, export=None, src_state=None) -> None:
+        """Eager: this layer's window KV into the KV source's slab rows (the chunk rows and the carry rows, exactly the eager path
+        A's _attention_sparse writes; the source is done with them, as for a consumer)."""
+        assert export is None and src_state is not None
+        _q, _ql, sliding_kv_g, _nc, _cos, _sin, kv_rm, carry_rm = outs
+        self._slab_write_rm(src_state, kv_rm, 0)
+        self._slab_write_rm(src_state, carry_rm, int(sliding_kv_g.shape[2]) + self._slab_cap)
+
+    def forward_attn(self, hidden_states, outs, state, real_len: int, src_state=None, kv_bucket=None, **_kw):
+        """Island A2: the static scorer over the KV source's index keys with its score mask (or their first ``kv_bucket``
+        columns), the sparse gather over the source's slab, the output projection -> (y, top-k)."""
+        q, q_latent, sliding_kv_g, _nc, cos, sin = outs[:6]
+        idx = self.indexer.select_indices_static(
+            q_latent, hidden_states, cos, sin, src_state.index_k, src_state.score_mask, kv_bucket=kv_bucket
+        )
+        attn = self._sparse_core(q, idx, cos, sin, src_state.slab_rm, seq_len=sliding_kv_g.shape[2])
+        return self._o_proj(attn), idx
+
+    def epilogue_chunk(self, state, outs, a2, export, real_len: int) -> None:
+        """Eager, after A2: the counters (the source's entry count after the chunk), the carry, and ``shared`` for this layer's
+        Reuse consumers (path A3: the top-k is A2's persistent output; the slab is the KV source's)."""
+        assert export is None
+        sh = self.source.shared
+        assert sh.get("path") == "A3", "a traced Reindex chunk needs its KV source's traced chunk first"
+        src = sh["state"]
+        state.kv_actual += int(real_len)
+        state.entry_count = int(sh["entry_count"])
+        _a3_carry(self, state, outs[2], outs[3], real_len)
+        self.last_path = "A3"
+        self.shared = dict(path="A3", idx=a2[1], state=src, entry_count=state.entry_count)
 
     def precreate_shared_masks(self, state) -> None:
         assert self._src_state is not None, "run an eager chunk before enabling islands"
@@ -1100,6 +1229,8 @@ def _kv_only(self, hidden_states, seq_len_actual=None, *, state, slab: bool = Fa
     ttnn.kv_cache.fill_cache_for_user_(state.index_k, keys, 0, update_idx=state.entry_count)
     if slab and self.sparse_path:
         self._slab_write(state, entries, hidden_states.shape[2] * self.sp_factor + state.entry_count)
+    if slab and DEC_A3 and getattr(state, "score_mask", None) is not None:
+        _open_mask_columns(self, state, state.entry_count + real_len // rate)
     if self.sp_factor > 1:
         sliding_kv = ttnn.experimental.all_gather_async(
             sliding_kv,
@@ -1120,3 +1251,32 @@ def _kv_only(self, hidden_states, seq_len_actual=None, *, state, slab: bool = Fa
 
 
 V41CSA.kv_only = _kv_only
+
+
+_MASK_OPEN_BIG = 16  # the bulk block of _open_mask_columns, in chunk-entry blocks (64k columns at ratio 1, chunk 4096)
+
+
+def _open_mask_columns(attn, state, upto: int) -> None:
+    """WS6 (DEC_A3): every entry column in [state.mask_zeroed_upto, upto) visible (0) in the static scorer's mask, in blocks of
+    the chunk's entry count -- a FIXED width, so one cached zeros constant and one slice_write program serve every depth and
+    every restored / KV-only run (TtCSA.glue_chunk's own catch-up builds a new [S_l, n] zeros tensor for every distinct gap n).
+    A block that would run past ``upto`` is moved back to end there (re-zeroing columns that are already 0)."""
+    mask = state.score_mask
+    S_l = int(mask.shape[2])
+    blk = int(attn._slab_chunk_tokens) // attn.compressor.compress_rate
+    c0, upto = int(state.mask_zeroed_upto), int(upto)
+    if upto <= c0:
+        return
+    big = blk * _MASK_OPEN_BIG
+    if upto - c0 >= big:  # an H1 / H2 resume opens up to ~1M columns at once: 64k-column blocks first
+        zb = attn.indexer._zeros_block_tile(S_l, big)
+        while upto - c0 >= big:
+            ttnn.experimental.slice_write(zb, mask, start=[0, 0, 0, c0], end=[1, 1, S_l, c0 + big], step=[1, 1, 1, 1])
+            c0 += big
+    zeros = attn.indexer._zeros_block_tile(S_l, blk)
+    j = c0
+    while j < upto:
+        st = max(0, min(j, upto - blk))
+        ttnn.experimental.slice_write(zeros, mask, start=[0, 0, 0, st], end=[1, 1, S_l, st + blk], step=[1, 1, 1, 1])
+        j = st + blk
+    state.mask_zeroed_upto = upto

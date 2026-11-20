@@ -500,14 +500,19 @@ class V41PrefillBlock(LightweightModule):
             if isinstance(attn, V41CSAConsumer)
             else "swa"
             if isinstance(attn, V41SWA)
+            else "rdx"
+            if isinstance(
+                attn, V41CSAReindex
+            )  # WS6 DEC_A3: a scorer (buckets) over its KV source's keys, a consumer's glue
             else None
         )
         if kind is None or not attn.traceable():
             return
         is_source = kind == "src"
+        has_scorer = kind in ("src", "rdx")
         rate = attn.compressor.compress_rate if attn.compressor is not None else 1
         S_l = int(h.shape[2])
-        if is_source:
+        if has_scorer:
             attn._a3_states, attn._a3_out = {}, {}
         for slot, state in self.states.items():
             # warm + capture at a valid position just past chunk 0: the runtime captures after its warm-all, whose counters can
@@ -520,15 +525,25 @@ class V41PrefillBlock(LightweightModule):
             elif kind == "con":
                 src_state, src_out = attn.source._a3_states[slot], attn.source._a3_out[slot]
                 kw = dict(src_idx=src_out[1], src_state=src_state)
+            elif kind == "rdx":
+                # the KV source (layer 20) was captured first: its per-slot state owns the keys, score mask and slab this layer
+                # reads; registered below as this layer's "_a3_states" so ITS Reuse consumers write that slab too
+                kw = dict(src_state=attn.source._a3_states[slot])
             glue_kw = dict(src_state=kw["src_state"]) if "src_state" in kw else {}
             # eager warm (compiles every program, buckets included) BEFORE any capture of this phase
             attn.prepare_chunk(state, chunk_tokens)
             warm = attn.forward_pre(h, state, chunk_tokens)
             attn.glue_chunk(state, warm, chunk_tokens, None, **glue_kw)
             a2_warm = list(attn.forward_attn(h, warm, state, chunk_tokens, **kw))
-            buckets = attn.capacity_buckets(state, S_l) if is_source else []
+            buckets = (
+                attn.capacity_buckets(state, S_l)
+                if is_source
+                else attn.capacity_buckets(kw["src_state"], S_l)
+                if kind == "rdx"
+                else []
+            )
             for kv_b in buckets:
-                for dst, t in zip(a2_warm, attn.forward_attn(h, warm, state, chunk_tokens, kv_bucket=kv_b)):
+                for dst, t in zip(a2_warm, attn.forward_attn(h, warm, state, chunk_tokens, kv_bucket=kv_b, **kw)):
                     copy_into(dst, t)
                     ttnn.deallocate(t)
             # DS41F-0073 (PREFILL_V41_A3_CHUNK0): chunk 0's A2 variant -- compiled and its repack constants built here, before
@@ -565,8 +580,8 @@ class V41PrefillBlock(LightweightModule):
                 # a bucket island writes the FULL island's persistent outputs (one output set per layer and slot, whichever
                 # island ran; the consumers' A2c islands read the top-k there): its own results are capture intermediates
 
-                def _bucket_fn(_o=outs, _st=state, _b=kv_b, _dst=a2_out):
-                    for dst, t in zip(_dst, attn.forward_attn(h, _o, _st, chunk_tokens, kv_bucket=_b)):
+                def _bucket_fn(_o=outs, _st=state, _b=kv_b, _dst=a2_out, _kw=kw):
+                    for dst, t in zip(_dst, attn.forward_attn(h, _o, _st, chunk_tokens, kv_bucket=_b, **_kw)):
                         copy_into(dst, t)
                         ttnn.deallocate(t)
                     return _dst
@@ -591,6 +606,8 @@ class V41PrefillBlock(LightweightModule):
             self._attn_islands[slot] = (A1, A2, kw)
             if is_source:
                 attn._a3_states[slot], attn._a3_out[slot] = state, a2_out
+            elif kind == "rdx":
+                attn._a3_states[slot], attn._a3_out[slot] = kw["src_state"], a2_out
             state.kv_actual, state.entry_count = saved[0], saved[1]
             if saved[2] is not None:
                 state.mask_zeroed_upto = saved[2]
@@ -599,7 +616,7 @@ class V41PrefillBlock(LightweightModule):
         logger.info(
             f"[v41 a3] layer {self.layer} ({type(attn).__name__}): attention islands A1 + A2 for slots "
             f"{sorted(self._attn_islands)}"
-            + (f", A2 buckets {[b for b, _ in self._a2_buckets[0]]}" if is_source else "")
+            + (f", A2 buckets {[b for b, _ in self._a2_buckets[0]]}" if has_scorer else "")
         )
 
     def _attn_islands_enabled(self) -> bool:
