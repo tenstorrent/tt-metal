@@ -9,7 +9,6 @@
 #include <iterator>
 #include <optional>
 #include <string>
-#include <string_view>
 #include <vector>
 
 #include <fmt/ranges.h>
@@ -67,12 +66,14 @@ std::vector<MeshCoordinate> devices_of_every(const std::vector<Tensor>& io_tenso
 }
 
 // The devices of a MeshProgramSpec's program that the check covers: those of its range that every tensor in io_tensors
-// is on. generic_op reports a range that reaches past them itself, so the check never hides that error.
+// is on. generic_op reports a range that reaches past them itself, so the check never hides that error. It walks the
+// tensors' devices rather than the range, so a range far past the mesh costs no more than one inside it, and leaves a
+// range of another dimension to generic_op too.
 std::vector<MeshCoordinate> devices_in(
     const ttnn::MeshCoordinateRange& range, const std::vector<MeshCoordinate>& io_tensor_devices) {
     std::vector<MeshCoordinate> devices;
-    std::ranges::copy_if(range, std::back_inserter(devices), [&](const MeshCoordinate& device) {
-        return std::ranges::find(io_tensor_devices, device) != io_tensor_devices.end();
+    std::ranges::copy_if(io_tensor_devices, std::back_inserter(devices), [&](const MeshCoordinate& device) {
+        return device.dims() == range.dims() && range.contains(device);
     });
     return devices;
 }
@@ -97,7 +98,8 @@ void check_tensor_views(
         if (!nb::isinstance<nb::str>(name)) {
             continue;
         }
-        const std::string_view parameter = nb::borrow<nb::str>(name).c_str();
+        // Length-aware, as the run args' own table is: a name may hold a NUL character.
+        const auto parameter = nb::cast<std::string>(name);
         if (std::ranges::none_of(
                 spec.tensor_parameters, [&](const auto& declared) { return *declared.unique_id == parameter; })) {
             continue;
