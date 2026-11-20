@@ -17,6 +17,15 @@ def test_concat(device):
     logger.debug(f"Concatenated Tensor Shape: {concatenated_tensor.shape}")  # Shape([1, 1, 64, 64])
 
 
+def test_assign(device):
+    # Create a tensor in DRAM
+    input_tensor = ttnn.rand((1, 1, 64, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Copy the tensor into a new tensor in L1
+    output_tensor = ttnn.assign(input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
+    logger.debug(f"Assigned Tensor Shape: {output_tensor.shape}")  # Shape([1, 1, 64, 32])
+
+
 def test_nonzero(device):
     # Create a rank-4 tensor with three non-zero elements
     input_tensor = torch.zeros((1, 1, 1, 32), dtype=torch.bfloat16)
@@ -73,6 +82,17 @@ def test_scatter(device):
     # Perform scatter operation
     output = ttnn.scatter(input_ttnn, dim, index_ttnn, source_ttnn)
     logger.debug(f"Scatter operation result: {output}")
+
+
+def test_fill_implicit_tile_padding(device):
+    # Create a TILE tensor of shape [1, 1, 40, 20]: its 32x32 tiles span [1, 1, 64, 32], and the rest is tile padding
+    input_tensor = ttnn.rand((1, 1, 40, 20), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Write -inf into the tile padding; the values inside the shape are unchanged
+    output = ttnn.fill_implicit_tile_padding(input_tensor, float("-inf"))
+    padded = ttnn.from_device(output).to_torch_with_padded_shape()
+    logger.debug(f"Padding Value: {padded[0, 0, -1, -1].item()}")  # -inf
+    logger.debug(f"Padded Shape: {output.padded_shape}")  # Shape([1, 1, 64, 32])
 
 
 def test_scatter_add(device):
@@ -194,6 +214,26 @@ def test_untilize(device):
     # Untilize the tensor
     untilized_tensor = ttnn.untilize(tilized_tensor)
     logger.debug(f"Untilized Tensor Layout: {untilized_tensor.layout}")  # Layout.ROW_MAJOR
+
+
+def test_moe_expert_token_remap(device):
+    # Routing weights of 4 tokens (batch 4, seq 1) for 32 experts
+    batch, seq, experts = 4, 1, 32
+    weights = torch.rand((1, batch, seq, experts))
+    topk = ttnn.from_torch(weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    # Place every expert on this single device
+    mapping = torch.ones((1, 1, experts, 1), dtype=torch.int32)
+    expert_mapping = ttnn.from_torch(mapping, dtype=ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    # Each token selects 2 experts
+    selected = torch.tensor([[0, 5], [1, 5], [2, 7], [3, 31]], dtype=torch.int32).reshape(1, batch, seq, 2)
+    expert_metadata = ttnn.from_torch(selected, dtype=ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    # Keep the weights of the selected experts, and flag the experts that each pair of tokens selects
+    local_weights, flags = ttnn.moe_expert_token_remap(topk, expert_mapping, expert_metadata, reduction_size=2)
+    logger.debug(f"Local Weights Shape: {local_weights.shape}")  # Shape([1, 4, 1, 32])
+    logger.debug(f"Flags Shape: {flags.shape}")  # Shape([1, 1, 2, 32])
 
 
 def test_untilize_with_unpadding(device):

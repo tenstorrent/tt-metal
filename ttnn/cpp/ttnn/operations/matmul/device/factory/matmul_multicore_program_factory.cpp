@@ -14,6 +14,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
+#include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
 using namespace tt;
 using namespace tt::constants;
@@ -95,6 +96,8 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
 
     // C = A*B*...
     // MN = MK*KN
+    // Broadcast batch dims are read in place: the reader finds each output tile's A and B batches.
+    const auto batch_broadcast = operations::matmul::utilities::get_batch_broadcast(ashape, bshape);
     uint32_t B = get_batch_size(ashape);
     uint32_t Mt = ashape[-2] / TILE_HEIGHT;
     uint32_t Kt = ashape[-1] / TILE_WIDTH;
@@ -188,6 +191,9 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
             },
         .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
+    if (batch_broadcast.has_value()) {
+        operations::matmul::utilities::add_batch_broadcast_args(reader, *batch_broadcast, MtKt, KtNt);
+    }
 
     KernelSpec writer{
         .unique_id = WRITER,
