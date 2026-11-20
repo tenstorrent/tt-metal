@@ -1194,7 +1194,7 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
     # The check compares devices, not placements: one device's view of a replicated tensor is rejected in the other
     # device's program too, although both devices hold the same data. The tensor itself holds both devices and passes.
     replicated = ttnn.from_torch(torch_input[:1], layout=ttnn.TILE_LAYOUT, device=mesh_device)
-    replicated_output = ttnn.allocate_tensor_on_device(replicated.spec, mesh_device)
+    replicated_output = ttnn.from_torch(torch.zeros_like(torch_input[:1]), layout=ttnn.TILE_LAYOUT, device=mesh_device)
     first_replica, second_replica = ttnn.get_device_tensors(replicated)
     first_replicated_output = ttnn.get_device_tensors(replicated_output)[0]
     spec, run_args = exp_program(second_replica, first_replicated_output)

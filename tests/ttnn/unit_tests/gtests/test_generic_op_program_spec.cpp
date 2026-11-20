@@ -593,17 +593,21 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecChecksTensorViewsOnEveryCa
         misses_its_device);
 
     // The mesh form's views name the run args of their range. A view counts only for the run args that bind it: the
-    // ProgramSpec form's run args are not those of this call's program.
+    // ProgramSpec form's run args are not those of this call's program. This program writes an output of zeros with the
+    // same spec as before, so it hits the cached program, and its result shows that it ran.
+    const Tensor zeros = ttnn::zeros_like(output);
+    const auto mesh_program = make_exp_program(input, zeros);
+    const auto mesh_entries = this->device_->num_program_cache_entries();
     const ttnn::MeshCoordinateRange whole_mesh(this->device_->shape());
-    const std::vector<std::pair<ttnn::MeshCoordinateRange, m2::ProgramSpec>> programs{{whole_mesh, program.spec}};
+    const std::vector<std::pair<ttnn::MeshCoordinateRange, m2::ProgramSpec>> programs{{whole_mesh, mesh_program.spec}};
     const std::vector<std::pair<ttnn::MeshCoordinateRange, m2::ProgramRunArgs>> run_args{
-        {whole_mesh, program.run_args}};
+        {whole_mesh, mesh_program.run_args}};
     EXPECT_THAT(
-        [&] { ttnn::prim::generic_op({input, output}, programs, run_args, view_of_input(run_args[0].second)); },
+        [&] { ttnn::prim::generic_op({input, zeros}, programs, run_args, view_of_input(run_args[0].second)); },
         misses_its_device);
-    ttnn::prim::generic_op({input, output}, programs, run_args, view_of_input(program.run_args));
-    EXPECT_EQ(this->device_->num_program_cache_entries(), entries + 1);
-    EXPECT_TRUE(ttnn::allclose<bfloat16>(ttnn::exp(input).cpu(), output.cpu()));
+    ttnn::prim::generic_op({input, zeros}, programs, run_args, view_of_input(mesh_program.run_args));
+    EXPECT_EQ(this->device_->num_program_cache_entries(), mesh_entries);
+    EXPECT_TRUE(ttnn::allclose<bfloat16>(ttnn::exp(input).cpu(), zeros.cpu()));
 }
 
 TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecPreparationFillsTheProgramCache) {
