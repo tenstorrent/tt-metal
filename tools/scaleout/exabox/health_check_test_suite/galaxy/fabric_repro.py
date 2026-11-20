@@ -4,8 +4,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """A loopable fabric-in-the-loop reduced repro for one chip's ethernet hang. Run with TT_VISIBLE_DEVICES set to
 the chips under test only (the mesh opens over exactly those chips).
-1xN mesh, FABRIC_1D: ttnn.all_gather(dim=2, cluster_axis=1) of a [1,1,16384,16384] bf16 DRAM tensor per chip
-(512 MiB in per chip).
+1xN mesh, FABRIC_1D: ttnn.all_gather(dim=2, cluster_axis=1) of a [1,1,H,W] bf16 DRAM tensor per chip
+(--hw, default 16384,16384: 512 MiB in per chip; 2560,4096 gives an odd per-worker page count).
 Link data: each chip sends its own host-built bit pattern (link_pattern.py: walking ones and
 zeros, seeded by mesh index). Launch 0 and the last launch are compared bit for bit with it on the host, every slab on
 every chip; each other launch is compared on the device with launch 0's checked output, and read back bit for bit only
@@ -25,7 +25,11 @@ ap.add_argument("--seconds", type=float, default=300)
 ap.add_argument("--rows", required=True)
 ap.add_argument("--beat", required=True)
 ap.add_argument("--label", default="")
+ap.add_argument("--hw", default="16384,16384", help="per-chip tensor H,W (bf16, multiples of 32)")
 a = ap.parse_args()
+H, W = (int(v) for v in a.hw.split(","))
+if H % 32 or W % 32:
+    ap.error("--hw: H and W must be multiples of 32")
 rows = open(a.rows, "a")
 
 
@@ -71,7 +75,6 @@ try:
         (v.strip() for v in vis.split(",") if v.strip()), key=lambda v: (0, int(v)) if v.isdigit() else (1, 0)
     )
     phys = [vlist[i] if i < len(vlist) else str(i) for i in ids]
-    H, W = 16384, 16384
     SEED = 4802
     exp = [lp.pattern(SEED, k, H, W) for k in range(N)]  # chip k's host-built pattern
     x = ttnn.from_torch(
