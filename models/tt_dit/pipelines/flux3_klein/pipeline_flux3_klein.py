@@ -8,6 +8,7 @@ import hashlib
 import math
 import time
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -316,6 +317,11 @@ class Flux3KleinPipeline:
         prompt = request.prompt if self._upsampler is None else self._upsampler(request.prompt, reference)
         timings["upsample"] = time.time() - t0
         seed = caption_seed(prompt) if request.seed is None else request.seed
+        h, w = latent_shape(size, size)
+        # The noise and the latent's host tensor are built on a helper thread while this thread dispatches the text
+        # encoder; the device copy stays on this thread
+        sp = self._transformers[request.model].sp_factor
+        latent_job = self._prestep_pool().submit(self._prepare_latent_host, seed, h, w, sp)
 
         t0 = time.time()
         text = self._prompt_encoder.encode(prompt, text_rows or self._text_rows(prompt, size, ref_bucket))
@@ -326,14 +332,14 @@ class Flux3KleinPipeline:
         if canvas is not None:
             if size == max(SIZES):
                 self._free_other_plans(math.prod(latent_shape(size, size)), ref_bucket)
-            h, w = latent_shape(canvas.height, canvas.width)
-            image_cond = (self._vae.encode(canvas), reference_ids(h, w, 0))
+            rh, rw = latent_shape(canvas.height, canvas.width)
+            image_cond = (self._vae.encode(canvas), reference_ids(rh, rw, 0))
         timings["encode_reference"] = time.time() - t0
 
         t0 = time.time()
-        h, w = latent_shape(size, size)
+        noise, x_host = latent_job.result()
         state, cached_steps = self._denoise(
-            request.model, make_noise(seed, h, w), image_ids(h, w), text, image_cond, steps, guidance, request.cache
+            request.model, noise, image_ids(h, w), text, image_cond, steps, guidance, request.cache, x_host=x_host
         )
         ttnn.deallocate(text[0])
         timings["denoise"] = time.time() - t0
@@ -361,6 +367,24 @@ class Flux3KleinPipeline:
             if (lengths["image"], lengths["image_cond"]) != (image_rows, cond_rows):
                 self._plan_cache.pop(key).deallocate()
 
+    def _prestep_pool(self) -> ThreadPoolExecutor:
+        if getattr(self, "_prestep_executor", None) is None:
+            self._prestep_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="flux3_klein_prestep")
+        return self._prestep_executor
+
+    def _prepare_latent_host(self, seed: int, h: int, w: int, sp: int) -> tuple[torch.Tensor, ttnn.Tensor]:
+        """The noise and its padded, SP-sharded fp32 host tensor (no device access)."""
+        noise = make_noise(seed, h, w)
+        rows_padded = ttnn.core.roundup(noise.shape[0], sp * TILE)
+        x_host = tensor.from_torch(
+            pad_rows(noise, rows_padded)[None],
+            device=self._device,
+            dtype=ttnn.float32,
+            mesh_axes=[None, self._sp_axis, None],
+            on_host=True,
+        )
+        return noise, x_host
+
     def _upload_rows(self, rows: torch.Tensor | ttnn.Tensor, sp_factor: int) -> ttnn.Tensor:
         if isinstance(rows, ttnn.Tensor):
             if rows.shape[-2] % (sp_factor * TILE):
@@ -384,6 +408,7 @@ class Flux3KleinPipeline:
         steps: int,
         guidance: float | None,
         cache_config: DBCacheConfig | None,
+        x_host: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, int]:
         transformer = self._transformers[model]
         sp = transformer.sp_factor
@@ -420,9 +445,12 @@ class Flux3KleinPipeline:
             samples.append(sample(1, *self._null_text))
         image_axes = [None, self._sp_axis, None]
         rows, rows_padded = noise.shape[0], ttnn.core.roundup(noise.shape[0], sp * TILE)
-        x = tensor.from_torch(
-            pad_rows(noise, rows_padded)[None], device=self._device, dtype=ttnn.float32, mesh_axes=image_axes
-        )
+        if x_host is not None:
+            x = ttnn.to_device(x_host, self._device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            x = tensor.from_torch(
+                pad_rows(noise, rows_padded)[None], device=self._device, dtype=ttnn.float32, mesh_axes=image_axes
+            )
         mask = self._mask_cache.get((rows, rows_padded))
         if mask is None:
             mask = torch.zeros(1, rows_padded, IN_CHANNELS["image"])
@@ -488,6 +516,9 @@ class Flux3KleinPipeline:
         return x, cached_steps
 
     def close(self) -> None:
+        if getattr(self, "_prestep_executor", None) is not None:
+            self._prestep_executor.shutdown(wait=True)
+            self._prestep_executor = None
         if self._upsampler is not None:
             self._upsampler.close()
             for t in self._upsampler_ranges:
