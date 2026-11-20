@@ -166,7 +166,7 @@ ChunkedParams compute_chunked_params(
         TT_FATAL(p.page_table_stick_size % 32 == 0, "page table stick size must be a multiple of 32");
     } else {
         p.max_blocks_per_seq = page_table_tensor.padded_shape()[1];
-        p.page_table_stick_size = page_table_tensor.buffer()->aligned_page_size();
+        p.page_table_stick_size = page_table_tensor.mesh_buffer().aligned_page_size();
         TT_FATAL(
             p.page_table_stick_size % 32 == 0,
             "page table page size in bytes must be a multiple of 32 due to address alignment");
@@ -521,7 +521,7 @@ uint32_t allocate_mask_block_map_cb(const SDPAInputs& tensors, sdpa_cb::CBIds& c
     if (!tensors.attn_mask_block_map.has_value()) {
         return 0;
     }
-    const uint32_t stick_size = tensors.attn_mask_block_map->buffer()->aligned_page_size();
+    const uint32_t stick_size = tensors.attn_mask_block_map->mesh_buffer().aligned_page_size();
     cb_ids.mask_block_map = allocate_cb(stick_size, 1, tt::DataFormat::Int32);
     return stick_size;
 }
@@ -1732,6 +1732,14 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     if (math_fidelity == MathFidelity::LoFi) {
         defines_map["SDPA_COMPUTE_LOFI"] = "1";
     }
+    if (fp32_dest_acc_en) {
+        // Matches the fp32 max CBs allocated below. Other factories sharing compute_common.hpp keep
+        // bf16 max CBs, and ring-joint kernels have no kernel-config-buffer room for the SFPU row max.
+        defines_map["SDPA_EXACT_FP32_ROW_MAX"] = "1";
+    }
+    if (program_config.has_value() && program_config->min_blocked_pack_tiles.has_value()) {
+        defines_map["SDPA_MIN_BLOCKED_PACK_TILES"] = std::to_string(*program_config->min_blocked_pack_tiles);
+    }
     log_debug(tt::LogOp, "use_zigzag_balancing: {}", use_zigzag_balancing);
 
     KernelDescriptor::Defines defines(defines_map.begin(), defines_map.end());
@@ -1756,6 +1764,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     tt::DataFormat im_df =
         tt::DataFormat::Float16_b;  // Keep most intermediates in bf16 to save L1; opt-in fp32 per-CB below.
     tt::DataFormat stats_df = im_df;
+    // The row max must keep the fp32 scores' peak exactly, or (score - max) * scale overflows exp.
+    tt::DataFormat max_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
     tt::DataFormat qk_im_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
     tt::DataFormat sum_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
     // salad_correct_fused inits mul_bcast_cols with out CB and applies it to sum CB too —
@@ -1771,6 +1781,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     uint32_t scalar_tile_size = tt::tile_size(scalar_df);
     uint32_t im_tile_size = tt::tile_size(im_df);
     uint32_t stats_tile_size = tt::tile_size(stats_df);
+    uint32_t max_tile_size = tt::tile_size(max_df);
     uint32_t qk_im_tile_size = tt::tile_size(qk_im_df);
     uint32_t sum_tile_size = tt::tile_size(sum_df);
 
@@ -1864,8 +1875,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     cb_ids.qk_im = allocate_tile_cb(qk_tiles, qk_im_tile_size, qk_im_df);
     cb_ids.out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
     cb_ids.out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
-    cb_ids.max_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
-    cb_ids.max_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    cb_ids.max_A = allocate_tile_cb(statistics_tiles, max_tile_size, max_df);
+    cb_ids.max_B = allocate_tile_cb(statistics_tiles, max_tile_size, max_df);
     cb_ids.sum_A = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
     cb_ids.sum_B = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
     cb_ids.exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
@@ -1938,8 +1949,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // 40% at bs16-32 (11x8, 12x10) and 13-14% at bs1 with L1-resident K/V and unicast chains. (Causal chains are
     // already off under retention, see kv_chain_mode_for.)
     constexpr uint32_t kMaxRetainChainBatch = 8;
-    const bool kv_in_l1 = input_tensor_k.buffer()->buffer_type() == tt::tt_metal::BufferType::L1 &&
-                          input_tensor_v.buffer()->buffer_type() == tt::tt_metal::BufferType::L1;
+    const bool kv_in_l1 = input_tensor_k.memory_config().buffer_type() == tt::tt_metal::BufferType::L1 &&
+                          input_tensor_v.memory_config().buffer_type() == tt::tt_metal::BufferType::L1;
     const bool retain_skips_chains = kv_retain != 0 && B > kMaxRetainChainBatch;
     if (kv_chains_possible && !retain_skips_chains) {
         // Causal chains pool the Q heads of a KV head. With K/V retention the non-causal chains share its key, so a

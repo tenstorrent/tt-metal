@@ -42,7 +42,7 @@ bool RunDeviceMcastWrapAroundTest(
         mcast_end_noc.str(),
         noc_id == NOC::RISCV_0_default ? "noc0" : "noc1");
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
 
     constexpr uint32_t data_size_bytes = 64;
 
