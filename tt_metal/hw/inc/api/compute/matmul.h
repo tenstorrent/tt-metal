@@ -454,7 +454,8 @@ constexpr bool matmul_fe_one_tile_kt1_cut() {
 // the TRISC wrapper's reading of the cut (matmul.h defines it, so a kernel without the matmul API skips the wrapper's ttsync)
 #define MATMUL_FE_TTSYNC_CUT()                                                           \
     ((::ckernel::matmul_fe_hifi3_wide() && !::ckernel::matmul_fe_mark::is_used<8>(0)) || \
-     ::ckernel::matmul_fe_one_tile_kt1_cut<::std::integral_constant<int, 0>>())
+     ::ckernel::matmul_fe_one_tile_kt1_cut<::std::integral_constant<int, 0>>() ||        \
+     ::ckernel::matmul_fe_hifi3_f32_bfp8_block())
 namespace ckernel {
 
 #ifdef TRISC_MATH
@@ -473,6 +474,19 @@ constexpr std::uint32_t matmul_fe_named_block_arg(const char* name) {
     }
 #endif
     return 0;
+}
+
+// HiFi3, 32-bit DEST, a Float32 in0 over a Bfp8_b in1 and a named subblock of two or more rows and columns: the tile
+// MOP and the polling unpack (minimal 424 2x2: the row form read +0.7 %, the ttsync unpack +0.35 %)
+constexpr bool matmul_fe_hifi3_f32_bfp8_block() {
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
+    return MATH_FIDELITY == MathFidelity::HiFi3 && DST_ACCUM_MODE && DST_SYNC_MODE == DstSync::SyncHalf &&
+           unpack_src_format[0] == to_underlying(DataFormat::Float32) &&
+           unpack_src_format[1] == to_underlying(DataFormat::Bfp8_b) && matmul_fe_named_block_arg("subblock_h") >= 2 &&
+           matmul_fe_named_block_arg("subblock_w") >= 2;
+#else
+    return false;
+#endif
 }
 
 // Hoisted unpack rows for the run-time calls. A kernel that names its subblock height (minimal_matmul) hoists only where
@@ -552,7 +566,9 @@ constexpr bool matmul_fe_hifi3_short_m_tile_mop() {
 template <bool row_mop_on, std::uint32_t kt_key, DataFormat form_out>
 constexpr bool matmul_fe_tile_mop() {
     using K = std::integral_constant<std::uint32_t, kt_key>;
-    if constexpr (
+    if constexpr (!row_mop_on && kt_key == 0 && matmul_fe_hifi3_f32_bfp8_block()) {
+        return true;
+    } else if constexpr (
         !row_mop_on && kt_key == 0 &&
         matmul_hifi2_half_wide(
             MATH_FIDELITY, DST_SYNC_MODE == DstSync::SyncHalf, DST_ACCUM_MODE, llk_math_matmul_kernel_has_32bit_cb()) &&
@@ -1329,7 +1345,8 @@ template <std::size_t mark>
 constexpr std::uint32_t matmul_fe_unpack_ttsync() {
 #if defined(UCK_CHLKC_UNPACK)
     constexpr bool runtime_cut =
-        matmul_fe_hifi3_wide() && !matmul_fe_mark::is_used_d<8, std::integral_constant<std::size_t, mark>>(0);
+        (matmul_fe_hifi3_wide() && !matmul_fe_mark::is_used_d<8, std::integral_constant<std::size_t, mark>>(0)) ||
+        matmul_fe_hifi3_f32_bfp8_block();
     return mark == 3 ? 3
                      : ((mark == 1 && llk_unpack_AB_matmul_kernel_ttsync() && !runtime_cut &&
                          !matmul_fe_one_tile_kt1_cut<std::integral_constant<std::size_t, mark>>())
