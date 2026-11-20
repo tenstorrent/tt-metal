@@ -29,6 +29,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import PrefillModelAdapter, PrefillRunParams
 from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import mesh_cache_key
 
 # NOTE: the heavy model stack (TtPrefillRuntime / TtPrefillTransformer, the MoE gate, transformers'
 # AutoConfig) is imported lazily inside the methods that need it. This keeps `import ...adapters` cheap
@@ -57,6 +58,10 @@ def unwrap_multimodal_config(cfg):
 class MLAPrefillAdapter(PrefillModelAdapter):
     """DeepSeek-V3-family prefill adapter (MLA + MoE over TtPrefillRuntime)."""
 
+    # Missing TTNN cache pieces are converted from the HF checkpoint (PREFILL_HF_MODEL) at start-up, which needs the
+    # DeepSeek-V3 HF key layout (see tt/runners/weight_categories.py). A model whose checkpoint differs sets False.
+    builds_missing_weight_cache = True
+
     def fabric_payload_size(self) -> int:
         from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import moe_fabric_payload_size
 
@@ -76,18 +81,18 @@ class MLAPrefillAdapter(PrefillModelAdapter):
     # ------------------------------------------------------------------
     # Weight cache
     # ------------------------------------------------------------------
-    def weight_cache_path(self, mesh_shape: tuple) -> Optional[Path]:
+    def weight_cache_path(self, mesh_shape: tuple, sp_axis: int = 0) -> Optional[Path]:
         """Mirror the pytest weight_cache_path layout so the runner reads the same
         files the cache-populate run wrote:
-          $PREFILL_TTNN_CACHE / {name}_{arch}_{N}dev / {sp}x{tp}
+          $PREFILL_TTNN_CACHE / {name}_{arch}_{N}dev / {rows}x{cols}[_sp1]
+        ``mesh_shape`` is (axis 0, axis 1); see ``mesh_cache_key`` for the SP-axis suffix.
         Defaults to ``ttnn_cache_default``; None only if explicitly empty."""
         env_cache = os.environ.get("PREFILL_TTNN_CACHE", self.ttnn_cache_default)
         if not env_cache:
             return None
         arch = "bh" if is_blackhole() else "wh"
         num_devices = ttnn.get_num_devices()
-        sp, tp = mesh_shape
-        path = Path(env_cache) / f"{self.name}_{arch}_{num_devices}dev" / f"{sp}x{tp}"
+        path = Path(env_cache) / f"{self.name}_{arch}_{num_devices}dev" / mesh_cache_key(mesh_shape, sp_axis)
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -109,10 +114,24 @@ class MLAPrefillAdapter(PrefillModelAdapter):
                 mesh_shape=params.mesh_shape,
                 sp_axis=params.sp_axis,
                 num_layers=params.num_layers,
-                num_users=params.num_users,
+                num_users=self.kv_cache_slots(params),
                 tp_axis=params.tp_axis if self._dense_tp_shard_kv(params) else None,
                 bank_aligned=True,
             )
+        )
+
+    def packed_forward_chunks(self, params: PrefillRunParams) -> int:
+        """Chunks per forward the runtime packs: params.forward_chunks when this adapter's runtime serves
+        prefill_forward, else 1 (the runner runs a forward of several chunks one chunk at a time)."""
+        return params.forward_chunks if self.supports_packed_forward else 1
+
+    def kv_cache_slots(self, params: PrefillRunParams) -> int:
+        """User slots to allocate in every KV cache: the runtime's cache_num_users (num_users, plus the traced
+        packed forward's scratch slot past them). The engine still addresses and migrates num_users slots."""
+        from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import kv_cache_slots
+
+        return kv_cache_slots(
+            params.num_users, forward_chunks=self.packed_forward_chunks(params), use_trace=params.use_trace
         )
 
     def _dense_tp_shard_kv(self, params: PrefillRunParams) -> bool:
@@ -141,6 +160,11 @@ class MLAPrefillAdapter(PrefillModelAdapter):
             max_seq_len=params.max_seq_len,
             mesh_shape=params.mesh_shape,
             chunk_size=params.chunk_size,
+            # Only an adapter whose runtime serves prefill_forward packs; otherwise the runner runs a forward of
+            # several chunks as prefill_chunk per chunk, on a one-chunk runtime.
+            forward_tokens_budget=(
+                params.forward_chunks * params.chunk_size if self.packed_forward_chunks(params) > 1 else None
+            ),
             num_users=params.num_users,
             sp_axis=params.sp_axis,
             tp_axis=params.tp_axis,
@@ -163,6 +187,10 @@ class MLAPrefillAdapter(PrefillModelAdapter):
             use_trace=params.use_trace,
             overlap_shared_expert_with_dispatch=params.overlap_shared_expert_with_dispatch,
             tp_shard_kv=True if self._dense_tp_shard_kv(params) else None,
+            build_missing_cache=self.builds_missing_weight_cache,
+            hf_model_path=os.environ.get("PREFILL_HF_MODEL")
+            or os.environ.get(self.env_var, "")
+            or self.hf_model_default,
         )
         return TtPrefillRuntime(
             mesh_device=mesh_device,

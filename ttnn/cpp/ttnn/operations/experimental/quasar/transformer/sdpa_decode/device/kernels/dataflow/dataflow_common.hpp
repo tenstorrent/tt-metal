@@ -655,15 +655,14 @@ uint32_t read_k(
             // Multicast the full K^T chunk to all receiver cores at once
             noc.async_write_multicast(
                 CoreLocalMem<uint32_t>(k_write_ptr),
-                MulticastEndpoint{},
+                dfb_k,
                 k_chunk_tiles * k_tile_bytes,
                 mcast_params.num_dests,
                 {},
                 {.noc_x_start = mcast_params.mcast_x,
                  .noc_y_start = mcast_params.mcast_y0,
                  .noc_x_end = mcast_params.mcast_x,
-                 .noc_y_end = mcast_params.mcast_y1,
-                 .addr = k_write_ptr},
+                 .noc_y_end = mcast_params.mcast_y1},
                 false);
             // Ensure data multicast is complete before signaling
             noc.async_write_barrier();

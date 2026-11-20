@@ -14,7 +14,7 @@ from models.common.utility_functions import is_blackhole, is_wormhole_b0
 
 from ...layers.conv3d import ContextParallelConv3d
 from ...layers.module import Module, ModuleList, Parameter
-from ...layers.normalization import GroupNorm
+from ...layers.normalization import GroupNorm, dram_group_norm_core_grid
 from ...parallel.config import MochiVAEParallelConfig, vae_neighbor_pad, vae_slice_reshard
 from ...parallel.manager import CCLManager
 from ...utils.substate import rename_substate
@@ -372,60 +372,20 @@ class ResBlock(Module):
         return x_NTHWC
 
     @staticmethod
-    def _valid_multicast(nvr, num_batches):
-        """Check the uniform-multicast-group constraint from GroupNorm.
-
-        When nvr < num_batches each virtual row handles at most one batch
-        element, so multicast groups are trivially uniform.  When
-        nvr >= num_batches, nvr must divide evenly by num_batches so every
-        batch contributes the same number of rows to each multicast group.
-        """
-        return nvr < num_batches or nvr % num_batches == 0
-
-    @staticmethod
-    def _valid_norm_grid(norm, batch_size, HW):
-        """Find a valid core_grid for GroupNorm given the actual tensor dimensions.
-
-        The ttnn group_norm kernel requires:
-            num_virtual_rows = (grid_x / num_virtual_cols) * grid_y
-            Ht % num_virtual_rows == 0  and  num_virtual_rows <= Ht
-            nvr < num_batches  OR  nvr % num_batches == 0  (uniform multicast)
-        where Ht = batch_size * ceil(HW / 32).
-
-        The grid computed at init time may be invalid when the actual HW differs
-        from what was expected (e.g. after slicing padding, or on topologies
-        where the per-device T differs).
-        """
-        Ht = batch_size * ((HW + 31) // 32)
-        nvc = norm.num_virtual_cols
-        # Try (grid_x, grid_y) combinations from largest to smallest.
-        # Reducing grid_x is needed when no grid_y works for the max grid_x
-        # (e.g. grid_x=12, nvc=4 → nvr=3*gy, but Ht not divisible by 3).
-        for gx in range(norm.core_grid.x, nvc - 1, -1):
-            for gy in range(norm.core_grid.y, 0, -1):
-                nvr = (gx // nvc) * gy
-                if nvr > 0 and nvr <= Ht and Ht % nvr == 0 and ResBlock._valid_multicast(nvr, batch_size):
-                    return ttnn.CoreGrid(x=gx, y=gy)
-        # Ultimate fallback: nvr=1 always satisfies the multicast constraint
-        # (1 < batch_size for batch_size > 1) and divides any Ht.
-        return ttnn.CoreGrid(x=nvc, y=1)
-
-    @staticmethod
     def _min_valid_norm_batch(norm, HW):
-        """Find the minimum batch_size for which a valid GroupNorm grid exists.
-
-        Returns the smallest batch_size >= 1 such that _valid_norm_grid returns
-        a grid where nvr actually divides Ht = batch_size * ceil(HW/32).
-        """
+        """The smallest batch_size >= 1 for which GroupNorm has a valid grid within norm.core_grid."""
         hw_tiles = (HW + 31) // 32
-        nvc = norm.num_virtual_cols
         for bs in range(1, hw_tiles + 1):
-            Ht = bs * hw_tiles
-            for gx in range(norm.core_grid.x, nvc - 1, -1):
-                for gy in range(norm.core_grid.y, 0, -1):
-                    nvr = (gx // nvc) * gy
-                    if nvr > 0 and nvr <= Ht and Ht % nvr == 0 and ResBlock._valid_multicast(nvr, bs):
-                        return bs
+            grid = dram_group_norm_core_grid(
+                norm.core_grid,
+                num_channels=norm.num_padded_channels,
+                num_groups=norm.num_padded_groups,
+                num_virtual_cols=norm.num_virtual_cols,
+                nhw=bs * hw_tiles * ttnn.TILE_SIZE,
+                num_batches=bs,
+            )
+            if grid is not None:
+                return bs
         return 1
 
     @staticmethod
@@ -454,11 +414,7 @@ class ResBlock(Module):
         return 1
 
     def _run_norm(self, norm, x_tiled, batch_size, HW, num_out_blocks, compute_kernel_config=None):
-        """Run GroupNorm with auto-validated core_grid."""
-        original_grid = norm.core_grid
-        valid_grid = self._valid_norm_grid(norm, batch_size, HW)
-        if valid_grid.x != original_grid.x or valid_grid.y != original_grid.y:
-            norm.core_grid = valid_grid
+        """Run GroupNorm; it picks a valid grid within norm.core_grid for the input itself."""
         Ht = batch_size * ((HW + 31) // 32)
         num_out_blocks = self._safe_num_out_blocks(Ht, num_out_blocks)
         # GroupNorm kernel requires bf16 input; cast and restore if needed.
@@ -468,8 +424,6 @@ class ResBlock(Module):
         x_tiled = norm(x_tiled, num_out_blocks, compute_kernel_config=compute_kernel_config)
         if input_dtype != ttnn.bfloat16:
             x_tiled = ttnn.typecast(x_tiled, input_dtype)
-        if norm.core_grid.x != original_grid.x or norm.core_grid.y != original_grid.y:
-            norm.core_grid = original_grid
         return x_tiled
 
     def _norm_silu_spatial_chunk(

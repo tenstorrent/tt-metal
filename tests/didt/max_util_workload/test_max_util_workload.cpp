@@ -37,6 +37,7 @@
 #include "multi_device_fixture.hpp"
 #include "tt_metal/tt_metal/eth/eth_test_common.hpp"
 #include "impl/buffers/buffer_impl.hpp"
+#include "impl/dispatch/host_device_transfer.hpp"
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
 
@@ -403,7 +404,7 @@ static shared_ptr<Buffer> setup_eth_stream_config(IDevice* device, MaxUtilConfig
 
     // Populate with a recognisable pattern so DRAM contains live data.
     std::vector<uint32_t> pattern(total_size / sizeof(uint32_t), 0xDEADBEEFu);
-    detail::WriteToBuffer(dram_buffer, pattern);
+    slow_dispatch::WriteToBuffer(*dram_buffer, pattern);
 
     return dram_buffer;
 }
@@ -423,7 +424,7 @@ struct PrefillProgram {
     shared_ptr<Buffer> dram_buffer1;
 };
 
-static PrefillProgram build_prefill_program(IDevice* device, MaxUtilConfig& cfg) {
+static PrefillProgram build_prefill_program(distributed::MeshDevice& mesh_device, IDevice* device, MaxUtilConfig& cfg) {
     const CoreRange core_range(cfg.grid_start, cfg.grid_end);
     const CoreRangeSet core_range_set({core_range});
 
@@ -440,12 +441,12 @@ static PrefillProgram build_prefill_program(IDevice* device, MaxUtilConfig& cfg)
     // Fill buffer 0 with random data
     std::vector<uint32_t> data0 =
         rng_bfp16(buffer_size_bfloat16, tile_rows, tile_cols, /*mean=*/0.0f, /*stdev=*/1.0f, /*seed=*/42);
-    detail::WriteToBuffer(dram_buffer0, data0);
+    slow_dispatch::WriteToBuffer(*dram_buffer0, data0);
 
     // Fill buffer 1 with random data
     std::vector<uint32_t> data1 =
         rng_bfp16(buffer_size_bfloat16, tile_rows, tile_cols, /*mean=*/0.0f, /*stdev=*/1.0f, /*seed=*/43);
-    detail::WriteToBuffer(dram_buffer1, data1);
+    slow_dispatch::WriteToBuffer(*dram_buffer1, data1);
 
     // Get L1 base address and pack all buffers densely
     uint64_t l1_base_addr = MetalContext::instance().hal().get_dev_addr(
@@ -471,7 +472,7 @@ static PrefillProgram build_prefill_program(IDevice* device, MaxUtilConfig& cfg)
         cfg.l1_super_sync_addr,
         cfg.l1_fpu_timing_addr);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
 
     std::vector<uint32_t> prefill_compile_args = {
         dram_buffer0_addr,       // 0: dram_buffer0_addr
@@ -624,7 +625,7 @@ static uint32_t duty_cycle_to_slow_loops(uint32_t duty_cycle_pct, uint32_t num_w
 // BRISC kernel synchronizes compute launch across the worker grid.
 // ---------------------------------------------------------------------------
 
-static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
+static Program build_program(distributed::MeshDevice& mesh_device, IDevice* device, const MaxUtilConfig& cfg) {
     const CoreRange core_range(cfg.grid_start, cfg.grid_end);
     const CoreRangeSet core_range_set({core_range});
 
@@ -635,7 +636,7 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
         cfg.num_iterations,
         cfg.num_wl_loops);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
 
     log_info(LogTest, "Super sync: {}", cfg.super_sync);
 
@@ -767,7 +768,7 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
 // lighter on the FPU. The slow workload loops num_slow_wl_loops times per dispatch.
 // ---------------------------------------------------------------------------
 
-static Program build_slow_cos_program(const MaxUtilConfig& cfg) {
+static Program build_slow_cos_program(distributed::MeshDevice& mesh_device, const MaxUtilConfig& cfg) {
     const CoreRange core_range(cfg.grid_start, cfg.grid_end);
     const CoreRangeSet core_range_set({core_range});
 
@@ -778,7 +779,7 @@ static Program build_slow_cos_program(const MaxUtilConfig& cfg) {
         cfg.num_iterations,
         cfg.num_slow_wl_loops);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
 
     // -- Compute kernel (TRISC): SFPU cosine on L1 data --
     CreateKernel(
@@ -943,7 +944,7 @@ static bool log_eth_bw(IDevice* device, const MaxUtilConfig& cfg, const shared_p
     }
 
     std::vector<uint32_t> readback;
-    detail::ReadFromBuffer(dram_buffer, readback);
+    slow_dispatch::ReadFromBuffer(*dram_buffer, readback);
 
     // Each stream reads cfg.eth_pages_per_bank pages from 1 bank per iteration.
     uint64_t bytes_per_stream =
@@ -1038,7 +1039,7 @@ static bool run_single_device(const shared_ptr<distributed::MeshDevice>& mesh_de
         distributed::MeshCoordinateRange(distributed::MeshCoordinate({0, 0}), distributed::MeshCoordinate({0, 0}));
 
     // Phase 1: Pre-fill L1 buffers from DRAM
-    auto prefill_program = build_prefill_program(device, cfg);
+    auto prefill_program = build_prefill_program(*mesh_device, device, cfg);
 
     // Run pre-fill program
     auto prefill_workload = distributed::MeshWorkload();
@@ -1053,12 +1054,12 @@ static bool run_single_device(const shared_ptr<distributed::MeshDevice>& mesh_de
 
     // Phase 2: Build and run main program, optionally interleaved with slow cos.
     auto mesh_workload = distributed::MeshWorkload();
-    mesh_workload.add_program(target, build_program(device, cfg));
+    mesh_workload.add_program(target, build_program(*mesh_device, device, cfg));
 
     const bool has_slow_wl = cfg.num_slow_wl_loops > 0;
     auto slow_cos_workload = distributed::MeshWorkload();
     if (has_slow_wl) {
-        slow_cos_workload.add_program(target, build_slow_cos_program(cfg));
+        slow_cos_workload.add_program(target, build_slow_cos_program(*mesh_device, cfg));
         log_info(
             LogTest, "Duty-cycle interleave: slow cos loops={} between each max-util dispatch", cfg.num_slow_wl_loops);
     }
@@ -1127,7 +1128,7 @@ static bool run_all_devices(
         auto* device = mesh_device->impl().get_devices().at(0);
         MaxUtilConfig cfg =
             full_grid_config(device, num_tiles, num_iterations, num_wl_loops, num_slow_wl_loops, super_sync);
-        auto prefill_program = build_prefill_program(device, cfg);
+        auto prefill_program = build_prefill_program(*mesh_device, device, cfg);
         auto prefill_workload = distributed::MeshWorkload();
         prefill_workload.add_program(target, std::move(prefill_program.program));
         auto& cq = mesh_device->mesh_command_queue();
@@ -1137,11 +1138,11 @@ static bool run_all_devices(
 
         auto eth_dram_buffer = setup_eth_stream_config(device, cfg);
         auto main_workload = std::make_unique<distributed::MeshWorkload>();
-        main_workload->add_program(target, build_program(device, cfg));
+        main_workload->add_program(target, build_program(*mesh_device, device, cfg));
         std::unique_ptr<distributed::MeshWorkload> slow_workload;
         if (cfg.num_slow_wl_loops > 0) {
             slow_workload = std::make_unique<distributed::MeshWorkload>();
-            slow_workload->add_program(target, build_slow_cos_program(cfg));
+            slow_workload->add_program(target, build_slow_cos_program(*mesh_device, cfg));
         }
         runs.push_back(DeviceRun{
             mesh_device, device, cfg, std::move(eth_dram_buffer), std::move(main_workload), std::move(slow_workload)});

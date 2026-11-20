@@ -30,7 +30,6 @@
 /////////////
 // RISC-V Address map definition (hardware)
 #define MEM_L1_BASE 0x0
-#define MEM_L1_SIZE (4 * 1024 * 1024)
 // Note: RISC-V LR/SC and AMO atomics don't work with uncached L1 (they hang).
 // Both require the cache coherence system. Only plain loads/stores with fences work uncached.
 // Worker and DRAM uncached window. On idle ethernet this is the sibling CCE, not this core.
@@ -278,10 +277,19 @@
 #error "Dispatch cached semaphore pool must start on a 64B cache line"
 #endif
 
+// Watcher ring buffer head, taken with a cached AMO. Nothing else may share its line: writing back the dirty line
+// would clobber neighbours written through the uncached alias.
+#define MEM_DISPATCH_WATCHER_RING_HEAD MEM_DISPATCH_SEM_REGIONS_END
+#define MEM_DISPATCH_WATCHER_RING_HEAD_END (MEM_DISPATCH_WATCHER_RING_HEAD + 64)
+#if (MEM_DISPATCH_WATCHER_RING_HEAD % 64 != 0)
+#error "Dispatch watcher ring buffer head must start on a 64B cache line"
+#endif
+
 // Everything above shifts with MEM_DISPATCH_MAP_END, so round the whole span up to the 2 kB L1 cache set
 // period: otherwise the kernel config ring and kernel text land on different sets.
-#define MEM_DISPATCH_MAP_END \
-    (MEM_DISPATCH_SEM_REGIONS_BASE + (((MEM_DISPATCH_SEM_REGIONS_END - MEM_DISPATCH_SEM_REGIONS_BASE) + 2047) & ~2047))
+#define MEM_DISPATCH_MAP_END         \
+    (MEM_DISPATCH_SEM_REGIONS_BASE + \
+     (((MEM_DISPATCH_WATCHER_RING_HEAD_END - MEM_DISPATCH_SEM_REGIONS_BASE) + 2047) & ~2047))
 
 // Pre-resolved form of the two layouts, so shared device code names one symbol instead of its own #if.
 #if defined(COMPILE_FOR_DISPATCH_ENGINE)
@@ -397,18 +405,50 @@
 // Register-width write of offset 0 programs the reset vector. A larger write stays in SRAM.
 #define MEM_IERISC_L1_SIZE (4 * 1024 * 1024)
 #define MEM_IERISC_UNCACHED_BASE 0x800000
-// This core's uncached alias of its own SRAM. Idle ethernet is 8 MiB up. Every other core uses
-// the worker window. Callers use this name; MEM_WORKER_UNCACHED_BASE is the +4 MiB window only.
+// This core's uncached alias of its own SRAM: 8 MiB above the CCE's own base (CCE0 8 MiB, CCE1 12 MiB), so a
+// CCE-relative offset plus this name is the alias address. Every other core uses the worker window.
+// Callers use this name; MEM_WORKER_UNCACHED_BASE is the +4 MiB window only.
+// Device code otherwise takes MEM_L1_UNCACHED_BASE from overlay_addresses.h (the variant's register headers);
+// that header leaves it to this one on idle-eth builds. The worker window is the fallback where it is not included,
+// as in host code.
 #if defined(COMPILE_FOR_IDLE_ERISC)
-#define MEM_L1_UNCACHED_BASE MEM_IERISC_UNCACHED_BASE
-#else
+#undef MEM_L1_UNCACHED_BASE
+#define MEM_L1_UNCACHED_BASE (ETH_CCE_LOCAL_BASE + MEM_IERISC_UNCACHED_BASE)
+#elif !defined(MEM_L1_UNCACHED_BASE)
 #define MEM_L1_UNCACHED_BASE MEM_WORKER_UNCACHED_BASE
+#endif
+// Distance from a cached address to its uncached alias: uncached = cached + MEM_L1_UNCACHED_OFFSET. A core whose own
+// cached view starts at 0 has MEM_L1_UNCACHED_OFFSET == MEM_L1_UNCACHED_BASE. A Keraunos CCE's own cached view starts at
+// ETH_CCE_LOCAL_BASE (CCE1: 4 MiB), so subtracting MEM_L1_UNCACHED_BASE there would land in the sibling CCE's SRAM.
+#if defined(COMPILE_FOR_IDLE_ERISC)
+#define MEM_L1_UNCACHED_OFFSET MEM_IERISC_UNCACHED_BASE
+#else
+#define MEM_L1_UNCACHED_OFFSET MEM_L1_UNCACHED_BASE
 #endif
 #define MEM_IERISC_LOCAL_SIZE MEM_DM_LOCAL_SIZE
 #define MEM_SUBORDINATE_IERISC_LOCAL_SIZE MEM_IERISC_LOCAL_SIZE
 #define MEM_IERISC_LOCAL_HARTS 8
+// One idle-ethernet core is one CCE of an HSIO tile, so a tile is two cores (CCE0 and CCE1). Each CCE sees
+// its own SRAM at local 0, and the sibling CCE's SRAM in the next window, MEM_IERISC_PEER_CCE_BASE (cached;
+// the uncached alias is MEM_L1_UNCACHED_BASE above it). Bring-up programs that view for both CCEs.
+#define MEM_IERISC_ETH_CCES 2
+#define MEM_IERISC_ETH_CCE_BASE(eth_cce) ((eth_cce) * MEM_IERISC_L1_SIZE)
+// The host and the HAL use CCE-relative offsets (CCE0's view). A firmware or kernel build is linked at its own CCE's
+// native addresses, where ETH_CCE_LOCAL_BASE is that CCE's SRAM and ETH_CCE_PEER_BASE its sibling's (the JIT defines
+// both per build).
+#ifndef ETH_CCE_LOCAL_BASE
+#define ETH_CCE_LOCAL_BASE 0
+#endif
+#ifndef ETH_CCE_PEER_BASE
+#define ETH_CCE_PEER_BASE MEM_IERISC_L1_SIZE
+#endif
+#define MEM_IERISC_PEER_CCE_BASE ETH_CCE_PEER_BASE
 // Offsets 0..63 are reset-vector registers, not SRAM. Reserve through 128 and start the mailbox there.
 #define MEM_IERISC_RESERVED_SIZE 128
+// Watcher ring buffer lock (cached view of this CCE's own SRAM). A Keraunos CCE has no NEO cluster semaphore to claim
+// slots with, so harts claim them under this lock, as a Mimir CCE does. Offsets 0..63 are registers and 64 is the
+// barrier word; the lock sits in the same reserved block, above them.
+#define MEM_IERISC_WATCHER_RING_BUFFER_LOCK 96
 #define MEM_IERISC_MAILBOX_BASE MEM_IERISC_RESERVED_SIZE
 #define MEM_IERISC_MAILBOX_SIZE 32768
 #define MEM_IERISC_MAILBOX_END (MEM_IERISC_MAILBOX_BASE + MEM_IERISC_MAILBOX_SIZE)
@@ -430,7 +470,10 @@
 #define MEM_SUBORDINATE_IERISC_STACK_MIN_SIZE MEM_IERISC_STACK_MIN_SIZE
 #define MEM_IERISC_BANK_TO_NOC_SCRATCH (MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH + 1024)
 #define MEM_IERISC_BANK_TO_NOC_SIZE (MEM_BANK_TO_NOC_XY_SIZE + MEM_BANK_OFFSET_SIZE)
-#define MEM_IERISC_KERNEL_CONFIG_BASE (MEM_IERISC_BANK_TO_NOC_SCRATCH + MEM_IERISC_BANK_TO_NOC_SIZE)
+// KeraunosSpaRoutes (hostdev/keraunos_spa_routes.h), host-written per core, read by experimental/keraunos_cce.h.
+#define MEM_IERISC_SPA_ROUTES_BASE (MEM_IERISC_BANK_TO_NOC_SCRATCH + MEM_IERISC_BANK_TO_NOC_SIZE)
+#define MEM_IERISC_SPA_ROUTES_SIZE 128
+#define MEM_IERISC_KERNEL_CONFIG_BASE (MEM_IERISC_SPA_ROUTES_BASE + MEM_IERISC_SPA_ROUTES_SIZE)
 #define MEM_IERISC_KERNEL_CONFIG_SIZE (2 * 1024)
 #define MEM_IERISC_KERNEL_BASE ((MEM_IERISC_KERNEL_CONFIG_BASE + MEM_IERISC_KERNEL_CONFIG_SIZE + 63) & ~63)
 #define MEM_IERISC_KERNEL_SIZE MEM_DM_KERNEL_SIZE
@@ -489,62 +532,62 @@
 //
 //   - Local CPU (the hart itself): its own SRAM at 0. Kernels that must be host-visible store
 //     through MEM_L1_UNCACHED_BASE. On a CCE that is MEM_WORKER_UNCACHED_BASE.
-//   - Host / local AXI: CCE n's SRAM at 0x40000000 + n * MEM_CCE_L1_SIZE. The host path does not
+//   - Host / local AXI: CCE n's SRAM at 0x40000000 + n * MEM_MIMIR_CCE_L1_SIZE. The host path does not
 //     go through the hart cache, so this is not the uncached alias even where a numeric field
 //     happens to match. No define for it here: host code never forms this address, and UMD owns it.
 //   - Package-global SPA: 0x1280000000 + n * 4MB.
 //
-// Firmware is linked against the local CPU view, so MEM_CCE_SRAM_LOCAL_BASE is 0 and the offsets
+// Firmware is linked against the local CPU view, so MEM_MIMIR_CCE_SRAM_LOCAL_BASE is 0 and the offsets
 // below serve as both the hart's addresses and the Mimir-local HAL's. Metal cluster access uses
 // the DRAM-core coordinate plus this tag; UMD maps that tagged window onto the host AXI view.
 // A package-ATT descriptor does not use this tag. Its HAL l1_noc_offset is the CCE SRAM window
 // at 0x1280000000.
 //
-#define MEM_CCE_L1_NOC_OFFSET 0x2000000000ULL
-#define MEM_CCE_SRAM_LOCAL_BASE 0x0
-#define MEM_CCE_L1_BASE 0x0
-#define MEM_CCE_L1_SIZE (4 * 1024 * 1024)
-#define MEM_CCE_RESERVED_SIZE 128
+#define MEM_MIMIR_CCE_L1_NOC_OFFSET 0x2000000000ULL
+#define MEM_MIMIR_CCE_SRAM_LOCAL_BASE 0x0
+#define MEM_MIMIR_CCE_L1_BASE 0x0
+#define MEM_MIMIR_CCE_L1_SIZE (4 * 1024 * 1024)
+#define MEM_MIMIR_CCE_RESERVED_SIZE 128
 // Cached watcher semaphore. Give it a dedicated cache line: host-visible mailbox state is updated
 // through the uncached alias, and a cached writeback must not overwrite neighboring fields.
-#define MEM_CCE_WATCHER_RING_BUFFER_LOCK 64
-#define MEM_CCE_MAILBOX_BASE MEM_CCE_RESERVED_SIZE
+#define MEM_MIMIR_CCE_WATCHER_RING_BUFFER_LOCK 64
+#define MEM_MIMIR_CCE_MAILBOX_BASE MEM_MIMIR_CCE_RESERVED_SIZE
 // Must hold mailboxes_t as instantiated for CCE (COMPILE_FOR_DRISC, PROCESSOR_COUNT == 8):
 // profiler_msg_t.buffer[8], DevicePrintBuffer<1632, 8>, and watcher already sized to
 // MaxProcessorsPerCoreType. The static_assert in qa_hal_dram.cpp fires if this is too small.
-#define MEM_CCE_MAILBOX_SIZE 32768
-#define MEM_CCE_MAILBOX_END (MEM_CCE_MAILBOX_BASE + MEM_CCE_MAILBOX_SIZE)
-#define MEM_CCE_FIRMWARE_BASE MEM_CCE_MAILBOX_END
-#define MEM_CCE_FIRMWARE_SIZE (24 * 1024)
-#define MEM_CCE_GLOBAL_BASE (MEM_CCE_FIRMWARE_BASE + MEM_CCE_FIRMWARE_SIZE)
-#define MEM_CCE_GLOBAL_SIZE MEM_DM_GLOBAL_SIZE
+#define MEM_MIMIR_CCE_MAILBOX_SIZE 32768
+#define MEM_MIMIR_CCE_MAILBOX_END (MEM_MIMIR_CCE_MAILBOX_BASE + MEM_MIMIR_CCE_MAILBOX_SIZE)
+#define MEM_MIMIR_CCE_FIRMWARE_BASE MEM_MIMIR_CCE_MAILBOX_END
+#define MEM_MIMIR_CCE_FIRMWARE_SIZE (24 * 1024)
+#define MEM_MIMIR_CCE_GLOBAL_BASE (MEM_MIMIR_CCE_FIRMWARE_BASE + MEM_MIMIR_CCE_FIRMWARE_SIZE)
+#define MEM_MIMIR_CCE_GLOBAL_SIZE MEM_DM_GLOBAL_SIZE
 // crt0 indexes TLS by mhartid. One shared firmware image, one TLS slot per CCE hart.
-#define MEM_CCE_LOCAL_SIZE MEM_DM_LOCAL_SIZE
-#define MEM_CCE_LOCAL_HARTS 8
-// Global slot 0 is the firmware's .data/.bss (__fw_data); slots 1..MEM_CCE_LOCAL_HARTS are the
+#define MEM_MIMIR_CCE_LOCAL_SIZE MEM_DM_LOCAL_SIZE
+#define MEM_MIMIR_CCE_LOCAL_HARTS 8
+// Global slot 0 is the firmware's .data/.bss (__fw_data); slots 1..MEM_MIMIR_CCE_LOCAL_HARTS are the
 // per-hart kernel .data/.bss (__kn_data). Without the kernel slots, __kn_data would alias the TLS
 // base below.
-#define MEM_CCE_LOCAL_BASE (MEM_CCE_GLOBAL_BASE + MEM_CCE_GLOBAL_SIZE * (MEM_CCE_LOCAL_HARTS + 1))
-#define MEM_CCE_MAP_END (MEM_CCE_LOCAL_BASE + (MEM_CCE_LOCAL_SIZE * MEM_CCE_LOCAL_HARTS))
-#define MEM_CCE_INIT_LOCAL_L1_BASE_SCRATCH MEM_CCE_MAP_END
-#define MEM_CCE_INIT_LOCAL_L1_SCRATCH_SIZE (1 * 1024)
-#define MEM_CCE_BANK_TO_NOC_SCRATCH (MEM_CCE_INIT_LOCAL_L1_BASE_SCRATCH + MEM_CCE_INIT_LOCAL_L1_SCRATCH_SIZE)
-#define MEM_CCE_BANK_TO_NOC_SIZE (MEM_BANK_TO_NOC_XY_SIZE + MEM_BANK_OFFSET_SIZE)
+#define MEM_MIMIR_CCE_LOCAL_BASE (MEM_MIMIR_CCE_GLOBAL_BASE + MEM_MIMIR_CCE_GLOBAL_SIZE * (MEM_MIMIR_CCE_LOCAL_HARTS + 1))
+#define MEM_MIMIR_CCE_MAP_END (MEM_MIMIR_CCE_LOCAL_BASE + (MEM_MIMIR_CCE_LOCAL_SIZE * MEM_MIMIR_CCE_LOCAL_HARTS))
+#define MEM_MIMIR_CCE_INIT_LOCAL_L1_BASE_SCRATCH MEM_MIMIR_CCE_MAP_END
+#define MEM_MIMIR_CCE_INIT_LOCAL_L1_SCRATCH_SIZE (1 * 1024)
+#define MEM_MIMIR_CCE_BANK_TO_NOC_SCRATCH (MEM_MIMIR_CCE_INIT_LOCAL_L1_BASE_SCRATCH + MEM_MIMIR_CCE_INIT_LOCAL_L1_SCRATCH_SIZE)
+#define MEM_MIMIR_CCE_BANK_TO_NOC_SIZE (MEM_BANK_TO_NOC_XY_SIZE + MEM_BANK_OFFSET_SIZE)
 // Written by the host after drisc.cc has copied the bank tables out of the preceding scratch
 // range. It is persistent CCE-kernel configuration, not boot code or mailbox storage.
-#define MEM_CCE_SPA_ROUTES_SIZE 64
-#define MEM_CCE_SPA_ROUTES_BASE (MEM_CCE_BANK_TO_NOC_SCRATCH + MEM_CCE_BANK_TO_NOC_SIZE)
-#define MEM_CCE_KERNEL_CONFIG_BASE (MEM_CCE_SPA_ROUTES_BASE + MEM_CCE_SPA_ROUTES_SIZE)
-#define MEM_CCE_KERNEL_CONFIG_SIZE (2 * 1024)
-#define MEM_CCE_KERNEL_BASE ((MEM_CCE_KERNEL_CONFIG_BASE + MEM_CCE_KERNEL_CONFIG_SIZE + 63) & ~63)
-#define MEM_CCE_KERNEL_SIZE MEM_DM_KERNEL_SIZE
-#define MEM_CCE_STACK_MIN_SIZE MEM_DM_STACK_MIN_SIZE
+#define MEM_MIMIR_CCE_SPA_ROUTES_SIZE 128
+#define MEM_MIMIR_CCE_SPA_ROUTES_BASE (MEM_MIMIR_CCE_BANK_TO_NOC_SCRATCH + MEM_MIMIR_CCE_BANK_TO_NOC_SIZE)
+#define MEM_MIMIR_CCE_KERNEL_CONFIG_BASE (MEM_MIMIR_CCE_SPA_ROUTES_BASE + MEM_MIMIR_CCE_SPA_ROUTES_SIZE)
+#define MEM_MIMIR_CCE_KERNEL_CONFIG_SIZE (2 * 1024)
+#define MEM_MIMIR_CCE_KERNEL_BASE ((MEM_MIMIR_CCE_KERNEL_CONFIG_BASE + MEM_MIMIR_CCE_KERNEL_CONFIG_SIZE + 63) & ~63)
+#define MEM_MIMIR_CCE_KERNEL_SIZE MEM_DM_KERNEL_SIZE
+#define MEM_MIMIR_CCE_STACK_MIN_SIZE MEM_DM_STACK_MIN_SIZE
 // Cached local offset, same as the host HAL. Device code adds MEM_L1_UNCACHED_BASE.
-#define MEM_DRISC_MAILBOX_BASE MEM_CCE_MAILBOX_BASE
+#define MEM_DRISC_MAILBOX_BASE MEM_MIMIR_CCE_MAILBOX_BASE
 // Metal boot hart is 0. The value is a local CPU address, so it is the same on
 // every CCE. CCE_RESET_VECTOR_BASE itself names CCE0; UMD offsets it per CCE.
 #define CCE_RESET_VECTOR_BASE 0x02000000
-#define CCE_BOOT_HART_RESET_VECTOR CCE_RESET_VECTOR_BASE
+#define MIMIR_CCE_BOOT_HART_RESET_VECTOR CCE_RESET_VECTOR_BASE
 
 /////////////
 // Padding/alignment restriction needed in linker scripts for erisc

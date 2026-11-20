@@ -16,7 +16,7 @@ from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, report_and_clear
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_mla_kv_cache
-from tests.ttnn.utils_for_testing import comp_pcc
+from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
 CACHE_DIR = Path("/tmp/DS_PREFILL_mla")
 

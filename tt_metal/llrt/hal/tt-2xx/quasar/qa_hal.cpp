@@ -16,7 +16,7 @@
 #include "quasar/qa_hal.hpp"
 #include "dev_mem_map.h"
 #include "eth_fw_api.h"
-#include "hal_types.hpp"
+#include "llrt/hal_types.hpp"
 #include "llrt/hal.hpp"
 #include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
@@ -104,18 +104,22 @@ public:
         // (which XIPify's check_relaxed expects); --no-relax only stops the linker from acting on them.
         flags += "-Wl,--no-relax ";
         if (params.core_type == HalProgrammableCoreType::IDLE_ETH) {
-            const DeviceAddr text = MEM_IERISC_FIRMWARE_BASE;
-            const DeviceAddr data = MEM_IERISC_GLOBAL_BASE;
-            const DeviceAddr tls = MEM_IERISC_LOCAL_BASE;
+            // Firmware is built per CCE (processor_id is the CCE); a kernel's processor_id is
+            // MEM_IERISC_LOCAL_HARTS * CCE + hart. Each build is linked into its own CCE's SRAM, at the CCE's base.
+            const uint32_t eth_cce = params.is_fw ? params.processor_id : params.processor_id / MEM_IERISC_LOCAL_HARTS;
+            const uint32_t hart = params.is_fw ? 0 : params.processor_id % MEM_IERISC_LOCAL_HARTS;
+            const DeviceAddr cce_base = MEM_IERISC_ETH_CCE_BASE(eth_cce);
+            const DeviceAddr text = cce_base + MEM_IERISC_FIRMWARE_BASE;
+            const DeviceAddr data = cce_base + MEM_IERISC_GLOBAL_BASE;
+            const DeviceAddr tls = cce_base + MEM_IERISC_LOCAL_BASE;
             if (params.is_fw) {
                 flags += fmt::format("-Wl,--defsym=__fw_text={} ", text);
                 flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_IERISC_FIRMWARE_SIZE);
             } else {
-                const DeviceAddr kn_text = MEM_IERISC_KERNEL_BASE + params.processor_id * MEM_IERISC_KERNEL_SIZE;
+                const DeviceAddr kn_text = cce_base + MEM_IERISC_KERNEL_BASE + hart * MEM_IERISC_KERNEL_SIZE;
                 flags += fmt::format("-Wl,--defsym=__kn_text={} ", kn_text);
                 flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_IERISC_KERNEL_SIZE);
-                flags += fmt::format(
-                    "-Wl,--defsym=__kn_data={} ", data + MEM_IERISC_GLOBAL_SIZE * (1 + params.processor_id));
+                flags += fmt::format("-Wl,--defsym=__kn_data={} ", data + MEM_IERISC_GLOBAL_SIZE * (1 + hart));
             }
             flags += fmt::format("-Wl,--defsym=__fw_data={} ", data);
             flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_IERISC_GLOBAL_SIZE);
@@ -125,27 +129,27 @@ public:
             flags += fmt::format("-Wl,--defsym=__local_base={} ", tls);
             flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_IERISC_LOCAL_SIZE);
         } else if (params.core_type == HalProgrammableCoreType::DRAM) {
-            const DeviceAddr cce_text = MEM_CCE_SRAM_LOCAL_BASE + MEM_CCE_FIRMWARE_BASE;
-            const DeviceAddr cce_data = MEM_CCE_SRAM_LOCAL_BASE + MEM_CCE_GLOBAL_BASE;
-            const DeviceAddr cce_tls = MEM_CCE_SRAM_LOCAL_BASE + MEM_CCE_LOCAL_BASE;
+            const DeviceAddr eth_cce_text = MEM_MIMIR_CCE_SRAM_LOCAL_BASE + MEM_MIMIR_CCE_FIRMWARE_BASE;
+            const DeviceAddr eth_cce_data = MEM_MIMIR_CCE_SRAM_LOCAL_BASE + MEM_MIMIR_CCE_GLOBAL_BASE;
+            const DeviceAddr eth_cce_tls = MEM_MIMIR_CCE_SRAM_LOCAL_BASE + MEM_MIMIR_CCE_LOCAL_BASE;
             if (params.is_fw) {
-                flags += fmt::format("-Wl,--defsym=__fw_text={} ", cce_text);
-                flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_CCE_FIRMWARE_SIZE);
+                flags += fmt::format("-Wl,--defsym=__fw_text={} ", eth_cce_text);
+                flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_MIMIR_CCE_FIRMWARE_SIZE);
             } else {
-                const DeviceAddr cce_kn_text =
-                    MEM_CCE_SRAM_LOCAL_BASE + MEM_CCE_KERNEL_BASE + params.processor_id * MEM_CCE_KERNEL_SIZE;
-                flags += fmt::format("-Wl,--defsym=__kn_text={} ", cce_kn_text);
-                flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_CCE_KERNEL_SIZE);
+                const DeviceAddr eth_cce_kn_text =
+                    MEM_MIMIR_CCE_SRAM_LOCAL_BASE + MEM_MIMIR_CCE_KERNEL_BASE + params.processor_id * MEM_MIMIR_CCE_KERNEL_SIZE;
+                flags += fmt::format("-Wl,--defsym=__kn_text={} ", eth_cce_kn_text);
+                flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_MIMIR_CCE_KERNEL_SIZE);
                 flags += fmt::format(
-                    "-Wl,--defsym=__kn_data={} ", cce_data + MEM_CCE_GLOBAL_SIZE * (1 + params.processor_id));
+                    "-Wl,--defsym=__kn_data={} ", eth_cce_data + MEM_MIMIR_CCE_GLOBAL_SIZE * (1 + params.processor_id));
             }
-            flags += fmt::format("-Wl,--defsym=__fw_data={} ", cce_data);
-            flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_CCE_GLOBAL_SIZE);
-            flags += fmt::format("-Wl,--defsym=__fw_tls={} ", cce_tls);
-            flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_CCE_LOCAL_SIZE);
-            flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_CCE_STACK_MIN_SIZE);
-            flags += fmt::format("-Wl,--defsym=__local_base={} ", cce_tls);
-            flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_CCE_LOCAL_SIZE);
+            flags += fmt::format("-Wl,--defsym=__fw_data={} ", eth_cce_data);
+            flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_MIMIR_CCE_GLOBAL_SIZE);
+            flags += fmt::format("-Wl,--defsym=__fw_tls={} ", eth_cce_tls);
+            flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_MIMIR_CCE_LOCAL_SIZE);
+            flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_MIMIR_CCE_STACK_MIN_SIZE);
+            flags += fmt::format("-Wl,--defsym=__local_base={} ", eth_cce_tls);
+            flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_MIMIR_CCE_LOCAL_SIZE);
         } else if (params.processor_class == HalProcessorClassType::DM) {
             const DeviceAddr dm_global_base = params.core_type == HalProgrammableCoreType::DISPATCH
                                                   ? MEM_DISPATCH_DM_GLOBAL_BASE
@@ -365,7 +369,11 @@ public:
             includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.1/meta");
         } else if (variant == IpVariant::TRINITY) {
             includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.2/meta");
+        } else if (variant == IpVariant::SATURN) {
+            includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.3/meta");
         }
+        // Saturn has no register headers yet, so it gets no include path here. Once they are added, add a
+        // Saturn branch for their version.
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/common/inc");
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/");
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/llk_lib");
@@ -403,6 +411,20 @@ public:
     std::vector<std::string> defines(const Params& params) const override {
         auto defines = HalJitBuildQueryBase::defines(params);
         defines.push_back("ARCH_QUASAR");
+        // Emit a per-variant define so kernel headers can gate on the specific Quasar IP.
+        // The variant is set by Cluster::get_quasar_ip_variant(), which reads ip_variant
+        // from the SoC descriptor (shipped beside the simulator binary).
+        // Add a new branch for each new IP variant.
+        if (hal_.quasar_arch_variant_ == IpVariant::HORIZON) {
+            defines.push_back("IP_VARIANT_HORIZON");
+        }
+        if (params.core_type == HalProgrammableCoreType::IDLE_ETH) {
+            // Which CCE of its HSIO tile this firmware or kernel build runs on: where its own SRAM sits in its
+            // view, and where the sibling CCE's does.
+            const uint32_t eth_cce = params.is_fw ? params.processor_id : params.processor_id / MEM_IERISC_LOCAL_HARTS;
+            defines.push_back(fmt::format("ETH_CCE_LOCAL_BASE={}", MEM_IERISC_ETH_CCE_BASE(eth_cce)));
+            defines.push_back(fmt::format("ETH_CCE_PEER_BASE={}", MEM_IERISC_ETH_CCE_BASE(1 - eth_cce)));
+        }
         // ttsim does not model the tensix global semaphore registers. UMD picks ttsim over RTL
         // emulation by the same .so test.
         if (params.rtoptions.get_simulator_path().extension() == ".so") {
@@ -540,7 +562,8 @@ public:
 
     std::string target_name(const Params& params) const override {
         if (params.core_type == HalProgrammableCoreType::IDLE_ETH) {
-            return params.is_fw ? "erisc" : fmt::format("erisc{}", params.processor_id);
+            return params.is_fw ? idle_eth_firmware_name(params.processor_id)
+                                : fmt::format("erisc{}", params.processor_id);
         }
         if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
             // build.cpp used to distinguish "active_erisc" and "erisc" and use
@@ -553,11 +576,35 @@ public:
 
     std::string weakened_firmware_target_name(const Params& params) const override {
         if (params.core_type == HalProgrammableCoreType::IDLE_ETH) {
-            return "erisc";
+            // A kernel links against the firmware of its own CCE.
+            return idle_eth_firmware_name(
+                params.is_fw ? params.processor_id : params.processor_id / MEM_IERISC_LOCAL_HARTS);
         }
         return HalJitBuildQueryBase::weakened_firmware_target_name(params);
     }
+
+private:
+    // One firmware image per CCE.
+    static std::string idle_eth_firmware_name(uint32_t eth_cce) {
+        return eth_cce == 0 ? "erisc" : fmt::format("eth_cce{}", eth_cce);
+    }
 };
+
+namespace quasar {
+
+std::uint32_t get_l1_size(IpVariant variant) {
+    switch (variant) {
+        case IpVariant::GRENDEL: return get_grendel_l1_size();
+        case IpVariant::HORIZON: return get_horizon_l1_size();
+        case IpVariant::TRINITY: return get_trinity_l1_size();
+        // Saturn has no register headers yet. Once they are added, read its L1 size from them the way the
+        // other variants do: add a qa_hal_saturn_l1.cpp and list it in QA_HAL_VARIANT_L1_SOURCES (sources.cmake).
+        case IpVariant::SATURN: TT_THROW("Saturn has no register headers to read the L1 size from");
+    }
+    TT_THROW("Unknown Quasar IP variant {}", enchantum::to_string(variant));
+}
+
+}  // namespace quasar
 
 void Hal::initialize_qa(
     std::uint32_t profiler_dram_bank_size_per_risc_bytes,
@@ -576,7 +623,7 @@ void Hal::initialize_qa(
         static_cast<int>(HalProgrammableCoreType::DISPATCH) == static_cast<int>(ProgrammableCoreType::DISPATCH));
 
     this->quasar_arch_variant_ = quasar_arch_variant;
-    this->core_info_.push_back(quasar::create_tensix_mem_map());
+    this->core_info_.push_back(quasar::create_tensix_mem_map(quasar_arch_variant));
     this->core_info_.push_back(quasar::create_active_eth_mem_map());
     this->core_info_.push_back(quasar::create_idle_eth_mem_map(enable_ethernet_cores));
     ensure_hal_core_info_slots(this->core_info_, this->core_info_.front());
@@ -584,13 +631,16 @@ void Hal::initialize_qa(
         this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::DRAM)] =
             quasar::create_dram_mem_map(drisc_l1_noc_offset);
     }
-    this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::DISPATCH)] = quasar::create_dispatch_mem_map();
+    this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::DISPATCH)] =
+        quasar::create_dispatch_mem_map(quasar_arch_variant);
     this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::TENSIX)].num_physical_riscs_ =
         static_cast<uint32_t>(TensixProcessorTypes::COUNT);
     this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::ACTIVE_ETH)].num_physical_riscs_ =
         static_cast<uint32_t>(EthProcessorTypes::COUNT);
     this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::IDLE_ETH)].num_physical_riscs_ =
         static_cast<uint32_t>(EthProcessorTypes::COUNT);
+    // One build of each ethernet kernel per CCE of an HSIO tile.
+    this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::IDLE_ETH)].build_variants_ = MEM_IERISC_ETH_CCES;
     this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::DISPATCH)].num_physical_riscs_ =
         static_cast<uint32_t>(DispatchEngineProcessorTypes::COUNT);
 
@@ -699,6 +749,7 @@ void Hal::initialize_qa(
     this->num_nocs_ = NUM_NOCS;
     this->noc_node_id_ = NOC_NODE_ID;
     this->noc_node_id_mask_ = NOC_NODE_ID_MASK;
+    this->noc_addr_local_bits_ = NOC_ADDR_LOCAL_BITS;
     this->noc_addr_node_id_bits_ = NOC_ADDR_NODE_ID_BITS;
     this->noc_max_burst_size_bytes_ = NOC_MAX_BURST_SIZE;
     this->noc_encoding_reg_ = NOC_NODE_ID;                                   // TODO: add correct value

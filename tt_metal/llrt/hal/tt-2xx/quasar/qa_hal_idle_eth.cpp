@@ -18,7 +18,7 @@ using namespace tt::tt_metal::quasar::idle_eth;
 #include "quasar/qa_hal.hpp"
 #include "quasar/qa_hal_eth_asserts.hpp"
 #include "dev_mem_map.h"
-#include "hal_types.hpp"
+#include "llrt/hal_types.hpp"
 #include "llrt/hal.hpp"
 
 #define GET_IERISC_MAILBOX_ADDRESS_HOST(x) ((std::uint64_t)&(((mailboxes_t*)MEM_IERISC_MAILBOX_BASE)->x))
@@ -113,7 +113,7 @@ HalCoreInfoType create_idle_eth_mem_map(bool programmable) {
         }
         processor_classes.push_back(std::move(processors));
         processor_classes_names.push_back(std::move(names));
-        processor_classes_num_fw_binaries.push_back(/*DM*/ 1);
+        processor_classes_num_fw_binaries.push_back(/*one image per CCE*/ MEM_IERISC_ETH_CCES);
     }
 
     return {

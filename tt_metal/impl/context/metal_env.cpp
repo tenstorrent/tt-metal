@@ -300,7 +300,7 @@ tt_fabric::FabricManagerMode MetalEnvImpl::get_fabric_manager() const { return f
 
 uint8_t MetalEnvImpl::get_num_fabric_active_routing_planes() const { return num_fabric_active_routing_planes_; }
 
-void MetalEnvImpl::configure_fabric(const FabricConfigDescriptor& fabric) {
+void MetalEnvImpl::configure_fabric(const FabricSettings& fabric) {
     // The control plane is the first object built from the fabric configuration, so its existence marks the
     // configuration as committed.
     std::lock_guard<std::mutex> lock(control_plane_mutex_);
@@ -554,10 +554,17 @@ void MetalEnvImpl::initialize_fabric_config() {
         return;
     }
 
-    this->get_cluster().configure_ethernet_cores_for_fabric_routers(
-        this->fabric_config_, this->num_fabric_active_routing_planes_);
     auto& cp = this->get_control_plane();
-    cp.configure_routing_tables_for_fabric_ethernet_channels();
+    if (cp.fabric_uses_flat_addressing()) {
+        // Horizon (QUASAR arch + HORIZON variant): no Ethernet fabric routers.
+        // Routing tables are built from crossbar flat addresses via get_flat_address().
+        cp.configure_routing_tables_for_fabric_flat_address();
+    } else {
+        // WH/BH/Quasar: Ethernet-based routing.
+        this->get_cluster().configure_ethernet_cores_for_fabric_routers(
+            this->fabric_config_, this->num_fabric_active_routing_planes_);
+        cp.configure_routing_tables_for_fabric_ethernet_channels();
+    }
 }
 
 void MetalEnvImpl::initialize_fabric_tensix_datamover_config(const tt_fabric::FabricTensixSessionInputs& inputs) {
@@ -679,8 +686,8 @@ void MetalEnvImpl::construct_control_plane() {
     fabric_config_ = control_plane_->get_fabric_config();
 }
 
-FabricConfigDescriptor MetalEnvImpl::control_plane_config() const {
-    return FabricConfigDescriptor{
+FabricSettings MetalEnvImpl::control_plane_config() const {
+    return FabricSettings{
         .fabric_config = fabric_config_,
         .reliability_mode = fabric_reliability_mode_,
         .num_routing_planes = num_fabric_active_routing_planes_,
@@ -815,11 +822,9 @@ MetalEnv::~MetalEnv() {
 
 const MetalEnvDescriptor& MetalEnv::get_descriptor() const { return impl_->get_descriptor(); }
 
-void MetalEnv::configure_fabric(const FabricConfigDescriptor& fabric) { impl_->configure_fabric(fabric); }
+void MetalEnv::configure_fabric(const FabricSettings& fabric) { impl_->configure_fabric(fabric); }
 
-const FabricConfigDescriptor& MetalEnv::get_fabric_config_descriptor() const {
-    return impl_->get_fabric_config_descriptor();
-}
+const FabricSettings& MetalEnv::get_fabric_settings() const { return impl_->get_fabric_settings(); }
 
 uint32_t MetalEnv::get_num_pcie_devices() const { return impl_->get_cluster().number_of_pci_devices(); }
 uint32_t MetalEnv::get_num_available_devices() const { return impl_->get_cluster().number_of_user_devices(); }

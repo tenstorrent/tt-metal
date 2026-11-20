@@ -22,7 +22,7 @@
     !defined(FORCE_WATCHER_OFF)
 
 // The condition above in one name, for code outside this header that exists only for the NoC sanitizer, such as
-// sanitize_multicast_destination.h.
+// sanitize_multicast_destination.h and the nodes a multicast destination keeps for it.
 #define DEBUG_SANITIZE_NOC_ENABLED
 
 #include "watcher_common.h"
@@ -270,12 +270,26 @@ inline uint16_t debug_valid_eth_addr(uint64_t addr, uint64_t len, bool write) {
     if (addr + len <= addr) {
         return DebugSanitizeNocAddrZeroLength;
     }
+#if defined(ARCH_QUASAR)
+    // An HSIO tile has two CCEs, MEM_IERISC_ETH_CCES windows of MEM_IERISC_L1_SIZE each. Addresses may be CCE-relative
+    // or native (CCE1 at one window up), and a local buffer may sit in the uncached alias (8 MiB above the CCE's own
+    // base). Fold the alias away, then require the transfer to stay within one CCE's SRAM.
+    if (addr >= MEM_IERISC_UNCACHED_BASE) {
+        addr -= MEM_IERISC_UNCACHED_BASE;
+    }
+    if (addr + len > static_cast<uint64_t>(MEM_IERISC_ETH_CCES) * MEM_IERISC_L1_SIZE ||
+        (addr / MEM_IERISC_L1_SIZE) != ((addr + len - 1) / MEM_IERISC_L1_SIZE)) {
+        return DebugSanitizeNocAddrOverflow;
+    }
+    addr %= MEM_IERISC_L1_SIZE;  // offset within that CCE, for the mailbox check
+#else
     if (addr < MEM_ETH_BASE) {
         return DebugSanitizeNocAddrUnderflow;
     }
     if (addr + len > MEM_ETH_BASE + MEM_ETH_SIZE) {
         return DebugSanitizeNocAddrOverflow;
     }
+#endif
     constexpr uint64_t mem_mailbox_end = MEM_IERISC_MAILBOX_END < eth_l1_mem::address_map::ERISC_MEM_MAILBOX_END
                                              ? MEM_IERISC_MAILBOX_END
                                              : eth_l1_mem::address_map::ERISC_MEM_MAILBOX_END;
@@ -301,7 +315,7 @@ inline uint16_t debug_valid_drisc_addr(uint64_t addr, uint64_t len, bool write) 
         return DebugSanitizeNocAddrOverflow;
     }
     const uint64_t local_addr = (addr >= MEM_L1_UNCACHED_BASE) ? (addr - MEM_L1_UNCACHED_BASE) : addr;
-    constexpr uint64_t mailbox_end = MEM_CCE_MAILBOX_END;
+    constexpr uint64_t mailbox_end = MEM_MIMIR_CCE_MAILBOX_END;
 #else
     if (addr < MEM_DRISC_L1_BASE) {
         return DebugSanitizeNocAddrUnderflow;
@@ -381,7 +395,7 @@ void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
     // TODO: Remove this check once mailbox is accessed via cached memory (see dm.cc UNCACHED_MEM_MAILBOX_BASE)
     uintptr_t addr = reinterpret_cast<uintptr_t>(san);
     if (addr >= MEM_L1_UNCACHED_BASE) {
-        san = reinterpret_cast<volatile debug_sanitize_addr_msg_t*>(addr - MEM_L1_UNCACHED_BASE);
+        san = reinterpret_cast<volatile debug_sanitize_addr_msg_t*>(addr - MEM_L1_UNCACHED_OFFSET);
     }
     static volatile uint32_t s_sanitize_lock = 0;
     uint32_t old = __atomic_exchange_n(&s_sanitize_lock, 0xDEADBEEFu, __ATOMIC_ACQ_REL);
@@ -827,6 +841,9 @@ void debug_sanitize_l1_access(uint64_t addr, uint32_t len) {
     bool illegal = (addr + len <= addr);  // zero length / wraparound
 #if defined(COMPILE_FOR_ERISC)
     illegal = illegal || (addr + len > MEM_ETH_SIZE);
+#elif defined(ARCH_QUASAR) && defined(COMPILE_FOR_IDLE_ERISC)
+    // Either CCE of the tile, in its cached view or its uncached alias, within one CCE (see debug_valid_eth_addr).
+    illegal = illegal || (debug_valid_eth_addr(addr, len, false) != DebugSanitizeOK);
 #elif defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
     // Ahead of the DRISC case: CCE is a DM-class core, so it is built with COMPILE_FOR_DM and its
     // SRAM aliases like worker L1. Access must lie wholly within the cached view or the uncached
@@ -1103,10 +1120,13 @@ inline uint64_t debug_att_cmd_buf_src(uint8_t noc_id, uint32_t cmd_buf) {
 #define DEBUG_SANITIZE_ETH(src_addr, dst_addr, l) debug_sanitize_eth(src_addr, dst_addr, l)
 
 // Validate a user-stamped NoC transaction id.
-// WH/BH: [0, NOC_MAX_TRANSACTION_ID]. Quasar: [0, USER_TXN_ID_MAX] (DFB owns the upper pool).
+// WH/BH: [0, NOC_MAX_TRANSACTION_ID]. Quasar: [0, USER_TXN_ID_MAX] (DFB owns the upper pool); fast dispatch's own
+// kernels (DISPATCH_KERNEL) are runtime too, so they may also take ids from the upper pool, [0, HW_TXN_ID_MAX].
 // On failure, l1_addr holds the bad trid and len holds the max allowed.
 inline void debug_sanitize_noc_txn_id(uint8_t noc_id, uint32_t trid) {
-#if defined(ARCH_QUASAR)
+#if defined(ARCH_QUASAR) && defined(DISPATCH_KERNEL)
+    constexpr uint32_t max_trid = HW_TXN_ID_MAX;
+#elif defined(ARCH_QUASAR)
     constexpr uint32_t max_trid = USER_TXN_ID_MAX;
 #else
     constexpr uint32_t max_trid = NOC_MAX_TRANSACTION_ID;
