@@ -5,14 +5,21 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cctype>
+#include <charconv>
 #include <chrono>
 #include <cerrno>
 #include <climits>
 #include <cstdint>
 #include <cstddef>
+#include <fstream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
+#include <string>
+#include <string_view>
+#include <system_error>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -130,7 +137,14 @@ uint32_t pick_cpu(
     const std::vector<uint32_t>& node_cpus,
     const std::vector<uint32_t>& pool_cpus,
     std::unordered_map<uint32_t, uint32_t>& workers_per_cpu,
-    size_t& next) {
+    size_t& next,
+    std::optional<uint32_t> preferred) {
+    if (preferred && workers_per_cpu[*preferred] == 0 &&
+        std::find(node_cpus.begin(), node_cpus.end(), *preferred) != node_cpus.end() &&
+        std::find(pool_cpus.begin(), pool_cpus.end(), *preferred) == pool_cpus.end()) {
+        workers_per_cpu[*preferred]++;
+        return *preferred;
+    }
     // CPUs outside the pool first, so its workers keep their spin window; then the least-used.
     const auto rank = [&](uint32_t cpu) {
         return std::pair{std::find(pool_cpus.begin(), pool_cpus.end(), cpu) != pool_cpus.end(), workers_per_cpu[cpu]};
@@ -150,9 +164,54 @@ uint32_t pick_cpu(
     }
 }
 
-// pool_cpus: the CPUs already picked for the caller's pool, which the pick avoids first.
+std::vector<uint32_t> parse_cpu_list(std::string_view list) {
+    std::vector<uint32_t> cpus;
+    const auto parse = [](std::string_view text, uint32_t& value) {
+        const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
+        return error == std::errc{} && end == text.data() + text.size();
+    };
+    while (!list.empty()) {
+        const size_t comma = list.find(',');
+        std::string_view range = list.substr(0, comma);
+        list = comma == std::string_view::npos ? std::string_view{} : list.substr(comma + 1);
+        while (!range.empty() && std::isspace(static_cast<unsigned char>(range.back()))) {
+            range.remove_suffix(1);
+        }
+        const size_t dash = range.find('-');
+        uint32_t first = 0;
+        uint32_t last = 0;
+        if (!parse(range.substr(0, dash), first) ||
+            !parse(dash == std::string_view::npos ? range : range.substr(dash + 1), last) || last < first) {
+            return {};
+        }
+        for (uint32_t cpu = first; cpu <= last; cpu++) {
+            cpus.push_back(cpu);
+        }
+    }
+    return cpus;
+}
+
+std::optional<uint32_t> smt_sibling(uint32_t cpu) {
+    std::ifstream file("/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/topology/thread_siblings_list");
+    std::string list;
+    if (!std::getline(file, list)) {
+        return std::nullopt;
+    }
+    for (const uint32_t sibling : parse_cpu_list(list)) {
+        if (sibling != cpu) {
+            return sibling;
+        }
+    }
+    return std::nullopt;
+}
+
+// pool_cpus: the CPUs already picked for the caller's pool, which the pick avoids first. preferred: taken if allowed,
+// outside the pool and unused.
 uint32_t get_cpu_core_for_physical_device(
-    ContextId context_id, uint32_t physical_device_id, const std::vector<uint32_t>& pool_cpus) {
+    ContextId context_id,
+    uint32_t physical_device_id,
+    const std::vector<uint32_t>& pool_cpus,
+    std::optional<uint32_t> preferred = std::nullopt) {
     auto& placement = cpu_placement();
     const std::lock_guard<std::mutex> lock(placement.mutex);
     // One snapshot of the allowed CPUs, taken on first use, feeds both the NUMA map and the fallback.
@@ -198,7 +257,8 @@ uint32_t get_cpu_core_for_physical_device(
             cpu_cores_per_numa_node[numa_node],
             pool_cpus,
             workers_per_cpu,
-            placement.next_cpu_per_numa_node[numa_node]);
+            placement.next_cpu_per_numa_node[numa_node],
+            preferred);
     }
     uint32_t cpu = 0;
     if (!allowed_cpus.empty()) {
@@ -811,13 +871,19 @@ public:
     DeviceBoundThreadPool(
         ContextId context_id,
         const std::vector<tt::tt_metal::Device*>& physical_devices,
-        std::chrono::nanoseconds spin_window = std::chrono::nanoseconds(0)) :
+        std::chrono::nanoseconds spin_window = std::chrono::nanoseconds(0),
+        const ThreadPool* siblings_of = nullptr) :
         num_workers_(physical_devices.size()) {
         allocate_jobs();
         cpu_cores_.cpus.reserve(num_workers_);
         for (uint32_t i = 0; i < num_workers_; i++) {
-            cpu_cores_.cpus.push_back(thread_binding::get_cpu_core_for_physical_device(
-                context_id, physical_devices[i]->id(), cpu_cores_.cpus));
+            const uint32_t device_id = physical_devices[i]->id();
+            std::optional<uint32_t> sibling;
+            if (const auto cpu = siblings_of != nullptr ? siblings_of->worker_cpu(device_id) : std::nullopt) {
+                sibling = thread_binding::smt_sibling(*cpu);
+            }
+            cpu_cores_.cpus.push_back(
+                thread_binding::get_cpu_core_for_physical_device(context_id, device_id, cpu_cores_.cpus, sibling));
         }
         spin_window = spin_window_for(cpu_cores_.cpus, spin_window);
         workers_.reserve(num_workers_);
@@ -873,6 +939,11 @@ public:
                                  : (thread_idx_.fetch_add(1, std::memory_order_relaxed) % num_workers_);
         completion_.add();
         workers_[thread_id]->enqueue(std::move(f));
+    }
+
+    std::optional<uint32_t> worker_cpu(uint32_t device_id) const override {
+        const auto it = phys_device_to_thread_id_.find(device_id);
+        return it == phys_device_to_thread_id_.end() ? std::nullopt : std::optional(cpu_cores_.cpus[it->second]);
     }
 
     void parallel_for(
@@ -1049,8 +1120,10 @@ std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
 std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
     ContextId context_id,
     const std::vector<tt::tt_metal::Device*>& physical_devices,
-    std::chrono::microseconds spin_window) {
-    return std::make_shared<thread_pool_impls::DeviceBoundThreadPool>(context_id, physical_devices, spin_window);
+    std::chrono::microseconds spin_window,
+    const ThreadPool* siblings_of) {
+    return std::make_shared<thread_pool_impls::DeviceBoundThreadPool>(
+        context_id, physical_devices, spin_window, siblings_of);
 }
 
 std::shared_ptr<ThreadPool> create_passthrough_thread_pool(ContextId /*context_id*/) {
