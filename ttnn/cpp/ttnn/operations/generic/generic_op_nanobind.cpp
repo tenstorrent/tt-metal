@@ -40,15 +40,22 @@ void bind_generic_operation(nb::module_& mod) {
         Returns:
             ttnn.Tensor: Handle to the output tensor, the last entry of io_tensors. When the tensors are not all on
             the same devices, it holds only its parts on the devices of the tensor in io_tensors that is on the
-            fewest devices. Its tensor topology is a label that says how its data is placed across the mesh: its
-            mesh placements and distribution shape. As for most ops, generic_op merges this label from the labels of
-            all the tensors in io_tensors, the output's own included, so a tensor sharded along a mesh axis usually
-            makes the output sharded along it. Other output tensors keep their labels. The label changes before most
-            of generic_op's checks, so it can change even if the call raises. If the program places the output's
-            data otherwise, such as the same data on every device from a sharded input, fix the label with
-            output.update_tensor_topology(topology), which moves no data: for example, save
-            topology = output.tensor_topology() before the call and pass it back after. Fix another output tensor's
-            label the same way if the program changes how its data is placed.
+            fewest devices.
+
+        Note:
+            The output's tensor topology is a label of how its data is placed across the mesh: its mesh placements
+            and distribution shape. As for most ops, generic_op merges this label from the labels of all the tensors
+            in io_tensors, the output's own included, so a tensor sharded along a mesh axis usually makes the output
+            sharded along it. Other output tensors keep their labels. The label changes before most of generic_op's
+            checks, so it can change even if the call raises.
+
+            If the program places the output's data otherwise, fix the label with
+            ``output.update_tensor_topology(topology)``, which moves no data. For the same data on every device
+            from a sharded input, save ``topology = output.tensor_topology()`` before the first call that uses the
+            output, ``ttnn.experimental.prepare_generic_op`` included, and pass it back after. For different data on
+            each device from replicated inputs, build the label with
+            ``ttnn.TensorTopology(distribution_shape, placements, mesh_coords)`` and ``ttnn.PlacementShard(dim)``.
+            Fix another output tensor's label the same way if the program changes how its data is placed.
 
         Example:
             Refer to tests/ttnn/unit_tests/operations/debug/test_generic_op.py for usage examples
@@ -187,14 +194,21 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
         Returns:
             ttnn.Tensor: The output tensor, the last entry of io_tensors. When the tensors are not all on the same
             devices, it holds only its parts on the devices of the tensor in io_tensors that is on the fewest
-            devices. Its tensor topology is a label that says how its data is placed across the mesh: its mesh
-            placements and distribution shape. As for most ops, generic_op merges this label from the labels of all
-            the tensors in io_tensors, the output's own included, so a tensor sharded along a mesh axis usually makes
-            the output sharded along it. generic_op and prepare_generic_op change the label before most of their
-            checks, so it can change even if the call raises. If the program places the output's data otherwise,
-            such as the same data on every device from a sharded input, fix the label with
-            output.update_tensor_topology(topology), which moves no data: for example, save
-            topology = output.tensor_topology() before the call and pass it back after.
+            devices.
+
+        Note:
+            The output's tensor topology is a label of how its data is placed across the mesh: its mesh placements
+            and distribution shape. As for most ops, generic_op merges this label from the labels of all the tensors
+            in io_tensors, the output's own included, so a tensor sharded along a mesh axis usually makes the output
+            sharded along it. generic_op and prepare_generic_op change the label before most of their checks, so it
+            can change even if the call raises.
+
+            If the program places the output's data otherwise, fix the label with
+            ``output.update_tensor_topology(topology)``, which moves no data. For the same data on every device
+            from a sharded input, save ``topology = output.tensor_topology()`` before the first call that uses the
+            output, ``prepare_generic_op`` included, and pass it back after. For different data on each device from
+            replicated inputs, build the label with
+            ``ttnn.TensorTopology(distribution_shape, placements, mesh_coords)`` and ``ttnn.PlacementShard(dim)``.
 
         Raises:
             RuntimeError: If the run args do not match the spec, naming the kernel, argument, tensor parameter or
