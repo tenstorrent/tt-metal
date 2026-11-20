@@ -196,6 +196,34 @@ def test_var_std_hw_single_outlier(torch_dtype, ttnn_dtype, device):
         assert_with_ulp(expected_result=expected, actual_result=got, ulp_threshold=threshold[torch_dtype])
 
 
+# From max|d| = 2^127 (1.7e38) up, the scale is capped at 2^126, so that 1 / scale is still a normal float. A single
+# 2e38 in a 544x512 plane of zeros has a finite mean, 7.2e32, and a standard deviation of 3.8e35. Its variance is above
+# FLT_MAX, so var_hw must give inf.
+@pytest.mark.parametrize("torch_dtype, ttnn_dtype", DTYPES, ids=DTYPE_IDS)
+def test_var_std_hw_outlier_at_the_top_of_the_range(torch_dtype, ttnn_dtype, device):
+    data = torch.zeros(STATISTIC_SHAPE)
+    data[0, 0, 0, 0] = 2e38
+    data = data.to(torch_dtype)
+    std = data.double().std(dim=(-2, -1), keepdim=True, unbiased=False)
+
+    got = _run(ttnn.std_hw, data, ttnn_dtype, device)
+    assert_with_ulp(expected_result=std, actual_result=got, ulp_threshold=STATISTIC_ULP_THRESHOLD[torch_dtype])
+    got = _run(ttnn.var_hw, data, ttnn_dtype, device)
+    assert torch.isposinf(got).all(), f"var_hw of a variance above FLT_MAX gives {got.flatten().tolist()}, not inf"
+
+
+@pytest.mark.parametrize("torch_dtype, ttnn_dtype", DTYPES, ids=DTYPE_IDS)
+def test_normalize_hw_outlier_at_the_top_of_the_range(torch_dtype, ttnn_dtype, device):
+    data = torch.zeros(NORMALIZE_SHAPE)
+    data[0, 0, 0, 0] = 2e38
+    data = data.to(torch_dtype)
+    x = data.double()
+    expected = (x - x.mean(dim=(-2, -1), keepdim=True)) / x.std(dim=(-2, -1), keepdim=True, unbiased=False)
+
+    got = _run(ttnn.normalize_hw, data, ttnn_dtype, device)
+    assert_with_ulp(expected_result=expected, actual_result=got, ulp_threshold=ULP_THRESHOLD[torch_dtype])
+
+
 # bfloat8_b shares one exponent across each 16 values of a tile row. The per-plane factors live on [N, C, 1, 1]
 # tiles next to their padding, so they are formed in bfloat16: in bfloat8_b the padding flushed them to 0. The
 # tolerance is the one test_normalize_global.py uses for bfloat8_b.
