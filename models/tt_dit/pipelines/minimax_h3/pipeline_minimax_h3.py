@@ -1835,6 +1835,7 @@ class MiniMaxH3Pipeline:
             mesh_shape=tuple(self.mesh_device.shape),
             mesh_device=self.mesh_device,
             get_torch_state_dict=self._read_transformer_state,
+            ccl_manager=self.ccl_manager,
         )
         return self._transformer
 
@@ -2005,6 +2006,7 @@ class MiniMaxH3Pipeline:
             mesh_device=self.mesh_device,
             dtype="fp32",  # the whole VAE checkpoint is fp32 and the port keeps it there
             get_torch_state_dict=lambda: state,
+            ccl_manager=self.vae_ccl_manager,
         )
         if self.vae_residency_mode == "shard_decoder" and module is self._vae.decoder:
             # Shard and gather once at each host load, so the shard and gather programs compile with the load (the

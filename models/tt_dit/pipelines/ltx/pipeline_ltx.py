@@ -1445,6 +1445,7 @@ class LTXPipeline:
             sources=sources,
             get_torch_state_dict=state.state_dict_provider,
             post_load_hook=post_load_hook,
+            ccl_manager=self.ccl_manager,
         )
         # The gate fold runs after load_model, never as its post_load_hook: on a cache miss that hook
         # runs before the cache is written, and the fold releases the unfused Q/QKV and gate shards the
@@ -1572,6 +1573,7 @@ class LTXPipeline:
             mesh_device=self.mesh_device,
             sources=[self._vae_checkpoint_path],
             get_torch_state_dict=_vae_state_provider,
+            ccl_manager=self.vae_ccl_manager,
         )
         logger.info(f"Loaded TTNN VAE decoder ({len(self._vae_decoder_blocks)} blocks)")
 
@@ -1599,6 +1601,7 @@ class LTXPipeline:
             mesh_device=self.mesh_device,
             sources=[self._vae_checkpoint_path],
             get_torch_state_dict=_vae_encoder_state_provider,
+            ccl_manager=self.vae_ccl_manager,
         )
         logger.info(f"Loaded TTNN VAE encoder ({len(self._vae_encoder_blocks)} blocks)")
 
@@ -1846,6 +1849,7 @@ class LTXPipeline:
             mesh_device=self.mesh_device,
             sources=[self._upsampler_path],
             get_torch_state_dict=_upsampler_state_provider,
+            ccl_manager=self.vae_ccl_manager,
         )
         logger.info("Loaded TTNN latent upsampler")
 
