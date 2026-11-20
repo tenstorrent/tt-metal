@@ -39,8 +39,8 @@ overload_t(Func, Args...) -> overload_t<Func, Args...>;
 // An overload whose function is called with the GIL held, for a function that reads Python objects before its work: it
 // releases the GIL itself (nb::gil_scoped_release) before anything that can block or take long, as the other
 // overloads have it released for them.
-// A type of its own, not an overload_t, so that code written for overload_t, which releases the GIL around the call,
-// cannot take it by mistake.
+// A type of its own, so that code written for overload_t, which releases the GIL around the call, cannot take it by
+// mistake. is_overload_t, which tells bind_function's overload specs from a plain function, counts both.
 template <typename Func, typename... Args>
 struct gil_held_overload_t {
     Func func;
