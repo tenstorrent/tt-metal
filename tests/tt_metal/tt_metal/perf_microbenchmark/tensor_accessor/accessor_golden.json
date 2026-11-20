@@ -1,0 +1,15 @@
+{
+  "arch": "wormhole_b0",
+  "description": "TensorAccessor address-calculation (get_noc_addr) CI golden (Wormhole, wh_n300_civ2). Metric = device cycles per get_noc_addr call, computed as (SHARDED_ACCESSOR_<static> - EMPTY) / N over a single-zone loop of N=4096 calls on one core (device profiler), one all-static config per tensor topology, keyed by GetNocAddr.<topology>. Values left null are in record mode: the measured cycles/call is printed and the gate passes, so each arch/topology can be armed from its own scheduled baseline. Arm from two consecutive (Runtime) Performance Tests runs on wh_n300_civ2; tolerance_pct 15% gives headroom for board/firmware drift while still catching real regressions.",
+  "pinned_config": "unit_tests_ttnn_accessor AccessorBenchmarks.GetNocAddr, single core, all-static config per topology, device profiler, cycles/call = (ACCESSOR - EMPTY) / 4096",
+  "golden": {
+    "GetNocAddr.interleaved_l1": 24.01,
+    "GetNocAddr.sharded_height_row_major": 25.00,
+    "GetNocAddr.sharded_height_col_major": 25.00,
+    "GetNocAddr.sharded_width_row_major": 25.00,
+    "GetNocAddr.sharded_width_col_major": 25.00,
+    "GetNocAddr.sharded_block_row_major": 47.00,
+    "GetNocAddr.sharded_block_col_major": 47.00,
+    "tolerance_pct": 15.0
+  }
+}

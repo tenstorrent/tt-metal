@@ -70,3 +70,34 @@
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
   budget_type: perf_profiler
+
+# --- TensorAccessor address-calculation microbenchmark ---
+# Runs the accessor benchmark gtest (unit_tests_ttnn_accessor,
+# AccessorBenchmarks.GetNocAddr) with the device profiler: for every parametrized tensor
+# topology (interleaved L1, plus height/width/block sharding each in ROW_MAJOR and
+# COL_MAJOR) the get_noc_addr address-calc kernel runs N calls under a single profiler
+# zone with an EMPTY baseline zone. It then post-processes the per-topology cycles/call
+# = (ACCESSOR - EMPTY) / N and gates them against the per-arch golden. The metric comes
+# only from the standard device profiler so it behaves identically on Wormhole and
+# Blackhole. Goldens are armed from the scheduled CI baseline per arch.
+- name: runtime_perf_tensor_accessor
+  cmd: |
+    export TT_METAL_DEVICE_PROFILER=1
+    GOLDEN=tests/tt_metal/tt_metal/perf_microbenchmark/tensor_accessor/accessor_golden.json
+    if [ "$ARCH_NAME" = "blackhole" ]; then
+      GOLDEN=tests/tt_metal/tt_metal/perf_microbenchmark/tensor_accessor/accessor_blackhole_golden.json
+    fi
+    # The post-proc imports the profiler team's parser (tracy.process_device_log /
+    # device_post_proc_config), which lives under tools/. Put tools/ (plus repo root)
+    # on PYTHONPATH so it resolves.
+    export PYTHONPATH="${TT_METAL_HOME}/tools:${TT_METAL_HOME}${PYTHONPATH:+:${PYTHONPATH}}"
+    python3 tests/tt_metal/tt_metal/perf_microbenchmark/tensor_accessor/accessor_postprocess.py \
+      --golden "$GOLDEN"
+  skus:
+    wh_n300_civ2:
+      timeout: 5
+    bh_p150_perf:
+      timeout: 5
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+  budget_type: perf_profiler
