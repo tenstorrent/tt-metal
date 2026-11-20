@@ -1212,6 +1212,7 @@ def test_embedding_repeated_tokens(device, pattern, layout, hidden):
 
 
 # Width-sharded TILE output: each core reads only its column slice of a weight row (weight_offset != 0).
+@pytest.mark.requires_grid_size((8, 4))
 @pytest.mark.parametrize("pattern", ["all_zeros", "runs_across_blocks", "alternating"])
 def test_embedding_repeated_tokens_width_sharded_tile_output(device, pattern):
     batch_size, sentence_size, hidden = 10, 96, 2048
