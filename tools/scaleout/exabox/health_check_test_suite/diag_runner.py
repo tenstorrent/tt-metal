@@ -435,9 +435,7 @@ def run_diag(
             if skip_reset:
                 return "no reset (--skip-reset)"
             aer_mark()
-            run_post_test_reset(tt_smi_path, ("-glx_reset",), links_phase, dry_run)
-            failed = any(c.name == "post_test_reset_ok" and c.status == FAIL for c in links_phase.checks)
-            return "reset failed" if failed else ""
+            return "" if run_post_test_reset(tt_smi_path, ("-glx_reset",), links_phase, dry_run) else "reset failed"
 
         _guarded(
             links_phase,

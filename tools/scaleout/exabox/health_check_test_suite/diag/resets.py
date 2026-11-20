@@ -245,8 +245,9 @@ def fold_post_reset_snapshots(report: dict, post_reset_phases: list[tuple[str, P
         report["phases"]["snapshot"]["status"] = PASS
 
 
-def run_post_test_reset(tt_smi_path: str | None, plan: Sequence[str], phase: Phase, dry_run: bool) -> None:
-    """Reset the unit between the tests and the triage phase.
+def run_post_test_reset(tt_smi_path: str | None, plan: Sequence[str], phase: Phase, dry_run: bool) -> bool:
+    """Reset the unit between the tests and the triage phase. True when the reset left the unit healthy; only
+    the checks it adds are judged, not ones *phase* already held.
 
     Deliberately bare: reset_loop() is called without snapshot_out /
     post_reset_phases, so it takes no revalidation snapshot and stays out of
@@ -254,6 +255,7 @@ def run_post_test_reset(tt_smi_path: str | None, plan: Sequence[str], phase: Pha
     function, which assumes a single batch of snapshot_after_* phases judged by
     normalize_health_report() on post[-1].
     """
+    held = len(phase.checks)
     try:
         tt_smi = resolve_tt_smi(tt_smi_path)
         reset_loop(tt_smi, plan, phase, dry_run)
@@ -266,7 +268,7 @@ def run_post_test_reset(tt_smi_path: str | None, plan: Sequence[str], phase: Pha
     # snapshot — but nothing runs after this one, so a reset that broke
     # enumeration here would leave no trace on the verdict. Restate the
     # outcome under a name that counts.
-    broke = [c.name for c in phase.checks if c.status == FAIL]
+    broke = [c.name for c in phase.checks[held:] if c.status == FAIL]
     phase.add(
         Check(
             name="post_test_reset_ok",
@@ -279,3 +281,4 @@ def run_post_test_reset(tt_smi_path: str | None, plan: Sequence[str], phase: Pha
             ip="other",
         )
     )
+    return not broke
