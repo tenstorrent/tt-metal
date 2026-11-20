@@ -22,7 +22,11 @@ jobs:
       # Keeps cache keys path-independent; remove once TorrentCI sets it by default.
       - {name: CCACHE_BASEDIR, value: /workspace}
       - {name: CPM_SOURCE_CACHE, value: /workspace/.cpmcache}
-    # CPM source cache: saves ~2.2 min of configure (162 s cold, 29 s warm).
+      # Stops git in a cached source without .git from walking up into the
+      # tt-metal checkout (benchmark took its version from tt-metal's tags).
+      - {name: GIT_CEILING_DIRECTORIES, value: /workspace/.cpmcache}
+    # CPM source cache: saves ~2.3 min of configure (162 s without it, 25 s
+    # warm; a cold run that also normalises the tree takes 177 s).
     # cpm-cache drops a restored tree whose dependency files changed.
     cache:
       key: 'cpm-v1-${ref_name}-${commit_sha}'
@@ -66,10 +70,28 @@ jobs:
         shell:
           run:
             - >-
-              ./build_metal.sh --build-dir build --build-type ASan
+              configure() { ./build_metal.sh --build-dir build --build-type ASan
               --toolchain-path cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
               --build-all --enable-ccache --configure-only
-              --use-system-sfpi --disable-profiler
+              --use-system-sfpi --disable-profiler; }
+            - configure
+            # The cache archive refuses symlinks, sparse files and .git paths,
+            # so a restored tree differs from a fresh download. After a fresh
+            # download, make the tree match what a restore gives (drop .git,
+            # replace each symlink with a copy of its target, densify files)
+            # and configure again (about 15 s), so the first build produces the
+            # same ccache keys as later ones.
+            - if [ -f /tmp/cpm-unchanged ]; then exit 0; fi
+            - find .cpmcache -name .git -prune -exec rm -rf {} +
+            - >-
+              find .cpmcache -type l -exec sh -c 'for l; do
+              t=$(readlink -f "$l") && rm "$l" && cp -rL "$t" "$l" || true; done' _ {} +
+            - find .cpmcache -type l -delete
+            - >-
+              find .cpmcache -type f -size +0 -printf '%S %p\n' | awk '$1 < 1 {sub(/^[^ ]+ /, ""); print}'
+              | while IFS= read -r f; do cp --sparse=never "$f" "$f.dense" && mv "$f.dense" "$f"; done
+            - rm -rf build
+            - configure
       - id: compile
         kind: shell
         shell:
@@ -110,16 +132,6 @@ jobs:
         kind: shell
         shell:
           run:
-            # The cache archive refuses symlinks, sparse files and .git paths.
-            # CPM only checks that a source directory exists, so drop .git and
-            # replace each symlink with a copy of its target.
-            - find .cpmcache -name .git -prune -exec rm -rf {} +
-            - >-
-              find .cpmcache -type l -exec sh -c 'for l; do
-              t=$(readlink -f "$l") && rm "$l" && cp -rL "$t" "$l" || true; done' _ {} +
-            - find .cpmcache -type l -delete
-            - >-
-              find .cpmcache -type f -size +0 -printf '%S %p\n' | awk '$1 < 1 {sub(/^[^ ]+ /, ""); print}'
-              | while IFS= read -r f; do cp --sparse=never "$f" "$f.dense" && mv "$f.dense" "$f"; done
-            # An unchanged restored tree is already stored; skip re-uploading it.
+            # configure already made a fresh tree archivable. An unchanged
+            # restored tree is already stored; skip re-uploading it.
             - if [ -f /tmp/cpm-unchanged ]; then rm -rf .cpmcache; fi
