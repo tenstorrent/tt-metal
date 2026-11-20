@@ -4,27 +4,23 @@
 
 #pragma once
 
+#include <cstdint>
+#include "llk_defs.h"
+
 // Helper function for _sfpu_binary_power_
 // This function is based on _float32_to_int32_, but expects a positive input, which simplifies the code
 // and makes it faster
 sfpi_inline sfpi::vInt _float_to_int32_positive_(sfpi::vFloat in) {
-    sfpi::vInt result;
-    sfpi::vInt exp = exexp(in);  // extract exponent
-    v_if(exp < 0) { result = 0; }
-    v_elseif(exp > 30)  // overflow occurs above this range
-    {
-        // set to int32 max value in case of overflow
-        result = std::numeric_limits<int32_t>::max();
-    }
-    v_else {
-        // extract mantissa
-        sfpi::vInt man = exman(in, sfpi::MantissaMode::ImplicitOne);
-        // shift the mantissa by (23-exponent) to the right
-        sfpi::vInt shift = exp - 23;  // 23 is number of mantissa bits in float32
-        man = shft(man, shift, sfpi::ShiftMode::Logical);
-
-        result = man;
-    }
+    sfpi::vInt exp = sfpi::exexp(in);  // extract exponent
+    // In-range value, computed for every lane: the mantissa with its implicit one, shifted left by
+    // (exponent - 23) (23 is the number of float32 mantissa bits). SFPSHFT has no side effects, so lanes that
+    // are out of range (|in| < 1.0 shifts right by up to 150; exp >= 31 overflows) just produce a value the
+    // fix-ups below overwrite. Keeping it out of the predicate avoids the PUSHC/POPC and register shuffles of
+    // a three-arm v_if / v_elseif / v_else chain.
+    sfpi::vInt man = sfpi::exman(in, sfpi::MantissaMode::ImplicitOne);
+    sfpi::vInt result = sfpi::shft(man, exp - 23, sfpi::ShiftMode::Logical);
+    v_if(exp < 0) { result = 0; }                                          // |in| < 1.0 (incl. zero and denormals)
+    v_elseif(exp >= 31) { result = std::numeric_limits<int32_t>::max(); }  // overflow: saturate to INT32_MAX
     v_endif;
     return result;
 }
@@ -51,4 +47,15 @@ sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
 
     // Reinterpret back as float
     return sfpi::as<sfpi::vFloat>(bits);
+}
+
+// Rounds an fp32 result to bf16 for a Float16_b Dest, ties away from zero. A 32-bit or Float16 Dest is left to the
+// store.
+template <bool is_fp32_dest_acc_en, DataFormat DEST_16BIT_FORMAT>
+sfpi_inline sfpi::vFloat round_to_dest(sfpi::vFloat result) {
+    if constexpr (is_fp32_dest_acc_en || DEST_16BIT_FORMAT != DataFormat::Float16_b) {
+        return result;
+    } else {
+        return sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+    }
 }

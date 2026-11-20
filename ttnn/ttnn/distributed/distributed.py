@@ -671,6 +671,8 @@ def open_mesh_device(
         ttnn._ttnn.multi_device.MeshDevice: The opened mesh device.
 
     """
+    # Fetch the matmul config model if it was turned on but isn't there yet (ttnn/ttnn/matmul_model/__init__.py)
+    ttnn.matmul_model.download_if_enabled()
     return ttnn._ttnn.multi_device.open_mesh_device(
         l1_small_size=l1_small_size,
         trace_region_size=trace_region_size,

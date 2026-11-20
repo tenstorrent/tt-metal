@@ -5,8 +5,8 @@
 #include "sort_program_factory.hpp"
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -19,7 +19,6 @@
 namespace ttnn::prim {
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace {
 
@@ -1689,7 +1688,14 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowMultiCore::c
     // shared counter it could overshoot the coordinator's exact-match wait and deadlock the op at
     // Ht >= 2. Readiness goes to the ready semaphore, per-pair confirmations to the done semaphore.
     // -----------------------------------------------------------------------
-    spec.semaphores.push_back(SemaphoreSpec{.unique_id = SEM_COORD_TO_CORES, .target_nodes = all_core_set});
+    // The coordinator multicasts its go signal to the workers' bounding box. When the workers are whole rows plus part
+    // of one more row (e.g. 64 workers on a 13-wide grid), the box also covers the rest of that row, so the go-signal
+    // semaphore is placed on the whole box: those nodes then hold it too, rather than taking the write at an address
+    // the program does not own there.
+    spec.semaphores.push_back(SemaphoreSpec{
+        .unique_id = SEM_COORD_TO_CORES,
+        .target_nodes = all_core_set.merge<CoreRangeSet>(CoreRangeSet(core_range.bounding_box())),
+    });
     spec.semaphores.push_back(SemaphoreSpec{.unique_id = SEM_CORES_TO_COORD_READY, .target_nodes = all_core_set});
     spec.semaphores.push_back(SemaphoreSpec{.unique_id = SEM_CORES_TO_COORD_DONE, .target_nodes = all_core_set});
 

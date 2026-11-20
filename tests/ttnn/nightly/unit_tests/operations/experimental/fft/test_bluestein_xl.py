@@ -28,6 +28,11 @@ from bluestein_xl import _bluestein_plan, _next_pow2, bluestein_fft_xl
 
 import ttnn
 
+# Every test in this module takes the function-scoped `device` fixture without
+# parametrizing device_params, so the device is opened once per module rather than
+# once per test.
+pytestmark = pytest.mark.use_module_device
+
 
 def _rel_err(got: torch.Tensor, ref: torch.Tensor) -> float:
     return float((got - ref).abs().norm() / ref.abs().norm().clamp_min(1e-30))

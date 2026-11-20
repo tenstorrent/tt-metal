@@ -5,10 +5,10 @@
 #pragma once
 
 #include <initializer_list>
+#include <tt_stl/move_only_function.hpp>
 #include <tt_stl/span.hpp>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -238,14 +238,6 @@ public:
         "Deprecated, retrieving physical devices can fail in distributed contexts. Iterate over MeshCoordinates or use "
         "get_device_ids instead. This will be removed after 2026-11-19.")]]
     std::vector<IDevice*> get_devices() const;
-    [[deprecated(
-        "Deprecated, retrieving physical devices can fail in distributed contexts. This will be removed after "
-        "28-02-2026.")]]
-    IDevice* get_device(ChipId physical_device_id) const;
-    [[deprecated(
-        "Deprecated, retrieving physical devices can fail in distributed contexts. This will be removed after "
-        "28-02-2026.")]]
-    IDevice* get_device(const MeshCoordinate& coord) const;
     tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;
 
     DeviceIds get_device_ids() const;
@@ -318,11 +310,13 @@ public:
 
     // This method will get removed once in favour of the ones in IDevice* and TT-Mesh bringup
     // These are prefixed with "mesh_" to avoid conflicts with the IDevice* methods
-    // If cq_id is not provided, the current command queue is returned from the current thread
+    // If cq_id is not provided, the queue selected through the deprecated PushCurrentCommandQueueIdForThread is
+    // returned (command queue 0 if none). Prefer passing cq_id explicitly: TTNN and Metal-internal code always do,
+    // and the implicit selection will be removed together with the deprecated Push/Pop/Get functions.
     MeshCommandQueue& mesh_command_queue(std::optional<uint8_t> cq_id = std::nullopt) const;
 
     // Currently expose users to the dispatch thread pool through the MeshDevice
-    void enqueue_to_thread_pool(std::function<void()>&& f);
+    void enqueue_to_thread_pool(ttsl::move_only_function<void()>&& f);
     void wait_for_thread_pool();
     static std::shared_ptr<MeshDevice> create(
         const MeshDeviceConfig& config,

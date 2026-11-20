@@ -11,7 +11,6 @@ runs. The copy must equal its input across every block boundary; a re-init that 
 the dest-offset registers shows up as a hang or a wrong tile.
 """
 
-import torch
 from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat
@@ -23,7 +22,6 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     DestSync,
-    format_dict,
 )
 from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
@@ -42,7 +40,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     generate_input_dim,
 )
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 REINIT_FORMATS = input_output_formats(
     [DataFormat.Float16_b, DataFormat.Float32, DataFormat.Bfp8_b], same=True
@@ -118,11 +116,7 @@ def test_pack_dest_reinit(formats, dest_acc, input_dimensions):
     )
 
     res_from_L1 = configuration.run().result
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), f"result has {len(res_from_L1)} datums, golden has {len(golden_tensor)}"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
     assert passed_test(golden_tensor, res_tensor, formats.output_format), (
         "datacopy output differs from its input after the per-block _llk_pack_dest_init_ / "
         "_llk_math_pack_sync_init_ re-init"

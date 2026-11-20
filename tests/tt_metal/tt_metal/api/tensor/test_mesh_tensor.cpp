@@ -53,6 +53,7 @@
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tt_metal/tt_metal/common/device_fixture.hpp"
+#include "common_tensor_test_utils.hpp"
 
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include "impl/context/metal_context.hpp"
@@ -147,6 +148,45 @@ TEST_F(MeshDeviceSingleCardFixture, AllocateFp8E4m3OnDevice) {
         EXPECT_ANY_THROW({ [[maybe_unused]] auto tensor = MeshTensor::allocate_on_device(mesh_device, spec); });
     }
 }
+
+// MX tensors can only be placed on Quasar. There the packed tiles (block scales included) must survive a
+// host -> device -> host round trip byte for byte; on any other arch allocation is rejected.
+class MeshTensorMxDeviceTest : public MeshDeviceSingleCardFixture, public ::testing::WithParamInterface<DataType> {};
+
+TEST_P(MeshTensorMxDeviceTest, RoundTripOnQuasarRejectedElsewhere) {
+    auto& mesh_device = *devices_[0];
+    const DataType dtype = GetParam();
+    // 2x2 tiles, so the round trip covers several pages.
+    const Shape shape{64, 64};
+    auto spec = TensorSpec(
+        shape,
+        TensorLayout(dtype, PageConfig(Layout::TILE), MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+
+    if (mesh_device.arch() != tt::ARCH::QUASAR) {
+        EXPECT_ANY_THROW({ [[maybe_unused]] auto tensor = MeshTensor::allocate_on_device(mesh_device, spec); });
+        return;
+    }
+
+    std::vector<float> data(shape.volume());
+    for (size_t i = 0; i < data.size(); ++i) {
+        data[i] = static_cast<float>(i % 61) - 30.0f;
+    }
+    auto host_tensor = HostTensor::from_vector(data, spec);
+
+    auto& cq = mesh_device.mesh_command_queue();
+    MeshTensor device_tensor = cq.enqueue_write_tensor(host_tensor);
+    EXPECT_EQ(device_tensor.dtype(), dtype);
+    HostTensor result = cq.enqueue_read_tensor(device_tensor);
+
+    EXPECT_EQ(result.tensor_spec(), host_tensor.tensor_spec());
+    EXPECT_THAT(host_buffer::get_as<uint32_t>(result), Pointwise(Eq(), host_buffer::get_as<uint32_t>(host_tensor)));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MeshTensorMxDevice,
+    MeshTensorMxDeviceTest,
+    ::testing::ValuesIn(::test_utils::kMxDataTypes),
+    ::test_utils::dtype_param_name);
 
 TEST_F(MeshTensorDeviceTest, MoveConstructionTransfersOwnership) {
     auto page_config = PageConfig(Layout::ROW_MAJOR);

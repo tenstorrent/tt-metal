@@ -23,7 +23,7 @@ enum class p_dim_stride_target
  * @brief Programs the unpacker source register format.
  *
  * L1 buffer info is not programmed here: it lives in buffer descriptors, which op inits
- * program via the per-TRISC allocator (see llk_bfd_alloc.h).
+ * program via the engine's fixed id (see ckernel_buf_desc.h).
  *
  * @tparam UNP_SEL: Selects which unpacker to configure, values = <p_unpacr::UNP_A/UNP_B/UNP_S/UNP_DEST>
  * @param reg_data_format: Source register (out) data format.
@@ -108,9 +108,7 @@ inline void _llk_unpack_dest_dvalid_section_done_()
  * @note Call once per program before the first unpack-to-dest init (@ref _llk_unpack_unary_operand_to_dest_init_,
  *       @ref _llk_unpack_tilize_to_dest_init_), never from a per-op init: op writers may re-run the per-op init inside
  *       their tile loop, and a reset there would pin unpack to bank 0 while pack keeps alternating banks. Pair with
- *       @ref _llk_math_pack_sync_init_ (T1) and @ref _llk_pack_dest_init_ (T2). The one exception is the unpack_to_dest
- *       compatibility arm of @ref _llk_unpack_unary_operand_init_, which keeps the per-init reset its unported callers
- *       rely on.
+ *       @ref _llk_math_pack_sync_init_ (T1) and @ref _llk_pack_dest_init_ (T2).
  */
 inline void _llk_unpack_dest_init_()
 {
@@ -205,5 +203,5 @@ constexpr std::uint32_t nop_insn_for_unused_unpacker_engine()
 {
     static_assert((UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B), "UNP_SEL must be UNP_A or UNP_B");
     constexpr auto unpacr_engine = UNP_SEL == p_unpacr::UNP_A ? p_unpacr::UNP_B : p_unpacr::UNP_A;
-    return TT_OP_UNPACR_NOP(unpacr_engine, 1 /*Set_Dvalid*/, 0 /*Stall_Cntrl*/, 0 /*Bank_Clr_Ctrl*/, 0 /*Src_ClrVal_Ctrl*/, 0 /*Nop_type*/);
+    return TT_OP_UNPACR_NOP(unpacr_engine, 1 /*Set_Dvalid*/, 0 /*Stall_Cntrl*/, 0 /*Bank_Clr_Ctrl*/, p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_CLRSRC);
 }

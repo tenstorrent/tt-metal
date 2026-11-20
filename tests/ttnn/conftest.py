@@ -8,13 +8,12 @@ import json
 import dataclasses
 import pprint
 import shutil
-from types import BuiltinFunctionType, FunctionType, ModuleType
-
 
 from loguru import logger
 import pytest
 
 import ttnn
+from tt_py_test_utils_common.utils_for_testing import format_parametrize_id
 
 
 def pytest_addoption(parser):
@@ -22,20 +21,7 @@ def pytest_addoption(parser):
 
 
 def pytest_make_parametrize_id(config, val, argname):
-    if isinstance(val, ModuleType):
-        val = val.__name__
-    # Handle FastOperation objects to avoid memory addresses in test IDs
-    # This ensures deterministic test names for pytest-xdist compatibility
-    elif hasattr(val, "python_fully_qualified_name"):
-        val = val.python_fully_qualified_name
-    # Handle TensorSpec objects - create deterministic ID from shape/dtype/layout
-    elif type(val).__name__ == "TensorSpec":
-        val = f"TensorSpec({val.shape},{val.dtype},{val.layout})"
-    # Handle functions (e.g. torch.erfinv) - their default repr embeds a memory address
-    # that differs per xdist worker process, which aborts collection with a mismatch
-    elif isinstance(val, (BuiltinFunctionType, FunctionType)):
-        val = val.__name__
-    return f"{argname}={val}"
+    return format_parametrize_id(argname, val)
 
 
 def pytest_collection_modifyitems(config, items):

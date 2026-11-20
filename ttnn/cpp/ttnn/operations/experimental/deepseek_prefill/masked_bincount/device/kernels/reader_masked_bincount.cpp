@@ -30,25 +30,15 @@
 //   overlap with phase-2 initialisation.
 //
 // Phase 2 — Local histogram counting:
-//   BRISC (the initializer) zeroes the shared histogram buffer in cb_out,
-//   fetches the expert mask into cb_mask, then signals NCRISC via init_sem.
-//   NCRISC waits for init_sem before proceeding. Both RISCs then iterate their
-//   input rows: for each UINT16 expert index that passes the bounds check
-//   (< n_routed_experts) and the mask check (mask[expert_idx] != 0), the count
-//   is incremented atomically using noc_semaphore_inc on the local L1 address.
-//   This is safe because semaphore increments are atomic even when both RISCs
-//   target the same word. After counting, each RISC increments done_sem and
-//   waits for the atomic barrier.
+//   BRISC fetches the expert mask into cb_mask and signals NCRISC via init_sem. Each RISC counts its rows'
+//   picks that pass the bounds check (< n_routed_experts) and the mask check (mask[expert] >= 0) into its own
+//   RISC-local array (plain increments). NCRISC publishes its array to cb_ncrisc_partial and bumps done_sem;
+//   BRISC writes local + NCRISC partial into the core's output page (cb_out).
 //
-// Phase 3 — Tree reduction (BRISC only):
-//   After both RISCs on a core finish (done_sem reaches 2), BRISC participates
-//   in a binary-tree reduction across cores. The tree is structured so that
-//   core i receives from children at indices i + 2^L for successive levels L.
-//   At each level, BRISC waits for the child's gather_sem signal, reads the
-//   child's histogram from remote L1 into a temporary CB (cb_gather_tmp), and
-//   element-wise adds it into the local histogram. After processing all
-//   children, non-root cores signal their parent's gather_sem. The root core
-//   (parent_noc_x == 0xFFFFFFFF) writes the final reduced histogram.
+// Phase 3 — Flat reduction (BRISC only):
+//   Every core but the collector (core 0) signals the collector's gather_sem once its page is final. The
+//   collector waits for all of them, reads every other core's page at once into cb_gather_tmp, sums, and
+//   writes the histogram.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -82,8 +72,10 @@ void kernel_main() {
     constexpr uint32_t cb_mask = get_compile_time_arg_val(15);
     constexpr uint32_t mask_page_size = get_compile_time_arg_val(16);
     constexpr uint32_t tile_h = get_compile_time_arg_val(17);
+    // L1 page where NCRISC publishes its partial histogram for BRISC (counts are kept RISC-local, not atomic).
+    constexpr uint32_t cb_ncrisc_partial = get_compile_time_arg_val(18);
 
-    constexpr uint32_t src_accessor_offset = 18;
+    constexpr uint32_t src_accessor_offset = 19;
     constexpr auto src_args = TensorAccessorArgs<src_accessor_offset>();
     const auto src_accessor = TensorAccessor(src_args, src_addr);
 
@@ -123,14 +115,11 @@ void kernel_main() {
         }
     }
 
-    // Phase 2: Local histogram counting (BRISC/NCRISC cooperate on same core)
+    // Phase 2: Local histogram counting. Each RISC counts into its own RISC-local array (plain increments, no
+    // NoC atomics); NCRISC then publishes its array to an L1 page and BRISC adds it into the output page.
     Semaphore<> init_sem(init_sem_idx);
 
     if constexpr (is_initializer) {
-        volatile tt_l1_ptr uint32_t* counts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_addr);
-        for (uint32_t i = 0; i < n_routed_experts; i++) {
-            counts[i] = 0;
-        }
         noc.async_read(mask_accessor, CoreLocalMem<uint32_t>(mask_l1_addr), mask_page_size, {.page_id = 0}, {});
         noc.async_read_barrier();
         init_sem.set(1);
@@ -138,12 +127,18 @@ void kernel_main() {
         noc.async_read_barrier();
         init_sem.wait(1);
     }
+    invalidate_l1_cache();
 
-    volatile tt_l1_ptr int32_t* mask = reinterpret_cast<volatile tt_l1_ptr int32_t*>(mask_l1_addr);
+    const int32_t* mask = reinterpret_cast<const int32_t*>(mask_l1_addr);
 
     const uint8_t my_noc_id = noc.get_noc_id();
     const uint32_t my_noc_x = my_x[my_noc_id];
     const uint32_t my_noc_y = my_y[my_noc_id];
+
+    static uint32_t local_counts[n_routed_experts];
+    for (uint32_t i = 0; i < n_routed_experts; i++) {
+        local_counts[i] = 0;
+    }
 
     // Untile in place: a 32x32 tile stores four 16x16 faces (face0,face1,face2,face3, row-major within
     // each). Experts occupy columns [0, num_experts_per_token) which fall in the left faces (0 and 2),
@@ -152,7 +147,7 @@ void kernel_main() {
     constexpr uint32_t FACE_DIM = 16;
     constexpr uint32_t FACE_SIZE = FACE_DIM * FACE_DIM;  // 256 uint16 per face
     const uint32_t tile_elems = input_page_size / 2;     // uint16 per tile page
-    volatile tt_l1_ptr uint16_t* in_u16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(in_base_addr);
+    const uint16_t* in_u16 = reinterpret_cast<const uint16_t*>(in_base_addr);
     for (uint32_t j = 0; j < h_count; j++) {
         uint32_t global_row = h_start + j;
         uint32_t tile_local = global_row / tile_h - first_tile;
@@ -162,75 +157,69 @@ void kernel_main() {
         for (uint32_t w = 0; w < num_experts_per_token; w++) {
             uint32_t expert_idx = in_u16[row_base + w];
             if (expert_idx < n_routed_experts && mask[expert_idx] >= 0) {
-                // TODO: D2.0 has no wrapper for atomic-increment on an arbitrary L1 word
-                // (the target here is a histogram bin, not a registered semaphore). The
-                // NoC atomic-inc primitive is exposed only via Semaphore<>::up(noc, x, y, val),
-                // which resolves a semaphore-id to an L1 address. Keeping the legacy free
-                // function for this specific case is documented as an acceptable fallback.
-                uint64_t noc_addr = get_noc_addr(my_noc_x, my_noc_y, out_addr + expert_idx * sizeof(uint32_t));
-                noc_semaphore_inc(noc_addr, 1);
+                local_counts[expert_idx]++;
             }
         }
     }
-    noc.async_atomic_barrier();
 
-    // Atomically bump the local done_sem on this core. up(noc, x, y, val) performs a NoC
-    // atomic increment even when the target is the current core, which is needed because
-    // BRISC and NCRISC both increment the same semaphore.
     Semaphore<> done_sem(done_sem_idx);
-    done_sem.up(noc, my_noc_x, my_noc_y, 1);
-    noc.async_atomic_barrier();
-
-    // Phase 3: Tree reduction — BRISC only
-    if constexpr (is_initializer) {
-        done_sem.wait_min(2);
-
-        uint32_t num_receive = get_arg_val<uint32_t>(4);
-        uint32_t parent_noc_x = get_arg_val<uint32_t>(5);
-        uint32_t parent_noc_y = get_arg_val<uint32_t>(6);
-
-        Semaphore<> gather_sem(gather_sem_idx);
-
-        uint32_t tmp_addr = cb_gather_tmp_obj.get_write_ptr();
-        volatile tt_l1_ptr uint32_t* local_hist = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_addr);
-
-        // Wait for ALL children to signal before reading any.
-        // A single gather_sem counter does not identify WHICH child signaled,
-        // so we must wait for all num_receive increments to guarantee every
-        // child's histogram is finalized before reading.
-        gather_sem.wait_min(num_receive);
-        for (uint32_t level = 0; level < num_receive; level++) {
-            uint32_t child_noc_x = get_arg_val<uint32_t>(7 + level * 2);
-            uint32_t child_noc_y = get_arg_val<uint32_t>(7 + level * 2 + 1);
-
-            noc.async_read(
-                UnicastEndpoint{},
-                CoreLocalMem<uint32_t>(tmp_addr),
-                output_page_size,
-                {.noc_x = child_noc_x, .noc_y = child_noc_y, .addr = out_addr},
-                {});
-            noc.async_read_barrier();
-
-            volatile tt_l1_ptr uint32_t* remote_hist = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tmp_addr);
-            for (uint32_t i = 0; i < n_routed_experts; i++) {
-                local_hist[i] += remote_hist[i];
-            }
+    volatile tt_l1_ptr uint32_t* ncrisc_partial =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CircularBuffer(cb_ncrisc_partial).get_write_ptr());
+    if constexpr (!is_initializer) {
+        for (uint32_t i = 0; i < n_routed_experts; i++) {
+            ncrisc_partial[i] = local_counts[i];
         }
-
-        if (parent_noc_x != 0xFFFFFFFF) {
-            // Force the tree-add stores into local_hist (== out_addr) to be processed into L1 BEFORE we
-            // signal the parent, which then NoC-reads this core's out_addr. A baby-RISCV store can retire
-            // before its write-request lands, and gather_sem.up() is an MMIO/NoC store that can race ahead
-            // of the L1 stores (WormholeB0/.../MemoryOrdering.md; NoC/Ordering.md: an MMIO write can race
-            // ahead of an L1 write). load_blocking the last accumulated word (blocking load + memory
-            // clobber) to drain the tree-add stores first.
-            (void)ckernel::load_blocking(local_hist + (n_routed_experts - 1));
-            // Bump parent's gather_sem (a real semaphore id resolved on each core).
-            gather_sem.up(noc, parent_noc_x, parent_noc_y, 1);
-            noc.async_atomic_barrier();
-        } else {
-            noc.async_write(CoreLocalMem<uint32_t>(out_addr), dst_accessor, output_page_size, {}, {.page_id = 0});
-            noc.async_write_barrier();
-        }
+        // The stores must land in L1 before BRISC is told to read them (an MMIO/NoC store can race ahead of
+        // L1 stores): a blocking load of the last word drains them first.
+        (void)ckernel::load_blocking(ncrisc_partial + (n_routed_experts - 1));
+        done_sem.up(noc, my_noc_x, my_noc_y, 1);
+        noc.async_atomic_barrier();
+        return;
     }
+
+    // BRISC from here on.
+    done_sem.wait_min(1);
+    invalidate_l1_cache();
+    volatile tt_l1_ptr uint32_t* local_hist = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_addr);
+    for (uint32_t i = 0; i < n_routed_experts; i++) {
+        local_hist[i] = local_counts[i] + ncrisc_partial[i];
+    }
+
+    // Phase 3: flat reduction. The collector reads every other core's histogram at once and sums them; the other
+    // cores only signal it.
+    uint32_t num_receive = get_arg_val<uint32_t>(4);
+    uint32_t parent_noc_x = get_arg_val<uint32_t>(5);
+    uint32_t parent_noc_y = get_arg_val<uint32_t>(6);
+    Semaphore<> gather_sem(gather_sem_idx);
+
+    if (parent_noc_x != 0xFFFFFFFF) {
+        (void)ckernel::load_blocking(local_hist + (n_routed_experts - 1));
+        gather_sem.up(noc, parent_noc_x, parent_noc_y, 1);
+        noc.async_atomic_barrier();
+        return;
+    }
+
+    uint32_t tmp_addr = cb_gather_tmp_obj.get_write_ptr();
+    gather_sem.wait_min(num_receive);
+    for (uint32_t c = 0; c < num_receive; c++) {
+        uint32_t child_noc_x = get_arg_val<uint32_t>(7 + c * 2);
+        uint32_t child_noc_y = get_arg_val<uint32_t>(7 + c * 2 + 1);
+        noc.async_read(
+            UnicastEndpoint{},
+            CoreLocalMem<uint32_t>(tmp_addr + c * output_page_size),
+            output_page_size,
+            {.noc_x = child_noc_x, .noc_y = child_noc_y, .addr = out_addr},
+            {});
+    }
+    noc.async_read_barrier();
+    invalidate_l1_cache();
+    for (uint32_t i = 0; i < n_routed_experts; i++) {
+        uint32_t sum = local_counts[i] + ncrisc_partial[i];
+        for (uint32_t c = 0; c < num_receive; c++) {
+            sum += reinterpret_cast<const uint32_t*>(tmp_addr + c * output_page_size)[i];
+        }
+        local_hist[i] = sum;
+    }
+    noc.async_write(CoreLocalMem<uint32_t>(out_addr), dst_accessor, output_page_size, {}, {.page_id = 0});
+    noc.async_write_barrier();
 }

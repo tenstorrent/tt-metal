@@ -7,11 +7,10 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 
-#include "core_descriptor.hpp"
 #include "impl/metal2_host_api/helpers.hpp"
 #include "impl/metal2_host_api/program_spec/validation/placement/placement.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 namespace {
 
@@ -19,10 +18,10 @@ namespace {
 // ValidateNodeBounds: Node coordinate bounds checking
 // ----------------------------------------------------------------------------
 //
-// Validates that every NodeCoord referenced by a WorkUnitSpec or SemaphoreSpec
-// is within the compute worker grid on this device.
-// (Kernel and DFB placement is derived from WorkUnitSpec membership, so
-// bounds-checking the WorkUnitSpecs covers them too.)
+// Validates that explicitly placed nodes, including work units, semaphores, and resource overrides,
+// are within the compute worker grid on this device.
+// (Kernel and inferred resource placement comes from WorkUnitSpec membership, so
+// bounds-checking the WorkUnitSpecs covers those nodes too.)
 //
 // NOTE: We're dealing in logical coordinates. (Harvesting is handled by UMD.)
 //
@@ -54,6 +53,17 @@ void ValidateNodeBounds(const ProgramSpec& spec, const CoreCoord& compute_grid_s
     }
     for (const auto& sem : spec.semaphores) {
         check_target_nodes(sem.target_nodes, "SemaphoreSpec", sem.unique_id.get());
+    }
+    for (const auto& dfb : spec.dataflow_buffers) {
+        if (dfb.advanced_options.override_placement) {
+            check_target_nodes(*dfb.advanced_options.override_placement, "DataflowBufferSpec", dfb.unique_id.get());
+        }
+    }
+    for (const auto& scratchpad : spec.scratchpads) {
+        if (scratchpad.advanced_options.override_placement) {
+            check_target_nodes(
+                *scratchpad.advanced_options.override_placement, "ScratchpadSpec", scratchpad.unique_id.get());
+        }
     }
     for (const auto& pipe : spec.advanced_options.prefetcher_pipe_parameters) {
         check_target_nodes(pipe.receivers, "PrefetcherPipeParameter", pipe.unique_id.get());
@@ -145,4 +155,4 @@ void ValidateWorkUnitSpec(const WorkUnitSpec& work_unit, const ValidationContext
     TT_FATAL(num_compute_kernels <= 1, "WorkUnitSpec '{}' has more than one compute kernel", work_unit.name);
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

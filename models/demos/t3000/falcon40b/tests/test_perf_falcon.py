@@ -298,6 +298,7 @@ def run_test_FalconCausalLM_end_to_end(
     # This script does not asser the expected vs actual time since this is done based on the perf report and as part of the perf pipeline
 
 
+@pytest.mark.falcon40b_config(decode_configs=("BFLOAT8_B-SHARDED",))
 @pytest.mark.model_perf_t3000
 @pytest.mark.parametrize("num_devices", (8,), ids=["8chips"])
 @pytest.mark.parametrize(
@@ -343,11 +344,6 @@ def test_perf_bare_metal(
     mesh_device,
     is_ci_env,
 ):
-    if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8):
-        pytest.skip("Prefill is only supported for DRAM memory config and 8 chips!")
-    if llm_mode == "decode" and model_config_str not in ["BFLOAT8_B-SHARDED"]:
-        pytest.skip("Decode is only supported for SHARDED memory config!")
-
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
@@ -374,6 +370,7 @@ def test_perf_bare_metal(
     )
 
 
+@pytest.mark.falcon40b_config(decode_configs=("BFLOAT8_B-SHARDED",))
 @pytest.mark.parametrize("num_devices", (8,), ids=["8chips"])
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len, expected_compile_time, expected_inference_time, num_layers, model_config_str",
@@ -408,11 +405,6 @@ def test_device_perf_bare_metal(
     mesh_device,
     is_ci_env,
 ):
-    if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8):
-        pytest.skip("Prefill is only supported for DRAM memory config and 8 chips!")
-    if llm_mode == "decode" and model_config_str not in ["BFLOAT8_B-SHARDED"]:
-        pytest.skip("Decode is only supported for SHARDED memory config!")
-
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
