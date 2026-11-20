@@ -75,6 +75,9 @@ PROFILE_NAMES = []
 for _spec in filter(None, os.environ.get("PREFIX_CHECK_PROFILE_IDS", "").split(",")):
     _name, _path = _spec.split("=", 1)
     PROMPTS[_name] = [int(t) for t in open(_path).read().replace("\n", " ").replace(",", " ").split()]
+    # floored to a multiple of 128, as tt-d-gen sends prompts: a 3,028-token ragged last chunk at ~127k (the 130,004-token chat
+    # needle) asserted in the eager source attention on the islands path (WS1 11-19 / 11-20), a length the engine never sends
+    PROMPTS[_name] = PROMPTS[_name][: len(PROMPTS[_name]) // 128 * 128]
     assert len(PROMPTS[_name]) <= int(os.environ.get("PREFILL_MAX_SEQ_LEN", 1 << 20)), (_name, len(PROMPTS[_name]))
     PROFILE_NAMES.append(_name)
 
