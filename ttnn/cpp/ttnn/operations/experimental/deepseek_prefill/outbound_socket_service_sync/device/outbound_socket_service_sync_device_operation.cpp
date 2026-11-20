@@ -19,26 +19,37 @@ namespace ttnn::experimental::prim {
 
 void OutboundSocketServiceSyncOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input = tensor_args.input;
-    const auto& backing = tensor_args.backing;
     TT_FATAL(
-        input.storage_type() == StorageType::DEVICE, "outbound_socket_service_sync: input tensor must be on device");
-    TT_FATAL(input.is_allocated(), "outbound_socket_service_sync: input tensor must be allocated");
+        tensor_args.input.has_value() == tensor_args.backing.has_value() &&
+            tensor_args.input.has_value() == !args.metadata_only,
+        "outbound_socket_service_sync: pass an input and a backing tensor unless metadata_only");
     TT_FATAL(
-        backing.storage_type() == StorageType::DEVICE,
-        "outbound_socket_service_sync: backing tensor must be on device");
-    TT_FATAL(backing.is_allocated(), "outbound_socket_service_sync: backing tensor must be allocated");
+        args.metadata_only || tensor_args.metadata.has_value() || args.metadata_size_bytes == 0,
+        "outbound_socket_service_sync: metadata_size_bytes > 0 requires a metadata tensor");
+    // The tensor that fixes the mesh: the backing, or the metadata record when there is no payload.
+    const Tensor& anchor = args.metadata_only ? *tensor_args.metadata : *tensor_args.backing;
     TT_FATAL(
-        input.tensor_spec() == backing.tensor_spec(),
-        "outbound_socket_service_sync: input tensor spec must match the sender backing per-shard spec (the kernel "
-        "copies it "
-        "page-for-page)");
+        anchor.storage_type() == StorageType::DEVICE && anchor.is_allocated(),
+        "outbound_socket_service_sync: {} tensor must be allocated on device",
+        args.metadata_only ? "metadata" : "backing");
+    if (!args.metadata_only) {
+        const auto& input = *tensor_args.input;
+        const auto& backing = *tensor_args.backing;
+        TT_FATAL(
+            input.storage_type() == StorageType::DEVICE,
+            "outbound_socket_service_sync: input tensor must be on device");
+        TT_FATAL(input.is_allocated(), "outbound_socket_service_sync: input tensor must be allocated");
+        TT_FATAL(
+            input.tensor_spec() == backing.tensor_spec(),
+            "outbound_socket_service_sync: input tensor spec must match the sender backing per-shard spec (the "
+            "kernel copies it page-for-page)");
+        // The writer runs on the backing's mesh and reads every input by address, so a tensor on
+        // another mesh would read unrelated memory.
+        TT_FATAL(
+            input.device() == backing.device(),
+            "outbound_socket_service_sync: input tensor must be on the sender backing's mesh device");
+    }
     TT_FATAL(args.page_size > 0 && args.num_pages > 0, "outbound_socket_service_sync: backing tensor has no pages");
-    // The writer runs on the backing's mesh and reads every input by address, so a tensor on
-    // another mesh would read unrelated memory.
-    TT_FATAL(
-        input.device() == backing.device(),
-        "outbound_socket_service_sync: input tensor must be on the sender backing's mesh device");
     TT_FATAL(
         !args.data_ready_addrs.empty() && args.service_core_x.size() == args.data_ready_addrs.size() &&
             args.service_core_y.size() == args.data_ready_addrs.size(),
@@ -63,7 +74,7 @@ void OutboundSocketServiceSyncOperation::validate_on_program_cache_miss(
             "outbound_socket_service_sync: input tensor {} spec must match the sender backing per-shard spec",
             i + 1);
         TT_FATAL(
-            extra_input.device() == backing.device(),
+            extra_input.device() == anchor.device(),
             "outbound_socket_service_sync: input tensor {} must be on the sender backing's mesh device",
             i + 1);
         const auto* extra_buffer = extra_backing.buffer();
@@ -96,7 +107,7 @@ void OutboundSocketServiceSyncOperation::validate_on_program_cache_miss(
             tensor_args.metadata.has_value() && tensor_args.metadata->is_allocated(),
             "outbound_socket_service_sync: metadata_size_bytes > 0 requires an allocated metadata tensor");
         TT_FATAL(
-            tensor_args.metadata->device() == backing.device(),
+            tensor_args.metadata->device() == anchor.device(),
             "outbound_socket_service_sync: metadata tensor must be on the sender backing's mesh device");
         TT_FATAL(
             args.metadata_addrs.size() == args.data_ready_addrs.size(),
@@ -107,7 +118,8 @@ void OutboundSocketServiceSyncOperation::validate_on_program_cache_miss(
 OutboundSocketServiceSyncOperation::spec_return_value_t OutboundSocketServiceSyncOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     // The op fills the service-owned backing in place; its spec is the output spec.
-    return tensor_args.backing.tensor_spec();
+    // Metadata-only has no backing: the output is the metadata record, also in place.
+    return tensor_args.backing.has_value() ? tensor_args.backing->tensor_spec() : tensor_args.metadata->tensor_spec();
 }
 
 OutboundSocketServiceSyncOperation::topology_return_value_t OutboundSocketServiceSyncOperation::compute_output_topologies(
@@ -117,14 +129,14 @@ OutboundSocketServiceSyncOperation::topology_return_value_t OutboundSocketServic
     if (tensor_args.extra_inputs.empty()) {
         return {};
     }
-    return {tensor_args.backing.tensor_topology()};
+    return {tensor_args.backing->tensor_topology()};
 }
 
 OutboundSocketServiceSyncOperation::tensor_return_value_t OutboundSocketServiceSyncOperation::create_output_tensors(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     // In-place: hand back the existing sender backing tensor (no new allocation). The
     // writer kernel writes into its buffer via a BufferBinding.
-    return tensor_args.backing;
+    return tensor_args.backing.has_value() ? *tensor_args.backing : *tensor_args.metadata;
 }
 
 }  // namespace ttnn::experimental::prim
@@ -230,7 +242,13 @@ ttnn::Tensor outbound_socket_service_sync_impl(
         }
     }
     return ttnn::device_operation::launch<OperationType>(
-        attrs, OperationType::tensor_args_t{input_t, backing, metadata, extra_inputs, std::move(extra_backings)});
+        attrs,
+        OperationType::tensor_args_t{
+            metadata_only ? std::nullopt : std::optional<ttnn::Tensor>(input_t),
+            metadata_only ? std::nullopt : std::optional<ttnn::Tensor>(backing),
+            metadata,
+            extra_inputs,
+            std::move(extra_backings)});
 }
 
 ttnn::Tensor outbound_socket_service_sync(

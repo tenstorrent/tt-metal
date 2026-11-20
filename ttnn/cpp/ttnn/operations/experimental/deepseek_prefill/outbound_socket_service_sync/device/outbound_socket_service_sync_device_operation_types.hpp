@@ -30,7 +30,7 @@ struct OutboundSocketServiceSyncParams {
 
     // Per-mesh-coordinate state, indexed row-major as (row * mesh_num_cols + col).
     // The sender service core (and thus the data-ready counter / metadata L1) may
-    // differ per device, so these are looked up per coord inside create_descriptor.
+    // differ per device, so each chip's program looks up its own (create_workload_descriptor).
     uint32_t mesh_num_cols = 0;
     std::vector<uint32_t> data_ready_addrs;  // L1 addr on each coord's service core
     std::vector<uint32_t> service_core_x;    // LOGICAL service-core x per coord
@@ -50,8 +50,10 @@ struct OutboundSocketServiceSyncInputs {
     //   `input`'s per-shard spec; also the op's (in-place) output.
     // metadata: optional [1,1,1,N] uint32 blob the designated worker forwards to the
     //   sender service core (metadata mode only).
-    Tensor input;
-    Tensor backing;
+    // Metadata-only (no payload): no input or backing, and the output is the metadata tensor. Each tensor is in one
+    // slot, so a cache hit patches its address.
+    std::optional<Tensor> input;
+    std::optional<Tensor> backing;
     std::optional<Tensor> metadata;
     // Extra D2D segments: extra_inputs[i] is copied into extra_backings[i] page-for-page,
     // exactly like input -> backing.

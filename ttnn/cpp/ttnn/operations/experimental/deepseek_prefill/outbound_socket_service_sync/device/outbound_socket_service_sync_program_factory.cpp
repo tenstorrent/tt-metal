@@ -16,19 +16,19 @@ using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
 
-ProgramDescriptor OutboundSocketServiceSyncProgramFactory::create_descriptor(
+namespace {
+
+ProgramDescriptor build_descriptor_at(
     const OutboundSocketServiceSyncParams& args,
     const OutboundSocketServiceSyncInputs& tensor_args,
     Tensor& backing_out,
-    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    TT_FATAL(
-        mesh_dispatch_coordinate.has_value(),
-        "outbound_socket_service_sync: the program factory requires a per-device mesh dispatch coordinate");
-    const auto& coord = *mesh_dispatch_coordinate;
+    const ttnn::MeshCoordinate& coord) {
     const uint32_t idx = coord[0] * args.mesh_num_cols + coord[1];
     TT_FATAL(idx < args.data_ready_addrs.size(), "outbound_socket_service_sync: mesh coordinate {} out of range", idx);
 
-    const auto& input = tensor_args.input;
+    // Metadata-only: no input or backing; the record stands in for the accessor args and the CB format, and the
+    // kernel never reads the two base addresses.
+    const Tensor& input = args.metadata_only ? *tensor_args.metadata : *tensor_args.input;
     const bool has_metadata = args.metadata_size_bytes > 0;
 
     // Per-coord service-core targeting (logical -> physical NoC coord).
@@ -55,8 +55,8 @@ ProgramDescriptor OutboundSocketServiceSyncProgramFactory::create_descriptor(
     const uint32_t num_workers = static_cast<uint32_t>(workers.size());
     TT_FATAL(num_workers > 0, "outbound_socket_service_sync: worker_cores must contain at least one core");
 
-    auto* input_buffer = input.buffer();
-    auto* backing_buffer = backing_out.buffer();
+    Buffer* input_buffer = input.buffer();
+    Buffer* backing_buffer = args.metadata_only ? nullptr : backing_out.buffer();
     Buffer* metadata_buffer = has_metadata ? tensor_args.metadata->buffer() : nullptr;
 
     const size_t num_extra = tensor_args.extra_inputs.size();
@@ -126,8 +126,13 @@ ProgramDescriptor OutboundSocketServiceSyncProgramFactory::create_descriptor(
         // rest are plain uint32 scalars. Order MUST match the kernel's get_arg_val
         // indices.
         KernelDescriptor::RTArgList rt_args;
-        rt_args.push_back(input_buffer);                           // 0: input base (patched per dispatch)
-        rt_args.push_back(backing_buffer);                         // 1: sender backing base
+        if (args.metadata_only) {
+            rt_args.push_back(0u);  // 0, 1: unused without a payload
+            rt_args.push_back(0u);
+        } else {
+            rt_args.push_back(input_buffer);    // 0: input base (patched per dispatch)
+            rt_args.push_back(backing_buffer);  // 1: sender backing base
+        }
         rt_args.push_back(data_ready_addr);                        // 2: service-core data_ready counter
         rt_args.push_back(static_cast<uint32_t>(service_phys.x));  // 3: service core NoC x
         rt_args.push_back(static_cast<uint32_t>(service_phys.y));  // 4: service core NoC y
@@ -159,6 +164,21 @@ ProgramDescriptor OutboundSocketServiceSyncProgramFactory::create_descriptor(
 
     desc.kernels.push_back(std::move(writer));
     return desc;
+}
+
+}  // namespace
+
+tt::tt_metal::WorkloadDescriptor OutboundSocketServiceSyncProgramFactory::create_workload_descriptor(
+    const OutboundSocketServiceSyncParams& args,
+    const OutboundSocketServiceSyncInputs& tensor_args,
+    Tensor& backing_out,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    tt::tt_metal::WorkloadDescriptor workload;
+    for (const auto& coord : tensor_coords.coords()) {
+        workload.programs.push_back(
+            {ttnn::MeshCoordinateRange(coord), build_descriptor_at(args, tensor_args, backing_out, coord)});
+    }
+    return workload;
 }
 
 }  // namespace ttnn::experimental::prim
