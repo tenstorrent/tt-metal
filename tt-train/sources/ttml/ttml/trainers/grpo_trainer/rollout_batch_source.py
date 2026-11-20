@@ -56,6 +56,12 @@ def validate_rollout_batch(
             f"logprobs must be a float32 array of shape [{B}, {max_completion_length}], "
             f"got {getattr(lp, 'dtype', type(lp))} {getattr(lp, 'shape', '')}"
         )
+    mask = rollout.loss_mask
+    if mask is not None and (not isinstance(mask, np.ndarray) or mask.shape != lp.shape or mask.dtype != np.float32):
+        raise RuntimeError(
+            f"loss_mask must be None or a float32 array of shape [{B}, {max_completion_length}], "
+            f"got {getattr(mask, 'dtype', type(mask))} {getattr(mask, 'shape', '')}"
+        )
     for r, c in enumerate(rollout.completions):
         if len(c) > max_completion_length:
             raise RuntimeError(f"row {r}: completion length {len(c)} > max_completion_length {max_completion_length}")

@@ -65,12 +65,15 @@ class RolloutBatch:
             log pi_old(a_t | s_t): the full-vocab log_softmax of logits / temperature
             (unscaled at temperature 0), without top_k/top_p. Padding positions are don't-care; the
             trainer masks them out.
+        loss_mask: [B, max_completion_length] float32, or None to train on all completion tokens.
+            1.0 on a sampled token, 0.0 on a tool-response token.
     """
 
     weight_version: int
     prompts: List[List[int]]
     completions: List[List[int]]
     logprobs: np.ndarray
+    loss_mask: Optional[np.ndarray] = None
 
 
 class RolloutSampler(ABC):
@@ -972,6 +975,7 @@ def layout_microbatch(
     prompts: List[List[int]],
     completions: List[List[int]],
     pad_token: int,
+    loss_mask_rows: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int]:
     """Right-padded next-token layout for one micro-batch.
 
@@ -979,7 +983,7 @@ def layout_microbatch(
     prediction: ``inputs[i, :L] = seq[:-1]`` and ``targets[i, :L] = seq[1:]``
     with ``L = len(seq) - 1``; pad tokens fill ``[L, Tp)``. Completion token
     ``j`` is therefore predicted at column ``len(prompts[i]) - 1 + j``, which is
-    where ``mask`` is 1.0. ``Tp`` is the tile-rounded max ``L`` over the
+    where ``mask`` is 1.0, or ``loss_mask_rows[i, j]``. ``Tp`` is the tile-rounded max ``L`` over the
     micro-batch. Padding only on the right means a plain causal mask keeps real
     tokens from attending to pads.
 
@@ -1000,7 +1004,7 @@ def layout_microbatch(
         L = len(seq) - 1
         inputs[i, :L] = np.asarray(seq[:-1], dtype=np.uint32)
         targets[i, :L] = np.asarray(seq[1:], dtype=np.uint32)
-        mask[i, len(p) - 1 : len(p) - 1 + len(c)] = 1.0
+        mask[i, len(p) - 1 : len(p) - 1 + len(c)] = 1.0 if loss_mask_rows is None else loss_mask_rows[i, : len(c)]
     return inputs, targets, mask, Tp
 
 
@@ -1629,7 +1633,8 @@ class GRPOTrainer:
         micro_batch_logprobs = []
         for i, (p, c) in enumerate(iter_micro_batch(batch.prompts, batch.completions, mb)):
             rows = slice(i * mb, i * mb + len(c))
-            inputs, targets, mask_np, Tp = layout_microbatch(p, c, self._pad_token)
+            loss_mask_rows = None if batch.loss_mask is None else batch.loss_mask[rows]
+            inputs, targets, mask_np, Tp = layout_microbatch(p, c, self._pad_token, loss_mask_rows)
             old_np = place_old_nlog_probs(p, c, batch.logprobs[rows], Tp)
             nlog_new = self._compute_policy_nlog_probs(inputs, targets)
             self._compute_loss_and_backward(nlog_new, mask_np, old_np, advantages_np[rows], global_len)
