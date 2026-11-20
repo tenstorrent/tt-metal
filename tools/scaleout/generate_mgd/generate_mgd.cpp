@@ -36,35 +36,17 @@ struct CablingDescriptorInfo {
 inline const std::unordered_map<std::string, NodeTypeInfo>& create_node_type_lookup() {
     static const std::unordered_map<std::string, NodeTypeInfo> lookup = {
         // Wormhole architectures
-        {"N300_LB_DEFAULT", {{2, 4}, tt::tt_fabric::proto::Architecture::WORMHOLE_B0, 2}},     // N300: 2 channels
-        {"N300_QB_DEFAULT", {{2, 4}, tt::tt_fabric::proto::Architecture::WORMHOLE_B0, 2}},     // N300: 2 channels
-        {"WH_GALAXY", {{8, 4}, tt::tt_fabric::proto::Architecture::WORMHOLE_B0, 4}},           // WH Galaxy: 4 channels
-        {"WH_GALAXY_X_TORUS", {{8, 4}, tt::tt_fabric::proto::Architecture::WORMHOLE_B0, 4}},   // WH Galaxy: 4 channels
-        {"WH_GALAXY_Y_TORUS", {{8, 4}, tt::tt_fabric::proto::Architecture::WORMHOLE_B0, 4}},   // WH Galaxy: 4 channels
-        {"WH_GALAXY_XY_TORUS", {{8, 4}, tt::tt_fabric::proto::Architecture::WORMHOLE_B0, 4}},  // WH Galaxy: 4 channels
+        {"N300_LB", {{2, 4}, tt::tt_fabric::proto::Architecture::WORMHOLE_B0, 2}},    // N300: 2 channels
+        {"N300_QB", {{2, 4}, tt::tt_fabric::proto::Architecture::WORMHOLE_B0, 2}},    // N300: 2 channels
+        {"WH_GALAXY", {{8, 4}, tt::tt_fabric::proto::Architecture::WORMHOLE_B0, 4}},  // WH Galaxy: 4 channels
 
         // Blackhole architectures
-        {"P150_LB", {{2, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},             // P150: 2 channels
-        {"P150_QB_AE_DEFAULT", {{2, 2}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 4}},  // P150: 4 channels
-        {"P300_QB_GE", {{2, 2}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},          // P300: 2 channels
-        {"BH_GALAXY", {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},           // BH Galaxy: 2 channels
-        {"BH_GALAXY_X_TORUS", {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},   // BH Galaxy: 2 channels
-        {"BH_GALAXY_Y_TORUS", {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},   // BH Galaxy: 2 channels
-        {"BH_GALAXY_XY_TORUS", {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},  // BH Galaxy: 2 channels
-        {"BH_GALAXY_REV_AB", {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},    // BH Galaxy: 2 channels
-        {"BH_GALAXY_REV_AB_X_TORUS",
-         {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},  // BH Galaxy: 2 channels
-        {"BH_GALAXY_REV_AB_Y_TORUS",
-         {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},  // BH Galaxy: 2 channels
-        {"BH_GALAXY_REV_AB_XY_TORUS",
-         {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},                     // BH Galaxy: 2 channels
-        {"BH_GALAXY_REV_C", {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},  // BH Galaxy: 2 channels
-        {"BH_GALAXY_REV_C_X_TORUS",
-         {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},  // BH Galaxy: 2 channels
-        {"BH_GALAXY_REV_C_Y_TORUS",
-         {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},  // BH Galaxy: 2 channels
-        {"BH_GALAXY_REV_C_XY_TORUS",
-         {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},  // BH Galaxy: 2 channels
+        {"P150_LB", {{2, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},           // P150: 2 channels
+        {"P150_QB_AE", {{2, 2}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 4}},        // P150: 4 channels
+        {"P300_QB_GE", {{2, 2}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},        // P300: 2 channels
+        {"BH_GALAXY", {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},         // BH Galaxy: 2 channels
+        {"BH_GALAXY_REV_AB", {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},  // BH Galaxy: 2 channels
+        {"BH_GALAXY_REV_C", {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},   // BH Galaxy: 2 channels
     };
     return lookup;
 }

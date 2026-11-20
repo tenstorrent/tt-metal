@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Phase 6: the QSFP tests (ETH link, cabling and module state).
+"""Phase 7: the QSFP tests (ETH link, cabling and module state).
 
 Collects a ``tt-bh-glx-cluster-debug`` dump; qsfp_ingest.py turns it into checks.
 """

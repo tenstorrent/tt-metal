@@ -52,8 +52,8 @@ public:
 
     // Requested fabric configuration (configure_fabric). Distinct from get_fabric_config(), which is the runtime
     // value and may differ after the dispatch fallback enables fabric.
-    const FabricConfigDescriptor& get_fabric_config_descriptor() const { return fabric_desc_; }
-    void configure_fabric(const FabricConfigDescriptor& fabric);
+    const FabricSettings& get_fabric_settings() const { return fabric_desc_; }
+    void configure_fabric(const FabricSettings& fabric);
 
     bool check_use_count_zero() const;
 
@@ -157,7 +157,7 @@ private:
 
     // --- Fabric config state ---
     // What configure_fabric was asked for. fabric_config_ below is the runtime value.
-    FabricConfigDescriptor fabric_desc_ = {};
+    FabricSettings fabric_desc_ = {};
 
     tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
     tt_fabric::FabricReliabilityMode fabric_reliability_mode_ =
@@ -189,7 +189,7 @@ private:
     void construct_control_plane(const std::filesystem::path& mesh_graph_desc_path);
     void construct_control_plane();
     // The current fabric settings, bundled for the ControlPlane constructor.
-    FabricConfigDescriptor control_plane_config() const;
+    FabricSettings control_plane_config() const;
     void initialize_control_plane_impl();
 
     struct QuasarDispatchCoresCacheKey {

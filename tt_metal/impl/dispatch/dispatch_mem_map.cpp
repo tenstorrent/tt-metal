@@ -9,7 +9,7 @@
 #include <tt_stl/assert.hpp>
 #include "command_queue_common.hpp"
 #include "dispatch_settings.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "llrt/hal.hpp"
 #include "llrt/rtoptions.hpp"
 #include <hostdevcommon/dispatch_telemetry_types.hpp>
@@ -252,7 +252,14 @@ DispatchMemMap::DispatchMemMap(
         dispatch_s_buffer_end_ + dispatch_s_device_print_l1_cache_size_ + (num_cqs_per_core_ - 1) * cq_zone_stride_;
     TT_FATAL(
         last_cq_zone_end <= l1_size, "Last CQ zone end ({}) extends past L1 end (size {})", last_cq_zone_end, l1_size);
+
+    unused_l1_base_ = align(last_cq_zone_end, 1u << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE);
+    unused_l1_size_ = unused_l1_base_ < l1_size ? l1_size - unused_l1_base_ : 0;
 }
+
+uint32_t DispatchMemMap::unused_l1_base() const { return unused_l1_base_; }
+
+uint32_t DispatchMemMap::unused_l1_size() const { return unused_l1_size_; }
 
 uint32_t DispatchMemMap::prefetch_q_entries() const { return settings.prefetch_q_entries_; }
 

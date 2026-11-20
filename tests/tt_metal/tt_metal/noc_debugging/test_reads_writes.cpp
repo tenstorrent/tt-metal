@@ -12,7 +12,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <impl/context/metal_context.hpp>
 
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "noc_debugging_fixture.hpp"
 #include "distributed/mesh_device_impl.hpp"
 

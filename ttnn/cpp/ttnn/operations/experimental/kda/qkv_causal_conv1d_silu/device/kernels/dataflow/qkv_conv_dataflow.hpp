@@ -52,7 +52,7 @@ inline uint32_t tail_page_tiles(uint32_t row_end) {
 }
 
 // Row `row` of a convolution tail's channel tiles [ct_start, ct_start + ct_count) into `destination` at byte
-// `destination_offset`: one read per page the range touches.
+// `destination_offset`: one read per page the range touches, the tail's pages from `page_base`.
 template <uint32_t token_paged, uint32_t page_channels, typename Tail, typename Destination>
 inline void read_tail_row(
     Noc& noc,
@@ -61,7 +61,8 @@ inline void read_tail_row(
     uint32_t row,
     uint32_t ct_start,
     uint32_t ct_count,
-    uint32_t destination_offset) {
+    uint32_t destination_offset,
+    uint32_t page_base = 0) {
     const uint32_t ct_end = ct_start + ct_count;
     const uint32_t page_tiles = tail_page_tiles<token_paged, page_channels>(ct_end);
     for (uint32_t ct = ct_start; ct < ct_end;) {
@@ -72,7 +73,7 @@ inline void read_tail_row(
             tail,
             destination,
             count * tile_row_bytes,
-            {.page_id = page, .offset_bytes = offset},
+            {.page_id = page_base + page, .offset_bytes = offset},
             {.offset_bytes = destination_offset + (ct - ct_start) * tile_row_bytes});
         ct += count;
     }
@@ -88,7 +89,8 @@ inline void write_tail(
     const Tail& tail,
     uint32_t channel_tiles,
     uint32_t rows_offset,
-    uint32_t pages_offset) {
+    uint32_t pages_offset,
+    uint32_t page_base = 0) {
     const uint32_t row_bytes = channel_tiles * tile_row_bytes;
     const uint32_t page_tiles = tail_page_tiles<token_paged, page_channels>(channel_tiles);
     const uint32_t pages = token_paged ? history_rows : channel_tiles / page_tiles;
@@ -111,13 +113,37 @@ inline void write_tail(
     }
     for (uint32_t page = 0; page < pages; ++page) {
         noc.async_write(
-            scratch, tail, page_bytes, {.offset_bytes = pages_source + page * page_bytes}, {.page_id = page});
+            scratch,
+            tail,
+            page_bytes,
+            {.offset_bytes = pages_source + page * page_bytes},
+            {.page_id = page_base + page});
+    }
+}
+
+// A history slab's carry: its first page, whether it reads as zeros (actual_start == 0 or past the slab), and whether
+// the replacement is written (not past the slab). Scalars land in the aligned L1 `slot`.
+struct SlabCarry {
+    uint32_t page_base;
+    bool zeros;
+    bool writes;
+};
+
+template <uint32_t slab, uint32_t slab_index_limit, uint32_t slab_scale, uint32_t slab_offset, uint32_t entry_pages>
+inline SlabCarry read_slab_carry(Noc& noc, uint32_t slot) {
+    if constexpr (!slab) {
+        return {0, false, true};
+    } else {
+        const uint32_t start = read_word(noc, TensorAccessor(tensor::actual_start), slot);
+        const uint32_t index = read_word(noc, TensorAccessor(*tensor::get_token_if_present<"slab_index">()), slot);
+        const bool in_slab = index < slab_index_limit;
+        return {in_slab ? (index * slab_scale + slab_offset) * entry_pages : 0, start == 0 || !in_slab, in_slab};
     }
 }
 
 // This rank's chronology over [actual_start, actual_end), or the full capacity without actual_end.
-template <uint32_t has_actual_end, uint32_t sp_rank, uint32_t sp_size, uint32_t local_rows>
-inline kda_chronology::Topology read_chronology(Noc& noc, uint32_t slot) {
+template <uint32_t has_actual_end, uint32_t sp_size, uint32_t local_rows>
+inline kda_chronology::Topology read_chronology(Noc& noc, uint32_t slot, uint32_t sp_rank) {
     const uint32_t start = read_word(noc, TensorAccessor(tensor::actual_start), slot);
     if constexpr (has_actual_end) {
         const uint32_t end = read_word(noc, TensorAccessor(*tensor::get_token_if_present<"actual_end">()), slot);

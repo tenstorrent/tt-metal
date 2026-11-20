@@ -358,8 +358,9 @@ def test_sigmoid_bw_rejects_mismatched_shapes_on_warm_cache(device, expect_error
 
 
 def test_sigmoid_bw_program_cache_same_padded_shape(device):
-    """Two inputs with the same padded shape but different logical shapes must get separate cache entries.
-    Their TensorSpecs differ and the Metal 2.0 TensorParameter match would reject one on the other's entry."""
+    """Inputs with the same padded shape but different logical shapes and Alignments share one cache entry. The
+    factory works only from the padded shape, so the key frees both via match_padded_shape_only +
+    relax_tensor_layout_alignment (#59915). Each output must still match torch."""
     torch.manual_seed(0)
     padded_shape = [1, 1, 96, 96]
 
@@ -392,7 +393,7 @@ def test_sigmoid_bw_program_cache_same_padded_shape(device):
         torch.testing.assert_close(ttnn.to_torch(output).float()[logical], expected, rtol=8e-3, atol=1e-4)
 
     added = device.num_program_cache_entries() - start
-    assert added == 2, f"expected 2 program cache entries (one per TensorSpec, third call a hit), got {added}"
+    assert added == 1, f"expected 1 program cache entry shared by all three calls, got {added}"
 
 
 def test_unary_backward_program_cache_keys_each_tensor(device):
