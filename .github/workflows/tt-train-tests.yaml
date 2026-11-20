@@ -165,7 +165,7 @@ jobs:
       image: ${{ inputs.prebuilt-image || format('{0}{1}', inputs.harbor-prefix, inputs.docker-image || 'docker-image-unresolved!') }}
       env:
         LOGURU_LEVEL: INFO
-        TT_LOGGER_LEVEL: warn
+        TT_LOGGER_LEVEL: info
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G

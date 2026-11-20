@@ -99,7 +99,7 @@ jobs:
       env:
         ARCH_NAME: ${{ (contains(matrix.test-group.sku, 'bh_') || contains(matrix.test-group.sku, 'blackhole')) && 'blackhole' || 'wormhole_b0' }}
         LOGURU_LEVEL: INFO
-        TT_LOGGER_LEVEL: warn
+        TT_LOGGER_LEVEL: info
         PYTHONPATH: /work
       volumes:
         - ${{ github.workspace }}/docker-job:/work

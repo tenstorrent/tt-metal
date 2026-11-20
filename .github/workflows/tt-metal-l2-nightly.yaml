@@ -200,7 +200,7 @@ jobs:
     # so it can still bake when none ends up running, but it can never skip a bake one
     # of them needs. Extend it when a new consumer is wired.
     if: ${{ !cancelled() && needs.build-artifact.result == 'success' &&
-     (github.event_name == 'schedule' ||
+     ((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') ||
       inputs.additional_test_categories != '' || inputs.run_cpp_tests || inputs.run_ccl_tests ||
       inputs.run_didt_tests || inputs.run_triage_tests || inputs.run_llk_unit_tests ||
       (inputs.run_blackhole && inputs.run_p100_sanity_tests)) }}
@@ -226,7 +226,7 @@ jobs:
     needs: [build-artifact, generate-arch-matrix]
     if: |
       needs.generate-arch-matrix.outputs.l2-nightly-skus != '' && (
-        github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',compute_fused,')
+        (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') || contains(format(',{0},', inputs.additional_test_categories), ',compute_fused,')
       )
     secrets: inherit
     uses: ./.github/workflows/ttsim-unit-tests-impl.yaml
@@ -236,7 +236,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
       additional_test_categories: >-
-        ${{ github.event_name == 'schedule' && 'compute_fused'
+        ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'compute_fused'
         || inputs.additional_test_categories }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
@@ -252,7 +252,7 @@ jobs:
     # l2-nightly-skus check, which is empty unless that job succeeded.
     if: |
       !cancelled() && needs.build-artifact.result == 'success' &&
-      (github.event_name == 'schedule' || inputs.run_didt_tests) &&
+      ((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') || inputs.run_didt_tests) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
     secrets: inherit
     uses: ./.github/workflows/syseng-didt-tests-impl.yaml
@@ -276,7 +276,7 @@ jobs:
     if: |
       !cancelled() && needs.build-artifact.result == 'success' &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != '' && (
-        github.event_name == 'schedule' || inputs.additional_test_categories != '' || inputs.run_cpp_tests || inputs.run_ccl_tests
+        (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') || inputs.additional_test_categories != '' || inputs.run_cpp_tests || inputs.run_ccl_tests
       )
     secrets: inherit
     uses: ./.github/workflows/ops-unit-tests-impl.yaml
@@ -287,7 +287,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
       additional_test_categories: >-
-        ${{ (github.event_name == 'schedule' &&
+        ${{ ((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
         'conv,matmul,fused,reduction,experimental,pool,eltwise,kernel_lib,transformers,moreh,misc,sdpa,data_movement,ccl,docs_examples,cpp_accessor,cpp_lab_examples,dp_op_unit_tests')
         || (inputs.run_ccl_tests && inputs.run_cpp_tests && format('{0},ccl,cpp_accessor,cpp_lab_examples', inputs.additional_test_categories))
         || (inputs.run_ccl_tests && format('{0},ccl', inputs.additional_test_categories))
@@ -297,7 +297,7 @@ jobs:
   ops-integration-tests:
     needs: [build-artifact, generate-arch-matrix]
     if: |
-      (github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',ops_docs_check,')) &&
+      ((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') || contains(format(',{0},', inputs.additional_test_categories), ',ops_docs_check,')) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
     secrets: inherit
     uses: ./.github/workflows/ops-integration-tests-impl.yaml
@@ -307,13 +307,13 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
       additional_test_categories: >-
-        ${{ github.event_name == 'schedule' && 'ops_docs_check'
+        ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'ops_docs_check'
         || inputs.additional_test_categories }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   ttnn-integration-tests:
     needs: [build-artifact, generate-arch-matrix]
     if: |
-      (github.event_name == 'schedule' || inputs.run_tutorials_tests) &&
+      ((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') || inputs.run_tutorials_tests) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
     secrets: inherit
     uses: ./.github/workflows/ttnn-integration-tests-impl.yaml
@@ -327,7 +327,7 @@ jobs:
   cnn-unit-tests:
     needs: [resolve-docker-pull-refs, build-artifact, generate-arch-matrix]
     if: |
-      (github.event_name == 'schedule' || inputs.run_tt_cnn_unit_tests) &&
+      ((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') || inputs.run_tt_cnn_unit_tests) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
     secrets: inherit
     uses: ./.github/workflows/tt-cnn-unit-tests-impl.yaml
@@ -339,7 +339,7 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   ttnn-p100-tests:
     needs: [check-harbor, build-artifact]
-    if: ${{ github.event_name == 'schedule' || (inputs.run_blackhole && inputs.run_p100_sanity_tests) }}
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') || (inputs.run_blackhole && inputs.run_p100_sanity_tests) }}
     secrets: inherit
     uses: ./.github/workflows/ttnn-sanity-tests-impl.yaml
     with:
@@ -361,7 +361,7 @@ jobs:
     # feeds docker-image.
     if: ${{ !cancelled() && needs.build-artifact.result == 'success' &&
      needs.resolve-docker-pull-refs.result == 'success' &&
-     (github.event_name == 'schedule' || (inputs.run_blackhole && inputs.run_p100_sanity_tests)) }}
+     ((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') || (inputs.run_blackhole && inputs.run_p100_sanity_tests)) }}
     secrets: inherit
     uses: ./.github/workflows/umd-sanity-tests-impl.yaml
     with:
@@ -377,7 +377,7 @@ jobs:
   tt-train-unit-tests:
     needs: [build-artifact, generate-arch-matrix]
     if: |
-      (github.event_name == 'schedule' || inputs.run_tt_train_unit_tests) &&
+      ((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') || inputs.run_tt_train_unit_tests) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
     secrets: inherit
     uses: ./.github/workflows/tt-train-tests.yaml
@@ -392,7 +392,7 @@ jobs:
   tt-train-perf-pretraining-tests:
     needs: [build-artifact, generate-arch-matrix]
     if: |
-      (github.event_name == 'schedule' || inputs.run_tt_train_perf_pretraining_tests) &&
+      ((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') || inputs.run_tt_train_perf_pretraining_tests) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
     secrets: inherit
     uses: ./.github/workflows/tt-train-tests.yaml
@@ -408,7 +408,7 @@ jobs:
   tt-train-perf-finetuning-tests:
     needs: [build-artifact, generate-arch-matrix]
     if: |
-      (github.event_name == 'schedule' || inputs.run_tt_train_perf_finetuning_tests) &&
+      ((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') || inputs.run_tt_train_perf_finetuning_tests) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
     secrets: inherit
     uses: ./.github/workflows/tt-train-tests.yaml
@@ -436,7 +436,7 @@ jobs:
     if: |
       !cancelled() && needs.build-artifact.result == 'success' &&
       needs.resolve-docker-pull-refs.result == 'success' &&
-      (github.event_name == 'schedule' || inputs.run_triage_tests) &&
+      ((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') || inputs.run_triage_tests) &&
       contains(needs.generate-arch-matrix.outputs.l2-nightly-skus, 'wh_n150')
     secrets: inherit
     uses: ./.github/workflows/triage-tests-impl.yaml
@@ -465,7 +465,7 @@ jobs:
     # l2-nightly-skus check, which is empty unless that job succeeded.
     if: |
       !cancelled() && needs.build-artifact.result == 'success' &&
-      (github.event_name == 'schedule' || inputs.run_llk_unit_tests) &&
+      ((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') || inputs.run_llk_unit_tests) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
     secrets: inherit
     uses: ./.github/workflows/llk-unit-tests-impl.yaml

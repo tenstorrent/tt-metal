@@ -123,6 +123,16 @@ runs:
         echo "TT_METAL_LLK_ASSERTS=1" >> $GITHUB_ENV
       shell: bash
 
+    # Measurement branch: print JIT build telemetry at process exit (host time blocked in
+    # program compile, build wall time, builds in flight) and one line per kernel compile.
+    - name: Set up env vars for JIT compile telemetry
+      working-directory: ${{ inputs.path }}
+      run: |
+        echo "Enabling JIT compile telemetry"
+        echo "TT_METAL_LOG_JIT_TELEMETRY=1" >> $GITHUB_ENV
+        echo "TT_METAL_LOG_KERNEL_COMPILE=1" >> $GITHUB_ENV
+      shell: bash
+
     # Kernel ccache configuration for JIT compilation at test runtime
     # This is separate from build ccache (REDIS_USER/REDIS_PASSWORD) which caches C++ compilation
     # Different Redis backends allow:
