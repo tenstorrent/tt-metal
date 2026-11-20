@@ -60,6 +60,8 @@ sudo apt install -y g++-13
 Need to add additional defines to build. After building the first time, can just run usual `./build_metal.sh` commands unless the CMAKE files are removed (e.g. with a `--clean` or `git clean`).
 
 ```
+export CHIPPY_DIR=/proj_sw/user_dev/$USER/chippy
+
 ./build_metal.sh --build-tests --build-umd-tests --configure-only
 
 cmake -DTT_UMD_BUILD_GRENDEL_JTAG=ON \
@@ -84,18 +86,26 @@ git checkout kstevens/metal_bringup
 export GRENDELEMU_DIR=/proj_sw/user_dev/$USER/grendelemulation
 ```
 
-`tests/test_metal_server.py` is on the `kstevens/metal_bringup` branch, not on `main`.
+Each model launches a different server test:
+
+| Model directory | Emulates | Server test |
+|---|---|---|
+| `models/mimir` | 1 Mimir chiplet (1 emulation module) | `tests/test_sival_server.py` |
+| `models/mmk` | 2 Mimir chiplets + 1 Keraunos (4 emulation modules) | `tests/test_metal_server.py` |
+
+`models/mmk/tests/test_metal_server.py` is on the `kstevens/metal_bringup` branch, not on `main`. The `mimir` model has no `test_metal_server.py`; launching it there collects no tests and the job exits.
 
 1. Log into one of the soc machines (e.g. `soc-l-#`)
-2. Setup your environment. Choose either the `mimir` directory (single mimir chiplet - 1 emulation module) or `mmk` (2 mimir chiplets + 1 keraunos - 4 emulation modules) directory depending on your needs.
+2. Setup your environment. Choose either the `mimir` or the `mmk` model directory depending on your needs.
 ```
 source /tools_soc/tt/bin/bashrc
-cd $GRENDELEMU_DIR/models/mimir
+cd $GRENDELEMU_DIR/models/mimir    # or models/mmk
 source bin/setup_env.sh
 ```
-3. Launch the emulation server
+3. Launch the emulation server with the server test for that model
 ```
-emu run -t 3600 -- -sv tests/test_metal_server.py --disable-dpi
+emu run -t 3600 -- -sv tests/test_sival_server.py --disable-dpi    # mimir
+emu run -t 3600 -- -sv tests/test_metal_server.py --disable-dpi    # mmk
 ```
 
 **_NOTE:_** Sometimes just re-launching the server doesn't work properly (it exits immediately thinking there is no design) and the setup commands must be re-run before re-launching the server.
@@ -109,16 +119,39 @@ emu run -t 3600 -- -sv tests/test_metal_server.py --disable-dpi
 
 ## Use 'chippy' to load firmware
 
-There are 3 FW bring-up scripts:
+There are 4 FW bring-up scripts:
 - `bringup_mimir_1x1.py` -> Requires at least 1 Mimir chiplets. Brings up 2 CCEs & connections to adjacent DRAM.
 - `bringup_two_mimir.py` -> Requires at least 2 Mimir chiplets connected to each other. Brings up 2 CCEs in each mimir, connections to adjacent DRAM from each mimir & D2D connections between the mimirs.
-- `bringup_mmk.py` -> Requires at least 2 Mimir chiplets connected to each other & connected to 1 Keraunos. Brings up CCEs for all 3 chiplets, connections to adjacent DRAM from each mimir & D2D connections between all 3 chiplets.
+- `bringup_mmk.py` -> Requires at least 2 Mimir chiplets connected to each other & connected to 1 Keraunos. Brings up CCEs for all 3 chiplets, connections to adjacent DRAM from each mimir & D2D connections between all 3 chiplets. Host-only: it programs everything from Python and loads no firmware. Keraunos reaches Mimir 1 over D2D (CCE SRAM and GDDR) only with `bringup_mmk_fw.py`; with this script those accesses do not complete.
+- `bringup_mmk_fw.py` -> Same package and result as `bringup_mmk.py`, but SysEng's SMC firmware does the chip bring-up on all 3 chiplets (reset and PLL sequencing, D2D configuration and link-up, Mimir NOC init), and the host adds the rest. This is the `emu` default for the `mmk` model. It needs the SysEng firmware images, see below.
 
 Command:
 ```
 cd $CHIPPY_DIR
 uv run --project validation python validation/metal_bringup/<script> <emu_host> <emu_port>
 ```
+
+### SysEng firmware for `bringup_mmk_fw.py`
+
+`bringup_mmk_fw.py` loads SysEng's K2M-remap firmware (the `mimir_smc_k2m_chip_init` and `ker_smc_k2m_chip_init` SMC apps and their CCE blobs, the same images as the `mmk_m2k_dma_remap` test). The images are not in git. Build them once on a machine with apptainer (the `soc-l-#` machines); the output goes to `validation/firmware/build/bin/` in your chippy directory, so any machine that sees that directory can use them:
+
+```
+source /tools_soc/tt/bin/bashrc
+$CHIPPY_DIR/validation/metal_bringup/build_mmk_fw.sh
+```
+
+`bringup_mmk_fw.py` checks for the images and builds them itself only if apptainer is available where it runs (a container usually has none); otherwise it stops with this command. Rebuild after changing anything under `validation/firmware/`.
+
+With the `emu` tool nothing else is needed: `emu` runs `bringup_mmk_fw.py` for the `mmk` model, on `tests/test_metal_server.py` (rounded SiVal clocks). To run it by hand against a server:
+
+```
+cd $CHIPPY_DIR
+uv run --project validation python validation/metal_bringup/bringup_mmk_fw.py <emu_host> <emu_port>
+```
+
+Bring-up takes about 6 minutes on the emulator. The script returns once the host steps are done and leaves the server running; the CCE harts are held, ready for tt-metal.
+
+One known mismatch: SysEng's Mimir SMC app hard-codes 1.5 GB per GDDR channel (`mimir_smc_k2m_chip_init/src/main.c`, `.noc.channel_capacity`) when it sizes the D2D BAR2, ATT entry 5 and the CCE remappers, while the host tooling and tt-metal use 1 GB. The script re-applies the 1 GB values after the firmware finishes. If SysEng's app took the density from `fw_params` (as `chip_enable_fill_noc_from_fw_params()` does in other apps), the host could choose it and this step would go away.
 
 The first run downloads packages from `syseng-pypi.yyz2.tenstorrent.com`. If it fails with `invalid peer certificate: UnknownIssuer`, the machine (or container) does not trust the Tenstorrent IT root CA. Install it with the "Ubuntu / Debian" script on the [Tenstorrent Enterprise IT Root CA Certificate](https://tenstorrent.atlassian.net/wiki/spaces/IT/pages/1287454725) page. The script writes the cert to `/usr/local/share/ca-certificates/tenstorrent-enterprise-it-root-ca-2025-06.crt` and runs `sudo update-ca-certificates`. Inside a docker container this only changes the container, and must be redone if the container is recreated.
 
@@ -129,10 +162,10 @@ Choose between `mimir_1x1.yaml` & `mimir_2x_package.yaml` depending on needs.
 ```
 export TT_METAL_HOME=<dir>
 export TT_METAL_EMU_SERVER=<host>:<port>
-export TT_METAL_EMU_SOC_DESC=$TT_METAL_HOME/tt_metal/third_party/umd/tests/soc_descs/<yaml_file>
+export TT_METAL_EMU_SOC_DESC=$TT_METAL_HOME/tt_metal/third_party/umd/descriptors/soc_descs/<yaml_file>
 ```
 
-`TT_METAL_EMU_SOC_DESC` also takes a comma-separated list: entry i is Metal's descriptor of logical chip i. A list requires `TT_METAL_EMU_PACKAGE_SOC_DESC`, the package descriptor (`mmk.yaml`), which UMD opens every chip on; with one entry that variable is refused. A list is read on Quasar only. Each chip's descriptor is the package's with only `eth`, `keraunos.cores` and `dram_views` narrowed to entries of the package's, and no Ethernet core or programmable DRAM view is in two chips' descriptors; Metal refuses to open otherwise. With a test cluster descriptor in `TT_METAL_EMU_CLUSTER_DESC`, this presents one mmk package as several chips, as the Keraunos fabric descriptors in `tests/tt_metal/tt_fabric/keraunos/` do. `TT_METAL_EMU_CLUSTER_DESC` requires `TT_METAL_EMU_SERVER`, and `TT_METAL_MOCK_CLUSTER_DESC_PATH` is rejected beside the server. For a Mock run on the same chips, unset the server and pass the cluster descriptor in `TT_METAL_MOCK_CLUSTER_DESC_PATH`; Mock also honours the `TT_METAL_EMU_SOC_DESC` list and `TT_METAL_EMU_PACKAGE_SOC_DESC`. Quasar Mock builds no firmware and JIT-compiles no kernels unless `TT_METAL_QUASAR_MOCK_JIT` is set. The Mimir suites take a single descriptor.
+`TT_METAL_EMU_SOC_DESC` also takes a comma-separated list: entry i is Metal's descriptor of logical chip i. A list requires `TT_METAL_EMU_PACKAGE_SOC_DESC`, the package descriptor (`mmk.yaml`), which UMD opens every chip on; with one entry that variable is refused. A list is read on Quasar only. Each chip's descriptor is the package's with only `eth`, `keraunos.cores` and `dram_views` narrowed to entries of the package's, and no Ethernet core or programmable DRAM view is in two chips' descriptors; Metal refuses to open otherwise. With a test cluster descriptor in `TT_METAL_EMU_CLUSTER_DESC`, this presents one mmk package as several chips, as the descriptors generated from a manifest in `tests/tt_metal/tt_fabric/keraunos/vcluster/manifests/` do: `fabric_unit_tests --gtest_filter=VclusterGenerate.FromEnvironment` with `VCLUSTER_MANIFEST`, `VCLUSTER_PACKAGE_SOC_DESC` (`mmk.yaml`) and `VCLUSTER_OUT` writes them into `VCLUSTER_OUT` with `env.emu` and `env.mock`, which hold these variables. `TT_METAL_EMU_CLUSTER_DESC` requires `TT_METAL_EMU_SERVER`, and `TT_METAL_MOCK_CLUSTER_DESC_PATH` is rejected beside the server. For a Mock run on the same chips, unset the server and pass the cluster descriptor in `TT_METAL_MOCK_CLUSTER_DESC_PATH`; Mock also honours the `TT_METAL_EMU_SOC_DESC` list and `TT_METAL_EMU_PACKAGE_SOC_DESC`. Quasar Mock builds no firmware and JIT-compiles no kernels unless `TT_METAL_QUASAR_MOCK_JIT` is set. The Mimir suites take a single descriptor.
 
 Run Mimir tests from `$TT_METAL_HOME`. A Mimir-only package has no Tensix cores. Set `TT_METAL_SLOW_DISPATCH_MODE=1` to run it; with that variable unset the suite skips. E.g.
 `TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_context --gtest_filter=*MimirEmu*`

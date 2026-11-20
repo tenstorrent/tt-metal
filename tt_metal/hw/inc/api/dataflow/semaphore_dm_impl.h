@@ -34,6 +34,8 @@ __attribute__((always_inline)) inline volatile tt_l1_ptr std::uint32_t* local_pt
 #if defined(ARCH_QUASAR) && !defined(KERAUNOS_CCE)
     if (scope != SemScope::DM_LOCAL_CACHED) {
         addr += MEM_L1_UNCACHED_BASE;
+    } else {
+        addr += ETH_CCE_LOCAL_BASE;  // This CCE's own SRAM in its cached view (0 except on an ethernet CCE1).
     }
 #endif
     return reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(addr);

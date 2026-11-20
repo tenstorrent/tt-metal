@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Fabric unicast on the Keraunos test lines in this directory, with the sender and receiver on hart 1 (DM1) of the end
-// chips' router CCEs, co-launched with the routers through the fabric program extension: one hop on the two-chip
-// descriptors, two hops through chip M on the three-chip ones. Run with TT_METAL_SLOW_DISPATCH_MODE=1. On Mock the
+// Fabric unicast on the Keraunos test lines of vcluster/manifests/, with the sender and receiver on hart 1 (DM1) of the
+// end chips' router CCEs, co-launched with the routers through the fabric program extension: one hop on
+// pair2_eth.yaml, two hops through chip M on line3_eth.yaml. Run with TT_METAL_SLOW_DISPATCH_MODE=1. On Mock the
 // test checks the launch messages and skips: UMD MockChip reads and writes are no-ops.
 //
 // KeraunosCoLaunchedWorkersNocLinks runs the same line with chosen links backed by the NOC: the fabric program

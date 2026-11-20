@@ -57,7 +57,7 @@ namespace HAL_BUILD {  // NOLINT(modernize-concat-nested-namespaces)
 // Every Quasar Ethernet core is a Keraunos CCE, linked or not: one mailbox, read through the uncached alias.
 #define GET_MAILBOX_ADDRESS_DEV(x) \
     (&(((mailboxes_t tt_l1_ptr*)(MEM_IERISC_MAILBOX_BASE + MEM_L1_UNCACHED_BASE))->x))
-#define GET_MAILBOX_ADDRESS_DEV_CACHED(x) (&(((mailboxes_t tt_l1_ptr*)MEM_IERISC_MAILBOX_BASE)->x))
+#define GET_MAILBOX_ADDRESS_DEV_CACHED(x) (&(((mailboxes_t tt_l1_ptr*)(ETH_CCE_LOCAL_BASE + MEM_IERISC_MAILBOX_BASE))->x))
 #elif defined(COMPILE_FOR_ERISC)
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
 #elif defined(COMPILE_FOR_IDLE_ERISC)
@@ -68,9 +68,12 @@ namespace HAL_BUILD {  // NOLINT(modernize-concat-nested-namespaces)
 #define GET_MAILBOX_ADDRESS_DEV_CACHED(x) (&(((mailboxes_t tt_l1_ptr*)MEM_DRISC_MAILBOX_BASE)->x))
 #else
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)MEM_DRISC_MAILBOX_BASE)->x))
-#define GET_MAILBOX_ADDRESS_DEV_CACHED(x) (&(((mailboxes_t tt_l1_ptr*)MEM_CCE_MAILBOX_BASE)->x))
+#define GET_MAILBOX_ADDRESS_DEV_CACHED(x) (&(((mailboxes_t tt_l1_ptr*)MEM_MIMIR_CCE_MAILBOX_BASE)->x))
 #endif
 #elif defined(ARCH_QUASAR)
+#if !defined(HAL_BUILD)
+#include "internal/tt-2xx/quasar/overlay/overlay_addresses.h"
+#endif
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE))->x))
 // Cached alias of the mailbox region. Needed for atomics.
 #define GET_MAILBOX_ADDRESS_DEV_CACHED(x) (&(((mailboxes_t tt_l1_ptr*)MEM_MAILBOX_BASE)->x))
@@ -124,6 +127,8 @@ constexpr uint32_t RUN_SYNC_MSG_GO = 0x80;
 constexpr uint32_t RUN_SYNC_MSG_LOAD = 0x1;
 constexpr uint32_t RUN_SYNC_MSG_WAITING_FOR_RESET = 0x2;
 constexpr uint32_t RUN_SYNC_MSG_INIT_SYNC_REGISTERS = 0x3;
+// Quasar kernel DM: the kernel has returned and its DFB exit records are written; it is now draining.
+constexpr uint32_t RUN_SYNC_MSG_DFB_DRAINING = 0x4;
 constexpr uint32_t RUN_SYNC_MSG_DONE = 0;
 constexpr uint32_t RUN_SYNC_MSG_ALL_GO = 0x80808080;
 constexpr uint32_t RUN_SYNC_MSG_ALL_INIT = 0x40404040;

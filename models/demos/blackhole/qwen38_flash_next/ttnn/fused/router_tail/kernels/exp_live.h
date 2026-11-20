@@ -4,8 +4,9 @@
 
 // Router tail: the precise exp over the live SFPU vectors of a tile only.
 //
-// `exp_tile_live(idst, pair_mask)` issues `exp_tile<false>`'s instructions on the SFPU vector pairs whose bit is set
-// and only the address increment on the others, so a live row is bit for bit the full call's. In the 32-bit dest,
+// `exp_tile_live(idst, pair_mask)` issues the sfpi form of `exp_tile<false>` on the SFPU vector pairs whose bit is set
+// and only the address increment on the others. The LLK tests hold its default replayed form bit-exact to that sfpi
+// form, so a live row is bit for bit the full call's. In the 32-bit dest,
 // vector pair p of face f holds token rows (f >> 1) * 16 + 4p .. + 3 at all 16 columns; one vector holds only half of
 // its rows' experts, so the pair is the unit. A row the core never produces is never read. The loop may stop at the
 // last live pair because the face step (a carriage-return SETRWC) places the next face from the CR base.
@@ -22,7 +23,7 @@
 namespace ckernel {
 namespace sfpu {
 
-// ---- copied from ckernel_sfpu_exp.h: calculate_exponential, the precise fp32-dest branch, with the vector guard ----
+// ---- copied from ckernel_sfpu_exp.h: calculate_exponential, the precise fp32-dest sfpi form, plus the vector guard
 template <bool is_fp32_dest_acc_en, bool SCALE_EN = false, int ITERATIONS = 8>
 inline void calculate_exponential_live(
     const std::uint32_t pair_mask, const uint exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {

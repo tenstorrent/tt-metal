@@ -65,8 +65,8 @@ inline void _llk_math_topk_xl_copy_(const std::uint32_t dst_index, const std::ui
         {
             const std::uint32_t dst_format_masked = masked_data_format(dst_format);
             const int clear_fp32                  = static_cast<int>(
-                dst_format_masked == (std::uint32_t)DataFormat::Float32 || dst_format_masked == (std::uint32_t)DataFormat::Int32 ||
-                dst_format_masked == (std::uint32_t)DataFormat::UInt32);
+                dst_format_masked == static_cast<std::uint32_t>(DataFormat::Float32) || dst_format_masked == static_cast<std::uint32_t>(DataFormat::Int32) ||
+                dst_format_masked == static_cast<std::uint32_t>(DataFormat::UInt32));
             const std::uint32_t tiles_per_bank = clear_fp32 ? 4 : 8;
             const std::uint32_t local_tile     = dst_index & (tiles_per_bank - 1);
 #pragma GCC unroll 0

@@ -18,7 +18,7 @@ from models.experimental.transfuser.tt.transfuser_backbone import TtTransfuserBa
 from ttnn.model_preprocessing import (
     preprocess_model_parameters,
 )
-from tests.ttnn.utils_for_testing import check_with_pcc
+from tt_py_test_utils_common.utils_for_testing import check_with_pcc
 
 
 def fix_and_filter_checkpoint_keys(
