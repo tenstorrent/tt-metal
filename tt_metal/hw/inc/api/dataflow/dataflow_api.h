@@ -1692,7 +1692,7 @@ FORCE_INLINE uintptr_t get_semaphore(uint32_t semaphore_id) {
 #ifdef KERAUNOS_CCE_NOC
     // A Keraunos CCE has only its own core type's semaphores, whatever @p type names, and reaches them through its
     // uncached alias: peers and the host write them by DMA or store, which its data cache does not see.
-    return (uintptr_t)sem_l1_base[PROGRAMMABLE_CORE_TYPE] + semaphore_id * L1_ALIGNMENT + MEM_IERISC_UNCACHED_BASE;
+    return (uintptr_t)sem_l1_base[PROGRAMMABLE_CORE_TYPE] + semaphore_id * L1_ALIGNMENT + MEM_L1_UNCACHED_BASE;
 #else
     return (uintptr_t)sem_l1_base[static_cast<int>(type)] + semaphore_id * L1_ALIGNMENT;
 #endif

@@ -39,7 +39,7 @@
 #include <experimental/fabric/fabric_types.hpp>
 #include "fabric/fabric_context.hpp"
 #include "hostdev/eth_link.h"
-#include "hostdev/cce_noc_routes.h"
+#include "hostdev/keraunos_noc_channels.h"
 #include "hostdev/keraunos_spa_routes.h"
 #include "hostdev/mimir_cce_spa_routes.h"
 #include "hostdevcommon/common_values.hpp"
@@ -1580,6 +1580,31 @@ void RiscFirmwareInitializer::initialize_firmware(
                     }
                 }
             }
+            if (quasar_device_has_keraunos_cores(cluster_, device_id)) {
+                // A CCE resolves NOC addresses with KeraunosNocChannels and KeraunosSpaRoutes. An idle core has its
+                // routes from the block above; a linked core takes them here, at the same CCE-relative address.
+                const auto& soc_k = cluster_.get_soc_desc(device_id);
+                const KeraunosNocChannels channels = keraunos_noc_channels(cluster_, device_id);
+                cluster_.write_core(
+                    &channels,
+                    sizeof(channels),
+                    tt_cxy_pair(device_id, virtual_core),
+                    hal_.get_dev_addr(core_type, HalL1MemAddrType::KERAUNOS_NOC_CHANNELS));
+                if (!is_idle_eth) {
+                    const auto* keraunos_core = soc_k.find_keraunos_core(soc_k.translate_coord_to(
+                        tt_xy_pair(virtual_core.x, virtual_core.y), CoordSystem::TRANSLATED, CoordSystem::NOC0));
+                    TT_FATAL(
+                        keraunos_core != nullptr,
+                        "Chip {} Ethernet core {} has no keraunos.cores entry",
+                        device_id,
+                        virtual_core.str());
+                    const KeraunosSpaRoutes routes = keraunos_spa_routes_for_core(soc_k, *keraunos_core);
+                    const uint64_t routes_addr =
+                        hal_.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::BANK_TO_NOC_SCRATCH) +
+                        hal_.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
+                    cluster_.write_core(&routes, sizeof(routes), tt_cxy_pair(device_id, virtual_core), routes_addr);
+                }
+            }
             if (quasar_ethernet) {
                 // All eight harts start together, and the completion word is 0. The L1 wipe leaves it at 0, so seed
                 // INIT or hart 0 treats the other harts as finished before they have written their slots.
@@ -1842,16 +1867,6 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         }
     }
 
-    const auto write_cce_noc_routes =
-        [&](const CoreCoord& logical_eth, const CoreCoord& virtual_core, HalProgrammableCoreType core_type) {
-            const CceNocRoutes routes = quasar_cce_noc_routes(cluster_, device_id, logical_eth);
-            cluster_.write_core_immediate(
-                &routes,
-                sizeof(routes),
-                {static_cast<size_t>(device_id), virtual_core},
-                hal_.get_dev_addr(core_type, HalL1MemAddrType::CCE_NOC_ROUTES));
-        };
-
     log_debug(tt::LogMetal, "Initializing active ethernet cores");
     dev_msgs_factory = hal_.get_dev_msgs_factory(HalProgrammableCoreType::ACTIVE_ETH);
     core_info = populate_core_info_msg(device_id, HalProgrammableCoreType::ACTIVE_ETH);
@@ -1890,7 +1905,6 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
                 sizeof(slot),
                 {static_cast<size_t>(device_id), virtual_core},
                 hal_.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ETH_LINK));
-            write_cce_noc_routes(eth_core, virtual_core, HalProgrammableCoreType::ACTIVE_ETH);
         }
         initialize_firmware(
             device_id, HalProgrammableCoreType::ACTIVE_ETH, virtual_core, launch_msg.view(), go_msg.view());
@@ -1918,9 +1932,6 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
             hal_.get_dev_addr(
                 llrt::get_core_type(descriptor_->env_impl(), device_id, virtual_core),
                 HalL1MemAddrType::CORE_INFO));
-        if (keraunos_ethernet) {
-            write_cce_noc_routes(eth_core, virtual_core, HalProgrammableCoreType::IDLE_ETH);
-        }
         initialize_firmware(
             device_id, HalProgrammableCoreType::IDLE_ETH, virtual_core, launch_msg.view(), go_msg.view());
         not_done_cores.insert(virtual_core);

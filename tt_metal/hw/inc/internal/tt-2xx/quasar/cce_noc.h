@@ -3,9 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // NOC calls on a Keraunos CCE (a Quasar Ethernet core), behind noc_nonblocking_api_v2.h. A CCE has no NOC endpoint:
-// a NOC coordinate resolves through the host-written CceNocRoutes (hostdev/cce_noc_routes.h), a copy is one iDMA
-// transfer on command buffer 0, and a word write or increment is a CPU store or load and store. Ethernet sends use
-// command buffer 1 (eth_cce_send.h).
+// a NOC coordinate resolves to an HSIO tile and CCE by rule or through the host-written KeraunosNocChannels
+// (hostdev/keraunos_noc_channels.h), its address comes from KeraunosSpaRoutes (experimental/keraunos_cce.h), a copy is
+// one iDMA transfer on command buffer 0, and a word write or increment is a CPU store or load and store. Ethernet sends
+// use command buffer 1 (eth_cce_send.h). Both host records are constant from launch, so latch() copies what a call
+// needs once a kernel run.
 
 #pragma once
 
@@ -18,19 +20,19 @@
 #endif
 
 #include "api/debug/assert.h"
-#include "hostdev/cce_noc_routes.h"
+#include "experimental/keraunos_cce.h"
+#include "hostdev/keraunos_noc_channels.h"
 #include "internal/risc_attribs.h"
 #include "internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp"
 #include "noc_parameters.h"
 
 namespace internal_::cce_noc {
 
-// What halt() records in CceNocRoutes::fault; the detail goes to fault_detail.
+// What halt() records in KeraunosNocChannels::fault; the detail goes to fault_detail.
 enum class Fault : uint32_t {
-    Unmapped = 0xCCEEF101,        // detail: the NOC address. Its coordinate is not in the routes, or they are invalid
-    OtherCceOfTile = 0xCCEEF102,  // detail: the NOC address
-    OutsideSram = 0xCCEEF103,     // detail: the flat address, above both views of this CCE's SRAM
-    Unsupported = 0xCCEEF104,     // detail: the line of noc_nonblocking_api_v2.h that called unsupported()
+    Unmapped = 0xCCEEF101,     // detail: the NOC address. Its coordinate names no core, or the channels are not valid
+    OutsideSram = 0xCCEEF103,  // detail: the flat address, outside both views of its CCE's SRAM
+    Unsupported = 0xCCEEF104,  // detail: the line of noc_nonblocking_api_v2.h that called unsupported()
 };
 
 constexpr overlay::CmdBuf kCmdBuf = overlay::CMDBUF_0;
@@ -39,15 +41,46 @@ constexpr uint32_t kTrid = overlay::CMDBUF_DEF_TRID;
 constexpr uint32_t kReqVc = 2;
 constexpr uint32_t kRespVc = overlay::CMDBUF_WR_RESP_VC;
 
-FORCE_INLINE volatile CceNocRoutes& routes() {
-    return *reinterpret_cast<volatile CceNocRoutes*>(
-        static_cast<uintptr_t>(MEM_IERISC_NOC_ROUTES_BASE + MEM_L1_UNCACHED_BASE));
+FORCE_INLINE volatile KeraunosNocChannels& channels() {
+    return *reinterpret_cast<volatile KeraunosNocChannels*>(
+        static_cast<uintptr_t>(MEM_IERISC_NOC_CHANNELS_BASE + MEM_L1_UNCACHED_BASE));
 }
 
-// Stops this hart: records @p fault and @p detail in the routes, where the host reads them, then asserts and spins.
+// What a NOC call reads of the two host records, in this kernel's own memory: plain loads, no uncached ones.
+// Kernel start-up zeroes it, so until latch() the channels are not valid and every lookup halts.
+struct Latched {
+    KeraunosNocChannels channels;
+    uint64_t sram_base[KERAUNOS_NOC_CORES_MAX];  // system address of offset 0 of each core's SRAM, by channels[] entry
+    uint32_t hsio;                               // this core's HSIO tile
+};
+inline Latched latched;
+
+// Fills latched from the host records and sets my_x and my_y to this core's own coordinate (KERAUNOS_NOC_CCE0_X +
+// eth_cce, hsio tile). Kernel start calls it once, on the kernel's first hart, before any other hart of the kernel
+// runs. Never blocks.
+inline void latch() {
+    volatile KeraunosNocChannels& r = channels();
+    latched.channels.num_channels = r.num_channels;
+    latched.channels.cores = r.cores;
+    for (uint32_t i = 0; i < KERAUNOS_NOC_CHANNELS_MAX; i++) {
+        latched.channels.channels[i] = r.channels[i];
+    }
+    for (uint32_t core = 0; core < KERAUNOS_NOC_CORES_MAX; core++) {
+        latched.sram_base[core] = experimental::keraunos::hsio_sram_addr(
+            keraunos_noc_channel_hsio(core), keraunos_noc_channel_eth_cce(core), 0);
+    }
+    latched.hsio = experimental::keraunos::my_hsio();
+    latched.channels.valid = r.valid;
+    for (uint32_t n = 0; n < NUM_NOCS; n++) {
+        my_x[n] = KERAUNOS_NOC_CCE0_X + experimental::keraunos::my_eth_cce();
+        my_y[n] = latched.hsio;
+    }
+}
+
+// Stops this hart: records @p fault and @p detail in the channels, where the host reads them, then asserts and spins.
 // Not a trap: the CCE firmware installs no trap vector.
 [[noreturn, gnu::cold, gnu::noinline]] inline void halt(Fault fault, uint64_t detail) {
-    volatile CceNocRoutes& r = routes();
+    volatile KeraunosNocChannels& r = channels();
     r.fault_detail = detail;
     r.fault = static_cast<uint32_t>(fault);
     ASSERT(false);
@@ -59,62 +92,62 @@ FORCE_INLINE volatile CceNocRoutes& routes() {
 // increment. @p line identifies the caller.
 [[noreturn, gnu::cold, gnu::noinline]] inline void unsupported(uint32_t line) { halt(Fault::Unsupported, line); }
 
+// The core a NOC address names, and the address's local part.
 struct Target {
-    CceNocRouteKind kind;
-    uint64_t sram_base;
-    uint64_t local;  // bits 35:0 of the NOC address
+    uint32_t core;   // as a channels[] entry: keraunos_noc_channel(hsio tile, eth_cce)
+    uint64_t local;  // bits 35:0 of the NOC address, in the target's own view
 };
 
-// The route of the unicast NOC address @p noc_addr. Halts with Fault::Unmapped when bits 63:48 are set, the
-// coordinate has no route or the routes are not valid, and with Fault::OtherCceOfTile on this tile's other CCE.
-// Read-only; never blocks.
+// The core the unicast NOC address @p noc_addr names: by its own coordinate, or by an Ethernet channel's through the
+// channels. Halts with Fault::Unmapped when bits 63:48 are set, the coordinate names no core or the channels are not
+// valid (latch() has not run, or the host wrote none). Read-only; never blocks.
 FORCE_INLINE Target lookup(uint64_t noc_addr) {
     const uint64_t xy = noc_addr >> NOC_ADDR_LOCAL_BITS;
-    volatile CceNocRoutes& r = routes();
-    const uint32_t num_routes = r.num_routes;
-    if (r.valid == CCE_NOC_ROUTES_VALID && num_routes <= CCE_NOC_ROUTES_MAX &&
-        (xy >> (2 * NOC_ADDR_NODE_ID_BITS)) == 0) {
-        const uint8_t x = xy & NOC_NODE_ID_MASK;
-        const uint8_t y = xy >> NOC_ADDR_NODE_ID_BITS;
-        for (uint32_t i = 0; i < num_routes; i++) {
-            if (r.routes[i].x == x && r.routes[i].y == y) {
-                const CceNocRouteKind kind = r.routes[i].kind;
-                if (kind == CceNocRouteKind::THIS_TILE_OTHER_CCE) {
-                    halt(Fault::OtherCceOfTile, noc_addr);
-                }
-                return {kind, r.routes[i].sram_base, noc_addr & NOC_LOCAL_ADDR_MASK};
-            }
+    if ((xy >> (2 * NOC_ADDR_NODE_ID_BITS)) == 0) {
+        const int32_t core = keraunos_noc_core(latched.channels, xy & NOC_NODE_ID_MASK, xy >> NOC_ADDR_NODE_ID_BITS);
+        if (core >= 0) {
+            return {static_cast<uint32_t>(core), noc_addr & NOC_LOCAL_ADDR_MASK};
         }
     }
     halt(Fault::Unmapped, noc_addr);
 }
 
-// The SRAM offset of @p flat, a flat address of this CCE in either view: cached from ETH_CCE_LOCAL_BASE, uncached
-// MEM_L1_UNCACHED_OFFSET above that. Halts with Fault::OutsideSram outside both.
-FORCE_INLINE uint64_t sram_offset(uint64_t flat) {
+// The SRAM offset of @p flat, a flat address of CCE @p eth_cce of a tile in that CCE's own view, either one: cached
+// from MEM_IERISC_ETH_CCE_BASE(eth_cce), uncached MEM_L1_UNCACHED_OFFSET above that. Halts with Fault::OutsideSram
+// outside both.
+FORCE_INLINE uint64_t sram_offset(uint64_t flat, uint32_t eth_cce) {
     const uint64_t cached = flat >= MEM_IERISC_UNCACHED_BASE ? flat - MEM_L1_UNCACHED_OFFSET : flat;
     // Below the CCE's base the difference wraps, so one comparison refuses both sides.
-    const uint64_t offset = cached - ETH_CCE_LOCAL_BASE;
+    const uint64_t offset = cached - MEM_IERISC_ETH_CCE_BASE(eth_cce);
     if (offset >= MEM_IERISC_L1_SIZE) {
         halt(Fault::OutsideSram, flat);
     }
     return offset;
 }
 
-// The address of @p target's local part through its route's SRAM base.
-FORCE_INLINE uint64_t routed_addr(const Target& target) { return target.sram_base + sram_offset(target.local); }
+// The iDMA address of @p target: the system address of its SRAM (KeraunosSpaRoutes), for this CCE's own SRAM too.
+FORCE_INLINE uint64_t dma_addr(const Target& target) {
+    return latched.sram_base[target.core] + sram_offset(target.local, keraunos_noc_channel_eth_cce(target.core));
+}
 
 // The iDMA address of @p noc_addr.
-FORCE_INLINE uint64_t dma_addr(uint64_t noc_addr) { return routed_addr(lookup(noc_addr)); }
+FORCE_INLINE uint64_t dma_addr(uint64_t noc_addr) { return dma_addr(lookup(noc_addr)); }
 
-// The iDMA address of @p flat, a flat address in this CCE's SRAM, either view. Needs risc_init()'s my_x / my_y.
-FORCE_INLINE uint64_t local_dma_addr(uint32_t flat) { return dma_addr(NOC_XY_ADDR(my_x[0], my_y[0], flat)); }
+// The iDMA address of @p flat, a flat address in this CCE's SRAM, either view.
+FORCE_INLINE uint64_t local_dma_addr(uint32_t flat) {
+    return dma_addr(Target{keraunos_noc_channel(latched.hsio, experimental::keraunos::my_eth_cce()), flat});
+}
 
-// The address a CPU load or store uses for @p noc_addr: on this CCE its local part as given (either view), on another
-// tile the system address.
+// The address a CPU load or store uses for @p noc_addr: on this tile, either CCE, the uncached view of its local part
+// (every CCE sees both of its tile's SRAMs uncached, CCE by CCE from MEM_IERISC_UNCACHED_BASE); on another tile the
+// system address. Either way the access reaches SRAM, where the target's harts and the iDMA see it, as a NOC write
+// would; a store through a cached view can stay in this hart's data cache.
 FORCE_INLINE uintptr_t cpu_addr(uint64_t noc_addr) {
     const Target target = lookup(noc_addr);
-    return target.kind == CceNocRouteKind::THIS_CCE ? target.local : routed_addr(target);
+    const uint32_t eth_cce = keraunos_noc_channel_eth_cce(target.core);
+    return keraunos_noc_channel_hsio(target.core) == latched.hsio
+               ? experimental::keraunos::eth_cce_sram_uncached_addr(eth_cce, sram_offset(target.local, eth_cce))
+               : dma_addr(target);
 }
 
 // Issues one iDMA copy of @p len bytes between two iDMA addresses, programming the whole command buffer, and returns
