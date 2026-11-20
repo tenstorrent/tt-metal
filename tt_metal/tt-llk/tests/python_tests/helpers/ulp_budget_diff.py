@@ -32,14 +32,12 @@ from .ulp_table import (
     TABLE_PATHS,
     BudgetKey,
     Measurement,
-    Metric,
     Resolved,
     Row,
     Table,
     arch_of_table,
     load_table,
     measured_arch,
-    most_specific,
     read_measurements,
     read_table,
     resolve,
@@ -631,7 +629,8 @@ def judge(
         cells.items(), key=lambda item: (item[0][0].name, item[0][1].sort_key)
     ):
         op, key = cell
-        row = most_specific(table.get(op, ()), key)
+        held = resolve(table.get(op, ()), key, arch)
+        row = held.row
         if row is None:
             out.uncovered += 1
             continue
@@ -664,7 +663,7 @@ def judge(
                 elif entry.ulp is not None and seen < entry.ulp:
                     found(Finding(cell, Verdict.TIGHTENS, seen, entry.ulp, entry))
             continue
-        if row.contract.metric is Metric.ULP and steps_bind(row.key, key, arch):
+        if held.gated:
             budget = row.contract.max_ulp
             if reading.worst != budget:
                 verdict = (

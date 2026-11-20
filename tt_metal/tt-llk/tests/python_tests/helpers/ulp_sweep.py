@@ -9,8 +9,8 @@ share. No subnormal is fed (the unpack flushes them), and only the formats the S
 computes in are swept.
 """
 
+import json
 import math
-import pickle
 from dataclasses import dataclass, replace
 from functools import cached_property, lru_cache
 from pathlib import Path
@@ -53,8 +53,10 @@ from helpers.ulp_table import (
     Metric,
     Reading,
     Row,
+    from_plain,
     load_table,
     measured_arch,
+    to_plain,
     write_table_file,
 )
 
@@ -766,19 +768,27 @@ def _with_measured(verdict: Unmeasurable, measured: int | None) -> Unmeasurable:
     return replace(verdict, measured=measured)
 
 
-def export_measured() -> bytes:
-    """This process's measurements, for an xdist worker to hand to the controller."""
-    return pickle.dumps(MEASURED)
+def export_measured() -> str:
+    """This process's measurements, for an xdist worker to hand to the controller: one
+    ``[op, key, record type, record]`` per cell, in the table's plain form."""
+    return json.dumps(
+        [
+            [op.name, to_plain(key), type(value).__name__, to_plain(value)]
+            for op, cells in MEASURED.items()
+            for key, value in cells.items()
+        ]
+    )
 
 
-def merge_measured(blob: bytes | None) -> None:
+def merge_measured(blob: str | None) -> None:
     """Fold a worker's :func:`export_measured` into this process, worst lane winning."""
-    for op, cells in pickle.loads(blob).items() if blob else ():
-        for key, value in cells.items():
-            if isinstance(value, Unmeasurable):
-                record_unmeasurable(op, key, value)
-            else:
-                record(op, key, value.max_ulp, value.floor, value.domains)
+    for name, key, kind, plain in json.loads(blob) if blob else ():
+        op, key = MathOperation[name], from_plain(BudgetKey, key)
+        if kind == Unmeasurable.__name__:
+            record_unmeasurable(op, key, from_plain(Unmeasurable, plain))
+        else:
+            value = from_plain(Measured, plain)
+            record(op, key, value.max_ulp, value.floor, value.domains)
 
 
 def cell_key(input_format, output_format, approx_mode, dest_acc) -> BudgetKey:
