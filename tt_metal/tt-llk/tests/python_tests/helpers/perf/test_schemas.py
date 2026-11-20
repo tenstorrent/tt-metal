@@ -1229,12 +1229,13 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_sfpu_reduce_sdpa": "perf_sfpu_reduce_sdpa"},
     },
     "perf_sfpu_ternary": {
-        "version": 5,
+        "version": 6,
         "columns": [
             "approx_mode",
             "clobber_lregs",
             "dest_acc",
             "dest_sync",
+            "fast_interpolate",
             "formats.input_A",
             "formats.input_B",
             "formats.output",

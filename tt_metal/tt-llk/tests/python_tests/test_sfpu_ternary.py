@@ -162,6 +162,7 @@ def _run_sfpu_ternary(
             UNPACK_TRANS_WITHIN_FACE(Transpose.No),
             VECTOR_MODE(VectorMode.RC),
             SFPU_CLOBBER_LREGS(clobber_lregs),
+            LERP_FAST_INTERPOLATE(fast_interpolate),
             DEST_SYNC(),
         ]
         runtimes = []
@@ -482,7 +483,8 @@ def _ulp_of(magnitude, torch_format):
 )
 def test_sfpu_lerp_fast_interpolate(formats, dest_acc, mathop, input_dimensions):
     """c == 0 -> a and c == 1 -> b bit-exact, finite for opposite-sign operands up to
-    the format max, and within 1 ULP of max(|a|, |b|) everywhere."""
+    the format max. Float16_b equals the rounded float64 golden (within 1 ULP with
+    fp32 Dest); Float32 is within 1 ULP of max(|a|, |b|) everywhere."""
     skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     torch_format = format_dict[formats.input_format]
@@ -514,6 +516,14 @@ def test_sfpu_lerp_fast_interpolate(formats, dest_acc, mathop, input_dimensions)
         assert torch.equal(
             res_tensor[c64 == 1], src_B[c64 == 1].to(output_format)
         ), "c == 1 must return b"
+        if formats.output_format == DataFormat.Float16_b:
+            ulp_diff = (_ordered_bits(res_tensor) - _ordered_bits(golden_tensor)).abs()
+            # fp32 Dest adds a packer bf16 rounding on top of the kernel's fp32 rounding.
+            max_ulp = 1 if dest_acc == DestAccumulation.Yes else 0
+            assert (
+                ulp_diff.max() <= max_ulp
+            ), f"max ULP diff {ulp_diff.max()} exceeds {max_ulp}"
+            return
         exact = (1.0 - c64) * a64 + c64 * b64
         error = (res_tensor.to(torch.float64) - exact).abs() / _ulp_of(
             torch.maximum(a64.abs(), b64.abs()), output_format

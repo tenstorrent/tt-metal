@@ -102,6 +102,7 @@ DB_SCHEMA = [
     Column("dst_rounding", "string", True, "configuration"),
     Column("face_c_dim", "int64", True, "configuration"),
     Column("face_r_dim", "int64", True, "configuration"),
+    Column("fast_interpolate", "bool", True, "configuration"),
     Column("fast_mode", "string", True, "configuration"),
     Column("full_ct_dim", "int64", True, "configuration"),
     Column("full_rt_dim", "int64", True, "configuration"),
