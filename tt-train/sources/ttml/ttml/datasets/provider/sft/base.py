@@ -120,13 +120,16 @@ class DatasetProvider:
 
     def _tokenize(self, example: dict) -> dict:
         prompt, response = self._prompt_and_response(example)
-        input_ids = self.tokenizer(prompt + response + self.tokenizer.eos_token, truncation=False, padding=False)[
-            "input_ids"
-        ]
-        prompt_len = len(self.tokenizer(prompt, truncation=False, padding=False)["input_ids"])
+        # Tokenized apart and joined. One string can merge the response's first character into the prompt's last
+        # token, which a response that starts with a newline does, and the label boundary shifts by one token.
+        # The response adds no special tokens, so the prompt's stay only at the start.
+        prompt_ids = self.tokenizer(prompt, truncation=False, padding=False)["input_ids"]
+        response_ids = self.tokenizer(
+            response + self.tokenizer.eos_token, truncation=False, padding=False, add_special_tokens=False
+        )["input_ids"]
         return {
-            "input_ids": input_ids,
-            "labels": [IGNORED_INDEX if i < prompt_len else token for i, token in enumerate(input_ids)],
+            "input_ids": prompt_ids + response_ids,
+            "labels": [IGNORED_INDEX] * len(prompt_ids) + response_ids,
         }
 
     def _tokenize_and_filter(self, raw_dataset: Any) -> Any:

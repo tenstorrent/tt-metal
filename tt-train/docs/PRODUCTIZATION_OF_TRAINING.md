@@ -108,7 +108,13 @@ dataset:
 ```
 
 Examples longer than `max_length` tokens are dropped. The loss is the cross-entropy of the response tokens; the prompt
-and padding don't count. Other datasets plug in as dataset providers (see [Adding a dataset](#adding-a-dataset)).
+and padding don't count.
+
+Instruct models are trained without their chat template, on this plain Alpaca and SST-2 text. tt-inference-server
+sends those same plain prompts at inference time. The datasets here are examples; tt-inference-server applies the
+same template in move-to-inference.
+
+Other datasets plug in as dataset providers (see [Adding a dataset](#adding-a-dataset)).
 
 ---
 
