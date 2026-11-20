@@ -527,7 +527,7 @@ class StreamPrefillLinear:
         out_tiles = list(out.padded_shape)[-1] // TILE
         if out_tiles > spec.n_tiles:
             cbs.append(cb(cb_zero, out_dtype, o_tile, 1))
-        reader_rt, compute_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+        per_core = {"reader": {}, "compute": {}, "writer": {}}
         noc = self.mesh_device.worker_core_from_logical_core
         for i, it in enumerate(plan.items):
             cx, cy = plan.core(i, grid.x)
@@ -547,9 +547,17 @@ class StreamPrefillLinear:
             args.append(len(it.segs))
             for bank, j0, cnt in it.segs:
                 args += [bank, j0 * spec.kt * w_tile, cnt]
-            reader_rt[cx][cy] = args
-            compute_rt[cx][cy] = [it.cols, it.m_cnt]
-            writer_rt[cx][cy] = [it.m0, it.m_cnt, it.cols, it.z0, it.z1] + it.columns(spec)
+            per_core["reader"][cx, cy] = args
+            per_core["compute"][cx, cy] = [it.cols, it.m_cnt]
+            per_core["writer"][cx, cy] = [it.m0, it.m_cnt, it.cols, it.z0, it.z1] + it.columns(spec)
+        # One runtime-arg length per kernel (zero-padded to the longest core's; the kernels read only their own count):
+        # cores whose argument lists differ in length take a slow per-core path when the program is enqueued, which
+        # measured 0.5 ms of host time per o_proj call at 1K (84 cores; 4 cores: 0.07 ms).
+        reader_rt, compute_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+        for rt, table in ((reader_rt, per_core["reader"]), (compute_rt, per_core["compute"]), (writer_rt, per_core["writer"])):
+            width = max(len(a) for a in table.values())
+            for (cx, cy), a in table.items():
+                rt[cx][cy] = a + [0] * (width - len(a))
         resident = int(plan.resident)
         reader_ct = [
             cb_x,

@@ -278,6 +278,20 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         kCoreGridY,
         grid_size.x,
         grid_size.y);
+    // weights_from_pages (gpt-oss: each chip holds a narrow tensor-parallel slice of every expert, 24 hidden
+    // tiles): use the grid width that leaves the fewest phantom hidden columns, up to the device's width. On the
+    // 11-wide default, 24 tiles round up to 3 per core and the last 3 grid columns hold only padding.
+    if (from_pages) {
+        uint32_t best_pad = (N_gate_tiles_full + GRID_X - 1) / GRID_X * GRID_X;
+        for (uint32_t x = kCoreGridX + 1; x <= grid_size.x; ++x) {
+            const uint32_t pad = (N_gate_tiles_full + x - 1) / x * x;
+            if (pad < best_pad) {
+                best_pad = pad;
+                GRID_X = x;
+            }
+        }
+    }
+    TT_FATAL(GRID_X <= grid_size.x, "GRID_X ({}) exceeds the compute grid width ({})", GRID_X, grid_size.x);
     // per_core_M upper bound (the CB-sized max). The adaptive L1-budget guard
     // below may shrink per_core_M / in0_block_w_gu (and hence chunk_M_tiles) to
     // fit the device's per-core L1 on large models.
@@ -352,9 +366,28 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
 
     (void)K_down_tiles;  // actual K_down; used by reader for OOB; suppress unused warning here
 
-    // down-matmul K-block width (= gate N per-core slice). Independent of the
-    // adaptive levers below.
-    const uint32_t in0_block_w_d = per_core_N_gu;
+    // down-matmul K-block width: down_group grid columns' activated slices (per_core_N_gu each) per K-block.
+    // Every down K-block costs a ready/valid handshake round and an L1-accumulating pack of the core's whole
+    // output block, so a narrow per_core_N_gu (gpt-oss tensor-parallel experts: 24 hidden tiles over the grid)
+    // spends more on rounds than on MACs. Grouping cuts the rounds to GRID_X / down_group; the group's senders
+    // multicast into their own slots of one K-block. It pays only while the rounds dominate, i.e. at few tokens per
+    // expert: measured on gpt-oss-20b (24 hidden tiles, grid 12) at 128 tokens per expert 1.50 -> 1.25 ms (6 columns
+    // per round), but at 1024 tokens 3.08 -> 3.38 ms, where the wider blocks cost more than the rounds they save.
+    // Only on the weights_from_pages path and for buffers of at most 1024 tokens (M_tiles_full: the buffer, not the
+    // runtime counts, which only the kernels see).
+    constexpr uint32_t kMaxDownBlockW = 12;
+    constexpr uint32_t kMaxGroupedMTiles = 32;
+    uint32_t down_group = 1;
+    if (from_pages && M_tiles_full <= kMaxGroupedMTiles) {
+        for (uint32_t g = GRID_X; g > 1; --g) {
+            if (GRID_X % g == 0 && g * per_core_N_gu <= kMaxDownBlockW) {
+                down_group = g;
+                break;
+            }
+        }
+    }
+    TT_FATAL(GRID_X % down_group == 0, "down_group ({}) must divide GRID_X ({})", down_group, GRID_X);
+    const uint32_t in0_block_w_d = down_group * per_core_N_gu;
     TT_FATAL(
         K_down_tiles_padded % in0_block_w_d == 0,
         "K_down_tiles_padded ({}) must be divisible by in0_block_w_d ({})",
@@ -892,9 +925,8 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     check_ring("cb_gate_intermed", gu_out_block_num_tiles, gu_out_subblock_h * gu_out_subblock_w);
     check_ring("cb_partials_gu", gu_out_block_num_tiles, gu_out_subblock_h * gu_out_subblock_w);
     check_ring("cb_partials_up", gu_out_block_num_tiles, gu_out_subblock_h * gu_out_subblock_w);
-    // The reader drains cb_activated one down K-block at a time; in0_block_w_d ==
-    // per_core_N_gu makes that granule the whole block, which this pins.
-    check_ring("cb_activated", gu_out_block_num_tiles, per_core_M * in0_block_w_d);
+    // The reader drains cb_activated one whole block (per_core_M x per_core_N_gu) per expert chunk, which this pins.
+    check_ring("cb_activated", gu_out_block_num_tiles, per_core_M * per_core_N_gu);
     // Down partials and the output ring repeat on a whole output row when the N-subblock
     // grid is ragged, and on a single subblock when it is exact.
     const uint32_t d_row_granule = d_out_subblock_h * (d_subblocks_exact ? d_out_subblock_w : per_core_N_d);

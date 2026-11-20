@@ -162,7 +162,10 @@ void kernel_main() {
     // A block size that changed between experts would overshoot fifo_limit, which
     // only wraps on exact equality — see the note in adaptive_chunk.hpp.
     constexpr uint32_t g_in0_block_tiles_max = per_core_M_max * in0_block_w_gu;
-    constexpr uint32_t act_tiles_max = per_core_M_max * in0_block_w_d;
+    // cb_activated holds this core's per_core_N_gu hidden columns; a down K-block gathers down_group of them.
+    constexpr uint32_t act_tiles_max = per_core_M_max * per_core_N_gu;
+    constexpr uint32_t down_group = in0_block_w_d / per_core_N_gu;
+    static_assert(down_group * per_core_N_gu == in0_block_w_d, "down K-block must be whole column slices");
     // cb_in0_down_full stays sized to the compile-time MAX per-core M: the down
     // matmul keeps a full ring and MAC-skips rows >= the runtime per_core_M, so
     // the reader pushes the full block (filling only per_core_M runtime rows via
@@ -1056,7 +1059,9 @@ void kernel_main() {
         const uint32_t intermed_tile_bytes = cb_in0_down_full_obj.get_tile_size();
 
         for (uint32_t kb = 0; kb < num_blocks_d; ++kb) {
-            const bool is_act_sender = (my_nt_d == kb);
+            // Senders of this K-block: grid columns [kb * down_group, + down_group); this core's slot in it.
+            const bool is_act_sender = (my_nt_d / down_group == kb);
+            const uint32_t act_slot = my_nt_d % down_group;
 
             cb_in1_down_obj.reserve_back(d_in1_block_num_tiles);
             cb_in0_down_full_obj.reserve_back(d_in0_block_num_tiles);
@@ -1079,11 +1084,27 @@ void kernel_main() {
                 in1_valid_sem.set(0);
                 in1_ready_sem.up(noc, in1_sender_nx, in1_sender_ny, 1);
             }
-            if (!is_act_sender) {
+            if constexpr (down_group == 1) {
+                if (!is_act_sender) {
+                    act_valid_sem.set(0);
+                    const uint32_t sender_nx = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * kb + 0);
+                    const uint32_t sender_ny = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * kb + 1);
+                    act_ready_sem.up(noc, sender_nx, sender_ny, 1);
+                }
+            } else {
+                // Grouped K-block: every core (the group's senders too) counts down_group valid incs, and acks
+                // each sender but itself. Reset before acking: no sender incs this core before its ack.
                 act_valid_sem.set(0);
-                const uint32_t sender_nx = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * kb + 0);
-                const uint32_t sender_ny = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * kb + 1);
-                act_ready_sem.up(noc, sender_nx, sender_ny, 1);
+                for (uint32_t s = 0; s < down_group; ++s) {
+                    const uint32_t c = kb * down_group + s;
+                    if (c != my_nt_d) {
+                        act_ready_sem.up(
+                            noc,
+                            get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * c + 0),
+                            get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * c + 1),
+                            1);
+                    }
+                }
             }
 
             // Step 2: in1_down sender kicks off DRAM reads (NoC 0) without
@@ -1179,6 +1200,35 @@ void kernel_main() {
 
                 const uint32_t src_l1 = cb_activated_obj.get_read_ptr();
                 const uint32_t dst_l1 = cb_in0_down_full_obj.get_write_ptr();
+                if constexpr (down_group > 1) {
+                    // Row m of this core's slice lands at tiles [m * in0_block_w_d + act_slot * per_core_N_gu, +
+                    // per_core_N_gu) of the K-block. Unlinked multicasts, then an ack-wait: once every copy has
+                    // landed (loopback included), unicast incs need no path ordering behind the data.
+                    const uint32_t row_bytes = per_core_N_gu * intermed_tile_bytes;
+                    for (uint32_t m = 0; m < per_core_M; ++m) {
+                        noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
+                            CoreLocalMem<uint32_t>(src_l1 + m * row_bytes),
+                            cb_in0_down_full_obj,
+                            row_bytes,
+                            GRID_X_NOC,
+                            {.offset_bytes = 0},
+                            {.noc_x_start = mrow_first_nx,
+                             .noc_y_start = mrow_first_ny,
+                             .noc_x_end = mrow_last_nx,
+                             .noc_y_end = mrow_last_ny,
+                             .offset_bytes = (m * in0_block_w_d + act_slot * per_core_N_gu) * intermed_tile_bytes},
+                            /*linked=*/false);
+                    }
+                    noc.async_write_barrier();
+                    for (uint32_t c = 0; c < GRID_X_NOC; ++c) {
+                        act_valid_sem.up(
+                            noc,
+                            get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * c + 0),
+                            get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * c + 1),
+                            1);
+                    }
+                    cb_activated_obj.pop_front(act_tiles_max);
+                } else {
                 const uint32_t mcast_bytes = re_act_tiles * intermed_tile_bytes;
                 // linked=true keeps the multicast path RESERVED so the
                 // valid-semaphore multicast below travels the SAME path and is
@@ -1214,10 +1264,13 @@ void kernel_main() {
                     noc, mrow_first_nx, mrow_first_ny, mrow_last_nx, mrow_last_ny, GRID_X_NOC);
 
                 cb_activated_obj.pop_front(act_tiles_max);
+                }
             }
 
             // Step 5: receivers wait for both valid sems and push.
-            if (!is_act_sender) {
+            if constexpr (down_group > 1) {
+                act_valid_sem.wait(down_group);
+            } else if (!is_act_sender) {
                 act_valid_sem.wait(ACT_VALID);
             } else {
                 // The sender's own copy arrives via the INCL_SRC loopback, so it needs a wait

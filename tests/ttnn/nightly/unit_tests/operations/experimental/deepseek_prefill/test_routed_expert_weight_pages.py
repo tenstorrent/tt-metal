@@ -381,9 +381,13 @@ def _run_weight_pages(mesh_device, fmt, transposed, counts, max_tokens, indexed=
     # rows outside the expert regions' counts are never written: compare the written rows only
     for e, c in enumerate(counts):
         rows = slice(e * max_tokens, e * max_tokens + c)
-        assert torch.equal(out_pages[rows], out_tensors[rows]), f"expert {e}: table-addressed output differs"
         if c == 0:
             continue
+        # Not bit-exact: the table path picks its own grid width (the fewest phantom hidden columns, 12 for 24 tiles
+        # on a 12-wide grid) and down K-block, so it may sum in a different order than the tensor path's 11 columns
+        # (on one grid the two are bit-equal).
+        _, pcc_paths = comp_pcc(out_tensors[rows], out_pages[rows], 0.9999)
+        assert pcc_paths >= 0.9999, f"expert {e}: table-addressed output differs from the tensor path (PCC {pcc_paths})"
         with torch.no_grad():
             ref = _swigluoai_ffn(x[rows], logical[e], biases[e])
         assert torch.isfinite(out_pages[rows]).all(), f"expert {e}: NaN / Inf"

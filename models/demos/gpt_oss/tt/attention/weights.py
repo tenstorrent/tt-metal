@@ -270,7 +270,9 @@ def load_attention_weights(
         )
         if stream_prefill:
             qkv_op = StreamPrefillLinear(mesh_device, hidden_size, local_qkv, qkv_order)
-            o_op = StreamPrefillLinear(mesh_device, local_heads_dim, hidden_size)
+            # LoFi: the fidelity the tensor prefill o_proj ran at (ttnn.linear with a program config and no compute
+            # config); half the math of HiFi2, the largest dense cost at 8K.
+            o_op = StreamPrefillLinear(mesh_device, local_heads_dim, hidden_size, math_fidelity="LoFi")
         qkv_layouts = o_layouts = None
         if state_dict:
             tp = mesh_config.tp
