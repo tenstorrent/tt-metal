@@ -34,6 +34,11 @@ INGRAPH_DECODE = True
 USE_2CQ = True
 
 
+SPLICE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=False
+)
+
+
 class Qwen3ASRDecoder(Transformer):
     def prepare_inputs_prefill_embeds(self, inputs_embeds, **kwargs):
         """inputs_embeds: torch (1, S, dim). Returns the same tuple as the base
@@ -58,30 +63,60 @@ class Qwen3ASRDecoder(Transformer):
         out[0] = emb
         return tuple(out)
 
-    def set_prefill_embeds(self, embeds_per_user):
-        """Queue merged prompt embeddings, one torch (S_i, dim) per user, for the next
-        token-id prefills. Each prefill that starts at position 0 takes the next entry;
-        later chunks of the same prompt keep using it. None clears the queue."""
-        self._embeds_queue = list(embeds_per_user) if embeds_per_user is not None else []
-        self._embeds_active = None
+    def set_prefill_audio(self, audio_per_user):
+        """Queue each user's audio for the next token-id prefills: a list per user of
+        (offset, length, audio) items, where audio is a device tensor (1, 1, A, dim) whose
+        first `length` rows replace the prompt rows [offset, offset + length). Each prefill
+        that starts at position 0 takes the next user; later chunks of the same prompt keep
+        using it. None clears the queue."""
+        self._audio_queue = list(audio_per_user) if audio_per_user is not None else []
+        self._audio_active = None
 
-    def pending_prefill_embeds(self):
-        return len(getattr(self, "_embeds_queue", []))
+    def pending_prefill_audio(self):
+        return len(getattr(self, "_audio_queue", []))
 
     def prepare_inputs_prefill(self, tokens, start_pos=0, **kwargs):
-        """The generator's prefill path passes token ids; when embeddings are queued, the
-        audio-spliced embeddings replace the token embeddings for the same positions."""
-        if start_pos == 0 and getattr(self, "_embeds_queue", None):
-            self._embeds_active = self._embeds_queue.pop(0)
-        active = getattr(self, "_embeds_active", None)
-        if active is None:
-            return super().prepare_inputs_prefill(tokens, start_pos=start_pos, **kwargs)
+        """Token embeddings, with queued audio embeddings over their placeholder rows."""
+        if start_pos == 0 and getattr(self, "_audio_queue", None):
+            self._audio_active = self._audio_queue.pop(0)
+        active = getattr(self, "_audio_active", None)
+        out = super().prepare_inputs_prefill(tokens, start_pos=start_pos, **kwargs)
+        if not active:
+            return out
         assert not kwargs.get("trace_enabled", False), "traced prefill takes token ids only"
-        S = tokens.shape[-1]
-        emb = active[start_pos : start_pos + S]
-        if emb.shape[0] < S:
-            emb = torch.nn.functional.pad(emb, (0, 0, 0, S - emb.shape[0]))
-        return self.prepare_inputs_prefill_embeds(emb.unsqueeze(0), start_pos=start_pos, **kwargs)
+        out = list(out)
+        out[0] = self._splice_audio(out[0], start_pos, tokens.shape[-1], active)
+        return tuple(out)
+
+    def _splice_audio(self, x, start, S, items):
+        """x: token embeddings (1, 1, S, dim) for prompt rows [start, start + S).
+
+        Each audio row lands on its row through a one-hot (S, A) matmul, so every op here
+        has a shape fixed by the prefill length and the encoder bucket; warmup can build
+        all of them before a trace exists. Exact in bf16: one nonzero product per output."""
+        assert self.args.num_devices == 1, "audio splice assumes the hidden dim is not sharded"
+        keep = torch.ones(1, 1, S, 1)
+        placed = None
+        for offset, length, audio in items:
+            lo, hi = max(offset, start), min(offset + length, start + S)
+            if lo >= hi:
+                continue
+            onehot = torch.zeros(1, 1, S, audio.shape[-2])
+            rows = torch.arange(lo, hi)
+            onehot[0, 0, rows - start, rows - offset] = 1.0
+            keep[0, 0, rows - start] = 0.0
+            onehot_tt = ttnn.from_torch(onehot, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            y = ttnn.matmul(onehot_tt, audio, compute_kernel_config=SPLICE_KERNEL_CONFIG)
+            ttnn.deallocate(onehot_tt)
+            placed = y if placed is None else ttnn.add(placed, y)
+        if placed is None:
+            return x
+        keep_tt = ttnn.from_torch(keep, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        out = ttnn.add(ttnn.multiply(x, keep_tt), placed)
+        ttnn.deallocate(keep_tt)
+        ttnn.deallocate(placed)
+        ttnn.deallocate(x)
+        return out
 
     @torch.no_grad()
     def prefill_logits(self, inputs_embeds):

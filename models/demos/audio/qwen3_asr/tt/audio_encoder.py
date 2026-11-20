@@ -255,9 +255,11 @@ def warmup(params, device):
     params["frozen"] = True
 
 
-def encode_mel(mel, params, device):
+def encode_mel(mel, params, device, to_host=True):
     """Full-TT encoder from mel (num_mel, T): TT conv2d frontend -> +PE -> transformer
-    -> projector. Returns audio embeds (feat_out_len(T), output_dim) as torch.
+    -> projector. Returns audio embeds (feat_out_len(T), output_dim) as torch, or with
+    to_host=False a (1, 1, bucket rows, output_dim) device tensor whose first
+    feat_out_len(T) rows are the embeds.
 
     The chunk count is padded to a whole window (8 chunks), so clips up to 32 s use 4
     shapes. Padded chunks and the padded tokens of a partial last chunk are excluded
@@ -294,7 +296,7 @@ def encode_mel(mel, params, device):
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )
-    out = encode(x, params, device, S=S_valid, cu_window_seqlens=cu)
+    out = encode(x, params, device, S=S_valid, cu_window_seqlens=cu, to_host=to_host)
     ttnn.deallocate(cu)
     return out
 
@@ -358,9 +360,10 @@ def _layer(x, lp, device, cu_window_seqlens=None):
     return x
 
 
-def encode(x_in, params, device, S=None, cu_window_seqlens=None):
+def encode(x_in, params, device, S=None, cu_window_seqlens=None, to_host=True):
     """x_in: (S, D_MODEL) torch, or a (1,1,S,D) device tensor with PE already added.
-    Returns the first S rows, (S, output_dim) torch. Attention is over all rows unless
+    Returns the first S rows, (S, output_dim) torch, or with to_host=False all rows as a
+    (1, 1, rows, output_dim) device tensor. Attention is over all rows unless
     `cu_window_seqlens` (device uint32 window bounds) is given."""
     if isinstance(x_in, ttnn.Tensor):
         x = x_in
@@ -385,6 +388,8 @@ def encode(x_in, params, device, S=None, cu_window_seqlens=None):
         x, params["proj1_w"], bias=params["proj1_b"], activation="gelu", core_grid=core, compute_kernel_config=HIFI4
     )
     x = ttnn.linear(x, params["proj2_w"], bias=params["proj2_b"], core_grid=core, compute_kernel_config=HIFI4)
+    if not to_host:
+        return x
     out = _to_torch(x).reshape(-1, OUTPUT_DIM)[:S].float()
     ttnn.deallocate(x)
     return out

@@ -4,8 +4,8 @@
 
 """Qwen3-ASR generator with paged KV and batch > 1, in the vLLM generator API.
 
-Prefill runs the audio encoder per request, splices its output over the audio
-placeholder tokens and prefills each user from those embeddings. Decode is the
+Prefill runs the audio encoder per request, splices its output on device over the
+audio placeholder tokens and prefills each user from those embeddings. Decode is the
 shared tt_transformers paged, batched, traced decode with on-device sampling.
 
 This module does not import vLLM, so it can be driven directly by tests; the vLLM
@@ -14,7 +14,6 @@ class in ``generator_vllm.py`` adds the processor registration on top.
 import os
 
 import torch
-from safetensors import safe_open
 
 import ttnn
 from models.demos.audio.qwen3_asr.tt import audio_encoder as tt_enc
@@ -53,10 +52,9 @@ class Qwen3ASRGenerator(Generator):
         "supports_sample_on_device": True,
     }
 
-    def __init__(self, model, model_args, mesh_device, tokenizer=None, encoder_params=None, embed_table=None):
+    def __init__(self, model, model_args, mesh_device, tokenizer=None, encoder_params=None):
         super().__init__(model, model_args, mesh_device, tokenizer=tokenizer)
         self.encoder_params = encoder_params
-        self.embed_table = embed_table
 
     @classmethod
     def build(cls, mesh_device, max_batch_size, max_seq_len, snap_dir, text_decoder_dir, optimizations=None):
@@ -69,7 +67,7 @@ class Qwen3ASRGenerator(Generator):
         args = Qwen3ASRModelArgs(
             mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len, optimizations=optimizations
         )
-        # Each user's prefill must reach prepare_inputs_prefill on its own to take its embeddings.
+        # Each user's prefill must reach prepare_inputs_prefill on its own to take its audio.
         args.disable_batched_prefill = True
         state_dict = args.load_state_dict()
         model = Qwen3ASRDecoder(
@@ -80,8 +78,6 @@ class Qwen3ASRGenerator(Generator):
             args.weight_cache_path(ttnn.bfloat16),
             use_paged_kv_cache=True,
         )
-        with safe_open(os.path.join(text_decoder_dir, "model.safetensors"), "pt") as h:
-            embed_table = h.get_tensor("model.embed_tokens.weight").to(torch.bfloat16)
         encoder_params = tt_enc.preprocess_weights(
             load_audio_tower_weights(snap_dir=snap_dir, dtype=torch.float32), mesh_device
         )
@@ -93,7 +89,6 @@ class Qwen3ASRGenerator(Generator):
             mesh_device,
             tokenizer=args.tokenizer,
             encoder_params=encoder_params,
-            embed_table=embed_table,
         )
 
     @property
@@ -127,21 +122,63 @@ class Qwen3ASRGenerator(Generator):
         return [layers]
 
     def encode_audio(self, features, lengths=None):
-        """Audio embeddings (feat_out_len(T_i), dim) for each audio item, in prompt order."""
+        """Per audio item, in prompt order: (device embeds (1, 1, bucket rows, dim), number
+        of valid rows)."""
         return [
-            tt_enc.encode_mel(mel.float(), self.encoder_params, self.mesh_device).to(torch.bfloat16)
+            (
+                tt_enc.encode_mel(mel.float(), self.encoder_params, self.mesh_device, to_host=False),
+                tt_enc.feat_out_len(mel.shape[-1]),
+            )
             for mel in split_audio_features(features, lengths)
         ]
 
-    def merge_embeds(self, input_ids, audio_embeds):
-        """Token embeddings with each audio item's embeddings over its placeholder tokens."""
-        x = self.embed_table[input_ids.long()]
-        mask = input_ids == AUDIO_TOKEN_ID
-        n_audio = sum(int(a.shape[0]) for a in audio_embeds)
-        assert int(mask.sum()) == n_audio, f"{int(mask.sum())} audio placeholders, {n_audio} audio embeddings"
-        if n_audio:
-            x[mask] = torch.cat(audio_embeds).to(x.dtype)
-        return x
+    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, greedy_only=False):
+        """Also builds, for every warmed prefill length, the audio splice for each encoder
+        bucket and the last-token slice at each 32-row offset (its offset is part of the
+        program), so untraced prefill builds no program once a decode trace exists."""
+        if self.already_warmed_up_prefill:
+            return
+        super().warmup_model_prefill(kv_cache, enable_trace, can_sample_on_device, greedy_only=greedy_only)
+        model = self.model[0]
+        args = self.model_args[0]
+        for seq_len in args.get_warmup_prefill_supported_seq_lens():
+            if seq_len > args.max_prefill_chunk_size:
+                continue
+            hidden = ttnn.from_torch(
+                torch.zeros(1, 1, seq_len, args.dim),
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            for row in range(0, seq_len, 32):
+                ttnn.deallocate(ttnn.slice(hidden, (0, 0, row, 0), (1, 1, row + 32, args.dim)))
+            ttnn.deallocate(hidden)
+            for n in tt_enc.WARM_BUCKETS:
+                rows = n * tt_enc.TOKENS_PER_CHUNK
+                audio = ttnn.from_torch(
+                    torch.zeros(1, 1, rows, args.dim),
+                    device=self.mesh_device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                )
+                model.set_prefill_audio([[(0, min(rows, seq_len), audio)]])
+                try:
+                    out = model.prepare_inputs_prefill(torch.zeros(1, seq_len, dtype=torch.long), page_table=None)
+                finally:
+                    model.set_prefill_audio(None)
+                for t in out[:1]:
+                    ttnn.deallocate(t)
+                ttnn.deallocate(audio)
+
+    @staticmethod
+    def audio_runs(input_ids):
+        """(offset, length) of each run of audio placeholder tokens, in prompt order."""
+        is_audio = (input_ids == AUDIO_TOKEN_ID).to(torch.int8)
+        edges = torch.diff(torch.nn.functional.pad(is_audio, (1, 1)))
+        starts = torch.nonzero(edges == 1).flatten().tolist()
+        ends = torch.nonzero(edges == -1).flatten().tolist()
+        return [(a, b - a) for a, b in zip(starts, ends)]
 
     def prefill_forward(
         self,
@@ -162,17 +199,24 @@ class Qwen3ASRGenerator(Generator):
         kwargs.pop("warmup_prefill", None)
         batch, seq = tokens.shape
         lens = [seq] * batch if prompt_lens is None else [int(n) for n in prompt_lens]
-        embeds = []
+        audio_per_user = []
         for i in range(batch):
             feats = input_audio_features[i] if input_audio_features is not None else None
             flens = audio_feature_lengths[i] if audio_feature_lengths is not None else None
-            embeds.append(self.merge_embeds(tokens[i, : lens[i]], self.encode_audio(feats, flens)))
+            encoded = self.encode_audio(feats, flens)
+            runs = self.audio_runs(tokens[i, : lens[i]])
+            if [length for _, length in runs] != [n for _, n in encoded]:
+                raise ValueError(
+                    f"user {i}: audio placeholder runs {runs} do not match encoder outputs "
+                    f"{[n for _, n in encoded]}"
+                )
+            audio_per_user.append([(off, length, emb) for (off, length), (emb, _) in zip(runs, encoded)])
 
         model = self.model[0]
-        model.set_prefill_embeds(embeds)
+        model.set_prefill_audio(audio_per_user)
         try:
             # Traced prefill feeds token ids, and warmup prefills would take the queued
-            # embeddings, so this path runs untraced with warmup done beforehand.
+            # audio, so this path runs untraced with warmup done beforehand.
             out = self.prefill_forward_text(
                 tokens,
                 page_table=page_table,
@@ -182,7 +226,10 @@ class Qwen3ASRGenerator(Generator):
                 warmup_prefill=False,
                 **kwargs,
             )
-            assert model.pending_prefill_embeds() == 0, "a user's prefill did not consume its embeddings"
+            assert model.pending_prefill_audio() == 0, "a user's prefill did not consume its audio"
         finally:
-            model.set_prefill_embeds(None)
+            model.set_prefill_audio(None)
+            for items in audio_per_user:
+                for _, _, emb in items:
+                    ttnn.deallocate(emb)
         return out

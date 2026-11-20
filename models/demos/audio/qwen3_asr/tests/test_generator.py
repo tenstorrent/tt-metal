@@ -7,6 +7,7 @@
   test_generator_teacher_forced_pcc   prefill + decode logits vs the CPU Qwen3 decoder on
                                       the same merged embeddings, feeding the reference
                                       tokens at every step
+  test_device_splice_matches_host     on-device audio splice equals the host splice exactly
   test_generator_batch_matches_single greedy on-device decode of 8 requests in one batch
                                       equals each request decoded alone
 
@@ -21,10 +22,12 @@ import os
 
 import pytest
 import torch
+from safetensors import safe_open
 
+import ttnn
 from models.common.sampling.generator import SamplingParams
 from models.demos.audio.qwen3_asr.demo import transcribe as T
-from models.demos.audio.qwen3_asr.tt.generator import Qwen3ASRGenerator
+from models.demos.audio.qwen3_asr.tt.generator import AUDIO_TOKEN_ID, Qwen3ASRGenerator
 from tests.ttnn.utils_for_testing import comp_pcc
 
 DEVICE_PARAMS = {"l1_small_size": 32768, "trace_region_size": 200000000}
@@ -114,6 +117,17 @@ def _decode(gen, kv_cache, page_table, tokens, positions, sampling_params=None):
     return out.reshape(MAX_BATCH, -1)[:, : gen.model_args[0].vocab_size].float()
 
 
+def _host_embeds(gen, ids, mel):
+    """Prompt embeddings spliced on host: token table rows with the encoder output over the
+    audio placeholders."""
+    with safe_open(os.path.join(T.find_text_decoder(T.find_snap()), "model.safetensors"), "pt") as h:
+        x = h.get_tensor("model.embed_tokens.weight").to(torch.bfloat16)[ids]
+    ((audio, n),) = gen.encode_audio(mel)
+    x[ids == AUDIO_TOKEN_ID] = ttnn.to_torch(audio).reshape(-1, x.shape[-1])[:n].to(torch.bfloat16)
+    ttnn.deallocate(audio)
+    return x
+
+
 def _reference_logits(ckpt, embeds, steps):
     """CPU Qwen3 decoder from merged embeddings, greedy: logits at the prompt's last
     position and after each greedy token, plus those tokens."""
@@ -138,7 +152,7 @@ def test_generator_teacher_forced_pcc(device):
     gen = _build(device)
     kv_cache, page_table = _paged(gen)
     ids, mel = reqs[0]
-    embeds = gen.merge_embeds(ids, gen.encode_audio(mel))
+    embeds = _host_embeds(gen, ids, mel)
     ref_logits, ref_toks = _reference_logits(T.find_text_decoder(T.find_snap()), embeds, STEPS)
 
     tt_logits = [_prefill(gen, kv_cache, page_table, reqs, [0])[0].reshape(-1)[: gen.model_args[0].vocab_size].float()]
@@ -156,10 +170,36 @@ def test_generator_teacher_forced_pcc(device):
     assert top1 >= MIN_TOP1_MATCH, f"top-1 match {top1:.2f}"
 
 
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
+def test_device_splice_matches_host(device):
+    """The on-device audio splice gives exactly the host-spliced prompt embeddings."""
+    gen = _build(device)
+    model = gen.model[0]
+    for ids, mel in _requests(_clip_paths()):
+        expected = _host_embeds(gen, ids, mel)
+        encoded = gen.encode_audio(mel)
+        runs = gen.audio_runs(ids)
+        model.set_prefill_audio([[(off, n, emb) for (off, n), (emb, _) in zip(runs, encoded)]])
+        S = ((ids.shape[0] + 127) // 128) * 128
+        tokens = torch.nn.functional.pad(ids, (0, S - ids.shape[0])).reshape(1, -1)
+        try:
+            x = model.prepare_inputs_prefill(tokens, page_table=None)[0]
+        finally:
+            model.set_prefill_audio(None)
+        got = ttnn.to_torch(x).reshape(-1, expected.shape[-1])[: ids.shape[0]]
+        assert torch.equal(got, expected), f"max diff {(got.float() - expected.float()).abs().max()}"
+        for emb, _ in encoded:
+            ttnn.deallocate(emb)
+
+
+def _greedy_params(n):
+    return SamplingParams(temperature=[0.0] * n, top_k=[1] * n, top_p=[1.0] * n)
+
+
 def _greedy(gen, kv_cache, page_table, reqs, slots, steps):
     """Greedy on-device decode of reqs in the given slots; other rows idle at position 0."""
-    greedy = SamplingParams(temperature=[0.0] * len(reqs), top_k=[1] * len(reqs), top_p=[1.0] * len(reqs))
-    first = _prefill(gen, kv_cache, page_table, reqs, slots, sampling_params=greedy)
+    first = _prefill(gen, kv_cache, page_table, reqs, slots, sampling_params=_greedy_params(len(reqs)))
     if isinstance(first, tuple):
         first = first[0].reshape(len(reqs), -1)[:, 0]
     else:
@@ -169,7 +209,7 @@ def _greedy(gen, kv_cache, page_table, reqs, slots, steps):
     positions = torch.zeros(MAX_BATCH, dtype=torch.long)
     for i, s in enumerate(slots):
         positions[s] = reqs[i][0].shape[0]
-    row_greedy = SamplingParams(temperature=[0.0] * MAX_BATCH, top_k=[1] * MAX_BATCH, top_p=[1.0] * MAX_BATCH)
+    row_greedy = _greedy_params(MAX_BATCH)
     for _ in range(steps):
         for s in slots:
             tokens[s] = out[s][-1]
@@ -188,11 +228,12 @@ def test_generator_batch_matches_single(device):
     gen = _build(device)
     kv_cache, page_table = _paged(gen)
     # Programs first built after a trace is captured can be overwritten by its replays, so
-    # the encoder must build none after warmup, whatever the clip length.
+    # audio prefill must build none after warmup, whatever the clip length.
+    _greedy(gen, kv_cache, page_table, reqs[:1], [0], 1)
     cached = device.num_program_cache_entries()
-    for _, mel in reqs:
-        gen.encode_audio(mel)
-    assert device.num_program_cache_entries() == cached, "encoder built new programs after warmup"
+    for r in reqs:
+        _prefill(gen, kv_cache, page_table, [r], [0], sampling_params=_greedy_params(1))
+    assert device.num_program_cache_entries() == cached, "audio prefill built new programs after warmup"
 
     single = [_greedy(gen, kv_cache, page_table, [r], [0], STEPS)[0] for r in reqs]
     # Reversed slots, so each request also moves to a different KV slot and page set.
