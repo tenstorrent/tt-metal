@@ -309,3 +309,31 @@ def test_runner_banner_mentioning_tt_fatal_is_not_a_crash():
     w.feed("[1,0]<stderr>: comparison_mode_should_raise_exception=false TT_FATAL handling on\n", now=1)
     w.feed("[1,0]<stdout>: 15:02:11.221 | warning | Metal | Failed to create shared memory: Permission denied\n", now=2)
     assert w.fatal == {} and not w.crashed(now=10**6)
+
+
+def test_python_traceback_ends_bring_up_with_its_exception_line():
+    w = gwdt_quad.BringupWatch(n_ranks=4, now=0)
+    log = (
+        "[1,0]<stderr>: Traceback (most recent call last):\n"
+        '[1,0]<stderr>:   File "prefill_runner.py", line 1290, in _unlink_stale_shm\n'
+        "[1,2]<stderr>: 2026-11-20 06:16:40.848 | INFO     | __main__:_serve_request:1372 - routing up\n"
+        "[1,0]<stderr>:     os.remove(path)\n"
+        "[1,0]<stderr>: PermissionError: [Errno 1] Operation not permitted: "
+        "'/dev/shm/tt_prefill_layer_completion_ring_0'\n"
+    )
+    w.feed(log, now=100)
+    assert w.fatal == {
+        0: "PermissionError: [Errno 1] Operation not permitted: '/dev/shm/tt_prefill_layer_completion_ring_0'"
+    }
+    assert w.crashed(now=100 + gwdt_quad.FATAL_GRACE_S)
+
+
+def test_tt_fatal_wins_over_the_traceback_it_raises():
+    w = gwdt_quad.BringupWatch(n_ranks=2, now=0)
+    w.feed(
+        "[1,1]<stdout>: 06:16:40.1 | critical |          Always | TT_FATAL: no free link (assert.hpp:104)\n"
+        "[1,1]<stderr>: Traceback (most recent call last):\n"
+        "[1,1]<stderr>: RuntimeError: TT_FATAL @ d2d_stream_service.cpp:666: !claimed.empty()\n",
+        now=1,
+    )
+    assert w.fatal == {1: "no free link"}

@@ -72,6 +72,9 @@ _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _FATAL = re.compile(
     r"^\[\d+,(\d+)\]<std(?:out|err)>:.*\|\s*critical\s*\|.*?TT_FATAL:\s*(.*?)(?:\s*\([\w.]+:\d+\))?\s*$"
 )
+# An uncaught Python exception ends a rank the same way; its last traceback line, unindented, names it.
+_TAGGED = re.compile(r"^\[\d+,(\d+)\]<std(?:out|err)>: ?(.*)$")
+_TRACEBACK = "Traceback (most recent call last):"
 FATAL_GRACE_S = 20
 FATAL_MAX_CHARS = 400
 # A run that never reached the hardware question; its fallback would meet the same wall.
@@ -220,15 +223,31 @@ class BringupWatch:
         self.fatal: dict[int, str] = {}
         self.fatal_at: float | None = None
         self._partial = ""
+        self._in_traceback: set[int] = set()
+
+    def _crash(self, rank: int, msg: str, now: float) -> None:
+        if rank not in self.fatal:
+            self.fatal[rank] = msg[:FATAL_MAX_CHARS]
+            self.fatal_at = self.fatal_at or now
 
     def feed(self, text: str, now: float) -> None:
         lines = (self._partial + text).split("\n")
         self._partial = lines.pop()
         for line in lines:
-            m = _FATAL.match(_ANSI.sub("", line))
-            if m and int(m.group(1)) not in self.fatal:
-                self.fatal[int(m.group(1))] = m.group(2)[:FATAL_MAX_CHARS]
-                self.fatal_at = self.fatal_at or now
+            line = _ANSI.sub("", line)
+            m = _FATAL.match(line)
+            if m:
+                self._crash(int(m.group(1)), m.group(2), now)
+                continue
+            t = _TAGGED.match(line)
+            if not t:
+                continue
+            rank, body = int(t.group(1)), t.group(2)
+            if body == _TRACEBACK:
+                self._in_traceback.add(rank)
+            elif rank in self._in_traceback and body and not body[0].isspace():
+                self._in_traceback.discard(rank)
+                self._crash(rank, body, now)
         got = setup_ranks(text)
         if got - self.ready:
             self.ready |= got
