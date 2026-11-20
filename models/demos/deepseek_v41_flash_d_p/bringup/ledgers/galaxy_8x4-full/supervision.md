@@ -946,3 +946,12 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   packing number is accepted or reported without: one host upload a chunk (ids + descriptor), host ms a new layout
   <= ~1, 0 program builds after warm-up, fresh layouts. Skill: the overseer checks the deliverable for host
   derivation / per-layout state BEFORE accepting.
+- 19:45 UTC PB.7C attempt 2 done, WAITING; gate units all PASS. Checked the deliverable (skill: before accepting):
+  0 program builds after warm-up, 1 indexer ring call a layer, oracles 0 - but the host still builds per-layout tables
+  and makes per-descriptor uploads: glued_new_layout_ms 3.36 / 11.79 / 1.01 (agent: "not yet one upload"). NOT
+  ACCEPTED (no decision recorded): brief rewritten for attempt 3 (ids + descriptor only, everything else on device;
+  gate glued_new_layout_ms* <= 1.5; a new brief = a new A/B key). Glued fresh 42.5 / 46.8 / 46.2k (repeat 53.3 / 55.2 /
+  51.9k). FIXED LANES ON FRESH LAYOUTS: 211 / 122 / 128 program builds after warm-up, a new layout up to 63.9 ms host,
+  25.1 / 29.2 / 30.2k vs repeated 31.7 / 43.0 / 41.6k: the lane path's serving problem is real (PB.9F / PB.9X).
+  Applied: PB.8R / PB.8RP, PB.9F / PB.9F5 / PB.9X / PB.9X5, PB.T's 0-builds check, PB.7C's host-ms gate. Order:
+  PB.7C (attempt 3) -> PB.9F -> PB.9F5 -> PB.9X -> PB.9X5 -> PB.8R -> PB.8RP -> PB.9C -> PB.T. tasks.yaml 490 KB.
