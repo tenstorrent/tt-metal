@@ -39,36 +39,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const std::uint32_t num_tiles           = NUM_BLOCKS * NUM_TILES_IN_BLOCK;
     const std::uint32_t src_handshake_iters = LOOP_FACTOR * _perf_src_handshake_iters_(tilize_en, num_tiles, num_faces);
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces);
 
     {
         START_PERF_MEASURE("INIT")
         if constexpr (!tilize_en)
         {
             _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-                formats.unpack_A_src,
-                formats.unpack_B_src,
-                formats.unpack_A_dst,
-                formats.unpack_B_dst,
-                ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces),
-                ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces));
+                formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, tensor_shape, tensor_shape);
             _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-                0 /* transpose_of_faces */,
-                0 /* within_face_16x16_transpose */,
-                ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces),
-                formats.unpack_A_src,
-                formats.unpack_A_dst);
+                0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
         }
         else
         {
             _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-                formats.unpack_A_src,
-                formats.unpack_B_src,
-                formats.unpack_A_dst,
-                formats.unpack_B_dst,
-                ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces),
-                ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces));
-            _llk_unpack_tilize_init_wrapper_(
-                formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces));
+                formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, tensor_shape, tensor_shape);
+            _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, tensor_shape);
         }
         PROFILER_SYNC();
     }
@@ -108,12 +94,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         for (std::uint32_t j = 0; j < BLOCK_CT_DIM; j++)
                         {
                             _llk_unpack_tilize_wrapper_(
-                                L1_ADDRESS(buffer_A[read_offset]),
-                                j,
-                                formats.unpack_A_src,
-                                formats.unpack_A_dst,
-                                0 /* block_ct_dim */,
-                                ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces));
+                                L1_ADDRESS(buffer_A[read_offset]), j, formats.unpack_A_src, formats.unpack_A_dst, 0 /* block_ct_dim */, tensor_shape);
                         }
                     }
                 }
@@ -123,7 +104,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     if constexpr (tilize_en)
     {
-        _llk_unpack_tilize_uninit_wrapper_(formats.unpack_A_dst, ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces));
+        _llk_unpack_tilize_uninit_wrapper_(formats.unpack_A_dst, tensor_shape);
     }
 }
 
@@ -157,7 +138,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const std::uint32_t num_tiles           = NUM_BLOCKS * NUM_TILES_IN_BLOCK;
     const std::uint32_t src_handshake_iters = LOOP_FACTOR * _perf_src_handshake_iters_(tilize_en, num_tiles, num_faces);
-
     const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces);
 
     {

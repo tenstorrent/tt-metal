@@ -22,28 +22,13 @@
 template <ckernel::experimental::LLKMemDescriptor DESC, bool is_fp32_dest_acc_en = false>
 inline void llk_unpack_tilize_init(const std::uint32_t ct_dim) {
     constexpr std::uint8_t RegFmt = ckernel::infer_unpack_reg_fmt(DESC.format, is_fp32_dest_acc_en);
-    constexpr bool narrow_tile = (DESC.shape.num_faces_c_dim == 1);
-    llk_unpack_tilize_init_impl(
-        static_cast<std::uint32_t>(DESC.format),
-        RegFmt,
-        ct_dim,
-        DESC.shape.face_r_dim,
-        narrow_tile,
-        DESC.shape.total_num_faces());
+    llk_unpack_tilize_init_impl(static_cast<std::uint32_t>(DESC.format), RegFmt, ct_dim, DESC.shape);
 }
 
 template <ckernel::experimental::LLKMemDescriptor DESC, bool is_fp32_dest_acc_en = false>
 inline void llk_unpack_tilize(const std::uint32_t base_address, const std::uint32_t tile_index) {
     constexpr std::uint8_t RegFmt = ckernel::infer_unpack_reg_fmt(DESC.format, is_fp32_dest_acc_en);
-    constexpr bool narrow_tile = (DESC.shape.num_faces_c_dim == 1);
-    llk_unpack_tilize_impl(
-        base_address,
-        tile_index,
-        static_cast<std::uint32_t>(DESC.format),
-        RegFmt,
-        DESC.shape.face_r_dim,
-        DESC.shape.total_num_faces(),
-        narrow_tile);
+    llk_unpack_tilize_impl(base_address, tile_index, static_cast<std::uint32_t>(DESC.format), RegFmt, DESC.shape);
 }
 
 template <ckernel::experimental::LLKMemDescriptor DESC, bool is_fp32_dest_acc_en = false>
