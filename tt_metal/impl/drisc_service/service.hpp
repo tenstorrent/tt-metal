@@ -184,14 +184,19 @@ private:
     void request_attach(uint32_t slot);
     bool acked() const;
     std::optional<uint64_t> post(const abi::KernelCommand& command);
+    uint8_t endpoint_flags(uint16_t noc_xy_addr) const;
     bool in_own_bank(uint16_t noc_xy_addr, uint64_t addr, uint32_t size) const;
-    abi::KernelCommand local_if_own_bank(const abi::KernelCommand& command) const;
+    // The command as sent: a CMD_SINGLE within this seat's bank becomes CMD_LOCAL. Throws if issue() would reject it.
+    abi::KernelCommand prepare(const abi::KernelCommand& command) const;
     // The kernel's live heartbeat counter in L1, over PCIe. For when the control page copy has nothing yet (classify(),
     // before attach) or may lag (describe_state()).
     uint32_t l1_heartbeat() const;
-    void validate(const abi::KernelCommand& command) const;
+    void validate(const abi::KernelCommand& command, bool src_in_own_bank) const;
 
     Seat seat_;
+    static constexpr uint8_t own_bank_endpoint = 1;
+    static constexpr uint8_t stream_mode_endpoint = 2;
+    std::array<uint8_t, size_t{1} << abi::CMD_KIND_SHIFT> endpoint_flags_{};  // indexed by noc_xy_addr
     PeerWindows* peers_ = nullptr;  // the owning Client's; null for a SeatClient of its own
     DriscCore core_;
     std::optional<ClientSeatLock> lock_;
