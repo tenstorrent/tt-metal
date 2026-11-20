@@ -4,9 +4,9 @@
 
 #pragma once
 
+#include <cstddef>
+#include <functional>
 #include <string_view>
-#include <utility>
-#include <vector>
 
 #include "ttnn-nanobind/nanobind_fwd.hpp"
 
@@ -29,16 +29,17 @@ namespace nb = nanobind;
 // MeshProgramSpec and MeshProgramRunArgs, re-exported under ttnn.experimental.
 void py_module_types(nb::module_& mod);
 
-// A tensor argument of run args made in Python: the tensor parameter's name and the ttnn.Tensor bound to it. The C++
-// run args keep only the tensor's MeshTensor, which the per-device views of one tensor share.
-using PythonTensorArg = std::pair<std::string_view, const ttnn::Tensor*>;
+// Calls visit with the name and the ttnn.Tensor of each tensor argument of a ProgramRunArgs made in Python, in
+// tensor_args order. The C++ run args keep only the tensor's MeshTensor, which the per-device views of one tensor
+// share. Calls nothing for run args made in C++. Needs the GIL; visit must run no Python code and must not keep the
+// name or the tensor after it returns.
+void for_each_python_tensor_arg(
+    const tt::tt_metal::ProgramRunArgs& run_args,
+    const std::function<void(std::string_view name, const ttnn::Tensor& tensor)>& visit);
 
-// The tensor arguments of a ProgramRunArgs made in Python, in tensor_args order; none for run args made in C++. The
-// names and tensors belong to the Python object: use them only while holding the GIL, and run no Python code meanwhile.
-std::vector<PythonTensorArg> python_tensor_args(const tt::tt_metal::ProgramRunArgs& run_args);
-
-// The tensor arguments of each program of a MeshProgramRunArgs made in Python, in the order of its programs; none for
-// run args made in C++. The same rules apply.
-std::vector<std::vector<PythonTensorArg>> python_tensor_args(const ttnn::experimental::MeshProgramRunArgs& run_args);
+// The same for each program of a MeshProgramRunArgs made in Python, with the program's index in its programs.
+void for_each_python_tensor_arg(
+    const ttnn::experimental::MeshProgramRunArgs& run_args,
+    const std::function<void(std::size_t program, std::string_view name, const ttnn::Tensor& tensor)>& visit);
 
 }  // namespace ttnn::program_spec

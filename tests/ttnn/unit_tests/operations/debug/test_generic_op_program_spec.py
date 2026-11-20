@@ -1059,7 +1059,7 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
     spec, run_args = exp_program(second_input, first_output)
     with expect_error(
         RuntimeError,
-        r"tensor_args\['input'\] holds devices MeshCoordinate\(\[0, 1\]\), but its program runs on device "
+        r"tensor_args\['input'\] holds devices MeshCoordinate\(\[0, 1\]\), but these run args are for device "
         r"MeshCoordinate\(\[0, 0\]\), which it does not hold. On each device it runs on, a program reads that "
         r"device's part of a tensor, so to read the data of a per-device view, run the program only on the view's "
         r"devices",
@@ -1151,6 +1151,31 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
     rename_tensor_parameter(spec, run_args, "input", "in\x00put")
     with expect_error(RuntimeError, r"tensor_args\['in\\0put'\] holds devices"):
         E.generic_op([first_input, first_output], spec, run_args)
+
+    # A Python subclass of the run args is checked too.
+    class SubclassRunArgs(E.ProgramRunArgs):
+        pass
+
+    spec, run_args = exp_program(second_input, first_output)
+    subclass_run_args = SubclassRunArgs(kernel_run_args=run_args.kernel_run_args, tensor_args=run_args.tensor_args)
+    with expect_error(RuntimeError, message):
+        E.generic_op([first_input, first_output], spec, subclass_run_args)
+
+    # The tensors that run args keep are private: an entry of another type, put there in place, is reported, not read.
+    spec, run_args = exp_program(first_input, first_output)
+    edited = exp_program(first_input, first_output)[1]
+    edited._tensor_args["input"] = 1
+    with expect_error(RuntimeError, "a ProgramRunArgs keeps were edited in place; set its tensor_args again"):
+        E.generic_op([first_input, first_output], spec, edited)
+    mesh_spec = E.MeshProgramSpec(programs=[(one_device(0), spec)])
+    edited_mesh = E.MeshProgramRunArgs(programs=[(one_device(0), run_args)])
+    edited_mesh._tensor_args[0]["input"] = 1
+    with expect_error(RuntimeError, "a MeshProgramRunArgs keeps were edited in place; set its programs again"):
+        E.generic_op([first_input, first_output], mesh_spec, edited_mesh)
+    edited_mesh = E.MeshProgramRunArgs(programs=[(one_device(0), run_args)])
+    edited_mesh._tensor_args.append({})
+    with expect_error(RuntimeError, "a MeshProgramRunArgs keeps were edited in place; set its programs again"):
+        E.generic_op([first_input, first_output], mesh_spec, edited_mesh)
 
     # A view, or the whole tensor, that holds the program's device reads that device's part.
     for input_view in (first_input, input_tensor):
