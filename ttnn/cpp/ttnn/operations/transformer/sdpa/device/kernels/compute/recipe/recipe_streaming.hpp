@@ -541,6 +541,37 @@ constexpr uint32_t kRefMaxChunkSumCb = 12;
 // pattern is unchanged. Its INT16 grid saturates about 0.72 above zero, so P stays in range while the
 // row max exceeds m_ref by less than tau.
 constexpr uint32_t kRefMaxExpOctaves = 28;
+// STANDARD's and FAST's score exp (recipe_sfpu.hpp, init_sdpa_score_exp): arm it (after any other SFPU program, the
+// pack thread's SFPU is shared), then exp `tiles` consecutive DEST tiles in place from tile `dst`. Its MAD
+// coefficient -256 log2(e) scale 2^104 is finite for scale below about 2^15.47; a larger scale (the recipes accept up
+// to 2^16) keeps the LLK fast exp, whose values agree in range.
+template <uint32_t scale_fp32>
+constexpr bool recipe_score_exp_one_op = 256.0f * 1.4426950408889634f * __builtin_bit_cast(float, scale_fp32) < 0x1p24f;
+template <uint32_t scale_fp32>
+ALWI void recipe_arm_score_exp() {
+    exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
+    if constexpr (recipe_score_exp_one_op<scale_fp32>) {
+        PACK((ckernel::sfpu::init_sdpa_score_exp<scale_fp32, kRefMaxExpOctaves>()));
+    } else {
+        PACK({
+            constexpr uint32_t exp_c_bits = __builtin_bit_cast(uint32_t, 32500.818359375f - 256.0f * kRefMaxExpOctaves);
+            TTI_SFPLOADI(0, 0xA, exp_c_bits & 0xFFFF);
+            TTI_SFPLOADI(0, 0x8, exp_c_bits >> 16);
+            TTI_SFPCONFIG(0, 13, 0);
+        })
+    }
+}
+template <uint32_t scale_fp32>
+ALWI void recipe_score_exp(uint32_t dst, uint32_t tiles) {
+    if constexpr (recipe_score_exp_one_op<scale_fp32>) {
+        PACK((SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_score_exp, dst, VectorMode::None, tiles)));
+    } else {
+        for (uint32_t t = 0; t < tiles; ++t) {
+            exp_packthread_tile<true, false, InputClamping::None, 32>(dst + t, VectorMode::None);
+        }
+    }
+}
 // Rescale threshold: keep m_ref until the row max exceeds it by theta (natural-log units of the
 // scaled scores). theta + 0.72 must stay below tau, so P never saturates.
 constexpr float kRefMaxTheta = 16.0f * 0.69314718055994531f;

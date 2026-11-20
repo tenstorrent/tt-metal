@@ -257,11 +257,7 @@ SDPA_RECIPE_COLD void sub_exp_block_bcast_cols(
             constexpr int iterations = 32;
             constexpr VectorMode vector_mode_exp = VectorMode::None;
             if constexpr (!recipe::fp32) {
-                for (uint32_t i = 0; i < tiles_per_row; i++) {
-                    for (uint32_t j = 0; j < tiles_per_column; j++) {
-                        exp_packthread_tile<true, false, InputClamping::None, iterations>(dst_index++, vector_mode_exp);
-                    }
-                }
+                recipe_score_exp<scale_fp32>(0, tiles_per_row * tiles_per_column);
             } else if (tiles_per_row * tiles_per_column == 4) {
                 PACK((ckernel::sfpu::restore_sdpa_grid_macro_instructions()));
                 PACK((ckernel::sfpu::init_sdpa_exp_grid<scale_fp32>()));
@@ -902,21 +898,14 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
     uint32_t q_index_offset = 0;
     uint32_t kt_index_offset = 0;
 
-    exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
     if constexpr (recipe::fp32) {
+        exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
         PACK((ckernel::sfpu::init_sdpa_refine_loadmacros()));
-    }
-    if constexpr (!recipe::fp32) {
-        // Exp headroom: P = exp(scale * (s - m_ref) - tau). The fast exp computes y = 256 * log2(e) * scale * x +
-        // (B - C) as INT16; lowering its constant (LREG13) by 256 per octave of tau moves saturation from ~0.72
-        // to tau + 0.72 above m_ref while s - m_ref stays small (precise in BF16).
-        PACK({
-            constexpr float exp_c = 32500.818359375f - 256.0f * kRefMaxExpOctaves;
-            constexpr uint32_t exp_c_bits = __builtin_bit_cast(uint32_t, exp_c);
-            TTI_SFPLOADI(0, 0xA, exp_c_bits & 0xFFFF);
-            TTI_SFPLOADI(0, 0x8, exp_c_bits >> 16);
-            TTI_SFPCONFIG(0, 13, 0);
-        })
+    } else {
+        // Exp headroom: P = exp(scale * (s - m_ref) - tau). The score exp's integer grid i = 256 * log2(e) * scale * x
+        // + B' is offset by 256 per octave of tau, which moves saturation from ~0.72 to tau + 0.72 above m_ref while
+        // s - m_ref stays small (precise in BF16).
+        recipe_arm_score_exp<scale_fp32>();
     }
     // Wormhole runs its fused chunks from the segment loop (recipe_fused_chunk_step); key-range calls run their edge
     // chunks on the reduce path.
@@ -1833,14 +1822,7 @@ ALWI bool recipe_fused_chunk_step(
         return false;
     }
     // As sdpa_inner_loop_step's entry: the fast exp and its headroom constant.
-    exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
-    PACK({
-        constexpr float exp_c = 32500.818359375f - 256.0f * kRefMaxExpOctaves;
-        constexpr uint32_t exp_c_bits = __builtin_bit_cast(uint32_t, exp_c);
-        TTI_SFPLOADI(0, 0xA, exp_c_bits & 0xFFFF);
-        TTI_SFPLOADI(0, 0x8, exp_c_bits >> 16);
-        TTI_SFPCONFIG(0, 13, 0);
-    })
+    recipe_arm_score_exp<scale_fp32>();
     // Wormhole's UNPACK copy is size-optimized (fused_os).
     if constexpr (recipe::unpack_thread) {
         fused_os::sdpa_fused_chunk<

@@ -95,6 +95,95 @@ inline void calculate_sdpa_negate_max() {
     }
 }
 
+// STANDARD and FAST score exp, one SFPLOADMACRO per 32 scores (call after the LLK fast exp's init,
+// exp_init<true, scale, false>, which sets LReg14 = 15 and the MAD template L12 * x + L13).
+//
+// The LLK fast exp computes i = round(A x + B') with A = 256 log2(e) scale, STOCHRNDs it to INT16 and stores the
+// sign-magnitude pattern i << 15 (P = 2^(i/256 - 127)); B' = 32500.818359375 - 256 * headroom_octaves. That takes two
+// round-unit instructions (STOCHRND, SHFT2) and two issued instructions per 32 scores, and below about -88 + headroom
+// it emits negative P for the packer's ReLU to clear. Here the MAD computes y = (2^24 - i) 2^104 instead
+// (L12 = -A 2^104, L13 = (2^24 - B') 2^104, exact scalings):
+//   - 0 < i <= 2^23: y lies in the top binade [2^127, 2^128), whose ulp is 2^104, so the FMA's round to nearest even
+//     rounds i to an integer and bits(y) = 0x7F800000 - i;
+//   - i <= 0 (P below 2^-127, at any distance below the maximum, including masked -2^100 logits): y overflows to +Inf
+//     (0x7F800000; a NaN score gives a NaN with zero low bits on Blackhole).
+// SHFT2 << L14 keeps the low 17 bits, w = ((-i) mod 2^17) << 15 (0 for +Inf), and an integer absolute value (Blackhole
+// SFPCAST mode 2, Wormhole SFPABS integer mode; both simple-unit) gives |w| = i << 15: the LLK pattern for
+// 0 < i < 2^16, and 0 for every i <= 0. In range the values equal the LLK exp's (one rounding, the FMA's, instead of
+// the FMA's then STOCHRND's: a tie can round the other way). No negative P (the packer ReLU never fires), no wrap
+// below the maximum. Above it, i >= 2^15 (P >= 2, about 0.72 + headroom above the reference max) gives large P
+// whose row sums trip the fused chunks' redo check up to i of about 98800 (about 199 nats above the reference max
+// in units of the scaled scores); past that w wraps (period 2^17), so P there is unspecified (the LLK exp saturates
+// at P = 2 instead). Scaled logits that far above a Q chunk's first K chunk's row maximum are outside STANDARD's and
+// FAST's range.
+//
+// Sequence 0, cycle-timed (Misc = 0): load, MAD (delay 0, template 1), SHFT2 (delay 2 = MAD latency, template 2,
+// -> VD), integer abs (delay 3, template 3, -> LReg16), store from LReg16 (delay 4). The LOADMACROs rotate LRegs
+// 0-7 (VDHi = Imm10 bit 0), so a register is reloaded only after its store has read it. The 32 recorded LOADMACROs
+// cover one tile of a 16-bit DEST (64 rows, DEST += 2 per LOADMACRO).
+template <uint32_t scale_fp32, uint32_t headroom_octaves>
+inline void init_sdpa_score_exp() {
+    constexpr float a = -(256.0f * 1.4426950408889634f * __builtin_bit_cast(float, scale_fp32)) * 0x1p104f;
+    constexpr float c = (16777216.0f - (32500.818359375f - 256.0f * static_cast<float>(headroom_octaves))) * 0x1p104f;
+    TTI_SFPLOADI(0, 0xA, Converter::lo16(a));
+    TTI_SFPLOADI(0, 0x8, Converter::hi16(a));
+    TTI_SFPCONFIG(0, 12, 0);
+    TTI_SFPLOADI(0, 0xA, Converter::lo16(c));
+    TTI_SFPLOADI(0, 0x8, Converter::hi16(c));
+    TTI_SFPCONFIG(0, 13, 0);
+    TTI_SFPNOP;
+    TTI_SFPSHFT2(0, 14, 14, 5);  // template 2 (VD 14 backdoor): VB << LReg14
+    TTI_SFPNOP;
+    if constexpr (recipe::wormhole) {
+        TTI_SFPABS(0, 0, 15, 0);  // template 3 (VD 15 backdoor): two's complement absolute value
+    } else {
+        TTI_SFPCAST(0, 15, 2);  // template 3 (VD 15 backdoor): int32 absolute value
+    }
+    TTI_SFPNOP;
+    // Simple 0x5F (VC = VD, -> LReg16, delay 3, template 3), MAD 0x85 (VB = loaded, delay 0, template 1), round 0x96
+    // (VB = VD, -> VD, delay 2, template 2), store 0x63 (from LReg16, delay 4).
+    TTI_SFPLOADI(0, 0xA, 0x855F);
+    TTI_SFPLOADI(0, 0x8, 0x6396);
+    TTI_SFPCONFIG(0, 4, 0);
+    TTI_SFPCONFIG(0, 8, 1);  // Misc = 0: store in DEST's format, cycle-timed delays
+    TTI_SFPNOP;
+    auto record = [] {
+#pragma GCC unroll 4
+        for (uint32_t r = 0; r < 4; ++r) {
+            TTI_SFPLOADMACRO(0, 0, kSdpaSfpuAddrMod7, 0);
+            TTI_SFPLOADMACRO(1, 0, kSdpaSfpuAddrMod7, 0);
+            TTI_SFPLOADMACRO(2, 0, kSdpaSfpuAddrMod7, 0);
+            TTI_SFPLOADMACRO(3, 0, kSdpaSfpuAddrMod7, 0);
+            TTI_SFPLOADMACRO(0, 0, kSdpaSfpuAddrMod7, 1);
+            TTI_SFPLOADMACRO(1, 0, kSdpaSfpuAddrMod7, 1);
+            TTI_SFPLOADMACRO(2, 0, kSdpaSfpuAddrMod7, 1);
+            TTI_SFPLOADMACRO(3, 0, kSdpaSfpuAddrMod7, 1);
+        }
+    };
+    // Blackhole records through load_replay_buf (instruction gathering); Wormhole records directly.
+#ifdef ARCH_BLACKHOLE
+    load_replay_buf(0, 32, record);
+#else
+    lltt::record(0, 32);
+    record();
+#endif
+}
+
+// `tiles` consecutive 16-bit DEST tiles from the current SFPU base (init_sdpa_score_exp).
+inline void calculate_sdpa_score_exp(uint32_t tiles) {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_7);
+#pragma GCC unroll 1
+    for (uint32_t t = 0; t < tiles; ++t) {
+        lltt::replay(0, 32);
+    }
+    // The last LOADMACRO's store executes five cycles after it.
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+}
+
 template <int iterations>
 inline void calculate_sdpa_exp_grid_batch() {
     static_assert(iterations % 4 == 0);

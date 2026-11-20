@@ -79,19 +79,10 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
             pack_cb = cb;
         }
     };
-    // The fast exp's SFPU program and constants (28-octave headroom). Other SFPU users interleaved with the
+    // The score exp's SFPU program and constants (28-octave headroom). Other SFPU users interleaved with the
     // exps (normalization's reciprocal, a redone group's correction and rescale) reprogram the shared
     // SFPU, so the exp is re-armed after them.
-    auto arm_exp = []() {
-        exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
-        PACK({
-            constexpr float exp_c = 32500.818359375f - 256.0f * kRefMaxExpOctaves;
-            constexpr uint32_t exp_c_bits = __builtin_bit_cast(uint32_t, exp_c);
-            TTI_SFPLOADI(0, 0xA, exp_c_bits & 0xFFFF);
-            TTI_SFPLOADI(0, 0x8, exp_c_bits >> 16);
-            TTI_SFPCONFIG(0, 13, 0);
-        })
-    };
+    auto arm_exp = []() { recipe_arm_score_exp<scale_fp32>(); };
 
     auto pack_to_unpack_barrier = []() {
         PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
@@ -200,9 +191,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         }
         if constexpr (recipe::lofi) {
             PACK((llk_pack_relu_config(ReluConfig::zero())));
-            for (uint32_t t = 0; t < h * sbw; ++t) {
-                exp_packthread_tile<true, false, InputClamping::None, 32>(t, VectorMode::None);
-            }
+            recipe_score_exp<scale_fp32>(0, h * sbw);
             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
             set_pack(cb_qkt_im);
             configure_row_pack_width(cb_qkt_im, sbw);
@@ -215,9 +204,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
             if (!qk_pack_on) {
                 PACK((llk_pack_relu_config(ReluConfig::zero())));
             }
-            for (uint32_t t = 0; t < h * sbw; ++t) {
-                exp_packthread_tile<true, false, InputClamping::None, 32>(t, VectorMode::None);
-            }
+            recipe_score_exp<scale_fp32>(0, h * sbw);
             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
             if (!qk_pack_on) {
                 set_pack(cb_qkt_im);

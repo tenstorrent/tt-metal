@@ -22,8 +22,9 @@ struct RecipeSelection {
 };
 
 // The numerical choices the host passes to the recipe kernels. QK fidelity, exp and
-// normalization are fixed per recipe inside the kernels; see
-// tech_reports/FlashAttention/SDPAPrecisionRecipes.md.
+// normalization are fixed per recipe inside the kernels: STANDARD and FAST take their score exp at one
+// SFPLOADMACRO per 32 scores (kernels/compute/recipe/recipe_sfpu.hpp, init_sdpa_score_exp), BALANCED and
+// ACCURATE the refined FP32 grid exp; see tech_reports/FlashAttention/SDPAPrecisionRecipes.md.
 struct PrecisionPolicy {
     RecipeSelection selection;
     tt::tt_metal::MathFidelity pv_fidelity;  // compute-config fidelity; C runs QK at HiFi3 in-kernel
