@@ -101,6 +101,7 @@ from ...parallel.manager import CCLManager
 from ...utils import cache, dram_probe
 from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.tensor import bf16_tensor, from_torch, local_device_to_torch, pad_single
+from ...utils.torch_threads import cap_torch_threads
 from ...utils.tracing import StateTensor, Tracer
 from ..events import DenoiseStep, PipelineEventCallback, event_section, null_callback
 from .conditioning import MINIMAX_H3_PIXEL_MEAN as _MINIMAX_H3_PIXEL_MEAN
@@ -709,6 +710,12 @@ def _transformer_file_from_env() -> tuple[Path | None, str]:
     if requested is not None and requested != layout:
         raise ValueError(f"{_TRANSFORMER_LAYOUT_ENV}={requested} but {path.name} is {layout}")
     return path, layout
+
+
+# A call's host torch work is many small ops, each an OpenMP region that waits for its slowest thread.
+# On torch's default of one thread per CPU a single busy CPU stalls every one of them; 8 threads
+# (the VAE decode's count) leave the scheduler room to keep them off busy CPUs.
+_CALL_TORCH_THREADS = 8
 
 
 class MiniMaxH3Pipeline:
@@ -2248,6 +2255,7 @@ class MiniMaxH3Pipeline:
 
     # ------------------------------------------------------------------ the call
 
+    @cap_torch_threads(_CALL_TORCH_THREADS)
     @torch.no_grad()
     def __call__(
         self,

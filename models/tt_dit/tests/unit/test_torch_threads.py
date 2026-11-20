@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from models.tt_dit.utils import torch_threads
-from models.tt_dit.utils.torch_threads import cap_torch_threads_to_half_the_cpus
+from models.tt_dit.utils.torch_threads import cap_torch_threads, cap_torch_threads_to_half_the_cpus
 
 
 @pytest.fixture
@@ -28,6 +28,19 @@ def affinity(monkeypatch):
     mask = SimpleNamespace(cpus=set(range(8)))
     monkeypatch.setattr(torch_threads.os, "sched_getaffinity", lambda pid: mask.cpus)
     return mask
+
+
+@pytest.mark.parametrize("count, inside, sets", [(64, 8, [8, 64]), (8, 8, []), (1, 1, [])])
+def test_cap_torch_threads_only_lowers_to_the_limit_and_restores(torch_pool, count, inside, sets):
+    torch_pool.count = count
+
+    @cap_torch_threads(8)
+    def call():
+        return torch_pool.count
+
+    assert call() == inside
+    assert torch_pool.count == count
+    assert torch_pool.sets == sets
 
 
 def test_lowers_to_half_the_affinity_mask_and_restores(torch_pool, affinity):
