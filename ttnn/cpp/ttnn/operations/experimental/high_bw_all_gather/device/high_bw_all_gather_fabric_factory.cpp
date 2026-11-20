@@ -47,9 +47,6 @@ constexpr uint32_t kReaderMetadataCbIndex = tt::CBIndex::c_1;  // the reader's m
 constexpr uint32_t kWriterMetadataCbIndex =
     tt::CBIndex::c_2;  // the sender's / copy writer's (the RISCs read concurrently)
 constexpr uint32_t kMetadataCbBytes = 64;
-constexpr uint32_t kInputRunCbIndex =
-    tt::CBIndex::c_3;  // local copy cores, non-interleaved input: contiguous input runs, reader -> writer
-constexpr uint32_t kInputRunCbPageBytes = 16;
 constexpr uint32_t kFabricChunkCbBudgetBytes = 112 * 1024;  // chunk CB per core: two CB batches
 constexpr uint32_t kMaxChunksPerCbBatch = 8;
 constexpr uint32_t kForward = 0;
@@ -564,9 +561,11 @@ GatherPlan build_gather_plan(
     std::stable_partition(local_copy_core_order.begin(), local_copy_core_order.end(), [&](const auto& core) {
         return core.y >= middle_y;
     });
-    // one per link of a hop; a non-interleaved input takes two per link, since they also convert the own shard page by
-    // page for the link workers (QuietBox, GLM KV cache, 6 KiB: 4 is fastest; 6 wins only at 14 KiB)
-    const uint32_t num_local_copy_cores = input_interleaved ? plan.links_per_hop : 2 * plan.links_per_hop;
+    // Interleaved input: one per link of a hop. Any other input (the ND-sharded KV cache): none, the link workers write
+    // the own shard from the chunks they read for sending. The write goes where the gather has slack: the ND-sharded
+    // gather is bound by the reader's page reads (NoC0), so the sender writes on NoC1; the interleaved gather is bound
+    // by the sender, so copy cores write (sender: ~4% slower, reader: ~2%; copy cores for ND: ~3% slower).
+    const uint32_t num_local_copy_cores = input_interleaved ? plan.links_per_hop : 0;
     std::vector<std::set<std::pair<size_t, size_t>>> link_worker_cores_of_chip(num_chips);
     for (uint32_t chip_index = 0; chip_index < num_chips; ++chip_index) {
         const Coord chip(chip_index / mesh_cols, chip_index % mesh_cols);
@@ -908,10 +907,7 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
     auto append_accessor = [](std::vector<uint32_t>& compile_args, const Tensor& tensor) {
         tt::tt_metal::TensorAccessorArgs(*tensor.buffer()).append_to(compile_args);
     };
-    // blocks_converted_semaphore (per program, one per local copy core): conversion blocks of a non-interleaved input's
-    // own shard that copy core has written into the output.
-    const uint32_t num_local_copy_cores = plan.local_copy_cores[0].size();
-    auto reader_config = [&](bool local_copy_core, uint32_t blocks_converted_semaphore) {
+    auto reader_config = [&]() {
         std::vector<uint32_t> compile_args{
             kFabricChunkCbIndex,
             kReaderMetadataCbIndex,
@@ -921,11 +917,7 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
             chunks_per_cb_batch,
             cache_slot_from_metadata ? 1u : 0u,
             valid_prefix_from_metadata ? 1u : 0u,
-            input_interleaved ? 1u : 0u,
-            local_copy_core ? 1u : 0u,
-            blocks_converted_semaphore,
-            num_local_copy_cores,
-            kInputRunCbIndex};
+            input_interleaved ? 1u : 0u};
         append_accessor(compile_args, input);
         append_accessor(compile_args, output_tensor);
         append_accessor(compile_args, batch_index_tensor);
@@ -950,7 +942,7 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
         .noc = tt::tt_metal::NOC::RISCV_1_default,
         .compile_args = sender_compile_args};
-    auto local_copy_writer_config = [&](uint32_t blocks_converted_semaphore) {
+    auto local_copy_writer_config = [&]() {
         std::vector<uint32_t> compile_args{
             kFabricChunkCbIndex,
             kWriterMetadataCbIndex,
@@ -958,10 +950,7 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
             pages_per_fabric_chunk,
             num_dram_banks,
             chunks_per_cb_batch,
-            valid_prefix_from_metadata ? 1u : 0u,
-            input_interleaved ? 1u : 0u,
-            blocks_converted_semaphore,
-            kInputRunCbIndex};
+            valid_prefix_from_metadata ? 1u : 0u};
         append_accessor(compile_args, output_tensor);
         append_accessor(compile_args, prefix_tensor);
         return tt::tt_metal::DataMovementConfig{
@@ -1031,24 +1020,6 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
                     .set_page_size(metadata_cb, kMetadataCbBytes));
         }
 
-        if (!input_interleaved) {
-            tt::tt_metal::CreateCircularBuffer(
-                program,
-                local_copy_core_set,
-                tt::tt_metal::CircularBufferConfig(
-                    2 * chunks_per_cb_batch * kInputRunCbPageBytes, {{kInputRunCbIndex, tt::DataFormat::UInt32}})
-                    .set_page_size(kInputRunCbIndex, kInputRunCbPageBytes));
-        }
-        // one per local copy core, consecutive ids: conversion blocks of the own shard that copy core has done
-        // (non-interleaved input)
-        const uint32_t blocks_converted_semaphore =
-            tt::tt_metal::CreateSemaphore(program, fabric_link_worker_core_set, 0);
-        for (uint32_t c = 1; c < num_local_copy_cores; ++c) {
-            TT_FATAL(
-                tt::tt_metal::CreateSemaphore(program, fabric_link_worker_core_set, 0) ==
-                    blocks_converted_semaphore + c,
-                "high_bw_all_gather: blocks-converted semaphores must have consecutive ids");
-        }
         // the fabric connection's teardown and buffer index semaphores (append_fabric_connection_rt_args), on every
         // link worker core: the same ids whichever chip's link worker it is
         const uint32_t fabric_teardown_semaphore =
@@ -1083,6 +1054,18 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
                                  : 0;
                     const bool signal_started_to_downstream =
                         signals_started_to_downstream(plan, chip_index, ring, direction);
+                    // no local copy cores (non-interleaved input): one direction per ring writes the own shard
+                    // (outgoing shard 0, whole), forward if it has any
+                    const uint32_t local_write_direction =
+                        on_ring.outgoing_shards(kForward).empty() ? 1u - kForward : kForward;
+                    const bool write_own_shard_locally =
+                        !input_interleaved && direction == local_write_direction && !outgoing_shards.empty();
+                    if (write_own_shard_locally) {
+                        TT_FATAL(
+                            chunk_walk::outgoing_shard_chunk_half(outgoing_shards[0]) == chunk_walk::kWholeChipShard &&
+                                chunk_walk::outgoing_shard_rank(outgoing_shards[0]) == plan.rank_of_chip[chip_index],
+                            "high_bw_all_gather: outgoing shard 0 must be the whole own shard");
+                    }
                     for (uint32_t link = 0; link < L; ++link) {
                         const auto& fabric_link_worker =
                             fabric_link_workers[fabric_link_worker_index(ring, direction, link, L)];
@@ -1111,7 +1094,7 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
                         sender_args = {
                             first_owned_chunk,
                             owned_chunk_stride,
-                            signal_started_to_downstream ? 1u : 0u,
+                            (signal_started_to_downstream ? 1u : 0u) | (write_own_shard_locally ? 2u : 0u),
                             static_cast<uint32_t>(started_signal_target.x),
                             static_cast<uint32_t>(started_signal_target.y),
                             static_cast<uint32_t>(downstream_worker.x),
@@ -1145,49 +1128,35 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
                     }
                 }
             }
-            // Local copy core c of n owns chunk numbers c, c + n, ... of this chip's shard (interleaved input), or
-            // conversion blocks c, c + n, ... of it (non-interleaved input, for_each_contiguous_input_run); the
-            // latter signals every fabric link worker of this chip per block.
+            // Local copy core c of n (interleaved input) owns chunk numbers c, c + n, ... of this chip's shard.
             const uint32_t rank = plan.rank_of_chip[chip_index];
-            auto* device = tt::tt_metal::internal::get_device(*mesh_device, chip);
-            std::vector<uint32_t> local_copy_writer_args{
-                0, num_local_copy_cores, rank, static_cast<uint32_t>(fabric_link_workers.size())};
-            local_copy_writer_args.reserve(local_copy_writer_args.size() + 2 * fabric_link_workers.size());
-            for (const auto& fabric_link_worker : fabric_link_workers) {
-                const auto noc = device->worker_core_from_logical_core(fabric_link_worker.core);
-                local_copy_writer_args.push_back(noc.x);
-                local_copy_writer_args.push_back(noc.y);
-            }
+            const uint32_t num_local_copy_cores = local_copy_cores.size();
             for (uint32_t c = 0; c < num_local_copy_cores; ++c) {
                 reader_args_of_core[local_copy_cores[c]] = {
                     c, num_local_copy_cores, 1, chunk_walk::make_outgoing_shard(rank, chunk_walk::kWholeChipShard)};
-                local_copy_writer_args[0] = c;
-                writer_args_of_core[local_copy_cores[c]] = local_copy_writer_args;
+                writer_args_of_core[local_copy_cores[c]] = {c, num_local_copy_cores, rank};
             }
         }
 
         const std::string dir(kKernelDir);
         const auto fabric_link_worker_reader_id = tt::tt_metal::CreateKernel(
-            program,
-            dir + "fabric_all_gather_reader.cpp",
-            fabric_link_worker_core_set,
-            reader_config(false, blocks_converted_semaphore));
+            program, dir + "fabric_all_gather_reader.cpp", fabric_link_worker_core_set, reader_config());
         const auto fabric_link_worker_sender_id = tt::tt_metal::CreateKernel(
             program, dir + "fabric_all_gather_sender.cpp", fabric_link_worker_core_set, sender_config);
-        const auto local_copy_core_reader_id = tt::tt_metal::CreateKernel(
-            program,
-            dir + "fabric_all_gather_reader.cpp",
-            local_copy_core_set,
-            reader_config(true, blocks_converted_semaphore));
-        const auto local_copy_core_writer_id = tt::tt_metal::CreateKernel(
-            program,
-            dir + "fabric_all_gather_copy_writer.cpp",
-            local_copy_core_set,
-            local_copy_writer_config(blocks_converted_semaphore));
+        const bool has_local_copy_cores = !local_copy_cores.empty();
+        tt::tt_metal::KernelHandle local_copy_core_reader_id{}, local_copy_core_writer_id{};
+        if (has_local_copy_cores) {
+            local_copy_core_reader_id = tt::tt_metal::CreateKernel(
+                program, dir + "fabric_all_gather_reader.cpp", local_copy_core_set, reader_config());
+            local_copy_core_writer_id = tt::tt_metal::CreateKernel(
+                program, dir + "fabric_all_gather_copy_writer.cpp", local_copy_core_set, local_copy_writer_config());
+        }
         tt::tt_metal::SetCommonRuntimeArgs(program, fabric_link_worker_reader_id, reader_common);
         tt::tt_metal::SetCommonRuntimeArgs(program, fabric_link_worker_sender_id, writer_common);
-        tt::tt_metal::SetCommonRuntimeArgs(program, local_copy_core_reader_id, reader_common);
-        tt::tt_metal::SetCommonRuntimeArgs(program, local_copy_core_writer_id, reader_common);
+        if (has_local_copy_cores) {
+            tt::tt_metal::SetCommonRuntimeArgs(program, local_copy_core_reader_id, reader_common);
+            tt::tt_metal::SetCommonRuntimeArgs(program, local_copy_core_writer_id, reader_common);
+        }
 
         // Per core and kernel: the program's own args are the first chip's (padded to the longest of any chip); with
         // several chips, every chip's args become per-device runtime args over the whole slot.
@@ -1238,6 +1207,7 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
                 .fabric_link_worker_sender_kernel_id = fabric_link_worker_sender_id,
                 .local_copy_core_reader_kernel_id = local_copy_core_reader_id,
                 .local_copy_core_writer_kernel_id = local_copy_core_writer_id,
+                .has_local_copy_cores = has_local_copy_cores,
                 .downstream_started_counter = downstream_started_counter,
                 .shards_arrived_counter = shards_arrived_counter,
                 .fabric_link_worker_cores = fabric_link_worker_core_set,
@@ -1296,8 +1266,10 @@ void HighBwAllGatherFabricFactory::override_runtime_arguments(
         };
         patch_common_args(shared.fabric_link_worker_reader_kernel_id, reader_common);
         patch_common_args(shared.fabric_link_worker_sender_kernel_id, writer_common);
-        patch_common_args(shared.local_copy_core_reader_kernel_id, reader_common);
-        patch_common_args(shared.local_copy_core_writer_kernel_id, reader_common);
+        if (shared.has_local_copy_cores) {
+            patch_common_args(shared.local_copy_core_reader_kernel_id, reader_common);
+            patch_common_args(shared.local_copy_core_writer_kernel_id, reader_common);
+        }
     }
     any_shared.applied_reader_common = reader_common;
     any_shared.applied_writer_common = writer_common;

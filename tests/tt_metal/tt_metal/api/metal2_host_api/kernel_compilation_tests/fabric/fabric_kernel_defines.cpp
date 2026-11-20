@@ -18,7 +18,7 @@
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
 
@@ -74,7 +74,7 @@ TEST_P(ProgramSpecFabricDefinesTest, CPU_DataMovementKernelGetsFabricKernelDefin
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", NodeCoord{0, 0}, {"dm_kernel"})};
 
     auto& mesh_device = devices_.at(0);
-    Program program = MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
     EXPECT_NO_THROW(program.impl().compile(mesh_device.get()));
 }
 

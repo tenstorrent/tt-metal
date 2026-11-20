@@ -33,7 +33,13 @@ inline constexpr uint32_t kTerminateOffset = 0 * kLineBytes;
 inline constexpr uint32_t kFifoWrOffset = 1 * kLineBytes;
 // Slots kernel `k` (its index in tensor_prefetcher_kernels()) has retired so far (monotonic).
 constexpr uint32_t fifo_rd_offset(uint32_t k) { return (2 + k) * kLineBytes; }
-inline constexpr uint32_t kControlBytes = fifo_rd_offset(kMaxKernels);
+// Signal slot `slot_index` (tensor_prefetcher_request.hpp), which a WAIT_SIGNAL request names: the dispatcher
+// writes a CQ fence slot and device kernels increment an op signal slot. A line apiece, which also keeps each
+// slot L1-aligned, as a dispatcher write must be. Zeroed by the host at Start.
+constexpr uint32_t signal_slot_offset(uint32_t slot_index) {
+    return fifo_rd_offset(kMaxKernels) + slot_index * kLineBytes;
+}
+inline constexpr uint32_t kControlBytes = signal_slot_offset(kNumSignalSlots);
 
 // Request slots in the FIFO.
 inline constexpr uint32_t kFifoSlots = 16;
@@ -54,12 +60,25 @@ static_assert(!count_behind(0, 0 - kFifoSlots + 1), "Nothing to wait for before 
 // the kernels' own state, and the stage ring. Its size depends on how many lanes a slot carries and on how
 // much state the kernels keep, so RegionLayout below gives the offsets for those.
 //
-// One slot = a header naming the DRAM bank behind each lane, then one request page per lane (the Tensor
-// prefetcher request page, tensor_prefetcher_request.hpp). A lane is one DRAM bank's sender endpoint; the
-// dispatch engine holds one endpoint per bank. A bank's endpoint is implied by the H2D socket a page arrives
-// on when the sender is a DRAM core, so here the bank travels in the header instead.
+// One slot = a header naming the DRAM bank behind each lane, a plan line the kernels fill in, then one request
+// page per lane (the Tensor prefetcher request page, tensor_prefetcher_request.hpp). A lane is one DRAM bank's sender
+// endpoint; the dispatch engine holds one endpoint per bank. A bank's endpoint is implied by the H2D socket a page
+// arrives on when the sender is a DRAM core, so here the bank travels in the header instead.
 inline constexpr uint32_t kLanePageBytes = kRequestPageBytes;
 inline constexpr uint32_t kSlotHeaderBytes = kLineBytes;
+
+// The line after a slot's header. The first kernel in tensor_prefetcher_kernels() writes in it how many blocks
+// each receiver gets of each tensor, and the kernels after it read that count rather than derive it: a group
+// selector makes it depend on device memory that may change while the slot is served, so only one kernel reads
+// the selector. The host writes kTensorBlocksUnplanned into every word.
+inline constexpr uint32_t kSlotPlanBytes = kLineBytes;
+inline constexpr uint32_t kMaxSlotTensors = kSlotPlanBytes / sizeof(uint32_t);
+inline constexpr uint32_t kTensorBlocksUnplanned = ~0u;
+static_assert(
+    (kRequestPageBytes - sizeof(TensorPrefetcherRequestHeader)) / sizeof(TensorPrefetcherEntry) <= kMaxSlotTensors,
+    "Every tensor a request page can name needs a word in the slot's plan");
+// Where a slot's request pages start.
+inline constexpr uint32_t kSlotPagesOffset = kSlotHeaderBytes + kSlotPlanBytes;
 
 // Per-receiver progress between the reader and the pusher: blocks staged by the reader, and blocks pushed
 // (so their stage slots are free again) by the pusher. One monotonic word per line, one writer each.
@@ -115,7 +134,7 @@ struct RegionLayout {
     // Whole cache lines.
     uint32_t kernel_state_bytes = 0;
 
-    constexpr uint32_t slot_bytes() const { return kSlotHeaderBytes + lanes * kLanePageBytes; }
+    constexpr uint32_t slot_bytes() const { return kSlotPagesOffset + lanes * kLanePageBytes; }
     constexpr uint32_t slot_offset(uint32_t slot_count) const {
         return kControlBytes + (slot_count % kFifoSlots) * slot_bytes();
     }

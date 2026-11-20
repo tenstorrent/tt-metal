@@ -14,6 +14,7 @@
 
 #include "hostdev/remote_dfb_config_layout.h"
 #include "impl/buffers/tensor_prefetcher_fifo.hpp"
+#include "impl/dispatch/dispatch_core_manager.hpp"
 #include "impl/dispatch/dispatch_mem_map.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include "llrt/tt_cluster.hpp"
@@ -92,7 +93,21 @@ TensorPrefetcherKernel::TensorPrefetcherKernel(
     const uint16_t channel = descriptor.cluster().get_assigned_channel_for_device(device_id);
     // Shares the dispatch engine (and its L1) with this CQ's prefetch, dispatch and dispatch_s kernels.
     logical_core_ = dispatch_core_manager.dispatcher_core(device_id, channel, cq_id_);
+    const CoreCoord named = tensor_prefetcher_dispatch_engine(dispatch_core_manager, device_id);
+    TT_FATAL(
+        CoreCoord(logical_core_.x, logical_core_.y) == named,
+        "Device {}: fast dispatch placed the Tensor prefetcher kernels on dispatch engine {}, but device init named "
+        "{} as theirs",
+        device_id,
+        CoreCoord(logical_core_.x, logical_core_.y),
+        named);
     kernel_type_ = FDKernelType::DISPATCH;
+}
+
+CoreCoord tensor_prefetcher_dispatch_engine(dispatch_core_manager& dispatch_core_manager, ChipId device_id) {
+    const std::vector<CoreCoord> pool = dispatch_core_manager.get_all_logical_dispatch_cores(device_id);
+    TT_FATAL(!pool.empty(), "Device {} has no dispatch cores to run the Tensor prefetcher on", device_id);
+    return pool.front();
 }
 
 uint32_t TensorPrefetcherKernel::index() const {

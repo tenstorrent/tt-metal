@@ -226,17 +226,48 @@ def _forward_payload(pushes: list, pool_of) -> tuple:
             _mtp_rows(pool, p.actual_start, p.actual_isl, actual_end=p.actual_end),
             _pack_metadata([PrefillChunk(p.slot_id, p.actual_start, p.actual_end)]),
         )
+    pushes = _partial_runs_last(pushes)
     chunks = pad_chunks([PrefillChunk(p.slot_id, p.actual_start, p.actual_end) for p in pushes], FORWARD_CHUNKS)
     tokens = [_chunk_slice(pool_of(p.slot_id), p.actual_start, p.actual_isl) for p in pushes]
     tokens += [[1] * CHUNK_SIZE] * (FORWARD_CHUNKS - len(pushes))
     rows = _h2d_forward_rows(tokens, [c.actual_start for c in chunks])
-    return rows, None, _pack_metadata(chunks)
+    return rows, _forward_mtp_rows(pushes, pool_of), _pack_metadata(chunks)
+
+
+def _partial_runs_last(pushes: list) -> list:
+    """``pushes`` with the slot runs that end in a partial chunk after the others. The MoE masks every pad row wherever
+    it sits (PackedPadding), but its dispatch loop stops at each chip's last real row, so trailing pad rows cost
+    nothing and pad rows ahead of a non-empty chunk still cost a loop pass (packed_routed_pad_rows). Whole runs
+    move, so each slot's chunks stay one run in order (validate_chunks); only a run's last chunk can be partial."""
+    runs = []
+    for p in pushes:
+        if runs and runs[-1][-1].slot_id == p.slot_id:
+            runs[-1].append(p)
+        else:
+            runs.append([p])
+    runs.sort(key=lambda run: run[-1].actual_end - run[-1].actual_start < CHUNK_SIZE)
+    return [p for run in runs for p in run]
+
+
+def _forward_mtp_rows(pushes: list, pool_of):
+    """``[sp, 1, FORWARD_CHUNKS * num_mtp_tokens]`` lookahead ids of a packed forward, sent after every chunk's ids:
+    chunk k's block (_mtp_rows) at ``k * num_mtp_tokens``, an empty chunk's all MTP_PAD_TOKEN_ID. None without MTP."""
+    n_mtp = num_mtp_tokens(MTP_LEVELS)
+    if not n_mtp:
+        return None
+    sp = SP_FACTOR
+    blocks = [_mtp_rows(pool_of(p.slot_id), p.actual_start, p.actual_isl, actual_end=p.actual_end) for p in pushes]
+    blocks += [np.full((sp, 1, n_mtp), MTP_PAD_TOKEN_ID, dtype=np.uint32)] * (FORWARD_CHUNKS - len(pushes))
+    return np.concatenate(blocks, axis=-1)
 
 
 def _shutdown_payload() -> tuple:
     """(token rows, MTP rows, metadata) of the SHUTDOWN sentinel: every metadata word is SHUTDOWN_WORD."""
     rows = _h2d_forward_rows([[1] * CHUNK_SIZE] * FORWARD_CHUNKS, [0] * FORWARD_CHUNKS)
-    return rows, _mtp_rows([], 0), sentinel_metadata(SHUTDOWN_WORD, FORWARD_CHUNKS, MEDIA_MAX_REFS)
+    mtp = _mtp_rows([], 0)
+    if mtp is not None:
+        mtp = np.concatenate([mtp] * FORWARD_CHUNKS, axis=-1)  # one block per chunk position
+    return rows, mtp, sentinel_metadata(SHUTDOWN_WORD, FORWARD_CHUNKS, MEDIA_MAX_REFS)
 
 
 def _mtp_rows(pool, actual_start: int, actual_isl=None, actual_end=None):

@@ -258,15 +258,60 @@ def test_packed_forward_refusals():
     # Without prefill_forward the runner runs chunks one by one, which is not traced.
     (reason,) = packed_forward_refusals(4, supports_packed_forward=False, use_trace=True, traced_forward=True)
     assert "USE_TRACE" in reason
+    # Indices between ranks: lifted only by a prefill_forward that carries every chunk's (GLM-5.3).
+    assert packed_forward_refusals(4, indexer_indices=True, forward_indexer_indices=True, **lifted) == []
+    (reason,) = packed_forward_refusals(4, supports_packed_forward=True, indexer_indices=True)
+    assert "indexer indices" in reason
+    (reason,) = packed_forward_refusals(
+        4, supports_packed_forward=False, indexer_indices=True, forward_indexer_indices=True
+    )
+    assert "indexer indices" in reason
+
+
+def test_packed_forward_mtp_refusal():
+    """MTP at F > 1 is lifted only by an adapter whose prefill_forward runs it (supports_packed_forward_mtp), eager or
+    traced; tracing still needs supports_packed_forward_trace."""
+    base = {"supports_packed_forward": True, "traced_forward": True, "forward_d2h_acks": True}
+    (reason,) = packed_forward_refusals(4, mtp_levels=1, **base)
+    assert "MTP" in reason
+    (reason,) = packed_forward_refusals(4, mtp_levels=1, supports_packed_forward=False, forward_mtp=True)
+    assert "MTP" in reason
+    assert packed_forward_refusals(4, mtp_levels=1, d2h_acks=True, forward_mtp=True, **base) == []
+    assert packed_forward_refusals(4, mtp_levels=1, use_trace=True, forward_mtp=True, **base) == []
+    (reason,) = packed_forward_refusals(
+        4, mtp_levels=1, use_trace=True, forward_mtp=True, **{**base, "traced_forward": False}
+    )
+    assert "USE_TRACE" in reason and "MTP" not in reason
+    # One chunk per forward: nothing to lift.
+    assert packed_forward_refusals(1, supports_packed_forward=False, mtp_levels=1, use_trace=True) == []
+
+
+def test_glm_adapter_runs_packed_mtp():
+    from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3 import GLM53Adapter
+
+    caps = packed_forward_capabilities(GLM53Adapter)
+    assert caps["forward_mtp"]
+    assert packed_forward_refusals(2, mtp_levels=1, d2h_acks=True, **caps) == []
+    assert packed_forward_refusals(2, mtp_levels=1, d2h_acks=True, use_trace=True, **caps) == []
 
 
 def test_packed_forward_capabilities_name_every_flag():
     adapter = SimpleNamespace(
-        supports_packed_forward=True, supports_packed_forward_trace=True, supports_packed_forward_d2h_acks=False
+        supports_packed_forward=True,
+        supports_packed_forward_trace=True,
+        supports_packed_forward_d2h_acks=False,
+        supports_packed_forward_indexer_indices=True,
+        supports_packed_forward_mtp=False,
     )
     caps = packed_forward_capabilities(adapter)
-    assert caps == {"supports_packed_forward": True, "traced_forward": True, "forward_d2h_acks": False}
-    (reason,) = packed_forward_refusals(4, use_trace=True, d2h_acks=True, **caps)
+    assert caps == {
+        "supports_packed_forward": True,
+        "traced_forward": True,
+        "forward_d2h_acks": False,
+        "forward_indexer_indices": True,
+        "forward_mtp": False,
+    }
+    (reason,) = packed_forward_refusals(4, use_trace=True, d2h_acks=True, indexer_indices=True, **caps)
     assert "LAYER_ACK_D2H" in reason
 
 
@@ -336,3 +381,13 @@ def test_media_refs_reject_bad_metadata(expect_error):
             validate_media_refs([ref], chunks)
     with expect_error(ValueError, "overlaps"):
         validate_media_refs([MediaRef(0, C, C + 20, KEY), MediaRef(0, C + 10, C + 30, KEY)], chunks)
+
+
+def test_glm_adapter_packs_on_a_pipeline():
+    """GLM-5.3 passes indexer indices between ranks, and its prefill_forward carries them, traced, with D2H acks:
+    the manifest's PREFILL_USE_TRACE=1 + PREFILL_LAYER_ACK_D2H=1 on a multi-rank split are not refused at F > 1."""
+    from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3 import GLM53Adapter
+
+    assert GLM53Adapter.passes_indexer_indices
+    caps = packed_forward_capabilities(GLM53Adapter)
+    assert packed_forward_refusals(4, use_trace=True, d2h_acks=True, indexer_indices=True, **caps) == []
