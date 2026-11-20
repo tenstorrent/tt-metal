@@ -10,7 +10,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 #include "impl/program/program_impl.hpp"
@@ -61,7 +61,7 @@ static_assert(scratch::get_token_if_present<"not_a_scratch">() == nullptr);
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 1024}};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
@@ -91,7 +91,7 @@ static_assert(scratch::get_token_if_present<"not_a_scratch">() == nullptr);
     spec.kernels[1].scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
@@ -119,7 +119,7 @@ void kernel_main() {
 )"};
     }
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
@@ -139,7 +139,7 @@ void kernel_main() {
     spec.kernels[1].scratchpad_bindings.push_back(
         KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
@@ -175,7 +175,7 @@ static_assert(scratch::get_token_if_present<"not_a_scratch">() == nullptr);
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 1024}};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
