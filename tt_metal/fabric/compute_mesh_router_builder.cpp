@@ -23,7 +23,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
-#include "tt_metal/hw/inc/hostdev/cce_noc_routes.h"
+#include "tt_metal/hw/inc/hostdev/keraunos_tile_counter.h"
 #include "tt_metal.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>

@@ -38,7 +38,7 @@
 #include "impl/program/slow_dispatch.hpp"
 #include "llrt/hal.hpp"
 #include "fabric_fixture.hpp"
-#include "tt_metal/hw/inc/hostdev/cce_noc_routes.h"
+#include "tt_metal/hw/inc/hostdev/keraunos_tile_counter.h"
 
 namespace tt::tt_metal {
 namespace {

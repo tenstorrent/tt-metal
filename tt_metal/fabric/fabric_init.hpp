@@ -5,7 +5,6 @@
 #pragma once
 
 #include <exception>
-#include <functional>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -56,19 +55,6 @@ void check_fabric_launch_headers(const std::vector<RouterChannelLayouts::LaunchH
 // Phase 2: create the router kernels and compile the device's fabric program.
 std::unique_ptr<tt::tt_metal::Program> compile_fabric_program(
     tt::tt_metal::MetalEnvImpl& env_impl, tt::tt_metal::IDevice* device, FabricDeviceBuild build);
-
-// Called once per device while its fabric program is built, after the router kernels are created and before the
-// program is compiled. The callee may add kernels, semaphores and runtime args to `fabric_program`. A write to any
-// device must be finished before any call returns: the launch loop configures and launches a device once
-// its own compile is done, while other devices still compile. One write under std::call_once that every call passes
-// through does that. Devices compile in parallel, so it is called from several threads, one per device, and must touch
-// only its own device's program. An empty function (the default) leaves fabric as it is.
-using FabricProgramExtension =
-    std::function<void(tt::tt_metal::IDevice* device, tt::tt_metal::Program& fabric_program)>;
-
-// Test-only. Process-wide: set before the devices open and cleared after they close. Not thread-safe against a
-// concurrent open.
-void set_fabric_program_extension(FabricProgramExtension extension);
 
 // Perform additional configuration (writing to specific L1 addresses, etc.) for fabric kernels on this device.
 void configure_fabric_cores(tt::tt_metal::MetalEnvImpl& env_impl, tt::tt_metal::IDevice* device);
