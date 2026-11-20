@@ -861,7 +861,9 @@ def _fabric_wraps_axis(fabric_config, cluster_axis: int) -> bool:
 
 def _live_links_on_axis(mesh_device: ttnn.MeshDevice, cluster_axis: int) -> int | None:
     """The fewest fabric links any hop along `cluster_axis` forwards on, or None where the
-    fabric is not up to ask. On an axis the fabric wraps, the last-to-first hop counts too."""
+    fabric is not up to ask. On an axis the fabric wraps, the last-to-first hop counts when
+    the two chips are physical neighbours (a submesh of a longer ring has no such hop). A hop
+    with no live link counts as 0."""
     shape = tuple(mesh_device.shape)
     if len(shape) != 2 or shape[cluster_axis] < 2:
         return None
@@ -877,10 +879,21 @@ def _live_links_on_axis(mesh_device: ttnn.MeshDevice, cluster_axis: int) -> int 
                     if not wrapped:
                         continue
                     dst[cluster_axis] = 0
+                    # Across a physical wrap the first hop keeps the direction of the line's own forward hop.
+                    after_dst = list(dst)
+                    after_dst[cluster_axis] = 1
+                    src_node, dst_node, after_node = (
+                        mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(coord)) for coord in (src, dst, after_dst)
+                    )
+                    wrap_direction = ttnn.get_eth_forwarding_direction(mesh_device, src_node, dst_node)
+                    if wrap_direction is None or wrap_direction != ttnn.get_eth_forwarding_direction(
+                        mesh_device, dst_node, after_node
+                    ):
+                        continue
                 src_node = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(src))
                 dst_node = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(dst))
                 count = len(ttnn.get_forwarding_link_indices(mesh_device, src_node, dst_node))
                 fewest = count if fewest is None else min(fewest, count)
-        return fewest or None
+        return fewest
     except RuntimeError:
         return None
