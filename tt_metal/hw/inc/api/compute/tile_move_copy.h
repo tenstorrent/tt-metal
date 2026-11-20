@@ -183,6 +183,10 @@ ALWI void copy_block(
 #ifndef ARCH_QUASAR
     LLK_SAN_FUNCTION();
 #endif
+#ifdef ARCH_BLACKHOLE
+    // Marks the kernel: its unpack A inits clear the block replay record
+    static_cast<void>(sizeof(matmul_fe_mark::set_d<19, std::integral_constant<bool, is_fp32_dest_acc_en>>));
+#endif
     UNPACK((llk_unpack_A_block<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         in_cb_id, start_in_tile_index, ntiles, start_dst_tile_index)));
     MATH((llk_math_eltwise_unary_datacopy_block<

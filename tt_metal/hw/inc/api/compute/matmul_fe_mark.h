@@ -14,7 +14,7 @@
 // 5: a plain call of constant block keys runs the ttsync unpack on its cell in a kernel the class rule keeps polling;
 // tags 7 and 8: a plain matmul call whose ct and rt are (8) or are not (7) constant expressions; tag 13: a call or init
 // of a constant one-tile block (14 unread); tag 15: a math init or call of constant kt 1 (16 unread); tag 17: an unpack
-// call of a constant one-tile block of constant kt 1, 18 any other unpack call.
+// call of a constant one-tile block of constant kt 1, 18 any other unpack call; tag 19: a copy_block call.
 namespace ckernel::matmul_fe_mark {
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wnon-template-friend"

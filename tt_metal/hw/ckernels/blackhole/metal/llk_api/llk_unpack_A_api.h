@@ -7,6 +7,7 @@
 #include "llk_unpack_A.h"
 #include "llk_unpack_common_api.h"
 #include "llk_size_mode.h"
+#include "api/compute/matmul_fe_mark.h"
 // llk_unpack_dummy(): debug-only SrcA flush on WH/BH (no WAIT/POP ordering role), defined in the debug
 // folder. Pulled in only so the shared compute-API dummy_unpack() resolves; on Quasar the same call is a
 // required TEN-4746 drain primitive defined inline in that arch's llk_unpack_A_api.h.
@@ -52,7 +53,10 @@ inline void llk_unpack_A_init_impl(
         StateDiscard<std::uint32_t>(transpose_of_faces),
         StateDiscard<std::uint32_t>(within_face_16x16_transpose)));
 
-    _llk_unpack_A_init_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
+    // Only a kernel with a copy_block call reads the block record; the store alone changes how gcc inlines other kernels
+    constexpr bool clear_block_record =
+        ckernel::matmul_fe_mark::is_used_d<19, std::integral_constant<bool, unpack_to_dest>>(0);
+    _llk_unpack_A_init_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, clear_block_record>(
         transpose_of_faces, within_face_16x16_transpose, tensor_shape, src_format, dst_format);
 }
 

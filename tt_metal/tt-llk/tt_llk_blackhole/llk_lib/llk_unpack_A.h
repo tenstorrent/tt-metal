@@ -362,7 +362,8 @@ template <
     BroadcastType BType                          = BroadcastType::NONE,
     bool acc_to_dest                             = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool unpack_to_dest                          = false>
+    bool unpack_to_dest                          = false,
+    bool clear_block_record                      = true>
 inline void _llk_unpack_A_init_(
     const std::uint32_t transpose_of_faces          = 0,
     const std::uint32_t within_face_16x16_transpose = 0,
@@ -424,7 +425,10 @@ inline void _llk_unpack_A_init_(
         transpose_of_faces > 0, tensor_shape, unpack_src_format, unpack_dst_format);
 
     // The replay buffer holds no block body after an init: _llk_unpack_A_block_ records its own at the first call of each context.
-    block_replay_body() = BlockReplayBody::None;
+    if constexpr (clear_block_record)
+    {
+        block_replay_body() = BlockReplayBody::None;
+    }
 }
 
 /**
