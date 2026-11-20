@@ -13,6 +13,10 @@
 #include <optional>
 #include <sstream>
 #include <vector>
+#include <cstdlib>
+#include <string>
+#include <csignal>
+#include <unistd.h>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/make_iterator.h>
@@ -170,6 +174,33 @@ void py_module_types(nb::module_& mod) {
 }
 // NOLINTEND(misc-redundant-expression)
 // NOLINTEND(bugprone-unused-raii)
+
+namespace {
+// The job stop from Python (DistributedContext::request_job_stop), shared by the hooks installed with the context and
+// by close_mesh_device. Only the process that installed the hooks acts: a forked child (os.fork, a multiprocessing
+// worker) inherits them, and an MPI or PMIx call from a child of a rank is undefined. A world of one has nobody to
+// stop (P31); a rank whose job is already stopping does not stop it again.
+pid_t g_hook_owner = 0;
+int g_fallback_abort_code = 0;  // a stop that could not be sent: the Python atexit aborts the job with this code
+bool g_stopped_here = false;    // this rank stopped the job, so the SIGTERM that comes back is its own
+
+bool job_has_peers() {
+    using tt::tt_metal::distributed::multihost::DistributedContext;
+    return DistributedContext::is_initialized() && *DistributedContext::get_current_world()->size() > 1;
+}
+
+bool stop_job_from_python(int code, const std::string& reason) {
+    using tt::tt_metal::distributed::multihost::DistributedContext;
+    if (::getpid() != g_hook_owner || !job_has_peers() || DistributedContext::is_terminating()) {
+        return false;
+    }
+    g_stopped_here = true;
+    if (!DistributedContext::request_job_stop(code, reason)) {
+        g_fallback_abort_code = code;
+    }
+    return true;
+}
+}  // namespace
 
 void py_module(nb::module_& mod) {
     static_cast<nb::class_<MeshShape>>(mod.attr("MeshShape"))
@@ -1180,15 +1211,118 @@ void py_module(nb::module_& mod) {
     // Distributed context bindings (moved from distributed_context.cpp)
     using namespace tt::tt_metal::distributed::multihost;
 
+    // Teardown plan P1 (Python half): a Python rank that fails must stop the job, not leave its peers waiting in a
+    // collective. The C++ context's on_exit stops it for any non-zero exit; these hooks stop it earlier and say why:
+    //  - sys.exit(code != 0) (P26): at the call, before SystemExit unwinds, so the peers close their devices while
+    //    this rank closes its own;
+    //  - an uncaught exception, KeyboardInterrupt included (P23): from sys.excepthook (or threading.excepthook for a
+    //    worker thread), after the traceback;
+    //  - SIGTERM (P28): becomes sys.exit(128 + SIGTERM) in the main thread, so with/finally blocks close the mesh.
+    // A stop sends SIGTERM to every rank (DistributedContext::request_job_stop) and the rank then leaves through the
+    // context's exit. When the launcher cannot be asked, the old way: the job is aborted at exit with the code. A world
+    // of one has nobody to stop (P31). Idempotent; installed when the context is created.
+    auto install_python_abort_hooks = [] {
+        static bool installed = false;
+        if (installed) {
+            return;
+        }
+        installed = true;
+        g_hook_owner = ::getpid();
+        auto stop_job = [](int code, const std::string& reason) { stop_job_from_python(code, reason); };
+        auto describe = [](nb::handle etype, nb::handle value) {
+            std::string name = nb::cast<std::string>(nb::str(etype.attr("__name__")));
+            std::string text = nb::cast<std::string>(nb::str(value));  // one line: request_job_stop flattens it
+            if (text.size() > 600) {
+                text = text.substr(0, 600);
+            }
+            return text.empty() ? name : name + ": " + text;
+        };
+        auto code_for = [](nb::handle etype) {
+            return PyErr_GivenExceptionMatches(etype.ptr(), PyExc_KeyboardInterrupt) != 0 ? 130 : 1;
+        };
+        nb::module_ sys = nb::module_::import_("sys");
+        nb::object prev_excepthook = sys.attr("excepthook");
+        sys.attr("excepthook") =
+            nb::cpp_function([prev_excepthook, stop_job, describe, code_for](const nb::args& args) {
+                prev_excepthook(*args);  // keep the normal traceback on stderr
+                if (args.size() >= 2) {
+                    stop_job(code_for(args[0]), "uncaught Python exception " + describe(args[0], args[1]));
+                }
+            });
+        nb::module_ threading = nb::module_::import_("threading");
+        nb::object prev_threadhook = threading.attr("excepthook");
+        threading.attr("excepthook") =
+            nb::cpp_function([prev_threadhook, stop_job, describe, code_for](nb::handle args) {
+                prev_threadhook(args);
+                std::string thread = args.attr("thread").is_none()
+                                         ? std::string("a thread")
+                                         : nb::cast<std::string>(nb::str(args.attr("thread").attr("name")));
+                stop_job(
+                    code_for(args.attr("exc_type")),
+                    "uncaught Python exception in thread " + thread + " " +
+                        describe(args.attr("exc_type"), args.attr("exc_value")));
+            });
+        // sys.excepthook is never called for SystemExit, so sys.exit is wrapped: a non-zero code stops the job at the
+        // call. A zero code is a clean exit and is left alone. A non-int code (a message) exits 1, as Python does.
+        nb::object prev_exit = sys.attr("exit");
+        sys.attr("exit") = nb::cpp_function([prev_exit, stop_job](const nb::args& args) {
+            int code = 0;
+            if (!args.empty() && !args[0].is_none()) {
+                code = nb::isinstance<nb::int_>(args[0]) ? nb::cast<int>(args[0]) : 1;
+            }
+            if (code != 0) {
+                stop_job(code, "sys.exit(" + std::to_string(code) + ")");
+            }
+            prev_exit(*args);  // raises SystemExit exactly as before
+        });
+        nb::module_ atexit_mod = nb::module_::import_("atexit");
+        atexit_mod.attr("register")(nb::cpp_function([] {
+            if (g_fallback_abort_code != 0 && ::getpid() == g_hook_owner && job_has_peers()) {
+                DistributedContext::get_current_world()->abort(g_fallback_abort_code);
+            }
+        }));
+
+        // Teardown plan P28: SIGTERM becomes sys.exit(128 + SIGTERM) in the main thread, so the program's with/finally
+        // blocks close the mesh, the interpreter finalizes, and the context's exit leaves with the other ranks.
+        // Installed only over the default disposition (a program's own handler wins) and never under a simulator
+        // (TT_METAL_SIMULATOR): there simulator_termination.cpp owns SIGTERM and exits through atexit, which releases
+        // the simulator session. A signal that lands while the rank is inside a C++ call is delivered when the call
+        // returns, as every Python handler is; the C-level handler installed on top makes a wait in flight return.
+        if (std::getenv("TT_METAL_SIMULATOR") == nullptr && job_has_peers()) {
+            nb::module_ signal_mod = nb::module_::import_("signal");
+            nb::object sigterm = signal_mod.attr("SIGTERM");
+            if (signal_mod.attr("getsignal")(sigterm).is(signal_mod.attr("SIG_DFL"))) {
+                nb::object sys_exit = sys.attr("exit");  // the wrapper above; it does not stop a job already stopping
+                nb::object is_finalizing = sys.attr("is_finalizing");
+                nb::object exc_info = sys.attr("exc_info");
+                signal_mod.attr("signal")(
+                    sigterm,
+                    nb::cpp_function([sys_exit, is_finalizing, exc_info](const nb::args& args) {  // (signum, frame)
+                        DistributedContext::mark_terminating();  // the close must not fence on the peers
+                        // No SystemExit when the rank is already leaving: its own stop coming back, the interpreter
+                        // finalizing, or an exception already unwinding (a SystemExit raised inside that finally
+                        // would cut the close short). The rank exits through the context's exit either way.
+                        if (::getpid() == g_hook_owner && !g_stopped_here && !nb::cast<bool>(is_finalizing()) &&
+                            nb::borrow<nb::tuple>(exc_info())[0].is_none()) {
+                            sys_exit(128 + (!args.empty() ? nb::cast<int>(args[0]) : static_cast<int>(SIGTERM)));
+                        }
+                    }));
+            }
+            // Python's signal.signal replaced the context's C-level handler: put it back on top, chaining to Python's.
+            DistributedContext::install_termination_handler();
+        }
+    };
+
     // Initialize the distributed context
     mod.def(
         "init_distributed_context",
-        []() {
+        [install_python_abort_hooks]() {
             // In Python context, we typically don't have argc/argv in the same way
             // This is a simplified initialization that works with default MPI settings
             static char prog_name[] = "python";
             static char* argv[] = {prog_name, nullptr};
             DistributedContext::create(1, argv);
+            install_python_abort_hooks();
         },
         R"doc(
             Initialize the distributed context with default settings.
@@ -1295,6 +1429,42 @@ void py_module(nb::module_& mod) {
                 >>> # Do some work...
                 >>> ttnn.distributed_context_barrier()
                 >>> # All processes continue from here
+        )doc");
+
+    // Stop the job from Python because of this rank (close_mesh_device calls it when it closes the mesh while an
+    // exception is unwinding, so the peers are told before this rank's close rather than after its traceback).
+    mod.def(
+        "request_job_stop",
+        [](int exit_code, const std::string& reason) { return stop_job_from_python(exit_code, reason); },
+        nb::arg("exit_code"),
+        nb::arg("reason"),
+        R"doc(
+            Stop the distributed job because of this rank: every other rank gets SIGTERM and closes its devices, and
+            the job ends with ``exit_code``. Returns False, doing nothing, when the job has no peers, is already
+            stopping, or the process is not the rank itself (a forked child).
+        )doc");
+
+    // Stop the whole distributed job (DistributedContext::abort). For a rank that detects an unrecoverable error and
+    // must tear the job down rather than let its peers hang.
+    mod.def(
+        "abort",
+        [](int error_code) {
+            if (!DistributedContext::is_initialized()) {
+                return;  // nothing to abort: no job was ever started (a singleton / uninitialized process)
+            }
+            DistributedContext::get_current_world()->abort(error_code);
+        },
+        nb::arg("error_code") = 1,
+        R"doc(
+            Stop the entire distributed job with the given exit code.
+
+            Every other rank gets SIGTERM and closes its devices, then every rank exits together with this code
+            (MPI_Abort when the launcher cannot be asked). Does not return. A no-op if the distributed context was
+            never initialized.
+
+            Example:
+                >>> import ttnn
+                >>> ttnn.distributed_context_abort(1)
         )doc");
 
     // Allgather a single int from every rank; returns list[int] of length num_ranks.
@@ -1451,8 +1621,8 @@ void py_module(nb::module_& mod) {
             const auto subcontext_count = world->subcontext_count();
             if (subcontext_id < 0 || subcontext_id >= subcontext_count) {
                 throw std::out_of_range(
-                    "subcontext_id out of range: expected 0 <= subcontext_id < " +
-                    std::to_string(subcontext_count) + ", got " + std::to_string(subcontext_id));
+                    "subcontext_id out of range: expected 0 <= subcontext_id < " + std::to_string(subcontext_count) +
+                    ", got " + std::to_string(subcontext_id));
             }
 
             return world->subcontext_size(SubcontextId{subcontext_id});
@@ -1478,8 +1648,8 @@ void py_module(nb::module_& mod) {
             const auto subcontext_count = world->subcontext_count();
             if (subcontext_id < 0 || subcontext_id >= subcontext_count) {
                 throw std::out_of_range(
-                    "subcontext_id out of range: expected 0 <= subcontext_id < " +
-                    std::to_string(subcontext_count) + ", got " + std::to_string(subcontext_id));
+                    "subcontext_id out of range: expected 0 <= subcontext_id < " + std::to_string(subcontext_count) +
+                    ", got " + std::to_string(subcontext_id));
             }
 
             const auto subcontext_sz = world->subcontext_size(SubcontextId{subcontext_id});

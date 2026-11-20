@@ -94,7 +94,8 @@ def test_ttrun_hang_timeout():
 @pytest.mark.xfail(
     reason="P1 for a raw MPI program: a rank that calls exit(1) runs its own atexit MPI_Finalize, which is collective "
     "and waits on the peers in their barrier, so the job rides the --timeout wall clock (241). Neither tt-run nor its "
-    "rank wrapper can end a rank that is still alive; a tt-metal rank stops the job from its exit instead (#64546).",
+    "rank wrapper can end a rank that is still alive; tt-metal ranks stop the job from their exit instead "
+    "(tests/ttnn/distributed/teardown_sanity/test_teardown_sanity.py::test_exit1_stops_the_job).",
     strict=True,
 )
 def test_ttrun_error_exit_fails_fast_not_hang():
@@ -371,3 +372,15 @@ def test_ulfm_launcher_available():
         pytest.skip("mpirun-ulfm not installed in this prefix")
     r = _run([ulfm, "--with-ft", "ulfm", "--allow-run-as-root", "-np", "1", "true"])
     assert r.returncode == 0, f"--with-ft ulfm failed on this install: {r.stderr[:200]}"
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# raw MPI: does the OpenMPI/PRRTE build we ship meet what the rank side relies on? (gates only)
+# ---------------------------------------------------------------------------------------------------------------
+def test_mpi_delivers_proc_failed_ulfm():
+    """With --with-ft ulfm, a dead rank must be delivered to the survivors (MPI_ERR_PROC_FAILED) and the job must
+    end. The rank side relies on it (a survivor's polled wait returns the failure and the rank closes); the row
+    confirms this build provides it."""
+    r = run_case("mpi_delivers_proc_failed", {**NP, "PROBE_SCENARIO": "victim_sigkill"}, DEADLINE_END, cmd=mpi_cmd())
+    ended(r)
+    clean(r)
