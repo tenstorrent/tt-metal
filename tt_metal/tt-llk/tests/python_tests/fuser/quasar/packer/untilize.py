@@ -9,7 +9,7 @@ from fuser.fuser_config import GlobalConfig
 from fuser.golden.pack.untilize import untilize_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.operand import BfdResource, L1AccessMode
+from fuser.operand import BfdId, L1AccessMode
 from fuser.pack_node import PackNode
 
 from .packer import Packer
@@ -47,9 +47,7 @@ class PackUntilize(Packer):
 
         return (
             "{\n"
-            + pack_node.output.bfd_alloc_and_program(
-                BfdResource.PACK0, mode, result_name="bfd_id"
-            )
+            + pack_node.output.program_bfd(BfdId.PACK0, mode, result_name="bfd_id")
             + f"_llk_pack_untilize_init_<{full_ct_dim}, {block_ct_dim}>"
             f"(bfd_id, {tensor_shape});\n"
             "}\n"

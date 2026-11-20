@@ -181,7 +181,7 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     ////////////////////////////////////////////////////////////////////////////
     //                            Core Assignment
     ////////////////////////////////////////////////////////////////////////////
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*mesh_device);
     const auto grid = mesh_device->compute_with_storage_grid_size();
 
     // One split for both passes (see `kernels/attn_res_core_runs.hpp`): a unit is a run of
@@ -471,7 +471,7 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     // also decides the packet header type the kernel reads these back with, so host and
     // device stay in step without a flag — and only a 2D config pairs with the header
     // this kernel is compiled against.
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig(*mesh_device);
     TT_FATAL(
         tt::tt_fabric::is_2d_fabric_config(fabric_config),
         "attn_res_gather_softmax needs a 2D fabric, got {}",
