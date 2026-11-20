@@ -132,9 +132,10 @@ Tensor nextafter(const Tensor& input_a, const Tensor& input_b, const std::option
 namespace {
 
 // Tensor-scalar maximum / minimum. binary_ng has no tensor-scalar MAXIMUM / MINIMUM kernel, so these stay
-// on the unary path, which packs its result in the input dtype; a requested output dtype is applied after
-// the compare. The activations run in the same unary op chain as the compare (lhs, then the compare, then
-// post), so they cost no extra pass, matching what the tensor-tensor overloads get from binary_ng.
+// on the unary path. The activations run in the same unary op chain as the compare (lhs, then the compare,
+// then post), so they cost no extra pass, matching what the tensor-tensor overloads get from binary_ng. A
+// requested output dtype ends the chain as a TYPECAST, so the chain computes at that precision and packs
+// only once.
 Tensor scalar_compare(
     unary::UnaryOpType op,
     const Tensor& input_a,
@@ -153,13 +154,14 @@ Tensor scalar_compare(
         !output_dtype.has_value() || !optional_output_tensor.has_value() ||
             *output_dtype == optional_output_tensor->dtype(),
         "If both output dtype and output tensor are provided, their dtypes should match");
-    const bool retype = output_dtype.has_value() && *output_dtype != input_a.dtype();
-    const std::optional<Tensor> compare_output = retype ? std::optional<Tensor>{} : optional_output_tensor;
     std::vector<unary::EltwiseUnaryWithParam> op_chain(lhs_activations.begin(), lhs_activations.end());
     std::visit([&](auto input_b) { op_chain.push_back(unary::EltwiseUnaryWithParam{op, input_b}); }, value);
     op_chain.insert(op_chain.end(), post_activations.begin(), post_activations.end());
-    Tensor result = ttnn::operations::unary::detail::unary_impl(input_a, op_chain, memory_config, compare_output);
-    return retype ? ttnn::typecast(result, *output_dtype, memory_config, optional_output_tensor) : result;
+    if (output_dtype.has_value() && *output_dtype != input_a.dtype()) {
+        op_chain.push_back(unary::EltwiseUnaryWithParam{
+            unary::UnaryOpType::TYPECAST, {static_cast<float>(input_a.dtype()), static_cast<float>(*output_dtype)}});
+    }
+    return ttnn::operations::unary::detail::unary_impl(input_a, op_chain, memory_config, optional_output_tensor);
 }
 
 }  // namespace
@@ -1282,31 +1284,23 @@ Tensor bias_gelu(
     const bool narrow = dtype.has_value() && *dtype != operand.dtype();
     const std::optional<Tensor> gelu_output = narrow ? std::optional<Tensor>{} : optional_output_tensor;
     // lhs / rhs activations apply to the add's operands, as binary_ng applies them in the tensor-tensor
-    // overload; post activations follow the gelu, in place on the same output.
-    Tensor result = ttnn::gelu(
-        ttnn::add(
-            operand,
-            bias,
-            std::nullopt,
-            memory_config,
-            gelu_output,
-            {},
-            lhs_activations,
-            rhs_activations,
-            /*fast_and_approximate_mode*/ std::nullopt,
-            resolved_sub_core_grids),
-        fast_and_approximate_mode.value_or(false),
+    // overload. Post activations run in the gelu's op chain, so they see the gelu before it is packed.
+    const Tensor sum = ttnn::add(
+        operand,
+        bias,
+        std::nullopt,
         memory_config,
         gelu_output,
+        {},
+        lhs_activations,
+        rhs_activations,
+        /*fast_and_approximate_mode*/ std::nullopt,
         resolved_sub_core_grids);
-    if (!post_activations.empty()) {
-        result = ttnn::operations::unary::detail::unary_impl(
-            result,
-            std::vector<unary::EltwiseUnaryWithParam>(post_activations.begin(), post_activations.end()),
-            memory_config,
-            gelu_output.has_value() ? std::optional<Tensor>{result} : std::nullopt,
-            resolved_sub_core_grids);
-    }
+    std::vector<unary::EltwiseUnaryWithParam> gelu_chain{unary::EltwiseUnaryWithParam{
+        unary::UnaryOpType::GELU, fast_and_approximate_mode.value_or(false) ? 1.0f : 0.0f}};
+    gelu_chain.insert(gelu_chain.end(), post_activations.begin(), post_activations.end());
+    Tensor result = ttnn::operations::unary::detail::unary_impl(
+        sum, gelu_chain, memory_config, gelu_output, resolved_sub_core_grids);
     return narrow ? ttnn::typecast(result, *dtype, memory_config, optional_output_tensor, resolved_sub_core_grids)
                   : result;
 }
