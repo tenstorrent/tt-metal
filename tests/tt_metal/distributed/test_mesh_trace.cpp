@@ -32,6 +32,7 @@
 #include <tt-metalium/device.hpp>
 #include "env_lib.hpp"
 #include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include "llrt.hpp"
@@ -87,6 +88,12 @@ std::vector<MeshCoordinateRange> tg_all_devices() {
 class MeshTraceTestSuite : public MeshDeviceFixtureBase {
 protected:
     MeshTraceTestSuite() : MeshDeviceFixtureBase(Config{.num_cqs = 1, .trace_region_size = (64 << 20)}) {}
+};
+
+// Two hardware CQs plus a trace region, so one CQ can capture while the other keeps dispatching.
+class MeshTraceMultiCQTestSuite : public MeshDeviceFixtureBase {
+protected:
+    MeshTraceMultiCQTestSuite() : MeshDeviceFixtureBase(Config{.num_cqs = 2, .trace_region_size = (16 << 20)}) {}
 };
 
 class MeshTraceTest2x4 : public MeshDeviceFixtureBase {
@@ -1156,6 +1163,109 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetectionWithAllocations
         }
     }
     ASSERT_TRUE(overlap_detected) << "Overlap detected - trace buffer conflicted with allocations made during trace";
+}
+
+// A workload that bumps a per-core L1 counter once per launch, and the zeroed counters it bumps.
+struct CounterWorkload {
+    std::shared_ptr<MeshBuffer> counters;
+    MeshWorkload workload;
+};
+
+CounterWorkload make_counter_workload(MeshDevice& mesh_device, const CoreRange& cores) {
+    // One counter page per core: a height-sharded L1 buffer gives every core its counter at the same address.
+    const uint32_t num_cores = cores.size();
+    const uint32_t page_size = hal::get_l1_alignment();
+    const uint32_t page_words = page_size / sizeof(uint32_t);
+    ShardSpecBuffer shard_spec(
+        CoreRangeSet(cores),
+        /*shard_shape=*/{1, page_words},
+        ShardOrientation::ROW_MAJOR,
+        /*page_shape=*/{1, page_words},
+        /*tensor2d_shape_in_pages=*/{num_cores, 1});
+    auto counters = MeshBuffer::create(
+        ReplicatedBufferConfig{.size = num_cores * page_size},
+        DeviceLocalBufferConfig{
+            .page_size = page_size,
+            .buffer_type = BufferType::L1,
+            .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED)},
+        &mesh_device);
+    EnqueueWriteMeshBuffer(
+        mesh_device.mesh_command_queue(),
+        counters,
+        std::vector<uint32_t>(num_cores * page_words, 0),
+        /*blocking=*/true);
+
+    Program program = CreateProgram(mesh_device);
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/local_counter_increment.cpp",
+        cores,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = {static_cast<uint32_t>(counters->address())}});
+    MeshWorkload workload;
+    workload.add_program(MeshCoordinateRange(mesh_device.shape()), std::move(program));
+    return {std::move(counters), std::move(workload)};
+}
+
+void expect_counts(
+    MeshDevice& mesh_device, const std::shared_ptr<MeshBuffer>& counters, uint32_t num_cores, uint32_t expected) {
+    const uint32_t page_words = hal::get_l1_alignment() / sizeof(uint32_t);
+    for (const auto& coord : MeshCoordinateRange(mesh_device.shape())) {
+        std::vector<uint32_t> pages;
+        ReadShard(mesh_device.mesh_command_queue(), pages, counters, coord);
+        ASSERT_EQ(pages.size(), num_cores * page_words);
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            EXPECT_EQ(pages[i * page_words], expected) << "chip " << coord << " core " << i;
+        }
+    }
+}
+
+// While CQ 1 captures a trace, CQ 0 keeps dispatching live, and both keep working after the trace is replayed. The
+// first workload moves the workers off launch slot 0, so a CQ handed the trace's launch state would hang or rerun a
+// stale launch message, which the counters would show.
+TEST_F(MeshTraceMultiCQTestSuite, OtherCQDispatchesDuringCapture) {
+    const CoreRange cores({0, 0}, {1, 1});
+    auto [counters, workload] = make_counter_workload(*mesh_device_, cores);
+    auto& live_cq = mesh_device_->mesh_command_queue(0);
+    auto& trace_cq = mesh_device_->mesh_command_queue(1);
+    uint32_t expected = 0;
+
+    EnqueueMeshWorkload(live_cq, workload, /*blocking=*/true);
+    expected++;
+
+    auto trace_id = mesh_device_->begin_mesh_trace(trace_cq);
+    EnqueueMeshWorkload(trace_cq, workload, /*blocking=*/false);
+    EnqueueMeshWorkload(live_cq, workload, /*blocking=*/true);
+    expected++;
+    mesh_device_->end_mesh_trace(trace_cq, trace_id);
+
+    for (int i = 0; i < 2; i++) {
+        EnqueueMeshWorkload(live_cq, workload, /*blocking=*/true);
+        mesh_device_->replay_mesh_trace(trace_cq, trace_id, /*blocking=*/true);
+        expected += 2;
+    }
+    mesh_device_->release_mesh_trace(trace_id);
+    expect_counts(*mesh_device_, counters, cores.size(), expected);
+}
+
+// Closing the device while a CQ is capturing drops the trace, and the device opens and runs again afterwards.
+TEST_F(MeshTraceMultiCQTestSuite, CloseDuringCapture) {
+    const CoreRange cores({0, 0}, {1, 1});
+    {
+        auto [counters, workload] = make_counter_workload(*mesh_device_, cores);
+        auto& trace_cq = mesh_device_->mesh_command_queue(1);
+        EnqueueMeshWorkload(trace_cq, workload, /*blocking=*/false);
+        mesh_device_->begin_mesh_trace(trace_cq);
+        EnqueueMeshWorkload(trace_cq, workload, /*blocking=*/false);
+    }
+    TearDown();
+    SetUp();
+
+    auto [counters, workload] = make_counter_workload(*mesh_device_, cores);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(1), workload, /*blocking=*/true);
+    expect_counts(*mesh_device_, counters, cores.size(), 1);
 }
 
 }  // namespace

@@ -12,6 +12,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/chronology_receive.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/copy_exact.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/matmul_subblock.hpp"
 
