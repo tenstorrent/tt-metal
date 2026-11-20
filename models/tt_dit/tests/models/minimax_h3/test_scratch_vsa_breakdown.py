@@ -224,6 +224,8 @@ def test_scratch_vsa_breakdown(
     orig = block.attn.forward
     block.attn.forward = lambda *a, **k: orig(*a, timings=timings, **k)
 
+    # The block output can be the CCL manager's persistent RS ping-pong buffer (fused MM+RS ff2 on BH ring), so it is
+    # not deallocated between runs: freeing it breaks the next run (TT_FATAL input_tensor.is_allocated()).
     def run(timed: bool):
         if not timed:
             block.attn.forward = orig
@@ -232,15 +234,15 @@ def test_scratch_vsa_breakdown(
         block.attn.forward = lambda *a, **k: orig(*a, timings=timings, **k)
         return out
 
-    ttnn.deallocate(run(False))  # compile
+    run(False)  # compile
     blocks_ms, per = [], {}
     for _ in range(3):  # untimed block wall (no per-section syncs)
         t0 = time.perf_counter()
-        ttnn.deallocate(run(False))
+        run(False)
         blocks_ms.append((time.perf_counter() - t0) * 1e3)
     for _ in range(3):
         timings.clear()
-        ttnn.deallocate(run(True))
+        run(True)
         for k, v in timings.items():
             per.setdefault(k, []).append(v)
     lines = [
