@@ -91,7 +91,11 @@ ttnn::Tensor permute_impl(
     bool cn = N == 1 && C == 0 && H == 2 && W == 3;
     bool cnwh = N == 1 && C == 0 && H == 3 && W == 2;
     bool bfloat8_supported = wh || cn || cnwh;
-    bool typecast = formatted_input_tensor.dtype() == DataType::BFLOAT8_B and !bfloat8_supported && !a.is_sharded();
+    // Only the WH and CN kernels handle block-float tiles, so bfloat8_b and bfloat4_b go through bfloat16 elsewhere.
+    const DataType input_dtype = formatted_input_tensor.dtype();
+    bool typecast =
+        (input_dtype == DataType::BFLOAT8_B || input_dtype == DataType::BFLOAT4_B) and !bfloat8_supported &&
+        !a.is_sharded();
     formatted_input_tensor =
         typecast ? ttnn::typecast(formatted_input_tensor, DataType::BFLOAT16) : formatted_input_tensor;
 
@@ -149,7 +153,7 @@ ttnn::Tensor permute_impl(
         }
     }
     // Convert back to original dtype if typecast was performed.
-    output = typecast ? ttnn::typecast(output, DataType::BFLOAT8_B) : output;
+    output = typecast ? ttnn::typecast(output, input_dtype) : output;
     return output;
 }
 

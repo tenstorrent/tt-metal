@@ -9,8 +9,16 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
 
 
-@pytest.mark.parametrize("shape", [[2, 3, 64, 96], [1, 2, 32, 64]])
-@pytest.mark.parametrize("dims", [(1, 2), (0, 2), (0, 3), (1, 3), (2, 3), (0, 1)])
+# 4D shapes cover tile-aligned and unaligned H (40); the rank 3 shape goes through the unsqueeze/squeeze to 4D.
+_DIMS_4D = [(1, 2), (0, 2), (0, 3), (1, 3), (2, 3), (0, 1)]
+_DIMS_3D = [(0, 1), (0, 2), (1, 2)]
+_SHAPE_DIMS = [(shape, dims) for shape in ([2, 3, 64, 96], [1, 2, 32, 64], [1, 2, 40, 64]) for dims in _DIMS_4D]
+_SHAPE_DIMS += [([3, 64, 96], dims) for dims in _DIMS_3D]
+
+
+@pytest.mark.parametrize(
+    "shape, dims", _SHAPE_DIMS, ids=[f"{'x'.join(map(str, shape))}-{dims[0]}{dims[1]}" for shape, dims in _SHAPE_DIMS]
+)
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
 def test_transpose_block_float_tile(device, shape, dims, dtype):
     torch.manual_seed(2005)
@@ -29,7 +37,7 @@ def test_transpose_block_float_tile(device, shape, dims, dtype):
     expected = quantized_input.transpose(dims[0], dims[1]).contiguous()
 
     assert list(output.shape) == list(expected.shape)
-    if 3 in dims:
+    if len(shape) - 1 in dims:
         assert_with_pcc(expected, output, 0.99)
     else:
         assert_equal(expected, output)
