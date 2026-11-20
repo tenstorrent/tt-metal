@@ -149,10 +149,12 @@ struct RowOwner {
     uint32_t local_row;
 };
 // Without split rows, when the whole rows leave a partial round and phase 1 is short (extra_first, below
-// split_first_below), the cores with one row more (the first whole_rows % num_cores) take the first rows, round-robin
-// among themselves, and the other cores the last ones: the cores with the most sorting get their rows early. With a
-// long phase 1 the plain round-robin, whose last rows go to cores already done with their first, measured faster.
-constexpr bool extra_rows_first(uint32_t search_len) { return search_len < split_first_below; }
+// extra_rows_first_below), the cores with one row more (the first whole_rows % num_cores) take the first rows,
+// round-robin among themselves, and the other cores the last ones: the cores with the most sorting get their rows
+// early. With a long phase 1 the plain round-robin, whose last rows go to cores already done with their first, measured
+// faster. Measured on 99 cores, 160 rows: the remap gains to 262K and loses at 512K.
+constexpr uint32_t extra_rows_first_below = 393216;
+constexpr bool extra_rows_first(uint32_t search_len) { return search_len < extra_rows_first_below; }
 constexpr RowOwner whole_row_owner(
     uint32_t row, uint32_t whole_rows, uint32_t split_rows, uint32_t num_cores, bool extra_first) {
     const uint32_t extra = whole_rows % num_cores;
