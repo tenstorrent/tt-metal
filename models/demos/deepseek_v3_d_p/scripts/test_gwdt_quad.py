@@ -463,11 +463,11 @@ def test_parse_checkout_rejects_garbage():
 
 
 def test_checkout_script_on_a_real_repo(tmp_path):
-    """The shell side: the fingerprint follows tracked edits and untracked files, and ignores LAUNCHER_ONLY."""
+    """The shell side: the fingerprint follows tracked edits and untracked files anywhere, gwdt's own scripts too."""
     git = lambda *a: gwdt_quad.subprocess.run(["git", "-C", str(tmp_path), *a], check=True, capture_output=True)
     git("init", "-q")
     (tmp_path / "m.py").write_text("1\n")
-    launcher = tmp_path / gwdt_quad.LAUNCHER_ONLY
+    launcher = tmp_path / "models/demos/deepseek_v3_d_p/scripts"
     launcher.mkdir(parents=True)
     (launcher / "g.py").write_text("1\n")
     git("add", ".")
@@ -481,6 +481,11 @@ def test_checkout_script_on_a_real_repo(tmp_path):
     assert clean.fingerprint == CLEAN and clean.files == ()
     (launcher / "g.py").write_text("2\n")
     (launcher / "new.py").write_text("x\n")
+    scripts = state()
+    assert scripts.files == ("models/demos/deepseek_v3_d_p/scripts/g.py", "models/demos/deepseek_v3_d_p/scripts/new.py")
+    assert scripts.fingerprint != CLEAN
+    (launcher / "g.py").write_text("1\n")
+    (launcher / "new.py").unlink()
     assert state() == clean
     (tmp_path / "m.py").write_text("2\n")
     edited = state()

@@ -343,25 +343,22 @@ def shared_dir_error(d: Path, hosts: list[str], timeout_s: int = SHARED_PROBE_TI
     return None
 
 
-# Code that runs only on the launching host; a difference there cannot reach a rank.
-LAUNCHER_ONLY = "models/demos/deepseek_v3_d_p/scripts"
 SHOWN_FILES = 3
 
 
 @dataclass(frozen=True)
 class Checkout:
     head: str
-    fingerprint: str  # of the uncommitted changes (tracked diff + untracked files) outside LAUNCHER_ONLY
+    fingerprint: str  # of the uncommitted changes (tracked diff + untracked files)
     files: tuple[str, ...]
 
 
 def checkout_script(repo: Path) -> str:
-    ps = f"-- . {shlex.quote(':(exclude)' + LAUNCHER_ONLY)}"
     return (
         f"cd {shlex.quote(str(repo))} && git rev-parse HEAD && "
-        f"{{ git diff HEAD --binary {ps}; git ls-files -o --exclude-standard -z {ps} | xargs -0 -r sha1sum; }}"
-        f" | sha1sum | cut -d' ' -f1 && "
-        f"{{ git diff HEAD --name-only {ps}; git ls-files -o --exclude-standard {ps}; }}"
+        "{ git diff HEAD --binary; git ls-files -o --exclude-standard -z | xargs -0 -r sha1sum; }"
+        " | sha1sum | cut -d' ' -f1 && "
+        "{ git diff HEAD --name-only; git ls-files -o --exclude-standard; }"
     )
 
 
@@ -410,8 +407,7 @@ def checkout_error(
 ) -> str | None:
     """None when every host has `repo` at this host's commit with the same uncommitted changes, else a table of every
     host's checkout marking the ones that differ. Every rank runs the code at the same path on its own host, so a
-    stale or locally edited checkout fails as if a galaxy were bad. Changes under LAUNCHER_ONLY are ignored: that
-    code runs only here. With dirty=False only the commits are compared."""
+    stale or locally edited checkout fails as if a galaxy were bad. With dirty=False only the commits are compared."""
     here = socket.gethostname()
     local = _checkout(repo, here, timeout_s)
     if local is None:

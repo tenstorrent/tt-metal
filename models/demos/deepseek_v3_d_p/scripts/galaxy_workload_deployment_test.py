@@ -292,8 +292,7 @@ def main(argv: list[str] | None = None) -> int:
         workaround = [f"  {env}=1  compare the commit only, ignore uncommitted changes"] if full else []
         workaround.append(f"  {env}=2  skip the checkout check")
         print(
-            f"error: --quad needs the same tt-metal checkout on every host ({what}; "
-            f"{gwdt_quad.LAUNCHER_ONLY} is not compared):\n{err}\n"
+            f"error: --quad needs the same tt-metal checkout on every host ({what}):\n{err}\n"
             "Sync the checkouts and rerun. To run anyway, set:\n" + "\n".join(workaround)
         )
         return 2
