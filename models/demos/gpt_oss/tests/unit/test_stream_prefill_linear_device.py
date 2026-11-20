@@ -78,14 +78,16 @@ def _column_order_ok(got, want, n_tiles):
         (2880, 1280, "qkv", 128, ttnn.bfloat16, ttnn.bfloat16, None, None),  # QKV at TP 4, K / V-first slot order
         (2880, 1280, "qkv", 1056, ttnn.bfloat16, ttnn.bfloat16, None, None),  # 33 row tiles: DST block tails
         (2880, 1280, "qkv", 4096, ttnn.bfloat16, ttnn.bfloat16, None, None),
+        (2880, 1280, "qkv", 8192, ttnn.bfloat16, ttnn.bfloat16, None, None),  # x multicast down grid columns
         (1024, 2880, "plain", 128, ttnn.bfloat8_b, ttnn.bfloat8_b, None, None),  # o_proj at TP 4 (bf8 in / out)
         (1024, 2880, "plain", 2048, ttnn.bfloat8_b, ttnn.bfloat8_b, None, None),
+        (1024, 2880, "plain", 8192, ttnn.bfloat8_b, ttnn.bfloat8_b, None, None),  # chunks across bank boundaries
         (2880, 32, "plain", 8, ttnn.bfloat16, ttnn.bfloat16, None, None),  # router, 8 tokens (one padded tile)
         (2880, 32, "plain", 1024, ttnn.bfloat16, ttnn.bfloat16, None, None),
         (2880, 50272, "plain", 32, ttnn.bfloat16, ttnn.bfloat8_b, 65536, None),  # LM head + power-of-two zero columns
         (1024, 2880, "plain", 640, ttnn.bfloat16, ttnn.bfloat16, None, 240 * 1024),  # small L1: several M blocks
     ],
-    ids=["qkv128", "qkv1056", "qkv4096", "o128", "o2048", "router8", "router1024", "lm_head", "small_l1"],
+    ids=["qkv128", "qkv1056", "qkv4096", "qkv8192", "o128", "o2048", "o8192", "router8", "router1024", "lm_head", "small_l1"],
 )
 def test_stream_prefill_linear(mesh_device, device_params, k, n, kind, rows, x_dtype, out_dtype, out_width, budget):
     if not is_blackhole():

@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Prefill matmul on a decode stream weight, reader (NCRISC, NOC0) (tt/stream_prefill_linear.py StreamPrefillLinear).
-// This core owns `cols` consecutive slots of one DRAM bank of the stream (each a column of KT = KX + 1 tiles: KX
-// weight tiles, then the bias tile; one contiguous byte range) and the output row tiles [m0, m0 + m_cnt). Per M block
+// This core owns `cols` slots of the stream in segments (each segment consecutive slots of one DRAM bank, a slot a
+// column of KT = KX + 1 tiles: KX weight tiles, then the bias tile; one contiguous byte range per segment) and the
+// output row tiles [m0, m0 + m_cnt). Per M block
 // of MB row tiles: the x rows into cb_x ([row][KT] tiles: the row's KX x tiles from the tensor accessor, then the
 // bias-multiplier "ones" tile), then the weight columns into cb_w in groups of G columns ([column][KT] tiles, one read
 // per tile, laid out [k][G] in cb_w: tile k of the group's column c at k * G + c, so the compute's DST blocks take
@@ -11,14 +12,15 @@
 // cb_w (stream_prefill_compute.cpp pops it at the end). Otherwise cb_w is a two-group ring, refilled every M block.
 // Every push is a whole block (MB rows / G columns) so the ring never holds a straddling block.
 //
-// MCAST: the cores of one row range are one grid row; its first core (the sender) reads each x block from DRAM and
+// MCAST: the cores of one row range are one grid row or column; its first core (the sender) reads each x block from DRAM and
 // multicasts it into the same cb_x slot of the others (x read once per row range, not once per core). Per block:
 // every receiver reserves its slot, clears its valid flag and tells the sender (ready += 1); the sender waits for all
 // of them, multicasts the block, then sets their valid flags (the flag write follows the data on the same path).
 //
 // common runtime args: [w_addr, x_addr, ones_addr]
-// runtime args: [bank_id, w_offset (bytes of the core's first slot in the bank), cols, m0, m_cnt]
-//               + MCAST: [is_sender, mcast x0, y0, x1, y1 (receivers' NOC rectangle), receivers, sender x, y]
+// runtime args: [cols, m0, m_cnt, is_sender, mcast x0, y0, x1, y1 (receivers' NOC rectangle), receivers, sender x, y
+//                (the multicast ones read only with MCAST), n_segs, n_segs x (bank_id, byte offset of the segment's
+//                first slot in the bank, slots)]
 // compile-time args: [cb_x, cb_w, KX, w_tile_bytes, MB, G, RESIDENT, MCAST, ready_sem, valid_sem, accessors (x, ones)]
 
 #include <stdint.h>
@@ -29,11 +31,11 @@ void kernel_main() {
     const uint32_t w_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t x_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t ones_addr = get_common_arg_val<uint32_t>(2);
-    const uint32_t bank_id = get_arg_val<uint32_t>(0);
-    const uint32_t w_offset = get_arg_val<uint32_t>(1);
-    const uint32_t cols = get_arg_val<uint32_t>(2);
-    const uint32_t m0 = get_arg_val<uint32_t>(3);
-    const uint32_t m_cnt = get_arg_val<uint32_t>(4);
+    const uint32_t cols = get_arg_val<uint32_t>(0);
+    const uint32_t m0 = get_arg_val<uint32_t>(1);
+    const uint32_t m_cnt = get_arg_val<uint32_t>(2);
+    constexpr uint32_t SEG_ARG = 11;
+    [[maybe_unused]] const uint32_t n_segs = get_arg_val<uint32_t>(SEG_ARG);  // (the segments are walked by slot count)
 
     constexpr uint32_t cb_x = get_compile_time_arg_val(0);
     constexpr uint32_t cb_w = get_compile_time_arg_val(1);
@@ -60,14 +62,14 @@ void kernel_main() {
     uint32_t mc_x0 = 0, mc_y0 = 0, mc_x1 = 0, mc_y1 = 0, n_recv = 0, snd_x = 0, snd_y = 0;
     uint32_t ready_addr = 0, valid_addr = 0;
     if constexpr (MCAST) {
-        is_sender = get_arg_val<uint32_t>(5) != 0;
-        mc_x0 = get_arg_val<uint32_t>(6);
-        mc_y0 = get_arg_val<uint32_t>(7);
-        mc_x1 = get_arg_val<uint32_t>(8);
-        mc_y1 = get_arg_val<uint32_t>(9);
-        n_recv = get_arg_val<uint32_t>(10);
-        snd_x = get_arg_val<uint32_t>(11);
-        snd_y = get_arg_val<uint32_t>(12);
+        is_sender = get_arg_val<uint32_t>(3) != 0;
+        mc_x0 = get_arg_val<uint32_t>(4);
+        mc_y0 = get_arg_val<uint32_t>(5);
+        mc_x1 = get_arg_val<uint32_t>(6);
+        mc_y1 = get_arg_val<uint32_t>(7);
+        n_recv = get_arg_val<uint32_t>(8);
+        snd_x = get_arg_val<uint32_t>(9);
+        snd_y = get_arg_val<uint32_t>(10);
         ready_addr = get_semaphore(ready_sem_id);
         valid_addr = get_semaphore(valid_sem_id);
     }
@@ -115,12 +117,24 @@ void kernel_main() {
             const uint32_t gc = cols - g * G < G ? cols - g * G : G;
             cb_reserve_back(cb_w, G * KT);
             const uint32_t w_l1 = get_write_ptr(cb_w);
+            // the segment holding the group's first column, and that column's index within it
+            uint32_t seg = 0, in_seg = g * G;
+            while (in_seg >= get_arg_val<uint32_t>(SEG_ARG + 3 + 3 * seg)) {
+                in_seg -= get_arg_val<uint32_t>(SEG_ARG + 3 + 3 * seg);
+                ++seg;
+            }
             for (uint32_t c = 0; c < gc; ++c) {
-                const uint64_t src =
-                    get_noc_addr_from_bank_id<true>(bank_id, w_addr + w_offset + (g * G + c) * col_bytes);
+                if (in_seg == get_arg_val<uint32_t>(SEG_ARG + 3 + 3 * seg)) {
+                    ++seg;
+                    in_seg = 0;
+                }
+                const uint32_t bank_id = get_arg_val<uint32_t>(SEG_ARG + 1 + 3 * seg);
+                const uint32_t w_offset = get_arg_val<uint32_t>(SEG_ARG + 2 + 3 * seg);
+                const uint64_t src = get_noc_addr_from_bank_id<true>(bank_id, w_addr + w_offset + in_seg * col_bytes);
                 for (uint32_t k = 0; k < KT; ++k) {
                     noc_async_read(src + k * w_tile, w_l1 + (k * G + c) * w_tile, w_tile);
                 }
+                ++in_seg;
             }
             noc_async_read_barrier();
             cb_push_back(cb_w, G * KT);

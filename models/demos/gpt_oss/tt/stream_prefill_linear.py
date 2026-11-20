@@ -13,8 +13,9 @@ Stream layout ([rows, banks * 32] per device, DRAM width-sharded, one 32-wide sh
 bias tile), contiguous; slot s holds output column tile order[s] (identity unless an order is given, e.g.
 qkv_column_order); slots past the N / 32 real columns are zero padding (always a suffix of a bank's slots).
 
-Work split (plan_work): every core owns `cols` consecutive real slots of one bank (one contiguous byte range of that
-bank, read in one piece) and a range of output row tiles. Per M block (MB row tiles) the core reads its x rows (K / 32
+Work split (plan_work): every core owns `cols` consecutive real slots of the banks' real slots in bank order (one or
+more segments, each a contiguous byte range of one bank: a chunk may cross a bank boundary, so the column chunks need
+not divide a bank's slots) and a range of output row tiles. Per M block (MB row tiles) the core reads its x rows (K / 32
 tiles per row, per-core reads through the tensor accessor: no multicast) plus one "ones" tile per row (columns
 0..NBIAS-1 = 1: multiplied by the bias tile it adds the bias, as the decode activation's extra tile does), then for each
 of its columns the MB x 1 output tiles summed over all kt K tiles in DST (FP32, matmul_block, at most 4 rows per DST
@@ -105,27 +106,47 @@ class StreamSpec:
 
 
 class WorkItem:
-    """One core's share: slots [j0, j0 + cols) of bank `bank`, output row tiles [m0, m0 + m_cnt), and the zero output
-    columns [z0, z1) it writes."""
+    """One core's share: slots [j0, j0 + cols) of bank `bank` (or, with segs, the slot segments [(bank, j0, cnt), ...]
+    in order), output row tiles [m0, m0 + m_cnt), and the zero output columns [z0, z1) it writes."""
 
-    def __init__(self, bank, j0, cols, m0, m_cnt, z0=0, z1=0):
-        self.bank, self.j0, self.cols, self.m0, self.m_cnt, self.z0, self.z1 = bank, j0, cols, m0, m_cnt, z0, z1
+    def __init__(self, bank, j0, cols, m0, m_cnt, z0=0, z1=0, segs=None):
+        self.segs = list(segs) if segs is not None else [(bank, j0, cols)]
+        assert self.segs and all(cnt >= 0 for _, _, cnt in self.segs), self.segs
+        self.cols = sum(cnt for _, _, cnt in self.segs)
+        self.m0, self.m_cnt, self.z0, self.z1 = m0, m_cnt, z0, z1
+
+    def columns(self, spec):
+        """Output column tiles of the core's slots, in slot order."""
+        return [c for b, j0, cnt in self.segs for c in spec.columns(b, j0, cnt)]
+
+    def slot(self, c):
+        """(bank, slot) of the core's column c."""
+        for b, j0, cnt in self.segs:
+            if c < cnt:
+                return b, j0 + c
+            c -= cnt
+        raise IndexError(c)
 
     def __repr__(self):
-        return f"WorkItem(b{self.bank} j{self.j0}+{self.cols} m{self.m0}+{self.m_cnt} z[{self.z0},{self.z1}))"
+        segs = " ".join(f"b{b}j{j0}+{cnt}" for b, j0, cnt in self.segs)
+        return f"WorkItem({segs} m{self.m0}+{self.m_cnt} z[{self.z0},{self.z1}))"
 
 
 class WorkPlan:
     """plan_work's result: the items (one per core), the block geometry and the circular-buffer sizes."""
 
-    def __init__(self, items, MB, G, resident, x_bufs, cost, group=0):
+    def __init__(self, items, MB, G, resident, x_bufs, cost, group=0, column=False):
         self.items, self.MB, self.G, self.resident, self.x_bufs, self.cost = items, MB, G, resident, x_bufs, cost
         # x multicast (group > 0): the items of one row range are one grid row of `group` cores (item i on core
-        # (i % group, i // group)); its first core reads the x blocks and multicasts them to the others.
+        # (i % group, i // group)), or with column one grid column (core (i // group, i % group)); its first core
+        # reads the x blocks and multicasts them to the others.
         self.group = group
+        self.column = column
 
     def core(self, i, gx):
         """Grid core (x, y) of item i."""
+        if self.group and self.column:
+            return i // self.group, i % self.group
         g = self.group or gx
         return i % g, i // g
 
@@ -138,7 +159,7 @@ class WorkPlan:
         return (
             f"WorkPlan({len(self.items)} cores, MB {self.MB}, G {self.G}, resident {self.resident}, "
             f"x_bufs {self.x_bufs}, cost {self.cost * 1e6:.1f} us"
-            + (f", x multicast over {self.group} cores" if self.group else "")
+            + (f", x multicast over {self.group} cores" + (" (grid columns)" if self.column else "") if self.group else "")
             + ")"
         )
 
@@ -167,82 +188,72 @@ def _geometry(chunk, rows, kt, x_tile, w_tile, out_tile, budget):
 
 
 def plan_work(spec, m_tiles, n_cores, x_tile, w_tile, out_tile, budget, out_tiles=None, grid=None):
-    """The work split of one call: per bank its real slots in `ns` chunks of <= chunk columns (one core each) times
-    `pm` ranges of output row tiles, minimizing a rough time estimate max(DRAM bytes / bandwidth, the busiest bank's
-    weight bytes / its share, the busiest core's reads / a core's bandwidth, its tile multiplies): x is read once per
-    column chunk (P_N times), the weights once per row range (P_M times; per M block when not resident). out_tiles
-    (> spec.n_tiles): the extra zero output columns, split over the chunks of each row range.
+    """The work split of one call: the banks' real slots (in bank order) in `pn` chunks of <= chunk consecutive slots
+    (one core each; a chunk may span two banks) times `pm` ranges of output row tiles, minimizing a rough time estimate
+    max(DRAM bytes / bandwidth, the busiest bank's weight bytes / its share, the busiest core's reads / a core's
+    bandwidth, its tile multiplies): x is read once per column chunk (pn times), the weights once per row range (pm
+    times; per M block when not resident). out_tiles (> spec.n_tiles): the extra zero output columns, split over the
+    chunks of each row range.
 
-    grid (gx, gy): also consider multicasting x. The column chunks of one row range are then one grid row (at most gx,
-    and at most gy row ranges), its first core reads each x block from DRAM and multicasts it to the others, so x is
-    read once per row range instead of once per chunk (8x for QKV at 8K: x bandwidth bound). The cheaper of the two
-    modes is taken."""
+    grid (gx, gy): also consider multicasting x. The column chunks of one row range are then one grid row (at most gx
+    chunks, at most gy row ranges) or one grid column (at most gy chunks, at most gx row ranges); its first core reads
+    each x block from DRAM and multicasts it to the others, so x is read once per row range instead of once per chunk
+    (8x for QKV at 8K: x bandwidth bound). The cheapest mode is taken."""
     assert m_tiles >= 1
     out_tiles = spec.n_tiles if out_tiles is None else out_tiles
     assert out_tiles >= spec.n_tiles
-    active = [b for b in range(spec.banks) if spec.real[b]]
+    slots = [(b, j) for b in range(spec.banks) for j in range(spec.real[b])]
     R = max(spec.real)
     kt = spec.kt
-    w_total = sum(spec.real) * kt * w_tile
+    w_total = len(slots) * kt * w_tile
     x_total = m_tiles * spec.kx * x_tile
     best = None
-    modes = [(False, n_cores, None)]
+    modes = [(None, n_cores)]
     if grid is not None:
-        modes.append((True, grid[0] * grid[1], grid))
-    for mcast, cores_avail, g in modes:
+        modes += [((grid[0], grid[1], False), grid[0] * grid[1]), ((grid[1], grid[0], True), grid[0] * grid[1])]
+    for mc, cores_avail in modes:
         best = _plan_search(
-            spec,
-            m_tiles,
-            cores_avail,
-            x_tile,
-            w_tile,
-            out_tile,
-            budget,
-            active,
-            R,
-            kt,
-            w_total,
-            x_total,
-            mcast,
-            g,
-            best,
+            spec, m_tiles, cores_avail, x_tile, w_tile, out_tile, budget, len(slots), R, kt, w_total, x_total, mc, best
         )
     assert best is not None, f"no work split fits {budget} bytes of L1 (K {spec.k}, N {spec.n}, {m_tiles} row tiles)"
-    (t, _), chunk, rows, (G, MB, resident, x_bufs, _), mcast = best
+    (t, _), pn, rows, (G, MB, resident, x_bufs, _), mc = best
+    chunks = []  # balanced: sizes differ by at most one
+    for i in range(pn):
+        a, b = len(slots) * i // pn, len(slots) * (i + 1) // pn
+        segs = []
+        for bank, j in slots[a:b]:
+            if segs and segs[-1][0] == bank:
+                segs[-1][2] += 1
+            else:
+                segs.append([bank, j, 1])
+        chunks.append([tuple(sg) for sg in segs])
     items = []
     for m0 in range(0, m_tiles, rows):
         m_cnt = min(rows, m_tiles - m0)
-        row_items = []
-        for b in active:
-            for j0 in range(0, spec.real[b], chunk):
-                row_items.append(WorkItem(b, j0, min(chunk, spec.real[b] - j0), m0, m_cnt))
+        row_items = [WorkItem(0, 0, 0, m0, m_cnt, segs=segs) for segs in chunks]
         extra = out_tiles - spec.n_tiles  # zero columns, split evenly over this row range's cores
         for i, it in enumerate(row_items):
             it.z0 = spec.n_tiles + extra * i // len(row_items)
             it.z1 = spec.n_tiles + extra * (i + 1) // len(row_items)
         items += row_items
-    assert len(items) <= (grid[0] * grid[1] if mcast else n_cores)
+    assert len(items) <= (grid[0] * grid[1] if mc else n_cores)
     assert all(it.cols <= MAX_WRITER_COLS for it in items)
-    group = sum(-(-spec.real[b] // chunk) for b in active) if mcast else 0
-    return WorkPlan(items, MB, G, resident, x_bufs, t, group)
+    return WorkPlan(items, MB, G, resident, x_bufs, t, pn if mc else 0, bool(mc and mc[2]))
 
 
-def _plan_search(
-    spec, m_tiles, n_cores, x_tile, w_tile, out_tile, budget, active, R, kt, w_total, x_total, mcast, grid, best
-):
-    """plan_work's search over (column chunk, row ranges) in one mode; returns the best (key, chunk, rows, geometry,
-    mcast) so far."""
-    for ns in range(1, R + 1):
-        chunk = -(-R // ns)
-        if ns > 1 and chunk == -(-R // (ns - 1)):
-            continue  # the same chunk size as ns - 1
-        pn = sum(-(-spec.real[b] // chunk) for b in active)
+def _plan_search(spec, m_tiles, n_cores, x_tile, w_tile, out_tile, budget, S, R, kt, w_total, x_total, mc, best):
+    """plan_work's search over (column chunks, row ranges) in one mode (mc: None, or (most chunks per group, most
+    groups, along grid columns)); returns the best (key, chunks, rows per range, geometry, mc) so far."""
+    for pn in range(1, S + 1):
+        chunk = -(-S // pn)
         if pn > n_cores:
             break
-        if mcast and (pn < 2 or pn > grid[0]):
-            continue  # multicast needs >= 2 chunks in one grid row
+        if chunk > MAX_WRITER_COLS:
+            continue  # the writer's runtime args hold the core's column list
+        if mc and (pn < 2 or pn > mc[0]):
+            continue  # multicast needs >= 2 chunks in one grid row / column
         seen = set()
-        pm_max = min(m_tiles, grid[1] if mcast else n_cores // pn)
+        pm_max = min(m_tiles, mc[1] if mc else n_cores // pn)
         for pm in range(1, pm_max + 1):
             rows = -(-m_tiles // pm)
             pm_eff = -(-m_tiles // rows)
@@ -256,7 +267,7 @@ def _plan_search(
             passes = 1 if resident else -(-rows // MB)
             w_reads = pm_eff * w_total * passes
             bank_reads = pm_eff * R * kt * w_tile * passes
-            x_reads = x_total if mcast else pn * x_total
+            x_reads = x_total if mc else pn * x_total
             t = max(
                 (w_reads + x_reads) / DRAM_BW,
                 bank_reads / (DRAM_BW / spec.banks),
@@ -265,7 +276,7 @@ def _plan_search(
             )
             key = (t, pn * pm_eff)
             if best is None or key < best[0]:
-                best = (key, chunk, rows, geo, mcast)
+                best = (key, pn, rows, geo, mc)
     return best
 
 
@@ -319,8 +330,7 @@ def reference_linear(x, layout, spec, plan, out_tiles=None):
     ones = ones_tile(torch).double()
     xd = x.double()
     for it in plan.items:
-        shard = layout[:, it.bank * TILE : (it.bank + 1) * TILE].double()
-        columns = spec.columns(it.bank, it.j0, it.cols)
+        columns = it.columns(spec)
         for r in range(it.m_cnt):
             for z in range(it.z0, it.z1):
                 row = it.m0 + r
@@ -328,8 +338,9 @@ def reference_linear(x, layout, spec, plan, out_tiles=None):
 
         # the weights as stored (the reader lays each group out in cb_w as tile (k, c) at k * G + c)
         def w_tile(c, k):
-            t = (it.j0 + c) * spec.kt + k
-            return shard[t * TILE : (t + 1) * TILE]
+            bank, j = it.slot(c)
+            t = j * spec.kt + k
+            return layout[t * TILE : (t + 1) * TILE, bank * TILE : (bank + 1) * TILE].double()
 
         for mb in range(0, it.m_cnt, plan.MB):
             rows = min(plan.MB, it.m_cnt - mb)
@@ -494,10 +505,8 @@ class StreamPrefillLinear:
         spec = self.spec
         x_tile, w_tile, o_tile = TILE_BYTES[x.dtype], TILE_BYTES[stream.dtype], TILE_BYTES[out_dtype]
         if plan.group:
-            rows_used = len(plan.items) // plan.group
-            cores = ttnn.CoreRangeSet(
-                [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(plan.group - 1, rows_used - 1))]
-            )
+            last = plan.core(len(plan.items) - 1, grid.x)
+            cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(last[0], last[1]))])
         else:
             cores = _core_ranges(ttnn, len(plan.items), grid.x)
         cb_x, cb_w, cb_out, cb_zero = 0, 1, 16, 17
@@ -522,15 +531,25 @@ class StreamPrefillLinear:
         noc = self.mesh_device.worker_core_from_logical_core
         for i, it in enumerate(plan.items):
             cx, cy = plan.core(i, grid.x)
-            args = [it.bank, it.j0 * spec.kt * w_tile, it.cols, it.m0, it.m_cnt]
+            args = [it.cols, it.m0, it.m_cnt]
             if plan.group:
-                # [is_sender, multicast rectangle (receivers: cores 1..group-1 of the row), receivers, sender]
-                first, last = noc(ttnn.CoreCoord(1, cy)), noc(ttnn.CoreCoord(plan.group - 1, cy))
-                sender = noc(ttnn.CoreCoord(0, cy))
-                args += [int(cx == 0), first.x, first.y, last.x, last.y, plan.group - 1, sender.x, sender.y]
+                # [is_sender, multicast rectangle (receivers: members 1..group-1 of the row / column), receivers,
+                # sender]
+                if plan.column:
+                    member, ends, sender = cy, ((cx, 1), (cx, plan.group - 1)), (cx, 0)
+                else:
+                    member, ends, sender = cx, ((1, cy), (plan.group - 1, cy)), (0, cy)
+                first, last = (noc(ttnn.CoreCoord(*e)) for e in ends)
+                snd = noc(ttnn.CoreCoord(*sender))
+                args += [int(member == 0), first.x, first.y, last.x, last.y, plan.group - 1, snd.x, snd.y]
+            else:
+                args += [1, 0, 0, 0, 0, 0, 0, 0]
+            args.append(len(it.segs))
+            for bank, j0, cnt in it.segs:
+                args += [bank, j0 * spec.kt * w_tile, cnt]
             reader_rt[cx][cy] = args
             compute_rt[cx][cy] = [it.cols, it.m_cnt]
-            writer_rt[cx][cy] = [it.m0, it.m_cnt, it.cols, it.z0, it.z1] + spec.columns(it.bank, it.j0, it.cols)
+            writer_rt[cx][cy] = [it.m0, it.m_cnt, it.cols, it.z0, it.z1] + it.columns(spec)
         resident = int(plan.resident)
         reader_ct = [
             cb_x,

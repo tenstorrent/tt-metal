@@ -131,7 +131,7 @@ def _coverage(spec, plan, m_tiles, out_tiles):
     """Every output tile written once; the writer's pages follow the compute kernel's tile order."""
     seen = []
     for it in plan.items:
-        cols = spec.columns(it.bank, it.j0, it.cols)
+        cols = it.columns(spec)
         order = sp.compute_order(it, plan)
         pages = sp.writer_pages(it, plan, cols, out_tiles)
         zeros = it.m_cnt * (it.z1 - it.z0)
@@ -161,13 +161,17 @@ def test_qkv_x_multicast(m_tiles):
     k, n = 2880, 1280
     order = st.qkv_column_order(n // TILE, 16 * 64 // TILE, BANKS)
     spec, plan = _check(k, n, m_tiles, order, grid=(11, 10))
-    assert plan.group >= 2 and len(plan.items) % plan.group == 0 and len(plan.items) // plan.group <= 10
-    assert plan.group <= 11
+    assert plan.group >= 2 and len(plan.items) % plan.group == 0
+    gx, gy = (10, 11) if plan.column else (11, 10)  # (members per group, groups) limits
+    assert plan.group <= gx and len(plan.items) // plan.group <= gy
+    cores = [plan.core(i, 11) for i in range(len(plan.items))]
+    assert len(set(cores)) == len(cores) and all(x < 11 and y < 10 for x, y in cores)
     for i, it in enumerate(plan.items):
-        x, y = plan.core(i, 11)
-        group_items = plan.items[y * plan.group : (y + 1) * plan.group]
-        assert all(g.m0 == it.m0 and g.m_cnt == it.m_cnt for g in group_items), "a row's cores share the x rows"
+        group_items = plan.items[i // plan.group * plan.group : (i // plan.group + 1) * plan.group]
+        assert all(g.m0 == it.m0 and g.m_cnt == it.m_cnt for g in group_items), "a group's cores share the x rows"
     _coverage(spec, plan, m_tiles, n // TILE)
+    if m_tiles == 256:  # chunks of 4 across bank boundaries: 10 per grid column, 11 row ranges, every core busy
+        assert (plan.group, plan.column, len(plan.items), max(it.cols for it in plan.items)) == (10, True, 110, 4)
     no_mc = sp.plan_work(spec, m_tiles, CORES, BF16, BF8, BF16, BUDGET)
     assert plan.cost <= no_mc.cost
 
@@ -176,7 +180,7 @@ def test_o_proj_bf8_input():
     """o_proj at TP 4: K = 1024, N = 2880 (90 tiles, C = 12; bank 7 holds 6 real slots + 6 padding), bf8 input."""
     spec, plan = _check(1024, 2880, 9, x_tile=BF8, seed=3)
     assert spec.C == 12 and spec.real == [12] * 7 + [6]
-    assert all(it.j0 + it.cols <= spec.real[it.bank] for it in plan.items), "a core reads padding slots"
+    assert all(j0 + cnt <= spec.real[b] for it in plan.items for b, j0, cnt in it.segs), "a core reads padding slots"
     _coverage(spec, plan, 9, 90)
 
 
@@ -184,7 +188,7 @@ def test_router_one_bank():
     """Router: N = 32 experts, one real slot on bank 0 (C = 1): every core reads bank 0 and splits the rows."""
     spec, plan = _check(2880, 32, 6, seed=4)
     assert spec.real == [1] + [0] * 7
-    assert {it.bank for it in plan.items} == {0}
+    assert {b for it in plan.items for b, _, _ in it.segs} == {0}
     _coverage(spec, plan, 6, 1)
 
 
