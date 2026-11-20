@@ -81,6 +81,13 @@ def window_bounds(n_valid: int, n_total: int) -> list:
     return bounds
 
 
+def _fixed_window_bounds(n_valid: int, n_total: int) -> list:
+    """window_bounds padded with empty windows to one length per n_total, so every clip
+    in a bucket runs the same SDPA program."""
+    bounds = window_bounds(n_valid, n_total)
+    return bounds + [n_total] * (n_total // WINDOW_TOKENS + 2 - len(bounds))
+
+
 def preprocess_conv_weights(w, device):
     """Conv2d frontend weights (kept on host as ttnn tensors; ttnn.conv2d folds them in)."""
     cp = {}
@@ -95,6 +102,17 @@ def preprocess_conv_weights(w, device):
             k=(cw.shape[2], cw.shape[3]),
         )
     return cp
+
+
+# Output bytes one conv2d slice may hold in L1. Left to ttnn, the slice count follows the
+# L1 free at call time, so the same clip shape can build new programs once other device
+# buffers are live; a count fixed per shape keeps the programs warmup built.
+CONV_L1_OUTPUT_BUDGET = 2 * 1024 * 1024
+
+
+def _conv_slice_config(out_bytes, out_height):
+    num_slices = min(max(1, -(-out_bytes // CONV_L1_OUTPUT_BUDGET)), out_height)
+    return ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=num_slices)
 
 
 def conv_frontend_tt(mel, conv_w, conv_out_w, conv_out_b, device, n=None, chunk=N_WINDOW * 2):
@@ -127,6 +145,8 @@ def conv_frontend_tt(mel, conv_w, conv_out_w, conv_out_b, device, n=None, chunk=
         # conv2d returns weights prepared for this batch size's sharding; reusing them at
         # another batch size fails, so keep one prepared set per input shape.
         prepared = c.setdefault("prepared", {}).get((n, chunk), (c["weight"], c["bias"]))
+        out_h = (H + 1) // 2
+        out_bytes = n * out_h * ((W + 1) // 2) * c["out_ch"] * 2
         conv_out, [H, W], c["prepared"][(n, chunk)] = ttnn.conv2d(
             input_tensor=xt,
             weight_tensor=prepared[0],
@@ -143,6 +163,7 @@ def conv_frontend_tt(mel, conv_w, conv_out_w, conv_out_b, device, n=None, chunk=
             input_width=W,
             conv_config=conv_cfg,
             compute_config=compute_cfg,
+            slice_config=_conv_slice_config(out_bytes, out_h),
             return_output_dim=True,
             return_weights_and_bias=True,
             dtype=ttnn.bfloat16,
@@ -220,22 +241,43 @@ def _sinusoid_pe(per_chunk=13):
     return _PE_CACHE[per_chunk]
 
 
-def encode_mel(mel, params, device):
+# Chunk counts encode_mel pads clips of 1-32 s to (whole 8-chunk windows).
+WARM_BUCKETS = (8, 16, 24, 32)
+
+
+def warmup(params, device):
+    """Encode every bucket once, then stop adding shapes. The conv frontend and the
+    positional embedding keep device tensors per input shape; one allocated after a
+    trace is captured can be overwritten by that trace's replays, so this must run
+    before any trace capture."""
+    for n in WARM_BUCKETS:
+        encode_mel(torch.zeros(128, n * N_WINDOW * 2), params, device)
+    params["frozen"] = True
+
+
+def encode_mel(mel, params, device, to_host=True):
     """Full-TT encoder from mel (num_mel, T): TT conv2d frontend -> +PE -> transformer
-    -> projector. Returns audio embeds (feat_out_len(T), output_dim) as torch.
+    -> projector. Returns audio embeds (feat_out_len(T), output_dim) as torch, or with
+    to_host=False a (1, 1, bucket rows, output_dim) device tensor whose first
+    feat_out_len(T) rows are the embeds.
 
     The chunk count is padded to a whole window (8 chunks), so clips up to 32 s use 4
     shapes. Padded chunks and the padded tokens of a partial last chunk are excluded
     from attention and dropped from the output. A clip under one chunk runs the conv at
-    its own width, as the model does: there, padding would change its last tokens."""
+    its own width, as the model does: there, padding would change its last tokens.
+    After warmup() it pads that clip to the smallest bucket instead, and clips longer
+    than the largest bucket raise."""
     T = int(mel.shape[1])
     chunk = N_WINDOW * 2
-    if T < chunk:
+    frozen = params.get("frozen", False)
+    if T < chunk and not frozen:
         n, chunk = 1, T
     else:
         chunks_per_window = WINDOW_TOKENS // TOKENS_PER_CHUNK
         n_real = (T + chunk - 1) // chunk
         n = (n_real + chunks_per_window - 1) // chunks_per_window * chunks_per_window
+        if frozen and n > WARM_BUCKETS[-1]:
+            raise ValueError(f"{T} mel frames need {n} chunks; warmed buckets go up to {WARM_BUCKETS[-1]}")
     conv_d = conv_frontend_tt(mel, params["conv_w"], params["conv_out_w"], None, device, n=n, chunk=chunk)
     per_chunk = int(conv_d.shape[1])
     pe_key = (id(device), per_chunk)
@@ -249,12 +291,12 @@ def encode_mel(mel, params, device):
     x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
     S_valid = feat_out_len(T)
     cu = _from_torch(
-        torch.tensor(window_bounds(S_valid, S), dtype=torch.int32),
+        torch.tensor(_fixed_window_bounds(S_valid, S), dtype=torch.int32),
         device,
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )
-    out = encode(x, params, device, S=S_valid, cu_window_seqlens=cu)
+    out = encode(x, params, device, S=S_valid, cu_window_seqlens=cu, to_host=to_host)
     ttnn.deallocate(cu)
     return out
 
@@ -318,9 +360,10 @@ def _layer(x, lp, device, cu_window_seqlens=None):
     return x
 
 
-def encode(x_in, params, device, S=None, cu_window_seqlens=None):
+def encode(x_in, params, device, S=None, cu_window_seqlens=None, to_host=True):
     """x_in: (S, D_MODEL) torch, or a (1,1,S,D) device tensor with PE already added.
-    Returns the first S rows, (S, output_dim) torch. Attention is over all rows unless
+    Returns the first S rows, (S, output_dim) torch, or with to_host=False all rows as a
+    (1, 1, rows, output_dim) device tensor. Attention is over all rows unless
     `cu_window_seqlens` (device uint32 window bounds) is given."""
     if isinstance(x_in, ttnn.Tensor):
         x = x_in
@@ -345,6 +388,8 @@ def encode(x_in, params, device, S=None, cu_window_seqlens=None):
         x, params["proj1_w"], bias=params["proj1_b"], activation="gelu", core_grid=core, compute_kernel_config=HIFI4
     )
     x = ttnn.linear(x, params["proj2_w"], bias=params["proj2_b"], core_grid=core, compute_kernel_config=HIFI4)
+    if not to_host:
+        return x
     out = _to_torch(x).reshape(-1, OUTPUT_DIM)[:S].float()
     ttnn.deallocate(x)
     return out
