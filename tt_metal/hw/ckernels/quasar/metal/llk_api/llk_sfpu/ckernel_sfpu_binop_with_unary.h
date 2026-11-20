@@ -8,6 +8,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "llk_assert.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
@@ -37,6 +38,18 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = SFPU_ITERATIONS>
 void calculate_mul(std::uint32_t param) {
     calculate_binop_with_scalar<APPROXIMATION_MODE, BinopMode::Mul, ITERATIONS>(param);
     return;
+}
+
+// Quasar has no UInt32 data format. The Compute API keeps one signature on every arch, so the kernel entry points
+// of add_unary_tile_uint32 / sub_unary_tile_uint32 reject the call here.
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_add_uint32([[maybe_unused]] std::uint32_t scalar) {
+    LLK_ASSERT(false, "UInt32 unary add with scalar (add_unary_tile_uint32) is not supported on Quasar");
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_sub_uint32([[maybe_unused]] std::uint32_t scalar) {
+    LLK_ASSERT(false, "UInt32 unary sub with scalar (sub_unary_tile_uint32) is not supported on Quasar");
 }
 
 }  // namespace ckernel::sfpu

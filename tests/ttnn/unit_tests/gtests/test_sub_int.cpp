@@ -62,12 +62,10 @@ TEST_P(SubUnaryFixture, CompareWithTorchReference) {
     // Create expected tensor (should be filled with the expected scalar value)
     auto expected_tensor = ttnn::full(shape, expected_scalar_result, dtype, ttnn::TILE_LAYOUT, device);
 
-    // Compare results using allclose
     auto expected_host = ttnn::from_device(expected_tensor);
     auto output_host = ttnn::from_device(ttnn_output);
 
-    TT_FATAL(
-        ttnn::allclose<int32_t>(expected_host, output_host), "TTNN unary sub result does not match expected result");
+    ASSERT_EQ(expected_host.to_vector<int32_t>(), output_host.to_vector<int32_t>());
 }
 
 INSTANTIATE_TEST_SUITE_P(
