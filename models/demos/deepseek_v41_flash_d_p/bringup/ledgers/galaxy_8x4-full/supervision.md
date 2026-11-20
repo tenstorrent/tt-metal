@@ -723,3 +723,20 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   plan's order: v1's loop + moves are 202 of 256 ms device, v2 removes them, and the gather hiding is designed for v2's
   lane-targeted schedule; hiding gathers on v1 first would be redone. PB.3A also: pad rows out of MoE dispatch, and
   the gate's walls on the shipped engram configuration. PB.3H then runs with ONECALL=on.
+- 00:13 UTC PB.3 gate PASS -> 2edd7a1be72 (units reused). PB.3A attempt 1 started.
+- 01:41 UTC PB.3A (attempt 1, in progress) agent measurements on the runner (layers 0-20, decode, agentic_cc, harness):
+  one-call attention path: 4x2k@139264 122.0 ms = 67.1k new tok/s (device 92.6, host enqueue ~108-111 ms: now
+  HOST-bound), mixed 132.1 ms = 62.0k (device 107.3; the 547k lane's indexer dominates), 1x2k 125.5 ms (experts 67 ms
+  of pad rows: pad exclusion still to do). Oracle with ONECALL=on bit-identical on the characteristic layers. RAM
+  leaked 21.4 GiB.
+- 01:53 UTC note OV-62: walls with one slot capacity for all lanes (serving's layout) so the one-ring indexer is what mixed measures; DS41-328 (unequal capacities broke the ring for smaller lanes) handled by per-segment rings as a fallback only.
+- 02:15 UTC PB.3A done (attempt 1), WAITING. One-call attention (v2): sdpa / indexer / window once a layer with per-chip
+  lane args (forks: sparse_sdpa, ring_indexer_score_dsa natural_query_lane_lo/hi; new lane copy / lane send ops, bit-exact
+  on 32 chips). Gate PASS: oracle 40 layers all 0, segments final hidden 0.131 x4 (limit 0.242), top-5 1.0. Walls with the
+  shipped resident engram table: 4x2k@139264 122.3 ms = 67.0k new tok/s harness (device 92.6, host ~108-111 enqueue:
+  host-bound), mixed 150.8 (unequal slot sizes -> per-segment rings, DS41-328), 1x2k 125.5 (pad rows in the experts 67
+  ms). The gate's walls ran mmap tables (243 ms): my gate cmd lacked DS41_ENGRAM_TABLE=resident (test_skip_positions sets
+  it itself, test_packed_walls does not). 7 runner restarts (4 C++ builds). DECIDED: accept.
+- 02:20 UTC tasks: DS41_ENGRAM_TABLE=resident on every remaining packed walls command (PB.3H / PB.4 / PB.5); PB.3H brief:
+  host-bound now: batch per-segment snapshot sends / writes / tail gathers into one program a layer, pipeline, hide the
+  gathers, mixed with one slot capacity; PB.4 brief: pad rows out of the MoE dispatch (PB.3A deferred it).

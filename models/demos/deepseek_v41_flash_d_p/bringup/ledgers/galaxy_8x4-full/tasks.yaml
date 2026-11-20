@@ -5897,19 +5897,23 @@ tasks:
       P.77 4-bit history, P.78 host hiding, C++ engram, P.83 mhc_post fast, P.81 grouped wo_a (results/agentx_ladder_20261119.md: 5120 steady walls 74.1-87.4 ms, 51k-1M, agentic_cc). P.87 (engram lookup
       fused with the KV-history prefetch in one kernel); P.73 (sub-device concurrent attention + gather: HUNG), FIX.36, DS41-283 (contradicted); P.77 (pack-before-gather, 4-bit history); PB.3''s walls and
       its exposed / hidden gather metrics.'
-    details: 'OVERSEER 2026-11-20: runs AFTER PB.3A (one attention call, v2): hide the gathers on v2''s schedule, with PACKED_ATTN_ONECALL=on. OWNER 20:55 (binding; replaces the plan''s optional B.6): the
-      per-segment history all-gather must be HIDDEN if at all possible, not left exposed: run the next segment''s gather fused with / concurrent to another kernel (the current segment''s sdpa / indexer,
-      or the token-wise projections / MoE), as P.87 did with the engram lookup. Every chunk the gather reads each segment''s own served cache (no reuse across chunks). Behind ONE call-time switch PACKED_GATHER_HIDE=off|on
-      (default off; on = your change). Bounded waits, every awaited semaphore signalled, smallest shape first (P.73''s concurrent attempt hung). Report exposed vs hidden gather time per segment from the
-      device profile (test_packed_walls'' metrics). Only if hiding is proven impossible: write why with the evidence in BREADCRUMBS as an OWNER DECISION and stop (do not ship a partial workaround). OWNER
-      RULES FOR EVERY B TASK (2026-11-19). FAST ITERATION IS THE FIRST RULE: never load what you do not need; before any load write the one-line reason in BREADCRUMBS; iterate on the CPU, one layer, the
-      characteristic layers [0, 1, 2, 3, 14, 20, 21, 24], then layers 0-20, and the full 40 only once (the gate does it). Every device open leaks 10-27 GiB of host RAM and a model load costs 2-4 min: ALL
-      device work (op tests, probes, layer tests) goes through the resident runner (python -m models.demos.common.bringup.resident status|submit --spec <spec> --cmd "<safe-runner command>"); never run scripts/run_safe_pytest.sh
-      directly (it makes the runner step aside = a fresh open). New test files: BATCH_SHARED = True (+ BATCH_ITEM_VARS for per-run env, BATCH_LAYERS for the layers it needs). A/B switches are call-time
-      (read per chunk, listed in bringup/hooks.py batch_call_settings) so both sides run in one load. New kernels: bounded waits, every awaited semaphore signalled, NOC writes inside buffers, fabric payloads
-      <= 6208 B, smallest shape first (two hangs on 2026-11-19). Only matmuls stay within 110 cores; other ops may use 120. Determinism (bit-identical repeats) outranks everything. Do not break tt-d-gen
-      compatibility (served caches, formats, addresses, acks, chunk header, the engine''s device input); the model does NOT know the next chunk; no per-prompt precompute, no extra host round trips. No fork
-      regression / unit suites on the 8x4: run only the tests you add and the model-level checks. Every Python-built op goes through ttnn.bringup.prepare_program / run_prepared. Forks first (ttnn/ttnn/bringup/INDEX.md),
+    details: 'OVERSEER 2026-11-20 02:20: PB.3A measured 4x2k@139264 122.3 ms (device 92.6, host enqueue ~108-111 ms: HOST-BOUND) and mixed 150.8 ms. The lever now is the host and the per-segment fixed costs
+      on the critical path: per-segment snapshot sends (~80 a chunk), history tail gathers and key decodes per segment, per-segment served writes: batch them into one prepared program a layer (PACKED_DESIGN.md
+      s6 rule 4: <= +20 launches over a single request), pipeline segment i+1''s prep while i computes, and hide the gathers (behind the token-wise work / attention). Mixed with ONE slot capacity for all
+      lanes (OV-62: serving''s layout, the one ring). Report the exposed host breakdown before / after. Targets: 4x2k_p139264 >= 67k and mixed >= 64k serving tok/s. OVERSEER 2026-11-20: runs AFTER PB.3A
+      (one attention call, v2): hide the gathers on v2''s schedule, with PACKED_ATTN_ONECALL=on. OWNER 20:55 (binding; replaces the plan''s optional B.6): the per-segment history all-gather must be HIDDEN
+      if at all possible, not left exposed: run the next segment''s gather fused with / concurrent to another kernel (the current segment''s sdpa / indexer, or the token-wise projections / MoE), as P.87
+      did with the engram lookup. Every chunk the gather reads each segment''s own served cache (no reuse across chunks). Behind ONE call-time switch PACKED_GATHER_HIDE=off|on (default off; on = your change).
+      Bounded waits, every awaited semaphore signalled, smallest shape first (P.73''s concurrent attempt hung). Report exposed vs hidden gather time per segment from the device profile (test_packed_walls''
+      metrics). Only if hiding is proven impossible: write why with the evidence in BREADCRUMBS as an OWNER DECISION and stop (do not ship a partial workaround). OWNER RULES FOR EVERY B TASK (2026-11-19).
+      FAST ITERATION IS THE FIRST RULE: never load what you do not need; before any load write the one-line reason in BREADCRUMBS; iterate on the CPU, one layer, the characteristic layers [0, 1, 2, 3, 14,
+      20, 21, 24], then layers 0-20, and the full 40 only once (the gate does it). Every device open leaks 10-27 GiB of host RAM and a model load costs 2-4 min: ALL device work (op tests, probes, layer
+      tests) goes through the resident runner (python -m models.demos.common.bringup.resident status|submit --spec <spec> --cmd "<safe-runner command>"); never run scripts/run_safe_pytest.sh directly (it
+      makes the runner step aside = a fresh open). New test files: BATCH_SHARED = True (+ BATCH_ITEM_VARS for per-run env, BATCH_LAYERS for the layers it needs). A/B switches are call-time (read per chunk,
+      listed in bringup/hooks.py batch_call_settings) so both sides run in one load. New kernels: bounded waits, every awaited semaphore signalled, NOC writes inside buffers, fabric payloads <= 6208 B,
+      smallest shape first (two hangs on 2026-11-19). Only matmuls stay within 110 cores; other ops may use 120. Determinism (bit-identical repeats) outranks everything. Do not break tt-d-gen compatibility
+      (served caches, formats, addresses, acks, chunk header, the engine''s device input); the model does NOT know the next chunk; no per-prompt precompute, no extra host round trips. No fork regression
+      / unit suites on the 8x4: run only the tests you add and the model-level checks. Every Python-built op goes through ttnn.bringup.prepare_program / run_prepared. Forks first (ttnn/ttnn/bringup/INDEX.md),
       then TTNN. Do not change thresholds, goldens, frozen tests, tasks.yaml, state or results/. Write per-segment, never per-test special cases. Record what you did and measured in BREADCRUMBS.md (PPB.<n>
       section). Plan and numbers: /data/dnijemcevic/bringup/handoff_20261119/BATCHING_PLAN.md (the owner''s plan: design, oracle, ladder), /data/dnijemcevic/bringup/handoff_20261119/packed8k_projection.md
       (projected, not measured), /data/dnijemcevic/bringup/handoff_20261119/HANDOFF.md. OWNER 2026-11-19 20:45-21:00 (binding): GOAL = packed prefill AT THE PERF TARGETS, not just working: agentic text,
@@ -5924,8 +5928,8 @@ tasks:
   gate:
     cmd: BRINGUP_CHUNK=8192 DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_oracle.py
       && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_reference.py
-      && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile
-      models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py
+      && BRINGUP_CHUNK=8192 DS41_ENGRAM_TABLE=resident DS41_PACKED=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py
     metrics:
       packed_lane_equiv_max_abs_diff: == 0
       packed_alone_vs_today_max_abs_diff: == 0
@@ -5960,35 +5964,37 @@ tasks:
       P.77 4-bit history, P.78 host hiding, C++ engram, P.83 mhc_post fast, P.81 grouped wo_a (results/agentx_ladder_20261119.md: 5120 steady walls 74.1-87.4 ms, 51k-1M, agentic_cc). MoE: P.79 / P.80 /
       P.82 / P.84 rejected (MoE heavily optimized; DS41-299 combine = 205 us + 6.77 us a busiest-chip tile above ~100 tiles; DS41-303 combine at its ~820 us / layer floor at 5120); MOE_BLOCK.md (D7 order-free
       combine).'
-    details: 'First VERIFY the MoE over 8192 packed rows is lane-equivalent by construction, with a block-level test (models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_moe_block.py, through the
-      runner, BATCH_LAYERS): the same rows with permuted / different companion rows and at a different lane give bit-identical outputs (expert planning, capacity / overflow paths, combine order, bfp exponents).
-      Then tune for the bigger per-expert matrices (combine off its floor, dispatch packets <= 6208 B, program configs that depend on rows per expert) behind ONE call-time switch PACKED_MOE=off|on (default
-      off; on = your change). Judge by the device profile of the packed 4 x 2k chunk at 139264 (layers 0-20); keep a change only at >= 1 ms device a chunk; if nothing reaches it, keep nothing (the verification
-      test stays) and say so. The gate runs the oracle and the walls with PACKED_MOE=on; the overseer compares with PB.3''s walls. OWNER RULES FOR EVERY B TASK (2026-11-19). FAST ITERATION IS THE FIRST
-      RULE: never load what you do not need; before any load write the one-line reason in BREADCRUMBS; iterate on the CPU, one layer, the characteristic layers [0, 1, 2, 3, 14, 20, 21, 24], then layers
-      0-20, and the full 40 only once (the gate does it). Every device open leaks 10-27 GiB of host RAM and a model load costs 2-4 min: ALL device work (op tests, probes, layer tests) goes through the resident
-      runner (python -m models.demos.common.bringup.resident status|submit --spec <spec> --cmd "<safe-runner command>"); never run scripts/run_safe_pytest.sh directly (it makes the runner step aside = a
-      fresh open). New test files: BATCH_SHARED = True (+ BATCH_ITEM_VARS for per-run env, BATCH_LAYERS for the layers it needs). A/B switches are call-time (read per chunk, listed in bringup/hooks.py batch_call_settings)
-      so both sides run in one load. New kernels: bounded waits, every awaited semaphore signalled, NOC writes inside buffers, fabric payloads <= 6208 B, smallest shape first (two hangs on 2026-11-19).
-      Only matmuls stay within 110 cores; other ops may use 120. Determinism (bit-identical repeats) outranks everything. Do not break tt-d-gen compatibility (served caches, formats, addresses, acks, chunk
-      header, the engine''s device input); the model does NOT know the next chunk; no per-prompt precompute, no extra host round trips. No fork regression / unit suites on the 8x4: run only the tests you
-      add and the model-level checks. Every Python-built op goes through ttnn.bringup.prepare_program / run_prepared. Forks first (ttnn/ttnn/bringup/INDEX.md), then TTNN. Do not change thresholds, goldens,
-      frozen tests, tasks.yaml, state or results/. Write per-segment, never per-test special cases. Record what you did and measured in BREADCRUMBS.md (PPB.<n> section). Plan and numbers: /data/dnijemcevic/bringup/handoff_20261119/BATCHING_PLAN.md
-      (the owner''s plan: design, oracle, ladder), /data/dnijemcevic/bringup/handoff_20261119/packed8k_projection.md (projected, not measured), /data/dnijemcevic/bringup/handoff_20261119/HANDOFF.md. OWNER
-      2026-11-19 20:45-21:00 (binding): GOAL = packed prefill AT THE PERF TARGETS, not just working: agentic text, steady, serving-equivalent: 4 x 2k each over ~139k history >= 67k new tok/s (<= ~122 ms
-      a 8192 chunk) and the mixed-history case (61k / 139k / 308k / 547k) >= 64k. NO SHORTCUTS, mimic serving: every chunk each segment''s history comes from ITS OWN slot''s served cache in tt-d-gen''s
-      layout and is gathered / refilled for that chunk (no per-chip gathered table or any per-slot device state assumed to persist across chunks or to belong to the same request; slots are arbitrary and
-      change every chunk; the model does not know the next chunk); device memory budgeted honestly (all segments'' history buffers resident at once, checked against the DRAM budget at 1M histories); inputs
-      as tt-d-gen delivers them (device ids, a per-segment descriptor in the chunk header; no per-prompt host precompute, no extra host round trips, no hardcoding to a trace); measured with real texts at
-      real history positions, padded and empty lanes included. Anything needing a shortcut is an OWNER DECISION: stop and write it in BREADCRUMBS. PIPELINE AND HIDE across segments from the start: per-segment
-      fixed costs (history gathers, engram lookups, launches, host prep) must not add up on the critical path: segment i+1''s lookup / gather / prep runs while segment i computes (fused with or concurrent
-      to attention, the indexer or the token-wise work, as P.87 fused the engram lookup with the history prefetch; or hidden behind the engram lookups as today). Judge by the device profile and the exposed-host
+    details: 'OVERSEER 2026-11-20 02:20: also in this task, pad rows OUT of the MoE dispatch (PACKED_DESIGN.md s11 DECIDED; PB.3A did not build it: 1 x 2k + 3 empty lanes spends 67 ms in experts on 6144
+      pad rows of one id): a padded or empty lane must cost no expert work and move no planner state; bit-identical for real rows (the oracle). First VERIFY the MoE over 8192 packed rows is lane-equivalent
+      by construction, with a block-level test (models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_moe_block.py, through the runner, BATCH_LAYERS): the same rows with permuted / different companion
+      rows and at a different lane give bit-identical outputs (expert planning, capacity / overflow paths, combine order, bfp exponents). Then tune for the bigger per-expert matrices (combine off its floor,
+      dispatch packets <= 6208 B, program configs that depend on rows per expert) behind ONE call-time switch PACKED_MOE=off|on (default off; on = your change). Judge by the device profile of the packed
+      4 x 2k chunk at 139264 (layers 0-20); keep a change only at >= 1 ms device a chunk; if nothing reaches it, keep nothing (the verification test stays) and say so. The gate runs the oracle and the walls
+      with PACKED_MOE=on; the overseer compares with PB.3''s walls. OWNER RULES FOR EVERY B TASK (2026-11-19). FAST ITERATION IS THE FIRST RULE: never load what you do not need; before any load write the
+      one-line reason in BREADCRUMBS; iterate on the CPU, one layer, the characteristic layers [0, 1, 2, 3, 14, 20, 21, 24], then layers 0-20, and the full 40 only once (the gate does it). Every device
+      open leaks 10-27 GiB of host RAM and a model load costs 2-4 min: ALL device work (op tests, probes, layer tests) goes through the resident runner (python -m models.demos.common.bringup.resident status|submit
+      --spec <spec> --cmd "<safe-runner command>"); never run scripts/run_safe_pytest.sh directly (it makes the runner step aside = a fresh open). New test files: BATCH_SHARED = True (+ BATCH_ITEM_VARS
+      for per-run env, BATCH_LAYERS for the layers it needs). A/B switches are call-time (read per chunk, listed in bringup/hooks.py batch_call_settings) so both sides run in one load. New kernels: bounded
+      waits, every awaited semaphore signalled, NOC writes inside buffers, fabric payloads <= 6208 B, smallest shape first (two hangs on 2026-11-19). Only matmuls stay within 110 cores; other ops may use
+      120. Determinism (bit-identical repeats) outranks everything. Do not break tt-d-gen compatibility (served caches, formats, addresses, acks, chunk header, the engine''s device input); the model does
+      NOT know the next chunk; no per-prompt precompute, no extra host round trips. No fork regression / unit suites on the 8x4: run only the tests you add and the model-level checks. Every Python-built
+      op goes through ttnn.bringup.prepare_program / run_prepared. Forks first (ttnn/ttnn/bringup/INDEX.md), then TTNN. Do not change thresholds, goldens, frozen tests, tasks.yaml, state or results/. Write
+      per-segment, never per-test special cases. Record what you did and measured in BREADCRUMBS.md (PPB.<n> section). Plan and numbers: /data/dnijemcevic/bringup/handoff_20261119/BATCHING_PLAN.md (the
+      owner''s plan: design, oracle, ladder), /data/dnijemcevic/bringup/handoff_20261119/packed8k_projection.md (projected, not measured), /data/dnijemcevic/bringup/handoff_20261119/HANDOFF.md. OWNER 2026-11-19
+      20:45-21:00 (binding): GOAL = packed prefill AT THE PERF TARGETS, not just working: agentic text, steady, serving-equivalent: 4 x 2k each over ~139k history >= 67k new tok/s (<= ~122 ms a 8192 chunk)
+      and the mixed-history case (61k / 139k / 308k / 547k) >= 64k. NO SHORTCUTS, mimic serving: every chunk each segment''s history comes from ITS OWN slot''s served cache in tt-d-gen''s layout and is
+      gathered / refilled for that chunk (no per-chip gathered table or any per-slot device state assumed to persist across chunks or to belong to the same request; slots are arbitrary and change every
+      chunk; the model does not know the next chunk); device memory budgeted honestly (all segments'' history buffers resident at once, checked against the DRAM budget at 1M histories); inputs as tt-d-gen
+      delivers them (device ids, a per-segment descriptor in the chunk header; no per-prompt host precompute, no extra host round trips, no hardcoding to a trace); measured with real texts at real history
+      positions, padded and empty lanes included. Anything needing a shortcut is an OWNER DECISION: stop and write it in BREADCRUMBS. PIPELINE AND HIDE across segments from the start: per-segment fixed
+      costs (history gathers, engram lookups, launches, host prep) must not add up on the critical path: segment i+1''s lookup / gather / prep runs while segment i computes (fused with or concurrent to
+      attention, the indexer or the token-wise work, as P.87 fused the engram lookup with the history prefetch; or hidden behind the engram lookups as today). Judge by the device profile and the exposed-host
       breakdown; report exposed vs hidden gather time per segment.'
   gate:
     cmd: BRINGUP_CHUNK=8192 DS41_PACKED=on scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_moe_block.py && BRINGUP_CHUNK=8192 DS41_PACKED_MOE=on
       scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_oracle.py && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on scripts/run_safe_pytest.sh
-      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_reference.py && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on
-      BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_reference.py && BRINGUP_CHUNK=8192 DS41_ENGRAM_TABLE=resident DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on
+      DS41_PACKED_ATTN_ONECALL=on BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py
     metrics:
       packed_moe_block_max_abs_diff: == 0
       packed_lane_equiv_max_abs_diff: == 0
@@ -6013,8 +6019,8 @@ tasks:
   gate:
     cmd: BRINGUP_CHUNK=8192 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_chunk8192_reference.py && BRINGUP_CHUNK=8192 scripts/run_safe_pytest.sh
       --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_oracle.py && BRINGUP_CHUNK=8192 DS41_PACKED=on scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_reference.py
-      && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_MOE=on BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all
-      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py
+      && BRINGUP_CHUNK=8192 DS41_ENGRAM_TABLE=resident DS41_PACKED=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_MOE=on BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py
     metrics:
       err_layer_L*: <= limit
       err_final_hidden*: <= limit

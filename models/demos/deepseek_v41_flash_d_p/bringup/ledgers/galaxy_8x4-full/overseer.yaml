@@ -643,6 +643,18 @@ notes:
     BRINGUP_CHUNK=8192. A unit refused with ''needs another model ... refused (owner rule 2026-11-19, spec tests.one_load)''
     is a configuration mismatch to fix in the test, not a model bug. Repeat determinism is measured inside test_packed_oracle
     (packed_determinism_max_abs_diff); test_determinism.py is not in the PB gates.'
+- id: OV-62
+  tasks:
+  - PB.3*
+  - PB.4
+  - PB.5
+  status: open
+  t: '2026-11-20T01:51:21'
+  text: 'Walls must mimic serving (owner rule 3): tt-d-gen''s slots all have ONE capacity (the served cache sized for the
+    deployment context), so test_packed_walls allocates every lane''s slot at that one capacity (not sized by the segment''s
+    position), and the one-ring indexer path is the one measured in every case incl. mixed. Keep the per-segment-ring fallback
+    for unequal capacities (correct, tested), but it is not the serving path. If one capacity at 1M for 4 slots does not
+    fit next to the model, record the DRAM numbers and use the largest capacity that fits for all 4 (say which).'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
