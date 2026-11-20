@@ -219,6 +219,9 @@ public:
 
     void initialize_receiver_pool(uint32_t num_partitions = 1);
     CoreCoord reserve_sync_core();
+    CoreCoord reserve_sync_core(const CoreCoord& core);
+    // The lowest core that is free on every listed device: the global sync needs one coordinate everywhere.
+    static CoreCoord find_common_sync_core(const std::vector<TestDeviceResources*>& devices);
     CoreCoord reserve_sender_core(const std::optional<CoreCoord>& specified_core);
     CoreCoord reserve_receiver_core(
         const std::optional<CoreCoord>& specified_core, uint32_t partition_id = 0, uint32_t num_partitions = 1);
@@ -318,6 +321,52 @@ inline CoreCoord TestDeviceResources::reserve_sync_core() {
     return core;
 }
 
+inline CoreCoord TestDeviceResources::reserve_sync_core(const CoreCoord& core) {
+    CorePool& pool = core_pools_[SENDER_TYPE_IDX];
+    if (!pool.initialized) {
+        refill_pool(pool);
+        pool.initialized = true;
+    }
+    reserve_core_internal(core, CoreType::SENDER);
+    return core;
+}
+
+inline CoreCoord TestDeviceResources::find_common_sync_core(const std::vector<TestDeviceResources*>& devices) {
+    for (auto* d : devices) {
+        CorePool& pool = d->core_pools_[SENDER_TYPE_IDX];
+        if (!pool.initialized) {
+            d->refill_pool(pool);
+            pool.initialized = true;
+        }
+    }
+    // Candidates: the first device's sender pool plus its still-pristine cores (reserve_core_internal pulls a
+    // pristine core into the pool), so a sender on row 0 of some device does not exhaust the choice.
+    std::vector<CoreCoord> candidates = devices.front()->core_pools_[SENDER_TYPE_IDX].active_pool;
+    candidates.insert(
+        candidates.end(), devices.front()->pristine_cores_.begin(), devices.front()->pristine_cores_.end());
+    std::sort(candidates.begin(), candidates.end(), [](const CoreCoord& a, const CoreCoord& b) {
+        return a.y != b.y ? a.y < b.y : a.x < b.x;
+    });
+    for (const auto& core : candidates) {
+        bool free_everywhere = true;
+        for (auto* d : devices) {
+            const auto& pool = d->core_pools_[SENDER_TYPE_IDX].active_pool;
+            const auto& pristine = d->pristine_cores_;
+            auto it = d->core_workload_.find(core);
+            const bool available = std::find(pool.begin(), pool.end(), core) != pool.end() ||
+                                   std::find(pristine.begin(), pristine.end(), core) != pristine.end();
+            if (!available || (it != d->core_workload_.end() && it->second > 0)) {
+                free_everywhere = false;
+                break;
+            }
+        }
+        if (free_everywhere) {
+            return core;
+        }
+    }
+    TT_THROW("No core is free for the sync worker on every device");
+}
+
 inline CoreCoord TestDeviceResources::reserve_sender_core(const std::optional<CoreCoord>& specified_core) {
     if (specified_core.has_value()) {
         reserve_core_internal(specified_core.value(), CoreType::SENDER);
@@ -379,8 +428,10 @@ inline void TestDeviceResources::refill_pool(CorePool& pool) {
             }
             break;
         }
-        new_cores.push_back(pristine_cores_.back());
-        pristine_cores_.pop_back();
+        // Take pool cores from the top-left of the grid: explicit receiver placements favour the bottom row,
+        // and a core that merely sits in the sender pool can never be given to a receiver.
+        new_cores.push_back(pristine_cores_.front());
+        pristine_cores_.erase(pristine_cores_.begin());
     }
 
     // Use CorePool::add_cores to handle partition assignment
@@ -455,10 +506,19 @@ inline std::vector<CoreCoord> TestDeviceResources::collect_remaining_pristine_co
 }
 
 inline CoreCoord TestDeviceResources::find_next_available_sync_core(CorePool& pool) {
-    size_t current_pool_idx = pool.next_pool_idx;
-    const CoreCoord& core = pool.active_pool[current_pool_idx];
-    pool.next_pool_idx = (current_pool_idx + 1) % pool.active_pool.size();
-    return core;
+    // The pool is filled from the bottom-right of the grid, where explicitly placed receivers tend to sit, so
+    // take the lowest free core (top-left first) and skip anything an explicit placement already took.
+    std::vector<CoreCoord> candidates(pool.active_pool.begin(), pool.active_pool.end());
+    std::sort(candidates.begin(), candidates.end(), [](const CoreCoord& a, const CoreCoord& b) {
+        return a.y != b.y ? a.y < b.y : a.x < b.x;
+    });
+    for (const auto& core : candidates) {
+        auto it = core_workload_.find(core);
+        if (it == core_workload_.end() || it->second == 0) {
+            return core;
+        }
+    }
+    TT_THROW("No free core left for the sync worker on device {}", node_id_);
 }
 
 inline CoreCoord TestDeviceResources::find_next_available_core(CorePool& pool, uint32_t partition_id) {
@@ -916,13 +976,6 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
     // Store flow control flag for use during device creation
     enable_flow_control_ = test_config.enable_flow_control;
 
-    // PASS 0: Reserve sync cores for synchronization
-    for (auto& sync_config : test_config.sync_configs) {
-        auto& sync_sender = sync_config.sender_config;
-        auto& device_resources = get_or_create_device_resources(sync_sender.device);
-        sync_sender.core = device_resources.reserve_sync_core();
-    }
-
     // PASS 1: Reserve all specified sender cores first. This establishes the pool of
     // cores that are *not* available for receivers.
     uint32_t receiver_partitions = 1;  // Compute number of link partitions needed
@@ -932,6 +985,21 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
         if (sender.core.has_value()) {
             auto& device_resources = get_or_create_device_resources(sender.device);
             device_resources.reserve_sender_core(sender.core);
+        }
+    }
+
+    // Sync cores come after the explicitly placed senders so they never collide with one, and the global
+    // sync needs the same coordinate on every device.
+    if (!test_config.sync_configs.empty()) {
+        std::vector<TestDeviceResources*> sync_devices;
+        for (auto& sync_config : test_config.sync_configs) {
+            sync_devices.push_back(&get_or_create_device_resources(sync_config.sender_config.device));
+        }
+        const CoreCoord sync_core = TestDeviceResources::find_common_sync_core(sync_devices);
+        for (auto& sync_config : test_config.sync_configs) {
+            auto& sync_sender = sync_config.sender_config;
+            auto& device_resources = get_or_create_device_resources(sync_sender.device);
+            sync_sender.core = device_resources.reserve_sync_core(sync_core);
         }
     }
 

@@ -210,17 +210,22 @@ struct SenderTrafficConfigMetadata {
     static SenderTrafficConfigMetadata build_from_args(size_t& arg_idx) { return SenderTrafficConfigMetadata(arg_idx); }
 
     SenderTrafficConfigMetadata(const SenderTrafficConfigMetadata& other) :
-        num_packets(other.num_packets), seed(other.seed), payload_buffer_size(other.payload_buffer_size) {}
+        num_packets(other.num_packets),
+        seed(other.seed),
+        payload_buffer_size(other.payload_buffer_size),
+        packet_period_cycles(other.packet_period_cycles) {}
 
     uint32_t num_packets = 0;
     uint32_t seed = 0;
     uint32_t payload_buffer_size = 0;
+    uint32_t packet_period_cycles = 0;
 
 private:
     SenderTrafficConfigMetadata(size_t& arg_idx) {
         this->num_packets = get_local_arg_val<uint32_t>(arg_idx++);
         this->seed = get_local_arg_val<uint32_t>(arg_idx++);
         this->payload_buffer_size = get_local_arg_val<uint32_t>(arg_idx++);
+        this->packet_period_cycles = get_local_arg_val<uint32_t>(arg_idx++);
     }
 };
 
@@ -893,16 +898,23 @@ struct SenderCreditManager {
         ASSERT(credit_semaphores_base_ptr_ != nullptr);
     }
 
-    // Initialize credit semaphores
-    void initialize() {
+    // Credit counters are zeroed by the host before launch; a receiver's first credit (its ready token in
+    // benchmark mode) may already be there when this kernel starts, so nothing is cleared here.
+    void initialize() {}
+
+    // Benchmark mode: block until every receiver has sent its ready token, so the clock starts only once the
+    // far end is running and able to acknowledge.
+    void wait_for_receivers_ready() {
         if (!enabled_) {
             return;
         }
-
         for (uint32_t i = 0; i < num_receivers_; i++) {
-            credit_semaphores_base_ptr_[i * CREDIT_STRIDE_WORDS] = 0;
+            while (credit_semaphores_base_ptr_[i * CREDIT_STRIDE_WORDS + READY_TOKEN_WORD] < 1) {
+                invalidate_l1_cache();
+            }
         }
     }
+    static constexpr uint32_t READY_TOKEN_WORD = 1;  // word 1 of a receiver's 16 B credit slot
 
     // Check if credits available (non-blocking, called before send)
     FORCE_INLINE bool has_credits_available(uint32_t num_packets_processed) const {
@@ -1102,24 +1114,69 @@ struct SenderKernelTrafficConfig {
         ASSERT(num_connections_ == 1);
         auto* conn = static_cast<EdmSenderT*>(connection_ptr_);
 
+        // Acked benchmark (flow control on, fused ntype on the host): every data packet goes out as a plain
+        // write, and one header-only atomic increment after the last write tells the receiver the transfer
+        // has landed. The bandwidth and cycle counts therefore cover writes only.
+        const bool acked_signal =
+            credit_manager_.is_enabled() && noc_send_type_ == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC;
+        if (acked_signal) {
+            const auto& f = noc_fields_.write_atomic_inc_fields;
+            packet_header->to_noc_unicast_write(
+                NocUnicastCommandHeader{
+                    get_noc_addr_helper(f.write_fields.dst_noc_encoding, f.write_fields.dst_address)},
+                f.write_fields.payload_size_bytes);
+        }
+
         // Perform stateful noc send by filling buffers with headers, first, then performing credit-only NOC sends
         // Phase 1: Warmup — send actual headers to fill all buffer slots
         const uint32_t warmup_end = (num_packets < num_warmup) ? num_packets : num_warmup;
-        for (uint32_t pkt = 0; pkt < warmup_end; pkt++) {
-            this->template send_one_packet<BENCHMARK_MODE, false>();
+        const uint32_t period = metadata.packet_period_cycles;
+        if (period == 0) {
+            for (uint32_t pkt = 0; pkt < warmup_end; pkt++) {
+                this->template send_one_packet<BENCHMARK_MODE, false>();
+            }
+
+            setup_credit_update_noc_state(*conn, get_fabric_worker_noc());
+
+            // Phase 2: Steady state — credit-only sends with stateful NOC. Every slot already holds a header, so a
+            // send is the adapter's slot wait and credit update alone (send_one_packet's steady-state arm), kept in
+            // locals so the loop costs the worker no more than the adapter calls.
+            for (uint32_t pkt = warmup_end; pkt < num_packets; pkt++) {
+                conn->wait_for_empty_write_slot();
+                fabric_detail::update_credits_and_slots<true>(conn);
+            }
+            if (num_packets > warmup_end) {
+                num_packets_processed += num_packets - warmup_end;
+            }
+        } else {
+            // Paced: packet i is issued no earlier than start + i * period. A sender that gets blocked
+            // falls behind and catches up at full rate, so the offered rate stays num_packets / period.
+            uint64_t next_issue = get_timestamp();
+            for (uint32_t pkt = 0; pkt < warmup_end; pkt++) {
+                while (get_timestamp() < next_issue) {
+                }
+                this->template send_one_packet<BENCHMARK_MODE, false>();
+                next_issue += period;
+            }
+
+            setup_credit_update_noc_state(*conn, get_fabric_worker_noc());
+
+            for (uint32_t pkt = warmup_end; pkt < num_packets; pkt++) {
+                while (get_timestamp() < next_issue) {
+                }
+                this->template send_one_packet<BENCHMARK_MODE, true>();
+                next_issue += period;
+            }
         }
 
-        setup_credit_update_noc_state(*conn, get_fabric_worker_noc());
-
-        // Phase 2: Steady state — credit-only sends with stateful NOC. Every slot already holds a header, so a
-        // send is the adapter's slot wait and credit update alone (send_one_packet's steady-state arm), kept in
-        // locals so the loop costs the worker no more than the adapter calls.
-        for (uint32_t pkt = warmup_end; pkt < num_packets; pkt++) {
-            conn->wait_for_empty_write_slot();
-            fabric_detail::update_credits_and_slots<true>(conn);
-        }
-        if (num_packets > warmup_end) {
-            num_packets_processed += num_packets - warmup_end;
+        if (acked_signal) {
+            const auto& f = noc_fields_.write_atomic_inc_fields;
+            packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
+                get_noc_addr_helper(f.atomic_inc_fields.dst_noc_encoding, f.atomic_inc_fields.dst_address),
+                f.atomic_inc_fields.atomic_inc_val});
+            connection_manager_->template wait_for_empty_write_slot<BENCHMARK_MODE>(connection_ptr_, connection_idx_);
+            connection_manager_->template send_header_non_blocking<BENCHMARK_MODE>(
+                connection_ptr_, connection_idx_, (uint32_t)packet_header);
         }
     }
 
@@ -1658,6 +1715,12 @@ struct SenderKernelConfig {
         }
     }
 
+    void wait_for_receivers_ready() {
+        for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
+            traffic_config_ptrs[i]->credit_manager_.wait_for_receivers_ready();
+        }
+    }
+
     void local_sync(uint8_t sync_iter) {
         if constexpr (LINE_SYNC) {
             local_sync_config().local_sync(sync_iter);
@@ -1846,6 +1909,33 @@ struct ReceiverCreditManager {
         }
     }
 
+    // Return every credit in one packet (benchmark mode: the sender ignores credits while sending and only
+    // waits for all of them to come back before it stops its clock).
+    FORCE_INLINE void ack_all(uint32_t num_credits) {
+        if (enabled_ && num_credits > 0) {
+            send_credits(num_credits);
+            accumulated_credits_ = 0;
+        }
+    }
+
+    // Ready token: an increment of the word next to the credit counter, so it never counts as a credit. The
+    // host zeroes the sender's slot when it launches that device, so a token may be wiped if it lands first;
+    // callers repeat it until the first packet shows up.
+    void send_ready_token() {
+        if (!enabled_) {
+            return;
+        }
+        noc_async_writes_flushed();
+        uint64_t noc_addr = get_noc_addr_helper(credit_fields_.dst_noc_encoding, credit_fields_.dst_address + 4);
+        packet_header_->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{noc_addr, 1});
+        connection_manager_->wait_for_empty_write_slot<false>(connection_ptr_, connection_idx_);
+        connection_manager_->send_header_flush_blocking<false>(
+            connection_ptr_, connection_idx_, (uint32_t)packet_header_);
+        uint64_t credit_addr = get_noc_addr_helper(credit_fields_.dst_noc_encoding, credit_fields_.dst_address);
+        packet_header_->to_noc_unicast_atomic_inc(
+            NocUnicastAtomicIncCommandHeader{credit_addr, credit_fields_.atomic_inc_val});
+    }
+
 private:
     FORCE_INLINE void send_credits() {
         connection_manager_->wait_for_empty_write_slot<false>(connection_ptr_, connection_idx_);
@@ -1929,6 +2019,30 @@ struct TrafficValidationConfigBase {
         if (credit_manager_ != nullptr) {
             static_cast<ReceiverCreditManager*>(credit_manager_)->accumulate_and_maybe_send();
         }
+    }
+
+    // Benchmark mode with flow control: packets are not validated one by one. Count arrivals through the
+    // config's poll (an atomic-increment counter for atomic_inc / fused_atomic_inc traffic) until the last
+    // packet has landed, then return every credit at once so the sender can close.
+    void benchmark_ack_all() {
+        if (credit_manager_ == nullptr) {
+            return;
+        }
+        auto* credits = static_cast<ReceiverCreditManager*>(credit_manager_);
+        // Ready token tells the sender this core is running, so its clock starts only then. Repeat it until the
+        // first packet arrives in case the sender's device was launched (and its slot zeroed) after the first one.
+        credits->send_ready_token();
+        uint32_t idle_polls = 0;
+        // The data packets are plain writes; the sender follows the last one with a single atomic increment
+        // of this config's counter, which is what poll() sees.
+        while (!ops.poll(this)) {
+            if (++idle_polls == 4096) {
+                credits->send_ready_token();
+                idle_polls = 0;
+            }
+        }
+        num_packets_processed = metadata.num_packets;
+        credits->ack_all(metadata.num_packets);
     }
 
     ReceiverTrafficConfigMetadata metadata;

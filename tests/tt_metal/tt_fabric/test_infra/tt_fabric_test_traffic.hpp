@@ -31,17 +31,22 @@ struct FlowDescriptor {
 };
 
 struct SenderMetadataFields {
-    SenderMetadataFields(uint32_t num_packets, uint32_t seed, uint32_t payload_buffer_size) :
-        num_packets(num_packets), seed(seed), payload_buffer_size(payload_buffer_size) {}
+    SenderMetadataFields(
+        uint32_t num_packets, uint32_t seed, uint32_t payload_buffer_size, uint32_t packet_period_cycles = 0) :
+        num_packets(num_packets),
+        seed(seed),
+        payload_buffer_size(payload_buffer_size),
+        packet_period_cycles(packet_period_cycles) {}
 
     std::vector<uint32_t> get_args() const {
-        std::vector<uint32_t> args = {num_packets, seed, payload_buffer_size};
+        std::vector<uint32_t> args = {num_packets, seed, payload_buffer_size, packet_period_cycles};
         return args;
     }
 
     uint32_t num_packets;
     uint32_t seed;
     uint32_t payload_buffer_size;
+    uint32_t packet_period_cycles;
 };
 
 struct ReceiverMetadataFields {
@@ -274,6 +279,7 @@ struct TrafficParameters {
     std::optional<uint32_t> atomic_inc_val;
     std::optional<uint32_t> mcast_start_hops;
     bool enable_flow_control = false;
+    uint32_t packet_period_cycles = 0;          // benchmark senders issue one packet per period (0 = as fast as possible)
     std::vector<uint32_t> scatter_chunk_sizes;  // NOC_UNICAST_SCATTER_WRITE: size of each write chunk
 
     // Global context
@@ -354,6 +360,7 @@ struct TestTrafficReceiverConfig {
     std::optional<size_t> atomic_inc_address;
     uint32_t payload_buffer_size;  // Add payload buffer size field
     uint32_t link_id = 0;          // Link ID derived from corresponding sender
+    std::optional<tt::tt_metal::NOC> noc_id;  // Responder kernel NOC (latency tests)
 
     // Credit flow info (when enable_flow_control is true)
     std::optional<ReceiverCreditInfo> receiver_credit_info;
@@ -369,7 +376,11 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
 
     if (!is_sync_config) {
         const auto metadata =
-            SenderMetadataFields(this->parameters.num_packets, this->parameters.seed, this->payload_buffer_size);
+            SenderMetadataFields(
+                this->parameters.num_packets,
+                this->parameters.seed,
+                this->payload_buffer_size,
+                this->parameters.packet_period_cycles);
         const auto metadata_args = metadata.get_args();
         args.insert(args.end(), metadata_args.begin(), metadata_args.end());
     }

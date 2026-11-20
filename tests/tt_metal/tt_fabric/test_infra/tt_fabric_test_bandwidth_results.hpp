@@ -65,6 +65,7 @@ struct BandwidthResult {
     uint32_t num_devices{};
     uint32_t device_id{};
     RoutingDirection direction = RoutingDirection::NONE;
+    uint32_t link_id{};
     uint32_t total_traffic_count{};
     uint32_t num_packets{};
     uint32_t packet_size{};

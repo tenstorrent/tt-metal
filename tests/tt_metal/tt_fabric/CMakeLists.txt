@@ -325,3 +325,26 @@ foreach(
 )
     tt_reuse_precompile_headers(${_fabric_test_target} metal_test_pch)
 endforeach()
+
+# Router-to-ethernet-core map used by the latency benchmark YAML generator.
+add_executable(fabric_router_map ${CMAKE_CURRENT_SOURCE_DIR}/latbench/fabric_router_map.cpp)
+target_link_libraries(
+    fabric_router_map
+    PRIVATE
+        tt_metal
+        test_common_libs
+)
+target_include_directories(
+    fabric_router_map
+    PRIVATE
+        ${UMD_HOME}
+        ${PROJECT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tt_metal
+)
+set_target_properties(
+    fabric_router_map
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric/test_infra
+)

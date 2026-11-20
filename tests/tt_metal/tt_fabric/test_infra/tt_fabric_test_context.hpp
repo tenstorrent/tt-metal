@@ -246,6 +246,7 @@ private:
     LatencyResultsManager::LatencyWorkerLocation get_latency_receiver_location();
 
     void add_traffic_config(const TestTrafficConfig& traffic_config);
+    void add_sender_traffic(const TestConfig& config, size_t first_sender);
 
     void initialize_memory_maps();
 

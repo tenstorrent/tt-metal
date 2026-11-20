@@ -186,6 +186,8 @@ public:
     void load_golden_csv() override;
     void write_summary_csv_to_file(const std::filesystem::path& csv_path, bool include_upload_columns) override;
     void append_to_csv(const TestConfig& config, const LatencyResult& result);
+    void flush_csv();
+    std::string csv_buffer_;
     void compare_latency_results_with_golden();
     void generate_latency_summary();
     void setup_ci_artifacts();
@@ -197,11 +199,21 @@ public:
     void reset_state();
 
 private:
-    template <typename GetWorkersMapFunc>
-    LatencyWorkerLocation find_latency_worker_device(
+    LatencyWorkerLocation find_probe_worker(
         std::unordered_map<MeshCoordinate, TestDevice>& test_devices,
-        GetWorkersMapFunc get_workers_map,
-        const std::string& worker_type);
+        const std::optional<FabricNodeId>& node,
+        const CoreCoord& core,
+        const char* worker_type);
+
+    // Background load senders (every sender after the probe) report their achieved rate in a side CSV.
+    void report_background_load(const TestConfig& config, std::unordered_map<MeshCoordinate, TestDevice>& test_devices);
+
+    std::optional<FabricNodeId> probe_sender_node_;
+    std::optional<FabricNodeId> probe_responder_node_;
+    CoreCoord probe_sender_core_;
+    CoreCoord probe_responder_core_;
+    uint32_t probe_start_delay_cycles_ = 0;
+    std::filesystem::path load_csv_file_path_;
 
     template <typename CompResultType, typename GoldenIterType>
     void populate_comparison_tolerance_and_status(

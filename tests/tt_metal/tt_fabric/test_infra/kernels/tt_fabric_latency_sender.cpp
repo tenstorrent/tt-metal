@@ -18,6 +18,9 @@
 constexpr bool enable_fused_payload_with_sync = get_compile_time_arg_val(0) != 0;
 constexpr bool sem_inc_only = get_compile_time_arg_val(1) != 0;
 constexpr bool is_2d_fabric = get_compile_time_arg_val(2) != 0;
+// Cycles to idle after the warmup handshake before the first sample, so background load started on other
+// chips is in steady state when the probe measures.
+constexpr uint32_t start_delay_cycles = get_compile_time_arg_val(3);
 
 void kernel_main() {
     set_l1_data_cache<false>();
@@ -116,6 +119,11 @@ void kernel_main() {
     {
         send_seminc_packet();
         wait_for_semaphore_then_reset(1);
+    }
+    if constexpr (start_delay_cycles > 0) {
+        const uint64_t idle_start = get_timestamp();
+        while (get_timestamp() - idle_start < start_delay_cycles) {
+        }
     }
 
     // Store elapsed time (cycles) as uint32_t in result buffer

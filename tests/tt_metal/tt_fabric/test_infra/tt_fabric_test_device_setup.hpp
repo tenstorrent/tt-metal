@@ -259,6 +259,9 @@ public:
     // stores traffic config and the optional credit connection key (if flow control enabled)
     // Managed by TestDevice::connection_manager_
     std::vector<std::pair<TestTrafficReceiverConfig, std::optional<ConnectionKey>>> configs_;
+    const std::vector<std::pair<TestTrafficReceiverConfig, std::optional<ConnectionKey>>>& get_configs() const {
+        return configs_;
+    }
 };
 
 struct TestSync : TestWorker {
@@ -305,7 +308,8 @@ public:
     void add_receiver_traffic_config(tt::tt_metal::CoreCoord logical_core, const TestTrafficReceiverConfig& config);
     void add_mux_worker_config(
         tt::tt_metal::CoreCoord logical_core, FabricMuxConfig* config, ConnectionKey connection_key, FabricNodeId next_hop_dst);
-    void create_kernels();
+    // skip_cores: cores whose kernels are created separately (the latency probe's sender / responder).
+    void create_kernels(const std::vector<tt::tt_metal::CoreCoord>& skip_cores = {});
 
     // Latency test kernel creation (called directly by TestContext)
     // Uses static memory map addresses for semaphores (same as bandwidth tests)
@@ -315,7 +319,10 @@ public:
         uint32_t payload_size,
         uint32_t num_samples,
         NocSendType noc_send_type,
-        tt::tt_metal::CoreCoord responder_virtual_core);
+        tt::tt_metal::CoreCoord responder_virtual_core,
+        uint32_t link_idx = 0,
+        tt::tt_metal::NOC noc_id = tt::tt_metal::NOC::RISCV_0_default,
+        uint32_t start_delay_cycles = 0);
 
     void create_latency_responder_kernel(
         tt::tt_metal::CoreCoord core,
@@ -325,7 +332,9 @@ public:
         NocSendType noc_send_type,
         uint32_t sender_send_buffer_address,
         uint32_t sender_receive_buffer_address,
-        tt::tt_metal::CoreCoord sender_virtual_core);
+        tt::tt_metal::CoreCoord sender_virtual_core,
+        tt::tt_metal::NOC noc_id = tt::tt_metal::NOC::RISCV_0_default,
+        uint32_t sender_link_idx = 0);
 
     void set_benchmark_mode(bool benchmark_mode) { benchmark_mode_ = benchmark_mode; }
     void set_global_sync(bool global_sync) { global_sync_ = global_sync; }
@@ -403,8 +412,8 @@ public:
 
 private:
     void add_worker(TestWorkerType worker_type, tt::tt_metal::CoreCoord logical_core);
-    void create_sender_kernels();
-    void create_receiver_kernels();
+    void create_sender_kernels(const std::vector<tt::tt_metal::CoreCoord>& skip_cores = {});
+    void create_receiver_kernels(const std::vector<tt::tt_metal::CoreCoord>& skip_cores = {});
     void validate_sender_results() const;
     void validate_receiver_results() const;
     void create_sync_kernel();

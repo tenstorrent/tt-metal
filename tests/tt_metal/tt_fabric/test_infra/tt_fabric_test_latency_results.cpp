@@ -25,15 +25,12 @@ LatencyResultsManager::LatencyResultsManager(TestFixture& fixture, SenderMemoryM
 
 void LatencyResultsManager::create_latency_kernels_for_device(
     TestDevice& test_device, std::unordered_map<MeshCoordinate, TestDevice>& test_devices) {
-    const auto& senders = test_device.get_senders();
-    const auto& receivers = test_device.get_receivers();
+    TT_FATAL(probe_sender_node_.has_value() && probe_responder_node_.has_value(), "Latency probe is not set up");
+    const auto node_id = test_device.get_node_id();
+    std::vector<CoreCoord> probe_cores;
 
-    bool has_sender = !senders.empty();
-    bool has_receiver = !receivers.empty();
-
-    if (has_sender) {
-        TT_FATAL(senders.size() == 1, "Latency test should have exactly one sender per device");
-        const auto& [sender_core, sender_worker] = *senders.begin();
+    if (node_id == probe_sender_node_.value()) {
+        const auto& sender_worker = test_device.get_senders().at(probe_sender_core_);
         const auto& sender_configs = sender_worker.get_configs();
         TT_FATAL(!sender_configs.empty(), "Latency sender should have at least one config");
 
@@ -58,22 +55,26 @@ void LatencyResultsManager::create_latency_kernels_for_device(
                 sender_config.dst_logical_core);
 
         test_device.create_latency_sender_kernel(
-            sender_core,
+            probe_sender_core_,
             responder_device_id,
             sender_config.parameters.payload_size_bytes,
             sender_config.parameters.num_packets,
             sender_config.parameters.noc_send_type.type,
-            responder_virtual_core);
-    } else if (has_receiver) {
-        TT_FATAL(receivers.size() == 1, "Latency test should have exactly one receiver per device");
-        const auto& [receiver_core, receiver_worker] = *receivers.begin();
+            responder_virtual_core,
+            sender_config.link_id,
+            sender_config.noc_id.value_or(tt::tt_metal::NOC::RISCV_0_default),
+            probe_start_delay_cycles_);
+        probe_cores.push_back(probe_sender_core_);
+    }
+
+    if (node_id == probe_responder_node_.value()) {
+        const auto& receiver_worker = test_device.get_receivers().at(probe_responder_core_);
 
         auto sender_location = get_latency_sender_location(test_devices);
         TestDevice* sender_device = sender_location.device;
         CoreCoord sender_core = sender_location.core;
 
-        const auto& sender_senders = sender_device->get_senders();
-        const auto& sender_worker = sender_senders.at(sender_core);
+        const auto& sender_worker = sender_device->get_senders().at(sender_core);
         const auto& sender_configs = sender_worker.get_configs();
         const auto& sender_config = sender_configs[0].first;
 
@@ -88,17 +89,29 @@ void LatencyResultsManager::create_latency_kernels_for_device(
         CoreCoord sender_virtual_core =
             sender_device->get_device_info_provider()->get_virtual_core_from_logical_core(sender_core);
 
+        const auto& receiver_configs = receiver_worker.get_configs();
+        tt::tt_metal::NOC responder_noc_id = tt::tt_metal::NOC::RISCV_0_default;
+        if (!receiver_configs.empty() && receiver_configs[0].first.noc_id.has_value()) {
+            responder_noc_id = receiver_configs[0].first.noc_id.value();
+        }
         test_device.create_latency_responder_kernel(
-            receiver_core,
+            probe_responder_core_,
             sender_device_id,
             payload_size,
             num_samples,
             noc_send_type,
             sender_send_buffer_address,
             sender_receive_buffer_address,
-            sender_virtual_core);
-    } else {
-        test_device.create_kernels();
+            sender_virtual_core,
+            responder_noc_id,
+            sender_config.link_id);
+        probe_cores.push_back(probe_responder_core_);
+    }
+
+    // Background load workers (and devices without any probe worker) take the regular kernel path.
+    const size_t num_workers = test_device.get_senders().size() + test_device.get_receivers().size();
+    if (probe_cores.empty() || num_workers > probe_cores.size()) {
+        test_device.create_kernels(probe_cores);
     }
 }
 
@@ -116,9 +129,9 @@ void LatencyResultsManager::setup_latency_test_mode(const TestConfig& config) {
             config.iteration_number);
     }
 
-    // Validate latency test structure
-    TT_FATAL(config.senders.size() == 1, "Latency test mode requires exactly one sender");
-    TT_FATAL(config.senders[0].patterns.size() == 1, "Latency test mode requires exactly one pattern");
+    // Validate latency test structure: the first sender is the probe, the rest are background load
+    TT_FATAL(!config.senders.empty(), "Latency test mode requires a probe sender");
+    TT_FATAL(config.senders[0].patterns.size() == 1, "Latency test mode requires exactly one probe pattern");
 
     const auto& sender = config.senders[0];
     const auto& pattern = sender.patterns[0];
@@ -126,20 +139,20 @@ void LatencyResultsManager::setup_latency_test_mode(const TestConfig& config) {
 
     log_info(
         tt::LogTest,
-        "Latency test mode: sender={}, responder={}, payload={} bytes, samples={}",
+        "Latency test mode: sender={}, responder={}, payload={} bytes, samples={}, background senders={}",
         sender.device.chip_id,
         dest.device.value().chip_id,
         pattern.size.value(),
-        pattern.num_packets.value());
+        pattern.num_packets.value(),
+        config.senders.size() - 1);
 }
 
 void LatencyResultsManager::setup_latency_test_workers(
     TestConfig& config, std::unordered_map<MeshCoordinate, TestDevice>& test_devices) {
     log_debug(tt::LogTest, "Latency test mode: manually populating sender and receiver workers");
 
-    // Latency tests have exactly one sender with one pattern
-    TT_FATAL(config.senders.size() == 1, "Latency test mode requires exactly one sender");
-    TT_FATAL(config.senders[0].patterns.size() == 1, "Latency test mode requires exactly one pattern");
+    TT_FATAL(!config.senders.empty(), "Latency test mode requires a probe sender");
+    TT_FATAL(config.senders[0].patterns.size() == 1, "Latency test mode requires exactly one probe pattern");
 
     const auto& sender = config.senders[0];
     const auto& pattern = sender.patterns[0];
@@ -155,6 +168,19 @@ void LatencyResultsManager::setup_latency_test_workers(
     CoreCoord receiver_core = dest.core.value_or(CoreCoord{0, 0});
     FabricNodeId sender_device_id = sender.device;
     FabricNodeId receiver_device_id = dest.device.value();
+
+    probe_sender_node_ = sender_device_id;
+    probe_sender_core_ = sender_core;
+    probe_responder_node_ = receiver_device_id;
+    probe_responder_core_ = receiver_core;
+    // With background load the probe idles after its handshake so the load reaches steady state first.
+    probe_start_delay_cycles_ = 0;
+    if (config.senders.size() > 1) {
+        probe_start_delay_cycles_ = 2000000;
+        if (const char* env = std::getenv("FABRIC_TEST_PROBE_DELAY_CYCLES")) {
+            probe_start_delay_cycles_ = static_cast<uint32_t>(std::stoul(env));
+        }
+    }
 
     // Create sender worker on sender device
     if (fixture_.is_local_fabric_node_id(sender_device_id)) {
@@ -186,7 +212,8 @@ void LatencyResultsManager::setup_latency_test_workers(
             .atomic_inc_address = std::nullopt,
             .dst_noc_encoding = fixture_.get_worker_noc_encoding(receiver_core),
             .payload_buffer_size = 0,
-            .link_id = 0};
+            .link_id = sender.link_id,
+            .noc_id = sender.noc_id};
 
         sender_test_device.add_sender_traffic_config(sender_core, std::move(latency_sender_config));
 
@@ -210,7 +237,8 @@ void LatencyResultsManager::setup_latency_test_workers(
             .target_address = 0,
             .atomic_inc_address = std::nullopt,
             .payload_buffer_size = 0,
-            .link_id = 0};
+            .link_id = 0,
+            .noc_id = dest.noc_id};
 
         receiver_test_device.add_receiver_traffic_config(receiver_core, dummy_receiver_config);
 
@@ -228,14 +256,12 @@ void LatencyResultsManager::setup_latency_test_workers(
 
 LatencyResultsManager::LatencyWorkerLocation LatencyResultsManager::get_latency_sender_location(
     std::unordered_map<MeshCoordinate, TestDevice>& test_devices) {
-    return find_latency_worker_device(
-        test_devices, [](TestDevice& d) -> const auto& { return d.get_senders(); }, "sender");
+    return find_probe_worker(test_devices, probe_sender_node_, probe_sender_core_, "sender");
 }
 
 LatencyResultsManager::LatencyWorkerLocation LatencyResultsManager::get_latency_receiver_location(
     std::unordered_map<MeshCoordinate, TestDevice>& test_devices) {
-    return find_latency_worker_device(
-        test_devices, [](TestDevice& d) -> const auto& { return d.get_receivers(); }, "receiver");
+    return find_probe_worker(test_devices, probe_responder_node_, probe_responder_core_, "responder");
 }
 
 void LatencyResultsManager::collect_latency_results(std::unordered_map<MeshCoordinate, TestDevice>& test_devices) {
@@ -246,7 +272,7 @@ void LatencyResultsManager::collect_latency_results(std::unordered_map<MeshCoord
     auto responder_location = get_latency_receiver_location(test_devices);
 
     // Get num_samples from sender config
-    const auto& sender_configs = sender_location.device->get_senders().begin()->second.get_configs();
+    const auto& sender_configs = sender_location.device->get_senders().at(sender_location.core).get_configs();
     uint32_t num_samples = sender_configs[0].first.parameters.num_packets;
     uint32_t result_buffer_size = num_samples * sizeof(uint32_t);
 
@@ -270,6 +296,7 @@ void LatencyResultsManager::collect_latency_results(std::unordered_map<MeshCoord
 void LatencyResultsManager::report_latency_results(
     const TestConfig& config, std::unordered_map<MeshCoordinate, TestDevice>& test_devices) {
     log_info(tt::LogTest, "Reporting latency results for test: {}", config.parametrized_name);
+    report_background_load(config, test_devices);
 
     // Find sender and responder locations
     auto sender_location = get_latency_sender_location(test_devices);
@@ -285,7 +312,7 @@ void LatencyResultsManager::report_latency_results(
     FabricNodeId responder_node_id = responder_location.node_id;
 
     // Get latency parameters from sender config
-    const auto& sender_configs = sender_device->get_senders().begin()->second.get_configs();
+    const auto& sender_configs = sender_device->get_senders().at(sender_core).get_configs();
     const auto& sender_config = sender_configs[0].first;
 
     uint32_t num_samples = sender_config.parameters.num_packets;
@@ -433,6 +460,7 @@ void LatencyResultsManager::report_latency_results(
         return;
     }
 
+    flush_csv();
     log_info(tt::LogTest, "Wrote {} samples to detailed CSV", num_samples);
 
     // Sort once for percentile calculation on summary statistics
@@ -551,6 +579,9 @@ void LatencyResultsManager::initialize_results_csv_file(bool telemetry_enabled_ 
     std::filesystem::path tt_metal_home =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir());
     std::filesystem::path latency_results_path = tt_metal_home / std::string(OUTPUT_DIR);
+    if (const char* override_dir = std::getenv("FABRIC_TEST_RESULTS_DIR")) {
+        latency_results_path = override_dir;
+    }
 
     if (!std::filesystem::exists(latency_results_path)) {
         std::filesystem::create_directories(latency_results_path);
@@ -563,6 +594,12 @@ void LatencyResultsManager::initialize_results_csv_file(bool telemetry_enabled_ 
     std::ostringstream oss;
     oss << get_perf_metric_name() + "_results_" << arch_name << ".csv";
     csv_file_path_ = latency_results_path / oss.str();
+    load_csv_file_path_ = latency_results_path / ("latency_load_results_" + arch_name + ".csv");
+    {
+        std::ofstream load_stream(load_csv_file_path_, std::ios::out | std::ios::trunc);
+        load_stream << "test_name,sender_device,sender_core_x,sender_core_y,dst_device,link_id,payload_size,"
+                       "num_packets,packet_period_cycles,cycles,packets,status\n";
+    }
 
     // Create detailed CSV file with header
     std::ofstream csv_stream(csv_file_path_, std::ios::out | std::ios::trunc);  // Truncate file
@@ -646,14 +683,21 @@ void LatencyResultsManager::write_summary_csv_to_file(
     log_info(tt::LogTest, "Latency results written to CSV file: {}", csv_file_path_.string());
 }
 
-void LatencyResultsManager::append_to_csv(const TestConfig& config [[maybe_unused]], const LatencyResult& result) {
-    // Open CSV file in append mode
+void LatencyResultsManager::flush_csv() {
+    if (csv_buffer_.empty()) {
+        return;
+    }
     std::ofstream csv_stream(csv_file_path_, std::ios::out | std::ios::app);
     if (!csv_stream.is_open()) {
         log_error(tt::LogTest, "Failed to open CSV file for appending: {}", csv_file_path_.string());
         return;
     }
+    csv_stream << csv_buffer_;
+    csv_buffer_.clear();
+}
 
+void LatencyResultsManager::append_to_csv(const TestConfig& config [[maybe_unused]], const LatencyResult& result) {
+    std::ostringstream csv_stream;
     csv_stream << result.test_name << "," << result.ftype << "," << result.ntype << "," << result.topology << ","
                << result.sender_device_id << "," << result.sender_core_x << "," << result.sender_core_y << ","
                << result.responder_device_id << "," << result.responder_core_x << "," << result.responder_core_y << ","
@@ -664,8 +708,7 @@ void LatencyResultsManager::append_to_csv(const TestConfig& config [[maybe_unuse
                << result.responder_p99_ns << "," << result.raw_min_ns << "," << result.raw_max_ns << ","
                << result.raw_avg_ns << "," << result.raw_p99_ns << "," << result.per_hop_min_ns << ","
                << result.per_hop_max_ns << "," << result.per_hop_avg_ns << "," << result.per_hop_p99_ns << "\n";
-
-    csv_stream.close();
+    csv_buffer_ += csv_stream.str();
 }
 
 void LatencyResultsManager::load_golden_csv() {
@@ -957,24 +1000,60 @@ void LatencyResultsManager::reset_state() {
 }
 
 // Template definitions
-template <typename GetWorkersMapFunc>
-LatencyResultsManager::LatencyWorkerLocation LatencyResultsManager::find_latency_worker_device(
+LatencyResultsManager::LatencyWorkerLocation LatencyResultsManager::find_probe_worker(
     std::unordered_map<MeshCoordinate, TestDevice>& test_devices,
-    GetWorkersMapFunc get_workers_map,
-    const std::string& worker_type) {
+    const std::optional<FabricNodeId>& node,
+    const CoreCoord& core,
+    const char* worker_type) {
+    TT_FATAL(node.has_value(), "Latency {} is not set up", worker_type);
     LatencyWorkerLocation info;
     for (auto& [coord, device] : test_devices) {
-        const auto& workers_map = get_workers_map(device);
-        if (!workers_map.empty()) {
+        if (device.get_node_id() == node.value()) {
             info.device = &device;
             info.mesh_coord = coord;
-            info.core = workers_map.begin()->first;
+            info.core = core;
             info.node_id = device.get_node_id();
             break;
         }
     }
     TT_FATAL(info.device != nullptr, "Could not find latency {} device", worker_type);
     return info;
+}
+
+void LatencyResultsManager::report_background_load(
+    const TestConfig& config, std::unordered_map<MeshCoordinate, TestDevice>& test_devices) {
+    if (config.senders.size() <= 1 || load_csv_file_path_.empty()) {
+        return;
+    }
+    std::ofstream csv(load_csv_file_path_, std::ios::out | std::ios::app);
+    if (!csv.is_open()) {
+        log_error(tt::LogTest, "Failed to open background load CSV: {}", load_csv_file_path_.string());
+        return;
+    }
+    constexpr uint32_t num_words = TT_FABRIC_CYCLES_INDEX + 2;
+    for (auto& [coord, device] : test_devices) {
+        const auto node_id = device.get_node_id();
+        for (const auto& [core, sender] : device.get_senders()) {
+            if (node_id == probe_sender_node_.value() && core == probe_sender_core_) {
+                continue;
+            }
+            auto data = fixture_.read_buffer_from_cores(
+                coord, {core}, sender_memory_map_.get_result_buffer_address(), num_words * sizeof(uint32_t));
+            const auto& words = data.at(core);
+            const uint64_t cycles =
+                (static_cast<uint64_t>(words[TT_FABRIC_CYCLES_INDEX + 1]) << 32) | words[TT_FABRIC_CYCLES_INDEX];
+            const uint64_t packets =
+                (static_cast<uint64_t>(words[TT_FABRIC_WORD_CNT_INDEX + 1]) << 32) | words[TT_FABRIC_WORD_CNT_INDEX];
+            for (const auto& [cfg, keys] : sender.get_configs()) {
+                (void)keys;
+                csv << config.parametrized_name << "," << node_id.chip_id << "," << core.x << "," << core.y << ","
+                    << (cfg.dst_node_ids.empty() ? 0u : cfg.dst_node_ids[0].chip_id) << "," << cfg.link_id << ","
+                    << cfg.parameters.payload_size_bytes << "," << cfg.parameters.num_packets << ","
+                    << cfg.parameters.packet_period_cycles << "," << cycles << "," << packets << ","
+                    << words[TT_FABRIC_STATUS_INDEX] << "\n";
+            }
+        }
+    }
 }
 
 template <typename CompResultType, typename GoldenIterType>

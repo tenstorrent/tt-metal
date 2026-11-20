@@ -55,6 +55,9 @@ void BandwidthResultsManager::initialize_results_csv_file(bool telemetry_enabled
     std::filesystem::path tt_metal_home =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir());
     std::filesystem::path bandwidth_results_path = tt_metal_home / std::string(OUTPUT_DIR);
+    if (const char* override_dir = std::getenv("FABRIC_TEST_RESULTS_DIR")) {
+        bandwidth_results_path = override_dir;
+    }
 
     if (!std::filesystem::exists(bandwidth_results_path)) {
         std::filesystem::create_directories(bandwidth_results_path);
@@ -75,7 +78,7 @@ void BandwidthResultsManager::initialize_results_csv_file(bool telemetry_enabled
 
     // Write detailed header
     csv_stream
-        << "test_name,ftype,ntype,topology,num_devices,device,num_links,direction,total_traffic_count,num_packets,"
+        << "test_name,ftype,ntype,topology,num_devices,device,num_links,direction,link_id,total_traffic_count,num_packets,"
            "packet_size,cycles,"
            "bandwidth_GB_s,packets_per_second";
     if (telemetry_enabled_) {
@@ -134,7 +137,7 @@ void BandwidthResultsManager::append_to_csv(const TestConfig& config, const Band
     csv_stream << config.parametrized_name << "," << ftype_str << "," << ntype_str << ","
                << enchantum::to_string(config.fabric_setup.topology) << "," << result.num_devices << ","
                << result.device_id << "," << config.fabric_setup.num_links << ","
-               << enchantum::to_string(result.direction) << "," << result.total_traffic_count << ","
+               << enchantum::to_string(result.direction) << "," << result.link_id << "," << result.total_traffic_count << ","
                << result.num_packets << "," << result.packet_size << "," << result.cycles << "," << std::fixed
                << std::setprecision(6) << result.bandwidth_GB_s << "," << std::fixed << std::setprecision(3)
                << result.packets_per_second;
