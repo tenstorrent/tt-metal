@@ -8,9 +8,8 @@ RMS error (RMS error / reference RMS, as helpers.check_output), and the got/true
 detector: a tight cluster around a non-1.0 constant is a uniform scale error, a broad spread centred on 1.0 is
 rounding noise), plus the per-row least-squares scale (mean / std over rows).
 
-Gated on PCC and relative RMS together against helpers.TOLERANCES, except the one known precision gap
-(bfloat16 layer_norm with fp32_dest_acc_en=False: op_requirements.md Refinement 2), which is measured and
-reported but only gated on PCC.
+Gated on PCC and relative RMS together against helpers.TOLERANCES on every config (the former bf16 layer_norm
+fp32_dest_acc_en=False carve-out was closed by Refinement 2).
 """
 
 from __future__ import annotations
@@ -40,13 +39,13 @@ SHAPES = [
     (1, 1, 128, 1792),  # wide hidden
 ]
 
-# (id, dtype, norm_type, fp32_dest_acc_en, known_gap)
+# (id, dtype, norm_type, fp32_dest_acc_en)
 CONFIGS = [
-    ("bf16_rms", ttnn.bfloat16, "rms_norm", True, False),
-    ("bf16_ln", ttnn.bfloat16, "layer_norm", True, False),
-    ("fp32_ln", ttnn.float32, "layer_norm", True, False),
-    ("bf8b_rms", ttnn.bfloat8_b, "rms_norm", True, False),
-    ("bf16_ln_acc16", ttnn.bfloat16, "layer_norm", False, True),
+    ("bf16_rms", ttnn.bfloat16, "rms_norm", True),
+    ("bf16_ln", ttnn.bfloat16, "layer_norm", True),
+    ("fp32_ln", ttnn.float32, "layer_norm", True),
+    ("bf8b_rms", ttnn.bfloat8_b, "rms_norm", True),
+    ("bf16_ln_acc16", ttnn.bfloat16, "layer_norm", False),
 ]
 
 
@@ -82,7 +81,7 @@ def _metrics(actual, expected):
 @pytest.mark.parametrize("shape", SHAPES, ids=lambda s: "x".join(map(str, s)))
 @pytest.mark.parametrize("cfg", CONFIGS, ids=lambda c: c[0])
 def test_precision_baseline(mesh_device, shape, cfg):
-    name, dtype, norm_type, fp32_dest_acc_en, known_gap = cfg
+    name, dtype, norm_type, fp32_dest_acc_en = cfg
     cluster_axis, G = 1, tuple(mesh_device.shape)[1]
     layer_norm = norm_type == "layer_norm"
     W = G * shape[-1]
@@ -129,5 +128,4 @@ def test_precision_baseline(mesh_device, shape, cfg):
         f"std={worst['row_scale_std']:.5f}"
     )
     assert worst["pcc"] >= pcc_t, f"pcc {worst['pcc']} < {pcc_t}"
-    if not known_gap:
-        assert worst["rel_rms"] <= rms_t, f"rel_rms {worst['rel_rms']} > {rms_t}"
+    assert worst["rel_rms"] <= rms_t, f"rel_rms {worst['rel_rms']} > {rms_t}"

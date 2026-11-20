@@ -611,6 +611,208 @@ sfpi_inline void m16_finalize(uint32_t inv_n_bits) {
     TTI_SFPSTORE(p_sfpu::LREG6, sfpi::SFPSTORE_MOD0_FMT_SRCB, ADDR_MOD_7, 64 + 16);
     TTI_SFPSTORE(p_sfpu::LREG7, sfpi::SFPSTORE_MOD0_FMT_SRCB, ADDR_MOD_7, 64 + 18);
 }
+
+// rows 0..3 of the tile at dst-base offset T (64 per tile) -> LREG0..3 (one row per LREG, lane = column);
+// LREG4-7 unchanged (double TRANSP)
+template <uint32_t T>
+sfpi_inline void c16_load_rows() {
+    TTI_SFPTRANSP(0, 0, 0, 0);
+    TTI_SFPLOAD(ckernel::p_sfpu::LREG0, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, T);
+    TTI_SFPLOAD(ckernel::p_sfpu::LREG1, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, T + 2);
+    TTI_SFPLOAD(ckernel::p_sfpu::LREG2, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, T + 16);
+    TTI_SFPLOAD(ckernel::p_sfpu::LREG3, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, T + 18);
+    TTI_SFPTRANSP(0, 0, 0, 0);
+}
+
+// LREG0..3 -> rows 0..3 of the tile at offset TA, LREG4..7 -> rows 0..3 of the tile at offset TB
+template <uint32_t TA, uint32_t TB, bool StoreB>
+sfpi_inline void c16_store_rows() {
+    TTI_SFPTRANSP(0, 0, 0, 0);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG0, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, TA);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG1, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, TA + 2);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG2, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, TA + 16);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG3, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, TA + 18);
+    if constexpr (StoreB) {
+        TTI_SFPSTORE(ckernel::p_sfpu::LREG4, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, TB);
+        TTI_SFPSTORE(ckernel::p_sfpu::LREG5, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, TB + 2);
+        TTI_SFPSTORE(ckernel::p_sfpu::LREG6, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, TB + 16);
+        TTI_SFPSTORE(ckernel::p_sfpu::LREG7, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, TB + 18);
+    }
+}
+
+// rows of the tile at runtime offset `off` (a 4-row block, 64 per tile) -> LREG0..3; LREG4-7 unchanged
+sfpi_inline void c16_load_rows_rt(uint32_t off) {
+    TTI_SFPTRANSP(0, 0, 0, 0);
+    TT_SFPLOAD(ckernel::p_sfpu::LREG0, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, off);
+    TT_SFPLOAD(ckernel::p_sfpu::LREG1, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, off + 2);
+    TT_SFPLOAD(ckernel::p_sfpu::LREG2, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, off + 16);
+    TT_SFPLOAD(ckernel::p_sfpu::LREG3, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, off + 18);
+    TTI_SFPTRANSP(0, 0, 0, 0);
+}
+
+// Chan combine, one member: its mean_m is row `rho` of the tile at the dst base, its M2_m row `rho` of the next tile
+// (symmetric: rho = 0 of transposed partials; owner: rho = the member's row of a gather tile). Pivoted one-pass sums
+// in fp32 LREGs: LREG4 = P (member 0's mean), LREG5 = A = sum n_m (mean_m - P),
+// LREG6 = B = sum M2_m + n_m (mean_m - P)^2
+template <uint32_t Li>
+sfpi_inline void c16_member_lane(uint32_t off, uint32_t n_bits, uint32_t first) {
+    using namespace ckernel;
+    c16_load_rows_rt(off);
+    TTI_SFPMOV(0, Li, p_sfpu::LREG7, 0);  // mean_m (kept across the next load)
+    c16_load_rows_rt(off + 64);
+    if constexpr (Li != p_sfpu::LREG0) {
+        TTI_SFPMOV(0, Li, p_sfpu::LREG0, 0);  // M2_m
+    }
+    if (first) {
+        TTI_SFPMOV(0, p_sfpu::LREG7, p_sfpu::LREG4, 0);
+        TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG6, 0);
+        return;
+    }
+    TT_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_UPPER, n_bits >> 16);
+    TT_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_LOWER, n_bits & 0xFFFF);
+    TTI_SFPMAD(p_sfpu::LREG11, p_sfpu::LREG4, p_sfpu::LREG7, p_sfpu::LREG7, 0);    // d = mean_m - P
+    TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG7, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);  // n_m d
+    TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG5, 0);  // A += n_m d
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG6, p_sfpu::LREG6, 0);  // B += M2_m
+    TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG7, p_sfpu::LREG6, p_sfpu::LREG6, 0);     // B += n_m d^2
+}
+
+sfpi_inline void c16_member(uint32_t rho, uint32_t n_bits, uint32_t first) {
+    const uint32_t off = (rho >> 4) * 32 + ((rho & 15) >> 2) * 4;  // 4-row block holding row rho
+    switch (rho & 3) {
+        case 0: c16_member_lane<ckernel::p_sfpu::LREG0>(off, n_bits, first); break;
+        case 1: c16_member_lane<ckernel::p_sfpu::LREG1>(off, n_bits, first); break;
+        case 2: c16_member_lane<ckernel::p_sfpu::LREG2>(off, n_bits, first); break;
+        default: c16_member_lane<ckernel::p_sfpu::LREG3>(off, n_bits, first); break;
+    }
+}
+
+// finalize (fp32): delta = A / W, mu = P + delta, M2 = B - A delta, inv_std = rsqrt(M2 / W + eps), K_g = bf16(mu),
+// shift = (K_g - mu) inv_std; RNE-rounded, ROW form: K_g -> tile 0 (row 1 = shift, scratch), inv_std -> tile 1,
+// shift -> tile 2 (offsets from the dst base)
+sfpi_inline void c16_finalize_values(uint32_t inv_w_bits, uint32_t eps_bits) {
+    const sfpi::vFloat p = sfpi::l_reg[sfpi::LRegs::LReg4];
+    const sfpi::vFloat a = sfpi::l_reg[sfpi::LRegs::LReg5];
+    const sfpi::vFloat b = sfpi::l_reg[sfpi::LRegs::LReg6];
+    const sfpi::vFloat inv_w = ckernel::sfpu::Converter::as_float(inv_w_bits);
+    const sfpi::vFloat eps = ckernel::sfpu::Converter::as_float(eps_bits);
+    const sfpi::vFloat delta = a * inv_w;
+    const sfpi::vFloat mu = p + delta;
+    const sfpi::vFloat m2 = b - a * delta;
+    sfpi::vFloat inv_std = ckernel::sfpu::_calculate_sqrt_body_<APPROX, true /*RECIPROCAL*/, false>(m2 * inv_w + eps);
+    sfpi::vFloat kg = sfpi::convert<sfpi::vFloat16b>(mu, sfpi::RoundMode::Nearest);
+    sfpi::vFloat shift = (kg - mu) * inv_std;
+    inv_std = sfpi::convert<sfpi::vFloat16b>(inv_std, sfpi::RoundMode::Nearest);
+    shift = sfpi::convert<sfpi::vFloat16b>(shift, sfpi::RoundMode::Nearest);
+    const sfpi::vFloat zero = 0.0f;
+    sfpi::l_reg[sfpi::LRegs::LReg0] = kg;
+    sfpi::l_reg[sfpi::LRegs::LReg1] = shift;
+    sfpi::l_reg[sfpi::LRegs::LReg2] = zero;
+    sfpi::l_reg[sfpi::LRegs::LReg3] = zero;
+    sfpi::l_reg[sfpi::LRegs::LReg4] = inv_std;
+    sfpi::l_reg[sfpi::LRegs::LReg5] = zero;
+    sfpi::l_reg[sfpi::LRegs::LReg6] = zero;
+    sfpi::l_reg[sfpi::LRegs::LReg7] = zero;
+}
+
+sfpi_inline void c16_finalize_store() {
+    using namespace ckernel;
+    c16_store_rows<0, 64, true>();  // tile 0: K_g (row 0), shift (row 1); tile 1: inv_std
+    c16_load_rows<0>();             // LREG1 = shift row
+    TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+    TTI_SFPLOADI(p_sfpu::LREG1, 0, 0);
+    TTI_SFPLOADI(p_sfpu::LREG2, 0, 0);
+    TTI_SFPLOADI(p_sfpu::LREG3, 0, 0);
+    c16_store_rows<128, 0, false>();  // tile 2: shift
+}
+#endif
+
+// Chan combine for 16-bit DEST (k members' column-form (mean_m, M2_m) in src_cb) -> cb_kg, cb_rowstat, cb_shift.
+// The members' tiles are transposed on unpack (row form: one LREG per statistic), combined in fp32 LREGs and stored
+// once, rounded to nearest-even (the 16-bit SFPU op chain of combine_block truncates at every step).
+template <uint32_t src_cb>
+ALWI void combine16_block(uint32_t rows, uint32_t inv_w_bits, uint32_t eps_bits, uint32_t nm_idx) {
+    constexpr uint32_t k = w_split_cores;
+    cb_wait_front(src_cb, 2 * k * rows);
+    for (uint32_t r = 0; r < rows; ++r) {
+        cb_reserve_back(cb_kg, 1);
+        cb_reserve_back(cb_rowstat, 1);
+        cb_reserve_back(cb_shift, 1);
+        welford_init();
+        reconfig_data_format_srca(src_cb);
+        transpose_init(src_cb);
+        tile_regs_acquire();
+        for (uint32_t m = 0; m < k; ++m) {
+            const uint32_t t = (r * k + m) * 2;
+            transpose_tile(src_cb, t, 0);
+            transpose_tile(src_cb, t + 1, 1);
+            MATH((_llk_math_welfords_sfpu_params_(c16_member, 0, 0u, arg(nm_idx + m), m == 0 ? 1u : 0u)));
+        }
+        MATH((_llk_math_welfords_sfpu_params_(c16_finalize_values, 2, inv_w_bits, eps_bits)));
+        MATH((_llk_math_welfords_sfpu_params_(c16_finalize_store, 2)));
+        transpose_dest_init<DST_ACCUM_MODE>();  // row form -> column form
+        transpose_dest<DST_ACCUM_MODE>(2);
+        transpose_dest<DST_ACCUM_MODE>(3);
+        transpose_dest<DST_ACCUM_MODE>(4);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_reconfig_data_format(cb_kg);
+        pack_tile(2, cb_kg);
+        pack_reconfig_data_format(cb_rowstat);
+        pack_tile(3, cb_rowstat);
+        pack_reconfig_data_format(cb_shift);
+        pack_tile(4, cb_shift);
+        tile_regs_release();
+        cb_push_back(cb_kg, 1);
+        cb_push_back(cb_rowstat, 1);
+        cb_push_back(cb_shift, 1);
+    }
+    cb_pop_front(src_cb, 2 * k * rows);
+    cb_wait_front(cb_kg, rows);
+    cb_wait_front(cb_rowstat, rows);
+}
+
+#ifdef AGRMS_OWNER
+// Owner Chan combine for 16-bit DEST (k > 8): per owned row j, gather tile g of stat s holds member m = 32 g + rho's
+// (mean_m, M2_m) in row rho (row form, lane = block row). Same fp32 LREG combine as combine16_block, one member row at
+// a time -> (inv_std, shift) -> cb_own_ret, K_g -> cb_own_kg (column form; the writer returns them).
+ALWI void owner16_ln(uint32_t owned, uint32_t inv_w_bits, uint32_t eps_bits, uint32_t nm_idx) {
+    constexpr uint32_t gp = gather_pages;
+    constexpr uint32_t k = w_split_cores;
+    cb_wait_front(cb_gathered, owned * 2 * gp);
+    for (uint32_t j = 0; j < owned; ++j) {
+        cb_reserve_back(cb_own_ret, 2);
+        cb_reserve_back(cb_own_kg, 1);
+        welford_init();
+        tile_regs_acquire();
+        for (uint32_t g = 0; g < gp; ++g) {
+            copy_to(cb_gathered, (j * 2) * gp + g, 0);
+            copy_to(cb_gathered, (j * 2 + 1) * gp + g, 1);
+            for (uint32_t rho = 0; rho < 32 && 32 * g + rho < k; ++rho) {
+                const uint32_t m = 32 * g + rho;
+                MATH((_llk_math_welfords_sfpu_params_(c16_member, 0, rho, arg(nm_idx + m), m == 0 ? 1u : 0u)));
+            }
+        }
+        MATH((_llk_math_welfords_sfpu_params_(c16_finalize_values, 2, inv_w_bits, eps_bits)));
+        MATH((_llk_math_welfords_sfpu_params_(c16_finalize_store, 2)));
+        transpose_dest_init<DST_ACCUM_MODE>();
+        transpose_dest<DST_ACCUM_MODE>(2);
+        transpose_dest<DST_ACCUM_MODE>(3);
+        transpose_dest<DST_ACCUM_MODE>(4);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_reconfig_data_format(cb_own_kg);
+        pack_tile(2, cb_own_kg);
+        pack_reconfig_data_format(cb_own_ret);
+        pack_tile(3, cb_own_ret);
+        pack_tile(4, cb_own_ret);
+        tile_regs_release();
+        cb_push_back(cb_own_ret, 2);
+        cb_push_back(cb_own_kg, 1);
+    }
+    cb_pop_front(cb_gathered, owned * 2 * gp);
+}
 #endif
 
 // member_moments_block for 16-bit DEST: per tile-row, (mean_m, M2_m) -> cb_partial (column form; owner: row form)
@@ -1151,13 +1353,18 @@ void kernel_main() {
 #ifdef AGRMS_OWNER
         const uint32_t owned = agrms_owner::owned_rows(rows, arg(2), w_split_cores);
         if (owned > 0) {
-            owner_combine_ln(owned, inv_w_bits, eps_bits);
+            if constexpr (!DST_ACCUM_MODE) {
+                owner16_ln(owned, inv_w_bits, eps_bits, nm_idx);
+            } else {
+                owner_combine_ln(owned, inv_w_bits, eps_bits);
+            }
         }
 #else
-        if constexpr (w_split_cores > 1) {
-            combine_block<cb_gathered>(rows, inv_w_bits, eps_bits, nm_idx);
+        constexpr uint32_t src_cb = w_split_cores > 1 ? cb_gathered : cb_partial;
+        if constexpr (!DST_ACCUM_MODE) {
+            combine16_block<src_cb>(rows, inv_w_bits, eps_bits, nm_idx);
         } else {
-            combine_block<cb_partial>(rows, inv_w_bits, eps_bits, nm_idx);
+            combine_block<src_cb>(rows, inv_w_bits, eps_bits, nm_idx);
         }
 #endif
     }

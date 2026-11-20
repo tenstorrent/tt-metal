@@ -259,6 +259,7 @@ class Sizes:
     has_beta: bool
     mask: bool
     ln_fpu: bool = False
+    m16: bool = False  # LN with 16-bit DEST: fp32-LREG moments + combine (no DEST-accumulated moment scratch)
     g_tail: int = 0  # compact gamma: extra pages covering the last page's unpacker read extent
 
 
@@ -275,6 +276,7 @@ def make_sizes(x_dtype, g_dtype, fp32_dest, is_ln, has_gamma, has_beta, mask) ->
         has_gamma=has_gamma,
         has_beta=has_beta,
         mask=mask,
+        m16=is_ln and not fp32_dest,
     )
 
 
@@ -320,7 +322,9 @@ def cb_plan(sz: Sizes, k: int, pitch: int, rows: int, n_affine_slots: int, dense
         CB_ROWSTAT: (rows, sz.T_acc),
         CB_OUT: (out_pages, sz.T_out),
     }
-    if not sz.ln_fpu:  # rms: sum x^2 tiles; ln SFPU path: sum x tiles (the LN FPU path reduces cb_x straight to cb_km)
+    if (
+        not sz.ln_fpu and not sz.m16
+    ):  # rms: sum x^2 tiles; ln SFPU path: sum x tiles (the LN FPU path reduces cb_x straight to cb_km)
         plan[CB_MOMENT_A] = (rows, sz.T_acc)
     if k > 1 and not is_owner(k):
         plan[CB_GATHERED] = (n_stat * k * rows, sz.T_acc)
@@ -332,23 +336,25 @@ def cb_plan(sz: Sizes, k: int, pitch: int, rows: int, n_affine_slots: int, dense
         plan[CB_OWN_RET] = (owned * n_stat, sz.T_acc)  # rms: inv_rms; ln: (inv_std, shift) per owned row
         if sz.is_ln:
             plan[CB_OWN_KG] = (owned, sz.T_bf16)
-            plan[CB_DEV] = (2 * gp, sz.T_acc)
             plan[CB_WCOL] = (gp, sz.T_acc)
+            if not sz.m16:
+                plan[CB_DEV] = (2 * gp, sz.T_acc)
     if sz.has_gamma:
         plan[CB_GAMMA] = (pitch + sz.g_tail, sz.T_g)  # compact row-0 pages (gamma_page_layout)
         plan[CB_AFFINE_STAGE] = (n_affine_slots, AFFINE_SLOT_BYTES)
     if sz.has_beta:
         plan[CB_BETA] = (pitch + sz.g_tail, sz.T_g)
     if sz.is_ln:
+        plan[CB_SHIFT] = (rows, sz.T_acc)
+        plan[CB_KG] = (rows, sz.T_bf16)
+        if sz.mask:
+            plan[CB_MASK] = (1, sz.T_bf16)
+    if sz.is_ln and not sz.m16:  # DEST-accumulated moments scratch (fp32 DEST only)
         plan[CB_MOMENT_B] = ((1 if sz.ln_fpu else 2) * rows, sz.T_acc)  # FPU: D2 tiles; SFPU: (D1, D2) pairs
         # owner: cb_km also carries the owner's pivot K and K_g = bf16(mu) after the member pivots are popped
         plan[CB_KM] = (max(rows, 2) if is_owner(k) else rows, sz.T_bf16)
         plan[CB_MSTAT] = (2 * rows, sz.T_acc)
-        plan[CB_SHIFT] = (rows, sz.T_acc)
-        plan[CB_KG] = (rows, sz.T_bf16)
         plan[CB_MU] = (2 if is_owner(k) else 1, sz.T_acc)  # owner: (mu, inv_std) between its two windows
-        if sz.mask:
-            plan[CB_MASK] = (1, sz.T_bf16)
         if sz.ln_fpu:
             plan[CB_CENT] = (rows * pitch, sz.T_acc)
     if dense is not None:
@@ -691,7 +697,10 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
     # It holds the centered block (cb_cent, accumulator format) beside cb_x: when no split fits with it and DEST is
     # fp32, the SFPU path (no block-sized scratch; precision-equivalent at fp32 DEST) is solved instead. 16-bit DEST
     # keeps the FPU path (the SFPU path was measured worse there).
-    ln_fpu_ok = cfg.is_ln and x_dtype != ttnn.float32 and geo.v == TILE
+    # 16-bit DEST (m16): the moments never use the FPU path's scratch, and the FPU normalize (one rounding per step)
+    # replaces the SFPU chain (a truncating SFPU store per step: -0.6 % per-row scale measured on w_non_aligned),
+    # so the FPU path holds for any bf16 / bfloat8_b input, slice tail included.
+    ln_fpu_ok = cfg.is_ln and x_dtype != ttnn.float32 and (geo.v == TILE or not fp32_dest)
     sz = replace(make_sizes(x_dtype, g_dtype, fp32_dest, cfg.is_ln, has_gamma, has_beta, mask), ln_fpu=ln_fpu_ok)
 
     chips, ring, ports_union = fabric
