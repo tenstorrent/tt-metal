@@ -58,6 +58,31 @@ class Qwen3ASRDecoder(Transformer):
         out[0] = emb
         return tuple(out)
 
+    def set_prefill_embeds(self, embeds_per_user):
+        """Queue merged prompt embeddings, one torch (S_i, dim) per user, for the next
+        token-id prefills. Each prefill that starts at position 0 takes the next entry;
+        later chunks of the same prompt keep using it. None clears the queue."""
+        self._embeds_queue = list(embeds_per_user) if embeds_per_user is not None else []
+        self._embeds_active = None
+
+    def pending_prefill_embeds(self):
+        return len(getattr(self, "_embeds_queue", []))
+
+    def prepare_inputs_prefill(self, tokens, start_pos=0, **kwargs):
+        """The generator's prefill path passes token ids; when embeddings are queued, the
+        audio-spliced embeddings replace the token embeddings for the same positions."""
+        if start_pos == 0 and getattr(self, "_embeds_queue", None):
+            self._embeds_active = self._embeds_queue.pop(0)
+        active = getattr(self, "_embeds_active", None)
+        if active is None:
+            return super().prepare_inputs_prefill(tokens, start_pos=start_pos, **kwargs)
+        assert not kwargs.get("trace_enabled", False), "traced prefill takes token ids only"
+        S = tokens.shape[-1]
+        emb = active[start_pos : start_pos + S]
+        if emb.shape[0] < S:
+            emb = torch.nn.functional.pad(emb, (0, 0, 0, S - emb.shape[0]))
+        return self.prepare_inputs_prefill_embeds(emb.unsqueeze(0), start_pos=start_pos, **kwargs)
+
     @torch.no_grad()
     def prefill_logits(self, inputs_embeds):
         """Run prefill on merged embeddings; return last-token logits (torch, vocab) and
