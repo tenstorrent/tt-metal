@@ -236,13 +236,14 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
             break;
         }
         case tt::ARCH::BLACKHOLE: {
-            // 2 workers cannot keep up with a ring's link. On a line they keep the link busy below 160 packets on the
-            // busiest link-direction; above it more workers are needed: 4 (with the mux in the middle and the writer
-            // on NOC1), and a 5th when packets are 4 KB or less (short rows), which cost more per byte. A 5th slows
-            // full packets.
-            constexpr uint64_t line_more_worker_packets = 160;
+            // 2 workers cannot keep up with a ring's link, nor with a line's from line_more_worker_link_bytes on the
+            // busiest link-direction (below the multicast crossover). Then more workers are needed: 4 (with the mux in
+            // the middle and the writer on NOC1), and a 5th when packets are 4 KB or less (short rows), which cost
+            // more per byte. A 5th slows full packets.
+            constexpr uint64_t line_more_worker_link_bytes = 512 * 1024;
             const uint32_t more_workers = packet_cap <= 4096 ? 5 : 4;
-            workers_per_dir = (is_ring || busiest_link_packets >= line_more_worker_packets) ? more_workers : 2;
+            const uint64_t busiest_link_bytes = input_bytes * (num_devices - 1) / std::max(1u, num_links);
+            workers_per_dir = (is_ring || busiest_link_bytes >= line_more_worker_link_bytes) ? more_workers : 2;
             // The mux sits between its workers, so the worker-to-mux NOC paths are shorter and split across both
             // sides of the row.
             mux_in_middle = true;
