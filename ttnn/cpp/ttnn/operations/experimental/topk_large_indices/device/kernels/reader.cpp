@@ -21,12 +21,22 @@ constexpr uint16_t neginf_bf16 = 0xFF80;
 
 // Returns the address of the last key stored. Its caller waits for the stores (topk_two_level::wait_l1_store) before
 // the CB push that hands them on.
-FORCE_INLINE uint32_t fill_neginf(uint32_t l1_addr, uint32_t num_elements) {
-    auto* p = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr);
-    for (uint32_t i = 0; i < num_elements; ++i) {
-        p[i] = neginf_bf16;
+// num_elements is at least 1. Word stores past a leading odd key.
+__attribute__((noinline)) uint32_t fill_neginf(uint32_t l1_addr, uint32_t num_elements) {
+    const uint32_t end = l1_addr + num_elements * sizeof(uint16_t);
+    uint32_t addr = l1_addr;
+    if (addr & 2) {
+        *reinterpret_cast<volatile tt_l1_ptr uint16_t*>(addr) = neginf_bf16;
+        addr += sizeof(uint16_t);
     }
-    return l1_addr + (num_elements - 1) * sizeof(uint16_t);
+#pragma GCC unroll 4
+    for (; addr + sizeof(uint32_t) <= end; addr += sizeof(uint32_t)) {
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr) = (uint32_t{neginf_bf16} << 16) | neginf_bf16;
+    }
+    if (addr < end) {
+        *reinterpret_cast<volatile tt_l1_ptr uint16_t*>(addr) = neginf_bf16;
+    }
+    return end - sizeof(uint16_t);
 }
 
 // What the reader hands the compute and the writer next (see topk_two_level::header_row): a header page then 32
@@ -86,8 +96,12 @@ FORCE_INLINE void two_level_unit(
             {.offset_bytes = tile_bytes + offset});
         noc.async_read_barrier();
     }
+    // Only the last live block's keys past the search length need -inf: the writer sends the maxima of the live
+    // blocks only, and each block's maximum comes from its own tile row, so the stale keys of later blocks reach
+    // nothing.
+    const uint32_t live_keys = live_bytes / sizeof(uint16_t);
     two_level_push_stage1(
-        live < unit_keys ? fill_neginf(base + tile_bytes + live * sizeof(uint16_t), unit_keys - live) : base);
+        live < live_keys ? fill_neginf(base + tile_bytes + live * sizeof(uint16_t), live_keys - live) : base);
 }
 
 // One read of the gather from the source set by noc_async_read_set_state (the row's DRAM bank, or this core's L1 for
