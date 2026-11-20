@@ -241,6 +241,11 @@ ttnn::device_operation::ProgramArtifacts ConcatBlockShardedProgramFactory::creat
     }
     const BufferDistributionSpec output_dist_spec = distribution_spec(output);
     const uint32_t output_shards_per_row = shards_per_row(output);
+    // Shard rows the output actually has. The grid can be bigger than the tensor needs, and the
+    // distribution spec trims those surplus grid rows and columns: they hold no shard, so there is
+    // nothing to copy into them and no source shard to copy from.
+    const uint32_t output_shard_rows =
+        tt::div_up(static_cast<uint32_t>(output.tensor_spec().physical_shape().height()), output_shard_h);
 
     auto input_shard_id = [&](uint32_t inp_id, uint32_t shard_row, uint32_t shard_col) {
         return (shard_row * input_shards_per_row[inp_id]) + shard_col;
@@ -258,6 +263,11 @@ ttnn::device_operation::ProgramArtifacts ConcatBlockShardedProgramFactory::creat
             const uint32_t sh = row_major_orient ? gy : gx;  // shard height index
             const uint32_t sw = row_major_orient ? gx : gy;  // shard width index
             const CoreCoord logical_core(start_x + gx, start_y + gy);
+
+            // A grid position past the output's shards has no output shard; leave it with no copies.
+            if (sh >= output_shard_rows || sw >= output_shards_per_row) {
+                continue;
+            }
 
             if (width_concat) {
                 // Clipped to the real width: the last shard can run past it into padding, which

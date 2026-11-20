@@ -1176,6 +1176,38 @@ def test_sharded_concat_height_leading_dims_block_sharded(
     _run_height_concat(device, layout, dtype, shapes, ttnn.ShardStrategy.BLOCK, grid_cols, grid_rows, orientation)
 
 
+# Block-sharded concat on a grid bigger than the tensors need: the shards fill only part of the
+# grid, and the cores past them hold no shard. The block-sharded factory has to leave those cores
+# idle rather than plan copies for shards that do not exist. Width concat leaves a spare shard row,
+# height concat a spare shard column; COL_MAJOR moves that spare onto the other grid axis.
+@pytest.mark.parametrize(
+    "dim, shape, in_shard, out_shard, layout, orientation",
+    [
+        (-1, (1, 1, 32, 64), (32, 32), (32, 64), ttnn.TILE_LAYOUT, ttnn.ShardOrientation.ROW_MAJOR),
+        (-1, (1, 1, 32, 64), (32, 32), (32, 64), ttnn.TILE_LAYOUT, ttnn.ShardOrientation.COL_MAJOR),
+        (-1, (1, 1, 32, 64), (32, 32), (32, 64), ttnn.ROW_MAJOR_LAYOUT, ttnn.ShardOrientation.ROW_MAJOR),
+        (-2, (1, 1, 64, 32), (32, 32), (64, 32), ttnn.TILE_LAYOUT, ttnn.ShardOrientation.ROW_MAJOR),
+        (-2, (1, 1, 64, 32), (32, 32), (64, 32), ttnn.TILE_LAYOUT, ttnn.ShardOrientation.COL_MAJOR),
+        (-2, (1, 1, 64, 32), (32, 32), (64, 32), ttnn.ROW_MAJOR_LAYOUT, ttnn.ShardOrientation.ROW_MAJOR),
+    ],
+)
+def test_block_sharded_concat_partially_filled_grid(device, dim, shape, in_shard, out_shard, layout, orientation):
+    grid = _sharded_grid_2d(2, 2)
+    torch_inputs = [random_torch_tensor(ttnn.bfloat16, shape) for _ in range(2)]
+    torch_out = torch.concat(torch_inputs, dim=dim)
+
+    in_mem = _height_concat_mem_config(in_shard, grid, ttnn.ShardStrategy.BLOCK, orientation)
+    ttnn_inputs = [
+        ttnn.to_memory_config(ttnn.from_torch(t, layout=layout, device=device, dtype=ttnn.bfloat16), in_mem)
+        for t in torch_inputs
+    ]
+    output_mem = _height_concat_mem_config(out_shard, grid, ttnn.ShardStrategy.BLOCK, orientation)
+    ttnn_out = ttnn.concat(ttnn_inputs, dim=dim, memory_config=output_mem)
+
+    assert ttnn_out.memory_config() == output_mem
+    assert_equal(torch_out, ttnn.to_torch(ttnn_out))
+
+
 # The issue's repro, spelled out. Distinct arange fills so a failure names which block moved where
 # instead of just reporting a mismatch; uint32 so the values are exact at any size. Checks the full
 # tensor, and separately the first column of each flattened row, which is the view in the issue:
