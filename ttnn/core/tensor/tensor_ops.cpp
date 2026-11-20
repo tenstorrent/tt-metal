@@ -592,6 +592,17 @@ Tensor unchecked_reinterpret_layout(const Tensor& input_tensor, Layout target_la
         return Tensor(host_tensor_from_buffer_with_topology(input_tensor.host_tensor().buffer(), new_spec, topology));
     }
 
+    // An interleaved buffer puts page i into bank i % num_banks, so other pages would put the source's bytes into other
+    // banks and could reach past the source's allocation in each bank. A sharded view keeps each shard in place.
+    const auto source_page_size = input_tensor.device_storage().get_mesh_buffer().page_size();
+    TT_FATAL(
+        new_spec.memory_config().is_sharded() || new_spec.compute_page_size_bytes() == source_page_size,
+        "Reinterpreting an interleaved tensor as {} would change its page size from {} to {} bytes, which moves its "
+        "pages to other banks",
+        target_layout,
+        source_page_size,
+        new_spec.compute_page_size_bytes());
+
     // shards_from_spec: the source's config describes its own pages (tiles vs. rows), which the new layout splits
     // differently, so keeping it would give a page size that doesn't match the spec. Building it from the spec is safe
     // because a reinterpretation leaves every shard on the same node with the same shape.
