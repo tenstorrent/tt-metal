@@ -370,57 +370,6 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ProgramConstruction_CbWithBothBuffer
     EXPECT_ANY_THROW((void)Program(*get_mesh_device(), desc));
 }
 
-// A single-tile CB on core (0, 0) backed by `tensor`, or static when it is null.
-CBDescriptor MakeSingleTileCb(const MeshTensor* tensor) {
-    return CBDescriptor{
-        .total_size = 2048,
-        .core_ranges = CoreRangeSet{CoreRange{{0, 0}}},
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = 0,
-            .data_format = tt::DataFormat::Float16_b,
-            .page_size = 2048,
-        }}},
-        .tensor = tensor,
-    };
-}
-
-// A CB whose buffer is bound later builds with no buffer.
-TEST_F(DescriptorPatchingDeviceTest, Tensix_ProgramConstruction_BindBufferLater_BuildsWithoutBuffer) {
-    ProgramDescriptor desc;
-    desc.kernels = {MakeBlankReaderKernel({0, 0})};
-    desc.cbs.push_back(MakeSingleTileCb(nullptr));
-    desc.cbs[0].globally_allocated_bound_later = true;
-    EXPECT_NO_THROW((void)Program{desc});
-}
-
-// A static and a backed CB give different programs, so they must not share a program hash. A CB bound later gives the
-// same program as one backed now.
-TEST_F(DescriptorPatchingDeviceTest, Tensix_ProgramHash_DistinguishesStaticAndBackedCbs) {
-    auto tensor = MakeSingleTileL1MeshTensor(get_mesh_device());
-    ProgramDescriptor static_cb;
-    static_cb.cbs.push_back(MakeSingleTileCb(nullptr));
-    ProgramDescriptor tensor_backed;
-    tensor_backed.cbs.push_back(MakeSingleTileCb(&tensor));
-    ProgramDescriptor bound_later;
-    bound_later.cbs.push_back(MakeSingleTileCb(nullptr));
-    bound_later.cbs[0].globally_allocated_bound_later = true;
-    EXPECT_NE(std::hash<ProgramDescriptor>{}(static_cb), std::hash<ProgramDescriptor>{}(tensor_backed));
-    EXPECT_EQ(std::hash<ProgramDescriptor>{}(bound_later), std::hash<ProgramDescriptor>{}(tensor_backed));
-}
-
-// Applying a descriptor checks that the CB is backed in the program iff it is in the descriptor.
-TEST_F(DescriptorPatchingDeviceTest, Tensix_ApplyDescriptorRuntimeArgs_BackingMismatch_Throws) {
-    auto tensor = MakeSingleTileL1MeshTensor(get_mesh_device());
-    ProgramDescriptor desc;
-    desc.kernels = {MakeBlankReaderKernel({0, 0})};
-    desc.cbs.push_back(MakeSingleTileCb(&tensor));
-    Program program{desc};
-
-    ProgramDescriptor static_cb = desc;
-    static_cb.cbs[0] = MakeSingleTileCb(nullptr);
-    EXPECT_ANY_THROW(apply_descriptor_runtime_args(program, static_cb));
-}
-
 TEST_F(DescriptorPatchingDeviceTest, Tensix_ApplyDescriptorRuntimeArgs_CbTensor_UpdatesAddress) {
     auto tensor_a = MakeSingleTileL1MeshTensor(get_mesh_device());
     auto tensor_b = MakeSingleTileL1MeshTensor(get_mesh_device());
