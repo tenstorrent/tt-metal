@@ -46,6 +46,11 @@ void validate_ring_distributed(const RingDistributedSDPAParams& attrs, const Rin
         "ring size {}",
         sq,
         ring_size);
+    if (attrs.program_config && attrs.program_config->q_chunk_size != 0) {
+        const uint32_t rows = sq / (2 * ring_size), q_chunk = attrs.program_config->q_chunk_size;
+        TT_FATAL(
+            rows % q_chunk == 0, "SDPA recipe Q slabs of {} rows must hold whole Q chunks of {} rows", rows, q_chunk);
+    }
     TT_FATAL(
         attrs.chunk_start_idx.has_value() == t.page_table.has_value(),
         "Ring-distributed SDPA takes chunk_start_idx and page_table together (prefix caching)");

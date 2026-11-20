@@ -763,7 +763,8 @@ def check_routing(device, case):
     explicit = explicit if isinstance(explicit, torch.Tensor) else ttnn.to_torch(explicit)
     assert torch.equal(routed, explicit), "the routed call must run the explicit recipe"
     name = "accurate" if recipe == accurate else "standard"
-    assert l2_pct(routed, expected) < L2_PCT_BOUND[name] + tolerance
+    error, bound = l2_pct(routed, expected), L2_PCT_BOUND[name] + tolerance
+    assert error < bound, f"L2 error {error:.3f}% above {bound:.3f}%"
 
 
 def rebind_call(device, case, seed):
