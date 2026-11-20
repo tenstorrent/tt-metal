@@ -340,7 +340,8 @@ def test_append_to_previous_prefills_only_new_tokens(sampler, monkeypatch):
     # The prefill reads the earlier tokens from the KV cache: without them the result changes.
     assert sampler.generate_and_get_log_probs(prompts, [W, W])[0] == first
     sampler._reset_kv_cache()
-    assert sampler.generate_and_get_log_probs(appended, limits, append_to_previous=True)[0] != second
+    without_cache, _ = sampler.generate_and_get_log_probs(appended, [16, 16], append_to_previous=True)
+    assert without_cache != [s[:16] for s in second]
 
 
 @pytest.mark.timeout(0)
