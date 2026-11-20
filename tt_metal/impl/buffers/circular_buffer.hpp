@@ -37,9 +37,7 @@ public:
 
     uint32_t page_size(uint32_t buffer_index) const;
 
-    bool globally_allocated() const {
-        return this->config_.dynamic_cb() || this->config_.globally_allocated_address().has_value();
-    }
+    bool globally_allocated() const { return this->config_.dynamic_cb(); }
     bool is_global_circular_buffer() const { return this->shadow_global_circular_buffer_ != nullptr; }
 
     uint32_t size() const { return this->config_.total_size(); }
