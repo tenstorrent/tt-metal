@@ -885,8 +885,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         uint32_t q_in, k_in, v_in, identity_scale_in, col_identity, qk_im, max_A, exp_max_diff, out, stats_in, prev_out,
             recip_scratch, sum_in, sparse_plan, pooled_bias, block_counts, key_bias, sum_identity;
     };
-    // Pooled bias rows in flight: two (the reader builds the next member's while compute adds this one's) when L1
-    // allows, decided once the pass split is fixed.
+    // Two pooled bias rows in flight when L1 allows.
     uint32_t pooled_bias_rows = 1;
     const auto lay_out_cbs = [&](uint32_t slots, uint32_t kv_pages, bool pairs, const auto& alloc) -> CbLayout {
         const auto tile_cb = [&](uint32_t num_tiles, uint32_t tile_size, tt::DataFormat data_format) {

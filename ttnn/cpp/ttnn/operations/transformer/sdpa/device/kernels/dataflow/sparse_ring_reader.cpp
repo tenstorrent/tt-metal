@@ -874,8 +874,6 @@ void kernel_main() {
                             noc.async_read_barrier();
                             noc.write_zeros_l1_barrier();
                             cb_v.push_back(v_chunk_tiles);
-                            // The piece's bias entries are the same for every Q block: when the piece's mask slice
-                            // and the entries fit in the scratch, build them once and read only the slice per block.
                             const uint32_t slice_bytes = tiles * 32 * sizeof(uint32_t);
                             const bool from_lut = slice_bytes + slice_bytes / 2 <= mask_row_bytes;
                             const uint32_t lut = scratch + slice_bytes;
@@ -884,8 +882,8 @@ void kernel_main() {
                                     lut, row0, tiles, geo, pooled_bias_table_base, counts_table);
                             }
                             for (uint32_t i = i0; i < i1; ++i) {
-                                // The chunk's own row (or slice) back into the plan scratch: compute reads only the
-                                // header words of a plan page, and every page has been popped by now.
+                                // The chunk's own row back into the plan scratch: compute reads only the header
+                                // words of a plan page, and every page has been popped by now.
                                 if (from_lut) {
                                     noc.async_read(
                                         mask_reader,

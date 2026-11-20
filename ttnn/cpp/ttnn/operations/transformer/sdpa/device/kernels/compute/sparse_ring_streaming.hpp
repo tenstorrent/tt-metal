@@ -547,8 +547,8 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
     sdpa_maybe_reconfig_data_format<cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im>();
     if (apply_col_bias) {
         // Pooled entry: every member one contiguous run from column 0 with its own bias tile row (the same row for
-        // each of its Q tile rows), consumed one at a time in member order. Only row 0 of each bias tile is read: it is
-        // broadcast down the tile and packed onto the scores with L1 accumulation.
+        // each of its Q tile rows), consumed one at a time (the reader pushes them in member order). Only row 0 of
+        // each bias tile is read.
         for (uint32_t g = 0; g < n_slots; ++g) {
             ASSERT(n_runs[g] == 1 && run_col(g, 0) == 0);
             CircularBuffer(cb_pooled_bias).wait_front(Sk_chunk_t);

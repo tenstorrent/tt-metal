@@ -157,9 +157,7 @@ SPARSE_RING_HOT void generate_key_bias_tile(const Noc& noc, uint32_t dst, uint32
     noc.async_read_barrier();
 }
 
-// The pooled-entry bias of every column of pooled tile rows [row0_t, row0_t + tiles), ignoring the mask: two packed bf16
-// per word, row-major, at L1 address lut (tiles * 16 words). It depends only on the piece, so it is built once and
-// shared by every Q block of the piece (generate_rows).
+// Each column's bias for pooled tile rows [row0_t, row0_t + tiles) before the mask, two bf16 per word.
 template <bool has_counts>
 SPARSE_RING_HOT void build_chunk_lut(
     uint32_t lut,
@@ -185,8 +183,7 @@ SPARSE_RING_HOT void build_chunk_lut(
     }
 }
 
-// generate_tiles from a piece's lut, writing only row 0 of each tile (compute adds it as a row broadcast). slice holds
-// the Q block's mask words of the piece's columns (tiles * 32 words): a set word makes its column "exact / padding".
+// generate_tiles from build_chunk_lut's entries and the piece's mask words (slice), writing only row 0 of each tile.
 template <uint32_t tile_bytes>
 SPARSE_RING_HOT void generate_rows(uint32_t dst, uint32_t tiles, uint32_t slice, uint32_t lut, uint32_t table_base_arg) {
     static_assert(tile_bytes == 4 * kFaceWords * 4, "pooled bias tiles are Float16_b 32x32");
@@ -203,7 +200,7 @@ SPARSE_RING_HOT void generate_rows(uint32_t dst, uint32_t tiles, uint32_t slice,
         }
     }
     if (tiles > 0) {
-        // Complete the stores before the push hands the tiles to compute (volatile read of the last word written).
+        // Complete the stores before the push.
         (void)*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
             dst + (tiles - 1) * tile_bytes + (kFaceWords + kFaceRowWords - 1) * sizeof(uint32_t));
     }
