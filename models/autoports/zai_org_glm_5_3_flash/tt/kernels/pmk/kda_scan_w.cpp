@@ -22,13 +22,14 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "models/autoports/zai_org_glm_5_3_flash/tt/kernels/mk/mk_common.hpp"
 #include "models/autoports/zai_org_glm_5_3_flash/tt/kernels/mk/phase_args.hpp"
 #include "models/autoports/zai_org_glm_5_3_flash/tt/kernels/pmk/kda_common.hpp"
 
 using namespace pk;
 
 namespace {
-FORCE_INLINE void zero_dram(const InterleavedAddrGen<true>& g, uint32_t page, uint32_t bytes) {
+FORCE_INLINE void zero_dram(const mk::DramAcc& g, uint32_t page, uint32_t bytes) {
     for (uint32_t off = 0; off < bytes; off += MEM_ZEROS_SIZE) {
         noc_async_write(
             MEM_ZEROS_BASE, g.get_noc_addr(page, off), MEM_ZEROS_SIZE < bytes - off ? MEM_ZEROS_SIZE : bytes - off);
@@ -52,18 +53,25 @@ void kernel_main() {
 
     const uint32_t head = get_arg_val<uint32_t>(ph_rt0 + 0);
     const uint32_t vblk = get_arg_val<uint32_t>(ph_rt0 + 1);
-    const InterleavedAddrGen<true> on_g{.bank_base_address = get_arg_val<uint32_t>(ph_rt0 + 2), .page_size = T16};
-    const InterleavedAddrGen<true> s_g{.bank_base_address = get_arg_val<uint32_t>(ph_rt0 + 3), .page_size = T32};
-    const InterleavedAddrGen<true> valid_g{.bank_base_address = get_arg_val<uint32_t>(ph_rt0 + 4), .page_size = 4};
-    const InterleavedAddrGen<true> cst_g{.bank_base_address = get_arg_val<uint32_t>(ph_rt0 + 5), .page_size = T16};
-    const InterleavedAddrGen<true> u_g{.bank_base_address = get_arg_val<uint32_t>(ph_rt0 + 6), .page_size = T16};
+    const auto on_g = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(ph_rt0 + 2), T16);
+    const auto s_g = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(ph_rt0 + 3), T32);
+    const auto valid_g = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(ph_rt0 + 4), 4);
+    const auto cst_g = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(ph_rt0 + 5), T16);
+    const auto u_g = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(ph_rt0 + 6), T16);
     // the leader / carry core is (head 0, v-block 0): derived from the (proven) args 0 / 1, not from the flags at
     // 7 / 10 (r3-probe: carry rows 0 on every core; the flags are dumped into the probe row for the post-mortem)
     const bool leader = head == 0 && vblk == 0;
     const uint32_t lx = get_arg_val<uint32_t>(ph_rt0 + 8), ly = get_arg_val<uint32_t>(ph_rt0 + 9);
     const bool carry_core = leader;
-    const InterleavedAddrGen<true> probe_g{
-        .bank_base_address = get_arg_val<uint32_t>(ph_rt0 + 11), .page_size = PROBE_ROW_BYTES};
+    const auto probe_g = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(),
+        get_arg_val<uint32_t>(ph_rt0 + 11),
+        PROBE_ROW_BYTES);
     const uint32_t n_item = get_arg_val<uint32_t>(ph_rt0 + 12);
     uint32_t pr_chunks = 0, pr_chk_on = 0, pr_chk_fs = 0, pr_carry = 0;
 

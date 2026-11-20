@@ -19,7 +19,7 @@ void kernel_main() {
     if (n == 0) {
         return;
     }
-    const InterleavedAddrGen<true> yg{.bank_base_address = y_addr, .page_size = BF16_TILE};
+    const auto yg = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), y_addr, BF16_TILE);
     for (uint32_t u = u0; u < u0 + n; ++u) {
         cb_wait_front(CB_Y, 1);
         noc_async_write(get_read_ptr(CB_Y), yg.get_noc_addr(u), BF16_TILE);  // unit u = tile r CTC + c

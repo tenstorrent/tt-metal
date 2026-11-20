@@ -46,7 +46,7 @@ FORCE_INLINE void load_arg_table() {
     const uint32_t tbl = get_arg_val<uint32_t>(0);
     const uint32_t row = get_arg_val<uint32_t>(1);
     const uint32_t dst = ((get_write_ptr(PMK_ARG_CB) + 63) & ~63u) + PMK_ARG_SLOT * PMK_ARG_PAGE;
-    const InterleavedAddrGen<true> t{.bank_base_address = tbl, .page_size = PMK_ARG_PAGE};
+    const auto t = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), tbl, PMK_ARG_PAGE);
     noc_async_read(t.get_noc_addr(row), dst, PMK_ARG_PAGE);
     noc_async_read_barrier();
     rta_l1_base = reinterpret_cast<uint32_t tt_l1_ptr*>(dst);

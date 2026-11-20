@@ -26,14 +26,14 @@ void kernel_main() {
     }
 
     const uint32_t base = get_write_ptr(0);
-    const InterleavedAddrGen<true> start_g{.bank_base_address = start_addr, .page_size = 4};
+    const auto start_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), start_addr, 4);
     noc_async_read(start_g.get_noc_addr(0), base, 4);
     noc_async_read_barrier();
     const int32_t s = reinterpret_cast<volatile tt_l1_ptr int32_t*>(base)[0];
     const uint32_t start = s < 0 ? 0u : static_cast<uint32_t>(s);
     const uint32_t buf = base + 64;
-    const InterleavedAddrGen<true> src{.bank_base_address = src_addr, .page_size = ROW_BYTES};
-    const InterleavedAddrGen<true> dst{.bank_base_address = dst_addr, .page_size = ROW_BYTES};
+    const auto src = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), src_addr, ROW_BYTES);
+    const auto dst = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), dst_addr, ROW_BYTES);
 
     const uint32_t end = first + count;
     for (uint32_t r = first; r < end;) {

@@ -60,9 +60,9 @@ FORCE_INLINE void phase_main() {
     const uint32_t succ_y = get_arg_val<uint32_t>(RT0 + 9);
     const uint32_t pred_x = get_arg_val<uint32_t>(RT0 + 10);
     const uint32_t pred_y = get_arg_val<uint32_t>(RT0 + 11);
-    const InterleavedAddrGen<true> out_g{.bank_base_address = out_addr, .page_size = ROW_BYTES};
-    const InterleavedAddrGen<true> x_g{.bank_base_address = x_addr, .page_size = ROW_BYTES};
-    const InterleavedAddrGen<true> disp_g{.bank_base_address = disp_addr, .page_size = cap * 4};
+    const auto out_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), out_addr, ROW_BYTES);
+    const auto x_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), x_addr, ROW_BYTES);
+    const auto disp_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), disp_addr, cap * 4);
     volatile tt_l1_ptr uint32_t* dl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CB_WTAB));
     XP_BEGIN();
 

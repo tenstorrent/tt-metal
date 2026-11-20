@@ -41,7 +41,7 @@ FORCE_INLINE void flush(uint32_t scratch_l1) {
     for (uint32_t i = 0; i < 16; ++i) {
         s[i] = i < g_n ? g_marks[i] : 0u;
     }
-    const InterleavedAddrGen<true> probe{.bank_base_address = addr, .page_size = 64};
+    const auto probe = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), addr, 64);
     noc_async_write(scratch_l1, probe.get_noc_addr(slot), 64);
     noc_async_write_barrier();
 }

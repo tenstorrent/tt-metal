@@ -20,7 +20,7 @@ void kernel_main() {
     if (n == 0) {
         return;
     }
-    const InterleavedAddrGen<true> og{.bank_base_address = out_addr, .page_size = FP32_TILE};
+    const auto og = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), out_addr, FP32_TILE);
     for (uint32_t u = u0; u < u0 + n; ++u) {
         const uint32_t r = u / CT, c = u % CT;
         cb_wait_front(CB_OUT, N_OUT);

@@ -79,7 +79,7 @@ FORCE_INLINE void phase_main() {
 #ifdef PMK_SHARED
     constexpr uint32_t KK = K + 1;
     const uint32_t ys_addr = get_arg_val<uint32_t>(PMK_RT_YS);
-    const InterleavedAddrGen<true> ys_g{.bank_base_address = ys_addr, .page_size = ROW_BYTES};
+    const auto ys_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), ys_addr, ROW_BYTES);
 #else
     constexpr uint32_t KK = K;
 #endif
@@ -128,12 +128,15 @@ FORCE_INLINE void phase_main() {
     const uint32_t w_l1 = idx_l1 + K * 32 * 4;
     volatile tt_l1_ptr uint32_t* idx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1);
     volatile tt_l1_ptr uint32_t* wl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w_l1);
-    const InterleavedAddrGen<true> out_g{.bank_base_address = out_addr, .page_size = ROW_BYTES};
-    const InterleavedAddrGen<true> dest_g{.bank_base_address = dest_addr, .page_size = K * C * 4};
+    const auto out_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), out_addr, ROW_BYTES);
+    const auto dest_g =
+        TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), dest_addr, K * C * 4);
 #ifdef PMK_WT_BF16
-    const InterleavedAddrGen<true> wt_g{.bank_base_address = wt_addr, .page_size = C * 2 * K};  // one ROW_MAJOR page
+    const auto wt_g = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), wt_addr, C * 2 * K);  // one ROW_MAJOR page
 #else
-    const InterleavedAddrGen<true> wt_g{.bank_base_address = wt_addr, .page_size = W_TILE_BYTES};
+    const auto wt_g =
+        TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), wt_addr, W_TILE_BYTES);
 #endif
 
 #ifdef PMK_OUT_BFP8
@@ -150,7 +153,8 @@ FORCE_INLINE void phase_main() {
     constexpr uint32_t NT = H_T_ / H_SPLIT;  // tiles of a part
     static_assert(NT % NC_ == 0, "a part = whole N chunks");
     constexpr uint32_t PART_B = (NT / NC_) * RB;
-    const InterleavedAddrGen<true> outb_g{.bank_base_address = out_addr, .page_size = ROWB_BYTES};
+    const auto outb_g =
+        TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), out_addr, ROWB_BYTES);
     const uint32_t stage = (w_l1 + W_TILE_BYTES + 63) & ~63u;  // 32 x PART_B staging (CB_CIDX sized by the host)
 #endif
 #ifdef PMK_RM_SKIP
@@ -173,7 +177,8 @@ FORCE_INLINE void phase_main() {
     // Stage 14 B2.3 token-major out_rm (ffn_writer.hpp PMK_OUT_TM): page (part, token) = the token's K row-parts in
     // slot order, contiguous: ONE read per token-part lands the K CIN pages (no dest table)
     static_assert(PMK_TM_PART == PART_BYTES && PMK_TM_K == K, "the writer's page geometry");
-    const InterleavedAddrGen<true> tm_g{.bank_base_address = out_addr, .page_size = K * PART_BYTES};
+    const auto tm_g =
+        TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), out_addr, K * PART_BYTES);
 #endif
 #if !defined(PMK_COMB_STRIDE)
 #define PMK_COMB_STRIDE \
@@ -253,7 +258,8 @@ FORCE_INLINE void phase_main() {
         if constexpr (COMB_HALF == 0) {  // the P13 partial, LAST: the chunk's NT tiles of y_s (bf16 TILE [C, H]: tile
                                          // (chunk, n) = page chunk H_T + n)
             // into CB_CSH and a weight tile whose column 0 is 1.0
-            const InterleavedAddrGen<true> yst_g{.bank_base_address = ys_addr, .page_size = 2048};
+            const auto yst_g =
+                TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), ys_addr, 2048);
             cb_reserve_back(CB_CSH, NT);
             cb_reserve_back(CB_CW, 1);
             const uint32_t csh = get_write_ptr(CB_CSH);
@@ -276,7 +282,8 @@ FORCE_INLINE void phase_main() {
 #if defined(PMK_COMB_SPLIT) && defined(PMK_RT_Y)  // (PMK_RT_Y: the NCRISC's instance only)
         if constexpr (COMB_HALF == 0) {  // the y write (comb_writer.hpp's unit) runs here: the BRISC rebuilds the odd
                                          // slots
-            const InterleavedAddrGen<true> yg{.bank_base_address = get_arg_val<uint32_t>(PMK_RT_Y), .page_size = 2048};
+            const auto yg = TensorAccessor(
+                tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(PMK_RT_Y), 2048);
             const uint32_t base = chunk * H_T_ + part * NT;
             cb_wait_front(CB_COUT, NT);
             CP_TIC();

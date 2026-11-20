@@ -57,7 +57,8 @@ void kernel_main() {
     }
 #if defined(EH_SEL) && defined(EH_SEL_ROWS)
     {
-        const InterleavedAddrGen<true> sg = {.bank_base_address = get_arg_val<uint32_t>(7), .page_size = 128};
+        const auto sg =
+            TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(7), 128);
         noc_async_read(sg.get_noc_addr(0), trow, 128);
         noc_async_read_barrier();
         for (uint32_t t = 0; t < T; ++t) {
@@ -66,7 +67,8 @@ void kernel_main() {
     }
 #elif defined(EH_SEL)
     {
-        const InterleavedAddrGen<true> sg = {.bank_base_address = get_arg_val<uint32_t>(7), .page_size = 128};
+        const auto sg =
+            TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(7), 128);
         noc_async_read(sg.get_noc_addr(0), trow, 64);
         noc_async_read_barrier();
         src_row[0] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(trow)[0];
@@ -79,8 +81,8 @@ void kernel_main() {
     static_assert(EH_IN == 2, "EH_ROW0: the bf16 tile source only");
     uint32_t row0;
     {
-        const InterleavedAddrGen<true> rg = {
-            .bank_base_address = get_arg_val<uint32_t>(9 + 2 * n_readers), .page_size = 128};
+        const auto rg = TensorAccessor(
+            tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(9 + 2 * n_readers), 128);
         noc_async_read(rg.get_noc_addr(0), trow, 64);
         noc_async_read_barrier();
         row0 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(trow)[0];

@@ -30,7 +30,7 @@ void kernel_main() {
     const uint32_t base = get_write_ptr(DISP_CB);
     const uint32_t meta_l1 = base + IDX_BYTES;
     const uint32_t buf = meta_l1 + 64;
-    const InterleavedAddrGen<true> meta_g{.bank_base_address = meta_addr, .page_size = 32 * 4};
+    const auto meta_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), meta_addr, 32 * 4);
     noc_async_read(meta_g.get_noc_addr(0), meta_l1, 32 * 4);
     noc_async_read_barrier();
     const uint32_t used = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta_l1)[0];
@@ -38,12 +38,12 @@ void kernel_main() {
     if (r0 >= end) {
         return;  // every read above has completed (barrier): nothing in flight
     }
-    const InterleavedAddrGen<true> disp_g{.bank_base_address = disp_addr, .page_size = CAP * 4};
+    const auto disp_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), disp_addr, CAP * 4);
     noc_async_read(disp_g.get_noc_addr(0), base, CAP * 4);
     noc_async_read_barrier();
     volatile tt_l1_ptr uint32_t* disp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base);
-    const InterleavedAddrGen<true> xg{.bank_base_address = x_addr, .page_size = ROW_BYTES};
-    const InterleavedAddrGen<true> og{.bank_base_address = xd_addr, .page_size = ROW_BYTES};
+    const auto xg = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), x_addr, ROW_BYTES);
+    const auto og = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), xd_addr, ROW_BYTES);
     for (uint32_t d0 = r0; d0 < end; d0 += DEPTH) {
         const uint32_t k = (end - d0 < DEPTH) ? end - d0 : DEPTH;
         for (uint32_t i = 0; i < k; ++i) {

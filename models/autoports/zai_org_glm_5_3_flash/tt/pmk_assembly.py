@@ -241,7 +241,7 @@ def _rtail_writer_row_mask(txt: str) -> str:
             "    MK_MARK();  // tail probe 0: start\n"
             "    uint32_t valid_end;  // GLM53_PMK_ROW_MASK: the chunk's valid rows (rows >= valid_end -> sentinel expert, weight 0)\n"
             "    {\n"
-            "        const InterleavedAddrGen<true> ve_g{.bank_base_address = get_arg_val<uint32_t>(ph_rt0 + RTAIL_VE_RT), .page_size = 4};\n"
+            "        const auto ve_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(ph_rt0 + RTAIL_VE_RT), 4);\n"
             "        const uint32_t s = get_write_ptr(CB_IDX);  // the scratch's first 64 B (the RM_OUT rows start at + 64)\n"
             "        noc_async_read(ve_g.get_noc_addr(0), s, 4);\n"
             "        noc_async_read_barrier();\n"

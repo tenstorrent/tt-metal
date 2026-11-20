@@ -22,7 +22,7 @@ void kernel_main() {
     if (nu == 0) {
         return;
     }
-    const InterleavedAddrGen<true> yg{.bank_base_address = y_addr, .page_size = TILE_BYTES};
+    const auto yg = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), y_addr, TILE_BYTES);
     for (uint32_t u = u0; u < u0 + nu; ++u) {
         const uint32_t chunk = u / H_SPLIT;
         const uint32_t base = chunk * HT + (u - chunk * H_SPLIT) * NT;
