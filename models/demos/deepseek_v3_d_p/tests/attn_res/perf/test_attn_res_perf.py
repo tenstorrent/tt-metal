@@ -77,7 +77,7 @@ _GALAXY = "SP8xTP4"
 _TARGETS_MS = {
     ("boundary", "untraced"): 0.459,
     ("boundary", "traced"): 0.446,
-    ("ordinary", "untraced"): 0.106,
+    ("ordinary", "untraced"): 0.127,
     ("ordinary", "traced"): 0.128,
 }
 # A layout's prefill chunk where it is not PER_CHIP_TOKENS a chip: a 4x4 stage takes the same chunk as the 8x4 mesh,

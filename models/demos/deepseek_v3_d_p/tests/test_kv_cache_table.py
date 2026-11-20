@@ -439,6 +439,7 @@ def test_kimi_k3_kv_cache_table(mesh_device, device_params, model, tmp_path, mon
         forward_chunks=1,
         use_trace=False,
     )
+    params.cache_num_users = adapter.kv_cache_slots(params)  # the runtime config the table builder reads
     caches = adapter.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
     token_caches = {"kvpe": caches.kvpe.storage}
     if caches.index is not None:
