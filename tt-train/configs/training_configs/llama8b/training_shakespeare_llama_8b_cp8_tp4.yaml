@@ -1,0 +1,25 @@
+# Context parallelism (ring attention) on a Galaxy: mesh axis 0 is CP=8, axis 1 is TP=4.
+# Each device holds 16384 / 8 = 2048 tokens of the sequence. Runs with the C++ nano_gpt (train.py has no CP).
+training_config:
+  project_name: tt_train_llama8b_cp
+  seed: 5489
+  model_save_interval: 0
+  batch_size: 1
+  gradient_accumulation_steps: 1
+  max_steps: 200
+  optimizer:
+    type: AdamW
+    lr: 2.0e-5
+    beta1: 0.9
+    beta2: 0.95
+    epsilon: 1.0e-8
+    weight_decay: 0.0
+  use_clip_grad_norm: false
+  clip_grad_norm_max_norm: 1.0
+  data_path: data/tokenized_shakespeare_llama8b.yaml
+  model_config: ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/llama8b_cp_16k.yaml
+  scheduler_type: warmup_linear
+device_config:
+  enable_cp: true
+  enable_tp: true
+  mesh_shape: [8, 4]
