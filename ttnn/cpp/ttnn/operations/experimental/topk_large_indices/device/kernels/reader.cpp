@@ -376,7 +376,9 @@ FORCE_INLINE void two_level_run(
     //   value is only the cap's estimate.
     static_assert(noc_mode == DM_DEDICATED_NOC);
     constexpr uint32_t claim_timeout = 200000;  // wall-clock ticks, about 150 us
-    constexpr uint32_t repair_after = 4000000;  // wall-clock ticks idle (about 3 ms) once every unit is claimed
+    // Wall-clock ticks idle once every unit is claimed. A claimed unit is done well within it (its core may first
+    // finish a row's last chunks); a repair that comes too early only does a unit twice.
+    constexpr uint32_t repair_after = 200000;  // about 150 us
     uint32_t last_claimed = 0xFFFFFFFFu;
     const auto claim = [&](uint32_t increment, uint32_t return_word) {
         atomic_add(noc.get_noc_id(), write_at_cmd_buf, counter, increment, return_word);
