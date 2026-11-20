@@ -541,7 +541,7 @@ void kernel_main() {
 #ifdef FUSE_BIAS
         // This expert's N-column slice of its (1, N) biases. The compute
         // kernel wait_fronts then pops at the end of this expert so the next
-        // expert can reuse the single-buffered bias CBs. Bias is a single
+        // expert can reuse its slot of the double-buffered bias CBs. Bias is a single
         // tile-row tensor, so the DRAM page index == tile column. Phantom
         // columns (col >= actual N) are zero-filled: unlike the per-K-block
         // weight reads this runs once per expert, so the fill is cheap, and it

@@ -511,6 +511,22 @@ FORCE_INLINE void matmul_phase_fused_gu(
     // Constant CB block sizes (per_core_M_max-derived, from the host CB sizing).
     constexpr uint32_t X_BLOCK_TILES_MAX = in0_block_num_tiles;
     constexpr uint32_t EFF_OUT_MAX = out_block_num_tiles;
+    // Narrow N slice (gpt-oss tensor-parallel experts: 2 hidden tiles per core): one N subblock, and all per_core_M
+    // rows of it fit DST at once. Then each gate / up K-block is ONE matmul over every row (rt_dim = EFF_M) instead of
+    // one 1 x w subblock per row, so every weight tile unpacked feeds all the rows and each K-block pays one DST
+    // acquire / pack per matmul. Measured: 1 x 2 subblocks spent 27 ns per tile multiply where the 1 x 3 of the
+    // full-width experts spent 13. Its DST layout (row-major rows x w) is exactly the partials' slot order.
+    constexpr uint32_t kGuDst =
+#if defined(FP32_DEST_ACC_EN) && FP32_DEST_ACC_EN
+        4;
+#else
+        8;
+#endif
+    constexpr bool kFullM = out_subblock_h == 1 && in1_num_subblocks == 1 && in0_num_subblocks * out_subblock_w <= kGuDst;
+    const uint32_t gu_rt = kFullM ? EFF_M : out_subblock_h;
+    if constexpr (kFullM) {
+        matmul_block_init(x_cb_id, gate_cb_id, kWeightsTranspose, out_subblock_w, gu_rt, in0_block_w);
+    }
     pack_reconfig_data_format(partials_gu_cb_id);
 #ifdef PACKER_L1_ACC
     PACK((llk_pack_reconfig_l1_acc(0)));
@@ -576,7 +592,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
             x_tilized_cb.push_back(x_pad);
         }
         reconfig_data_format_srca(gate_cb_id);
-        matmul_block_init(x_cb_id, gate_cb_id, kWeightsTranspose, out_subblock_w, out_subblock_h, in0_block_w);
+        matmul_block_init(x_cb_id, gate_cb_id, kWeightsTranspose, out_subblock_w, gu_rt, in0_block_w);
         pack_reconfig_data_format(x_tilized_cb_id, partials_gu_cb_id);
 #ifdef PACKER_L1_ACC
         PACK((llk_pack_reconfig_l1_acc(mm_block == 0 ? 0 : 1)));
@@ -607,6 +623,27 @@ FORCE_INLINE void matmul_phase_fused_gu(
         gate_cb.wait_front(in1_block_num_tiles);
         up_cb.wait_front(in1_block_num_tiles);
 
+        if constexpr (kFullM) {
+            // Phantom-column cores (n_subblocks 0) skip both matmuls and packs, as below.
+            if (n_subblocks > 0) {
+                const uint32_t n_out = EFF_M * out_subblock_w;
+                for (uint32_t which = 0; which < 2; ++which) {
+                    const uint32_t w_cb = which == 0 ? gate_cb_id : up_cb_id;
+                    const uint32_t p_cb = which == 0 ? partials_gu_cb_id : partials_up_cb_id;
+                    tile_regs_acquire();
+                    for (uint32_t k = 0; k < in0_block_w; ++k) {
+                        matmul_block(
+                            x_cb_id, w_cb, k, k * in1_per_core_w, 0, kWeightsTranspose, out_subblock_w, EFF_M, in0_block_w);
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t i = 0; i < n_out; ++i) {
+                        pack_tile<true>(i, p_cb, i);
+                    }
+                    tile_regs_release();
+                }
+            }
+        } else {
         int in0_index_subblock_offset = 0;
         uint32_t partials_slot_idx = 0;
         for (uint32_t sb_m = 0; sb_m < EFF_M; ++sb_m) {
@@ -677,6 +714,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
                 in1_index_subblock_offset += out_subblock_w;
             }
             in0_index_subblock_offset += in0_subblock_num_tiles;
+        }
         }
 
 #ifdef PACKER_L1_ACC

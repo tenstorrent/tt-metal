@@ -544,9 +544,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         total += static_cast<uint64_t>(M * per_core_N_d) * partials_d_tile_size;            // cb_mm_partials_d
         total += static_cast<uint64_t>(cb_out_tiles) * out_tile_size;                       // cb_out
         total += static_cast<uint64_t>(M * in0_block_w_d * 2) * intermed_tile_size;         // cb_in0_down_full
-        // Bias CBs (FUSE_BIAS): single-buffered, per_core_N_gu (gate/up) + per_core_N_d
-        // (down) tiles. Keep in sync with the CB allocations in the "Bias CBs" section.
-        total += static_cast<uint64_t>(2 * per_core_N_gu + per_core_N_d) * bias_ts;
+        // Bias CBs (FUSE_BIAS): double-buffered, per_core_N_gu (gate/up) + per_core_N_d
+        // (down) tiles each. Keep in sync with the CB allocations in the "Bias CBs" section.
+        total += static_cast<uint64_t>(2 * (2 * per_core_N_gu + per_core_N_d)) * bias_ts;
         total += static_cast<uint64_t>(2) * pages_scratch_bytes;  // cb_pages_reader + cb_pages_writer
         if (has_zero_row) {
             total += rm_out_row_bytes;  // cb_zero_row
@@ -980,18 +980,21 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         counts_num_entries * static_cast<uint32_t>(sizeof(uint32_t)));
     make_cb(CB_START_SCRATCH_READER, tt::DataFormat::UInt32, /*tiles=*/1, start_scratch_bytes);
 
-    // Bias CBs (FUSE_BIAS): one full per-core N-column slice each; single-buffered
-    // (read once, reused across all chunks). gate/up: per_core_N_gu tiles; down:
-    // per_core_N_d tiles. Bias broadcast across rows in the compute kernel.
+    // Bias CBs (FUSE_BIAS): one full per-core N-column slice per expert (read once, reused across all its
+    // chunks), double-buffered: the reader loads the next expert's biases while the compute still holds this
+    // expert's. Single-buffered, the reader's reserve waited for the compute to finish the whole expert (down phase
+    // included) before it could even issue the next expert's bias reads: 9.6 us per expert on gpt-oss-20b's
+    // tensor-parallel experts (32 per chip per layer), with the next expert's x and weights queued behind it.
+    // gate/up: per_core_N_gu tiles; down: per_core_N_d tiles. Bias broadcast across rows in the compute kernel.
     const bool fuse_bias = op.fuse_bias;
     if (fuse_bias) {
         // Validation enforces gate/up/down biases share one dtype, so all three CBs
         // (and the compute kernel's single unpack reconfig for gate/up) use it safely.
         const tt::DataFormat bias_df = tt::tt_metal::datatype_to_dataformat_converter(t.gate_biases[0].dtype());
         const uint32_t bias_tile_size = tt::tile_size(bias_df);
-        make_cb(CB_GATE_BIAS, bias_df, /*tiles=*/per_core_N_gu, bias_tile_size);
-        make_cb(CB_UP_BIAS, bias_df, /*tiles=*/per_core_N_gu, bias_tile_size);
-        make_cb(CB_DOWN_BIAS, bias_df, /*tiles=*/per_core_N_d, bias_tile_size);
+        make_cb(CB_GATE_BIAS, bias_df, /*tiles=*/2 * per_core_N_gu, bias_tile_size);
+        make_cb(CB_UP_BIAS, bias_df, /*tiles=*/2 * per_core_N_gu, bias_tile_size);
+        make_cb(CB_DOWN_BIAS, bias_df, /*tiles=*/2 * per_core_N_d, bias_tile_size);
     }
     if (has_zero_row) {
         make_cb(CB_ZERO_ROW, tt::DataFormat::Float16_b, /*tiles=*/1, rm_out_row_bytes);
