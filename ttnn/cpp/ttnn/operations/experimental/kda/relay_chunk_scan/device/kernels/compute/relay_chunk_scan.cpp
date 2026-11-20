@@ -22,6 +22,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/activations.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/relay_chunk_scan/device/kernels/compute/gate_matmul.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/relay_chunk_scan/device/kernels/correction_core.hpp"
 
 namespace ckl = compute_kernel_lib;
 
@@ -35,11 +36,10 @@ constexpr uint32_t cb_diff = get_compile_time_arg_val(5);
 constexpr uint32_t cb_out = get_compile_time_arg_val(6);
 constexpr uint32_t core_chunks = get_compile_time_arg_val(7);
 constexpr bool streamed = get_compile_time_arg_val(8);
-// The cores are heads x cores_per_head consecutive cores of the compute grid in row-major order, from first_core,
-// head by head.
+// The cores' layout (correction_core.hpp).
 constexpr uint32_t cores_per_head = get_compile_time_arg_val(9);
-constexpr uint32_t grid_x = get_compile_time_arg_val(10);
-constexpr uint32_t first_core = get_compile_time_arg_val(11);
+constexpr uint32_t heads_per_column = get_compile_time_arg_val(10);
+constexpr uint32_t first_row = get_compile_time_arg_val(11);
 // The gated output norm of each chunk row x: x / sqrt(mean(x^2) + epsilon) * g with g = sigmoid(gate) * weight. The
 // squares, the mean's scaler, 1 / rms, the gate rows (FP32, all of the core's chunks), the weight (row 0 of its tiles)
 // and broadcast down every row, each chunk's g (all in place, one streamed), and the result.
@@ -61,12 +61,11 @@ constexpr uint32_t gate_kb = get_compile_time_arg_val(24);
 constexpr uint32_t gate_blocks = get_compile_time_arg_val(25);
 constexpr auto gate_fidelity = static_cast<ckernel::MathFidelity>(get_compile_time_arg_val(26));
 // The partial sums of the pair's other head, and the pair's core's of this core's head (the output gate's heads pair
-// up, h with h + heads / 2, each core forming both over its head's half of K).
+// up, h with h ^ 1, each core forming both over its head's half of K).
 constexpr uint32_t cb_gate_pair = get_compile_time_arg_val(27);
 constexpr uint32_t cb_gate_partial = get_compile_time_arg_val(28);
-constexpr uint32_t gate_heads = get_compile_time_arg_val(29);
 // 2 where the heads pair up, else 1 (each core its head over all of K).
-constexpr uint32_t gate_ways = get_compile_time_arg_val(30);
+constexpr uint32_t gate_ways = get_compile_time_arg_val(29);
 constexpr uint32_t state_tiles = kt * kt;
 // A chunk row of the outputs is formed in one DST pass (the op checks K against the DST).
 static_assert(kt <= compute_kernel_lib::DEST_AUTO_LIMIT);
@@ -236,7 +235,7 @@ void correct(uint32_t begin, uint32_t end, uint32_t seed) {
 
 // Every correction core forms its chunks' gate rows, then corrects and normalizes its chunks once their seeds land.
 void kernel_main() {
-    const uint32_t head = (get_absolute_logical_y() * grid_x + get_absolute_logical_x() - first_core) / cores_per_head;
+    const uint32_t head = kda_relay::correction_core<heads_per_column, first_row, cores_per_head>().head;
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_terms, cb_seed, cb_out);
     cb_wait_front(cb_ctl, 1);
     const uint32_t chunks = read_tile_value(cb_ctl, 0, 0);
@@ -248,7 +247,7 @@ void kernel_main() {
         cb_gin1,
         cb_gate,
         cb_gate_pair,
-        gate_ways == 1 || head % gate_heads < gate_heads / 2,
+        gate_ways == 1 || head % 2 == 0,
         gate_ways,
         core_chunks,
         kt,
