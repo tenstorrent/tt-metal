@@ -889,10 +889,10 @@ def test_transpose_hc(dtype, shape, device):
 )
 def test_transpose_2D(dtype, shape, layout, device):
     torch.manual_seed(2005)
-    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_input = random_torch_tensor(dtype, shape)
     torch_output = torch_input.transpose(0, 1)
 
-    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.DataType.BFLOAT16, layout=layout, device=device)
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=layout, device=device)
     tt_output = ttnn.transpose(tt_input, 0, 1)
     tt_output = ttnn.to_torch(tt_output)
     assert_with_pcc(torch_output, tt_output, 0.9999)
