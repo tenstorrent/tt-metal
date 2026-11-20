@@ -81,7 +81,7 @@ cb_moment_b = rows).
 
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
-| x (own slice) | 1 (read S by the own members) | resident in cb_x for every pass; the ports read it from L1, not DRAM | ports read it from L1 twice (fwd and bwd port): 2·S local NoC |
+| x (own slice) | 1 (read S by the own members); 2 on LN FPU fp32-DEST cells with `own_pivot` (Refinement 5: a second copy into `cb_own`) | resident in cb_x for every pass; the ports read it from L1, not DRAM | ports read it from L1 twice (fwd and bwd port): 2·S local NoC |
 | x (remote slices) | 0 | land in compute L1 from the fabric; the far slice is relayed out of the middle chip's L1 | relay reads: 0.5·S per relay port (far half), notifications |
 | fabric | busiest link direction 1.5·S over 2 links (= roofline) | balanced ring schedule (example) | — |
 | output | 1 (write G·S) | each member writes its block once | — |
@@ -188,3 +188,19 @@ Net: the m16 path frees `rows · (1 + 2 + 2) · T_acc + rows · pitch · T_acc (
 
 Data-movement budget: unchanged (DRAM and fabric crossings identical; the own-loaded bit masks change only the
 port-local semaphore increments).
+
+## Refinement 5 deltas (indexer layer_norm tail: fused k = 1 finalize, own-slice pivot, blocked normalize)
+
+| CB | Capacity (pages) | Page format | Producer | Consumer | Shares with / why not |
+|----|------------------|-------------|----------|----------|-----------------------|
+| `cb_own` (28, ln FPU ∧ fp32 DEST ∧ k ≤ 8 ∧ `OWN_PIVOT`) | `rows · max own-slice tiles per member` (indexer case: 1 page, 2 KB) | input dtype | reader (second DRAM read of the own tiles, same barrier as cb_x's) | compute (`own_pivot_block`: one BulkWaitBulkPop reduce → `cb_km`, before the landing) | NEW. Not `cb_x`: the reduce helper has no tile offset and the own slice sits at column `own_off` of cb_x (and cb_x is pushed only after the last landing). Not aliased: it is live only before the landing, but every compute-only scratch that is free then (`cb_cent`, `cb_mstat`) is aliased already or receives the staged pivot. Allocated only when the split chosen without it still fits (`own_pivot` trial, like `XG_FIRST`): the split never changes for it |
+| `cb_mstat` (13) | `3 · rows` when `own_pivot` ∧ k = 1 (else `2 · rows`, unchanged) | T_acc (UnpackToDestFp32) | compute | compute | `[K_m × rows][D1 × rows][D2 × rows]`: the bf16 pivot is staged ahead of the moments (fp32 copy, before the landing) so the fused finalize copies its three inputs in one format (a bf16 `cb_km` copy among them cost ≈ 0.27 µs on the tail). Still aliased with `cb_mu` (the k = 1 path never uses `cb_mu`) |
+| `cb_kg` (15) | `rows` (unchanged) | Float16_b | k = 1 block pivot: the pivot reduce (K_g = K_m); own pivot: the fused finalize (K_g = bf16_rne(mu)) | compute (normalize) | k = 1 without the own pivot also leaves `cb_km` unused (allocated, `rows` bf16 pages) |
+| `cb_out` (12) | unchanged; the LN FPU normalize packs it in blocks of `norm_block = gcd(unit, ring pages, member core_w)` | output dtype | compute | writer | a block is packed at contiguous offsets and never straddles the ring end (each block full, ring a whole number of blocks) |
+
+Indexer LN case per compute core: + `cb_own` 2,048 B + `cb_mstat` one extra T_acc page 4,096 B (aliased region grows by
+the same) → ≈ 95.4 KB.
+
+Data-movement budget: with `own_pivot` the own slice is read from DRAM **twice** per own member (into cb_x and into
+cb_own, one barrier) — `x (own slice)` DRAM crossings 1 → 2 on LN FPU fp32-DEST cells (+S per chip; 41 KB on the indexer
+case, inside the read barrier the own read already pays). Fabric and output crossings unchanged.

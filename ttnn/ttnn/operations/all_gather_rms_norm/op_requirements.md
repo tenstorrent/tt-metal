@@ -201,7 +201,7 @@ link floor, mostly the router backlog after the sender's last hand-off. Next: fi
 the last group, fewer zones) and narrow every group landing in the last ~2 µs, not only the last wave; not done here
 because the zone markers on those cores were unreliable and the fix needs a dedicated debug pass.
 
-### [ ] Refinement 5 — Indexer layer_norm case: local LN tail (column-0 SFPU scope) + own-slice moments before the landing
+### [x] Refinement 5 — Indexer layer_norm case: local LN tail (column-0 SFPU scope) + own-slice moments before the landing
 
 **Type**: perf
 
@@ -222,6 +222,16 @@ srcA-format fix in the normalize chain (it costs +0.17 µs here; it removed a �
 
 **Done when**: measured fastest-chip win on case1 beyond noise, slowest chip not higher, the precision baseline still
 green (no bias regression), golden green, no regression on the guard set.
+**Outcome**: case1 fastest **15.64 → 12.07 µs**, slowest 16.39 → 12.82 (`eval.ccl_perf compare`: win, −3.57 µs);
+case0 guard 20.65 µs (unchanged). Kept: k = 1 fused column-0 SFPU finalize (member finalize + Chan combine in one window,
+−3.05 µs), blocked LN FPU normalize (one init per chain step per DEST block, srcA switch per block, wrap-safe block =
+gcd(unit, cb_out ring, member widths): −0.35 µs). Own-slice pivot formed before the landing (`AGRMS_OWN_PIVOT`, `cb_own`):
+−0.1 µs vs the block pivot (noise band), kept as a live knob; writer unit 2 / 1 measured flat / +0.25 (kept 4). Precision
+baseline unchanged (bf16_ln 640×32 rel RMS 0.00185). Bottleneck now: the post-landing chain ≈ 4.6 µs for four tiles is
+fixed per-phase cost (centering, D1 reduce, squares, D2 reduce, finalize ≈ 1 µs, normalize 1.6 µs, store 0.56), and the
+7.7 µs to the last landing (TRANSPORT, Refinement 6) is the larger share. Not done: own-slice centered moments before
+the landing (1 of 4 tiles, non-contiguous remote columns, ≤ ~0.2 µs); next would be fusing the moments phases (one chain
+producing c' and c'² with L1-accumulated packs feeding a single reduce) and fewer pack-format switches in the finalize.
 
 ### [ ] Refinement 6 — TRANSPORT: indexer layer_norm case packetization and fixed exchange cost
 

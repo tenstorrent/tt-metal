@@ -193,3 +193,33 @@
   budget); with 4 calls the data is clean. The tail split's last 8-member group finished its partial exchange ~4 µs after
   its last moment — not explained; recorded as the next lever.
 - Tests added: none (probe changes only: `zones_agrms.py`).
+
+## Refinement 5 — Indexer layer_norm case: local LN tail (column-0 SFPU scope) + own-slice moments before the landing
+- Date: 2026-11-20
+- What was done: (perf, `LOOSE_CASES[1]` 640×32 bf16 LN, k = 1) (1) k = 1 fp32-DEST member finalize + Chan combine
+  collapsed into one column-0-scoped SFPU window (`ln_finalize_k1_block`, the base op's `finalize_col0_body` pattern);
+  with the block pivot K_g = K_m is packed straight to `cb_kg`. (2) OVERLAP: `AGRMS_OWN_PIVOT` — the member pivot is the
+  bf16 mean of the own slice, reduced from a reader copy (`cb_own`) before the landing; k = 1 stages K_m in fp32
+  `cb_mstat` and forms K_g = bf16_rne(mu) in the finalize. (3) Blocked LN FPU normalize: `eltwise_chain` block mode
+  (each step inits once per DEST block; `DestReuseBcast(blk, Wt)` switches srcA per block), block = gcd(writer unit,
+  cb_out ring pages, member widths) so a block never straddles the cb_out ring end (compute CT [6], `AGRMS_NORM_BLOCK`).
+  (4) `AGRMS_OUT_UNIT` env knob (default 4). Reused: the pivot reduce / centering / D1-D2 reduces, the FPU normalize
+  chain and `DestReuseBcast`, the reader's own-read loop. Added: one SFPU body, `stage_pivot_block`, `own_pivot_block`,
+  `cb_own`.
+- Measured (eval `ccl_perf`, 5 experiments, fastest / slowest chip): case1 15.64 / 16.39 → 12.59 (fused finalize) →
+  12.42 (own pivot + staged K) → **12.07 / 12.82 µs** (blocked normalize); own pivot vs block pivot 12.42 vs 12.53 (noise
+  band, kept as a knob); writer unit 2 / 1: 12.11 / 12.32 (kept 4). case0 guard 20.65 µs (unchanged).
+- Accuracy achieved: precision baseline unchanged — bf16_ln 640×32 PCC 0.999998, rel RMS 0.00185 (was 0.00187), row scale
+  0.99973; bf16_ln 640×384 / 128×1792 / 32×384 rel RMS 0.0019 (identical); fp32_ln 0.00053–0.00070; bf16_ln_acc16
+  0.0041–0.0044 (identical).
+- Golden test progress: stratified LN slice (every dtype × fp32_dest × alignment × memory_layout, 3 shapes each, + 12 rms,
+  + both perf cases) 125/125 executed pass (3 skips: sharded inputs too large to allocate, as before; 48 expected xfail),
+  second random LN sample 218/218 executed pass (4 such skips, 38 xfail); test_regression + test_ring_mock 160/160; unit
+  directory 70/70.
+- Issues encountered: the first blocked normalize used block = writer unit; on 2×4×128×512 (pitch 6, members 6 / 4,
+  rows 2) the 4 + 2 blocks per row wrapped an 8-page `cb_out` and the 4-tile pack ran past the ring end (PCC 0.85, both
+  DEST widths) — fixed with the gcd block. A bf16 pivot copy inside the fused finalize cost +0.27 µs (format switch
+  among UnpackToDestFp32 copies) — staged into fp32 `cb_mstat` before the landing instead. Own-slice centered moments
+  before the landing not built (1 of 4 tiles, non-contiguous remote columns, per-phase fixed cost dominates).
+- Tests added: none (the precision baseline, unit and golden suites cover the touched paths; perf via perf_agrms.py /
+  zones_agrms.py).

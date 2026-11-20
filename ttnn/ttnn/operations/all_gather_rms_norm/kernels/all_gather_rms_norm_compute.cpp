@@ -31,6 +31,10 @@
 //    collapse_rows_to_row0), owner = reduce_tile COL over the gather tiles + transpose_dest + finalize (base op
 //    combine_rows_block). ln: member finalize transposes (mean_m, M2_m) in DEST before the pack; the owner's Chan
 //    combine is the raw SFPU loop of the symmetric path plus a ones-row matmul for the sums over members.
+//  * ln k = 1 finalize (fp32 DEST, Refinement 5): member finalize + Chan combine in ONE column-0-scoped SFPU body
+//    (the base op's finalize_col0_body pattern through _llk_math_eltwise_unary_sfpu_params_, VectorMode::C): no helper
+//    post-op sees the three statistics tiles together, and the per-element chain ops run over full tiles (~15 init + op
+//    pairs on column-0 data).
 //  * ln pass A / pass B / member finalize / Chan combine: eltwise_chain keeps no SFPU accumulator in DEST across the
 //    tiles of a walk (DestAccumulation is FPU-only), and the FPU path would truncate fp32 x to tf32 before the
 //    pivot subtraction (big-offset precision). These are short raw loops of copy_tile / unary_bcast /

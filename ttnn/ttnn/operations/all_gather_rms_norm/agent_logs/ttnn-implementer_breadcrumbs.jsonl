@@ -9,3 +9,4 @@
 {"event":"fix_applied","what":"stream port reader (trid per slot) + port_batch 2; PORT_PACK parked 0","ts":"2026-11-20T06:12:08+00:00"}
 {"event":"test_run","status":"pass","test":"golden stratified slice + ring_mock","passed":137,"failed":0,"ts":"2026-11-20T06:12:08+00:00"}
 {"event":"test_run","refinement":4,"status":"pass","case0_fastest_us":[20.739,20.64],"case0_slowest_us":[21.509,21.345],"case1_fastest_us":15.636,"unit":"70/70","golden_sample":"77 pass/0 fail","ts":"2026-11-20T07:55:40+00:00"}
+{"event":"test_run","status":"pass","detail":"Refinement 5 final: case1 15.64->12.07us (fused k1 col0 finalize, own pivot knob, blocked normalize with wrap-safe gcd block); case0 20.65 unchanged; golden LN slices 125/125 + 218/218, regression+ring 160/160, unit 70/70","ts":"2026-11-20T10:11:21+00:00"}
