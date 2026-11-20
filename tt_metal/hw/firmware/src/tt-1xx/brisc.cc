@@ -212,25 +212,19 @@ void set_deassert_addresses() {
 // reads back as false SBEs and DBEs.
 constexpr uint32_t l1_ecc_populated_rows = MEM_L1_SIZE / (l1_ecc_banks * l1_ecc_word_bytes);
 
-// ECC_CTRL's interrupt enables while armed, and the ECC_STATUS view selected after arming and after a false error.
-// The hardware interrupts only on an error in a word other than the last error's, so the SBE interrupt is enabled and
-// every SBE clears the last error: a later DBE in the same word is then new and interrupts.
-constexpr uint32_t ecc_ctrl_armed = ECC_CTRL_L1_SBE_IRQ_EN | ECC_CTRL_L1_DBE_IRQ_EN;
-constexpr uint32_t ecc_ctrl_host_view = static_cast<uint32_t>(EccView::L1_COUNTS);
-
 inline __attribute__((always_inline)) uint32_t read_ecc_view(EccView view) {
     *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_ECC_CTRL) =
-        ecc_ctrl_armed | static_cast<uint32_t>(view);
+        l1_ecc_ctrl_irq_enables | static_cast<uint32_t>(view);
     // The view select must land before the ECC_STATUS load.
     asm volatile("fence" ::: "memory");
     return *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_ECC_STATUS);
 }
 
-// Clears the interrupt, the counts and the last error before returning to the kernel.
-inline __attribute__((always_inline)) void l1_ecc_resume() {
+// Clears the interrupt, the counts and the last error.
+inline __attribute__((always_inline)) void clear_l1_ecc_error() {
     volatile tt_reg_ptr uint32_t* ecc_ctrl = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_ECC_CTRL);
-    *ecc_ctrl = ecc_ctrl_armed | ecc_ctrl_host_view | ECC_CTRL_COUNTS_CLR | ECC_CTRL_IRQ_CLR;
-    *ecc_ctrl = ecc_ctrl_armed | ecc_ctrl_host_view;
+    *ecc_ctrl = l1_ecc_ctrl_armed | ECC_CTRL_COUNTS_CLR | ECC_CTRL_IRQ_CLR;
+    *ecc_ctrl = l1_ecc_ctrl_armed;
 }
 
 // Records the ECC state for the host and halts the core until the next device open releases it.
@@ -258,14 +252,14 @@ extern "C" __attribute__((noinline, used)) void l1_ecc_check() {
         (last_l1_error_banks_0_15 & ECC_LAST_ERR_ROW_MASK) >= l1_ecc_populated_rows) {
         // Without the IRQ clear, mret re-enters the handler. Without the last error clear, a later IRQ 3 from another
         // source (the watchdog) would find this error still valid and return here forever.
-        l1_ecc_resume();
+        clear_l1_ecc_error();
         return;
     }
     // Every handled error clears the counts, so a nonzero DBE count is a DBE since the last return.
     const uint32_t counts = read_ecc_view(EccView::L1_COUNTS);
     if ((counts & ECC_DBE_COUNT_MASK) == 0 && (counts & ECC_SBE_COUNT_MASK) != 0) {
         // Correctable. Clearing the last error makes a later DBE in this word new, so it interrupts.
-        l1_ecc_resume();
+        clear_l1_ecc_error();
         return;
     }
     halt_on_ecc_error(last_l1_error_banks_0_15, (counts & ECC_DBE_COUNT_MASK) != 0);
@@ -323,7 +317,7 @@ void arm_l1_ecc_halt() {
     // ECC_CTRL survives RISC soft reset. Nothing else enables its interrupts today (ARC firmware leaves it at 0), so
     // any enable outside our own means another owner, such as future ARC firmware, and arming is skipped. The clears
     // are ours too: a reset between the handler's two ECC_CTRL writes leaves them set.
-    if (*ecc_ctrl & ~(ECC_CTRL_VIEW_MASK | ecc_ctrl_armed | ECC_CTRL_COUNTS_CLR | ECC_CTRL_IRQ_CLR)) {
+    if (*ecc_ctrl & ~(ECC_CTRL_VIEW_MASK | l1_ecc_ctrl_irq_enables | ECC_CTRL_COUNTS_CLR | ECC_CTRL_IRQ_CLR)) {
         return;
     }
     // Arm in this order: clear stale state, enable the ECC sources, install the handler, and enable BRISC at the
@@ -333,7 +327,7 @@ void arm_l1_ecc_halt() {
     // Clear the counts, the last error and the IRQ.
     *ecc_ctrl = ECC_CTRL_COUNTS_CLR | ECC_CTRL_IRQ_CLR;
     *ecc_ctrl = 0;
-    *ecc_ctrl = ecc_ctrl_host_view | ecc_ctrl_armed;
+    *ecc_ctrl = l1_ecc_ctrl_armed;
     asm volatile("fence" ::: "memory");
     RISC_PIC_INT_PCS[pic_num_sw_ints + pic_hw_int_err] = reinterpret_cast<uint32_t>(l1_ecc_irq_entry);
     // Only BRISC takes IRQ 3. NCRISC needs no masking: it is still in soft reset here, which holds its PIC
