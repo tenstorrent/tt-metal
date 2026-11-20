@@ -56,9 +56,9 @@ void bind_generic_operation(nb::module_& mod) {
             ``output.tensor_topology()``, which returns a copy.
 
             If the program places the output's data otherwise, such as the same data on every device from a sharded
-            input, fix the label the same way after each call that runs it. When every tensor in io_tensors is on every
-            device of the mesh, build the label that ttnn gives its own tensors with that placement, from the output's
-            devices::
+            input, or different data on each device from replicated inputs, fix the label the same way after each call
+            that runs it. When every tensor in io_tensors is on every device of the mesh, build the label that ttnn
+            gives its own tensors with that placement, from the output's devices::
 
                 coords = output.tensor_topology().mesh_coords()
                 shape = output.device().shape
@@ -231,9 +231,9 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
             ``output.tensor_topology()``, which returns a copy.
 
             If the program places the output's data otherwise, such as the same data on every device from a sharded
-            input, fix the label the same way after each call that runs it. When every tensor in io_tensors is on every
-            device of the mesh, build the label that ttnn gives its own tensors with that placement, from the output's
-            devices::
+            input, or different data on each device from replicated inputs, fix the label the same way after each call
+            that runs it. When every tensor in io_tensors is on every device of the mesh, build the label that ttnn
+            gives its own tensors with that placement, from the output's devices::
 
                 coords = output.tensor_topology().mesh_coords()
                 shape = output.device().shape
