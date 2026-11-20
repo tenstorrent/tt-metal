@@ -19,6 +19,7 @@ from ....parallel.config import DiTGParallelConfigNoCFG, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils import cache, tensor
 from ....utils.check import assert_quality
+from ....utils.hf_local_mirror import ensure_cached
 from ....utils.padding import PaddingConfig
 from .device_params import line_params_flux2_transformer, ring_params_8k_flux2, ring_params_8k_flux2_req_exact
 
@@ -97,7 +98,7 @@ def test_transformer(
         f"topology={topology}, num_links={num_links}, fsdp={fsdp}"
     )
 
-    model_name = model_location_generator("black-forest-labs/FLUX.2-dev", model_subdir="transformer")
+    model_name = ensure_cached(model_location_generator("black-forest-labs/FLUX.2-dev", model_subdir="transformer"))
     config = diffusers.Flux2Transformer2DModel.load_config(model_name, subfolder="transformer")
 
     assert 0 <= skip_layers < config["num_layers"]
@@ -302,7 +303,7 @@ def test_transformer_profile(
         f"topology={topology}, num_links={num_links}"
     )
 
-    model_name = "black-forest-labs/FLUX.2-dev"
+    model_name = ensure_cached("black-forest-labs/FLUX.2-dev")
     torch_model = diffusers.Flux2Transformer2DModel.from_pretrained(
         model_name, subfolder="transformer", torch_dtype=torch.bfloat16
     )

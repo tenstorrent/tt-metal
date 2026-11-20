@@ -22,6 +22,7 @@ from models.tt_dit.parallel.config import EncoderParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.flux2.system_messages import SYSTEM_MESSAGE, SYSTEM_MESSAGE_UPSAMPLING_T2I
 from models.tt_dit.utils import cache, tensor
+from models.tt_dit.utils.hf_local_mirror import ensure_cached
 
 
 class PromptEncoder:
@@ -42,7 +43,8 @@ class PromptEncoder:
     ) -> None:
         self._device = device
         self._parallel_config = parallel_config
-        self._checkpoint_name = checkpoint_name
+        self._checkpoint_name = ensure_cached(checkpoint_name)
+        checkpoint_name = self._checkpoint_name
 
         hf_config = transformers.AutoConfig.from_pretrained(checkpoint_name, subfolder="text_encoder")
         self._is_qwen3 = hf_config.model_type == "qwen3"

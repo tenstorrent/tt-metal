@@ -1145,9 +1145,10 @@
 - name: TT-DiT Flux.2-dev multihost e2e tests
   cmd: |
     unset TT_METAL_WATCHER  # blocked by #50886
-    unset HF_HUB_OFFLINE
     export NO_PROMPT=1
-    export HF_HOME=/mnt/models/huggingface
+    export HF_HUB_OFFLINE=1
+    export HF_HOME=/mnt/weka/model-weights/video/huggingface
+    export TT_DIT_LOCAL_WEIGHTS_ROOT=/mnt/weka/model-weights/video
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0

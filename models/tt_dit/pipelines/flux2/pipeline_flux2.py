@@ -27,6 +27,7 @@ from ...models.vae.vae_flux2 import Flux2VaeDecoder, Flux2VaeEncoder
 from ...parallel.config import DiTGParallelConfigNoCFG, EncoderParallelConfig, Flux2VaeParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
 from ...utils import cache
+from ...utils.hf_local_mirror import ensure_cached
 from ...utils.padding import PaddingConfig
 from ...utils.tensor import fast_device_to_host, float_to_uint8, from_torch, to_torch
 from ...utils.tracing import StateTensor, Tracer
@@ -193,7 +194,8 @@ class Flux2Pipeline:
 
         logger.info("loading models...")
 
-        self.checkpoint_name = checkpoint_name
+        self.checkpoint_name = ensure_cached(checkpoint_name)
+        checkpoint_name = self.checkpoint_name
 
         self._torch_transformer = diffusers.Flux2Transformer2DModel.from_pretrained(
             checkpoint_name,
