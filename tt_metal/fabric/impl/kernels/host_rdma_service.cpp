@@ -9,18 +9,25 @@
 // into packets and, per packet: forms the header (route to the destination chip from this core's routing tables; a
 // NoC write at the destination, the last packet's fused with the request's completion increment) in a staging slot,
 // reads the payload from the request's source on this chip into the slot after the header, then writes header and
-// payload into the router's next host_rdma slot. Up to WINDOW packets are in flight, each on its own NoC transaction
-// ID: a read is issued as soon as the packet's router slot is free, its write as soon as the read lands, and as writes
-// are acked (in order) the packets' slots are taken on the router's free-slots register, as a worker connected to the
-// router would. A request is consumed once its last packet has been taken.
+// payload into the router's host_rdma channel. Up to WINDOW packets are in flight, each on its own NoC transaction ID:
+// a read is issued as soon as the channel has a free slot for the packet, the packet is sent as soon as the read lands,
+// and packets retire (in order) as their writes are acked. A request is consumed once its last packet has retired.
 //
-// The router credits this kernel: its host_rdma credit target is the channel's `credits` word here.
+// Each channel is a fabric connection (WorkerToFabricEdmSender): it sends each packet into the router's next slot and
+// takes the slot on the router's free-slots register, keeps the slot cursor and the free-slot count, and hands its
+// cursor to the channel's next producer through the router (open/close). The router credits it in the channel's
+// `credits` word here (its host_rdma credit target).
 
 #include <cstdint>
+#include <limits>
+#include <new>
 
 #include "api/dataflow/dataflow_api.h"
 #include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_flow_control_helpers.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/host_rdma_service_abi.hpp"
 
@@ -28,28 +35,23 @@ namespace abi = tt::tt_fabric::host_rdma::service_abi;
 
 namespace {
 
-// The router's free-slots register takes a signed slot increment at this bit of its increment-on-write register
-// (REMOTE_DEST_BUF_WORDS_FREE_INC).
-constexpr uint32_t FREE_SLOTS_INC_SHIFT = 6;
 constexpr uint32_t L1_ALIGN = 16;
 constexpr uint32_t HEADER_BYTES = sizeof(PACKET_HEADER_TYPE);
 static_assert(HEADER_BYTES % L1_ALIGN == 0);
 
 // The kernel's state per channel.
 struct ChannelState {
-    uint32_t taken;     // requests loaded from the queue
-    uint32_t consumed;  // requests whose last packet has been taken by the router
-    uint32_t claimed;   // router slots claimed by packets (absolute, from the channel's start)
-    uint32_t retired;   // packets whose write is acked
-    uint32_t rung;      // packets whose slots are taken on the router
-    bool carving;       // `req` has bytes left to packetize
-    uint32_t off;       // bytes of `req` packetized so far
+    tt::tt_fabric::WorkerToFabricEdmSender conn;  // the router channel
+    uint32_t taken;                               // requests loaded from the queue
+    uint32_t consumed;                            // requests whose last packet has retired
+    uint32_t reading;                             // packets accepted and not yet sent (each holds a free slot)
+    bool carving;                                 // `req` has bytes left to packetize
+    uint32_t off;                                 // bytes of `req` packetized so far
     abi::Request req;
 };
 
 // A packet in flight, on transaction ID index + 1.
 struct Packet {
-    uint64_t dst;    // its router slot
     uint32_t bytes;  // header and payload
     uint8_t channel;
     bool last;  // the last packet of its request
@@ -57,8 +59,14 @@ struct Packet {
 
 volatile tt_l1_ptr abi::Header* header;
 volatile tt_l1_ptr abi::Channel* channels;
-ChannelState state[abi::MAX_CHANNELS];
+// The channels' state, constructed when a channel opens (the kernel environment has no static constructors).
+alignas(ChannelState) uint8_t state_storage[sizeof(ChannelState) * abi::MAX_CHANNELS];
 bool initialized[abi::MAX_CHANNELS];
+FORCE_INLINE ChannelState& state(uint32_t c) { return reinterpret_cast<ChannelState*>(state_storage)[c]; }
+
+// The channel whose router the connections' stateful command buffers are set up for (none: NO_CHANNEL).
+constexpr uint32_t NO_CHANNEL = abi::MAX_CHANNELS;
+uint32_t stateful_channel = NO_CHANNEL;
 
 // The window, oldest first: [head, head + writing) have their writes issued, the rest of the n are reading.
 Packet window[abi::WINDOW];
@@ -124,18 +132,15 @@ FORCE_INLINE void form_header(uint32_t addr, const ChannelState& s, uint32_t pay
     }
 }
 
-// Retires packets in order whose writes are acked, takes each channel's retired slots on its router, and publishes
-// each channel's consumed requests.
+// Retires packets in order whose writes are acked, and publishes each channel's consumed requests.
 void retire() {
     bool any = false;
     while (writing != 0 && ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, trid_of(head))) {
         const Packet& p = window[head];
-        ChannelState& s = state[p.channel];
-        s.retired++;
         if (p.last) {
-            s.consumed++;
+            state(p.channel).consumed++;
         }
-        head = (head + 1) % abi::WINDOW;
+        head = tt::tt_fabric::wrap_increment<abi::WINDOW>(head);
         n--;
         writing--;
         any = true;
@@ -144,30 +149,30 @@ void retire() {
         return;
     }
     for (uint32_t c = 0; c < abi::MAX_CHANNELS; c++) {
-        ChannelState& s = state[c];
-        const uint32_t count = s.retired - s.rung;
-        if (count == 0) {
-            continue;
+        if (initialized[c]) {
+            channels[c].consumed = state(c).consumed;
         }
-        const volatile abi::Channel& ch = channels[c];
-        noc_inline_dw_write<InlineWriteDst::REG>(
-            get_noc_addr(ch.router_x, ch.router_y, ch.free_slots_addr),
-            static_cast<uint32_t>(-static_cast<int32_t>(count)) << FREE_SLOTS_INC_SHIFT);
-        s.rung = s.retired;
-        channels[c].consumed = s.consumed;
     }
 }
 
-// Issues writes, in order, for packets whose payload reads have landed (each on the transaction ID its read used).
+// Sends, in order, the packets whose payload reads have landed, each through its channel's connection on the
+// transaction ID its read used.
 void issue_writes() {
     while (writing != n) {
-        const uint32_t index = (head + writing) % abi::WINDOW;
+        const uint32_t index = tt::tt_fabric::wrap_increment_n<abi::WINDOW>(head, writing);
         if (!ncrisc_noc_read_with_transaction_id_flushed(noc_index, trid_of(index))) {
             return;
         }
         const Packet& p = window[index];
-        noc_async_write_one_packet_with_trid(staging_of(index), p.dst, p.bytes, trid_of(index));
-        settle(write_cmd_buf);
+        ChannelState& s = state(p.channel);
+        if (stateful_channel != p.channel) {
+            s.conn.setup_stateful_send_cmd_bufs(noc_index);
+            stateful_channel = p.channel;
+        }
+        s.conn.send_current_slot_stateful_non_blocking_from_address_with_trid(
+            staging_of(index), p.bytes, trid_of(index), noc_index);
+        settle(s.conn.get_stateful_send_data_noc_cmd_buf());
+        s.reading--;
         writing++;
     }
 }
@@ -177,30 +182,30 @@ void issue_writes() {
 void accept() {
     for (uint32_t tried = 0; tried < abi::MAX_CHANNELS && n != abi::WINDOW; tried++) {
         const uint32_t c = next_channel;
-        next_channel = (next_channel + 1) % abi::MAX_CHANNELS;
+        next_channel = tt::tt_fabric::wrap_increment<abi::MAX_CHANNELS>(next_channel);
         if (!initialized[c]) {
             continue;
         }
         volatile abi::Channel& ch = channels[c];
-        ChannelState& s = state[c];
+        ChannelState& s = state(c);
         while (n != abi::WINDOW) {
             if (!s.carving) {
                 if (s.taken == ch.produced) {
                     break;
                 }
-                s.req = load_request(ch.queue[s.taken % abi::QUEUE_DEPTH]);
+                s.req = load_request(ch.queue[s.taken & (abi::QUEUE_DEPTH - 1)]);
                 s.taken++;
                 s.off = 0;
                 s.carving = true;
             }
-            // A free router slot: fewer than num_slots claimed and not yet credited.
-            if (s.claimed - ch.credits >= ch.num_slots) {
+            // A free slot for the packet, besides those held by the channel's packets still reading.
+            if (s.conn.get_num_free_write_slots() <= s.reading) {
                 break;
             }
             const uint32_t remaining = s.req.size - s.off;
             const uint32_t payload = remaining < ch.max_payload ? remaining : ch.max_payload;
             const bool last = payload == remaining;
-            const uint32_t index = (head + n) % abi::WINDOW;
+            const uint32_t index = tt::tt_fabric::wrap_increment_n<abi::WINDOW>(head, n);
             const uint32_t staging = staging_of(index);
 
             form_header(staging, s, payload, last);
@@ -213,8 +218,7 @@ void accept() {
             p.channel = static_cast<uint8_t>(c);
             p.last = last;
             p.bytes = (HEADER_BYTES + payload + L1_ALIGN - 1) & ~(L1_ALIGN - 1);
-            p.dst = get_noc_addr(ch.router_x, ch.router_y, ch.slots_base + (s.claimed % ch.num_slots) * ch.slot_bytes);
-            s.claimed++;
+            s.reading++;
             n++;
             s.off += payload;
             s.carving = !last;
@@ -222,33 +226,53 @@ void accept() {
     }
 }
 
-// A channel becoming active starts where the host says the router is; one going inactive is forgotten.
+// Opens channel c's connection: from the producer cursor the channel's last producer left in the router, and the
+// router's count of slots freed (into `credits`).
+void open_channel(uint32_t c) {
+    volatile abi::Channel& ch = channels[c];
+    ChannelState& s = *new (&state(c)) ChannelState{};
+    s.taken = ch.consumed;
+    s.consumed = ch.consumed;
+    s.conn.init<ProgrammableCoreType::TENSIX>(
+        /*connected_to_persistent_fabric=*/true,
+        static_cast<uint8_t>(ch.router_x),
+        static_cast<uint8_t>(ch.router_y),
+        ch.slots_base,
+        static_cast<uint8_t>(ch.num_slots),
+        ch.connection_semaphore_addr,
+        ch.connection_info_addr,
+        static_cast<uint16_t>(ch.slot_bytes),
+        ch.producer_cursor_addr,
+        &ch.credits,
+        &ch.teardown,
+        reinterpret_cast<uint32_t>(&ch.cursor_scratch[0]),
+        ch.free_slots_stream,
+        StreamId{std::numeric_limits<uint32_t>::max()});  // unused: credits come in `credits`
+    noc_async_read_set_trid(0);                           // the open's reads are on no packet's transaction ID
+    s.conn.open();
+    stateful_channel = NO_CHANNEL;  // the open's writes reprogram the command buffers
+}
+
+// Closes channel c's connection, leaving its producer cursor in the router for the next producer. Only the cursor
+// hand-off and the close request: the router does not acknowledge a host_rdma channel's teardown, so there is no ack
+// to wait for (close_finish).
+void close_channel(uint32_t c) {
+    state(c).conn.close_start();
+    noc_async_write_barrier();
+    stateful_channel = NO_CHANNEL;
+}
+
+// A channel becoming active is opened; one going inactive is closed.
 void scan_channels() {
     for (uint32_t c = 0; c < abi::MAX_CHANNELS; c++) {
         const bool active = channels[c].active != 0;
         if (active && !initialized[c]) {
-            const uint32_t start = channels[c].start;
-            state[c] = ChannelState{};
-            state[c].taken = channels[c].consumed;
-            state[c].consumed = channels[c].consumed;
-            state[c].claimed = start;
-            state[c].retired = start;
-            state[c].rung = start;
+            open_channel(c);
+        } else if (!active && initialized[c]) {
+            close_channel(c);
         }
         initialized[c] = active;
     }
-}
-
-bool idle() {
-    if (n != 0) {
-        return false;
-    }
-    for (uint32_t c = 0; c < abi::MAX_CHANNELS; c++) {
-        if (initialized[c] && (state[c].carving || state[c].taken != channels[c].produced)) {
-            return false;
-        }
-    }
-    return true;
 }
 
 }  // namespace
@@ -271,9 +295,15 @@ void kernel_main() {
         retire();
         issue_writes();
         accept();
-        if (header->terminate != 0 && idle()) {
+        // The host terminates only once it has drained every channel, so the kernel stops at once.
+        if (header->terminate != 0) {
             break;
         }
     }
     noc_async_full_barrier();
+    for (uint32_t c = 0; c < abi::MAX_CHANNELS; c++) {
+        if (initialized[c]) {
+            close_channel(c);
+        }
+    }
 }
