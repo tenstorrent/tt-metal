@@ -259,8 +259,13 @@ Tensor to_memory_config(
     using namespace tt::tt_metal;
 
     // Integer <-> float dtype changes cannot be done by the data-movement kernels (they only change the CB data
-    // format and would reinterpret the bits), so convert with typecast first and then move the result.
+    // format and would reinterpret the bits), so they go through typecast. The cast runs on the interleaved side of
+    // the move: after it for a sharded -> interleaved move (no second sharded L1 allocation in the source layout),
+    // before it otherwise. A preallocated output already has the new dtype, so the cast always comes first then.
     if (dtype.has_value() && is_int_float_conversion(tensor.dtype(), dtype.value())) {
+        if (!output_tensor.has_value() && tensor.is_sharded() && !memory_config.is_sharded()) {
+            return ttnn::typecast(to_memory_config(tensor, memory_config, std::nullopt, std::nullopt), dtype.value());
+        }
         return to_memory_config(ttnn::typecast(tensor, dtype.value()), memory_config, std::nullopt, output_tensor);
     }
 

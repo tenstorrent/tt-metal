@@ -38,12 +38,15 @@ SHARD_MEMCFG = ttnn.MemoryConfig(
 )
 
 
-def make_values(in_dtype, out_dtype):
+def make_values(in_dtype, out_dtype, shape=SHAPE):
     # Integral values 0..255 exactly representable in bf16. Negatives only when both ends are signed.
-    base = torch.arange(NUM_ELEMENTS, dtype=torch.int32) % 256
+    numel = 1
+    for d in shape:
+        numel *= d
+    base = torch.arange(numel, dtype=torch.int32) % 256
     if ttnn.uint32 not in (in_dtype, out_dtype):
         base = base - 100
-    return base.reshape(SHAPE)
+    return base.reshape(shape)
 
 
 def upload(device, values, dtype, layout):
@@ -53,20 +56,19 @@ def upload(device, values, dtype, layout):
 
 def check(result, expected_values, out_dtype):
     assert result.dtype == out_dtype
-    got = ttnn.to_torch(result).reshape(SHAPE)
-    expected = expected_values.to(TORCH_DTYPES[out_dtype]).reshape(SHAPE)
+    shape = list(expected_values.shape)
+    got = ttnn.to_torch(result).reshape(shape)
+    expected = expected_values.to(TORCH_DTYPES[out_dtype]).reshape(shape)
     assert torch.equal(
         got.to(torch.float32), expected.to(torch.float32)
-    ), f"{int((got.to(torch.float32) != expected.to(torch.float32)).sum())} of {NUM_ELEMENTS} values differ"
+    ), f"{int((got.to(torch.float32) != expected.to(torch.float32)).sum())} of {expected.numel()} values differ"
 
 
-def run_tile_entry(device, entry, in_dtype, out_dtype):
-    values = make_values(in_dtype, out_dtype)
-    torch_in, tt_in = upload(device, values, in_dtype, ttnn.TILE_LAYOUT)
+def run_tile_entry(device, entry, in_dtype, out_dtype, shape=SHAPE, layout=ttnn.TILE_LAYOUT):
+    values = make_values(in_dtype, out_dtype, shape)
+    torch_in, tt_in = upload(device, values, in_dtype, layout)
     if entry == "clone":
         out = ttnn.clone(tt_in, dtype=out_dtype)
-    elif entry == "experimental_typecast":
-        out = ttnn.experimental.typecast(tt_in, out_dtype)
     elif entry == "to_memory_config_interleaved":
         out = ttnn.to_memory_config(tt_in, ttnn.L1_MEMORY_CONFIG, dtype=out_dtype)
     elif entry == "to_memory_config_sharded":
@@ -86,12 +88,8 @@ def run_tile_entry(device, entry, in_dtype, out_dtype):
 def run_row_major_entry(device, entry, in_dtype, out_dtype):
     values = make_values(in_dtype, out_dtype)
     torch_in, tt_in = upload(device, values, in_dtype, ttnn.ROW_MAJOR_LAYOUT)
-    if entry == "tilize":
-        out = ttnn.tilize(tt_in, dtype=out_dtype)
-    elif entry == "tilize_with_val_padding":
+    if entry == "tilize_with_val_padding":
         out = ttnn.tilize_with_val_padding(tt_in, SHAPE, 0, dtype=out_dtype)
-    elif entry == "to_layout":
-        out = ttnn.to_layout(tt_in, ttnn.TILE_LAYOUT, dtype=out_dtype)
     else:
         raise AssertionError(entry)
     assert out.layout == ttnn.TILE_LAYOUT
@@ -146,3 +144,25 @@ def test_tile_entry_float_to_float_unchanged(device, entry, dtype_pair):
 @pytest.mark.parametrize("dtype", [ttnn.int32, ttnn.float32])
 def test_tile_entry_same_dtype_unchanged(device, entry, dtype):
     run_tile_entry(device, entry, dtype, dtype)
+
+
+@pytest.mark.parametrize("entry", TILE_ENTRIES)
+@pytest.mark.parametrize("in_dtype, out_dtype", [(ttnn.int32, ttnn.bfloat16), (ttnn.float32, ttnn.int32)])
+def test_tile_entry_repeated_call(device, entry, in_dtype, out_dtype):
+    # The second call hits the program cache on the composite path.
+    run_tile_entry(device, entry, in_dtype, out_dtype)
+    run_tile_entry(device, entry, in_dtype, out_dtype)
+
+
+@pytest.mark.parametrize("entry", ["clone", "to_memory_config_interleaved"])
+@pytest.mark.parametrize("in_dtype, out_dtype", [(ttnn.int32, ttnn.float32), (ttnn.bfloat16, ttnn.int32)])
+def test_tile_entry_unaligned_shape(device, entry, in_dtype, out_dtype):
+    # Last two dims are not multiples of 32, so the tiles carry padding.
+    run_tile_entry(device, entry, in_dtype, out_dtype, shape=[1, 1, 50, 40])
+
+
+@pytest.mark.parametrize("entry", ["to_memory_config_interleaved", "to_memory_config_sharded", "interleaved_to_sharded"])
+@pytest.mark.parametrize("in_dtype, out_dtype", [(ttnn.int32, ttnn.float32), (ttnn.float32, ttnn.int32)])
+def test_row_major_input_memory_entries(device, entry, in_dtype, out_dtype):
+    # ROW_MAJOR inputs take the typecast row-major path before (or after) the move.
+    run_tile_entry(device, entry, in_dtype, out_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
