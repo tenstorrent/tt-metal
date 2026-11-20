@@ -196,12 +196,13 @@ class DenseDecodeExpertWeights:
 
 
 def dense_kgptq_dir(layer, weight_dtype):
-    """The K-GPTQ expert directory (GPT_OSS_DECODE_SPLIT_ROUND_DIR, layer_<L>.pt) the batched dense decode experts
-    load, or "": a bfloat4_b layer with a known index, when the decode experts read K-GPTQ (gpt-oss-20b release
-    settings). Batch-32 decode and prefill then hold the same K-GPTQ values as batch-1 decode and prefill."""
+    """The K-GPTQ expert source as given (GPT_OSS_DECODE_SPLIT_ROUND_DIR: a directory or a pinned hf:// location of
+    layer_<L>.pt) the batched dense decode experts load, or "": a bfloat4_b layer with a known index, when the decode
+    experts read K-GPTQ (gpt-oss-20b release settings). Batch-32 decode and prefill then hold the same K-GPTQ values as
+    batch-1 decode and prefill. Resolved (downloaded) only when the weights are loaded."""
     if weight_dtype != ttnn.bfloat4_b or layer is None:
         return ""
-    return env_path("GPT_OSS_DECODE_SPLIT_ROUND_DIR")
+    return os.environ.get("GPT_OSS_DECODE_SPLIT_ROUND_DIR", "").strip()
 
 
 def _dram_width_sharded(mesh_device, k, n, shard_tiles=None):
@@ -249,7 +250,7 @@ def load_dense_decode_expert_weights(
         down_w = state_dict["down_proj"]  # [E, I, H]
         if kgptq_dir:
             # the K-GPTQ experts (checkpoint channel order, the biases are the checkpoint's)
-            rw = torch.load(f"{kgptq_dir}/layer_{int(layer)}.pt")
+            rw = torch.load(f"{resolve(kgptq_dir)}/layer_{int(layer)}.pt")
             gate_up, down_w = rw["gate_up_proj"], rw["down_proj"]
         gate_up_bias = state_dict["gate_up_proj_bias"]  # [E, 2 * I]
         gate = dl.gate_up_columns(gate_up[..., ::2], tp, il_pad)
@@ -259,7 +260,7 @@ def load_dense_decode_expert_weights(
         down = dl.down_rows(down_w, tp, il_pad)
         down_bias = dl.down_bias_rows(state_dict["down_proj_bias"].reshape(E, H), tp)
     # Cache names carry the padded width (the unpadded 720-column layout had the same names without it). The K-GPTQ
-    # weights (transposed tiles) are named per source: a hash of the resolved directory, which names the pinned Hub
+    # weights (transposed tiles) are named per source: a hash of the source as given, which names the pinned Hub
     # revision (as the routed prefill's K-GPTQ caches, prefill_routed.py).
     tag = f"dense_decode_p{il_pad}"
     wtag = tag

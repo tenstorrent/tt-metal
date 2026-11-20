@@ -179,7 +179,12 @@ def decode_stream_kinds(layer_idx):
     can read (stream_pages.STREAM_*), else None. Mirrors experts/weights.py: split streams (GPT_OSS_DECODE_EXPERTS_SPLIT)
     with GPT_OSS_DECODE_SPLIT_RANKS set carry the rounded part, round-only for split_r0 with
     GPT_OSS_DECODE_SPLIT_ROUND_ONLY, else full [BFP4][BFP2][rounded BFP4] segments."""
-    from ..fused_decode.config import DECODE_SPLIT_RANKS, DECODE_SPLIT_ROUND_ONLY, decode_experts_split, decode_split_dtype
+    from ..fused_decode.config import (
+        DECODE_SPLIT_RANKS,
+        DECODE_SPLIT_ROUND_ONLY,
+        decode_experts_split,
+        decode_split_dtype,
+    )
     from .stream_pages import STREAM_FULL, STREAM_ROUND_ONLY
 
     if layer_idx is None or DECODE_SPLIT_RANKS is None:

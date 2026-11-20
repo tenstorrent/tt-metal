@@ -73,11 +73,11 @@ class TopKRouter:
             state_dict["weight_decode"].transpose(0, 1) if state_dict and "weight_decode" in state_dict else None
         )
         torch_bias = state_dict["bias"].unsqueeze(0) if state_dict else None
-        # Batch-1 fused model (one decode stream term): the decode weight_stream (+ its bias tiles) is the only router
+        # Batch-1 fused model: the decode weight_stream (+ its bias tiles) is the only router
         # weight; prefill multiplies by it directly (StreamPrefillLinear, stream_prefill_linear.py; HiFi4: the bf8
         # weights times the activation's bf16 values exactly, one output column so the cost is small).
         self._prefill_op = None
-        if indexed_decode and ROUTER_DECODE_TERMS == 1:
+        if indexed_decode:
             self._prefill_op = StreamPrefillLinear(
                 mesh_device, self.hidden_dim, self.num_experts, math_fidelity="HiFi4"
             )
