@@ -29,6 +29,8 @@ def pipeline(weights_dir, recorder):
     obj.weights_dir = Path(weights_dir)
     obj.vae_parallel_config = "dp"
     obj.mesh_device = SimpleNamespace(shape=(4, 8))
+    obj.vae_ccl_manager = object()
+    obj.vae_residency_mode = "replicate"
     return obj
 
 
@@ -45,6 +47,7 @@ class H3VaeCacheAtLoad(unittest.TestCase):
             self.assertEqual(p._safetensors_files("vae"), [vae / "s1.safetensors", vae / "s2.safetensors"])
             p._cache_submodel(object(), "vae_decoder_t1_h2_w3", {})
             self.assertEqual(rec.calls[0]["sources"], [vae / "s1.safetensors", vae / "s2.safetensors"])
+            self.assertIs(rec.calls[0]["ccl_manager"], p.vae_ccl_manager)
 
     def test_single_file_and_missing(self):
         with tempfile.TemporaryDirectory() as d:

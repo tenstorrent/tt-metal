@@ -49,6 +49,9 @@ class Toy(Module):
         for name, shape, dtype, axes in SPECS:
             setattr(self, name, Parameter(total_shape=shape, device=mesh_device, dtype=dtype, mesh_axes=axes))
 
+    def forward(self) -> None:
+        pass
+
 
 def _chip_tensors(param: Parameter) -> list[torch.Tensor]:
     return [ttnn.to_torch(t) for t in ttnn.get_device_tensors(param.data)]
