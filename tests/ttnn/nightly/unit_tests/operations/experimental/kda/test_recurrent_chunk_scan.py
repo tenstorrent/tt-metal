@@ -102,7 +102,7 @@ def _recurrent_chunk_scan_ops(
         chunk_size != CHUNK_SIZE
         or any(tensor.shape != expected for tensor, expected in zip(inputs, expected_input_shapes, strict=True))
         or state.shape != (batch_heads, key_dim, value_dim)
-        or outputs[0].shape != (batch_heads, num_chunks, CHUNK_SIZE, value_dim)
+        or outputs[0].shape != (batch_heads, num_chunks * CHUNK_SIZE, value_dim)
         or outputs[1].shape != state.shape
     ):
         raise ValueError("recurrent chunk-scan tensor shapes are inconsistent")
@@ -150,7 +150,7 @@ def test_recurrent_chunk_scan_work_golden() -> None:
     fpu, sfpu = _recurrent_chunk_scan_ops(
         inputs,
         torch.empty((1, 2, 1)),
-        (torch.empty((1, 1, 32, 1)), torch.empty((1, 2, 1))),
+        (torch.empty((1, 32, 1)), torch.empty((1, 2, 1))),
     )
 
     assert fpu == perf_model.FpuOps(matrix_flops=4480, multiply_ops=2, add_ops=64)
@@ -217,7 +217,7 @@ def test_recurrent_chunk_scan_contract_and_trace(
         expected,
         names=("token_output", "final_state"),
         dtypes=(ttnn.bfloat16, ttnn.float32),
-        shapes=((batch_heads, num_chunks, CHUNK_SIZE, value_dim), (batch_heads, key_dim, value_dim)),
+        shapes=((batch_heads, num_chunks * CHUNK_SIZE, value_dim), (batch_heads, key_dim, value_dim)),
         expected_memory_config=output_memory,
         nrmse_threshold=0.004,
     )
@@ -292,8 +292,7 @@ def test_recurrent_chunk_scan_is_device_deterministic(zero_actual_start, device:
         )
     assert tuple(reference[0].shape) == (
         case.batch_heads,
-        case.num_chunks,
-        CHUNK_SIZE,
+        case.num_chunks * CHUNK_SIZE,
         case.value_dim,
     )
     for output in reference:
@@ -482,8 +481,7 @@ def test_recurrent_chunk_scan_regression_performance(zero_actual_start, device: 
     duration_ns = perf_record["duration_ns"]
     assert tuple(outputs[0].shape) == (
         case.batch_heads,
-        case.num_chunks,
-        CHUNK_SIZE,
+        case.num_chunks * CHUNK_SIZE,
         case.value_dim,
     )
     performance = _recurrent_chunk_scan_performance(
@@ -532,8 +530,7 @@ def test_recurrent_chunk_scan_production_performance(zero_actual_start, device: 
     duration_ns = perf_record["duration_ns"]
     assert tuple(outputs[0].shape) == (
         case.batch_heads,
-        case.num_chunks,
-        CHUNK_SIZE,
+        case.num_chunks * CHUNK_SIZE,
         case.value_dim,
     )
     assert outputs[0].memory_config() == ttnn.DRAM_MEMORY_CONFIG

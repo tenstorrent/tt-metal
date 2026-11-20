@@ -3251,7 +3251,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     bool row_broadcast_bias = true,
     CoreCoord sub_device_start_core = {0, 0},
     const ttnn::PrefetcherPipeList& prefetcher_pipes = {},
-    ttsl::optional_reference<const McastIn0Sparsity> sparsity = std::nullopt) {
+    ttsl::optional_reference<const McastIn0Sparsity> sparsity = std::nullopt,
+    const std::optional<operations::matmul::utilities::BatchBroadcast>& batch_broadcast = std::nullopt) {
     using tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids;
 
     // currently only support transpose of the full tile
@@ -4018,6 +4019,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
                 add_sparsity_bindings(k, SPARSITY_IN0_SCRATCH);
                 k.runtime_arg_schema = {.runtime_arg_names = {"in0_tensor_start_tile_id", "last_block_h"}};
             }
+            if (batch_broadcast.has_value()) {
+                operations::matmul::utilities::add_batch_broadcast_args(k, *batch_broadcast, M * K, std::nullopt);
+            }
             return k;
         };
 
@@ -4160,6 +4164,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
             in1_sender_rta_names.push_back("last_num_blocks_w_dim");
         }
         in1_sender.runtime_arg_schema = {.runtime_arg_names = std::move(in1_sender_rta_names)};
+        if (batch_broadcast.has_value()) {
+            operations::matmul::utilities::add_batch_broadcast_args(in1_sender, *batch_broadcast, std::nullopt, K * N);
+        }
         kernels.push_back(std::move(in1_sender));
     }
 
@@ -5105,7 +5112,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
     bool output_is_sharded,
     bool untilize_out,
     bool row_broadcast_bias = true,
-    CoreCoord sub_device_start_core = {0, 0}) {
+    CoreCoord sub_device_start_core = {0, 0},
+    const std::optional<operations::matmul::utilities::BatchBroadcast>& batch_broadcast = std::nullopt) {
     // currently only support transpose of the full tile
     bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
@@ -5642,6 +5650,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
                 .endpoint_type = DFBEndpointType::CONSUMER,
             });
         }
+        if (batch_broadcast.has_value()) {
+            operations::matmul::utilities::add_batch_broadcast_args(in0_sender, *batch_broadcast, M * K, std::nullopt);
+        }
         kernels.push_back(std::move(in0_sender));
     }
 
@@ -5734,6 +5745,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
             in1_sender_rta_names.push_back("last_num_blocks_w_dim");
         }
         in1_sender.runtime_arg_schema = {.runtime_arg_names = std::move(in1_sender_rta_names)};
+        if (batch_broadcast.has_value()) {
+            operations::matmul::utilities::add_batch_broadcast_args(in1_sender, *batch_broadcast, std::nullopt, K * N);
+        }
         kernels.push_back(std::move(in1_sender));
     }
 
@@ -6670,8 +6684,15 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast1DProgramFacto
             operation_attributes.prefetcher_pipes);
     }
 
-    const auto in0_B = fuse_batch ? 1 : get_batch_size(a_shape_padded);
-    const auto in1_B = fuse_batch ? 1 : get_batch_size(b_shape_padded);
+    // Broadcast batch dims are read in place, so the senders loop over the output's batches. A batch-1 A keeps the
+    // mcast_in1 program's in0 reuse, which holds A in L1 for every B batch.
+    const bool in0_reuse =
+        get_batch_size(a_shape_padded) == 1 && !mcast_in0 && !program_config.fused_activation.has_value();
+    const auto batch_broadcast =
+        fuse_batch || in0_reuse ? std::nullopt : get_batch_broadcast(a_shape_padded, b_shape_padded);
+    const uint32_t out_B = get_output_batch_size(a_shape_padded, b_shape_padded);
+    const auto in0_B = fuse_batch ? 1 : (batch_broadcast.has_value() ? out_B : get_batch_size(a_shape_padded));
+    const auto in1_B = fuse_batch ? 1 : (batch_broadcast.has_value() ? out_B : get_batch_size(b_shape_padded));
     const auto Mt = get_M_dim(a_shape_padded, in0_tile, fuse_batch);
     const auto Kt = get_K_dim(a_shape_padded, in0_tile);
     const auto Nt = get_N_dim(b_shape_padded, in1_tile);
@@ -6765,7 +6786,9 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast1DProgramFacto
             fused_op_signaler,
             fused_matmul_bias_row_broadcastable(bias),
             sub_device_start_core,
-            operation_attributes.prefetcher_pipes);
+            operation_attributes.prefetcher_pipes,
+            std::nullopt,
+            batch_broadcast);
     }
     return reuse_mcast_1d_optimized_helpers::create_program_mcast_in1_artifacts(
         a,
@@ -6807,7 +6830,8 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast1DProgramFacto
         output.memory_config().is_sharded(),
         untilize_out,
         fused_matmul_bias_row_broadcastable(bias),
-        sub_device_start_core);
+        sub_device_start_core,
+        batch_broadcast);
 }
 
 MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_reuse_mcast_1d_optimized_helper(
@@ -6901,7 +6925,7 @@ MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory::create_mesh_workload(
             }
             auto mesh_grid = pc.allowed_worker_cores.value().bounding_box().grid_size();
             DeviceComputeKernelConfig ckc = attributes.compute_kernel_config.value();
-            tt_metal::Program program{};
+            tt_metal::Program program = tt_metal::CreateProgram(*tensor_args.input_tensors.at(0).device());
             std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_signaler = std::nullopt;
             auto b_tensors =
                 std::vector<Tensor>{tensor_args.input_tensors.begin() + 1, tensor_args.input_tensors.end()};

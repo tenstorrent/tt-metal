@@ -24,10 +24,8 @@
  * batching only takes the per-tile issue off the unpack RISC. A row longer than the MOP loop length runs one
  * tile per MOP.
  *
- * The operand gets a BFD id allocated from the unpack partition (Unp0 / UNPACR0) and its table
- * entry is programmed here; the DFB id is used only to fetch buffer info, never as the BFD id.
- * One init burns 1 unpack-partition id — the standard wrap contract (re-init before re-execute)
- * applies.
+ * The operand's table entry on Unp0 / UNPACR0 is programmed here; the DFB id is used only to
+ * fetch buffer info, never as the BFD id. Re-init before re-execute whenever the operand changes.
  *
  * @param operand       The input dataflow buffer identifier.
  * @param full_ct_dim   Number of tiles in a full row of the input tensor, the row llk_unpack_tilize_block tilizes.
@@ -40,17 +38,18 @@ inline void llk_unpack_tilize_init(const std::uint32_t operand, const std::uint3
     if constexpr (UnpackToDestEn) {
         LLK_ASSERT(
             tensor_shape.total_num_faces() == NUM_FACES, "unpack-to-dest tilize supports only 32x32 tiles on Quasar");
-        const std::uint8_t bfd_id = llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operand_id);
+        llk_unpack_program_bfd<ckernel::trisc::BFD_ID_UNP0>(operand_id);
+        constexpr std::uint8_t bfd_id = ckernel::trisc::BFD_ID_UNP0;
         _llk_unpack_tilize_to_dest_init_(bfd_id, full_ct_dim, 1 /*block_ct_dim*/, tensor_shape);
     } else {
         // Tiles other than 32x32 need a strided buffer descriptor.
-        const std::uint8_t bfd_id =
-            _llk_unpack_tilize_is_strided_(tensor_shape)
-                ? llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0, ckernel::trisc::L1AccessMode::Strided>(
-                      operand_id)
-                : llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operand_id);
+        if (_llk_unpack_tilize_is_strided_(tensor_shape)) {
+            llk_unpack_program_bfd<ckernel::trisc::BFD_ID_UNP0, ckernel::trisc::L1AccessMode::Strided>(operand_id);
+        } else {
+            llk_unpack_program_bfd<ckernel::trisc::BFD_ID_UNP0>(operand_id);
+        }
         _llk_unpack_tilize_init_<p_unpacr::UNP_A, DST_ACCUM_MODE>(
-            bfd_id, full_ct_dim, full_ct_dim /*block_ct_dim*/, tensor_shape);
+            ckernel::trisc::BFD_ID_UNP0, full_ct_dim, full_ct_dim /*block_ct_dim*/, tensor_shape);
     }
 }
 
@@ -72,7 +71,7 @@ inline void llk_unpack_tilize_block(
     const std::uint32_t operand, const std::uint32_t block_c_tiles, const std::uint32_t input_tile_index = 0) {
     LLK_TDMA_GUARD_NOTE_TDMA(operand);  // TEN-4746: real unpack (UNPACR) disarms this dfb
     LLK_REINIT_GUARD_ASSERT_MATCHES(
-        ckernel::trisc::BfdResource::Unp0,
+        ckernel::trisc::BFD_ID_UNP0,
         operand,
         "unpack_tilize operand DFB differs from the one llk_unpack_tilize_init programmed");
     const std::uint32_t operand_id = get_operand_id(operand);
@@ -124,7 +123,7 @@ inline void llk_unpack_tilize_uninit([[maybe_unused]] const std::uint32_t operan
  *
  * On Quasar, operand A's buffer descriptor is programmed in Strided mode (y_dim=1, z_dim=1)
  * required by the UNPACR_STRIDE tilize sequence; operand B gets a normal Continuous descriptor.
- * Both ids come from the unpack BFD partition — DFB ids never double as BFD ids.
+ * Both ids are the fixed unpack-engine ids — DFB ids never double as BFD ids.
  *
  * @tparam neginf_srcA      No effect on Quasar; accepted for API compatibility with WH/BH.
  * @tparam reload_srcB      Must be true on Quasar (asserted true, srcB is reloaded every iteration for reduce);
@@ -155,9 +154,10 @@ inline void llk_unpack_tilizeA_B_init(
 
     // UNPACR_STRIDE used in unpack_tilize_operands_reduce requires a Strided buffer descriptor
     // (y_dim=1, z_dim=1) for operandA; operandB (scalar srcB) uses a Continuous descriptor.
-    [[maybe_unused]] const std::uint8_t bfd_a =
-        llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0, ckernel::trisc::L1AccessMode::Strided>(operandA_id);
-    [[maybe_unused]] const std::uint8_t bfd_b = llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp1>(operandB_id);
+    llk_unpack_program_bfd<ckernel::trisc::BFD_ID_UNP0, ckernel::trisc::L1AccessMode::Strided>(operandA_id);
+    [[maybe_unused]] constexpr std::uint8_t bfd_a = ckernel::trisc::BFD_ID_UNP0;
+    llk_unpack_program_bfd<ckernel::trisc::BFD_ID_UNP1>(operandB_id);
+    [[maybe_unused]] constexpr std::uint8_t bfd_b = ckernel::trisc::BFD_ID_UNP1;
 
 #if defined(REDUCE_OP)
     _llk_unpack_reduce_col_tilizeA_strided_init_<REDUCE_OP>(bfd_a, bfd_b, ct_dim, tensor_shape_A);
@@ -202,11 +202,11 @@ inline void llk_unpack_tilizeA_B(
     LLK_TDMA_GUARD_NOTE_TDMA(operandA);  // TEN-4746: real unpack (UNPACR) disarms these dfbs
     LLK_TDMA_GUARD_NOTE_TDMA(operandB);
     LLK_REINIT_GUARD_ASSERT_MATCHES(
-        ckernel::trisc::BfdResource::Unp0,
+        ckernel::trisc::BFD_ID_UNP0,
         operandA,
         "unpack_tilizeA_B operandA DFB differs from the one llk_unpack_tilizeA_B_init programmed");
     LLK_REINIT_GUARD_ASSERT_MATCHES(
-        ckernel::trisc::BfdResource::Unp1,
+        ckernel::trisc::BFD_ID_UNP1,
         operandB,
         "unpack_tilizeA_B operandB DFB differs from the one llk_unpack_tilizeA_B_init programmed");
 

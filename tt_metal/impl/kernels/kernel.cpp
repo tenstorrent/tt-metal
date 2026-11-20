@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <device.hpp>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
@@ -20,7 +20,7 @@
 
 #include <tt_stl/assert.hpp>
 #include "base_types.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "jit_build/build.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include "llrt.hpp"
@@ -401,6 +401,13 @@ void Kernel::process_scratchpad_binding_handles(const std::function<void(
                                                     const std::optional<LLKMetadata>&)>& callback) const {
     for (const auto& handle : this->scratchpad_binding_handles_) {
         callback(handle.accessor_name, handle.size_bytes, handle.addr_crta_word, handle.llk_metadata);
+    }
+}
+
+void Kernel::process_global_semaphore_binding_handles(
+    std::function<void(const std::string& accessor_name, uint32_t addr_crta_word)> callback) const {
+    for (const auto& handle : this->global_semaphore_binding_handles_) {
+        callback(handle.accessor_name, handle.addr_crta_word);
     }
 }
 
@@ -796,6 +803,13 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(static_cast<uint64_t>(handle.addr_crta_word));
         hash_llk_metadata(handle.llk_metadata);
     }
+    // GlobalSemaphore binding handles: the address word index is baked into the generated `global_sem::`
+    // token. The parameter name is omitted, as it does not appear in the generated headers.
+    hasher.update(static_cast<uint64_t>(this->global_semaphore_binding_handles_.size()));
+    for (const auto& handle : this->global_semaphore_binding_handles_) {
+        hasher.update(handle.accessor_name);
+        hasher.update(static_cast<uint64_t>(handle.addr_crta_word));
+    }
     // PrefetcherPipe binding handles: the slot id is baked into the generated `pipe::` token.
     hasher.update(static_cast<uint64_t>(this->prefetcher_pipe_binding_handles_.size()));
     for (const auto& handle : this->prefetcher_pipe_binding_handles_) {
@@ -962,7 +976,7 @@ void SetScratchpadBindingAddress(Kernel& kernel, ScratchpadBindingHandle& bindin
     // Patch the allocated address into the kernel's CRTA buffer if it exists.
     // On the Metal 2.0 factory path, reserve_runtime_arg_buffers pre-sizes the CRTA
     // buffer before this runs, so the address is updated here. If CRTA is not yet allocated
-    // (legacy order: SetProgramRunArgs first), SetProgramRunArgs copies
+    // (legacy order: Program::set_program_run_args first), Program::set_program_run_args copies
     // handle.allocated_address into the scratchpad section when it builds the buffer.
     // This allows for allocation of scratchpad and the CRTA buffer to be order agnostic.
     //

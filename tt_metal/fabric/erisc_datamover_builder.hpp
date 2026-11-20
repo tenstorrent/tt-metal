@@ -22,8 +22,10 @@
 #include <string>
 #include <unordered_map>
 #include "builder/fabric_channel_allocator.hpp"
+#include "builder/fabric_static_sized_channels_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/builder/connection_writer_adapter.hpp"
+#include "tt_metal/fabric/builder/fabric_master_router_selection.hpp"
 #include "tt_metal/fabric/channel_trimming_import.hpp"
 #include "tt_metal/fabric/fabric_datamover_builder_base.hpp"
 
@@ -41,7 +43,6 @@ struct FabricRiscConfig;
 class FabricContext;
 class FabricRouterBuilder;
 class ComputeMeshRouterBuilder;
-class FabricRemoteChannelsAllocator;
 
 class FabricEriscDatamoverBuilder;
 class FabricTensixDatamoverBuilder;
@@ -208,6 +209,9 @@ struct FabricEriscDatamoverConfig {
     size_t receiver_channel_remote_ack_counters_base_addr = 0;
     size_t receiver_channel_remote_completion_counters_base_addr = 0;
     size_t router_buffer_clear_size_words = 1;
+    // Every sender channel's connection info and semaphores, [start, end): zeroed at fabric init.
+    size_t sender_channels_bookkeeping_start = 0;
+    size_t sender_channels_bookkeeping_end = 0;
 
     // ----------- Local Tensix Relay Connection (UDM mode only)
     // Connection buffer index for the local tensix relay interface
@@ -272,10 +276,8 @@ struct FabricEriscDatamoverConfig {
 
     // Fabric channel allocator for L1 memory management
     // Points to the primary allocator (typically static allocator for single-pool configs)
+    // The fabric-wide allocation here; each router's builder replaces it with one laid out for its own channels.
     std::shared_ptr<FabricChannelAllocator> channel_allocator;
-
-    // Remote channels allocator - tracks remote receiver channel info for the remote ethernet core
-    std::shared_ptr<FabricRemoteChannelsAllocator> remote_channels_allocator;
 
 private:
     FabricEriscDatamoverConfig(const FabricContext& fabric_context, Topology topology);
@@ -340,6 +342,14 @@ void append_worker_to_fabric_edm_sender_rt_args(
     size_t sender_worker_buffer_index_semaphore_id,
     std::vector<uint32_t>& args_out);
 size_t log_worker_to_fabric_edm_sender_rt_args(const std::vector<uint32_t>& args, size_t starting_arg_idx = 0);
+
+// What a fabric graph already knows about a router, handed in instead of worked out by the builder.
+// Sender vectors are by flat sender channel (VC0's, then VC1's, then VC2's).
+struct RouterGraphInputs {
+    RouterChannelLayout layout;       // this router's channels
+    std::vector<bool> injection;      // acquires a protected ring (bubble flow control)
+    std::vector<bool> serviced;       // a channel, or a slot stock services anyway
+};
 
 /*
  * The `FabricEriscDatamoverBuilder` is a general class that is used to build fabric router erisc kernels.
@@ -417,7 +427,8 @@ public:
         std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc =
             std::nullopt,
         std::optional<ChannelTrimmingOverrides> channel_trimming_overrides = std::nullopt,
-        std::optional<Vc0TrimFastPathInfo> vc0_trim_fast_path_info = std::nullopt);
+        std::optional<Vc0TrimFastPathInfo> vc0_trim_fast_path_info = std::nullopt,
+        const RouterGraphInputs* graph_inputs = nullptr);
 
     // fabric_context must outlive the returned builder.
     static FabricEriscDatamoverBuilder build(
@@ -438,7 +449,8 @@ public:
         std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc =
             std::nullopt,
         std::optional<ChannelTrimmingOverrides> channel_trimming_overrides = std::nullopt,
-        std::optional<Vc0TrimFastPathInfo> vc0_trim_fast_path_info = std::nullopt);
+        std::optional<Vc0TrimFastPathInfo> vc0_trim_fast_path_info = std::nullopt,
+        const RouterGraphInputs* graph_inputs = nullptr);
 
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
     // Overload that accepts VC, absolute channel ID, and VC-relative channel ID
@@ -454,6 +466,14 @@ public:
     };
     [[nodiscard]] CompileTimeArgs get_compile_time_args(uint32_t risc_id) const;
 
+    // The length of each VC's downstream arrays in the kernel (VC0_DOWNSTREAM_EDM_SIZE and VC1_DOWNSTREAM_EDM_SIZE).
+    // Note: This is only valid once the router's downstream connections are made.
+    [[nodiscard]] std::array<uint32_t, 2> get_downstream_edm_array_sizes() const;
+
+    // Creates the master routercandidate type that describes the router's downstream connections. Only valid once the
+    // router's downstream connections are made.
+    [[nodiscard]] MasterRouterCandidate describe_master_router_candidate() const;
+
     // Helper for `get_compile_time_args`
     void get_telemetry_compile_time_args(uint32_t risc_id, std::unordered_map<std::string, uint32_t>& named_args) const;
 
@@ -465,6 +485,9 @@ public:
 
     // One past the last byte the router places below config.max_l1_loading_size.
     size_t get_allocated_l1_end_address() const { return config.allocated_l1_end_address; }
+
+    // This router's channel buffers, as its link peer and the routers feeding it address them.
+    RouterChannelLayout get_channel_layout() const;
 
     // Returns the resolved kernel build optimization level for this router.
     // This opt-level is per-builder/router, and should not be shared across builders.
@@ -511,9 +534,7 @@ public:
         downstream_allocators = {};
 
     std::array<size_t, builder_config::num_max_receiver_channels> receiver_channels_num_buffers = {};
-    std::array<size_t, builder_config::num_max_receiver_channels> remote_receiver_channels_num_buffers = {};
     std::array<size_t, builder_config::num_max_receiver_channels> local_receiver_channels_buffer_address = {};
-    std::array<size_t, builder_config::num_max_receiver_channels> remote_receiver_channels_base_address = {};
 
     std::array<size_t, builder_config::num_max_sender_channels> local_sender_channels_connection_info_addr = {};
 

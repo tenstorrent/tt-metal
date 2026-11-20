@@ -122,6 +122,25 @@ def test_sharded_read_partly_past_the_end_raises(tmp_path, expect_error):
         _load_golden_kv_post(trace, 0, 64, start=200)
 
 
+@pytest.mark.parametrize(
+    "load, path, key",
+    [
+        (_load_golden_kv_post, "kv_cache/layer_0.safetensors", "kv_post_transform_layer_0"),
+        (_load_golden_index_k, "indexer/indexer_k_layer_0.safetensors", "indexer_k_layer_0"),
+    ],
+)
+def test_single_file_read_past_the_end_raises(tmp_path, expect_error, load, path, key):
+    """The single-file layout (DeepSeek's kv_cache, Kimi-K3.1's indexer key) refuses a short read as the shards do."""
+    import torch
+    from safetensors.torch import save_file
+
+    (tmp_path / path).parent.mkdir(parents=True)
+    save_file({key: torch.arange(256, dtype=torch.float32).unsqueeze(1).expand(256, 8).contiguous()}, tmp_path / path)
+    assert torch.equal(load(tmp_path, 0, 16, start=240)[:, 0], torch.arange(240, 256, dtype=torch.float32))
+    with expect_error(FileNotFoundError, "covers only 56 of rows"):
+        load(tmp_path, 0, 64, start=200)
+
+
 @pytest.mark.parametrize("position0", [0, 65536])
 def test_index_k_rope_rebase_uses_absolute_position(tmp_path, position0):
     """A half-split tail golden re-bases to the device's interleaved pairing at its own prompt

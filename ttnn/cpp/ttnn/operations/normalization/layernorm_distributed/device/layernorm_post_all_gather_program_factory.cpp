@@ -225,15 +225,55 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
         log_debug(tt::LogOp, "core_group_2: {}", core_group_2.str());
         log_debug(tt::LogOp, "num_tile_rows_per_core_group_2: {}", num_tile_rows_per_core_group_2);
     }
+    const tt::DataFormat scaler_data_format =
+        in_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    const uint32_t scaler_tile_size = tt::tile_size(scaler_data_format);
+
     uint32_t block_size = fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(tiles_per_core_y, 4)
                                            : tt::tt_metal::find_max_divisor(tiles_per_core_y, 8);
-    uint32_t cb_length = tiles_per_core_y;
+    const bool uses_x_normed = gamma.has_value() || beta.has_value();
+    // The gamma product needs a buffer of its own only when beta still has to be added to it.
+    const bool uses_times_gamma_out = gamma.has_value() && beta.has_value();
 
-    const double available_L1 =
-        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    if ((!(operation_attributes.use_2d_core_grid.has_value() && *operation_attributes.use_2d_core_grid)) &&
-        (cb_length * in_single_tile_size > available_L1 * 0.95)) {
-        cb_length = ((available_L1 / in_single_tile_size) * 0.95) / 7;
+    // Every buffer that holds part of a row is cb_length tiles deep. When a whole row does not fit, the row is
+    // processed in chunks of cb_length tiles. The kernels walk each buffer in blocks of block_size tiles (or the
+    // DEST limit) from the start of a chunk, and a buffer cannot serve a block that wraps past its end, so a chunk
+    // must fill its buffers exactly: cb_length divides the row and is a multiple of block_size.
+    uint32_t cb_length = tiles_per_core_y;
+    if (!use_2d_kernel) {
+        const uint32_t row_bytes_per_tile = in_single_tile_size + (gamma.has_value() ? gamma_single_tile_size : 0) +
+                                            (beta.has_value() ? beta_single_tile_size : 0) +
+                                            (is_rmsnorm ? 0 : single_tile_size) +
+                                            (uses_x_normed ? single_tile_size : 0) +
+                                            (uses_times_gamma_out ? single_tile_size : 0) + out_single_tile_size;
+        // The stats, epsilon, reduce scalar and per-row statistics buffers do not scale with cb_length.
+        const uint32_t fixed_bytes =
+            (stats_tiles_cols * stats_single_tile_size) + bfloat16_tile_size + scaler_tile_size +
+            (is_rmsnorm ? 0 : (tile_cols_per_device + 1) * single_tile_size) + (2 * single_tile_size);
+        const double available_L1 =
+            device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        const double chunk_L1 = (available_L1 * 0.95) - fixed_bytes;
+        TT_FATAL(
+            chunk_L1 > 0,
+            "The fixed buffers of distributed norm post-all-gather need {} B of L1, more than the {} B available",
+            fixed_bytes,
+            static_cast<uint64_t>(available_L1 * 0.95));
+        const auto max_cb_length = static_cast<uint32_t>(chunk_L1 / row_bytes_per_tile);
+        if (cb_length > max_cb_length) {
+            const uint32_t row_blocks = tiles_per_core_y / block_size;
+            uint32_t chunk_blocks = std::min(max_cb_length / block_size, row_blocks);
+            while (chunk_blocks > 1 && row_blocks % chunk_blocks != 0) {
+                chunk_blocks--;
+            }
+            TT_FATAL(
+                chunk_blocks > 0,
+                "A row of {} tiles cannot be split into chunks that fit in L1: one block of {} tiles needs {} B per "
+                "tile across its buffers",
+                tiles_per_core_y,
+                block_size,
+                row_bytes_per_tile);
+            cb_length = chunk_blocks * block_size;
+        }
     }
     const uint32_t in0_tiles = cb_length;
     const uint32_t in1_tiles = stats_tiles_cols;
@@ -300,17 +340,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
         gb_defines.emplace("FUSE_BETA", "1");
     }
 
-    const bool uses_x_normed = gamma.has_value() || beta.has_value();
-    // The gamma product needs a buffer of its own only when beta still has to be added to it.
-    const bool uses_times_gamma_out = gamma.has_value() && beta.has_value();
-
     ////////////////////////////////////////////////////////////////////////////
     //                      Dataflow buffers
     ////////////////////////////////////////////////////////////////////////////
-    const tt::DataFormat scaler_data_format =
-        in_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    const uint32_t scaler_tile_size = tt::tile_size(scaler_data_format);
-
     m2::Group<m2::DataflowBufferSpec> dfbs;
     dfbs.push_back(make_dfb(POST_INPUT, in0_tiles, in_single_tile_size, in_data_format));
     dfbs.push_back(make_dfb(POST_STATS, in1_tiles, stats_single_tile_size, stats_data_format));
