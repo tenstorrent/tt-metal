@@ -64,7 +64,7 @@ Note: before any `Program` is run on device there is a validation step to ensure
 
 Debug reports can be generated to get a dump of the memory state at a particular point in time or set to log memory state during each `Program`compile.
 
-In both cases three reports are generated in `$TT_METAL_HOME/generated`:
+In both cases three reports are generated in `<logs_dir>/generated/reports/`, where `<logs_dir>` is `TT_METAL_LOGS_PATH` if set, otherwise the current working directory. Per-compile reports are prefixed with `program_` (e.g. `program_l1_usage_summary.csv`), and reports from `DumpDeviceMemoryState` are prefixed with the optional `prefix` argument:
 - `l1_usage_summary.csv` has a table with an entry for each program indicating the minimum largest free SRAM block and size of largest SRAM buffer that can be interleaved across available free SRAM blocks
 - `memory_usage_summary.csv` for each program there is an entry indicating total allocatable, allocated, free, and largest free block sizes for each DRAM and SRAM bank
 - `detailed_memory_usage.csv` expands on the memory usage summary report by including each memory block address, size, and allocation status

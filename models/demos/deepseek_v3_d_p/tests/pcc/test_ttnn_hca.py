@@ -35,7 +35,7 @@ from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import V4_MESH_CONFIGS
 from models.demos.deepseek_v3_d_p.tests.pcc.v4_test_utils import V4_CACHE_PCC, report_chunk_pccs
 from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtHCACompressor
 from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import TtHCA
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 # Real (pre-pad) prompt lengths. prepare_input pads each up to compress_rate*sp, so the ragged ones
 # exercise the pad + trim + mask path.

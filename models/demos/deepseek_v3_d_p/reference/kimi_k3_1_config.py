@@ -5,7 +5,8 @@
 """Kimi K3.1 (``moonshotai/Kimi-K3.1-Pro``): K3 with its 24 full-attention MLA layers turned into DSA layers.
 
 ``text_config.dsa_config``: top-2048, 32 index heads x 128, ``index_rope_dim`` 0 (NoPE indexer), LayerNorm
-k_norm with bias. The indexer weights match DeepSeek-V3.2 / GLM's, so the indexer is DS-V3.2's without RoPE.
+k_norm with bias. The indexer weights match DeepSeek-V3.2 / GLM's, so the indexer is DS-V3.2's without RoPE and
+without its q/k Hadamard rotation.
 No ``indexer_types``: every DSA layer owns its index slot, in the same 24-slot space as the KVPE cache.
 """
 
@@ -24,6 +25,11 @@ class KimiK31Config(KimiK3Config):
     INDEX_TOPK_FREQ = 1
     INDEX_SKIP_TOPK_OFFSET = 1
 
+    # K3's 1536 B/bank is spent by KDA's long-lived semaphores, MoE routing and dense MLA; a DSA layer's
+    # early-Q all-to-all then needs one more 16 B slot per bank (OOM at 1536 with KDA layers 1-2 and DSA
+    # layer 3 in one forward, test_kimi_k3_1_dsa_trace.py hybrid_L0_3 window).
+    L1_SMALL_SIZE = 2048
+
     # 1-indexed as in the HF config; identical to the full-attention layers.
     DSA_LAYERS_1BASED = list(KimiK3Config.FULL_ATTN_LAYERS_1BASED)
 
@@ -39,6 +45,11 @@ def kimi_k3_1_hf_config(max_seq: int = 8192):
     cfg.index_topk = KimiK31Config.INDEX_TOPK
     cfg.index_rope_dim = KimiK31Config.INDEX_ROPE_DIM
     cfg.index_rope_interleave = True
+    # vLLM's KimiK3DSAIndexerKNorm (LayerNorm) takes config.rms_norm_eps, not DS-V3.2's 1e-6.
+    cfg.index_k_norm_eps = cfg.rms_norm_eps
+    # No Hadamard on the indexer q/k (vLLM PR 65685 and K3.1 decode): the index cache holds natural-basis keys
+    # (DS-V3.2 / GLM keep the default, rotated).
+    cfg.index_hadamard = False
     # Overlap the indexer TopK with the sparse-KV gather, as GLM-5.3 (serial on SP=1).
     cfg.sparse_mla_overlap_profile = "auto"
     return cfg

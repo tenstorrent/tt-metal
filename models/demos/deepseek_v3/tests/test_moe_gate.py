@@ -23,7 +23,7 @@ from models.demos.deepseek_v3.utils.test_utils import (
     load_reference_io_tensors_for_module,
     run_module_forward,
 )
-from tests.ttnn.utils_for_testing import comp_pcc
+from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
 
 def load_real_moe_input(mode: str, module_path: str, num_tokens: int) -> torch.Tensor:
