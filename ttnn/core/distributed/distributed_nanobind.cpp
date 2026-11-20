@@ -1242,7 +1242,7 @@ void py_module(nb::module_& mod) {
         };
         nb::module_ sys = nb::module_::import_("sys");
         nb::object prev_excepthook = sys.attr("excepthook");
-        sys.attr("excepthook") = nb::cpp_function([prev_excepthook, stop_job, describe, code_for](nb::args args) {
+        sys.attr("excepthook") = nb::cpp_function([prev_excepthook, stop_job, describe, code_for](const nb::args& args) {
             prev_excepthook(*args);  // keep the normal traceback on stderr
             if (args.size() >= 2) {
                 stop_job(code_for(args[0]), "uncaught Python exception " + describe(args[0], args[1]));
@@ -1264,9 +1264,9 @@ void py_module(nb::module_& mod) {
         // sys.excepthook is never called for SystemExit, so sys.exit is wrapped: a non-zero code stops the job at the
         // call. A zero code is a clean exit and is left alone. A non-int code (a message) exits 1, as Python does.
         nb::object prev_exit = sys.attr("exit");
-        sys.attr("exit") = nb::cpp_function([prev_exit, stop_job](nb::args args) {
+        sys.attr("exit") = nb::cpp_function([prev_exit, stop_job](const nb::args& args) {
             int code = 0;
-            if (args.size() > 0 && !args[0].is_none()) {
+            if (!args.empty() && !args[0].is_none()) {
                 code = nb::isinstance<nb::int_>(args[0]) ? nb::cast<int>(args[0]) : 1;
             }
             if (code != 0) {
@@ -1295,14 +1295,14 @@ void py_module(nb::module_& mod) {
                 nb::object is_finalizing = sys.attr("is_finalizing");
                 nb::object exc_info = sys.attr("exc_info");
                 signal_mod.attr("signal")(
-                    sigterm, nb::cpp_function([sys_exit, is_finalizing, exc_info](nb::args args) {  // (signum, frame)
+                    sigterm, nb::cpp_function([sys_exit, is_finalizing, exc_info](const nb::args& args) {  // (signum, frame)
                         DistributedContext::mark_terminating();  // the close must not fence on the peers
                         // No SystemExit when the rank is already leaving: its own stop coming back, the interpreter
                         // finalizing, or an exception already unwinding (a SystemExit raised inside that finally
                         // would cut the close short). The rank exits through the context's exit either way.
                         if (::getpid() == g_hook_owner && !g_stopped_here && !nb::cast<bool>(is_finalizing()) &&
                             nb::borrow<nb::tuple>(exc_info())[0].is_none()) {
-                            sys_exit(128 + (args.size() > 0 ? nb::cast<int>(args[0]) : static_cast<int>(SIGTERM)));
+                            sys_exit(128 + (!args.empty() ? nb::cast<int>(args[0]) : static_cast<int>(SIGTERM)));
                         }
                     }));
             }

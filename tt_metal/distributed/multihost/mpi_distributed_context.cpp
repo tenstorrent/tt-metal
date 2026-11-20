@@ -338,11 +338,11 @@ static void sweep_stale_launcher_dirs() {
     std::error_code ec;
     for (const auto& entry : std::filesystem::directory_iterator(root, ec)) {
         const std::string name = entry.path().filename().string();
-        if (!entry.is_directory(ec) || name.rfind("prterun.", 0) != 0 || name.size() <= suffix.size() ||
-            name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0) {
+        if (!entry.is_directory(ec) || !name.starts_with("prterun.") || name.size() <= suffix.size() ||
+            !name.ends_with(suffix)) {
             continue;
         }
-        if (own != nullptr && std::string(own).rfind(entry.path().string(), 0) == 0) {
+        if (own != nullptr && std::string(own).starts_with(entry.path().string())) {
             continue;  // this job's own launcher
         }
         const std::string stem = name.substr(0, name.size() - suffix.size());
@@ -366,7 +366,7 @@ static void sweep_stale_launcher_dirs() {
 static void sweep_stale_singleton_dirs(const std::filesystem::path& base) {
     std::error_code ec;
     for (const auto& entry : std::filesystem::directory_iterator(base, ec)) {
-        if (!entry.is_directory(ec) || entry.path().filename().string().rfind("tt_mpi_singleton.", 0) != 0) {
+        if (!entry.is_directory(ec) || !entry.path().filename().string().starts_with("tt_mpi_singleton.")) {
             continue;
         }
         std::ifstream owner(entry.path() / "owner.pid");
@@ -669,6 +669,7 @@ inline void init_env(int& argc, char**& argv) {
                 } catch (const std::exception& e) {
                     what = e.what();
                 } catch (...) {
+                    what = "an exception that is not a std::exception";
                 }
             }
             std::fprintf(stderr, "[MPIContext] std::terminate: uncaught exception: %s\n", what.c_str());
