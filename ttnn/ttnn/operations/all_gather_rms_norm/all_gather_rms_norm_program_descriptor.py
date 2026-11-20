@@ -349,6 +349,8 @@ def cb_plan(sz: Sizes, k: int, pitch: int, rows: int, n_affine_slots: int, dense
         plan[CB_KG] = (rows, sz.T_bf16)
         if sz.mask:
             plan[CB_MASK] = (1, sz.T_bf16)
+    if sz.m16:  # row-form statistics -> column form (unpack transpose round trip): K_g, inv_std, shift of one row
+        plan[CB_MU] = (3, sz.T_acc)
     if sz.is_ln and not sz.m16:  # DEST-accumulated moments scratch (fp32 DEST only)
         plan[CB_MOMENT_B] = ((1 if sz.ln_fpu else 2) * rows, sz.T_acc)  # FPU: D2 tiles; SFPU: (D1, D2) pairs
         # owner: cb_km also carries the owner's pivot K and K_g = bf16(mu) after the member pivots are popped

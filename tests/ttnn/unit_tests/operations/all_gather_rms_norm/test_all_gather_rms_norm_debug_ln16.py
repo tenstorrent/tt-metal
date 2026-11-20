@@ -25,7 +25,8 @@ SHAPES = [
     (1, 1, 32, 1280),  # golden failing (k > 1 symmetric)
     (1, 1, 640, 32),  # k = 1
     (1, 1, 32, 4096),  # owner combine (k > 8)
-    (1, 1, 64, 1000),  # w_non_aligned: SFPU moments path
+    (1, 1, 64, 1000),  # w_non_aligned (dense assembly)
+    (1, 1, 2048, 384),  # several tile-rows per member
 ]
 
 
@@ -56,6 +57,10 @@ def test_ln16_decompose(mesh_device, shape, row_offset):
     for idx, t in enumerate(ttnn.get_device_tensors(out)):
         a = ttnn.to_torch(t).to(torch.float64).reshape(-1, expected.shape[-1])
         e = expected[0, idx].to(torch.float64).reshape(-1, expected.shape[-1])
+        bad_rows = (~torch.isfinite(a)).any(-1)
+        if bad_rows.any():
+            tr = bad_rows.reshape(-1, 32).any(-1).nonzero().flatten().tolist()
+            logger.info(f"LN16 dev{idx}: non-finite tile-rows {tr[:24]} ({len(tr)} of {a.shape[0] // 32})")
         rel_rms = float(((a - e) ** 2).mean().sqrt() / (e**2).mean().sqrt())
         em, am = e.mean(-1, keepdim=True), a.mean(-1, keepdim=True)
         scale = ((a - am) * (e - em)).sum(-1) / ((e - em) ** 2).sum(-1)

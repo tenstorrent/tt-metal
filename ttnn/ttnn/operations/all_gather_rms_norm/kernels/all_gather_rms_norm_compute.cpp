@@ -728,6 +728,36 @@ sfpi_inline void c16_finalize_store() {
 }
 #endif
 
+// Row form -> column form for 16-bit DEST: the row-form DEST tiles [0, n) are packed to cb_mu (caller pushed) and
+// transposed back on unpack (transpose_tile), packing tile i to outs[i] — the generic Welford reduction's pattern
+// (it keeps transpose_dest's replay / ALU-format reprogramming out of the per-row SFPU-config sequence).
+template <uint32_t n>
+ALWI void mu_rows_to_cols(const uint32_t (&outs)[n]) {
+    cb_wait_front(cb_mu, n);
+    reconfig_data_format_srca(cb_mu);
+    transpose_init(cb_mu);
+    tile_regs_acquire();
+    for (uint32_t i = 0; i < n; ++i) {
+        transpose_tile(cb_mu, i, i);
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    for (uint32_t i = 0; i < n; ++i) {
+        pack_reconfig_data_format(outs[i]);
+        pack_tile(i, outs[i]);
+    }
+    tile_regs_release();
+    cb_pop_front(cb_mu, n);
+}
+
+// pack the row-form DEST tiles [d, d + n) to cb_mu (inside the caller's DEST window)
+ALWI void pack_rows_to_mu(uint32_t d, uint32_t n) {
+    pack_reconfig_data_format(cb_mu);
+    for (uint32_t i = 0; i < n; ++i) {
+        pack_tile(d + i, cb_mu);
+    }
+}
+
 // Chan combine for 16-bit DEST (k members' column-form (mean_m, M2_m) in src_cb) -> cb_kg, cb_rowstat, cb_shift.
 // The members' tiles are transposed on unpack (row form: one LREG per statistic), combined in fp32 LREGs and stored
 // once, rounded to nearest-even (the 16-bit SFPU op chain of combine_block truncates at every step).
@@ -749,21 +779,16 @@ ALWI void combine16_block(uint32_t rows, uint32_t inv_w_bits, uint32_t eps_bits,
             transpose_tile(src_cb, t + 1, 1);
             MATH((_llk_math_welfords_sfpu_params_(c16_member, 0, 0u, arg(nm_idx + m), m == 0 ? 1u : 0u)));
         }
+        rsqrt_tile_init();  // the fp32 rsqrt body's programmable constants (never left to a previous kernel)
         MATH((_llk_math_welfords_sfpu_params_(c16_finalize_values, 2, inv_w_bits, eps_bits)));
         MATH((_llk_math_welfords_sfpu_params_(c16_finalize_store, 2)));
-        transpose_dest_init<DST_ACCUM_MODE>();  // row form -> column form
-        transpose_dest<DST_ACCUM_MODE>(2);
-        transpose_dest<DST_ACCUM_MODE>(3);
-        transpose_dest<DST_ACCUM_MODE>(4);
+        cb_reserve_back(cb_mu, 3);
         tile_regs_commit();
         tile_regs_wait();
-        pack_reconfig_data_format(cb_kg);
-        pack_tile(2, cb_kg);
-        pack_reconfig_data_format(cb_rowstat);
-        pack_tile(3, cb_rowstat);
-        pack_reconfig_data_format(cb_shift);
-        pack_tile(4, cb_shift);
+        pack_rows_to_mu(2, 3);
         tile_regs_release();
+        cb_push_back(cb_mu, 3);
+        mu_rows_to_cols<3>({cb_kg, cb_rowstat, cb_shift});
         cb_push_back(cb_kg, 1);
         cb_push_back(cb_rowstat, 1);
         cb_push_back(cb_shift, 1);
@@ -794,20 +819,16 @@ ALWI void owner16_ln(uint32_t owned, uint32_t inv_w_bits, uint32_t eps_bits, uin
                 MATH((_llk_math_welfords_sfpu_params_(c16_member, 0, rho, arg(nm_idx + m), m == 0 ? 1u : 0u)));
             }
         }
+        rsqrt_tile_init();  // the fp32 rsqrt body's programmable constants (never left to a previous kernel)
         MATH((_llk_math_welfords_sfpu_params_(c16_finalize_values, 2, inv_w_bits, eps_bits)));
         MATH((_llk_math_welfords_sfpu_params_(c16_finalize_store, 2)));
-        transpose_dest_init<DST_ACCUM_MODE>();
-        transpose_dest<DST_ACCUM_MODE>(2);
-        transpose_dest<DST_ACCUM_MODE>(3);
-        transpose_dest<DST_ACCUM_MODE>(4);
+        cb_reserve_back(cb_mu, 3);
         tile_regs_commit();
         tile_regs_wait();
-        pack_reconfig_data_format(cb_own_kg);
-        pack_tile(2, cb_own_kg);
-        pack_reconfig_data_format(cb_own_ret);
-        pack_tile(3, cb_own_ret);
-        pack_tile(4, cb_own_ret);
+        pack_rows_to_mu(2, 3);
         tile_regs_release();
+        cb_push_back(cb_mu, 3);
+        mu_rows_to_cols<3>({cb_own_kg, cb_own_ret, cb_own_ret});
         cb_push_back(cb_own_ret, 2);
         cb_push_back(cb_own_kg, 1);
     }
@@ -837,16 +858,24 @@ ALWI void moments16_block(uint32_t rows, uint32_t n_segs, uint32_t segs_idx, uin
             }
         }
         MATH((_llk_math_welfords_sfpu_params_(m16_finalize, 1, inv_n_bits)));
-#ifndef AGRMS_OWNER
-        transpose_dest_init<DST_ACCUM_MODE>();  // row form -> column form (column 0 = the row statistics)
-        transpose_dest<DST_ACCUM_MODE>(1);
-        transpose_dest<DST_ACCUM_MODE>(2);
-#endif
+#ifdef AGRMS_OWNER
+        // owner combine: the partials travel in ROW form, as produced
         tile_regs_commit();
         tile_regs_wait();
+        pack_reconfig_data_format(cb_partial);
         pack_tile(1, cb_partial);
         pack_tile(2, cb_partial);
         tile_regs_release();
+#else
+        // symmetric / k = 1: column form (column 0 = the row statistics)
+        cb_reserve_back(cb_mu, 2);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_rows_to_mu(1, 2);
+        tile_regs_release();
+        cb_push_back(cb_mu, 2);
+        mu_rows_to_cols<2>({cb_partial, cb_partial});
+#endif
         cb_push_back(cb_partial, 2);
     }
 }
