@@ -39,6 +39,7 @@
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
 #include "fabric/fabric_context.hpp"
+#include "hostdev/cce_noc_routes.h"
 #include "hostdev/keraunos_spa_routes.h"
 #include "hostdev/mimir_cce_spa_routes.h"
 #include "hostdevcommon/common_values.hpp"
