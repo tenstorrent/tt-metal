@@ -103,6 +103,21 @@ deadline. Remove it in a separate PR. Extend `.github/deprecations.json` and its
 reaper as automated symbol-level validation is added. The lexical hygiene check
 does **not** yet enforce deprecation requirements.
 
+`.github/deprecations.json` is the grace-period manifest the weekly reaper reads.
+It is not a list of every symbol marked `[[deprecated]]`. To inventory the
+attributes currently in the Metal API headers (`tt_metal/api/`):
+
+```sh
+python3 scripts/validate_api/list_deprecated_api.py
+python3 scripts/validate_api/list_deprecated_api.py --format json
+python3 scripts/validate_api/list_deprecated_api.py --status overdue --tier stable
+```
+
+The script is a lexical scan of `[[deprecated]]`. It records the qualified name,
+the removal date written in the message, and whether a manifest entry names that
+symbol. Pass another directory to scan a different tree, such as the device
+kernel headers under `tt_metal/hw/inc/api`.
+
 ## Next automation increments
 
 1. **Compiler-based hygiene:** resolved transitive include chains; exposed-type
