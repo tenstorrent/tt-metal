@@ -574,6 +574,8 @@ In the manual's order:
 - **Enums in functions and anonymous namespaces.** The device names the type with `__PRETTY_FUNCTION__`. The host
   finds no DWARF entry for `kernel_main()::Color`, and the braces in `{anonymous}` end its placeholder early.
 - **`#` as an enum's fill.** The host strips every `#` from an enum's spec and reads it as the alternate form.
+- **Global names.** `dprint.h` keeps the old stream API's deprecated structs (`F32`, `BF16`, ..., `TYPED_U32_ARRAY`)
+  at global scope for their deprecation messages, and `dprint_tile.h` defines `tile_info_t` there.
 - **`TileSlice<N>` sizes.** The generic serializer takes a `uint32_t` size and `TileSlice` an `int`, so C++17
   deduction never matches it and only the 64 and 128 specializations work. `tile_slice_from_l1` value-initializes a
   `TileSlice`, which has no default constructor outside `ENV_LLK_INFRA`.
@@ -591,5 +593,8 @@ In the manual's order:
   Quasar's Tensix processors 0-7 are DMs and its TRISCs start at 8, and no name adds the dispatch engines.
 - **Quasar with the watcher.** The pack TRISC firmware doesn't fit its 5120 bytes with both, so
   `tt_metal/hw/firmware/src/tt-2xx/trisc.cc` stops the build with `#error`.
+- **Quasar DEST dumps with unpack-to-dest.** `dprint_tensix_dest_reg()` runs between `tile_regs_acquire()` and
+  `tile_regs_commit()`, and its unpack half, `dbg_thread_halt<UnpackThreadId>()`, waits for math. With unpack-to-dest,
+  math's `tile_regs_acquire()` waits for the unpacker's `UNPACK_MATH` post, which comes in `tile_regs_commit()`.
 
 Users don't see one more: `await()` decides from timing, not from device state.

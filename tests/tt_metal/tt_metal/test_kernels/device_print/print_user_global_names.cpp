@@ -27,10 +27,10 @@ struct tile_info_t {};
 #define DPRINT_COMBINE(...) DPRINT(__VA_ARGS__)
 #define DEBUG_PRINT 0
 
-// As ttnn's CCL kernels declare it.
+// As the CCL op kernels declare it.
 void dprint(const F32& value) { DPRINT("dprint: {}\n", value.f); }
 
-// As ttnn's moe_compute kernels declare it.
+// As the moe_compute op kernels declare it.
 void print_tile_rows(
     U32 cb_idx,
     U32 tile_idx,

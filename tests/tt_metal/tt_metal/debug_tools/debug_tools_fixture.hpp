@@ -570,8 +570,13 @@ public:
     }
 
     // Deletes the files check_output reads. A RISC's file is rewritten only when the RISC prints, so without this a
-    // RISC that prints nothing would be checked against a file left over from an earlier run.
+    // RISC that prints nothing would be checked against a file left over from an earlier run. The print server keeps
+    // each RISC's file open once the RISC has printed, so it closes them first; otherwise a later run in the same test
+    // would write into the deleted files.
     static void remove_output_files(ChipId device_id) {
+        if (const auto& dprint_server = MetalContext::instance().dprint_server()) {
+            dprint_server->reset_for_new_run();
+        }
         for (const auto& suffix : suffixes) {
             std::filesystem::remove(output_file_name(device_id, suffix));
         }
