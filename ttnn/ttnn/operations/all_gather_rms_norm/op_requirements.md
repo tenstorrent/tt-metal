@@ -109,7 +109,7 @@ Bullet 3 FAIL: REGRESSION — prior-passing golden cells no longer pass (respons
 unowned L1 blocks exist, + collect-and-retry on the OOM path. Full golden: 29118 pass, 1284 fail (all bf16 LN
 acc16 precision, Refinement 2), 0 hangs, 0 OOM, 0 regressions vs Phase 0. Perf unchanged.
 
-### [ ] Refinement 2 — layer_norm precision with 16-bit DEST (fp32_dest_acc_en=False)
+### [x] Refinement 2 — layer_norm precision with 16-bit DEST (fp32_dest_acc_en=False)
 
 **Goal**: move the bfloat16 `layer_norm` cells with `fp32_dest_acc_en=False` out of `numerical-precision` (143 sampled
 cells, about half of that family: rel RMS 0.015–0.025 vs 0.015, PCC ≥ 0.9997). Measured decomposition (verifier
@@ -131,6 +131,13 @@ combine of Refinement 1 also carries the LN Chan payload; build the two-word mea
 
 **Done when**: the sampled `numerical-precision` cells (bf16, fp32_dest_acc_en=False, layer_norm) pass; the precision
 baseline's `bf16_ln_acc16` rows meet the (bf16, False) tolerance and the test drops its known-gap carve-out.
+**Outcome**: root cause = 16-bit DEST rounding with TRUNCATING SFPU stores at every accumulation / combine step (variance
+under-estimated 1–3 %). Moments and Chan combine now run in fp32 SFPU registers (transposed tiles, SFPTRANSP row loads,
+shifted sums, one RNE store per statistic); FPU normalize for every 16-bit-DEST bf16 / bf8b cell. Precision baseline
+`bf16_ln_acc16` rel RMS 0.009–0.014 → 0.0041–0.0044 (carve-out dropped); debug decomposition: per-row scale bias
++0.3…1.3 % → ≤ +0.16 %, offset rms 0.002–0.006 → ≤ 0.001. Golden: the 39-cell one-per-shape slice 33 → 39/39, two
+random samples of the family 51/51 and 126/126 executed cells pass; unit dir 70/70; regression 32/32. Perf cases
+unchanged (fp32 DEST path untouched): case0 21.30 µs, case1 16.32 µs.
 
 ### [ ] Refinement 3 — TRANSPORT: raise the focus case's link bandwidth
 

@@ -107,3 +107,31 @@
 - Perf (eval protocol, 5 experiments, fastest chip): case0 21.31 µs, case1 16.32 µs (unchanged).
 - Issues encountered: none beyond the above; unit dir 58/58.
 - Tests added: none (repro = the golden order with `EVAL_CAPTURE_L1=1 -p eval.metrics_plugin`).
+
+## Refinement 2 — layer_norm precision with 16-bit DEST (fp32_dest_acc_en=False)
+- Date: 2026-11-20
+- What was done: measured the error split per row (new debug test, no gamma / beta: fit out = a·ref + b): the dominant
+  term was a per-row SCALE bias +0.3…1.3 % growing with member width (σ² under-estimated), plus an offset of rms
+  0.002–0.006 with row offsets. Cause: with 16-bit DEST every intermediate is bf16 and an SFPU store truncates toward
+  zero (LLK: "SFPSTORE → bf16 dst defaults to TRUNCATION"), so tile-by-tile DEST accumulation and the per-member SFPU op
+  chains of the finalize / Chan combine all bias downward. 16-bit-DEST LN now (fp32 DEST untouched):
+  (1) `moments16_block`: x tiles transposed into DEST, loaded with the Welford LLK's SFPTRANSP pattern (one LREG lane
+  per row), shifted sums S1, S2 (shift = the row's first sample) accumulated in fp32 LREGs across the member's tiles,
+  slice-last tiles limited to their valid columns (the segs RT flag now carries v); mean_m / M2_m formed in fp32 and
+  stored once with RNE; (2) `combine16_block` (symmetric, k = 1) and `owner16_ln` (k > 8): one-pass pivoted Chan in
+  fp32 LREGs, fp32 rsqrt (with `rsqrt_tile_init()` — the first cut left its programmable constants to the previous
+  kernel: inv_std ≈ 1e−22, zero outputs), K_g = RNE bf16(mu), shift = (K_g − mu)·inv_std carrying the sub-bf16 mean;
+  row → column form through `cb_mu` + unpack transpose; (3) FPU normalize for every bf16 / bf8b 16-bit-DEST cell (the
+  SFPU chain truncates: −0.6 % scale on w_non_aligned); (4) moment scratch CBs (`cb_moment_a/b`, `cb_mstat`, `cb_cent`,
+  `cb_km`, `cb_dev`) not allocated on this path (`Sizes.m16`). Reused: cb_partial / cb_gathered / owner exchange payloads,
+  writer, reader, normalize chain; Added: raw-TTI LREG accumulators (documented bypass), `cb_mu` 3-page round trip.
+- Accuracy achieved (1x4 ring, bf16, HiFi4): precision baseline `bf16_ln_acc16` rel RMS 0.0041–0.0044, PCC 0.99999 on
+  [1x1x32x384, 1x1x640x32, 1x1x640x384, 1x1x128x1792] (was 0.0094–0.0142); debug decomposition rel RMS 0.0029–0.0039
+  incl. owner (32x1280, 32x4096), dense w_non_aligned (64x1000), multi-row (2048x384); residual ≈ output rounding.
+- Golden test progress: one-per-shape slice of the family (39 cells, Linear, 1 link, gamma+beta RM) 33 → 39/39; two
+  random samples over all axes of the family 51/51 + 126/126 executed (rest INVALID-skipped / expected xfail);
+  test_regression 32/32; unit dir 70/70. Perf (fp32 DEST, path unchanged): case0 21.30 µs, case1 16.32 µs.
+- Issues encountered: stale SFPU programmable constants (rsqrt init missing) produced inf / zero outputs only on some
+  runs — found with DEVICE_PRINT of the row-form statistics.
+- Tests added: `test_all_gather_rms_norm_debug_ln16.py` (per-row scale / offset decomposition, 6 shapes × 2 offset
+  modes, gated on the (bf16, False) tolerance); precision baseline drops the `bf16_ln_acc16` known-gap carve-out.

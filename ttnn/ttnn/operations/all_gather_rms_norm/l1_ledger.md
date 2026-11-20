@@ -167,3 +167,14 @@ finalize. Region size is rounded to whole `cb_dev` / `cb_mu` blocks (they cycle 
 
 Data-movement budget: unchanged on DRAM and fabric. Cross-core: the owner path replaces the k²·rows faces-0/2 partial
 exchange with k·rows·n_stat row-form writes (2 × 16 datums) plus an n_ret·rows·k faces-0/2 return.
+
+## Refinement 2 deltas (layer_norm, 16-bit DEST: `Sizes.m16`)
+
+| CB | Change on the m16 path | Why |
+|---|---|---|
+| `cb_moment_a`, `cb_moment_b`, `cb_mstat`, `cb_cent`, `cb_km`, `cb_dev` | **not allocated** | the member moments accumulate in fp32 SFPU registers (LREG4-6) across the member's tiles and the Chan combine runs in LREGs too: no DEST-accumulated scratch, no pivot tile, no owner `cb_dev` round |
+| `cb_mu` (16) | `3` pages (T_acc), not aliased | the row-form statistics (mean_m / M2_m: 2 pages; K_g / inv_std / shift: 3 pages) are packed here and transposed back to column form on unpack — the generic Welford reduction's round trip. Shares with / why not: its old alias partner `cb_mstat` is gone on this path; nothing else is live with a matching lifetime |
+| `cb_mask`, `cb_wcol` | unchanged (reader still pushes them) | unused by the m16 compute; one tile / `ceil(k/32)` tiles, left in place so the reader is untouched |
+
+Net: the m16 path frees `rows · (1 + 2 + 2) · T_acc + rows · pitch · T_acc (cb_cent) + rows · T_bf16` minus 3 · T_acc
+(cb_mu) per compute core. DRAM / fabric crossings: unchanged.

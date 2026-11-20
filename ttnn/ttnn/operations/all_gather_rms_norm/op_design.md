@@ -484,3 +484,16 @@ after the last landing ≈ 5.8 µs (moments 1 µs, exchange + combine ≈ 1.1 µ
 | LN owner combine | — (base op has no LN) | row form: pivot K = bf16(mean_0), centered weighted terms (SFPU fp32), member sums by a ones-row matmul, transpose_dest to column form | every FPU operand is centered (big row offsets stay exact); the pivot needs no extra exchange round |
 | L1 budget | `cb_l1_budget` = distance to the lowest L1 buffer | + persistent global semaphores relocated when free L1 opens above them | they were the lowest buffer after the first sharded call's tensors were freed (measured) |
 | LN moments path | FPU fast path for aligned bf16 / bf8b | FPU unless no split fits and DEST is fp32 → SFPU path | `cb_cent` is block-sized in the accumulator format |
+
+## Refinement 2 deviations (layer_norm with 16-bit DEST)
+
+| Item | Phase 0 / plan | Built | Why |
+|---|---|---|---|
+| Member moments (16-bit DEST) | pass A pivot + pass B Σc', Σc'² DEST-accumulated (FPU / SFPU), member finalize on SFPU | `moments16_block`: each x tile transposed into DEST (unpack), loaded 4 columns at a time with the Welford LLK's SFPTRANSP pattern (one LREG lane per row), shifted sums S1 = Σ(x − K), S2 = Σ(x − K)² with K = the row's first sample kept in fp32 LREGs across all member tiles (slice-last tiles: only their valid columns); finalize mean_m = K + S1/n, M2_m = S2 − S1²/n in fp32, stored once with RNE | every 16-bit DEST write rounds and an SFPU store TRUNCATES: tile-by-tile accumulation under-estimated σ² by 1–3 % (per-row scale +0.3…1.3 %), growing with member width |
+| Chan combine (16-bit DEST) | per-member SFPU op chain in DEST (truncating at every step) | `combine16_block` (symmetric, k = 1) / `owner16_ln` (k > 8): members' (mean_m, M2_m) as row-form LREGs, one-pass pivoted Chan in fp32 (P = member 0's mean, A = Σ n_m(mean_m − P), B = Σ M2_m + n_m(mean_m − P)²), finalize mu, inv_std (fp32 rsqrt body), K_g = RNE bf16(mu), shift = (K_g − mu)·inv_std, each stored once with RNE | same truncation bias; the fp32 mu also keeps the sub-bf16 part of the mean in `shift` (the planned two-word mean, without a second payload word) |
+| Row → column form | `transpose_dest` | pack to `cb_mu`, `transpose_tile` back (unpack transpose) | the generic Welford reduction's pattern; keeps `transpose_dest`'s replay / ALU-format programming out of the per-row SFPU config |
+| Normalize (16-bit DEST, w_non_aligned) | SFPU chain when a slice tail is masked | FPU chain for any bf16 / bfloat8_b input with 16-bit DEST | the SFPU chain truncates at every store (−0.6 % per-row scale measured); normalize needs no tail mask (padding columns are dropped by the dense assembly) |
+| Partial payload | (mean_m, M2_m), 2 tiles | unchanged | a single RNE bf16 mean_m costs ≤ 0.001 output offset rms (measured with row offsets N(0, 4)); the exchange / owner payload stay as built |
+
+Raw TTI SFPU (documented helper bypass): no helper keeps a per-row accumulator in LREGs across tiles, and the
+row-per-lane load needs SFPTRANSP. fp32 DEST keeps the Phase 0 / Refinement 1 path byte-identical.

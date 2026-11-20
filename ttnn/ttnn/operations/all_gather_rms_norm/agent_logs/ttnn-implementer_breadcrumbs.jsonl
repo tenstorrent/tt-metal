@@ -4,3 +4,4 @@
 {"event":"test_run","refinement":1,"result":"pass","detail":"31/31 Phase-0 OOM cells, unit 54/54, golden slices: 1x1x32x2048 840/0, 8 families 5009 pass / 256 fail (pre-existing bf16 LN acc16), ring-mock+regression 160/160; perf case0 21.29 case1 16.32 us","ts":"2026-11-19T22:53:35+00:00"}
 {"event":"hypothesis","refinement":1,"detail":"small CB budgets in batch runs = persistent global semaphores allocated below the first sharded call tensors; confirmed by L1 block view (test_all_gather_rms_norm_debug_l1.py); fixed by relocation","ts":"2026-11-19T22:53:35+00:00"}
 {"event":"test_run","what":"full golden suite after 1b fix","passed":29118,"failed":1284,"hangs":0,"oom":0,"l1prof_errors":0,"regressions_vs_phase0":0,"ts":"2026-11-20T02:18:38+00:00"}
+{"event":"test_run","status":"pass","detail":"R2: golden ln16 slice 39/39, samples 51/51+126/126, unit 70/70, regression 32/32, perf unchanged","ts":"2026-11-20T04:24:43+00:00"}
