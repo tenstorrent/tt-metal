@@ -28,6 +28,9 @@ FAIL); a chip with any other bad word or semaphore count is its NUMERIC FAIL (fl
 BDF, tray 1-4 and ASIC. Passes loop until the wall cap. If this ttnn cannot build or run the multicast kernel, L1mc is
 'not checked' (a WARN) and the other legs go on.
 """
+import os
+import sys
+sys.path.append(os.path.dirname(os.path.realpath(__file__)))  # the sibling programs, also when run or imported through a link
 import re
 import time
 

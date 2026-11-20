@@ -19,6 +19,8 @@ Chip naming: metal device id -> PCIe id (/dev/tenstorrent/N) from UMD's 'Opening
 -> PCI address -> tray 1-4 (bus & 0xF0, ub0_repro.py's BUS_TO_TRAY).
 """
 import os
+import sys
+sys.path.append(os.path.dirname(os.path.realpath(__file__)))  # the sibling programs, also when run or imported through a link
 import re
 import time
 
