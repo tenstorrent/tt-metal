@@ -643,7 +643,6 @@ Generic
 
    ttnn.generic_op
    ttnn.experimental.generic_op
-   ttnn.experimental.prepare_generic_op
 
 KV Cache
 ========
