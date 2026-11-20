@@ -928,6 +928,67 @@ struct MulScalar {
     }
 };
 
+// Member pivot K_m (bf16). k == 1: one member holds the whole row, so its pivot IS the row pivot K_g of the normalize
+// (fp32 DEST): it is packed straight to cb_kg and the member finalize + Chan combine collapse into
+// ln_finalize_k1_block.
+constexpr bool kFusedK1 = w_split_cores == 1 && DST_ACCUM_MODE;
+constexpr uint32_t cb_pivot = kFusedK1 ? cb_kg : cb_km;
+
+// k == 1 finalize, column-0 SFPU scope (the base op's finalize_col0_body pattern: faces 0/2, the even dst rows =
+// columns 0-7, where a REDUCE_ROW result lives). DEST tile 0 = D1 = sum (x - K), tile 1 = D2 = sum (x - K)^2 ->
+//   t = D1 / n, M2 = D2 - D1 t, inv_std = rsqrt(M2 / W + eps) -> tile 1, shift = (K - mu) inv_std = -t inv_std -> tile
+//   0
+// (mu = K + t, K_g = K exactly: no bf16 re-rounding of mu, no second window). All fp32 in SFPU registers.
+#ifdef TRISC_MATH
+sfpi_inline void ln_finalize_k1_col0_body(uint32_t inv_n_bits, uint32_t inv_w_bits, uint32_t eps_bits) {
+#pragma GCC unroll 0
+    for (int rg = 0; rg < 4; rg++) {
+        const sfpi::vFloat inv_n = ckernel::sfpu::Converter::as_float(inv_n_bits);
+        const sfpi::vFloat inv_w = ckernel::sfpu::Converter::as_float(inv_w_bits);
+        const sfpi::vFloat eps = ckernel::sfpu::Converter::as_float(eps_bits);
+        const sfpi::vFloat d1 = sfpi::dst_reg[0];
+        const sfpi::vFloat d2 = sfpi::dst_reg[32];
+        const sfpi::vFloat t = d1 * inv_n;
+        const sfpi::vFloat m2 = d2 - d1 * t;
+        const sfpi::vFloat inv_std =
+            ckernel::sfpu::_calculate_sqrt_body_<APPROX, true /*RECIPROCAL*/, false>(m2 * inv_w + eps);
+        sfpi::dst_reg[32] = inv_std;
+        sfpi::dst_reg[0] = -t * inv_std;
+        sfpi::dst_reg += 2;
+    }
+}
+#endif
+
+// k == 1 (fp32 DEST): (D1, D2) per tile-row (cb_mstat) -> inv_std (cb_rowstat), shift (cb_shift); K_g already in cb_kg
+ALWI void ln_finalize_k1_block(uint32_t rows, uint32_t inv_n_bits, uint32_t inv_w_bits, uint32_t eps_bits) {
+    cb_wait_front(cb_mstat, 2 * rows);
+    for (uint32_t r = 0; r < rows; ++r) {
+        cb_reserve_back(cb_shift, 1);
+        cb_reserve_back(cb_rowstat, 1);
+        tile_regs_acquire();
+#ifdef AGRMS_LN_FPU
+        copy_to(cb_mstat, r, 0);         // D1 (D1 block, then D2 block)
+        copy_to(cb_mstat, rows + r, 1);  // D2
+#else
+        copy_to(cb_mstat, 2 * r, 0);      // D1
+        copy_to(cb_mstat, 2 * r + 1, 1);  // D2
+#endif
+        rsqrt_tile_init();
+        MATH((_llk_math_eltwise_unary_sfpu_params_(
+            ln_finalize_k1_col0_body, 0, VectorMode::C, inv_n_bits, inv_w_bits, eps_bits)));
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_reconfig_data_format(cb_shift);
+        pack_tile(0, cb_shift);
+        pack_reconfig_data_format(cb_rowstat);
+        pack_tile(1, cb_rowstat);
+        tile_regs_release();
+        cb_push_back(cb_shift, 1);
+        cb_push_back(cb_rowstat, 1);
+    }
+    cb_pop_front(cb_mstat, 2 * rows);
+}
+
 // pass A: per tile-row sum of the member's x tiles (fp32 DEST) -> cb_moment_a
 ALWI void sum_x_block(uint32_t rows, uint32_t core_w) {
     pack_reconfig_data_format(cb_moment_a);
@@ -961,7 +1022,7 @@ ALWI void centered_moments_block(uint32_t rows, uint32_t n_segs, uint32_t segs_i
             for (uint32_t j = 0; j < w; ++j, ++col) {
                 const uint32_t c = first ? 0 : 2;
                 copy_to(cb_x, r * pitch + col, c);
-                bcast_col_to(cb_km, r, 3);
+                bcast_col_to(cb_pivot, r, 3);
                 sub_d(c, 3, c);
 #ifdef AGRMS_MASK
                 if (masked && j + 1 == w) {
@@ -1255,7 +1316,7 @@ ALWI void pivot_block_fpu(uint32_t rows, uint32_t core_w, uint32_t inv_n_bits) {
         ReduceDim::REDUCE_ROW,
         cb_x,
         cb_ones,
-        cb_km,
+        cb_pivot,
         ReduceInputPolicy::NoWaitNoPop,
         ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
         ReduceFp32Mode::Fast,
@@ -1276,7 +1337,7 @@ ALWI void centered_moments_block_fpu(uint32_t rows, uint32_t core_w) {
         InputTileMapping::Block,
         DataFormatReconfig::Enabled,
         TileAddressing::Strided);
-    constexpr auto km_in = input(cb_km, BroadcastDim::Col, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col);
+    constexpr auto km_in = input(cb_pivot, BroadcastDim::Col, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col);
     eltwise_chain(
         IterationShape::grid(rows, core_w),
         BinaryFpu<BinaryFpuOp::Sub, x_in, km_in>{StridedTileRange{0, pitch}},
@@ -1402,18 +1463,20 @@ void kernel_main() {
         } else {
 #ifdef AGRMS_LN_FPU
             pivot_block_fpu(rows, core_w, inv_n_bits);
-            cb_wait_front(cb_km, rows);
+            cb_wait_front(cb_pivot, rows);
             centered_moments_block_fpu(rows, core_w);
 #else
             // pass A -> pivot K_m
             sum_x_block(rows, core_w);
-            row_reduce<cb_moment_a, cb_km>(rows, MulScalar{inv_n_bits});
-            cb_wait_front(cb_km, rows);
+            row_reduce<cb_moment_a, cb_pivot>(rows, MulScalar{inv_n_bits});
+            cb_wait_front(cb_pivot, rows);
             // pass B -> centered moments
             centered_moments_block(rows, n_segs, segs_idx);
             row_reduce<cb_moment_b, cb_mstat>(2 * rows, NoOp{});
 #endif
-            member_finalize_block(rows, inv_n_bits);
+            if constexpr (!kFusedK1) {
+                member_finalize_block(rows, inv_n_bits);
+            }
         }
     }
     {
@@ -1431,6 +1494,8 @@ void kernel_main() {
         constexpr uint32_t src_cb = w_split_cores > 1 ? cb_gathered : cb_partial;
         if constexpr (!DST_ACCUM_MODE) {
             combine16_block<src_cb>(rows, inv_w_bits, eps_bits, nm_idx);
+        } else if constexpr (kFusedK1) {
+            ln_finalize_k1_block(rows, inv_n_bits, inv_w_bits, eps_bits);
         } else {
             combine_block<src_cb>(rows, inv_w_bits, eps_bits, nm_idx);
         }
