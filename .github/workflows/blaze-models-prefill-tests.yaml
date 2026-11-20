@@ -14,7 +14,7 @@ on:
       kimi_k3:
         type: boolean
         default: false
-        description: "Kimi-K3: every K3 leg (also pulls kimi_moe_perf, ring_joint_sdpa_perf)"
+        description: "Kimi-K3: every K3 leg (also pulls ring_joint_sdpa_perf)"
       k3_mla_perf:
         type: boolean
         default: false
@@ -79,10 +79,10 @@ on:
         type: boolean
         default: false
         description: "Mistral4: every Mistral4 leg (also pulls kv_cache_table)"
-      llama31:
+      kimi_k3_1:
         type: boolean
         default: false
-        description: "Llama3.1: every Llama3.1 leg"
+        description: "Kimi-K3.1: every K3.1 leg (temporary, replaces llama31)"
       gpt_oss_prefill_suite:
         type: boolean
         default: false
