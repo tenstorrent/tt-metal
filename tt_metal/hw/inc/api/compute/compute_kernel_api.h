@@ -656,7 +656,7 @@ ALWI void exp2_tile(uint32_t idst) {
             DST_SYNC_MODE,
             is_fp32_dest_acc_en,
             calculate_exp2,
-            (true /* APPROXIMATE */, is_fp32_dest_acc_en, 32),
+            (true /* APPROXIMATE */, is_fp32_dest_acc_en, 32 /*ITERATIONS*/),
             idst,
             VectorMode::None);
         return;
