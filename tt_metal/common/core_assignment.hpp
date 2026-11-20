@@ -8,7 +8,7 @@
 #include <tt-umd/types/arch.hpp>  // tt::ARCH
 #include <vector>
 
-#include "core_coord.hpp"
+#include "common/core_coord.hpp"
 
 namespace tt::tt_metal {
 // Returns an ordered list of DRAM Bank ID to optimally placed worker cores. Placing DRAM reader or writer

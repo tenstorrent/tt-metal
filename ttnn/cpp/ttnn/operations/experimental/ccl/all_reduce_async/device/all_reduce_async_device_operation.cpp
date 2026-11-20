@@ -77,7 +77,7 @@ void AllReduceAsyncDeviceOperation::validate_on_program_cache_miss(
 
     if (args.one_shot) {
         TT_FATAL(
-            tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig()),
+            tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig(*input_tensor.device())),
             "all_reduce_async one_shot routes by hop count and needs a 1D (line or ring) fabric");
         TT_FATAL(args.ring_size >= 2, "all_reduce_async one_shot needs at least 2 devices, got {}", args.ring_size);
         TT_FATAL(!args.use_noc1_only, "all_reduce_async one_shot does not support use_noc1_only");
@@ -210,9 +210,11 @@ AllReduceAsyncDeviceOperation::create_op_performance_model(
     // --- Architecture and clock ---
     tt::ARCH arch = tt::ARCH::WORMHOLE_B0;
     int clock_rate_mhz = 1000;
+    auto fabric_config = tt::tt_fabric::FabricConfig::DISABLED;
     if (input_tensor.storage_type() == StorageType::DEVICE) {
         arch = input_tensor.device()->arch();
         clock_rate_mhz = input_tensor.device()->get_clock_rate_mhz();
+        fabric_config = tt::tt_fabric::GetFabricConfig(*input_tensor.device());
     }
 
     // --- Data sizes ---
@@ -254,7 +256,6 @@ AllReduceAsyncDeviceOperation::create_op_performance_model(
     }
     // AllReduce = ReduceScatter + AllGather: two sequential fabric phases, so their
     // bandwidths sum and their fills sum (the totals compete in the final max() below).
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
     const auto [rs_bw_cycles, rs_fill_cycles] = ttnn::ccl::estimate_fabric_transfer_cycles(
         arch, fabric_config, clock_rate_mhz, rs_bottleneck_bytes, num_links, num_hops);
     const auto [ag_bw_cycles, ag_fill_cycles] = ttnn::ccl::estimate_fabric_transfer_cycles(

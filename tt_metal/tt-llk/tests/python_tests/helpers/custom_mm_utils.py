@@ -14,13 +14,16 @@ silicon-validated `compressed_utils.run_compressed` emits.
 The sibling tests that shared these helpers (`custom_mm`, `sdpa_custom_mm`,
 `sdpa_custom_mm_reuse_dest_srcb`) are owned by #53361, which targets the promoted `experimental/`
 headers; the DEST-tile layout they needed went with them.
+
+The SrcB face-walk helpers at the end are shared by `test_custom_mm.py`, `test_sdpa_custom_mm.py` and
+`perf_custom_mm.py`.
 """
 
 import torch
 
-from .tile_constants import FACE_C_DIM
+from .tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM, FACE_C_DIM
 
-# Header contract: ct_dim 1..16, kt_dim even (2..256), in0 rows in {1, 2, 4, 8}.
+# Header contract: ct_dim 1..16, kt_dim even (2..254), in0 rows in {1, 2, 4, 8}.
 CT_DIMS = [1, 2, 4, 8, 16]
 KT_DIMS = [2, 4]
 # NOT rt_dim: the header contract pins rt_dim at 1, and in0 is a single partial tile. This axis is
@@ -81,3 +84,42 @@ def dense_result_rowmajor(res_tensor, ct_dim, in0_rows):
         .permute(2, 0, 1, 3)
         .reshape(in0_rows, ct_dim * 32)
     )
+
+
+# Matches CUSTOM_MM_MAX_KT_PER_WALK in llk_unpack_AB_custom_mm.h
+CUSTOM_MM_MAX_KT_PER_WALK = 255
+
+
+def face_walk_starts(kt):
+    """First k-tile of each SrcB face walk, split as _llk_unpack_AB_custom_mm_run_ splits kt."""
+    num_walks = -(-kt // CUSTOM_MM_MAX_KT_PER_WALK)
+    base_kt, long_walks = divmod(kt, num_walks)
+    starts, start = [], 0
+    for walk in range(num_walks):
+        starts.append(start)
+        start += base_kt + (1 if walk < long_walks else 0)
+    return starts
+
+
+def face_walk_operands(M, kt, ct):
+    """Exact bf16 integer operands. A is +-1 only on faces at the ends, the walk boundaries and every 256th face;
+    B is random in {-2, -1, 1, 2}.
+    """
+    torch.manual_seed(0)
+    num_faces = 2 * kt
+    sentinels = {0, 1, num_faces - 2, num_faces - 1}
+    for walk_start in face_walk_starts(kt)[1:]:
+        face = 2 * walk_start
+        sentinels |= {face - 2, face - 1, face, face + 1}
+    sentinels |= set(range(255, num_faces, 256))
+
+    torch_a = torch.zeros((M, kt * DEFAULT_TILE_R_DIM), dtype=torch.float32)
+    for face in sentinels:
+        value = 1.0 if (face // 256) % 2 == 0 else -1.0
+        for m in range(M):
+            torch_a[m, face * FACE_C_DIM + (face + m) % FACE_C_DIM] = value
+    shape = (kt * DEFAULT_TILE_R_DIM, ct * DEFAULT_TILE_C_DIM)
+    magnitude = torch.randint(1, 3, shape)
+    sign = torch.randint(0, 2, shape) * 2 - 1
+    torch_b = (magnitude * sign).to(torch.float32)
+    return torch_a, torch_b
