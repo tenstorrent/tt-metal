@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Decoder of the metal profiler's DRAM traffic log (dram_traffic.csv and dram_idle.csv).
+"""Decoder of the metal profiler's DRAM traffic logs (dram_traffic.csv, dram_idle.csv and dram_controller.csv).
 Counter names and the word size come from tools/include/perf_counters/dram_counters_*.h through headers.py.
 """
 
@@ -13,8 +13,15 @@ from . import headers
 
 TRAFFIC_LOG = "dram_traffic.csv"
 IDLE_LOG = "dram_idle.csv"
+CONTROLLER_LOG = "dram_controller.csv"
 FLAG_OVERLAPPED = 1
 FLAG_UNSETTLED = 2
+FLAG_INTERVAL_WRAPPED = 4
+
+# A full controller command moves 64 B; a narrower host access is still one command, so this is an upper bound.
+COMMAND_BYTES = 64
+READ_COMMANDS = ("RD_CMD", "RD_AP_CMD")
+WRITE_COMMANDS = ("WR_CMD", "WR_AP_CMD")
 
 READ_WORDS = ("NIU_SLV_RD_DATA_WORD_SENT",)
 WRITE_WORDS = (
@@ -179,6 +186,107 @@ def per_program(
     return result
 
 
+class ControllerRow(NamedTuple):
+    device: int
+    program: int
+    seq: int
+    flags: int
+    elapsed_ns: int
+    channel: int
+    tile: Tuple[int, int]
+    counter: str
+    value: int
+
+
+def read_controller(path) -> List[ControllerRow]:
+    """Rows of dram_controller.csv: nonzero activity monitor counts of one controller interval per launch."""
+    with open(path, newline="") as f:
+        return [
+            ControllerRow(
+                int(r["device_id"]),
+                int(r["program_id"]),
+                int(r["launch_seq"]),
+                int(r["flags"]),
+                int(r["elapsed_ns"]),
+                int(r["channel"]),
+                (int(r["dram_x"]), int(r["dram_y"])),
+                r["counter"],
+                int(r["value"]),
+            )
+            for r in csv.DictReader(f)
+        ]
+
+
+class ControllerTraffic(NamedTuple):
+    device: int
+    program: int
+    seq: int
+    flags: int
+    elapsed_ns: int
+    channels: Dict[int, Dict[str, int]]
+    read_commands: int
+    write_commands: int
+    activates: int
+
+    @property
+    def wrapped(self) -> bool:
+        return bool(self.flags & FLAG_INTERVAL_WRAPPED)
+
+    @property
+    def row_hit_rate(self) -> float:
+        """Share of read and write commands that found their row open."""
+        commands = self.read_commands + self.write_commands
+        return max(0.0, 1.0 - self.activates / commands) if commands else 0.0
+
+    @property
+    def command_bytes(self) -> int:
+        return (self.read_commands + self.write_commands) * COMMAND_BYTES
+
+
+def per_program_controller(rows: Iterable[ControllerRow]) -> List[ControllerTraffic]:
+    """One entry per launch in launch order: counters per channel and the command totals over all channels.
+    The flags of a launch are the union over its channels, so a wrap on any channel shows.
+    """
+    launches: Dict[tuple, List[ControllerRow]] = defaultdict(list)
+    for row in rows:
+        launches[(row.device, row.seq, row.program)].append(row)
+    result = []
+    for (device, seq, program), group in sorted(launches.items()):
+        channels: Dict[int, Dict[str, int]] = defaultdict(dict)
+        flags = 0
+        for row in group:
+            channels[row.channel][row.counter] = row.value
+            flags |= row.flags
+
+        def total(names):
+            return sum(c.get(n, 0) for c in channels.values() for n in names)
+
+        result.append(
+            ControllerTraffic(
+                device,
+                program,
+                seq,
+                flags,
+                group[0].elapsed_ns,
+                dict(channels),
+                total(READ_COMMANDS),
+                total(WRITE_COMMANDS),
+                total(("ACT_CMD",)),
+            )
+        )
+    return result
+
+
+def format_controller_table(programs: List[ControllerTraffic]) -> str:
+    lines = ["device program seq  rd_cmds  wr_cmds  activates  row_hit  flags"]
+    for p in programs:
+        lines.append(
+            f"{p.device:6d} {p.program:7d} {p.seq:3d} {p.read_commands:8d} {p.write_commands:8d} "
+            f"{p.activates:10d} {p.row_hit_rate:8.2f}  {p.flags}"
+        )
+    return "\n".join(lines)
+
+
 def format_table(programs: List[ProgramTraffic]) -> str:
     lines = [
         "device program seq   read_bytes  write_bytes  elapsed_us  rd_GB/s  wr_GB/s  flags"
@@ -210,6 +318,14 @@ def main(argv=None) -> int:
     idle_path = log_dir / IDLE_LOG
     idle = read_idle(idle_path) if idle_path.is_file() and not args.no_idle else None
     print(format_table(per_program(rows, args.arch, idle)))
+    controller_path = log_dir / CONTROLLER_LOG
+    if controller_path.is_file():
+        print()
+        print(
+            format_controller_table(
+                per_program_controller(read_controller(controller_path))
+            )
+        )
     return 0
 
 

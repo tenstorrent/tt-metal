@@ -56,6 +56,20 @@ constexpr Layout layout_for(Arch arch)
     return Layout {0, 0, 0, 1, 0, 0, 0};
 }
 
+constexpr ControllerLayout controller_layout_for(Arch arch)
+{
+    return arch == Arch::BLACKHOLE ? blackhole::controller_layout : ControllerLayout {0, 0, 0, 0, 0, 0};
+}
+
+constexpr ControllerTable controller_table(Arch arch)
+{
+    if (arch == Arch::BLACKHOLE)
+    {
+        return ControllerTable {blackhole::controller_counters.data(), blackhole::controller_counters.size()};
+    }
+    return ControllerTable {nullptr, 0};
+}
+
 // Register address of a counter on a tile with the given noc0 y: the offset moves with the NoC instance and the
 // register instance of the tile.
 constexpr std::uint64_t niu_address(Arch arch, std::uint32_t noc, std::uint32_t tile_noc0_y, std::uint32_t offset)

@@ -57,4 +57,29 @@ struct Layout
     std::uint32_t num_nocs;
 };
 
+// A counter of the memory controller's activity monitor: a 32-bit register that holds the count of the last capture
+// interval, read through the register window of the DRAM tile.
+struct ControllerEntry
+{
+    const char* name;
+    std::uint32_t address;
+};
+
+struct ControllerTable
+{
+    const ControllerEntry* data;
+    std::size_t size;
+};
+
+// Registers that frame a capture interval. A zero register_window means the architecture has no known controller map.
+struct ControllerLayout
+{
+    std::uint64_t register_window;       // OR-ed into every controller register address
+    std::uint32_t interval;              // interval length in memory clocks; 0 stops counting and latches the counts
+    std::uint32_t interval_done;         // nonzero after an interval completed, cleared by the read
+    std::uint32_t axi_control;           // AXI port resets and clock gating of the controller
+    std::uint32_t axi_reset_bits;        // all set on a controller whose registers answer through this tile
+    std::uint32_t axi_dynamic_gate_bits; // a dynamically gated port's monitor stops counting with its clock
+};
+
 } // namespace llk::perf::dram

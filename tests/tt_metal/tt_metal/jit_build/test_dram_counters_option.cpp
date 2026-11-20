@@ -5,6 +5,9 @@
 #include <gtest/gtest.h>
 
 #include <cstdlib>
+#include <optional>
+#include <set>
+#include <string>
 
 #include "impl/profiler/dram_counters.hpp"
 #include "llrt/rtoptions.hpp"
@@ -13,11 +16,18 @@ namespace tt::llrt {
 namespace {
 
 constexpr const char* kEnv = "TT_METAL_PROFILE_DRAM_COUNTERS";
+constexpr const char* kEnvController = "TT_METAL_PROFILE_DRAM_CONTROLLER";
 
 class DramCountersOptionTest : public ::testing::Test {
 protected:
-    void SetUp() override { unsetenv(kEnv); }
-    void TearDown() override { unsetenv(kEnv); }
+    void SetUp() override {
+        unsetenv(kEnv);
+        unsetenv(kEnvController);
+    }
+    void TearDown() override {
+        unsetenv(kEnv);
+        unsetenv(kEnvController);
+    }
 
     static RunTimeOptions with(const char* value) {
         setenv(kEnv, value, 1);
@@ -46,6 +56,22 @@ TEST_F(DramCountersOptionTest, RawSkipsCalibration) {
 TEST_F(DramCountersOptionTest, ZeroStaysDisabled) { EXPECT_FALSE(with("0").get_profiler_dram_counters_enabled()); }
 
 TEST_F(DramCountersOptionTest, DoesNotForceTheDeviceProfiler) { EXPECT_FALSE(with("1").get_profiler_enabled()); }
+
+TEST_F(DramCountersOptionTest, ControllerOffByDefault) {
+    EXPECT_FALSE(with("1").get_profiler_dram_controller_enabled());
+}
+
+TEST_F(DramCountersOptionTest, ControllerRidesOnTheTileCapture) {
+    setenv(kEnvController, "1", 1);
+    RunTimeOptions opts = with("raw");
+    EXPECT_TRUE(opts.get_profiler_dram_controller_enabled());
+    EXPECT_TRUE(opts.get_profiler_dram_counters_enabled());
+}
+
+TEST_F(DramCountersOptionTest, ControllerAloneIsRejected) {
+    setenv(kEnvController, "1", 1);
+    EXPECT_ANY_THROW(RunTimeOptions{});
+}
 
 }  // namespace
 }  // namespace tt::llrt
@@ -156,6 +182,38 @@ TEST(DramCountersDiff, WriteCountersNeverGetSelfCorrection) {
     ASSERT_EQ(deltas.size(), 1u);
     EXPECT_EQ(deltas[0].words, 9u);
     EXPECT_EQ(deltas[0].self_words, 0u);
+}
+
+TEST(DramCountersController, OnlyBlackholeHasAMap) {
+    const auto bh = dc::controller_layout_for(dc::Arch::BLACKHOLE);
+    EXPECT_EQ(bh.register_window, 1ull << 40);
+    EXPECT_GT(dc::controller_table(dc::Arch::BLACKHOLE).size, 0u);
+    EXPECT_EQ(dc::controller_layout_for(dc::Arch::WORMHOLE).register_window, 0u);
+    EXPECT_EQ(dc::controller_table(dc::Arch::WORMHOLE).size, 0u);
+    EXPECT_EQ(dc::controller_table(dc::Arch::QUASAR).size, 0u);
+}
+
+TEST(DramCountersController, CountersAreDistinctMonitorRegisters) {
+    const auto table = dc::controller_table(dc::Arch::BLACKHOLE);
+    const auto l = dc::controller_layout_for(dc::Arch::BLACKHOLE);
+    std::set<uint32_t> seen;
+    std::set<std::string> names;
+    for (size_t i = 0; i < table.size; i++) {
+        EXPECT_TRUE(seen.insert(table.data[i].address).second) << table.data[i].name;
+        EXPECT_TRUE(names.insert(table.data[i].name).second) << table.data[i].name;
+        EXPECT_EQ(table.data[i].address & 3u, 0u);
+        EXPECT_NE(table.data[i].address, l.interval);
+        EXPECT_NE(table.data[i].address, l.interval_done);
+    }
+}
+
+TEST(DramCountersController, FirstPortWithEveryAxiResetReleasedAnswers) {
+    const auto l = dc::controller_layout_for(dc::Arch::BLACKHOLE);
+    EXPECT_EQ(answering_port({0u, 0x10007u, 0x10007u}, l), std::optional<size_t>(1));
+    EXPECT_EQ(answering_port({0x7u}, l), std::optional<size_t>(0));
+    EXPECT_FALSE(answering_port({0u, 0x3u, 0x10000u}, l).has_value());
+    EXPECT_FALSE(answering_port({}, l).has_value());
+    EXPECT_FALSE(answering_port({0x7u}, dc::controller_layout_for(dc::Arch::WORMHOLE)).has_value());
 }
 
 TEST(DramCountersIdleFit, ConstantRateRecoversBothTerms) {
