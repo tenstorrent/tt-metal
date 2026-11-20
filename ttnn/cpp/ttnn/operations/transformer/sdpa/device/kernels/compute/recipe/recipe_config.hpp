@@ -17,6 +17,9 @@ constexpr bool lofi = get_named_compile_time_arg_val("recipe_lofi") != 0;
 constexpr bool fused = get_named_compile_time_arg_val("recipe_fused") != 0;
 // Dense additive attn_mask.
 constexpr bool mask = get_named_compile_time_arg_val("recipe_mask") != 0;
+// The attn_mask's factor 1 / scale (FP32 bits; 0: none): the exps scale masked scores by `scale`, so each mask tile is
+// multiplied by its inverse (in FP32, on the pack thread) before the L1 add, and the mask enters softmax unscaled.
+constexpr uint32_t mask_scale = get_named_compile_time_arg_val("recipe_mask_scale");
 // Dense key-range calls (causal, sliding window, chunked, windowed): the reader's per-Q-chunk key range and edge
 // chunk masks.
 constexpr bool krange = get_named_compile_time_arg_val("recipe_krange") != 0;

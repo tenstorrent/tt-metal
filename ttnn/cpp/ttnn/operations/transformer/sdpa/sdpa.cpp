@@ -2,17 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cmath>
 #include <mutex>
 #include <utility>
 
 #include "ttnn/operations/transformer/sdpa/sdpa.hpp"
 
-#include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
-#include "ttnn/operations/transformer/sdpa/device/recipe/sdpa_recipe_dense.hpp"
 #include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_device_operation.hpp"
@@ -83,53 +79,13 @@ ttnn::Tensor scaled_dot_product_attention(
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
-    // PyTorch semantics: softmax(Q·Kᵀ * scale + mask) · V, where `scale` applies
-    // to Q·Kᵀ only and the mask is added unscaled.
-    //
-    // The compute kernel folds `scale` into the softmax exponent as a
-    // performance optimization:
-    //     exp((QK + mask - row_max) * scale)
-    //   = exp(QK*scale + mask*scale - row_max*scale)
-    // which scales the mask along with QK, diverging from PyTorch semantics.
-    //
-    // Pre-multiply the mask by 1/scale so the kernel's subsequent *scale
-    // restores the original mask magnitude inside softmax. QK remains scaled
-    // exactly once.
-    //
-    // Windowed mode synthesizes a {0, -inf} block-diagonal mask on-device from cu_window_seqlens;
-    // pre-scaling is unnecessary (0/-inf are scale-invariant), so attn_mask is left empty.
-    std::optional<ttnn::Tensor> effective_mask = attn_mask;
-    if (attn_mask.has_value()) {
-        // Reject an unsupported mask before the pre-scale dispatches anything.
-        ttnn::operations::transformer::sdpa::detail::validate_dense_recipe_mask(
-            input_tensor_q,
-            input_tensor_k,
-            *attn_mask,
-            precision,
-            is_causal,
-            sliding_window_size,
-            cu_window_seqlens.has_value());
-        const float effective_scale =
-            scale.value_or(1.0f / std::sqrt(static_cast<float>(input_tensor_q.padded_shape()[-1])));
-        if (effective_scale != 1.0f) {
-            // The FP32-state recipes (BALANCED, ACCURATE) add the mask to FP32 scores: unless 1/scale is a power of
-            // two (exact in the mask's own format), pre-scale in FP32.
-            int exponent = 0;
-            const bool exact = std::frexp(1.0f / effective_scale, &exponent) == 0.5f;
-            const bool fp32_state =
-                precision == SDPAPrecision::BALANCED || precision == SDPAPrecision::ACCURATE;
-            const auto& source = (fp32_state && !exact && attn_mask->dtype() != DataType::FLOAT32)
-                                     ? ttnn::typecast(attn_mask.value(), DataType::FLOAT32)
-                                     : attn_mask.value();
-            effective_mask = ttnn::multiply(source, 1.0f / effective_scale);
-        }
-    }
-
+    // PyTorch semantics: softmax(Q·Kᵀ * scale + mask) · V. The recipe kernels fold `scale` into the exps and
+    // multiply each attn_mask tile by 1 / scale on device, so the mask enters softmax unscaled.
     return ttnn::prim::sdpa(
         input_tensor_q,
         input_tensor_k,
         input_tensor_v,
-        effective_mask,
+        attn_mask,
         std::nullopt,  // page_table
         attention_sink,
         is_causal,

@@ -64,8 +64,33 @@ inline void mask_recipe_diagonal() {
         }
     }
 }
+
+// Dense attn_mask: one mask tile in DST times 1 / scale (FP32 bits), the whole tile per call (VectorMode::None).
+inline void scale_recipe_mask(uint32_t inverse_scale_bits) {
+    const sfpi::vFloat inverse_scale = Converter::as_float(inverse_scale_bits);
+#pragma GCC unroll 8
+    for (uint32_t i = 0; i < 32; ++i) {
+        sfpi::dst_reg[0] = sfpi::dst_reg[0] * inverse_scale;
+        sfpi::dst_reg++;
+    }
+}
 }  // namespace ckernel::sfpu
 #endif
+
+// Dense attn_mask: multiply the `tiles` mask tiles MATH copied to DST by 1 / scale before PACK adds them onto the
+// scores (recipe_add_attn_mask). PACK owns the SFPU (see mask_recipe_tail_body).
+ALWI void scale_recipe_mask_tiles(uint32_t tiles) {
+    if constexpr (recipe::mask_scale != 0) {
+        PACK({
+            addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+            for (uint32_t i = 0; i < tiles; ++i) {
+                SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
+                    DST_SYNC_MODE, DST_ACCUM_MODE, scale_recipe_mask, i, VectorMode::None, recipe::mask_scale);
+            }
+            TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU);
+        })
+    }
+}
 
 static uint32_t recipe_k_tile_offset;
 // Ring: valid key rows of the current K chunk, and the rows in one full K chunk (the ring hook masks only chunks

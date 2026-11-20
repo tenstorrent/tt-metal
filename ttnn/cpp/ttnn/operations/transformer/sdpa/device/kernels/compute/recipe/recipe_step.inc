@@ -739,11 +739,10 @@ ALWI void normalize_row_streaming(uint32_t cur_sum_cb, uint32_t cur_out_cb, uint
     }
 }
 
-// Dense additive attn_mask (legacy SDPA contract): L1-accumulate one QK row group's mask tiles onto
-// the packed scores in cb_qkt_im, before the row max. The reader streams one Q chunk x K chunk of
-// mask per K chunk into CB 15, one Q tile row at a time. The add runs in the packer's L1
-// accumulator (the same adder legacy SDPA uses); no recipe SFPU/FPU arithmetic changes, and
-// unmasked builds compile this out.
+// Dense additive attn_mask (legacy SDPA contract): L1-accumulate one QK row group's mask tiles, times 1 / scale
+// (recipe::mask_scale), onto the packed scores in cb_qkt_im, before the row max. The reader streams one Q chunk x K
+// chunk of mask per K chunk into CB 15, one Q tile row at a time. The add runs in the packer's L1 accumulator (the same
+// adder legacy SDPA uses); no recipe SFPU/FPU arithmetic changes, and unmasked builds compile this out.
 constexpr uint32_t kRecipeMaskCb = 15;
 // The reader always pushes whole group_rows groups (an odd chunk's single-row tail group carries a
 // zero padding row), so waits/pops stay group-aligned in a one- or two-group CB.
@@ -765,6 +764,7 @@ static __attribute__((noinline, noclone)) void recipe_add_attn_mask(uint32_t row
         }
         tile_regs_commit();
         tile_regs_wait();
+        scale_recipe_mask_tiles(n);
         for (uint32_t j = 0; j < n; ++j) {
             pack_tile<true>(j, cb_qkt_im, out_base + i + j);
         }

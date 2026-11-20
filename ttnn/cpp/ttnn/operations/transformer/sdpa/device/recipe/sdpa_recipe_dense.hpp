@@ -26,17 +26,6 @@ DenseRecipeCall dense_recipe_call(const ttnn::prim::SDPAParams& attrs, const ttn
 // The precision policy of a call (attrs.precision, STANDARD when unset).
 PrecisionPolicy dense_recipe_policy(const ttnn::prim::SDPAParams& attrs, const ttnn::prim::SDPAInputs& tensors);
 
-// The attn_mask checks of a dense call, run by scaled_dot_product_attention before it pre-scales the mask (so a
-// rejected call dispatches nothing).
-void validate_dense_recipe_mask(
-    const Tensor& q,
-    const Tensor& k,
-    const Tensor& mask,
-    std::optional<SDPAPrecision> precision,
-    bool is_causal,
-    std::optional<uint32_t> sliding_window_size,
-    bool windowed);
-
 // Runs before the program-cache lookup: fills the chunk sizes the caller left to the op (attrs.program_config) and
 // the L1 budget (attrs.recipe_l1_budget), both part of the program hash.
 void resolve_dense_recipe(ttnn::prim::SDPAParams& attrs, const ttnn::prim::SDPAInputs& tensors);

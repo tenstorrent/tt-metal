@@ -255,6 +255,7 @@ ProgramDescriptor recipe_compute_program(
              {"recipe_lofi", policy.selection.recipe == Recipe::E ? 1u : 0u},
              {"recipe_fused", fused ? 1u : 0u},
              {"recipe_mask", 0},
+             {"recipe_mask_scale", 0},
              {"recipe_krange", 0},
              {"recipe_sink_cb", 0},
              {"recipe_sink_bf16", 0},
@@ -307,7 +308,7 @@ PrecisionPolicy resolve_recipe_policy(
     TT_FATAL(q.storage_type() == StorageType::DEVICE, "SDPA recipes require device inputs");
     require_recipe_sfploadmacro();
     // The exps take scale * (s - m) with s - m <= 0, so the scale must be positive; it is folded into the exp
-    // (and the attn_mask is pre-multiplied by 1/scale), never into Q.
+    // (and compute multiplies the attn_mask by 1/scale), never into Q.
     TT_FATAL(
         !scale || (std::isfinite(*scale) && *scale > 0.0f),
         "SDPA recipes require a finite positive scale, got {}",
@@ -649,7 +650,7 @@ ProgramDescriptor recipe_program(
     TT_FATAL(
         segments.size() == 1 || !options.output_concat_heads,
         "SDPA recipe output_concat_heads is supported on the dense path only");
-    // The mask itself was validated (validate_recipe_mask) before its pre-scale.
+    // The mask itself was validated (validate_recipe_mask) before the program-cache lookup.
     TT_FATAL(!attn_mask || segments.size() == 1, "SDPA recipe masks are supported on the dense (non-joint) path only");
     if (keyed) {
         TT_FATAL(segments.size() == 1, "SDPA recipe key ranges are supported on the dense (non-joint) path only");
@@ -737,6 +738,14 @@ ProgramDescriptor recipe_program(
             .format_descriptors = {{.buffer_index = kRecipeMaskCb, .data_format = mask_format, .page_size = mask_page}}});
         auto& compute_args = program.kernels.front().named_compile_time_args;
         set_named_arg(compute_args, "recipe_mask", 1);
+        if (attn_mask) {
+            // PyTorch adds the mask to the scaled scores; the exps scale the masked scores, so compute multiplies each
+            // mask tile by 1 / scale (in FP32) first. No host-side tensor op touches the mask.
+            const float inverse_scale = 1.0f / scale.value_or(1.0f / std::sqrt(static_cast<float>(d_tiles * 32)));
+            if (inverse_scale != 1.0f) {
+                set_named_arg(compute_args, "recipe_mask_scale", std::bit_cast<uint32_t>(inverse_scale));
+            }
+        }
         if (keyed) {
             set_named_arg(compute_args, "recipe_krange", 1);
         }
