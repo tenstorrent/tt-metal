@@ -29,7 +29,7 @@ from ....models.transformers.minimax_h3.sol_prepass import (
 from ....models.transformers.minimax_h3.sol_prepass_fused import SolPrepassFused, torch_reference_chunk
 from ....parallel.manager import CCLManager
 from ....utils.tensor import from_torch
-from .common import GALAXY_RING
+from .common import GALAXY_RING, _ring_8k
 
 H = 14
 D = 128
@@ -206,3 +206,116 @@ def test_sol_prepass_fused_production_geometry(
         v=v,
     )
     assert r["agree_real"] >= max(0.985, r.get("agree_ttnn_ref", 1.0) - 0.002), r
+
+
+# Runtime prompt length: one padded geometry (bucket), three logical lengths with their own sink and prefix-spread block
+# map, the production pre-pass configuration (resident: the compact gather-form mask, no bias, head weights).
+_RTLEN_ROWS, _RTLEN_K_CHUNK = 1184, 512
+_RTLEN_SINKS = (300, 453, 200)
+
+
+def _rtlen_cases(S: int):
+    from ....models.transformers.minimax_h3.prefix_spread import prefix_spread_block_map
+
+    full = S * _RTLEN_ROWS
+    out = []
+    for n, sink in zip((full, full - 472, (S - 1) * _RTLEN_ROWS - 40), _RTLEN_SINKS):
+        geo = SolGeometry(shards=S, rows=_RTLEN_ROWS, logical_n=n, q_chunk=64, k_chunk=_RTLEN_K_CHUNK)
+        bmap = prefix_spread_block_map(rows=_RTLEN_ROWS, shards=S, logical_n=n, prefix_rows=sink)
+        out.append((geo, sink, bmap))
+    return out
+
+
+def _rtlen_prepass(mesh_device, sp_axis, ccl_manager):
+    return SolPrepassFused(
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        sp_axis=sp_axis,
+        tau=1.2,
+        mode="compact",
+        emit_bias=False,
+        head_weights=True,
+    )
+
+
+def _rtlen_outputs(mesh_device, sp_axis, tp_axis, out) -> dict:
+    names = ("block_mask", "pooled_k", "pooled_v", "head_weights")
+    return {name: _to_host(mesh_device, sp_axis, tp_axis, out[name]).float() for name in names if name in out}
+
+
+_RING_8K_TRACE_SMALL = {**_ring_8k, "trace_region_size": 64 * 1024 * 1024}
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    [pytest.param((4, 8), 1, 0, 2, _RING_8K_TRACE_SMALL, ttnn.Topology.Ring, False, id="4x8_trace")],
+    indirect=["mesh_device", "device_params"],
+)
+def test_sol_prepass_fused_runtime_len(
+    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, reset_seeds, monkeypatch
+):
+    """Three logical lengths of one padded geometry, each with its own sink and block map: the persistent pre-pass
+    (one state, constants rewritten in place) builds its programs once and gives the same bits as a fresh pre-pass per
+    length; a trace captured at one length replays at the others after only `prepare()`."""
+    S = tuple(mesh_device.shape)[sp_axis]
+    scale = D**-0.5
+    cases = _rtlen_cases(S)
+    q, k, v = _structured_qkv(S, _RTLEN_ROWS, seed=5)
+    tq, tk, tv = (_upload(mesh_device, sp_axis, x) for x in (q, k, v))
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+    monkeypatch.setattr(SolPrepassFused, "keep_across_generations", False)
+
+    refs = []
+    for geo, sink, bmap in cases:
+        SolPrepassFused.new_generation()  # drops the shared state: a fresh pre-pass per length
+        pre = _rtlen_prepass(mesh_device, sp_axis, ccl_manager)
+        pre.block_map = bmap
+        pre.prepare(geo, sink, scale)
+        refs.append(_rtlen_outputs(mesh_device, sp_axis, tp_axis, pre(tq, tk, tv, scale=scale)))
+        ttnn.synchronize_device(mesh_device)
+
+    monkeypatch.setattr(SolPrepassFused, "keep_across_generations", True)
+    SolPrepassFused._shared.clear()
+    pre = _rtlen_prepass(mesh_device, sp_axis, ccl_manager)
+    added = []
+    for i, (geo, sink, bmap) in enumerate(cases):
+        SolPrepassFused.new_generation()  # a new request, as MiniMaxH3Attention.sol_logical_n's setter does
+        pre.block_map = bmap
+        before = mesh_device.num_program_cache_entries()
+        pre.prepare(geo, sink, scale)
+        got = _rtlen_outputs(mesh_device, sp_axis, tp_axis, pre(tq, tk, tv, scale=scale))
+        ttnn.synchronize_device(mesh_device)
+        added.append(mesh_device.num_program_cache_entries() - before)
+        for name, ref in refs[i].items():
+            same = torch.equal(got[name], ref)
+            logger.info(f"[prepass runtime_len] logical_n {geo.logical_n} {name}: bit-identical {same}")
+            assert same, f"logical_n {geo.logical_n}: {name} differs from the fresh per-length pre-pass"
+    assert len(SolPrepassFused._shared) == 1, f"{len(SolPrepassFused._shared)} states for one padded geometry"
+    logger.info(f"[prepass runtime_len] program cache entries added per length: {added}")
+    assert all(a == 0 for a in added[1:]), f"program cache entries added per length {added}: expected 0 after the first"
+
+    # Trace: captured at the first length, replayed at the others after prepare() rewrote the constants.
+    geo, sink, bmap = cases[0]
+    pre.block_map = bmap
+    pre.prepare(geo, sink, scale)
+    pre(tq, tk, tv, scale=scale)
+    ttnn.synchronize_device(mesh_device)
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    out = pre(tq, tk, tv, scale=scale)
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    try:
+        for i in (1, 2, 0, 2):
+            geo, sink, bmap = cases[i]
+            pre.block_map = bmap
+            pre.prepare(geo, sink, scale)
+            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            got = _rtlen_outputs(mesh_device, sp_axis, tp_axis, out)
+            for name, ref in refs[i].items():
+                same = torch.equal(got[name], ref)
+                logger.info(
+                    f"[prepass runtime_len trace] replay at logical_n {geo.logical_n} {name}: bit-identical {same}"
+                )
+                assert same, f"trace replay at logical_n {geo.logical_n}: {name} differs"
+    finally:
+        ttnn.release_trace(mesh_device, tid)

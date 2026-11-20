@@ -22,7 +22,7 @@ namespace {
 constexpr uint32_t cb_kc = 0, cb_q = 1, cb_ones = 2, cb_qsel = 3, cb_ksel = 4, cb_erow = 5, cb_constor = 6, cb_colc = 7,
                    cb_part = 8, cb_mom = 9, cb_qsq = 10, cb_thrcol = 11, cb_thr = 12, cb_exact = 13, cb_block01 = 14,
                    cb_chunk2 = 15, cb_mask_out = 16, cb_brow = 17, cb_bias_out = 18, cb_var = 20, cb_union_out = 21,
-                   cb_recv = 23, cb_pl = 24, cb_shsel = 29;
+                   cb_recv = 23, cb_pl = 24, cb_nv = 25, cb_shsel = 29;
 constexpr uint32_t PART_T = 8;
 constexpr uint32_t HALF_NEG = 0xBF000000u;
 constexpr uint32_t SLAB = 3;
@@ -43,7 +43,6 @@ void kernel_main() {
     constexpr uint32_t TAU = get_compile_time_arg_val(11);
     constexpr uint32_t EPS2 = get_compile_time_arg_val(12);
     constexpr uint32_t NEG = get_compile_time_arg_val(13);
-    constexpr uint32_t INV_NV = get_compile_time_arg_val(14);
     constexpr uint32_t TQ = get_compile_time_arg_val(15);
     constexpr uint32_t NBGT = S * NBPT;
     constexpr uint32_t UNITS_PER_SHARD_ = get_compile_time_arg_val(19);
@@ -68,6 +67,15 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_q, cb_kc, cb_bias_out);
     if (unit_count == 0) {
         return;
+    }
+    // 1 / (valid blocks) as fp32 bits, word 1 of the geometry page (the writer reads it from DRAM at every dispatch):
+    // a runtime value, so one program serves every logical length of a padded geometry.
+    uint32_t inv_nv;
+    {
+        CircularBuffer nv(cb_nv);
+        nv.wait_front(1);
+        inv_nv = nv.read_tile_value(0, 1);
+        nv.pop_front(1);
     }
     CircularBuffer kcb(cb_kc), qb(cb_q), ones(cb_ones), qsel(cb_qsel), ksel(cb_ksel), erow(cb_erow),
         constor(cb_constor), colc(cb_colc), part(cb_part), mom(cb_mom), qsq(cb_qsq), thrcol(cb_thrcol), thr(cb_thr),
@@ -177,7 +185,7 @@ void kernel_main() {
             }
             binop_with_scalar_tile_init();
             for (uint32_t i = 0; i < QUAD; ++i) {
-                mul_unary_tile(i, INV_NV);
+                mul_unary_tile(i, inv_nv);
             }
             tile_regs_commit();
             tile_regs_wait();

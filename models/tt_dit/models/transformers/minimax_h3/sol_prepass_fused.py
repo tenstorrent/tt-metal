@@ -11,13 +11,16 @@ Same outputs and semantics as :class:`sol_prepass.SolPrepass` (its ``torch_refer
 * ``sol_route`` (``sol_kernels/sol_route_*.cpp``): moments, thresholds, proxy scores, Q-chunk union, K-chunk union,
   uint32 mask and the column-bias tiles in one program; replaces the chain of small ttnn ops in SolPrepass.
 
-Geometry constants are built on host once per geometry (cached per mesh, like SolPrepass) and the program
+Geometry constants are built on host and uploaded once per padded geometry (cached per mesh) and the program
 descriptors are cached with them; per call only the buffer addresses are patched (generic_op re-applies runtime
-args on a program-cache hit).
+args on a program-cache hit). The logical length, the sink and the block map only change the constants' contents
+(rewritten in place) and the runtime 1 / n_valid_blocks the route kernels read from the geometry tensor, so one
+program and one set of buffers serve every length of a padded geometry, trace replays included.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import struct
@@ -249,10 +252,14 @@ class SolPrepassFused:
         device = self.mesh_device if on_device else None
         return ttnn.from_torch(t, dtype=dtype, layout=layout, device=device, mesh_mapper=mapper)
 
-    def _geo_host(self, geo: SolGeometry) -> torch.Tensor:
-        """Valid rows per shard, the pool kernel's `geo` operand (one int per shard in a 32-int row)."""
+    @staticmethod
+    def _geo_host(geo: SolGeometry, n_valid_blocks: float) -> torch.Tensor:
+        """The `geo` operand, one 32-word row per shard: word 0 the shard's valid rows (pool kernel), word 1 the fp32
+        bits of 1 / n_valid_blocks (route kernels), stored as int32 bits."""
+        inv_nv = _f32_bits(1.0 / n_valid_blocks)
+        inv_nv = inv_nv - (1 << 32) if inv_nv >= 1 << 31 else inv_nv
         return torch.tensor(
-            [[[[max(0, min(geo.rows, geo.logical_n - s * geo.rows))] + [0] * 31]] for s in range(geo.shards)],
+            [[[[max(0, min(geo.rows, geo.logical_n - s * geo.rows)), inv_nv] + [0] * 30]] for s in range(geo.shards)],
             dtype=torch.int32,
         )
 
@@ -278,10 +285,29 @@ class SolPrepassFused:
     # Prefix spread (prefix_spread.py): the logical block of each packed block, set by the attention; None = identity.
     block_map: tuple[int, ...] | None = None
 
+    def _host_constants(self, geo: SolGeometry, sink_tokens, scale: float) -> tuple[dict, dict]:
+        """(host constants by `_CONST_SPECS` name, the build's scalars) for one logical length / sink / block map."""
+        c = build_fused_constants(
+            geo,
+            band=self.band,
+            sink_tokens=sink_tokens,
+            force_first_chunk=self.force_first_chunk,
+            scale=scale,
+            dense_prefix_queries=self.dense_prefix_queries,
+            block_map=self.block_map,
+        )
+        host = {name: c[name] for name in self._CONST_SPECS if name != "geo"}
+        host["geo"] = self._geo_host(geo, c["n_valid_blocks"])
+        return host, {"n_valid_blocks": c["n_valid_blocks"], "nkcl": c["nkcl"]}
+
     def prepare(self, geo: SolGeometry, sink_tokens: int, scale: float) -> None:
         key = (geo, sink_tokens, scale) if self.block_map is None else (geo, sink_tokens, scale, self.block_map)
         if key == self._key:
             return
+        # One state per padded geometry: the buffers, shapes and programs do not depend on the logical length, the sink
+        # or the block map, which only change the constants' contents (rewritten in place when they change, so a trace
+        # captured at one length replays at any other) and the runtime 1 / n_valid_blocks in the geometry tensor.
+        bucket = (dataclasses.replace(geo, logical_n=geo.shards * geo.rows), scale)
         shared_key = (
             id(self.mesh_device),
             self.sp_axis,
@@ -294,56 +320,33 @@ class SolPrepassFused:
             self.emit_chunk_union,
             self.route_units_per_shard,
             str(self.math_fidelity),
-            key,
+            bucket,
         )
         st = SolPrepassFused._shared.get(shared_key)
-        if st is not None and SolPrepassFused.keep_across_generations:
-            if st.get("generation") != SolPrepassFused._generation:
-                self._refresh_constants(st)
-                st["generation"] = SolPrepassFused._generation
         if st is None:
-            c = build_fused_constants(
-                geo,
-                band=self.band,
-                sink_tokens=sink_tokens,
-                force_first_chunk=self.force_first_chunk,
-                scale=scale,
-                dense_prefix_queries=self.dense_prefix_queries,
-                block_map=self.block_map,
-            )
+            host, scalars = self._host_constants(geo, sink_tokens, scale)
             st = {
-                "geo": geo,
                 "scale": scale,
-                "n_valid_blocks": c["n_valid_blocks"],
-                "nkcl": c["nkcl"],
-                "const_or": self._upload(c["const_or"], shard=True),
-                "colconst": self._upload(c["colconst"], shard=False),
-                "qsel": self._upload(c["qsel"], shard=False),
-                "ksel": self._upload(c["ksel"], shard=False),
-                "erow": self._upload(c["erow"], shard=False),
-                "ones": self._upload(c["ones"], shard=False),
-                "shsel": self._upload(c["shsel"], shard=False),
-                "geo": self._upload(
-                    torch.tensor(
-                        [
-                            [[[max(0, min(geo.rows, geo.logical_n - s * geo.rows))] + [0] * 31]]
-                            for s in range(geo.shards)
-                        ],
-                        dtype=torch.int32,
-                    ),
-                    shard=True,
-                    dtype=ttnn.uint32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                ),
+                **scalars,
                 "pool_prog": {},
                 "route_prog": None,
                 "pool_outs": None,
+                "host_consts": host,
+                "len_key": key,
+                "generation": SolPrepassFused._generation,
             }
-            if SolPrepassFused.keep_across_generations:
-                st["host_consts"] = {name: c[name] for name in self._CONST_SPECS if name != "geo"}
-                st["host_consts"]["geo"] = self._geo_host(geo)
-                st["generation"] = SolPrepassFused._generation
+            for name, (shard, dtype, layout) in self._CONST_SPECS.items():
+                st[name] = self._upload(host[name], shard=shard, dtype=dtype, layout=layout)
             SolPrepassFused._shared[shared_key] = st
+        elif st["len_key"] != key:
+            st["host_consts"], scalars = self._host_constants(geo, sink_tokens, scale)
+            st.update(scalars)
+            self._refresh_constants(st)
+            st["len_key"] = key
+            st["generation"] = SolPrepassFused._generation
+        elif SolPrepassFused.keep_across_generations and st["generation"] != SolPrepassFused._generation:
+            self._refresh_constants(st)
+            st["generation"] = SolPrepassFused._generation
         old = getattr(self, "_state", None)
         if old is not None and old is not st and old.get("pool_outs"):
             for t in {id(t): t for t in old["pool_outs"]}.values():
@@ -518,7 +521,7 @@ class SolPrepassFused:
             _f32_bits(self.tau),
             _f32_bits(VAR_EPS / (log2_scale * log2_scale)),
             _f32_bits(NEG),
-            _f32_bits(1.0 / st["n_valid_blocks"]),
+            0,  # was 1 / n_valid_blocks: now read at run time from the geometry tensor (word 1)
             TQ,
         ]
         ins = [q_bar, kc, st["const_or"], st["colconst"], st["qsel"], st["ksel"], st["erow"], st["ones"]]
@@ -528,6 +531,7 @@ class SolPrepassFused:
         hw = self._route_hw if self._route_hw is not None else mask
         hw_on = int(self._route_hw is not None)
         acc_out += [hw_on, geo.nb] + list(ttnn.TensorAccessorArgs(hw).get_compile_time_args())
+        acc_out += list(ttnn.TensorAccessorArgs(st["geo"]).get_compile_time_args())
         units_per_shard = 1 if (self.route_units_per_shard and mode == 1) else 0
         units = H * S if units_per_shard else H * NQCT
         self.route_units = (units, units_per_shard)
@@ -587,7 +591,8 @@ class SolPrepassFused:
         row_bytes = geo.nkc_pad * 4
         cbs.append(self._cb(19, 32, cores, page_size=row_bytes, dtype=ttnn.uint32))
         cbs.append(self._cb(22, SCRATCH_PAGES, cores, page_size=geo.nb_pad * 4, dtype=ttnn.uint32))
-        total = sum(n for n in sizes.values()) * TILE_BYTES + 32 * row_bytes + SCRATCH_PAGES * geo.nb_pad * 4
+        cbs.append(self._cb(25, 1, cores, page_size=128, dtype=ttnn.uint32))  # geometry page: 1 / n_valid_blocks
+        total = sum(n for n in sizes.values()) * TILE_BYTES + 32 * row_bytes + SCRATCH_PAGES * geo.nb_pad * 4 + 128
         total += 2 * mask_rows_bytes if units_per_shard else 0
         if total > L1_CB_BUDGET:
             raise ValueError(f"sol_route circular buffers need {total} B of L1 (> {L1_CB_BUDGET}); geometry too large")
@@ -600,7 +605,9 @@ class SolPrepassFused:
             [0] * 10 + core_xy + rects,
             ttnn.ReaderConfigDescriptor(),
         )
-        writer = self._kernel("sol_route_writer.cpp", cores, ct + acc_out, [], [0, 0, 0], ttnn.WriterConfigDescriptor())
+        writer = self._kernel(
+            "sol_route_writer.cpp", cores, ct + acc_out, [], [0, 0, 0, 0, 0], ttnn.WriterConfigDescriptor()
+        )
         compute = self._kernel("sol_route_compute.cpp", cores, ct, [], [], self._compute_config(full_sync=True))
         sems = (
             [ttnn.SemaphoreDescriptor(id=i, core_ranges=cores, initial_value=0) for i in (0, 1, 2)]
@@ -698,8 +705,11 @@ class SolPrepassFused:
             bias.buffer_address(),
             union.buffer_address(),
             hw.buffer_address(),
+            st["geo"].buffer_address(),
         ]
-        ttnn.generic_op([*ins, st["shsel"], mask, bias, union] + ([hw] if self._route_hw is not None else []), prog)
+        ttnn.generic_op(
+            [*ins, st["shsel"], st["geo"], mask, bias, union] + ([hw] if self._route_hw is not None else []), prog
+        )
         return mask, (bias if self.emit_bias else None), (union if self.emit_chunk_union else None)
 
     def _gather(self, t: ttnn.Tensor) -> ttnn.Tensor:

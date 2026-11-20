@@ -6,11 +6,13 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
 
 namespace {
-constexpr uint32_t cb_mask_out = 16, cb_bias_out = 18, cb_rows = 19, cb_union_out = 21, cb_ring = 22;
+constexpr uint32_t cb_mask_out = 16, cb_bias_out = 18, cb_rows = 19, cb_union_out = 21, cb_ring = 22, cb_nv = 25;
+constexpr uint32_t GEO_BYTES = 128;
 constexpr uint32_t TILE_BYTES = 2048;
 constexpr uint32_t RING_PAGES = 8;
 constexpr uint32_t BIAS_BATCH = 8;
@@ -60,6 +62,7 @@ void kernel_main() {
     constexpr uint32_t HEAD_WEIGHTS = get_compile_time_arg_val(un_args.next_compile_time_args_offset());
     constexpr uint32_t NB = get_compile_time_arg_val(un_args.next_compile_time_args_offset() + 1);
     constexpr auto hw_args = TensorAccessorArgs<un_args.next_compile_time_args_offset() + 2>();
+    constexpr auto geo_args = TensorAccessorArgs<hw_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t NX = get_compile_time_arg_val(16);
     constexpr uint32_t NY = get_compile_time_arg_val(17);
@@ -81,6 +84,15 @@ void kernel_main() {
         HEAD_WEIGHTS == 0 || (UNITS_PER_SHARD == 1 && NQCT <= 8), "head weights: (head, shard) units, NQCT <= 8");
 
     Noc noc;
+    {
+        // The geometry page (word 1: 1 / valid blocks, fp32 bits) for compute, which cannot read DRAM.
+        const auto geo = TensorAccessor(geo_args, get_common_arg_val<uint32_t>(4));
+        CircularBuffer cbnv(cb_nv);
+        cbnv.reserve_back(1);
+        noc.async_read(geo, cbnv, GEO_BYTES, {.page_id = 0}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        cbnv.push_back(1);
+    }
     CircularBuffer cbm(cb_mask_out), cbb(cb_bias_out), cbrows(cb_rows), cbu(cb_union_out), cbring(cb_ring);
     cbrows.reserve_back(32);
     const uint32_t rows_base = cbrows.get_write_ptr();
