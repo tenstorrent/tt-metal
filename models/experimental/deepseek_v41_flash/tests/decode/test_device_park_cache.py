@@ -283,9 +283,28 @@ def test_evict_oldest_to_host_only_when_pool_full():
     assert [c.owner for c in pool.host] == ["u_oldest", "u0"]
 
 
-def test_parse_args_256_slots_keeps_kv_pool_size():
-    from models.experimental.deepseek_v41_flash.demo.server import parse_args
+def test_parse_args_persistent_moe_one_session_per_instance():
+    """The default server is the persistent MoE: one session on each instance, not one pipeline of users."""
+    from models.experimental.deepseek_v41_flash.demo.server import (
+        _INSTANCES,
+        _PERSISTENT_MAX_CONTEXT,
+        _PERSISTENT_TOTAL_CONTEXT,
+        parse_args,
+    )
 
     args = parse_args([])
+    assert args.persistent_moe and args.dspark
+    assert args.instances == _INSTANCES
+    assert args.num_users == 1
+    assert args.max_running == 1
+    assert args.max_context == _PERSISTENT_MAX_CONTEXT
+    assert args.total_context == _PERSISTENT_TOTAL_CONTEXT
+
+
+def test_parse_args_pipeline_256_slots_keeps_kv_pool_size():
+    from models.experimental.deepseek_v41_flash.demo.server import parse_args
+
+    args = parse_args(["--no-persistent-moe"])
+    assert args.instances == 1
     assert args.num_users == 256
     assert args.total_context == 40 * 204800

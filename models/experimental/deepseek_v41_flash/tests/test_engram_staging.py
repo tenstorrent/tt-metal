@@ -89,9 +89,9 @@ def test_stage_copies_once_and_ram_needed_drops_to_zero(staged):
     shard_bytes = sum(lookup.engram_table_nbytes(loader, i) for i in LAYERS)
     assert nbytes == shard_bytes > 0
 
-    shards, copied = lookup.stage_engram_tables(loader, LAYERS)
-    assert copied == sum(path.stat().st_size for path in shards)
-    assert all(lookup.staged_copy(path) is not None for path in shards)
+    packed_paths, copied = lookup.stage_engram_tables(loader, LAYERS)
+    assert copied == shard_bytes
+    assert all(lookup.staged_packed_copy(loader, layer) == path for layer, path in zip(LAYERS, packed_paths))
     # A staged layer is resident tmpfs, so a run maps it instead of needing RAM of its own.
     assert lookup.engram_ram_needed(loader, LAYERS) == 0
     # Nothing to do the second time, and no partial left behind.
@@ -101,23 +101,27 @@ def test_stage_copies_once_and_ram_needed_drops_to_zero(staged):
 
 def test_staged_copy_rejects_a_truncated_copy(staged):
     lookup, loader = staged
-    shards, _ = lookup.stage_engram_tables(loader, LAYERS)
-    copy = lookup.STAGE_DIR / shards[0].name
-    os.truncate(copy, copy.stat().st_size - 1)
-    assert lookup.staged_copy(shards[0]) is None
+    packed_paths, _ = lookup.stage_engram_tables(loader, LAYERS)
+    os.truncate(packed_paths[0], packed_paths[0].stat().st_size - 1)
+    assert lookup.staged_packed_copy(loader, LAYERS[0]) is None
     # A short copy is staged again rather than mapped.
     assert lookup.stage_engram_tables(loader, LAYERS)[1] > 0
-    assert lookup.staged_copy(shards[0]) is not None
+    assert lookup.staged_packed_copy(loader, LAYERS[0]) is not None
 
 
 def test_a_staged_table_maps_to_the_checkpoint_values(staged):
     lookup, loader = staged
     original = {layer: lookup.load_engram_table(loader, layer) for layer in LAYERS}
     lookup.stage_engram_tables(loader, LAYERS)
+    row_bytes = HEAD_DIM + SCALE_COLS
     for layer in LAYERS:
         mapped = lookup.load_engram_table(loader, layer)
         assert tuple(mapped[0].shape) == (ROWS, HEAD_DIM)
         assert tuple(mapped[1].shape) == (ROWS, SCALE_COLS)
+        # Contiguous row-packed [weight | scale] layout: same row stride, scale sits immediately after weight.
+        assert mapped[0].stride() == (row_bytes, 1)
+        assert mapped[1].stride() == (row_bytes, 1)
+        assert mapped[1].data_ptr() - mapped[0].data_ptr() == HEAD_DIM
         for from_copy, from_checkpoint in zip(mapped, original[layer]):
             assert torch.equal(from_copy.view(torch.uint8), from_checkpoint.view(torch.uint8))
 
@@ -133,7 +137,7 @@ def test_no_room_leaves_the_checkpoint_alone(staged, monkeypatch):
     lookup, loader = staged
     # A stage dir with no room cannot hold a copy, so staging gives up and the model reads the checkpoint.
     monkeypatch.setattr(lookup.shutil, "disk_usage", lambda path: os.statvfs(path) and type("U", (), {"free": 1})())
-    shards, copied = lookup.stage_engram_tables(loader, LAYERS)
+    _, copied = lookup.stage_engram_tables(loader, LAYERS)
     assert copied == 0
-    assert all(lookup.staged_copy(path) is None for path in shards)
+    assert all(lookup.staged_packed_copy(loader, layer) is None for layer in LAYERS)
     assert lookup.engram_ram_needed(loader, LAYERS) > 0

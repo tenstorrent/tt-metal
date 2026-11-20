@@ -54,17 +54,22 @@ What V4.1 imposes on the serving side:
   server on rows 5-7 (``tt/decode/persistent_moe.py``), which ``--instances`` (default 5) independent model instances
   share: instance j is a whole ``1 x 4`` model on mesh row 4 - j -- every layer's attention, Engram, hyper-connections
   and norms, the ``lm_head`` and its DSpark drafter (``DeepSeekV41Model(drafter_on_stage=True)``) -- and the server's
-  requester j, which it serves in whatever order the instances send. Each instance has its own session, scheduler and
-  Rust host runtime; a request goes to the instance holding its conversation, else to the idlest one
-  (:class:`_Instances`). With ``--dspark`` each round of a reply is either a 4-row verify step (3 drafts + 1 checked in
+  requester j, which it serves in whatever order the instances send. Each instance has its own weights, session,
+  scheduler and Rust host runtime. What they share is the MoE and one Engram n-gram table mapping (~203 GB,
+  :func:`~..tt.model.load_engram_tables`): each runtime keeps its own session histories over that mapping. The
+  instances load in parallel, one thread per mesh row; trace capture stays one instance at a time, because a capture
+  selects the shared server's request mode. A request goes to the instance holding its conversation, else to the
+  idlest one (:class:`_Instances`). With ``--dspark`` each round of a reply is either a 4-row verify step (3 drafts + 1 checked in
   ONE traced step, ``DeepSeekV41Model.decode_verify_block``; the draft's FFNs on the server as 4-row requests too) or a
   one-row step: ``--dspark-drafts`` (entries 3 or 0) picks by how many users decode on all the instances, default
   :data:`_INSTANCE_DSPARK_DRAFTS` (4-row rounds at any load: with five users decoding at once, one per instance, GSM8K
   measured 127 tok/s/user, 635 in all, against 100 / 500 a step at a time). The server is launched once for 4-row
   blocks and runs one-row requests natively on the same launch, so a switch costs nothing. Up to ``--instances`` users
-  decode in parallel, one session each: a request finding every instance's session busy gets a 429, and a new
-  conversation takes a parked session only if it repeats that session's start (:class:`_V41SlotPool`) or once the
-  session has been idle ``--slot-idle-timeout`` seconds. One instance alone measured ~216 tok/s/user on GSM8K and ~145 on chat text
+  decode in parallel, one session each. A conversation stays on the instance that holds it: a request for it that
+  finds that session busy gets a 429 and is not started on another instance. A new conversation goes to the idlest
+  instance, and to the next when that one turns it away with a 429 before replying; it takes a parked session only
+  if it repeats that session's start (:class:`_V41SlotPool`) or once the session has been idle
+  ``--slot-idle-timeout`` seconds. One instance alone measured ~216 tok/s/user on GSM8K and ~145 on chat text
   against ~149 a step at a time (``tests/decode/test_dspark_spec.py``). What that path takes: one session per
   instance (``--num-users 1``), greedy decoding with the sampler on device (``--temperature 0``; a request's
   ``temperature`` and ``top_p`` are ignored), no traced prefill model (prompts are replayed through decode,
@@ -87,13 +92,17 @@ What V4.1 imposes on the serving side:
   ``--device-sampling``; a request's ``temperature`` and ``top_p`` apply. The rounds run on the Rust host runtime
   as single steps do (its threads replay the stages' traces, write the packets and Engram rows and read the
   outputs), and the web monitor watches them.
-* Shared prefixes. A prompt that continues no conversation starts from the longest prefix of it any other slot's
-  cache holds, running or parked (a common system prompt, a forked conversation): the two slots share that prefix's
-  compressed KV blocks, counted per slot so either can rewind or reset without the other losing them, and the
-  prefill model rebuilds the new slot's sliding window from them by replaying the 128 tokens before the prefix's end
-  (``DeepSeekV41Model.attach_session_prefix``, ``_Scheduler._share_prefix`` in the V4 server). The prefix is matched
-  on the tokens the other slot was fed, in multiples of 128, up to the first image token, and is counted as
-  ``prompt_cache_hit_tokens``.
+* Shared prefixes. A prompt that continues no conversation starts from the longest cached prefix of its tokens.
+  With a traced prefill model that prefix comes from another slot's cache, running or parked (a common system
+  prompt, a forked conversation): the two slots share that prefix's compressed KV blocks, counted per slot so
+  either can rewind or reset without the other losing them, and the prefill model rebuilds the new slot's sliding
+  window by replaying the 128 tokens before the prefix's end (``DeepSeekV41Model.attach_session_prefix``,
+  ``_Scheduler._share_prefix`` in the V4 server). With prompts replayed through decode (persistent MoE,
+  ``--no-prefill``), every instance shares one prefix table (:class:`~models.experimental.deepseek_v4_flash.demo.server._PrefixCache`).
+  A hit loads a decode-ready snapshot of that prefix — rings, compressor windows, compressed KV and Engram
+  history — with ``import_session``, and decode replays the tail. The table is keyed by the token prefix, so a
+  hit is the same whichever user or slot produced it. The match stops at the first image token and leaves the
+  last prompt token to decode. Either way the hit is ``prompt_cache_hit_tokens``.
 * Slot reuse. A request that continues no slot's conversation, but whose tokens differ from a parked slot's cache
   only in the cache's last 512 (``_SLOT_REUSE_TOKENS``) -- a trace replay that sends its own recording of the last
   reply rather than the server's, an edited or regenerated last turn -- takes that slot instead of a new one: the
@@ -181,6 +190,7 @@ import threading
 import time
 import uuid
 from collections import OrderedDict, deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from email.parser import BytesHeaderParser
 from pathlib import Path
@@ -220,7 +230,7 @@ from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
 )
 from models.experimental.deepseek_v41_flash.tt.lm_head import DeepSeekV41LMHead
 from models.experimental.deepseek_v41_flash.tt.decode import persistent_moe as pmoe
-from models.experimental.deepseek_v41_flash.tt.model import DeepSeekV41Model
+from models.experimental.deepseek_v41_flash.tt.model import DeepSeekV41Model, load_engram_tables
 from models.experimental.deepseek_v41_flash.tt.vision import (
     DELIMITER_ROWS,
     FIRST_IMAGE_ROW,
@@ -1945,7 +1955,8 @@ class V41GenerationServer(GenerationServer):
     rendered."""
 
     def __init__(self, *args, monitor_feed: bool = True, files: "_FileStore | None" = None, cpus=None, **kwargs):
-        """``monitor_feed`` publishes this server's state for the web monitor (one instance's when there are several);
+        """``monitor_feed`` publishes this server's state for the web monitor (with several instances only the first
+        publishes, and its snapshot covers every instance, see :meth:`monitor_snapshot`);
         ``files`` shares another server's upload store; ``cpus`` pins the host runtime's threads (default
         :func:`_host_cpus`)."""
         super().__init__(*args, **kwargs)
@@ -1962,11 +1973,15 @@ class V41GenerationServer(GenerationServer):
         self._monitor_sink = None
         if host_rs.enabled():
             # After every capture: from here the decode step's replays, packets, Engram rows and outputs run on the
-            # Rust host runtime's threads, which keep their counters where the web monitor reads them.
+            # Rust host runtime's threads, which keep their counters where the web monitor reads them. Several
+            # instances each write ``<prefix>.<j>.counters``; the monitor sums them. Only the first publishes the
+            # JSON snapshot (monitor_feed), and that snapshot already covers every instance.
             prefix = monitor.default_prefix()
+            n = getattr(self.engine, "instances", 1)
+            slot = self.engine.instance if n > 1 else None
             self.engine.model.start_host_runtime(
                 _host_cpus() if cpus is None else cpus,
-                counters_path=monitor.counters_path(prefix) if monitor_feed else None,
+                counters_path=monitor.counters_path(prefix, slot) if monitor_feed or n > 1 else None,
             )
             if monitor_feed:
                 self.monitor_feed = monitor.MonitorFeed(
@@ -2004,26 +2019,41 @@ class V41GenerationServer(GenerationServer):
     def monitor_snapshot(self) -> dict:
         """The raw state :class:`~.monitor.MonitorFeed` publishes for the web monitor: counts, sizes and ages,
         read without locking the scheduler, as the live console reads them. Every rate is the monitor's to work out,
-        in its own process."""
-        scheduler, pool = self.scheduler, self.pool
+        in its own process.
+
+        With several instances (:class:`_Instances`) only the first publishes, and its snapshot covers them all:
+        every instance's turns -- a prompt replayed through decode on any of them shows its ``prefilled`` progress --
+        slots, ended turns and totals. The slots are numbered across the instances (instance j's slot i is
+        ``i`` plus the slots of the instances before it), so the monitor's slot table tells them apart."""
         now = time.perf_counter()
-        host_users, host_bytes = pool.host_usage()
-        # Before the active turns: see _Scheduler._retire.
-        ended = list(scheduler.ended_turns)[-monitor.FEED_ENDED_TURNS :]
-        specs = dict(getattr(scheduler, "_specs", {}))  # turn -> its DSpark speculator, while it speculates
-        snapshot = {
-            "t": time.time(),
-            "model_id": self.model_id,
-            "started": self._created,
-            "max_seq": self.engine.max_seq,
-            "slots": len(self.engine.users),
-            "slot_states": pool.counts(),
-            "users": pool.rows(),
-            "turns": [
+        users, turns, ended = [], [], []
+        totals = dict.fromkeys(("total_turns", "total_prefilled", "total_generated", "total_input", "total_cached"), 0)
+        slot_states: dict = {}
+        kv_pool: dict = {}
+        host_users = host_bytes = max_host_users = max_host_bytes = 0
+        inflight = rounds = steps = tokens_left = speculating = 0
+        tokens_left_min = None
+        broken = None
+        offset = 0
+        for j, server in enumerate(self.peers):
+            scheduler, pool = server.scheduler, server.pool
+            # Before the active turns: see _Scheduler._retire. The newest record carries this instance's totals.
+            records = list(scheduler.ended_turns)
+            if records:
+                for key in totals:
+                    totals[key] += records[-1].get(key, 0)
+            ended += [
+                {**record, "slot": None if record["slot"] is None else record["slot"] + offset, "instance": j}
+                for record in records[-monitor.FEED_ENDED_TURNS :]
+            ]
+            specs = dict(getattr(scheduler, "_specs", {}))  # turn -> its DSpark speculator, while it speculates
+            speculating += len(specs)
+            turns += [
                 {
                     "serial": turn.serial,
                     "user": turn.user_key,
-                    "slot": turn.slot,
+                    "slot": None if turn.slot is None else turn.slot + offset,
+                    "instance": j,
                     "phase": turn.phase,
                     "prompt_tokens": len(turn.ids),
                     "cached_tokens": turn.cached,
@@ -2036,28 +2066,69 @@ class V41GenerationServer(GenerationServer):
                     **_spec_fields(specs.get(turn)),
                 }
                 for turn in list(scheduler._active)
-            ],
-            "inflight": len(scheduler._inflight),
-            "rounds": scheduler.rounds,
-            "steps": scheduler.steps,
+            ]
+            users += [
+                {**row, "index": None if row.get("index") is None else row["index"] + offset, "instance": j}
+                for row in pool.rows()
+            ]
+            for key, value in pool.counts().items():
+                slot_states[key] = slot_states.get(key, 0) + value
+            for name, (used, total) in scheduler.pool_usage().items():
+                prev_used, prev_total = kv_pool.get(name, (0, 0))
+                kv_pool[name] = (prev_used + used, prev_total + total)
+            n_users, n_bytes = pool.host_usage()
+            host_users += n_users
+            host_bytes += n_bytes
+            max_host_users += pool.host_users
+            max_host_bytes += pool.host_bytes
+            inflight += len(scheduler._inflight)
+            rounds += scheduler.rounds
+            steps += scheduler.steps
+            left = server.engine.tokens_left()
+            tokens_left += left
+            tokens_left_min = left if tokens_left_min is None else min(tokens_left_min, left)
+            if broken is None and scheduler._broken is not None:
+                broken = f"instance {j}: {scheduler._broken}" if len(self.peers) > 1 else str(scheduler._broken)
+            offset += len(server.engine.users)
+        ended.sort(key=lambda record: record["ended"])
+        ended = ended[-monitor.FEED_ENDED_TURNS :]
+        if ended:  # the monitor reads the running totals off the newest record: make them every instance's
+            ended[-1] = {**ended[-1], **totals}
+        snapshot = {
+            "t": time.time(),
+            "model_id": self.model_id,
+            "started": self._created,
+            "max_seq": self.engine.max_seq,
+            "slots": offset,
+            "instances": len(self.peers),
+            "slot_states": slot_states,
+            "users": users,
+            "turns": turns,
+            "inflight": inflight,
+            "rounds": rounds,
+            "steps": steps,
             "ended_turns": ended,
-            "pool": scheduler.pool_usage(),
-            "tokens_left": self.engine.tokens_left(),
+            "pool": kv_pool,
+            "tokens_left": tokens_left,
+            "tokens_left_min": 0 if tokens_left_min is None else tokens_left_min,
             "host": {
                 "users": host_users,
                 "bytes": host_bytes,
-                "max_users": pool.host_users,
-                "max_bytes": pool.host_bytes,
+                "max_users": max_host_users,
+                "max_bytes": max_host_bytes,
             },
-            "broken": None if scheduler._broken is None else str(scheduler._broken),
+            "broken": broken,
         }
         if self.engine.images is not None:
             snapshot["images"] = {**self.engine.images.stats(), "files": self.files.usage()}
         if self.engine.dspark:
+            # Each scheduler picks drafts from the same load (every instance's decoding users) on its own round,
+            # so they agree once a switch has landed. Until then the monitor shows the fewer.
+            drafts = [getattr(server.scheduler, "_drafts", 0) for server in self.peers]
             snapshot["dspark"] = {
-                "drafts": scheduler._drafts,
+                "drafts": min(drafts) if drafts else 0,
                 "schedule": list(self.engine.dspark_drafts),
-                "speculating": len(specs),
+                "speculating": speculating,
             }
         return snapshot
 
@@ -2227,10 +2298,11 @@ class _Instances:
     (:func:`_serve_instances`) -- behind the one HTTP server, as the handler's ``api``.
 
     A request goes to the instance holding its conversation (a slot ``user_key`` owns, or whose stored messages the
-    request continues), else to the idlest instance (an empty slot, then a parked one, then the fewest running and
-    queued turns). An instance that turns it away with a 429 before replying passes it to the next. Each instance
-    keeps its own sessions, scheduler and Rust host runtime; the DSpark schedule counts every instance's decoding users
-    (``peers``)."""
+    request continues) and stays there: a 429 from that instance is the answer, not a reason to start the same
+    conversation on another instance. A new conversation goes to the idlest instance (an empty slot, then a parked
+    one, then the fewest running and queued turns), and an instance that turns it away with a 429 before replying
+    passes it to the next. Each instance keeps its own sessions, scheduler and Rust host runtime; the DSpark
+    schedule counts every instance's decoding users (``peers``)."""
 
     def __init__(self, servers: list):
         self.servers = list(servers)
@@ -2281,6 +2353,14 @@ class _Instances:
         with self._lock:
             return [self.servers[j] for j in sorted(range(len(self.servers)), key=rank)]
 
+    def _holds(self, server, user_key: str, messages: list[dict]) -> bool:
+        """Whether ``server`` already has ``user_key``'s conversation: a slot it owns, or stored messages this
+        request continues. That instance is the only one that may serve the request."""
+        pool = server.pool
+        if pool.slots_of(user_key):
+            return True
+        return any(user.messages and _continues(messages, user.messages) for user in server.engine.users)
+
     def generate(self, user_key: str, body: dict, on_chunk, request_id: str | None = None, client_gone=None) -> dict:
         messages = self.servers[0].normalized_messages(body)
         replied = [False]
@@ -2289,8 +2369,12 @@ class _Instances:
             replied[0] = True
             on_chunk(reasoning, content)
 
+        order = self._order(user_key, messages)
+        # A conversation stays on the instances that hold it (usually one). A new one tries the idlest, then
+        # the next, when an instance turns it away with a 429 before replying.
+        sticky = [server for server in order if self._holds(server, user_key, messages)]
         error = None
-        for server in self._order(user_key, messages):
+        for server in sticky or order:
             try:
                 return server.generate(user_key, body, relay, request_id, client_gone)
             except RequestError as e:
@@ -2321,11 +2405,36 @@ class _Instances:
         return sum(server.cancel_all() for server in self.servers)
 
 
+class _LockedExitStack:
+    """``ExitStack.enter_context`` / ``callback`` from the instance-load threads.
+
+    Each instance registers its own callbacks in order, and the stack is one sequence, so an instance's later
+    callback stays above its earlier ones whichever way the threads interleave. The lock only covers the push.
+    """
+
+    def __init__(self, stack: contextlib.ExitStack):
+        self._stack = stack
+        self._lock = threading.Lock()
+
+    def enter_context(self, cm):
+        with self._lock:
+            return self._stack.enter_context(cm)
+
+    def callback(self, callback, *args, **kwargs):
+        with self._lock:
+            return self._stack.callback(callback, *args, **kwargs)
+
+
 @torch.no_grad()
 def _serve_instances(args) -> int:
     """:func:`serve` for ``--instances`` > 1: open the 8x4 mesh, launch one persistent MoE for every instance
     (:func:`~..tt.decode.persistent_moe.launch_instances_server`), build, warm up and serve each instance -- a whole
-    TP4 model and its DSpark drafter on mesh row 4 - j -- behind one HTTP server (:class:`_Instances`)."""
+    TP4 model and its DSpark drafter on mesh row 4 - j -- behind one HTTP server (:class:`_Instances`).
+
+    The instances load together, one thread per mesh row (each row has its own allocator and command queues). They
+    share one Engram table mapping. Trace capture stays one instance at a time: a capture selects the shared MoE's
+    request mode.
+    """
     from models.experimental.deepseek_v4_flash.demo import server as v4_server
 
     for stream in (sys.stdout, sys.stderr):
@@ -2360,18 +2469,43 @@ def _serve_instances(args) -> int:
             server = pmoe.launch_instances_server(mesh_device, config, loader, cache, num_layers, n, dspark=args.dspark)
             stack.callback(server.stop)
             logger.info(f"persistent MoE up in {time.perf_counter() - t0:.0f}s")
-            engines = []
-            for j in range(n):
+            engram_ids = [i for i in config.engram_layer_ids if i < num_layers]
+            # One mapping for every instance. Each runtime builds its own lookup (its own session histories) over it.
+            engram_tables = load_engram_tables(loader, engram_ids) if engram_ids else None
+            locked = _LockedExitStack(stack)
+
+            def load_instance(j: int):
                 t0 = time.perf_counter()
-                engine = V41ChatEngine(mesh_device, args, stack, moe_server=server, instance=j)
+                engine = V41ChatEngine(
+                    mesh_device,
+                    args,
+                    locked,
+                    moe_server=server,
+                    instance=j,
+                    engram_tables=engram_tables,
+                )
+                logger.info(
+                    f"instance {j} (mesh row {pmoe.INSTANCE_ROWS[j]}) loaded in {time.perf_counter() - t0:.0f}s"
+                )
+                return engine
+
+            logger.info(f"loading {n} instances in parallel")
+            with ThreadPoolExecutor(max_workers=n, thread_name_prefix="instance-load") as pool:
+                engines = list(pool.map(load_instance, range(n)))
+            for j, engine in enumerate(engines):
+                t0 = time.perf_counter()
                 # Compiled and captured one instance at a time: a capture picks the server's request mode, which the
                 # instances share (see DeepSeekV41Model._use_server_rows).
                 engine.warmup()
-                engines.append(engine)
-                logger.info(f"instance {j} (mesh row {pmoe.INSTANCE_ROWS[j]}) ready in {time.perf_counter() - t0:.0f}s")
+                logger.info(
+                    f"instance {j} (mesh row {pmoe.INSTANCE_ROWS[j]}) captured in {time.perf_counter() - t0:.0f}s"
+                )
             cpus = _host_cpus()
             per = len(cpus) // n if cpus else 0
             servers = []
+            # One prefix table for every instance: a prompt replayed on any row can resume on any other.
+            host_bytes = int(args.host_cache_gb * 2**30)
+            prefix_cache = v4_server._PrefixCache(host_bytes if host_bytes > 0 else 32 << 30)
             for j, engine in enumerate(engines):
                 servers.append(
                     V41GenerationServer(
@@ -2383,11 +2517,12 @@ def _serve_instances(args) -> int:
                         decode_ahead=args.decode_ahead,
                         temperature=args.temperature,
                         host_users=args.host_users,
-                        host_bytes=int(args.host_cache_gb * 2**30),
+                        host_bytes=host_bytes,
                         max_running=args.max_running,
                         slot_idle_timeout=args.slot_idle_timeout,
                         think=args.think,
                         reasoning_effort=args.reasoning_effort,
+                        prefix_cache=prefix_cache,
                         monitor_feed=j == 0,
                         files=servers[0].files if servers else None,
                         # DEEPSEEK_V41_HOST_CPUS split evenly over the instances' host runtimes.
@@ -2433,9 +2568,22 @@ class V41ChatEngine(ChatEngine):
     # Every posted step keeps the session it was posted for, so decoding turns can each keep one posted.
     interleave_ahead = True
 
-    def __init__(self, mesh_device, args, prefetcher: contextlib.ExitStack, moe_server=None, instance: int = 0):
+    def __init__(
+        self,
+        mesh_device,
+        args,
+        prefetcher: contextlib.ExitStack,
+        moe_server=None,
+        instance: int = 0,
+        engram_tables=None,
+    ):
         """``moe_server`` (a persistent MoE launched for several instances, :func:`_serve_instances`) makes this engine
-        instance ``instance``: a whole model on that requester's mesh row, its DSpark drafter on the same row."""
+        instance ``instance``: a whole model on that requester's mesh row, its DSpark drafter on the same row.
+
+        ``engram_tables`` is the shared n-gram mapping (:func:`~..tt.model.load_engram_tables`). Several instances
+        pass the same dict; each lookup keeps its own session histories. ``prefetcher`` may be a
+        :class:`_LockedExitStack` when instances load on several threads.
+        """
         from transformers import AutoTokenizer
 
         loader = DeepseekV4WeightLoader(args.model_dir)
@@ -2567,6 +2715,7 @@ class V41ChatEngine(ChatEngine):
             total_tokens=max(args.total_context, self.max_seq),
             block_size=_PAGE_BLOCK_SIZE,
             device_sampling=bool(getattr(args, "device_sampling", False)),
+            engram_tables=engram_tables,
         )
         if self.model.context_limit is not None and self.model.context_limit < self.max_seq:
             logger.warning(f"context capped at {self.model.context_limit} tokens by the compressed KV")

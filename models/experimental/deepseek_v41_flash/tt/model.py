@@ -105,6 +105,7 @@ from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
     load_engram_table,
     stage_engram_tables,
     staged_copy,
+    staged_packed_copy,
 )
 from models.experimental.deepseek_v41_flash.tt.lm_head import DeepSeekV41DeviceSampler, DeepSeekV41LMHead
 from models.experimental.deepseek_v41_flash.tt.prefill.model import DeepSeekV41PrefillModel
@@ -263,6 +264,46 @@ ENGRAM_BEFORE_DISPATCH = os.environ.get("DEEPSEEK_V41_VERIFY_ENGRAM_EARLY", "1")
 # Once a model's traces are captured, leave a mixed persistent MoE's default request rows alone
 # (DEEPSEEK_V41_FREEZE_SERVER_ROWS=0 switches them per step again, as before several instances shared the server).
 _FREEZE_SERVER_ROWS = os.environ.get("DEEPSEEK_V41_FREEZE_SERVER_ROWS", "1") not in ("0", "", "false", "False")
+
+
+def load_engram_tables(loader, layer_ids) -> dict:
+    """Map each Engram layer's n-gram table once: ``{layer_id: (weight, scale)}``.
+
+    The tensors are read-only. Several model instances pass this same dict to
+    :meth:`DeepSeekV41Model.prepare_static_decode` (``engram_tables=``) so each keeps its own session histories
+    while every lookup reads the one mapping (~203 GB) instead of mapping a copy per instance.
+    """
+    ids = list(layer_ids)
+    if not ids:
+        return {}
+    total = sum(engram_table_nbytes(loader, i) for i in ids)
+    staged = all(
+        staged_packed_copy(loader, i)
+        or staged_copy(loader.shard_of(f"layers.{i}.engram.embed.weight", translate=False))
+        for i in ids
+    )
+    source = f"mapped from {STAGE_DIR}" if staged else "read from the checkpoint"
+    t0 = time.perf_counter()
+    # Drawn on a terminal only (disable=None); a log file gets the summary line below.
+    with tqdm(
+        total=total, unit="B", unit_scale=True, desc=f"Engram tables {ids}", mininterval=0.5, disable=None
+    ) as bar:
+        lock = threading.Lock()
+
+        def advance(n: int) -> None:  # the table readers are 16 threads
+            with lock:
+                bar.update(n)
+
+        tables = {}
+        for layer_idx in ids:
+            bar.set_postfix_str(f"layer {layer_idx}")
+            tables[layer_idx] = load_engram_table(loader, layer_idx, progress=advance)
+    seconds = time.perf_counter() - t0
+    logger.info(
+        f"Engram tables of layers {ids} {source}: {total / 1e9:.0f} GB in {seconds:.0f}s "
+        f"({total / 1e9 / max(seconds, 1e-9):.1f} GB/s)"
+    )
+    return tables
 
 
 class DeepSeekV41Model(DeepSeekV4Model):
@@ -520,7 +561,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self._stage_and_require_engram_ram()
         # A verify block's rows outnumber a socket's pages, so decode_verify writes them from a second thread.
         engram_sockets = {
-            li: open_rows_sockets(self.submeshes[self.layer_submesh_ids[li]], rows_page_bytes(config))
+            li: open_rows_sockets(self.submeshes[self.layer_submesh_ids[li]], rows_page_bytes(config, tp_size))
             for li in config.engram_layer_ids
             if li < n
         }
@@ -571,7 +612,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 None,
             )
             if table_sockets is None:
-                table_sockets = open_rows_sockets(self.first_device, rows_page_bytes(config))
+                table_sockets = open_rows_sockets(self.first_device, rows_page_bytes(config, tp_size))
             self.image_sockets = open_image_sockets(
                 load_vision_config(loader.snapshot_dir), self.submeshes[vision_stage], table_sockets
             )
@@ -795,6 +836,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         block_size: int = 32,
         batch: int = 1,
         device_sampling: bool = False,
+        engram_tables: dict | None = None,
     ) -> None:
         """Allocate the traced-decode buffers.
 
@@ -812,6 +854,10 @@ class DeepSeekV41Model(DeepSeekV4Model):
         ``device_sampling`` picks each step's token on the output stage (:attr:`device_sampler`, greedy until its
         ``set_sampling``): :meth:`read_decoded_output` then returns ``[1, 1, words]`` int32, the token first, and no
         logits leave the stage.
+
+        ``engram_tables`` (from :func:`load_engram_tables`) is the one host mapping of the n-gram tables. Several
+        instances pass the same dict: each lookup keeps its own session histories and only the table bytes are shared.
+        ``None`` loads them here.
         """
         if batch != 1:
             raise NotImplementedError(f"V4.1 decode supports batch 1, got batch={batch}")
@@ -1082,31 +1128,17 @@ class DeepSeekV41Model(DeepSeekV4Model):
             )
         if self._engram_layers:
             ids = [layer_idx for layer_idx, _ in self._engram_layers]
-            total = sum(engram_table_nbytes(self.loader, i) for i in ids)
-            staged = all(
-                staged_copy(self.loader.shard_of(f"layers.{i}.engram.embed.weight", translate=False)) for i in ids
-            )
-            source = f"mapped from {STAGE_DIR}" if staged else "read from the checkpoint"
-            t0 = time.perf_counter()
-            # Drawn on a terminal only (disable=None); a log file gets the summary line below.
-            with tqdm(
-                total=total, unit="B", unit_scale=True, desc=f"Engram tables {ids}", mininterval=0.5, disable=None
-            ) as bar:
-                lock = threading.Lock()
-
-                def advance(n: int) -> None:  # the table readers are 16 threads
-                    with lock:
-                        bar.update(n)
-
-                tables = {}
-                for layer_idx in ids:
-                    bar.set_postfix_str(f"layer {layer_idx}")
-                    tables[layer_idx] = load_engram_table(self.loader, layer_idx, progress=advance)
-            seconds = time.perf_counter() - t0
-            logger.info(
-                f"Engram tables of layers {ids} {source}: {total / 1e9:.0f} GB in {seconds:.0f}s "
-                f"({total / 1e9 / max(seconds, 1e-9):.1f} GB/s)"
-            )
+            if engram_tables is None:
+                tables = load_engram_tables(self.loader, ids)
+            else:
+                missing = [i for i in ids if i not in engram_tables]
+                if missing:
+                    raise ValueError(f"shared Engram tables are missing layers {missing}")
+                tables = engram_tables
+                logger.info(
+                    f"Engram tables of layers {ids} shared "
+                    f"({sum(engram_table_nbytes(self.loader, i) for i in ids) / 1e9:.0f} GB, one copy)"
+                )
             lookup_cls = host_rs.RustEngramLookup if host_rs.engram_enabled() else EngramHostLookup
             self._engram_lookup = lookup_cls(
                 cfg, self.loader.snapshot_dir, tables, batch=batch, max_seq=max_seq, sessions=num_sessions

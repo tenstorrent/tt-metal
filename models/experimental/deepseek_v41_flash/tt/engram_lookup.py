@@ -36,6 +36,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from loguru import logger
@@ -44,6 +45,8 @@ from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4Wei
 
 # One E8M0 scale per this many consecutive values of a table row.
 TABLE_BLOCK = 32
+# Rows packed per worker task (~264 MB at head_dim=256).
+PACK_CHUNK_ROWS = 1 << 20
 # Headroom above the Engram tables a run needs, whether it stages a copy of them or reads them: the copy holds
 # the source's page cache plus the new tmpfs pages while it is made, and the build needs room above either.
 ENGRAM_RAM_MARGIN = 1.25
@@ -143,25 +146,105 @@ def staged_copy(path) -> Optional[Path]:
     return None
 
 
-def _copy_shard(src: Path, dst: Path, threads: int, chunk: int = 1 << 30) -> None:
-    """``src`` copied to ``dst`` by ``threads`` ``sendfile`` copies of ``chunk`` bytes, then written out of the
-    page cache so the copy does not hold the source's pages too."""
-    size = src.stat().st_size
-    with open(dst, "wb") as f:
+def _table_regions(loader: DeepseekV4WeightLoader, layer_idx: int):
+    """``(w_path, w_offset, s_path, s_offset, rows, head_dim, scale_cols)`` of layer ``layer_idx``'s table."""
+    w_name = f"layers.{layer_idx}.engram.embed.weight"
+    s_name = f"layers.{layer_idx}.engram.embed.scale"
+    w_path = Path(loader.shard_of(w_name, translate=False)).resolve()
+    s_path = Path(loader.shard_of(s_name, translate=False)).resolve()
+    w_offset, w_shape = tensor_region(w_path, w_name)
+    s_offset, s_shape = tensor_region(s_path, s_name)
+    rows, head_dim = w_shape
+    assert s_shape == [rows, head_dim // TABLE_BLOCK], (w_shape, s_shape)
+    return w_path, w_offset, s_path, s_offset, rows, head_dim, s_shape[1]
+
+
+def staged_packed_path(loader: DeepseekV4WeightLoader, layer_idx: int) -> Path:
+    """Path in :data:`STAGE_DIR` where layer ``layer_idx``'s row-packed ``[weight | scale]`` table lives."""
+    w_path = Path(loader.shard_of(f"layers.{layer_idx}.engram.embed.weight", translate=False)).resolve()
+    return STAGE_DIR / f"{w_path.name}.layer{layer_idx}.packed"
+
+
+def staged_packed_copy(loader: DeepseekV4WeightLoader, layer_idx: int) -> Optional[Path]:
+    """The :data:`STAGE_DIR` row-packed copy of layer ``layer_idx``'s table, or ``None`` if absent or truncated."""
+    copy = staged_packed_path(loader, layer_idx)
+    if copy.is_file() and copy.stat().st_size == engram_table_nbytes(loader, layer_idx):
+        return copy
+    return None
+
+
+def _pread_exact(fd: int, nbytes: int, offset: int) -> bytes:
+    """Read exactly ``nbytes`` at ``offset`` from ``fd`` via ``os.pread``."""
+    data = os.pread(fd, nbytes, offset)
+    if len(data) == nbytes:
+        return data
+    chunks = [data]
+    got = len(data)
+    while got < nbytes:
+        piece = os.pread(fd, nbytes - got, offset + got)
+        assert piece, f"short pread at {offset + got}"
+        chunks.append(piece)
+        got += len(piece)
+    return b"".join(chunks)
+
+
+def _pack_into_array(
+    w_path: Path,
+    w_offset: int,
+    s_path: Path,
+    s_offset: int,
+    dst: np.ndarray,
+    head_dim: int,
+    scale_cols: int,
+    threads: int = 16,
+    chunk_rows: int = PACK_CHUNK_ROWS,
+    progress=None,
+) -> None:
+    """Stream ``weight`` and ``scale`` from checkpoint files into ``dst`` ``[rows, head_dim + scale_cols]`` uint8."""
+    rows = dst.shape[0]
+    row_bytes = head_dim + scale_cols
+    w_fd = os.open(w_path, os.O_RDONLY)
+    s_fd = w_fd if s_path == w_path else os.open(s_path, os.O_RDONLY)
+    try:
+
+        def pack(begin: int) -> None:
+            end = min(begin + chunk_rows, rows)
+            n = end - begin
+            w_raw = _pread_exact(w_fd, n * head_dim, w_offset + begin * head_dim)
+            s_raw = _pread_exact(s_fd, n * scale_cols, s_offset + begin * scale_cols)
+            dst[begin:end, :head_dim] = np.frombuffer(w_raw, dtype=np.uint8).reshape(n, head_dim)
+            dst[begin:end, head_dim:] = np.frombuffer(s_raw, dtype=np.uint8).reshape(n, scale_cols)
+            if progress is not None:
+                progress(n * row_bytes)
+
+        with ThreadPoolExecutor(threads) as pool:
+            list(pool.map(pack, range(0, rows, chunk_rows)))
+    finally:
+        os.close(w_fd)
+        if s_fd != w_fd:
+            os.close(s_fd)
+
+
+def _pack_layer_to_file(loader: DeepseekV4WeightLoader, layer_idx: int, dst: Path, threads: int = 16) -> int:
+    """Stream layer ``layer_idx``'s table into a contiguous ``[weight | scale]`` packed file at ``dst``."""
+    w_path, w_offset, s_path, s_offset, rows, head_dim, scale_cols = _table_regions(loader, layer_idx)
+    row_bytes = head_dim + scale_cols
+    size = rows * row_bytes
+    with open(dst, "w+b") as f:
         f.truncate(size)
-
-    def copy(begin):
-        end = min(begin + chunk, size)
-        with open(src, "rb", buffering=0) as fin, open(dst, "r+b", buffering=0) as fout:
-            fout.seek(begin)
-            while begin < end:
-                n = os.sendfile(fout.fileno(), fin.fileno(), begin, end - begin)
-                assert n, f"short read of {src} at {begin}"
-                begin += n
-
-    with ThreadPoolExecutor(threads) as pool:
-        list(pool.map(copy, range(0, size, chunk)))
-    _drop_page_cache(src)
+        mm = mmap.mmap(f.fileno(), size, access=mmap.ACCESS_WRITE)
+        try:
+            arr = np.frombuffer(mm, dtype=np.uint8).reshape(rows, row_bytes)
+            try:
+                _pack_into_array(w_path, w_offset, s_path, s_offset, arr, head_dim, scale_cols, threads=threads)
+            finally:
+                del arr
+        finally:
+            mm.close()
+    _drop_page_cache(w_path)
+    if s_path != w_path:
+        _drop_page_cache(s_path)
+    return size
 
 
 def engram_shards(loader: DeepseekV4WeightLoader, layer_ids) -> list[Path]:
@@ -190,27 +273,29 @@ def _staging_lock():
 
 
 def stage_engram_tables(loader: DeepseekV4WeightLoader, layer_ids, threads: int = 16) -> tuple[list[Path], int]:
-    """Stage ``layer_ids``' tables in :data:`STAGE_DIR` so every process maps one copy instead of reading the
-    checkpoint into memory itself: the copies outlive the process, and with them a run takes no Engram RAM of
-    its own (:func:`engram_ram_needed` returns 0 for a staged layer).
+    """Stage ``layer_ids``' tables in :data:`STAGE_DIR` as contiguous row-packed ``[weight | scale]`` files so
+    every process maps one copy instead of reading the checkpoint into memory itself: the copies outlive the
+    process, and with them a run takes no Engram RAM of its own (:func:`engram_ram_needed` returns 0 for a
+    staged layer). Each row packs its 256 B fp8 weights followed immediately by its 8 B E8M0 scales (264 B/row,
+    same total size as the raw tensors, halving random DRAM/TLB misses per lookup).
 
-    Skips files already staged, and returns the staged paths and the bytes this call copied (0 when nothing had
+    Skips layers already staged, and returns the staged paths and the bytes this call wrote (0 when nothing had
     to be). Falls back to leaving the files alone -- the model then reads the checkpoint as before -- when they
-    do not fit next to the RAM a build needs, or when ``DEEPSEEK_V41_ENGRAM_STAGE=0``. Copies go to a partial
+    do not fit next to the RAM a build needs, or when ``DEEPSEEK_V41_ENGRAM_STAGE=0``. Files go to a partial
     name first and are renamed into place, and the whole staging runs under a lock on :data:`STAGE_DIR`, so
     processes starting at once share the copy rather than racing for it.
 
-    Must be called before the model reads the tables (``DeepSeekV41Model.prepare_static_decode``). It copies
-    ~203 GB for the two layers of the checkpoint, so it is worth calling once per host even from a test.
+    Must be called before the model reads the tables (``DeepSeekV41Model.prepare_static_decode``).
     """
     if os.environ.get("DEEPSEEK_V41_ENGRAM_STAGE", "1") in ("0", "", "false", "False"):
         return [], 0
-    shards = engram_shards(loader, layer_ids)
+    ids = list(layer_ids)
+    paths = [staged_packed_path(loader, i) for i in ids]
     with _staging_lock():
-        todo = [shard for shard in shards if staged_copy(shard) is None]
+        todo = [i for i in ids if staged_packed_copy(loader, i) is None]
         if not todo:
-            return shards, 0
-        need = sum(shard.stat().st_size for shard in todo)
+            return paths, 0
+        need = sum(engram_table_nbytes(loader, i) for i in todo)
         # The copy holds the bytes twice while it is made (the source's page cache and the new tmpfs pages), and
         # the build still needs its own headroom above what is staged.
         parent = STAGE_DIR
@@ -219,29 +304,29 @@ def stage_engram_tables(loader: DeepseekV4WeightLoader, layer_ids, threads: int 
         available = min(shutil.disk_usage(parent).free, host_mem_available())
         if available < ENGRAM_RAM_MARGIN * need:
             logger.warning(
-                f"Engram tables of layers {list(layer_ids)} not staged: {need / 1e9:.0f} GB to copy, "
+                f"Engram tables of layers {ids} not staged: {need / 1e9:.0f} GB to pack, "
                 f"{available / 1e9:.0f} GB available in {parent} and host RAM; reading the checkpoint instead"
             )
-            return shards, 0
-        logger.info(f"staging Engram tables of layers {list(layer_ids)} in {STAGE_DIR}: {need / 1e9:.0f} GB to copy")
+            return paths, 0
+        logger.info(f"staging packed Engram tables of layers {ids} in {STAGE_DIR}: {need / 1e9:.0f} GB to write")
         copied = 0
-        for shard in todo:
-            dst = STAGE_DIR / shard.name
+        for layer_idx in todo:
+            dst = staged_packed_path(loader, layer_idx)
             partial = dst.with_name(f".{dst.name}.{os.getpid()}.partial")
             start = time.monotonic()
             try:
-                _copy_shard(shard, partial, threads)
+                written = _pack_layer_to_file(loader, layer_idx, partial, threads=threads)
                 partial.chmod(0o644)
                 os.replace(partial, dst)
             finally:
                 partial.unlink(missing_ok=True)
             seconds = time.monotonic() - start
-            copied += shard.stat().st_size
+            copied += written
             logger.info(
-                f"staged {shard.name}: {shard.stat().st_size / 1e9:.0f} GB in {seconds:.0f}s "
-                f"({shard.stat().st_size / 1e9 / max(seconds, 1e-9):.1f} GB/s)"
+                f"staged packed {dst.name}: {written / 1e9:.0f} GB in {seconds:.0f}s "
+                f"({written / 1e9 / max(seconds, 1e-9):.1f} GB/s)"
             )
-        return shards, copied
+        return paths, copied
 
 
 def engram_table_nbytes(loader: DeepseekV4WeightLoader, layer_idx: int) -> int:
@@ -260,27 +345,35 @@ def engram_ram_needed(loader: DeepseekV4WeightLoader, layer_ids) -> int:
     return sum(
         engram_table_nbytes(loader, i)
         for i in layer_ids
-        if staged_copy(loader.shard_of(f"layers.{i}.engram.embed.weight", translate=False)) is None
+        if staged_packed_copy(loader, i) is None
+        and staged_copy(loader.shard_of(f"layers.{i}.engram.embed.weight", translate=False)) is None
     )
 
 
 def load_engram_table(
     loader: DeepseekV4WeightLoader, layer_idx: int, progress=None
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Layer ``layer_idx``'s table in host RAM, as stored: ``weight`` ``[rows, head_dim]`` fp8 E4M3 and
-    ``scale`` ``[rows, head_dim / 32]`` E8M0 (~101 GB together). Mapped from its :func:`staged_copy` if
-    there is one, else read from the checkpoint. ``progress`` as :func:`read_into_memory`'s."""
-    tensors = []
-    for part, dtype in (("weight", torch.float8_e4m3fn), ("scale", torch.float8_e8m0fnu)):
-        name = f"layers.{layer_idx}.engram.embed.{part}"
-        path = loader.shard_of(name, translate=False)
-        region = tensor_region(path, name)
-        copy = staged_copy(path)
-        if copy is None:
-            tensors.append(read_into_memory(path, *region, dtype, progress=progress))
-        else:
-            tensors.append(map_into_memory(copy, *region, dtype, progress=progress))
-    return tuple(tensors)
+    """Layer ``layer_idx``'s table in host RAM: ``weight`` ``[rows, head_dim]`` fp8 E4M3 and ``scale``
+    ``[rows, head_dim / 32]`` E8M0 (~101 GB together). Mapped as strided views of a contiguous row-packed
+    ``[weight | scale]`` buffer from :func:`staged_packed_copy` when staged (or packed directly on read when
+    not staged), falling back to a legacy raw :func:`staged_copy` if one is present. ``progress`` as
+    :func:`read_into_memory`'s."""
+    w_path, w_offset, s_path, s_offset, rows, head_dim, scale_cols = _table_regions(loader, layer_idx)
+    row_bytes = head_dim + scale_cols
+    packed_copy = staged_packed_copy(loader, layer_idx)
+    if packed_copy is not None:
+        packed = map_into_memory(packed_copy, 0, (rows, row_bytes), torch.uint8, progress=progress)
+        return packed[:, :head_dim].view(torch.float8_e4m3fn), packed[:, head_dim:].view(torch.float8_e8m0fnu)
+    # Fall back to a legacy raw shard staged in STAGE_DIR if present.
+    w_copy, s_copy = staged_copy(w_path), staged_copy(s_path)
+    if w_copy is not None and s_copy is not None:
+        return (
+            map_into_memory(w_copy, w_offset, (rows, head_dim), torch.float8_e4m3fn, progress=progress),
+            map_into_memory(s_copy, s_offset, (rows, scale_cols), torch.float8_e8m0fnu, progress=progress),
+        )
+    packed = torch.empty((rows, row_bytes), dtype=torch.uint8)
+    _pack_into_array(w_path, w_offset, s_path, s_offset, packed.numpy(), head_dim, scale_cols, progress=progress)
+    return packed[:, :head_dim].view(torch.float8_e4m3fn), packed[:, head_dim:].view(torch.float8_e8m0fnu)
 
 
 def _engram_module(snapshot_dir: Path):

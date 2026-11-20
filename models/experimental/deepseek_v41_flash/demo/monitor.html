@@ -95,11 +95,11 @@
     <div class="panel" id="drafts-panel" style="display:none"><h2>DSpark drafts per round
       <span class="dim">(0: plain decode)</span></h2><div class="chart" id="c-drafts"></div></div>
     <div class="panel"><h2>Device steps/s</h2><div class="chart" id="c-steps"></div></div>
-    <div class="panel"><h2>Host runtime, mean µs per call</h2><div class="chart" id="c-timers"></div></div>
+    <div class="panel"><h2>Host runtime, mean µs per call <span class="dim" id="timers-note"></span></h2><div class="chart" id="c-timers"></div></div>
   </div>
   <div class="row2">
     <div class="panel"><h2>KV page pool</h2><table id="pool"></table>
-      <h2 style="margin-top:14px">Host runtime</h2><table id="runtime"></table></div>
+      <h2 style="margin-top:14px" id="runtime-title">Host runtime</h2><table id="runtime"></table></div>
   </div>
   <div class="panel"><h2>History <span class="dim" id="history-summary"></span></h2><div class="scroll"><table id="history"></table></div></div>
   <div class="panel"><h2>Log <label><input type="checkbox" id="debug"> debug</label>
@@ -300,7 +300,8 @@ function drawCards() {
       totals.input ? `${fmt(100 * totals.prefilled / totals.input, 1)}% of input` : "tokens fed through prefill"),
     card("Cached input", int(totals.cached),
       totals.input ? `${fmt(100 * totals.cached / totals.input, 1)}% cache hit` : "tokens, already in KV"),
-    card("Free KV cache", int(state.tokens_left), "tokens"),
+    card("Free KV cache", int(state.tokens_left),
+      (state.instances > 1) ? `least instance ${int(state.tokens_left_min)}` : "tokens"),
     card("KV pages used", total ? fmt(100 * used / total, 1) + "%" : "–", `${int(used)} / ${int(total)} blocks`),
   ].join("");
   $("decode-now").textContent = `${fmt(avg("decode", 5))} tok/s now`;
@@ -315,9 +316,11 @@ function drawSlots() {
   const lastTurn = new Map();   // "user/slot" -> its newest ended turn, for the users not running one
   for (const h of history) lastTurn.set(`${h.user}/${h.slot}`, h);
   const st = state.slot_states || {};
+  const multi = (state.instances || 1) > 1;
   $("slot-summary").textContent = `${int(st.running)} active · ${int(st.queued)} queued · ${int(st.parked)} parked · ` +
-    `${int((state.host || {}).users)} in host RAM · ${int(st.empty)} empty slots`;
-  $("slots").innerHTML = `<tr><th class="r">slot</th><th>user</th><th>state</th><th class="r">context</th><th></th>
+    `${int((state.host || {}).users)} in host RAM · ${int(st.empty)} empty slots` +
+    (multi ? ` · ${int(state.instances)} instances` : "");
+  $("slots").innerHTML = `<tr><th class="r">slot</th>${multi ? `<th class="r">instance</th>` : ""}<th>user</th><th>state</th><th class="r">context</th><th></th>
     <th class="r">msgs</th><th>progress</th><th class="r">prefill tok/s</th><th class="r">decode tok/s</th>${state.dspark ? `<th class="r">drafts</th>` : ""}<th class="r">turn age</th></tr>` +
     (rows.length ? rows.map((r) => {
     const turn = r.index != null ? turns.get(r.index) : null;
@@ -344,11 +347,11 @@ function drawSlots() {
       }
     }
     const share = state.max_seq ? r.tokens / state.max_seq : 0;
-    return `<tr class="${esc(r.tier)}"><td class="r">${r.index ?? "h" + (r.host ?? "")}</td><td>${esc(r.id || "–")}</td><td>${esc(phase)}</td>
+    return `<tr class="${esc(r.tier)}"><td class="r">${r.index ?? "h" + (r.host ?? "")}</td>${multi ? `<td class="r">${r.instance ?? ""}</td>` : ""}<td>${esc(r.id || "–")}</td><td>${esc(phase)}</td>
       <td class="r">${int(r.tokens)} / ${int(state.max_seq)}</td>
       <td><div class="bar" title="${fmt(100 * share, 1)}% of the context"><div style="width:${100 * share}%;background:var(--blue)"></div></div></td>
       <td class="r">${int(r.messages)}</td><td>${progress}</td><td class="r">${prefill}</td><td class="r">${decode}</td>${state.dspark ? `<td class="r">${drafts}</td>` : ""}<td class="r">${age}</td></tr>`;
-  }).join("") : `<tr><td colspan="${state.dspark ? 11 : 10}" class="dim">no users yet</td></tr>`);
+  }).join("") : `<tr><td colspan="${(state.dspark ? 11 : 10) + (multi ? 1 : 0)}" class="dim">no users yet</td></tr>`);
 }
 
 // What each stage of an image in flight is doing, in the words of the server's _ImageStatus.
@@ -396,27 +399,31 @@ function drawPool() {
     (rows.join("") || `<tr><td colspan="4" class="dim">no page pool yet</td></tr>`) +
     `<tr><td>tokens free</td><td class="r" colspan="2">${int(state.tokens_left)}</td><td></td></tr>`;
   const c = state.counters, rt = state.runtime;
+  const multi = (state.instances || 1) > 1;
+  $("runtime-title").textContent = multi ? `Host runtimes (${int(state.instances)} instances, summed)` : "Host runtime";
+  $("timers-note").textContent = multi ? "summed across instances" : "";
   if (!c) { $("runtime").innerHTML = `<tr><td class="dim">no runtime counters (not running on the Rust host?)</td></tr>`; return; }
   const names = ["dispatch", "packet", "hash", "engram", "output_read"];
   $("runtime").innerHTML = `<tr><th>thread work</th><th class="r">calls</th><th class="r">µs now</th><th class="r">µs mean</th></tr>` +
     names.map((n) => `<tr><td>${n}</td><td class="r">${int(c[n + "_count"])}</td><td class="r">${fmt(rt && rt[n + "_us"], 1)}</td>
       <td class="r">${fmt(c[n + "_count"] ? c[n + "_ns"] / c[n + "_count"] / 1e3 : null, 1)}</td></tr>`).join("") +
-    `<tr><td>steps posted / read</td><td class="r" colspan="3">${int(c.posted)} / ${int(c.outputs_read)}${c.closed ? " <span class='dim'>(closed)</span>" : ""}</td></tr>`;
+    `<tr><td>steps posted / read</td><td class="r" colspan="3">${int(c.posted)} / ${int(c.outputs_read)}${c.closed ? " <span class='dim'>(closed)</span>" : ""}${multi ? " <span class='dim'>across instances</span>" : ""}</td></tr>`;
 }
 
 function drawHistory() {
   const rows = history.slice(-300).reverse();
   const done = history.filter((r) => r.decode_s > 0);
   const meanDecode = done.length ? done.reduce((a, r) => a + r.decode_tps, 0) / done.length : null;
+  const multi = state && (state.instances || 1) > 1;
   $("history-summary").textContent = `${history.length} turns · mean ${fmt(meanDecode)} tok/s decode`;
-  $("history").innerHTML = `<tr><th>ended</th><th>user</th><th class="r">slot</th><th>outcome</th><th class="r">queued</th>
+  $("history").innerHTML = `<tr><th>ended</th><th>user</th><th class="r">slot</th>${multi ? `<th class="r">instance</th>` : ""}<th>outcome</th><th class="r">queued</th>
     <th class="r">prompt</th><th class="r">cached</th><th class="r">prefill</th><th class="r">prefill tok/s</th><th class="r">TTFT</th>
     <th class="r">generated</th><th class="r">decode</th><th class="r">decode tok/s</th></tr>` + (rows.length ? rows.map((r) => `<tr>
-    <td>${clock(r.ended)}</td><td>${esc(r.user || "–")}</td><td class="r">${r.slot}</td><td>${esc(r.outcome)}</td>
+    <td>${clock(r.ended)}</td><td>${esc(r.user || "–")}</td><td class="r">${r.slot}</td>${multi ? `<td class="r">${r.instance ?? ""}</td>` : ""}<td>${esc(r.outcome)}</td>
     <td class="r">${fmt(r.queued_s, 2)}s</td><td class="r">${int(r.prompt_tokens)}</td><td class="r">${int(r.cached_tokens)}</td>
     <td class="r">${fmt(r.prefill_s, 2)}s</td><td class="r">${fmt(r.prefill_tps, 0)}</td><td class="r">${fmt(r.ttft_s, 2)}s</td>
     <td class="r">${int(r.generated)}</td><td class="r">${fmt(r.decode_s, 1)}s</td><td class="r">${fmt(r.decode_tps)}</td></tr>`).join("")
-    : `<tr><td colspan="13" class="dim">no turns have ended yet</td></tr>`);
+    : `<tr><td colspan="${multi ? 14 : 13}" class="dim">no turns have ended yet</td></tr>`);
 }
 
 function drawLog() {
@@ -434,7 +441,8 @@ function drawHeader(now) {
   if (closed || age > 15) { el.className = "pill down"; el.textContent = closed ? "runtime closed" : "server gone"; }
   else if (age > 4) { el.className = "pill stale"; el.textContent = "stale"; }
   else { el.className = "pill live"; el.textContent = "live"; }
-  $("model").textContent = state.model_id || "DeepSeek-V4.1";
+  const n = state.instances || 1;
+  $("model").textContent = (state.model_id || "DeepSeek-V4.1") + (n > 1 ? ` · ${n} instances` : "");
   $("uptime").textContent = `up ${dur(state.t - state.started)}`;
   $("updated").textContent = `updated ${fmt(age, 1)} s ago`;
   const broken = $("broken"); broken.style.display = state.broken ? "block" : "none";

@@ -28,9 +28,9 @@ weight is ~2 MB a core, more L1 than a per-call copy into the matmul's own buffe
 
 Under TP ``wkv`` is row-parallel: each rank holds ``kin / TP`` rows of it and multiplies its own slice
 of the rows, and ``width_sharded_all_reduce`` sums the ``[B, (hc + 1) * D]`` partials, so ``engram_gate``
-still sees the whole ``kv`` on every rank. A trace runs one program on every rank, so the rank picks its
-slice by position: :meth:`DeepSeekV41Engram.write_rows` rotates each device's rows so that device's slice
-leads, and :meth:`DeepSeekV41Engram.forward` slices the leading ``kin / TP`` columns.
+still sees the whole ``kv`` on every rank. Each rank's H2D socket carries only that rank's ``kin / TP``
+columns (:meth:`DeepSeekV41Engram.write_rows`), so the device receives its local slice directly with no
+on-device slice op.
 """
 
 from typing import Optional
@@ -70,9 +70,12 @@ def _value(weight) -> torch.Tensor:
 ENGRAM_WRITE_CHUNK = 2
 
 
-def rows_page_bytes(config) -> int:
-    """One user's bf16 Engram rows ``[kin]``: the page of a rows socket."""
-    return (config.engram_max_ngram_size - 1) * config.engram_n_heads * config.engram_head_dim * 2
+def rows_page_bytes(config, tp_size: int = 1) -> int:
+    """One user's per-rank bf16 Engram rows ``[kin / tp_size]``: the page of a rows socket."""
+    kin = (config.engram_max_ngram_size - 1) * config.engram_n_heads * config.engram_head_dim
+    if kin % tp_size:
+        raise ValueError(f"Engram's kin {kin} does not split over TP{tp_size}")
+    return (kin // tp_size) * 2
 
 
 def open_rows_sockets(device, page_bytes: int, fifo_pages: int = 2, socket_core: tuple = ROWS_SOCKET_CORE) -> list:
@@ -189,13 +192,13 @@ class DeepSeekV41Engram(DeepSeekV4Module):
             else None
         )
 
-        self.page_bytes = rows_page_bytes(config)
+        self.page_bytes = rows_page_bytes(config, tp_size)
         alignment = active_system_config().pipeline.pcie_alignment
         if self.page_bytes % alignment:
             raise ValueError(f"a {self.page_bytes} B row page is not a multiple of the {alignment} B PCIe alignment")
-        # Row-major, so a tensor page is one user's row: recv_async_h2d needs it to equal the socket page.
+        # Row-major, so a tensor page is one user's per-rank row: recv_async_h2d needs it to equal the socket page.
         self.rows = ttnn.from_torch(
-            torch.zeros(1, 1, batch, self.kin),
+            torch.zeros(1, 1, batch, self.local_kin),
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
@@ -203,7 +206,7 @@ class DeepSeekV41Engram(DeepSeekV4Module):
         )
         self.verify_rows_in = (
             ttnn.from_torch(
-                torch.zeros(1, 1, verify_rows, self.kin),
+                torch.zeros(1, 1, verify_rows, self.local_kin),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=device,
@@ -248,10 +251,10 @@ class DeepSeekV41Engram(DeepSeekV4Module):
         """
         rows = rows.reshape(-1, self.kin).to(torch.bfloat16)
         assert rows.shape[0] in (self.batch, self.verify_rows), (rows.shape[0], self.batch, self.verify_rows)
-        # Under TP the sockets are in rank order along the 1xTP mesh, the order ShardTensorToMesh cuts wkv in. The
-        # socket copies raw bytes; an integer view keeps bf16 out of the DLPack dtype check.
+        # Under TP the sockets are in rank order along the 1xTP mesh, the order ShardTensorToMesh cuts wkv in.
+        # Each rank receives only its local_kin columns. An integer view keeps bf16 out of the DLPack dtype check.
         ranked = [
-            (torch.roll(rows, -rank * self.local_kin, dims=-1) if self.tp_size > 1 else rows)
+            (rows[:, rank * self.local_kin : (rank + 1) * self.local_kin] if self.tp_size > 1 else rows)
             .contiguous()
             .view(torch.int16)
             for rank in range(len(self.sockets))
@@ -279,15 +282,10 @@ class DeepSeekV41Engram(DeepSeekV4Module):
         assert streams.memory_config() == memory_config, streams.memory_config()
         for socket in self.sockets:
             ttnn.experimental.recv_async_h2d(rows_in, socket)
-        local_rows = rows_in
-        if self.tp_size > 1:
-            local_rows = ttnn.slice(rows_in, [0, 0, 0, 0], [1, 1, n, self.local_kin])
         # ROW_MAJOR A, so kv comes out ROW_MAJOR WIDTH_SHARDED over the ring's receivers.
-        rows = _decode_activation(self.wkv, local_rows)
+        rows = _decode_activation(self.wkv, rows_in)
         kv = self.wkv(rows)
         ttnn.deallocate(rows)
-        if local_rows is not rows_in:
-            ttnn.deallocate(local_rows)
         if self.tp_size > 1:
             partial = kv
             if s == 1:
@@ -324,12 +322,9 @@ class DeepSeekV41Engram(DeepSeekV4Module):
         rows_in = self.verify_rows_in
         for socket in self.sockets:
             ttnn.experimental.recv_async_h2d(rows_in, socket)
-        local_rows = rows_in
-        if self.tp_size > 1:
-            local_rows = ttnn.slice(rows_in, [0, 0, 0, 0], [1, 1, r, self.local_kin])
         one_core = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
         block = ttnn.tilize(
-            local_rows,
+            rows_in,
             tile=ttnn.Tile((r, ttnn.TILE_SIZE)),
             memory_config=ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -337,8 +332,6 @@ class DeepSeekV41Engram(DeepSeekV4Module):
                 ttnn.ShardSpec(one_core, [r, self.local_kin], ttnn.ShardOrientation.ROW_MAJOR),
             ),
         )
-        if local_rows is not rows_in:
-            ttnn.deallocate(local_rows)
         replica = ttnn.experimental.deepseek.all_gather_for_matmul(
             block, ttnn.CoreRangeSet({self.wkv.b_core_grid().bounding_box()})
         )
