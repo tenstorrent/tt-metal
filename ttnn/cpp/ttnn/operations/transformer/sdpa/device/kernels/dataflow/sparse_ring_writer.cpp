@@ -19,6 +19,9 @@
 #include "ring_joint_kv_pad_derivation.hpp"
 #include "fused_op_receiver.hpp"
 #include "ring_utils.hpp"
+#if defined(SPARSE_LOGICAL_N_TENSOR)
+#include "sparse_ring_length.hpp"
+#endif
 
 // Output slice of one local Q chunk (the op has no joint tokens).
 inline Slice q_chunk_out_slice(uint32_t q_chunk, uint32_t nb, uint32_t nq, uint32_t Sq_chunk_t, uint32_t DHt) {
@@ -51,11 +54,16 @@ void kernel_main() {
     constexpr uint32_t kv_region_Nt = q_local_padded_Nt / kv_stripe_split;
     static_assert(kv_region_Nt * ring_size == chunk_size_t, "chunk_size_t must span one KV region per ring rank");
 
-    // Slots 28-37 hold scalars (32-35, the rank mapping, are unused: the writer never needs the ring id); the output
-    // accessor starts at slot 38 and the CB block follows it.
+    // Slots 28-37 hold scalars (32-35, the rank mapping, are read only with logical_n_tensor); the output accessor
+    // starts at slot 38 and the CB block follows it.
     constexpr uint32_t kFirstAccessorArgOffset = 38;
     constexpr auto out_args = TensorAccessorArgs<kFirstAccessorArgOffset>();
+#if defined(SPARSE_LOGICAL_N_TENSOR)
+    constexpr auto logical_n_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    constexpr uint32_t cb_arg_offset = logical_n_args.next_compile_time_args_offset();
+#else
     constexpr uint32_t cb_arg_offset = out_args.next_compile_time_args_offset();
+#endif
 
     // No Q rotation and no grouped K/V sources.
     static_assert(get_ct_arg<kernel_compile_time_args.size() - 1>() == 0, "no rotated Q split");
@@ -66,7 +74,7 @@ void kernel_main() {
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
     argidx++;  // logical_nt (unused: the writer only follows the ring order)
-    const uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
+    uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
     argidx++;  // single-valid-K-chunk mask (only the save / restore path needs it)
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
         false, /* wait_for_op_signal */
@@ -79,6 +87,37 @@ void kernel_main() {
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
 
     Noc noc;
+
+#if defined(SPARSE_LOGICAL_N_TENSOR)
+    {
+        // cb_col_identity is free until generated below.
+        constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(5);
+        constexpr uint32_t kv_local_padded_Nt = get_compile_time_arg_val(7);
+        constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(13);
+        constexpr bool full_mesh_rank_mapping = get_compile_time_arg_val(32) == 1;
+        constexpr auto snake_orientation =
+            static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(33));
+        constexpr uint32_t mesh_rows = get_compile_time_arg_val(34);
+        constexpr uint32_t mesh_cols = get_compile_time_arg_val(35);
+        active_ring_iter_mask = sparse_ring_length::read<
+                                    full_mesh_rank_mapping,
+                                    ring_size,
+                                    kv_local_padded_Nt,
+                                    Sk_chunk_t,
+                                    num_local_k_chunks,
+                                    chunk_size_t,
+                                    kv_region_Nt>(
+                                    noc,
+                                    logical_n_args,
+                                    get_common_arg_val<uint32_t>(0),
+                                    CircularBuffer(cb_col_identity).get_write_ptr(),
+                                    fused_op_receiver.seq,
+                                    mesh_rows,
+                                    mesh_cols,
+                                    snake_orientation)
+                                    .active_ring_iter_mask;
+    }
+#endif
 
     const auto out_writer = TensorAccessor(out_args, out_addr);
     constexpr bool output_has_no_padding = q_local_padded_Nt % Sq_chunk_t == 0;

@@ -16,6 +16,9 @@
 #include "pooled_bias_gen.hpp"
 #include "fused_op_receiver.hpp"
 #include "ring_utils.hpp"
+#if defined(SPARSE_LOGICAL_N_TENSOR)
+#include "sparse_ring_length.hpp"
+#endif
 
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 
@@ -147,7 +150,16 @@ void kernel_main() {
     constexpr auto pooled_k_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
     constexpr auto pooled_v_args = TensorAccessorArgs<pooled_k_args.next_compile_time_args_offset()>();
     constexpr auto block_counts_args = TensorAccessorArgs<pooled_v_args.next_compile_time_args_offset()>();
+#if defined(SPARSE_LOGICAL_N_TENSOR)
+    constexpr bool kLogicalNTensor = true;
+    constexpr uint32_t kLengthWordsOffset = SPARSE_LOGICAL_N_TENSOR;
+    constexpr auto logical_n_args = TensorAccessorArgs<block_counts_args.next_compile_time_args_offset()>();
+    constexpr uint32_t chains_base_offset = logical_n_args.next_compile_time_args_offset();
+#else
+    constexpr bool kLogicalNTensor = false;
+    constexpr uint32_t kLengthWordsOffset = 0;
     constexpr uint32_t chains_base_offset = block_counts_args.next_compile_time_args_offset();
+#endif
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -173,8 +185,8 @@ void kernel_main() {
         argidx++;  // max_q_per_core (dense loop only)
     }
 
-    const uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
-    const uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
+    uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
+    uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
     argidx += 4;  // chunked-prefill Q mapping (not chunked)
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
         true, /* wait_for_op_signal */
@@ -203,7 +215,6 @@ void kernel_main() {
     // (pooled_bias_gen::kTableWords words) and the head group's delivery arguments.
     [[maybe_unused]] const uint32_t block_counts_addr = get_arg_val<uint32_t>(sparse_args_base + 3);
     const uint32_t pooled_bias_table_base = sparse_args_base + 4;
-    constexpr uint32_t logical_n_tokens = get_named_compile_time_arg_val("sparse_logical_n");
     constexpr uint32_t mask_nb = get_named_compile_time_arg_val("mask_nb");
     constexpr uint32_t mask_nb_pad = get_named_compile_time_arg_val("mask_nb_pad");
     constexpr uint32_t mask_n_blocks_pad = get_named_compile_time_arg_val("mask_n_blocks_pad");
@@ -259,6 +270,36 @@ void kernel_main() {
 
     Noc noc;
 
+#if defined(SPARSE_LOGICAL_N_TENSOR)
+    // The plan page is free until the first plan.
+    uint32_t logical_n_tokens = 0;
+    {
+        CircularBuffer cb_plan(cb_sparse_plan);
+        cb_plan.reserve_back(1);
+        const auto len = sparse_ring_length::read<
+            full_mesh_rank_mapping,
+            ring_size,
+            kv_local_padded_Nt,
+            Sk_chunk_t,
+            num_local_k_chunks,
+            chunk_size_t,
+            kv_region_Nt>(
+            noc,
+            logical_n_args,
+            get_common_arg_val<uint32_t>(0),
+            cb_plan.get_write_ptr(),
+            fused_op_receiver.seq,
+            mesh_rows,
+            mesh_cols,
+            snake_orientation);
+        logical_n_tokens = len.logical_n;
+        logical_nt = len.logical_nt;
+        active_ring_iter_mask = len.active_ring_iter_mask;
+    }
+#else
+    constexpr uint32_t logical_n_tokens = get_named_compile_time_arg_val("sparse_logical_n");
+#endif
+
     // Head chain (query-head level): MHA uses it for K/V; separate-V shared-K uses it for V only.
     auto head_chain = make_chain_link<HeadChainArgs, true>(head_cfg, v_chunk_tiles, v_tile_bytes, head_cfg.head);
     // Shared-K chain used by K with one local K head (no chain head).
@@ -310,6 +351,15 @@ void kernel_main() {
     // Real tokens of block b of shard s. Block b is computed exactly iff its mask bit is set and it holds a real
     // token; tokens past its count are never attended (compute trims the block's tiles and adds the key bias).
     const pooled_bias_gen::Geometry geo{kv_local_padded_Nt * 32, logical_n_tokens, mask_nb, mask_nb_pad};
+    // Compute cannot read DRAM: it takes the length from the counts page.
+    [[maybe_unused]] const auto write_length_words = [&](uint32_t page) {
+        if constexpr (kLogicalNTensor) {
+            CoreLocalMem<volatile uint32_t> r(page + kLengthWordsOffset);
+            r[0] = logical_n_tokens;
+            r[1] = logical_nt;
+            r[2] = active_ring_iter_mask;
+        }
+    };
     [[maybe_unused]] volatile tt_l1_ptr uint8_t* counts_table = nullptr;
     if constexpr (has_block_counts) {
         // One byte per global block, read in place by compute for the whole op. The given counts (one uint32 page of
@@ -336,6 +386,12 @@ void kernel_main() {
                 counts_table[g] = static_cast<uint8_t>(given[g] < len ? given[g] : len);
             }
         }
+        write_length_words(cb_counts.get_write_ptr());
+        cb_counts.push_back(1);
+    } else if constexpr (kLogicalNTensor) {
+        CircularBuffer cb_counts(cb_block_counts);
+        cb_counts.reserve_back(1);
+        write_length_words(cb_counts.get_write_ptr());
         cb_counts.push_back(1);
     }
     const auto block_count = [&](uint32_t s, uint32_t b) -> uint32_t {

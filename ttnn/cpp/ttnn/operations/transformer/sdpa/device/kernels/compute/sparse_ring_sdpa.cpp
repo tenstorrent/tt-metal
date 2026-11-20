@@ -43,7 +43,13 @@ void kernel_main() {
     constexpr uint32_t qk_subblock_w = get_compile_time_arg_val(17);
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(26);
     constexpr bool use_streaming_compute = get_compile_time_arg_val(27) == 1;
+#if defined(SPARSE_LOGICAL_N_TENSOR)
+    constexpr bool kLogicalNTensor = true;
+    constexpr uint32_t kLengthWordsOffset = SPARSE_LOGICAL_N_TENSOR;
+#else
+    constexpr bool kLogicalNTensor = false;
     constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(28);
+#endif
     constexpr uint32_t chunk_size_t = get_compile_time_arg_val(34);
     // One KV region per ring rank (no split KV).
     constexpr uint32_t kv_region_Nt = q_local_padded_Nt;
@@ -52,7 +58,8 @@ void kernel_main() {
 
     // Padding of the last K chunk of a shard (local padded tail) and of the shard holding logical_n.
     constexpr bool local_n_has_padding = kv_local_padded_Nt % Sk_chunk_t != 0;
-    constexpr bool global_n_has_padding = logical_n_compile % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+    constexpr bool global_n_has_padding =
+        logical_n_compile % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0 || kLogicalNTensor;
     constexpr uint32_t local_n_padded_tiles = local_n_has_padding ? Sk_chunk_t - (kv_local_padded_Nt % Sk_chunk_t) : 0;
 
     uint32_t argidx = 0;
@@ -62,9 +69,9 @@ void kernel_main() {
     const uint32_t ring_index_runtime = get_arg_val<uint32_t>(argidx++);
     const uint32_t forward_writes_expected = get_arg_val<uint32_t>(argidx++);
     const uint32_t backward_writes_expected = get_arg_val<uint32_t>(argidx++);
-    const uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
+    uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
     argidx += 4;  // KV-pad rotation words (unused: no KV cache)
-    const uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
+    uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
 
     // CB indices: the block starts at positional slot 49.
     constexpr uint32_t cb_arg_offset = 49;
@@ -117,11 +124,18 @@ void kernel_main() {
     // The identity scale stays fronted for the whole op.
     CircularBuffer(cb_identity_scale_in).wait_front(1);
     [[maybe_unused]] const volatile uint8_t* block_counts = nullptr;
-    if constexpr (has_block_counts) {
+    if constexpr (has_block_counts || kLogicalNTensor) {
         CircularBuffer(cb_block_counts).wait_front(1);
         block_counts = reinterpret_cast<const volatile uint8_t*>(ckernel::get_tile_address(cb_block_counts, 0));
         invalidate_l1_cache();
     }
+#if defined(SPARSE_LOGICAL_N_TENSOR)
+    const volatile uint32_t* length_words =
+        reinterpret_cast<const volatile uint32_t*>(block_counts + kLengthWordsOffset);
+    const uint32_t global_n_partial_col = length_words[0] % tt::constants::TILE_HEIGHT;
+    logical_nt = length_words[1];
+    active_ring_iter_mask = length_words[2];
+#endif
 
     const uint32_t q_per_core = global_q_end - global_q_start;
     // The K/V CBs' read position in entries, carried across ring iterations and passes (the CBs are never reset).
@@ -230,7 +244,7 @@ void kernel_main() {
                 block_counts);
         }
     }
-    if constexpr (has_block_counts) {
+    if constexpr (has_block_counts || kLogicalNTensor) {
         CircularBuffer(cb_block_counts).pop_front(1);
     }
 }

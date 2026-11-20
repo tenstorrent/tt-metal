@@ -136,14 +136,15 @@ struct CheckedRuntimeArgList {
 RingWorkMasks build_ring_work_masks(
     const ttnn::prim::SparseRingSDPAParams& args,
     const ttnn::prim::SparseRingSDPAInputs& tensor_args,
-    const RingWritePlan& ring_write_plan) {
+    const RingWritePlan& ring_write_plan,
+    uint32_t logical_n) {
     const uint32_t ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
     TT_FATAL(
         ring_size <= std::numeric_limits<uint32_t>::digits,
         "SparseRingSDPA host ring-work masks support up to {} ring iterations. Got ring_size={}",
         std::numeric_limits<uint32_t>::digits,
         ring_size);
-    const uint32_t logical_nt = tt::div_up(static_cast<uint32_t>(args.logical_n), tt::constants::TILE_HEIGHT);
+    const uint32_t logical_nt = tt::div_up(logical_n, tt::constants::TILE_HEIGHT);
     const uint32_t kv_local_padded_Nt = tensor_args.local_kv_seq_len() / tt::constants::TILE_HEIGHT;
     const uint32_t k_chunk_tile_count = args.get_k_chunk_size() / tt::constants::TILE_HEIGHT;
     const uint32_t num_local_k_chunks = tt::div_up(tensor_args.local_kv_seq_len(), args.get_k_chunk_size());
@@ -328,9 +329,13 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const uint32_t gathered_padded_Nt = gathered_padded_N / tt::constants::TILE_HEIGHT;
     const uint32_t DHt = DH / tt::constants::TILE_WIDTH;
     const uint32_t vDHt = vDH / tt::constants::TILE_WIDTH;
-    const RingWorkMasks ring_work_masks = build_ring_work_masks(args, tensor_args, ring_write_plan);
+    // With logical_n_tensor the kernels read the length on device; host values use the padded length.
+    const bool has_logical_n_tensor = tensor_args.logical_n_tensor.has_value();
+    const uint32_t host_logical_n =
+        has_logical_n_tensor ? kv_local_padded_N * ring_size : static_cast<uint32_t>(args.logical_n);
+    const RingWorkMasks ring_work_masks = build_ring_work_masks(args, tensor_args, ring_write_plan, host_logical_n);
     const RingJointRuntimeArgLayout runtime_arg_layout = get_runtime_arg_layout(use_head_chain, k_uses_batch_chain);
-    const uint32_t logical_nt = tt::div_up(static_cast<uint32_t>(args.logical_n), tt::constants::TILE_HEIGHT);
+    const uint32_t logical_nt = tt::div_up(host_logical_n, tt::constants::TILE_HEIGHT);
     // Chunked-prefill Q mapping words of the shared runtime-arg layout; unused here.
     constexpr uint32_t kUnusedQMappingWord = 0;
 
@@ -362,7 +367,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     // Global chunk width the kernels divide by the ring size (one Q slab per device).
     const uint32_t q_chunk_group_tile_count = q_local_padded_Nt * ring_size;
 
-    const uint32_t compile_time_logical_n = static_cast<uint32_t>(args.logical_n);
+    const uint32_t compile_time_logical_n = has_logical_n_tensor ? 0u : static_cast<uint32_t>(args.logical_n);
+    const uint32_t compile_time_logical_nt = has_logical_n_tensor ? 0u : logical_nt;
     const uint32_t compile_time_global_n_partial_col = compile_time_logical_n % tt::constants::TILE_HEIGHT;
 
     const uint32_t num_local_q_chunks = tt::div_up(q_local_padded_N, q_chunk_size);
@@ -640,6 +646,10 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     TensorAccessorArgs(pooled_k_buf).append_to(reader_compile_time_args);
     TensorAccessorArgs(pooled_v_buf).append_to(reader_compile_time_args);
     TensorAccessorArgs(block_counts_buf).append_to(reader_compile_time_args);
+    tt::tt_metal::Buffer* const logical_n_buf = has_logical_n_tensor ? tensor_args.logical_n_tensor->buffer() : nullptr;
+    if (has_logical_n_tensor) {
+        TensorAccessorArgs(logical_n_buf).append_to(reader_compile_time_args);
+    }
 
     /**
      * Create semaphores used for L1-L1 store-and-forward of KV between cores.
@@ -754,6 +764,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
+    if (has_logical_n_tensor) {
+        TensorAccessorArgs(logical_n_buf).append_to(writer_compile_time_args);
+    }
 
     std::vector<uint32_t> compute_compile_time_args = {
         NH,
@@ -764,7 +777,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         q_local_padded_Nt,
         kv_local_padded_Nt,
         compile_time_logical_n,
-        logical_nt,
+        compile_time_logical_nt,
         0,  // Lt
         0,  // L
         num_local_q_chunks,
@@ -879,8 +892,17 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     constexpr uint32_t kResidentGroup = 4;
     const bool has_block_counts = tensor_args.block_counts.has_value();
     const uint32_t block_counts_bytes = tt::round_up(mask_n_blocks_pad, 32u);
+    // The counts page: block counts, then logical_n, logical_nt and active_ring_iter_mask (logical_n_tensor).
+    const bool has_counts_page = has_block_counts || has_logical_n_tensor;
+    const uint32_t length_words_offset = has_block_counts ? block_counts_bytes : 0u;
+    const uint32_t counts_page_bytes = length_words_offset + (has_logical_n_tensor ? 32u : 0u);
+    if (has_logical_n_tensor) {
+        defines["SPARSE_LOGICAL_N_TENSOR"] = std::to_string(length_words_offset);
+    }
     const uint32_t key_bias_tiles =
-        (has_block_counts || args.logical_n % tt::constants::TILE_WIDTH != 0) ? 2 * (Sk_chunk_t / block_tiles) : 0u;
+        (has_block_counts || has_logical_n_tensor || args.logical_n % tt::constants::TILE_WIDTH != 0)
+            ? 2 * (Sk_chunk_t / block_tiles)
+            : 0u;
     struct CbLayout {
         uint32_t q_in, k_in, v_in, identity_scale_in, col_identity, qk_im, max_A, exp_max_diff, out, stats_in, prev_out,
             recip_scratch, sum_in, sparse_plan, pooled_bias, block_counts, key_bias, sum_identity;
@@ -917,11 +939,11 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         // One pooled chunk of bias tiles in flight; only with the pooled route.
         l.pooled_bias = pooled_route ? tile_cb(Sk_chunk_t, mask_tile_size, mask_df)
                                      : std::numeric_limits<uint32_t>::max();  // inactive
-        // One byte per global block, filled once by the reader.
-        l.block_counts = has_block_counts ? alloc(block_counts_bytes, 1, tt::DataFormat::UInt32)
-                                          : std::numeric_limits<uint32_t>::max();  // inactive
+        // One byte per global block, filled once by the reader, then the length words.
+        l.block_counts = has_counts_page ? alloc(counts_page_bytes, 1, tt::DataFormat::UInt32)
+                                         : std::numeric_limits<uint32_t>::max();  // inactive
         // Key bias: one column-bias tile per block whose real tokens end inside a tile, two pieces' worth. Needed
-        // only with block_counts or a logical_n off a tile boundary.
+        // only with block_counts, logical_n_tensor or a logical_n off a tile boundary.
         l.key_bias = key_bias_tiles > 0 ? tile_cb(key_bias_tiles, mask_tile_size, mask_df)
                                         : std::numeric_limits<uint32_t>::max();  // inactive
         return l;
@@ -1032,7 +1054,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     // Without the pooled route the bias CB is not allocated; the kernels still take an id (and its tile size), so
     // they get Q's, which they never touch through it.
     const uint32_t cb_pooled_bias = pooled_route ? cbs.pooled_bias : cbs.q_in;
-    const uint32_t cb_block_counts = has_block_counts ? cbs.block_counts : cbs.q_in;
+    const uint32_t cb_block_counts = has_counts_page ? cbs.block_counts : cbs.q_in;
     const uint32_t cb_key_bias = key_bias_tiles > 0 ? cbs.key_bias : cbs.q_in;
 
     // The dense op's padding-mask and scale CBs: the resident step masks padding by narrowing its K width and applies
@@ -1270,7 +1292,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         {"pooled_last_tiles", pooled_last_tiles},
         {"mask_row_bytes", mask_row_bytes},
         // Logical length in tokens, for the on-device pooled-column bias.
-        {"sparse_logical_n", static_cast<uint32_t>(args.logical_n)},
+        {"sparse_logical_n", compile_time_logical_n},
         {"cb_sparse_plan", cb_sparse_plan},
         {"cb_pooled_bias", cb_pooled_bias},
         // Real tokens per block: given (block_counts) or the geometric lengths; see the CB layout above.
@@ -1501,6 +1523,14 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         compute_args.push_checked(
             runtime_arg_layout.compute_active_ring_iter_mask, active_ring_iter_mask, "compute.active_ring_iter_mask");
         compute_kernel.emplace_runtime_args(core, compute_args.args);
+    }
+
+    if (has_logical_n_tensor) {
+        for (auto* kernel : {&reader_kernel, &writer_kernel}) {
+            KernelDescriptor::RTArgList common_args;
+            common_args.push_back(logical_n_buf);
+            kernel->emplace_common_runtime_args(common_args);
+        }
     }
 
     // Push the SDPA kernels into desc before invoking the all-gather helper so the helper appends its own kernels
