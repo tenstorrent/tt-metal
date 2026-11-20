@@ -43,7 +43,7 @@ __attribute__((always_inline)) inline vFloat exp_root_rsqrt(vFloat x) {
     return y;
 }
 
-template <typename Config, bool Held = false>
+template <typename Config>
 __attribute__((always_inline)) inline vFloat exp_root_eval(vFloat x) {
     static_assert(
         Config::kExpDegree == 2u && Config::kCoreDegree == 4u && Config::kCorrectionDegree == 1u &&
@@ -53,9 +53,7 @@ __attribute__((always_inline)) inline vFloat exp_root_eval(vFloat x) {
     vFloat magnitude = setsgn(x, 0);
     // A call that loads the root's Newton constants itself takes the root first, while few values are live.
     vFloat root;
-    if constexpr (Held) {
-        root = exp_root_rsqrt<Config>(magnitude);
-    }
+    root = exp_root_rsqrt<Config>(magnitude);
     vFloat square = magnitude * magnitude;
     vFloat core = Config::kCoreCoefficients[Config::kCoreDegree];
 #pragma GCC unroll 8
@@ -79,9 +77,6 @@ __attribute__((always_inline)) inline vFloat exp_root_eval(vFloat x) {
 #pragma GCC unroll 4
     for (int k = (int)Config::kExpDegree - 1; k >= 0; --k) {
         exp_polynomial = exp_polynomial * fraction + Config::kExpCoefficients[k];
-    }
-    if constexpr (!Held) {
-        root = exp_root_rsqrt(magnitude);
     }
     vFloat inverse = root * root;
     vFloat scaled_root = exp_polynomial * root;

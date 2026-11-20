@@ -19,7 +19,7 @@ inline void calculate_exp_root() {
     static_assert(!Config::kWormhole);
     for (int d = 0; d < 32; d++) {
         sfpi::vFloat x_raw = sfpi::dst_reg[d];
-        sfpi::vFloat y = ttpoly::i1::exp_root_eval<Config, true>(x_raw);
+        sfpi::vFloat y = ttpoly::i1::exp_root_eval<Config>(x_raw);
         ttpoly::i1::apply_raw_domain_records<Config, 1>(x_raw, y);
         sfpi::vUInt raw_u16 = sfpi::dst_reg[d].template mode<sfpi::DataLayout::U16>();
         {
