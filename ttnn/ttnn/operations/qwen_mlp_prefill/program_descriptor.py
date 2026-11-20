@@ -29,17 +29,30 @@ def _packed(entries):
     return names, flat
 
 
-def _relay_sources(groups, chips):
-    sources = [[] for _ in range(L.RELAY_COUNT)]
+def _routes(groups, chips):
+    """Ports of every down core, the relay assigned to each port and the sources of every relay."""
     if chips == 1:
-        return sources
+        return {}, {}, [[] for _ in range(L.RELAY_COUNT)]
+    routes = {}
     for group in range(groups):
         for row in range(L.B_ROWS):
-            for block, (_, _, relay) in L.PARTIAL_ROUTE.items():
-                sources[relay].append((L.b_core(group, block, row), 0))
-            sources[0 if row < L.B_ROWS // 2 else 1].append((L.b_core(group, L.OWNER_BLOCK, row), 0))
-            sources[3].append((L.b_core(group, L.OWNER_BLOCK, row), 1))
-    return sources
+            for block in range(L.B_COLUMNS):
+                if block == L.OWNER_BLOCK:
+                    routes[group, block, row] = [(0, 0, row % 2 == 0), (1, 1, row % 2 == 1)]
+                else:
+                    direction = {1: 0, 2: row % 2, 3: 1}[block]
+                    routes[group, block, row] = [(0, direction, 1)]
+    load = [0] * L.RELAY_COUNT
+    sources = [[] for _ in range(L.RELAY_COUNT)]
+    assigned = {}
+    for key, ports in routes.items():
+        for port, direction, extra in ports:
+            weight = 3 * (1 + extra) if key[1] == L.OWNER_BLOCK else 3
+            relay = min((2 * direction, 2 * direction + 1), key=lambda r: load[r])
+            load[relay] += weight
+            sources[relay].append((L.b_core(*key), port))
+            assigned[key, port] = relay
+    return routes, assigned, sources
 
 
 def create_program_descriptor(h, w_norm, w_gate_up, w_down, y, chip, chips, groups, node_ids, startup):
@@ -181,7 +194,9 @@ def create_program_descriptor(h, w_norm, w_gate_up, w_down, y, chip, chips, grou
         )
 
     risc0, risc1 = ttnn.DataMovementProcessor.RISCV_0, ttnn.DataMovementProcessor.RISCV_1
-    relay_sources = _relay_sources(groups, chips)
+    routes, assigned, relay_sources = _routes(groups, chips)
+
+    sources_of = [set(sources) for sources in relay_sources]
 
     def source_index(relay, core, port):
         return relay_sources[relay].index((core, port))
@@ -212,22 +227,32 @@ def create_program_descriptor(h, w_norm, w_gate_up, w_down, y, chip, chips, grou
             ("partner_x", partner(core, group)[0]),
             ("partner_y", partner(core, group)[1]),
         ]
-        relay0 = relay1 = (0, 0)
+        relay = [0, 0]
+        port_offset2 = 0
         hops = 0
-        if chips > 1 and block == L.OWNER_BLOCK:
-            relay0 = (0 if row < L.B_ROWS // 2 else 1, 0)
-            relay1 = (3, 1)
-        elif chips > 1:
-            _, hops, relay = L.PARTIAL_ROUTE[block]
-            relay0 = (relay, 0)
+        if chips > 1:
+            key = (group, block, row)
+            for port, _, offset2 in routes[key]:
+                relay[port] = assigned[key, port]
+            if block == L.OWNER_BLOCK:
+                port_offset2 = 0 if row % 2 == 0 else 1
+            else:
+                hops = 1 if block != 2 else 2
         extra += [
             ("hops", hops),
-            ("relay_x0", physical(*L.RELAY_CORE_LIST[relay0[0]])[0]),
-            ("relay_y0", physical(*L.RELAY_CORE_LIST[relay0[0]])[1]),
-            ("relay_source0", source_index(relay0[0], core, relay0[1]) if chips > 1 else 0),
-            ("relay_x1", physical(*L.RELAY_CORE_LIST[relay1[0]])[0]),
-            ("relay_y1", physical(*L.RELAY_CORE_LIST[relay1[0]])[1]),
-            ("relay_source1", source_index(relay1[0], core, 1) if chips > 1 and relay1[1] else 0),
+            ("port_offset2", port_offset2),
+            *[
+                item
+                for port in range(2)
+                for item in (
+                    (f"relay_x{port}", physical(*L.RELAY_CORE_LIST[relay[port]])[0]),
+                    (f"relay_y{port}", physical(*L.RELAY_CORE_LIST[relay[port]])[1]),
+                    (
+                        f"relay_source{port}",
+                        source_index(relay[port], core, port) if (core, port) in sources_of[relay[port]] else 0,
+                    ),
+                )
+            ],
         ]
         return core, extra
 

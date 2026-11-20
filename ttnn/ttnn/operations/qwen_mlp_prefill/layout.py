@@ -60,8 +60,6 @@ BLOCK_OF_COLUMN = [2, 1, 3, 0]
 COLUMN_OF_BLOCK = [BLOCK_OF_COLUMN.index(block) for block in range(B_COLUMNS)]
 OWNER_BLOCK = 0
 
-# block -> (ring direction, hops, relay index) used to send a partial segment to its owner chip
-PARTIAL_ROUTE = {1: (0, 1, 1), 2: (0, 2, 0), 3: (1, 1, 2)}
 RELAY_COUNT = 4
 RELAY_CORE_LIST = [(B_FIRST_X, 4), (B_FIRST_X + 1, 4), (B_FIRST_X + 2, 4), (B_FIRST_X + 2, 3)]
 FLAG_BYTES = 16

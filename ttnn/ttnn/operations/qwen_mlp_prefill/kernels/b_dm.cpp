@@ -88,6 +88,7 @@ void kernel_main() {
                 {.page_id = (m * groups + CT_ARG("group")) * CT_ARG("h_tiles") + first_column + t});
         }
     };
+    auto offset_port = [&](uint32_t offset) { return offset == 1 ? 0 : offset == 2 ? RT_ARG("port_offset2") : 1; };
     auto send_segment = [&](RelayPort& port,
                             uint32_t hops,
                             uint32_t source,
@@ -170,10 +171,9 @@ void kernel_main() {
                 if (credited) {
                     write_segment(m, y_segment.get_read_ptr());
                     for (uint32_t offset = 1; offset <= peers; offset++) {
-                        const uint32_t port = offset == RING_CHIPS - 1 ? 1 : 0;
                         send_segment(
-                            ports[port],
-                            port == 1 ? 1 : offset,
+                            ports[offset_port(offset)],
+                            offset == 2 ? 2 : 1,
                             y_segment.get_read_ptr(),
                             block_x[RING_CHIPS - offset],
                             landing[0] + (m % depth) * segment_bytes,
@@ -182,11 +182,10 @@ void kernel_main() {
                     noc.async_write_barrier();
                     y_segment.pop_front(columns);
                     for (uint32_t offset = 1; offset <= peers; offset++) {
-                        const uint32_t port = offset == RING_CHIPS - 1 ? 1 : 0;
-                        ports[port].push(
+                        ports[offset_port(offset)].push(
                             noc,
                             MessageKind::Increment,
-                            port == 1 ? 1 : offset,
+                            offset == 2 ? 2 : 1,
                             0,
                             0,
                             block_x[RING_CHIPS - offset],
