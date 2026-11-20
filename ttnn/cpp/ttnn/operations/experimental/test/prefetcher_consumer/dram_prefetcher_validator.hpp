@@ -12,6 +12,7 @@
 
 #include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher.hpp"
@@ -90,7 +91,9 @@ void test_dram_prefetcher_validator(
 // they do above and must match what was queued; the consumer Attaches the pipes and reads them
 // through the device-side experimental::PrefetcherPipe. `bank_to_receivers` is the plan the pipes
 // were created from (create_prefetcher_pipes_for_tensor_prefetcher); it fixes which slab each
-// receiver expects, so `prefetcher_pipes` may be in any order.
+// receiver expects, so `prefetcher_pipes` may be in any order. For a grouped weight (its dim -3 counts the
+// groups, at most 32), `groups` lists the groups the prefetcher delivers, ascending, as a group selector picks
+// them; empty means every group.
 //
 // Unlike the GlobalCircularBuffer path this is not a ttnn device operation: it builds and enqueues
 // its program directly. Every run wants a fresh program anyway -- the validator is checked once per
@@ -104,6 +107,20 @@ void test_tensor_prefetcher_pipe_validator(
     const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes,
     const std::vector<std::pair<uint32_t, tt::tt_metal::CoreRangeSet>>& bank_to_receivers,
     bool streaming = false,
-    const std::vector<uint32_t>& rotation = {});
+    const std::vector<uint32_t>& rotation = {},
+    const std::vector<uint32_t>& groups = {});
+
+// The workload test_tensor_prefetcher_pipe_validator enqueues, for a caller that enqueues it some other way,
+// such as recording it into a CommandList.
+tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_workload(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    const ttnn::Tensor& source_tensor,
+    uint32_t num_layers,
+    uint32_t print_stride,
+    const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes,
+    const std::vector<std::pair<uint32_t, tt::tt_metal::CoreRangeSet>>& bank_to_receivers,
+    bool streaming = false,
+    const std::vector<uint32_t>& rotation = {},
+    const std::vector<uint32_t>& groups = {});
 
 }  // namespace ttnn::operations::experimental::test

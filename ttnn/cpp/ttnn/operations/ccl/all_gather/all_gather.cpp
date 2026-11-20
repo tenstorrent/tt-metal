@@ -68,8 +68,8 @@ std::pair<bool, std::string> use_composite_all_gather(
     // Page sizes are UNALIGNED (content) sizes, so a matched-but-padded gather reads as matched, not
     // concat. The page checks below are no-ops for tile, whose pages are always aligned and equally
     // sized on both sides.
-    const uint32_t input_page_size = input_tensor.buffer()->page_size();
-    const uint32_t input_aligned_page_size = input_tensor.buffer()->aligned_page_size();
+    const uint32_t input_page_size = input_tensor.mesh_buffer().page_size();
+    const uint32_t input_aligned_page_size = input_tensor.mesh_buffer().aligned_page_size();
     const uint32_t output_page_size = output_spec.compute_page_size_bytes();
 
     // The factory derives chunks-per-page (concat) and split-factor (split) with a truncating
@@ -89,7 +89,7 @@ std::pair<bool, std::string> use_composite_all_gather(
             fmt::format(
                 "input rows ({} B) are padded to the {} B memory alignment; resharding needs unpadded rows",
                 input_page_size,
-                input_tensor.buffer()->alignment())};
+                input_tensor.mesh_buffer().alignment())};
     }
     // NoC write alignment (NOC_{L1,DRAM}_WRITE_ALIGNMENT_BYTES): 16 B on Wormhole/Blackhole, 1 B on Quasar.
     // Ideally this should be queried (Hal::get_write_alignment(HalMemType) is currently unreachable from TTNN).

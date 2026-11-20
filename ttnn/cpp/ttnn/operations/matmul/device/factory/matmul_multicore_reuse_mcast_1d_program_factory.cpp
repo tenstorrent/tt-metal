@@ -17,8 +17,8 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 
 #include "ttnn/prefetcher_pipe.hpp"
@@ -37,29 +37,32 @@ using ttnn::operations::unary::UnaryWithParam;
 
 using tt::tt_metal::MeshTensor;
 
+using tt::tt_metal::AddRuntimeArgsForNode;
+using tt::tt_metal::DataflowBufferSpec;
+using tt::tt_metal::DataMovementHardwareConfig;
+using tt::tt_metal::DFBBinding;
+using tt::tt_metal::DFBEndpointType;
+using tt::tt_metal::DFBSpecName;
+using tt::tt_metal::Group;
 using tt::tt_metal::KernelBuildOptLevel;
-using tt::tt_metal::experimental::AddRuntimeArgsForNode;
-using tt::tt_metal::experimental::DataflowBufferSpec;
-using tt::tt_metal::experimental::DataMovementHardwareConfig;
-using tt::tt_metal::experimental::DFBBinding;
-using tt::tt_metal::experimental::DFBEndpointType;
-using tt::tt_metal::experimental::DFBSpecName;
-using tt::tt_metal::experimental::Group;
-using tt::tt_metal::experimental::KernelRunArgs;
-using tt::tt_metal::experimental::KernelSpec;
-using tt::tt_metal::experimental::KernelSpecName;
+using tt::tt_metal::KernelRunArgs;
+using tt::tt_metal::KernelSpec;
+using tt::tt_metal::KernelSpecName;
+using tt::tt_metal::ProgramRunArgs;
+using tt::tt_metal::ProgramSpec;
+using tt::tt_metal::ScratchpadBinding;
+using tt::tt_metal::ScratchpadSpec;
+using tt::tt_metal::ScratchpadSpecName;
+using tt::tt_metal::SemaphoreBinding;
+using tt::tt_metal::SemaphoreSpec;
+using tt::tt_metal::SemaphoreSpecName;
+using tt::tt_metal::TensorBinding;
+using tt::tt_metal::TensorParameter;
+using tt::tt_metal::TensorParamName;
+using tt::tt_metal::WorkUnitSpec;
 using tt::tt_metal::experimental::PrefetcherPipeArgument;
 using tt::tt_metal::experimental::PrefetcherPipeParameter;
 using tt::tt_metal::experimental::PrefetcherPipeParamName;
-using tt::tt_metal::experimental::ProgramRunArgs;
-using tt::tt_metal::experimental::ProgramSpec;
-using tt::tt_metal::experimental::SemaphoreBinding;
-using tt::tt_metal::experimental::SemaphoreSpec;
-using tt::tt_metal::experimental::SemaphoreSpecName;
-using tt::tt_metal::experimental::TensorBinding;
-using tt::tt_metal::experimental::TensorParameter;
-using tt::tt_metal::experimental::TensorParamName;
-using tt::tt_metal::experimental::WorkUnitSpec;
 
 namespace ttnn::prim {
 
@@ -91,7 +94,7 @@ static void reserve_multicast_tail(
         .source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/mcast_tail_reservation.cpp",
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = dfb, .accessor_name = "reserved", .endpoint_type = DFBEndpointType::CONSUMER}},
-        .hw_config = tt::tt_metal::experimental::ComputeHardwareConfig{},
+        .hw_config = tt_metal::ComputeHardwareConfig{},
     });
     work_units.push_back(WorkUnitSpec{
         .name = "multicast_tail_storage", .kernels = {producer, consumer}, .target_nodes = idle_cores});
@@ -3516,8 +3519,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     const DFBSpecName INTERM0_ALIAS_DFB{"intermed0_reload_alias"};
     const DFBSpecName BIAS_DFB{"bias"};
     const DFBSpecName IN0_TRANSPOSED_DFB{"in0_transposed"};
-    const DFBSpecName SPARSITY_IN0_DFB{"sparsity_in0"};
-    const DFBSpecName SPARSITY_IN1_DFB{"sparsity_in1"};
+
+    const ScratchpadSpecName SPARSITY_IN0_SCRATCH{"sparsity_in0"};
+    const ScratchpadSpecName SPARSITY_IN1_SCRATCH{"sparsity_in1"};
 
     const TensorParamName IN0{"in0"};
     const TensorParamName IN1{"in1"};
@@ -3820,18 +3824,19 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     }
 
     // The mask page, one copy per kernel that scans it. The in0 sender and the in1 sender/writer
-    // share a node, and a node hosts one producer and one consumer of a buffer, so each gets its own,
-    // which it fills and reads itself (a self-loop).
+    // share a node and each re-reads the mask pages on its own schedule, so each gets its own copy,
+    // which it fills and reads itself. No kernel exchanges FIFO credits on a copy, so each copy is a
+    // kernel-private scratchpad. (A data movement kernel bound as both PRODUCER and CONSUMER of one
+    // DFB is a self-loop, which Gen2 (Quasar) rejects.)
     const uint32_t mask_aligned_page_size =
         use_sparsity ? static_cast<uint32_t>(sparsity->mask.mesh_buffer().get_reference_buffer()->aligned_page_size())
                      : 0u;
+    Group<ScratchpadSpec> scratchpads;
     if (use_sparsity) {
-        for (const auto& name : {SPARSITY_IN0_DFB, SPARSITY_IN1_DFB}) {
-            dataflow_buffers.push_back(DataflowBufferSpec{
+        for (const auto& name : {SPARSITY_IN0_SCRATCH, SPARSITY_IN1_SCRATCH}) {
+            scratchpads.push_back(ScratchpadSpec{
                 .unique_id = name,
-                .entry_size = mask_aligned_page_size,
-                .num_entries = 1,
-                .data_format_metadata = tt::DataFormat::Float16_b,
+                .size_per_node = mask_aligned_page_size,
             });
         }
     }
@@ -3877,14 +3882,12 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     Group<KernelSpec> kernels;
 
     // The kernel that scans the mask fills its own copy of the mask page and reads it back.
-    auto add_sparsity_bindings = [&](KernelSpec& k, const DFBSpecName& mask_dfb) {
+    auto add_sparsity_bindings = [&](KernelSpec& k, const ScratchpadSpecName& mask_scratch) {
         if (!use_sparsity) {
             return;
         }
-        k.dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = mask_dfb, .accessor_name = "sparsity", .endpoint_type = DFBEndpointType::PRODUCER});
-        k.dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = mask_dfb, .accessor_name = "sparsity", .endpoint_type = DFBEndpointType::CONSUMER});
+        k.scratchpad_bindings.push_back(
+            ScratchpadBinding{.scratchpad_spec_name = mask_scratch, .accessor_name = "sparsity"});
         k.tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = SPARSITY, .accessor_name = "sparsity"});
     };
 
@@ -4012,7 +4015,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
                 k.tensor_bindings = {
                     TensorBinding{.tensor_parameter_name = IN0, .accessor_name = "in0"},
                 };
-                add_sparsity_bindings(k, SPARSITY_IN0_DFB);
+                add_sparsity_bindings(k, SPARSITY_IN0_SCRATCH);
                 k.runtime_arg_schema = {.runtime_arg_names = {"in0_tensor_start_tile_id", "last_block_h"}};
             }
             return k;
@@ -4122,7 +4125,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
         if (use_sparsity) {
             in1_sender.compile_time_args.insert({"sparsity_pagesize", mask_aligned_page_size});
         }
-        add_sparsity_bindings(in1_sender, SPARSITY_IN1_DFB);
+        add_sparsity_bindings(in1_sender, SPARSITY_IN1_SCRATCH);
 
         Group<std::string> in1_sender_rta_names = {
             "in1_tensor_start_tile_id",
@@ -4487,6 +4490,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
         .name = "matmul_multi_core_reuse_mcast_1d_in0",
         .kernels = std::move(kernels),
         .dataflow_buffers = std::move(dataflow_buffers),
+        .scratchpads = std::move(scratchpads),
         .tensor_parameters = std::move(tensor_parameters),
         .work_units = std::move(work_units),
         .advanced_options = {.prefetcher_pipe_parameters = std::move(in1_pipe_relay.parameters)},
@@ -4533,6 +4537,57 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     };
 }
 
+// Where the gather ring's worker kernels run: the ring's bounding box when the sub-device's worker grid
+// holds all of it, and otherwise the bounding box of the ring within each rectangle of that grid that
+// holds part of it. Dispatch configures a rectangle with one multicast, so a scattered ring placed on
+// its own cores costs a write per rectangle of the ring where a box costs one; the box's other cores run
+// the kernels idle, at the cost of their per-node runtime args. A box stays inside the sub-device, whose
+// neighbours may be running other programs. The grid's rectangles are its ranges merged, so how the
+// caller wrote the sub-device down does not change the boxes. Hop cores run their own kernels and a
+// worker-sender pipe's sender runs the producer, so neither joins a box. A ring that no one sub-device
+// holds stays on its own cores.
+static CoreRangeSet gather_in0_ring_placement(
+    const tt_metal::distributed::MeshDevice& device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const CoreRangeSet& ring_cores,
+    const CoreRangeSet& hop_cores,
+    const ttnn::PrefetcherPipeList& prefetcher_pipes) {
+    // Unnamed, the matmul runs on the sub-device holding its cores.
+    const std::vector<tt::tt_metal::SubDeviceId> candidates =
+        sub_device_id.has_value() ? std::vector{*sub_device_id} : device.get_sub_device_ids();
+    std::optional<CoreRangeSet> sub_device_cores;
+    for (const auto& id : candidates) {
+        CoreRangeSet cores = device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, id);
+        if (cores.contains(ring_cores)) {
+            sub_device_cores = std::move(cores);
+            break;
+        }
+    }
+    if (!sub_device_cores.has_value()) {
+        return ring_cores;
+    }
+
+    CoreRangeSet outside_box = hop_cores;
+    for (const auto& pipe : prefetcher_pipes) {
+        if (pipe->sender_core_type() == tt::tt_metal::experimental::SenderCoreType::Worker) {
+            outside_box = outside_box.merge(pipe->sender_cores());
+        }
+    }
+    const CoreRange ring_box = ring_cores.bounding_box();
+    if (sub_device_cores->contains(ring_box)) {
+        return CoreRangeSet(ring_box).subtract(outside_box);
+    }
+    const CoreRangeSet sub_device_rectangles = sub_device_cores->merge_ranges();
+    std::vector<CoreRange> boxes;
+    for (const CoreRange& range : sub_device_rectangles.ranges()) {
+        const CoreRangeSet ring_in_range = ring_cores.intersection(CoreRangeSet(range));
+        if (!ring_in_range.empty()) {
+            boxes.push_back(ring_in_range.bounding_box());
+        }
+    }
+    return CoreRangeSet(boxes).subtract(outside_box);
+}
+
 // gather_in0 over PrefetcherPipes. The ring is the activation's shard grid in shard order (range by
 // range, which is row-major only within a range): worker i holds in0 shard i and computes output
 // column block i. Each step it forwards the in0 shard it holds to the previous worker (worker 0 to the
@@ -4548,6 +4603,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
 // this body to what it builds.
 static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifacts(
     const tt_metal::distributed::MeshDevice& device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const DeviceComputeKernelConfig& compute_kernel_config,
     bool fp32_dest_acc_en,
     bool packer_l1_acc,
@@ -4582,6 +4638,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
     const auto ring_size = static_cast<uint32_t>(ring.size());
     // Hop cores only pass in0 on, carrying the ring's link from its first core round to its last.
     const std::vector<CoreCoord> hops = corerange_to_cores(hop_cores, std::nullopt, row_major);
+    // The workers' kernels also run, idle, on the cores that fill out the ring's rectangles.
+    const CoreRangeSet ring_placement =
+        gather_in0_ring_placement(device, sub_device_id, ring_cores, hop_cores, prefetcher_pipes);
+    const CoreRangeSet idle_cores = ring_placement.subtract(ring_cores);
 
     // Each in0 shard is one K-block. When K does not fill the ring the last shards are short or empty;
     // the kernels take each one's unpadded width from k_tiles.
@@ -4707,7 +4767,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
     //                      Semaphores
     ////////////////////////////////////////////////////////////////////////////
     Group<SemaphoreSpec> semaphores = {
-        SemaphoreSpec{.unique_id = RING_SIGNAL_SEM, .target_nodes = ring_cores.merge(hop_cores)},
+        SemaphoreSpec{.unique_id = RING_SIGNAL_SEM, .target_nodes = ring_placement.merge(hop_cores)},
     };
 
     ////////////////////////////////////////////////////////////////////////////
@@ -4751,7 +4811,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
         .semaphore_bindings = {SemaphoreBinding{
             .semaphore_spec_name = RING_SIGNAL_SEM, .accessor_name = "in0_ring_signal"}},
         .compile_time_args = in0_forward_cta,
-        .runtime_arg_schema = {.runtime_arg_names = {"ring_idx", "next_core_noc_x", "next_core_noc_y"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"is_worker_core", "ring_idx", "next_core_noc_x", "next_core_noc_y"}},
         .hw_config = in0_forward_hw,
     });
 
@@ -4774,7 +4835,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
                 {"in1_in_ring_order", static_cast<uint32_t>(stream_in1)},
                 {"rest_of_ring_blocks", rest_of_ring_blocks},
             },
-        .runtime_arg_schema = {.runtime_arg_names = {"ring_idx"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"is_worker_core", "ring_idx"}},
         .hw_config =
             DataMovementHardwareConfig{
                 .config_1xx =
@@ -4785,14 +4846,15 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
             },
         // One accessor over every pipe, one of which is present on each worker.
         .advanced_options =
-            {.prefetcher_pipe_bindings = {{.pipe_parameter_names = in1_pipe_relay.names, .accessor_name = "in1"}}},
+            {.prefetcher_pipe_bindings =
+                 {{.pipe_parameter_names = in1_pipe_relay.names, .accessor_name = "in1", .extra_nodes = idle_cores}}},
     });
 
     // Metal 2.0 requires an unpack mode for every Float32 buffer a compute kernel consumes with 32-bit
     // DEST. fp32 K-partials are reloaded into DEST between blocks; marking them UnpackToDest sends the
     // reload straight to DEST instead of through SrcA, which would truncate them to TF32. The rest get
     // UnpackToSrc.
-    const auto add_float32_unpack_mode = [&](tt::tt_metal::experimental::ComputeHardwareConfig& hw,
+    const auto add_float32_unpack_mode = [&](tt_metal::ComputeHardwareConfig& hw,
                                              const DFBSpecName& name,
                                              tt::DataFormat fmt) {
         if (!fp32_dest_acc_en || fmt != tt::DataFormat::Float32) {
@@ -4887,7 +4949,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
                         .endpoint_type = DFBEndpointType::CONSUMER},
                 },
             .compile_time_args = std::move(compute_cta),
-            .runtime_arg_schema = {.runtime_arg_names = {"ring_idx"}},
+            .runtime_arg_schema = {.runtime_arg_names = {"is_worker_core", "ring_idx"}},
             .hw_config = compute_hw,
         });
     }
@@ -4920,7 +4982,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
     }
 
     Group<WorkUnitSpec> work_units = {
-        WorkUnitSpec{.name = "ring", .kernels = {IN0_RING, IN1_READER, COMPUTE}, .target_nodes = ring_cores},
+        WorkUnitSpec{.name = "ring", .kernels = {IN0_RING, IN1_READER, COMPUTE}, .target_nodes = ring_placement},
     };
     if (!hops.empty()) {
         work_units.push_back(WorkUnitSpec{.name = "hops", .kernels = {IN0_HOP, HOP_SINK}, .target_nodes = hop_cores});
@@ -4939,17 +5001,29 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
     KernelRunArgs in0_ring_run_args{.kernel = IN0_RING};
     KernelRunArgs in1_reader_run_args{.kernel = IN1_READER};
     KernelRunArgs compute_run_args{.kernel = COMPUTE};
-    for (uint32_t i = 0; i < ring_size; ++i) {
-        const CoreCoord next_core = (i > 0) ? ring[i - 1] : (hops.empty() ? ring[ring_size - 1] : hops.front());
-        const CoreCoord next_core_noc = device.worker_core_from_logical_core(next_core);
+    auto add_ring_kernel_args = [&](const CoreCoord& core,
+                                    uint32_t is_worker_core,
+                                    uint32_t ring_idx,
+                                    const CoreCoord& next_core_noc) {
         AddRuntimeArgsForNode(
             in0_ring_run_args.runtime_arg_values,
-            ring[i],
-            {{"ring_idx", i},
+            core,
+            {{"is_worker_core", is_worker_core},
+             {"ring_idx", ring_idx},
              {"next_core_noc_x", static_cast<uint32_t>(next_core_noc.x)},
              {"next_core_noc_y", static_cast<uint32_t>(next_core_noc.y)}});
-        AddRuntimeArgsForNode(in1_reader_run_args.runtime_arg_values, ring[i], {{"ring_idx", i}});
-        AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, ring[i], {{"ring_idx", i}});
+        AddRuntimeArgsForNode(
+            in1_reader_run_args.runtime_arg_values, core, {{"is_worker_core", is_worker_core}, {"ring_idx", ring_idx}});
+        AddRuntimeArgsForNode(
+            compute_run_args.runtime_arg_values, core, {{"is_worker_core", is_worker_core}, {"ring_idx", ring_idx}});
+    };
+    for (uint32_t i = 0; i < ring_size; ++i) {
+        const CoreCoord next_core = (i > 0) ? ring[i - 1] : (hops.empty() ? ring[ring_size - 1] : hops.front());
+        add_ring_kernel_args(ring[i], 1, i, device.worker_core_from_logical_core(next_core));
+    }
+    // The idle cores' kernels return before reading their other args.
+    for (const CoreCoord& core : corerange_to_cores(idle_cores, std::nullopt, row_major)) {
+        add_ring_kernel_args(core, 0, 0, CoreCoord{0, 0});
     }
 
     ProgramRunArgs run_args;
@@ -6570,6 +6644,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast1DProgramFacto
     if (gather_in0) {
         return reuse_mcast_1d_optimized_helpers::create_program_gather_in0_artifacts(
             device,
+            operation_attributes.sub_device_id,
             compute_kernel_config,
             fp32_dest_acc_en,
             packer_l1_acc,
@@ -6826,7 +6901,7 @@ MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory::create_mesh_workload(
             }
             auto mesh_grid = pc.allowed_worker_cores.value().bounding_box().grid_size();
             DeviceComputeKernelConfig ckc = attributes.compute_kernel_config.value();
-            tt_metal::Program program{};
+            tt_metal::Program program = tt_metal::CreateProgram(*tensor_args.input_tensors.at(0).device());
             std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_signaler = std::nullopt;
             auto b_tensors =
                 std::vector<Tensor>{tensor_args.input_tensors.begin() + 1, tensor_args.input_tensors.end()};
