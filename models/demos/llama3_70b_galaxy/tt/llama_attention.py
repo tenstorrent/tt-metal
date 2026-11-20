@@ -1237,6 +1237,7 @@ class TtLlamaAttention(LightweightModule):
                 ring_size=4,  # Number of devices in the ring topology (4 devices per row in 8x4 mesh)
                 scale=self.scale,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
+                precision=ttnn.SDPAPrecision.ACCURATE,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len, chunk_start_idx=0),
                 page_table=None,
                 chunk_start_idx=None,
@@ -1257,6 +1258,7 @@ class TtLlamaAttention(LightweightModule):
                     page_table_tensor=page_table,
                     chunk_start_idx_tensor=chunk_start_idx_tensor,
                     compute_kernel_config=self.compute_kernel_config_hifi4,
+                    precision=ttnn.SDPAPrecision.ACCURATE,
                     program_config=self.model_config["SDPA_PROGCFG_FLEXIBLE_CHUNK"](seq_len, page_size),
                 )
 
@@ -1287,6 +1289,7 @@ class TtLlamaAttention(LightweightModule):
                     is_causal=True,
                     scale=self.scale,
                     compute_kernel_config=self.compute_kernel_config_hifi4,
+                    precision=ttnn.SDPAPrecision.ACCURATE,
                     program_config=self.model_config["SDPA_PROGCFG"](
                         seq_len // batch_size if seq_len // batch_size == 128 else seq_len
                     ),
