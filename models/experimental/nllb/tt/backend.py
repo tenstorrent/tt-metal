@@ -223,6 +223,7 @@ class Backend:
                 scale=1.0,
                 program_config=self.decoder_sdpa_config,
                 compute_kernel_config=self.kernel,
+                precision=ttnn.SDPAPrecision.ACCURATE,
             )
         else:
             scores = ttnn.matmul(q, k, transpose_b=True, compute_kernel_config=self.kernel)
