@@ -919,6 +919,7 @@ class MultichipDecoder(OptimizedDecoder):
             sliding_window_size=self.window,
             program_config=sdpa,
             compute_kernel_config=self.attention_ck,
+            precision=ttnn.SDPAPrecision.ACCURATE,
         )
         attn = ttnn.reshape(ttnn.transformer.concatenate_heads(attn), (1, 1, length, 1024))
         return self._finish(x, normalized, attn, attention_gate)
