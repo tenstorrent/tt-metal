@@ -117,15 +117,15 @@ Tensor _mean_of_squares(
 
 }  // namespace
 
-// ttnn::var and ttnn::std over H and W run as one program, but give each (N, C) plane to a single core. The
-// composite below spreads a plane over the grid, but rescales the deviation before squaring it: var_hw takes 16
-// programs and std_hw 15 (six more when H or W is not a multiple of 32, since each ttnn::mean and the ttnn::max then
-// also copy their input and fill its tile padding), and they read the input twice and make five passes over an
-// input-sized intermediate: two writes, the second in place, and three reads. Timed on an 8x8 Wormhole in an earlier,
-// 13-program version, the one program was faster at 256 tiles per plane (except one 512x512 FLOAT32 plane) and for
-// nine 1024x1024 planes, and the composite for one 1024x1024 or 2048x2048 plane; 4 planes interpolates between one
-// and nine. Blackhole was not timed with the rescale. Before it, the composite took five programs and the crossover
-// was at 64 tiles and 10 planes, on both an 8x8 Wormhole and a 120-core Blackhole.
+// ttnn::var and ttnn::std over H and W run as one program, but give each (N, C) plane to a single core, and they
+// square the deviation unscaled (#55159). The composite below spreads a plane over the grid and rescales the deviation
+// before squaring it: var_hw takes 17 programs and std_hw 16 (six more when H or W is not a multiple of 32, since each
+// ttnn::mean and the ttnn::max then also copy their input and fill its tile padding), and they read the input twice
+// and make five passes over an input-sized intermediate: two writes, the second in place, and three reads. The limits
+// were measured before the rescale, when the composite took five programs: the one program was faster for planes of at
+// most 64 tiles, and for larger planes from 10 planes up, on both an 8x8 Wormhole and a 120-core Blackhole. The
+// rescaled composite is slower, so the one program would now be faster on more shapes, but moving them there would
+// give up the rescale on them until ttnn::var and ttnn::std have it too.
 bool _hw_statistic_fits_one_program(const Tensor& y) {
     const auto& shape = y.logical_shape();
     // Host tensors and ranks below 2 take the composite, whose first op reports them. Quasar has no two-pass
@@ -137,8 +137,8 @@ bool _hw_statistic_fits_one_program(const Tensor& y) {
     const uint64_t planes = plane_area == 0 ? 0 : shape.volume() / plane_area;
     const uint64_t tiles_per_plane = static_cast<uint64_t>(tt::div_up(shape[-2], tt::constants::TILE_HEIGHT)) *
                                      tt::div_up(shape[-1], tt::constants::TILE_WIDTH);
-    constexpr uint64_t max_tiles_per_plane = 256;
-    constexpr uint64_t min_planes = 4;
+    constexpr uint64_t max_tiles_per_plane = 64;
+    constexpr uint64_t min_planes = 10;
     return tiles_per_plane <= max_tiles_per_plane || planes >= min_planes;
 }
 

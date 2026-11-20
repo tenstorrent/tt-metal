@@ -6,7 +6,7 @@ import pytest
 import torch
 import ttnn
 
-# The first nine shapes run ttnn.var / ttnn.std (at most 256 tiles per plane; 512x512 is exactly 256); the rest run the
+# The first six shapes run ttnn.var / ttnn.std (at most 64 tiles per plane; 256x256 is exactly 64); the rest run the
 # composite. 30x70, 300x700 and 600x600 are not tile-aligned.
 SHAPES = [
     [1, 1, 32, 32],
@@ -18,8 +18,6 @@ SHAPES = [
     [1, 1, 256, 512],
     [1, 1, 512, 512],
     [1, 1, 300, 700],
-    [1, 1, 544, 512],
-    [1, 3, 544, 512],
     [1, 600, 600],
 ]
 
@@ -41,10 +39,10 @@ def test_var_std_hw(device, dtype, rtol, offset, shape):
 
 # A bfloat16 mean of about 100 is a multiple of 0.5, so subtracting it as a bfloat16 adds its rounding error squared to
 # every squared deviation: 4% of the variance for a std of 1, 15% for a std of 0.5. The composite subtracts an FP32
-# mean. 256x256 runs ttnn.var / ttnn.std; 544x512 and 600x600 run the composite.
+# mean. 256x256 runs ttnn.var / ttnn.std; 512x512 and 300x700 run the composite.
 @pytest.mark.parametrize("std", [1.0, 0.5])
 @pytest.mark.parametrize(
-    "shape", [[1, 1, 256, 256], [1, 1, 544, 512], [1, 1, 600, 600]], ids=lambda shape: "x".join(map(str, shape))
+    "shape", [[1, 1, 256, 256], [1, 1, 512, 512], [1, 1, 300, 700]], ids=lambda shape: "x".join(map(str, shape))
 )
 def test_var_std_hw_bf16_large_mean(device, shape, std):
     torch.manual_seed(0)
@@ -66,19 +64,19 @@ def _input_memory_config(shape, placement):
 
 
 # Without memory_config the output stays where the input is; with one it goes there. 64x64, 8 height-sharded 64x64
-# planes and a block-sharded 256x256 run ttnn.var / ttnn.std; 544x512, 2 height-sharded 2048x512 planes (512 KiB a
-# core) and a block-sharded 512x1024 run the composite.
+# planes and a block-sharded 256x256 run ttnn.var / ttnn.std; 512x512, 8 height-sharded 512x512 planes and a
+# block-sharded 512x512 run the composite.
 @pytest.mark.parametrize(
     "shape, placement",
     [
         ([1, 1, 64, 64], "dram"),
         ([1, 1, 64, 64], "l1"),
-        ([1, 1, 544, 512], "dram"),
-        ([1, 1, 544, 512], "l1"),
+        ([1, 1, 512, 512], "dram"),
+        ([1, 1, 512, 512], "l1"),
         ([1, 8, 64, 64], "height_sharded"),
-        ([1, 2, 2048, 512], "height_sharded"),
+        ([1, 8, 512, 512], "height_sharded"),
         ([1, 1, 256, 256], "block_sharded"),
-        ([1, 1, 512, 1024], "block_sharded"),
+        ([1, 1, 512, 512], "block_sharded"),
     ],
     ids=lambda value: "x".join(map(str, value)) if isinstance(value, list) else value,
 )
@@ -111,15 +109,15 @@ def _runs_one_program(op, tt_x):
     return "WelfordReduceDeviceOperation" in ttnn.graph.extract_calltrace(captured_graph)
 
 
-# Both sides of each limit: one program for planes of at most 256 tiles, and for larger planes from 4 planes up.
+# Both sides of each limit: one program for planes of at most 64 tiles, and for larger planes from 10 planes up.
 @pytest.mark.parametrize(
     "planes, height, width, one_program",
     [
-        (1, 512, 512, True),  # 256 tiles
-        (1, 32, 8224, False),  # 257 tiles
-        (1, 512, 1024, False),  # 512 tiles
-        (3, 512, 1024, False),  # 512 tiles each
-        (4, 512, 1024, True),  # 512 tiles each
+        (1, 256, 256, True),  # 64 tiles
+        (1, 32, 2080, False),  # 65 tiles
+        (1, 256, 512, False),  # 128 tiles
+        (9, 256, 512, False),  # 128 tiles each
+        (10, 256, 512, True),  # 128 tiles each
         ("cores_plus_one", 32, 2048, True),  # 64 tiles each
     ],
 )

@@ -33,14 +33,14 @@ DTYPE_IDS = ("float32", "bfloat16")
 # The references are exact, so the error is measured in ULP of the result's dtype: 2 in float32 and 1 in bfloat16.
 # std_hw and var_hw also carry the rounding of the float32 mean of the squares, which depends on the shape and on the
 # order of the reduction: on Blackhole (ttsim) up to 2 ULP for std_hw and 3.3 for var_hw on the shapes below, and up
-# to 6.2 on other planes above 256 tiles. So in float32 they get 8, as test_mean_nc does for a float32 mean.
+# to 6.2 on other shapes that were tried. So in float32 they get 8, as test_mean_nc does for a float32 mean.
 ULP_THRESHOLD = {torch.float32: 2, torch.bfloat16: 1}
 STATISTIC_ULP_THRESHOLD = {torch.float32: 8, torch.bfloat16: 1}
 
 NORMALIZE_SHAPE = torch.Size([1, 1, 32, 32])
 UNALIGNED_NORMALIZE_SHAPE = torch.Size([1, 1, 30, 40])
 
-# std_hw and var_hw send planes of at most 256 tiles, and 4 or more planes, to ttnn.std / ttnn.var, which run as one
+# std_hw and var_hw send planes of at most 64 tiles, and 10 or more planes, to ttnn.std / ttnn.var, which run as one
 # program and do not rescale the deviation yet (#55159). The statistic tests use planes of 17 x 16 tiles, which take
 # the composite: 544x512, and 520x512, which is not tile-aligned, one at a time or three in one tensor.
 STATISTIC_SHAPE = torch.Size([1, 1, 544, 512])
@@ -143,7 +143,7 @@ def test_var_hw_matches_the_constructed_spread(deviation, torch_dtype, ttnn_dtyp
 
 
 # Each plane gets its own scale, so planes 50 decades apart in one tensor all come out right, and a constant plane
-# next to them gives 0. Three planes stay below the four from which std_hw / var_hw run as one program.
+# next to them gives 0. Three planes stay below the ten from which std_hw / var_hw run as one program.
 @pytest.mark.parametrize("torch_dtype, ttnn_dtype", DTYPES, ids=DTYPE_IDS)
 def test_normalize_hw_planes_of_different_magnitude(torch_dtype, ttnn_dtype, device):
     _check_normalize([1e-25, 1.0, 1e18, 1e25], torch_dtype, ttnn_dtype, torch.Size([2, 2, 32, 32]), device)
