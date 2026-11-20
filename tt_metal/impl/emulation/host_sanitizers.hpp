@@ -31,12 +31,10 @@
 
 // `Buffer` is used by value-of-reference in a declaration below; include the
 // real header (it is core, safe in any build) rather than forward-declaring, so
-// includers that were getting it transitively keep compiling. `IDevice` is only
-// used as a pointer, so a forward declaration suffices.
+// includers that were getting it transitively keep compiling.
 #include <buffer.hpp>
 
 namespace tt::tt_metal {
-class IDevice;
 class Program;
 }  // namespace tt::tt_metal
 
@@ -70,22 +68,11 @@ inline bool dirty_cb_check_skipped() {
 
 // ---- Host checks --------------------------------------------------------
 // In an emule build these are defined in host_sanitizers.cpp; otherwise they are
-// inline no-ops. The alignment checks take (device, size) rather than a
-// precomputed alignment so the Cluster::get_alignment_requirements() lookup
-// happens INSIDE the implementation, after the enabled-check — never on the
-// production host path.
+// inline no-ops.
 #ifdef TT_METAL_USE_EMULE
 
 // Use-After-Free: `op` touched a buffer that is not currently allocated.
 void check_buffer_allocated(const Buffer& buffer, const char* op);
-
-// Host->L1 / host->DRAM alignment. `size` is the transfer size; the real
-// requirement is Cluster::get_alignment_requirements(device, size) (DMA
-// alignment when DMA-backed, else 1 → no-op). See host_sanitizers.cpp for why a
-// hardcoded word/NoC alignment would false-positive legitimate byte-granular
-// writes (e.g. row-major remainders).
-void check_host_l1_alignment(const IDevice* device, uint32_t address, uint32_t size, const char* op);
-void check_host_dram_alignment(const IDevice* device, uint32_t address, uint32_t size, const char* op);
 
 // Metadata Overflow check: throws if any programmable core type's program
 // metadata statically exceeds its reserved KERNEL_CONFIG L1 window. This is an
@@ -107,8 +94,6 @@ void register_logical_size(const Buffer& buffer, DeviceAddr logical_size);
 #else  // !TT_METAL_USE_EMULE — inline no-ops so callers stay #ifdef-free.
 
 inline void check_buffer_allocated(const Buffer&, const char*) {}
-inline void check_host_l1_alignment(const IDevice*, uint32_t, uint32_t, const char*) {}
-inline void check_host_dram_alignment(const IDevice*, uint32_t, uint32_t, const char*) {}
 inline void check_program_metadata_size(Program&) {}
 inline void report_metadata_overflow(bool, const char*) {}
 inline void register_logical_size(const Buffer&, DeviceAddr) {}

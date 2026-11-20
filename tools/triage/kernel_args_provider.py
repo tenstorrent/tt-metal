@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Usage:
+    kernel_args_provider
+
+Description:
+    Data provider for the arguments of the kernel each RISC runs: its compile-time args, its runtime
+    args on this core and its common runtime args.
+
+    Compile-time args come from Inspector; they never change.
+    Runtime args are read from L1, where the kernel reads them: kernel_config_base plus the
+    RISC's rta_offset (crta_offset for common args) from the launch message. The host's copies can be
+    older or newer than what a hung kernel uses, so L1 is the only exact source. L1 holds where each
+    list starts but not how long it is, so Inspector gives the number of words to read. With watcher
+    asserts enabled, each list is shifted by one word.
+
+    Each value carries the name metal gives it: Metal 2.0 arg names, tensor::<accessor> and
+    scratch::<accessor> slots. Other values show their word index, as [i].
+    A RISC not enabled by the launch, or running a kernel Inspector does not know, has no args (None).
+
+Owner:
+    onenezicTT
+"""
+
+from collections.abc import Sequence
+from dataclasses import dataclass
+from functools import cache
+
+from rich.markup import escape
+
+from configuration_provider import run as get_configuration_provider
+from dispatcher_data import run as get_dispatcher_data, DispatcherData
+from triage import ScriptConfig, run_script, triage_field, triage_singleton
+from ttexalens.context import Context
+from ttexalens.coordinate import OnChipCoordinate
+from ttexalens.hardware.risc_debug import RiscLocation
+
+script_config = ScriptConfig(
+    data_provider=True,
+    depends=["dispatcher_data", "configuration_provider"],
+)
+
+
+@dataclass
+class KernelArg:
+    name: str | None
+    value: int
+
+
+def kernel_args_serializer(args: list[KernelArg] | None) -> str:
+    """Values in word order, in hex, as name=value, or [i]=value for word i when it has no name."""
+    if args is None:
+        return "N/A"
+    return ", ".join(
+        f"{escape(arg.name)}={arg.value:#x}" if arg.name else f"[{i}]={arg.value:#x}" for i, arg in enumerate(args)
+    )
+
+
+@dataclass
+class KernelArgsData:
+    compile_time_args: list[KernelArg] | None = triage_field("CT Args", kernel_args_serializer, verbose=1)
+    runtime_args: list[KernelArg] | None = triage_field("RT Args", kernel_args_serializer, verbose=1)
+    common_runtime_args: list[KernelArg] | None = triage_field("Common RT Args", kernel_args_serializer, verbose=1)
+
+
+class KernelArgsProvider:
+    def __init__(self, dispatcher_data: DispatcherData, watcher_asserts: bool):
+        self.dispatcher_data = dispatcher_data
+        self.count_word_bytes = 4 if watcher_asserts else 0
+
+    @cache
+    def get_cached_kernel_args(self, risc_location: RiscLocation) -> KernelArgsData:
+        return self.get_kernel_args(risc_location)
+
+    def get_kernel_args(self, risc_location: RiscLocation) -> KernelArgsData:
+        core = self.dispatcher_data.get_cached_core_data(risc_location)
+        kernel = core.kernel
+        if kernel is None or core.risc_enabled_by_kernel is False:
+            return KernelArgsData(None, None, None)
+        location = risc_location.location
+        (x, y), _ = location.to("logical")
+        runtime_arg_count = next((c.count for c in kernel.runtimeArgs.counts if (c.core.x, c.core.y) == (x, y)), 0)
+        base = core.kernel_config_base + self.count_word_bytes
+        return KernelArgsData(
+            compile_time_args=[KernelArg(arg.name or None, arg.value) for arg in kernel.compileTimeArgs],
+            runtime_args=self._read_args(location, base + core.rta_offset, kernel.runtimeArgs.names, runtime_arg_count),
+            common_runtime_args=self._read_args(
+                location, base + core.crta_offset, kernel.commonRuntimeArgs.names, kernel.commonRuntimeArgs.count
+            ),
+        )
+
+    def _read_args(self, location: OnChipCoordinate, address: int, names: Sequence[str], count: int) -> list[KernelArg]:
+        if count == 0:
+            return []
+        data = bytearray(4 * count)
+        self.dispatcher_data.l1_memory_access(location).read(address, data)
+        values = [int.from_bytes(data[i : i + 4], "little") for i in range(0, len(data), 4)]
+        return [KernelArg(names[i] if i < len(names) and names[i] else None, value) for i, value in enumerate(values)]
+
+
+@triage_singleton
+def run(args, context: Context) -> KernelArgsProvider:
+    configuration = get_configuration_provider(args, context)
+    # With watcher asserts enabled, each runtime arg list is shifted by one word.
+    disabled_features = (configuration.get("watcher_disabled_features") or "").split(", ")
+    watcher_asserts = configuration.get_bool("watcher_enabled") and "ASSERT" not in disabled_features
+    return KernelArgsProvider(get_dispatcher_data(args, context), watcher_asserts)
+
+
+if __name__ == "__main__":
+    run_script()

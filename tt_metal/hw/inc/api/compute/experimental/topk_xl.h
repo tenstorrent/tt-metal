@@ -5,10 +5,10 @@
 #pragma once
 
 // Define TOPK_XL_BLAZE_COMPAT consistently for all TRISCs before including this
-// header to use the Blaze-managed protocol. It disables SFPLOADMACRO, leaves
-// generic-sort SrcB validity to the caller, and uses PACK replay slots [0, 3)
-// for index extraction. The caller must serialize MATH
-// and PACK SFPU/replay access and preserve ADDR_MOD_7 = zero advance across it.
+// header to use the Blaze-managed protocol. It leaves generic-sort SrcB validity
+// to the caller and uses PACK replay slots [0, 3) for index extraction. The caller
+// must serialize MATH and PACK SFPU/replay access and preserve ADDR_MOD_7 = zero
+// advance across it.
 // Use topk_xl_copy_tile_init_short after configuring formats in that pipeline.
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
@@ -400,7 +400,7 @@ ALWI void topk_xl_reinit_mop_after_copy() {
 }
 
 /**
- * Restore the subset of unfused TopK state clobbered by copy_tile_init.
+ * Restore the subset of unfused TopK state clobbered by copy_init.
  *
  * In addition to the shared MOP Expander, unfused rebuild consumes ADDR_MOD_3,
  * which copy init rewrites, and ADDR_MOD_2, which is (re)established for the

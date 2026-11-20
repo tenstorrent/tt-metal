@@ -5,7 +5,7 @@
 #define HAL_BUILD tt::tt_metal::blackhole::dram
 #define COMPILE_FOR_DRISC
 
-#include "tt_align.hpp"
+#include <tt-metalium/math.hpp>
 #include "hostdev/dev_msgs.h"
 #include "hostdevcommon/fabric_telemetry_msgs.h"
 #include "hostdev/realtime_profiler_msgs.h"
@@ -16,7 +16,7 @@ using namespace tt::tt_metal::blackhole::dram;
 
 #include "blackhole/bh_hal.hpp"
 #include "dev_mem_map.h"
-#include "hal_types.hpp"
+#include "llrt/hal_types.hpp"
 #include "llrt/hal.hpp"
 #include <tt-umd/types/core_coordinates.hpp>
 

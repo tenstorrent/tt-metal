@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import os
 import subprocess
 
 
@@ -63,6 +64,26 @@ def is_high_power(min_tdp_watts=130):
     except Exception:
         return False
     return tdp is not None and tdp >= min_tdp_watts
+
+
+def require_high_power(what, min_tdp_watts=130):
+    """Fail, rather than skip, a perf test that landed on a low-power galaxy.
+
+    Perf legs run on the high-power pool (bh_sc1_high_power, exabox.tenstorrent.com/power=14kw) and their
+    baselines are 14kw numbers, so a low-power host there is a misrouted runner; skipping would turn the
+    job green with nothing measured. PREFILL_PERF_IGNORE_POWER=1 runs anyway, for bring-up only."""
+    if os.environ.get("PREFILL_PERF_IGNORE_POWER") == "1" or is_high_power(min_tdp_watts):
+        return
+    import pytest
+
+    try:
+        tdp = get_tdp_limit_max()
+    except Exception as e:
+        tdp = f"unreadable ({type(e).__name__})"
+    pytest.fail(
+        f"{what} needs a high-power (>= {min_tdp_watts} W TDP, 14kw) galaxy but TDP_LIMIT_MAX={tdp}: "
+        "the runner is misrouted or mislabeled. PREFILL_PERF_IGNORE_POWER=1 runs anyway, for bring-up only."
+    )
 
 
 def is_p150():

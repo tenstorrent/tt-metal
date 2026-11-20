@@ -32,7 +32,7 @@ void bind_test_dram_prefetcher_consumer(nb::module_& mod) {
                 num_iters (int): total pages each receiver should consume (= num_layers * num_blocks).
                 page_size_bytes (int): receiver-side page size; must match what the sender pushes
                     (in0_block_w_tiles * n_tiles_per_receiver * tile_bytes).
-                global_cb (GlobalCircularBuffer): either a worker-sender or DRAM-sender GCB.
+                global_cb (GlobalCircularBuffer): the GCB the worker-core prefetcher fills.
         )doc",
         &test_dram_prefetcher_consumer,
         nb::arg("mesh_device"),
@@ -89,7 +89,7 @@ void bind_test_dram_prefetcher_consumer(nb::module_& mod) {
                     prefetcher is being driven with.
                 num_layers (int): number of layers the prefetcher will push.
                 print_stride (int): DPRINT every Nth iter; first/last always logged. 0 = first/last only.
-                global_cb (GlobalCircularBuffer): worker-sender or DRAM-sender GCB.
+                global_cb (GlobalCircularBuffer): the GCB the worker-core prefetcher fills.
                 streaming (bool): when True, expect the streaming prefetcher's ring-rotated
                     delivery (block at FIFO position p is physical block (lead_block + p) mod
                     num_blocks). Must match the streaming flag passed to the prefetcher.
@@ -138,6 +138,9 @@ void bind_test_dram_prefetcher_consumer(nb::module_& mod) {
                 rotation (List[int]): per-receiver streaming rotation indexed by global ring
                     position (must match the rotation queued to the prefetcher). Empty == identity
                     (lead_block = ring_pos), the natural topology order. Defaults to empty.
+                groups (List[int]): for a grouped weight (dim -3 counts its groups, at most 32), the
+                    groups the prefetcher delivers, ascending, as its group selector picks them.
+                    Empty == every group. Defaults to empty.
         )doc",
         &test_tensor_prefetcher_pipe_validator,
         nb::arg("mesh_device"),
@@ -148,7 +151,8 @@ void bind_test_dram_prefetcher_consumer(nb::module_& mod) {
         nb::arg("prefetcher_pipes"),
         nb::arg("bank_to_receivers"),
         nb::arg("streaming") = false,
-        nb::arg("rotation") = std::vector<uint32_t>{});
+        nb::arg("rotation") = std::vector<uint32_t>{},
+        nb::arg("groups") = std::vector<uint32_t>{});
 }
 
 }  // namespace ttnn::operations::experimental::test
