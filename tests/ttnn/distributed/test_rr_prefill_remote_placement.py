@@ -31,9 +31,9 @@ def barrier():
 
 
 def local_shards(tensor):
-    """`{(row, col): host tensor}` for the shards this process holds."""
+    """`{(row, col): single-device host tensor}` for the shards this process holds."""
     coords = list(tensor.device_coords())
-    return {(int(c[0]), int(c[1])): s for c, s in zip(coords, ttnn.get_device_tensors(tensor))}
+    return {(int(c[0]), int(c[1])): s for c, s in zip(coords, tensor.cpu_shards(coords))}
 
 
 @pytest.fixture(scope="module")
