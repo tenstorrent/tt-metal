@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <map>
+#include <optional>
 #include <set>
 
 #include <tt-metalium/distributed.hpp>
@@ -98,10 +99,11 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
         operation_attributes.dim_from_end,
         num_devices,
         packet_size,
-        /*reads_output=*/true);
+        unicast_relay_reads_output(is_ring, num_devices));
     TT_FATAL(
         walk_geometry.has_value(),
-        "all_gather unicast cannot cut {} B input pages and {} B output pages on the relay's read alignment",
+        "all_gather unicast cannot cut {} B input pages and {} B output pages on the read alignment of every buffer it "
+        "reads",
         input_tensor.mesh_buffer().page_size(),
         output_tensor.mesh_buffer().page_size());
     const all_gather_walk::WalkGeo& geo = *walk_geometry;
@@ -112,26 +114,26 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     ////////////////////////////////////////////////////////////////
     // Core selection
     //
-    // Each link runs two directions: forward (dir 0) and backward (dir 1). The workers of a direction can't each open
-    // a direct connection (an ERISC exposes one worker sender channel per direction), so they share a fabric mux: one
-    // mux core per direction per link owns the connection and multiplexes their traffic.
+    // Each link runs two directions: forward (dir 0) and backward (dir 1). One worker per direction connects straight
+    // to the fabric router. More workers can't each open a direct connection (an ERISC exposes one worker sender
+    // channel per direction), so they share a fabric mux: one mux core per direction per link owns the connection and
+    // multiplexes their traffic.
     //
-    // Flat layout, per link:
+    // Flat layout, per link (no mux with one worker per direction):
     //   [dir 0: mux, worker 0 .. worker W-1][dir 1: mux, worker 0 .. worker W-1]
     ////////////////////////////////////////////////////////////////
 
     // Fit to the available cores: links drop only when one worker per direction per link does not fit, and then each
     // keeps one worker; otherwise the workers shrink (below).
     const uint32_t num_available_cores = available_cores.num_cores();
-    auto cores_per_link = [](uint32_t workers) { return 2u * (workers + 1u); };
     const uint32_t wanted_links = operation_attributes.axis_num_links[axis];
     uint32_t num_links = wanted_links;
-    if (num_links * cores_per_link(1) > num_available_cores) {
-        num_links = num_available_cores / cores_per_link(1);
+    if (num_links * unicast_cores_per_link(1) > num_available_cores) {
+        num_links = num_available_cores / unicast_cores_per_link(1);
         TT_FATAL(
             num_links > 0,
             "all_gather needs at least {} worker cores but only {} are available; provide a larger sub_core_grid.",
-            cores_per_link(1),
+            unicast_cores_per_link(1),
             num_available_cores);
     }
 
@@ -142,7 +144,6 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
         tt::div_up(input_bytes * (num_devices - 1), uint64_t{is_ring ? 2u : 1u} * std::max(1u, num_links) * packet_cap);
     uint32_t workers_per_dir = 1;  // worker cores per direction per link
     bool mux_in_middle = false;    // the mux between its direction's workers instead of first
-    // Mux buffers per channel from 2 workers; one worker keeps 4 (below).
     uint8_t mux_buffers_per_channel = 2;
     // Packets per CB slot: at most max_packets_per_slot, and at least min_slots slots per worker iteration.
     uint32_t max_packets_per_slot = kMaxPacketsPerSlot;
@@ -201,7 +202,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     if (num_links < wanted_links) {
         workers_per_dir = 1;
     }
-    while (workers_per_dir > 1 && num_links * cores_per_link(workers_per_dir) > num_available_cores) {
+    while (workers_per_dir > 1 && num_links * unicast_cores_per_link(workers_per_dir) > num_available_cores) {
         --workers_per_dir;
     }
     if (workers_per_dir != wanted_workers || num_links != wanted_links) {
@@ -217,8 +218,10 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     }
 
     constexpr uint32_t num_directions = 2;  // 0 = forward, 1 = backward
-    const uint32_t cores_per_dir = workers_per_dir + 1;
-    const uint32_t num_cores_per_link = num_directions * cores_per_dir;
+    const bool use_mux = workers_per_dir > 1;
+    const uint32_t mux_per_dir = use_mux ? 1u : 0u;
+    const uint32_t cores_per_dir = workers_per_dir + mux_per_dir;
+    const uint32_t num_cores_per_link = unicast_cores_per_link(workers_per_dir);
 
     [[maybe_unused]] auto [all_core_range, all_cores] = ttnn::ccl::choose_worker_cores(
         num_links,
@@ -264,7 +267,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
         }
     };
     group_by_row();
-    if (mux_in_middle) {
+    if (use_mux && mux_in_middle) {
         for (size_t g = 0; g + cores_per_dir <= all_cores.size(); g += cores_per_dir) {
             std::swap(all_cores[g], all_cores[g + (cores_per_dir / 2)]);
         }
@@ -276,7 +279,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     };
     auto mux_core = [&](uint32_t link, uint32_t dir) -> const CoreCoord& { return core_at(link, dir, 0); };
     auto worker_core = [&](uint32_t link, uint32_t dir, uint32_t w) -> const CoreCoord& {
-        return core_at(link, dir, 1 + w);
+        return core_at(link, dir, mux_per_dir + w);
     };
     auto dir_neighbor = [&](uint32_t dir) { return dir == 0 ? fwd_coord : bwd_coord; };
     auto dir_active = [&](uint32_t dir) { return dir_neighbor(dir).has_value(); };
@@ -287,7 +290,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     std::set<CoreRange> mux_core_set;
     for (uint32_t link = 0; link < num_links; ++link) {
         for (uint32_t dir = 0; dir < num_directions; ++dir) {
-            if (dir_active(dir)) {
+            if (use_mux && dir_active(dir)) {
                 mux_core_set.emplace(mux_core(link, dir));
             }
             for (uint32_t w = 0; w < workers_per_dir; ++w) {
@@ -297,20 +300,21 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     }
     const CoreRangeSet worker_core_range(worker_core_set);
 
-    // Fabric mux config. One worker per direction needs 4 buffers per channel to keep the link busy; from 2 workers,
-    // mux_buffers_per_channel (above). The mux map goes in program-local L1 (a circular buffer on the mux cores), so it
-    // stays clear of persistent L1 there and the program's L1 validation keeps it below L1 buffers; its addresses are
-    // offsets until the mux publishes the map's base. It must be placed before add_fabric_mux_v2_to_program and
+    // Fabric mux config. The mux map goes in program-local L1 (a circular buffer on the mux cores), so it stays clear
+    // of persistent L1 there and the program's L1 validation keeps it below L1 buffers; its addresses are offsets until
+    // the mux publishes the map's base. It must be placed before add_fabric_mux_v2_to_program and
     // append_client_connection_rt_args, which read its CB index and semaphore id.
-    const uint8_t num_buffers_per_channel = workers_per_dir == 1 ? 4 : mux_buffers_per_channel;
-    tt::tt_fabric::FabricMuxV2Config mux_config(
-        *mesh_device,
-        static_cast<uint8_t>(workers_per_dir),
-        num_buffers_per_channel,
-        tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device),
-        /*base_l1_address=*/0);
-    if (!mux_core_set.empty()) {
-        mux_config.place_in_program_local_l1(desc, CoreRangeSet(mux_core_set));
+    std::optional<tt::tt_fabric::FabricMuxV2Config> mux_config;
+    if (use_mux) {
+        mux_config.emplace(
+            *mesh_device,
+            static_cast<uint8_t>(workers_per_dir),
+            mux_buffers_per_channel,
+            tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device),
+            /*base_l1_address=*/0);
+        if (!mux_core_set.empty()) {
+            mux_config->place_in_program_local_l1(desc, CoreRangeSet(mux_core_set));
+        }
     }
 
     ////////////////////////////////////////////////////////////////
@@ -350,7 +354,8 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
         packet_header_size,  // fabric packet header size
         cb0_id,
         slot_bytes,
-        num_buffers_per_channel,  // mux buffers per channel
+        mux_buffers_per_channel,  // mux buffers per channel
+        use_mux,                  // through the direction's mux, else straight to the fabric router
     };
 
     tt::tt_metal::KernelDescriptor reader_kernel_desc;
@@ -387,18 +392,20 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
 
     // Mux kernels: one fabric connection per active direction per link, to that direction's neighbor. The forwarder
     // writes every packet into an ethernet core from NOC0, the mux's default NOC.
-    for (uint32_t link = 0; link < num_links; ++link) {
-        for (uint32_t dir = 0; dir < num_directions; ++dir) {
-            if (dir_active(dir)) {
-                tt::tt_fabric::add_fabric_mux_v2_to_program(
-                    *mesh_device,
-                    desc,
-                    mux_config,
-                    mux_core(link, dir),
-                    sender_fabric_node_id,
-                    mesh_device->get_fabric_node_id(*dir_neighbor(dir)),
-                    link,
-                    tt::tt_metal::NOC::NOC_0);
+    if (use_mux) {
+        for (uint32_t link = 0; link < num_links; ++link) {
+            for (uint32_t dir = 0; dir < num_directions; ++dir) {
+                if (dir_active(dir)) {
+                    tt::tt_fabric::add_fabric_mux_v2_to_program(
+                        *mesh_device,
+                        desc,
+                        *mux_config,
+                        mux_core(link, dir),
+                        sender_fabric_node_id,
+                        mesh_device->get_fabric_node_id(*dir_neighbor(dir)),
+                        link,
+                        tt::tt_metal::NOC::NOC_0);
+                }
             }
         }
     }
@@ -490,19 +497,31 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
                     (uint32_t)(*route_node.mesh_id),  // neighbor mesh id (packet header 2D route)
                 };
                 TT_FATAL(num_iters == 0 || neighbor.has_value(), "an active direction must have a neighbor");
-                if (num_iters > 0) {
+                if (num_iters > 0 && use_mux) {
                     // Connect this worker to its channel (== worker index w) on the direction's mux; two local
                     // semaphores back the connection.
                     const uint32_t flow_control_sem =
                         ttnn::experimental::ccl::add_semaphore_descriptor(desc, CoreRangeSet(CoreRange(core)));
                     const uint32_t teardown_sem =
                         ttnn::experimental::ccl::add_semaphore_descriptor(desc, CoreRangeSet(CoreRange(core)));
-                    mux_config.append_client_connection_rt_args(
+                    mux_config->append_client_connection_rt_args(
                         mesh_device->worker_core_from_logical_core(mux_core(link, dir)),
                         static_cast<uint8_t>(w),
                         tt::tt_fabric::FabricMuxV2Config::ClientSemaphores{
                             .flow_control_sem_id = flow_control_sem, .teardown_sem_id = teardown_sem},
                         writer_rt_args);
+                } else if (num_iters > 0) {
+                    // Connect this worker straight to the direction's fabric router on this link.
+                    tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+                        *mesh_device,
+                        sender_fabric_node_id,
+                        {route_node},
+                        {link},
+                        desc,
+                        writer_kernel_id,
+                        core,
+                        writer_rt_args,
+                        tt::tt_fabric::FabricApiType::Linear);
                 }
                 desc.kernels[writer_kernel_id].runtime_args.emplace_back(core, std::move(writer_rt_args));
             }

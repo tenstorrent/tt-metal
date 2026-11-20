@@ -59,8 +59,7 @@ void kernel_main() {
     ///////////////////////////////////////////////////
 
     walk.init(device_idx, slice_start, slice_count, 0, slice_count);
-    ag::fill_slots(
-        noc, cb, lay, unit_bytes, builder, slice_count * geo.element_units, /*local_copy=*/true, [](uint32_t) {});
+    ag::fill_slots(noc, cb, lay, unit_bytes, builder, /*local_copy=*/true, [](uint32_t) {});
 
     ///////////////////////////////////////////////////
     // CLEANUP

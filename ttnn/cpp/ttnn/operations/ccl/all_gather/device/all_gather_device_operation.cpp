@@ -256,29 +256,55 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
     const auto& output_spec = tensor_args.persistent_output_tensor.has_value()
                                   ? tensor_args.persistent_output_tensor->tensor_spec()
                                   : args.output_spec;
+    const uint32_t num_available_cores = get_available_worker_cores(args, tensor_args.input_tensor).num_cores();
+    const bool unicast_fits_cores = num_available_cores >= unicast_cores_per_link(1);
+    // A relay re-reads its own output, so pages resharded on the way (concat or split) must also be cut on the
+    // output's read alignment
+    auto unicast_cuts_pages = [&]() {
+        return compute_walk_geometry(
+                   tensor_args.input_tensor,
+                   output_spec,
+                   args.dim_from_end,
+                   args.num_devices,
+                   args.packet_size,
+                   unicast_relay_reads_output(
+                       tt::tt_fabric::is_ring_or_torus(args.axis_topology[args.get_1d_axis()]), args.num_devices))
+            .has_value();
+    };
+    // Bent axis and NeighborExchange run unicast only; the composite path multicasts too.
+    auto require_unicast = [&](const char* reason) {
+        TT_FATAL(
+            unicast_fits_cores,
+            "all_gather {} supports only the unicast algorithm, which needs at least {} worker cores but only {} are "
+            "available; provide a larger sub_core_grid.",
+            reason,
+            unicast_cores_per_link(1),
+            num_available_cores);
+        TT_FATAL(
+            unicast_cuts_pages(),
+            "all_gather {} supports only the unicast algorithm, which cannot cut {} B input pages and {} B output "
+            "pages on the read alignment of every buffer it reads",
+            reason,
+            tensor_args.input_tensor.mesh_buffer().page_size(),
+            output_spec.compute_page_size_bytes());
+    };
+    // NOLINTNEXTLINE(bugprone-branch-clone) - one branch per limitation, kept separate to document each
     if (args.is_true_2d()) {
         // Limitation: Unicast algorithm currently does not support true 2D topologies
         use_unicast = false;
-        // NOLINTNEXTLINE(bugprone-branch-clone) - one branch per limitation, kept separate to document each
     } else if (tt::tt_fabric::is_2d_fabric_config(args.fabric_config) && !args.axis_is_straight[args.get_1d_axis()]) {
         // Limitation: Multicast cannot handle 2D topology reshapes/views that bend an axis
+        require_unicast("on a bent mesh axis");
         use_unicast = true;
     } else if (args.fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE) {
         // Limitation: NeighborExchange only permits 1-hop unicast
+        require_unicast("on FABRIC_1D_NEIGHBOR_EXCHANGE");
         use_unicast = true;
-    } else if (get_available_worker_cores(args, tensor_args.input_tensor).num_cores() < 4) {
-        // Limitation: unicast needs a fabric mux and a worker per direction
+    } else if (!unicast_fits_cores) {
+        // Limitation: unicast needs a worker per direction
         use_unicast = false;
-    } else if (!compute_walk_geometry(
-                    tensor_args.input_tensor,
-                    output_spec,
-                    args.dim_from_end,
-                    args.num_devices,
-                    args.packet_size,
-                    /*reads_output=*/true)
-                    .has_value()) {
-        // Limitation: the unicast relay re-reads its own output, so pages resharded on the way (concat or split)
-        // must also be cut on the output's read alignment
+    } else if (!unicast_cuts_pages()) {
+        // Limitation: unicast cannot cut these pages on the read alignment of every buffer it reads
         use_unicast = false;
     } else {
         // Heuristics: Decide between multicast or unicast algorithm
@@ -427,10 +453,17 @@ std::optional<all_gather_walk::WalkGeo> compute_walk_geometry(
     // stripe is whole output pages, else one unit.
     const uint64_t stripe_units = input_pages_per_stripe * in_page_units;
     const uint32_t element_units = stripe_units % out_page_units == 0 ? out_page_units : 1u;
-    if (stripe_units * num_devices > std::numeric_limits<uint32_t>::max() ||
-        num_input_pages * in_page_units > std::numeric_limits<uint32_t>::max()) {
-        return std::nullopt;
-    }
+    // The kernels index the output's units in 32 bits; the stripe and the input's units are within it.
+    const uint64_t output_units = uint64_t{num_devices} * num_input_pages * in_page_units;
+    TT_FATAL(
+        output_units <= std::numeric_limits<uint32_t>::max(),
+        "all_gather output has {} units of {} B ({} devices x {} input pages x {} units per page); at most 2^32 - 1 "
+        "are supported",
+        output_units,
+        unit_bytes,
+        num_devices,
+        num_input_pages,
+        in_page_units);
     return all_gather_walk::WalkGeo{
         .unit_bytes = unit_bytes,
         .in_page_units = in_page_units,

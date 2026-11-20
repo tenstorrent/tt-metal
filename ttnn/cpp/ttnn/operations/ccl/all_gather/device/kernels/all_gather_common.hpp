@@ -226,6 +226,9 @@ public:
         }
     }
 
+    // True when next() has no run left.
+    FORCE_INLINE bool done() const { return left_ == 0; }
+
     FORCE_INLINE bool next(DstRun& r) {
         if (left_ == 0) {
             return false;
@@ -324,6 +327,9 @@ public:
         whole_pages_ = src_cross_ && element_units_ == in_page_units_ && r.step == in_page_stride_;
     }
 
+    // True when next() has no piece of the run left.
+    FORCE_INLINE bool done() const { return units_left_ == 0 && next_ == run_.count; }
+
     FORCE_INLINE bool next(Piece& p) {
         if (units_left_ == 0) {
             if (next_ == run_.count) {
@@ -381,6 +387,9 @@ public:
         p_ = {r.own_addr, bytes, bytes};
         pending_ = true;
     }
+
+    // True when next() has no piece of the run left.
+    FORCE_INLINE bool done() const { return !pending_; }
 
     FORCE_INLINE bool next(Piece& p) {
         p = p_;
@@ -456,6 +465,9 @@ public:
         return used;
     }
 
+    // True when the walk has nothing left to send.
+    FORCE_INLINE bool exhausted() const { return walk_.done() && !have_ && src_.done(); }
+
 private:
     // Loads the next piece (and the next run when this one is done); false when the walk is exhausted.
     FORCE_INLINE bool pull() {
@@ -514,10 +526,11 @@ FORCE_INLINE void wait_and_consume(uint32_t sem_l1, uint32_t count) {
     noc_semaphore_inc(get_noc_addr(sem_l1), uint32_t{0} - count);
 }
 
-// The reader's slot loop, one walk pass of take_units units: per slot, wait(consumed) -> reserve -> up to
-// lay.packets packets (records + payload reads) -> one read barrier -> [local copy, flushed] -> SlotInfo -> push.
-// local_copy also writes every packet into our own output, on a second VC so the writes do not queue behind the
-// fabric traffic on this NOC; the caller's final write barrier acks them.
+// The reader's slot loop, one walk pass, until the builder is exhausted: per slot, wait(units already pushed) ->
+// reserve -> up to lay.packets packets (records + payload reads) -> one read barrier -> [local copy, flushed] ->
+// SlotInfo -> push. The slot that exhausts the builder ends the pass (iter_end), and an empty pass pushes none.
+// local_copy also writes every packet into our own output, on a second VC so the writes do not queue behind the fabric
+// traffic on this NOC; the caller's final write barrier acks them.
 template <class Builder, class Wait>
 FORCE_INLINE void fill_slots(
     Noc& noc,
@@ -525,11 +538,14 @@ FORCE_INLINE void fill_slots(
     const SlotLayout& lay,
     uint32_t unit_bytes,
     Builder& builder,
-    uint32_t take_units,
     bool local_copy,
     Wait&& wait) {
     auto own_addrs = [&](uint32_t slot, uint32_t j) { return reinterpret_cast<uint64_t*>(lay.own_addrs(slot, j)); };
-    for (uint32_t consumed = 0; consumed < take_units;) {
+    if (builder.exhausted()) {
+        return;
+    }
+    uint32_t consumed = 0;
+    for (bool iter_end = false; !iter_end;) {
         wait(consumed);
         cb.reserve_back(1);
         const uint32_t slot = cb.get_write_ptr();
@@ -547,9 +563,6 @@ FORCE_INLINE void fill_slots(
             }
             units += bytes / unit_bytes;
         }
-        // The walk ending before the schedule's units (a host / walk mismatch) would push empty slots forever. A
-        // kernel has no release-mode way to fail the op, so this is a watcher assert.
-        ASSERT(units != 0);
         noc.async_read_barrier();
         if (local_copy) {
             for (uint32_t j = 0; j < packets; ++j) {
@@ -568,8 +581,9 @@ FORCE_INLINE void fill_slots(
             noc.async_writes_flushed();
         }
         consumed += units;
+        iter_end = builder.exhausted();
         *reinterpret_cast<SlotInfo*>(slot) =
-            SlotInfo{static_cast<uint16_t>(packets), static_cast<uint16_t>(consumed == take_units ? 1 : 0), units};
+            SlotInfo{static_cast<uint16_t>(packets), static_cast<uint16_t>(iter_end ? 1 : 0), units};
         slot_publish();
         cb.push_back(1);
     }

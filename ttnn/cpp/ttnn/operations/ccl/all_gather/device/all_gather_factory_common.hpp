@@ -22,7 +22,8 @@ namespace ttnn::operations::ccl {
 // The kernels' walk geometry (all_gather_walk.hpp): this device's input pages and the output pages cut into units that
 // are a multiple of the NOC write alignment and of the read alignment of every source the kernels read, or nullopt
 // when the pages cannot be cut so. reads_output: the kernels also read the output (the unicast relay re-reads what
-// upstream wrote there), so the unit is also a multiple of the output's read alignment.
+// upstream wrote there), so the unit is also a multiple of the output's read alignment. Fails when the walk's output
+// unit index would not fit 32 bits.
 std::optional<all_gather_walk::WalkGeo> compute_walk_geometry(
     const Tensor& input_tensor,
     const tt::tt_metal::TensorSpec& output_spec,
@@ -54,6 +55,18 @@ uint32_t compute_packets_per_slot(
 
 // Worker cores the op may use: the sub-device's, within sub_core_grid.
 CoreRangeSet get_available_worker_cores(const AllGatherParams& args, const Tensor& input_tensor);
+
+// Unicast cores per link: workers_per_dir workers in each direction, plus the direction's fabric mux from 2 workers
+// (one worker connects straight to the fabric router).
+inline constexpr uint32_t unicast_cores_per_link(uint32_t workers_per_dir) {
+    return 2u * (workers_per_dir + (workers_per_dir > 1 ? 1u : 0u));
+}
+
+// Whether the unicast relay re-reads the output: only when a direction runs 2 or more iterations, i.e. a line of 3 or
+// more devices or a ring of 4 or more.
+inline constexpr bool unicast_relay_reads_output(bool is_ring, uint32_t num_devices) {
+    return is_ring ? num_devices >= 4 : num_devices >= 3;
+}
 
 // Appends the walk geometry and the packet cap as kernel compile-time args, in the order
 // all_gather_walk::walk_geo_from_ct_args and packet_cap_from_ct_args read them (kWalkCtArgCount args).
