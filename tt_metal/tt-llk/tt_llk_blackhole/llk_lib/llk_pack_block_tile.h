@@ -30,8 +30,9 @@ inline constexpr bool pack_strides_u2d<PackMode::Default> = llk_pack_u2d;
 template <PackMode pack_mode>
 inline constexpr bool llk_pack_rmw_tile = DST_SYNC_MODE == DstSync::SyncFull && pack_mode == PackMode::Default;
 
-// A 16-bit DEST matmul kernel with a block-float CB (Bfp8 in0 at HiFi2: minimal 222 1x1, joint_sdpa k512): its unpacker binds, and
-// the byte-wise write's earlier start costs it L1 (+0.4..+0.8 %, e41d7fe1da8 bisect).
+// A 16-bit DEST matmul kernel with a block-float CB (Bfp8 in0 at HiFi2: minimal 222 1x1): its unpacker binds, and the byte-wise
+// write's earlier start costs it L1 (+0.4..+0.8 %, e41d7fe1da8 bisect). SDPA kernels (a block-float mask CB) keep the byte-wise write:
+// their k128 rows lose 0.1-0.3 % with the word write.
 template <std::uint32_t dep>
 constexpr bool llk_pack_matmul_bfp16()
 {
@@ -40,7 +41,7 @@ constexpr bool llk_pack_matmul_bfp16()
     {
         bfp = bfp || (unpack_src_format[i] != static_cast<std::uint8_t>(DataFormat::Invalid) && IS_BFP_FORMAT(unpack_src_format[i]));
     }
-    return bfp && ckernel::packer::llk_pack_matmul_kernel<dep>();
+    return bfp && ckernel::packer::llk_pack_matmul_kernel<dep>() && !ckernel::packer::llk_pack_sdpa_api<dep * 0 + 1>::value;
 }
 
 // The default per-tile pack writes the destination by bytes under both syncs, except at half sync where its earlier start

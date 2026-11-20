@@ -459,6 +459,13 @@ struct llk_pack_sfpu_api
     static constexpr bool value = false;
 };
 
+// Specialized by the SDPA SFPU header (ckernel_sfpu_sdpa.h): SDPA compute kernels.
+template <int api>
+struct llk_pack_sdpa_api
+{
+    static constexpr bool value = false;
+};
+
 template <std::uint32_t dep>
 constexpr bool llk_pack_sfpu_kernel()
 {
