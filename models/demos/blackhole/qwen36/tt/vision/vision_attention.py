@@ -340,7 +340,8 @@ class VisionAttention(LightweightModule):
         if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:
             q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
 
-        if self.head_dim != self.padded_head_dim:
+        # (QWEN36_VISION_LEAN=rotpad uploads the tables already padded_head_dim wide: then nothing is padded here)
+        if self.head_dim != self.padded_head_dim and int(rot_mats[0].shape[-1]) != self.padded_head_dim:
             pad_dim = lambda x, v: ttnn.pad(
                 x, (x.shape[0], x.shape[1], x.shape[2], self.padded_head_dim), (0, 0, 0, 0), v
             )

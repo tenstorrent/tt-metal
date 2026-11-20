@@ -466,7 +466,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             grid_thw = torch.stack([g.to(dtype=torch.int32) for g in grid_thw], dim=0)
         return pixel_values, grid_thw
 
-    def _compute_vision_tokens(self, model, kwargs, u=0):
+    def _compute_vision_tokens(self, model, kwargs, u=0, host_rows=False):
         """Run the vision tower for user `u`'s request, if it carries images or video.
 
         Returns the packed embeddings (ttnn [num_vision_tokens, H]) for prefill to splice in, or None for a
@@ -475,16 +475,17 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         A request carries at most one visual modality (see get_supported_mm_limits); video takes precedence.
         NOTE: the tower stashes MODEL-GLOBAL grids, so call this right before user u's prefill (never ahead of time
         for several users).
+        ``host_rows`` True: the packed rows as a HOST bf16 tensor (no upload); see _vision_cached.
         """
         video = self._gather_user_visual(kwargs, u, "pixel_values_videos", "video_grid_thw")
         if video is not None:
             self._check_vision_bucket(video[1])
-            return self._vision_cached(model, "video", video, model.get_video_features)
+            return self._vision_cached(model, "video", video, model.get_video_features, host_rows=host_rows)
 
         image = self._gather_user_visual(kwargs, u, "pixel_values", "image_grid_thw")
         if image is not None:
             self._check_vision_bucket(image[1])
-            return self._vision_cached(model, "image", image, model.get_image_features)
+            return self._vision_cached(model, "image", image, model.get_image_features, host_rows=host_rows)
 
         return None
 
@@ -620,8 +621,9 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
 
     @staticmethod
     def _vision_bucket(num_patches):
-        """Padded patch bucket the tower runs on (same rule as tt/vision/model.py: ceil-to-2048 of count + 1 step)."""
-        return (int(num_patches) // 2048 + 1) * 2048
+        """Padded patch bucket the tower runs on (same rule as tt/vision/model.py: ceil-to-2048 of count + 1 step;
+        QWEN36_VISION_BUCKET_EXACT / QWEN36_VISION_BUCKET_1024 change it for both, see tt/vision/vision_fast.py)."""
+        return _vf.vision_bucket(num_patches)
 
     def _check_vision_bucket(self, grid_thw):
         """Refuse an item whose padded bucket was not compiled before trace capture (warmup_vision).
@@ -633,8 +635,16 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         warmed = getattr(self, "_vision_warmed_max_bucket", None)
         if not warmed:
             return
+        # With a changed bucket rule the warmed buckets are checked one by one (a bucket below the maximum that no
+        # warm-up grid compiled would hang the same way); None = the release's check against the maximum only.
+        warmed_set = getattr(self, "_vision_warmed_buckets", None)
         for g in grid_thw.reshape(-1, 3):
             n = int(g[0]) * int(g[1]) * int(g[2])
+            if warmed_set is not None and self._vision_bucket(n) <= warmed and self._vision_bucket(n) not in warmed_set:
+                raise ValueError(
+                    f"Vision input of {n} patches (grid {tuple(int(x) for x in g)}): bucket {self._vision_bucket(n)} "
+                    f"was not warmed before trace capture (warmed: {sorted(warmed_set)})"
+                )
             if self._vision_bucket(n) > warmed:
                 raise ValueError(
                     f"Vision input of {n} patches (grid {tuple(int(x) for x in g)}, bucket {self._vision_bucket(n)}) "
@@ -1142,12 +1152,30 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
                         f"max_pixels={max_pixels}: up to {need} patches -> also warming bucket {need_bucket} "
                         f"with grid 1x{h}x{w}"
                     )
+        if _vf.bucket_flags_on() and grids:
+            # QWEN36_VISION_BUCKET_EXACT / _1024: a grid may now land one bucket lower (1x32x32 and 1x64x64 are exact
+            # multiples), which would leave its old bucket uncompiled; add one grid per bucket that lost its warm-up, and
+            # one for the 1,024-row bucket.
+            n0 = len(grids)
+            grids = _vf.warm_grids(grids)
+            logger.info(
+                f"vision bucket flags ({_vf.flags_summary()}): warm-up grids {grids[:n0]} + {grids[n0:]} -> buckets "
+                f"{_vf.warmed_buckets(grids)}"
+            )
         patch_dim = vc.in_channels * vc.temporal_patch_size * vc.patch_size**2
+        resident = _vf.parse_grids(os.environ.get("QWEN36_VISION_RESIDENT_GRIDS", ""))
+        if resident and grids:
+            # Rotary tables of these grids stay in DRAM (allocated here, before any trace capture, before the first
+            # tower call so the warm-up below already runs the resident path for a warm-up grid that is listed).
+            keys = model.vision_model.stage_resident_rot(resident)
+            logger.info(f"QWEN36_VISION_RESIDENT_GRIDS: rotary tables resident for (t, h, w, rows, width) {keys}")
         for t, h, w in grids:
             pix = torch.zeros(t * h * w, patch_dim, dtype=torch.float32)
             grid = torch.tensor([[t, h, w]], dtype=torch.int32)
             ttnn.deallocate(model.get_image_features(pix, grid))  # image / video share the device work
         self._vision_warmed_max_bucket = max((self._vision_bucket(t * h * w) for t, h, w in grids), default=None)
+        if _vf.bucket_flags_on():
+            self._vision_warmed_buckets = {self._vision_bucket(t * h * w) for t, h, w in grids}
         model._req_image_grid_thw = None
         model._req_video_grid_thw = None
         ttnn.synchronize_device(self.mesh_device)
@@ -1621,7 +1649,12 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             # the next turn resumes from); the engine encodes the images its resume reaches.
             out = eng.prefill(slots[i], tokens[i, :L], table[i : i + 1], start_pos=starts[i], vision_tokens=mm_vision)
             return out.float().reshape(-1)
-        vision_tokens = self._compute_vision_tokens(model, kwargs, i) if has_mm else None
+        # QWEN36_VISION_LEAN=hostrows (default off): take the tower's host rows directly. The release uploads the packed
+        # rows (tilize + write + wait) and vision_rows_host below reads them straight back.
+        direct = has_mm and hasattr(model, "vision_rows_host") and _vf.lean("hostrows")
+        vision_tokens = (
+            self._compute_vision_tokens(model, kwargs, i, **({"host_rows": True} if direct else {})) if has_mm else None
+        )
         if vision_tokens is not None and hasattr(model, "vision_rows_host"):
             # rows to host right after the tower, before any trace replay (see Qwen36Model.vision_rows_host)
             vision_tokens = model.vision_rows_host(vision_tokens)

@@ -253,6 +253,182 @@ class DropInVisionTransformer(torch.nn.Module):
             )
         return dev
 
+    # ---- QWEN36_VISION_* levers (vision_fast.py; all default off) ----------------------------------------------------
+    def _rot_width(self):
+        """Columns of the uploaded rotary tables: head_dim (the release; vision_attention pads to padded_head_dim on
+        device in every block), or padded_head_dim with QWEN36_VISION_LEAN=rotpad (padded once on the host)."""
+        return self.model_args.padded_head_dim if _vf.lean("rotpad") else self.model_args.head_dim
+
+    def _grid_lru(self):
+        cap = _vf.grid_cache_cap()
+        if cap <= 0:
+            return None
+        lru = self.__dict__.get("_grid_cache")
+        if lru is None or lru.cap != cap:
+            lru = self.__dict__["_grid_cache"] = _vf.LRU(cap)
+        return lru
+
+    def _fast_path_on(self):
+        return bool(
+            _vf.grid_cache_cap() > 0
+            or self.__dict__.get("_resident_rot")
+            or _vf.pipeline_enabled()
+            or _vf.patch_linear_enabled()
+            or _vf.lean("rotpad")
+        )
+
+    def _rot_host(self, grid_thw, unpadded_seq_len, seq_len, rot_w):
+        """Host cos / sin [1, 1, seq_len, rot_w] of one grid: the release's tables (rows past the image = identity
+        rotation), plus the identity column pad when rot_w > head_dim."""
+        _, (cos, sin) = qwen3_5_vision_transformer_preprocess(
+            seq_len=unpadded_seq_len,
+            grid_thw=grid_thw,
+            head_dim=self.model_args.head_dim,
+            spatial_merge_size=self.model_args.hf_config.vision_config.spatial_merge_size,
+        )
+        cos, sin = convert_rope_style_hf_to_meta(cos, sin)
+        return _vf.pad_rot_tables(cos, sin, unpadded_seq_len, seq_len, width=rot_w)
+
+    def stage_resident_rot(self, grids):
+        """QWEN36_VISION_RESIDENT_GRIDS: upload the rotary tables of these (t, h, w) grids once and keep them in DRAM.
+        ONLY before trace capture (warmup_vision): a device tensor allocated after capture can share DRAM with trace
+        intermediates and be overwritten by a replay, so nothing is made resident at request time."""
+        mesh = self.model_args.mesh_device
+        rot_w = self._rot_width()
+        res = self.__dict__.setdefault("_resident_rot", {})
+        for t, h, w in grids:
+            g = torch.tensor([[int(t), int(h), int(w)]], dtype=torch.int32)
+            n = int(t) * int(h) * int(w)
+            seq_len = _vf.vision_bucket(n)
+            key = _vf.grid_key(g, seq_len, rot_w)
+            if key in res:
+                continue
+            res[key] = tuple(
+                ttnn.from_torch(
+                    x,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=mesh,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+                )
+                for x in self._rot_host(g, n, seq_len, rot_w)
+            )
+        return sorted(res)
+
+    def _read_rows(self, tt_out, n_valid, rec):
+        """Merged rows of one image to host, valid rows only, owned bf16 (the release's read-back + trim)."""
+        out_hidden_full = self.model_args.hf_config.vision_config.out_hidden_size
+        mesh = self.model_args.mesh_device
+        if rec is not None:
+            rec.start()
+        host = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=3))
+        ttnn.deallocate(tt_out)
+        if rec is not None:
+            rec.lap("readback")
+        rows = host.reshape(-1, host.shape[-1])[:n_valid, :out_hidden_full].to(torch.bfloat16).clone()
+        if rec is not None:
+            rec.lap("trim")
+        return rows
+
+    def _forward_fast(self, all_pixel_values, all_grid_thw, rec):
+        """The host_trim tower loop with the levers; returns the per-image host rows. Device work per image is the
+        release's (same programs on the padded bucket: two table uploads unless resident, the patch upload, the tower,
+        the read-back); what changes is where the host constants come from and when the read-back happens.
+
+        - QWEN36_VISION_GRID_CACHE=N: per (grid, bucket, table width) the position-embedding interpolation (torch) and
+          the cos / sin tables as tilized HOST tensors; a hit skips their CPU work and uploads the kept host tensors.
+        - QWEN36_VISION_RESIDENT_GRIDS: tables staged in DRAM by stage_resident_rot are used as they are (no upload, no
+          deallocate).
+        - QWEN36_VISION_LEAN=rotpad: tables are uploaded padded_head_dim wide, so vision_attention skips its two device
+          pads per block.
+        - QWEN36_VISION_PATCH_LINEAR=1: patch embedding as one matmul.
+        - QWEN36_VISION_PIPELINE=1 (two or more images): every image is dispatched before the first read-back, so the
+          host pre-work of image k+1 runs while the device works on image k. The outputs wait in DRAM (bucket/4 x 5120
+          bf16 each) until the loop ends; nothing replays a trace in between."""
+        mesh = self.model_args.mesh_device
+        vc = self.model_args.hf_config.vision_config
+        merge_sq = vc.spatial_merge_size**2
+        rot_w = self._rot_width()
+        cache = self._grid_lru()
+        resident = self.__dict__.get("_resident_rot") or {}
+        pipeline = _vf.pipeline_enabled() and len(all_grid_thw) > 1
+        wait = not pipeline  # timing: per-stage device waits would undo the overlap, so PIPELINE is clocked without them
+        mark = None if rec is None else (lambda name: rec.lap(name, sync=wait, disp=True))
+        n_dev = int(mesh.get_num_devices())
+        outputs, pending, host_refs = [], [], []
+        for grid_thw in all_grid_thw:
+            pixel_values = all_pixel_values[: grid_thw.prod(), :]
+            all_pixel_values = all_pixel_values[grid_thw.prod() :, :]
+            grid_thw = grid_thw.unsqueeze(0)
+            unpadded_seq_len = grid_thw.prod(dim=1).sum().item()
+            seq_len = _vf.vision_bucket(unpadded_seq_len)
+            if rec is not None:
+                rec.image(grid_thw[0].tolist(), unpadded_seq_len, seq_len)
+            key = _vf.grid_key(grid_thw, seq_len, rot_w)
+            ent = cache.get(key) if cache is not None else None
+            cos_host, sin_host, pos_embeds = ent if ent is not None else (None, None, None)
+            dev_rot = resident.get(key)
+            if dev_rot is None and cos_host is None:
+                cos_host, sin_host = (
+                    ttnn.from_torch(
+                        x,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=None,
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+                    )
+                    for x in self._rot_host(grid_thw, unpadded_seq_len, seq_len, rot_w)
+                )
+            if rec is not None:
+                rec.lap("host_rot")  # with the levers this includes the tables' bf16 conversion + tilize
+            if _vf.patch_linear_enabled():
+                patch_input = _vf.patch_embed_linear(self.reference_model.patch_embed, pixel_values)
+            else:
+                patch_input = self.reference_model.patch_embed(pixel_values)
+            if rec is not None:
+                rec.lap("host_patch")
+            if pos_embeds is None:
+                pos_embeds = self.reference_model.fast_pos_embed_interpolate(grid_thw).detach()
+            if cache is not None and ent is None:
+                cache.put(key, (cos_host, sin_host, pos_embeds))
+            patch_input = patch_input + pos_embeds
+            if rec is not None:
+                rec.lap("host_pos")
+            if dev_rot is not None:
+                cos, sin = dev_rot
+            else:
+                cos = ttnn.to_device(cos_host, mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                sin = ttnn.to_device(sin_host, mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                # the writes may still be in flight: their host sources stay referenced until every read-back of this
+                # call is done (a cache eviction or the end of this iteration must not free them; see upload_rows)
+                host_refs += [cos_host, sin_host]
+            if rec is not None:
+                nb = 0 if dev_rot is not None else 2 * seq_len * rot_w * 2 * n_dev
+                rec.lap("up_rot", sync=wait, nbytes=nb)
+            tt_input = self.tt_model.prepare_input(patch_input, seq_len)
+            if rec is not None:
+                rec.lap("up_patch", sync=wait, nbytes=seq_len * int(patch_input.shape[-1]) * 2)
+            tt_out = self.tt_model(
+                tt_input,
+                unpadded_seq_len=unpadded_seq_len,
+                rot_mats=[cos, sin],
+                trim_before_merger=False,
+                **({} if mark is None else dict(_mark=mark)),
+            )
+            ttnn.deallocate(tt_input)
+            if dev_rot is None:
+                ttnn.deallocate(cos)
+                ttnn.deallocate(sin)
+            n_valid = unpadded_seq_len // merge_sq
+            if pipeline:
+                pending.append((tt_out, n_valid))
+                continue
+            outputs.append(self._read_rows(tt_out, n_valid, rec))
+        for tt_out, n_valid in pending:  # PIPELINE: the read-backs, in image order (clocked on the last image's entry)
+            outputs.append(self._read_rows(tt_out, n_valid, rec))
+        del host_refs
+        return outputs
+
     def forward(
         self, pixel_values: torch.Tensor, grid_thw: torch.Tensor, host_trim: bool = False, return_host_rows=False
     ):
@@ -291,6 +467,11 @@ class DropInVisionTransformer(torch.nn.Module):
                 rec = own_rec = _vf.timing_begin(sync=lambda: ttnn.synchronize_device(_mesh), standalone=True)
         t_call = time.perf_counter()
         mark = None if rec is None else (lambda name: rec.lap(name, sync=True, disp=True))
+        if host_trim and self._fast_path_on():
+            # QWEN36_VISION_GRID_CACHE / _RESIDENT_GRIDS / _PIPELINE / _PATCH_LINEAR / _LEAN=rotpad (all default off): the
+            # serving loop with those levers. The loop below stays the release's.
+            final_outputs = self._forward_fast(all_pixel_values, all_grid_thw, rec)
+            all_grid_thw = []
         # todo)) refactor this code to leverage tt-mesh's ttnn.ShardTensorToMesh(mesh_device, dim=batch_size_dim) for data parallelism
         for grid_thw in all_grid_thw:
             # --- pick out the pixel_values for this users' images (grid_thw.prod() pixels) ---
@@ -301,7 +482,8 @@ class DropInVisionTransformer(torch.nn.Module):
             grid_thw = grid_thw.unsqueeze(0)
             unpadded_seq_len = grid_thw.prod(dim=1).sum().item()
             # Calculate padded sequence length (divisible by 2048) required by models/tt_transformers/tt/attention.py::forward_prefill
-            seq_len = ((unpadded_seq_len // 2048) + 1) * 2048
+            # (the release rule (n // 2048 + 1) * 2048 unless QWEN36_VISION_BUCKET_EXACT / _1024 is set: vision_fast.py)
+            seq_len = _vf.vision_bucket(unpadded_seq_len)
             if rec is not None:
                 rec.image(grid_thw[0].tolist(), unpadded_seq_len, seq_len)
 

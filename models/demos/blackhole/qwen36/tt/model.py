@@ -258,6 +258,43 @@ def _page_table_rows(page_tables):
     return (pt.reshape(1, -1) if pt.dim() == 1 else pt).to(torch.int32).contiguous()
 
 
+
+# ---- vision splice buffer pairs (module functions: the splice methods are also called on test stand-ins) ----------------
+def _vis_pair_for(model, length):
+    """(vis buffer, mask buffer, host zero mask, key) for a replay of ``length`` rows: the pair of that length when
+    QWEN36_VISION_SPLICE_SEG allocated one, else the release's single pair (key None). The trace body
+    (_apply_vision_merge) and the staging (_set_vision_merge) both come through here, so a replay reads the pair that
+    was staged for it."""
+    ss = getattr(model, "_vis_set", None)
+    key = None if ss is None else ss.pick(length)
+    if key is None:
+        return model._vis_buf, model._vis_mask_buf, getattr(model, "_vis_zero_mask_host", None), None
+    return ss.get(key) + (key,)
+
+
+def _vis_clear_mask(model, key):
+    """Zero the device mask of pair ``key`` (the where becomes the identity). Release behaviour: one upload of the host
+    zero mask per call. With per-length pairs every pair an image left non-zero is zeroed as well.
+    QWEN36_VISION_LEAN=maskskip: a pair whose mask is known zero (allocated zero, or cleared since its last image) is
+    not uploaded again."""
+    ss = getattr(model, "_vis_set", None)
+    if ss is None:  # no book-keeping (single device): the release's call
+        ttnn.copy_host_to_device_tensor(model._vis_zero_mask_host, model._vis_mask_buf)
+        return
+    keys = ss.to_clear(key, skip_clean=_vf.lean("maskskip"))
+    for k in keys:
+        _, mask_buf, zero_host = ss.get(k)
+        ttnn.copy_host_to_device_tensor(zero_host, mask_buf)
+    ss.cleared(keys)
+
+
+def _vis_time_clear(rec):
+    """QWEN36_VISION_TIMING: a zero-mask upload (text segment of an image request) on the request's record."""
+    if rec is not None:
+        rec.lap("mask_clear", sync=True, image=False)
+        rec.add("mask_clear_n", 1)
+
+
 class Qwen36Model:
     """Qwen3.5-9B text LM on Blackhole P150. HF_MODEL env var selects checkpoint."""
 
@@ -529,6 +566,10 @@ class Qwen36Model:
         self._vis_buf = None  # [1, chunk_size, dim] bf16, image rows placed at their positions
         self._vis_mask_buf = None  # [1, chunk_size, 1] bf16, 1 at image positions else 0
         self._vis_zero_mask_host = None  # cached host zero mask for the clear (text/tail) path
+        # Book-keeping of the splice buffer pairs (vision_fast.SpliceSet): key None = the pair above; with
+        # QWEN36_VISION_SPLICE_SEG=1 (default off) one more pair per prefill trace length. None until allocated.
+        self._vis_set = None
+        self._vis_host_refs = None  # QWEN36_VISION_LEAN=hostref: the last staged host tensors
 
         # MTP (multi-token prediction) drafter head for speculative decode. Built only when the
         # checkpoint ships mtp.* weights AND the config declares an MTP head. Its own paged KV
@@ -691,6 +732,45 @@ class Qwen36Model:
                 device=None,
                 mesh_mapper=rep,
             )
+            self._vis_set = _vf.SpliceSet()
+            self._vis_set.add(None, self._vis_buf, self._vis_mask_buf, self._vis_zero_mask_host)
+            if _vf.splice_seg_enabled():
+                # One more pair per prefill trace length below this buffer's rows (the short-trace buckets and the
+                # chunk size): the trace of that length then reads its own pair (_apply_vision_merge, no slice) and an
+                # image segment uploads length x dim instead of chunk_size x dim. Allocated here, i.e. before warm-up
+                # and before any trace capture, like the pair above. DRAM: sum(lengths) x dim x 2 B over the mesh.
+                lengths = _vf.splice_lengths(self._PREFILL_MASK_BUCKETS, self._chunked_chunk_size, chunk_size)
+                for L in lengths:
+                    self._vis_set.add(
+                        L,
+                        ttnn.from_torch(
+                            torch.zeros(1, 1, L, H, dtype=torch.bfloat16),
+                            dtype=ttnn.bfloat16,
+                            layout=ttnn.TILE_LAYOUT,
+                            device=device,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                            mesh_mapper=shard,
+                        ),
+                        ttnn.from_torch(
+                            torch.zeros(1, 1, L, 1, dtype=torch.bfloat16),
+                            dtype=ttnn.bfloat16,
+                            layout=ttnn.TILE_LAYOUT,
+                            device=device,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                            mesh_mapper=rep,
+                        ),
+                        ttnn.from_torch(
+                            torch.zeros(1, 1, L, 1, dtype=torch.bfloat16),
+                            dtype=ttnn.bfloat16,
+                            layout=ttnn.TILE_LAYOUT,
+                            device=None,
+                            mesh_mapper=rep,
+                        ),
+                    )
+                logger.info(
+                    f"QWEN36_VISION_SPLICE_SEG=1: vision splice buffer pairs for trace lengths {lengths} "
+                    f"(+ the {chunk_size}-row pair for every other length)"
+                )
             return
         self._vis_buf = ttnn.from_torch(
             torch.zeros(1, chunk_size, H, dtype=torch.bfloat16),
@@ -725,9 +805,11 @@ class Qwen36Model:
             return x
         if self._vis_buf.shape.rank == 4:
             # TP: buffers are [1, 1, chunk_size, dim(/TP)], matching the 4D TP activations.
-            full = self._vis_buf.shape[2] == length
-            mask = self._vis_mask_buf if full else self._vis_mask_buf[:, :, :length, :]
-            vis = self._vis_buf if full else self._vis_buf[:, :, :length, :]
+            # (QWEN36_VISION_SPLICE_SEG: the pair of this trace length when there is one; else the release's pair)
+            vis_buf, mask_buf, _, _ = _vis_pair_for(self, length)
+            full = vis_buf.shape[2] == length
+            mask = mask_buf if full else mask_buf[:, :, :length, :]
+            vis = vis_buf if full else vis_buf[:, :, :length, :]
         else:
             full = self._vis_buf.shape[1] == length
             mask = self._vis_mask_buf if full else self._vis_mask_buf[:, :length, :]
@@ -752,7 +834,7 @@ class Qwen36Model:
             ).to(torch.bfloat16)
         return ttnn.to_torch(vision_tokens).to(torch.bfloat16)
 
-    def _set_vision_merge(self, ids_host, vision_tokens, vis_row_offset=0):
+    def _set_vision_merge(self, ids_host, vision_tokens, vis_row_offset=0, length=None):
         """Stage the persistent vision buffers for the next forward (host -> device copy only; no
         program compiles). ``vision_tokens`` None clears the mask (where becomes identity); otherwise
         packed image rows are read back to host, placed at their token positions in a zero
@@ -761,6 +843,8 @@ class Qwen36Model:
         placeholders before this segment, so a large image spanning chunks splices
         ``vis_host[vis_row_offset : vis_row_offset + n]``. A segment with no placeholders clears
         the mask (identity merge).
+        ``length``: the rows of the replay this call stages for (its trace bucket / chunk size). It selects the buffer
+        pair with QWEN36_VISION_SPLICE_SEG; without the flag (or None) the single release pair is used.
         """
         if self._vis_buf is None:
             # Fail loudly rather than silently drop the image: a multimodal request must run on a
@@ -772,12 +856,13 @@ class Qwen36Model:
         rec = _vf.timing_current()
         if rec is not None:
             rec.start()
+        vis_buf, mask_buf, _, vkey = _vis_pair_for(self, length)
         if vision_tokens is None:
-            ttnn.copy_host_to_device_tensor(self._vis_zero_mask_host, self._vis_mask_buf)
-            self._vis_time_clear(rec)
+            _vis_clear_mask(self, vkey)
+            _vis_time_clear(rec)
             return
         tp = self.num_devices > 1
-        cs = self._vis_buf.shape[-2]  # seq dim: dim 1 (3D single) / dim 2 (4D TP)
+        cs = vis_buf.shape[-2]  # seq dim: dim 1 (3D single) / dim 2 (4D TP)
         Hg = self.args.dim  # global hidden (the buffer's last dim is dim/TP on a mesh)
         flat = ids_host.reshape(-1)
         pos = torch.nonzero(flat[:cs] == self._vision_placeholder_token_id(), as_tuple=False).reshape(-1)
@@ -785,8 +870,8 @@ class Qwen36Model:
         # No image placeholders in this segment (text-only chunk, or a tail that holds none of the
         # image rows): the merge is the identity, so just clear the mask.
         if n == 0:
-            ttnn.copy_host_to_device_tensor(self._vis_zero_mask_host, self._vis_mask_buf)
-            self._vis_time_clear(rec)
+            _vis_clear_mask(self, vkey)
+            _vis_time_clear(rec)
             return
         assert vis_row_offset + n <= int(vision_tokens.shape[0]), (
             f"vision splice out of range: row offset {vis_row_offset} + {n} image positions in this "
@@ -808,35 +893,44 @@ class Qwen36Model:
             vis_full[0, 0, pos] = seg
             mask = torch.zeros(1, 1, cs, 1, dtype=torch.bfloat16)
             mask[0, 0, pos, 0] = 1.0
-            if rec is not None:
-                # timed variant: the same four calls in the same order, with the host part (zero buffer, row placement,
-                # bf16 tilize + shard) and the device part (the two writes, synchronised) clocked separately
-                rec.lap("splice_host", image=False)
+            if getattr(self, "_vis_set", None) is not None:
+                self._vis_set.staged(vkey)  # this pair's mask is non-zero until its next clear
+            if rec is not None or _vf.lean("hostref"):
+                # Timed / hostref variant: the same four calls in the same order. Timing clocks the host part (zero buffer,
+                # row placement, bf16 tilize + shard) and the device part (the two writes, synchronised) separately.
+                # QWEN36_VISION_LEAN=hostref keeps the two host tensors referenced until the next staging call instead of
+                # dropping them while their writes may still be in flight (the hazard upload_rows documents).
+                if rec is not None:
+                    rec.lap("splice_host", image=False)
                 vis_host_t = ttnn.from_torch(
                     vis_full, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=shard
                 )
-                rec.lap("splice_host", image=False)
-                ttnn.copy_host_to_device_tensor(vis_host_t, self._vis_buf)
-                rec.lap("splice_up", image=False)
+                if rec is not None:
+                    rec.lap("splice_host", image=False)
+                ttnn.copy_host_to_device_tensor(vis_host_t, vis_buf)
+                if rec is not None:
+                    rec.lap("splice_up", image=False)
                 mask_host_t = ttnn.from_torch(
                     mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep
                 )
-                rec.lap("splice_host", image=False)
-                ttnn.copy_host_to_device_tensor(mask_host_t, self._vis_mask_buf)
-                # the host tensors stay referenced until the writes have landed
-                rec.lap("splice_up", sync=True, image=False, nbytes=cs * Hg * 2 + cs * 2 * self.num_devices)
-                del vis_host_t, mask_host_t
-                rec.add("splice_n", 1)
-                rec.add("splice_rows", n)
-                rec.add("splice_len", cs)
+                if rec is not None:
+                    rec.lap("splice_host", image=False)
+                ttnn.copy_host_to_device_tensor(mask_host_t, mask_buf)
+                if rec is not None:
+                    # the host tensors are still referenced here: the wait covers both writes
+                    rec.lap("splice_up", sync=True, image=False, nbytes=cs * Hg * 2 + cs * 2 * self.num_devices)
+                    rec.add("splice_n", 1)
+                    rec.add("splice_rows", n)
+                    rec.add("splice_len", cs)
+                self._vis_host_refs = (vis_host_t, mask_host_t) if _vf.lean("hostref") else None
                 return
             ttnn.copy_host_to_device_tensor(
                 ttnn.from_torch(vis_full, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=shard),
-                self._vis_buf,
+                vis_buf,
             )
             ttnn.copy_host_to_device_tensor(
                 ttnn.from_torch(mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep),
-                self._vis_mask_buf,
+                mask_buf,
             )
             return
         vis_full = torch.zeros(1, cs, Hg, dtype=torch.bfloat16)
@@ -849,13 +943,6 @@ class Qwen36Model:
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), self._vis_mask_buf
         )
-
-    @staticmethod
-    def _vis_time_clear(rec):
-        """QWEN36_VISION_TIMING: a zero-mask upload (text segment of an image request) on the request's record."""
-        if rec is not None:
-            rec.lap("mask_clear", sync=True, image=False)
-            rec.add("mask_clear_n", 1)
 
     def _vis_row_offset_for(self, token_ids, chunk_start):
         """Packed-vision-row offset for the prefill segment starting at absolute position
@@ -2194,7 +2281,10 @@ class Qwen36Model:
                 ttnn.deallocate(last_hidden)
             # Stage this chunk's slice of the packed vision rows (clears the mask for text: no stale rows).
             self._set_vision_merge(
-                token_ids[:, cs : cs + chunk_size], vision_tokens, self._vis_row_offset_for(token_ids, cs)
+                token_ids[:, cs : cs + chunk_size],
+                vision_tokens,
+                self._vis_row_offset_for(token_ids, cs),
+                length=chunk_size,
             )
             last_hidden = self._forward_prefill_chunk_masked_tp(
                 token_ids[:, cs : cs + chunk_size],
@@ -5732,7 +5822,7 @@ class Qwen36Model:
         elif spec_inputs is not None:
             raise ValueError(f"bucket {tr.bucket} is not a spec short trace, but spec_inputs were given")
         # Vision-splice mask (host->device copy only; clears it for text-only requests).
-        self._set_vision_merge(toks, vision_tokens, vis_row_offset)
+        self._set_vision_merge(toks, vision_tokens, vis_row_offset, length=tr.bucket)
         if self.snap_rows_ok(tr.bucket):  # QWEN36_PREFILL_INTRACE_SNAP: this replay's in-replay snapshot rows
             assert all(3 <= int(r) <= actual_len - 3 for r in snap_rows), (snap_rows, actual_len)
             host_refs.extend(self._snap_stage(snap_rows))
@@ -7359,7 +7449,7 @@ class Qwen36Model:
         # slice of the packed vision rows (vis_row_offset); a segment with no image placeholders
         # (text-only prompt, or a tail past the image) clears the mask inside _set_vision_merge so
         # the where is the identity. No-op without buffers.
-        self._set_vision_merge(token_buf, vision_tokens, vis_row_offset)
+        self._set_vision_merge(token_buf, vision_tokens, vis_row_offset, length=bucket)
 
         hidden = self._forward_prefill_chunk_masked(
             token_buf, actual_len, chunk_start, page_table, bucket, flex_sdpa=flex_sdpa, vision_tokens=vision_tokens
@@ -7708,7 +7798,10 @@ class Qwen36Model:
             # compile), so the parked trace is untouched. Handles a large image whose placeholders
             # span multiple chunks.
             self._set_vision_merge(
-                token_ids[:, cs : cs + chunk_size], vision_tokens, self._vis_row_offset_for(token_ids, cs)
+                token_ids[:, cs : cs + chunk_size],
+                vision_tokens,
+                self._vis_row_offset_for(token_ids, cs),
+                length=chunk_size,
             )
 
             ttnn.execute_trace(self.device, self._chunked_trace_id, cq_id=0, blocking=False)
@@ -7753,7 +7846,10 @@ class Qwen36Model:
             # (vis_row_offset = image tokens before cs); a chunk with no image tokens clears the
             # mask so the where is the identity (host->device copy only, no compile).
             self._set_vision_merge(
-                token_ids[:, cs : cs + chunk_size], vision_tokens, self._vis_row_offset_for(token_ids, cs)
+                token_ids[:, cs : cs + chunk_size],
+                vision_tokens,
+                self._vis_row_offset_for(token_ids, cs),
+                length=chunk_size,
             )
             # Full chunk: valid_len == bucket == chunk_size (no padding/masking).
             last_hidden = self._forward_prefill_chunk_masked_tp(
@@ -7863,7 +7959,10 @@ class Qwen36Model:
             # tokens clears the mask so the captured where is the identity. host->device copy only
             # (no compile), so the parked trace is untouched.
             self._set_vision_merge(
-                token_ids[:, cs : cs + chunk_size], vision_tokens, self._vis_row_offset_for(token_ids, cs)
+                token_ids[:, cs : cs + chunk_size],
+                vision_tokens,
+                self._vis_row_offset_for(token_ids, cs),
+                length=chunk_size,
             )
             _inside = ()
             if self.snap_rows_ok(chunk_size):  # QWEN36_PREFILL_INTRACE_SNAP: this chunk's in-replay snapshot rows
