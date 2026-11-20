@@ -162,18 +162,21 @@ def _decode_process_rng(state: dict) -> dict[str, Any]:
             # first 624 of them 32-bit words, and a position in [0, 624] after them when its form has one. A text in
             # the other standard library's form would be misread, so it is refused too.
             expected = _mt19937_text_tokens()
-            if (
-                len(tokens) != expected
-                or not all(token.isascii() and token.isdigit() for token in tokens)
-                or any(int(token) > 0xFFFFFFFF for token in tokens[:_MT19937_WORDS])
-                or (expected > _MT19937_WORDS and int(tokens[-1]) > _MT19937_WORDS)
-            ):
-                position = f" and a position in [0, {_MT19937_WORDS}]" if expected > _MT19937_WORDS else ""
+            if len(tokens) != expected:
                 raise ValueError(
-                    f"the ttml generator state is not the {expected} tokens this build writes for an mt19937 "
-                    f"({_MT19937_WORDS} 32-bit words{position}); it has {len(tokens)} (a build with the other C++ "
-                    "standard library writes another form)"
+                    f"the ttml generator state has {len(tokens)} tokens, not the {expected} this build writes for an "
+                    "mt19937 (a build with the other C++ standard library writes another form)"
                 )
+            bad = next((i for i, token in enumerate(tokens) if not (token.isascii() and token.isdigit())), None)
+            if bad is not None:
+                raise ValueError(
+                    f"token {bad} of the ttml generator state, {tokens[bad]!r}, is not an ASCII decimal number"
+                )
+            bad = next((i for i, token in enumerate(tokens[:_MT19937_WORDS]) if int(token) > 0xFFFFFFFF), None)
+            if bad is not None:
+                raise ValueError(f"word {bad} of the ttml generator state, {tokens[bad]}, does not fit in 32 bits")
+            if expected > _MT19937_WORDS and int(tokens[-1]) > _MT19937_WORDS:
+                raise ValueError(f"the ttml generator state's position, {tokens[-1]}, is past {_MT19937_WORDS}")
             decoded["ttml"] = " ".join(tokens)
         python_state = state.get("python")
         if python_state is not None:

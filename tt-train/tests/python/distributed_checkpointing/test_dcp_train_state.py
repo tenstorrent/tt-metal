@@ -18,7 +18,7 @@ import pytest
 import torch
 import ttnn
 
-from dcp_oracle import MISREAD_RNG, WRONG_LENGTH_RNG, Loader, advance_generators, host_draws
+from dcp_oracle import MISREAD_RNG, WRONG_LENGTH_RNG, Loader, advance_generators, host_draws, set_ttml_token
 
 import ttml
 from ttml.common.schedulers import CosineAnnealingScheduler, LinearScheduler, SequentialScheduler, StepScheduler
@@ -324,12 +324,20 @@ def test_the_ttml_text_must_have_the_form_this_build_writes(monkeypatch, expect_
     other_form = 624 if this_form == 625 else 625
     other = json.loads(json.dumps(block))
     other["ranks"]["0"]["ttml"] = " ".join(tokens[:624] + ["0"] * (other_form - 624))
-    with expect_error(CheckpointError, f"is not the {this_form} tokens this build writes .*it has {other_form}"):
+    with expect_error(CheckpointError, f"has {other_form} tokens, not the {this_form} this build writes .*other C"):
         check_train_state({"rng": other}, rng=True, world_rank=0)
+    # The right count, one bad token: the refusal names it, and says nothing of the other library.
+    bad = json.loads(json.dumps(block))
+    set_ttml_token(bad["ranks"]["0"], 5, "x")
+    with expect_error(
+        CheckpointError, r"token 5 of the ttml generator state, 'x', is not an ASCII decimal number"
+    ) as e:
+        check_train_state({"rng": bad}, rng=True, world_rank=0)
+    assert "standard library" not in str(e.value)
 
     monkeypatch.setattr(_train_state, "_mt19937_text_tokens", lambda: other_form)  # a build with the other library
     check_train_state({"rng": other}, rng=True, world_rank=0)  # its own form decodes
-    with expect_error(CheckpointError, f"is not the {other_form} tokens this build writes .*it has {this_form}"):
+    with expect_error(CheckpointError, f"has {this_form} tokens, not the {other_form} this build writes .*other C"):
         check_train_state({"rng": block}, rng=True, world_rank=0)
 
 
