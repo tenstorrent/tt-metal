@@ -139,7 +139,7 @@ def _run_partial_s2i(mesh, shard_mem, num_slices, slice_rows, width):
     ortho = U.to_tt(torch.zeros(1, 1, total, width, dtype=torch.bfloat16), mesh)
     for i in range(num_slices):
         part = full[:, :, i * slice_rows : (i + 1) * slice_rows, :]
-        tt_part = ttnn.to_memory_config(U.to_tt(part, mesh), shard_mem)
+        tt_part = U.op("to_memory_config")(U.to_tt(part, mesh), shard_mem)
         ttnn.sharded_to_interleaved_partial(tt_part, ortho, num_slices, i, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     U.assert_lossless(full, ortho, mesh_device=mesh)
 

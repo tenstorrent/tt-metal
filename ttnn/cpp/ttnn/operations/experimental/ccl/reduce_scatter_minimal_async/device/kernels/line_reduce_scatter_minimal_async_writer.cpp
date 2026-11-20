@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/ccl/shared_with_host/ccl_runtime_args.hpp"
+#include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -38,11 +39,11 @@ constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(2);
 constexpr uint32_t tile_granularity = get_compile_time_arg_val(3);
 constexpr uint32_t page_size = get_compile_time_arg_val(4);
 constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(5);
-constexpr uint32_t input_num_pages = get_compile_time_arg_val(6);
-constexpr uint32_t input_batch_num_pages = get_compile_time_arg_val(7);
-constexpr uint32_t input_channel_num_pages = get_compile_time_arg_val(8);
-constexpr uint32_t output_batch_num_pages = get_compile_time_arg_val(9);
-constexpr uint32_t output_channel_num_pages = get_compile_time_arg_val(10);
+constexpr uint32_t ct_input_num_pages = get_compile_time_arg_val(6);
+constexpr uint32_t ct_input_batch_num_pages = get_compile_time_arg_val(7);
+constexpr uint32_t ct_input_channel_num_pages = get_compile_time_arg_val(8);
+constexpr uint32_t ct_output_batch_num_pages = get_compile_time_arg_val(9);
+constexpr uint32_t ct_output_channel_num_pages = get_compile_time_arg_val(10);
 constexpr uint32_t input_tensor_B = get_compile_time_arg_val(11);
 constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(12);
 constexpr uint32_t slice_C = get_compile_time_arg_val(13);
@@ -58,8 +59,9 @@ constexpr uint32_t fabric_mux_l1_base_semaphore_id = get_compile_time_arg_val(20
 constexpr size_t fabric_mux_termination_signal_offset = get_compile_time_arg_val(21);
 constexpr uint32_t num_mux_clients = get_compile_time_arg_val(22);
 constexpr uint32_t barrier_target_count = get_compile_time_arg_val(23);
+constexpr bool runtime_rows = get_compile_time_arg_val(24);
 
-constexpr uint32_t num_ct_args = 24;
+constexpr uint32_t num_ct_args = 25;
 
 constexpr ccl_routing_utils::line_unicast_route_info_t forward_unicast_route_info =
     ccl_routing_utils::get_line_unicast_route_info_from_args<num_ct_args>();
@@ -108,6 +110,8 @@ void kernel_main() {
     const uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
     bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
     const bool is_termination_master = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t fabric_mux_x = get_arg_val<uint32_t>(arg_idx++);
@@ -281,7 +285,31 @@ void kernel_main() {
                 static_cast<uint32_t>(1)});  // increment 1
     }
 
-    const uint32_t intermediate_full_offset = is_forward ? 0 : input_num_pages;
+    uint32_t input_num_pages = ct_input_num_pages;
+    uint32_t input_batch_num_pages = ct_input_batch_num_pages;
+    uint32_t input_channel_num_pages = ct_input_channel_num_pages;
+    uint32_t output_batch_num_pages = ct_output_batch_num_pages;
+    uint32_t output_channel_num_pages = ct_output_channel_num_pages;
+    uint32_t tiles_read_begin = start_tiles_read;
+    uint32_t tiles_read_end = start_tiles_to_read;
+    uint32_t pages_in_row_begin = start_pages_read_in_row;
+    uint32_t row_offset_begin = start_row_offset;
+    uint32_t intermediate_full_offset = is_forward ? 0 : input_num_pages;
+    if constexpr (runtime_rows) {
+        const uint32_t input_Ht = get_common_arg_val<uint32_t>(ttnn::ccl::ReduceScatterCommonArgs::input_Ht);
+        const uint32_t intermediate_half_pages =
+            get_common_arg_val<uint32_t>(ttnn::ccl::ReduceScatterCommonArgs::intermediate_half_pages);
+        input_num_pages = input_Ht * input_tensor_Wt;
+        input_batch_num_pages = input_num_pages;
+        input_channel_num_pages = input_num_pages;
+        output_channel_num_pages = input_Ht * slice_Wt;
+        output_batch_num_pages = output_channel_num_pages;
+        tiles_read_begin = ttnn::runtime_length::balanced_start(worker_id, output_channel_num_pages, num_workers);
+        tiles_read_end = ttnn::runtime_length::balanced_end(worker_id, output_channel_num_pages, num_workers);
+        pages_in_row_begin = tiles_read_begin % slice_Wt;
+        row_offset_begin = tiles_read_begin / slice_Wt * input_tensor_Wt;
+        intermediate_full_offset = is_forward ? 0 : intermediate_half_pages;
+    }
 
     uint32_t chunk_count = 0;
     for (uint32_t b = 0; b < input_tensor_B; b++) {
@@ -304,11 +332,11 @@ void kernel_main() {
                 ASSERT(false);
             }
             for (uint32_t c = 0; c < slice_C; ++c) {
-                uint32_t intermediate_pages_read_in_row = start_pages_read_in_row;
-                uint32_t intermediate_row_offset = start_row_offset;
+                uint32_t intermediate_pages_read_in_row = pages_in_row_begin;
+                uint32_t intermediate_row_offset = row_offset_begin;
 
-                uint32_t tiles_read = start_tiles_read;
-                uint32_t tiles_to_read = start_tiles_to_read;
+                uint32_t tiles_read = tiles_read_begin;
+                uint32_t tiles_to_read = tiles_read_end;
 
                 // Write to remote intermediate buffer
                 while (tiles_read < tiles_to_read) {
@@ -397,8 +425,8 @@ void kernel_main() {
             // Write output
             uint32_t output_tile_id_start = b * output_batch_num_pages;
             for (uint32_t c = 0; c < slice_C; ++c) {
-                uint32_t tiles_read = start_tiles_read;
-                uint32_t tiles_to_read = start_tiles_to_read;
+                uint32_t tiles_read = tiles_read_begin;
+                uint32_t tiles_to_read = tiles_read_end;
 
                 while (tiles_read < tiles_to_read) {
                     uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;

@@ -24,8 +24,11 @@ namespace ttnn::experimental::prim {
 // Kernel indices of the reduce-scatter reader and writer inside a ProgramDescriptor. A Program built from the
 // descriptor uses the same indices as kernel handles, which is how cache-hit overrides find the common args.
 struct ReduceScatterDescriptorArtifacts {
+    static constexpr size_t no_kernel = static_cast<size_t>(-1);
     size_t reader_kernel_index = 0;
     size_t writer_kernel_index = 0;
+    // Set by the line builder; the ring builder leaves it unset.
+    size_t reduce_kernel_index = no_kernel;
 };
 
 struct ReduceScatterMinimalAsyncParams {

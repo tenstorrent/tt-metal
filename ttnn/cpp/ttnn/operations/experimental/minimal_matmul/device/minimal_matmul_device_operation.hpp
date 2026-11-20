@@ -8,7 +8,7 @@
 #include <variant>
 
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/device_operation.hpp"
@@ -33,7 +33,7 @@ struct MinimalMatmulDeviceOperation {
             std::vector<Tensor>& tensor_return_value);
 
         // Cache hit: the row count (common runtime arg M_tiles) and the tensor bindings.
-        static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+        static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
             const MinimalMatmulParams& operation_attributes,
             const MinimalMatmulInputs& tensor_args,
             std::vector<Tensor>& tensor_return_value,

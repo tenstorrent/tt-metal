@@ -1,0 +1,45 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <optional>
+#include <tuple>
+#include <vector>
+
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace ttnn::experimental::kda {
+
+std::tuple<ttnn::Tensor, ttnn::Tensor> relay_chunk_scan(
+    const ttnn::Tensor& packed,
+    const ttnn::Tensor& terms,
+    const ttnn::Tensor& initial_state,
+    const ttnn::Tensor& final_e,
+    const ttnn::Tensor& final_b,
+    const ttnn::Tensor& output_gate,
+    const ttnn::Tensor& norm_weight,
+    const ttnn::Tensor& actual_start,
+    const ttnn::Tensor& landing,
+    const std::vector<tt::tt_metal::GlobalSemaphore>& semaphores,
+    uint32_t local_rows,
+    uint32_t num_links,
+    const std::vector<tt::tt_metal::CoreCoord>& cores,
+    uint32_t num_heads,
+    const std::optional<ttnn::Tensor>& actual_end = std::nullopt,
+    uint32_t sequence_parallel_axis = 0,
+    uint32_t gate_column_offset = 0,
+    float norm_epsilon = 1e-6f,
+    tt::tt_metal::DataType output_dtype = tt::tt_metal::DataType::BFLOAT16,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    const std::optional<ttnn::Tensor>& slab_index = std::nullopt,
+    uint32_t slab_index_scale = 1,
+    uint32_t slab_index_offset = 0);
+
+}  // namespace ttnn::experimental::kda
