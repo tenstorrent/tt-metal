@@ -897,9 +897,9 @@
   test_group: module
   skus:
     bh_sc1:
-      # The sum of the bounds of the sections that were here before the 4x4 [RING, RING] section (32 + 20 + 20 + 25 + 40 + 40).
-      # The sub-torus section (25) and the sparse KV push step's longer bound (+10) are not added: the leg's slowest
-      # run on record is 93 min and the sub-torus section takes about 4 min on CI.
+      # The sum of the bounds of every section except the 4x4 [RING, RING] one (32 + 30 + 20 + 25 + 40 + 40).
+      # The sub-torus section's own bound (25) is not added: the leg's slowest run on record is 93 min and the
+      # sub-torus section takes about 4 min on CI.
       timeout: 187
       tier: 2
       release_ready: false
