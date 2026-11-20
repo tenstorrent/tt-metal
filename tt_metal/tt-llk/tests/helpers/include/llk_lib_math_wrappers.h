@@ -10,6 +10,7 @@
 
 #include <cstdint>
 
+#include "experimental/llk_math_eltwise_binary_custom.h"
 #include "experimental/llk_math_reduce_custom.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
@@ -25,6 +26,22 @@ inline constexpr PackMode llk_test_pack_mode_v = untilize ? PackMode::Untilize
                                                           : PackMode::Default;
 
 #ifdef ARCH_WORMHOLE
+
+template <EltwiseBinaryType type, BroadcastType bcast_type, MathFidelity math_fidelity>
+inline void _llk_math_eltwise_binary_init_custom_wrapper_(const std::uint32_t num_faces)
+{
+    static_assert(type == EltwiseBinaryType::ELWSUB, "Wormhole blocked bcast-col reuse supports ELWSUB only");
+    static_assert(math_fidelity == MathFidelity::LoFi, "Wormhole ELWSUB supports LoFi only");
+    _llk_math_eltwise_binary_init_custom_<type, bcast_type>(num_faces);
+}
+
+template <EltwiseBinaryType type, MathFidelity math_fidelity>
+inline void _llk_math_bcast_cols_reuse_custom_wrapper_(const std::uint32_t ct_dim, const ckernel::TensorShape& tensor_shape)
+{
+    static_assert(type == EltwiseBinaryType::ELWSUB, "Wormhole blocked bcast-col reuse supports ELWSUB only");
+    static_assert(math_fidelity == MathFidelity::LoFi, "Wormhole ELWSUB supports LoFi only");
+    _llk_math_sub_bcast_cols_reuse_custom_(ct_dim, tensor_shape);
+}
 
 template <
     DataCopyType type,
@@ -68,6 +85,18 @@ inline void _llk_math_reduce_block_max_row_reinit_wrapper_(const ckernel::Tensor
 }
 
 #elif defined(ARCH_BLACKHOLE)
+
+template <EltwiseBinaryType type, BroadcastType bcast_type, MathFidelity math_fidelity>
+inline void _llk_math_eltwise_binary_init_custom_wrapper_(const std::uint32_t num_faces)
+{
+    _llk_math_eltwise_binary_init_custom_<type, bcast_type, math_fidelity>(num_faces);
+}
+
+template <EltwiseBinaryType type, MathFidelity math_fidelity>
+inline void _llk_math_bcast_cols_reuse_custom_wrapper_(const std::uint32_t ct_dim, const ckernel::TensorShape& tensor_shape)
+{
+    _llk_math_bcast_cols_reuse_custom_<type, math_fidelity>(ct_dim, tensor_shape);
+}
 
 template <
     DataCopyType type,

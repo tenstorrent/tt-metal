@@ -468,21 +468,23 @@ def test_where_without_sfploadmacro_replay_record_is_gathering_bracketed():
         MathOperation,
         PerfRunType,
         Transpose,
+        VectorMode,
     )
     from helpers.test_variant_parameters import (
         APPROX_MODE,
         DEST_SYNC,
         ITERATIONS,
         LOOP_FACTOR,
+        MATH_OP,
         NUM_BLOCKS,
         NUM_FACES,
         NUM_TILES_IN_BLOCK,
         PERF_RUN_TYPE,
-        SFPU_TERNARY_OP,
         SFPU_TERNARY_SCALAR,
         TILE_COUNT,
         UNPACK_TRANS_FACES,
         UNPACK_TRANS_WITHIN_FACE,
+        VECTOR_MODE,
     )
     from helpers.tile_constants import MAX_NUM_FACES
 
@@ -499,7 +501,7 @@ def test_where_without_sfploadmacro_replay_record_is_gathering_bracketed():
         "sources/sfpu_ternary_gathering_nomacro_test.cpp",
         formats,
         templates=[
-            SFPU_TERNARY_OP(MathOperation.TTNNWhere),
+            MATH_OP(mathop=MathOperation.TTNNWhere),
             SFPU_TERNARY_SCALAR(0x40000000),
             APPROX_MODE(ApproximationMode.No),
             ITERATIONS(8),
@@ -509,6 +511,7 @@ def test_where_without_sfploadmacro_replay_record_is_gathering_bracketed():
             NUM_FACES(num_faces=MAX_NUM_FACES),
             UNPACK_TRANS_FACES(Transpose.No),
             UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+            VECTOR_MODE(VectorMode.RC),
             PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
         ],
         runtimes=[NUM_BLOCKS(tile_cnt_A), NUM_TILES_IN_BLOCK(1)],
@@ -543,9 +546,8 @@ def test_where_without_sfploadmacro_replay_record_is_gathering_bracketed():
 GATHERING_BUILD_VARIANTS = [
     (
         "transpose_dest 32-bit",
-        "test_transpose_dest.py::test_transpose_dest_float[fmt_dest_acc_math_transp_unpack_to_dest:"
-        "(InputOutputFormat[A:Float32,B:Float32,out:Float32], <DestAccumulation.Yes: True>, "
-        "<Transpose.Yes: True>, True)]",
+        "test_transpose_dest.py::test_transpose_dest_float[formats:Float32->Float32-dest_acc:Yes-"
+        "math_transpose_faces:Yes-unpack_to_dest:True]",
         "math",
     ),
     (
@@ -577,33 +579,33 @@ GATHERING_BUILD_VARIANTS = [
     (
         "sfpu reduce max/min uint16 in a 32-bit Dest (manual swap chain)",
         "test_sfpu_reduce.py::test_sfpu_reduce[formats:UInt16->UInt16-mathop:ReduceColumn-dest_acc:Yes-"
-        "input_bounds:(0, 1000)-reduce_pool:Max-dimension_combinations:[32, 32]-reduced_extent:15]",
+        "input_bounds:(0, 1000)-pool_type:Max-dimension_combinations:[32, 32]-reduced_extent:15]",
         "math",
     ),
     (
         "sfpu reduce max/min float (LOADMACRO swap chain)",
         "test_sfpu_reduce.py::test_sfpu_reduce[formats:Float16_b->Float16_b-mathop:ReduceColumn-"
-        "dest_acc:No-input_bounds:(-1000, 1000)-reduce_pool:Max-dimension_combinations:[32, 32]-"
+        "dest_acc:No-input_bounds:(-1000, 1000)-pool_type:Max-dimension_combinations:[32, 32]-"
         "reduced_extent:15]",
         "math",
     ),
     (
         "sfpu reduce sum/avg float (tree reduce)",
         "test_sfpu_reduce.py::test_sfpu_reduce[formats:Float16_b->Float16_b-mathop:ReduceColumn-"
-        "dest_acc:No-input_bounds:(-1000, 1000)-reduce_pool:Sum-dimension_combinations:[32, 32]-"
+        "dest_acc:No-input_bounds:(-1000, 1000)-pool_type:Sum-dimension_combinations:[32, 32]-"
         "reduced_extent:15]",
         "math",
     ),
     (
         "sfpu reduce sum/avg integer (tree reduce)",
         "test_sfpu_reduce.py::test_sfpu_reduce[formats:Int32->Int32-mathop:ReduceColumn-dest_acc:Yes-"
-        "input_bounds:(-1000, 1000)-reduce_pool:Sum-dimension_combinations:[32, 32]-reduced_extent:1]",
+        "input_bounds:(-1000, 1000)-pool_type:Sum-dimension_combinations:[32, 32]-reduced_extent:1]",
         "math",
     ),
     (
         "sfpu reduce max/min signed int32 (swap chain)",
         "test_sfpu_reduce.py::test_sfpu_reduce[formats:Int32->Int32-mathop:ReduceColumn-dest_acc:Yes-"
-        "input_bounds:(-1000, 1000)-reduce_pool:Max-dimension_combinations:[32, 32]-reduced_extent:1]",
+        "input_bounds:(-1000, 1000)-pool_type:Max-dimension_combinations:[32, 32]-reduced_extent:1]",
         "math",
     ),
     (
@@ -650,27 +652,27 @@ GATHERING_BUILD_VARIANTS = [
     ),
     (
         "generalized moe gate eltwise binary reload",
-        "test_generalized_moe_gate.py::test_generalized_moe_gate_binary[math_op:Elwadd-reload:True]",
+        "test_generalized_moe_gate.py::test_generalized_moe_gate_binary[mathop:Elwadd-reload:True]",
         "math",
     ),
     (
         "reduce_block_max_row (reduce_custom)",
-        "test_reduce_block_max.py::test_reduce_block_max[formats:Float16_b->Float16_b-block_ct_dim:1-num_faces:4]",
+        "test_reduce_block_max.py::test_reduce_block_max[formats:Float16_b->Float16_b-block_ct_dim:1-tile_dimensions:[32, 32]]",
         "math",
     ),
     (
         "reduce_block_max_row fp32 Dest",
-        "test_reduce_block_max.py::test_reduce_block_max[formats:Float16_b->Float32-block_ct_dim:1-num_faces:4]",
+        "test_reduce_block_max.py::test_reduce_block_max[formats:Float16_b->Float32-block_ct_dim:1-tile_dimensions:[32, 32]]",
         "math",
     ),
     (
         "reduce_block_max_row runtime (reduce_runtime_custom)",
-        "test_reduce_block_max.py::test_reduce_block_max_runtime[formats:Float16_b->Float16_b-block_ct_dim:1-num_faces:4]",
+        "test_reduce_block_max.py::test_reduce_block_max_runtime[formats:Float16_b->Float16_b-block_ct_dim:1-tile_dimensions:[32, 32]]",
         "math",
     ),
     (
         "reduce_block_max_row runtime fp32 Dest",
-        "test_reduce_block_max.py::test_reduce_block_max_runtime[formats:Float16_b->Float32-block_ct_dim:1-num_faces:4]",
+        "test_reduce_block_max.py::test_reduce_block_max_runtime[formats:Float16_b->Float32-block_ct_dim:1-tile_dimensions:[32, 32]]",
         "math",
     ),
     (
