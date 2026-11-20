@@ -1045,3 +1045,28 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
 - Launch: tmux orch_pb, SKIP=check-models-do-not-import-tests, `orchestrator resume --spec <spec> --until <task>
   --attempts 20`; before accepting check `gate <task> --status` and the deliverable (skill rules of 2026-11-20).
 - 23:37 UTC overseer_batch started (claude session 9b97aa56-fe07-4a3a-8355-6e7082717eea, tmux overseer_batch) on dnijemcevic/model_bringup_batching; batching ledger records restored (stash popped, history chunks 0003 / 0004 back); model_bringup's local ledger records stashed ('model_bringup ledger local records'). This overseer session stops supervising (heartbeat cancelled).
+
+### Overseer session 9b97aa56 (batching branch, owner asleep from 22:20: fully autonomous), from 2026-11-20 23:37 UTC
+- 23:40 committed the restored ledger records (4e5453d9b40; dashboards stay uncommitted: > 500 KB hook, as before).
+- 23:45 framework parity with model_bringup (ef0b35dd8c6): bringup-engineer rule 20 (serving reality) + the skill's
+  test_no_rebuild rule. Framework files now identical on both branches (git diff empty), so the merge task touches none.
+- 23:55 QUEUED (tasks.yaml, orchestrator stopped): PB.MB (agent, perf): `git merge --squash --no-commit
+  dnijemcevic/model_bringup` (7a529ec295e: MB.1 24d93f2590f + MB.2 b3decade3d8), ledger + framework kept as ours,
+  conflicts resolved so both sides survive (POS_DYNAMIC default on, ids reorder on device; every packed / glued
+  switch). Trial merge-tree: 17 model files changed on both sides (page_copy.py / snapshot_send.py added on both).
+  Gate (8192 geometry): packed + glued oracles bit-identical, chunk8192 reference, fresh walls through
+  adapter.prefill_chunk with 0 builds after warm-up, test_no_rebuild at 8192. PB.MB5 (scripted, 5120 geometry; F283
+  refuses two geometries in one gate): ladder last, determinism, decoder skip, contract, outside history, 5120 fresh
+  walls 0 builds, test_no_rebuild. PB.9X5 dropped (folded into PB.MB5: the same units).
+- DECIDED (owner's open choice): ROUTE lane-shaped chunks through the glued path instead of de-rebuilding fixed
+  lanes. Why: glued already derives its tables on the device with ~0 builds and is faster fresh (4x2k 72.6k vs 59.0k,
+  AgentX 45-52k vs 23-29k); one packed path to keep build-free instead of two. PB.9X re-scoped accordingly (+ remove
+  glued's residual 1-2 builds on AgentX m1 / 5x1.6k; gate 0 builds every layout, 4x2k fresh >= 67k, oracles 0,
+  per-segment overhead column in its report).
+- test_no_rebuild (5120 and 8192) appended to the gates of PB.8R, PB.8RP, PB.T (skill rule from MB.2); PB.9C's brief:
+  5120 numbers from PB.MB5 / PB.8R, 0 builds required, table sent to the owner.
+- tasks.yaml trimmed 490 -> ~443 KB (old PASS briefs > 3 KB replaced by a pointer to 3226245ec38).
+- PROPOSALS FOR THE OWNER (not queued): (1) per-segment overhead of misaligned glued segments, target ~70k for any
+  segment count (PB.9X's report gives the per-segment ms to size it); (2) scope PB.7's order-free reduces
+  (DS41-339/341, ~1.5 ms) to glued chunks only. Note: with lane-shaped chunks now on glued, (2) becomes "skip the
+  order-free reduces when a glued chunk is lane-aligned".
