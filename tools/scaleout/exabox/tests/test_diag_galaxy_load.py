@@ -52,14 +52,11 @@ class TestPlan(unittest.TestCase):
             self.assertGreaterEqual(f[name].seconds, p[name].seconds, name)
 
     def test_smoke_caps_each_length(self):
-        s = _steps("smoke", smoke_s=2)
+        s = _steps("smoke")
         argv = s["qb"].argv
         self.assertEqual(argv[argv.index("--idle-s") + 1], "2")
         self.assertEqual(argv[argv.index("--burst-s") + 1], "2")
         self.assertLess(sum(x.seconds for x in s.values()), 120)
-
-    def test_mix_override(self):
-        self.assertIn("0.5,1", _steps("plain", mix_s=(30, 60))["mix"].argv)
 
     def test_unknown_mode(self):
         with self.assertRaises(ValueError):
@@ -159,15 +156,26 @@ class TestLinks(unittest.TestCase):
             self.assertEqual(links.umd_index(["c1:00.0", "0000:81:00.0"], d), [2, 1])
             self.assertIsNone(links.umd_index(["0000:41:00.0"], d))
 
+    def _run_links(self, fault, reset):
+        phase = Phase(name="links")
+        with mock.patch.object(links, "discover", return_value={"bdfs": {}, "links": {}}), mock.patch.object(
+            links, "pair_test", return_value=False
+        ) as pt, mock.patch.object(links, "fabric_open"):
+            links.run_links(phase, Path("/tmp"), fault, reset)
+        return phase, pt
+
     def test_sweep_only_after_a_fault(self):
         for fault, want in ((False, 0), (True, 1)):
             resets = []
-            with mock.patch.object(links, "discover", return_value={"bdfs": {}, "links": {}}), mock.patch.object(
-                links, "pair_test", return_value=False
-            ) as pt, mock.patch.object(links, "fabric_open"):
-                links.run_links(Phase(name="links"), Path("/tmp"), fault, lambda: resets.append(1))
+            _, pt = self._run_links(fault, lambda: resets.append(1) or True)
             self.assertEqual(len(resets), want)
             self.assertEqual(pt.call_count, 1 + want)
+
+    def test_no_sweep_when_no_reset_ran(self):
+        phase, pt = self._run_links(True, lambda: False)
+        self.assertEqual(pt.call_count, 1)
+        sweep = [c for c in phase.checks if c.name == "galaxy_sweep"]
+        self.assertEqual([(c.status, c.details) for c in sweep], [(SKIP, "no reset (--skip-reset)")])
 
 
 class TestTierAndAer(unittest.TestCase):

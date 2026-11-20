@@ -4,16 +4,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """A loopable fabric-in-the-loop reduced repro for one chip's ethernet hang. Run with TT_VISIBLE_DEVICES set to
 the chips under test only (the mesh opens over exactly those chips).
---mode p2p      1x2 mesh, FABRIC_1D: ttnn.point_to_point of a [1,1,8192,16384] bf16 DRAM tensor 0->1 then 1->0 per launch
---mode ag       1xN mesh (FABRIC_1D for N=2, FABRIC_1D_RING for --ring): ttnn.all_gather(dim=2, cluster_axis=1) of a
-                [1,1,16384,16384] bf16 DRAM tensor per chip (512 MiB in per chip)
---hw H,W        p2p/ag: the per-chip tensor instead (2560,4096: an odd per-worker page count)
+--mode ag       1xN mesh, FABRIC_1D: ttnn.all_gather(dim=2, cluster_axis=1) of a [1,1,16384,16384] bf16 DRAM tensor
+                per chip (512 MiB in per chip)
 Link data: each chip sends its own host-built bit pattern (link_pattern.py: walking ones and
 zeros, seeded by mesh index). Launch 0 and the last launch are compared bit for bit with it on the host, every slab on
 every chip; each other launch is compared on the device with launch 0's checked output, and read back bit for bit only
 when that differs. A mismatch writes a 'linkdata' row: sender and receiver mesh index, words wrong, the flipped bits
 and their place in a 32 B chunk.
-Runs --iters launches or until --seconds. One JSON row per launch (fsync) in --rows; --beat holds 'launch i' / 'done i'
+Runs launches until --seconds. One JSON row per launch (fsync) in --rows; --beat holds 'launch i' / 'done i'
 for an outside watchdog (this process never returns while a chip is hung). Exit 0 done, 4 data mismatch, 1 setup error."""
 import argparse
 import json
@@ -22,21 +20,9 @@ import sys
 import time
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--mode", choices=["p2p", "ag"], required=True)
-ap.add_argument("--n", type=int, default=2, help="ag: mesh width")
-ap.add_argument("--ring", action="store_true", help="ag: FABRIC_1D_RING (ring all-gather)")
-ap.add_argument("--iters", type=int, default=100000)
+ap.add_argument("--mode", choices=["ag"], required=True)
+ap.add_argument("--n", type=int, default=2, help="mesh width")
 ap.add_argument("--seconds", type=float, default=300)
-ap.add_argument(
-    "--hw", default=None, help="p2p/ag: per-chip tensor H,W (bf16, multiples of 32; e.g. 2560,4096)"
-)
-ap.add_argument("--out-mem", choices=["dram", "l1"], default="dram", help="ag: all-gather output memory")
-ap.add_argument(
-    "--planes",
-    type=int,
-    default=None,
-    help="p2p/ag: set_fabric_config num_planes (routing planes = ETH channels per direction)",
-)
 ap.add_argument("--rows", required=True)
 ap.add_argument("--beat", required=True)
 ap.add_argument("--label", default="")
@@ -61,7 +47,8 @@ def beat(s):
 import torch  # noqa: E402
 import ttnn  # noqa: E402
 
-sys.path.append(os.path.dirname(os.path.realpath(__file__)))  # the sibling programs, also when run or imported through a link
+# the sibling programs, also when run or imported through a link
+sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 import link_pattern as lp  # noqa: E402
 import stop_signal as ss  # noqa: E402
 
@@ -72,12 +59,8 @@ beat("open")
 bad = 0
 t_end = time.time() + a.seconds
 
-N = 2 if a.mode == "p2p" else a.n
-fab = "FABRIC_1D_RING" if (a.mode == "ag" and a.ring) else "FABRIC_1D"
-if a.planes:
-    ttnn.set_fabric_config(getattr(ttnn.FabricConfig, fab), num_planes=a.planes)
-else:
-    ttnn.set_fabric_config(getattr(ttnn.FabricConfig, fab))
+N = a.n
+ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
 m = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, N))
 try:
     ss.arm()
@@ -89,9 +72,7 @@ try:
         (v.strip() for v in vis.split(",") if v.strip()), key=lambda v: (0, int(v)) if v.isdigit() else (1, 0)
     )
     phys = [vlist[i] if i < len(vlist) else str(i) for i in ids]
-    H, W = (8192, 16384) if a.mode == "p2p" else (16384, 16384)
-    if a.hw:
-        H, W = (int(v) for v in a.hw.split(","))
+    H, W = 16384, 16384
     SEED = 4802
     exp = [lp.pattern(SEED, k, H, W) for k in range(N)]  # chip k's host-built pattern
     x = ttnn.from_torch(
@@ -146,9 +127,7 @@ try:
     row(
         event="setup",
         mode=a.mode,
-        fabric=fab,
-        planes=a.planes,
-        out_mem=a.out_mem,
+        fabric="FABRIC_1D",
         two_erisc_off=os.environ.get("TT_METAL_DISABLE_FABRIC_TWO_ERISC"),
         visible=vis,
         mesh_ids=ids,
@@ -156,40 +135,24 @@ try:
         shape=[1, 1, H, W],
         MiB_in_per_chip=per // 2**20,
     )
-    c0, c1 = ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, 1)
     i = 0
-    while i < a.iters and (i == 0 or time.time() < t_end):  # at least one launch (setup can outlast --seconds)
+    while i == 0 or time.time() < t_end:  # at least one launch (setup can outlast --seconds)
         beat(f"launch {i}")
         t0 = time.time()
-        if a.mode == "p2p":
-            y1 = ttnn.point_to_point(x, sender_coord=c0, receiver_coord=c1, topology=ttnn.Topology.Linear)
-            y2 = ttnn.point_to_point(x, sender_coord=c1, receiver_coord=c0, topology=ttnn.Topology.Linear)
-            ttnn.synchronize_device(m)
-            moved = 2 * per
-        else:
-            y = ttnn.all_gather(
-                x,
-                dim=2,
-                cluster_axis=1,
-                memory_config=(ttnn.L1_MEMORY_CONFIG if a.out_mem == "l1" else ttnn.DRAM_MEMORY_CONFIG),
-            )
-            ttnn.synchronize_device(m)
-            moved = (N - 1) * per * N
+        y = ttnn.all_gather(x, dim=2, cluster_axis=1, memory_config=DRAM)
+        ttnn.synchronize_device(m)
+        moved = (N - 1) * per * N
         dt = time.time() - t0
         beat(f"done {i}")
         r = {"event": "iter", "i": i, "s": round(dt, 4), "GBps_total": round(moved / dt / 1e9, 1)}
-        last = i + 1 >= a.iters or time.time() >= t_end
-        ys = [y1, y2] if a.mode == "p2p" else [y]
-        if a.mode == "p2p":  # receiver 1 holds sender 0's shard, receiver 0 sender 1's
-            outs = [(1, ttnn.get_device_tensors(y1)[1], [0]), (0, ttnn.get_device_tensors(y2)[0], [1])]
-        else:  # every chip's output: slab k is chip k's pattern
-            outs = [(j, t, list(range(N))) for j, t in enumerate(ttnn.get_device_tensors(y))]
+        last = time.time() >= t_end
+        outs = [(j, t, list(range(N))) for j, t in enumerate(ttnn.get_device_tensors(y))]  # slab k is chip k's pattern
         mism = None
         if i == 0 or last:
             mism = host_check(i, outs)
         elif devcmp:
             try:
-                fl = dev_flags(ys, refs)
+                fl = dev_flags([y], refs)
                 want = [o for o in outs if any(f[o[0]] for f in fl)]
                 mism = host_check(i, want) if want else 0
                 if want and not mism:  # the device saw a difference the readback no longer holds
@@ -202,21 +165,14 @@ try:
             r.update(verify="ok" if mism == 0 else "MISMATCH", mismatches=mism)
             bad += mism > 0
         if i == 0 and mism == 0 and not last:  # launch 0 is the host-checked reference for the device compare
-            refs = [ttnn.to_memory_config(t, DRAM) if a.out_mem == "l1" else t for t in ys]
-            if a.out_mem == "l1":
-                for t in ys:
-                    ttnn.deallocate(t)
+            refs = [y]
             r.update(devcmp=devcmp)
             row(**r)
             i += 1
             continue
         if i == 0:
             devcmp = False  # launch 0 wrong: no reference; launch 0 and the last are still host-checked
-        if a.mode == "p2p":
-            ttnn.deallocate(y1)
-            ttnn.deallocate(y2)
-        else:
-            ttnn.deallocate(y)
+        ttnn.deallocate(y)
         row(**r)
         i += 1
     for t in refs or []:

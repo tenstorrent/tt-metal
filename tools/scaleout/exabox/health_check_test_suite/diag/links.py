@@ -170,8 +170,8 @@ def fabric_open(phase: Phase, out: Path, dry_run: bool = False) -> None:
 
 
 def run_links(phase: Phase, out: Path, fault: bool, reset, dry_run: bool = False) -> None:
-    """Pair test; on a fault here or in the bus-bar phase, *reset* (the glx_reset) and the sweep; then the fabric
-    open/close."""
+    """Pair test; on a fault here or in the bus-bar phase, *reset* (the glx_reset; True when one ran) and the sweep,
+    which is skipped when none ran; then the fabric open/close."""
     try:
         disc = discover() if not dry_run else {"bdfs": {}, "links": {}}
     except Exception as e:
@@ -180,6 +180,8 @@ def run_links(phase: Phase, out: Path, fault: bool, reset, dry_run: bool = False
     if disc is not None:
         fault |= pair_test(phase, out / "links", "pair", PAIR_S, disc, dry_run)
     if fault and disc is not None:
-        reset()
-        pair_test(phase, out / "links", "sweep", SWEEP_S, disc, dry_run)
+        if reset():
+            pair_test(phase, out / "links", "sweep", SWEEP_S, disc, dry_run)
+        else:
+            phase.add(Check(name="galaxy_sweep", status=SKIP, details="no reset (--skip-reset)", ip="eth"))
     fabric_open(phase, out / "links", dry_run)
