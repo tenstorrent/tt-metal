@@ -130,6 +130,9 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         fused_neg_unit_ready = true;
     }
 
+    // The packer's ReLU clears the negative P of the LLK fast exp (recipe_score_exp's fallback for large scales); the
+    // one-instruction score exp emits none.
+    constexpr bool score_relu = !recipe_score_exp_one_op<scale_fp32>;
     // QK matmul setup is kept across back-to-back subblocks of the same height (the m step's replay ends
     // with the counter reset, so it leaves nothing behind), and in STANDARD so is the P pack setup (format,
     // row width, ReLU; FAST's exp ring builds have no room for it); every other step calls leave_qk.
@@ -140,7 +143,9 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     auto leave_qk = [&]() __attribute__((noinline)) {
         qk_setup_h = 0;
         if (qk_pack_on) {
-            PACK((llk_pack_relu_config(ReluConfig::none())));
+            if constexpr (score_relu) {
+                PACK((llk_pack_relu_config(ReluConfig::none())));
+            }
             qk_pack_on = false;
         }
     };
@@ -196,7 +201,9 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
             qk_setup_h = 0;
         }
         if constexpr (recipe::lofi) {
-            PACK((llk_pack_relu_config(ReluConfig::zero())));
+            if constexpr (score_relu) {
+                PACK((llk_pack_relu_config(ReluConfig::zero())));
+            }
             recipe_score_exp<scale_fp32>(0, h * sbw);
             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
             set_pack(cb_qkt_im);
@@ -205,10 +212,14 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
             PACK((llk_pack_reconfig_l1_acc(kb > 0 ? 1 : 0)));
             pack_contiguous_rows_nocfg(psum_cb, row0, h, sbw, 0, sbw);
             PACK((llk_pack_reconfig_l1_acc(0)));
-            PACK((llk_pack_relu_config(ReluConfig::none())));
+            if constexpr (score_relu) {
+                PACK((llk_pack_relu_config(ReluConfig::none())));
+            }
         } else {
-            if (!qk_pack_on) {
-                PACK((llk_pack_relu_config(ReluConfig::zero())));
+            if constexpr (score_relu) {
+                if (!qk_pack_on) {
+                    PACK((llk_pack_relu_config(ReluConfig::zero())));
+                }
             }
             recipe_score_exp<scale_fp32>(0, h * sbw);
             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));

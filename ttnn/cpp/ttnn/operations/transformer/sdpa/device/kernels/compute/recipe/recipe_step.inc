@@ -251,7 +251,12 @@ SDPA_RECIPE_COLD void sub_exp_block_bcast_cols(
         tile_regs_commit();
 
         tile_regs_wait();
-        PACK((llk_pack_relu_config(ReluConfig::zero())));
+        // The packer's ReLU clears negative P: BALANCED's grid exp below its range and the LLK fast exp (the score
+        // exp's fallback for large scales); STANDARD's and FAST's one-instruction score exp emits none.
+        constexpr bool score_relu = recipe::fp32 || !recipe_score_exp_one_op<scale_fp32>;
+        if constexpr (score_relu) {
+            PACK((llk_pack_relu_config(ReluConfig::zero())));
+        }
         {
             uint32_t dst_index = 0;
             constexpr int iterations = 32;
@@ -334,7 +339,9 @@ SDPA_RECIPE_COLD void sub_exp_block_bcast_cols(
         tile_regs_release();
 
         // Restore packer ReLU config after all exp operations complete
-        PACK((llk_pack_relu_config(ReluConfig::none())));
+        if constexpr (score_relu) {
+            PACK((llk_pack_relu_config(ReluConfig::none())));
+        }
         PACK((llk_pack_reconfig_l1_acc(0)));
     }
 }
