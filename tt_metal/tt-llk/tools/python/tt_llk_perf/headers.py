@@ -476,9 +476,6 @@ def dram_niu_address(arch, noc, tile_noc0_y, offset, include_dir=None) -> int:
     )
 
 
-    return DramLayout(*(int(g.rstrip("uU"), 0) for g in match.groups()))
-
-
 # NoC router counters: router_counters_types.h has the port names, the option mask layout and the virtual channel
 # count, router_counters_<arch>.h the {port, bank offset} table in capture order and the layout of one bank.
 _ROUTER_ARCH_HEADER = {
