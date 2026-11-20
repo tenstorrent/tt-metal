@@ -18,7 +18,7 @@ struct Rect {
     uint32_t y_end;
     uint32_t cores;
 
-    void write(const Noc& noc, uint32_t src, uint32_t dst, uint32_t bytes) const {
+    void write(const Noc& noc, uint32_t src, uint32_t dst, uint32_t bytes, bool linked = false) const {
         noc.async_write_multicast(
             CoreLocalMem<uint32_t>(src),
             MulticastEndpoint{},
@@ -26,7 +26,7 @@ struct Rect {
             cores,
             {},
             {.noc_x_start = x_start, .noc_y_start = y_start, .noc_x_end = x_end, .noc_y_end = y_end, .addr = dst},
-            false);
+            linked);
     }
 
     void increment(const Noc& noc, Semaphore<>& semaphore, uint32_t value) const {

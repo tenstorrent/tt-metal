@@ -12,6 +12,7 @@ void kernel_main() {
     constexpr uint32_t tile_bytes = CT_ARG("tile_bytes_act");
     constexpr uint32_t a_row_bytes = CT_ARG("i_tiles") * tile_bytes;
     constexpr uint32_t depth = CT_ARG("a_depth");
+    constexpr uint32_t gather_depth = CT_ARG("gather_depth");
     constexpr uint32_t own_bytes = a_tiles * tile_bytes;
     constexpr uint32_t gather_bytes = CT_ARG("gather_tiles") * tile_bytes;
     const Rect b_grid = RECT("b_grid");
@@ -38,13 +39,13 @@ void kernel_main() {
 
     for (uint32_t m = 0; m < CT_ARG("rows"); m++) {
         const uint32_t slot = m % depth;
-        const uint32_t use = m / depth;
-        const uint32_t destination = gather + slot * gather_bytes + RT_ARG("position") * own_bytes;
+        const uint32_t gather_slot = m % gather_depth;
+        const uint32_t gather_use = m / gather_depth;
+        const uint32_t destination = gather + gather_slot * gather_bytes + RT_ARG("position") * own_bytes;
         a_out.wait_front(a_tiles);
 
         if (!collector) {
-            Semaphore<> gather_free(CT_ARG("sem_gather_free") + slot);
-            gather_free.wait_min(use);
+            Semaphore<>(CT_ARG("sem_gather_free") + gather_slot).wait_min(gather_use);
             noc.async_write(
                 CoreLocalMem<uint32_t>(a_out.get_read_ptr()),
                 UnicastEndpoint{},
@@ -52,7 +53,7 @@ void kernel_main() {
                 {},
                 {.noc_x = RT_ARG("collector_x"), .noc_y = RT_ARG("row_y"), .addr = destination});
             noc.async_writes_flushed();
-            Semaphore<>(CT_ARG("sem_gather_valid") + slot).up(noc, RT_ARG("collector_x"), RT_ARG("row_y"), 1);
+            Semaphore<>(CT_ARG("sem_gather_valid") + gather_slot).up(noc, RT_ARG("collector_x"), RT_ARG("row_y"), 1);
         } else {
             noc.async_write(
                 CoreLocalMem<uint32_t>(a_out.get_read_ptr()),
@@ -60,12 +61,12 @@ void kernel_main() {
                 own_bytes,
                 {},
                 {.noc_x = RT_ARG("collector_x"), .noc_y = RT_ARG("row_y"), .addr = destination});
-            Semaphore<>(CT_ARG("sem_gather_valid") + slot).wait_min((row_cores - 1) * (use + 1));
+            Semaphore<>(CT_ARG("sem_gather_valid") + gather_slot).wait_min((row_cores - 1) * (gather_use + 1));
 
-            Semaphore<>(CT_ARG("sem_a_free") + slot).wait_min(CT_ARG("b_cores") * (use + 1));
+            Semaphore<>(CT_ARG("sem_a_free") + slot).wait_min(CT_ARG("b_cores") * (m / depth + 1));
 
             noc.async_writes_flushed();
-            b_grid.write(noc, gather + slot * gather_bytes, b_slots + slot * a_row_bytes, row_cores * own_bytes);
+            b_grid.write(noc, gather + gather_slot * gather_bytes, b_slots + slot * a_row_bytes, row_cores * own_bytes);
             noc.async_writes_flushed();
 
             Semaphore<> a_valid(CT_ARG("sem_a_valid") + slot);
@@ -73,7 +74,7 @@ void kernel_main() {
 
             noc.async_write_barrier();
 
-            Semaphore<> gather_free(CT_ARG("sem_gather_free") + slot);
+            Semaphore<> gather_free(CT_ARG("sem_gather_free") + gather_slot);
             row_sources.increment(noc, gather_free, 1);
         }
         a_out.pop_front(a_tiles);

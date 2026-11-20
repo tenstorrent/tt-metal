@@ -29,7 +29,7 @@ def _role_cbs():
         _cb(L.CB_A, act, L.ACT_TILE_BYTES, L.A_DEPTH * L.INTERMEDIATE_TILES, b),
         _cb(L.CB_NORM_OUT, act, L.ACT_TILE_BYTES, L.NORM_CORES * L.N_ROW_TILES, norm),
         _cb(L.CB_N, act, L.ACT_TILE_BYTES, L.N_DEPTH * L.N_ROW_TILES, a),
-        _cb(L.CB_GATHER, act, L.ACT_TILE_BYTES, L.A_DEPTH * L.GATHER_TILES, a),
+        _cb(L.CB_GATHER, act, L.ACT_TILE_BYTES, L.GATHER_DEPTH * L.GATHER_TILES, a),
         *[_cb(L.CB_LANDING + i, bf16, L.BF16_TILE_BYTES, L.LANDING_DEPTH * seg, b) for i in range(L.CHIPS - 1)],
         _cb(L.CB_RELAY_SLOTS, ttnn.uint32, L.RELAY_SLOT_BYTES, 2 * L.RELAY_SOURCE_SLOTS, b),
         _cb(L.CB_NORM_SCALER, bf16, L.BF16_TILE_BYTES, 1, norm),
@@ -60,7 +60,16 @@ def _packed(entries):
 
 
 def _semaphores():
-    return [ttnn.SemaphoreDescriptor(id=i, core_ranges=L.GRID.core_range_set(), initial_value=0) for i in range(16)]
+    roles = [
+        (L.core_range_set(L.NORM_CORE_LIST), L.N_DEPTH),
+        (L.core_range_set(L.A_CORE_LIST), L.SEM_GATHER_FREE + L.GATHER_DEPTH),
+        (L.B_GRID.core_range_set(), L.SEM_RELAY_FREE + 2),
+    ]
+    return [
+        ttnn.SemaphoreDescriptor(id=i, core_ranges=cores, initial_value=0)
+        for cores, count in roles
+        for i in range(count)
+    ]
 
 
 def _relay_sources():
@@ -107,6 +116,7 @@ def create_program_descriptor(h, w_norm, w_gate_up, w_down, y, chip, chips, node
         "owner_lag": owner_lag,
         "n_depth": L.N_DEPTH,
         "a_depth": L.A_DEPTH,
+        "gather_depth": L.GATHER_DEPTH,
         "landing_depth": L.LANDING_DEPTH,
         "h_tiles": L.HIDDEN_TILES,
         "n_row_tiles": L.N_ROW_TILES,

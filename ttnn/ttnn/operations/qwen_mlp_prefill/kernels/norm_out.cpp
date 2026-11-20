@@ -20,10 +20,15 @@ void kernel_main() {
 
         Semaphore<>(CT_ARG("sem_n_free") + slot).wait_min(CT_ARG("a_active") * (m / depth + 1));
 
-        for (uint32_t offset = 0; offset < row_bytes; offset += chunk_bytes) {
-            const uint32_t bytes = row_bytes - offset < chunk_bytes ? row_bytes - offset : chunk_bytes;
-            for (const Rect& rect : a_rects) {
-                rect.write(noc, out.get_read_ptr() + offset, base + slot * row_bytes + offset, bytes);
+        for (const Rect& rect : a_rects) {
+            for (uint32_t offset = 0; offset < row_bytes; offset += chunk_bytes) {
+                const uint32_t bytes = row_bytes - offset < chunk_bytes ? row_bytes - offset : chunk_bytes;
+                rect.write(
+                    noc,
+                    out.get_read_ptr() + offset,
+                    base + slot * row_bytes + offset,
+                    bytes,
+                    offset + bytes < row_bytes);
             }
         }
         noc.async_writes_flushed();
