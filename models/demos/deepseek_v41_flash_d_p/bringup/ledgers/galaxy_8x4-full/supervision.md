@@ -632,3 +632,9 @@
 - 23:04 UTC MB.2 (running) agent: POS_DYNAMIC=on -> test_no_rebuild 0 builds on 8 fresh kinds up to 539k, fresh walls 0 + 0 builds in 24 timed chunks. OV-3 DISAGREED (with evidence): fixed-shape history tail (always 2 hs rows) and bucketed whole-history pack to keep one program shape (rule 20), not padding for a kernel limit: ACCEPTED; its cost shows in the fresh walls. KNOWLEDGE CONTRADICTED DS41-281 (the builders are named and fixed).
 - 23:12 UTC MB.2 WAITING ('would FAIL': a stale test_decoder_skip_decode FAIL at 22:57; the agent's later shared-process gate run passed it, rc 0, 562 s; ladder / determinism / no_rebuild stale after its last edits). A/B: 0 builds both ways in that process; fresh 5120 steady 61.4k, resumed 59.4k (MB.1 fresh 53.6 / 54.6k, warm 63.4 / 61.6k). DECIDED: accept -> the accept gate re-runs every stale unit on the current code and commits only if all pass; POS_DYNAMIC default on (owner).
 - 23:22 UTC MB.2 accept gate FAIL on unit test_decoder_skip_decode: MY gate glob '*_fresh*: > 0' matched prefix_hit_limit_exceed_fresh (an exceedance count, 0 = good). Fixed the glob to 'single*_fresh_tok_s*: > 0' in MB.1 / MB.2 (overseer task error, not the model's); metrics re-check ok; resuming (units reused).
+- 23:34 UTC MB.2 gate PASS -> b3decade3d8 (all 7 units: ladder, determinism, decoder skip, contract, outside history,
+  fresh walls, test_no_rebuild). The shipped single-request path no longer builds programs in serving (0 builds after
+  warm-up on fresh starts / slots / partial last chunks / a replay), ids reordered on the device (no re-upload);
+  POS_DYNAMIC default ON (owner). Fresh 5120: steady 61.4k (was 53.6k fresh, 63.4k warm), resumed 59.4k (54.6 / 61.6k).
+  tests/test_no_rebuild.py is permanent (skill: in every accept / perf gate of this model). Not pushed.
+- 23:35 UTC handing the folder to the batching overseer: start_overseer_batch.sh (tmux overseer_batch).
