@@ -19,7 +19,7 @@
 // The workers partition the logical position tiles exactly as in contiguous mode (chunk_of, bank-affine or round
 // robin), so both modes run the same arithmetic in the same order; only the DRAM addresses differ (a tile's bank
 // is the page's, not tile % banks). At kernel start every worker (and the tail core) looks up the page of each of its
-// tiles of every user once (cb_pages: batch x kv_max_n page numbers relative to copy 0, then a window of the page
+// tiles of every user once (cb_pages: kRows x kv_max_n page numbers relative to copy 0, then a window of the page
 // table); all of the step's layers use them. The tail core's writer reads its tail pages there too, after the
 // reader's cb_ntiles push.
 #pragma once
@@ -34,6 +34,7 @@ constexpr uint32_t kv_max_n = get_named_compile_time_arg_val("kv_max_n");       
 constexpr uint32_t kv_copy_pages = get_named_compile_time_arg_val("kv_copy_pages");      // pages per layer copy
 constexpr uint32_t kv_pt_row_bytes = get_named_compile_time_arg_val("kv_pt_row_bytes");  // page table row
 static_assert(!kv_paged || kv_pt_row_bytes % 64 == 0, "page table rows are whole 64 B DRAM reads");
+static_assert(groups == 1 || kv_paged, "row groups address their users' KV through the page lists (rows mode)");
 
 constexpr uint32_t cb_pages = 30;     // worker / tail core: page lists, then the page-table window
 constexpr uint32_t kPtWindow = 2048;  // bytes of a page-table row read at once (512 blocks)
@@ -60,7 +61,7 @@ FORCE_INLINE uint64_t page_noc_addr(uint32_t pool, uint32_t page, uint8_t noc = 
 // read in increasing windows)
 FORCE_INLINE void translate_chunk(uint32_t pt_addr, uint32_t row, uint32_t u, const Chunk& ch, uint32_t n) {
     const InterleavedAddrGen<true> pt{.bank_base_address = pt_addr, .page_size = kv_pt_row_bytes};
-    const uint32_t win = (pages_base() + 4 * batch * kv_max_n + 63) & ~63u;
+    const uint32_t win = (pages_base() + 4 * kRows * kv_max_n + 63) & ~63u;
     volatile tt_l1_ptr uint32_t* entries = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(win);
     volatile tt_l1_ptr uint32_t* out = page_list(u);
     uint32_t lo = 0, hi = 0;  // the window holds blocks [lo, hi)

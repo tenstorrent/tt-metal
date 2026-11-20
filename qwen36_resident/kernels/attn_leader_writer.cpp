@@ -77,11 +77,12 @@ void kernel_main() {
         noc_async_read_barrier();
         mask = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage)[kTokActive];
         volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage);
-        for (uint32_t w = 0; w < heads * Dt * kRowTile / 4; w++) {
+        for (uint32_t w = 0; w < groups * heads * Dt * kRowTile / 4; w++) {
             p[w] = 0;
         }
     }
-    const ActiveRows<users> act(mask);
+    // (row groups: global rows; the stage holds one heads x Dt block per group, written to o_in block g)
+    const ActiveRows<kUsers> act(mask);
     const uint32_t n_act = act.n;
 
     // the staged output rows into every streamer's attention-output buffer, and their head semaphore bumped
@@ -89,7 +90,12 @@ void kernel_main() {
         for (uint32_t s = 0; s < num_streamers; s++) {
             const uint32_t px = get_arg_val<uint32_t>(peers_base + 2 * s);
             const uint32_t py = get_arg_val<uint32_t>(peers_base + 2 * s + 1);
-            noc_async_write(stage, get_noc_addr(px, py, o_in), heads * Dt * kRowTile);
+            for (uint32_t gr = 0; gr < groups; gr++) {
+                noc_async_write(
+                    stage + gr * heads * Dt * kRowTile,
+                    get_noc_addr(px, py, o_in + gr * o_tiles * kRowTile),
+                    heads * Dt * kRowTile);
+            }
         }
         noc_async_write_barrier();
         for (uint32_t s = 0; s < num_streamers; s++) {
@@ -152,7 +158,8 @@ void kernel_main() {
             for (uint32_t h = 0; h < heads; h++) {
                 for (uint32_t d = 0; d < Dt; d++) {
                     const uint32_t src = out + d * kTile + row_offset(r * heads + h);
-                    const uint32_t dst = stage + (h * Dt + d) * kRowTile + user_offset(u * group_rows + r);
+                    const uint32_t dst = stage + ((u / users) * heads * Dt + h * Dt + d) * kRowTile +
+                                         user_offset((u % users) * group_rows + r);
                     noc_async_read(get_noc_addr(src), dst, kFaceRow);
                     noc_async_read(get_noc_addr(src + kFace), dst + batch * kFaceRow, kFaceRow);
                 }

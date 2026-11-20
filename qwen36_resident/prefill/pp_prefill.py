@@ -1559,7 +1559,9 @@ class PPPrefill:
                 per = [(hh * 16, 16) for hh in range(d.nv)] if per_head else [(0, pages)]
                 for c in range(n):
                     for off, cnt in per:
-                        dst_page = g_i * pages + off if len(per) == 1 else (g_i * d.nv + off // 16) * model.batch * 16
+                        # (rows mode: the launch's users, every row group's, per (copy, head))
+                        users = getattr(model, "launch_rows", model.batch)
+                        dst_page = g_i * pages + off if len(per) == 1 else (g_i * d.nv + off // 16) * users * 16
                         rows[p].append(
                             torch.tensor(
                                 [
@@ -1603,10 +1605,11 @@ class PPPrefill:
         return self._ho["sel"][key]
 
     def _ho_target(self, model, slot):
-        """(rows mode, slot, row, the slot's launch tensors) of a handoff into `model`"""
+        """(rows mode, slot, row, the slot's launch tensors) of a handoff into `model` (row groups: the row of the launch,
+        group row // batch, tile row row % batch)"""
         rows_mode = getattr(model, "rows", False)
         slot = (slot or 0) if rows_mode else 0
-        launch, row = divmod(slot, model.batch)
+        launch, row = divmod(slot, getattr(model, "launch_rows", model.batch))
         return rows_mode, slot, row, model.subs[launch]
 
     def _ho_jobs(self, model, p, n_tokens, block_table=None, slot=None):
@@ -1810,14 +1813,17 @@ class PPPrefill:
         coords = [ttnn.CoreCoord(i % grid.x, i // grid.x) for i in range(cores)]
         all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in coords])
         tiles = (hcols[::TILE] // TILE).tolist()
-        pairs = [v for k in range(K) for v in (int(hrows[k]), tiles[k])]
+        # (row groups: group row // batch's history rows follow the S x copies rows of the groups before it; the tile
+        # row is row % batch)
+        gr, u = divmod(row, model.batch) if rows_mode else (0, row)
+        pairs = [v for k in range(K) for v in (int(hrows[k]) + gr * model._S, tiles[k])]
         rt, first = ttnn.RuntimeArgs(), 0
         for i, c in enumerate(coords):
             cnt = G // cores + (i < G % cores)
             rt[c.x][c.y] = (
                 [compact_t.buffer_address(), target["hist"].buffer_address(), first, cnt]
                 + pairs
-                + ([row] if rows_mode else [])
+                + ([u] if rows_mode else [])
             )
             first += cnt
         program = ttnn.ProgramDescriptor(

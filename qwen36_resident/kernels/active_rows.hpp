@@ -27,6 +27,9 @@ constexpr uint32_t kTokHeadBytes = 48;  // token state words 0 .. 11, read at on
 // the rows' positions: with one row group words 1 .. batch of the head; with more (whose rows outnumber the head's
 // free words) one word per global row g * batch + u at byte tok_pos_off of the token state (past its x0 / rope)
 constexpr uint32_t tok_pos_off = get_named_compile_time_arg_val("tok_pos_off");
+// per row group: the mixers' row-buffer block (row_tiles batch x 32 tiles) and the streamers' o_in block (o_tiles)
+constexpr uint32_t row_tiles = get_named_compile_time_arg_val("row_tiles");
+constexpr uint32_t o_tiles = get_named_compile_time_arg_val("o_tiles");
 
 // the rows that run this step, in order (rows mode: the set bits of mask; otherwise all of them)
 template <uint32_t B>

@@ -37,7 +37,7 @@ import time
 import torch
 from loguru import logger
 
-ROWS = 8  # users per launch: the rows-mode build is compiled at width 8 for every launch
+ROWS = 8  # users per launch by default: one 8-row group (a build with row groups: 8 * groups, ResidentModel groups=)
 # RESIDENT_SCHED_TRACE=<file>: one JSON line per prefill_forward call (wall times of each row's PP + handoff and of
 # the first-token launches; the PP calls end in a device sync, so host time is device time) for the scheduling analysis
 SCHED_TRACE = os.environ.get("RESIDENT_SCHED_TRACE")
@@ -104,18 +104,18 @@ class SlotMap:
     The plugin's remap is a gather: remap[i] = j means vLLM slot i now holds what vLLM slot j held. Applied to this
     map only (resident state never moves): the new map sends i to the resident slot j was mapped to."""
 
-    def __init__(self, n_slots, row_order=None):
-        self.n = n_slots
+    def __init__(self, n_slots, row_order=None, rows=ROWS):
+        self.n, self.rows = n_slots, rows  # rows: users per launch
         self.res_of = {}
         self.free = set(range(n_slots))
-        self.set_row_order(row_order or list(range(ROWS)))
+        self.set_row_order(row_order or list(range(rows)))
 
     def set_row_order(self, row_order):
         """the order a launch's rows fill (contract section 2): every launch's rows in row_order, launch by launch"""
         row_order = [int(u) for u in row_order]
-        if sorted(row_order) != list(range(ROWS)):
-            raise RuntimeError(f"row order {row_order} is not a permutation of the {ROWS} rows")
-        self.order = [k * ROWS + u for k in range(self.n // ROWS) for u in row_order]
+        if sorted(row_order) != list(range(self.rows)):
+            raise RuntimeError(f"row order {row_order} is not a permutation of the {self.rows} rows")
+        self.order = [k * self.rows + u for k in range(self.n // self.rows) for u in row_order]
 
     def assign(self, vslot):
         """a fresh resident slot for a request prefilled into vLLM slot vslot: the lowest launch with a free row,
@@ -152,10 +152,11 @@ class ResidentRowsAdapter:
 
     decode_input_update_contract = 1
 
-    def __init__(self, engine, vocab, max_seq_len, max_batch, chunk_unit, mrope=False):
+    def __init__(self, engine, vocab, max_seq_len, max_batch, chunk_unit, mrope=False, rows=ROWS):
         self.engine, self.vocab, self.max_seq_len, self.mrope = engine, vocab, max_seq_len, mrope
-        self.n_slots = -(-max_batch // ROWS) * ROWS
-        self.slots = SlotMap(self.n_slots)
+        self.launch_rows = rows  # users per launch (8 * row groups)
+        self.n_slots = -(-max_batch // rows) * rows
+        self.slots = SlotMap(self.n_slots, rows=rows)
         self._row_order = None  # the engine's, at the first prefill (the serving class builds the engine late)
         self.chunk = chunk_unit  # PP resume unit: a split prompt's calls start / end on its multiples
         # resident slots whose state is decode-ready (handed off + first token); a partial prefill's slot is not
@@ -169,7 +170,7 @@ class ResidentRowsAdapter:
 
     # ------------------------------------------------------------------ helpers
     def _launch(self, r):
-        return r // ROWS
+        return r // self.launch_rows
 
     def _write_tables(self):
         self.engine.set_page_table(self.tables)
@@ -515,6 +516,7 @@ class RowsEngine:
     def __init__(self, model, pp, emb, vocab, vocab_chip, n_slots, chunk_unit, mesh=None):
         self.model, self.pp, self.emb = model, pp, emb
         self.vocab, self.vocab_chip, self.n_slots = vocab, vocab_chip, n_slots
+        self.launch_rows = int(getattr(model, "launch_rows", ROWS))  # users per launch (8 * row groups)
         self.chunk = chunk_unit
         self.mesh = mesh
         # the rows-mode hub draws and feeds each row's next token (WP7: a model built with embed)
@@ -531,11 +533,11 @@ class RowsEngine:
         None for a launch left as it is"""
         by_launch = {k: {} for k in launches}
         for r, (tok, p) in feed.items():
-            by_launch[r // ROWS][r % ROWS] = (self.emb[int(tok)].float(), int(p))
+            by_launch[r // self.launch_rows][r % self.launch_rows] = (self.emb[int(tok)].float(), int(p))
         states = {
             k: self.model.token_state_rows(rows, preserve=k in preserve_launches) for k, rows in by_launch.items()
         }
-        return [states.get(k) for k in range(self.n_slots // ROWS)]
+        return [states.get(k) for k in range(self.n_slots // self.launch_rows)]
 
     def set_page_table(self, tables):
         self.model.set_page_table([t if t else [0] for t in tables])
@@ -547,7 +549,7 @@ class RowsEngine:
             return [int(u) for u in self.model.row_order()]
         except AttributeError:
             G = self.model.head_groups
-            return [(i % G) * (ROWS // G) + i // G for i in range(ROWS)]
+            return [(i % G) * (ROWS // G) + i // G for i in range(ROWS)]  # (builds before row groups)
 
     def pick_chunk(self, n_tokens):
         """the PP chunk for a prefill of n_tokens (its fastest; the adapter keeps it for every span of the sequence)"""
@@ -596,10 +598,11 @@ class RowsEngine:
 
     def _logits(self, slots):
         """[len(slots), vocab] logits of the given slots, read from their launches only"""
-        ks = sorted({r // ROWS for r in slots})
-        lg = self.model.logits(launches=ks)  # [8 * len(ks), n, vocab_chip] in the order of ks
+        R = self.launch_rows
+        ks = sorted({r // R for r in slots})
+        lg = self.model.logits(launches=ks)  # [R * len(ks), n, vocab_chip] in the order of ks
         lg = lg[:, :, : self.vocab_chip].reshape(lg.shape[0], -1)[:, : self.vocab].float()
-        idx = [ks.index(r // ROWS) * ROWS + r % ROWS for r in slots]
+        idx = [ks.index(r // R) * R + r % R for r in slots]
         return lg[torch.as_tensor(idx, dtype=torch.long)].clone()
 
     def read_logits(self, slots):
@@ -616,7 +619,7 @@ class RowsEngine:
     def read_tokens(self, slots, async_read):
         """enqueue the reads of the out words (token, position, active, 0 per row) of the slots' launches: (slots,
         {launch: host read}, events)"""
-        ks = sorted({r // ROWS for r in slots})
+        ks = sorted({r // self.launch_rows for r in slots})
         reads, events = {}, []
         for k in ks:
             out = self.model.out_tensor(k)
@@ -642,10 +645,10 @@ class RowsEngine:
                 import ttnn
 
                 host = ttnn.to_torch(host)
-            rows[k] = host.reshape(-1)[: ROWS * 4].reshape(ROWS, 4).to(torch.int64)
+            rows[k] = host.reshape(-1)[: self.launch_rows * 4].reshape(self.launch_rows, 4).to(torch.int64)
         out = []
         for r in slots:
-            w = rows[r // ROWS][r % ROWS]
+            w = rows[r // self.launch_rows][r % self.launch_rows]
             if int(w[2]) != 1:
                 raise RuntimeError(f"slot {r}: its launch's out word is not active ({w.tolist()})")
             out.append(int(w[0]))

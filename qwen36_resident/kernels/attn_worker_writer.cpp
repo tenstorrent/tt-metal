@@ -18,7 +18,7 @@
 // state address, then workers - 1 x (x, y) of the chunk workers (verify: see attn_common.hpp). Paged KV
 // (attn_paged.hpp): the k / v addresses are the pools, the stride is 0, and the tail tiles' pages come from the
 // reader's page lists (ready once cb_ntiles is). Rows mode (active_rows.hpp): only the active users run (the
-// reader's mask, word `batch` of the cb_ntiles page).
+// reader's mask, word kMaskWord of the cb_ntiles page; row groups: the kUsers users of every group).
 
 #include "api/dataflow/dataflow_api.h"
 #include "attn_common.hpp"
@@ -60,11 +60,11 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* q_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_q));
     volatile tt_l1_ptr uint32_t* M_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_M));
     cb_wait_front(cb_ntiles, 1);
-    const ActiveRows<users> act(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_ntiles))[batch]);
+    const ActiveRows<kUsers> act(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_ntiles))[kMaskWord]);
     const uint32_t n_act = act.n;
-    bool chunk_of_user[users];
+    bool chunk_of_user[kUsers];
     bool any_chunkless = false;
-    for (uint32_t u = 0; u < users; u++) {
+    for (uint32_t u = 0; u < kUsers; u++) {
         chunk_of_user[u] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_ntiles))[u] > 0;
         any_chunkless |= !chunk_of_user[u];
     }
@@ -76,16 +76,22 @@ void kernel_main() {
             p[i] = 0xff80;
         }
     }
-    uint32_t tail_bank[batch], tail_row[batch];
+    uint32_t tail_bank[kRows], tail_row[kRows];
     uint64_t owner_sem = 0;  // verify: the tail-semaphore of the chunk worker reading row 0's tile for later rows
     uint32_t last = batch;   // verify: the last row on row 0's tile, if a later row starts the next one
     if (role == 2) {
         const InterleavedAddrGen<true> tok{
             .bank_base_address = get_arg_val<uint32_t>(tail_args + 3), .page_size = 4 * (1 + batch)};
-        noc_async_read(tok.get_noc_addr(0), get_write_ptr(cb_flush), 4 * (1 + batch));
+        // (row groups: the users' positions are the token state's positions region)
+        if constexpr (groups == 1) {
+            noc_async_read(tok.get_noc_addr(0), get_write_ptr(cb_flush), 4 * (1 + batch));
+        } else {
+            noc_async_read(tok.get_noc_addr(0, tok_pos_off), get_write_ptr(cb_flush), (4 * kUsers + 31) & ~31u);
+        }
         noc_async_read_barrier();
-        for (uint32_t u = 0; u < batch; u++) {
-            const uint32_t tp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_flush))[1 + u] / 32;
+        for (uint32_t u = 0; u < kRows; u++) {
+            const uint32_t tp =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_flush))[(groups == 1 ? 1 : 0) + u] / 32;
             tail_bank[u] = tp % banks;
             tail_row[u] = tp / banks;
         }

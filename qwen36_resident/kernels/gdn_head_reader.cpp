@@ -47,7 +47,6 @@ constexpr uint32_t sem_slot = get_compile_time_arg_val(10);
 constexpr uint32_t st = Kt * Vt;
 // row groups (active_rows.hpp): the row buffer holds `groups` blocks of row_tiles batch x 32 tiles (group g's users at
 // block g), the state tensor [copies][heads][groups * batch][Kt * Vt]; a user is its global row g * batch + u
-constexpr uint32_t row_tiles = get_named_compile_time_arg_val("row_tiles");
 constexpr uint32_t kUsers = batch * groups;
 // token state word: the state slot row 0 continues from (verify; past the R positions of R > 2 rows)
 constexpr uint32_t kTokSlot = batch > 2 ? 15 : 4;

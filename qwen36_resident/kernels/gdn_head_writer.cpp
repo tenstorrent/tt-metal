@@ -43,7 +43,6 @@ constexpr uint32_t kBf16Tile = 2048, kF32Tile = 4096, kFaceBytes = 512, kFaceRow
 constexpr uint32_t kRowTile = 64 * batch;
 // row groups (active_rows.hpp): the stage and the streamers' o_in hold one block per group (stage block Vt tiles,
 // o_in block o_tiles tiles); users are global rows g * batch + u; the state tensor holds groups * batch users
-constexpr uint32_t o_tiles = get_named_compile_time_arg_val("o_tiles");
 constexpr uint32_t kUsers = batch * groups;
 
 void kernel_main() {

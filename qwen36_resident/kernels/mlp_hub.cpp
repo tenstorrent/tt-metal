@@ -119,6 +119,8 @@ constexpr uint32_t kListWords = 2 * sampling::kTopK;
 // a chip's candidate slot: per row a list (sampling) or (key, index) (at least 16 B)
 constexpr uint32_t kCandWords = sample ? kFeedRows * kListWords : (2 * kFeedRows > 4 ? 2 * kFeedRows : 4);
 constexpr uint32_t cand_bytes = 4 * kCandWords;
+// the candidates go to the other hubs as one fabric packet (32 sampled rows' lists would need two: row groups of 4)
+static_assert(cand_bytes <= packet_bytes, "a chip's candidates exceed one fabric packet");
 constexpr uint32_t n_taps = get_compile_time_arg_val(22);
 static_assert(n_taps <= 5 && (n_taps == 0 || published), "taps are written from the summed x");
 constexpr uint32_t tap_rounds[5] = {
@@ -278,6 +280,13 @@ void feed_verify(
     noc_async_write_barrier();
 }
 
+// row groups: wait until half `shift` / 16 of a semaphore word (two 16-bit counters) reaches n
+FORCE_INLINE void wait_half(volatile tt_l1_ptr uint32_t* sem, uint32_t shift, uint32_t n) {
+    while (((*sem >> shift) & 0xffff) < n) {
+        invalidate_l1_cache();
+    }
+}
+
 void kernel_main() {
     size_t arg_idx = 0;
     const uint32_t arg0 = get_arg_val<uint32_t>(arg_idx++);
@@ -427,7 +436,15 @@ void kernel_main() {
         const uint32_t l = s / groups, g = s % groups;
         const uint32_t par = s & 1;
         const uint32_t base = slots + par * num_chips * vector_bytes;
-        noc_semaphore_wait_min(gather, num_streamers * (s + 1));
+        if constexpr (groups == 1) {
+            noc_semaphore_wait_min(gather, num_streamers * (s + 1));
+        } else {
+            // (row groups: a fast streamer sends group g + 1's partial before a slow one sends group g's, so a plain
+            // count would start group g's sum early; the streamers count parity-0 sub-rounds in the low half of the
+            // gather word and parity-1 ones in the high half. A parity's next partial needs this round's multicasts
+            // of every group first (groups <= 2), so a half never runs ahead of its sub-round.)
+            wait_half(gather, 16 * par, num_streamers * (s / 2 + 1));
+        }
         mark(s, 0);
         if constexpr (num_chips > 1) {
             for (uint32_t p = 0; p < packets_per_vector; p++) {
@@ -510,7 +527,11 @@ void kernel_main() {
     noc_async_write_barrier();
     if constexpr (feed) {
         // this step's records: one more gather count per streamer after its argmax write
-        noc_semaphore_wait_min(gather, num_streamers * (layers * groups + 1));
+        if constexpr (groups == 1) {
+            noc_semaphore_wait_min(gather, num_streamers * (layers * groups + 1));
+        } else {
+            wait_half(gather, 0, num_streamers * ((layers * groups + 1) / 2 + 1));  // (the records: the low half)
+        }
         invalidate_l1_cache();
         volatile tt_l1_ptr uint32_t* rec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(argmax_addr);
         volatile tt_l1_ptr uint32_t* cand = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cand_addr);

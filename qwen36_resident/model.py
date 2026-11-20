@@ -567,7 +567,8 @@ class ResidentModel:
         each active row its own token (mlp_hub.cpp rows mode; per-row sampling parameters, set_sampling rows=).
         groups (rows mode, kernels/active_rows.hpp): row groups of `batch` rows that one launch carries, the weights
         streamed once for all of them (custom_mm takes at most 8 rows, so more users per launch come as groups).
-        Only 1 is implemented so far; anything else raises rather than running as more launches."""
+        groups > 1: exactly 8 * groups users (st), one launch; rows mode, paged KV, no fc / verify / taps. 1 or 2 so far
+        (4 needs the hub's slot-free handshake); anything else raises rather than running as more launches."""
         self.mesh, self.d, self.layers, self.interval, self.lm_head = mesh, d, layers, interval, lm_head
         R = 0 if not verify else (2 if verify is True else int(verify))
         assert R in (0, 2, 4, 8), "verify runs 2, 4 or 8 rows"
@@ -577,10 +578,13 @@ class ResidentModel:
         assert len(self.taps) <= 5
         self.rows = rows
         assert not rows or not verify, "rows mode: independent users"
-        if groups != 1:
+        if groups not in (1, 2):
             raise NotImplementedError(
-                f"row groups per launch: groups={groups} (rows={rows}) is not implemented yet; only groups=1 runs"
+                f"row groups per launch: groups={groups} is not implemented (1 or 2; 4 needs the hub's slot-free "
+                "handshake, PLAN.md E4)"
             )
+        if groups > 1 and not (rows and kv_pool_blocks is not None and fc is None and not verify and not taps):
+            raise ValueError("row groups: rows mode with paged KV, no fc / verify / taps")
         self.groups = groups
         # with row groups the rows' positions live past the token state's x0 / rope (active_rows.hpp tok_pos_off);
         # one group keeps them in the head's words 1 .. batch
@@ -591,10 +595,15 @@ class ResidentModel:
             assert isinstance(st, State)
             st = [st] * R
         sts_all = list(st) if isinstance(st, (list, tuple)) else [st]
-        n_sub = -(-len(sts_all) // 8)
+        if groups > 1:
+            assert len(sts_all) == 8 * groups, f"row groups: 8 users per group, one launch ({len(sts_all)} users)"
+            n_sub = 1
+        else:
+            n_sub = -(-len(sts_all) // 8)
         assert len(sts_all) % n_sub == 0
-        sts = sts_all[: len(sts_all) // n_sub]
-        B = self.batch = len(sts)  # users per launch
+        sts = sts_all[: len(sts_all) // n_sub]  # the users of one launch
+        B = self.batch = len(sts) // groups  # rows per group (the tiles' rows)
+        self.launch_rows = len(sts)  # users per launch: groups x batch
         self.n_sub, self.users = n_sub, len(sts_all)
         assert B in (1, 2, 4, 8), "custom_mm takes 1, 2, 4 or 8 rows"
         assert not rows or B > 1, "rows mode: a batch of users"
@@ -611,8 +620,8 @@ class ResidentModel:
             assert attn_copies == self.n_attn or not self.n_attn, "verify: one KV cache per attention layer"
 
         # ---- cores
-        groups, used = streamer_cores(mesh)
-        cores = [c for grp in groups for c in grp]
+        core_groups, used = streamer_cores(mesh)
+        cores = [c for grp in core_groups for c in grp]
         S = len(cores)
         self.S = S
         grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
@@ -776,21 +785,24 @@ class ResidentModel:
 
         # the activation buffers grow with the batch: the weight ring gives up their extra L1 (streamer CBs,
         # and the L1 tensors that take the same addresses on every core: mixer rows and output, logits)
-        def act_bytes(b):
+        # (row groups: every per-row buffer once per group; the conv taps are shared, counted per group anyway)
+        def act_bytes(b, gr=1):
             blk = (TILE // b) * -(-max(nq_max, ng_max) * b // TILE)
-            cbs_ = 64 * b * (2 * d.Ht + d.It + 2 * nd_max + 13 * blk) + (18432 if b > 1 else 0)
-            return cbs_ + b * 2 * (d.gv + nv_max * TILE + max(d.g_cols, d.a_cols))
+            cbs_ = 64 * b * gr * (2 * d.Ht + d.It + 2 * nd_max + 13 * blk) + (18432 if b > 1 else 0)
+            return cbs_ + b * gr * 2 * (d.gv + nv_max * TILE + max(d.g_cols, d.a_cols))
 
         # (each further sub-batch has its own logits, an L1 tensor)
         extra = (n_sub - 1) * B * 2 * nv_max * TILE if lm_head else 0
         # verify: two more conv history outputs and the row selections (R > 2 rows: 9 row selections)
         extra += (2 * blk_tiles * 64 * B + 3 * 2048) if R == 2 else (9 * 2048 if verify else 0)
-        ring_bytes = ((L1_WEIGHT_BUDGET - act_bytes(B) + act_bytes(1) - extra) // lcm) * lcm
+        ring_bytes = ((L1_WEIGHT_BUDGET - act_bytes(B, groups) + act_bytes(1) - extra) // lcm) * lcm
         self.ring_bytes = ring_bytes
 
         # ---- streamer tensors
-        self.o_in_t = l1(torch.zeros(S * B, d.gv), grid, [B, d.gv])
-        self.logits_t = l1(torch.zeros(S * B, nv_max * TILE), grid, [B, nv_max * TILE]) if lm_head else None
+        # (row groups: a shard holds every group's rows, tile row gr = group gr: o block gr at gr * o_tiles tiles)
+        LR = self.launch_rows
+        self.o_in_t = l1(torch.zeros(S * LR, d.gv), grid, [LR, d.gv])
+        self.logits_t = l1(torch.zeros(S * LR, nv_max * TILE), grid, [LR, nv_max * TILE]) if lm_head else None
         blk = blk_tiles * TILE * B
         # conv taps per (streamer, GDN copy): [tap][32 x 1x32 tiles], only the core's q|k|v columns
         self._S, self._gdn_copies, self._attn_copies = S, gdn_copies, attn_copies
@@ -822,7 +834,7 @@ class ResidentModel:
 
         # ---- mixer rows (GDN heads, attention leader and tail core)
         row_w = max(d.g_cols, d.a_cols)
-        rows_t = l1(torch.zeros((len(heads) + 2) * B, row_w), mixer_grid, [B, row_w])
+        rows_t = l1(torch.zeros((len(heads) + 2) * LR, row_w), mixer_grid, [LR, row_w])
 
         # ---- GDN heads: state [copy][head][16] fp32 tiles (interleaved: a state's tiles spread over the
         # banks), norm weight [copy][4] row-0 tiles
@@ -905,8 +917,13 @@ class ResidentModel:
         slots_per_node = max(FANIN - 1, len(groups_))
 
         # ---- token state: ring step, positions, x0, rope tables of the positions
-        self.rope_off = TOK_X0 + (2 if self.fc else 1) * d.Ht * 64 * B
-        self.tok_words = (self.rope_off + 3 * 2048 * B) // 4
+        # (row groups: group gr's x0 at TOK_X0 + gr * Ht tiles, row r's rope at rope_off + r * 3 tiles, and the rows'
+        # positions at tok_pos_off, 64 B aligned, one word per row)
+        self.rope_off = TOK_X0 + (2 if self.fc else 1) * d.Ht * 64 * LR
+        self.tok_words = (self.rope_off + 3 * 2048 * LR) // 4
+        if groups > 1:
+            self.tok_pos_off = -(-(self.rope_off + 3 * 2048 * LR) // 64) * 64
+            self.tok_words = (self.tok_pos_off + -(-4 * LR // 64) * 64) // 4
         if tok is None:
             tok = dram_t(torch.zeros(1, self.tok_words, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, rep)
         assert tok.shape[-1] == self.tok_words
@@ -914,7 +931,8 @@ class ResidentModel:
 
         # ---- hub
         # the hub's slots are a hub CB; it dumps the last layer's x here (for the host)
-        self.x_t = dram_t(torch.zeros(n, B * HIDDEN), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
+        # (row groups: one page per group)
+        self.x_t = dram_t(torch.zeros(n * groups, B * HIDDEN), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
         self.ccl_sems = [ttnn.create_global_semaphore(mesh, hub_grid, 0) for _ in range(2)]  # per slot parity
         # the hubs' all-reduce over RESIDENT_HUB_LINKS fabric links per neighbour where that many trained, else fewer
         # (a cabling or mesh descriptor with one link per neighbour takes the one-link path)
@@ -931,7 +949,7 @@ class ResidentModel:
         logger.info(f"resident hub all-reduce: {self.hub_links} fabric link(s) per neighbour")
         # per streamer (order key, vocab index) of its largest logit, written by the streamer writers
         # (sample: its top-k list, sampling.hpp)
-        rec_words = S * B * (2 * TOP_K if self.sample else 4)  # (sampling: B = 1, or rows mode)
+        rec_words = S * LR * (2 * TOP_K if self.sample else 4)  # (sampling: B = 1, or rows mode)
         self.argmax_t = (
             l1(
                 torch.zeros(1, rec_words, dtype=torch.int32),
@@ -953,7 +971,7 @@ class ResidentModel:
             ), "the hub feeds batch 1, verify or rows"
             assert (feed_peer is not None) == verify
             self.embed, self.feed_peer = embed, feed_peer
-            fed_rows = B if rows else 2 if verify else 1  # tokens per launch (mlp_hub.cpp kCandWords)
+            fed_rows = LR if rows else 2 if verify else 1  # tokens per launch (mlp_hub.cpp kCandWords)
             cand_words = n * (2 * TOP_K * fed_rows if self.sample else max(4, 2 * fed_rows))
             self.cand_t = l1(
                 torch.zeros(1, cand_words, dtype=torch.int32),
@@ -966,7 +984,7 @@ class ResidentModel:
             rope = rope_compact(sts[0].max_pos).view(np.int32)
             self.rope_t = dram_t(torch.from_numpy(rope.copy()), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, rep)
             # (rows mode: per launch, 16 B of out and 16 parameter words per row)
-            out_words, par_words = (4 * B, 16 * B) if rows else (16, 16)
+            out_words, par_words = (4 * LR, 16 * LR) if rows else (16, 16)
             self._feed_io = lambda: (
                 dram_t(torch.zeros(1, out_words, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, rep),
                 dram_t(torch.zeros(1, par_words, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, rep),
@@ -1011,7 +1029,7 @@ class ResidentModel:
         ]
         # paged KV: a page table per launch (rows = its users), apart from the token state (set_page_table)
         pt_zeros = lambda: dram_t(
-            torch.zeros(B, self.pt_cols, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, rep
+            torch.zeros(LR, self.pt_cols, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, rep
         )
         if self.kv_paged:
             subs[0]["pt"] = pt_zeros()
@@ -1094,20 +1112,20 @@ class ResidentModel:
                     ],
                 ),
                 cb(7, grid, 1, ttnn.uint32, 16),
-                cb(8, grid, d.It, page=64 * B, tiny_tile=True),
-                tiny_cb(9, nd_max),
-                tiny_cb(10, nd_max),
-                aliased(11, 12, d.Ht),
-                aliased(13, 14, d.Ht),
-                aliased(15, 27, blk_tiles),
-                aliased(26, 28, blk_tiles),
-                aliased(16, 29, blk_tiles),
-                aliased(17, 22, blk_tiles),
-                aliased(18, 23, blk_tiles),
+                cb(8, grid, groups * d.It, page=64 * B, tiny_tile=True),
+                tiny_cb(9, groups * nd_max),
+                tiny_cb(10, groups * nd_max),
+                aliased(11, 12, groups * d.Ht),
+                aliased(13, 14, groups * d.Ht),
+                aliased(15, 27, groups * blk_tiles),
+                aliased(26, 28, groups * blk_tiles),
+                aliased(16, 29, groups * blk_tiles),
+                aliased(17, 22, groups * blk_tiles),
+                aliased(18, 23, groups * blk_tiles),
                 aliased(19, 24, CONV_K * blk_tiles),
-                aliased(20, 25, (CONV_K - 1) * blk_tiles),
+                aliased(20, 25, groups * (CONV_K - 1) * blk_tiles),
                 T(21, self.o_in_t),
-                cb(30, grid, (3 if R == 2 or self.rows else 1) * blk_tiles * B // TILE),
+                cb(30, grid, groups * (3 if R == 2 or self.rows else 1) * blk_tiles * B // TILE),
             ]
             if self.verify:
                 cbs.append(cb(36, grid, 3 if R == 2 else 9))
@@ -1195,7 +1213,7 @@ class ResidentModel:
             for idx, ((dt, page), cnt) in head_cb_spec.items():
                 cbs.append(cb(idx, head_grid, cnt, dt, page))
             if not self.gdn_chunk:
-                cbs.append(cb(22, head_grid, 1, page=4 * 64 * B))
+                cbs.append(cb(22, head_grid, 1, page=groups * 4 * 64 * B))  # the stage (a block per group)
             if self.rows:
                 cbs.append(cb(29, head_grid, 1, ttnn.uint32, 64))  # active_rows.hpp: the core's active users
             # attention workers (chunk workers and the tail core)
@@ -1213,16 +1231,17 @@ class ResidentModel:
                 cb(26, chunk_grid, 1, *f32),
                 cb(7, work_grid, 1),
                 cb(8, work_grid, Dt + 1),
-                cb(10, work_grid, 1, ttnn.uint32, 1088 if packed else 256),
+                # (row groups: up to 32 users' words, the -inf rows at 256 and the positions at 512)
+                cb(10, work_grid, 1, ttnn.uint32, 1088 if packed or groups > 1 else 256),
                 cb(23, attn_grid, slots_per_node * (Dt + 1)),
                 cb(25, attn_grid, Dt + 1),
                 # leader and tail core
                 cb(13, prep_grid, Dt),
                 cb(14, prep_grid, 2),
-                cb(17, prep_grid, 3 * B + (3 * attn_users + 3 if packed else 0)),
+                cb(17, prep_grid, 3 * LR + (3 * attn_users + 3 if packed else 0)),
                 T(29, mean_t),
                 # leader
-                cb(2, lead_grid, 1, page=heads_a * Dt * 64 * B),
+                cb(2, lead_grid, 1, page=groups * heads_a * Dt * 64 * B),
                 cb(9, lead_grid, Dt),
                 cb(10, lead_grid, 2 * Dt),
                 cb(15, lead_grid, Dt),
@@ -1233,19 +1252,19 @@ class ResidentModel:
                 *([cb(7, lead_grid, 1, ttnn.uint32, 64)] if self.rows else []),  # the token state head
                 # tail core
                 cb(11, tail_grid, Dt),
-                cb(12, tail_grid, 4 if packed else 2 * B),
+                cb(12, tail_grid, 4 if packed else 2 * LR),
                 cb(16, tail_grid, Dt),
                 cb(18, tail_grid, Dt),
                 cb(19, tail_grid, (2 if packed else 1) * Dt),
                 cb(20, tail_grid, (2 if packed else 1) * Dt),
                 cb(21, tail_grid, Dt),
-                cb(22, tail_grid, 2 * attn_users if packed else B),
+                cb(22, tail_grid, 2 * attn_users if packed else LR),
                 cb(28, tail_grid, (4 if packed else 2) * Dt, ttnn.bfloat8_b, kv_page),
                 cb(31, tail_grid, (4 if packed else 2) * Dt, ttnn.bfloat8_b, kv_page),
             ]
             if self.kv_paged:
                 # page lists of the workers' tiles, then a page-table window (attn_paged.hpp cb_pages)
-                cbs.append(cb(30, work_grid, 1, ttnn.uint32, -(-(4 * B * self.kv_max_n + 2048 + 64) // 64) * 64))
+                cbs.append(cb(30, work_grid, 1, ttnn.uint32, -(-(4 * LR * self.kv_max_n + 2048 + 64) // 64) * 64))
             # the hub needs free semaphore ids for its fabric connections (2 per connection, 2 or 4 connections): the
             # head-group one only on the heads, and on the hub only the ones mlp_hub.cpp owns
             hub_sems = (SEM_GATHER, SEM_FLAG, SEM_ADDR)
@@ -1684,11 +1703,11 @@ class ResidentModel:
         """rows mode: the host token state of one launch from its active rows, rows = {row: (x0 [HIDDEN], pos)}
         (the launch's other rows inactive); preserve: see token_state"""
         assert self.rows and len(rows) > 0
-        B = self.batch
-        x0, pos = torch.zeros(B, HIDDEN), [0] * B
+        LR = self.launch_rows
+        x0, pos = torch.zeros(LR, HIDDEN), [0] * LR
         for u, (v, p) in rows.items():
             x0[u], pos[u] = v.reshape(-1).float(), int(p)
-        return self._token_state(x0, pos, None, active=[u in rows for u in range(B)], preserve=preserve)
+        return self._token_state(x0, pos, None, active=[u in rows for u in range(LR)], preserve=preserve)
 
     def out_tensor(self, launch=0):
         """the device out tensor of a launch's fed tokens (rows mode: 4 words per row, see fed_token)"""
@@ -1697,9 +1716,10 @@ class ResidentModel:
     def row_order(self):
         """rows mode: the order to fill a launch's rows in. Core g of a GDN value head runs rows g B / G .. (g + 1) B / G
         one after another, so the i-th user goes to row (i % G) B / G + i // G: consecutive users on different head
-        cores (G = 2: 0, 4, 1, 5, ...). A user's tokens are the same in any row; only the step time changes."""
+        cores (G = 2: 0, 4, 1, 5, ...). A user's tokens are the same in any row; only the step time changes.
+        Row groups: group 0's rows first, in that order, then group 1's (row gr * batch + r)."""
         B, G = self.batch, self.head_groups
-        return [(i % G) * (B // G) + i // G for i in range(B)]
+        return [gr * B + (i % G) * (B // G) + i // G for gr in range(self.groups) for i in range(B)]
 
     def clear_slot(self, s):
         """rows mode: zero slot s's GDN states and its row of the conv histories (a request's state before its first
@@ -1707,8 +1727,9 @@ class ResidentModel:
         positions below its own only). On device: the prefill handoff kernel copies a zero buffer into the slot's
         state pages, hist_scatter writes zeros into its history row."""
         assert self.rows
-        k, u = divmod(s, self.batch)
-        sub, d, mesh, n, B = self.subs[k], self.d, self.mesh, self.d.n, self.batch
+        k, r = divmod(s, self.launch_rows)  # (row groups: row r = gr * batch + u of the launch)
+        gr, u = divmod(r, self.batch)
+        sub, d, mesh, n, B, LR = self.subs[k], self.d, self.mesh, self.d.n, self.batch, self.launch_rows
         pdir = f"{PKG_DIR}/prefill/kernels/"
         rows, cols, _ = self.hist_index()
         K, G = len(rows), self._gdn_copies
@@ -1740,7 +1761,7 @@ class ResidentModel:
         c, h = torch.meshgrid(torch.arange(G), torch.arange(d.nv), indexing="ij")
         jobs = torch.zeros(n, G * d.nv, 16, dtype=torch.int64)
         jobs[:, :, 1], jobs[:, :, 3], jobs[:, :, 5] = zs.buffer_address(), 4096, sub["state"].buffer_address()
-        jobs[:, :, 6], jobs[:, :, 7] = (((c * d.nv + h) * B + u) * 16).reshape(-1), 16
+        jobs[:, :, 6], jobs[:, :, 7] = (((c * d.nv + h) * LR + r) * 16).reshape(-1), 16
         jobs[:, :, 0] = torch.arange(n)[:, None]
         table = (jobs & 0xFFFFFFFF).numpy().astype(np.uint32).view(np.int32)
         jobs_t = ttnn.from_torch(
@@ -1788,7 +1809,8 @@ class ResidentModel:
         # conv history: zeros into row u of every (streamer, copy) row (prefill/kernels/hist_scatter.cpp)
         tiles = (cols[::TILE] // TILE).tolist()
         rt = ttnn.RuntimeArgs()
-        pairs = [v for i in range(K) for v in (int(rows[i]), tiles[i])]
+        # (row groups: group gr's history rows follow the S x copies rows of the groups before it)
+        pairs = [v for i in range(K) for v in (int(rows[i]) + gr * self._S, tiles[i])]
         rt[core.x][core.y] = [zh.buffer_address(), sub["hist"].buffer_address(), 0, G] + pairs + [u]
         hist_kern = ttnn.KernelDescriptor(
             kernel_source=pdir + "hist_scatter.cpp",
@@ -1809,7 +1831,7 @@ class ResidentModel:
         ttnn.deallocate(jobs_t)
 
     def _token_state(self, x0, pos, ring, slot=0, extra=None, active=None, preserve=False):
-        B = self.batch
+        B = self.launch_rows
         x0 = x0.reshape(B, -1)
         pos = [pos] if B == 1 and not isinstance(pos, (list, tuple)) else list(pos)
         assert len(pos) == B and (ring is not None or B == 1 or self.rows)
@@ -1826,13 +1848,20 @@ class ResidentModel:
         else:
             assert active is None and not preserve, "active / preserve: rows mode"
         words = np.zeros(self.tok_words * 2, dtype=np.uint16)
-        for i, v in enumerate([ring] + pos):
+        # (row groups: the positions in their region, the head's words 1 .. batch unused)
+        for i, v in enumerate([ring] + (pos if self.groups == 1 else [])):
             words[2 * i], words[2 * i + 1] = v & 0xFFFF, v >> 16
+        if self.groups > 1:
+            p0 = self.tok_pos_off // 2
+            for i, v in enumerate(pos):
+                words[p0 + 2 * i], words[p0 + 2 * i + 1] = v & 0xFFFF, v >> 16
         if self.verify:
             words[2 * (TOK_SLOT if self.R == 2 else TOK_SLOT_ROWS)] = slot
         for i, v in (extra or {}).items():  # further head words (the MTP feed's, see mlp_hub.cpp)
             words[2 * i], words[2 * i + 1] = v & 0xFFFF, v >> 16
-        words[TOK_X0 // 2 : TOK_X0 // 2 + x0.numel()] = bf16_bits(tiny_order(x0))
+        b = self.batch  # (row groups: x0 of group gr after group gr - 1's, each in its batch x 32 tiles)
+        x0_dev = torch.cat([tiny_order(x0[g * b : (g + 1) * b]) for g in range(self.groups)])
+        words[TOK_X0 // 2 : TOK_X0 // 2 + x0.numel()] = bf16_bits(x0_dev)
         r0 = self.rope_off // 2
         if not hasattr(self, "_rope"):
             # every position's compact entry, built once (expanding one costs microseconds)
@@ -1874,6 +1903,14 @@ class ResidentModel:
         sts = sts if isinstance(sts, (list, tuple)) else [sts]
         if self.R > 2:
             return self._hist_host_rows(sts[0], ring or 0)
+        if self.groups > 1 and len(sts) == self.launch_rows:
+            # row groups: group gr's rows (its batch x 32 tiles) after the S x copies rows of the groups before it
+            b, n = self.batch, self.d.n
+            per = [
+                self._hist_host(sts[g * b : (g + 1) * b], ring).reshape(n, self._S * self._gdn_copies, -1)
+                for g in range(self.groups)
+            ]
+            return torch.cat(per, dim=1).reshape(n * self.groups * self._S * self._gdn_copies, -1)
         B = len(sts)
         if ring is None:
             ring = sts[0].pos if B == 1 else 0
@@ -2019,7 +2056,7 @@ class ResidentModel:
     def page_table_host(self, tables):
         """host tensors (one per sub-batch) of the page tables: tables[u] lists the physical blocks of user u's
         logical blocks 0, 1, ... (blocks past a user's last position are never read; missing rows / entries 0)"""
-        B, out = self.batch, []
+        B, out = self.launch_rows, []
         for k in range(self.n_sub):
             pt = torch.zeros(B, self.pt_cols, dtype=torch.int32)
             for r, tbl in enumerate(tables[k * B : (k + 1) * B]):
@@ -2045,15 +2082,17 @@ class ResidentModel:
 
     # ---- one user's state (rows mode): whole-tensor host round trips, for tests and tools
     def _slot_index(self, s):
-        """(launch, row, element indices of the row in a history row, KV pages relative to copy 0) of slot s"""
-        k, u = divmod(s, self.batch)
+        """(launch, row, element indices of the row in a history row, KV pages relative to copy 0) of slot s
+        (row groups: the row of the launch, gr * batch + u; the elements are row u's of group gr's history rows)"""
+        k, r = divmod(s, self.launch_rows)
+        u = r % self.batch
         blk = self._blk * TILE
         e = torch.arange(blk)
         slots = 4 if self.verify else CONV_K - 1
         hist_el = torch.cat([j * blk * self.batch + tiny_index(e, u, self.batch) for j in range(slots)])
         tbl = torch.as_tensor(self.block_tables[s], dtype=torch.long)
         pages = (tbl[:, None] * self.kv_tpb + torch.arange(self.kv_tpb)).reshape(-1)
-        return k, u, hist_el, pages
+        return k, r, hist_el, pages
 
     def _pool_rows(self, t):
         """the pool tensor t as [n, copies, pages per copy, TILE, HD] (host)"""
@@ -2068,15 +2107,16 @@ class ResidentModel:
         elements of the q|k|v tiles, the ones the conv reads; a whole-view write-back also fills the views' other
         tiles, which nothing reads), K / V [n, copies, its pages, TILE, HD] (paged pool)"""
         assert self.rows and self.kv_paged
-        k, u, _, pages = self._slot_index(s)
+        k, r, _, pages = self._slot_index(s)
         sub, d, B, G = self.subs[k], self.d, self.batch, self._gdn_copies
+        gr, u = divmod(r, B)
         cat = lambda t: ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0)).float()
-        state = cat(sub["state"]).reshape(d.n, G, d.nv, B, -1)[:, :, :, u]
+        state = cat(sub["state"]).reshape(d.n, G, d.nv, self.launch_rows, -1)[:, :, :, r]
         hrows, hcols, _ = self.hist_index()  # per conv element (streamer, element of a batch-1 slot)
         blk = self._blk * TILE * B
         el = torch.cat([j * blk + tiny_index(hcols, u, B) for j in range(CONV_K - 1)])
         rows = hrows.repeat_interleave(TILE).repeat(CONV_K - 1)
-        per_chip = cat(sub["hist"]).reshape(d.n, self._S * G, -1)
+        per_chip = cat(sub["hist"]).reshape(d.n, self.groups, self._S * G, -1)[:, gr]
         hist = torch.stack([per_chip[:, rows * G + c, el] for c in range(G)], dim=1)
         return dict(
             state=state,
@@ -2089,14 +2129,17 @@ class ResidentModel:
         """write State st as slot s's state (GDN states, conv histories at canonical order, KV through the slot's
         block table), every other slot's left bit-identical (read-modify-write of the whole tensors)"""
         assert self.rows and self.kv_paged
-        k, u, hist_el, pages = self._slot_index(s)
-        sub, d, B = self.subs[k], self.d, self.batch
+        k, r, hist_el, pages = self._slot_index(s)
+        sub, d, B, LR = self.subs[k], self.d, self.batch, self.launch_rows
+        gr = r // B
         per_chip = ttnn.ShardTensorToMesh(self.mesh, dim=0)
         cat = lambda t: ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0))
-        state = cat(sub["state"]).float().reshape(d.n, self._gdn_copies, d.nv, B, -1)
-        state[:, :, :, u] = self._state_host([st] * B).reshape(d.n, self._gdn_copies, d.nv, B, -1)[:, :, :, u]
+        state = cat(sub["state"]).float().reshape(d.n, self._gdn_copies, d.nv, LR, -1)
+        state[:, :, :, r] = self._state_host([st]).reshape(d.n, self._gdn_copies, d.nv, 1, -1)[:, :, :, 0]
+        # (row groups: group gr's history rows; hist_el are row u's elements of a group's batch x 32 tiles)
         hist = cat(sub["hist"]).float()
-        hist[:, hist_el] = self._hist_host([st] * B, ring=0)[:, hist_el]
+        rows_g = hist.reshape(d.n, self.groups, -1, hist.shape[-1])[:, gr]
+        rows_g[:, :, hist_el] = self._hist_host([st] * B, ring=0).reshape(d.n, -1, hist.shape[-1])[:, :, hist_el]
         writes = [
             (
                 ttnn.from_torch(
@@ -2182,9 +2225,8 @@ class ResidentModel:
         eagerly (a trace records only compiled programs) on an idle token state: no row active, preserve set, which
         changes no slot's state. The launches' token states are left idle."""
         if self.rows:
-            idle = self._token_state(
-                torch.zeros(self.batch, HIDDEN), [0] * self.batch, None, active=[False] * self.batch, preserve=True
-            )
+            LR = self.launch_rows
+            idle = self._token_state(torch.zeros(LR, HIDDEN), [0] * LR, None, active=[False] * LR, preserve=True)
             for k in range(self.n_sub):
                 ttnn.copy_host_to_device_tensor(idle, self.subs[k]["tok"])
                 ttnn.generic_op(self.ios[k], self.mesh_pds[k])
@@ -2231,7 +2273,7 @@ class ResidentModel:
         xs = []
         for sub in self.subs:
             got = ttnn.to_torch(sub["x"], mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0)).float()
-            xs.append(tiny_unorder(got[0], self.batch))
+            xs += [tiny_unorder(got[g], self.batch) for g in range(self.groups)]  # (chip 0's page per group)
         x = torch.cat(xs)
         return x[0] if self.users == 1 else x
 
@@ -2239,8 +2281,8 @@ class ResidentModel:
         """the last layer's mixer output as received by streamer 0 of each chip: [n, gv], or [n, batch, gv]
         (the last sub-batch's users: the launches share the buffer)"""
         o = ttnn.to_torch(self.o_in_t, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0)).float()
-        o = o.reshape(self.d.n, self.S, self.batch, -1)[:, 0]
-        return o[:, 0] if self.batch == 1 else o
+        o = o.reshape(self.d.n, self.S, self.launch_rows, -1)[:, 0]
+        return o[:, 0] if self.launch_rows == 1 else o
 
     @staticmethod
     def sampling_words(temperature=0.0, top_k=1, top_p=1.0, seed=0):
@@ -2264,7 +2306,7 @@ class ResidentModel:
         per = rows if rows is not None else [(temperature, top_k, top_p, seed)] * (self.users if self.rows else 1)
         assert len(per) == (self.users if self.rows else 1)
         for k, sub in enumerate(self.subs if self.rows else self.subs[:1]):
-            chunk = per[k * self.batch : (k + 1) * self.batch] if self.rows else per
+            chunk = per[k * self.launch_rows : (k + 1) * self.launch_rows] if self.rows else per
             words = np.concatenate([self.sampling_words(*p) for p in chunk])
             t = ttnn.from_torch(
                 torch.from_numpy(words.view(np.int32).copy()).reshape(1, -1),
@@ -2280,7 +2322,7 @@ class ResidentModel:
         if self.rows:
             out = []
             for sub in self.subs:
-                o = ttnn.to_torch(ttnn.get_device_tensors(sub["out"])[0]).reshape(self.batch, 4)
+                o = ttnn.to_torch(ttnn.get_device_tensors(sub["out"])[0]).reshape(self.launch_rows, 4)
                 out += [(int(r[0]), int(r[1]), bool(r[2])) for r in o]
             return out
         out = ttnn.to_torch(ttnn.get_device_tensors(self.out_t)[0]).reshape(-1)
@@ -2292,12 +2334,13 @@ class ResidentModel:
         out = []
         for sub in self.subs:
             raw = ttnn.to_torch(sub["argmax"], mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0))
+            LR = self.launch_rows
             if self.sample:  # each streamer's list starts with its largest (key, index); lists [row][streamer]
-                c = raw.reshape(-1, self.batch, self.S, 2, TOP_K)[..., 0].transpose(1, 2)
+                c = raw.reshape(-1, LR, self.S, 2, TOP_K)[..., 0].transpose(1, 2)
             else:
-                c = raw.reshape(-1, self.S, self.batch, 4)[..., :2]
+                c = raw.reshape(-1, self.S, LR, 4)[..., :2]
             c = c.to(torch.int64) & 0xFFFFFFFF
-            for u in range(self.batch):
+            for u in range(LR):
                 cu = c[:, :, u].reshape(-1, 2)
                 best = cu[:, 0].max()
                 out.append(int(cu[cu[:, 0] == best, 1].min()))
@@ -2306,7 +2349,7 @@ class ResidentModel:
     def logits(self, launches=None):
         """per-chip logits [n, vocab_chip] in vocab order, or [users, n, vocab_chip]; launches: only those launches'
         users ([8 * len(launches), n, vocab_chip], launch order as given)"""
-        B = self.batch
+        B = self.launch_rows
         if not hasattr(self, "_vocab_src"):
             # vocab column -> (streamer, column in its slice); one gather instead of a loop per streamer
             src_i = torch.full((self.d.vocab,), -1, dtype=torch.long)

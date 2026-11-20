@@ -119,11 +119,12 @@ void kernel_main() {
 
     // x of round 0 = x0; the ring step (for the conv slot order) lands in cb_dout, unused until compute runs
     // (fc: this chip's half of the fc input instead, see streamer_common.hpp)
-    cb_reserve_back(cb_x, Ht);
+    // (row groups: x0 of every group, group gr at kTokX0 + gr * Ht tiles of the token state, gr * Ht of cb_x)
+    cb_reserve_back(cb_x, groups * Ht);
     noc_async_read(
         tok.get_noc_addr(0, kTokX0 + (fc_in && chip >= num_chips / 2 ? Ht * kTileBytes : 0)),
         get_write_ptr(cb_x),
-        Ht * kTileBytes);
+        groups * Ht * kTileBytes);
     noc_async_read(tok.get_noc_addr(0), get_write_ptr(cb_dout), kTokHeadBytes);
     noc_async_read_barrier();
     volatile tt_l1_ptr uint32_t* head = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_dout));
@@ -131,7 +132,7 @@ void kernel_main() {
     // for the writer: the ring step + 1, or (rows mode) the active rows and the preserve word (high bit set)
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_ring)) =
         rows_mode ? 0x80000000u | ((head[kTokPreserve] & 1) << 16) | (head[kTokActive] & 0xffff) : ring + 1;
-    cb_push_back(cb_x, Ht);
+    cb_push_back(cb_x, groups * Ht);
     if constexpr (batch > 1) {
         // rmsnorm constants: ones, the fold matrix (1 where row = column mod batch), the identity, bf16 32x32
         cb_reserve_back(cb_ones_full, 1);
@@ -210,7 +211,9 @@ void kernel_main() {
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_local)), g - gdn_copies + 1);
             }
             cb_reserve_back(cb_conv_w, 4 * kBlk);
-            cb_reserve_back(cb_conv_hist, 3 * kBlk);
+            // (row groups: one set of taps; group gr's history at gr * 3 * kBlk tiles, from its rows
+            // gr * num_streamers * gdn_copies further, see the writer)
+            cb_reserve_back(cb_conv_hist, groups * 3 * kBlk);
             if (conv_bytes > 0) {
                 for (uint32_t j = 0; j < 4; j++) {
                     noc_async_read(
@@ -224,16 +227,20 @@ void kernel_main() {
                         get_write_ptr(cb_conv_hist) + j * kBlkBytes,
                         conv_bytes);
                 }
-                for (uint32_t j = 0; !verify_rows && j < 3; j++) {
-                    noc_async_read(
-                        hist.get_noc_addr(row, (rows_mode ? j : (step + j) % kHistSlots) * kBlkBytes),
-                        get_write_ptr(cb_conv_hist) + j * kBlkBytes,
-                        conv_bytes);
+                for (uint32_t gr = 0; !verify_rows && gr < groups; gr++) {
+                    for (uint32_t j = 0; j < 3; j++) {
+                        noc_async_read(
+                            hist.get_noc_addr(
+                                gr * num_streamers * gdn_copies + row,
+                                (rows_mode ? j : (step + j) % kHistSlots) * kBlkBytes),
+                            get_write_ptr(cb_conv_hist) + (gr * 3 + j) * kBlkBytes,
+                            conv_bytes);
+                    }
                 }
             }
             noc_async_read_barrier();
             cb_push_back(cb_conv_w, 4 * kBlk);
-            cb_push_back(cb_conv_hist, 3 * kBlk);
+            cb_push_back(cb_conv_hist, groups * 3 * kBlk);
             g++;
         }
         mark(l, 0);

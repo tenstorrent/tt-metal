@@ -46,7 +46,7 @@ FORCE_INLINE void push_resident(uint32_t cb, uint32_t n) {
 }  // namespace
 
 void kernel_main() {
-    const uint32_t rows = get_arg_val<uint32_t>(0);
+    const uint32_t rows_base = get_arg_val<uint32_t>(0);  // the row buffer (block g: row group g)
     const uint32_t children = get_arg_val<uint32_t>(1);
     const uint32_t ts_addr = get_arg_val<uint32_t>(2);
     const uint32_t tok_addr = get_arg_val<uint32_t>(3);
@@ -67,9 +67,10 @@ void kernel_main() {
     zero_tiles(cb_gate, 2 * Dt);
     push_resident(cb_mean, 1);
     {
-        const InterleavedAddrGen<true> tok{.bank_base_address = tok_addr, .page_size = rope_off + 3 * batch * kTile};
+        const InterleavedAddrGen<true> tok{
+            .bank_base_address = tok_addr, .page_size = rope_off + 3 * batch * groups * kTile};
         cb_reserve_back(cb_rope, kRopePages);
-        noc_async_read(tok.get_noc_addr(0, rope_off), get_write_ptr(cb_rope), 3 * batch * kTile);
+        noc_async_read(tok.get_noc_addr(0, rope_off), get_write_ptr(cb_rope), 3 * batch * groups * kTile);
         noc_async_read_barrier();
         if constexpr (packed) {
             build_packed_rope(get_write_ptr(cb_rope));
@@ -85,15 +86,17 @@ void kernel_main() {
         mask = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_lead_active))[kTokActive];
         cb_push_back(cb_lead_active, 1);
     }
-    const ActiveRows<users> act(mask);
+    const ActiveRows<kUsers> act(mask);
     const uint32_t n_act = act.n;
 
     constexpr uint32_t gate0 = heads * Dt;
     // pass u: row (r, h) = r * heads + h of q / gate from row u * group_rows + r (one row per pass: row h)
-    auto place = [&](uint32_t u) {
+    // (row groups: user u is global row u, its rows in block u / batch of the row buffer, row u % batch)
+    auto place = [&](uint32_t ug) {
         cb_reserve_back(cb_qraw, Dt);
         cb_reserve_back(cb_gate, Dt);
         const uint32_t q = get_write_ptr(cb_qraw), g = get_write_ptr(cb_gate);
+        const uint32_t u = ug % users, rows = rows_base + (ug / users) * row_tiles * kRowTile;
         for (uint32_t r = 0; r < group_rows; r++) {
             for (uint32_t h = 0; h < heads; h++) {
                 for (uint32_t d = 0; d < Dt; d++) {

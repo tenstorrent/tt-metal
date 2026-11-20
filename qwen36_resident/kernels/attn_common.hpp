@@ -63,6 +63,8 @@
 
 #include <stdint.h>
 
+#include "active_rows.hpp"  // groups (row groups), before the constants that depend on it
+
 namespace resident_attn {
 
 constexpr uint32_t layers = get_compile_time_arg_val(0);
@@ -93,6 +95,11 @@ constexpr uint32_t group_rows = get_compile_time_arg_val(23);
 constexpr bool packed = group_rows > 1;
 static_assert(!packed || (verify && batch % group_rows == 0), "packed passes take groups of the verify rows");
 constexpr uint32_t users = batch / group_rows;  // passes per layer: users, or groups of verify rows
+// row groups (active_rows.hpp, rows mode): every group's users run through the layer (global row g * batch + u; the
+// streamers' rows / the leader's output are one block of row_tiles / o_tiles batch x 32 tiles per group)
+static_assert(groups == 1 || (!verify && group_rows == 1), "row groups are rows mode: one row per user");
+constexpr uint32_t kUsers = users * groups;
+constexpr uint32_t kRows = groups == 1 ? batch : kUsers;  // per-row arrays / lists (verify: the batch rows of one user)
 constexpr uint32_t qrows = heads * group_rows;  // q / output rows of a pass
 static_assert(qrows <= 32, "a pass's rows fit one tile");
 constexpr bool top_faces = qrows <= 16;  // a pass's rows live in the top faces only
@@ -121,8 +128,11 @@ constexpr uint32_t cb_p = 6;         // exp(s - M) of one block, chunk_max tiles
 constexpr uint32_t cb_m = 7;         // this core's row max
 constexpr uint32_t cb_o = 8;         // this core's partial (kPart tiles)
 constexpr uint32_t cb_ntiles = 10;   // worker: its chunk's KV tiles per user (uint32s, for compute and writer)
-constexpr uint32_t kNegInfOff = 64;  // in the cb_ntiles page: the writer's -inf row-max rows (a row-max slot)
-static_assert(batch * 4 <= kNegInfOff, "chunk counts overlap the -inf rows");
+// in the cb_ntiles page: the chunk KV tiles per user (words 0 .. kUsers - 1), the active mask (word kUsers), and at
+// kNegInfOff the writer's -inf row-max rows (a row-max slot); row groups need room for up to 32 users' words
+constexpr uint32_t kNegInfOff = groups == 1 ? 64 : 256;
+constexpr uint32_t kMaskWord = groups == 1 ? batch : kUsers;
+static_assert(batch * 4 <= kNegInfOff && (kMaskWord + 1) * 4 <= kNegInfOff, "chunk counts overlap the -inf rows");
 // packed: the bytes of a partial's tiles a worker sends (the top two faces, or all four)
 constexpr uint32_t kPartBytes = top_faces ? 2 * 512 : 4 * 512;
 // chunk worker: online-softmax state over the chunk's blocks (fp32): output, row sum, row max, rescale
@@ -143,7 +153,7 @@ constexpr uint32_t cb_rope = 17;    // per user: cos, sin, -sin of its position 
 // cb_rope pages: per token-state row cos, sin, -sin (rows replicated); packed: then per pass the q rope (row (r, h)
 // from the group's row r) and the tail's k rope (row r from row r)
 constexpr uint32_t kRopeQ = 3 * batch, kRopeK = 3 * batch + 3 * users;
-constexpr uint32_t kRopePages = packed ? kRopeK + 3 : 3 * batch;
+constexpr uint32_t kRopePages = packed ? kRopeK + 3 : 3 * batch * groups;
 constexpr uint32_t cb_knew = 18;    // normalized + rotated k row (row 0)
 constexpr uint32_t cb_tail8 = 31;   // tail core: tail k | v tiles as read from DRAM (2 Dt bf8)
 constexpr uint32_t cb_rowsel = 12;  // tail core: per user R (ones in row r), 1 - R (packed: per tail tile the

@@ -9,7 +9,7 @@
 // a group head adds its children's partials to its own.
 //
 // Runtime args: 0 role (1 chunk worker, 2 tail core), 1 children. The chunk's KV tiles come in cb_ntiles, and
-// (rows mode, active_rows.hpp) the active mask in its word `batch`: only the active users run.
+// (rows mode, active_rows.hpp) the active mask in its word kMaskWord: only the active users run.
 
 #include <cstdint>
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -215,11 +215,11 @@ void kernel_main() {
     const uint32_t children = get_arg_val<uint32_t>(1);
     cb_wait_front(cb_one, 1);
     cb_wait_front(cb_ntiles, 1);
-    uint32_t n_of[users];
-    for (uint32_t u = 0; u < users; u++) {
+    uint32_t n_of[kUsers];
+    for (uint32_t u = 0; u < kUsers; u++) {
         n_of[u] = read_tile_value(cb_ntiles, 0, u);
     }
-    const ActiveRows<users> act(read_tile_value(cb_ntiles, 0, batch));
+    const ActiveRows<kUsers> act(read_tile_value(cb_ntiles, 0, kMaskWord));
     const uint32_t n_act = act.n;
     if (role == 1) {
         compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q, cb_k, cb_s);
@@ -281,8 +281,8 @@ void kernel_main() {
         }
         return;
     }
-    cb_wait_front(cb_mask, batch);
-    cb_wait_front(cb_rowsel, 2 * batch);
+    cb_wait_front(cb_mask, kRows);
+    cb_wait_front(cb_rowsel, 2 * kRows);
     for (uint32_t i = 0; i < layers * n_act; i++) {
         const uint32_t u = act.row[i % n_act];
         cb_wait_front(cb_kw, Dt);

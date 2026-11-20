@@ -102,7 +102,15 @@ void kernel_main() {
     }
     // (rows mode: the active rows and the preserve word, see the reader)
     const uint32_t ring = rows_mode ? 0 : *ring_sem - 1;
-    const uint32_t active_mask = *ring_sem & 0xffff;
+    // (row groups: the active word has a bit per global row g * batch + u, more than the semaphore's 16; it is read
+    // from the reader's copy of the token state head in cb_dout, which compute first writes after this core's first
+    // o_in release below)
+    invalidate_l1_cache();
+    const uint32_t active_mask = groups == 1
+                                     ? (*ring_sem & 0xffff)
+                                     : reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_base(cb_dout))[kTokActive];
+    // (row groups: group gr's conv history rows follow the num_streamers x gdn_copies rows of the groups before it)
+    const uint32_t hist_group_rows = num_streamers * gdn_copies;
     const bool preserve = rows_mode && ((*ring_sem >> 16) & 1);
 
     // x of round 0 (x0) is seeded and released by the reader; the hub multicasts x of the later rounds
@@ -119,6 +127,7 @@ void kernel_main() {
     // a slot free for up to 2 groups: a group's slot is summed before the round's last multicast, which the next
     // round's partials wait for. More groups need a slot-free signal from the hub (static_assert below).
     static_assert(groups <= 2, "row groups > 2 reuse a hub slot within a round: needs a slot-free handshake");
+    static_assert(groups == 1 || o_tiles == Ot, "the mixers' o block per group is the out projection's K");
     auto send_partial = [&](uint32_t round) {
         for (uint32_t g = 0; g < groups; g++) {
             cb_wait_front(cb_pout, nd_max);
@@ -130,16 +139,22 @@ void kernel_main() {
             const uint32_t dst = hub_slots + (((sr & 1) * num_chips + chip) * Ht + pout_off) * kTileBytes;
             noc_async_write(get_read_ptr(cb_pout), get_noc_addr(hub_x, hub_y, dst), nd * kTileBytes);
             noc_async_write_barrier();
-            noc_semaphore_inc(hub_gather_sem, 1);
+            // (row groups: parity-0 sub-rounds count in the gather word's low half, parity 1 in its high half)
+            noc_semaphore_inc(hub_gather_sem, groups == 1 ? 1 : 1u << (16 * (sr & 1)));
             cb_pop_front(cb_pout, nd_max);
         }
     };
+    // (row groups: group gr's projection block at gr * kBlk tiles of cb_qkvz_out goes to block gr of the mixers' row
+    // buffer, row_tiles tiles per group; one rows semaphore increment per layer once every group is written)
     auto send_row = [&](uint32_t first, uint32_t count, uint32_t nq, uint32_t q_off) {
-        const uint32_t row = get_read_ptr(cb_qkvz_out);
-        for (uint32_t i = 0; i < count; i++) {
-            const uint32_t hx = get_arg_val<uint32_t>(first + 2 * i);
-            const uint32_t hy = get_arg_val<uint32_t>(first + 2 * i + 1);
-            noc_async_write(row, get_noc_addr(hx, hy, mixer_rows + q_off * kTileBytes), nq * kTileBytes);
+        for (uint32_t gr = 0; gr < groups; gr++) {
+            const uint32_t row = get_read_ptr(cb_qkvz_out) + gr * kBlk * kTileBytes;
+            for (uint32_t i = 0; i < count; i++) {
+                const uint32_t hx = get_arg_val<uint32_t>(first + 2 * i);
+                const uint32_t hy = get_arg_val<uint32_t>(first + 2 * i + 1);
+                noc_async_write(
+                    row, get_noc_addr(hx, hy, mixer_rows + (gr * row_tiles + q_off) * kTileBytes), nq * kTileBytes);
+            }
         }
         noc_async_write_barrier();
         for (uint32_t i = 0; i < count; i++) {
@@ -152,19 +167,21 @@ void kernel_main() {
     constexpr uint32_t runs_base = peers_base + 2 * num_streamers + 5;
     const uint32_t n_runs = get_arg_val<uint32_t>(runs_base);
     auto send_runs = [&](uint32_t q_off) {
-        const uint32_t row = get_read_ptr(cb_qkvz_out);
-        for (uint32_t r = 0; r < n_runs; r++) {
-            const uint32_t start = get_arg_val<uint32_t>(runs_base + 1 + 4 * r);
-            const uint32_t count = get_arg_val<uint32_t>(runs_base + 2 + 4 * r);
-            const uint32_t first = get_arg_val<uint32_t>(runs_base + 3 + 4 * r);
-            const uint32_t dests = get_arg_val<uint32_t>(runs_base + 4 + 4 * r);
-            for (uint32_t c = first; c < first + dests; c++) {
-                const uint32_t hx = get_arg_val<uint32_t>(heads_base + 2 * c);
-                const uint32_t hy = get_arg_val<uint32_t>(heads_base + 2 * c + 1);
-                noc_async_write(
-                    row + start * kTileBytes,
-                    get_noc_addr(hx, hy, mixer_rows + (q_off + start) * kTileBytes),
-                    count * kTileBytes);
+        for (uint32_t gr = 0; gr < groups; gr++) {
+            const uint32_t row = get_read_ptr(cb_qkvz_out) + gr * kBlk * kTileBytes;
+            for (uint32_t r = 0; r < n_runs; r++) {
+                const uint32_t start = get_arg_val<uint32_t>(runs_base + 1 + 4 * r);
+                const uint32_t count = get_arg_val<uint32_t>(runs_base + 2 + 4 * r);
+                const uint32_t first = get_arg_val<uint32_t>(runs_base + 3 + 4 * r);
+                const uint32_t dests = get_arg_val<uint32_t>(runs_base + 4 + 4 * r);
+                for (uint32_t c = first; c < first + dests; c++) {
+                    const uint32_t hx = get_arg_val<uint32_t>(heads_base + 2 * c);
+                    const uint32_t hy = get_arg_val<uint32_t>(heads_base + 2 * c + 1);
+                    noc_async_write(
+                        row + start * kTileBytes,
+                        get_noc_addr(hx, hy, mixer_rows + (gr * row_tiles + q_off + start) * kTileBytes),
+                        count * kTileBytes);
+                }
             }
         }
         noc_async_write_barrier();
@@ -189,7 +206,7 @@ void kernel_main() {
         // mixer half
         take_slots(2 * l + kRound0);
         mark(l, 0);
-        cb_wait_front(cb_qkvz_out, kBlk);
+        cb_wait_front(cb_qkvz_out, groups * kBlk);
         mark(l, 1);
         if (attn) {
             send_row(attn_base, 2, nq_attn, q_off_attn);
@@ -199,7 +216,8 @@ void kernel_main() {
             o_expected += o_heads;
             // verify: T(k + 2), T(k + 3), T(k + 4); rows mode: (h1, h2, y)
             constexpr uint32_t outs = verify_pair || rows_mode ? 3 : 1;
-            cb_wait_front(cb_hist_out, outs * kBlkViews);
+            // (row groups: group gr's outs slots at gr * outs * kBlkViews, its history rows hist_group_rows further)
+            cb_wait_front(cb_hist_out, groups * outs * kBlkViews);
             if (verify_rows && n_conv > 0) {
                 // input row r -> ring slot ring + 3 + r: rows 0 .. n1 - 1 to block b from row o, the rest to block
                 // b + 1 from row 0, per tile and face (see streamer_common.hpp)
@@ -222,17 +240,18 @@ void kernel_main() {
                 noc_async_write_barrier();
             } else if (rows_mode && preserve && n_conv > 0) {
                 // the active rows' two face rows of each q|k|v tile of the 3 slots
-                const uint32_t row = first_row + g % gdn_copies;
-                for (uint32_t u = 0; u < batch; u++) {
-                    if (!((active_mask >> u) & 1)) {
+                for (uint32_t ug = 0; ug < groups * batch; ug++) {
+                    if (!((active_mask >> ug) & 1)) {
                         continue;
                     }
+                    const uint32_t gr = ug / batch, u = ug % batch;
+                    const uint32_t row = gr * hist_group_rows + first_row + g % gdn_copies;
                     for (uint32_t j = 0; j < outs; j++) {
                         for (uint32_t t = 0; t < n_conv; t++) {
                             for (uint32_t f = 0; f < 2; f++) {
                                 const uint32_t off = t * kTileBytes + (f * batch + u) * 32;
                                 noc_async_write(
-                                    get_read_ptr(cb_hist_out) + j * kBlkViews * 2048 + off,
+                                    get_read_ptr(cb_hist_out) + (gr * outs + j) * kBlkViews * 2048 + off,
                                     hist.get_noc_addr(row, j * kBlkBytes + off),
                                     32);
                             }
@@ -243,38 +262,45 @@ void kernel_main() {
             } else if (n_conv > 0) {
                 // the 32x32 views holding the q|k|v tiles
                 const uint32_t step = conv_step(ring, g, gdn_copies);
-                for (uint32_t j = 0; j < outs; j++) {
-                    noc_async_write(
-                        get_read_ptr(cb_hist_out) + j * kBlkViews * 2048,
-                        hist.get_noc_addr(
-                            first_row + g % gdn_copies,
-                            (rows_mode ? j : (step + (verify_pair ? 2 + j : 0)) % kHistSlots) * kBlkBytes),
-                        views_of(n_conv) * 2048);
+                for (uint32_t gr = 0; gr < groups; gr++) {
+                    for (uint32_t j = 0; j < outs; j++) {
+                        noc_async_write(
+                            get_read_ptr(cb_hist_out) + (gr * outs + j) * kBlkViews * 2048,
+                            hist.get_noc_addr(
+                                gr * hist_group_rows + first_row + g % gdn_copies,
+                                (rows_mode ? j : (step + (verify_pair ? 2 + j : 0)) % kHistSlots) * kBlkBytes),
+                            views_of(n_conv) * 2048);
+                    }
                 }
                 noc_async_write_barrier();
             }
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_local)) = g + 1;
-            cb_pop_front(cb_hist_out, outs * kBlkViews);
+            cb_pop_front(cb_hist_out, groups * outs * kBlkViews);
             g++;
         }
-        cb_pop_front(cb_qkvz_out, kBlk);
+        cb_pop_front(cb_qkvz_out, groups * kBlk);
         noc_semaphore_wait_min(heads_sem, o_expected);
         mark(l, 2);
-        cb_reserve_back(cb_o_in, Ot);
-        cb_push_back(cb_o_in, Ot);
+        // (row groups: the mixers wrote group gr's o at gr * Ot tiles; o_tiles == Ot, see static_assert)
+        cb_reserve_back(cb_o_in, groups * Ot);
+        cb_push_back(cb_o_in, groups * Ot);
         send_partial(2 * l + kRound0);
         mark(l, 3);
 
         // mlp half
         take_slots(2 * l + 1 + kRound0);
         mark(l, 4);
-        cb_wait_front(cb_aslice, kBlk);
+        cb_wait_front(cb_aslice, groups * kBlk);
         mark(l, 5);
-        const uint32_t slice = get_read_ptr(cb_aslice);
-        for (uint32_t s = 0; s < num_streamers; s++) {
-            const uint32_t px = get_arg_val<uint32_t>(peers_base + 2 * s);
-            const uint32_t py = get_arg_val<uint32_t>(peers_base + 2 * s + 1);
-            noc_async_write(slice, get_noc_addr(px, py, act_addr + act_off * kTileBytes), ng * kTileBytes);
+        // (row groups: group gr's slice at gr * kBlk tiles, to block gr of every streamer's act, It tiles per group)
+        for (uint32_t gr = 0; gr < groups; gr++) {
+            const uint32_t slice = get_read_ptr(cb_aslice) + gr * kBlk * kTileBytes;
+            for (uint32_t s = 0; s < num_streamers; s++) {
+                const uint32_t px = get_arg_val<uint32_t>(peers_base + 2 * s);
+                const uint32_t py = get_arg_val<uint32_t>(peers_base + 2 * s + 1);
+                noc_async_write(
+                    slice, get_noc_addr(px, py, act_addr + (gr * It + act_off) * kTileBytes), ng * kTileBytes);
+            }
         }
         noc_async_write_barrier();
         for (uint32_t s = 0; s < num_streamers; s++) {
@@ -282,77 +308,87 @@ void kernel_main() {
             const uint32_t py = get_arg_val<uint32_t>(peers_base + 2 * s + 1);
             noc_semaphore_inc(get_noc_addr(px, py, act_sem_addr), 1);
         }
-        cb_pop_front(cb_aslice, kBlk);
+        cb_pop_front(cb_aslice, groups * kBlk);
         noc_semaphore_wait_min(act_sem, num_streamers * (l + 1));
         mark(l, 6);
-        cb_reserve_back(cb_act, It);
-        cb_push_back(cb_act, It);
+        cb_reserve_back(cb_act, groups * It);
+        cb_push_back(cb_act, groups * It);
         send_partial(2 * l + 1 + kRound0);
         mark(l, 7);
     }
     if constexpr (lm_head) {
         take_slots(2 * layers + kRound0);
         if (argmax_addr) {
-            // bf16 bits -> unsigned key in the order of the values; per user, record slot core * batch + u.
-            // Column c of user u: tile c / 32, face (c % 32) / 16, face row u
-            cb_wait_front(cb_logits, nv_max);
+            // bf16 bits -> unsigned key in the order of the values; per row, record slot core * kRecRows + row.
+            // Column c of user u: tile c / 32, face (c % 32) / 16, face row u (row groups: group gr's logits at
+            // gr * nv_max tiles; its user u is global row gr * batch + u)
+            constexpr uint32_t kRecRows = groups * batch;  // the hub's kFeedRows
+            cb_wait_front(cb_logits, groups * nv_max);
             const uint32_t base = get_read_ptr(cb_logits);
             auto key = [](uint32_t b) { return sampling::key_of(b); };
+            auto word = [&](uint32_t gr, uint32_t u, uint32_t i) {
+                const uint32_t c = i % 32;
+                return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    base + (gr * nv_max + i / 32) * kTileBytes + ((c / 16) * batch + u) * 32)[(c % 16) / 2];
+            };
             volatile tt_l1_ptr uint32_t* rec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_pout));
             if constexpr (sample) {
-                // per row its list (rows mode: the active rows'; the others stay cleared)
+                // per row its list (rows mode: the active rows'; the others stay cleared), staged one group at a time;
+                // row r's lists of every streamer back to back on the hub: [row][streamer]
                 static_assert(nd_max * kTileBytes >= batch * sampling::kListBytes, "the lists are staged in cb_pout");
-                for (uint32_t u = 0; u < batch; u++) {
-                    volatile tt_l1_ptr uint32_t* list = rec + u * 2 * sampling::kTopK;
-                    sampling::clear(list);
-                    if (rows_mode && !((active_mask >> u) & 1)) {
-                        continue;
+                for (uint32_t gr = 0; gr < groups; gr++) {
+                    if (gr > 0) {
+                        noc_async_write_barrier();  // the previous group's lists have left cb_pout
                     }
-                    for (uint32_t i = 0; i < valid_cols; i += 2) {
-                        const uint32_t c = i % 32;
-                        const uint32_t w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                            base + (i / 32) * kTileBytes + ((c / 16) * batch + u) * 32)[(c % 16) / 2];
-                        sampling::insert(list, key(w & 0xffff), first_index + i);
-                        if (i + 1 < valid_cols) {
-                            sampling::insert(list, key(w >> 16), first_index + i + 1);
+                    for (uint32_t u = 0; u < batch; u++) {
+                        volatile tt_l1_ptr uint32_t* list = rec + u * 2 * sampling::kTopK;
+                        sampling::clear(list);
+                        if (rows_mode && !((active_mask >> (gr * batch + u)) & 1)) {
+                            continue;
+                        }
+                        for (uint32_t i = 0; i < valid_cols; i += 2) {
+                            const uint32_t w = word(gr, u, i);
+                            sampling::insert(list, key(w & 0xffff), first_index + i);
+                            if (i + 1 < valid_cols) {
+                                sampling::insert(list, key(w >> 16), first_index + i + 1);
+                            }
                         }
                     }
-                }
-            }
-            for (uint32_t u = 0; !sample && u < batch; u++) {
-                uint32_t best = 0, best_i = 0;
-                for (uint32_t i = 0; i < valid_cols; i += 2) {
-                    const uint32_t c = i % 32;
-                    const uint32_t w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                        base + (i / 32) * kTileBytes + ((c / 16) * batch + u) * 32)[(c % 16) / 2];
-                    const uint32_t k0 = key(w & 0xffff);
-                    if (k0 > best) {
-                        best = k0;
-                        best_i = i;
+                    for (uint32_t u = 0; u < batch; u++) {
+                        const uint32_t r = gr * batch + u;
+                        noc_async_write(
+                            get_write_ptr(cb_pout) + u * sampling::kListBytes,
+                            get_noc_addr(hub_x, hub_y, argmax_addr + (r * num_streamers + core) * sampling::kListBytes),
+                            sampling::kListBytes);
                     }
-                    if (i + 1 < valid_cols) {
-                        const uint32_t k1 = key(w >> 16);
-                        if (k1 > best) {
-                            best = k1;
-                            best_i = i + 1;
-                        }
-                    }
-                }
-                rec[4 * u] = best;
-                rec[4 * u + 1] = first_index + best_i;
-            }
-            constexpr uint32_t rec_bytes = sample ? sampling::kListBytes : batch * 16;
-            if constexpr (sample && batch > 1) {
-                // row u's lists of every streamer back to back on the hub: [row][streamer]
-                for (uint32_t u = 0; u < batch; u++) {
-                    noc_async_write(
-                        get_write_ptr(cb_pout) + u * sampling::kListBytes,
-                        get_noc_addr(hub_x, hub_y, argmax_addr + (u * num_streamers + core) * sampling::kListBytes),
-                        sampling::kListBytes);
                 }
             } else {
+                static_assert(nd_max * kTileBytes >= kRecRows * 16, "the records are staged in cb_pout");
+                for (uint32_t r = 0; r < kRecRows; r++) {
+                    const uint32_t gr = r / batch, u = r % batch;
+                    uint32_t best = 0, best_i = 0;
+                    for (uint32_t i = 0; i < valid_cols; i += 2) {
+                        const uint32_t w = word(gr, u, i);
+                        const uint32_t k0 = key(w & 0xffff);
+                        if (k0 > best) {
+                            best = k0;
+                            best_i = i;
+                        }
+                        if (i + 1 < valid_cols) {
+                            const uint32_t k1 = key(w >> 16);
+                            if (k1 > best) {
+                                best = k1;
+                                best_i = i + 1;
+                            }
+                        }
+                    }
+                    rec[4 * r] = best;
+                    rec[4 * r + 1] = first_index + best_i;
+                }
                 noc_async_write(
-                    get_write_ptr(cb_pout), get_noc_addr(hub_x, hub_y, argmax_addr + core * rec_bytes), rec_bytes);
+                    get_write_ptr(cb_pout),
+                    get_noc_addr(hub_x, hub_y, argmax_addr + core * kRecRows * 16),
+                    kRecRows * 16);
             }
             noc_async_write_barrier();
             noc_semaphore_inc(hub_gather_sem, 1);  // the record is on the hub (a feeding hub waits for it)

@@ -86,17 +86,24 @@ void kernel_main() {
     push_resident(cb_one, 1);
 
     // positions -> this core's KV rows per user
-    const InterleavedAddrGen<true> tok{.bank_base_address = tok_addr, .page_size = rope_off + 3 * batch * kTile};
+    const InterleavedAddrGen<true> tok{
+        .bank_base_address = tok_addr, .page_size = rope_off + 3 * batch * groups * kTile};
     cb_reserve_back(cb_ntiles, 1);
     const uint32_t scratch = get_write_ptr(cb_ntiles);
     noc_async_read(tok.get_noc_addr(0), scratch, rows_mode ? kTokHeadBytes : 4 * (1 + batch));
+    // (row groups: the users' positions are the token state's positions region, staged past the -inf rows)
+    constexpr uint32_t kPosScratch = 512;
+    if constexpr (groups > 1) {
+        noc_async_read(tok.get_noc_addr(0, tok_pos_off), scratch + kPosScratch, (4 * kUsers + 31) & ~31u);
+    }
     noc_async_read_barrier();
     const uint32_t mask = rows_mode ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch)[kTokActive] : ~0u;
-    const ActiveRows<users> act(mask);
-    Chunk chs[batch];
-    uint32_t tail_rs[batch], tps[batch];
-    for (uint32_t u = 0; u < batch; u++) {
-        const uint32_t pos = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch)[1 + u];
+    const ActiveRows<kUsers> act(mask);
+    Chunk chs[kRows];
+    uint32_t tail_rs[kRows], tps[kRows];
+    for (uint32_t u = 0; u < kRows; u++) {
+        const uint32_t pos = groups == 1 ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch)[1 + u]
+                                         : reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + kPosScratch)[u];
         const uint32_t tp = pos / 32;
         tps[u] = tp;
         tail_rs[u] = pos % 32;
@@ -115,11 +122,11 @@ void kernel_main() {
             translate_chunk(pt_addr, verify ? 0 : u, u, chs[u], chs[u].n);
         }
     }
-    for (uint32_t u = 0; u < users; u++) {
+    for (uint32_t u = 0; u < kUsers; u++) {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch)[u] = chs[u].n;
     }
-    static_assert((batch + 1) * 4 <= kNegInfOff, "the active mask overlaps the -inf rows");
-    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch)[batch] = mask;
+    static_assert((kMaskWord + 1) * 4 <= kNegInfOff, "the active mask overlaps the -inf rows");
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch)[kMaskWord] = mask;
     cb_push_back(cb_ntiles, 1);
 
     uint32_t rows = 0;
@@ -171,9 +178,9 @@ void kernel_main() {
             cb_push_back(cb_rope, kRopePages);
         }
         // per user: causal mask over the tail columns (0 up to r, -inf after); R = ones in row r, 1 - R
-        cb_reserve_back(cb_mask, packed ? 0 : batch);
-        cb_reserve_back(cb_rowsel, packed ? 0 : 2 * batch);
-        for (uint32_t u = 0; !packed && u < batch; u++) {
+        cb_reserve_back(cb_mask, packed ? 0 : kRows);
+        cb_reserve_back(cb_rowsel, packed ? 0 : 2 * kRows);
+        for (uint32_t u = 0; !packed && u < kRows; u++) {
             tail_r = tail_rs[u];
             fill_bf16(
                 get_write_ptr(cb_mask) + u * kTile, [](uint32_t, uint32_t col) { return col <= tail_r; }, 0, 0xff80);
@@ -182,12 +189,12 @@ void kernel_main() {
             fill_bf16(sel + kTile, [](uint32_t row, uint32_t) { return row == tail_r; }, 0, 0x3f80);
         }
         if constexpr (!packed) {
-            cb_push_back(cb_mask, batch);
-            cb_push_back(cb_rowsel, 2 * batch);
-            cb_reserve_back(cb_rope, 3 * batch);
-            noc_async_read(tok.get_noc_addr(0, rope_off), get_write_ptr(cb_rope), 3 * batch * kTile);
+            cb_push_back(cb_mask, kRows);
+            cb_push_back(cb_rowsel, 2 * kRows);
+            cb_reserve_back(cb_rope, 3 * batch * groups);
+            noc_async_read(tok.get_noc_addr(0, rope_off), get_write_ptr(cb_rope), 3 * batch * groups * kTile);
             noc_async_read_barrier();
-            cb_push_back(cb_rope, 3 * batch);
+            cb_push_back(cb_rope, 3 * batch * groups);
         }
         push_resident(cb_mean, 1);
     }
@@ -314,9 +321,11 @@ void kernel_main() {
             cb_reserve_back(cb_kraw, Dt);
             cb_reserve_back(cb_vraw, Dt);
             const uint32_t k = get_write_ptr(cb_kraw), v = get_write_ptr(cb_vraw);
+            // (row groups: user u's rows in block u / batch of the row buffer, row u % batch)
+            const uint32_t grows = rows + (u / batch) * row_tiles * kRowTile;
             for (uint32_t d = 0; d < Dt; d++) {
-                place_row0(rows + (k0 + d) * kRowTile + user_offset(u), k + d * kTile);
-                place_row0(rows + (v0 + d) * kRowTile + user_offset(u), v + d * kTile);
+                place_row0(grows + (k0 + d) * kRowTile + user_offset(u % batch), k + d * kTile);
+                place_row0(grows + (v0 + d) * kRowTile + user_offset(u % batch), v + d * kTile);
             }
             noc_async_read_barrier();
             cb_push_back(cb_kraw, Dt);

@@ -45,6 +45,10 @@ PREFILL_CHUNKS = tuple(int(c) for c in os.environ.get("RESIDENT_PREFILL_CHUNKS",
 FULL_RESET = os.environ.get("RESIDENT_PREFILL_FULL_RESET", "0") == "1"
 if max(PREFILL_CHUNKS) != CHUNK_UNIT or any(CHUNK_UNIT % c for c in PREFILL_CHUNKS):
     raise ValueError(f"RESIDENT_PREFILL_CHUNKS {PREFILL_CHUNKS}: the largest must be {CHUNK_UNIT}, every one divide it")
+# row groups of the multi-user build (ResidentModel groups=): one launch carries 8 * RESIDENT_ROW_GROUPS users, the
+# weights streamed once for all of them. 1: launches of 8 rows. More than one launch of row groups is not built: a
+# max_num_seqs that does not fit one launch raises instead of falling back to more launches
+ROW_GROUPS = int(os.environ.get("RESIDENT_ROW_GROUPS", "1"))
 greedy_only.install()
 
 
@@ -205,7 +209,12 @@ class Qwen36ResidentRowsForCausalLM(ResidentRowsAdapter):
         C = max(PREFILL_CHUNKS)
         self.max_len = -(-max_seq_len // C) * C
         self.pp = PPPrefill(mesh, ck, self.layers, self.interval, chunk=list(PREFILL_CHUNKS), max_len=self.max_len)
-        super().__init__(None, cfg["vocab_size"], max_seq_len, max_batch, C, mrope)
+        if ROW_GROUPS > 1 and -(-max_batch // 8) != ROW_GROUPS:
+            raise ValueError(
+                f"RESIDENT_ROW_GROUPS={ROW_GROUPS} runs exactly {8 * ROW_GROUPS} slots in one launch; max_num_seqs="
+                f"{max_batch} needs {-(-max_batch // 8)} groups"
+            )
+        super().__init__(None, cfg["vocab_size"], max_seq_len, max_batch, C, mrope, rows=8 * ROW_GROUPS)
 
     def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
         """build the rows-mode model on a KV pool of the plugin's block count (its block ids index the pool)"""
@@ -231,6 +240,7 @@ class Qwen36ResidentRowsForCausalLM(ResidentRowsAdapter):
             kv_pool_blocks=nb,
             block_tables=[[0]] * self.n_slots,
             rows=True,
+            groups=ROW_GROUPS,
         )
         del w
         # contract section 6a: everything that allocates comes before the captures, which replay the L1 layout they

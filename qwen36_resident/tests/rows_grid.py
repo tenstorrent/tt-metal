@@ -92,8 +92,11 @@ def main():
         "auto: model.row_order()",
     )
     ap.add_argument("--no-pp", action="store_true", help="no prefill model: embedding table only, no smoke, no B=1")
+    ap.add_argument("--groups", type=int, default=1, help="row groups: one launch of 8 * groups rows (ResidentModel)")
     ap.add_argument("--out")
     a = ap.parse_args()
+    B = 8 * a.groups  # rows of the launch
+    SMOKE = 5 if a.groups == 1 else B - 3  # the smoke's slot (row groups: one in the last group)
     faulthandler.dump_traceback_later(300, repeat=True, file=sys.stderr)
     ids = torch.load(a.corpus)["ids"]
     contexts = [int(t) for t in a.contexts.split(",")]
@@ -151,7 +154,8 @@ def main():
         elif a.no_pp:
             nb = B * need + smoke_need
         else:
-            other_gb = 6.45  # decode weights 5.97 + 8 GDN states 0.30 + conv histories 0.08 + rope 0.03 + small
+            # decode weights 5.97 + 8 GDN states 0.30 + conv histories 0.08 + rope 0.03 + small (per further 8 rows 0.4)
+            other_gb = 6.45 + 0.4 * (a.groups - 1)
             nb = int((after_pp["largest_free"] - other_gb - a.margin_gb) * 1e9 // block_bytes)
         assert nb >= B * need + smoke_need, (nb, B * need + smoke_need)
         perm = torch.randperm(nb - smoke_need, generator=torch.Generator().manual_seed(11)).tolist()
@@ -172,6 +176,7 @@ def main():
             kv_pool_blocks=nb,
             block_tables=[[0]] * B,
             rows=True,
+            groups=a.groups,
         )
         gc.collect()
         phase(f"rows decode model (GDN head groups G={m.head_groups}: core g of a head takes rows {B} g / G ..)")
@@ -250,29 +255,31 @@ def main():
         ms, ok = time_fed(
             m, m.token_state(x0, [127] * B, active=[True] * B), lambda fed, k: all(f[1] == 127 + k for f in fed)
         )
-        out["step_ms"]["rows, 8 active, T=128, greedy"] = ms
-        phase(f"rows, 8 active, T=128, greedy: step {ms:.3f} ms; fed ok {ok}")
+        out["step_ms"][f"rows, {B} active, T=128, greedy"] = ms
+        phase(f"rows, {B} active, T=128, greedy: step {ms:.3f} ms; fed ok {ok}")
 
-        # smoke at the pool's far end: slot 5 on the highest blocks, the other rows idle
+        # smoke at the pool's far end: slot SMOKE on the highest blocks, the other rows idle
         if pp is not None:
             prompt = ids[: a.prompt_len]
             P = len(prompt)
-            tables[5] = smoke_table
+            tables[SMOKE] = smoke_table
             m.set_page_table(tables)
             m.reset(state=False)
             pp.reset()
             pp.run(prompt[: P - 1])
-            pp.handoff(m, P - 1, block_table=smoke_table, slot=5)
+            pp.handoff(m, P - 1, block_table=smoke_table, slot=SMOKE)
             x0 = torch.zeros(B, 5120)
-            x0[5] = emb[int(prompt[-1])].float()
-            m.step(m.token_state(x0, [P - 1 if s == 5 else 0 for s in range(B)], active=[s == 5 for s in range(B)]))
+            x0[SMOKE] = emb[int(prompt[-1])].float()
+            m.step(
+                m.token_state(x0, [P - 1 if s == SMOKE else 0 for s in range(B)], active=[s == SMOKE for s in range(B)])
+            )
             rows_toks = []
             for k in range(a.smoke_steps):
                 if k:
                     m.step(None)
                 ttnn.synchronize_device(mesh)
-                rows_toks.append(m.fed_token()[5][0])
-            phase(f"smoke: slot 5 on blocks {smoke_table[0]}..{smoke_table[-1]}: {rows_toks}")
+                rows_toks.append(m.fed_token()[SMOKE][0])
+            phase(f"smoke: slot {SMOKE} on blocks {smoke_table[0]}..{smoke_table[-1]}: {rows_toks}")
             out["smoke"] = dict(rows=rows_toks, blocks=[smoke_table[0], smoke_table[-1]])
             log_dram("after smoke")
 
