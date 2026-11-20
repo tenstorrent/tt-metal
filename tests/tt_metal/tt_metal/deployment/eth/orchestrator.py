@@ -15,7 +15,7 @@ from argparse import ArgumentParser
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from contextlib import contextmanager, closing
-from typing import Union, Optional, Iterator, Iterable, TypeAlias, cast
+from typing import Union, Optional, Iterator, Iterable, TypeAlias, cast, Sequence
 
 from pssh.config import HostConfig
 from pssh.output import HostOutput
@@ -185,13 +185,13 @@ def run_single(host: HostSettings, argv: str, env: dict[str, str | int], wfd: Op
     return tuple(host_output.exit_code for host_output in outputs)
 
 
-def run_pair(
-    hosts: tuple[HostSettings, HostSettings],
+def run_many(
+    hosts: list[HostSettings],
     argv: str,
     env: dict[str, str | int],
-    wfds: Optional[tuple[int, int]] = None,
+    wfds: Optional[list[int]] = None,
     sync: bool = True,
-) -> tuple[int, int]:
+) -> list[int]:
     hostnames = [h.hostname for h in hosts]
     hostconfigs = [h.host_config for h in hosts]
 
@@ -206,7 +206,7 @@ def run_pair(
     outputs = client.run_command(f"cd %s && {e} {argv}", host_args=args)
     # outputs = client.run_command("cd %s && for i in $(seq 10); do echo $i; sleep .4; done # sh run2.sh %d", host_args=args)
 
-    fds: tuple[Optional[int], Optional[int]] = (None, None)
+    fds: Sequence[Optional[int]] = [None for h in hosts]
     if wfds:
         fds = wfds
     readers = [spawn(handle_output, host, host_output, wfd) for host, host_output, wfd in zip(hosts, outputs, fds)]
@@ -214,7 +214,7 @@ def run_pair(
     joinall(readers)
     client.join(outputs)
 
-    return tuple(host_output.exit_code for host_output in outputs)
+    return [host_output.exit_code for host_output in outputs]
 
 
 def test_one(
@@ -263,7 +263,7 @@ def test_pair(
     precompile=True,
     wfds: Optional[tuple[int, int]] = None,
 ) -> bool:
-    endpoint_pairs = getlinks(db, *[h.hostname for h in hosts])  # TODO
+    endpoint_pairs = getlinks(db, *(h.hostname for h in hosts))  # TODO
     if len(endpoint_pairs) == 0:
         return False  # TODO
 
@@ -284,12 +284,12 @@ def test_pair(
     if precompile:
         e = env.copy()
         e["ETH_TEST_PRECOMPILE"] = 1
-        exitcodes = run_pair(hosts, cmd, e, sync=False)
+        exitcodes = run_many(list(hosts), cmd, e, sync=False)
         if sum(exitcodes) > 0:
             print(f"Kernel precompilation failed with exit codes: {', '.join(str(e) for e in exitcodes)}")
             return False
 
-    exitcodes = run_pair(hosts, cmd, env, wfds)
+    exitcodes = run_many(list(hosts), cmd, env, list(wfds) if wfds else None)
     if sum(exitcodes) > 0:
         print(f"Test run failed with exit codes: {', '.join(str(e) for e in exitcodes)}")
         return False
@@ -592,6 +592,7 @@ def main() -> int:
     parser.add_argument("-c", type=str, help="INI host config file")
     parser.add_argument("-l", type=str, help="List of links to test")
     parser.add_argument("-t", type=str, help="Test to run")
+    parser.add_argument("-e", type=str, help="Command to execute instead of tests")
     parser.add_argument("-m", type=str, help="Host or comma separated list of hosts to run the tests on")
     opts = parser.parse_args()
 
@@ -613,6 +614,9 @@ def main() -> int:
 
     mergeid = opts.s if opts.s else "merge_id"
     runid = opts.r if opts.r else "run_id"
+
+    if opts.e:
+        assert not opts.t
 
     test_pass = True
 
