@@ -41,13 +41,19 @@ from helpers.golden_generators import EltwiseBinaryGolden
 from helpers.llk_params import (
     DestAccumulation,
     MathFidelity,
+    PerfRunType,
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize, runtime
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import MATH_FIDELITY, NUM_FACES, TILE_COUNT
+from helpers.test_variant_parameters import (
+    LOOP_FACTOR,
+    MATH_FIDELITY,
+    NUM_FACES,
+    TILE_COUNT,
+)
 from helpers.tile_constants import FACE_C_DIM, MAX_FACE_R_DIM
 from helpers.utils import passed_test, result_tensor
 
@@ -61,18 +67,22 @@ TILE_DIMS = [MAX_FACE_R_DIM, FACE_C_DIM]
 LOGICAL_ROWS = 8
 
 
-@blackhole_only
-@parametrize(
-    formats=SDPA_FORMATS,
-    math_fidelity=list(MathFidelity),
-    cancellation=runtime([False, True]),
-)
-def test_sdpa_bcast_col_srca_srcb_reuse(
+def _run_sdpa_bcast_col_srca_srcb_reuse(
     formats,
     math_fidelity,
     cancellation,
     boot_mode=BootMode.DEFAULT,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+    if run_types is None:
+        run_types = [PerfRunType.L1_TO_L1]
+
     torch_format = format_dict[formats.output_format]
     tile_cnt = 1
 
@@ -137,37 +147,44 @@ def test_sdpa_bcast_col_srca_srcb_reuse(
         golden_tensor += a.to(torch.float32) * b.to(torch.float32)
     golden_tensor = golden_tensor.to(torch_format)
 
-    configuration = TestConfig(
-        "sources/sdpa_bcast_col_srca_srcb_reuse_test.cpp",
-        formats,
-        templates=[
-            MATH_FIDELITY(math_fidelity),
-            # NUM_FACES is a TEMPLATE parameter, not a runtime one: it emits `constexpr num_faces`, and the
-            # SDPA addrmod config needs a compile-time face count (SETC16 "n" asm constraint). The mop's own
-            # inner-loop count is 2, not NUM_FACES_HOST -- that one is a fixed property of the primitive and
-            # is pinned in the .cpp (MATH_MOP_NUM_FACES).
-            NUM_FACES(NUM_FACES_HOST, NUM_FACES_HOST, NUM_FACES_HOST),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt,
-            num_faces=NUM_FACES_HOST,
-            face_r_dim=MAX_FACE_R_DIM,
-            tile_dimensions=TILE_DIMS,
-            use_dense_tile_dimensions=True,
-        ),
-        dest_acc=DestAccumulation.No,
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
         boot_mode=boot_mode,
+        test_config_kwargs={
+            "test_name": "sources/sdpa_bcast_col_srca_srcb_reuse_test.cpp",
+            "formats": formats,
+            "templates": [
+                MATH_FIDELITY(math_fidelity),
+                # The addrmod SETC16 requires a compile-time face count. The MOP's
+                # separate fixed inner-loop count remains in the C++ driver.
+                NUM_FACES(NUM_FACES_HOST, NUM_FACES_HOST, NUM_FACES_HOST),
+            ],
+            "runtimes": [
+                TILE_COUNT(tile_cnt),
+                LOOP_FACTOR(loop_factor),
+            ],
+            "variant_stimuli": StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt_A,
+                tile_count_B=tile_cnt_B,
+                tile_count_res=tile_cnt,
+                num_faces=NUM_FACES_HOST,
+                face_r_dim=MAX_FACE_R_DIM,
+                tile_dimensions=TILE_DIMS,
+                use_dense_tile_dimensions=True,
+            ),
+            "dest_acc": DestAccumulation.No,
+        },
     )
+
+    if is_perf:
+        configuration.run(perf_report)
+        return
 
     res_from_L1 = configuration.run().result
 
@@ -176,3 +193,23 @@ def test_sdpa_bcast_col_srca_srcb_reuse(
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"
+
+
+@blackhole_only
+@parametrize(
+    formats=SDPA_FORMATS,
+    math_fidelity=list(MathFidelity),
+    cancellation=runtime([False, True]),
+)
+def test_sdpa_bcast_col_srca_srcb_reuse(
+    formats,
+    math_fidelity,
+    cancellation,
+    boot_mode=BootMode.DEFAULT,
+):
+    _run_sdpa_bcast_col_srca_srcb_reuse(
+        formats,
+        math_fidelity,
+        cancellation,
+        boot_mode,
+    )

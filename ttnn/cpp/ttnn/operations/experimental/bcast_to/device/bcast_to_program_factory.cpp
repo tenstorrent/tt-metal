@@ -11,8 +11,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -23,7 +23,6 @@ using namespace ttnn::operations::experimental::broadcast_to;
 
 namespace ttnn::operations::experimental::broadcast_to {
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace {
 const KernelSpecName READER{"reader"};

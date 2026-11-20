@@ -24,8 +24,8 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 
 #include "nanobind/nb_export_enum.hpp"
 #include "nanobind/nb_fwd.hpp"
+#include "nanobind/nb_util.hpp"
 #include "optimizers/adamw.hpp"
-#include "optimizers/adamw_full_precision.hpp"
 #include "optimizers/muon_composite.hpp"
 #include "optimizers/no_op.hpp"
 #include "optimizers/optimizer_base.hpp"
@@ -135,9 +135,7 @@ void py_module_types(nb::module_& m) {
     nb::class_<SGDConfig>(m, "SGDConfig");
     nb::class_<SGD, OptimizerBase>(m, "SGD");
     nb::class_<AdamWConfig>(m, "AdamWConfig");
-    nb::class_<AdamWFullPrecisionConfig>(m, "AdamWFullPrecisionConfig");
     nb::class_<AdamW, OptimizerBase>(m, "AdamW");
-    nb::class_<AdamWFullPrecision, OptimizerBase>(m, "AdamWFullPrecision");
     nb::class_<MuonConfig>(m, "MuonConfig");
     nb::class_<MuonComposite, OptimizerBase>(m, "MuonComposite");
     nb::class_<NoOp, OptimizerBase>(m, "NoOp");
@@ -145,36 +143,6 @@ void py_module_types(nb::module_& m) {
 }
 
 namespace {
-
-YAML::Node obj_to_yaml(nb::object obj) {
-    if (nb::isinstance<nb::dict>(obj)) {
-        YAML::Node node;
-        for (auto [key, val] : nb::cast<nb::dict>(obj)) {
-            node[nb::cast<std::string>(key)] = obj_to_yaml(nb::borrow(val));
-        }
-        return node;
-    }
-    if (nb::isinstance<nb::list>(obj)) {
-        YAML::Node node;
-        for (auto item : nb::cast<nb::list>(obj)) {
-            node.push_back(obj_to_yaml(nb::borrow(item)));
-        }
-        return node;
-    }
-    if (nb::isinstance<nb::bool_>(obj)) {
-        return YAML::Node(nb::cast<bool>(obj));
-    }
-    if (nb::isinstance<nb::int_>(obj)) {
-        return YAML::Node(nb::cast<int64_t>(obj));
-    }
-    if (nb::isinstance<nb::float_>(obj)) {
-        return YAML::Node(nb::cast<double>(obj));
-    }
-    if (nb::isinstance<nb::str>(obj)) {
-        return YAML::Node(nb::cast<std::string>(obj));
-    }
-    return YAML::Node();
-}
 
 std::vector<ParamGroup> param_groups_from_py(const nb::list& groups) {
     std::vector<ParamGroup> result;
@@ -249,7 +217,7 @@ void py_module(nb::module_& m) {
                 }
                 return py_registry[type.c_str()](config, std::move(params));
             }
-            return nb::cast(create_optimizer(obj_to_yaml(config), std::move(params)));
+            return nb::cast(create_optimizer(ttml::nanobind::util::obj_to_yaml(config), std::move(params)));
         },
         nb::arg("config"),
         nb::arg("params"),
@@ -381,38 +349,8 @@ void py_module(nb::module_& m) {
     }
 
     {
-        auto py_adamw_full_precision_config =
-            static_cast<nb::class_<AdamWFullPrecisionConfig>>(m.attr("AdamWFullPrecisionConfig"));
-        py_adamw_full_precision_config.def(nb::init<>());
-        py_adamw_full_precision_config.def_static(
-            "make",
-            [](float lr, float beta1, float beta2, float epsilon, float weight_decay, bool amsgrad) {
-                return AdamWFullPrecisionConfig{
-                    .lr = lr,
-                    .beta1 = beta1,
-                    .beta2 = beta2,
-                    .epsilon = epsilon,
-                    .weight_decay = weight_decay,
-                    .amsgrad = amsgrad};
-            },
-            nb::arg("lr"),
-            nb::arg("beta1"),
-            nb::arg("beta2"),
-            nb::arg("epsilon"),
-            nb::arg("weight_decay"),
-            nb::arg("amsgrad") = false,
-            "Make an AdamWFullPrecisionConfig object");
-    }
-
-    {
         auto py_adamw = static_cast<nb::class_<AdamW, OptimizerBase>>(m.attr("AdamW"));
         def_init_with_param_groups<AdamW, AdamWConfig>(py_adamw);
-    }
-
-    {
-        auto py_adamw_full_precision =
-            static_cast<nb::class_<AdamWFullPrecision, OptimizerBase>>(m.attr("AdamWFullPrecision"));
-        def_init_with_param_groups<AdamWFullPrecision, AdamWFullPrecisionConfig>(py_adamw_full_precision);
     }
 
     {

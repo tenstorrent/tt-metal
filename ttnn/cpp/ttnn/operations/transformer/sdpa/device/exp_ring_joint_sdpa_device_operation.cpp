@@ -70,7 +70,7 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
                 tensor.dtype() == DataType::BFLOAT4_B,
             "Inputs to Joint SDPA must be BF16 or BF8 or BF4");
         TT_FATAL(
-            tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
             "Operands to Joint SDPA need to be in DRAM");
     }
 
@@ -269,9 +269,9 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
             user_grid.y);
     } else {
         TT_FATAL(
-            user_grid.x >= 2,
-            "Program config grid ({}x{}) too narrow: needs at least 2 columns (the last column is "
-            "reserved for the fabric MUX kernels).",
+            user_grid.x >= 2 && user_grid.y >= 1,
+            "Program config grid ({}x{}) too small: needs at least 1 row and 2 columns (the last column "
+            "is reserved for the fabric MUX kernels).",
             user_grid.x,
             user_grid.y);
     }

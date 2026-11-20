@@ -37,6 +37,13 @@ namespace ckernel {
  * | idst0          | The index of the tile in DST register buffer to use as first operand  | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | idst1          | The index of the tile in DST register buffer to use as second operand | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
+ *
+ * add_binary_tile, sub_binary_tile and mul_binary_tile also take the extent of the tile they touch:
+ *
+ * | Argument       | Description                                                           | Type       | Valid Range                                           | Required |
+ * |----------------|-----------------------------------------------------------------------|------------|-------------------------------------------------------|----------|
+ * | ITERATIONS     | Template: 4-row groups per visited face. Iteration k writes face rows 4*(k/2)..4*(k/2)+3 of one column parity (even columns for even k, odd for odd k), so 8 is the whole face and 2 under VectorMode::R is rows 0..3 of all 32 columns. The body advances the DEST counter per iteration and the vector-mode loop re-bases every face on the CR counter, so a partial count composes with any vector mode. Fixed at 8 on Quasar. | int | 1 to 8 | False (8) |
+ * | vector_mode    | The faces to visit: RC all four, R faces 0 and 1 (rows 0..15), C faces 0 and 2 (columns 0..15) | VectorMode | RC, R, C | False (RC) |
  */
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
@@ -64,9 +71,14 @@ ALWI void div_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #endif
 }
 
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void mul_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+/**
+ * @tparam is_fp32_dest_acc_en Enables fp32 DEST accumulation. Defaults to DST_ACCUM_MODE.
+ * @tparam ITERATIONS, vector_mode The extent of the tile the op touches; see the table above and add_binary_tile.
+ */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, int ITERATIONS = 8>
+ALWI void mul_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
 #ifdef ARCH_QUASAR
+    static_assert(ITERATIONS == 8, "mul_binary_tile: ITERATIONS is fixed at 8 on Quasar");
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -75,17 +87,17 @@ ALWI void mul_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         idst0,
         idst1,
         odst,
-        VectorMode::RC)));
+        vector_mode)));
 #else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_sfpu_binary_mul,
-        (APPROX, ckernel::BinaryOp::MUL, 8 /* ITERATIONS */, is_fp32_dest_acc_en),
+        (APPROX, ckernel::BinaryOp::MUL, ITERATIONS, is_fp32_dest_acc_en),
         idst0,
         idst1,
         odst,
-        VectorMode::RC)));
+        vector_mode)));
 #endif
 }
 
@@ -96,12 +108,21 @@ ALWI void mul_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  *         apply RNE rounding when narrowing to bf16. Kept as the first template parameter for source compatibility
  *         with add_binary_tile<DstRoundingMode::...>(...).
  * @tparam is_fp32_dest_acc_en Enables fp32 DEST accumulation. Defaults to DST_ACCUM_MODE.
+ * @tparam ITERATIONS 4-row groups per visited face (1..8, default 8 = the whole face): iteration k writes face rows
+ *         4*(k/2)..4*(k/2)+3 of one column parity (even columns for even k, odd for odd k), so 2 under VectorMode::R
+ *         is rows 0..3 of all 32 columns. The body advances the DEST counter per iteration and the vector-mode loop
+ *         re-bases every face on the CR counter, so a partial count composes with any vector mode. Fixed at 8 on
+ *         Quasar.
+ * @param vector_mode The faces to visit: RC (default) all four, R faces 0 and 1, C faces 0 and 2. The elements
+ *        outside the visited faces and iterations keep their contents.
  */
 template <
     ckernel::DstRoundingMode dst_rounding_mode = ckernel::DstRoundingMode::Default,
-    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void add_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    int ITERATIONS = 8>
+ALWI void add_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
 #ifdef ARCH_QUASAR
+    static_assert(ITERATIONS == 8, "add_binary_tile: ITERATIONS is fixed at 8 on Quasar");
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -110,26 +131,28 @@ ALWI void add_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         idst0,
         idst1,
         odst,
-        VectorMode::RC)));
+        vector_mode)));
 #else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_sfpu_binary,
-        (APPROX, ckernel::BinaryOp::ADD, 8 /* ITERATIONS */, is_fp32_dest_acc_en, dst_rounding_mode),
+        (APPROX, ckernel::BinaryOp::ADD, ITERATIONS, is_fp32_dest_acc_en, dst_rounding_mode),
         idst0,
         idst1,
         odst,
-        VectorMode::RC)));
+        vector_mode)));
 #endif
 }
 
-/// @tparam dst_rounding_mode, is_fp32_dest_acc_en See add_binary_tile.
+/// @tparam dst_rounding_mode, is_fp32_dest_acc_en, ITERATIONS, vector_mode See add_binary_tile.
 template <
     ckernel::DstRoundingMode dst_rounding_mode = ckernel::DstRoundingMode::Default,
-    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void sub_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    int ITERATIONS = 8>
+ALWI void sub_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
 #ifdef ARCH_QUASAR
+    static_assert(ITERATIONS == 8, "sub_binary_tile: ITERATIONS is fixed at 8 on Quasar");
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -138,17 +161,17 @@ ALWI void sub_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         idst0,
         idst1,
         odst,
-        VectorMode::RC)));
+        vector_mode)));
 #else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_sfpu_binary,
-        (APPROX, ckernel::BinaryOp::SUB, 8 /* ITERATIONS */, is_fp32_dest_acc_en, dst_rounding_mode),
+        (APPROX, ckernel::BinaryOp::SUB, ITERATIONS, is_fp32_dest_acc_en, dst_rounding_mode),
         idst0,
         idst1,
         odst,
-        VectorMode::RC)));
+        vector_mode)));
 #endif
 }
 
