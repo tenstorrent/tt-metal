@@ -9,7 +9,7 @@ Wormhole and Blackhole share files and are imported twice. Quasar files live in
 ``quasar/`` and drop a trailing ``_quasar``. ``CHIP_ARCH`` selects the architecture
 unless ``--arch`` is passed. Comparison is the union of values on each axis.
 
-``math_op`` joins ``mathop`` only when the sides disagree. A tuple axis whose name
+Axes join by name; ``AXIS_ALIASES`` renames one side's axis when the sides disagree. A tuple axis whose name
 is the other side's axes (``dest_sync_dest_acc``) splits when slot types match.
 ``CROSS_ARCH_FUNCTION_EXCEPTIONS`` pairs a function that lives in another module.
 Format lists print shared values first, then side-only values, each alphabetical.
@@ -195,7 +195,7 @@ def axis_value_sets(pmarks: list) -> Sweep:
 
 
 # Applied only when the two sides use different names.
-AXIS_ALIASES = {"math_op": "mathop"}
+AXIS_ALIASES: dict[str, str] = {}
 
 
 def _rename_key(mapping: dict, old: str, new: str) -> dict:

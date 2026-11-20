@@ -9,7 +9,7 @@
 #include <string_view>
 
 #include "dev_mem_map.h"  // MEM_LOCAL_BASE
-#include "hal_types.hpp"
+#include "llrt/hal_types.hpp"
 #include "eth_l1_address_map.h"
 #include "llrt/hal.hpp"
 #include "noc/noc_overlay_parameters.h"
@@ -17,7 +17,7 @@
 #include "stream_io_map.h"
 #include "tensix.h"
 #include "wormhole/wh_hal.hpp"
-#include "impl/context/metal_context.hpp"
+#include "rtoptions.hpp"
 #include "hal_1xx_common.hpp"
 #include "impl/dispatch/dispatch_settings.hpp"
 
@@ -169,6 +169,11 @@ public:
         return defines;
     }
 
+protected:
+    // TRISCs and BRISC with Max_Req_Count 4. NCRISC runs kernels from IRAM on Wormhole, so it is left off.
+    std::optional<uint32_t> default_risc_prefetch_ctrl() const override { return 0x8F; }
+
+public:
     std::vector<std::string> srcs(const Params& params) const override {
         auto srcs = HalJitBuildQueryBase::srcs(params);
         if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
@@ -365,6 +370,7 @@ void Hal::initialize_wh(
     this->num_nocs_ = NUM_NOCS;
     this->noc_node_id_ = NOC_NODE_ID;
     this->noc_node_id_mask_ = NOC_NODE_ID_MASK;
+    this->noc_addr_local_bits_ = NOC_ADDR_LOCAL_BITS;
     this->noc_addr_node_id_bits_ = NOC_ADDR_NODE_ID_BITS;
     this->noc_max_burst_size_bytes_ = NOC_MAX_BURST_SIZE;
     this->noc_encoding_reg_ = COORDINATE_VIRTUALIZATION_ENABLED ? NOC_CFG(NOC_ID_LOGICAL) : NOC_NODE_ID;

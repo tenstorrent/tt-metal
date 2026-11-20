@@ -69,7 +69,7 @@ void matmul_single_core(
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    Program program{};
+    Program program = CreateProgram(*mesh_device);
     // Core range from x: [0, 0] to y: [0, 0] (single core at {0, 0})
     CoreCoord core({0, 0});
 
