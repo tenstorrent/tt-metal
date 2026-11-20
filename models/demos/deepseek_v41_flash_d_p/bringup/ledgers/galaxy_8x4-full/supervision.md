@@ -740,3 +740,13 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
 - 02:20 UTC tasks: DS41_ENGRAM_TABLE=resident on every remaining packed walls command (PB.3H / PB.4 / PB.5); PB.3H brief:
   host-bound now: batch per-segment snapshot sends / writes / tail gathers into one program a layer, pipeline, hide the
   gathers, mixed with one slot capacity; PB.4 brief: pad rows out of the MoE dispatch (PB.3A deferred it).
+- 02:25 UTC PB.3A gate PASS -> e9baabaab8d. The orchestrator then took PB.4 (bulk MoE + pad rows out of dispatch)
+  before PB.3H: my 00:10 reorder left PB.4's dep on PB.3A. DECIDED: let PB.4 run (independent of PB.3H; aborting
+  wastes its start). QUEUED for PB.4's stop (no tasks.yaml edits while an agent runs): PB.5 deps -> [PB.4, PB.3H] so
+  the accept gate waits for the host / gather work; PB.3H runs next with PACKED_MOE as PB.4 leaves it.
+- 02:50 UTC PB.4 done (attempt 1), WAITING. Pad rows out of the MoE dispatch behind PACKED_MOE=on (padded / empty lanes
+  cost no expert work): 1x2k + 3 empty 125.5 -> 92.1 ms (experts 66.7 -> 27.4); 4x2k@139264 122.8 ms = 66.7k (no pad
+  rows, unchanged), mixed 151.1. MoE block composition test (permuted / companion rows, other lane) 0.0; oracle 40
+  layers all 0; segments within limits, top-5 1.0. Bulk-MoE tuning: nothing >= 1 ms (busiest chip's FPU bound, the
+  flat plan has no rows-per-expert knob, packets already <= 6208 B; P.80 fp8 dispatch was owner-rejected, not redone).
+  DECIDED: accept. Applied the queued patch: PB.3H deps PB.4 (runs with PACKED_MOE=on), PB.5 deps PB.3H.
