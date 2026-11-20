@@ -23,3 +23,7 @@ NO SHORTCUTS, mimic serving: every chunk each segment's history comes from ITS O
 Anything needing a shortcut is an OWNER DECISION: stop and write it in BREADCRUMBS.
 PIPELINE AND HIDE across segments from the start: per-segment fixed costs (history gathers, engram lookups, launches, host prep) must not add up on the critical path: segment i+1's lookup / gather / prep runs while segment i computes (fused with or concurrent to attention, the indexer or the token-wise work, as P.87 fused the engram lookup with the history prefetch; or hidden behind the engram lookups as today).
 Judge by the device profile and the exposed-host breakdown; report exposed vs hidden gather time per segment.
+
+TT-D-GEN SHAPES (owner 2026-11-20 16:00, from the tt-d-gen source, /scratch/dnijemcevic/tt-d-gen = origin/main Nov 6): one fixed chunk_size (a multiple of 32), every chunk padded to it, only a request's last chunk partial; every start 32-aligned (prefix resumes at 64-token blocks; DSv4 recurrent: requests start at 0, chunk starts are multiples of chunk_size, except a last chunk clamped to max_seq_len - chunk_size); lengths 1..chunk_size (1-token segments ARE reachable and supported).
+Glued packing: segment starts 32-aligned, splits only at 32-aligned positions (the continuation starts 32-aligned; <= 31 pad rows a split).
+Do not build or test unaligned starts (31, 33, ...).

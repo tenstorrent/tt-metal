@@ -898,3 +898,26 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   (1.3-1.8x), 5 x 1.6k 59.5k vs 39.5k, 6 x 1M 35.4k (v1 10.4k), n1..n6 83.1 / 77.5 / 65.9 / 72.8 / 57.9 / 53.2k; 4x2k
   72.2k (below the brief's 74.6k: the loss is PB.7's DS41-339/341 order-free reduces; the gate's threshold 67k holds).
   Oracle all 0 (glued, splits, digests, lanes), reference within limits, DRAM headroom 6 x 1M 6.7 GB. DECIDED: accept.
+- 15:52 UTC PB.7B gate PASS -> 561fc994f0f (sparse_sdpa kv_lane_rows folded: 5 x 1.6k 132.2 ms = 60.5k; the indexer's
+  second pass remains: 5.6 ms at 139k, 15.8 ms on a 35k-444k AgentX mix). PB.8 (mhc_post) attempt 1 started.
+  SERVING GAP found in PB.7B's notes: a new segment layout builds new programs for the lane maps (sdpa kv_lane_of_chip,
+  ring lane_buffer hashed) and uploads ~5 per-chunk tables; the walls warm them, serving pays them every new
+  descriptor: the glued walls are optimistic (owner rule: no shortcuts). tt-d-gen research (agent, /scratch tt-d-gen
+  = origin/main Nov 6): one fixed chunk_size (multiple of 32), only a request's last chunk partial, starts 32-aligned
+  (prefix resumes at 64-blocks; DSv4 recurrent: every request starts at 0, chunk starts = multiples of chunk_size,
+  except a clamped last chunk), 1-token chunks reachable (prompts of 1-2 tokens in P2D, remainder 1, prefix hit),
+  packing within a chunk not in tt-d-gen. PROPOSED to the owner (pending): keep length-1 segments, test only
+  32-aligned starts, split glued segments at 32-aligned positions, cut PB.T's boundary set, queue the per-layout
+  program fix (lane maps as runtime args / device tables, walls with a fresh layout every chunk).
+- 16:00 UTC OWNER: support 1-token segments, 32-aligned starts, splits at 32-aligned positions, PB.T's boundary set cut to what tt-d-gen can send. DECIDED (owner asked when / how): PB.7C (no program build / upload per segment layout: lane maps as runtime args / device tables in the descriptor input; walls with a fresh AgentX layout every chunk, program builds after warm-up == 0) after PB.8P and before PB.9C, so the combined report measures what serving pays. Patch scratchpad add_pb7c.py (dry-run valid), applied at PB.8's stop with PB.T's new boundary set and the tt-d-gen shapes in PACKED_RULES.md.
+- 16:12 UTC OWNER: fold the two-lanes-a-device indexer score into PB.7C (one ring call for glued chunks: per-device query-row ranges with their lane / start / kv_len as runtime args, the lane -> buffer map unhashed; removes PB.7B's second indexer pass 5.6 / 15.8 ms and the top-k phase copies; metric glued_indexer_ring_calls_per_layer == 1). Patch updated, dry-run valid; applied at PB.8's stop.
+- 16:57 UTC PB.8 done (attempt 1), WAITING. mhc_post v2 (feed lands in the ports' L1; the hc transposes on the root's
+  SFPU; Milan's W-share placement did not apply: our op has no combine tree and already multicasts; his fused SFPU mix
+  was already ours): op probe, slowest chip: 5120 ffn 111.1 -> 102.6 us, attn 143-150 -> 138.4 us; packed 256 rows ffn
+  161.8 -> 158.2, attn 249.6 -> 240.6: ~-0.6 ms device a chunk at 5120, ~-0.5 packed. Bit-identical, deterministic;
+  the full 5120 accept gate passed (ladder, determinism, decoder skip, contract, outside history, walls; also the
+  first 5120 check of PB.7's order-free reduces). Walls on/off -1.2 / -1.5 / 0 / -0.1 ms (noise). DECIDED: REJECT
+  (owner's keep line ~1 ms device; not a simplification). Diff + notes kept in
+  /data/dnijemcevic/bringup/handoff_20261119/rejected_pb8/. PB.8P removed (moot); applied PB.7C (no program per
+  layout, fresh-layout walls, one glued indexer ring) after PB.7B, PB.T's tt-d-gen boundary set, the tt-d-gen shapes
+  in PACKED_RULES.md; MHC_POST_V2 dropped from the later gates. Orchestrator --until PB.T.
