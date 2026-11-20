@@ -35,7 +35,7 @@ import ttnn
 
 import ttml
 
-from ._errors import CheckpointError, IncompleteCheckpointError, VersionError
+from ._errors import CheckpointError, IncompleteCheckpointError, MissingKeyError, VersionError
 from ._index import HEADER_NAME, check_json, read_checked_header
 
 TRAIN_STATE_KEY = "train_state"
@@ -162,18 +162,21 @@ def _decode_process_rng(state: dict) -> dict[str, Any]:
             # first 624 of them 32-bit words, and a position in [0, 624] after them when its form has one. A text in
             # the other standard library's form would be misread, so it is refused too.
             expected = _mt19937_text_tokens()
-            if (
-                len(tokens) != expected
-                or not all(token.isascii() and token.isdigit() for token in tokens)
-                or any(int(token) > 0xFFFFFFFF for token in tokens[:_MT19937_WORDS])
-                or (expected > _MT19937_WORDS and int(tokens[-1]) > _MT19937_WORDS)
-            ):
-                position = f" and a position in [0, {_MT19937_WORDS}]" if expected > _MT19937_WORDS else ""
+            if len(tokens) != expected:
                 raise ValueError(
-                    f"the ttml generator state is not the {expected} tokens this build writes for an mt19937 "
-                    f"({_MT19937_WORDS} 32-bit words{position}); it has {len(tokens)} (a build with the other C++ "
-                    "standard library writes another form)"
+                    f"the ttml generator state has {len(tokens)} tokens, not the {expected} this build writes for an "
+                    "mt19937 (a build with the other C++ standard library writes another form)"
                 )
+            bad = next((i for i, token in enumerate(tokens) if not (token.isascii() and token.isdigit())), None)
+            if bad is not None:
+                raise ValueError(
+                    f"token {bad} of the ttml generator state, {tokens[bad]!r}, is not an ASCII decimal number"
+                )
+            bad = next((i for i, token in enumerate(tokens[:_MT19937_WORDS]) if int(token) > 0xFFFFFFFF), None)
+            if bad is not None:
+                raise ValueError(f"word {bad} of the ttml generator state, {tokens[bad]}, does not fit in 32 bits")
+            if expected > _MT19937_WORDS and int(tokens[-1]) > _MT19937_WORDS:
+                raise ValueError(f"the ttml generator state's position, {tokens[-1]}, is past {_MT19937_WORDS}")
             decoded["ttml"] = " ".join(tokens)
         python_state = state.get("python")
         if python_state is not None:
@@ -276,6 +279,18 @@ def missing_train_state(state: dict, *, scheduler=None, dataloader=None, rng: bo
     """``train_state/<component>`` for every component asked for that the checkpoint does not hold."""
     wanted = (("scheduler", scheduler is not None), ("dataloader", dataloader is not None), ("rng", rng))
     return [f"{TRAIN_STATE_KEY}/{name}" for name, asked in wanted if asked and name not in state]
+
+
+def missing_train_state_error(missing: list[str], *, rng_by_default: bool) -> MissingKeyError:
+    """A strict load's refusal of components asked for that the checkpoint lacks. When the RNG block is one of them and
+    the caller left ``rng`` at its default, which asks for it on a resume, it says how to load without it."""
+    message = f"the checkpoint holds no state for {missing}"
+    if rng_by_default and f"{TRAIN_STATE_KEY}/rng" in missing:
+        message += (
+            "; rng was not passed, and a load that restores a scheduler or dataloader restores the generators too: "
+            "pass rng=False to keep the current ones (a checkpoint saved with rng=False has none)"
+        )
+    return MissingKeyError(message)
 
 
 def check_train_state(state: dict, *, scheduler=None, dataloader=None, rng: bool = False, world_rank: int = 0) -> None:

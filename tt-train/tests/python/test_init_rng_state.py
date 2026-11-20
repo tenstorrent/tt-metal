@@ -20,6 +20,7 @@ def _keep_init_rng():
 
 
 def test_set_rng_state_continues_from_a_state_get_rng_state_returned():
+    assert {"get_rng_state", "set_rng_state"} <= set(ttml.init.__all__), "exported beside manual_seed"
     ttml.init.manual_seed(3)
     ttml.init._rng.integers(0, 2**32, dtype=np.uint32)  # mid-stream: half of a 64-bit output is cached
     state = ttml.init.get_rng_state()

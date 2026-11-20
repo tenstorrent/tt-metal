@@ -255,9 +255,10 @@ WRONG_LENGTH_RNG = {
 }
 # The right length, but what a setter would misread: the ttml text the C++ stream stops partway through (non-ASCII
 # digits, a word past 64 bits) or reads into a state no mt19937 has (a word past 32 bits, a position past 624), a cached
-# Gaussian Python's setstate keeps but the next random.gauss cannot use, a numpy position past its 624 words, and a
-# ttml.init state for another bit generator than the PCG64 it was captured from, or with values past 128 bits (an
-# OverflowError) or negative (wrapped silently).
+# Gaussian Python's setstate keeps but the next random.gauss cannot use, a numpy position past its 624 words (625: the
+# first one numpy's set_state takes and our check must refuse), and a ttml.init state for another bit generator than
+# the PCG64 it was captured from, with a state past 128 bits or a negative increment (which numpy would wrap silently),
+# or a cached half-output past 32 bits (an OverflowError from numpy).
 MISREAD_RNG = {
     "ttml_superscript_digit": lambda own: set_ttml_token(own, 5, "²"),
     "ttml_arabic_indic_digit": lambda own: set_ttml_token(own, 5, "٣"),
@@ -267,11 +268,12 @@ MISREAD_RNG = {
     "python_gauss_next_text": lambda own: own["python"].update(gauss_next="corrupt"),
     "python_gauss_next_list": lambda own: own["python"].update(gauss_next=[0.5]),
     "python_gauss_next_bool": lambda own: own["python"].update(gauss_next=True),
-    "numpy_position_past_624": lambda own: own["numpy"].update(pos=700),
+    "numpy_position_625": lambda own: own["numpy"].update(pos=625),
     "numpy_negative_position": lambda own: own["numpy"].update(pos=-1),
     "ttml_init_not_pcg64": lambda own: own["ttml_init"].update(bit_generator="MT19937"),
     "ttml_init_state_past_128_bits": lambda own: own["ttml_init"].update(state=format(2**200, "x")),
     "ttml_init_negative_increment": lambda own: own["ttml_init"].update(inc="-1"),
+    "ttml_init_uinteger_past_32_bits": lambda own: own["ttml_init"].update(uinteger=2**32),
 }
 
 
