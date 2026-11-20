@@ -171,19 +171,15 @@ def additive_attention_mask(
     that dtype rather than cast down to it: fp32's finfo.min is outside bf16's range and would
     round to -inf. The result is 0.0 at real-token keys and dtype-min everywhere else.
 
-    mask_dtype, when given, is the dtype the mask is cast to after tiling: SDPA also takes a
-    bfloat8_b or bfloat4_b mask, whose shared exponents hold 0 and dtype-min exactly.
+    mask_dtype, when given, is the dtype the mask is tiled into: SDPA also takes a bfloat8_b or
+    bfloat4_b mask. It is tiled straight into that dtype because ttnn.typecast to a block float
+    zeroes the tile padding first, which would undo the dtype-min fill.
     """
     torch_dtype = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32}[dtype]
     seqlen = attention_mask.shape[-1]
     mask = build_extended_attention_mask(attention_mask, torch_dtype).expand(-1, -1, seqlen, -1)
     row_major = ttnn.from_torch(mask.contiguous(), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    tiled = ttnn.to_layout(row_major, LAYOUT, pad_value=float(torch.finfo(torch_dtype).min))
-    if mask_dtype is None or mask_dtype == dtype:
-        return tiled
-    cast = ttnn.typecast(tiled, mask_dtype)
-    ttnn.deallocate(tiled)
-    return cast
+    return ttnn.to_layout(row_major, LAYOUT, dtype=mask_dtype or dtype, pad_value=float(torch.finfo(torch_dtype).min))
 
 
 def rotary_pair_permutation(head_dim: int) -> torch.Tensor:

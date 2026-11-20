@@ -175,7 +175,9 @@ All 42 inventory rows are accounted for by this table and section 1, over 41 dis
 - **The mask's tile padding must be dtype-min, not the 0 a TILE conversion defaults to.** S
   rounds up to a multiple of 32 and 0 means "attend here", so SDPA counts the pad columns in
   the softmax denominator. At `S=37` that took the output norm to 0.69x. Build the mask in
-  ROW_MAJOR and convert with `ttnn.to_layout(..., pad_value=finfo.min)`.
+  ROW_MAJOR and convert with `ttnn.to_layout(..., pad_value=finfo.min)`, tiling straight into
+  the block-float mask dtype with its `dtype=`: `ttnn.typecast` to `bfloat8_b` or `bfloat4_b`
+  zeroes the tile padding first (#64204), so casting after the fill undoes it.
 - `ttnn.topk` accepts fp32, bf16 and `bfloat8_b`, but is only correct on the first two.
 - The MoE transient is the routed pass's w1 output, `(1, 1, R, F)` with R about 2T rows: 7.4 MB
   at `T=1024` in bfloat8_b, where every token through every expert would take 27 MB. It scales
@@ -216,7 +218,6 @@ Ten ways to get an operator wrong that produce finite, plausible output. Each ha
 | Concat-widened rotary tables, the reference's own widening, under the adjacent-pair kernel | PCC 0.295 | `test_concat_widened_rotary_tables_are_decorrelated` |
 | Rounding router probabilities to bf16 before `topk` | Reroutes 0.34% to 0.59% of tokens. bf16 quantizes an 8-wide row coarsely enough to turn near-ties into exact ties, which torch and ttnn order differently. | `test_rounding_probabilities_to_bfloat16_before_topk_flips_routing` |
 | `ttnn.topk` on `bfloat8_b` | Accepted, 1010/1024 rows wrong. A tile-wide shared exponent flattens an 8-wide probability row. | `test_topk_on_bfloat8_b_is_silently_wrong` |
-| A `bfloat8_b` cast of a tensor with stale tile padding | The padding enters the shared exponents. The permuted expert gate of a dense pass this port no longer runs held stale memory there, and casting it crushed the 12 real gates of the last tile at 300 tokens: module PCC 0.984. Zeroed first with `ttnn.fill_implicit_tile_padding`, which writes in place, the cast stays within 1e-2. | `test_bfloat8_b_cast_reads_the_tile_padding` |
 | Shared expert bias added inside the loop | PCC 0.9999+, so only max-abs sees it. | `test_shared_bias_must_be_added_after_the_weighted_sum` |
 
 One more raises instead, and is asserted as such:

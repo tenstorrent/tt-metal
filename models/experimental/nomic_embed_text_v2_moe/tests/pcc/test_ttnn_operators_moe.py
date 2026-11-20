@@ -184,27 +184,25 @@ def test_topk_on_bfloat8_b_is_silently_wrong(device, config):
     assert disagreeing > 0, "bfloat8_b topk agreed with torch; re-check whether this is still a trap"
 
 
-def test_bfloat8_b_cast_reads_the_tile_padding(device, config):
-    """Negative control: a bfloat8_b cast mixes a tile's padding into its shared exponents.
+def test_block_float_typecast_zeroes_the_tile_padding(device, config):
+    """A typecast to bfloat8_b zeroes the tile padding before packing, so stale padding is harmless.
 
-    The transposed dense expert pass the routed one replaced cast its permuted (1, E, 1, t) gate to
-    bfloat8_b. At t=300 the last tile holds 12 real columns, and 16 columns share one exponent, so
-    padding left stale by the permute crushed the real gates beside it: module PCC 0.984. Zeroing
-    the padding first fixes it, and the fill writes in place.
+    16 columns share one exponent, and at t=300 the last tile holds 12 real columns. Before
+    #64204 padding of 1e4 crushed those real values (module PCC 0.984 on a permuted expert gate).
+    The same zeroing also drops a deliberate fill, which is why additive_attention_mask tiles
+    straight into its block-float dtype instead of casting after a dtype-min fill.
     """
-    tokens, edge = 300, slice(288, 300)
+    tokens = 300
     gate_host = torch.rand(1, config.num_experts, 1, tokens)
     gate = ttnn.from_torch(gate_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     stale = ttnn.fill_implicit_tile_padding(gate, 1e4)
     assert stale.buffer_address() == gate.buffer_address(), "the fill no longer writes in place"
-    crushed = ttnn.to_torch(ttnn.typecast(stale, ttnn.bfloat8_b)).float()
-    assert (
-        compute_max_abs_error(gate_host[..., edge], crushed[..., edge]) > 0.1
-    ), "the padding no longer reaches the real gates"
+    cast = ttnn.typecast(stale, ttnn.bfloat8_b)
+    assert compute_max_abs_error(gate_host, ttnn.to_torch(cast).float()) < 1e-2
 
-    zeroed = ttnn.to_torch(ttnn.typecast(ttnn.fill_implicit_tile_padding(gate, 0.0), ttnn.bfloat8_b)).float()
-    assert compute_max_abs_error(gate_host, zeroed) < 1e-2
+    padding = cast.cpu().to_torch_with_padded_shape().float()[..., :1, tokens:]
+    assert torch.equal(padding, torch.zeros_like(padding)), "the cast kept the tile padding"
 
 
 # Experts.
