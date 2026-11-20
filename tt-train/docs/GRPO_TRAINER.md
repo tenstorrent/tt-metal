@@ -260,6 +260,7 @@ config's `max_completion_length`, `temperature` and `num_generations`, plus its
 | `prompts` | `List[List[int]]` | `B` prompts, already expanded: each input prompt repeated `num_generations` times, in order. |
 | `completions` | `List[List[int]]` | `B` completions, ending with the stop token when one is sampled. |
 | `logprobs` | `np.ndarray` `[B, max_completion_length]` float32 | `+log pi_old` of completion token `j` at column `j`; columns past `len(completion)` are ignored. |
+| `loss_mask` | `np.ndarray` `[B, max_completion_length]` float32, or `None` | 1.0 on a sampled token, 0.0 on a tool-response token. `None` trains on all completion tokens. |
 
 ### Required methods
 
@@ -350,6 +351,7 @@ from ttml.trainers import GRPOConfig
 | `max_staleness` | `int` | `0` | *(no direct equivalent)* | `ttt_remote_async` only: drop a batch generated with weights more than this many optimizer steps older than the policy. Must be >= `weight_sync_every - num_iterations`. |
 | `weight_sync_every` | `int` | `1` | *(no direct equivalent)* | `ttt_remote_sync` and `ttt_remote_async`: push the policy weights to the rollout rank at a generation-batch boundary once *N* optimizer steps have passed since the last push. On `ttt_remote_async`, must be a multiple of `num_iterations`. |
 | `remote_rollout` | `RemoteRolloutConfig \| None` | `None` | *(no direct equivalent)* | Rollout rank settings, required for `ttt_remote_sync` and `ttt_remote_async`. `get_grpo_config` reads it from the top-level `remote_rollout_config` YAML section: `mesh_shape`, `max_batch_size` (per tt-transformers model), `max_seq_len`, and optional `top_k` (default 32), `top_p` (default 1.0), `rollout_queue_capacity` (`ttt_remote_async` only, default 2). |
+| `multi_turn` | `MultiTurnConfig \| None` | `None` | `max_tool_calling_iterations` | Multi-turn tool-calling rollouts, `ttt_remote_sync` and `ttt_remote_async` only; needs `GRPOTrainer(tools=...)`. See [Multi-turn tool calling](#multi-turn-tool-calling). |
 | `output_dir` | `str` | — | `output_dir` | Directory for logs, metrics CSV, and checkpoints. |
 | `checkpointing` | `bool` | — | *(use `save_steps`)* | Whether to save checkpoints during training. |
 | `checkpoint_interval` | `int` | — | *(use `save_steps`)* | Save a checkpoint every *N* optimizer steps (when `checkpointing=True`). |
@@ -381,6 +383,7 @@ GRPOTrainer(
     optimizer_dict=None,
     callbacks=None,
     reward_funcs=None,
+    tools=(),
 )
 ```
 
@@ -395,6 +398,7 @@ GRPOTrainer(
 | `optimizer_dict` | `dict` | Optimizer config dict passed to the [ttml optimizer registry](TTML_ONBOARDING.md). Must include a `"type"` key. |
 | `callbacks` | `list[TrainerCallback] \| None` | Hooks into the training loop (see [Callbacks](#callbacks)). |
 | `reward_funcs` | `list[Callable] \| None` | Reward functions summed per completion; with more than one, each one's mean is logged as `<name>_mean`. |
+| `tools` | `Sequence[Tool]` | Tools the model can call; needs `grpo_config.multi_turn`. See [Multi-turn tool calling](#multi-turn-tool-calling). |
 
 The constructor opens the device, loads the model, builds the rollout
 sampler (in-process), the optimizer and the LR scheduler, tokenizes the
@@ -443,6 +447,54 @@ If the function declares `**kwargs`, all available data is passed. If it does no
 only explicitly named parameters are passed.
 
 > **Note:** As in TRL, `reward_funcs=[f1, f2]` sums the functions' outputs per completion.
+
+---
+
+## Multi-turn tool calling
+
+With `grpo_config.multi_turn` and `GRPOTrainer(tools=...)`, a rollout can call tools between assistant turns
+(`ttt_remote_sync` and `ttt_remote_async` only).
+
+```yaml
+grpo_config:
+  multi_turn:
+    max_turns: 16                  # assistant turns per rollout
+    tool_call_format: "qwen3"      # optional; default from the model_type of model_source
+    max_tool_response_chars: 2048  # optional; each tool response is cut to this length
+```
+
+```python
+from ttml.trainers import Tool
+
+class AddTool(Tool):
+    name = "add"
+    description = "Add two numbers."
+    parameters = {
+        "type": "object",
+        "properties": {"a": {"type": "number"}, "b": {"type": "number"}},
+        "required": ["a", "b"],
+    }
+
+    def call(self, arguments: dict) -> str:
+        return str(arguments["a"] + arguments["b"])
+
+trainer = GRPOTrainer(..., tools=[AddTool()])
+```
+
+A dataset `"prompt"` that is a list of chat messages gets the chat template, with the tool schemas in the system
+prompt. The rollout loop (`generate_tool_turns` in `tool_calling.py`):
+
+1. Generate one assistant turn for each row. A row stops at `<|im_end|>`, `<|endoftext|>` or at its token limit.
+2. The turn calls tools only if it ends with `<|im_end|>` and has complete `<tool_call>{...}</tool_call>` pairs after
+   `</think>`. Bad JSON, an unknown tool or a tool exception gives `Error: invalid tool call (...)` as the response.
+3. Append one user turn with all tool responses, then open the next assistant turn. The sampler keeps the KV cache
+   and prefills only the appended tokens.
+4. A row stops when its turn has no tool call, when the tool responses do not fit `max_completion_length`, or after
+   `max_turns` turns.
+
+A completion holds all turns and the tool responses. The tool-response tokens have log-prob 0.0 and
+`RolloutBatch.loss_mask` 0.0, so the GRPO loss uses only the sampled tokens (also the `<|im_end|>` after
+`</tool_call>`). The reward functions get the decoded completion with all turns.
 
 ---
 
