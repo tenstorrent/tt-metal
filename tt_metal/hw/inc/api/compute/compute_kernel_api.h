@@ -489,7 +489,12 @@ ALWI void signbit_tile_int32(uint32_t idst) {
 ALWI void abs_tile(uint32_t idst) {
     MATH(if constexpr (ckernel::sfpu::abs_bf16_whole_tile && !DST_ACCUM_MODE) {
         SFPU_UNARY_CALL(
-            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_abs, (APPROX, 32, DST_ACCUM_MODE), idst, VectorMode::None);
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_abs,
+            (APPROX, 32 /*ITERATIONS*/, DST_ACCUM_MODE),
+            idst,
+            VectorMode::None);
         return;
     });
     MATH(SFPU_UNARY_CALL(
