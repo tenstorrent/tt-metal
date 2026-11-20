@@ -19,7 +19,8 @@ struct ActivationImpl;
 template <bool APPROXIMATION_MODE>
 struct ActivationImpl<APPROXIMATION_MODE, ActivationType::Hardsigmoid> {
     static inline void apply(sfpi::vFloat& v) {
-        sfpi::vFloat tmp = (v * sfpi::vConstFloatPrgm0) + sfpi::vConstFloatPrgm1;
+        // (v + 3) / 6 as an add then a multiply: v * (1/6) + 0.5 cancels just below x = -3, where the result is near 0.
+        sfpi::vFloat tmp = (v + sfpi::vConstFloatPrgm1) * sfpi::vConstFloatPrgm0;
         // clamp(tmp, 0, 1) as two SFPSWAP folds against the constant registers (threshold first,
         // then the relu clamp, so a NaN lands on 1.0): 7 instructions per row, 10 as two v_if
         // blocks. Kept as the shared relu_max body rather than sfpi::clamp, which folds in the
@@ -50,7 +51,7 @@ void hardsigmoid_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     // For hardsigmoid slope is 1/6, FP32 IEEE 754 representation.
     sfpi::vConstFloatPrgm0 = 0.1666666716337204f;
-    sfpi::vConstFloatPrgm1 = 0.5f;
+    sfpi::vConstFloatPrgm1 = 3.0f;
 }
 
 }  // namespace ckernel::sfpu

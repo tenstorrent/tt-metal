@@ -19,7 +19,8 @@ struct ActivationImpl;
 template <bool APPROXIMATION_MODE>
 struct ActivationImpl<APPROXIMATION_MODE, ActivationType::Hardsigmoid> {
     static inline void apply(sfpi::vFloat& v) {
-        sfpi::vFloat tmp = (v * sfpi::vConstFloatPrgm0) + sfpi::vConstFloatPrgm1;
+        // (v + 3) / 6 as an add then a multiply: v * (1/6) + 0.5 cancels just below x = -3, where the result is near 0.
+        sfpi::vFloat tmp = (v + sfpi::vConstFloatPrgm1) * sfpi::vConstFloatPrgm0;
         v = _relu_max_body_(tmp, 1.0f);
     }
 };
@@ -46,7 +47,7 @@ void hardsigmoid_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     // For hardsigmoid slope is 1/6, FP32 IEEE 754 representation.
     sfpi::vConstFloatPrgm0 = 0.1666666716337204f;
-    sfpi::vConstFloatPrgm1 = 0.5f;
+    sfpi::vConstFloatPrgm1 = 3.0f;
 }
 
 }  // namespace ckernel::sfpu

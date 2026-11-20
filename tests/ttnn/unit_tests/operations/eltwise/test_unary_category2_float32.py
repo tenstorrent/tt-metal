@@ -57,11 +57,10 @@ Accuracy criteria (FTZ = flush-to-zero, SNB = smallest normal bfloat16)
 | hardmish     | all                    | ULP ≤ 1                  | same fp32 formula as golden (measured 0)   |
 |              | ±inf, NaN, ±0          | matches golden by value  | -0 returns +0 (sign dropped)               |
 |              | subnormals             | exactly 0                | device flushes subnormal inputs            |
-| hardsigmoid  | -3 < x < -2.25         | abs ≤ 2^-24              | x*(1/6) + 0.5 cancels near x = -3          |
-|              | elsewhere              | ULP ≤ 1                  |                                            |
+| hardsigmoid  | all                    | ULP ≤ 1                  | (x + 3) * (1/6): x + 3 is exact near -3    |
 | hardswish    | x > ~5.65e37           | device returns x         | torch golden overflows to inf              |
 |              | |x| < 2*SNB            | exactly 0                | x/2 underflow FTZ                          |
-|              | -3 < x < -2.25         | abs ≤ 2^-22              | inherits hardsigmoid cancellation          |
+|              | -3 < x < -2.25         | abs ≤ 2^-22              | hardsigmoid is tiny, x scales its error    |
 |              | elsewhere              | ULP ≤ 2                  |                                            |
 | silu, swish  | |x| < 2*SNB            | exactly 0                | x/2 underflow FTZ                          |
 |              | -88.5 <= x <= -87.5    | exactly 0                | device sigmoid FTZ before torch's          |
@@ -122,8 +121,7 @@ def test_exact_piecewise_ops(device, ttnn_op):
 # Piecewise-linear-with-division ops (hardmish, hardsigmoid)
 # ─────────────────────────────────────────────────────────────────────────────
 
-# hardsigmoid's x*(1/6) + 0.5 cancels as x -> -3, where the output tends to 0.
-# Measured on the exhaustive sweep, ULP > 1 occurs only for -2.984 <= x <= -2.266.
+# hardswish scales hardsigmoid's error by |x| near x = -3, where hardsigmoid tends to 0, so it keeps an absolute band.
 HARDSIGMOID_CANCELLATION_LO = -3.0
 HARDSIGMOID_CANCELLATION_HI = -2.25
 
@@ -189,13 +187,11 @@ def test_hardmish_special_values(device):
 def test_hardsigmoid(device):
     """Float32 sweep over every normal bfloat16 value for hardsigmoid = clip(x/6 + 0.5, 0, 1).
 
-    The kernel evaluates x * fp32(1/6) + 0.5.
+    The kernel evaluates (x + 3) * fp32(1/6), as torch does ((x + 3) / 6): x + 3 is exact just above -3.
 
     | Input range    | Check       | Reason                                                  |
     |----------------|-------------|---------------------------------------------------------|
-    | -3 < x < -2.25 | abs ≤ 2^-24 | x/6 ≈ -0.5 carries ≤ ULP(0.5) = 2^-24 error; adding 0.5 |
-    |                |             | cancels to an output near 0 (75 ULP at x = -2.984375)   |
-    | elsewhere      | ULP ≤ 1     | single rounding of the multiply-add                     |
+    | all            | ULP ≤ 1     | one rounding in the multiply                            |
     """
     input_tensor = generate_float32_bits()
 
@@ -206,10 +202,31 @@ def test_hardsigmoid(device):
 
     result = ttnn.to_torch(ttnn.hardsigmoid(tt_in))
 
-    band = hardsigmoid_cancellation_band(input_tensor)
-    assert band.any(), "expected hardsigmoid cancellation band to be non-empty for this exhaustive sweep"
-    assert_allclose(golden[band], result[band], rtol=0, atol=2**-24)
-    assert_with_ulp(expected_result=golden[~band], actual_result=result[~band], ulp_threshold=1)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
+
+
+def test_hardsigmoid_just_above_minus_three(device):
+    """Dense float32 inputs just above x = -3, where hardsigmoid is tiny.
+
+    x * (1/6) + 0.5 added two rounded terms that nearly cancel there and was 2.8 million ULP off at
+    x = -2.9999998. The sweep above only holds bfloat16 values, which are 2^-6 apart near -3.
+
+    | Input                                 | Check   | Reason                                  |
+    |---------------------------------------|---------|-----------------------------------------|
+    | 2048 consecutive floats above -3      | ULP ≤ 2 | x + 3 is exact, one rounding after that |
+    | 2048 log-spaced offsets in [-3, -2.9] | ULP ≤ 2 |                                         |
+    """
+    minus_three_bits = torch.tensor(-3.0, dtype=torch.float32).view(torch.int32)
+    consecutive = (minus_three_bits - torch.arange(1, 2049, dtype=torch.int32)).view(torch.float32)
+    offsets = torch.logspace(-7, -1, 2048, dtype=torch.float64)
+    input_tensor = torch.cat([consecutive, (-3.0 + offsets).to(torch.float32)]).reshape(1, 1, 64, 64)
+
+    tt_in = to_float32_tt_tensor(input_tensor, device)
+
+    golden = torch.nn.functional.hardsigmoid(input_tensor)
+    result = ttnn.to_torch(ttnn.hardsigmoid(tt_in))
+
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=2)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
