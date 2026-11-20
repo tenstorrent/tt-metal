@@ -212,16 +212,16 @@ static void prepare_receiver_integrity_dram(
     tt_metal::Program* recv_program,
     bool init_recv_dram) {
     /* ============= */
+    if (init_recv_dram) {
+        log_info(tt::LogTest, "      initing ram bank {}", send_bank_id);
+        tensix_counter_dram(fixture, recv_mesh_device, dram_start_addr, dram_end_addr, send_bank_id);
+    }
+
     if (!recv_program) {
         return;
     }
 
     tensix_zero_dram(fixture, recv_mesh_device, dram_start_addr, dram_end_addr, dram_bank_id);
-    if (init_recv_dram) {
-        log_info(tt::LogTest, "      initing ram bank {}", dram_bank_id);
-        tensix_counter_dram(fixture, recv_mesh_device, dram_start_addr, dram_end_addr, send_bank_id);
-    }
-
     auto recv_eth_config = tt_metal::EthernetConfig{
         .noc = tt_metal::NOC::NOC_0,
         .processor = processor,
