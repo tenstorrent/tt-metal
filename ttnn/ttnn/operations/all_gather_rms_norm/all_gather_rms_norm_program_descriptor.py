@@ -68,6 +68,9 @@ CB_DEV = 25  # ln owner scratch: per gather tile (n_m d_m, M2_m + n_m d_m^2) in 
 CB_WCOL = 26  # ln owner: member weights n_m, column 0 of row m % 32 of gather tile m // 32 (accumulator format)
 CB_XG = 27  # rms with gamma, XG_FIRST: x * gamma of the member block (accumulator format)
 CB_OWN = 28  # ln, OWN_PIVOT: the reader's contiguous copy of the member's own slice (input format)
+CB_PORT_HDR = (
+    29  # port cores: the sender's packet-header ring (HDR_RING slots of HDR_STRIDE bytes; raw L1, sender only)
+)
 NUM_CBS = 32
 
 # ---- semaphores (program-local; declared BEFORE setup_fabric_connection takes its ids) ----
@@ -103,8 +106,31 @@ TAIL_RELAY_LAG = int(os.environ.get("AGRMS_TAIL_RELAY_LAG", str(RELAY_LAG_WAVES)
 STAGE_BATCHES = int(os.environ.get("AGRMS_STAGE_BATCHES", "2"))  # cb_port_stage ring depth in sender batches
 PORT_READ_STREAM = int(os.environ.get("AGRMS_READ_STREAM", "1"))  # port reader: per-slot transaction ids, every
 # landed slot pushed at once, the whole stage ring in flight (TRANSPORT, Refinement 3); 0 = batch mode below
-PORT_PACK = int(os.environ.get("AGRMS_PACK", "0"))  # packets span the runs of an entry (fabric scatter write, <= 4
-# pieces): full chunk_pages packets when a member run is not a multiple of chunk_pages (TRANSPORT, Refinement 3)
+# ---- short-run transport (TRANSPORT, Refinement 6) ----
+# When the member runs of the outgoing entries are short (narrow slices: the indexer case's 1-tile runs, one per
+# (row, slice) and compute core), one packet per run makes the port's per-packet work — the sender's header build +
+# issue (~0.2 us per packet measured) and the reader's per-slot turnaround — the transport's rate, and each relay
+# entry waits behind it. The regime is chosen on the host from the actual entries: it is on when scatter packing
+# (<= 4 runs per packet) at least halves the packet count (SHORT_RUN_RATIO). It turns on together (each knob below:
+# -1 = auto = on in the short-run regime only, else 0 / the env value everywhere):
+#   PORT_PACK      packets span the runs of an entry (fabric scatter write, <= 4 pieces, full chunk_pages packets)
+#   SHORT_RUN_BATCH  sender flush + stage-slot release per packet (batch 1) instead of per PORT_BATCH_CHUNKS
+#   HDR_RING       every packet's header built ahead of its send (fence / stage / credit waits) into a ring slot;
+#                  0 = a header built right before each send (the original sender)
+#   PORT_STATEFUL  stateful router sends (command buffers programmed once after the fence) + cached router credits
+# Case1 (640x32 LN, 1-tile runs, eval ccl_perf fastest / slowest chip): 12.02 / 12.73 -> 11.42 / 12.23 us with all
+# four; pack alone 12.09 (flat), ring without pack +1.1, batch 1 without pack +0.9. Long runs (the focus case's
+# 12-tile runs) keep the original path: there pack measured +0.4 and batch 1 +1.9 (Refinement 3).
+SHORT_RUN_RATIO = 2
+PORT_PACK = int(os.environ.get("AGRMS_PACK", "-1"))
+SHORT_RUN_BATCH = int(os.environ.get("AGRMS_SHORT_BATCH", "1"))
+HDR_RING = int(os.environ.get("AGRMS_HDR_RING", "-1"))
+HDR_RING_AUTO = 16  # ring slots in the short-run regime (8 measured equal; >= the batch)
+HDR_STRIDE = 128  # bytes per header slot (>= sizeof(PACKET_HEADER_TYPE), checked by the kernel)
+# slot templates: the RISC copies the routed header into a slot at its first build, inside the waits (1), or a DMA
+# fills every slot after the connection opens (0: -0.2 us worse on case1, the barrier sits before the fence wait)
+HDR_COPY = int(os.environ.get("AGRMS_HDR_COPY", "1"))
+PORT_STATEFUL = int(os.environ.get("AGRMS_STATEFUL", "-1"))
 PORT_PUSH_PACKETS = int(os.environ.get("AGRMS_PUSH", "0")) or None  # batch mode: packets per read barrier + push
 # (None = the batch; 1 measured +3.6 us on the focus case: one 14 KB L1 read in flight is latency-bound)
 # ln FPU path (fp32 DEST, k <= 8): the member pivot is the bf16 mean of the member's OWN slice, reduced from a reader
@@ -128,7 +154,13 @@ OWNER_MEMBER_COST = 0.4  # base op: per gathered partial on the owner (combine +
 ROW_GATHER = 32  # members per gather tile (one 32-datum row each)
 # k cap: the writer carries one (x, y) pair per member as runtime args (max_runtime_args = 341 per kernel)
 K_CAP_MAX = 128
-FORCE_K = None  # tests / perf probes only: pin the member count (must be a fitting slice-aligned candidate)
+# perf probe only: tile-rows per row-group at least (Refinement 6: case1 k = 1 at 4 rows per group +8.6 us, k = 4 at
+# 1 / 2 / 4 rows +8.2 / +17 / +37 us — the narrow LN chain is per-row bound, so contiguous multi-tile runs cannot be
+# bought with fewer, taller row-groups)
+GROUP_ROWS_MIN = int(os.environ.get("AGRMS_GROUP_ROWS", "1"))
+FORCE_K = (
+    int(os.environ["AGRMS_FORCE_K"]) if os.environ.get("AGRMS_FORCE_K") else None
+)  # tests / perf probes only: pin the member count (must be a fitting slice-aligned candidate)
 LAST_INFO = None  # tests / probes: the split of the last built descriptor (k, owner, batches, ...)
 AFFINE_SLOT_BYTES = 128  # one staged gamma / beta "stick" (32 datums, fp32 at most)
 
@@ -331,6 +363,43 @@ def port_batch_candidates():
         pb = max(1, pb // 2)
 
 
+def hdr_ring_bytes() -> int:
+    """Port-core L1 of the sender's header ring at its largest (the regime is chosen after the split)."""
+    return max(HDR_RING, HDR_RING_AUTO) * HDR_STRIDE
+
+
+def entry_packets(runs, chunk_pages: int, pack: bool) -> int:
+    """Packets of one outgoing entry (runs = tile counts in order): mirror of agrms_pack::EntryPacker."""
+    max_pieces = 4 if pack else 1  # NOC_SCATTER_WRITE_MAX_CHUNKS
+    packets = r = t = 0
+    while r < len(runs):
+        tiles = pieces = 0
+        while r < len(runs) and tiles < chunk_pages and pieces < max_pieces:
+            take = min(runs[r] - t, chunk_pages - tiles)
+            tiles += take
+            t += take
+            pieces += 1
+            if t == runs[r]:
+                r, t = r + 1, 0
+        packets += 1
+    return packets
+
+
+def short_run_transport(out_entries: dict, chunk_pages: int) -> bool:
+    """The short-run regime: scatter packing at least halves the packets of the busiest port."""
+    worst = (0, 0)
+    for entries in out_entries.values():
+        runs = [[r[2] for r in e["runs"]] for e in entries]
+        plain = sum(entry_packets(rr, chunk_pages, False) for rr in runs)
+        packed = sum(entry_packets(rr, chunk_pages, True) for rr in runs)
+        worst = max(worst, (plain, packed))
+    return worst[0] > 0 and worst[0] >= SHORT_RUN_RATIO * worst[1]
+
+
+def _auto(knob: int, on: bool, value: int = 1) -> int:
+    return knob if knob >= 0 else (value if on else 0)
+
+
 def stage_pages(batch: int, chunk_pages: int) -> int:
     return STAGE_BATCHES * batch * chunk_pages
 
@@ -515,7 +584,7 @@ def select_split(geo: Geometry, N: int, fits_fn) -> Split:
     cands = _k_candidates(geo, N)
 
     def groups(k):
-        return min(trt, N // k)
+        return min(trt, N // k, max(1, trt // GROUP_ROWS_MIN))
 
     def rows(k):
         return _div_up(trt, groups(k))
@@ -824,7 +893,7 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
         # port cores: cb_x (mirror of the member block) + cb_port_stage; the batch halves under L1 pressure
         port_bytes = None
         for pb in port_batch_candidates():
-            port_bytes = rows * mm.pitch * sz.T_in + stage_pages(pb, chunk_pages) * tile_bytes
+            port_bytes = rows * mm.pitch * sz.T_in + stage_pages(pb, chunk_pages) * tile_bytes + hdr_ring_bytes()
             if port_bytes <= budget:
                 break
         if port_bytes > budget:
@@ -912,6 +981,11 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
             cplan, own_pivot = trial, True
     compute_used = compute_all[: split.cores_used()]
     out_e, in_e, n_waves = build_entries(chips, ring, L, split, geo, compute_used, vxy, wave_rg, chunk_pages)
+    short_runs = short_run_transport(out_e, chunk_pages)
+    port_pack = _auto(PORT_PACK, short_runs)
+    if short_runs and os.environ.get("AGRMS_BATCH") is None:
+        port_batch = min(port_batch, SHORT_RUN_BATCH)
+    port_stateful = _auto(PORT_STATEFUL, short_runs)
     n_stat = 2 if cfg.is_ln else 1
     t_acc = acc_dtype(fp32_dest)
     cb_dtype = {
@@ -1062,10 +1136,12 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
         SEM_LANDED,
         min(PORT_PUSH_PACKETS or port_batch, port_batch),
         PORT_READ_STREAM,
-        PORT_PACK,
+        port_pack,
         STAGE_BATCHES,
     ]
-    port_sender_ct = [tile_bytes, chunk_pages, port_batch, PORT_PACK]
+    hdr_ring = _auto(HDR_RING, short_runs, HDR_RING_AUTO)
+    hdr_ring = max(hdr_ring, port_batch) if hdr_ring > 0 else 0  # a slot is reused only after its batch's flush
+    port_sender_ct = [tile_bytes, chunk_pages, port_batch, port_pack, hdr_ring, port_stateful, HDR_STRIDE, HDR_COPY]
 
     inv_w_bits = _f32_bits(1.0 / geo.W)
     eps_bits = _f32_bits(cfg.epsilon)
@@ -1095,6 +1171,7 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
             wave_rg,
             fit_unit[k],
             port_batch,
+            tuple(port_sender_ct),
             ln_fpu,
             xg_first,
             own_pivot,
@@ -1122,6 +1199,8 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
         # CBs: cb_x FIRST over compute_used + ports_union (identical on every chip -> one landing address)
         cbs = [_cb(CB_X, cplan[CB_X][0], cplan[CB_X][1], x_dtype, crs_x)]
         cbs.append(_cb(CB_STAGE, stage_pages(port_batch, chunk_pages), tile_bytes, x_dtype, crs_ports))
+        if hdr_ring > 0:
+            cbs.append(_cb(CB_PORT_HDR, hdr_ring, HDR_STRIDE, x_dtype, crs_ports))
         regions = alias_regions(cplan, sz)
         aliased = {c for idx, _ in regions for c in idx}
         for idx in sorted(cplan):
@@ -1350,6 +1429,9 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
         ],
         owner=owner,
         port_batch=port_batch,
+        short_runs=short_runs,
+        port_pack=port_pack,
+        hdr_ring=hdr_ring,
         out_unit=fit_unit[k],
         num_groups=split.num_groups,
         rows=rows_max,
