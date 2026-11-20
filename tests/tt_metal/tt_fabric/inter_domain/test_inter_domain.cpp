@@ -227,6 +227,7 @@ TEST(InterDomain, Sanity) {
     const uint32_t rounds = env_u32("TT_INTER_DOMAIN_ROUNDS").value_or(2);
     for (uint32_t round = 0; round < rounds; ++round) {
         auto step = [&](const std::string& what) {
+            log_info(tt::LogTest, "domain {} round {}: {}", *domain, round, what);
             write_file(mine(std::to_string(round) + "." + what), "");
             wait_file(theirs(std::to_string(round) + "." + what));
         };
