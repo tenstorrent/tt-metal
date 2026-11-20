@@ -29,11 +29,10 @@ COPY _tt-metal/build/ ./build/
 COPY _tt-metal/runtime/ ./runtime/
 COPY ttnn-*.whl ./
 
-# UMD api_tests embed UMD_TESTS_ROOT_PATH=/work/tt_metal/third_party/umd/tests at compile time.
-# The metal build runs at /work, but this image keeps sources under /home/user/tt-metal.
-# Point the baked-in path at the cloned soc_descs and cluster_descriptor_examples.
-RUN sudo mkdir -p /work/tt_metal/third_party/umd && \
-    sudo ln -sfn /home/user/tt-metal/tt_metal/third_party/umd/tests /work/tt_metal/third_party/umd/tests
+# UMD api_tests locate their YAML descriptors (soc_descs, cluster_descriptor_examples, ...)
+# relative to the working directory unless UMD_DESCRIPTORS_PATH is set; this image keeps
+# sources under /home/user/tt-metal.
+ENV UMD_DESCRIPTORS_PATH=/home/user/tt-metal/tt_metal/third_party/umd/descriptors
 
 RUN uv pip install $(ls -1 *.whl)
 

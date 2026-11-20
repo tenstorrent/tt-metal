@@ -39,6 +39,11 @@ struct MatmulParams {
     // Read A's K columns from this tile-aligned column of a wider interleaved A, instead of all of A's columns.
     // Set through ttnn::linear; only the 2D multicast program config (its Metal 2.0 spec factory) supports it.
     std::optional<uint32_t> in0_column_offset = std::nullopt;
+    // Set by ttnn::prim::matmul for a gather_in0 matmul over prefetcher_pipes: the device's active
+    // sub-device manager. The ring's kernels run on boxes around it within its sub-device's cores, so the
+    // manager that lays those out is part of the program-cache key, and a program built under one manager
+    // is not reused under another that may split its boxes. Manager ids are never reused.
+    std::optional<tt::tt_metal::SubDeviceManagerId> gather_in0_sub_device_manager_id = std::nullopt;
 };
 
 struct MatmulInputs {

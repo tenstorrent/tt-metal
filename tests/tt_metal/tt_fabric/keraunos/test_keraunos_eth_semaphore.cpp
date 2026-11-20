@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Semaphores and tile counters on Keraunos Ethernet cores (CCE), on the two-chip test descriptors in this directory.
+// Semaphores and tile counters on Keraunos Ethernet cores (CCE), on the two chips of
+// vcluster/manifests/pair2_eth.yaml.
 // Run with TT_METAL_SLOW_DISPATCH_MODE=1. On Mock these tests check what the host computes and skip
 // before launch: UMD MockChip reads and writes are no-ops.
 
@@ -37,7 +38,7 @@
 #include "impl/program/slow_dispatch.hpp"
 #include "llrt/hal.hpp"
 #include "fabric_fixture.hpp"
-#include "tt_metal/hw/inc/hostdev/cce_spa_routes.h"
+#include "tt_metal/hw/inc/hostdev/cce_noc_routes.h"
 
 namespace tt::tt_metal {
 namespace {
@@ -83,7 +84,7 @@ std::vector<EthCore> keraunos_eth_cores(IDevice* device) {
         const CoreCoord logical = soc_desc.get_logical_ethernet_core_from_physical({core.coord.x, core.coord.y});
         const auto type =
             active.contains(logical) ? HalProgrammableCoreType::ACTIVE_ETH : HalProgrammableCoreType::IDLE_ETH;
-        cores.push_back({logical, type, core.hsio, core.cce});
+        cores.push_back({logical, type, core.hsio, core.eth_cce});
     }
     return cores;
 }
@@ -118,8 +119,7 @@ uint32_t read_word(distributed::MeshDevice& mesh, const EthCore& core, uint32_t 
     return value[0];
 }
 
-// Each chip claims its own Metal DRAM cores, none shared, and opens with DRAM banks (the V3 per-chip SoC
-// descriptors in variants/).
+// Each chip claims its own Metal DRAM cores, none shared, and opens with DRAM banks.
 TEST(KeraunosSocDesc, MetalDramCoresPerChip) {
     auto& cluster = MetalContext::instance().get_cluster();
     std::vector<std::set<CoreCoord>> per_chip;

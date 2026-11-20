@@ -15,8 +15,8 @@
 #include <tt_stl/strong_type.hpp>
 
 #include "algorithms/allocator_algorithm.hpp"
-#include "core_coord.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include "allocator_state.hpp"
 
 namespace tt::tt_metal {
@@ -151,14 +151,6 @@ public:
     // Extracts the state of the given allocator.
     AllocatorState::BufferTypeState extract_state(
         AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0}) const;
-    // Extracts the merged state from all dependent allocators.
-    AllocatorState::BufferTypeState extract_merged_state() const;
-
-    // Applies the state of the given allocator without overriding the current state.
-    void apply_state(
-        const AllocatorState::BufferTypeState& state,
-        AllocatorDependencies::AllocatorID target_allocator_id = AllocatorDependencies::AllocatorID{0});
-
     // Overrides the current state with the given state.
     void override_state(
         const AllocatorState::BufferTypeState& state,

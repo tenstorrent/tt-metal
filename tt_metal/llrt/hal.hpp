@@ -100,8 +100,10 @@ enum class HalL1MemAddrType : uint8_t {
     FABRIC_CONNECTION_LOCK,
     ETH_PTP_TRACE,            // Runtime FW entry/exit PTP stamps (Blackhole only)
     L1_ECC_HALT,              // L1 ECC halt record and BRISC release code, l1_ecc_halt_slot_t (Blackhole Tensix only)
+    RING_BUF_HEAD,            // Watcher MPSC ring buffer head, outside the mailbox (Quasar dispatch only)
     FABRIC_KERNEL_HEARTBEAT,  // Fabric router heartbeat (Quasar only)
     ETH_LINK,                 // Ethernet-link slot, written before launch (Quasar only)
+    CCE_NOC_ROUTES,           // CceNocRoutes of a Keraunos CCE, written before launch (Quasar Ethernet only)
     COUNT                     // Keep this last so it always indicates number of enum options
 };
 
@@ -250,6 +252,9 @@ private:
     std::vector<uint32_t> tensix_debug_regs_;
     // The physical RISCs the core has.
     std::optional<uint32_t> num_physical_riscs_;
+    // Kernel binaries built per processor. A Keraunos ethernet core is one CCE of an HSIO tile, and each CCE needs
+    // its own build of a kernel (its SRAM base differs), so a kernel there has one build state per CCE.
+    uint32_t build_variants_ = 1;
     bool supports_cbs_ = false;
     bool supports_dfbs_ = false;
     bool supports_receiving_multicast_cmds_ = false;
@@ -450,6 +455,7 @@ private:
     uint64_t pcie_addr_lower_bound_{};
     uint64_t pcie_addr_upper_bound_{};
     uint32_t num_nocs_{};
+    uint32_t noc_addr_local_bits_{};
     uint32_t noc_addr_node_id_bits_{};
     uint32_t noc_node_id_ = 0;
     uint32_t noc_node_id_mask_ = 0;
@@ -582,6 +588,7 @@ public:
     uint32_t get_num_nocs() const { return num_nocs_; }
     uint32_t get_noc_node_id() const { return noc_node_id_; }
     uint32_t get_noc_node_id_mask() const { return noc_node_id_mask_; }
+    uint32_t get_noc_addr_local_bits() const { return noc_addr_local_bits_; }
     uint32_t get_noc_addr_node_id_bits() const { return noc_addr_node_id_bits_; }
     uint32_t get_noc_coord_reg_offset() const { return noc_coord_reg_offset_; }
     uint32_t get_noc_encoding_reg() const { return noc_encoding_reg_; }
@@ -758,6 +765,10 @@ public:
     HalProcessorSet parse_processor_set_spec(std::string_view spec) const;
 
     uint32_t get_total_num_risc_processors() const;
+    // Kernel build states per processor on a core type (1 unless the core has per-CCE builds).
+    uint32_t get_build_variants(uint32_t programmable_core_type_idx) const {
+        return this->core_info_[programmable_core_type_idx].build_variants_;
+    }
     uint32_t get_max_processors_per_core() const { return max_processors_per_core_; }
 
     const HalJitBuildConfig& get_jit_build_config(

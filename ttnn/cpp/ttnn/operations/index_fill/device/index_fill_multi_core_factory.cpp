@@ -199,8 +199,8 @@ tt::tt_metal::ProgramDescriptor IndexFillOperation::create_descriptor(
     auto input_dataformat = datatype_to_dataformat_converter(input.dtype());
     auto index_dataformat = datatype_to_dataformat_converter(index.dtype());
 
-    uint32_t input_page_size = input.buffer()->aligned_page_size();
-    uint32_t index_total_size = index.buffer()->aligned_size();
+    uint32_t input_page_size = input.mesh_buffer().aligned_page_size();
+    uint32_t index_total_size = index.mesh_buffer().aligned_size();
 
     uint32_t input_cb_depth = 2;
 
@@ -243,7 +243,7 @@ tt::tt_metal::ProgramDescriptor IndexFillOperation::create_descriptor(
         // element_size, no extra NOC-alignment padding), so that the WIDTH/BLOCK→INTERLEAVED/HEIGHT
         // byte offset (col_shard_id * input_page_size) and the row-splitting write size line up.
         // This holds for row-major L1 sharded buffers used here; revisit if padded page sizes are introduced.
-        out_write_size = output.buffer()->aligned_page_size();
+        out_write_size = output.mesh_buffer().aligned_page_size();
         out_KW = (input.padded_shape()[-1] * input.element_size()) / out_write_size;
     } else {
         // INTERLEAVED or HEIGHT_SHARDED output: write size = full input page

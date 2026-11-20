@@ -179,7 +179,7 @@ constexpr uint32_t MSDA_TENSOR_ACCESSOR_ARG_BASE = MSDA_LAST_SCALAR_CT_ARG + 1;
 constexpr uint32_t TILE_MAX_ROWS = fused_msda_tile_layout::TILE_MAX_ROWS;
 constexpr uint32_t TILE_NBYTES = fused_msda_tile_layout::TILE_NBYTES;
 constexpr uint32_t TILE_WORDS = TILE_NBYTES / sizeof(uint32_t);
-constexpr uint32_t HALF_STICK_NBYTES = 32;  // one face-row half: 16 bf16
+constexpr uint32_t HALF_STICK_NBYTES = fused_msda_tile_layout::FACE_ROW_NBYTES;
 constexpr uint32_t HALF_WORDS = HALF_STICK_NBYTES / sizeof(uint32_t);
 constexpr uint32_t WORDS_PER_TILE_ROW = 2 * HALF_WORDS;
 

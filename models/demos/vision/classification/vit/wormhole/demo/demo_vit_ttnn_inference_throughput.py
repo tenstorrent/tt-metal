@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import itertools
 import time
 
 import pytest
@@ -13,7 +14,11 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 import ttnn
 from models.common.utility_functions import is_blackhole, torch2tt_tensor
 from models.demos.vision.classification.vit.common.common import load_torch_model
-from models.demos.vision.classification.vit.common.tests.vit_helper_funcs import get_batch, get_data_loader
+from models.demos.vision.classification.vit.common.tests.vit_helper_funcs import (
+    available_iterations,
+    get_batch,
+    get_data_loader,
+)
 from models.demos.vision.classification.vit.wormhole.tt import ttnn_optimized_sharded_vit_wh
 from models.perf.perf_utils import prep_perf_report
 
@@ -79,12 +84,11 @@ def test_vit(device, model_location_generator):
     else:
         head_masks = [None for _ in range(config.num_hidden_layers)]
 
-    # IMAGENET INFERENCE
-    #####################
-    data_loader = get_data_loader("ImageNet_data", batch_size, 2)
+    # The first pass compiles and the second is timed alone; a folder with one full batch replays it.
+    data_loader = itertools.cycle(get_data_loader(batch_size, available_iterations(batch_size, 2)))
 
     durations = []
-    for iter in range(2):
+    for _ in range(2):
         torch_pixel_values, labels = get_batch(data_loader, image_processor)
         start = time.time()
         torch_pixel_values = torch.permute(torch_pixel_values, (0, 2, 3, 1))

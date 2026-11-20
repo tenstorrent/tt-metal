@@ -32,7 +32,7 @@
 namespace tt::tt_metal {
 namespace mimir_contract {
 
-inline constexpr uint64_t kCceSramTestOffset = 0x800;
+inline constexpr uint64_t kMimirCceSramTestOffset = 0x800;
 inline constexpr uint32_t kDramOffset = 0x800;
 inline constexpr uint64_t kGddrSlotStride = 1ull << 30;
 // Mimir/MMK emu GDDR is an 8GiB SPA with a 1GiB sparse backing store. Unique 32KiB pages persist
@@ -160,35 +160,35 @@ inline uint32_t locations_per_channel(const metal_SocDescriptor& soc_desc) {
     return std::max<uint32_t>(static_cast<uint32_t>(soc_desc.get_grid_size(tt::CoreType::DRAM).y), 1u);
 }
 
-inline uint32_t mimir_index_for_cce(const metal_SocDescriptor& soc_desc, uint32_t cce_index) {
-    return cce_index / locations_per_channel(soc_desc);
+inline uint32_t mimir_index_for_cce(const metal_SocDescriptor& soc_desc, uint32_t mimir_cce_index) {
+    return mimir_cce_index / locations_per_channel(soc_desc);
 }
 
-inline uint32_t location_for_cce(const metal_SocDescriptor& soc_desc, uint32_t cce_index) {
-    return cce_index % locations_per_channel(soc_desc);
+inline uint32_t location_for_mimir_cce(const metal_SocDescriptor& soc_desc, uint32_t mimir_cce_index) {
+    return mimir_cce_index % locations_per_channel(soc_desc);
 }
 
-inline uint32_t mimir_index_for_cce(uint32_t cce_index) {
-    return mimir_index_for_cce(configured_soc_desc(), cce_index);
+inline uint32_t mimir_index_for_cce(uint32_t mimir_cce_index) {
+    return mimir_index_for_cce(configured_soc_desc(), mimir_cce_index);
 }
 
-inline uint32_t location_for_cce(uint32_t cce_index) { return location_for_cce(configured_soc_desc(), cce_index); }
+inline uint32_t location_for_mimir_cce(uint32_t mimir_cce_index) { return location_for_mimir_cce(configured_soc_desc(), mimir_cce_index); }
 
-inline uint32_t num_cces_from_soc(const metal_SocDescriptor& soc_desc) {
+inline uint32_t num_mimir_cces_from_soc(const metal_SocDescriptor& soc_desc) {
     return static_cast<uint32_t>(soc_desc.get_num_dram_channels() * locations_per_channel(soc_desc));
 }
 
-inline const std::vector<uint32_t>& cce_indices() {
+inline const std::vector<uint32_t>& mimir_cce_indices() {
     static const std::vector<uint32_t> indices = [] {
         std::vector<uint32_t> built;
         if (selected_soc_desc_path() == nullptr) {
             built.push_back(0);
             return built;
         }
-        const uint32_t cce_count = num_cces_from_soc(configured_soc_desc());
-        built.reserve(cce_count);
-        for (uint32_t cce_index = 0; cce_index < cce_count; ++cce_index) {
-            built.push_back(cce_index);
+        const uint32_t mimir_cce_count = num_mimir_cces_from_soc(configured_soc_desc());
+        built.reserve(mimir_cce_count);
+        for (uint32_t mimir_cce_index = 0; mimir_cce_index < mimir_cce_count; ++mimir_cce_index) {
+            built.push_back(mimir_cce_index);
         }
         return built;
     }();
@@ -216,7 +216,7 @@ inline const metal_SocDescriptor& soc_desc_of(const IDevice* device) {
     return MetalContext::instance().get_cluster().get_soc_desc(device->id());
 }
 
-inline uint32_t num_cces_on(const IDevice* device) { return num_cces_from_soc(soc_desc_of(device)); }
+inline uint32_t num_mimir_cces_on(const IDevice* device) { return num_mimir_cces_from_soc(soc_desc_of(device)); }
 
 // One Mimir is one UMD DRAM channel. Device::num_dram_channels() is the Metal view count.
 inline uint32_t num_mimirs_on(const IDevice* device) {
@@ -254,24 +254,24 @@ struct GddrTarget {
     uint32_t slot_stride = 0;
 };
 
-struct CcePartition {
-    uint32_t cce_index = 0;
+struct MimirCcePartition {
+    uint32_t mimir_cce_index = 0;
     uint32_t partition = 0;
 };
 
-inline const std::vector<CcePartition>& cce_partition_params() {
-    static const std::vector<CcePartition> params = [] {
+inline const std::vector<MimirCcePartition>& mimir_cce_partition_params() {
+    static const std::vector<MimirCcePartition> params = [] {
         if (selected_soc_desc_path() == nullptr) {
-            return std::vector<CcePartition>{{0, 0}};
+            return std::vector<MimirCcePartition>{{0, 0}};
         }
         const metal_SocDescriptor& soc_desc = configured_soc_desc();
-        const uint32_t cce_count = num_cces_from_soc(soc_desc);
+        const uint32_t mimir_cce_count = num_mimir_cces_from_soc(soc_desc);
         const uint32_t partition_count = static_cast<uint32_t>(soc_desc.get_num_dram_views());
-        std::vector<CcePartition> built;
-        built.reserve(cce_count * partition_count);
-        for (uint32_t cce_index = 0; cce_index < cce_count; ++cce_index) {
+        std::vector<MimirCcePartition> built;
+        built.reserve(mimir_cce_count * partition_count);
+        for (uint32_t mimir_cce_index = 0; mimir_cce_index < mimir_cce_count; ++mimir_cce_index) {
             for (uint32_t partition = 0; partition < partition_count; ++partition) {
-                built.push_back({cce_index, partition});
+                built.push_back({mimir_cce_index, partition});
             }
         }
         return built;
@@ -279,12 +279,12 @@ inline const std::vector<CcePartition>& cce_partition_params() {
     return params;
 }
 
-inline std::string cce_param_name(const ::testing::TestParamInfo<uint32_t>& info) {
+inline std::string mimir_cce_param_name(const ::testing::TestParamInfo<uint32_t>& info) {
     return fmt::format("Cce{}", info.param);
 }
 
-inline std::string cce_partition_name(const ::testing::TestParamInfo<CcePartition>& info) {
-    return fmt::format("Cce{}Partition{}", info.param.cce_index, info.param.partition);
+inline std::string mimir_cce_partition_name(const ::testing::TestParamInfo<MimirCcePartition>& info) {
+    return fmt::format("Cce{}Partition{}", info.param.mimir_cce_index, info.param.partition);
 }
 
 inline bool is_cross_mimir_case() {
@@ -302,27 +302,27 @@ inline std::vector<uint32_t> dram_views_for_channel(const metal_SocDescriptor& s
     return views;
 }
 
-inline uint32_t local_dram_view_for_cce(const metal_SocDescriptor& soc_desc, uint32_t cce_index) {
-    const std::vector<uint32_t> views = dram_views_for_channel(soc_desc, mimir_index_for_cce(soc_desc, cce_index));
-    TT_FATAL(!views.empty(), "Mimir {} has no DRAM view", mimir_index_for_cce(soc_desc, cce_index));
+inline uint32_t local_dram_view_for_mimir_cce(const metal_SocDescriptor& soc_desc, uint32_t mimir_cce_index) {
+    const std::vector<uint32_t> views = dram_views_for_channel(soc_desc, mimir_index_for_cce(soc_desc, mimir_cce_index));
+    TT_FATAL(!views.empty(), "Mimir {} has no DRAM view", mimir_index_for_cce(soc_desc, mimir_cce_index));
     if (views.size() == 1) {
         return views.front();
     }
-    const uint32_t location = location_for_cce(soc_desc, cce_index);
+    const uint32_t location = location_for_mimir_cce(soc_desc, mimir_cce_index);
     TT_FATAL(
         location < views.size(),
         "CCE {} location {} has no DRAM view on mimir {}",
-        cce_index,
+        mimir_cce_index,
         location,
-        mimir_index_for_cce(soc_desc, cce_index));
+        mimir_index_for_cce(soc_desc, mimir_cce_index));
     return views[location];
 }
 
 // Metal's logical DRAM coordinate is {view, index into that view's endpoints}, not {channel, location}.
-inline CoreCoord logical_cce_core(const metal_SocDescriptor& soc_desc, uint32_t cce_index) {
-    const uint32_t view = local_dram_view_for_cce(soc_desc, cce_index);
+inline CoreCoord logical_mimir_cce_core(const metal_SocDescriptor& soc_desc, uint32_t mimir_cce_index) {
+    const uint32_t view = local_dram_view_for_mimir_cce(soc_desc, mimir_cce_index);
     return soc_desc.get_logical_dram_core_for_subchannel(
-        static_cast<int>(view), static_cast<int>(location_for_cce(soc_desc, cce_index)));
+        static_cast<int>(view), static_cast<int>(location_for_mimir_cce(soc_desc, mimir_cce_index)));
 }
 
 inline uint32_t dram_view_location(const metal_SocDescriptor& soc_desc, uint32_t view) {
@@ -337,24 +337,24 @@ inline uint32_t dram_view_location(const metal_SocDescriptor& soc_desc, uint32_t
     return 0;
 }
 
-inline bool partition_in_case(const metal_SocDescriptor& soc_desc, uint32_t cce_index, uint32_t partition, bool cross) {
+inline bool partition_in_case(const metal_SocDescriptor& soc_desc, uint32_t mimir_cce_index, uint32_t partition, bool cross) {
     if (partition >= soc_desc.get_num_dram_views()) {
         return false;
     }
     const bool local =
-        soc_desc.get_channel_for_dram_view(static_cast<int>(partition)) == mimir_index_for_cce(soc_desc, cce_index);
+        soc_desc.get_channel_for_dram_view(static_cast<int>(partition)) == mimir_index_for_cce(soc_desc, mimir_cce_index);
     return cross ? !local : local;
 }
 
-inline bool cce_partition_case_applies(const CcePartition& param, bool cross) {
+inline bool mimir_cce_partition_case_applies(const MimirCcePartition& param, bool cross) {
     const metal_SocDescriptor& soc_desc = configured_soc_desc();
-    if (param.cce_index >= num_cces_from_soc(soc_desc) || soc_desc.get_num_dram_channels() == 0) {
+    if (param.mimir_cce_index >= num_mimir_cces_from_soc(soc_desc) || soc_desc.get_num_dram_channels() == 0) {
         return false;
     }
     if (cross && soc_desc.get_num_dram_channels() < 2) {
         return false;
     }
-    return partition_in_case(soc_desc, param.cce_index, param.partition, cross);
+    return partition_in_case(soc_desc, param.mimir_cce_index, param.partition, cross);
 }
 
 inline GddrTarget gddr_target_for_view(const metal_SocDescriptor& soc_desc, uint32_t view, const GddrSweep& sweep) {
@@ -451,13 +451,13 @@ inline void read_mimir_gddr(
 
 // Host view of one CCE's SRAM. The address is the HAL NOC address (base plus offset), which UMD
 // resolves. Callers do not form a chiplet-local AXI address.
-inline void write_cce_sram(
+inline void write_mimir_cce_sram(
     IDevice* device, CoreCoord logical_dram_core, uint64_t noc_addr, const void* data, uint32_t size) {
     const CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_dram_core, CoreType::DRAM);
     MetalContext::instance().get_cluster().write_core(data, size, {device->id(), virtual_core}, noc_addr);
 }
 
-inline void read_cce_sram(IDevice* device, CoreCoord logical_dram_core, uint64_t noc_addr, void* data, uint32_t size) {
+inline void read_mimir_cce_sram(IDevice* device, CoreCoord logical_dram_core, uint64_t noc_addr, void* data, uint32_t size) {
     const CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_dram_core, CoreType::DRAM);
     MetalContext::instance().get_cluster().read_core(data, size, {device->id(), virtual_core}, noc_addr);
 }
@@ -473,18 +473,18 @@ inline void write_eth_sram(
     MetalContext::instance().get_cluster().write_core(data, size, {device->id(), virtual_core}, noc_addr);
 }
 
-inline uint64_t cce_sram_noc_addr(uint64_t offset) {
+inline uint64_t mimir_cce_sram_noc_addr(uint64_t offset) {
     return MetalContext::instance().hal().get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::BASE) +
            offset;
 }
 
 // UMD logical DRAM coordinate {channel, location}. Backend checks that do not go through a Metal
-// device use this. Contract tests use logical_cce_core().
-inline CoreCoord translated_dram_core(const metal_SocDescriptor& soc_desc, uint32_t cce_index) {
+// device use this. Contract tests use logical_mimir_cce_core().
+inline CoreCoord translated_dram_core(const metal_SocDescriptor& soc_desc, uint32_t mimir_cce_index) {
     const auto core = soc_desc.translate_coord_to(
         tt::umd::CoreCoord(
-            mimir_index_for_cce(soc_desc, cce_index),
-            location_for_cce(soc_desc, cce_index),
+            mimir_index_for_cce(soc_desc, mimir_cce_index),
+            location_for_mimir_cce(soc_desc, mimir_cce_index),
             CoreType::DRAM,
             CoordSystem::LOGICAL),
         CoordSystem::TRANSLATED);
