@@ -408,9 +408,16 @@ class ResidentRowsAdapter:
         if reload_inputs or reload_page_table:
             if page_table is None:
                 raise RuntimeError("a reload without the page table")
+            # host sampling reloads every step with the same tables: convert each row in one call (a Python int per
+            # element cost ~37 ms a step at 16 users x 4096 blocks) and rewrite the device tables only on a change
+            changed = False
             for i, r in zip(rows, row_slot):
-                self.tables[r] = [int(b) for b in page_table[i]]
-            self._write_tables()
+                row = page_table[i].tolist()
+                if row != self.tables[r]:
+                    self.tables[r] = row
+                    changed = True
+            if changed:
+                self._write_tables()
         if device and (reload_sampling_params or reset_sampling_state or self._sampling is None):
             self._set_sampling(sampling_params, rows, row_slot)
         if reload_inputs or not device:
