@@ -1,0 +1,2 @@
+{"case": 33, "variant": "base", "knobs": {}, "log": "r0", "t": 1795200885.235198, "status": "ok", "sha1": "bc0a4a18a4d6df4a3d8128115792592aa5cf78b1", "pcc": 0.9999985634438742, "ref": true, "bit_identical_to_first": true, "frac_diff_vs_first": 0.0, "max_ulp_vs_first": 0}
+{"case": 33, "variant": "dbg", "knobs": {"BRF_DEBUG": true}, "log": "r0", "t": 1795200885.4574077, "status": "ok", "sha1": "8d7a9cc7ed8192fed328ae20d93f32ccea90fe34", "pcc": 0.0010705185994468057, "bit_identical_to_first": false, "frac_diff_vs_first": 0.5828654170036316, "max_ulp_vs_first": 50582}

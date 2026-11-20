@@ -1,0 +1,261 @@
+SAFE_PYTEST: Waiting for device lock...
+[2026-11-20 20:39:32] SAFE_PYTEST: waiting for device (20s) — holder pid=2689495 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py " parent pid=2689486 cmd="/bin/bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/run.sh dg2 idx41,idx44 lazy,lazy_t2,lazy_t3 BRO_ORDER=alt "
+[2026-11-20 20:39:53] SAFE_PYTEST: waiting for device (40s) — holder pid=2689495 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py " parent pid=2689486 cmd="/bin/bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/run.sh dg2 idx41,idx44 lazy,lazy_t2,lazy_t3 BRO_ORDER=alt "
+[2026-11-20 20:40:14] SAFE_PYTEST: waiting for device (60s) — holder pid=2689495 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py " parent pid=2689486 cmd="/bin/bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/run.sh dg2 idx41,idx44 lazy,lazy_t2,lazy_t3 BRO_ORDER=alt "
+[2026-11-20 20:40:35] SAFE_PYTEST: waiting for device (80s) — holder pid=2689495 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py " parent pid=2689486 cmd="/bin/bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/run.sh dg2 idx41,idx44 lazy,lazy_t2,lazy_t3 BRO_ORDER=alt "
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: on — collect + parallel compile (x64) inside the pytest session, local
+SAFE_PYTEST: env UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=64 PYTHONPATH=/localdev/pmilojevic/workspaces/opgen:/localdev/pmilojevic/workspaces/opgen pytest -p tests.plugins.up_front_collect ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple_v2/test_panoptic_guard.py
+========================================
+2026-11-20 20:40:50.789 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/workspaces/opgen
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, anyio-4.16.0, benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, cov-7.0.0, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-11-20 20:40:51.002 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-20 20:40:51.002 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-20 20:40:51.005 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-20 20:40:51.005 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-20 20:40:51.028 | info     |             UMD | Established firmware bundle version: 19.16.1 (topology_discovery.cpp:700)
+2026-11-20 20:40:51.029 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-20 20:40:51.292 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:174)
+2026-11-20 20:40:51.292 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-20 20:40:51.292 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-20 20:40:51.292 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-20 20:40:51.299 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-20 20:40:51.860 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-20 20:40:52.000 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-20 20:40:52.000 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-20 20:40:52.137 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:40:52.824 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+2026-11-20 20:40:52.833 | INFO     | tracy:signpost:49 - cmp|stem.conv1|base|0
+2026-11-20 20:40:52.835 | INFO     | tracy:signpost:49 - cmpend|stem.conv1|base
+2026-11-20 20:40:52.836 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+2026-11-20 20:40:52.839 | INFO     | tracy:signpost:49 - cmp|stem.conv1|final|0
+2026-11-20 20:40:52.841 | INFO     | tracy:signpost:49 - cmpend|stem.conv1|final
+2026-11-20 20:40:53.015 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:40:53.108 | info     |           Metal | Clearing program cache on MeshDevice 3 (mesh_device.cpp:1327)
+2026-11-20 20:40:53.122 | INFO     | tracy:signpost:49 - cmp|stem.conv2|base|0
+2026-11-20 20:40:53.127 | INFO     | tracy:signpost:49 - cmpend|stem.conv2|base
+2026-11-20 20:40:53.128 | info     |           Metal | Clearing program cache on MeshDevice 3 (mesh_device.cpp:1327)
+2026-11-20 20:40:53.136 | INFO     | tracy:signpost:49 - cmp|stem.conv2|final|0
+2026-11-20 20:40:53.141 | INFO     | tracy:signpost:49 - cmpend|stem.conv2|final
+2026-11-20 20:40:53.314 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:40:53.402 | info     |           Metal | Clearing program cache on MeshDevice 5 (mesh_device.cpp:1327)
+2026-11-20 20:40:53.419 | INFO     | tracy:signpost:49 - cmp|stem.conv3|base|0
+2026-11-20 20:40:53.426 | INFO     | tracy:signpost:49 - cmpend|stem.conv3|base
+2026-11-20 20:40:53.426 | info     |           Metal | Clearing program cache on MeshDevice 5 (mesh_device.cpp:1327)
+2026-11-20 20:40:53.437 | INFO     | tracy:signpost:49 - cmp|stem.conv3|final|0
+2026-11-20 20:40:53.444 | INFO     | tracy:signpost:49 - cmpend|stem.conv3|final
+2026-11-20 20:40:53.615 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:40:53.697 | info     |           Metal | Clearing program cache on MeshDevice 7 (mesh_device.cpp:1327)
+2026-11-20 20:40:53.709 | INFO     | tracy:signpost:49 - cmp|res2.{0,1,2}.conv2|base|0
+2026-11-20 20:40:53.714 | INFO     | tracy:signpost:49 - cmpend|res2.{0,1,2}.conv2|base
+2026-11-20 20:40:53.715 | info     |           Metal | Clearing program cache on MeshDevice 7 (mesh_device.cpp:1327)
+2026-11-20 20:40:53.721 | INFO     | tracy:signpost:49 - cmp|res2.{0,1,2}.conv2|final|0
+2026-11-20 20:40:53.727 | INFO     | tracy:signpost:49 - cmpend|res2.{0,1,2}.conv2|final
+2026-11-20 20:40:53.899 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:40:53.984 | info     |           Metal | Clearing program cache on MeshDevice 9 (mesh_device.cpp:1327)
+2026-11-20 20:40:53.994 | INFO     | tracy:signpost:49 - cmp|res3.0.conv2|base|0
+2026-11-20 20:40:53.996 | INFO     | tracy:signpost:49 - cmpend|res3.0.conv2|base
+2026-11-20 20:40:53.996 | info     |           Metal | Clearing program cache on MeshDevice 9 (mesh_device.cpp:1327)
+2026-11-20 20:40:53.999 | INFO     | tracy:signpost:49 - cmp|res3.0.conv2|final|0
+2026-11-20 20:40:54.002 | INFO     | tracy:signpost:49 - cmpend|res3.0.conv2|final
+2026-11-20 20:40:54.176 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:40:54.260 | info     |           Metal | Clearing program cache on MeshDevice 11 (mesh_device.cpp:1327)
+2026-11-20 20:40:54.272 | INFO     | tracy:signpost:49 - cmp|res3.{1,2,3}.conv2 + instance res3.fuse_conv.1|base|0
+2026-11-20 20:40:54.277 | INFO     | tracy:signpost:49 - cmpend|res3.{1,2,3}.conv2 + instance res3.fuse_conv.1|base
+2026-11-20 20:40:54.278 | info     |           Metal | Clearing program cache on MeshDevice 11 (mesh_device.cpp:1327)
+2026-11-20 20:40:54.285 | INFO     | tracy:signpost:49 - cmp|res3.{1,2,3}.conv2 + instance res3.fuse_conv.1|final|0
+2026-11-20 20:40:54.290 | INFO     | tracy:signpost:49 - cmpend|res3.{1,2,3}.conv2 + instance res3.fuse_conv.1|final
+2026-11-20 20:40:54.464 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:40:54.549 | info     |           Metal | Clearing program cache on MeshDevice 13 (mesh_device.cpp:1327)
+2026-11-20 20:40:54.574 | INFO     | tracy:signpost:49 - cmp|res4.0.conv2|base|0
+2026-11-20 20:40:54.581 | INFO     | tracy:signpost:49 - cmpend|res4.0.conv2|base
+2026-11-20 20:40:54.582 | info     |           Metal | Clearing program cache on MeshDevice 13 (mesh_device.cpp:1327)
+2026-11-20 20:40:54.601 | INFO     | tracy:signpost:49 - cmp|res4.0.conv2|final|0
+2026-11-20 20:40:54.608 | INFO     | tracy:signpost:49 - cmpend|res4.0.conv2|final
+2026-11-20 20:40:54.784 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:40:54.870 | info     |           Metal | Clearing program cache on MeshDevice 15 (mesh_device.cpp:1327)
+2026-11-20 20:40:54.898 | INFO     | tracy:signpost:49 - cmp|res4.{1..5}.conv2|base|0
+2026-11-20 20:40:54.906 | INFO     | tracy:signpost:49 - cmpend|res4.{1..5}.conv2|base
+2026-11-20 20:40:54.906 | info     |           Metal | Clearing program cache on MeshDevice 15 (mesh_device.cpp:1327)
+2026-11-20 20:40:54.927 | INFO     | tracy:signpost:49 - cmp|res4.{1..5}.conv2|final|0
+2026-11-20 20:40:54.935 | INFO     | tracy:signpost:49 - cmpend|res4.{1..5}.conv2|final
+2026-11-20 20:40:55.111 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:40:55.194 | info     |           Metal | Clearing program cache on MeshDevice 17 (mesh_device.cpp:1327)
+2026-11-20 20:40:55.593 | INFO     | tracy:signpost:49 - cmp|res5.0.conv2|base|0
+2026-11-20 20:40:55.602 | INFO     | tracy:signpost:49 - cmpend|res5.0.conv2|base
+2026-11-20 20:40:55.602 | info     |           Metal | Clearing program cache on MeshDevice 17 (mesh_device.cpp:1327)
+2026-11-20 20:40:55.995 | INFO     | tracy:signpost:49 - cmp|res5.0.conv2|final|0
+2026-11-20 20:40:56.004 | INFO     | tracy:signpost:49 - cmpend|res5.0.conv2|final
+2026-11-20 20:40:56.175 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:40:56.259 | info     |           Metal | Clearing program cache on MeshDevice 19 (mesh_device.cpp:1327)
+2026-11-20 20:40:56.407 | INFO     | tracy:signpost:49 - cmp|res5.1.conv2|base|0
+2026-11-20 20:40:56.537 | INFO     | tracy:signpost:49 - cmpend|res5.1.conv2|base
+2026-11-20 20:40:56.538 | info     |           Metal | Clearing program cache on MeshDevice 19 (mesh_device.cpp:1327)
+2026-11-20 20:40:56.681 | INFO     | tracy:signpost:49 - cmp|res5.1.conv2|final|0
+2026-11-20 20:40:56.812 | INFO     | tracy:signpost:49 - cmpend|res5.1.conv2|final
+2026-11-20 20:40:56.984 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:40:57.068 | info     |           Metal | Clearing program cache on MeshDevice 21 (mesh_device.cpp:1327)
+2026-11-20 20:40:57.172 | INFO     | tracy:signpost:49 - cmp|res5.2.conv2|base|0
+2026-11-20 20:40:57.258 | INFO     | tracy:signpost:49 - cmpend|res5.2.conv2|base
+2026-11-20 20:40:57.258 | info     |           Metal | Clearing program cache on MeshDevice 21 (mesh_device.cpp:1327)
+2026-11-20 20:40:57.357 | INFO     | tracy:signpost:49 - cmp|res5.2.conv2|final|0
+2026-11-20 20:40:57.444 | INFO     | tracy:signpost:49 - cmpend|res5.2.conv2|final
+2026-11-20 20:40:57.616 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:40:57.703 | info     |           Metal | Clearing program cache on MeshDevice 23 (mesh_device.cpp:1327)
+2026-11-20 20:40:57.952 | INFO     | tracy:signpost:49 - cmp|aspp.convs.1 (x2 heads)|base|0
+2026-11-20 20:40:58.181 | INFO     | tracy:signpost:49 - cmpend|aspp.convs.1 (x2 heads)|base
+2026-11-20 20:40:58.182 | info     |           Metal | Clearing program cache on MeshDevice 23 (mesh_device.cpp:1327)
+2026-11-20 20:40:58.427 | INFO     | tracy:signpost:49 - cmp|aspp.convs.1 (x2 heads)|final|0
+2026-11-20 20:40:58.656 | INFO     | tracy:signpost:49 - cmpend|aspp.convs.1 (x2 heads)|final
+2026-11-20 20:40:58.835 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:40:58.919 | info     |           Metal | Clearing program cache on MeshDevice 25 (mesh_device.cpp:1327)
+2026-11-20 20:40:59.063 | INFO     | tracy:signpost:49 - cmp|aspp.convs.2 (x2 heads)|base|0
+2026-11-20 20:40:59.186 | INFO     | tracy:signpost:49 - cmpend|aspp.convs.2 (x2 heads)|base
+2026-11-20 20:40:59.186 | info     |           Metal | Clearing program cache on MeshDevice 25 (mesh_device.cpp:1327)
+2026-11-20 20:40:59.324 | INFO     | tracy:signpost:49 - cmp|aspp.convs.2 (x2 heads)|final|0
+2026-11-20 20:40:59.448 | INFO     | tracy:signpost:49 - cmpend|aspp.convs.2 (x2 heads)|final
+2026-11-20 20:40:59.624 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:40:59.707 | info     |           Metal | Clearing program cache on MeshDevice 27 (mesh_device.cpp:1327)
+2026-11-20 20:40:59.860 | INFO     | tracy:signpost:49 - cmp|aspp.convs.3 (x2 heads, 1024-ch slice)|base|0
+2026-11-20 20:40:59.994 | INFO     | tracy:signpost:49 - cmpend|aspp.convs.3 (x2 heads, 1024-ch slice)|base
+2026-11-20 20:40:59.995 | info     |           Metal | Clearing program cache on MeshDevice 27 (mesh_device.cpp:1327)
+2026-11-20 20:41:00.141 | INFO     | tracy:signpost:49 - cmp|aspp.convs.3 (x2 heads, 1024-ch slice)|final|0
+2026-11-20 20:41:00.275 | INFO     | tracy:signpost:49 - cmpend|aspp.convs.3 (x2 heads, 1024-ch slice)|final
+2026-11-20 20:41:00.446 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:41:00.529 | info     |           Metal | Clearing program cache on MeshDevice 29 (mesh_device.cpp:1327)
+2026-11-20 20:41:00.542 | INFO     | tracy:signpost:49 - cmp|semantic decoder.res3.fuse_conv.0|base|0
+2026-11-20 20:41:00.547 | INFO     | tracy:signpost:49 - cmpend|semantic decoder.res3.fuse_conv.0|base
+2026-11-20 20:41:00.547 | info     |           Metal | Clearing program cache on MeshDevice 29 (mesh_device.cpp:1327)
+2026-11-20 20:41:00.554 | INFO     | tracy:signpost:49 - cmp|semantic decoder.res3.fuse_conv.0|final|0
+2026-11-20 20:41:00.559 | INFO     | tracy:signpost:49 - cmpend|semantic decoder.res3.fuse_conv.0|final
+2026-11-20 20:41:00.729 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:41:00.798 | info     |           Metal | Clearing program cache on MeshDevice 31 (mesh_device.cpp:1327)
+2026-11-20 20:41:00.811 | INFO     | tracy:signpost:49 - cmp|instance decoder.res3.fuse_conv.0|base|0
+2026-11-20 20:41:00.815 | INFO     | tracy:signpost:49 - cmpend|instance decoder.res3.fuse_conv.0|base
+2026-11-20 20:41:00.816 | info     |           Metal | Clearing program cache on MeshDevice 31 (mesh_device.cpp:1327)
+2026-11-20 20:41:00.823 | INFO     | tracy:signpost:49 - cmp|instance decoder.res3.fuse_conv.0|final|0
+2026-11-20 20:41:00.827 | INFO     | tracy:signpost:49 - cmpend|instance decoder.res3.fuse_conv.0|final
+2026-11-20 20:41:00.998 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:41:01.082 | info     |           Metal | Clearing program cache on MeshDevice 33 (mesh_device.cpp:1327)
+2026-11-20 20:41:01.094 | INFO     | tracy:signpost:49 - cmp|semantic decoder.res3.fuse_conv.1|base|0
+2026-11-20 20:41:01.099 | INFO     | tracy:signpost:49 - cmpend|semantic decoder.res3.fuse_conv.1|base
+2026-11-20 20:41:01.099 | info     |           Metal | Clearing program cache on MeshDevice 33 (mesh_device.cpp:1327)
+2026-11-20 20:41:01.106 | INFO     | tracy:signpost:49 - cmp|semantic decoder.res3.fuse_conv.1|final|0
+2026-11-20 20:41:01.111 | INFO     | tracy:signpost:49 - cmpend|semantic decoder.res3.fuse_conv.1|final
+2026-11-20 20:41:01.282 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:41:01.357 | info     |           Metal | Clearing program cache on MeshDevice 35 (mesh_device.cpp:1327)
+2026-11-20 20:41:01.372 | INFO     | tracy:signpost:49 - cmp|semantic decoder.res2.fuse_conv.0|base|0
+2026-11-20 20:41:01.377 | INFO     | tracy:signpost:49 - cmpend|sem
+... [truncated: 322460 bytes] ...
+SAFE_PYTEST: Waiting for device lock...
+[2026-11-20 20:39:32] SAFE_PYTEST: waiting for device (20s) — holder pid=2689495 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py " parent pid=2689486 cmd="/bin/bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/run.sh dg2 idx41,idx44 lazy,lazy_t2,lazy_t3 BRO_ORDER=alt "
+[2026-11-20 20:39:53] SAFE_PYTEST: waiting for device (40s) — holder pid=2689495 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py " parent pid=2689486 cmd="/bin/bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/run.sh dg2 idx41,idx44 lazy,lazy_t2,lazy_t3 BRO_ORDER=alt "
+[2026-11-20 20:40:14] SAFE_PYTEST: waiting for device (60s) — holder pid=2689495 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py " parent pid=2689486 cmd="/bin/bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/run.sh dg2 idx41,idx44 lazy,lazy_t2,lazy_t3 BRO_ORDER=alt "
+[2026-11-20 20:40:35] SAFE_PYTEST: waiting for device (80s) — holder pid=2689495 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py " parent pid=2689486 cmd="/bin/bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/run.sh dg2 idx41,idx44 lazy,lazy_t2,lazy_t3 BRO_ORDER=alt "
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+SAFE_PYTEST: env UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=64 PYTHONPATH=/localdev/pmilojevic/workspaces/opgen:/localdev/pmilojevic/workspaces/opgen pytest -p tests.plugins.up_front_collect ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple_v2/test_panoptic_guard.py
+WSD_PAN: {"layer": "stem.conv1", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "stem.conv2", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "stem.conv3", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "res2.{0,1,2}.conv2", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "res3.0.conv2", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "res3.{1,2,3}.conv2 + instance res3.fuse_conv.1", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "res4.0.conv2", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "res4.{1..5}.conv2", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "res5.0.conv2", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "res5.1.conv2", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "res5.2.conv2", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "aspp.convs.1 (x2 heads)", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "aspp.convs.2 (x2 heads)", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "aspp.convs.3 (x2 heads, 1024-ch slice)", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "semantic decoder.res3.fuse_conv.0", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "instance decoder.res3.fuse_conv.0", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "semantic decoder.res3.fuse_conv.1", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "semantic decoder.res2.fuse_conv.0", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "instance decoder.res2.fuse_conv.0", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "semantic res2.fuse_conv.1 + semantic_head.head.{0,1}", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "instance res2.fuse_conv.1 + center_head.0 + offset_head.0", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "center_head.1 + offset_head.1", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "res4.{1..5}.conv2 @ LoFi", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "stem.conv1 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "stem.conv2 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "stem.conv3 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "res2.{0,1,2}.conv2 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "res3.0.conv2 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "res3.{1,2,3}.conv2 + instance res3.fuse_conv.1 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "res4.0.conv2 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "res4.{1..5}.conv2 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "res5.0.conv2 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "res5.1.conv2 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "res5.2.conv2 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "aspp.convs.1 (x2 heads) @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "aspp.convs.2 (x2 heads) @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "aspp.convs.3 (x2 heads, 1024-ch slice) @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "semantic decoder.res3.fuse_conv.0 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "instance decoder.res3.fuse_conv.0 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "semantic decoder.res3.fuse_conv.1 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "semantic decoder.res2.fuse_conv.0 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "instance decoder.res2.fuse_conv.0 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "semantic res2.fuse_conv.1 + semantic_head.head.{0,1} @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "instance res2.fuse_conv.1 + center_head.0 + offset_head.0 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+PASSED
+WSD_PAN: {"layer": "center_head.1 + offset_head.1 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+PASSEDUP_FRONT_INLINE: real pass took 20.7s
+============================= 45 passed in 55.31s ==============================
+SAFE_PYTEST_RESULT: PASS
+SAFE_PYTEST_TOTAL_RUNTIME: 1m03s (63s total, device-lock-acquired -> exit)

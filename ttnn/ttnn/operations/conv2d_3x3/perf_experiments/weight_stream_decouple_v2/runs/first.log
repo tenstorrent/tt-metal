@@ -1,0 +1,178 @@
+SAFE_PYTEST: Waiting for device lock...
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: on — collect + parallel compile (x64) inside the pytest session, local
+SAFE_PYTEST: env UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=64 PYTHONPATH=/localdev/pmilojevic/workspaces/opgen:/localdev/pmilojevic/workspaces/opgen python -m tracy -r -m pytest -p tests.plugins.up_front_collect ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple_v2/test_wsd2.py
+========================================
+2026-11-20 18:49:33.254 | INFO     | __main__:main:381 - Using port 8086
+2026-11-20 18:49:33.254 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-11-20 18:49:33.454 | INFO     | __main__:run_workload:416 - Test process started
+2026-11-20 18:49:35.969 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/workspaces/opgen
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, anyio-4.16.0, benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, cov-7.0.0, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-11-20 18:49:41.122 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-20 18:49:41.122 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-20 18:49:41.125 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-20 18:49:41.125 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-20 18:49:41.147 | info     |             UMD | Established firmware bundle version: 19.16.1 (topology_discovery.cpp:700)
+2026-11-20 18:49:41.148 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-20 18:49:41.411 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:174)
+2026-11-20 18:49:41.411 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-20 18:49:41.411 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-20 18:49:41.411 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-20 18:49:41.419 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-20 18:49:41.802 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-20 18:49:41.948 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-20 18:49:41.948 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-20 18:49:42.131 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 18:49:42.150 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-11-20 18:49:42.899 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+2026-11-20 18:49:43.164 | INFO     | tracy:signpost:49 - cmp|43|base|0
+2026-11-20 18:49:43.195 | INFO     | tracy:signpost:49 - cmpend|43|base
+2026-11-20 18:49:43.197 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+2026-11-20 18:49:43.481 | INFO     | tracy:signpost:49 - cmp|43|sp|0
+2026-11-20 18:49:43.541 | INFO     | tracy:signpost:49 - cmpend|43|sp
+2026-11-20 18:49:43.542 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+2026-11-20 18:49:43.845 | INFO     | tracy:signpost:49 - cmp|43|rec|0
+2026-11-20 18:49:43.919 | INFO     | tracy:signpost:49 - cmpend|43|rec
+collected 1 item
+
+UP_FRONT_INLINE: collect pass over 1 item(s) took 2.8s
+UP_FRONT_INLINE: compile route local (programs=3, farm_min=10)
+
+UP_FRONT_COLLECT: 6 ops stashed across 1 bodies -> 3 unique programs (swallowed 0, skipped-capture 0)
+UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=7 fallback=0
+2026-11-20 18:49:44.121 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 18:49:44.135 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-11-20 18:49:44.200 | info     |           Metal | Enabling program cache on MeshDevice 3 (mesh_device.cpp:1322)
+Building ncrisc, compile step:
+ccache sloppiness=pch_defines,time_macros /localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/workspaces/opgen/ -I/localdev/pmilojevic/workspaces/opgen/ttnn -I/localdev/pmilojevic/workspaces/opgen/ttnn/cpp -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/workspaces/opgen/tt_metal/api/ -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple_v2/op_base/kernels -include /localdev/pmilojevic/workspaces/opgen/built/tt-metal-cache/pch/947b0d35d37b4285/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DBANK_RUN_FILL=1 -DBRF_CHUNK_PX=64 -DBRF_NSTG=4 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="conv2d_3x3_reader/1334283188670345046/" -DKERNEL_COMPILE_TIME_ARGS=0,1,7,258,512,512,131072,128,128,0,1,1,8,4,12,9,258,0,256,0,1,8,0,0,0,0,1,16,16,16,5,8,2,3,1,0,2,2,0,0,0,0,8,0,0,774,11,0,10,0,1,0,2,0,0,0,0,0,0,2,0,0,0,0,12,0,1,13,4,4,2,1,8,0,0,0,1,2,256 -c -o /localdev/pmilojevic/workspaces/opgen/built/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_reader/1334283188670345046/ncrisc/ncrisck.4191774527917450680_1802627.o /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/pmilojevic/workspaces/opgen/built/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_reader/1334283188670345046/ncrisc/ncrisck.4191774527917450680_1802627.d
+In file included from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,645,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:645:5: note: in expansion of macro 'SrcLocNameToHash'
+  645 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple_v2/op_base/kernels/conv2d_3x3_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple_v2/op_base/kernels/conv2d_3x3_reader.cpp,745,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple_v2/op_base/kernels/conv2d_3x3_reader.cpp:745:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+  745 |             MaybeDeviceZoneScope("reader_fill");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill_reserve,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple_v2/op_base/kernels/conv2d_3x3_reader.cpp,784,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple_v2/op_base/kernels/conv2d_3x3_reader.cpp:784:21: note: in expansion of macro 'MaybeDeviceZoneScope'
+  784 |                     MaybeDeviceZoneScope("reader_fill_reserve");
+      |                     ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill_fwd_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple_v2/op_base/kernels/conv2d_3x3_reader.cpp,799,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple_v2/op_base/kernels/conv2d_3x3_reader.cpp:799:25: note: in expansion of macro 'MaybeDeviceZoneScope'
+  799 |                         MaybeDeviceZoneScope("reader_fill_fwd_wait");
+      |                         ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple_v2/op_base/kernels/conv2d_3x3_reader.cpp,816,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple_v2/op_base/kernels/conv2d_3x3_reader.cpp:816:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+  816 |             MaybeDeviceZoneScope("reader_fill");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill_reserve,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple_v2/op_base/kernels/conv2d_3x3_reader.cpp,1008,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple_v2/op_base/kernels/conv2d_3x3_reader.cpp:1008:25: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1008 |                         MaybeDeviceZoneScope("reader_fill_reserve");
+      |                         ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple_v2/op_base/kernels/conv2d_3x3_reader.cpp: In lambda function:
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill_fwd_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple_v2/op_base/kernels/conv2d_3x3_reader.cpp,1028,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple_v2/op_base/kernels/conv2d_3x3_reader.cpp:1028:29: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1028 |                             MaybeDeviceZoneScope("reader_fill_fwd_wait");
+      |                             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple_v2/op_base/kernels/conv2d_3x3_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill_reserve,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple_v2/op_base/kernels/conv2d_3x3_reader.cpp,1041,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple_v2/op_base/kernels/conv2d_3x3_reader.cpp:1041:29: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1041 |                             MaybeDeviceZoneScope("reader_fill_reserve");
+      |                             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple_v2/op_base/kernels/conv2d_3x3_reader.cpp,1081,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |
+... [truncated: 512391 bytes] ...
+SAFE_PYTEST: Waiting for device lock...
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+SAFE_PYTEST: env UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=64 PYTHONPATH=/localdev/pmilojevic/workspaces/opgen:/localdev/pmilojevic/workspaces/opgen python -m tracy -r -m pytest -p tests.plugins.up_front_collect ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple_v2/test_wsd2.py
+ccache sloppiness=pch_defines,time_macros /localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno
+ccache sloppiness=pch_defines,time_macros /localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno
+ccache sloppiness=pch_defines,time_macros /localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno
+WSD: {"case": 43, "variant": "base", "knobs": {}, "log": "first", "t": 1795200586.024546, "sha1": "e4417d6178b44f6dbacdcb00e9e16f35b6c2d12c", "status": "ok", "pcc": 0.9999985522014374, "ref": true, "bit_identical_to_first": true, "max_abs_vs_first": 0.0, "frac_diff_vs_first": 0.0, "max_ulp_vs_first": 0}
+WSD: {"case": 43, "variant": "sp", "knobs": {"WSD_SPLIT": true}, "log": "first", "t": 1795200587.1217804, "sha1": "e4417d6178b44f6dbacdcb00e9e16f35b6c2d12c", "status": "ok", "blocking": {"bm": 8, "bk": 4, "depth": 2, "m_blocks": 5, "k_blocks": 9, "footprint": 1222272}, "pcc": 0.9999985522014374, "bit_identical_to_first": true, "max_abs_vs_first": 0.0, "frac_diff_vs_first": 0.0, "max_ulp_vs_first":
+WSD: {"case": 43, "variant": "rec", "knobs": {"WSD_KROT": "all", "WSD_SPLIT": true, "WSD_FILL_LEAD": 1}, "log": "first", "t": 1795200588.5243638, "sha1": "be5d05466e0b8f2bd5f09f54d42f74ba1fadd89d", "status": "ok", "blocking": {"bm": 8, "bk": 4, "depth": 2, "m_blocks": 5, "k_blocks": 9, "footprint": 1222272}, "pcc": 0.9999985522011948, "bit_identical_to_first": false, "max_abs_vs_first": 0.015625,
+PASSED2026-11-20 18:49:50.342 | info     |           Metal | Device kernel duration perf summary (device=0): count=6, min=1466932ns, avg=1598566.5ns, max=1682700ns (profiler_analysis.cpp:729)
+============================== 1 passed in 10.60s ==============================
+SAFE_PYTEST: PROFILER CSV: /localdev/pmilojevic/workspaces/opgen/generated/profiler/reports/2026_11_20_18_50_00/ops_perf_results_2026_11_20_18_50_00.csv
+SAFE_PYTEST_RESULT: PASS
+SAFE_PYTEST_TOTAL_RUNTIME: 0m30s (30s total, device-lock-acquired -> exit)

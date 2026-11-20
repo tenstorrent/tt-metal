@@ -1,0 +1,167 @@
+SAFE_PYTEST: Waiting for device lock...
+[2026-11-20 20:43:14] SAFE_PYTEST: waiting for device (20s) — holder pid=2724915 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py " parent pid=2724906 cmd="/bin/bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/run.sh dsA idx41,idx35,idx36,idx33,idx42,idx44 base,lazy BRO_ORDER=alt "
+[2026-11-20 20:43:36] SAFE_PYTEST: waiting for device (40s) — holder pid=2724915 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py " parent pid=2724906 cmd="/bin/bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/run.sh dsA idx41,idx35,idx36,idx33,idx42,idx44 base,lazy BRO_ORDER=alt "
+[2026-11-20 20:43:57] SAFE_PYTEST: waiting for device (60s) — holder pid=2724915 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py " parent pid=2724906 cmd="/bin/bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/run.sh dsA idx41,idx35,idx36,idx33,idx42,idx44 base,lazy BRO_ORDER=alt "
+[2026-11-20 20:44:18] SAFE_PYTEST: waiting for device (80s) — holder pid=2688664 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/rm_ring_bank_run/test_rmb.py " parent pid=2688663 cmd="timeout 3000 scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/rm_ring_bank_run/test_rmb.py "
+[2026-11-20 20:44:39] SAFE_PYTEST: waiting for device (100s) — holder pid=2688664 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/rm_ring_bank_run/test_rmb.py " parent pid=2688663 cmd="timeout 3000 scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/rm_ring_bank_run/test_rmb.py "
+[2026-11-20 20:45:00] SAFE_PYTEST: waiting for device (120s) — holder pid=2755505 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py " parent pid=2755496 cmd="/bin/bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/run.sh dsB idx46,idx39,idx37,idx45,idx40,idx43 base,lazy BRO_ORDER=alt "
+[2026-11-20 20:45:22] SAFE_PYTEST: waiting for device (140s) — holder pid=2755505 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py " parent pid=2755496 cmd="/bin/bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/run.sh dsB idx46,idx39,idx37,idx45,idx40,idx43 base,lazy BRO_ORDER=alt "
+[2026-11-20 20:45:43] SAFE_PYTEST: waiting for device (160s) — holder pid=2755505 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py " parent pid=2755496 cmd="/bin/bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/run.sh dsB idx46,idx39,idx37,idx45,idx40,idx43 base,lazy BRO_ORDER=alt "
+[2026-11-20 20:46:04] SAFE_PYTEST: waiting for device (180s) — holder pid=2758900 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/rm_ring_bank_run/test_rmb.py " parent pid=2758895 cmd="timeout 3000 scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/rm_ring_bank_run/test_rmb.py "
+[2026-11-20 20:46:25] SAFE_PYTEST: waiting for device (200s) — holder pid=2758900 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/rm_ring_bank_run/test_rmb.py " parent pid=2758895 cmd="timeout 3000 scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/rm_ring_bank_run/test_rmb.py "
+[2026-11-20 20:46:46] SAFE_PYTEST: waiting for device (220s) — holder pid=2758900 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/rm_ring_bank_run/test_rmb.py " parent pid=2758895 cmd="timeout 3000 scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/rm_ring_bank_run/test_rmb.py "
+[2026-11-20 20:47:07] SAFE_PYTEST: waiting for device (240s) — holder pid=2758900 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/rm_ring_bank_run/test_rmb.py " parent pid=2758895 cmd="timeout 3000 scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/rm_ring_bank_run/test_rmb.py "
+[2026-11-20 20:47:28] SAFE_PYTEST: waiting for device (260s) — holder pid=2758900 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/rm_ring_bank_run/test_rmb.py " parent pid=2758895 cmd="timeout 3000 scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/rm_ring_bank_run/test_rmb.py "
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: on — collect + parallel compile (x64) inside the pytest session, local
+SAFE_PYTEST: env UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=64 PYTHONPATH=/localdev/pmilojevic/workspaces/opgen:/localdev/pmilojevic/workspaces/opgen python -m tracy -r -m pytest -p tests.plugins.up_front_collect ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple_v2/test_wsd2.py
+========================================
+2026-11-20 20:47:51.761 | INFO     | __main__:main:381 - Using port 8086
+2026-11-20 20:47:51.762 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-11-20 20:47:52.153 | INFO     | __main__:run_workload:416 - Test process started
+2026-11-20 20:47:54.622 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/workspaces/opgen
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, anyio-4.16.0, benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, cov-7.0.0, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-11-20 20:47:59.860 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-20 20:47:59.860 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-20 20:47:59.862 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-20 20:47:59.862 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-20 20:47:59.886 | info     |             UMD | Established firmware bundle version: 19.16.1 (topology_discovery.cpp:700)
+2026-11-20 20:47:59.886 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-20 20:48:00.152 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:174)
+2026-11-20 20:48:00.152 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-20 20:48:00.152 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-20 20:48:00.152 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-20 20:48:00.160 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-20 20:48:00.616 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-20 20:48:00.763 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-20 20:48:00.763 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-20 20:48:00.944 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:48:00.962 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-11-20 20:48:01.730 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+2026-11-20 20:48:02.036 | INFO     | tracy:signpost:49 - cmp|43|final|0
+2026-11-20 20:48:02.112 | INFO     | tracy:signpost:49 - cmpend|43|final
+2026-11-20 20:48:02.113 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+2026-11-20 20:48:02.373 | INFO     | tracy:signpost:49 - cmp|43|base|0
+2026-11-20 20:48:02.404 | INFO     | tracy:signpost:49 - cmpend|43|base
+2026-11-20 20:48:02.610 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:48:02.624 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-11-20 20:48:02.731 | info     |           Metal | Clearing program cache on MeshDevice 3 (mesh_device.cpp:1327)
+2026-11-20 20:48:02.817 | INFO     | tracy:signpost:49 - cmp|38|base|0
+2026-11-20 20:48:02.848 | INFO     | tracy:signpost:49 - cmpend|38|base
+2026-11-20 20:48:02.849 | info     |           Metal | Clearing program cache on MeshDevice 3 (mesh_device.cpp:1327)
+2026-11-20 20:48:02.970 | INFO     | tracy:signpost:49 - cmp|38|final|0
+2026-11-20 20:48:03.043 | INFO     | tracy:signpost:49 - cmpend|38|final
+2026-11-20 20:48:03.240 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:48:03.243 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-11-20 20:48:03.350 | info     |           Metal | Clearing program cache on MeshDevice 5 (mesh_device.cpp:1327)
+2026-11-20 20:48:04.531 | INFO     | tracy:signpost:49 - cmp|47|final|0
+2026-11-20 20:48:04.608 | INFO     | tracy:signpost:49 - cmpend|47|final
+2026-11-20 20:48:04.609 | info     |           Metal | Clearing program cache on MeshDevice 5 (mesh_device.cpp:1327)
+2026-11-20 20:48:05.731 | INFO     | tracy:signpost:49 - cmp|47|base|0
+2026-11-20 20:48:05.763 | INFO     | tracy:signpost:49 - cmpend|47|base
+2026-11-20 20:48:05.970 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:48:05.972 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-11-20 20:48:06.079 | info     |           Metal | Clearing program cache on MeshDevice 7 (mesh_device.cpp:1327)
+2026-11-20 20:48:06.163 | INFO     | tracy:signpost:49 - cmp|102|base|0
+2026-11-20 20:48:06.193 | INFO     | tracy:signpost:49 - cmpend|102|base
+2026-11-20 20:48:06.194 | info     |           Metal | Clearing program cache on MeshDevice 7 (mesh_device.cpp:1327)
+2026-11-20 20:48:06.301 | INFO     | tracy:signpost:49 - cmp|102|final|0
+2026-11-20 20:48:06.359 | INFO     | tracy:signpost:49 - cmpend|102|final
+2026-11-20 20:48:06.559 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:48:06.561 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-11-20 20:48:06.668 | info     |           Metal | Clearing program cache on MeshDevice 9 (mesh_device.cpp:1327)
+2026-11-20 20:48:06.826 | INFO     | tracy:signpost:49 - cmp|106|final|0
+2026-11-20 20:48:06.905 | INFO     | tracy:signpost:49 - cmpend|106|final
+2026-11-20 20:48:06.906 | info     |           Metal | Clearing program cache on MeshDevice 9 (mesh_device.cpp:1327)
+2026-11-20 20:48:07.011 | INFO     | tracy:signpost:49 - cmp|106|base|0
+2026-11-20 20:48:07.044 | INFO     | tracy:signpost:49 - cmpend|106|base
+collected 5 items
+
+UP_FRONT_INLINE: collect pass over 5 item(s) took 7.2s
+UP_FRONT_INLINE: compile route local (programs=10, farm_min=10)
+
+UP_FRONT_COLLECT: 20 ops stashed across 5 bodies -> 10 unique programs (swallowed 0, skipped-capture 0)
+UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=25 fallback=0
+2026-11-20 20:48:07.240 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:48:07.242 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-11-20 20:48:07.323 | info     |           Metal | Enabling program cache on MeshDevice 11 (mesh_device.cpp:1322)
+Building ncrisc, compile step:
+ccache sloppiness=pch_defines,time_macros /localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/workspaces/opgen/ -I/localdev/pmilojevic/workspaces/opgen/ttnn -I/localdev/pmilojevic/workspaces/opgen/ttnn/cpp -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/workspaces/opgen/tt_metal/api/ -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple_v2/op_final/kernels -include /localdev/pmilojevic/workspaces/opgen/built/tt-metal-cache/pch/947b0d35d37b4285/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DBANK_RUN_FILL=1 -DBRF_CHUNK_PX=32 -DBRF_NSTG=2 -DWSD_ARG=9 -DWSD_KROT=1 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="conv2d_3x3_reader/10022896172199406820/" -DKERNEL_COMPILE_TIME_ARGS=0,1,7,98,512,512,49152,256,256,0,1,1,5,8,24,9,162,0,512,0,1,2,0,0,0,0,1,16,16,16,5,8,2,3,1,0,2,2,0,0,0,0,5,0,0,486,11,0,10,0,1,0,2,0,0,0,0,0,0,2,0,0,0,0,12,0,1,13,4,4,2,1,5,0,0,0,1,2,512 -c -o /localdev/pmilojevic/workspaces/opgen/built/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_reader/10022896172199406820/ncrisc/ncrisck.10618114202892211702_2786037.o /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/pmilojevic/workspaces/opgen/built/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_reader/10022896172199406820/ncrisc/ncrisck.10618114202892211702_2786037.d
+In file included from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,645,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:645:5: note: in expansion of macro 'SrcLocNameToHash'
+  645 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple_v2/op_final/kernels/conv2d_3x3_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple_v2/op_final/kernels/conv2d_3x3_reader.cpp,751,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~
+... [truncated: 407310 bytes] ...
+SAFE_PYTEST: Waiting for device lock...
+[2026-11-20 20:43:14] SAFE_PYTEST: waiting for device (20s) — holder pid=2724915 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py " parent pid=2724906 cmd="/bin/bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/run.sh dsA idx41,idx35,idx36,idx33,idx42,idx44 base,lazy BRO_ORDER=al
+[2026-11-20 20:43:36] SAFE_PYTEST: waiting for device (40s) — holder pid=2724915 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py " parent pid=2724906 cmd="/bin/bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/run.sh dsA idx41,idx35,idx36,idx33,idx42,idx44 base,lazy BRO_ORDER=al
+[2026-11-20 20:43:57] SAFE_PYTEST: waiting for device (60s) — holder pid=2724915 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py " parent pid=2724906 cmd="/bin/bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/run.sh dsA idx41,idx35,idx36,idx33,idx42,idx44 base,lazy BRO_ORDER=al
+[2026-11-20 20:44:18] SAFE_PYTEST: waiting for device (80s) — holder pid=2688664 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/rm_ring_bank_run/test_rmb.py " parent pid=2688663 cmd="timeout 3000 scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/rm_ring_bank_run/test_rmb.py "
+[2026-11-20 20:44:39] SAFE_PYTEST: waiting for device (100s) — holder pid=2688664 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/rm_ring_bank_run/test_rmb.py " parent pid=2688663 cmd="timeout 3000 scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/rm_ring_bank_run/test_rmb.py "
+[2026-11-20 20:45:00] SAFE_PYTEST: waiting for device (120s) — holder pid=2755505 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py " parent pid=2755496 cmd="/bin/bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/run.sh dsB idx46,idx39,idx37,idx45,idx40,idx43 base,lazy BRO_ORDER=a
+[2026-11-20 20:45:22] SAFE_PYTEST: waiting for device (140s) — holder pid=2755505 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py " parent pid=2755496 cmd="/bin/bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/run.sh dsB idx46,idx39,idx37,idx45,idx40,idx43 base,lazy BRO_ORDER=a
+[2026-11-20 20:45:43] SAFE_PYTEST: waiting for device (160s) — holder pid=2755505 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py " parent pid=2755496 cmd="/bin/bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/run.sh dsB idx46,idx39,idx37,idx45,idx40,idx43 base,lazy BRO_ORDER=a
+[2026-11-20 20:46:04] SAFE_PYTEST: waiting for device (180s) — holder pid=2758900 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/rm_ring_bank_run/test_rmb.py " parent pid=2758895 cmd="timeout 3000 scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/rm_ring_bank_run/test_rmb.py "
+[2026-11-20 20:46:25] SAFE_PYTEST: waiting for device (200s) — holder pid=2758900 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/rm_ring_bank_run/test_rmb.py " parent pid=2758895 cmd="timeout 3000 scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/rm_ring_bank_run/test_rmb.py "
+[2026-11-20 20:46:46] SAFE_PYTEST: waiting for device (220s) — holder pid=2758900 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/rm_ring_bank_run/test_rmb.py " parent pid=2758895 cmd="timeout 3000 scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/rm_ring_bank_run/test_rmb.py "
+[2026-11-20 20:47:07] SAFE_PYTEST: waiting for device (240s) — holder pid=2758900 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/rm_ring_bank_run/test_rmb.py " parent pid=2758895 cmd="timeout 3000 scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/rm_ring_bank_run/test_rmb.py "
+[2026-11-20 20:47:28] SAFE_PYTEST: waiting for device (260s) — holder pid=2758900 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/rm_ring_bank_run/test_rmb.py " parent pid=2758895 cmd="timeout 3000 scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/rm_ring_bank_run/test_rmb.py "
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+SAFE_PYTEST: env UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=64 PYTHONPATH=/localdev/pmilojevic/workspaces/opgen:/localdev/pmilojevic/workspaces/opgen python -m tracy -r -m pytest -p tests.plugins.up_front_collect ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple_v2/test_wsd2.py
+ccache sloppiness=pch_defines,time_macros /localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno
+ccache sloppiness=pch_defines,time_macros /localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno
+ccache sloppiness=pch_defines,time_macros /localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno
+ccache sloppiness=pch_defines,time_macros /localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno
+ccache sloppiness=pch_defines,time_macros /localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno
+ccache sloppiness=pch_defines,time_macros /localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno
+WSD: {"case": 43, "variant": "final", "knobs": {}, "log": "fin3", "t": 1795207689.1356435, "sha1": "ae0e9b171d93240fe4e59f4c23de5d1c100c73b8", "status": "ok", "pcc": 0.9999985522009962, "ref": true, "bit_identical_to_first": true, "max_abs_vs_first": 0.0, "frac_diff_vs_first": 0.0, "n_diff_vs_first": 0, "max_ulp_same_sign_vs_first": 0, "n_sign_flip_vs_first": 0}
+WSD: {"case": 43, "variant": "base", "knobs": {}, "log": "fin3", "t": 1795207691.1024296, "sha1": "e4417d6178b44f6dbacdcb00e9e16f35b6c2d12c", "status": "ok", "pcc": 0.9999985522014374, "bit_identical_to_first": false, "max_abs_vs_first": 0.015625, "frac_diff_vs_first": 2.4303793907165527e-05, "n_diff_vs_first": 1631, "max_ulp_same_sign_vs_first": 128, "n_sign_flip_vs_first": 3}
+PASSED2026-11-20 20:48:13.464 | info     |           Metal | Device kernel duration perf summary (device=0): count=4, min=1453346ns, avg=1567526.0ns, max=1681259ns (profiler_analysis.cpp:729)
+WSD: {"case": 38, "variant": "base", "knobs": {}, "log": "fin3", "t": 1795207694.0236523, "sha1": "7ac604e5df8bc0fadefcf76a57666d0f5628251e", "status": "ok", "pcc": 0.9999985515464787, "ref": true, "bit_identical_to_first": true, "max_abs_vs_first": 0.0, "frac_diff_vs_first": 0.0, "n_diff_vs_first": 0, "max_ulp_same_sign_vs_first": 0, "n_sign_flip_vs_first": 0}
+WSD: {"case": 38, "variant": "final", "knobs": {}, "log": "fin3", "t": 1795207694.5463722, "sha1": "a7ad5e6689d237368d9bf103d29ffa98d3985319", "status": "ok", "pcc": 0.9999985515450779, "bit_identical_to_first": false, "max_abs_vs_first": 0.015625, "frac_diff_vs_first": 2.5212764739990234e-05, "n_diff_vs_first": 423, "max_ulp_same_sign_vs_first": 64, "n_sign_flip_vs_first": 0}
+PASSED2026-11-20 20:48:15.318 | info     |           Metal | Device kernel duration perf summary (device=0): count=4, min=421093ns, avg=433836.5ns, max=447095ns (profiler_analysis.cpp:729)
+WSD: {"case": 47, "variant": "final", "knobs": {}, "log": "fin3", "t": 1795207697.0125816, "sha1": "4a6d8060600f1977ca225860425ed3b752896bc4", "status": "ok", "pcc": 0.9999985524026305, "ref": true, "bit_identical_to_first": true, "max_abs_vs_first": 0.0, "frac_diff_vs_first": 0.0, "n_diff_vs_first": 0, "max_ulp_same_sign_vs_first": 0, "n_sign_flip_vs_first": 0}
+WSD: {"case": 47, "variant": "base", "knobs": {}, "log": "fin3", "t": 1795207703.3049905, "sha1": "b02dc797c4f34bac024fe6b1ed4b47506b0904b1", "status": "ok", "pcc": 0.9999985524030564, "bit_identical_to_first": false, "max_abs_vs_first": 0.015625, "frac_diff_vs_first": 2.3771077394485474e-05, "n_diff_vs_first": 6381, "max_ulp_same_sign_vs_first": 14464, "n_sign_flip_vs_first": 2}
+PASSED2026-11-20 20:48:31.835 | info     |           Metal | Device kernel duration perf summary (device=0): count=4, min=4944213ns, avg=5666882.2ns, max=6389531ns (profiler_analysis.cpp:729)
+WSD: {"case": 102, "variant": "base", "knobs": {}, "log": "fin3", "t": 1795207712.6469212, "sha1": "ff12a083187a5269603afb54f38fd3b8f9a7d183", "status": "ok", "pcc": 0.9999985534945195, "ref": true, "bit_identical_to_first": true, "max_abs_vs_first": 0.0, "frac_diff_vs_first": 0.0, "n_diff_vs_first": 0, "max_ulp_same_sign_vs_first": 0, "n_sign_flip_vs_first": 0}
+WSD: {"case": 102, "variant": "final", "knobs": {}, "log": "fin3", "t": 1795207713.2005591, "sha1": "ff12a083187a5269603afb54f38fd3b8f9a7d183", "status": "ok", "pcc": 0.9999985534945195, "bit_identical_to_first": true, "max_abs_vs_first": 0.0, "frac_diff_vs_first": 0.0, "n_diff_vs_first": 0, "max_ulp_same_sign_vs_first": 0, "n_sign_flip_vs_first": 0}
+PASSED2026-11-20 20:48:33.990 | info     |           Metal | Device kernel duration perf summary (device=0): count=4, min=744395ns, avg=753845.2ns, max=763063ns (profiler_analysis.cpp:729)
+WSD: {"case": 106, "variant": "final", "knobs": {}, "log": "fin3", "t": 1795207714.5946493, "sha1": "497201dba1a0f99dd90fcc8245cb007f608de536", "status": "ok", "pcc": 0.9999985515002291, "ref": true, "bit_identical_to_first": true, "max_abs_vs_first": 0.0, "frac_diff_vs_first": 0.0, "n_diff_vs_first": 0, "max_ulp_same_sign_vs_first": 0, "n_sign_flip_vs_first": 0}
+WSD: {"case": 106, "variant": "base", "knobs": {}, "log": "fin3", "t": 1795207715.6146042, "sha1": "938f7156494973ecc58a1ad3cc35b95d26f8acda", "status": "ok", "pcc": 0.9999985515021438, "bit_identical_to_first": false, "max_abs_vs_first": 0.015625, "frac_diff_vs_first": 1.8874803572543897e-05, "n_diff_vs_first": 475, "max_ulp_same_sign_vs_first": 64, "n_sign_flip_vs_first": 0}
+PASSED2026-11-20 20:48:36.790 | info     |           Metal | Device kernel duration perf summary (device=0): count=4, min=1066910ns, avg=1096454.5ns, max=1126704ns (profiler_analysis.cpp:729)
+============================== 5 passed in 38.18s ==============================
+SAFE_PYTEST: PROFILER CSV: /localdev/pmilojevic/workspaces/opgen/generated/profiler/reports/2026_11_20_20_48_54/ops_perf_results_2026_11_20_20_48_54.csv
+SAFE_PYTEST_RESULT: PASS
+SAFE_PYTEST_TOTAL_RUNTIME: 1m06s (66s total, device-lock-acquired -> exit)

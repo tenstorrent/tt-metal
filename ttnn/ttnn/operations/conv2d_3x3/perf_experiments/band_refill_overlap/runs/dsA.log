@@ -1,0 +1,1586 @@
+SAFE_PYTEST: Waiting for device lock...
+[2026-11-20 20:41:45] SAFE_PYTEST: waiting for device (20s) — holder pid=2697041 cmd="/bin/bash scripts/run_safe_pytest.sh --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple_v2/test_panoptic_guard.py " parent pid=2697037 cmd="timeout 3000 scripts/run_safe_pytest.sh --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple_v2/test_panoptic_guard.py "
+[2026-11-20 20:42:07] SAFE_PYTEST: waiting for device (40s) — holder pid=2725519 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/bias_epilogue/test_bias_epi.py " parent pid=2725516 cmd="/bin/bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/bias_epilogue/safe_run.sh ttnn/ttnn/operations/conv2d_3x3/perf_experiments/bias_epilogue/ru"
+[2026-11-20 20:42:28] SAFE_PYTEST: waiting for device (60s) — holder pid=2725519 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/bias_epilogue/test_bias_epi.py " parent pid=2725516 cmd="/bin/bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/bias_epilogue/safe_run.sh ttnn/ttnn/operations/conv2d_3x3/perf_experiments/bias_epilogue/ru"
+[2026-11-20 20:42:49] SAFE_PYTEST: waiting for device (80s) — holder pid=2725519 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/bias_epilogue/test_bias_epi.py " parent pid=2725516 cmd="/bin/bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/bias_epilogue/safe_run.sh ttnn/ttnn/operations/conv2d_3x3/perf_experiments/bias_epilogue/ru"
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: on — collect + parallel compile (x64) inside the pytest session, local
+SAFE_PYTEST: env UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=64 PYTHONPATH=/localdev/pmilojevic/workspaces/opgen:/localdev/pmilojevic/workspaces/opgen python -m tracy -r -m pytest -p tests.plugins.up_front_collect ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py
+========================================
+2026-11-20 20:43:11.242 | INFO     | __main__:main:381 - Using port 8086
+2026-11-20 20:43:11.242 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-11-20 20:43:11.466 | INFO     | __main__:run_workload:416 - Test process started
+2026-11-20 20:43:13.828 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/workspaces/opgen
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, anyio-4.16.0, benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, cov-7.0.0, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-11-20 20:43:19.002 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-20 20:43:19.002 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-20 20:43:19.005 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-20 20:43:19.005 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-20 20:43:19.029 | info     |             UMD | Established firmware bundle version: 19.16.1 (topology_discovery.cpp:700)
+2026-11-20 20:43:19.029 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-20 20:43:19.302 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:174)
+2026-11-20 20:43:19.302 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-20 20:43:19.303 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-20 20:43:19.303 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-20 20:43:19.310 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-20 20:43:19.878 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-20 20:43:20.028 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-20 20:43:20.028 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-20 20:43:20.211 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:43:20.231 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-11-20 20:43:21.001 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+2026-11-20 20:43:21.214 | INFO     | tracy:signpost:49 - cmp|idx41|base|0
+2026-11-20 20:43:21.246 | INFO     | tracy:signpost:49 - cmpend|idx41|base
+2026-11-20 20:43:21.248 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+2026-11-20 20:43:21.461 | INFO     | tracy:signpost:49 - cmp|idx41|lazy|0
+2026-11-20 20:43:21.494 | INFO     | tracy:signpost:49 - cmpend|idx41|lazy
+2026-11-20 20:43:21.710 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:43:21.728 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-11-20 20:43:21.851 | info     |           Metal | Clearing program cache on MeshDevice 3 (mesh_device.cpp:1327)
+2026-11-20 20:43:22.251 | INFO     | tracy:signpost:49 - cmp|idx35|lazy|0
+2026-11-20 20:43:22.284 | INFO     | tracy:signpost:49 - cmpend|idx35|lazy
+2026-11-20 20:43:22.285 | info     |           Metal | Clearing program cache on MeshDevice 3 (mesh_device.cpp:1327)
+2026-11-20 20:43:22.678 | INFO     | tracy:signpost:49 - cmp|idx35|base|0
+2026-11-20 20:43:22.710 | INFO     | tracy:signpost:49 - cmpend|idx35|base
+2026-11-20 20:43:22.966 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:43:22.969 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-11-20 20:43:23.060 | info     |           Metal | Clearing program cache on MeshDevice 5 (mesh_device.cpp:1327)
+2026-11-20 20:43:23.113 | INFO     | tracy:signpost:49 - cmp|idx36|base|0
+2026-11-20 20:43:23.145 | INFO     | tracy:signpost:49 - cmpend|idx36|base
+2026-11-20 20:43:23.147 | info     |           Metal | Clearing program cache on MeshDevice 5 (mesh_device.cpp:1327)
+2026-11-20 20:43:23.197 | INFO     | tracy:signpost:49 - cmp|idx36|lazy|0
+2026-11-20 20:43:23.230 | INFO     | tracy:signpost:49 - cmpend|idx36|lazy
+2026-11-20 20:43:23.433 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:43:23.435 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-11-20 20:43:23.544 | info     |           Metal | Clearing program cache on MeshDevice 7 (mesh_device.cpp:1327)
+2026-11-20 20:43:23.615 | INFO     | tracy:signpost:49 - cmp|idx33|lazy|0
+2026-11-20 20:43:23.647 | INFO     | tracy:signpost:49 - cmpend|idx33|lazy
+2026-11-20 20:43:23.649 | info     |           Metal | Clearing program cache on MeshDevice 7 (mesh_device.cpp:1327)
+2026-11-20 20:43:23.712 | INFO     | tracy:signpost:49 - cmp|idx33|base|0
+2026-11-20 20:43:23.744 | INFO     | tracy:signpost:49 - cmpend|idx33|base
+2026-11-20 20:43:23.959 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:43:23.961 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-11-20 20:43:24.056 | info     |           Metal | Clearing program cache on MeshDevice 9 (mesh_device.cpp:1327)
+2026-11-20 20:43:24.165 | INFO     | tracy:signpost:49 - cmp|idx42|base|0
+2026-11-20 20:43:24.198 | INFO     | tracy:signpost:49 - cmpend|idx42|base
+2026-11-20 20:43:24.199 | info     |           Metal | Clearing program cache on MeshDevice 9 (mesh_device.cpp:1327)
+2026-11-20 20:43:24.303 | INFO     | tracy:signpost:49 - cmp|idx42|lazy|0
+2026-11-20 20:43:24.336 | INFO     | tracy:signpost:49 - cmpend|idx42|lazy
+2026-11-20 20:43:24.545 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:43:24.547 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-11-20 20:43:24.665 | info     |           Metal | Clearing program cache on MeshDevice 11 (mesh_device.cpp:1327)
+2026-11-20 20:43:25.020 | INFO     | tracy:signpost:49 - cmp|idx44|lazy|0
+2026-11-20 20:43:25.053 | INFO     | tracy:signpost:49 - cmpend|idx44|lazy
+2026-11-20 20:43:25.055 | info     |           Metal | Clearing program cache on MeshDevice 11 (mesh_device.cpp:1327)
+2026-11-20 20:43:25.407 | INFO     | tracy:signpost:49 - cmp|idx44|base|0
+2026-11-20 20:43:25.439 | INFO     | tracy:signpost:49 - cmpend|idx44|base
+collected 6 items
+
+UP_FRONT_INLINE: collect pass over 6 item(s) took 6.5s
+UP_FRONT_INLINE: compile route local (programs=12, farm_min=10)
+
+UP_FRONT_COLLECT: 24 ops stashed across 6 bodies -> 12 unique programs (swallowed 0, skipped-capture 0)
+UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=30 fallback=0
+2026-11-20 20:43:25.661 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:43:25.664 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-11-20 20:43:25.728 | info     |           Metal | Enabling program cache on MeshDevice 13 (mesh_device.cpp:1322)
+Building ncrisc, compile step:
+ccache sloppiness=pch_defines,time_macros /localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/workspaces/opgen/ -I/localdev/pmilojevic/workspaces/opgen/ttnn -I/localdev/pmilojevic/workspaces/opgen/ttnn/cpp -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/workspaces/opgen/tt_metal/api/ -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels -include /localdev/pmilojevic/workspaces/opgen/built/tt-metal-cache/pch/947b0d35d37b4285/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DBANK_RUN_FILL=1 -DBRF_CHUNK_PX=256 -DBRF_NSTG=4 -DBRO_CB_OUT=6 -DBRO_OVERLAP=1 -DBRO_POLL=0 -DBRO_POLL_BANKS=8 -DBRO_STAGE_OFF_BYTES=233600 -DBRO_WRITE_YIELD=-1 -DBRO_WX=0 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="conv2d_3x3_reader/17989675246923211456/" -DKERNEL_COMPILE_TIME_ARGS=0,1,7,514,1024,1024,524288,32,32,0,1,1,50,1,3,9,1024,0,64,0,1,6,0,0,0,0,1,4,4,4,5,8,2,3,1,0,2,2,0,0,0,0,50,0,0,3650,11,0,10,0,1,0,2,0,0,0,0,0,0,2,0,0,0,0,12,0,1,13,4,4,2,1,50,0,0,0,1,2,64 -c -o /localdev/pmilojevic/workspaces/opgen/built/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_reader/17989675246923211456/ncrisc/ncrisck.8634713673820301920_2740847.o /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/pmilojevic/workspaces/opgen/built/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_reader/17989675246923211456/ncrisc/ncrisck.8634713673820301920_2740847.d
+In file included from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,645,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:645:5: note: in expansion of macro 'SrcLocNameToHash'
+  645 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,967,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:967:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+  967 |             MaybeDeviceZoneScope("reader_fill");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill_reserve,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1006,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1006:21: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1006 |                     MaybeDeviceZoneScope("reader_fill_reserve");
+      |                     ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill_fwd_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1021,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1021:25: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1021 |                         MaybeDeviceZoneScope("reader_fill_fwd_wait");
+      |                         ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1038,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1038:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1038 |             MaybeDeviceZoneScope("reader_fill");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill_reserve,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1230,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1230:25: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1230 |                         MaybeDeviceZoneScope("reader_fill_reserve");
+      |                         ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp: In lambda function:
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill_fwd_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1250,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1250:29: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1250 |                             MaybeDeviceZoneScope("reader_fill_fwd_wait");
+      |                             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill_reserve,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1263,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1263:29: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1263 |                             MaybeDeviceZoneScope("reader_fill_reserve");
+      |                             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1303,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1303:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1303 |             MaybeDeviceZoneScope("reader_fill");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill_fwd_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1536,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1536:17: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1536 |                 MaybeDeviceZoneScope("reader_fill_fwd_wait");
+      |                 ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_center,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1546,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1546:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1546 |             MaybeDeviceZoneScope("reader_center");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_band_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1793,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1793:17: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1793 |                 MaybeDeviceZoneScope("reader_band_wait");
+      |                 ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_gather,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1804,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1804:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1804 |             MaybeDeviceZoneScope("reader_gather");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_center_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1813,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1813:17: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1813 |                 MaybeDeviceZoneScope("reader_center_wait");
+      |                 ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_center_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1819,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1819:21: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1819 |                     MaybeDeviceZoneScope("reader_center_wait");
+      |                     ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_center,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1915,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1915:21: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1915 |                     MaybeDeviceZoneScope("reader_center");
+      |                     ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_band_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1958,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1958:17: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1958 |                 MaybeDeviceZoneScope("reader_band_wait");
+      |                 ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_gather,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1974,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1974:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1974 |             MaybeDeviceZoneScope("reader_gather");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_center_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,2056,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:2056:29: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 2056 |                             MaybeDeviceZoneScope("reader_center_wait");
+      |                             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_slab_dead_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,2106,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:2106:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 2106 |             MaybeDeviceZoneScope("reader_slab_dead_wait");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_combine_send,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,2148,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:2148:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 2148 |             MaybeDeviceZoneScope("reader_combine_send");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_ring_wait_step,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,2172,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:2172:25: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 2172 |                         MaybeDeviceZoneScope("reader_ring_wait_step");
+      |                         ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_ring_send,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,2175,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:2175:21: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 2175 |                     MaybeDeviceZoneScope("reader_ring_send");
+      |                     ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_combine_wait_go,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,2222,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:2222:17: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 2222 |                 MaybeDeviceZoneScope("reader_combine_wait_go");
+      |                 ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_combine_send,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,2225,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:2225:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 2225 |             MaybeDeviceZoneScope("reader_combine_send");
+      |             ^~~~~~~~~~~~~~~~~~~~
+In file included from ../kernel_includes.hpp:2,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:23:
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:353:10: warning: variable 'r0_try' set but not used [-Wunused-but-set-variable]
+  353 |     auto r0_try = [&]() {};
+      |          ^~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: NCRISC-KERNEL,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1067:5: note: in expansion of macro 'DO_PRAGMA'
+ 1067 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+ccache sloppiness=pch_defines,time_macros /localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/workspaces/opgen/ -I/localdev/pmilojevic/workspaces/opgen/ttnn -I/localdev/pmilojevic/workspaces/opgen/ttnn/cpp -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/workspaces/opgen/tt_metal/api/ -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels -include /localdev/pmilojevic/workspaces/opgen/built/tt-metal-cache/pch/947b0d35d37b4285/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DBANK_RUN_FILL=1 -DBRF_CHUNK_PX=64 -DBRF_NSTG=2 -DBRO_CB_OUT=6 -DBRO_OVERLAP=1 -DBRO_POLL=0 -DBRO_POLL_BANKS=8 -DBRO_STAGE_OFF_BYTES=787968 -DBRO_WRITE_YIELD=-1 -DBRO_WX=0 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="conv2d_3x3_reader/14599367090837375855/" -DKERNEL_COMPILE_TIME_ARGS=0,1,7,1026,2048,2048,2097152,128,128,0,1,1,32,4,12,9,1026,0,256,0,1,2,0,0,0,0,1,1,1,1,5,8,2,3,1,0,2,2,0,0,0,0,32,0,0,3078,11,0,10,0,1,0,2,0,0,0,0,0,0,2,0,0,0,0,12,0,1,13,4,4,2,1,32,0,0,0,1,2,256 -c -o /localdev/pmilojevic/workspaces/opgen/built/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_reader/14599367090837375855/ncrisc/ncrisck.8634713673820301920_2740847.o /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/pmilojevic/workspaces/opgen/built/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_reader/14599367090837375855/ncrisc/ncrisck.8634713673820301920_2740847.d
+In file included from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,645,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:645:5: note: in expansion of macro 'SrcLocNameToHash'
+  645 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,967,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:967:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+  967 |             MaybeDeviceZoneScope("reader_fill");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill_reserve,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1006,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1006:21: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1006 |                     MaybeDeviceZoneScope("reader_fill_reserve");
+      |                     ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill_fwd_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1021,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1021:25: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1021 |                         MaybeDeviceZoneScope("reader_fill_fwd_wait");
+      |                         ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1038,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1038:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1038 |             MaybeDeviceZoneScope("reader_fill");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill_reserve,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1230,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1230:25: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1230 |                         MaybeDeviceZoneScope("reader_fill_reserve");
+      |                         ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp: In lambda function:
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill_fwd_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1250,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1250:29: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1250 |                             MaybeDeviceZoneScope("reader_fill_fwd_wait");
+      |                             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill_reserve,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1263,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1263:29: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1263 |                             MaybeDeviceZoneScope("reader_fill_reserve");
+      |                             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1303,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1303:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1303 |             MaybeDeviceZoneScope("reader_fill");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill_fwd_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1536,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1536:17: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1536 |                 MaybeDeviceZoneScope("reader_fill_fwd_wait");
+      |                 ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_center,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1546,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1546:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1546 |             MaybeDeviceZoneScope("reader_center");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_band_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1793,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1793:17: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1793 |                 MaybeDeviceZoneScope("reader_band_wait");
+      |                 ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_gather,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1804,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1804:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1804 |             MaybeDeviceZoneScope("reader_gather");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_center_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1813,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1813:17: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1813 |                 MaybeDeviceZoneScope("reader_center_wait");
+      |                 ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_center_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1819,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1819:21: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1819 |                     MaybeDeviceZoneScope("reader_center_wait");
+      |                     ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_center,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1915,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1915:21: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1915 |                     MaybeDeviceZoneScope("reader_center");
+      |                     ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_band_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1958,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1958:17: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1958 |                 MaybeDeviceZoneScope("reader_band_wait");
+      |                 ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_gather,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1974,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1974:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1974 |             MaybeDeviceZoneScope("reader_gather");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_center_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,2056,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:2056:29: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 2056 |                             MaybeDeviceZoneScope("reader_center_wait");
+      |                             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_slab_dead_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,2106,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:2106:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 2106 |             MaybeDeviceZoneScope("reader_slab_dead_wait");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_combine_send,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,2148,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:2148:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 2148 |             MaybeDeviceZoneScope("reader_combine_send");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_ring_wait_step,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,2172,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:2172:25: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 2172 |                         MaybeDeviceZoneScope("reader_ring_wait_step");
+      |                         ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_ring_send,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,2175,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:2175:21: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 2175 |                     MaybeDeviceZoneScope("reader_ring_send");
+      |                     ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_combine_wait_go,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,2222,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:2222:17: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 2222 |                 MaybeDeviceZoneScope("reader_combine_wait_go");
+      |                 ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_combine_send,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,2225,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:2225:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 2225 |             MaybeDeviceZoneScope("reader_combine_send");
+      |             ^~~~~~~~~~~~~~~~~~~~
+In file included from ../kernel_includes.hpp:2,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:23:
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:353:10: warning: variable 'r0_try' set but not used [-Wunused-but-set-variable]
+  353 |     auto r0_try = [&]() {};
+      |          ^~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: NCRISC-KERNEL,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1067:5: note: in expansion of macro 'DO_PRAGMA'
+ 1067 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+ccache sloppiness=pch_defines,time_macros /localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/workspaces/opgen/ -I/localdev/pmilojevic/workspaces/opgen/ttnn -I/localdev/pmilojevic/workspaces/opgen/ttnn/cpp -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/workspaces/opgen/tt_metal/api/ -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels -include /localdev/pmilojevic/workspaces/opgen/built/tt-metal-cache/pch/947b0d35d37b4285/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DBANK_RUN_FILL=1 -DBRF_CHUNK_PX=64 -DBRF_NSTG=4 -DBRO_CB_OUT=6 -DBRO_OVERLAP=1 -DBRO_POLL=0 -DBRO_POLL_BANKS=8 -DBRO_STAGE_OFF_BYTES=738816 -DBRO_WRITE_YIELD=-1 -DBRO_WX=0 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="conv2d_3x3_reader/1250320249242279654/" -DKERNEL_COMPILE_TIME_ARGS=0,1,7,514,1024,1024,524288,128,128,0,1,1,30,4,12,9,962,0,256,0,1,7,0,0,0,0,1,1,1,1,5,8,2,3,1,0,2,2,0,0,0,0,30,0,0,2886,11,0,10,0,1,0,2,0,0,0,0,0,0,2,0,0,0,0,12,0,1,13,4,4,2,1,30,0,0,0,1,2,256 -c -o /localdev/pmilojevic/workspaces/opgen/built/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_reader/1250320249242279654/ncrisc/ncrisck.8634713673820301920_2740847.o /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/pmilojevic/workspaces/opgen/built/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_reader/1250320249242279654/ncrisc/ncrisck.8634713673820301920_2740847.d
+In file included from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,645,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:645:5: note: in expansion of macro 'SrcLocNameToHash'
+  645 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,967,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:967:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+  967 |             MaybeDeviceZoneScope("reader_fill");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill_reserve,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1006,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1006:21: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1006 |                     MaybeDeviceZoneScope("reader_fill_reserve");
+      |                     ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill_fwd_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1021,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1021:25: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1021 |                         MaybeDeviceZoneScope("reader_fill_fwd_wait");
+      |                         ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1038,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1038:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1038 |             MaybeDeviceZoneScope("reader_fill");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill_reserve,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1230,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1230:25: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1230 |                         MaybeDeviceZoneScope("reader_fill_reserve");
+      |                         ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp: In lambda function:
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill_fwd_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1250,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1250:29: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1250 |                             MaybeDeviceZoneScope("reader_fill_fwd_wait");
+      |                             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill_reserve,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1263,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1263:29: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1263 |                             MaybeDeviceZoneScope("reader_fill_reserve");
+      |                             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1303,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1303:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1303 |             MaybeDeviceZoneScope("reader_fill");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill_fwd_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1536,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1536:17: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1536 |                 MaybeDeviceZoneScope("reader_fill_fwd_wait");
+      |                 ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_center,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1546,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1546:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1546 |             MaybeDeviceZoneScope("reader_center");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_band_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1793,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1793:17: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1793 |                 MaybeDeviceZoneScope("reader_band_wait");
+      |                 ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_gather,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1804,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1804:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1804 |             MaybeDeviceZoneScope("reader_gather");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_center_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1813,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1813:17: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1813 |                 MaybeDeviceZoneScope("reader_center_wait");
+      |                 ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_center_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1819,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1819:21: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1819 |                     MaybeDeviceZoneScope("reader_center_wait");
+      |                     ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_center,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1915,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1915:21: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1915 |                     MaybeDeviceZoneScope("reader_center");
+      |                     ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_band_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1958,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1958:17: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1958 |                 MaybeDeviceZoneScope("reader_band_wait");
+      |                 ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_gather,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1974,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1974:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1974 |             MaybeDeviceZoneScope("reader_gather");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_center_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,2056,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:2056:29: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 2056 |                             MaybeDeviceZoneScope("reader_center_wait");
+      |                             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_slab_dead_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,2106,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:2106:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 2106 |             MaybeDeviceZoneScope("reader_slab_dead_wait");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_combine_send,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,2148,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:2148:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 2148 |             MaybeDeviceZoneScope("reader_combine_send");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_ring_wait_step,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,2172,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:2172:25: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 2172 |                         MaybeDeviceZoneScope("reader_ring_wait_step");
+      |                         ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_ring_send,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,2175,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:2175:21: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 2175 |                     MaybeDeviceZoneScope("reader_ring_send");
+      |                     ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_combine_wait_go,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,2222,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:2222:17: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 2222 |                 MaybeDeviceZoneScope("reader_combine_wait_go");
+      |                 ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_combine_send,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,2225,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:2225:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 2225 |             MaybeDeviceZoneScope("reader_combine_send");
+      |             ^~~~~~~~~~~~~~~~~~~~
+In file included from ../kernel_includes.hpp:2,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:23:
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:353:10: warning: variable 'r0_try' set but not used [-Wunused-but-set-variable]
+  353 |     auto r0_try = [&]() {};
+      |          ^~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: NCRISC-KERNEL,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1067:5: note: in expansion of macro 'DO_PRAGMA'
+ 1067 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+ccache sloppiness=pch_defines,time_macros /localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/workspaces/opgen/ -I/localdev/pmilojevic/workspaces/opgen/ttnn -I/localdev/pmilojevic/workspaces/opgen/ttnn/cpp -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/workspaces/opgen/tt_metal/api/ -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels -include /localdev/pmilojevic/workspaces/opgen/built/tt-metal-cache/pch/947b0d35d37b4285/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DBANK_RUN_FILL=1 -DBRF_CHUNK_PX=128 -DBRF_NSTG=2 -DBRO_CB_OUT=6 -DBRO_OVERLAP=1 -DBRO_POLL=0 -DBRO_POLL_BANKS=8 -DBRO_STAGE_OFF_BYTES=234240 -DBRO_WRITE_YIELD=-1 -DBRO_WX=0 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="conv2d_3x3_reader/14400871995379284421/" -DKERNEL_COMPILE_TIME_ARGS=0,1,7,514,1024,1024,524288,64,64,0,1,1,19,2,6,9,610,0,128,0,1,4,0,0,0,0,1,8,8,8,5,8,2,3,1,0,2,2,0,0,0,0,19,0,0,1830,11,0,10,0,1,0,2,0,0,0,0,0,0,2,0,0,0,0,12,0,1,13,4,4,2,1,19,0,0,0,1,2,128 -c -o /localdev/pmilojevic/workspaces/opgen/built/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_reader/14400871995379284421/ncrisc/ncrisck.8634713673820301920_2740847.o /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/pmilojevic/workspaces/opgen/built/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_reader/14400871995379284421/ncrisc/ncrisck.8634713673820301920_2740847.d
+In file included from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,645,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:645:5: note: in expansion of macro 'SrcLocNameToHash'
+  645 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,967,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:967:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+  967 |             MaybeDeviceZoneScope("reader_fill");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill_reserve,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1006,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1006:21: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1006 |                     MaybeDeviceZoneScope("reader_fill_reserve");
+      |                     ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill_fwd_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1021,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1021:25: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1021 |                         MaybeDeviceZoneScope("reader_fill_fwd_wait");
+      |                         ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1038,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1038:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1038 |             MaybeDeviceZoneScope("reader_fill");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill_reserve,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1230,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1230:25: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1230 |                         MaybeDeviceZoneScope("reader_fill_reserve");
+      |                         ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp: In lambda function:
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill_fwd_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1250,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1250:29: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1250 |                             MaybeDeviceZoneScope("reader_fill_fwd_wait");
+      |                             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill_reserve,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1263,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1263:29: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1263 |                             MaybeDeviceZoneScope("reader_fill_reserve");
+      |                             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1303,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1303:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1303 |             MaybeDeviceZoneScope("reader_fill");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_fill_fwd_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1536,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1536:17: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1536 |                 MaybeDeviceZoneScope("reader_fill_fwd_wait");
+      |                 ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_center,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1546,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1546:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1546 |             MaybeDeviceZoneScope("reader_center");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_band_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1793,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1793:17: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1793 |                 MaybeDeviceZoneScope("reader_band_wait");
+      |                 ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_gather,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1804,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1804:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1804 |             MaybeDeviceZoneScope("reader_gather");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_center_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1813,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1813:17: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1813 |                 MaybeDeviceZoneScope("reader_center_wait");
+      |                 ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_center_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1819,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1819:21: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1819 |                     MaybeDeviceZoneScope("reader_center_wait");
+      |                     ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_center,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1915,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1915:21: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1915 |                     MaybeDeviceZoneScope("reader_center");
+      |                     ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_band_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1958,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1958:17: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1958 |                 MaybeDeviceZoneScope("reader_band_wait");
+      |                 ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_gather,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,1974,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:1974:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 1974 |             MaybeDeviceZoneScope("reader_gather");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_center_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,2056,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:2056:29: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 2056 |                             MaybeDeviceZoneScope("reader_center_wait");
+      |                             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_slab_dead_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,2106,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:2106:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 2106 |             MaybeDeviceZoneScope("reader_slab_dead_wait");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_combine_send,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,2148,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:2148:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 2148 |             MaybeDeviceZoneScope("reader_combine_send");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_ring_wait_step,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,2172,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:2172:25: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 2172 |                         MaybeDeviceZoneScope("reader_ring_wait_step");
+      |                         ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_ring_send,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,2175,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:2175:21: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 2175 |                     MaybeDeviceZoneScope("reader_ring_send");
+      |                     ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_combine_wait_go,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,2222,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:2222:17: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 2222 |                 MaybeDeviceZoneScope("reader_combine_wait_go");
+      |                 ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reader_combine_send,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp,2225,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:2225:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+ 2225 |             MaybeDeviceZoneScope("reader_combine_send");
+      |             ^~~~~~~~~~~~~~~~~~~~
+In file included from ../kernel_includes.hpp:2,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:23:
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/op_copy/kernels/conv2d_3x3_reader.cpp:353:10: warning: variable 'r0_try' set but not used [-Wunused-but-set-variable]
+  353 |     auto r0_try = [&]() {};
+      |          ^~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: NCRISC-KERNEL,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1067:5: note: in expansion of macro 'DO_PRAGMA'
+ 1067 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+UP_FRONT_COLLECT: 12 collected · 12 built · 0 already compiled in 1.1s (workers=64, errors=0) -> on-disk JIT cache warm
+UP_FRONT_COLLECT_RESULT: status=ok reason=ok unique=12 programs=12 errors=0 pytest_exit=0 xpass_strict=0 other_failures=0 built=12 compile_s=1.3 collect_s=6.5 route=local
+UP_FRONT_INLINE: compile step took 1.3s; starting the real pass
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py::test_bro[idx41-device_params0] 2026-11-20 20:43:26.997 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:43:27.000 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-11-20 20:43:28.437 | info     |           Metal | Clearing program cache on MeshDevice 15 (mesh_device.cpp:1327)
+2026-11-20 20:43:28.530 | INFO     | tracy:signpost:49 - cmp|idx41|base|0
+2026-11-20 20:43:28.624 | INFO     | tracy:signpost:49 - cmpend|idx41|base
+2026-11-20 20:43:30.476 | info     |           Metal | Clearing program cache on MeshDevice 15 (mesh_device.cpp:1327)
+2026-11-20 20:43:30.741 | INFO     | tracy:signpost:49 - cmp|idx41|lazy|0
+2026-11-20 20:43:30.833 | INFO     | tracy:signpost:49 - cmpend|idx41|lazy
+BRO: {"case": "idx41", "variant": "base", "knobs": {}, "log": "dsA", "t": 1795207408.4385378, "status": "ok", "blocking": {"bm": 46, "bk": 1, "m_blocks": 13, "resident": true, "im2col_depth": 46, "band_len": 1474, "band_stride": 1474, "bro_nstg": 0, "bro_chunk_px": 0, "foot_kb": 1295.1}, "sha1": "f5265eabb8dba9ceae288d7afd31ce8b5f5e0405", "pcc": 0.9999985539970446, "ref": "base", "bit_identical": true}
+BRO: {"case": "idx41", "variant": "lazy", "knobs": {"BRO_POLL": false}, "log": "dsA", "t": 1795207410.4776495, "status": "ok", "blocking": {"bm": 46, "bk": 1, "m_blocks": 13, "resident": true, "im2col_depth": 18, "band_len": 1474, "band_stride": 1474, "bro_nstg": 4, "bro_chunk_px": 256, "foot_kb": 1303.1}, "sha1": "f5265eabb8dba9ceae288d7afd31ce8b5f5e0405", "pcc": 0.9999985539970446, "bit_identical": true}
+PASSED2026-11-20 20:43:33.001 | info     |           Metal | Device kernel duration perf summary (device=0): count=4, min=2284159ns, avg=2447438.5ns, max=2608589ns (profiler_analysis.cpp:729)
+2026-11-20 20:43:33.001 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=32500ns, range=[2275000..2600000), underflow(<2275000ns)=0, overflow(>=2600000ns)=2) (profiler_analysis.cpp:772)
+2026-11-20 20:43:33.001 | info     |           Metal |   [     2275000 ..      2307500) |########################################|        2 (profiler_analysis.cpp:777)
+2026-11-20 20:43:33.001 | info     |           Metal |   [     2307500 ..      2340000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:33.001 | info     |           Metal |   [     2340000 ..      2372500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:33.001 | info     |           Metal |   [     2372500 ..      2405000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:33.001 | info     |           Metal |   [     2405000 ..      2437500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:33.001 | info     |           Metal |   [     2437500 ..      2470000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:33.001 | info     |           Metal |   [     2470000 ..      2502500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:33.001 | info     |           Metal |   [     2502500 ..      2535000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:33.001 | info     |           Metal |   [     2535000 ..      2567500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:33.001 | info     |           Metal |   [     2567500 ..      2600000) |                                        |        0 (profiler_analysis.cpp:777)
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py::test_bro[idx35-device_params0] 2026-11-20 20:43:33.469 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:43:33.472 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-11-20 20:43:38.821 | info     |           Metal | Clearing program cache on MeshDevice 17 (mesh_device.cpp:1327)
+2026-11-20 20:43:39.266 | INFO     | tracy:signpost:49 - cmp|idx35|lazy|0
+2026-11-20 20:43:39.330 | INFO     | tracy:signpost:49 - cmpend|idx35|lazy
+2026-11-20 20:43:39.607 | info     |           Metal | Clearing program cache on MeshDevice 17 (mesh_device.cpp:1327)
+2026-11-20 20:43:39.688 | INFO     | tracy:signpost:49 - cmp|idx35|base|0
+2026-11-20 20:43:39.751 | INFO     | tracy:signpost:49 - cmpend|idx35|base
+BRO: {"case": "idx35", "variant": "lazy", "knobs": {"BRO_POLL": false}, "log": "dsA", "t": 1795207418.822177, "status": "ok", "blocking": {"bm": 32, "bk": 4, "m_blocks": 19, "resident": true, "im2col_depth": 2, "band_len": 1026, "band_stride": 1026, "bro_nstg": 2, "bro_chunk_px": 64, "foot_kb": 1300.0}, "sha1": "702575ae57c367de2aa4e87cdd22514163d547ea", "pcc": 0.9999985480879082, "ref": "lazy", "bit_identical": true}
+BRO: {"case": "idx35", "variant": "base", "knobs": {}, "log": "dsA", "t": 1795207419.6090128, "status": "ok", "blocking": {"bm": 32, "bk": 4, "m_blocks": 19, "resident": true, "im2col_depth": 6, "band_len": 1026, "band_stride": 1026, "bro_nstg": 0, "bro_chunk_px": 0, "foot_kb": 1300.0}, "sha1": "702575ae57c367de2aa4e87cdd22514163d547ea", "pcc": 0.9999985480879082, "bit_identical": true}
+PASSED2026-11-20 20:43:40.322 | info     |           Metal | Device kernel duration perf summary (device=0): count=4, min=5068735ns, avg=5148864.5ns, max=5245543ns (profiler_analysis.cpp:729)
+2026-11-20 20:43:40.322 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=17700ns, range=[5062200..5239200), underflow(<5062200ns)=0, overflow(>=5239200ns)=1) (profiler_analysis.cpp:772)
+2026-11-20 20:43:40.322 | info     |           Metal |   [     5062200 ..      5079900) |########################################|        2 (profiler_analysis.cpp:777)
+2026-11-20 20:43:40.322 | info     |           Metal |   [     5079900 ..      5097600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:40.322 | info     |           Metal |   [     5097600 ..      5115300) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:40.322 | info     |           Metal |   [     5115300 ..      5133000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:40.322 | info     |           Metal |   [     5133000 ..      5150700) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:40.322 | info     |           Metal |   [     5150700 ..      5168400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:40.322 | info     |           Metal |   [     5168400 ..      5186100) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:40.322 | info     |           Metal |   [     5186100 ..      5203800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:40.322 | info     |           Metal |   [     5203800 ..      5221500) |####################                    |        1 (profiler_analysis.cpp:777)
+2026-11-20 20:43:40.322 | info     |           Metal |   [     5221500 ..      5239200) |                                        |        0 (profiler_analysis.cpp:777)
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py::test_bro[idx36-device_params0] 2026-11-20 20:43:40.796 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:43:40.799 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-11-20 20:43:41.213 | info     |           Metal | Clearing program cache on MeshDevice 19 (mesh_device.cpp:1327)
+2026-11-20 20:43:41.263 | INFO     | tracy:signpost:49 - cmp|idx36|base|0
+2026-11-20 20:43:41.308 | INFO     | tracy:signpost:49 - cmpend|idx36|base
+2026-11-20 20:43:41.824 | info     |           Metal | Clearing program cache on MeshDevice 19 (mesh_device.cpp:1327)
+2026-11-20 20:43:41.888 | INFO     | tracy:signpost:49 - cmp|idx36|lazy|0
+2026-11-20 20:43:41.932 | INFO     | tracy:signpost:49 - cmpend|idx36|lazy
+BRO: {"case": "idx36", "variant": "base", "knobs": {}, "log": "dsA", "t": 1795207421.2147658, "status": "ok", "blocking": {"bm": 50, "bk": 1, "m_blocks": 3, "resident": true, "im2col_depth": 38, "band_len": 1602, "band_stride": 1024, "bro_nstg": 0, "bro_chunk_px": 0, "foot_kb": 1302.9}, "sha1": "8c78d9da0c9690306cbb3b81bc969bdee9687d32", "pcc": 0.9999985504467828, "ref": "base", "bit_identical": true}
+BRO: {"case": "idx36", "variant": "lazy", "knobs": {"BRO_POLL": false}, "log": "dsA", "t": 1795207421.825947, "status": "ok", "blocking": {"bm": 50, "bk": 1, "m_blocks": 3, "resident": true, "im2col_depth": 6, "band_len": 1602, "band_stride": 1024, "bro_nstg": 4, "bro_chunk_px": 256, "foot_kb": 1302.9}, "sha1": "8c78d9da0c9690306cbb3b81bc969bdee9687d32", "pcc": 0.9999985504467828, "bit_identical": true}
+PASSED2026-11-20 20:43:42.568 | info     |           Metal | Device kernel duration perf summary (device=0): count=4, min=647704ns, avg=687922.0ns, max=728673ns (profiler_analysis.cpp:729)
+2026-11-20 20:43:42.568 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=8100ns, range=[639900..720900), underflow(<639900ns)=0, overflow(>=720900ns)=2) (profiler_analysis.cpp:772)
+2026-11-20 20:43:42.568 | info     |           Metal |   [      639900 ..       648000) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-20 20:43:42.568 | info     |           Metal |   [      648000 ..       656100) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-20 20:43:42.568 | info     |           Metal |   [      656100 ..       664200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:42.568 | info     |           Metal |   [      664200 ..       672300) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:42.568 | info     |           Metal |   [      672300 ..       680400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:42.568 | info     |           Metal |   [      680400 ..       688500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:42.568 | info     |           Metal |   [      688500 ..       696600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:42.568 | info     |           Metal |   [      696600 ..       704700) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:42.568 | info     |           Metal |   [      704700 ..       712800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:42.568 | info     |           Metal |   [      712800 ..       720900) |                                        |        0 (profiler_analysis.cpp:777)
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py::test_bro[idx33-device_params0] 2026-11-20 20:43:42.864 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:43:42.867 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-11-20 20:43:44.254 | info     |           Metal | Clearing program cache on MeshDevice 21 (mesh_device.cpp:1327)
+2026-11-20 20:43:44.340 | INFO     | tracy:signpost:49 - cmp|idx33|lazy|0
+2026-11-20 20:43:44.389 | INFO     | tracy:signpost:49 - cmpend|idx33|lazy
+2026-11-20 20:43:44.424 | info     |           Metal | Clearing program cache on MeshDevice 21 (mesh_device.cpp:1327)
+2026-11-20 20:43:44.487 | INFO     | tracy:signpost:49 - cmp|idx33|base|0
+2026-11-20 20:43:44.536 | INFO     | tracy:signpost:49 - cmpend|idx33|base
+BRO: {"case": "idx33", "variant": "lazy", "knobs": {"BRO_POLL": false}, "log": "dsA", "t": 1795207424.2557402, "status": "ok", "blocking": {"bm": 30, "bk": 4, "m_blocks": 5, "resident": true, "im2col_depth": 7, "band_len": 962, "band_stride": 962, "bro_nstg": 4, "bro_chunk_px": 64, "foot_kb": 1296.0}, "sha1": "bc0a4a18a4d6df4a3d8128115792592aa5cf78b1", "pcc": 0.9999985634438742, "ref": "lazy", "bit_identical": true}
+BRO: {"case": "idx33", "variant": "base", "knobs": {}, "log": "dsA", "t": 1795207424.4256356, "status": "ok", "blocking": {"bm": 30, "bk": 4, "m_blocks": 5, "resident": true, "im2col_depth": 15, "band_len": 962, "band_stride": 962, "bro_nstg": 0, "bro_chunk_px": 0, "foot_kb": 1296.0}, "sha1": "bc0a4a18a4d6df4a3d8128115792592aa5cf78b1", "pcc": 0.9999985634438742, "bit_identical": true}
+PASSED2026-11-20 20:43:44.703 | info     |           Metal | Device kernel duration perf summary (device=0): count=4, min=1352404ns, avg=1380230.8ns, max=1409018ns (profiler_analysis.cpp:729)
+2026-11-20 20:43:44.703 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=5700ns, range=[1350900..1407900), underflow(<1350900ns)=0, overflow(>=1407900ns)=1) (profiler_analysis.cpp:772)
+2026-11-20 20:43:44.703 | info     |           Metal |   [     1350900 ..      1356600) |########################################|        2 (profiler_analysis.cpp:777)
+2026-11-20 20:43:44.703 | info     |           Metal |   [     1356600 ..      1362300) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:44.703 | info     |           Metal |   [     1362300 ..      1368000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:44.703 | info     |           Metal |   [     1368000 ..      1373700) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:44.703 | info     |           Metal |   [     1373700 ..      1379400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:44.703 | info     |           Metal |   [     1379400 ..      1385100) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:44.703 | info     |           Metal |   [     1385100 ..      1390800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:44.703 | info     |           Metal |   [     1390800 ..      1396500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:44.703 | info     |           Metal |   [     1396500 ..      1402200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:44.703 | info     |           Metal |   [     1402200 ..      1407900) |####################                    |        1 (profiler_analysis.cpp:777)
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py::test_bro[idx42-device_params0] 2026-11-20 20:43:45.070 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:43:45.074 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-11-20 20:43:45.829 | info     |           Metal | Clearing program cache on MeshDevice 23 (mesh_device.cpp:1327)
+2026-11-20 20:43:45.891 | INFO     | tracy:signpost:49 - cmp|idx42|base|0
+2026-11-20 20:43:45.948 | INFO     | tracy:signpost:49 - cmpend|idx42|base
+2026-11-20 20:43:47.045 | info     |           Metal | Clearing program cache on MeshDevice 23 (mesh_device.cpp:1327)
+2026-11-20 20:43:47.174 | INFO     | tracy:signpost:49 - cmp|idx42|lazy|0
+2026-11-20 20:43:47.230 | INFO     | tracy:signpost:49 - cmpend|idx42|lazy
+BRO: {"case": "idx42", "variant": "base", "knobs": {}, "log": "dsA", "t": 1795207425.8306112, "status": "ok", "blocking": {"bm": 19, "bk": 2, "m_blocks": 8, "resident": true, "im2col_depth": 12, "band_len": 610, "band_stride": 610, "bro_nstg": 0, "bro_chunk_px": 0, "foot_kb": 1301.0}, "sha1": "05ef45778414808ae1ef4fb08dcad60fbe046a9d", "pcc": 0.9999985523059673, "ref": "base", "bit_identical": true}
+BRO: {"case": "idx42", "variant": "lazy", "knobs": {"BRO_POLL": false}, "log": "dsA", "t": 1795207427.0474498, "status": "ok", "blocking": {"bm": 19, "bk": 2, "m_blocks": 8, "resident": true, "im2col_depth": 4, "band_len": 610, "band_stride": 610, "bro_nstg": 2, "bro_chunk_px": 128, "foot_kb": 1301.0}, "sha1": "05ef45778414808ae1ef4fb08dcad60fbe046a9d", "pcc": 0.9999985523059673, "bit_identical": true}
+PASSED2026-11-20 20:43:48.538 | info     |           Metal | Device kernel duration perf summary (device=0): count=4, min=1447733ns, avg=1534959.5ns, max=1622592ns (profiler_analysis.cpp:729)
+2026-11-20 20:43:48.538 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=17500ns, range=[1435000..1610000), underflow(<1435000ns)=0, overflow(>=1610000ns)=2) (profiler_analysis.cpp:772)
+2026-11-20 20:43:48.538 | info     |           Metal |   [     1435000 ..      1452500) |########################################|        2 (profiler_analysis.cpp:777)
+2026-11-20 20:43:48.538 | info     |           Metal |   [     1452500 ..      1470000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:48.538 | info     |           Metal |   [     1470000 ..      1487500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:48.538 | info     |           Metal |   [     1487500 ..      1505000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:48.538 | info     |           Metal |   [     1505000 ..      1522500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:48.538 | info     |           Metal |   [     1522500 ..      1540000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:48.538 | info     |           Metal |   [     1540000 ..      1557500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:48.538 | info     |           Metal |   [     1557500 ..      1575000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:48.538 | info     |           Metal |   [     1575000 ..      1592500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:48.538 | info     |           Metal |   [     1592500 ..      1610000) |                                        |        0 (profiler_analysis.cpp:777)
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py::test_bro[idx44-device_params0] 2026-11-20 20:43:48.968 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 20:43:48.971 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-11-20 20:43:51.695 | info     |           Metal | Clearing program cache on MeshDevice 25 (mesh_device.cpp:1327)
+2026-11-20 20:43:52.099 | INFO     | tracy:signpost:49 - cmp|idx44|lazy|0
+2026-11-20 20:43:52.158 | INFO     | tracy:signpost:49 - cmpend|idx44|lazy
+2026-11-20 20:43:53.971 | info     |           Metal | Clearing program cache on MeshDevice 25 (mesh_device.cpp:1327)
+2026-11-20 20:43:54.034 | INFO     | tracy:signpost:49 - cmp|idx44|base|0
+2026-11-20 20:43:54.095 | INFO     | tracy:signpost:49 - cmpend|idx44|base
+BRO: {"case": "idx44", "variant": "lazy", "knobs": {"BRO_POLL": false}, "log": "dsA", "t": 1795207431.6962786, "status": "ok", "blocking": {"bm": 34, "bk": 2, "m_blocks": 18, "resident": true, "im2col_depth": 2, "band_len": 1090, "band_stride": 1090, "bro_nstg": 2, "bro_chunk_px": 128, "foot_kb": 1301.3}, "sha1": "648724b5138814deb6de2c2b278d2b1e584d72a2", "pcc": 0.999998552259108, "ref": "lazy", "bit_identical": true}
+BRO: {"case": "idx44", "variant": "base", "knobs": {}, "log": "dsA", "t": 1795207433.972947, "status": "ok", "blocking": {"bm": 34, "bk": 2, "m_blocks": 18, "resident": true, "im2col_depth": 10, "band_len": 1090, "band_stride": 1090, "bro_nstg": 0, "bro_chunk_px": 0, "foot_kb": 1301.3}, "sha1": "648724b5138814deb6de2c2b278d2b1e584d72a2", "pcc": 0.999998552259108, "bit_identical": true}
+PASSED2026-11-20 20:43:56.239 | info     |           Metal | Device kernel duration perf summary (device=0): count=4, min=3252432ns, avg=3579786.5ns, max=3928286ns (profiler_analysis.cpp:729)
+2026-11-20 20:43:56.239 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=67600ns, range=[3244800..3920800), underflow(<3244800ns)=0, overflow(>=3920800ns)=1) (profiler_analysis.cpp:772)
+2026-11-20 20:43:56.239 | info     |           Metal |   [     3244800 ..      3312400) |########################################|        2 (profiler_analysis.cpp:777)
+2026-11-20 20:43:56.239 | info     |           Metal |   [     3312400 ..      3380000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:56.239 | info     |           Metal |   [     3380000 ..      3447600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:56.239 | info     |           Metal |   [     3447600 ..      3515200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:56.239 | info     |           Metal |   [     3515200 ..      3582800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:56.239 | info     |           Metal |   [     3582800 ..      3650400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:56.239 | info     |           Metal |   [     3650400 ..      3718000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:56.239 | info     |           Metal |   [     3718000 ..      3785600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:56.239 | info     |           Metal |   [     3785600 ..      3853200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 20:43:56.239 | info     |           Metal |   [     3853200 ..      3920800) |####################                    |        1 (profiler_analysis.cpp:777)
+UP_FRONT_INLINE: real pass took 29.7s
+
+
+- generated xml file: /localdev/pmilojevic/workspaces/opgen/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+7.00s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py::test_bro[idx44-device_params0]
+6.59s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py::test_bro[idx35-device_params0]
+5.73s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py::test_bro[idx41-device_params0]
+3.23s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py::test_bro[idx42-device_params0]
+1.65s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py::test_bro[idx33-device_params0]
+1.61s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py::test_bro[idx36-device_params0]
+0.50s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py::test_bro[idx44-device_params0]
+0.49s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py::test_bro[idx41-device_params0]
+0.48s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py::test_bro[idx35-device_params0]
+0.42s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py::test_bro[idx42-device_params0]
+0.32s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py::test_bro[idx33-device_params0]
+0.25s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py::test_bro[idx41-device_params0]
+0.25s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py::test_bro[idx35-device_params0]
+0.25s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py::test_bro[idx44-device_params0]
+0.25s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py::test_bro[idx42-device_params0]
+0.25s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py::test_bro[idx36-device_params0]
+0.23s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py::test_bro[idx33-device_params0]
+0.21s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py::test_bro[idx36-device_params0]
+============================== 6 passed in 38.58s ==============================
+2026-11-20 20:43:58.201 | info     |    BuildKernels | JIT cache stats: 75/79 hits (94.9%) [75 cached, 1138 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-20 20:43:58.201 | info     |    BuildKernels | JIT telemetry: 40 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-20 20:43:58.249 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:605)
+2026-11-20 20:43:58.249 | info     |             UMD | Closing devices in cluster (cluster.cpp:1496)
+2026-11-20 20:43:58.606 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1506)
+2026-11-20 20:43:58.606 | info     |             UMD | Cluster destructor started. (cluster.cpp:1227)
+2026-11-20 20:43:58.606 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1240)
+2026-11-20 20:43:59.174 | INFO     | __main__:main:490 - Copying /localdev/pmilojevic/workspaces/opgen/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/pmilojevic/workspaces/opgen/build/profiler/build_wasm/traces/test_bro_2026_11_20_20_43_59.tracy
+2026-11-20 20:43:59.185 | INFO     | __main__:main:493 - Copied /localdev/pmilojevic/workspaces/opgen/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/pmilojevic/workspaces/opgen/build/profiler/build_wasm/traces/test_bro_2026_11_20_20_43_59.tracy
+2026-11-20 20:43:59.185 | INFO     | __main__:main:502 - embed.tracy -> traces/test_bro_2026_11_20_20_43_59.tracy
+2026-11-20 20:43:59.186 | INFO     | tracy.serve_wasm:launch_server_subprocess:310 - Launching tracy web app GUI server subprocess...
+2026-11-20 20:43:59.186 | INFO     | tracy.serve_wasm:launch_server_subprocess:313 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-11-20 20:43:59.186 | INFO     | tracy.serve_wasm:launch_server_subprocess:320 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-11-20 20:44:03.646 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /localdev/pmilojevic/workspaces/opgen/generated/profiler/.logs/tracy_ops_times.csv
+2026-11-20 20:44:03.827 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /localdev/pmilojevic/workspaces/opgen/generated/profiler/.logs/tracy_ops_data.csv
+2026-11-20 20:44:03.828 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:430 - Importing ops logs
+/localdev/pmilojevic/workspaces/opgen/tools/tracy/process_ops_logs.py:535: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-11-20 20:44:13.534 | INFO     | tracy.perf_counter_analysis:get_device_op_data:420 - Getting device ops
+2026-11-20 20:44:13.535 | INFO     | tracy.process_ops_logs:append_device_data:995 - Appending device data
+2026-11-20 20:44:18.584 | INFO     | tracy.process_ops_logs:generate_reports:1323 - OPs' perf analysis is finished! Generating reports ...
+2026-11-20 20:44:18.585 | INFO     | tracy.process_ops_logs:generate_reports:1343 - Copying runtime artifacts
+2026-11-20 20:44:18.741 | INFO     | tracy.process_ops_logs:generate_reports:1352 - Generating OPs CSV
+2026-11-20 20:44:18.770 | INFO     | tracy.process_ops_logs:generate_reports:1814 - OPs csv generated at: /localdev/pmilojevic/workspaces/opgen/generated/profiler/reports/2026_11_20_20_44_18/ops_perf_results_2026_11_20_20_44_18.csv
+========================================
+PRECOMPILE: UP_FRONT_INLINE: collect pass over 6 item(s) took 6.5s
+PRECOMPILE: UP_FRONT_INLINE: compile route local (programs=12, farm_min=10)
+PRECOMPILE: UP_FRONT_COLLECT: 24 ops stashed across 6 bodies -> 12 unique programs (swallowed 0, skipped-capture 0)
+PRECOMPILE: UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=30 fallback=0
+PRECOMPILE: UP_FRONT_COLLECT: 12 collected · 12 built · 0 already compiled in 1.1s (workers=64, errors=0) -> on-disk JIT cache warm
+PRECOMPILE: UP_FRONT_INLINE: compile step took 1.3s; starting the real pass
+PRECOMPILE: UP_FRONT_INLINE: real pass took 29.7s
+SAFE_PYTEST: PROFILER CSV: /localdev/pmilojevic/workspaces/opgen/generated/profiler/reports/2026_11_20_20_44_18/ops_perf_results_2026_11_20_20_44_18.csv
+SAFE_PYTEST_RESULT: PASS
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 1m10s (70s total, device-lock-acquired -> exit)

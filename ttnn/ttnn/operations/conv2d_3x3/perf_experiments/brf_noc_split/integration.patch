@@ -1,0 +1,466 @@
+diff -ru '--exclude=__pycache__' op_base/conv2d_3x3_program_descriptor.py op_copy/conv2d_3x3_program_descriptor.py
+--- op_base/conv2d_3x3_program_descriptor.py	2026-11-20 18:44:59.481599411 +0000
++++ op_copy/conv2d_3x3_program_descriptor.py	2026-11-20 19:51:02.648779600 +0000
+@@ -93,6 +93,11 @@
+ BRF_NSTG = 4
+ BRF_CHUNK_BYTES = 16384
+ BRF_MIN_READ_BYTES = 2048  # smallest per-bank read worth a staging chunk (else fewer, larger chunks)
++# Split bank-run fill: with resident weights the writer (BRISC, NoC1) idles beside the output store, so it fills part of
++# every M-block's chunks through its own staging slots (half of the staging L1 each). The reader claims chunks from
++# the front of the block's chunk sequence, the writer from the back, until they meet: the split adapts per core to
++# whichever NoC delivers faster.
++BRF_SPLIT = True
+ 
+ 
+ def _brf_staging(g, slack_bytes):
+@@ -3349,9 +3354,43 @@
+         if g.sharded_output and not g.remote_output
+         else ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
+     )
++    brf_stage = _brf_staging(g, b.im2col_rm_depth_rows * bk * TILE_BYTES_BF16)
++    brf_fill = (
++        brf_stage is not None
++        and not g.tile_input
++        and input_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
++        and input_tensor.memory_config().buffer_type == ttnn.BufferType.DRAM
++        and g.c_in == g.c_in_p
++        and input_tensor.buffer_aligned_page_size() == pixel_bytes
++        and tap_direct_fifo_units > 0
++    )
++    # Split bank-run fill (BRF_SPLIT): the reader and the writer each get the staging of half the slack (one chunk
++    # size for both); semaphores: the reader's go (slab dead), the writer's done, and the two claim words. Measured
++    # (Blackhole p150b, 110 cores, bit-identical): 1026x2048x128 -> 3 5204 -> 4123 us, 514x1024x128 -> 3 1408 -> 1070
++    # us, 1026x2048x32 -> 128 2611 -> 2339 us.
++    _brf_split_defines = []
++    _brf_split_stage = None
++    if brf_fill and BRF_SPLIT and b.weights_resident:
++        _brf_split_stage = _brf_staging(g, b.im2col_rm_depth_rows * bk * TILE_BYTES_BF16 // 2)
++    if _brf_split_stage is not None:
++        brf_split_sems = tuple(range(len(sem_ids), len(sem_ids) + 4))
++        sem_ids += brf_split_sems
++        assert len(sem_ids) <= MAX_SEMAPHORES, sem_ids
++        _brf_split_defines = [
++            ("BANK_RUN_FILL", "1"),
++            ("BRF_NSTG", str(_brf_split_stage[0])),
++            ("BRF_CHUNK_PX", str(_brf_split_stage[1])),
++            ("BRF_SPLIT", "1"),
++            ("BRF_NSTG_W", str(_brf_split_stage[0])),
++            ("BRF_GO_SEM", str(brf_split_sems[0])),
++            ("BRF_DONE_SEM", str(brf_split_sems[1])),
++            ("BRF_RCLAIM_SEM", str(brf_split_sems[2])),
++            ("BRF_WCLAIM_SEM", str(brf_split_sems[3])),
++        ]
++    # Split bank-run fill (BRF_SPLIT): the writer reads the DRAM-interleaved ROW_MAJOR input too.
+     writer_ct_args.extend(
+         ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
+-        if fill_split
++        if fill_split or _brf_split_stage is not None
+         else ttnn.TensorAccessorArgs().get_compile_time_args()
+     )
+ 
+@@ -3777,17 +3816,8 @@
+     # (cb_im2col_rm), which is dead during the fill: the reader refills the slab only once compute popped every unit of
+     # the previous M-block, and it gathers again only after the fill. No new L1, no blocking change. Elsewhere the
+     # per-pixel fill: TILE and sharded inputs have no pixel pages to coalesce, L1-interleaved pages stride by the L1
+-    # bank count, and the other walks keep cb_im2col_rm live during the fill.
+-    brf_stage = _brf_staging(g, b.im2col_rm_depth_rows * bk * TILE_BYTES_BF16)
+-    brf_fill = (
+-        brf_stage is not None
+-        and not g.tile_input
+-        and input_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+-        and input_tensor.memory_config().buffer_type == ttnn.BufferType.DRAM
+-        and g.c_in == g.c_in_p
+-        and input_tensor.buffer_aligned_page_size() == pixel_bytes
+-        and tap_direct_fifo_units > 0
+-    )
++    # bank count, and the other walks keep cb_im2col_rm live during the fill. (brf_stage / brf_fill: computed above, the
++    # split fill decides the writer's compile-time args.)
+     _host_fill_defines = (
+         [("CONV2D_3X3_HOST_FILL", "1"), ("HOST_FILL_WRITER_WINDOW", str(HOST_FILL_WRITER_WINDOW))] if host_fill else []
+     )
+@@ -3815,7 +3845,7 @@
+             + _sd_dm_defines
+             + _s2_dm_defines
+             + _host_fill_defines
+-            + _brf_defines,
++            + (_brf_split_defines or _brf_defines),
+             config=ttnn.ReaderConfigDescriptor(),
+         )
+         for slice_channels, (reader_cores, reader_rt) in reader_groups.items()
+@@ -3835,6 +3865,7 @@
+             + slot_ack_defines
+             + _host_fill_defines
+             + _wr_defines
++            + _brf_split_defines
+             + ([("NSLICE_ROUND0", "1")] if round0_args else [])
+             + (
+                 [
+diff -ru '--exclude=__pycache__' op_base/kernels/conv2d_3x3_reader.cpp op_copy/kernels/conv2d_3x3_reader.cpp
+--- op_base/kernels/conv2d_3x3_reader.cpp	2026-11-20 18:44:59.483599439 +0000
++++ op_copy/kernels/conv2d_3x3_reader.cpp	2026-11-20 19:43:35.029436438 +0000
+@@ -1201,9 +1201,18 @@
+                 // The staging ring is cb_im2col_rm's L1 (the gathered-block FIFO): every unit of the previous M-block
+                 // was popped (the wait above), and this reader gathers into it again only after the fill.
+                 static_assert(kb_tap_direct && !zero_im2col_once, "staging aliases the tap-direct block FIFO");
++#ifdef BRF_SPLIT
++                // Split fill (the writer's split bank-run fill): its BRF_NSTG_W staging slots follow these. The writer
++                // starts a later block on BRF_GO_SEM, set by the K-blocked tap-direct slab-dead wait below.
++                static_assert(!padded_slab && !(window_direct && !s2_taps), "BRF_GO_SEM is set on the tap-direct wait");
++                static_assert(
++                    (BRF_NSTG + BRF_NSTG_W) * BRF_CHUNK_PX * pixel_bytes <= im2col_rm_depth_rows * block_k_tiles * 2048,
++                    "both RISCs' staging fits cb_im2col_rm");
++#else
+                 static_assert(
+                     BRF_NSTG * BRF_CHUNK_PX * pixel_bytes <= im2col_rm_depth_rows * block_k_tiles * 2048,
+                     "staging fits cb_im2col_rm");
++#endif
+                 constexpr uint32_t NB = NUM_DRAM_BANKS;
+                 constexpr uint32_t brf_ch = BRF_CHUNK_PX;
+                 static_assert(brf_ch % NB == 0, "a chunk is whole bank rows");
+@@ -1220,9 +1229,11 @@
+                         band_hi[kh] = (x_hi > x_lo ? x_hi : x_lo) + v_minus_x;
+                         band_vmx[kh] = v_minus_x;
+                     });
++                // Chunk c: counted over the three bands in order (the split fill's claim index).
+                 struct BrfCursor {
+                     int32_t kh;
+                     int32_t a;
++                    uint32_t c;
+                 };
+                 auto settle = [&](BrfCursor& c) {
+                     while (c.kh < 3 && c.a >= band_hi[c.kh]) {
+@@ -1231,7 +1242,7 @@
+                         }
+                     }
+                 };
+-                BrfCursor ic{0, band_lo[0]};
++                BrfCursor ic{0, band_lo[0], 0};
+                 settle(ic);
+                 BrfCursor pc = ic;
+                 auto issue = [&](uint32_t slot) {
+@@ -1245,19 +1256,52 @@
+                         reads.read(input.get_noc_addr(a + s), base + s * brf_slot_bytes, run * pixel_bytes);
+                     }
+                     ic.a += brf_ch;
++                    ++ic.c;
+                     settle(ic);
+                 };
++#ifdef BRF_SPLIT
++                // Split fill: this reader claims chunks from the front, the writer from the back, each publishing
++                // (block << 16 | chunks claimed) in its claim word. The reader stops at the first chunk the writer
++                // claimed and processes every chunk it claimed (the writer yields a chunk it sees claimed here after
++                // claiming it; a chunk both claim in a race is copied twice, with the same bytes).
++                uint32_t brf_nchunks = 0;
++                for (int32_t kh = 0; kh < 3; ++kh) {
++                    if (band_hi[kh] > band_lo[kh]) {
++                        brf_nchunks += static_cast<uint32_t>(band_hi[kh] - band_lo[kh] + brf_ch - 1) / brf_ch;
++                    }
++                }
++                volatile tt_l1_ptr uint32_t* brf_rclaim =
++                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(BRF_RCLAIM_SEM));
++                volatile tt_l1_ptr uint32_t* brf_wclaim =
++                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(BRF_WCLAIM_SEM));
++                auto claim = [&]() -> bool {
++                    if (ic.kh >= 3) {
++                        return false;
++                    }
++                    invalidate_l1_cache();
++                    const uint32_t w = *brf_wclaim;
++                    const uint32_t wc = (w >> 16) == m_block_idx ? (w & 0xFFFFu) : 0;
++                    if (ic.c + wc >= brf_nchunks) {
++                        return false;
++                    }
++                    *brf_rclaim = (m_block_idx << 16) | (ic.c + 1);
++                    asm volatile("fence" ::: "memory");
++                    return true;
++                };
++#else
++                auto claim = [&]() -> bool { return ic.kh < 3; };
++#endif
+                 uint32_t issued = 0;
+                 uint32_t processed = 0;
+                 int32_t prev_kh = -1;
+-                for (; issued + 1 < BRF_NSTG && ic.kh < 3; ++issued) {
++                for (; issued + 1 < BRF_NSTG && claim(); ++issued) {
+                     issue(issued % BRF_NSTG);
+                 }
+                 const uint32_t noc = reads.noc.get_noc_id();
+-                while (pc.kh < 3) {
++                while (processed < issued) {
+                     const uint32_t slot = processed % BRF_NSTG;
+                     reads.wait(brf_trid0 + slot);
+-                    if (ic.kh < 3) {
++                    if (claim()) {
+                         // The slot freed by the previous chunk (its copies are under that chunk's band trid).
+                         if (prev_kh >= 0) {
+                             reads.wait(prev_kh + 1);
+@@ -1287,6 +1331,14 @@
+                     pc.a += brf_ch;
+                     settle(pc);
+                 }
++#ifdef BRF_SPLIT
++                {
++                    // The writer's chunks landed in the slab and its staging is dead (the gather below reuses that
++                    // L1): it publishes BRF_DONE_SEM = block + 1.
++                    MaybeDeviceZoneScope("reader_brf_wait");
++                    Semaphore<>(BRF_DONE_SEM).wait_min(m_block_idx + 1);
++                }
++#endif
+                 // The staging overwrote any canonical zero rows the block FIFO kept (zero-once): forget them.
+                 for (uint32_t blk = 0; blk < sizeof(fifo.blk_zkw); ++blk) {
+                     fifo.blk_zkw[blk] = 0;
+@@ -1871,6 +1923,10 @@
+             // writer, runs after its own tilize of this one (same unpacker, in order).
+             if (m_block_idx + 1 < num_m_blocks_this_core) {
+                 cb_reserve_back(cb_src_table, tap_direct_fifo_units);
++#ifdef BRF_SPLIT
++                // The slab and cb_im2col_rm are dead: the writer may fill its part of the next block.
++                Semaphore<>(BRF_GO_SEM).set(m_block_idx + 1);
++#endif
+             }
+         }
+         if constexpr (tile_input && !ring_slab && !s2_taps) {
+diff -ru '--exclude=__pycache__' op_base/kernels/conv2d_3x3_writer.cpp op_copy/kernels/conv2d_3x3_writer.cpp
+--- op_base/kernels/conv2d_3x3_writer.cpp	2026-11-20 18:44:59.483599439 +0000
++++ op_copy/kernels/conv2d_3x3_writer.cpp	2026-11-20 19:43:10.172084188 +0000
+@@ -2472,6 +2472,203 @@
+ #ifdef WEIGHTS_RESIDENT
+     static_assert(!row_split && !nslice_outer && !k_split && !weight_servers && !slab_split && !output_sharded);
+ #endif
++#ifdef BRF_SPLIT
++    // ---- Split bank-run fill, writer part (the reader's BANK_RUN_FILL). An M-block's slab is the three bands'
++    // in-image pixels; each band is cut into chunks of BRF_CHUNK_PX consecutive input pixels from its first pixel,
++    // numbered over the bands in order. The reader claims chunks from the front, this writer from the back, until they
++    // meet (so each core's split follows whichever NoC delivers faster there): per chunk one DRAM read per bank on NoC1
++    // into one of BRF_NSTG_W staging slots (cb_im2col_rm's L1 after the reader's BRF_NSTG slots, transaction ids 8..), then
++    // one self-aimed NoC1 read per pixel into the slab under the band's id kh + 1. Block m starts once the reader set
++    // BRF_GO_SEM >= m (compute popped every unit of block m - 1, so the slab and cb_im2col_rm are dead; block 0 at once)
++    // and ends with BRF_DONE_SEM = m + 1 once its copies landed (the reader gathers, into cb_im2col_rm, only after it).
++    // Served from the writer's waits (the output store's), one chunk per call, so the store keeps moving. Raw NoC
++    // (capability): the de-interleave rewrites both addresses of every read (read_with_state fixes the source).
++    static_assert(!tile_input && !slab_split && !row_split && !nslice_outer && !k_split && !output_sharded);
++    constexpr uint32_t brf_px_bytes = input_page_bytes;
++    constexpr uint32_t brf_nb = NUM_DRAM_BANKS;
++    constexpr uint32_t brf_ch = BRF_CHUNK_PX;
++    static_assert(brf_ch % brf_nb == 0, "a chunk is whole bank rows");
++    constexpr uint32_t brf_slot_bytes = brf_ch / brf_nb * brf_px_bytes;
++    constexpr uint32_t brf_chunk_bytes = brf_ch * brf_px_bytes;
++    constexpr uint32_t brf_trid0 = 8;
++    static_assert(BRF_NSTG_W >= 2 && brf_trid0 + BRF_NSTG_W - 1 <= NOC_MAX_TRANSACTION_ID, "trids");
++    static_assert(
++        (BRF_NSTG + BRF_NSTG_W) * brf_chunk_bytes <= im2col_rm_depth_rows * block_k_tiles * 2048,
++        "both RISCs' staging fits cb_im2col_rm");
++    const uint32_t brf_stage = get_local_cb_interface(cb_im2col_rm).fifo_limit -
++                               get_local_cb_interface(cb_im2col_rm).fifo_size + BRF_NSTG * brf_chunk_bytes;
++    const uint32_t brf_slab_l1 = get_write_ptr(cb_halo_slab);
++    const auto brf_input = TensorAccessor(input_args, input_addr, input_page_bytes);
++    conv2d_3x3::TaggedReads<false> brf_reads;
++    const uint32_t brf_noc = brf_reads.noc.get_noc_id();
++    int32_t brf_lo[3], brf_hi[3], brf_vmx[3];
++    uint32_t brf_issued = 0;
++    uint32_t brf_processed = 0;
++    int32_t brf_prev_kh = -1;
++    uint32_t brf_m = 0;  // the block being filled, or the next one
++    bool brf_active = false;
++    // Chunk j of the block: band kh, input pixels [a, e).
++    int32_t brf_first[3];  // first chunk index of each band
++    uint32_t brf_nchunks = 0;
++    auto brf_chunk = [&](uint32_t j, int32_t& kh, int32_t& a, int32_t& e) {
++        kh = 2;
++        while (kh > 0 && static_cast<int32_t>(j) < brf_first[kh]) {
++            --kh;
++        }
++        a = brf_lo[kh] + (static_cast<int32_t>(j) - brf_first[kh]) * static_cast<int32_t>(brf_ch);
++        e = a + static_cast<int32_t>(brf_ch) < brf_hi[kh] ? a + static_cast<int32_t>(brf_ch) : brf_hi[kh];
++    };
++    // Claim chunks from the back (the reader claims from the front), publishing (block << 16 | chunks claimed); after
++    // a claim, yield the chunk (and stop) if the reader's claim word covers it.
++    volatile tt_l1_ptr uint32_t* brf_rclaim =
++        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(BRF_RCLAIM_SEM));
++    volatile tt_l1_ptr uint32_t* brf_wclaim =
++        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(BRF_WCLAIM_SEM));
++    uint32_t brf_wc = 0;
++    bool brf_stopped = false;
++    auto brf_reader_claimed = [&]() -> uint32_t {
++        invalidate_l1_cache();
++        const uint32_t r = *brf_rclaim;
++        return (r >> 16) == brf_m ? (r & 0xFFFFu) : 0;
++    };
++    // The next chunk to issue, or false (and stop) once the two ends met.
++    auto brf_claim = [&](uint32_t& j) -> bool {
++        if (brf_stopped) {
++            return false;
++        }
++        if (brf_wc >= brf_nchunks || brf_nchunks - 1 - brf_wc < brf_reader_claimed()) {
++            brf_stopped = true;
++            return false;
++        }
++        j = brf_nchunks - 1 - brf_wc;
++        *brf_wclaim = (brf_m << 16) | (brf_wc + 1);
++        asm volatile("fence" ::: "memory");
++        ++brf_wc;
++        if (j < brf_reader_claimed()) {
++            brf_stopped = true;
++            return false;
++        }
++        return true;
++    };
++    uint32_t brf_slot_chunk[BRF_NSTG_W];
++    // Claim the next chunk and issue its DRAM reads (one per bank) into slot brf_issued % BRF_NSTG_W.
++    auto brf_issue_next = [&]() -> bool {
++        uint32_t j;
++        if (!brf_claim(j)) {
++            return false;
++        }
++        int32_t kh, a, e;
++        brf_chunk(j, kh, a, e);
++        const uint32_t slot = brf_issued % BRF_NSTG_W;
++        brf_slot_chunk[slot] = j;
++        const uint32_t base = brf_stage + slot * brf_chunk_bytes;
++        brf_reads.begin(brf_trid0 + slot);
++        for (int32_t s = 0; s < static_cast<int32_t>(brf_nb) && a + s < e; ++s) {
++            const uint32_t run = static_cast<uint32_t>(e - a - s + brf_nb - 1) / brf_nb;
++            brf_reads.read(brf_input.get_noc_addr(a + s), base + s * brf_slot_bytes, run * brf_px_bytes);
++        }
++        dataflow_kernel_lib::set_read_trid(brf_reads.noc, 0);
++        ++brf_issued;
++        return true;
++    };
++    auto brf_start = [&]() {
++        const uint32_t block_tiles_done = brf_m * block_m_tiles;
++        const uint32_t block_valid_tiles = actual_m_tiles - block_tiles_done < block_m_tiles
++                                               ? actual_m_tiles - block_tiles_done
++                                               : block_m_tiles;
++        const uint32_t first = (m_tile_start + block_tiles_done) * 32;
++        const uint32_t end_tiles = first + block_valid_tiles * 32;
++        int32_t unused_x_base[3];
++        conv2d_3x3::slab_bands<input_width, input_height * input_width, dilation, band_stride_px>(
++            conv2d_3x3::block_footprint<output_width, input_width, stride, pad_top, pad_left, dilation, band_last_tap>(
++                first, end_tiles < num_out_px ? end_tiles : num_out_px),
++            unused_x_base,
++            [&](int32_t kh, int32_t x_lo, int32_t x_hi, int32_t v_minus_x) {
++                brf_lo[kh] = x_lo + v_minus_x;
++                brf_hi[kh] = (x_hi > x_lo ? x_hi : x_lo) + v_minus_x;
++                brf_vmx[kh] = v_minus_x;
++            });
++        brf_nchunks = 0;
++        for (int32_t kh = 0; kh < 3; ++kh) {
++            brf_first[kh] = static_cast<int32_t>(brf_nchunks);
++            if (brf_hi[kh] > brf_lo[kh]) {
++                brf_nchunks += static_cast<uint32_t>(brf_hi[kh] - brf_lo[kh] + brf_ch - 1) / brf_ch;
++            }
++        }
++        brf_wc = 0;
++        brf_stopped = false;
++        brf_issued = 0;
++        brf_processed = 0;
++        brf_prev_kh = -1;
++        while (brf_issued + 1 < BRF_NSTG_W && brf_issue_next()) {
++        }
++        brf_active = true;
++    };
++    // One step of the active block: de-interleave the next staged chunk (once it landed) and refill its slot, or
++    // publish the block once every copy landed. Never blocks.
++    auto brf_step = [&]() {
++        if (brf_processed == brf_issued) {
++            // Nothing staged: everything claimed is copied (the pipeline only drains once the claims ran out).
++            for (uint32_t t = 1; t <= 3; ++t) {
++                if (!ncrisc_noc_read_with_transaction_id_flushed(brf_noc, t)) {
++                    return;
++                }
++            }
++            Semaphore<>(BRF_DONE_SEM).set(brf_m + 1);
++            brf_active = false;
++            ++brf_m;
++            return;
++        }
++        const uint32_t slot = brf_processed % BRF_NSTG_W;
++        if (!ncrisc_noc_read_with_transaction_id_flushed(brf_noc, brf_trid0 + slot)) {
++            return;
++        }
++        // The slot freed by the previous chunk (its copies are under that chunk's band trid).
++        if (brf_prev_kh >= 0 && !ncrisc_noc_read_with_transaction_id_flushed(brf_noc, brf_prev_kh + 1)) {
++            return;
++        }
++        brf_issue_next();
++        int32_t kh, a, e;
++        brf_chunk(brf_slot_chunk[slot], kh, a, e);
++        const uint32_t base = brf_stage + slot * brf_chunk_bytes;
++        brf_reads.begin(kh + 1);
++        ncrisc_noc_read_set_state<DM_DEDICATED_NOC, true>(
++            brf_noc, read_cmd_buf, get_noc_addr(base, brf_noc), brf_px_bytes);
++        for (int32_t s = 0; s < static_cast<int32_t>(brf_nb) && a + s < e; ++s) {
++            uint32_t src = base + s * brf_slot_bytes;
++            uint32_t dst = brf_slab_l1 + static_cast<uint32_t>(a + s - brf_vmx[kh]) * brf_px_bytes;
++            for (int32_t q = a + s; q < e; q += brf_nb) {
++                ncrisc_noc_read_with_state<DM_DEDICATED_NOC, true, true>(brf_noc, read_cmd_buf, src, dst);
++                brf_reads.count_packets(1);
++                src += brf_px_bytes;
++                dst += brf_nb * brf_px_bytes;
++            }
++        }
++        dataflow_kernel_lib::set_read_trid(brf_reads.noc, 0);
++        brf_prev_kh = kh;
++        ++brf_processed;
++    };
++    // Non-blocking: start the next block once the reader released it, else step the active one.
++    auto brf_serve = [&]() {
++        if (!brf_active) {
++            if (brf_m >= num_m_blocks_this_core ||
++                (brf_m > 0 && Semaphore<>(BRF_GO_SEM).value() < brf_m)) {
++                return;
++            }
++            brf_start();
++        }
++        brf_step();
++    };
++    // Blocking: until block m's part is published.
++    auto brf_finish = [&](uint32_t m) {
++        if (m < num_m_blocks_this_core && brf_m <= m) {
++            MaybeDeviceZoneScope("writer_brf_fill");
++            while (brf_m <= m) {
++                brf_serve();
++            }
++        }
++    };
++#endif
+     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
+         if constexpr (slab_split) {
+ #ifdef CONV2D_3X3_SLAB_DIRECT
+@@ -2602,6 +2799,12 @@
+                 combine_round(m_block_idx);
+             }
+         }
++#ifdef BRF_SPLIT
++        // Block 0's part (the slab is empty at kernel start), after the resident weights went out.
++        if (m_block_idx == 0) {
++            brf_finish(0);
++        }
++#endif
+         if constexpr (remote_output) {
+             // ---- store_block (remote output shard): compute pushes the owner's [bm, out_n] block (per bias row
+             // group, or whole); each valid tile-row goes to the output shard that holds it, as soon as it is packed.
+@@ -2636,6 +2839,12 @@
+             const auto output = TensorAccessor(output_args, output_addr, out_tile_bytes);
+             const uint32_t block_tile0 = m_block_idx * block_m_tiles;
+             for (uint32_t row_group = 0; row_group < row_groups_per_block; ++row_group) {
++#ifdef BRF_SPLIT
++                // The next block's fill part, while compute packs this one.
++                while (!cb_pages_available_at_front(cb_output_tiles, row_group_tiles)) {
++                    brf_serve();
++                }
++#endif
+                 cb_wait_front(cb_output_tiles, row_group_tiles);
+                 uint32_t l1 = get_read_ptr(cb_output_tiles);
+                 for (uint32_t r = 0; r < out_subblock_h; ++r) {
+@@ -2657,6 +2866,10 @@
+                 }
+             }
+         }
++#ifdef BRF_SPLIT
++        // The rest of the next block's part: the reader gathers it only after BRF_DONE_SEM.
++        brf_finish(m_block_idx + 1);
++#endif
+     }
+     drain_fill();
+     if constexpr (!output_sharded || remote_output) {

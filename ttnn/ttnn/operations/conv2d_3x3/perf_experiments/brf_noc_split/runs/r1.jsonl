@@ -1,0 +1,2 @@
+{"case": 33, "variant": "base", "knobs": {}, "log": "r1", "t": 1795200974.634951, "status": "ok", "sha1": "bc0a4a18a4d6df4a3d8128115792592aa5cf78b1", "pcc": 0.9999985634438742, "ref": true, "bit_identical_to_first": true, "frac_diff_vs_first": 0.0, "max_ulp_vs_first": 0}
+{"case": 33, "variant": "split", "knobs": {}, "log": "r1", "t": 1795200974.860247, "status": "ok", "sha1": "bc0a4a18a4d6df4a3d8128115792592aa5cf78b1", "pcc": 0.9999985634438742, "bit_identical_to_first": true, "frac_diff_vs_first": 0.0, "max_ulp_vs_first": 0}

@@ -1,0 +1,45 @@
+{"layer": "stem.conv1", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+{"layer": "stem.conv2", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+{"layer": "stem.conv3", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+{"layer": "res2.{0,1,2}.conv2", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+{"layer": "res3.0.conv2", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+{"layer": "res3.{1,2,3}.conv2 + instance res3.fuse_conv.1", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+{"layer": "res4.0.conv2", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+{"layer": "res4.{1..5}.conv2", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+{"layer": "res5.0.conv2", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+{"layer": "res5.1.conv2", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+{"layer": "res5.2.conv2", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+{"layer": "aspp.convs.1 (x2 heads)", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+{"layer": "aspp.convs.2 (x2 heads)", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+{"layer": "aspp.convs.3 (x2 heads, 1024-ch slice)", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+{"layer": "semantic decoder.res3.fuse_conv.0", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+{"layer": "instance decoder.res3.fuse_conv.0", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+{"layer": "semantic decoder.res3.fuse_conv.1", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+{"layer": "semantic decoder.res2.fuse_conv.0", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+{"layer": "instance decoder.res2.fuse_conv.0", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+{"layer": "semantic res2.fuse_conv.1 + semantic_head.head.{0,1}", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+{"layer": "instance res2.fuse_conv.1 + center_head.0 + offset_head.0", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+{"layer": "center_head.1 + offset_head.1", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+{"layer": "res4.{1..5}.conv2 @ LoFi", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+{"layer": "stem.conv1 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+{"layer": "stem.conv2 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+{"layer": "stem.conv3 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+{"layer": "res2.{0,1,2}.conv2 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+{"layer": "res3.0.conv2 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+{"layer": "res3.{1,2,3}.conv2 + instance res3.fuse_conv.1 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+{"layer": "res4.0.conv2 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+{"layer": "res4.{1..5}.conv2 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+{"layer": "res5.0.conv2 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+{"layer": "res5.1.conv2 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+{"layer": "res5.2.conv2 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+{"layer": "aspp.convs.1 (x2 heads) @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+{"layer": "aspp.convs.2 (x2 heads) @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+{"layer": "aspp.convs.3 (x2 heads, 1024-ch slice) @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "bit_identical": true}
+{"layer": "semantic decoder.res3.fuse_conv.0 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+{"layer": "instance decoder.res3.fuse_conv.0 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+{"layer": "semantic decoder.res3.fuse_conv.1 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+{"layer": "semantic decoder.res2.fuse_conv.0 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+{"layer": "instance decoder.res2.fuse_conv.0 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+{"layer": "semantic res2.fuse_conv.1 + semantic_head.head.{0,1} @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+{"layer": "instance res2.fuse_conv.1 + center_head.0 + offset_head.0 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}
+{"layer": "center_head.1 + offset_head.1 @ LoFi [perf]", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "bit_identical": true}

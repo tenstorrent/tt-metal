@@ -1,0 +1,483 @@
+diff -ru a/conv2d_3x3.py b/conv2d_3x3.py
+--- a/conv2d_3x3.py	2026-11-20 18:47:31.460753645 +0000
++++ b/conv2d_3x3.py	2026-11-20 18:55:40.581687126 +0000
+@@ -633,6 +633,9 @@
+         sharded_output=input_memory_config.is_sharded(),
+         k_cols=channel_slices(c_in, input_tensor.layout, input_memory_config),
+         l1_small_bytes=ttnn.device.get_memory_view(device, ttnn.BufferType.L1_SMALL).total_bytes_per_bank,
++        rm_dram_interleaved=input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
++        and input_memory_config.memory_layout == _ML.INTERLEAVED
++        and input_memory_config.buffer_type == ttnn.BufferType.DRAM,
+     )
+     if geometry.sharded_output:
+         # Same shard grid and scheme as the input. HEIGHT: one M work index per shard, shard i on shard
+diff -ru a/conv2d_3x3_program_descriptor.py b/conv2d_3x3_program_descriptor.py
+--- a/conv2d_3x3_program_descriptor.py	2026-11-20 18:47:31.460753645 +0000
++++ b/conv2d_3x3_program_descriptor.py	2026-11-20 20:53:58.246304485 +0000
+@@ -95,6 +95,43 @@
+ BRF_MIN_READ_BYTES = 2048  # smallest per-bank read worth a staging chunk (else fewer, larger chunks)
+ 
+ 
++# Overlapped band refill: the bank-run fill runs as an engine in the reader across M-blocks instead of one serialized
++# fill per M-block after compute popped every unit of the previous one. Each chunk is de-interleaved once compute popped
++# every unit of the kernel rows of the previous block that read the slab range it overwrites, and the K-block loop fills
++# each band when its first K-block needs it, compute running the unit table (one K-block) under that fill. Its staging
++# ring gets its own L1 (cb_im2col_rm stays live under the fill): carved from the L1 left at the solved (bm, bk) before
++# the deeper im2col ring takes the rest, so the blocking never changes. Measured (Blackhole p150b, 110 cores,
++# bit-identical): 1026x2048x32 -> 128 2605 -> 2284 us, 1026x2048x64 -> 128 3928 -> 3252 us, 514x1024x64 -> 256 1623 ->
++# 1448 us.
++# BRO_POLL: the reader also refills while compute's unit table is full (the whole fill under compute) where a block's
++# output bytes are at most BRO_POLL_OUT_FRAC of its fill bytes (conv_out: 1026x2048x128 -> 3 5207 -> 4754 us, against
++# 5069 us filled per band). Elsewhere that keeps DRAM busy with reads for the whole walk, and the far grid columns'
++# output writes starve (1026x2048x32 -> 128: 3.0 ms, most cores done at 2.0 ms); "auto" picks per program, True / False
++# force it. BRO_POLL_BANKS: bank runs de-interleaved per poll.
++# BRO_MIN_CHUNK_PX: below this the dedicated staging is not worth it (the serialized fill's aliased staging is larger):
++# two 8-pixel chunks measured +51% on 514x1024x256 -> 64.
++BRO_OVERLAP = True
++BRO_POLL = "auto"
++BRO_POLL_OUT_FRAC = 0.25
++BRO_POLL_BANKS = 8
++BRO_MIN_CHUNK_PX = 16
++
++
++def bro_capable(g, bm, bk, nslice):
++    """The overlapped band refill's domain: the bank-run fill's (DRAM-interleaved ROW_MAJOR, one pixel per page) on the
++    K-blocked tap-direct walk."""
++    return (
++        BRO_OVERLAP
++        and g.rm_dram_interleaved
++        and not g.tile_input
++        and not g.sharded_output
++        and not g.k_split
++        and not nslice
++        and g.c_in == g.c_in_p
++        and _tap_direct_fifo_units(g, bm, bk, nslice) > 0
++    )
++
++
+ def _brf_staging(g, slack_bytes):
+     """(chunks, chunk pixels) of the staging ring that fit in slack_bytes, or None (the per-pixel fill). A chunk is
+     whole bank rows (a multiple of 8 pixels), at most BRF_CHUNK_BYTES; the most chunks whose chunk is >= 8 KB (a bank
+@@ -551,6 +588,9 @@
+     block_rows: int = 0
+     # The device's L1_SMALL region size (l1_cb_budget_bytes).
+     l1_small_bytes: int = 0
++    # ROW_MAJOR input DRAM-interleaved (the bank-run fill's input; the overlapped band refill's staging is solved only
++    # there).
++    rm_dram_interleaved: bool = False
+ 
+     @property
+     def pad_sides(self):
+@@ -663,6 +703,10 @@
+     ring: bool = False
+     # Weights resident (weights_resident_capable): cb_weights holds all num_k_blocks rounds (weight_depth = num_k_blocks).
+     weights_resident: bool = False
++    # Overlapped band refill (BRO_OVERLAP): the bank-run staging ring's slots and chunk pixels, in its own L1 (the slab
++    # CB's tail). 0: the serialized bank-run fill (staging aliases cb_im2col_rm) or none.
++    bro_nstg: int = 0
++    bro_chunk_px: int = 0
+ 
+     @property
+     def slab_px(self):
+@@ -1340,6 +1384,15 @@
+                 if resident:
+                     fit["weights_resident"] = True
+                 if fit["footprint_bytes"] <= l1_budget:
++                    # Overlapped band refill: its staging from the L1 left at this block, before the deeper im2col ring.
++                    bro = _brf_staging(g, l1_budget - fit["footprint_bytes"]) if bro_capable(g, bm, bk, nslice) else None
++                    if bro and bro[1] < BRO_MIN_CHUNK_PX:
++                        bro = None
++                    bro_bytes = bro[0] * bro[1] * g.c_in_p * BF16_BYTES if bro else 0
++                    if bro:
++                        fit = dict(
++                            fit, bro_nstg=bro[0], bro_chunk_px=bro[1], footprint_bytes=fit["footprint_bytes"] + bro_bytes
++                        )
+                     # The deeper im2col ring only takes L1 left at this (bm, bk, ub): it never costs a coarser block.
+                     for depth in range(_im2col_ring_target(g, bm, bk, nslice), IM2COL_RM_DEPTH_ROWS, -1):
+                         deep = _footprint(
+@@ -1354,6 +1407,13 @@
+                             shared=shared,
+                             resident=resident,
+                         )
++                        if bro:
++                            deep = dict(
++                                deep,
++                                bro_nstg=bro[0],
++                                bro_chunk_px=bro[1],
++                                footprint_bytes=deep["footprint_bytes"] + bro_bytes,
++                            )
+                         if deep["footprint_bytes"] <= l1_budget:
+                             fit = dict(deep, weights_resident=True) if resident else deep
+                             break
+@@ -2604,7 +2664,8 @@
+         # Untilized footprint tile-rows: one bf16 tile page holds 32 slab pixels of 32 channels.
+         slab_cb = _cb(CB_HALO_SLAB, ttnn.bfloat16, TILE_BYTES_BF16, b.slab_tile_rows * g.c_in_tiles, cores)
+     else:
+-        slab_cb = _cb(CB_HALO_SLAB, ttnn.bfloat16, pixel_bytes, b.slab_px, cores)
++        # Overlapped band refill: the bank-run staging ring after the slab.
++        slab_cb = _cb(CB_HALO_SLAB, ttnn.bfloat16, pixel_bytes, b.slab_px + b.bro_nstg * b.bro_chunk_px, cores)
+     if b.shared_slab_bytes:
+         # One region, two CB indices: the slab (dead once the core's gather landed) and the row's combine slots
+         # (written by peers only after this core's credit, which follows the gather).
+@@ -3778,7 +3839,10 @@
+     # the previous M-block, and it gathers again only after the fill. No new L1, no blocking change. Elsewhere the
+     # per-pixel fill: TILE and sharded inputs have no pixel pages to coalesce, L1-interleaved pages stride by the L1
+     # bank count, and the other walks keep cb_im2col_rm live during the fill.
+-    brf_stage = _brf_staging(g, b.im2col_rm_depth_rows * bk * TILE_BYTES_BF16)
++    bro = b.bro_nstg > 0
++    brf_stage = (
++        (b.bro_nstg, b.bro_chunk_px) if bro else _brf_staging(g, b.im2col_rm_depth_rows * bk * TILE_BYTES_BF16)
++    )
+     brf_fill = (
+         brf_stage is not None
+         and not g.tile_input
+@@ -3794,12 +3858,26 @@
+     _wr_defines = [("WEIGHTS_RESIDENT", "1")] if b.weights_resident else []
+     if b.weights_resident:
+         assert not (kwf or slab_direct or row_split or b.nslice or g.k_split or g.sharded_output or weight_servers)
++    assert not bro or brf_fill, "the overlapped band refill's staging was solved for a bank-run fill"
++    bro_poll = (
++        bm * bn * g.out_tile_bytes <= BRO_POLL_OUT_FRAC * b.slab_px * pixel_bytes if BRO_POLL == "auto" else BRO_POLL
++    )
+     _brf_defines = (
+         [
+             ("BANK_RUN_FILL", "1"),
+             ("BRF_NSTG", str(brf_stage[0])),
+             ("BRF_CHUNK_PX", str(brf_stage[1])),
+         ]
++        + (
++            [
++                ("BRO_OVERLAP", "1"),
++                ("BRO_STAGE_OFF_BYTES", str(b.slab_px * pixel_bytes)),
++                ("BRO_POLL", "1" if bro_poll else "0"),
++                ("BRO_POLL_BANKS", str(BRO_POLL_BANKS)),
++            ]
++            if bro
++            else []
++        )
+         if brf_fill
+         else []
+     )
+diff -ru a/kernels/conv2d_3x3_gather_dataflow.hpp b/kernels/conv2d_3x3_gather_dataflow.hpp
+--- a/kernels/conv2d_3x3_gather_dataflow.hpp	2026-11-20 18:47:31.464753702 +0000
++++ b/kernels/conv2d_3x3_gather_dataflow.hpp	2026-11-20 21:05:16.929935501 +0000
+@@ -705,6 +705,9 @@
+     uint32_t tbl_reserved = 0;  // entries reserved from tbl_head
+     uint32_t in_flight = 0;     // gather reads issued since the last fence
+     uint32_t fixed_state = 0;   // bytes of the stateful read setup (0: none)
++#ifdef BRO_OVERLAP
++    uint32_t tbl_pushed = 0;  // entries pushed so far (cumulative; the overlapped band refill's slab-dead gate)
++#endif
+     uint8_t blk_zkw[zero_once ? num_blocks : 1];
+ 
+     FORCE_INLINE void init(uint32_t blocks_l1, uint32_t table_l1) {
+@@ -770,6 +773,9 @@
+         }
+         if (tbl_written > 0) {
+             cb_push_back(cb_table, tbl_written);
++#ifdef BRO_OVERLAP
++            tbl_pushed += tbl_written;
++#endif
+             tbl_head += tbl_written;
+             if (tbl_head >= table_units) {
+                 tbl_head -= table_units;
+@@ -794,6 +800,16 @@
+         return b;
+     }
+ 
++    // Entries reserve(group, units_left) would wait for, 0 while a reservation is still open.
++    FORCE_INLINE uint32_t reserve_need(uint32_t group, uint32_t units_left) const {
++        if (tbl_reserved > tbl_written) {
++            return 0;
++        }
++        const uint32_t to_end = table_units - tbl_head;
++        uint32_t g = group < units_left ? group : units_left;
++        return g < to_end ? g : to_end;
++    }
++
+     // Reserve entries for the next units: at most `group`, `units_left`, and never past the table's ring end.
+     FORCE_INLINE void reserve(uint32_t group, uint32_t units_left) {
+         if (tbl_reserved > tbl_written) {
+diff -ru a/kernels/conv2d_3x3_reader.cpp b/kernels/conv2d_3x3_reader.cpp
+--- a/kernels/conv2d_3x3_reader.cpp	2026-11-20 18:47:31.464753702 +0000
++++ b/kernels/conv2d_3x3_reader.cpp	2026-11-20 21:05:41.933290316 +0000
+@@ -710,6 +710,206 @@
+     [[maybe_unused]] uint32_t ring_sent = 0;
+     [[maybe_unused]] const uint32_t ring_count_words = nslice_outer ? get_read_ptr(cb_ring_token) : 0;
+     [[maybe_unused]] int32_t ring_pushed_hi = 0;
++#ifdef BRO_OVERLAP
++    // Overlapped bank-run band refill (the descriptor's BRO_OVERLAP). The bank-run fill's chunks (one DRAM read per bank
++    // into a staging slot, then one self-aimed local read per pixel into the slab under the band's trid kh + 1) run as
++    // an engine across M-blocks instead of a serialized per-block fill behind a wait for compute to pop every unit of
++    // the previous block: the K-block loop pumps it (blocking) up to the band its next K-block needs, while compute runs
++    // the unit table it already holds (one K-block), and with BRO_POLL also polls it (non-blocking) whenever that table
++    // is full. The DRAM reads of the next NSTG chunks are issued ahead (they land under compute).
++    // Slab pixel x of block j + 1 may be written once compute popped every unit entry of kernel row min(2, x /
++    // band_stride_px) of block j (the last kernel row reading it: band kh sits at [kh * stride, kh * stride + len), and
++    // the gathered edge blocks were copied out before their entries were pushed); entries are bm per K-block, K-blocks
++    // kh-major, so kernel row r of block j ends at entry (j * nk + (r + 1) * kpr) * bm. Compute's pops are read from
++    // cb_src_table's acked counter (relative to the pushed count, so no base is assumed). The staging has its own L1
++    // (the slab CB's tail, counted in the L1 solve), so cb_im2col_rm stays live under the refill.
++    // Measured (Blackhole p150b, 110 cores, bit-identical, per-band fill): 1026x2048x32 -> 128 2609 -> 2290 us,
++    // 1026x2048x64 -> 128 3897 -> 3272 us; polled (conv_out) 1026x2048x128 -> 3 5226 -> 4737 us.
++    // Raw NoC / CB (capability), as the serialized bank-run fill: dataflow_kernel_lib::read_with_state fixes the source
++    // address, the de-interleave changes both addresses on every read; and the CB API has no "pages the consumer popped
++    // so far" query (cb_pages_reservable_at_back answers only "is there room for n now"), which the slab-dead gate
++    // needs, so it reads the CB's received / acked counters itself.
++    static_assert(
++        !tile_input && !slab_split && !channel_slice && !zero_slab_lanes && kb_tap_direct && !zero_im2col_once &&
++            !face_direct && !row_split && center_mode == 0 && !ring_slab && !nslice_outer && !s2_taps,
++        "overlapped band refill: interleaved ROW_MAJOR fill on the K-blocked tap-direct walk");
++    constexpr uint32_t BRO_NB = NUM_DRAM_BANKS;
++    constexpr uint32_t bro_ch = BRF_CHUNK_PX;
++    static_assert(bro_ch % BRO_NB == 0, "a chunk is whole bank rows");
++    constexpr uint32_t bro_slot_bytes = bro_ch / BRO_NB * pixel_bytes;
++    constexpr uint32_t bro_chunk_bytes = bro_ch * pixel_bytes;
++    constexpr uint32_t bro_trid0 = 8;  // DRAM trids 8 .. 8 + BRF_NSTG - 1
++    static_assert(bro_trid0 + BRF_NSTG - 1 <= NOC_MAX_TRANSACTION_ID, "trids");
++    constexpr uint32_t bro_kpr = tensor_kkh_tiles / block_k_tiles;  // K-blocks per kernel row
++    static_assert(bro_kpr * block_k_tiles == tensor_kkh_tiles, "K-blocks never straddle a kernel row");
++    const uint32_t bro_stage = slab_l1 + BRO_STAGE_OFF_BYTES;
++    const int32_t bro_nblocks = static_cast<int32_t>(num_m_blocks_this_core);
++    struct BroCursor {
++        int32_t blk;
++        int32_t kh;
++        int32_t a;
++        int32_t lo[3];
++        int32_t hi[3];
++        int32_t vmx[3];
++    };
++    // Block c.blk's three band ranges (flat input pixels) and their slab offsets; cursor at band 0's start.
++    auto bro_bands = [&](BroCursor& c) {
++        const uint32_t done = static_cast<uint32_t>(c.blk) * block_m_tiles;
++        const uint32_t valid = actual_m_tiles - done < block_m_tiles ? actual_m_tiles - done : block_m_tiles;
++        const uint32_t of = (m_tile_start + done) * TILE_DIM;
++        const uint32_t oe_t = of + valid * TILE_DIM;
++        const uint32_t oe = oe_t < num_out_px ? oe_t : num_out_px;
++        const conv2d_3x3::SlabFootprint fp =
++            conv2d_3x3::block_footprint<output_width, input_width, stride, pad_top, pad_left, dilation, band_last_tap>(
++                of, oe);
++        int32_t xb[3];
++        conv2d_3x3::slab_bands<input_width, num_in_px, dilation, band_stride_px>(
++            fp, xb, [&](int32_t kh, int32_t x_lo, int32_t x_hi, int32_t v_minus_x) {
++                c.lo[kh] = x_lo + v_minus_x;
++                c.hi[kh] = (x_hi > x_lo ? x_hi : x_lo) + v_minus_x;
++                c.vmx[kh] = v_minus_x;
++            });
++        c.kh = 0;
++        c.a = c.lo[0];
++    };
++    // Skip finished / empty bands, into the next block; done: blk == nblocks.
++    auto bro_settle = [&](BroCursor& c) {
++        while (c.blk < bro_nblocks) {
++            while (c.kh < 3 && c.a >= c.hi[c.kh]) {
++                if (++c.kh < 3) {
++                    c.a = c.lo[c.kh];
++                }
++            }
++            if (c.kh < 3) {
++                return;
++            }
++            if (++c.blk < bro_nblocks) {
++                bro_bands(c);
++            }
++        }
++    };
++    BroCursor bro_ic{};  // next chunk to read from DRAM
++    bro_ic.blk = 0;
++    bro_ic.kh = 3;
++    if (bro_nblocks > 0) {
++        bro_bands(bro_ic);
++        bro_settle(bro_ic);
++    }
++    BroCursor bro_pc = bro_ic;  // next chunk to de-interleave
++    uint32_t bro_issued = 0;
++    uint32_t bro_processed = 0;
++    uint32_t bro_sub = 0;   // banks of chunk bro_processed already de-interleaved
++    uint32_t bro_open = 0;  // compute's popped entries, last seen
++    uint8_t bro_dtrid[BRF_NSTG];  // band trid of each slot's last de-interleave (0: landed)
++    for (uint32_t s = 0; s < BRF_NSTG; ++s) {
++        bro_dtrid[s] = 0;
++    }
++    const uint32_t bro_noc = reads.noc.get_noc_id();
++    const uintptr_t bro_acked_ptr = reinterpret_cast<uintptr_t>(get_cb_tiles_acked_ptr(cb_src_table));
++    const uintptr_t bro_recv_ptr = reinterpret_cast<uintptr_t>(get_cb_tiles_received_ptr(cb_src_table));
++    // DRAM reads of the next chunks into free staging slots; true if any read was issued (the trid changed). need_one:
++    // wait for one slot if none is free.
++    auto bro_issue = [&](bool need_one) -> bool {
++        bool any = false;
++        while (bro_ic.blk < bro_nblocks && bro_issued < bro_processed + BRF_NSTG) {
++            const uint32_t s = bro_issued % BRF_NSTG;
++            if (bro_dtrid[s] != 0) {
++                if (!ncrisc_noc_read_with_transaction_id_flushed(bro_noc, bro_dtrid[s])) {
++                    if (!need_one || any) {
++                        break;
++                    }
++                    reads.wait(bro_dtrid[s]);
++                }
++                bro_dtrid[s] = 0;
++            }
++            const int32_t a = bro_ic.a;
++            const int32_t hi = bro_ic.hi[bro_ic.kh];
++            const int32_t e = a + static_cast<int32_t>(bro_ch) < hi ? a + static_cast<int32_t>(bro_ch) : hi;
++            const uint32_t base = bro_stage + s * bro_chunk_bytes;
++            reads.begin(bro_trid0 + s);
++            for (int32_t b = 0; b < static_cast<int32_t>(BRO_NB) && a + b < e; ++b) {
++                const uint32_t run = static_cast<uint32_t>(e - a - b + BRO_NB - 1) / BRO_NB;
++                ASSERT(input.num_contiguous_pages(a + b, e) == run);
++                reads.read(input.get_noc_addr(a + b), base + b * bro_slot_bytes, run * pixel_bytes);
++            }
++            bro_ic.a += bro_ch;
++            bro_settle(bro_ic);
++            ++bro_issued;
++            any = true;
++        }
++        return any;
++    };
++    // De-interleave up to max_banks bank runs of the next chunk once its DRAM reads landed and the slab range it writes
++    // is dead (block: wait for both). True if any read was issued.
++    auto bro_process = [&](bool block, uint32_t max_banks) -> bool {
++        if (bro_processed == bro_issued) {
++            return false;
++        }
++        const uint32_t s = bro_processed % BRF_NSTG;
++        const int32_t kh = bro_pc.kh;
++        const int32_t a = bro_pc.a;
++        const int32_t hi = bro_pc.hi[kh];
++        const int32_t e = a + static_cast<int32_t>(bro_ch) < hi ? a + static_cast<int32_t>(bro_ch) : hi;
++        const int32_t vmx = bro_pc.vmx[kh];
++        if (bro_sub == 0) {
++            if (!ncrisc_noc_read_with_transaction_id_flushed(bro_noc, bro_trid0 + s)) {
++                if (!block) {
++                    return false;
++                }
++                reads.wait(bro_trid0 + s);
++            }
++            if (bro_pc.blk > 0) {
++                int32_t r = (e - 1 - vmx) / band_stride_px;
++                r = r > 2 ? 2 : r;
++                const uint32_t target =
++                    ((static_cast<uint32_t>(bro_pc.blk) - 1) * num_k_blocks + (r + 1) * bro_kpr) * block_m_tiles;
++                while (bro_open < target) {
++                    invalidate_l1_cache();
++                    const uint16_t outstanding = static_cast<uint16_t>(
++                        static_cast<uint16_t>(reg_read(bro_recv_ptr)) - static_cast<uint16_t>(reg_read(bro_acked_ptr)));
++                    bro_open = fifo.tbl_pushed - outstanding;
++                    if (bro_open < target && !block) {
++                        return false;
++                    }
++                }
++            }
++        }
++        const uint32_t base = bro_stage + s * bro_chunk_bytes;
++        reads.begin(kh + 1);
++        ncrisc_noc_read_set_state<DM_DEDICATED_NOC, true>(
++            bro_noc, NCRISC_RD_CMD_BUF, get_noc_addr(base, bro_noc), pixel_bytes);
++        uint32_t b = bro_sub;
++        const uint32_t b_end = b + max_banks < BRO_NB ? b + max_banks : BRO_NB;
++        for (; b < b_end && a + static_cast<int32_t>(b) < e; ++b) {
++            uint32_t src = base + b * bro_slot_bytes;
++            uint32_t dst = slab_l1 + static_cast<uint32_t>(a + static_cast<int32_t>(b) - vmx) * pixel_bytes;
++            for (int32_t q = a + static_cast<int32_t>(b); q < e; q += BRO_NB) {
++                ncrisc_noc_read_with_state<DM_DEDICATED_NOC, true, true>(bro_noc, NCRISC_RD_CMD_BUF, src, dst);
++                reads.count_packets(1);
++                src += pixel_bytes;
++                dst += BRO_NB * pixel_bytes;
++            }
++        }
++        reads.drop_fixed_state();
++        bro_dtrid[s] = static_cast<uint8_t>(kh + 1);
++        if (b < BRO_NB && a + static_cast<int32_t>(b) < e) {
++            bro_sub = b;
++            return true;
++        }
++        bro_sub = 0;
++        ++bro_processed;
++        bro_pc.a += bro_ch;
++        bro_settle(bro_pc);
++        return true;
++    };
++    // Every chunk of block j's bands 0..kh de-interleaved (issued; the caller waits trid kh + 1).
++    auto bro_pump = [&](int32_t j, int32_t kh) {
++        while (bro_pc.blk < j || (bro_pc.blk == j && bro_pc.kh <= kh)) {
++            bro_issue(bro_processed == bro_issued);
++            bro_process(true, BRO_NB);
++        }
++    };
++#endif
+     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
+         const uint32_t block_tiles_done = m_block_idx * block_m_tiles;
+         const uint32_t block_valid_tiles =
+@@ -1183,7 +1383,12 @@
+                     Semaphore<>(slab_free_sem_id).up(1);
+                 }
+             }
+-#ifdef BANK_RUN_FILL
++#if defined(BRO_OVERLAP)
++            // Overlapped band refill: the engine fills this block's bands under the K-block loop; only the slab
++            // offsets here.
++            conv2d_3x3::slab_bands<input_width, num_in_px, dilation, band_stride_px>(
++                footprint, slab_x_base, [&](int32_t, int32_t, int32_t, int32_t) {});
++#elif defined(BANK_RUN_FILL)
+             {
+                 // Bank-run fill. DRAM-interleaved pages p, p + NB, p + 2 NB, ... sit back to back in one bank
+                 // (InterleavedAddrGen: bank offset (p / NB) * aligned page), so a chunk of BRF_CHUNK_PX consecutive
+@@ -1735,6 +1940,9 @@
+                             cb_wait_front(cb_halo_slab, slab_ready_pages[band]);
+                         }
+                     } else {
++#ifdef BRO_OVERLAP
++                        bro_pump(static_cast<int32_t>(m_block_idx), band);
++#endif
+                         reads.wait(band + 1);
+                     }
+                 }
+@@ -1797,6 +2005,23 @@
+                 fifo.fixed_state = 0;
+                 reads.begin(TRID_GATHER);
+                 for (uint32_t tile_row = 0; tile_row < block_m_tiles; ++tile_row) {
++#ifdef BRO_OVERLAP
++                    if constexpr (BRO_POLL) {
++                        // Polled refill: at a new group keep the DRAM chunks in flight, and refill while compute's unit
++                        // table is full (compute is a whole K-block behind).
++                        if (const uint32_t g = fifo.reserve_need(tap_direct_group, block_m_tiles - tile_row)) {
++                            bool touched = bro_issue(false);
++                            while (!cb_pages_reservable_at_back(cb_src_table, g)) {
++                                touched |= bro_issue(false);
++                                touched |= bro_process(false, BRO_POLL_BANKS);
++                            }
++                            if (touched) {
++                                fifo.fixed_state = 0;
++                                reads.begin(TRID_GATHER);
++                            }
++                        }
++                    }
++#endif
+                     fifo.reserve(tap_direct_group, block_m_tiles - tile_row);
+                     if constexpr (center_mode == 2) {
+                         if (tile_row == 0) {
+@@ -1869,9 +2094,12 @@
+             // ROW_MAJOR: this reader refills the slab for the next M-block itself, so it waits until compute popped
+             // every entry pointing into it. TILE needs no wait: compute's untilize of the next block, the slab's only
+             // writer, runs after its own tilize of this one (same unpacker, in order).
++#ifndef BRO_OVERLAP
++            // (Overlapped band refill: the engine gates each chunk on the kernel rows it overwrites instead.)
+             if (m_block_idx + 1 < num_m_blocks_this_core) {
+                 cb_reserve_back(cb_src_table, tap_direct_fifo_units);
+             }
++#endif
+         }
+         if constexpr (tile_input && !ring_slab && !s2_taps) {
+             const uint32_t slab_pages = slab_rows_m * c_in_tiles;
+@@ -1988,6 +2216,11 @@
+             send_done.up(1);
+         }
+     }
++#ifdef BRO_OVERLAP
++    for (uint32_t t = 1; t <= 3; ++t) {
++        reads.wait(t);
++    }
++#endif
+     dataflow_kernel_lib::set_read_trid(reads.noc, 0);
+ #ifdef SD_R0_NOC0
+     while (r0_state != 2) {

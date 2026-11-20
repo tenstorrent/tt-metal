@@ -1,0 +1,443 @@
+diff -ru '--exclude=__pycache__' op_base/conv2d_3x3_program_descriptor.py op_final/conv2d_3x3_program_descriptor.py
+--- op_base/conv2d_3x3_program_descriptor.py	2026-11-20 18:45:17.678857349 +0000
++++ op_final/conv2d_3x3_program_descriptor.py	2026-11-20 20:42:45.634766195 +0000
+@@ -314,6 +314,22 @@
+ # Tap-direct on the K-blocked walk: the reader reserves, fences and pushes this many unit entries at a time.
+ TAP_DIRECT_FIFO_GROUP = 4
+ WEIGHT_DEPTH = 2
++# Streamed weights on the interleaved ROW_MAJOR K-blocked tap-direct walk (weight_stream_decouple, Perf 17): the
++# weight multicast keeps every participant within one round of the others, so without these all cores reach their
++# M-block boundary (store the block, refill the slab) in the same window and the DRAM traffic of 100+ cores bunches
++# there while the stream stalls on them.
++# WSD_KROT: K-rotation stagger. Participant i walks every M-block's K-blocks from offset WSD_KROT[i % len] (mod
++# num_k_blocks), taking stream rounds o + 9 m .. o + 9 m + 8; the rounds before its first and after its last are
++# popped unused. "auto": four phase groups spaced min(2, M - 1) K-blocks apart (none with one M-block); () = off.
++WSD_KROT = "auto"
++# WSD_SPLIT: split-phase weight rounds in the store loop (non-blocking ack / data-ready poll while the output CB is
++# polled; a sender sends only once every ack is in), so a store never waits behind a round.
++WSD_SPLIT = True
++# WSD_SPLIT on TILE input too (not measured there; default ROW_MAJOR only).
++WSD_SPLIT_TILE = False
++# WSD_FILL_LEAD: staggered first fill under K-rotation: a core with offset o issues its first slab fill once its writer
++# has issued round o - WSD_FILL_LEAD (None: at kernel start). "auto": 1 when the groups are spaced 2 apart.
++WSD_FILL_LEAD = "auto"
+ OUT_DEPTH_ROW_GROUPS = 2
+ # cb_input_tiles depth in untilize batches: the reader reads batch b+1 while compute untilizes b. Where every core runs
+ # one M-block the ring instead holds the whole slab in cb_im2col_tiles' L1 (see create_program_descriptor).
+@@ -3513,6 +3529,7 @@
+             lo = device.worker_core_from_logical_core(rect.start)
+             hi = device.worker_core_from_logical_core(rect.end)
+             sd_r0_args += [lo.x, lo.y, hi.x, hi.y, rect.grid_size().x * rect.grid_size().y - int(ins)]
++    _wsd_pending = []
+     for core, m_index, col in work:
+         m_tile_start, actual_m_tiles = m_ranges[m_index]
+         num_m_blocks_this_core = m_blocks_per_index[m_index]
+@@ -3567,7 +3584,7 @@
+             assert sd_r0_arg in (None, len(reader_args))
+             sd_r0_arg = len(reader_args)
+             reader_args += sd_r0_args if (core.x, core.y) == (core_list[0].x, core_list[0].y) else [0]
+-        reader_rt[core.x][core.y] = reader_args
++        _wsd_pending.append(("r", reader_rt, core, reader_args))
+         compute_args = [num_m_blocks_this_core, int(out_valid_tiles > 0), col]
+         if g.k_split and b.nslice and not kwf:
+             # The N-slice ring walk's kernel-row masks (args 3..: no ring slab under a K split).
+@@ -3588,12 +3605,12 @@
+             ub = b.untilize_batch_rows
+             for _, _, new_rows in ring_plan(g, b.core_m_tiles, bm)[m_index]:
+                 compute_args += [new_rows, -new_rows % ub]
+-        compute_rt[core.x][core.y] = compute_args
++        _wsd_pending.append(("c", compute_rt, core, compute_args))
+         writer_cores, writer_rt = writer_groups.setdefault(
+             (_slice_channels(g, col), bool(split_cores)), ([], ttnn.RuntimeArgs())
+         )
+         writer_cores.append(core)
+-        writer_rt[core.x][core.y] = (
++        _wsd_w_args = (
+             [
+                 weight_addr,
+                 bias_addr,
+@@ -3617,6 +3634,79 @@
+             + (round0_args.get((core.x, core.y), [0] * (12 if spread_rounds else 11)) if round0_args else [])
+             + (host_fill_words[(core.x, core.y)][1] if host_fill else [])
+         )
++        _wsd_pending.append(("w", writer_rt, core, _wsd_w_args))
++
++    # ---- weight_stream_decouple: K-rotation stagger (WSD_KROT). Per core: (offset, max offset) on the weight
++    # channel's participants, (0, 0) elsewhere. Every kind's args are padded to one length L and the experiment's words
++    # appended at L (define WSD_ARG).
++    krot_active = (
++        bool(WSD_KROT)
++        and not b.weights_resident
++        and not input_tensor.memory_config().is_sharded()
++        and not g.sharded_output
++        and not g.k_split
++        and not g.tile_input
++        and mcast_receivers is not None
++        and weight_servers is None
++        and tap_direct
++        and not b.nslice
++        and center_mode == CENTER_NONE
++        and not slab_direct
++        and not kwf
++        and not face_direct
++        and not row_split
++        and not s2_taps
++        and not padded_slab
++        and not spread_rounds
++    )
++    krot = {}
++    # The channel's M-blocks per participant: every participant takes the same rounds.
++    wsd_m_blocks = max(m_blocks_per_index) if m_blocks_per_index else 0
++    wsd_fill_lead = WSD_FILL_LEAD
++    offs = []
++    if krot_active:
++        if WSD_KROT == "auto":
++            # Measured (Perf 17, weight_stream_decouple_v2): bk <= 4 (C_in 128 here): four phase groups spaced
++            # min(2, M - 1) K-blocks apart (none with one M-block: no boundary to stagger, the extra rounds are pure
++            # cost); wider K-blocks (bk > 4, C_in 256): three groups 1 apart from 3 M-blocks, none below (4 groups
++            # 2 apart measured +1.1% / +2.5% at 3 / 2 M-blocks there).
++            if b.block_k_tiles <= 4:
++                step = min(2, wsd_m_blocks - 1, (b.num_k_blocks - 1) // 3)
++                offs = sorted({step * i for i in range(4)}) if step > 0 else []
++            else:
++                step = 1
++                offs = [0, 1, 2] if wsd_m_blocks >= 3 and b.num_k_blocks >= 3 else []
++            if wsd_fill_lead == "auto":
++                wsd_fill_lead = 1 if step == 2 else None
++        else:
++            offs = list(range(b.num_k_blocks)) if WSD_KROT == "all" else list(WSD_KROT)
++    if krot_active and (b.num_k_blocks < 2 or len(offs) < 2):
++        krot_active = False
++    if wsd_fill_lead == "auto":
++        wsd_fill_lead = None
++    if krot_active:
++        assert all(0 <= o < b.num_k_blocks for o in offs), (offs, b.num_k_blocks)
++        top = max(offs)
++        part = {(c.x, c.y) for c in ttnn.corerange_to_cores(mcast_receivers)}
++        i = 0
++        for core, _, _ in work:
++            if (core.x, core.y) in part:
++                krot[(core.x, core.y)] = (offs[i % len(offs)], top)
++                i += 1
++    wsd_fill_sem = None
++    if krot_active and wsd_fill_lead is not None:
++        wsd_fill_sem = len(sem_ids)
++        sem_ids += (wsd_fill_sem,)
++        assert len(sem_ids) <= MAX_SEMAPHORES
++    _wsd_len = {}
++    for kind, _, _, args in _wsd_pending:
++        _wsd_len[kind] = max(_wsd_len.get(kind, 0), len(args))
++    for kind, rt, core, args in _wsd_pending:
++        if krot_active:
++            o, top = krot.get((core.x, core.y), (0, 0))
++            extra = {"r": [o], "c": [o, top - o], "w": [o, top]}[kind]
++            args = list(args) + [0] * (_wsd_len[kind] - len(args)) + extra
++        rt[core.x][core.y] = args
+ 
+     # kw-fold kernels: the mode flag and its compile-time shape (defines keep the regular kernels' CT args intact).
+     _kwf_dm_defines, _kwf_compute_defines = [], []
+@@ -3803,6 +3893,31 @@
+         if brf_fill
+         else []
+     )
++    _wsd_defines = []
++    if (
++        WSD_SPLIT
++        and mcast_receivers is not None
++        and not b.weights_resident
++        and not input_tensor.memory_config().is_sharded()
++        and not g.sharded_output
++        and (WSD_SPLIT_TILE or not g.tile_input)
++        and not g.k_split
++        and weight_servers is None
++        and not slab_direct
++        and not kwf
++        and not tile_fill_split
++        and not spread_rounds
++    ):
++        _wsd_defines += [("WSD_SPLIT", "1")]
++    _wsd_r_defines, _wsd_c_defines = [], []
++    if krot_active:
++        _wsd_r_defines = [("WSD_KROT", "1"), ("WSD_ARG", str(_wsd_len["r"]))]
++        _wsd_c_defines = [("WSD_KROT", "1"), ("WSD_ARG", str(_wsd_len["c"]))]
++        _wsd_defines += [("WSD_KROT", "1"), ("WSD_ARG", str(_wsd_len["w"]))]
++        if wsd_fill_sem is not None:
++            _fill = [("WSD_FILL_SEM", str(wsd_fill_sem)), ("WSD_FILL_LEAD", str(wsd_fill_lead))]
++            _wsd_r_defines += _fill
++            _wsd_defines += _fill
+     readers = [
+         ttnn.KernelDescriptor(
+             kernel_source=str(KERNEL_DIR / "conv2d_3x3_reader.cpp"),
+@@ -3815,7 +3930,8 @@
+             + _sd_dm_defines
+             + _s2_dm_defines
+             + _host_fill_defines
+-            + _brf_defines,
++            + _brf_defines
++            + _wsd_r_defines,
+             config=ttnn.ReaderConfigDescriptor(),
+         )
+         for slice_channels, (reader_cores, reader_rt) in reader_groups.items()
+@@ -3835,6 +3951,7 @@
+             + slot_ack_defines
+             + _host_fill_defines
+             + _wr_defines
++            + _wsd_defines
+             + ([("NSLICE_ROUND0", "1")] if round0_args else [])
+             + (
+                 [
+@@ -3863,7 +3980,8 @@
+         + _wide_short_defines
+         + _s2_compute_defines
+         + _ring_arrival_defines
+-        + _wr_defines,
++        + _wr_defines
++        + _wsd_c_defines,
+         config=ttnn.ComputeConfigDescriptor(
+             math_fidelity=compute_kernel_config.math_fidelity,
+             math_approx_mode=compute_kernel_config.math_approx_mode,
+diff -ru '--exclude=__pycache__' op_base/kernels/conv2d_3x3_compute.cpp op_final/kernels/conv2d_3x3_compute.cpp
+--- op_base/kernels/conv2d_3x3_compute.cpp	2026-11-20 18:45:17.682857405 +0000
++++ op_final/kernels/conv2d_3x3_compute.cpp	2026-11-20 19:53:56.022236454 +0000
+@@ -1338,6 +1338,16 @@
+     [[maybe_unused]] uint32_t ring_need = 0;
+     // Weights resident: rounds waited for so far (see ResidentWeightsPreKBlock).
+     [[maybe_unused]] uint32_t wr_rounds_waited = 0;
++#ifdef WSD_KROT
++    // weight_stream_decouple K-rotation (streamed weights only): this core's M-block m multiplies rounds
++    // off + 9 m .. off + 9 m + 8 of the channel's stream, so the rounds before its first one are not its own.
++    static_assert(num_k_blocks > 1);
++    for (uint32_t i = 0, n = get_arg_val<uint32_t>(WSD_ARG); i < n; ++i) {
++        MaybeDeviceZoneScope("compute_wsd_skip_round");
++        weights.wait_front(block_k_tiles * block_n_tiles);
++        weights.pop_front(block_k_tiles * block_n_tiles);
++    }
++#endif
+     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
+         [[maybe_unused]] const uint32_t valid_rows =
+             rt_valid ? get_arg_val<uint32_t>(rt_arg_base + 2 * m_block_idx) : block_m_tiles;
+@@ -2288,6 +2298,13 @@
+             pack_relu_config(ReluConfig::none());
+         }
+     }
++#ifdef WSD_KROT
++    // ... nor the rounds after its last one.
++    for (uint32_t i = 0, n = get_arg_val<uint32_t>(WSD_ARG + 1); i < n; ++i) {
++        weights.wait_front(block_k_tiles * block_n_tiles);
++        weights.pop_front(block_k_tiles * block_n_tiles);
++    }
++#endif
+ 
+ #ifdef WEIGHTS_RESIDENT
+     if (wr_rounds_waited > 0) {
+diff -ru '--exclude=__pycache__' op_base/kernels/conv2d_3x3_reader.cpp op_final/kernels/conv2d_3x3_reader.cpp
+--- op_base/kernels/conv2d_3x3_reader.cpp	2026-11-20 18:45:17.682857405 +0000
++++ op_final/kernels/conv2d_3x3_reader.cpp	2026-11-20 19:53:56.022236454 +0000
+@@ -300,6 +300,12 @@
+     [[maybe_unused]] const uint32_t slice_page_offset = get_arg_val<uint32_t>(5);
+     [[maybe_unused]] const uint32_t my_col = get_arg_val<uint32_t>(6);
+     [[maybe_unused]] const uint32_t my_shard = get_arg_val<uint32_t>(7);
++#ifdef WSD_KROT
++    // weight_stream_decouple K-rotation: this core walks every M-block's K-blocks from wsd_off (mod num_k_blocks).
++    const uint32_t wsd_off = get_arg_val<uint32_t>(WSD_ARG);
++#else
++    constexpr uint32_t wsd_off = 0;
++#endif
+     constexpr uint32_t row_peer_coords_arg = 8;  // (x, y) of grid columns 0..k_cols-1 of this row
+     // Split TILE fill on this core (runtime: the kernel is shared with the cores that keep the reader-only fill).
+     constexpr uint32_t split_flag_arg = row_peer_coords_arg + (channel_slice ? 2 * k_cols : 0);
+@@ -1183,6 +1189,14 @@
+                     Semaphore<>(slab_free_sem_id).up(1);
+                 }
+             }
++#ifdef WSD_FILL_SEM
++            if (m_block_idx == 0 && wsd_off > WSD_FILL_LEAD) {
++                // weight_stream_decouple staggered first fill: the writer's go once round wsd_off - WSD_FILL_LEAD is
++                // in (this core's first K-block is round wsd_off).
++                MaybeDeviceZoneScope("reader_wsd_fill_gate");
++                Semaphore<>(WSD_FILL_SEM).wait_min(1);
++            }
++#endif
+ #ifdef BANK_RUN_FILL
+             {
+                 // Bank-run fill. DRAM-interleaved pages p, p + NB, p + 2 NB, ... sit back to back in one bank
+@@ -1677,7 +1691,11 @@
+             }
+         }
+         for (uint32_t k_block_idx = 0; k_block_idx < (tile_row_outer || s2_taps ? 0 : num_k_blocks); ++k_block_idx) {
+-            const uint32_t k_tile0 = k_block_idx * block_k_tiles;
++            uint32_t k_block_rot = k_block_idx + wsd_off;
++            if (k_block_rot >= num_k_blocks) {
++                k_block_rot -= num_k_blocks;
++            }
++            const uint32_t k_tile0 = k_block_rot * block_k_tiles;
+             const int32_t kh = k_tile0 / tensor_kkh_tiles;
+             const uint32_t col_lo = (k_tile0 - kh * tensor_kkh_tiles) * TILE_DIM;
+             if constexpr (center_mode == 1) {
+@@ -1726,7 +1744,7 @@
+                     continue;
+                 }
+             }
+-            if (col_lo == 0) {
++            if (col_lo == 0 || (wsd_off != 0 && k_block_idx == 0)) {
+                 // The band's slab rows: compute's untilize (TILE) or this core's own band reads (ROW_MAJOR).
+                 MaybeDeviceZoneScope("reader_band_wait");
+                 for (int32_t band = kh; band < kh + static_cast<int32_t>(kh_per_k_block); ++band) {
+diff -ru '--exclude=__pycache__' op_base/kernels/conv2d_3x3_writer.cpp op_final/kernels/conv2d_3x3_writer.cpp
+--- op_base/kernels/conv2d_3x3_writer.cpp	2026-11-20 18:45:17.682857405 +0000
++++ op_final/kernels/conv2d_3x3_writer.cpp	2026-11-20 20:42:36.538637224 +0000
+@@ -297,7 +297,14 @@
+     // own cb_weights slot and stays there for all of this core's M-blocks, so the core takes num_k_blocks rounds, all
+     // issued in its first M-block; compute re-reads them per M-block.
+     const uint32_t total_k_blocks = num_m_blocks_this_core > 0 ? num_k_blocks : 0;
++    constexpr uint32_t wsd_off = 0;
++#elif defined(WSD_KROT)
++    // weight_stream_decouple K-rotation: this core's M-block m takes rounds wsd_off + m * num_k_blocks .. + 8; every
++    // channel participant takes all rounds up to the largest offset (the same slot sequence as the sender).
++    const uint32_t wsd_off = get_arg_val<uint32_t>(WSD_ARG);
++    const uint32_t total_k_blocks = num_m_blocks_this_core * num_k_blocks + get_arg_val<uint32_t>(WSD_ARG + 1);
+ #else
++    constexpr uint32_t wsd_off = 0;
+     const uint32_t total_k_blocks = num_m_blocks_this_core * num_k_blocks;
+ #endif
+     uint32_t k_blocks_issued = 0;
+@@ -1393,7 +1400,45 @@
+     constexpr uint32_t round0_chunks = 1;
+ #endif
+     [[maybe_unused]] uint32_t round0_pushed = 0;
++#ifdef WSD_SPLIT
++    // weight_stream_decouple split-phase rounds (store loop): a receiver reserves its slot and acks as soon as the slot
++    // is free, then keeps storing; the round completes when its flag is seen (a later poll, or the next blocking
++    // issue). A sender sends only once every ack is in. Same protocol and order as ReceiverPipe::receive / send.
++    // Raw semaphore protocol (capability bypass of ReceiverPipe::receive / SenderPipe::send): the pipe has no ack-now /
++    // complete-later receive and no non-blocking "every ack in" query for the sender. Same wire protocol and order as
++    // the helper's fixed-sender multicast (flag data-ready, pre-handshake acks, ack_count acks per round).
++    using WsdChannel = std::decay_t<decltype(weight_mcast)>;
++    static_assert(
++        WsdChannel::active && WsdChannel::pre_handshake && !WsdChannel::rotating &&
++            WsdChannel::signal == dataflow_kernel_lib::DataReadySignal::Flag &&
++            WsdChannel::transfer_mode == dataflow_kernel_lib::TransferMode::Multicast,
++        "split-phase rounds speak the fixed-sender flag protocol");
++    constexpr uint32_t wsd_ct_base = get_named_compile_time_arg_val("weight_mcast_ct_offset");
++    bool wsd_pending = false;
++    auto wsd_data_ready = [&]() {
++        return Semaphore<>(dataflow_kernel_lib::detail::
++                               positional_mcast_semaphore<wsd_ct_base, dataflow_kernel_lib::mcast_wire::DATA_READY>());
++    };
++    auto wsd_consumer_ready = [&]() {
++        return Semaphore<>(
++            dataflow_kernel_lib::detail::
++                positional_mcast_semaphore<wsd_ct_base, dataflow_kernel_lib::mcast_wire::CONSUMER_READY>());
++    };
++#endif
+     auto issue_weight_k_block = [&]() {
++#ifdef WSD_SPLIT
++        if (wsd_pending) {
++            MaybeDeviceZoneScope("writer_weight_fetch");
++            auto dr = wsd_data_ready();
++            while (dr.value() != VALID) {
++            }
++            dr.set(INVALID);
++            cb_push_back(cb_weights, weight_k_block_tiles);
++            ++k_blocks_issued;
++            wsd_pending = false;
++            return;
++        }
++#endif
+         if (sd_w0 == 1) {
+             // Slab-direct round 0 (taken early): wait for it, serving the fill.
+             MaybeDeviceZoneScope("writer_weight_fetch");
+@@ -1512,6 +1557,40 @@
+         }
+     };
+ 
++#ifdef WSD_SPLIT
++    // One non-blocking step of the round stream; true when a round completed (call again for the next).
++    auto wsd_try_weight = [&]() -> bool {
++        if (weight_receiver && !(weight_sender && weight_mcast.should_send(k_blocks_issued))) {
++            if (!wsd_pending) {
++                if (!cb_pages_reservable_at_back(cb_weights, weight_k_block_tiles)) {
++                    return false;
++                }
++                cb_reserve_back(cb_weights, weight_k_block_tiles);
++                Noc ack_noc;
++                wsd_consumer_ready().up(ack_noc, weight_mcast.sender_x(), weight_mcast.sender_y(), 1);
++                wsd_pending = true;
++            }
++            auto dr = wsd_data_ready();
++            if (dr.value() != VALID) {
++                return false;
++            }
++            dr.set(INVALID);
++            cb_push_back(cb_weights, weight_k_block_tiles);
++            ++k_blocks_issued;
++            wsd_pending = false;
++            return true;
++        }
++        if (!cb_pages_reservable_at_back(cb_weights, weight_k_block_tiles)) {
++            return false;
++        }
++        if (weight_sender && weight_mcast.should_send(k_blocks_issued) && wsd_consumer_ready().value() < WsdChannel::ack_count) {
++            return false;
++        }
++        issue_weight_k_block();
++        return true;
++    };
++#endif
++
+     // ---- R4 row reduce-scatter (see the file comment).
+     constexpr uint32_t partials_tiles = block_m_tiles * block_n_tiles;
+     constexpr uint32_t slot_tiles = block_m_tiles * out_n_tiles;
+@@ -2581,7 +2660,12 @@
+             // kw-fold whole-K / weights resident: the weights stay resident across this core's M-blocks: one stream.
+             while (k_blocks_issued < num_k_blocks) {
+ #else
+-            while (k_blocks_issued < (m_block_idx + 1) * num_k_blocks) {
++            while (k_blocks_issued < wsd_off + (m_block_idx + 1) * num_k_blocks) {
++#endif
++#ifdef WSD_FILL_SEM
++                if (m_block_idx == 0 && wsd_off > WSD_FILL_LEAD && k_blocks_issued + WSD_FILL_LEAD == wsd_off) {
++                    Semaphore<>(WSD_FILL_SEM).up(1);
++                }
+ #endif
+                 issue_weight_k_block();
+                 if constexpr (gather_split) {
+@@ -2636,6 +2720,14 @@
+             const auto output = TensorAccessor(output_args, output_addr, out_tile_bytes);
+             const uint32_t block_tile0 = m_block_idx * block_m_tiles;
+             for (uint32_t row_group = 0; row_group < row_groups_per_block; ++row_group) {
++#ifdef WSD_SPLIT
++                // Keep the round stream going (ack a freed slot, push a landed round) while compute packs the block.
++                while (!cb_pages_available_at_front(cb_output_tiles, row_group_tiles)) {
++                    if (k_blocks_issued < total_k_blocks) {
++                        wsd_try_weight();
++                    }
++                }
++#endif
+                 cb_wait_front(cb_output_tiles, row_group_tiles);
+                 uint32_t l1 = get_read_ptr(cb_output_tiles);
+                 for (uint32_t r = 0; r < out_subblock_h; ++r) {
+@@ -2651,13 +2743,23 @@
+                 noc_async_writes_flushed();
+                 cb_pop_front(cb_output_tiles, row_group_tiles);
+ 
++#ifdef WSD_SPLIT
++                while (k_blocks_issued < total_k_blocks && wsd_try_weight()) {
++                }
++#else
+                 while (k_blocks_issued < total_k_blocks &&
+                        cb_pages_reservable_at_back(cb_weights, weight_k_block_tiles)) {
+                     issue_weight_k_block();
+                 }
++#endif
+             }
+         }
+     }
++#ifdef WSD_KROT
++    while (k_blocks_issued < total_k_blocks) {
++        issue_weight_k_block();
++    }
++#endif
+     drain_fill();
+     if constexpr (!output_sharded || remote_output) {
+         noc_async_write_barrier();
