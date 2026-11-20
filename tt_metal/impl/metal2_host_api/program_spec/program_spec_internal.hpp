@@ -10,9 +10,8 @@
 
 namespace tt::tt_metal {
 
-// Builds a Program from a ProgramSpec without compiling it. MakeProgramFromSpec is this followed by
+// Builds a Program from a ProgramSpec without compiling it. Program(mesh_device, spec) is this followed by
 // compile_and_allocate. Internal: for callers (tests) that must inspect or drive compile themselves.
-Program BuildProgramFromSpec(
-    distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation = false);
+Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const ProgramSpec& spec);
 
 }  // namespace tt::tt_metal
