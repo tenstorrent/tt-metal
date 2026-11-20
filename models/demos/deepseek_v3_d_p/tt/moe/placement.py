@@ -60,15 +60,17 @@ def new_ids_for(
     per_chip = n // (rows * cols)
     per_group = rows * per_chip
     assert per_chip * rows * cols == n, (n, rows, cols)
-    slots: dict[tuple[int, int], list[int]] = {}
-    for e_str, (g, c) in rec["placement"].items():
+    slots: dict[tuple[int, int], list[tuple[int, int]]] = {}
+    for e_str, where in rec["placement"].items():
         e = int(e_str)
-        assert e // per_group == int(g), f"layer {layer}: expert {e} moved out of its dispatch group ({g})"
-        slots.setdefault((int(g), int(c)), []).append(e)
+        g, c = int(where[0]), int(where[1])
+        order = int(where[2]) if len(where) > 2 else e  # optional explicit local slot; default: by expert id
+        assert e // per_group == g, f"layer {layer}: expert {e} moved out of its dispatch group ({g})"
+        slots.setdefault((g, c), []).append((order, e))
     new_id_of = [-1] * n
     for (g, c), experts in slots.items():
         assert len(experts) == per_chip, f"layer {layer}: chip ({g}, {c}) gets {len(experts)} experts, not {per_chip}"
-        for i, e in enumerate(sorted(experts)):
+        for i, (_, e) in enumerate(sorted(experts)):
             new_id_of[e] = (g * rows + c) * per_chip + i
     assert sorted(new_id_of) == list(range(n)), f"layer {layer}: placement is not a permutation"
     moved = sum(1 for e in range(n) if new_id_of[e] != e)
