@@ -34,6 +34,7 @@ add_subdirectory(reduction)
 add_subdirectory(high_bw_all_gather)
 add_subdirectory(indexer_score)
 add_subdirectory(kda)
+add_subdirectory(sparse_kv_push)
 add_subdirectory(topk_large_indices)
 
 # metallium-maintainers-llama-models
@@ -49,6 +50,9 @@ add_subdirectory(isin)
 # cglagovichTT, jonathansuTT (named individuals, not a team)
 add_subdirectory(minimal_matmul)
 add_subdirectory(rgb_to_yuv)
+
+# mstaletovic (named individual): the MoE block's prefill ops
+add_subdirectory(moe_block)
 
 # Jointly owned by convolutions + ops-data-movement — already covered by this
 # file's CODEOWNERS union above, so no separate decision was needed to fold
@@ -101,6 +105,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::HighBwAllGather
         TTNN::Ops::Experimental::IndexerScore
         TTNN::Ops::Experimental::KDA
+        TTNN::Ops::Experimental::SparseKvPush
         TTNN::Ops::Experimental::TopkLargeIndices
         TTNN::Ops::Experimental::Gemma4
         TTNN::Ops::Experimental::IndexedPageCache
@@ -108,6 +113,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::IsIn
         TTNN::Ops::Experimental::MinimalMatmul
         TTNN::Ops::Experimental::RgbToYuv
+        TTNN::Ops::Experimental::MoEBlock
         TTNN::Ops::Experimental::PaddedSlice
         TTNN::Ops::Experimental::SliceWrite
         TTNN::Ops::Experimental::BcastTo
@@ -158,6 +164,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Reduction>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::HighBwAllGather>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IndexerScore>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::SparseKvPush>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::TopkLargeIndices>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Gemma4>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IndexedPageCache>
@@ -165,6 +172,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IsIn>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MinimalMatmul>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::RgbToYuv>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::MoEBlock>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PaddedSlice>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::SliceWrite>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::BcastTo>

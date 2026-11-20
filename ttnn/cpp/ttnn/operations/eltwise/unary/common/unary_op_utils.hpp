@@ -10,6 +10,8 @@
 #include <string>
 #include <span>
 
+#include <tt-umd/types/arch.hpp>
+
 #include "unary_op_types.hpp"
 #include "ttnn/tensor/types.hpp"
 namespace ttnn::operations::unary::utils {
@@ -35,11 +37,33 @@ std::map<std::string, std::string> get_defines(
     const std::string& idst = "0",
     std::optional<DataType> input_dtype = std::nullopt);
 
+// Target dtype (second parameter) of a TYPECAST/BITCAST op, whichever type backs its parameters.
+std::optional<tt::tt_metal::DataType> typecast_target_dtype(const EltwiseUnaryWithParam& op);
+
+// The SFPU chain defines of a lone op that a generated kernel computes in one pass over BF16
+// DEST, or none when the op runs its own kernel.
+std::optional<std::map<std::string, std::string>> get_bf16_kernel_defines(
+    const std::vector<EltwiseUnaryWithParam>& op_chain,
+    DataType input_dtype,
+    DataType output_dtype,
+    bool fp32_dest_acc_en,
+    tt::ARCH arch);
+
 std::map<std::string, std::string> get_block_defines(
     const std::vector<EltwiseUnaryWithParam>& op_chain,
     const std::string& block_id = "0",
     const std::string& idst = "0",
     std::optional<DataType> input_dtype = std::nullopt);
+
+// The packer ReLU configuration that computes a lone op as its tile is packed, as a
+// ckernel::ReluConfig expression, or none when the op runs on the SFPU. `sharded`: the input and
+// the output are both sharded, so no tile crosses the NoC.
+std::optional<std::string> get_pack_relu_config(
+    const std::vector<EltwiseUnaryWithParam>& op_chain,
+    DataType input_dtype,
+    DataType output_dtype,
+    bool fp32_dest_acc_en,
+    bool sharded);
 
 template <typename T>
 bool is_parametrized_type(T val) {
@@ -146,4 +170,7 @@ std::optional<RuntimeScalarDefines> get_runtime_scalar_defines(
 // parameters compiled in. The pointer stays valid until the calling thread's next lookup.
 const RuntimeScalarDefines* get_runtime_scalar_defines_cached(
     const std::vector<EltwiseUnaryWithParam>& op_chain, DataType input_dtype);
+// True when the op's result at 0 is inf or nan. Run on the zero tile padding, such an op leaves a non-finite value in
+// the lanes that share a BFLOAT8_B / BFLOAT4_B block with real lanes, and that value sets the block's exponent.
+bool is_non_finite_at_zero(const EltwiseUnaryWithParam& op);
 }  // namespace ttnn::operations::unary::utils

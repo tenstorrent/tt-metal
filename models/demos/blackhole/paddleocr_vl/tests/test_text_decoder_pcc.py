@@ -19,7 +19,7 @@ import ttnn
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import ModelArgs
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 PROMPT = "The capital of France is Paris. The capital of Japan is"
 TOP_K = 5
