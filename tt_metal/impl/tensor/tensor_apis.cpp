@@ -15,6 +15,7 @@
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/tensor/tensor_apis.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
