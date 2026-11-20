@@ -12,6 +12,7 @@
 #include "ttnn/operations/data_movement/sharded/reshard/device/reshard_device_operation.hpp"
 #include "ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/hal.hpp>
@@ -256,6 +257,17 @@ Tensor to_memory_config(
     std::optional<DataType> dtype,
     const std::optional<Tensor>& output_tensor) {
     using namespace tt::tt_metal;
+
+    // Integer <-> float dtype changes cannot be done by the data-movement kernels (they only change the CB data
+    // format and would reinterpret the bits), so they go through typecast. The cast runs on the interleaved side of
+    // the move: after it for a sharded -> interleaved move (no second sharded L1 allocation in the source layout),
+    // before it otherwise. A preallocated output already has the new dtype, so the cast always comes first then.
+    if (dtype.has_value() && is_int_float_conversion(tensor.dtype(), dtype.value())) {
+        if (!output_tensor.has_value() && tensor.is_sharded() && !memory_config.is_sharded()) {
+            return ttnn::typecast(to_memory_config(tensor, memory_config, std::nullopt, std::nullopt), dtype.value());
+        }
+        return to_memory_config(ttnn::typecast(tensor, dtype.value()), memory_config, std::nullopt, output_tensor);
+    }
 
     // Temporary until we see why buffer data not being populated
     const auto original_memory_config = ttnn::get_memory_config(tensor);

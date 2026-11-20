@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "typecast_device_op.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -155,8 +156,20 @@ tt::tt_metal::TensorSpec TypecastDeviceOperation::compute_output_specs(
     const Layout output_layout = tensor_args.input.layout();
 
     const Shape output_shape = tensor_args.input.logical_shape();
-    return tt::tt_metal::TensorSpec(
-        output_shape, TensorLayout(args.output_dtype, output_layout, args.output_memory_config));
+    tt::tt_metal::TensorSpec spec(output_shape, TensorLayout(args.output_dtype, output_layout, args.output_memory_config));
+    // A TILE input padded past its tile-rounded shape (e.g. from tilize_with_val_padding) keeps that padding: the
+    // factory converts every input page, so the output must hold as many.
+    if (output_layout == Layout::TILE && spec.padded_shape() != tensor_args.input.padded_shape()) {
+        return tt::tt_metal::TensorSpec(
+            output_shape,
+            tt::tt_metal::experimental::tensor_layout_from_padded_shape(
+                args.output_dtype,
+                tt::tt_metal::PageConfig(output_layout),
+                args.output_memory_config,
+                output_shape,
+                tensor_args.input.padded_shape()));
+    }
+    return spec;
 }
 
 Tensor TypecastDeviceOperation::create_output_tensors(const TypecastParams& args, const TypecastInputs& tensor_args) {
