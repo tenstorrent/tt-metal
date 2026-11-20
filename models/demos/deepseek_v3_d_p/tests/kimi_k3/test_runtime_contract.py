@@ -444,7 +444,7 @@ def test_build_runtime_hands_the_forward_budget_to_the_runtime(monkeypatch, adap
     from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3_1 import KimiK31Adapter
 
     adapter = {"kimi_k3": KimiK3Adapter, "kimi_k3_1": KimiK31Adapter}[adapter_name]()
-    monkeypatch.setattr(tt_ccl, "per_axis_topology", lambda: (None, None))
+    monkeypatch.setattr(tt_ccl, "per_axis_topology", lambda *args, **kwargs: (None, None))
     built = Mock()
     monkeypatch.setattr(k3_runtime, "TtKimiK3Runtime", built)
     params = PrefillRunParams(

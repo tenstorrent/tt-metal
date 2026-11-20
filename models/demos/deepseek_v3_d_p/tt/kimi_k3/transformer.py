@@ -36,6 +36,7 @@ from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import mark_layer_cached
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import packed_padding
+from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_enabled
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
@@ -120,11 +121,15 @@ class TtKimiK3Transformer(LightweightModule):
         # Chunks per packed forward (TtPrefillRuntime forward_tokens_budget); see forward_packed. Named so the
         # runtime's value reaches every block explicitly rather than through **block_kwargs.
         forward_chunks: int = 1,
+        # Which MoE (tt/moe_impl.py). Kimi-K3's blocks build TtMoe only until they run on the MoE block (#64991).
+        moe_impl: Optional[str] = None,
         **block_kwargs,
     ):
         super().__init__()
         if mtp_predictor is not None:
             raise ValueError("Kimi-K3 has no MTP predictor; got a non-None mtp_predictor")
+        if moe_block_enabled(model_cfg, moe_impl):
+            raise ValueError(f"Kimi-K3 runs its MoE layers on TtMoe only; got moe_impl={moe_impl!r} (or $MOE_IMPL)")
         assert forward_chunks >= 1, f"forward_chunks must be positive, got {forward_chunks}"
         # Chunks per packed forward; seq_len stays the per-chunk size.
         self.forward_chunks = forward_chunks
