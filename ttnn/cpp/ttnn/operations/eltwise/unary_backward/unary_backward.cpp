@@ -12,6 +12,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -2139,16 +2140,20 @@ std::vector<Tensor> repeat_bw(
         grad_tensor.emplace_back(zero_tensor);
         return grad_tensor;
     }
+    // The gradient has the input's dtype.
+    const auto sum_to_input = [&](int dim) {
+        Tensor result = ttnn::sum(grad, dim, /*keepdim=*/true, sum_output_mem_config);
+        return result.dtype() == input.dtype() ? result
+                                               : ttnn::typecast(result, input.dtype(), sum_output_mem_config);
+    };
     if (shape[0] > 1) {
         TT_FATAL(shape[1] == 1 && shape[2] == 1 && shape[3] == 1, "repeat[1], [2], [3] should be 1");
-        Tensor result = ttnn::sum(grad, 0, /*keepdim=*/true, sum_output_mem_config);
-        grad_tensor.emplace_back(result);
+        grad_tensor.emplace_back(sum_to_input(0));
         return grad_tensor;
     }
     if (shape[1] > 1) {
         TT_FATAL(shape[0] == 1 && shape[2] == 1 && shape[3] == 1, "repeat[0], [2], [3] should be 1");
-        Tensor result = ttnn::sum(grad, 1, /*keepdim=*/true, sum_output_mem_config);
-        grad_tensor.emplace_back(result);
+        grad_tensor.emplace_back(sum_to_input(1));
         return grad_tensor;
     }
     return grad_tensor;
