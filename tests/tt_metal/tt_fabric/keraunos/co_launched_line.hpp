@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Fabric unicast on a Keraunos test line, with the sender and receiver on hart 1 (DM1) of the end chips' router CCEs,
-// co-launched with the routers through the fabric program extension, and chosen links backed by the NOC: the extension
-// sets the kind word of the link record on both ends of each chosen link (PLAN-0008 Phase 1b, 1c; decisions
-// 62db7e799795-D2 and -D3). Run with TT_METAL_SLOW_DISPATCH_MODE=1. On Mock the run checks the launch messages and
-// skips: UMD MockChip reads and writes are no-ops.
+// Fabric unicast on a Keraunos test line, with the sender and receiver on CCE1 of the end routers' HSIO tiles, launched
+// as ordinary programs once fabric is up, and chosen links backed by the NOC: the fabric program extension sets the
+// kind word of the link record on both ends of each chosen link (PLAN-0008 Phase 1b, 1c; decisions 62db7e799795-D2 and
+// -D3). Run with TT_METAL_SLOW_DISPATCH_MODE=1. On Mock the run compiles the kernels and skips: UMD MockChip reads and
+// writes are no-ops.
 
 #pragma once
 
@@ -30,13 +30,13 @@ using NocLinks = std::vector<std::pair<uint32_t, uint32_t>>;
 // devices. Called on Mock too, before the Mock skip; not called when the run skips before opening.
 using AfterOpen = std::function<void()>;
 
-// A worker beside a router: the router's Ethernet channel and core, on DM1.
+// A worker beside a router: the router's Ethernet channel, and the worker's core, CCE1 of the router's tile
+// (BaseFabricFixture::get_worker_beside_router).
 struct Worker {
     FabricNodeId node;
     ChipId chip;
     chan_id_t router_chan;
-    tt::tt_metal::CoreCoord logical;
-    tt::tt_metal::CoreCoord virtual_core;
+    FabricTestWorker core;
 };
 
 // The line's two ends: the sender on fabric chip 0, the receiver on the last fabric chip, each beside its router that
@@ -47,7 +47,8 @@ struct Line {
     uint32_t num_hops;
 };
 
-// The line's ends of the open cluster, from the control plane. Fatal when a chip has no router toward the other end.
+// The line's ends of the open cluster, from the control plane. Fatal when a chip has no router toward the other end, or
+// its SoC descriptor lists no idle CCE1 on that router's tile.
 Line line_ends();
 
 class KeraunosCoLaunchedWorkers : public BaseFabricFixture {
@@ -56,7 +57,7 @@ protected:
     // `noc_links` on the NOC and the rest on Ethernet, then checks the link records, both workers' results and that
     // every router terminates, and the path each link took from the routers' NOC staging words. `after_open`, when
     // set, runs between the open and the first check (AfterOpen). Skips off Quasar, when a link in `noc_links` is not
-    // on the open line, and on Mock after checking the launch messages.
+    // on the open line, and on Mock after compiling the workers' kernels.
     void run_line_unicast(const NocLinks& noc_links, const AfterOpen& after_open = {});
 
     static void SetUpTestSuite() {}
