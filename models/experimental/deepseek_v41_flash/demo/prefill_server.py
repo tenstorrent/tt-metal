@@ -12,7 +12,7 @@ decode server commits into the session's caches (``PREFILL_D_P_INTEGRATION.md``)
 Run (from the repo root, ttnn venv)::
 
     BRINGUP_SPEC=models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml BRINGUP_HF=... \\
-      python models/experimental/deepseek_v41_flash/demo/prefill_server.py --port 9041 --max-seq 131072
+      python models/experimental/deepseek_v41_flash/demo/prefill_server.py --port 9041
 
 and try it with ``demo/prefill_client.py --server HOST:9041``.
 """
@@ -130,7 +130,12 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--host", default="0.0.0.0")
     p.add_argument("--port", type=int, default=9041)
-    p.add_argument("--max-seq", type=int, default=131072, help="longest prompt served (rounded up to whole chunks)")
+    p.add_argument(
+        "--max-seq",
+        type=int,
+        default=1044480,
+        help="longest prompt served, rounded up to whole chunks (default: 204 chunks of 5120, metal_2's deployed 1M)",
+    )
     p.add_argument(
         "--warm-len", type=int, default=None, help="random prompt run once before serving (default: --max-seq)"
     )
@@ -138,6 +143,9 @@ def main(argv: list[str] | None = None) -> int:
     if not os.environ.get("BRINGUP_SPEC"):
         print("set BRINGUP_SPEC (metal_2's galaxy_8x4-full spec) and BRINGUP_HF", file=sys.stderr)
         return 1
+    # metal_2's settings give a process that has imported pytest (its model build does) ENGRAM_TABLE=mmap: random reads
+    # of the ~190 GB checkpoint tables, which leave a 1M-token prompt host-bound for many minutes. Serve from RAM.
+    os.environ.setdefault("DS41_ENGRAM_TABLE", "resident")
 
     from models.demos.common.bringup.testing.harness import close_mesh, open_mesh
     from models.experimental.deepseek_v41_flash.tt.prefill.d_p_bridge import DPPrefill

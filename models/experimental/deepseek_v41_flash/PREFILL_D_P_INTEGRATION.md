@@ -228,6 +228,16 @@ Results (server on 40, client on 41):
 | saved 16k prompt x3, `--compare` | PASS; server prefill 0.55-0.60 s (27-30k tok/s), round trip 0.98-1.02 s, 55.2 MB back |
 | 8192 random tokens, 4 clients x 2 | PASS; prefill 0.32 s each, queueing works (waits 0.65 / 1.32 / 2.00 s), 12.6k tok/s overall |
 | error paths | unaligned, too long, out-of-vocab ids rejected; ping works after |
+| 1,044,480 random tokens x2 (default `--max-seq`) | PASS; server prefill 19.8 s (52.6k tok/s), readback 5.5-11.8 s, send 2.0 s, round trip 27.6-33.9 s, 3.35 GB back |
+
+Startup at the 1M default: weights 202 s, cold-chunk compile 160 s (both overlap the resident engram table build),
+warm-up of a 1M random prompt 22 s.
+
+Engram table mode: metal_2's settings give a process that has imported pytest `ENGRAM_TABLE=mmap` (its "test"
+value), and something in the model build imports it, so the server first ran with random reads of the ~190 GB
+checkpoint tables: a 1M warm-up was still running after 12 minutes. `prefill_server.py` sets
+`DS41_ENGRAM_TABLE=resident` (the tables built into ~209 GB of host RAM as bfp8 rows) unless the environment says
+otherwise.
 
 Per 8192-token request on the server: prefill 0.32 s, readback of layers 0-20 to host 0.30 s (inside the device
 lock), TCP send 0.04 s (~7 Gb/s). The readback, not the network, is the next cost to cut (fewer, larger
