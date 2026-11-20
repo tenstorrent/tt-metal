@@ -57,18 +57,13 @@ public:
     }
 };
 
-// CP2 ring attention on a 1x2 mesh, wherever one fits. In CI that is the tt-train distributed unit-test leg
-// (bh_quietbox_2 with the 1x2 mesh graph descriptor), the only CI coverage of the real ring loop: the Galaxy suite
-// above needs 32 chips.
+// CP2 ring attention on a 1x2 mesh.
 class Mesh1x2RingSDPATest : public ttml::test_utils::Mesh1x2SuiteFixture {
 protected:
     static void SetUpTestSuite() {
         Mesh1x2SuiteFixture::SetUpTestSuite();
         if (ttml::test_utils::system_supports_mesh(mesh_shape())) {
-            // Another suite in this process may have created the distributed context already.
-            try {
-                (void)ttml::autograd::ctx().get_distributed_context();
-            } catch (const std::runtime_error&) {
+            if (!ttml::autograd::ctx().is_distributed_context_initialized()) {
                 ttml::autograd::ctx().initialize_distributed_context(0, nullptr);
             }
             ttml::autograd::ctx().set_seed(42);

@@ -267,8 +267,8 @@ INSTANTIATE_TEST_SUITE_P(
     });
 
 // One merge over rows of every kind, against the float64 reference.
-static void check_single_merge(const MergeShape& shape) {
-    const auto [B, H, S_param, D] = shape;
+TEST_P(RingAttentionMergeTest, SingleMergeMatchesReference) {
+    const auto [B, H, S_param, D] = GetParam();
     const uint32_t S = resolve_seq_len(S_param);
     MergeInputs in = make_inputs(B, H, S, D, /*seed=*/7U);
     DeviceMergeInputs dev = upload(in);
@@ -309,11 +309,6 @@ static void check_single_merge(const MergeShape& shape) {
             }
         }
     }
-}
-
-// The ring passes the SDPA kernel's BFLOAT16 output.
-TEST_P(RingAttentionMergeTest, SingleMergeMatchesReference) {
-    check_single_merge(GetParam());
 }
 
 // A full ring of merges starting from (O = 0, L = -inf), some steps skipped, against the direct
