@@ -2853,3 +2853,12 @@ test_model_settings.py::test_lint_skips_committed_env_reads_in_hooks_but_not_in_
 has stalled for 6 hours because of some stupid rule." overseer.MAX_ABORTS = inf: an abort always leads to the next
 attempt with its note. Attempt budgets stay in defaults.yaml but the overseer launches long unattended runs with
 `--attempts <large>` and overrides any cap tripped by failures that are not the agent's (skill, standing decisions).
+
+## F291 (DeepSeek-V4.1 PB.5C, 2026-11-20): a torn read of a chunked store killed the orchestrator
+After PB.5C's gate commit the orchestrator died in decided_picks -> Ledger.state() with "history_state.chunks: key
+'W.1' in both 0002.json and 0003.json"; seconds later the store read cleanly (no duplicate on disk). ChunkedJson.write
+replaces the chunk files one by one, so a reader between two replaces (another process, e.g. a decide / status call or
+the dashboard export) sees a key that moved chunks in both. read() now retries a torn view (duplicate key, a file gone
+mid-replace, half-written JSON) for ~5 s before raising; a duplicate that persists is still an error. Selftest:
+test_ledger_chunks.py::test_a_torn_view_mid_write_is_retried_not_an_error. Not done: a write that is atomic across
+files (a generation directory swapped in one rename).

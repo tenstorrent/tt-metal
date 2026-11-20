@@ -829,3 +829,4 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   items). tt-d-gen ask draft copied next to the 2026-11-18 asks:
   /data/dnijemcevic/bringup/handoff_20261118/drafts/tt_d_gen_packed_ask.md (not sent). The plan's queue is done; the
   orchestrator has exited; the runner holds the box idle. Nothing pushed.
+- 08:20 UTC FRAMEWORK: the orchestrator died after PB.5C's commit on a torn read of history_state.chunks (key 'W.1' in two chunk files mid-rewrite; healthy seconds later, no record lost; the run was at its end). Fixed: F291, ChunkedJson.read retries a torn view (selftest). PB.5C PASS is recorded.
