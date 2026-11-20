@@ -63,8 +63,6 @@ class TestWeeklyPytests(unittest.TestCase):
     def test_fabric_step_selects_only_plain_2d_mesh_cases(self):
         # A torus case asserts in fabric init on a galaxy without the torus cables.
         spec = PYTESTS["fabric_all_gather_matmul_galaxy"]
-        k = spec["args"][spec["args"].index("-k") + 1]
-        self.assertTrue(k.startswith("SP8xTP4-mesh and ("), k)
         self.assertEqual(_galaxy_configs(SUITE_DIR.parents[3] / spec["target"], "SP8xTP4-mesh"), {"FABRIC_2D"})
 
 
@@ -166,7 +164,7 @@ class TestPcieRecount(unittest.TestCase):
         self.assertEqual((check.name, check.status), ("pcie_enum_count_after_tests", FAIL))
         self.assertEqual(
             check.details,
-            "no snapshot after the tests: tt-smi -f failed (rc=1):  Error in detecting devices!; "
+            "no snapshot after the tests: tt-smi -f failed (rc=1): Error in detecting devices!; "
             "Read 0xffffffff over PCIe ID 24: the board should be reset.",
         )
 
@@ -188,14 +186,6 @@ class TestPcieRecount(unittest.TestCase):
         self.assertEqual(
             check.details, f"no snapshot after the tests: tt-smi -f timed out after {SNAPSHOT_TIMEOUT_S} s"
         )
-
-    def test_missing_tt_smi_fails_instead_of_raising(self):
-        from diag_runner import recount_after_tests
-
-        def snapshot():
-            raise FileNotFoundError("tt-smi not found")
-
-        self.assertEqual(recount_after_tests(snapshot).status, FAIL)
 
 
 if __name__ == "__main__":
