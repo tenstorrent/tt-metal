@@ -81,7 +81,8 @@ class PrefillService:
             t0 = time.perf_counter()
             n = self.d_p.prefill(ids.tolist(), on_chunk=progress)
             seconds = time.perf_counter() - t0
-            host = self.d_p.host_states(n)
+            parts: dict = {}
+            host = self.d_p.host_states(n, parts)
             readback = time.perf_counter() - t0 - seconds
         if gone:
             raise ConnectionError(f"{peer} hung up during the prefill: {gone[0]}")
@@ -89,7 +90,9 @@ class PrefillService:
         send_states(conn, host, seconds, queued)
         logger.info(
             f"{peer}: {n} tokens prefilled in {seconds:.2f} s ({n / seconds:.0f} tok/s), waited {queued:.2f} s, "
-            f"read back in {readback:.2f} s, sent in {time.perf_counter() - t0:.2f} s"
+            f"read back in {readback:.2f} s ("
+            + ", ".join(f"{k} {v:.2f} s" for k, v in parts.items())
+            + f"), sent in {time.perf_counter() - t0:.2f} s"
         )
 
 

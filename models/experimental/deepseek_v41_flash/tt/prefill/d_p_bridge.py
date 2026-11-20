@@ -119,26 +119,88 @@ class DPPrefill:
         ttnn.synchronize_device(self.mesh_device)
         return n
 
-    def host_states(self, seq_len: int) -> dict:
+    def host_states(self, seq_len: int, times: Optional[dict] = None) -> dict:
         """Layers 0-20 of the slot after a prompt of ``seq_len`` tokens, in the host format (module docstring).
-        Layer 20's window ring is zeros: DECODER_SKIP=decode never writes it (decode's tail replay rebuilds it)."""
+        Layer 20's window ring is zeros: DECODER_SKIP=decode never writes it (decode's tail replay rebuilds it).
+
+        Reads only what decode needs, in bf16: the compressed rows the prompt covers (a device slice of each owner's
+        slab, not the whole ``max_seq`` slab of every chip), one copy of TP-replicated stripes, and the window blocks
+        of the last ``window`` positions from their owners. ``times``: seconds per part, added up."""
         cfg, T = self.cfg, int(seq_len)
         st = self.runtime.state(self.kv, 0)
         skipped = set(self.runtime.model.decoder)
         window = cfg.window
-        pos = torch.arange(max(0, T - window), T)
+        p0 = max(0, T - window)
+        times = times if times is not None else {}
         out = {}
         for i in self.layers:
-            got = st.to_torch(i, T)
-            tail = torch.zeros(window, cfg.head_dim)
+            t0 = time.perf_counter()
+            tail = torch.zeros(window, cfg.head_dim, dtype=torch.bfloat16)
             if i not in skipped:
-                tail[window - pos.numel() :] = got["window_kv"][pos % window]
-            layer = {"kv_tail": tail.to(torch.bfloat16)}
+                tail[window - (T - p0) :] = _window_rows(st.window[i], p0, T)
+            layer = {"kv_tail": tail}
+            t1 = time.perf_counter()
+            times["window"] = times.get("window", 0.0) + t1 - t0
             if cfg.is_kv_source(i):
-                layer["compressed_kv"] = got["compress_kv"].to(torch.bfloat16)
-                layer["idx_keys"] = got["index_k"].to(torch.bfloat16)
+                c = st.compress[i]
+                layer["compressed_kv"] = _compressed_rows(c.ckv, T)
+                layer["idx_keys"] = _compressed_rows(c.index_k, T)
+                times["compressed"] = times.get("compressed", 0.0) + time.perf_counter() - t1
             out[i] = layer
         return {"seq_len": T, "layers": out}
+
+
+def _compressed_rows(c, length: int) -> torch.Tensor:
+    """Natural-order rows ``[length / ratio, width]`` bf16 of metal_2's served compressed cache ``c``
+    (``tt/compressor.py`` ``TtServedRows``), read from the owners' slabs up to the last block the prompt reaches."""
+    import ttnn
+
+    from models.demos.deepseek_v41_flash_d_p.tt.served import dealloc
+
+    if c.fp8:  # (INDEX_K_SERVED=fp8_row192: decoded on the host by metal_2)
+        return c.to_host(length)[: length // c.ratio].to(torch.bfloat16)
+    slab = c.slab if c.slab is not None else c.served
+    hs = c.stripe // c.ratio  # compressed rows per owner stripe
+    need = length // c.ratio
+    blocks = min(-(-need // (c.owners * hs)), c.crows // hs)
+    rows = blocks * hs
+    sl = slab.slice_rows(0, rows)
+    try:
+        devs = ttnn.get_device_tensors(sl)
+        if c.tp_axis is None:  # replicated over TP: mesh column 0's copy of every SP row
+            devs = devs[:: c.geo.tp]
+        shards = [ttnn.to_torch(t).reshape(rows, slab.width) for t in devs]
+    finally:
+        dealloc(sl)
+    nat = torch.stack([s.reshape(blocks, hs, slab.width) for s in shards], dim=1).reshape(-1, slab.width)
+    return nat[:need].to(torch.bfloat16)
+
+
+def _window_rows(win, p0: int, p1: int) -> torch.Tensor:
+    """Positions ``[p0, p1)`` of metal_2's window cache ``win`` (``tt/attention.py`` ``TtWindowCache``) as bf16 rows,
+    reading only the chips that own those ring blocks (``_ring_natural`` reads every chip's ring)."""
+    import ttnn
+
+    from models.demos.deepseek_v41_flash_d_p.tt.attention import RING
+
+    ring = win.ring
+    if ring is None:  # WINDOW_KV_KEEP=full: the served slab
+        return win.to_host(p1)[p0:p1].to(torch.bfloat16)
+    out = torch.zeros(max(0, p1 - p0), win.WIDTH, dtype=torch.bfloat16)
+    if p1 <= p0 or ring.writer is not win and win.keep == "none" or not win.history:
+        return out
+    devs, shards = ttnn.get_device_tensors(ring.t), {}
+    for j in range(ring.BLOCKS):
+        q = ring.pos[j]
+        if q is None:
+            continue
+        lo, hi = max(q, p0), min(ring.vend[j], p1)
+        if lo < hi:
+            k = ring.own[j] or 0
+            if k not in shards:
+                shards[k] = ttnn.to_torch(devs[k]).reshape(RING, win.WIDTH)
+            out[lo - p0 : hi - p0] = shards[k][q % RING + lo - q : q % RING + hi - q]
+    return out
 
 
 def save_host_states(host: dict, path: str | Path, **extra) -> Path:
