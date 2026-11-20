@@ -10,6 +10,7 @@ GroupNorm statistics cover the image only, and the mid-block attention biases th
 
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass
 
 import torch
@@ -35,6 +36,11 @@ REFERENCE_CANVASES = (
     (1792, 4096),
 )
 LEVELS = 4
+# A resnet conv or shortcut whose output (pixels x channels, the size of its channel-partial output) is over
+# WHOLE_ELEMENTS runs in row bands of at most BAND_ELEMENTS: whole, it does not fit DRAM next to the DiT. These are the
+# first two levels of the 2816x1536, 2304x2304 and 7.3 MP canvases.
+WHOLE_ELEMENTS = 1 << 28
+BAND_ELEMENTS = 1 << 27
 KEY_MASK_BIAS = -1.0e5
 GROUP_NORM_EPS = 1e-6
 GROUPS = 32
@@ -166,11 +172,33 @@ class CanvasVaeEncoder(Flux2VaeEncoder):
             attn.norm = MaskedGroupNorm(channels, ctx=ctx, silu=False)
         self.conv_norm_out = MaskedGroupNorm(channels, ctx=ctx, silu=True)
 
+    def _banded(self, forward, x: ttnn.Tensor, channels: int) -> ttnn.Tensor:
+        """`forward` (a stride-1 conv's or a linear's, `channels` outputs) on `x`, in row bands with a halo row above and
+        below if its output is over WHOLE_ELEMENTS."""
+        _, h, w, c = (int(d) for d in x.shape)
+        if h * w * channels <= WHOLE_ELEMENTS:
+            return forward(x)
+        rows = BAND_ELEMENTS // (w * channels) // 32 * 32
+        bands = []
+        for top in range(0, h, rows):
+            bottom = min(top + rows, h)
+            lo, hi = max(top - 1, 0), min(bottom + 1, h)
+            part = ttnn.slice(x, [0, lo, 0, 0], [1, hi, w, c])
+            out = forward(part)
+            ttnn.deallocate(part)
+            bands.append(ttnn.slice(out, [0, top - lo, 0, 0], [1, bottom - lo, w, int(out.shape[3])]))
+            ttnn.deallocate(out)
+        x = ttnn.concat(bands, dim=1)
+        for band in bands:
+            ttnn.deallocate(band)
+        return x
+
     def _resnet(self, r: VaeResnetBlock, x: ttnn.Tensor, masks: CanvasMasks) -> ttnn.Tensor:
-        h = r.conv1.forward(r.norm1.forward(x, masks(x)))
-        h = r.conv2.forward(r.norm2.forward(h, masks(h)))
+        channels = r.conv1.inner.out_channels
+        h = self._banded(r.conv1.forward, r.norm1.forward(x, masks(x)), channels)
+        h = self._banded(r.conv2.forward, r.norm2.forward(h, masks(h)), channels)
         if r.conv_shortcut is not None:
-            x = r.conv_shortcut.forward(x, use_persistent_buffer=False)
+            x = self._banded(functools.partial(r.conv_shortcut.forward, use_persistent_buffer=False), x, channels)
         return x + h
 
     def _attention(self, attn: VaeAttention, x: ttnn.Tensor, masks: CanvasMasks) -> ttnn.Tensor:

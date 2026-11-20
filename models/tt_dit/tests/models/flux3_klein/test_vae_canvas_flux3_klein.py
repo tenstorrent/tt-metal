@@ -39,6 +39,7 @@ REFERENCE_SIZES = (
     (2048, 2048),
     (2720, 1536),
     (1530, 2720),
+    (2560, 1600),
 )
 
 
@@ -164,6 +165,18 @@ def test_masked_attention_is_attention_on_the_image(torch_ttnn):
     tokens = x[:, :vh, :vw].reshape(1, 1, vh * vw, c)
     ref = F.scaled_dot_product_attention(tokens @ wq, tokens @ wk, tokens @ wv) @ wo
     torch.testing.assert_close(out[:, :vh, :vw], ref.reshape(1, vh, vw, c) + x[:, :vh, :vw], atol=1e-4, rtol=1e-4)
+
+
+def test_banded_is_whole(torch_ttnn, monkeypatch):
+    torch.manual_seed(0)
+    monkeypatch.setattr(cv, "WHOLE_ELEMENTS", 0)
+    monkeypatch.setattr(cv, "BAND_ELEMENTS", 64 * 32 * 8)
+    weight = torch.randn(8, 8, 3, 3)
+    conv = types.SimpleNamespace(
+        forward=lambda x: F.conv2d(x.permute(0, 3, 1, 2), weight, padding=1).permute(0, 2, 3, 1).contiguous()
+    )
+    x = torch.randn(1, 80, 64, 8)  # bands of 32, 32 and 16 rows
+    torch.testing.assert_close(cv.CanvasVaeEncoder._banded(None, conv.forward, x, 8), conv.forward(x))
 
 
 def _pattern(width: int, height: int) -> Image.Image:
