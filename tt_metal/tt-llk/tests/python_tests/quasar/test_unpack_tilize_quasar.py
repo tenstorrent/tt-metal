@@ -4,9 +4,11 @@
 from typing import List
 
 import pytest
+import torch
 from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
+    DataCopyGolden,
     TilizeGolden,
     get_golden_generator,
     quantize_mx_tensor_chunked,
@@ -14,6 +16,7 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     DataCopyType,
     DestAccumulation,
+    DestSync,
     PerfRunType,
     UnpackerEngine,
 )
@@ -333,41 +336,122 @@ def test_unpack_tilize_quasar(
     ), "Assert against golden failed"
 
 
-def _first_per_engine_and_tile(combinations):
-    """One combination per (unpacker engine, tile shape): the SrcA, SrcB, strided and to-dest paths."""
-    picked = {}
-    for combo in combinations:
-        picked.setdefault((combo[3], combo[5]), combo)
-    return list(picked.values())
-
-
-UNPACK_TILIZE_UNINIT_COMBINATIONS = _first_per_engine_and_tile(
-    ALL_UNPACK_TILIZE_COMBINATIONS
-)
+# (unpacker engine, input dimensions, tile dimensions, block_ct_dim): the 32x32 UNPACR_TILIZE path in several runs
+# per row and over two rows, and the strided path for 1x32 and 2x32 tiles, on both unpackers.
+TILIZE_THEN_UNARY_CASES = [
+    (engine, input_dimensions, tile_dimensions, block_ct_dim)
+    for engine in (UnpackerEngine.UnpA, UnpackerEngine.UnpB)
+    for input_dimensions, tile_dimensions, block_ct_dim in (
+        ([32, 128], (32, 32), 2),
+        ([64, 64], (32, 32), 1),
+        ([1, 128], (1, 32), None),
+        ([2, 128], (2, 32), None),
+    )
+]
 
 
 @pytest.mark.quasar
 @parametrize(
-    **flat_axes(UNPACK_TILIZE_FLAT_NAMES, UNPACK_TILIZE_UNINIT_COMBINATIONS),
+    **flat_axes(
+        ("unpacker_sel", "input_dimensions", "tile_dimensions", "block_ct_dim"),
+        TILIZE_THEN_UNARY_CASES,
+    ),
 )
-def test_unpack_tilize_uninit_quasar(
-    formats,
-    dest_acc,
-    dest_sync,
-    unpacker_sel,
-    input_dimensions,
-    tile_dimensions,
-    block_ct_dim,
+def test_unpack_tilize_then_unary_quasar(
+    unpacker_sel, input_dimensions, tile_dimensions, block_ct_dim
 ):
-    """Unpack tilize followed by _llk_unpack_tilize_uninit_, the teardown tilize_uninit() calls on Quasar."""
-    test_unpack_tilize_quasar(
-        formats,
-        dest_acc,
-        dest_sync,
-        unpacker_sel,
-        input_dimensions,
-        tile_dimensions,
-        block_ct_dim,
-        run_types=[PerfRunType.L1_TO_L1],
-        loop_factor=1,
+    """Unpack tilize, then a plain unary unpack of the same input on the same unpacker with no teardown in between.
+
+    tilize_uninit() is a no-op on Quasar, so the unary unpack must not depend on any state tilize leaves behind.
+    """
+    formats = input_output_formats([DataFormat.Float16_b], same=True)[0]
+    dest_acc = DestAccumulation.No
+    tile_shape = construct_tile_shape(tile_dimensions)
+    num_faces = tile_shape.total_num_faces()
+
+    sequential_spec = StimuliSpec.sequential()
+    src_A, tile_cnt, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+        tile_dimensions=tile_dimensions,
+        spec_A=sequential_spec,
+        spec_B=sequential_spec,
     )
+    golden_src = src_B if unpacker_sel == UnpackerEngine.UnpB else src_A
+
+    # Section 0 is the tilized input, section 1 the input copied tile by tile.
+    tilize_golden = get_golden_generator(TilizeGolden)(
+        golden_src,
+        input_dimensions,
+        formats.output_format,
+        num_faces=num_faces,
+        tile_dimensions=tile_dimensions,
+    )
+    copy_golden = get_golden_generator(DataCopyGolden)(
+        golden_src,
+        formats.output_format,
+        num_faces=num_faces,
+        input_dimensions=input_dimensions,
+        face_r_dim=tile_shape.face_r_dim,
+        input_format=formats.input_format,
+        tile_shape=tile_shape,
+    )
+    golden_tensor = torch.cat([tilize_golden.flatten(), copy_golden.flatten()])
+
+    configuration = create_test_or_perf_config(
+        is_perf=False,
+        run_types=[PerfRunType.L1_TO_L1],
+        test_config_kwargs={
+            "test_name": "sources/quasar/unpack_tilize_then_unary_quasar_test.cpp",
+            "formats": formats,
+            "templates": [
+                generate_input_dim(
+                    input_dimensions,
+                    input_dimensions,
+                    block_ct_dim=block_ct_dim,
+                    tile_dimensions=tile_dimensions,
+                ),
+                UNPACKER_ENGINE_SEL(unpacker_sel),
+                DATA_COPY_TYPE(
+                    DataCopyType.B2D
+                    if unpacker_sel == UnpackerEngine.UnpB
+                    else DataCopyType.A2D
+                ),
+                DEST_SYNC(DestSync.Half),
+            ],
+            "runtimes": [
+                TILE_COUNT(tile_cnt),
+                TEST_FACE_DIMS(tile_shape.face_r_dim),
+                NUM_FACES(num_faces),
+                NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
+                NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
+            ],
+            "variant_stimuli": StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt,
+                tile_count_B=tile_cnt,
+                tile_count_res=2 * tile_cnt,
+                num_faces=num_faces,
+                face_r_dim=tile_shape.face_r_dim,
+                tile_dimensions=tile_dimensions,
+                use_dense_tile_dimensions=True,
+            ),
+            "unpack_to_dest": False,
+            "dest_acc": dest_acc,
+        },
+    )
+    res_from_L1 = configuration.run().result
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
+
+    assert passed_test(
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
+        tile_shape=tile_shape,
+    ), "Assert against golden failed"

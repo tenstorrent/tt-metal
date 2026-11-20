@@ -229,7 +229,7 @@ ALWI void unpack_tilizeA_B_block(
  *
  * NOTE: This function is not in line with our programming model, and will be removed by the end of 2025
  * as a part of tt-metal#22904.
- * NOTE: On Quasar only the unpacker is restored (tilize L1 source offset and counters); the packer has no tilize state.
+ * NOTE: Does nothing on Quasar because there is no persistent tilize unpack/pack state to undo.
  *
  * Return value: None
  *

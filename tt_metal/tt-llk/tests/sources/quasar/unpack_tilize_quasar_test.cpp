@@ -170,8 +170,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
-    // Teardown, outside the measured zones. Unpack tilize to DEST runs on Unpacker 0, so it restores UNP_A.
-    _llk_unpack_tilize_uninit_<SRC_SEL>();
 }
 
 #endif
