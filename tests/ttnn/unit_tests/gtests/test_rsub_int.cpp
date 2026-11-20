@@ -75,6 +75,8 @@ INSTANTIATE_TEST_SUITE_P(
         RsubUnaryParam{0, 78, 4, 4},
         RsubUnaryParam{17, -96, 64, 64},
         RsubUnaryParam{100, 458, 128, 128},
-        RsubUnaryParam{564, -118, 64, 128}));
+        RsubUnaryParam{564, -118, 64, 128},
+        RsubUnaryParam{0, 16777217, 32, 32},
+        RsubUnaryParam{2147483647, 2147483647, 32, 32}));
 
 }  // namespace ttnn::operations::unary::test

@@ -289,7 +289,7 @@ TEST(RelationalUnaryScalarWord, UnrepresentableFloatScalarIsRejected) {
         const std::array<float, 1> params = {scalar};
         get_defines<float>(op, std::span<const float>(params), "0", "0", dtype);
     };
-    constexpr const char* reason = "cannot represent the scalar";
+    constexpr const char* reason = "on INT32 data requires an integer scalar in [-2147483648, 2147483647], got";
     EXPECT_THAT(
         [&] { emit(UnaryOpType::UNARY_GE, 2.5f, DataType::INT32); },
         ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
@@ -318,7 +318,7 @@ TEST(RelationalUnaryScalarWord, Uint32ScalarOutsideInt32RangeIsRejected) {
         const std::array<T, 1> params = {scalar};
         get_defines<T>(op, std::span<const T>(params), "0", "0", dtype);
     };
-    constexpr const char* reason = "cannot represent the scalar";
+    constexpr const char* reason = "on INT32 data requires an integer scalar in [-2147483648, 2147483647], got";
     EXPECT_THAT(
         [&] { emit(UnaryOpType::UNARY_LT, std::uint32_t{2147483648u}, DataType::INT32); },
         ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
@@ -397,7 +397,7 @@ TEST_P(RelationalUnaryRejectFixture, UnrepresentableFloatScalarIsRejected) {
     const auto p = GetParam();
     auto t = make_int_tensor(*device_, p.dtype, 32, 32, 1);
     const float s = p.scalar_param;
-    constexpr const char* reason = "cannot represent the scalar";
+    constexpr const char* reason = "on INT32 data requires an integer scalar in [-2147483648, 2147483647], got";
 
     EXPECT_THAT([&] { ttnn::eq_unary(t, s); }, ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
     EXPECT_THAT([&] { ttnn::ne_unary(t, s); }, ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
@@ -409,6 +409,10 @@ TEST_P(RelationalUnaryRejectFixture, UnrepresentableFloatScalarIsRejected) {
     EXPECT_THAT([&] { ttnn::ne(s, t); }, ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
     EXPECT_THAT([&] { ttnn::gt(s, t); }, ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
     EXPECT_THAT([&] { ttnn::lt(s, t); }, ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
+    // ge, le and eq with the scalar first subtract the tensor from the scalar (RSUB) and compare to zero.
+    EXPECT_THAT([&] { ttnn::ge(s, t); }, ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
+    EXPECT_THAT([&] { ttnn::le(s, t); }, ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
+    EXPECT_THAT([&] { ttnn::eq(s, t); }, ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
 }
 
 INSTANTIATE_TEST_SUITE_P(
