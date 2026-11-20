@@ -33,7 +33,7 @@
  * Input:  32 FP16B values per lane from the DST tile at `dst_index` (all 4 faces).
  *         A mask tile at DST offset 128 (tile 2).
  * Output: 8 FP16B values (top-8 descending) in face 0 rows 0-7, and 8 corresponding
- *         8-bit expert indices in face 0 rows 8-15 (LO16 mode), of the same DST tile.
+ *         8-bit expert indices in face 0 rows 8-15 (LO16_ONLY mode), of the same DST tile.
  *         Index encoding: bits [7:5]=core_id, bits [4:3]=group, bits [2:0]=intra-group.
  */
 

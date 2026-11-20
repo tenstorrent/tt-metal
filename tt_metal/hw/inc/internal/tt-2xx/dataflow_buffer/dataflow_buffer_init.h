@@ -21,6 +21,8 @@
 #endif
 
 // Map a cached TL1 byte address to the uncached alias (DM↔TRISC visibility).
+// Uncached only on DM cores. A TRISC caches reads through it, so it must call invalidate_l1_cache() before reading
+// another core's write.
 FORCE_INLINE volatile uint8_t* dfb_l1_uncached_byte_ptr(uintptr_t cached_l1_addr) {
     return reinterpret_cast<volatile uint8_t*>(
         static_cast<uintptr_t>(MEM_L1_UNCACHED_BASE) + (cached_l1_addr - static_cast<uintptr_t>(MEM_L1_BASE)));
@@ -299,6 +301,7 @@ FORCE_INLINE void dfb_ensure_ready(uintptr_t config_cached, uint8_t dfb_id) {
 #if defined(COMPILE_FOR_TRISC) && !defined(UCK_CHLKC_UNPACK) && !defined(UCK_CHLKC_PACK)
     return;
 #endif
+    invalidate_l1_cache();
     const uint32_t sig_off =
         *dfb_l1_uncached_u32_ptr(config_cached + offsetof(dfb_global_header_t, dfb_signal_region_off));
 
@@ -324,6 +327,7 @@ FORCE_INLINE void dfb_ensure_ready(uintptr_t config_cached, uint8_t dfb_id) {
     // Poll each producer's byte slot; remove from remaining when non-zero.
     uint32_t remaining = expected;
     while (remaining != 0u) {
+        invalidate_l1_cache();
         const uint8_t bit = static_cast<uint8_t>(__builtin_ctz(remaining));
         const volatile uint8_t* slot =
             dfb_l1_uncached_byte_ptr(config_cached + sig_off + static_cast<uint32_t>(dfb_id) * kSlotStride + bit);
@@ -686,6 +690,8 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
         g_dfb_config_base_addr = 0;
         return packer_rmp;
     }
+
+    invalidate_l1_cache();
 
     const uint32_t start_time = rdcycle();
 

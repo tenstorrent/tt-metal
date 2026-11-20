@@ -36,6 +36,7 @@ from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     sech2_exact,
     ulp_distance_bf16_daz,
 )
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 def tanh_derivative_expected_bf16_daz(x: float) -> float:
@@ -219,18 +220,30 @@ class TestTanhBwDeepTail:
     ),
 )
 class TestTanhBwNonFinite:
-    """Non-finite inputs return 0, whatever the sign bit. The sign-set NaNs are the
-    ones that matter: torch rounds every NaN to bf16 as 0xFFFF, and with |x| taken by
-    sfpi::abs those came out as +inf while 0x7FC0 gave 0."""
+    """Torch's classes at non-finite inputs, whatever the sign bit: an infinite x gives 0
+    (1 - tanh(x)^2 is 0 there), and a NaN x gives NaN, as torch's tanh backward does. The
+    BF16 kernel this call runs (TANH_BW_BF16) follows torch; the kernel before it returned 0
+    for a NaN x. The BF16 pack stores a NaN as +inf, so a NaN x may read back as either. The
+    sign-set NaNs matter: torch rounds every NaN to bf16 as 0xFFFF."""
 
-    @pytest.mark.parametrize("bits", [0x7FC0, 0xFFC0, 0xFFFF, 0x7F81, 0xFF81, 0x7F80, 0xFF80])
-    def test_non_finite_is_zero(self, device, bits):
+    @staticmethod
+    def _run(device, bits):
         x = torch.tensor([bits], dtype=torch.int32).to(torch.int16).view(torch.bfloat16).reshape(1, 1)
         tt_x = ttnn.from_torch(x, device=device, layout=ttnn.TILE_LAYOUT)
         tt_g = ttnn.from_torch(torch.ones_like(x), device=device, layout=ttnn.TILE_LAYOUT)
         actual = ttnn.to_torch(ttnn.tanh_bw(tt_g, tt_x)[0]).reshape(-1)[0].item()
         logger.info(f"x=0x{bits:04X}: actual={actual!r}")
+        return actual
+
+    @pytest.mark.parametrize("bits", [0x7F80, 0xFF80])
+    def test_infinite_is_zero(self, device, bits):
+        actual = self._run(device, bits)
         assert actual == 0.0, f"x=0x{bits:04X}: expected 0, got {actual!r}"
+
+    @pytest.mark.parametrize("bits", [0x7FC0, 0xFFC0, 0xFFFF, 0x7F81, 0xFF81])
+    def test_nan_is_nan(self, device, bits):
+        actual = self._run(device, bits)
+        assert actual != actual or actual == float("inf"), f"x=0x{bits:04X}: expected NaN, got {actual!r}"
 
 
 class TestTanhBwWithGradientScaling:
@@ -361,4 +374,32 @@ def test_tanh_bw_cache_miss_same_volume_different_alignment(device):
     assert device.num_program_cache_entries() == 1
     ttnn.tanh_bw(*tall)
     assert device.num_program_cache_entries() == 2
+    device.disable_and_clear_program_cache()
+
+
+def test_tanh_bw_cache_hit_same_padded_shape_different_logical_shape(device):
+    """Same padded shape and layout, different logical shape, must share one cache entry and stay correct.
+
+    logical 30x30 and 32x32 both pad to 32x32 under the default tile alignment. The key matches each tensor the way
+    Metal 2.0's match_padded_shape_only relaxation does (padded shape plus TensorLayout), so the logical shape
+    stays out and the second call reuses the first call's program (#59915).
+    """
+    device.enable_program_cache()
+
+    def run(logical):
+        grad = torch.rand(logical, dtype=torch.bfloat16)
+        x = torch.rand(logical, dtype=torch.bfloat16)
+        tt_grad = ttnn.from_torch(grad, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_x = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device)
+        assert list(tt_x.padded_shape) == [1, 1, 32, 32]
+        output = ttnn.to_torch(ttnn.tanh_bw(tt_grad, tt_x)[0])
+        expected = grad.float() * (1 - torch.tanh(x.float()) ** 2)
+        assert_with_pcc(expected, output.float(), 0.999)
+
+    torch.manual_seed(0)
+    device.clear_program_cache()
+    run((1, 1, 30, 30))
+    assert device.num_program_cache_entries() == 1
+    run((1, 1, 32, 32))
+    assert device.num_program_cache_entries() == 1
     device.disable_and_clear_program_cache()
