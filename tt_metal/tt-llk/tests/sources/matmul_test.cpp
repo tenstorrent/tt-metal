@@ -652,6 +652,32 @@ constexpr bool matmul_production = true;
 volatile __attribute__((rvtt_l1_ptr)) std::uint32_t* matmul_throttle_ptr = reinterpret_cast<volatile __attribute__((rvtt_l1_ptr)) std::uint32_t*>(16);
 static std::uint32_t matmul_throttled_mop_status                         = 0;
 
+// The compute API's fidelity phase count (llk_math_matmul_phases.h) for in0 = UNPACK_B_IN (SrcB), in1 = UNPACK_A_IN (SrcA): after an
+// init of the form's count, the phases the operands need, except on a one-tile block of a block-float in0 and a wide in1
+__attribute__((always_inline)) inline void matmul_production_phases(const std::uint32_t requested, const std::uint32_t ct_dim, const std::uint32_t rt_dim)
+{
+#if !defined(RUNTIME_FORMATS) && !defined(MATMUL_PROD_NO_ELIDE)
+    constexpr auto in0 = static_cast<DataFormat>(UNPACK_B_IN);
+    constexpr auto in1 = static_cast<DataFormat>(UNPACK_A_IN);
+    constexpr auto out = static_cast<DataFormat>(PACK_OUT);
+    constexpr bool in0_bfp = in0 == DataFormat::Bfp8_b || in0 == DataFormat::Bfp4_b;
+    constexpr bool in1_bfp = in1 == DataFormat::Bfp8_b || in1 == DataFormat::Bfp4_b;
+    constexpr bool elidable = (MATH_FIDELITY == ckernel::MathFidelity::HiFi3 || MATH_FIDELITY == ckernel::MathFidelity::HiFi4) && THROTTLE_LEVEL == 0 &&
+                              (in0_bfp || in1_bfp || out == DataFormat::Bfp8_b || out == DataFormat::Bfp4_b);
+    if constexpr (elidable)
+    {
+        const bool lo_a_zero          = in1 == DataFormat::Bfp4_b;
+        const std::uint32_t needed    = (requested >= 4 && !lo_a_zero && !in0_bfp) ? 4 : (requested >= 3 && !in0_bfp) ? 3 : 2;
+        const std::uint32_t p         = needed < requested ? needed : requested;
+        const bool keep_one_tile      = in0_bfp && !in1_bfp && ct_dim == 1 && rt_dim == 1;
+        if (p != requested && !keep_one_tile)
+        {
+            reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE)[1] = p;
+        }
+    }
+#endif
+}
+
 // matmul_block_init's math: the init, then the unthrottled MOP state
 __attribute__((always_inline)) inline void matmul_production_init(
     const std::uint32_t in0_tile_r_dim,
@@ -666,6 +692,10 @@ __attribute__((always_inline)) inline void matmul_production_init(
     _llk_math_matmul_init_<MATMUL_MATH_DEFAULT_INIT_ARGS>(
         in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);
     matmul_throttled_mop_status = 0;
+    if constexpr (ckernel::math::is_high_fidelity(matmul_prod_fidelity))
+    {
+        matmul_production_phases(static_cast<std::uint32_t>(matmul_prod_fidelity), ct_dim, rt_dim);
+    }
 }
 
 // matmul_block's math: matmul_block_math_dynamic_throttle, re-initing on a change of the FW throttle
@@ -686,6 +716,10 @@ __attribute__((always_inline)) inline void matmul_production_math(const std::uin
         {
             _llk_math_matmul_init_<MATMUL_MATH_DEFAULT_INIT_ARGS>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, transpose, ct_dim, rt_dim);
             matmul_throttled_mop_status = 0;
+            if constexpr (ckernel::math::is_high_fidelity(matmul_prod_fidelity))
+            {
+                matmul_production_phases(static_cast<std::uint32_t>(matmul_prod_fidelity), ct_dim, rt_dim);
+            }
         }
         _llk_math_matmul_<MATMUL_MATH_DEFAULT_ARGS>(0, ct_dim, rt_dim);
     }

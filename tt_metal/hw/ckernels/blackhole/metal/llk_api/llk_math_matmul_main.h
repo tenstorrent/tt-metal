@@ -8,6 +8,7 @@
 // d6b3ab771ce), verbatim in their own namespace: a plain call that takes none of the matmul forms compiles to main's code
 #include "llk_math_matmul_api.h"
 #include "llk_math_matmul_main_lib.h"
+#include "llk_math_matmul_phases.h"
 
 namespace mm_main {
 
@@ -120,6 +121,9 @@ ALWI void matmul_block_math_dynamic_throttle(
     } else {
         if (throttled_mop_status != 0) {
             MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+            if constexpr (matmul_kernel_phase_elidable() && MM_THROTTLE == 0) {
+                MATH((matmul_cb_phases(to_underlying(MATH_FIDELITY), in0_cb_id, in1_cb_id, ct_dim, rt_dim)));
+            }
             throttled_mop_status = 0;
         }
         MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, ct_dim, rt_dim)));
