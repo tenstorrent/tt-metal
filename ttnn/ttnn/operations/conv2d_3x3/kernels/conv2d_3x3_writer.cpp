@@ -292,7 +292,14 @@ void kernel_main() {
     const auto weights = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
 
     // ---- stream_weight_blocks: K-block tiles k-major, n-fastest (matmul in1 layout).
+#ifdef WEIGHTS_RESIDENT
+    // Weights resident (the descriptor's WEIGHTS_RESIDENT): every round lands in its
+    // own cb_weights slot and stays there for all of this core's M-blocks, so the core takes num_k_blocks rounds, all
+    // issued in its first M-block; compute re-reads them per M-block.
+    const uint32_t total_k_blocks = num_m_blocks_this_core > 0 ? num_k_blocks : 0;
+#else
     const uint32_t total_k_blocks = num_m_blocks_this_core * num_k_blocks;
+#endif
     uint32_t k_blocks_issued = 0;
     // Slab-direct round 0 (sd_w0): its DRAM reader (the multicast sender, or a core outside the channel) issues it
     // under transaction id 8 at kernel entry (below), a receiver of the reader multicast reserves its slot before the
@@ -2462,6 +2469,9 @@ void kernel_main() {
         }
     }
 #endif
+#ifdef WEIGHTS_RESIDENT
+    static_assert(!row_split && !nslice_outer && !k_split && !weight_servers && !slab_split && !output_sharded);
+#endif
     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
         if constexpr (slab_split) {
 #ifdef CONV2D_3X3_SLAB_DIRECT
@@ -2567,8 +2577,8 @@ void kernel_main() {
                 combine_round(m_block_idx);
             }
         } else {
-#if defined(CONV2D_3X3_KW_FOLD) && !KWF_KBLOCKED
-            // kw-fold whole-K: the weights stay resident across this core's M-blocks: one stream.
+#if (defined(CONV2D_3X3_KW_FOLD) && !KWF_KBLOCKED) || defined(WEIGHTS_RESIDENT)
+            // kw-fold whole-K / weights resident: the weights stay resident across this core's M-blocks: one stream.
             while (k_blocks_issued < num_k_blocks) {
 #else
             while (k_blocks_issued < (m_block_idx + 1) * num_k_blocks) {

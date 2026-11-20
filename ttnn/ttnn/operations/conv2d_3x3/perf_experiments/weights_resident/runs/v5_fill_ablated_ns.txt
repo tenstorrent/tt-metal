@@ -1,0 +1,6 @@
+idx41|base_abl	3232905	[3232905]
+idx41|solve_abl	1818273	[1818273]
+idx42|base_abl	2105589	[2105589]
+idx42|solve_abl	1421850	[1421850]
+idx35|base_abl	2154939	[2154939]
+idx35|solve_abl	1725181	[1725181]

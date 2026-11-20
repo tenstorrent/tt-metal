@@ -848,6 +848,31 @@ struct CenterTapIn0 {
     }
 };
 
+// Weights resident (the descriptor's WEIGHTS_RESIDENT): cb_weights holds all
+// num_k_blocks rounds, pushed once by the writer. K-block k reads round k at tile offset k * bk * bn of the fronted
+// region (matmul_block in1 NoWaitNoPop + this In1BaseOffsetFn); nothing is popped until the walk ends. The helper's
+// own in1 policies cannot express it: WaitAndPopPerKBlock re-waits and frees every round, WaitAndRetainOnLastBlock
+// retains only the last.
+template <uint32_t round_tiles>
+struct ResidentIn1Offset {
+    ALWI uint32_t operator()(uint32_t block) const { return block * round_tiles; }
+};
+// The walk's PreKBlockFn (the tap-direct tilize) followed, until every round arrived (the first M-block), by the wait
+// for round k: the tilize of K-block k never waits on a weight round, the matmul of K-block k does.
+template <typename Inner, uint32_t cb_w, uint32_t round_tiles>
+struct ResidentWeightsPreKBlock {
+    Inner inner;
+    uint32_t* rounds_waited;
+    ALWI void operator()(uint32_t block, uint32_t num_k_blocks, bool is_last) const {
+        inner(block, num_k_blocks, is_last);
+        if (*rounds_waited <= block) {
+            MaybeDeviceZoneScope("compute_weight_wait");
+            cb_wait_front(cb_w, (block + 1) * round_tiles);
+            *rounds_waited = block + 1;
+        }
+    }
+};
+
 #ifdef CONV2D_3X3_SLAB_DIRECT
 // Slab-direct in0 (conv2d_3x3_slab_direct.hpp): every in0 tile is unpacked straight from the padded slab as two
 // 2-face runs, K columns [0, 16) of its 32 rows at a and K columns [16, 32) at a + SD_HALF_BYTES. Each run lands in
@@ -1311,6 +1336,8 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t rt_arg_base = 3 + ((rt_ring_groups + 9) / 10) * num_m_blocks_this_core;
     // N-slice ring: incoming row groups packed onto so far, over all M-blocks (the arrival count each waits for).
     [[maybe_unused]] uint32_t ring_need = 0;
+    // Weights resident: rounds waited for so far (see ResidentWeightsPreKBlock).
+    [[maybe_unused]] uint32_t wr_rounds_waited = 0;
     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
         [[maybe_unused]] const uint32_t valid_rows =
             rt_valid ? get_arg_val<uint32_t>(rt_arg_base + 2 * m_block_idx) : block_m_tiles;
@@ -2185,6 +2212,41 @@ void kernel_main() {
             if constexpr (caller_owns_partials) {
                 partials.reserve_back(partials_tiles);
             }
+#ifdef WEIGHTS_RESIDENT
+            // Weights resident (see ResidentIn1Offset): the rounds stay fronted across the M-blocks.
+            constexpr uint32_t wr_round_tiles = block_k_tiles * block_n_tiles;
+            using WrPre = ResidentWeightsPreKBlock<PreKBlockFn, cb_weights, wr_round_tiles>;
+            const WrPre wr_pre{pre_k_block, &wr_rounds_waited};
+            ckl::matmul_block<
+                /*transpose=*/false,
+                /*packer_l1_acc=*/true,
+                last_block_target,
+                ckl::OutputCBLayout::TileRowMajor,
+                ckl::matmul_config::InitMode::ShortAfterPreKBlock,
+                ckl::InputPolicy::WaitAndPopPerKBlock,
+                ckl::InputPolicy::NoWaitNoPop,
+                ckl::NoPostCompute,
+                WrPre,
+                ckl::NoPostKBlock,
+                /*untilize_block_ct_dim=*/0,
+                ckl::NoKBlockInnerDimFn,
+                CenterTapIn0<center_mode, cb_center_tiles>,
+                ResidentIn1Offset<wr_round_tiles>,
+                caller_owns_partials>(
+                im2col_tiles,
+                weights,
+                output_tiles,
+                partials,
+                mm_shape,
+                {},
+                wr_pre,
+                /*in1_per_core_w=*/block_n_tiles,
+                /*out_row_width=*/block_n_tiles,
+                {},
+                {},
+                CenterTapIn0<center_mode, cb_center_tiles>{},
+                ResidentIn1Offset<wr_round_tiles>{});
+#else
             ckl::matmul_block<
                 /*transpose=*/false,
                 /*packer_l1_acc=*/true,
@@ -2213,6 +2275,7 @@ void kernel_main() {
                 {},
                 {},
                 CenterTapIn0<center_mode, cb_center_tiles>{});
+#endif
             if constexpr (caller_owns_partials) {
                 partials.push_back(partials_tiles);
             }
@@ -2226,6 +2289,11 @@ void kernel_main() {
         }
     }
 
+#ifdef WEIGHTS_RESIDENT
+    if (wr_rounds_waited > 0) {
+        weights.pop_front(wr_rounds_waited * block_k_tiles * block_n_tiles);
+    }
+#endif
 #ifdef SD_BIAS_IN_WEIGHTS
     constexpr bool bias_cb_used = false;  // the bias came with the weight rounds
 #else

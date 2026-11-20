@@ -351,6 +351,10 @@ SLAB_READ_STAGGER_PX_PER_CORE = 0
 # A large value disables it (every core streams its own weights, regime R0).
 WEIGHT_MCAST_MIN_CORES = 2
 WEIGHT_MCAST_PREFIX = "weight_mcast"
+# Weights resident (op_design R5): on the interleaved K-blocked walk with more than one M-block per core, cb_weights holds
+# the whole [K, N] weight matrix: the writer streams the num_k_blocks rounds once at kernel start (one per K-block, into
+# fresh slots) and compute re-reads them for every M-block (matmul_block in1 NoWaitNoPop + In1BaseOffsetFn). The solve
+# counts the resident weights (bm shrinks for them); where no block fits with them, the weights stream per M-block.
 # Weight servers (HEIGHT-sharded K-blocked walk): when the device has a spare core per rectangle of the weight channel,
 # each rectangle's rounds come from one spare core outside the work grid (its reader reads DRAM on NoC0, its writer
 # multicasts on NoC1) instead of from work core 0, which read on NoC1 (the unfavourable read NoC, ~23 GB/s) and then
@@ -650,6 +654,8 @@ class Conv3x3Blocking:
     center_slot_blocks: int = 1
     # Ring slab (see ring_capable): slab_tile_rows is then the ring capacity.
     ring: bool = False
+    # Weights resident (weights_resident_capable): cb_weights holds all num_k_blocks rounds (weight_depth = num_k_blocks).
+    weights_resident: bool = False
 
     @property
     def slab_px(self):
@@ -1104,7 +1110,16 @@ def _shared_region_bytes(a_bytes, a_page, b_bytes, b_page):
 
 
 def _footprint(
-    g: Conv3x3Geometry, core_m_tiles, bm, bk, bn, ub_cap=None, nslice=False, im2col_depth=None, shared=False
+    g: Conv3x3Geometry,
+    core_m_tiles,
+    bm,
+    bk,
+    bn,
+    ub_cap=None,
+    nslice=False,
+    im2col_depth=None,
+    shared=False,
+    resident=False,
 ):
     num_k_blocks = g.tensor_k_tiles // bk
     im2col_rm_depth_rows = (
@@ -1116,6 +1131,9 @@ def _footprint(
     num_slices = _div_up(g.tensor_n_tiles, g.out_n_tiles)
     weight_rounds = (num_slices if nslice else num_k_blocks) * max_m_blocks
     weight_depth = 1 if weight_rounds == 1 else (NSLICE_WEIGHT_DEPTH if nslice else WEIGHT_DEPTH)
+    if resident:
+        assert not nslice
+        weight_depth = num_k_blocks
     band_len, raw_slab_rows = _block_extents(g, core_m_tiles, bm)
     band_stride = min(g.dilation * g.input_width, band_len)
     sb_h, sb_w = _out_subblock(bm, bn)
@@ -1254,6 +1272,21 @@ def ring_rows(g: Conv3x3Geometry, core_m_tiles, bm):
     return max(hi - lo for core in ring_plan(g, core_m_tiles, bm) for lo, hi, _ in core)
 
 
+def weights_resident_capable(g: Conv3x3Geometry, core_m_tiles, bm, bk, nslice=False):
+    """Weights resident (see above): the interleaved (never a sharded path) K-blocked walk without a K split, more than one
+    K-block and more than one M-block per core, on the gathers whose compute takes the walk's matmul_block call (not the
+    split row gather, whose writer hands units over per issued round)."""
+    return (
+        not g.sharded_output
+        and not g.k_split
+        and not nslice
+        and g.tensor_k_tiles // bk > 1
+        and _div_up(core_m_tiles, bm) > 1
+        and not face_direct_im2col(g, bk)
+        and not _row_split(g, bm, bk)
+    )
+
+
 @functools.lru_cache(maxsize=256)
 def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
     """The one place block extents are chosen. Order of the L1 solve (op_design Mechanism caps #1):
@@ -1288,22 +1321,34 @@ def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
     search = [(bm, bk) for bm in bm_candidates for bk in bk_above_floor]
     search += [(bm_candidates[-1], bk) for bk in bk_below_floor]
 
-    def solve(candidates, nslice, shared=False):
+    def solve(candidates, nslice, shared=False, wr_solve=False):
         for bm, bk in candidates:
+            resident = wr_solve and weights_resident_capable(g, core_m_tiles, bm, bk, nslice)
             # The untilize batch shrinks first: a smaller batch costs one more read fence per tile-row,
             # a smaller bk costs a whole K-block (tilize, matmul init, L1-acc pass).
             band_len, raw_slab_rows = _block_extents(g, core_m_tiles, bm)
             ub_default = _default_untilize_batch_rows(g, band_len, raw_slab_rows)
             for ub_cap in range(ub_default, 0, -1):
-                fit = _footprint(g, core_m_tiles, bm, bk, bn, ub_cap, nslice, shared=shared)
+                fit = _footprint(g, core_m_tiles, bm, bk, bn, ub_cap, nslice, shared=shared, resident=resident)
+                if resident:
+                    fit["weights_resident"] = True
                 if fit["footprint_bytes"] <= l1_budget:
                     # The deeper im2col ring only takes L1 left at this (bm, bk, ub): it never costs a coarser block.
                     for depth in range(_im2col_ring_target(g, bm, bk, nslice), IM2COL_RM_DEPTH_ROWS, -1):
                         deep = _footprint(
-                            g, core_m_tiles, bm, bk, bn, ub_cap, nslice, im2col_depth=depth, shared=shared
+                            g,
+                            core_m_tiles,
+                            bm,
+                            bk,
+                            bn,
+                            ub_cap,
+                            nslice,
+                            im2col_depth=depth,
+                            shared=shared,
+                            resident=resident,
                         )
                         if deep["footprint_bytes"] <= l1_budget:
-                            fit = deep
+                            fit = dict(deep, weights_resident=True) if resident else deep
                             break
                     # Center-tap direct: bm * bk more in0 tiles, from the L1 left after everything else.
                     mode = center_tap_mode(g, bm, bk)
@@ -1336,7 +1381,7 @@ def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
                     )
         return None
 
-    blocking = solve(search, nslice=False)
+    blocking = solve(search, nslice=False, wr_solve=True) or solve(search, nslice=False)
     if blocking is not None and g.k_split:
         # N-slice-outer at the K-blocked solve's bm, unless its resident [bm, K] in0 does not fit. There bk only sets
         # the gather / tilize granularity and costs almost no L1, so the coarsest that fits wins.
@@ -2836,7 +2881,16 @@ def create_program_descriptor(
     m_blocks_per_index = [_div_up(actual_m_tiles, bm) for _, actual_m_tiles in m_ranges]
     # The weight multicast's cores (the channel below is built from the same set). The split TILE fill runs on its pure
     # receivers: not the sender (work core 0), nor the own-stream cores outside the channel.
-    mcast_receivers = None if g.k_split else _weight_mcast_cores(core_list, [m_blocks_per_index[i] for _, i, _ in work])
+    # Weights resident: every core with work takes the same num_k_blocks rounds into the same slots, so every such core
+    # joins the channel (no own-stream cores).
+    mcast_receivers = (
+        None
+        if g.k_split
+        else _weight_mcast_cores(
+            core_list,
+            [min(m_blocks_per_index[i], 1) if b.weights_resident else m_blocks_per_index[i] for _, i, _ in work],
+        )
+    )
     weight_servers = None
     if WEIGHT_SERVERS and g.sharded_output and not g.k_split and mcast_receivers is not None:
         # Partners under kw-fold, where a chunk splits into two parts (see WEIGHT_SERVER_PARTNERS).
@@ -3730,6 +3784,9 @@ def create_program_descriptor(
     _host_fill_defines = (
         [("CONV2D_3X3_HOST_FILL", "1"), ("HOST_FILL_WRITER_WINDOW", str(HOST_FILL_WRITER_WINDOW))] if host_fill else []
     )
+    _wr_defines = [("WEIGHTS_RESIDENT", "1")] if b.weights_resident else []
+    if b.weights_resident:
+        assert not (kwf or slab_direct or row_split or b.nslice or g.k_split or g.sharded_output or weight_servers)
     _brf_defines = (
         [
             ("BANK_RUN_FILL", "1"),
@@ -3770,6 +3827,7 @@ def create_program_descriptor(
             + _round0_defines
             + slot_ack_defines
             + _host_fill_defines
+            + _wr_defines
             + ([("NSLICE_ROUND0", "1")] if round0_args else [])
             + (
                 [
@@ -3797,7 +3855,8 @@ def create_program_descriptor(
         + _sd_compute_defines
         + _wide_short_defines
         + _s2_compute_defines
-        + _ring_arrival_defines,
+        + _ring_arrival_defines
+        + _wr_defines,
         config=ttnn.ComputeConfigDescriptor(
             math_fidelity=compute_kernel_config.math_fidelity,
             math_approx_mode=compute_kernel_config.math_approx_mode,

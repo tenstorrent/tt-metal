@@ -1,0 +1,366 @@
+diff -ruN '--exclude=__pycache__' ./conv2d_3x3_program_descriptor.py ../op_copy/conv2d_3x3_program_descriptor.py
+--- a/conv2d_3x3_program_descriptor.py	2026-11-20 14:56:28.595064350 +0000
++++ b/conv2d_3x3_program_descriptor.py	2026-11-20 15:25:01.564818225 +0000
+@@ -331,6 +331,18 @@
+ # A large value disables it (every core streams its own weights, regime R0).
+ WEIGHT_MCAST_MIN_CORES = 2
+ WEIGHT_MCAST_PREFIX = "weight_mcast"
++# Weights resident (perf experiment weights_resident, op_design R5): on the interleaved K-blocked walk with more than one
++# M-block per core, cb_weights holds the whole [K, N] weight matrix: the writer streams the num_k_blocks rounds once at
++# kernel start (one per K-block, into fresh slots) and compute re-reads them for every M-block (matmul_block in1
++# NoWaitNoPop + In1BaseOffsetFn). WR_MODE: "off" (stream per M-block), "leftover" (resident only from the L1 left at
++# the streaming solve, never a smaller block), "trim" (resident at the streaming solve's bm and bk, taking the deeper
++# im2col ring's L1 if it must), "solve" (resident counted in the solve: bm shrinks for it).
++# WR_NOACK: the resident rounds go out without the receivers' slot acks (every slot is fresh at kernel start), on a
++# counter data-ready signal.
++WR_MODE = "off"
++WR_NOACK = False
++# Diagnostic only: cap on the deeper im2col ring (tile-rows), to separate its depth from residency.
++WR_IM2COL_CAP = 1 << 30
+ # Weight servers (HEIGHT-sharded K-blocked walk): when the device has a spare core per rectangle of the weight channel,
+ # each rectangle's rounds come from one spare core outside the work grid (its reader reads DRAM on NoC0, its writer
+ # multicasts on NoC1) instead of from work core 0, which read on NoC1 (the unfavourable read NoC, ~23 GB/s) and then
+@@ -637,6 +649,8 @@
+     center_slot_blocks: int = 1
+     # Ring slab (see ring_capable): slab_tile_rows is then the ring capacity.
+     ring: bool = False
++    # Weights resident (see WR_MODE): cb_weights holds all num_k_blocks rounds (weight_depth = num_k_blocks).
++    weights_resident: bool = False
+ 
+     @property
+     def slab_px(self):
+@@ -1091,7 +1105,16 @@
+ 
+ 
+ def _footprint(
+-    g: Conv3x3Geometry, core_m_tiles, bm, bk, bn, ub_cap=None, nslice=False, im2col_depth=None, shared=False
++    g: Conv3x3Geometry,
++    core_m_tiles,
++    bm,
++    bk,
++    bn,
++    ub_cap=None,
++    nslice=False,
++    im2col_depth=None,
++    shared=False,
++    resident=False,
+ ):
+     num_k_blocks = g.tensor_k_tiles // bk
+     im2col_rm_depth_rows = (
+@@ -1103,6 +1126,9 @@
+     num_slices = _div_up(g.tensor_n_tiles, g.out_n_tiles)
+     weight_rounds = (num_slices if nslice else num_k_blocks) * max_m_blocks
+     weight_depth = 1 if weight_rounds == 1 else (NSLICE_WEIGHT_DEPTH if nslice else WEIGHT_DEPTH)
++    if resident:
++        assert not nslice
++        weight_depth = num_k_blocks
+     band_len, raw_slab_rows = _block_extents(g, core_m_tiles, bm)
+     band_stride = min(g.dilation * g.input_width, band_len)
+     sb_h, sb_w = _out_subblock(bm, bn)
+@@ -1241,6 +1267,21 @@
+     return max(hi - lo for core in ring_plan(g, core_m_tiles, bm) for lo, hi, _ in core)
+ 
+ 
++def weights_resident_capable(g: Conv3x3Geometry, core_m_tiles, bm, bk, nslice=False):
++    """WR_MODE's predicate: the interleaved (never a sharded path) K-blocked walk without a K split, more than one
++    K-block and more than one M-block per core, on the gathers whose compute takes the walk's matmul_block call (not the
++    split row gather, whose writer hands units over per issued round)."""
++    return (
++        not g.sharded_output
++        and not g.k_split
++        and not nslice
++        and g.tensor_k_tiles // bk > 1
++        and _div_up(core_m_tiles, bm) > 1
++        and not face_direct_im2col(g, bk)
++        and not _row_split(g, bm, bk)
++    )
++
++
+ @functools.lru_cache(maxsize=256)
+ def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
+     """The one place block extents are chosen. Order of the L1 solve (op_design Mechanism caps #1):
+@@ -1275,22 +1316,36 @@
+     search = [(bm, bk) for bm in bm_candidates for bk in bk_above_floor]
+     search += [(bm_candidates[-1], bk) for bk in bk_below_floor]
+ 
+-    def solve(candidates, nslice, shared=False):
++    def solve(candidates, nslice, shared=False, wr_solve=False):
+         for bm, bk in candidates:
++            resident = wr_solve and weights_resident_capable(g, core_m_tiles, bm, bk, nslice)
+             # The untilize batch shrinks first: a smaller batch costs one more read fence per tile-row,
+             # a smaller bk costs a whole K-block (tilize, matmul init, L1-acc pass).
+             band_len, raw_slab_rows = _block_extents(g, core_m_tiles, bm)
+             ub_default = _default_untilize_batch_rows(g, band_len, raw_slab_rows)
+             for ub_cap in range(ub_default, 0, -1):
+-                fit = _footprint(g, core_m_tiles, bm, bk, bn, ub_cap, nslice, shared=shared)
++                fit = _footprint(g, core_m_tiles, bm, bk, bn, ub_cap, nslice, shared=shared, resident=resident)
++                if resident:
++                    fit["weights_resident"] = True
+                 if fit["footprint_bytes"] <= l1_budget:
+                     # The deeper im2col ring only takes L1 left at this (bm, bk, ub): it never costs a coarser block.
+-                    for depth in range(_im2col_ring_target(g, bm, bk, nslice), IM2COL_RM_DEPTH_ROWS, -1):
++                    for depth in range(
++                        min(_im2col_ring_target(g, bm, bk, nslice), WR_IM2COL_CAP), IM2COL_RM_DEPTH_ROWS, -1
++                    ):
+                         deep = _footprint(
+-                            g, core_m_tiles, bm, bk, bn, ub_cap, nslice, im2col_depth=depth, shared=shared
++                            g,
++                            core_m_tiles,
++                            bm,
++                            bk,
++                            bn,
++                            ub_cap,
++                            nslice,
++                            im2col_depth=depth,
++                            shared=shared,
++                            resident=resident,
+                         )
+                         if deep["footprint_bytes"] <= l1_budget:
+-                            fit = deep
++                            fit = dict(deep, weights_resident=True) if resident else deep
+                             break
+                     # Center-tap direct: bm * bk more in0 tiles, from the L1 left after everything else.
+                     mode = center_tap_mode(g, bm, bk)
+@@ -1311,6 +1366,21 @@
+                             fit = dict(
+                                 fit, ring=True, slab_tile_rows=ring, footprint_bytes=fit["footprint_bytes"] + delta
+                             )
++                    # Weights resident from the L1 left after everything else (WR_MODE "leftover").
++                    if (
++                        WR_MODE == "leftover"
++                        and not fit.get("weights_resident")
++                        and weights_resident_capable(g, core_m_tiles, bm, bk, nslice)
++                    ):
++                        nkb = g.tensor_k_tiles // bk
++                        extra = (nkb - fit["weight_depth"]) * bk * bn * g.weight_tile_bytes
++                        if fit["footprint_bytes"] + extra <= l1_budget:
++                            fit = dict(
++                                fit,
++                                weights_resident=True,
++                                weight_depth=nkb,
++                                footprint_bytes=fit["footprint_bytes"] + extra,
++                            )
+                     return Conv3x3Blocking(
+                         grid_x=grid_x,
+                         core_m_tiles=core_m_tiles,
+@@ -1323,7 +1393,14 @@
+                     )
+         return None
+ 
+-    blocking = solve(search, nslice=False)
++    blocking = (solve(search, nslice=False, wr_solve=True) if WR_MODE == "solve" else None) or solve(
++        search, nslice=False
++    )
++    if WR_MODE == "trim" and blocking is not None and not g.k_split:
++        # Resident at the streaming solve's (bm, bk): it may take the deeper im2col ring's L1, never a smaller block.
++        blocking = (
++            solve([(blocking.block_m_tiles, blocking.block_k_tiles)], nslice=False, wr_solve=True) or blocking
++        )
+     if blocking is not None and g.k_split:
+         # N-slice-outer at the K-blocked solve's bm, unless its resident [bm, K] in0 does not fit. There bk only sets
+         # the gather / tilize granularity and costs almost no L1, so the coarsest that fits wins.
+@@ -2823,7 +2900,16 @@
+     m_blocks_per_index = [_div_up(actual_m_tiles, bm) for _, actual_m_tiles in m_ranges]
+     # The weight multicast's cores (the channel below is built from the same set). The split TILE fill runs on its pure
+     # receivers: not the sender (work core 0), nor the own-stream cores outside the channel.
+-    mcast_receivers = None if g.k_split else _weight_mcast_cores(core_list, [m_blocks_per_index[i] for _, i, _ in work])
++    # Weights resident: every core with work takes the same num_k_blocks rounds into the same slots, so every such core
++    # joins the channel (no own-stream cores).
++    mcast_receivers = (
++        None
++        if g.k_split
++        else _weight_mcast_cores(
++            core_list,
++            [min(m_blocks_per_index[i], 1) if b.weights_resident else m_blocks_per_index[i] for _, i, _ in work],
++        )
++    )
+     weight_servers = None
+     if WEIGHT_SERVERS and g.sharded_output and not g.k_split and mcast_receivers is not None:
+         # Partners under kw-fold, where a chunk splits into two parts (see WEIGHT_SERVER_PARTNERS).
+@@ -3701,6 +3787,9 @@
+     _host_fill_defines = (
+         [("CONV2D_3X3_HOST_FILL", "1"), ("HOST_FILL_WRITER_WINDOW", str(HOST_FILL_WRITER_WINDOW))] if host_fill else []
+     )
++    _wr_defines = [("WEIGHTS_RESIDENT", "1")] if b.weights_resident else []
++    if b.weights_resident:
++        assert not (kwf or slab_direct or row_split or b.nslice or g.k_split or g.sharded_output or weight_servers)
+     readers = [
+         ttnn.KernelDescriptor(
+             kernel_source=str(KERNEL_DIR / "conv2d_3x3_reader.cpp"),
+@@ -3731,6 +3820,7 @@
+             + _round0_defines
+             + slot_ack_defines
+             + _host_fill_defines
++            + _wr_defines
+             + ([("NSLICE_ROUND0", "1")] if round0_args else [])
+             + (
+                 [
+@@ -3758,7 +3848,8 @@
+         + _sd_compute_defines
+         + _wide_short_defines
+         + _s2_compute_defines
+-        + _ring_arrival_defines,
++        + _ring_arrival_defines
++        + _wr_defines,
+         config=ttnn.ComputeConfigDescriptor(
+             math_fidelity=compute_kernel_config.math_fidelity,
+             math_approx_mode=compute_kernel_config.math_approx_mode,
+@@ -3933,7 +4024,12 @@
+     semaphores = [ttnn.SemaphoreDescriptor(id=sem_id, core_ranges=sem_cores, initial_value=0) for sem_id in sem_ids]
+     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=semaphores, cbs=cbs)
+     # The writer's NoC (WriterConfigDescriptor).
+-    weight_mcast_config = ttnn.McastConfig(noc=ttnn.NOC.NOC_1)
++    weight_mcast_config = (
++        # Weights resident without acks: every round lands in a fresh slot (see WR_NOACK).
++        ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=False, data_ready=ttnn.McastDataReady.Counter)
++        if b.weights_resident and WR_NOACK
++        else ttnn.McastConfig(noc=ttnn.NOC.NOC_1)
++    )
+     weight_mcast = None
+     spare_mcast = None
+     if g.k_split:
+diff -ruN '--exclude=__pycache__' ./kernels/conv2d_3x3_compute.cpp ../op_copy/kernels/conv2d_3x3_compute.cpp
+--- a/kernels/conv2d_3x3_compute.cpp	2026-11-20 14:56:28.598064394 +0000
++++ b/kernels/conv2d_3x3_compute.cpp	2026-11-20 15:01:22.497375084 +0000
+@@ -848,6 +848,31 @@
+     }
+ };
+ 
++// Weights resident (the descriptor's WEIGHTS_RESIDENT, perf experiment weights_resident): cb_weights holds all
++// num_k_blocks rounds, pushed once by the writer. K-block k reads round k at tile offset k * bk * bn of the fronted
++// region (matmul_block in1 NoWaitNoPop + this In1BaseOffsetFn); nothing is popped until the walk ends. The helper's
++// own in1 policies cannot express it: WaitAndPopPerKBlock re-waits and frees every round, WaitAndRetainOnLastBlock
++// retains only the last.
++template <uint32_t round_tiles>
++struct ResidentIn1Offset {
++    ALWI uint32_t operator()(uint32_t block) const { return block * round_tiles; }
++};
++// The walk's PreKBlockFn (the tap-direct tilize) followed, until every round arrived (the first M-block), by the wait
++// for round k: the tilize of K-block k never waits on a weight round, the matmul of K-block k does.
++template <typename Inner, uint32_t cb_w, uint32_t round_tiles>
++struct ResidentWeightsPreKBlock {
++    Inner inner;
++    uint32_t* rounds_waited;
++    ALWI void operator()(uint32_t block, uint32_t num_k_blocks, bool is_last) const {
++        inner(block, num_k_blocks, is_last);
++        if (*rounds_waited <= block) {
++            MaybeDeviceZoneScope("compute_weight_wait");
++            cb_wait_front(cb_w, (block + 1) * round_tiles);
++            *rounds_waited = block + 1;
++        }
++    }
++};
++
+ #ifdef CONV2D_3X3_SLAB_DIRECT
+ // Slab-direct in0 (conv2d_3x3_slab_direct.hpp): every in0 tile is unpacked straight from the padded slab as two
+ // 2-face runs, K columns [0, 16) of its 32 rows at a and K columns [16, 32) at a + SD_HALF_BYTES. Each run lands in
+@@ -1311,6 +1336,8 @@
+     [[maybe_unused]] const uint32_t rt_arg_base = 3 + ((rt_ring_groups + 9) / 10) * num_m_blocks_this_core;
+     // N-slice ring: incoming row groups packed onto so far, over all M-blocks (the arrival count each waits for).
+     [[maybe_unused]] uint32_t ring_need = 0;
++    // Weights resident: rounds waited for so far (see ResidentWeightsPreKBlock).
++    [[maybe_unused]] uint32_t wr_rounds_waited = 0;
+     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
+         [[maybe_unused]] const uint32_t valid_rows =
+             rt_valid ? get_arg_val<uint32_t>(rt_arg_base + 2 * m_block_idx) : block_m_tiles;
+@@ -2185,6 +2212,41 @@
+             if constexpr (caller_owns_partials) {
+                 partials.reserve_back(partials_tiles);
+             }
++#ifdef WEIGHTS_RESIDENT
++            // Weights resident (see ResidentIn1Offset): the rounds stay fronted across the M-blocks.
++            constexpr uint32_t wr_round_tiles = block_k_tiles * block_n_tiles;
++            using WrPre = ResidentWeightsPreKBlock<PreKBlockFn, cb_weights, wr_round_tiles>;
++            const WrPre wr_pre{pre_k_block, &wr_rounds_waited};
++            ckl::matmul_block<
++                /*transpose=*/false,
++                /*packer_l1_acc=*/true,
++                last_block_target,
++                ckl::OutputCBLayout::TileRowMajor,
++                ckl::matmul_config::InitMode::ShortAfterPreKBlock,
++                ckl::InputPolicy::WaitAndPopPerKBlock,
++                ckl::InputPolicy::NoWaitNoPop,
++                ckl::NoPostCompute,
++                WrPre,
++                ckl::NoPostKBlock,
++                /*untilize_block_ct_dim=*/0,
++                ckl::NoKBlockInnerDimFn,
++                CenterTapIn0<center_mode, cb_center_tiles>,
++                ResidentIn1Offset<wr_round_tiles>,
++                caller_owns_partials>(
++                im2col_tiles,
++                weights,
++                output_tiles,
++                partials,
++                mm_shape,
++                {},
++                wr_pre,
++                /*in1_per_core_w=*/block_n_tiles,
++                /*out_row_width=*/block_n_tiles,
++                {},
++                {},
++                CenterTapIn0<center_mode, cb_center_tiles>{},
++                ResidentIn1Offset<wr_round_tiles>{});
++#else
+             ckl::matmul_block<
+                 /*transpose=*/false,
+                 /*packer_l1_acc=*/true,
+@@ -2213,6 +2275,7 @@
+                 {},
+                 {},
+                 CenterTapIn0<center_mode, cb_center_tiles>{});
++#endif
+             if constexpr (caller_owns_partials) {
+                 partials.push_back(partials_tiles);
+             }
+@@ -2226,6 +2289,11 @@
+         }
+     }
+ 
++#ifdef WEIGHTS_RESIDENT
++    if (wr_rounds_waited > 0) {
++        weights.pop_front(wr_rounds_waited * block_k_tiles * block_n_tiles);
++    }
++#endif
+ #ifdef SD_BIAS_IN_WEIGHTS
+     constexpr bool bias_cb_used = false;  // the bias came with the weight rounds
+ #else
+diff -ruN '--exclude=__pycache__' ./kernels/conv2d_3x3_writer.cpp ../op_copy/kernels/conv2d_3x3_writer.cpp
+--- a/kernels/conv2d_3x3_writer.cpp	2026-11-20 14:56:28.599064409 +0000
++++ b/kernels/conv2d_3x3_writer.cpp	2026-11-20 15:01:41.001646597 +0000
+@@ -292,7 +292,14 @@
+     const auto weights = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
+ 
+     // ---- stream_weight_blocks: K-block tiles k-major, n-fastest (matmul in1 layout).
++#ifdef WEIGHTS_RESIDENT
++    // Weights resident (the descriptor's WEIGHTS_RESIDENT, perf experiment weights_resident): every round lands in its
++    // own cb_weights slot and stays there for all of this core's M-blocks, so the core takes num_k_blocks rounds, all
++    // issued in its first M-block; compute re-reads them per M-block.
++    const uint32_t total_k_blocks = num_m_blocks_this_core > 0 ? num_k_blocks : 0;
++#else
+     const uint32_t total_k_blocks = num_m_blocks_this_core * num_k_blocks;
++#endif
+     uint32_t k_blocks_issued = 0;
+     // Slab-direct round 0 (sd_w0): its DRAM reader (the multicast sender, or a core outside the channel) issues it
+     // under transaction id 8 at kernel entry (below), a receiver of the reader multicast reserves its slot before the
+@@ -2462,6 +2469,9 @@
+         }
+     }
+ #endif
++#ifdef WEIGHTS_RESIDENT
++    static_assert(!row_split && !nslice_outer && !k_split && !weight_servers && !slab_split && !output_sharded);
++#endif
+     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
+         if constexpr (slab_split) {
+ #ifdef CONV2D_3X3_SLAB_DIRECT
+@@ -2567,8 +2577,8 @@
+                 combine_round(m_block_idx);
+             }
+         } else {
+-#if defined(CONV2D_3X3_KW_FOLD) && !KWF_KBLOCKED
+-            // kw-fold whole-K: the weights stay resident across this core's M-blocks: one stream.
++#if (defined(CONV2D_3X3_KW_FOLD) && !KWF_KBLOCKED) || defined(WEIGHTS_RESIDENT)
++            // kw-fold whole-K / weights resident: the weights stay resident across this core's M-blocks: one stream.
+             while (k_blocks_issued < num_k_blocks) {
+ #else
+             while (k_blocks_issued < (m_block_idx + 1) * num_k_blocks) {
