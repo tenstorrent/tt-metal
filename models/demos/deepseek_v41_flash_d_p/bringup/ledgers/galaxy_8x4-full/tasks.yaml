@@ -5602,3 +5602,89 @@ tasks:
       steady_wall_ms_p1024000: '> 0'
       steady_wall_ms_p145408_tagentic: '> 0'
       steady_wall_ms_p145408_tmultilingual: '> 0'
+- id: MB.1
+  title: 'OWNER 2026-11-20: honest 5120 walls on the shipped branch (fresh positions / slots / last chunks every timed chunk, program builds counted per op)'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.83
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.1_fresh_walls.md
+  brief:
+    prior_work: 'Batching branch dnijemcevic/model_bringup_batching: PB.9F (a72c8c6918d) added WALLS_FRESH=1 to tests/test_skip_positions.py with tests/packed/fresh_common.py (fresh AgentX draws, disjoint
+      warm-up / timed slot pools, misses counted, a probe naming every op that built); PB.9F5 (83c7ee814cf) measured THIS path at 5120: steady 63.2k warm -> 37.2k fresh, resumed 61.2 -> 50.6k, partial last
+      chunks 19.2 -> 14.7k, ~20-23 builds a chunk, host 33-35 ms vs 12-16; builders: ttnn.slice @ served.py:155 (history slice_rows: slot x position), compressor.py:181 + rope.py:451 (RoPE rows), served.py:211
+      (DeviceScalars), history_gather.py:376 (tail), attention.py:488 (srv_row). 8192 measured 0 builds (unexplained). Audit with file:line: /data/dnijemcevic/bringup/handoff_20261119/../deepseek_v41_flash_d_p?
+      see supervision.md 2026-11-20 20:05 and note OV-68 on the batching ledger.'
+    details: 'OWNER 2026-11-20 (binding): measure the shipped single-request path honestly on THIS branch. Tests only (no tt/ change): bring PB.9F''s single-request fresh mode over from a72c8c6918d (git
+      show a72c8c6918d:models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py and tests/packed/fresh_common.py; keep only what the single-request path needs; place the helper under tests/ as fresh_common.py),
+      and run 5120 fresh vs warm: steady, resumed (write_start > start, a replay), partial last chunks, fresh slots; builds after warm-up per op with the attribute that changed; host ms a chunk. Also explain
+      why PB.9F measured 0 builds at 8192 (run the same at BRINGUP_CHUNK=8192 through the runner, report only). Write models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.1_fresh_walls.md.
+      Read rule 20 of models/demos/common/bringup/agents/bringup-engineer.md (serving reality: no program build in serving, no host tables, fresh-traffic walls only, no impractical shortcuts) and the skill''s
+      standing decisions of 2026-11-20.'
+  gate:
+    cmd: BRINGUP_CHUNK=5120 DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode WALLS_FRESH=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+    metrics:
+      '*_fresh*': '> 0'
+      program_builds_after_warmup_*: '>= 0'
+- id: MB.2
+  title: 'OWNER 2026-11-20: no program build in serving on the single-request path (every per-chunk value a runtime value), ids reordered on the device; a permanent no-rebuild test in every accept gate'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - MB.1
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - ttnn/ttnn/bringup
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.2_fresh_walls.md
+  ab:
+    env:
+      POS_DYNAMIC: 'off'
+    change:
+      POS_DYNAMIC: 'on'
+  ab_mode: full
+  ab_rungs:
+  - last
+  brief:
+    prior_work: 'Batching branch dnijemcevic/model_bringup_batching: PB.9F (a72c8c6918d) added WALLS_FRESH=1 to tests/test_skip_positions.py with tests/packed/fresh_common.py (fresh AgentX draws, disjoint
+      warm-up / timed slot pools, misses counted, a probe naming every op that built); PB.9F5 (83c7ee814cf) measured THIS path at 5120: steady 63.2k warm -> 37.2k fresh, resumed 61.2 -> 50.6k, partial last
+      chunks 19.2 -> 14.7k, ~20-23 builds a chunk, host 33-35 ms vs 12-16; builders: ttnn.slice @ served.py:155 (history slice_rows: slot x position), compressor.py:181 + rope.py:451 (RoPE rows), served.py:211
+      (DeviceScalars), history_gather.py:376 (tail), attention.py:488 (srv_row). 8192 measured 0 builds (unexplained). Audit with file:line: /data/dnijemcevic/bringup/handoff_20261119/../deepseek_v41_flash_d_p?
+      see supervision.md 2026-11-20 20:05 and note OV-68 on the batching ledger. MB.1''s table (results/MB.1_fresh_walls.md). Batching branch pieces to reuse: PB.7C (ce4e3bc674f) tt/glued_derive.py (per-chunk
+      tables derived on device from a header), tt/page_copy.py (pages_of instead of position-keyed slices), prepared-program values (ttnn.bringup.prepare_program / run_prepared).'
+    details: 'OWNER 2026-11-20 (binding): serving never rebuilds. On the single-request path (5120 and 8192), make every per-chunk value a runtime value: the RoPE / compressed-RoPE row slices by start,
+      DeviceScalars k = start//32 and ceil(end/32) of a last chunk, the history slice_rows by slot x layer x start, the history tail slices, srv_row, replay offsets (write_start - start), SnapshotSend patterns
+      at last-chunk caps, the partial-chunk masks, the unpack_fp8_rows core counts: whatever MB.1''s probe lists. Means: runtime-arg slices / page copies / prepared-program values / device tables (reuse
+      the batching branch''s pieces); the program-cache key depends on shapes and switches only; warm-up is a finite enumerable set. Also: no second upload of the token ids: reorder the engine''s input
+      into natural order ON THE DEVICE (the host keeps only the readback for the engram hash; engrams stay on the HOST, owner decision). Behind ONE call-time switch POS_DYNAMIC=off|on (batch_call_settings).
+      Bit-identical to today. Add a PERMANENT test models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py (BATCH_SHARED, layers 0-20, <= ~3 min): after warm-up, N fresh chunks (new starts, new slots,
+      a partial last chunk, a replay) on the shipped switches; metric program_builds_after_warmup_serving == 0 and ids_uploads_per_chunk == 0. Report fresh vs warm per case in models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.2_fresh_walls.md
+      (target: fresh ~= warm). Read rule 20 of models/demos/common/bringup/agents/bringup-engineer.md (serving reality: no program build in serving, no host tables, fresh-traffic walls only, no impractical
+      shortcuts) and the skill''s standing decisions of 2026-11-20.'
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py && BRINGUP_CHUNK=5120 DS41_ENGRAM_TABLE=resident DS41_POS_DYNAMIC=on BRINGUP_POS_TOKENS=agentic_cc
+      DS41_DECODER_SKIP=decode WALLS_FRESH=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py && DS41_ENGRAM_TABLE=resident DS41_POS_DYNAMIC=on
+      BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      determinism_max_abs_diff: == 0
+      contract_checks_failed: == 0
+      contract_checks_failed_decoder_skip: == 0
+      outside_history_max_abs_diff: == 0
+      '*_fresh*': '> 0'
+      program_builds_after_warmup_*: == 0
+      ids_uploads_per_chunk*: == 0

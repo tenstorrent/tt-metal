@@ -607,3 +607,15 @@
 - 19:22 UTC DEVICE (justified, owner): AgentX-like ladder on HEAD 087ba04c142 (P.83 + P.81 in), runner request (reserve 48.2 GiB after a load: ok).
 - 19:28 UTC AgentX-like ladder on HEAD (agentic_cc, steady, harness): 51k 74.1 ms / 69.1k tok/s; 128k 75.2 / 68.1k; 256k 77.2 / 66.3k; 512k 79.5 / 64.4k; 768k 84.9 / 60.3k; 1M 87.4 / 58.6k (earlier today 67.5 / 66.1 / 65.0 / 62.2 / 58.9 / 56.6k). 1 open / 1 load; RAM unaccounted 215.9 -> 217.9 GiB.
 - 19:37 UTC HANDOFF written for the owner's restart (prompt packing next): /data/dnijemcevic/bringup/handoff_20261119/HANDOFF.md (+ ledger copy). Runner stopped; nothing running; RAM unaccounted 216.9 GiB.
+
+## 2026-11-20 22:20 UTC: switched to dnijemcevic/model_bringup (owner: fix the shipped branch, measure, cover with tests)
+- Batching branch left clean: its local ledger records stashed (stash "batching ledger local records 2026-11-20") and
+  untracked history chunks 0003/0004 + results/PB.8.json moved to /data/dnijemcevic/bringup/handoff_20261119/
+  batching_ledger_local_20261120/ (restore them when going back). Resident runner stopped.
+- Brought the framework + skill changes of 2026-11-19/20 (F289-F294, skill rules) from the batching branch
+  (eca7aadb815); bringup-engineer.md rule 20 "serving reality" (no builds in serving, no host tables, fresh walls only,
+  no impractical shortcuts). Skill: every accept / perf gate of this model carries tests/test_no_rebuild.py (from MB.2).
+- Tasks: MB.1 (tests only: PB.9F's fresh mode for the single-request path; 5120 fresh vs warm, builds per op; explain
+  8192's 0 builds) -> MB.2 (no build in serving: every per-chunk value a runtime value, ids reordered on device,
+  POS_DYNAMIC, bit-identical; gate = P.83's 5120 accept units + fresh walls + the permanent test_no_rebuild.py, builds
+  == 0, ids uploads == 0; A/B on POS_DYNAMIC). Note OV-* (the audit list) to MB.*. Launch --until MB.2.

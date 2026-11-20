@@ -594,6 +594,22 @@ notes:
     by the device profile; keep a change at >= 1 ms device a chunk. If host RAM runs low, run with DS41_ENGRAM_DEVICE=on
     and DS41_ENGRAM_DEVICE_TABLES=on and DS41_ENGRAM_TABLE=mmap (the tables on the mesh, the host copy not resident) for
     the measurement; the owner may reset the device in about an hour: keep work committed / recoverable.'
+- id: OV-57
+  tasks:
+  - MB.*
+  status: open
+  t: '2026-11-20T21:52:06'
+  text: 'Overseer audit 2026-11-20 (single-request path, read-only) + PB.9F5''s probe: programs BUILT in serving: adapter.compile()
+    warms only a full chunk at start 0 (runners/adapter.py:347-356); ttnn.slice hashes slice_start/end: rope.py:439/451
+    RoPE rows (begin=start; via attention.py:1541, kv.py:80, indexer.py:344); compressor.py:169/181 compressed-row RoPE
+    (start//r; also the table INPUT shape changes 522240 -> 1044480); served.py:210/215 (211 _pick) DeviceScalars k=start//32,
+    ceil(end/32) of a last chunk (arbitrary), slot (via compressor.py:718-732); history_gather.py:323/339 -> served.py:155
+    slab.slice_rows [slot x layers + row, start-derived] (the biggest: x18 a probe); history_gather.py:355/376 tail ttnn.slice;
+    attention.py:477-490 srv_row; compressor.py:1278-1280 replay offsets; bounded: snapshot_send.py:399-412 / 752-760 owner
+    patterns at last-chunk caps, fp8_rows.py unpack ncores, partial-chunk masks attention.py:401-411 / compressor.py:1170-1190.
+    Already runtime: update_padded_kv_cache, ring_indexer_score_dsa start / kv_len, topk_large_indices valid_length, high_bw_all_gather.
+    Host per chunk: engram C++ job (by design, stays on the host) + the ids readback and re-upload in natural order (model.py:2151,
+    adapter.py:247-260): remove the re-upload (device reorder).'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
