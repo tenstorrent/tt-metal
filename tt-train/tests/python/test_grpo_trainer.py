@@ -1192,7 +1192,7 @@ def test_failed_trainer_shuts_down_the_rollout_server(
     "model_type, enable_fsdp, local_source, message",
     [
         ("mistral", False, False, "supports Llama and Qwen3 models only"),
-        ("llama", True, False, "does not support FSDP"),
+        ("qwen3", True, False, "does not support FSDP"),
         ("llama", False, True, "needs a HuggingFace Hub model id"),
     ],
 )
