@@ -251,6 +251,8 @@ class LlamaDecoder(LightweightModule):
 
         self.compute = compute(p["compute_fidelities"]["norm_rope"], p["accumulation"]["norm_rope_fp32"])
         self.sdpa_compute = compute(p["compute_fidelities"]["sdpa"], p["accumulation"]["sdpa_fp32"], False)
+        # Prefill SDPA ignores compute_kernel_config: FP32 accumulation is the ACCURATE recipe.
+        self.sdpa_precision = ttnn.SDPAPrecision.ACCURATE if self.sdpa_compute.fp32_dest_acc_en else None
         self.decode_sdpa_compute = compute(
             p["compute_fidelities"]["sdpa"], p["accumulation"]["sdpa_fp32"], False, dst_full_sync_en=True
         )
@@ -660,6 +662,7 @@ class LlamaDecoder(LightweightModule):
                         exp_approx_mode=False,
                     ),
                     compute_kernel_config=self.sdpa_compute,
+                    precision=self.sdpa_precision,
                 )
                 attention = ttnn.experimental.nlp_concat_heads(
                     attention,
