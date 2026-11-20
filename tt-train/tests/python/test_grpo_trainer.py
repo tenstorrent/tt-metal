@@ -1365,6 +1365,8 @@ def test_mpi_rollout_loopback(mpi_loopback, expect_error):
     assert version == 0
 
     client.shutdown()
+    thread.join(timeout=30)
+    assert at_exit == [client.shutdown]
 
 
 class _MaskedEchoSampler(_EchoSampler):
@@ -1378,12 +1380,11 @@ class _MaskedEchoSampler(_EchoSampler):
 
 
 def test_mpi_rollout_loopback_sends_loss_mask(mpi_loopback):
-    client, _ = _start_rollout_server(_MaskedEchoSampler())
+    client, thread = _start_rollout_server(_MaskedEchoSampler())
     client.send_weights({}, version=0)
     assert client.remote_generate([[1, 2], [3]])[3] == [[1.0, 0.0], [1.0]]
     client.shutdown()
     thread.join(timeout=30)
-    assert at_exit == [client.shutdown]
 
 
 class _IdsTokenizer:
