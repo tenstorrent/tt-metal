@@ -67,7 +67,6 @@ enum class BinaryOp : std::uint8_t
     SUB,
     MUL,
     DIV,
-    RSUB,
     GT,
     LT,
     LE,
@@ -109,6 +108,7 @@ enum class BinaryOp : std::uint8_t
     GCD,
     LCM,
     RESHUFFLE_ROWS,
+    RSUB,
 };
 
 enum class DataLayout

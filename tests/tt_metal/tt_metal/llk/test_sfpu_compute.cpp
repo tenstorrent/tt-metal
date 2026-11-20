@@ -2534,7 +2534,7 @@ inline std::vector<uint32_t> typecast_pack(tt::DataFormat fmt, const std::vector
             return out;
         }
         case tt::DataFormat::Int32: {
-            // Native Int32 in L1 (and in Dest through unpack-to-dest) is two's complement (#59016).
+            // Native Int32 in L1 (and in Dest through unpack-to-dest) is two's complement.
             std::vector<uint32_t> out;
             out.reserve(vals.size());
             for (const float v : vals) {
@@ -3521,7 +3521,12 @@ bool run_sfpu_binary_two_input_buffer(distributed::MeshDevice& mesh_device, cons
 
     const bool is_int8_op = sfpu_util::is_int8_binary_sfpu_op(test_config.sfpu_op);
     const bool is_int32_op = sfpu_util::is_int32_binary_sfpu_op(test_config.sfpu_op);
-    const size_t element_size = is_int8_op ? sizeof(int8_t) : is_int32_op ? sizeof(int32_t) : sizeof(bfloat16);
+    size_t element_size = sizeof(bfloat16);
+    if (is_int8_op) {
+        element_size = sizeof(int8_t);
+    } else if (is_int32_op) {
+        element_size = sizeof(int32_t);
+    }
     const uint32_t numel = per_buffer_byte_size_input / element_size;
     const int seed = sfpu_test_seed;
     auto [packed_lhs, packed_rhs] = sfpu_util::generate_packed_sfpu_binary_inputs(numel, test_config.sfpu_op, seed);
@@ -4938,9 +4943,12 @@ void run_binary_sfpu_case(
     // (two's-complement) Int32 L1 inputs. div_binary stays bfloat16.
     const bool is_int8_op = unit_tests::sfpu_util::is_int8_binary_sfpu_op(sfpu_op);
     const bool is_int32_op = unit_tests::sfpu_util::is_int32_binary_sfpu_op(sfpu_op);
-    const tt::DataFormat data_format_input = is_int8_op    ? tt::DataFormat::Int8
-                                             : is_int32_op ? tt::DataFormat::Int32
-                                                           : tt::DataFormat::Float16_b;
+    tt::DataFormat data_format_input = tt::DataFormat::Float16_b;
+    if (is_int8_op) {
+        data_format_input = tt::DataFormat::Int8;
+    } else if (is_int32_op) {
+        data_format_input = tt::DataFormat::Int32;
+    }
     tt::DataFormat data_format_output = (is_int8_op || is_int32_op) ? tt::DataFormat::Int32 : tt::DataFormat::Float16_b;
     if (sfpu_op == "div_int32") {
         data_format_output = tt::DataFormat::Float32;
