@@ -173,3 +173,41 @@ def test_d_p_vs_kv_only(mesh_device):
     assert len(converted) == num_layers and all(s.seq_len == T for s in converted)
     free_prefill_states(converted)
     assert not bad, "metal_2 prefill states differ from this model's:\n" + "\n".join(bad)
+
+
+@pytest.mark.timeout(3600)
+def test_d_p_worker():
+    """A running ``demo/d_p_prefill_worker.py`` (``D_P_WORKER=host:port``, no device in this process) prefills the
+    prompt ``test_d_p_export`` saved, and its states match the saved ones."""
+    from models.experimental.deepseek_v41_flash.tt.prefill.d_p_bridge import load_host_states
+    from models.experimental.deepseek_v41_flash.tt.prefill.d_p_wire import PrefillClient
+
+    address = os.environ.get("D_P_WORKER")
+    if not address:
+        pytest.skip("set D_P_WORKER=host:port of a running d_p_prefill_worker.py")
+    if not STATES.exists():
+        pytest.skip(f"{STATES} not found: run test_d_p_export first")
+    saved = load_host_states(STATES)
+    ids = saved["ids"].tolist()
+
+    client = PrefillClient(address)
+    logger.info(f"worker {address}: {client.info}")
+    t0 = time.perf_counter()
+    got = client.prefill(ids)
+    wall = time.perf_counter() - t0
+    client.close()
+    T = got["seq_len"]
+    logger.info(
+        f"{T} tokens: worker prefill {got['seconds']:.2f} s ({T / got['seconds']:.0f} tok/s), "
+        f"round trip {wall:.2f} s"
+    )
+    assert T == len(ids) and sorted(got["layers"]) == sorted(saved["layers"])
+    bad = []
+    for i, layer in saved["layers"].items():
+        for name, want in layer.items():
+            have = got["layers"][i][name]
+            assert have.shape == want.shape, (i, name, tuple(have.shape), tuple(want.shape))
+            p = _pcc(have, want)
+            if p < MIN_PCC:
+                bad.append(f"layer {i} {name}: PCC {p:.6f}")
+    assert not bad, "worker states differ from the saved run:\n" + "\n".join(bad)
