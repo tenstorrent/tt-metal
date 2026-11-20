@@ -132,13 +132,17 @@ def wait_acks(target: int, timeout_s: float, marks=None) -> bool:
 _seq = [0]
 
 
+_set = {"name": "", "env": ""}
+
+
 def run_prompt(phase: str, name: str, arm: str, *, digest=False, mark=True, timeout_s=900.0) -> dict:
     toks = PROMPTS[name]
     S = len(toks)
     chunks = [(s, min(S, s + CHUNK)) for s in range(0, S, CHUNK)]
     _seq[0] += 1
-    tag = f"{phase}.{_seq[0]}:{name}"
-    set_ctl(f"{arm} {tag}{' digest' if digest else ''}")
+    tag = f"{_set['name'] + '/' if _set['name'] else ''}{phase}.{_seq[0]}:{name}"
+    env = f" env:{_set['env']}" if _set["env"] else ""
+    set_ctl(f"{arm} {tag}{' digest' if digest else ''}{env}")
     base = acked
     marks = {base + (k + 1) * ACKS_PER_CHUNK: None for k in range(len(chunks))}
     t0 = time.perf_counter()
@@ -247,6 +251,20 @@ def main() -> None:
         res.append(run_prompt("U", "X", "cold", mark=False))
         for name in ("A", "A2", "B"):
             res.append(run_prompt("U", name, "reuse", digest=True, mark=False))
+    SETS = [x for x in os.environ.get("PREFIX_CHECK_SETS", "").split("+") if x.strip()]  # "name:K=V,K=V+name2:..."
+    for spec in SETS:  # WS1 lever sets inside one runner: R2 digests + S2 store sequence + P (walls, digests) per set
+        nm, _, env = spec.partition(":")
+        _set["name"], _set["env"], _seq[0] = nm.strip(), env.strip(), 0
+        log(f"SET {nm}: env [{env}]")
+        for name in ("A", "U", "A2", "AP", "B"):
+            res.append(run_prompt("R2", "X", "off"))
+            res.append(run_prompt("R2", name, "off", digest=True))
+        res.append(run_prompt("S2", "X", "clear"))
+        for name in S2:
+            res.append(run_prompt("S2", name, "reuse", digest=True))
+        for name in PROFILE_NAMES:
+            res.append(run_prompt("P", name, "off", digest=PROFILE_DIGEST, timeout_s=7200.0))
+    _set["name"], _set["env"] = "", ""
     if "R2" in PHASES:  # H2 references: arm off = today's runner, the store untouched
         for name in ("A", "A", "U", "A2", "AP", "B"):
             res.append(run_prompt("R2", "X", "off"))

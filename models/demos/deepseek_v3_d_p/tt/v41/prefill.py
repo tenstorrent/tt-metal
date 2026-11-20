@@ -541,8 +541,8 @@ class V41Prefill:
                 blk.attn.precreate_shared_masks(blk.state)
         streams = self._streams([0] * self.chunk)
         pre = identity_pre_row(self.mesh, self.chunk // self.sp, self.sp_axis)
-        if PRE_CACHED:
-            # V41_PREFILL_PRE_CACHED: the identity pre row every chunk rebuilt + uploaded (a constant), allocated ONCE and
+        if PRE_CACHED or os.environ.get("V41_PREFILL_PRE_CACHED", "0") == "alloc":
+            # V41_PREFILL_PRE_CACHED (=alloc: allocated, used only while the env reads 1 -- a harness A/B in one runner): the identity pre row every chunk rebuilt + uploaded (a constant), allocated ONCE and
             # BEFORE the captures -- a buffer allocated after a capture can sit in the islands' intermediates (DS41F-0037)
             self._pre_cached = identity_pre_row(self.mesh, self.chunk // self.sp, self.sp_axis)
         t0 = time.time()
@@ -640,7 +640,7 @@ class V41Prefill:
             mark("engram.host")
         streams = self._streams(part)
         self._route_bias(part)
-        cached = getattr(self, "_pre_cached", None) if PRE_CACHED else None
+        cached = getattr(self, "_pre_cached", None) if os.environ.get("V41_PREFILL_PRE_CACHED", "0") == "1" else None
         pre = cached if cached is not None else identity_pre_row(self.mesh, self.chunk // self.sp, self.sp_axis)
         mark("embed")
         if self.engrams and engram_host is not None and not ENGRAM_EARLY:

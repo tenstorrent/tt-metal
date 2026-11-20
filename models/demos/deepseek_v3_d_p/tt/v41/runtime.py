@@ -207,7 +207,7 @@ class V41PrefillRuntime:
 
     def _token_ids_from_device(self, input_tensor) -> list:
         """Request mode: the chunk's ids arrive over H2D as [sp, 1, S / sp] uint32 per mesh (SP-sharded, TP-replicated)."""
-        if IDS_COL0:
+        if IDS_COL0 or os.environ.get("V41_PREFILL_IDS_COL0", "0") == "1":  # read per chunk: a harness may switch it
             return self._token_ids_col0(input_tensor)
         full = ttnn.to_torch(
             input_tensor,

@@ -155,6 +155,13 @@ def prefill_chunk(self, input_tensor, kv_caches, *, metadata_msg=None, **kw):
         else:
             pr.on = True
         st["tag"], st["digest"] = tag, "digest" in words
+        # WS1: "env:K=V,K2=V2" sets runner env for this prompt on (lever A/B inside one runner; only flags read per call)
+        for w in words:
+            if w.startswith("env:") and len(w) > 4:
+                for kv in w[4:].split(","):
+                    k, v = kv.split("=", 1)
+                    os.environ[k] = v
+                logger.info(f"[prefix-check] env for {tag}: {w[4:]}")
         logger.info(f"[prefix-check] chunk {request_id}: prompt {tag} arm {mode}{' digest' if st['digest'] else ''}")
     out = _prefill_chunk(self, input_tensor, kv_caches, metadata_msg=metadata_msg, **kw)
     if st["digest"]:
