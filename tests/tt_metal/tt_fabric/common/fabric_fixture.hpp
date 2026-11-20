@@ -17,6 +17,7 @@
 #include <llrt/tt_cluster.hpp>
 #include <tt-metalium/allocator.hpp>
 #include "impl/program/program_impl.hpp"
+#include "impl/dispatch/slow_dispatch.hpp"
 #include "test_host_kernel_common.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
