@@ -4,7 +4,11 @@
 
 // Horizon (Quasar 2xx) mesh API implementation.
 // Uses Horizon crossbar routing via fabric_flat_address_routing_l1_info_t::flat_addr + noc_async_write.
-// All functions except fabric_unicast_noc_unicast_write are TODO stubs.
+// Implemented: fabric_unicast_noc_unicast_write (stateless + ConnectionManager overload),
+//              fabric_unicast_noc_unicast_write_{set,with}_state,
+//              fabric_unicast_noc_scatter_write (stateless),
+//              fabric_unicast_noc_scatter_write_{set,with}_state.
+// All other functions are TODO stubs.
 
 #pragma once
 
@@ -33,6 +37,27 @@ static constexpr uint32_t HORIZON_ATT_WORKER_GRID_X = 2;
 static constexpr uint32_t HORIZON_ATT_ENDPOINT_SHIFT = 26;
 static constexpr uint64_t HORIZON_ATT_OFFSET_MASK = (uint64_t(1) << HORIZON_ATT_ENDPOINT_SHIFT) - 1;
 
+namespace horizon_detail {
+// Decodes a Horizon ATT-encoded noc_address (bits [25:0] = local offset, bits [31:26] = ATT selector)
+// and looks up the flat crossbar address for the given destination device and mesh.
+static FORCE_INLINE uint64_t
+resolve_destination_flat_address(uint64_t att_noc_addr, uint8_t dst_dev_id, uint16_t dst_mesh_id) {
+    const uint64_t local_offset = att_noc_addr & HORIZON_ATT_OFFSET_MASK;
+    const uint32_t selector = static_cast<uint32_t>((att_noc_addr >> HORIZON_ATT_ENDPOINT_SHIFT) & 0x3F);
+    const uint32_t tile_x = selector % HORIZON_ATT_WORKER_GRID_X;
+    const uint32_t tile_y = selector / HORIZON_ATT_WORKER_GRID_X;
+    ASSERT(dst_mesh_id < tt::tt_fabric::MAX_HORIZON_MESHES);
+    ASSERT(dst_dev_id < tt::tt_fabric::MAX_HORIZON_DEVS_PER_MESH);
+    ASSERT(tile_x < HORIZON_ATT_WORKER_GRID_X);
+    ASSERT(tile_y < tt::tt_fabric::MAX_HORIZON_NOC_Y);
+    const auto* rt =
+        reinterpret_cast<const tt_l1_ptr tt::tt_fabric::fabric_flat_address_routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    const uint64_t base = rt->flat_addr[dst_mesh_id][dst_dev_id][tile_x][tile_y];
+    ASSERT(base != 0);  // unfilled routing table slot
+    return base + local_offset;
+}
+}  // namespace horizon_detail
+
 // FABRIC_MAX_PACKET_SIZE is available via macro from addrgen_api.h
 
 template <typename FabricSenderType, bool SetRoute>
@@ -49,26 +74,10 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
     [[maybe_unused]] auto* _ph = packet_header;
 
     const uint64_t noc_addr = noc_unicast_command_header.noc_address;
-    // noc_addr is a flat ATT address: REMOTE_WINDOW.compare | (selector << HORIZON_ATT_ENDPOINT_SHIFT) | offset
     const uint64_t local_offset = noc_addr & HORIZON_ATT_OFFSET_MASK;
-    const uint32_t selector = static_cast<uint32_t>((noc_addr >> HORIZON_ATT_ENDPOINT_SHIFT) & 0x3F);
-    const uint32_t tile_x = selector % HORIZON_ATT_WORKER_GRID_X;
-    const uint32_t tile_y = selector / HORIZON_ATT_WORKER_GRID_X;
-
-    ASSERT(dst_mesh_id < tt::tt_fabric::MAX_HORIZON_MESHES);
-    ASSERT(dst_dev_id < tt::tt_fabric::MAX_HORIZON_DEVS_PER_MESH);
-    ASSERT(tile_x < HORIZON_ATT_WORKER_GRID_X);
-    ASSERT(tile_y < tt::tt_fabric::MAX_HORIZON_NOC_Y);
-    const auto* routing_table =
-        reinterpret_cast<const tt_l1_ptr tt::tt_fabric::fabric_flat_address_routing_l1_info_t*>(ROUTING_TABLE_BASE);
-    // flat_addr[mesh][dev_id][noc_x_within_dev][noc_y_within_dev]
-    const uint64_t remote_addr = routing_table->flat_addr[dst_mesh_id][dst_dev_id][tile_x][tile_y] + local_offset;
-
-    // Horizon NoC communication can currently only reach the lower 1 MB of each
-    // Tensix core's L1; the NOC2AXI crossbar window is 1 MB per tile slot.
+    // Horizon NOC2AXI crossbar window is 1 MB per tile slot.
     ASSERT(local_offset + size <= (1u << 20));
-    // Zero base means an unfilled routing table slot.
-    ASSERT(remote_addr - local_offset != 0);
+    const uint64_t remote_addr = horizon_detail::resolve_destination_flat_address(noc_addr, dst_dev_id, dst_mesh_id);
     noc_async_write(src_addr, remote_addr, size);
 }
 
@@ -79,8 +88,19 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header) {
-    /* TODO: To be implemented (tracked in issue #61516) */
-    ASSERT(false);
+#ifdef FABRIC_2D
+    auto& slot = connection_manager.get(route_id);
+    fabric_unicast_noc_unicast_write<decltype(slot.sender), SetRoute>(
+        &slot.sender,
+        (volatile PACKET_HEADER_TYPE*)nullptr,
+        static_cast<uint8_t>(slot.dst_dev_id),
+        slot.dst_mesh_id,
+        src_addr,
+        size,
+        noc_unicast_command_header);
+#else
+    static_assert(!SetRoute, "Horizon ConnectionManager unicast write requires FABRIC_2D");
+#endif
 }
 
 template <UnicastWriteUpdateMask UpdateMask, typename FabricSenderType, typename CommandHeaderT>
@@ -90,8 +110,18 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
     uint32_t src_addr,
     CommandHeaderT noc_unicast_command_header,
     uint16_t packet_size_bytes) {
-    /* TODO: To be implemented (tracked in issue #61516) */
-    ASSERT(false);
+    [[maybe_unused]] auto* _ci = client_interface;
+    if constexpr (has_flag(UpdateMask, UnicastWriteUpdateMask::DstAddr)) {
+        packet_header->command_fields.unicast_write.noc_address = noc_unicast_command_header.noc_address;
+    }
+    if constexpr (has_flag(UpdateMask, UnicastWriteUpdateMask::PayloadSize)) {
+        packet_header->payload_size_bytes = packet_size_bytes;
+    }
+    const uint64_t flat = horizon_detail::resolve_destination_flat_address(
+        packet_header->command_fields.unicast_write.noc_address,
+        static_cast<uint8_t>(packet_header->dst_start_chip_id),
+        packet_header->dst_start_mesh_id);
+    noc_async_write(src_addr, flat, packet_header->payload_size_bytes);
 }
 
 template <UnicastWriteUpdateMask UpdateMask, typename CommandHeaderT>
@@ -112,8 +142,17 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_set_state(
     uint16_t dst_mesh_id,
     CommandHeaderT command_header,
     uint16_t packet_size_bytes) {
-    /* TODO: To be implemented (tracked in issue #61516) */
-    ASSERT(false);
+    // HybridMeshPacketHeader::dst_start_chip_id/dst_start_mesh_id repurposed as
+    // dst_dev_id/dst_mesh_id for Horizon crossbar routing.
+    packet_header->dst_start_chip_id = dst_dev_id;
+    packet_header->dst_start_mesh_id = dst_mesh_id;
+    packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
+    if constexpr (has_flag(UpdateMask, UnicastWriteUpdateMask::DstAddr)) {
+        packet_header->command_fields.unicast_write.noc_address = command_header.noc_address;
+    }
+    if constexpr (has_flag(UpdateMask, UnicastWriteUpdateMask::PayloadSize)) {
+        packet_header->payload_size_bytes = packet_size_bytes;
+    }
 }
 
 template <UnicastWriteUpdateMask UpdateMask, typename CommandHeaderT>
@@ -189,8 +228,19 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header) {
-    /* TODO: To be implemented (tracked in issue #61516) */
-    ASSERT(false);
+    [[maybe_unused]] auto* _ci = client_interface;
+    [[maybe_unused]] auto* _ph = packet_header;
+    uint32_t src_offset = 0;
+    const uint8_t chunk_count = noc_unicast_scatter_command_header.chunk_count;
+    for (uint8_t i = 0; i < chunk_count; ++i) {
+        const uint16_t chunk_size = (i < static_cast<uint8_t>(chunk_count - 1))
+                                        ? noc_unicast_scatter_command_header.chunk_size[i]
+                                        : static_cast<uint16_t>(size - src_offset);
+        const uint64_t flat = horizon_detail::resolve_destination_flat_address(
+            noc_unicast_scatter_command_header.noc_address[i], dst_dev_id, dst_mesh_id);
+        noc_async_write(src_addr + src_offset, flat, chunk_size);
+        src_offset += chunk_size;
+    }
 }
 
 template <bool SetRoute>
@@ -278,8 +328,38 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_with_state(
     uint32_t src_addr,
     CommandHeaderT noc_unicast_scatter_command_header,
     uint16_t packet_size_bytes) {
-    /* TODO: To be implemented (tracked in issue #61516) */
-    ASSERT(false);
+    [[maybe_unused]] auto* _ci = client_interface;
+    if constexpr (has_flag(UpdateMask, UnicastScatterWriteUpdateMask::DstAddrs)) {
+        packet_header->command_fields.unicast_scatter_write.chunk_count =
+            noc_unicast_scatter_command_header.chunk_count;
+        for (uint8_t i = 0; i < noc_unicast_scatter_command_header.chunk_count; ++i) {
+            packet_header->command_fields.unicast_scatter_write.noc_address[i] =
+                noc_unicast_scatter_command_header.noc_address[i];
+        }
+    }
+    if constexpr (has_flag(UpdateMask, UnicastScatterWriteUpdateMask::ChunkSizes)) {
+        for (uint8_t i = 0; i < static_cast<uint8_t>(noc_unicast_scatter_command_header.chunk_count - 1); ++i) {
+            packet_header->command_fields.unicast_scatter_write.chunk_size[i] =
+                noc_unicast_scatter_command_header.chunk_size[i];
+        }
+    }
+    if constexpr (has_flag(UpdateMask, UnicastScatterWriteUpdateMask::PayloadSize)) {
+        packet_header->payload_size_bytes = packet_size_bytes;
+    }
+    const uint8_t n = packet_header->command_fields.unicast_scatter_write.chunk_count;
+    const uint8_t dev_id = static_cast<uint8_t>(packet_header->dst_start_chip_id);
+    const uint16_t mesh_id = packet_header->dst_start_mesh_id;
+    const uint16_t total = packet_header->payload_size_bytes;
+    uint32_t src_offset = 0;
+    for (uint8_t i = 0; i < n; ++i) {
+        const uint16_t chunk_size = (i < static_cast<uint8_t>(n - 1))
+                                        ? packet_header->command_fields.unicast_scatter_write.chunk_size[i]
+                                        : static_cast<uint16_t>(total - src_offset);
+        const uint64_t flat = horizon_detail::resolve_destination_flat_address(
+            packet_header->command_fields.unicast_scatter_write.noc_address[i], dev_id, mesh_id);
+        noc_async_write(src_addr + src_offset, flat, chunk_size);
+        src_offset += chunk_size;
+    }
 }
 
 template <UnicastScatterWriteUpdateMask UpdateMask, typename CommandHeaderT>
@@ -300,8 +380,25 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_set_state(
     uint16_t dst_mesh_id,
     CommandHeaderT command_header,
     uint16_t packet_size_bytes) {
-    /* TODO: To be implemented (tracked in issue #61516) */
-    ASSERT(false);
+    // HybridMeshPacketHeader::dst_start_chip_id/dst_start_mesh_id repurposed as
+    // dst_dev_id/dst_mesh_id for Horizon crossbar routing.
+    packet_header->dst_start_chip_id = dst_dev_id;
+    packet_header->dst_start_mesh_id = dst_mesh_id;
+    packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_SCATTER_WRITE;
+    if constexpr (has_flag(UpdateMask, UnicastScatterWriteUpdateMask::DstAddrs)) {
+        packet_header->command_fields.unicast_scatter_write.chunk_count = command_header.chunk_count;
+        for (uint8_t i = 0; i < command_header.chunk_count; ++i) {
+            packet_header->command_fields.unicast_scatter_write.noc_address[i] = command_header.noc_address[i];
+        }
+    }
+    if constexpr (has_flag(UpdateMask, UnicastScatterWriteUpdateMask::ChunkSizes)) {
+        for (uint8_t i = 0; i < static_cast<uint8_t>(command_header.chunk_count - 1); ++i) {
+            packet_header->command_fields.unicast_scatter_write.chunk_size[i] = command_header.chunk_size[i];
+        }
+    }
+    if constexpr (has_flag(UpdateMask, UnicastScatterWriteUpdateMask::PayloadSize)) {
+        packet_header->payload_size_bytes = packet_size_bytes;
+    }
 }
 
 template <UnicastScatterWriteUpdateMask UpdateMask, typename CommandHeaderT>

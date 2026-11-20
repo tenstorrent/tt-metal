@@ -420,6 +420,10 @@ LoweredKernel LowerKernel(
         if (kernel_spec.is_data_movement_kernel()) {
             auto config = MakeQuasarDataMovementConfig(kernel_spec);
             config.compile_args = std::move(compile_args);
+            for (const auto& [name, value] :
+                 MetalContext::instance(context_id).get_control_plane().get_fabric_kernel_defines()) {
+                config.defines.emplace(name, value);
+            }
             auto processors = GetDMProcessorSet(DMProcessorMask{static_cast<uint8_t>(risc_mask & 0xFF)});
             kernel = std::make_shared<experimental::quasar::QuasarDataMovementKernel>(
                 context_id,
