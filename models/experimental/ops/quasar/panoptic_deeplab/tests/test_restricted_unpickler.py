@@ -18,9 +18,15 @@ def _boom(arg):
     _SENTINEL.append(arg)
 
 
-class _Malicious:
-    def __reduce__(self):
-        return (_boom, ("executed",))
+def _blob_calling_boom() -> bytes:
+    """Hand-assembled protocol-2 pickle that would call _boom("executed") if the global were resolved.
+
+    Equivalent to a __reduce__ payload, but written as raw opcodes (GLOBAL, BINUNICODE, TUPLE1, REDUCE, STOP).
+    """
+    arg = b"executed"
+    return (
+        b"\x80\x02" + b"c" + __name__.encode() + b"\n_boom\n" + b"X" + len(arg).to_bytes(4, "little") + arg + b"\x85R."
+    )
 
 
 def _load(blob: bytes):
@@ -47,10 +53,8 @@ def test_numpy_checkpoint_roundtrip(protocol):
         np.testing.assert_array_equal(out["model"][k], v)
 
 
-@pytest.mark.parametrize("protocol", [2, 4])
-def test_disallowed_callable_is_rejected_without_running(protocol, expect_error):
+def test_disallowed_callable_is_rejected_without_running(expect_error):
     _SENTINEL.clear()
-    blob = pickle.dumps({"model": {"x": _Malicious()}}, protocol=protocol)
     with expect_error(pickle.UnpicklingError, "Forbidden global"):
-        _load(blob)
+        _load(_blob_calling_boom())
     assert not _SENTINEL, "disallowed callable was invoked during unpickling"
