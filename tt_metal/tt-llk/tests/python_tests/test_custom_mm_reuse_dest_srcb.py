@@ -22,8 +22,8 @@ from helpers.format_config import DataFormat
 from helpers.golden_generators import MatmulGolden
 from helpers.llk_params import DestAccumulation, MathFidelity, format_dict
 from helpers.param_config import input_output_formats, parametrize
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     CUSTOM_MM_REUSE_CFG,
     NUM_FACES,
@@ -60,7 +60,16 @@ def _tile(t, dims, fmt, face_r_dim=16):
     dest_acc=[DestAccumulation.No],
     reuse_kt_nt=REUSE_KT_NT,
 )
-def test_custom_mm_reuse_dest_srcb(formats, dest_acc, reuse_kt_nt):
+def test_custom_mm_reuse_dest_srcb(
+    formats,
+    dest_acc,
+    reuse_kt_nt,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     REUSE_KT, REUSE_NT = reuse_kt_nt
     torch_format = format_dict[formats.output_format]
     in_fmt = formats.input_format
@@ -109,9 +118,9 @@ def test_custom_mm_reuse_dest_srcb(formats, dest_acc, reuse_kt_nt):
     B0_bytes = bytes(packer(_tile(B0.flatten(), dims=[kp, kt], fmt=in_fmt)))
     B1_bytes = bytes(packer(_tile(B1.flatten(), dims=[kt, nt], fmt=in_fmt)))
 
-    configuration = TestConfig(
-        "sources/custom_mm_reuse_dest_srcb_test.cpp",
-        formats,
+    test_config_kwargs = dict(
+        test_name="sources/custom_mm_reuse_dest_srcb_test.cpp",
+        formats=formats,
         templates=[
             CUSTOM_MM_REUSE_CFG(
                 in0_tile_r_dim=IN0_TILE_R_DIM,
@@ -138,15 +147,33 @@ def test_custom_mm_reuse_dest_srcb(formats, dest_acc, reuse_kt_nt):
         ),
         dest_acc=dest_acc,
     )
-
-    res_from_L1 = configuration.run().result
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=test_config_kwargs,
+    )
+    if is_perf:
+        return
 
     # Each output tile is packed as two 8-row faces (cols 0..15, then cols 16..31);
     # the rest of the tile is undefined. Reorder the defined rows to [m, nt].
-    per_tile = res_tensor.reshape(REUSE_NT, -1)[:, : 2 * m * 16]
-    device = per_tile.reshape(REUSE_NT, 2, m, 16).permute(2, 0, 1, 3).reshape(m, nt)
+    def defined_rows(result):
+        result_tensor = torch.tensor(result, dtype=torch_format)
+        per_tile = result_tensor.reshape(REUSE_NT, -1)[:, : 2 * m * 16]
+        return per_tile.reshape(REUSE_NT, 2, m, 16).permute(2, 0, 1, 3).reshape(m, nt)
+
+    device = defined_rows(outcome.result)
+
+    # This largest case is a deterministic canary for accidental FPU stochastic
+    # rounding. A ULP budget alone lets most such perturbed variants pass.
+    if reuse_kt_nt == (8, 4):
+        repeated = execute_llk(is_perf=False, test_config_kwargs=test_config_kwargs)
+        assert torch.equal(
+            device, defined_rows(repeated.result)
+        ), "defined lanes changed across identical runs"
 
     assert passed_test(
-        golden, device, formats.output_format
+        golden, device, formats.output_format, max_ulp=4
     ), "Assert against golden failed (defined lanes)"

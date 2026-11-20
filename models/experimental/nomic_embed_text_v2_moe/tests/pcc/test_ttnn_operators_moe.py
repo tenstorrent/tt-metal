@@ -27,7 +27,7 @@ from models.common.utility_functions import run_for_blackhole
 from models.experimental.nomic_embed_text_v2_moe.tt.common import to_device
 from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
 from models.experimental.nomic_embed_text_v2_moe.tt.router import PADDING_LOGIT, SCORED_COLUMNS, TtNomicRouter
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 pytestmark = [run_for_blackhole(), pytest.mark.use_module_device]
 
