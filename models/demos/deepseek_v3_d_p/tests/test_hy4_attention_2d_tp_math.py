@@ -24,7 +24,7 @@ import torch
 
 from models.demos.deepseek_v3_d_p.reference.hy4_attention import (
     Hy4AttnDims,
-    apply_rope_half_split,
+    apply_rope_interleaved,
     hy4_attention,
     mla_latents,
     rope_cos_sin,
@@ -86,8 +86,8 @@ def _hf_weights(d: Hy4AttnDims, hidden: int, seed: int = 0) -> dict:
 
 
 def _ttmla_names(w: dict) -> dict:
-    """HF names -> ttMLA's canonical names (``hy4_checkpoint.hy4_mla_weights`` minus the RoPE frame reorder, which is a
-    row permutation of the same tensors; the emulation ropes half-split like the reference)."""
+    """HF names -> ttMLA's canonical names (as ``hy4_checkpoint.hy4_mla_weights`` maps them; the MLA projections need
+    no RoPE reorder: the checkpoint pairs RoPE dims interleaved, as the emulation, the reference and ttMLA rope)."""
     out = {k: v for k, v in w.items() if k not in ("linear_gate.weight", "learnable_sink_param")}
     out["g_proj.weight"] = w["linear_gate.weight"]
     out["attn_sink.weight"] = w["learnable_sink_param"]
@@ -122,7 +122,7 @@ def _emulate_2d(hn: torch.Tensor, w_hf: dict, topk: torch.Tensor, d: Hy4AttnDims
     kv_ln = host["kv_a_layernorm"][0].reshape(-1).to(F32)
     latent = kv[:, :L] * torch.rsqrt(kv[:, :L].square().mean(-1, keepdim=True) + d.low_rank_norm_eps) * kv_ln
     cos, sin = rope_cos_sin(torch.arange(S), R, d.rope_theta)
-    k_pe = apply_rope_half_split(kv[:, L:], cos, sin)
+    k_pe = apply_rope_interleaved(kv[:, L:], cos, sin)
     # The sink is replicated, stored in core head order as sparse_sdpa's bf16 sink / scale (rounding covered by the
     # #65921 convention test); the emulation uses the model's fp32 logits of each chip's heads.
     order = ttMLA2DTP.core_head_order(H, sp, tp)
@@ -138,7 +138,7 @@ def _emulate_2d(hn: torch.Tensor, w_hf: dict, topk: torch.Tensor, d: Hy4AttnDims
         heads = ttMLA2DTP.heads_of_chip(H, sp, tp, s, t)
         q = q_chip[s, t]
         q_lat = torch.einsum("nhd,hdc->nhc", q[..., :N], W("wkv_b1", s, t)[0])
-        q_pe = apply_rope_half_split(q[..., N:], cos, sin)
+        q_pe = apply_rope_interleaved(q[..., N:], cos, sin)
         sc = torch.einsum("nhc,nkc->nhk", q_lat, latent[safe]) + torch.einsum("nhr,nkr->nhk", q_pe, k_pe[safe])
         sc = (sc * d.softmax_scale).masked_fill(~valid.unsqueeze(1), float("-inf"))
         probs = sink_softmax(sc, sink[heads])

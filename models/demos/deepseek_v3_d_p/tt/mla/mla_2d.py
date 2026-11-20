@@ -71,7 +71,9 @@ Cache files: ``layer_{i}.mla2d_{layout}.*`` with the layout in the name (``cache
 e.g. ``mla2d_8x4_sp8ax0_tp4ax1`` on SC1) and a stamp ``layer_{i}.mla2d_{layout}.layout.stamp`` next to them holding the
 layout descriptor (``utils/sharded_cache.py``: module, ``CACHE_FORMAT``, mesh, axes, dtypes). Shards without a stamp,
 or with a stamp for another layout / format, refuse to load. ``CACHE_FORMAT`` is bumped whenever the shards change
-without an axis moving (format 2: q_b's K over TP; the first split cached as ``mla2d`` / ``mla2d_v2`` and never loads).
+without an axis moving (format 2: q_b's K over TP; the first split cached as ``mla2d`` / ``mla2d_v2`` and never loads;
+format 3: the RoPE pairing the weights were read in, ``ROPE_PAIRING``, is in the stamp. Hy4's reader used to permute
+the q_b / kv_a rope rows half-split -> interleaved; the checkpoint is interleaved, so those shards must not load).
 """
 
 from __future__ import annotations
@@ -118,7 +120,10 @@ def mla_class(config):
 
 class ttMLA2DTP(ttMLA):
     CACHE_PREFIX = "mla2d"  # + the layout tag (cache_name); never ttMLA's TP-only shards
-    CACHE_FORMAT = 2  # bump when the shards change without an axis moving (module docstring)
+    CACHE_FORMAT = 3  # bump when the shards change without an axis moving (module docstring)
+    # RoPE pairing of the q_b / kv_a rope rows as cached: the checkpoint's own interleaved (2i, 2i+1) pairs, which the
+    # device ropes. Recorded in the layout stamp so shards read under another pairing refuse to load.
+    ROPE_PAIRING = "interleaved"
 
     # ------------------------------------------------------------------------------------------- host math
     @staticmethod
@@ -233,7 +238,12 @@ class ttMLA2DTP(ttMLA):
             w: "BFLOAT16" if w in ttMLA2DTP.VECTOR_WEIGHTS else "BFLOAT8_B" for w in ttMLA.weight_names(True, True)
         }
         descriptor = layout_descriptor(
-            "ttMLA2DTP", ttMLA2DTP.CACHE_FORMAT, mesh_shape, {"sp": sp_axis, "tp": tp_axis}, dtypes
+            "ttMLA2DTP",
+            ttMLA2DTP.CACHE_FORMAT,
+            mesh_shape,
+            {"sp": sp_axis, "tp": tp_axis},
+            dtypes,
+            extra={"rope_pairing": ttMLA2DTP.ROPE_PAIRING},
         )
         return LayoutCacheGuard(cache_path, name, f"{name}.*.tensorbin", descriptor)
 

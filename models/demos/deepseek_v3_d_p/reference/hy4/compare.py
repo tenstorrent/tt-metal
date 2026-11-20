@@ -31,6 +31,7 @@ from pathlib import Path
 import torch
 
 from models.demos.deepseek_v3_d_p.reference.hy4.golden import (
+    golden_pe_rope,
     index_k_device_to_hf,
     kvpe_half_pccs,
     load_rows,
@@ -54,7 +55,9 @@ def _rope_dim(meta) -> int:
 
 def _index_k_hf(trace, meta, layer, n):
     k = load_rows(trace, f"dsa/indexer_k_layer_{layer}", f"indexer_k_layer_{layer}", 0, n).float()
-    return index_k_device_to_hf(k, _rope_dim(meta)) if meta["frames"]["index_k"]["frame"] == "device" else k
+    if meta["frames"]["index_k"]["frame"] != "device":
+        return k
+    return index_k_device_to_hf(k, _rope_dim(meta), golden_pe_rope(meta))
 
 
 def compare_traces(golden, other, max_rows: int | None = None) -> list[dict]:
@@ -62,6 +65,10 @@ def compare_traces(golden, other, max_rows: int | None = None) -> list[dict]:
     n = min(gm["n_prompt_tokens"], om["n_prompt_tokens"], max_rows or 1 << 62)
     if gm["token_ids"][:n] != om["token_ids"][:n]:
         raise SystemExit(f"{golden} and {other} were captured from different prompts")
+    if golden_pe_rope(gm) != golden_pe_rope(om):
+        raise SystemExit(
+            f"{golden} ({golden_pe_rope(gm)}) and {other} ({golden_pe_rope(om)}) were roped with different pairings"
+        )
     kv_lora = _kv_lora(gm)
     rows = []
     layers = sorted(set(gm.get("layers_written", [])) & set(om.get("layers_written", [])))
@@ -69,7 +76,7 @@ def compare_traces(golden, other, max_rows: int | None = None) -> list[dict]:
         key = f"kv_post_transform_layer_{layer}"
         g = load_rows(golden, f"kv_cache/layer_{layer}", key, 0, n).float()
         o = load_rows(other, f"kv_cache/layer_{layer}", key, 0, n).float()
-        nope, pe = kvpe_half_pccs(g, o, kv_lora, other_pe_interleaved=False)
+        nope, pe = kvpe_half_pccs(g, o, kv_lora, rebase_golden_pe=False)
         row = {"layer": layer, "kvpe_nope": nope, "kvpe_pe": pe}
         if layer in gm["full_indexer_layers"] and layer in om["full_indexer_layers"]:
             if (Path(golden) / "dsa" / f"indexer_k_layer_{layer}").is_dir() and (
@@ -92,9 +99,11 @@ def compare_traces(golden, other, max_rows: int | None = None) -> list[dict]:
 
 def compare_dump(golden, dump_dir, slot: int = 0, golden_offset: int = 0) -> list[dict]:
     """Producer dumps (``device_kv_layer{L}_slot{S}.pt``): the compare window's rows, device frame
-    (interleaved pe). ``golden_offset`` is the golden row the window starts at (PREFILL_PCC_GOLDEN_OFFSET)."""
+    (interleaved pe). ``golden_offset`` is the golden row the window starts at (PREFILL_PCC_GOLDEN_OFFSET). A current
+    golden is interleaved too and compares directly; one written before the interleaved fix is re-based."""
     gm = read_metadata(golden)
     kv_lora = _kv_lora(gm)
+    rebase = golden_pe_rope(gm) == "half_split"
     rows = []
     for f in sorted(
         Path(dump_dir).glob(f"device_kv_layer*_slot{slot}.pt"), key=lambda p: int(re.findall(r"\d+", p.name)[0])
@@ -104,7 +113,7 @@ def compare_dump(golden, dump_dir, slot: int = 0, golden_offset: int = 0) -> lis
         g = load_rows(
             golden, f"kv_cache/layer_{layer}", f"kv_post_transform_layer_{layer}", golden_offset, dev.shape[0]
         )
-        nope, pe = kvpe_half_pccs(g.float(), dev, kv_lora, other_pe_interleaved=True)
+        nope, pe = kvpe_half_pccs(g.float(), dev, kv_lora, rebase_golden_pe=rebase)
         rows.append({"layer": layer, "kvpe_nope": nope, "kvpe_pe": pe, "rows": dev.shape[0]})
     return rows
 

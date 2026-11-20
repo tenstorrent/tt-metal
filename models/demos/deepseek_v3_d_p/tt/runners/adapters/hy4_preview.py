@@ -20,6 +20,9 @@ from its explicit ``indexer_types`` by ``full_indexer_rank``. What it changes:
     stays as the explicitly selected DEV / NUMERICS layout (``PREFILL_HY4_LAYOUT=glm_prefill_sp8_tp4``) on the same
     8x4 mesh. See ``tt/hy4/layout.py``. The weight cache is keyed by mesh and layout.
   * deltas the stack does not implement yet are refused unless a bring-up override is set (below).
+  * RoPE: the checkpoint pairs RoPE dims interleaved, as ttMLA / TtIndexer rope; the reader only moves the indexer's
+    rope block to the front (``hy4_checkpoint.indexer_to_device_frame``). Goldens are interleaved too, so the KVPE pe
+    half compares directly (``kv_pe_interleave = False``).
   * KV stripe: the caches are allocated as GLM-5.3's, but on a 32-chip mesh the prefill chunk must write
     128-token blocks (chunk 4096), the layout decode reads (``tt/hy4/kv_cache.py``, #65886).
 """
@@ -89,6 +92,9 @@ class Hy4Adapter(GLM53Adapter):
     # GLM-5.3's thresholds until the sibling issues measure Hy4's (#65921 MLA, #65923 MoE).
     mla_pcc_threshold = 0.995
     moe_pcc_threshold = 0.971
+    # The golden's k_pe is already in the device's interleaved RoPE pairing (the checkpoint's own; reference/hy4), so
+    # the KVPE pe half compares directly: no half-split -> interleaved re-base (cache_half_pccs(pe_interleave=False)).
+    kv_pe_interleave = False
 
     def _checkpoint_dir(self) -> str:
         return os.environ.get("PREFILL_HF_MODEL") or os.environ.get(self.env_var, "") or self.hf_model_default

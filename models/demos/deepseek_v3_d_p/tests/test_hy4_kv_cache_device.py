@@ -49,10 +49,9 @@ from models.demos.deepseek_v3_d_p.tt.hy4.kv_cache import (
     stripe_key_axis,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import normalized_hadamard_matrix
-from models.demos.deepseek_v3_d_p.tt.runners.hy4_checkpoint import half_split_to_interleaved_perm
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 
-GOLDEN = Path(os.environ.get("PREFILL_TRACE_DIR", "/mnt/tt-data/dwadhwani/hy4-golden/hy4-bf16-longbench-4k-v2"))
+GOLDEN = Path(os.environ.get("PREFILL_TRACE_DIR", "/mnt/tt-data/dwadhwani/hy4-golden/hy4-bf16-longbench-4k-ropeint"))
 S = 4096
 PCC_FLOOR = 0.99
 KV_LORA, ROPE, INDEX_DIM = 512, 64, 128
@@ -84,9 +83,18 @@ def _rows(group: str, key: str, n: int = S) -> torch.Tensor:
 
 
 def _golden_layer0():
-    """Layer 0 in the device frames: KVPE ``[latent 512 | rope 64 interleaved]``, index keys ``[rope | nope]``."""
+    """Layer 0 in the device frames: KVPE ``[latent 512 | rope 64 interleaved]``, index keys ``[rope | nope]``. The
+    golden is already in them (RoPE paired interleaved, the checkpoint's pairing); a trace written before that fix
+    (``pe_rope: half_split``) has its pe re-based."""
+    from models.demos.deepseek_v3_d_p.reference.hy4.golden import (
+        golden_pe_rope,
+        half_split_to_interleaved_perm,
+        read_metadata,
+    )
+
     kv = _rows("kv_cache/layer_0", "kv_post_transform_layer_0")
-    kv = torch.cat([kv[:, :KV_LORA], kv[:, KV_LORA:][:, half_split_to_interleaved_perm(ROPE)]], dim=-1)
+    if golden_pe_rope(read_metadata(GOLDEN)) == "half_split":
+        kv = torch.cat([kv[:, :KV_LORA], kv[:, KV_LORA:][:, half_split_to_interleaved_perm(ROPE)]], dim=-1)
     ik = _rows("dsa/indexer_k_layer_0", "indexer_k_layer_0")
     return kv, ik
 

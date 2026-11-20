@@ -45,7 +45,7 @@ from models.demos.deepseek_v3_d_p.tt.hy4 import ihc as hy4_ihc
 
 chunked = smoke.chunked
 TRUNK = 5  # the MTP layer sits at index 5
-TRACE = Path(os.environ.get("HY4_MTP_TRACE", "/mnt/tt-data/dwadhwani/hy4-golden/hy4-4k-v3-mtp-L5"))
+TRACE = Path(os.environ.get("HY4_MTP_TRACE", "/mnt/tt-data/dwadhwani/hy4-golden/hy4-4k-ropeint-mtp-L5"))
 MTP_CACHE_ROOT = Path(
     os.environ.get("HY4_MTP_TTNN_CACHE", "/mnt/tt-data/dwadhwani/Hy4-Preview-Cache/hy4_mtp_ttnn_cache")
 )
@@ -133,6 +133,8 @@ def test_hy4_prefill_ihc_mtp(variant, config_only, mesh_device, device_params, n
 
     # --- weights: the trunk's missing categories from the checkpoint (the runner's rebuild), the MTP's own cache ---
     cache = smoke._mesh_cache_dir(mesh_device.get_num_devices())
+    stale = hc.stale_mla_cache_layers(cache, range(TRUNK))
+    assert not stale, f"Hy4 MLA/indexer cache at {cache} for layers {stale} predates format {hc.HY4_MLA_CACHE_FORMAT}"
     missing = wc.missing_trunk_categories(
         cache,
         num_layers=TRUNK,
@@ -156,7 +158,7 @@ def test_hy4_prefill_ihc_mtp(variant, config_only, mesh_device, device_params, n
         else {}
     )
     mtp_cache = MTP_CACHE_ROOT / f"hy4_preview_{'bh' if is_blackhole() else 'wh'}_{ttnn.get_num_devices()}dev"
-    mtp_cache = mtp_cache / f"{sp}x{tp}_L{TRUNK}"
+    mtp_cache = mtp_cache / f"{sp}x{tp}_L{TRUNK}_mlafmt{hc.HY4_MLA_CACHE_FORMAT}"  # the RoPE frame of its attention
     mtp_cache.mkdir(parents=True, exist_ok=True)
     init_checker(mtp_cache)
     mtp_cached = TtMTPPredictor.check_cache_complete(
@@ -309,6 +311,7 @@ def test_hy4_prefill_ihc_mtp(variant, config_only, mesh_device, device_params, n
     chunked._record_kv_cache_pcc(
         TRACE, layout, kvpe_cache, mesh_device, sp, TRUNK + K, SEQ_CACHE, S, config.kv_lora_rank,
         tp_shard_kv=True, assert_threshold=None, sp_axis=sp_axis, chunk_size=S,
+        pe_interleave=variant.kv_pe_interleave,  # the golden's pe is already interleaved
     )  # fmt: skip
     chunked._record_indexer_k_cache_pcc(
         TRACE, layout, index_kv_cache, mesh_device, sp, TRUNK + K, SEQ_CACHE, S, config,

@@ -23,7 +23,7 @@ import torch
 
 from models.demos.deepseek_v3_d_p.reference.hy4_attention import (
     Hy4AttnDims,
-    apply_rope_half_split,
+    apply_rope_interleaved,
     causal_topk_all,
     hy4_attention,
     mla_latents,
@@ -79,7 +79,7 @@ def _dense_eager(hn, w, topk, d: Hy4AttnDims, use_sink=True, use_gate=True):
     cos, sin = rope_cos_sin(torch.arange(S), R, d.rope_theta)
     q_resid, kvpe = mla_latents(hn, w, d, cos, sin)
     q = (q_resid @ w["q_b_proj.weight"].T).view(S, H, N + R)
-    q = torch.cat([q[..., :N], apply_rope_half_split(q[..., N:], cos, sin)], dim=-1).transpose(0, 1)  # [H,S,N+R]
+    q = torch.cat([q[..., :N], apply_rope_interleaved(q[..., N:], cos, sin)], dim=-1).transpose(0, 1)  # [H,S,N+R]
     kv = (kvpe[:, :L] @ w["kv_b_proj.weight"].T).view(S, H, N + V)
     k = torch.cat([kv[..., :N], kvpe[:, L:].unsqueeze(1).expand(S, H, R)], dim=-1).transpose(0, 1)
     v = kv[..., N:].transpose(0, 1)  # [H, S, V]

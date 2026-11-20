@@ -15,12 +15,18 @@ eager DSA attention materializes a dense ``[heads, S, S]`` score tensor (275 GB 
 
 All math runs in fp32 on bf16 (or dequantized MXFP8) weights. The HF-equivalence test
 (``tests/hy4/test_hy4_golden.py``) checks this against ``HYV4ForCausalLM`` (transformers >= 5.23)
-on a random tiny checkpoint, layer by layer.
+on a random tiny checkpoint, layer by layer, with ``rope_pairing="half_split"`` (HF's ``rotate_half``).
+
+RoPE pairing: the checkpoint pairs RoPE dims INTERLEAVED, ``(2i, 2i + 1)`` at frequency ``i``, for both MLA and the
+indexer (weight row-norm pairing, a teacher-forced probe and vLLM's hy_v4 agree; HF ``modeling_hy_v4.py``'s
+``rotate_half`` is wrong for this checkpoint). That is the default, ``rope_pairing="interleaved"``.
 
 Per layer, the sink receives exactly what the device writes for that layer:
-  * ``kvpe``    ``[S, kv_lora + rope]``  = ``kv_a_layernorm(latent) | k_pe`` with k_pe roped HALF-SPLIT (HF frame)
+  * ``kvpe``    ``[S, kv_lora + rope]``  = ``kv_a_layernorm(latent) | k_pe`` with k_pe roped interleaved (the device's
+                frame too)
   * ``index_k`` ``[S, index_head_dim]`` on full-indexer layers = ``LayerNorm(wk(x))`` with RoPE on the
-                LAST ``rope`` dims, half-split (HF frame; ``golden.index_k_hf_to_device`` re-frames it)
+                LAST ``rope`` dims, interleaved (checkpoint frame; ``golden.index_k_hf_to_device`` moves the rope
+                block to the front, the device frame)
   * ``topk``    ``[S, index_topk]`` int32 on full-indexer layers, descending score, ``-1`` = no valid key
 """
 
@@ -54,13 +60,26 @@ def rope_cos_sin(positions: torch.Tensor, dim: int, theta: float, fp64: bool = T
     return ang.cos().to(F32), ang.sin().to(F32)
 
 
+def apply_rope_interleaved(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+    """Interleaved RoPE on the last dim of ``x`` ``[N, ..., d]``: pairs ``(2i, 2i + 1)`` rotated by frequency ``i``
+    (Hy4's checkpoint pairing); cos/sin ``[N, d/2]``."""
+    shape = (cos.shape[0],) + (1,) * (x.dim() - 2) + (cos.shape[1],)
+    c, s = cos.view(shape), sin.view(shape)
+    a, b = x[..., 0::2], x[..., 1::2]
+    return torch.stack((a * c - b * s, b * c + a * s), dim=-1).flatten(-2)
+
+
 def apply_rope_half_split(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
-    """HF ``rotate_half`` RoPE on the last dim of ``x`` ``[N, ..., d]``; cos/sin ``[N, d/2]``."""
+    """HF ``rotate_half`` RoPE (pairs ``(i, i + d/2)``) on the last dim of ``x``; cos/sin ``[N, d/2]``. Not Hy4's
+    pairing; ``rope_pairing="half_split"`` uses it to compare against HF's code."""
     shape = (cos.shape[0],) + (1,) * (x.dim() - 2) + (cos.shape[1],)
     c, s = cos.view(shape), sin.view(shape)
     h = x.shape[-1] // 2
     a, b = x[..., :h], x[..., h:]
     return torch.cat((a * c - b * s, b * c + a * s), dim=-1)
+
+
+ROPE_PAIRINGS = {"interleaved": apply_rope_interleaved, "half_split": apply_rope_half_split}
 
 
 def hyper_connection(x4: torch.Tensor, fn, base, scale, cfg: Hy4RefConfig):
@@ -139,6 +158,11 @@ class Hy4PrefillReference:
     next-token logits when the full stack ran.
     """
 
+    rope_pairing = "interleaved"  # Hy4's checkpoint pairing; __init__ takes "half_split" to compare with HF's code
+
+    def _rope(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+        return ROPE_PAIRINGS[self.rope_pairing](x, cos, sin)
+
     def __init__(
         self,
         ckpt,
@@ -149,7 +173,11 @@ class Hy4PrefillReference:
         index_budget_bytes: int = 2 << 30,
         rope_fp64: bool = True,
         prefetch: bool = True,
+        rope_pairing: str = "interleaved",
     ):
+        if rope_pairing not in ROPE_PAIRINGS:
+            raise ValueError(f"rope_pairing {rope_pairing!r}: expected one of {sorted(ROPE_PAIRINGS)}")
+        self.rope_pairing = rope_pairing
         self.ckpt = ckpt
         self.cfg = cfg or ckpt.config
         self.attn_block = attn_block
@@ -179,7 +207,7 @@ class Hy4PrefillReference:
             q_resid[a:b] = rms_norm(hn[a:b] @ w["q_a_proj"].T, w["q_a_layernorm"], cfg.low_rank_norm_eps)
             ckv = hn[a:b] @ w["kv_a_proj_with_mqa"].T
             kvpe[a:b, :L] = rms_norm(ckv[:, :L], w["kv_a_layernorm"], cfg.low_rank_norm_eps)
-            kvpe[a:b, L:] = apply_rope_half_split(ckv[:, L:], cos[a:b], sin[a:b])
+            kvpe[a:b, L:] = self._rope(ckv[:, L:], cos[a:b], sin[a:b])
             if full:
                 k = F.layer_norm(
                     hn[a:b] @ w["indexer.wk"].T,
@@ -190,7 +218,7 @@ class Hy4PrefillReference:
                 )
                 nope = cfg.index_head_dim - R  # Hy4 ropes the LAST R dims of the index head
                 index_k[a:b, :nope] = k[:, :nope]
-                index_k[a:b, nope:] = apply_rope_half_split(k[:, nope:], cos[a:b], sin[a:b])
+                index_k[a:b, nope:] = self._rope(k[:, nope:], cos[a:b], sin[a:b])
                 index_w[a:b] = (
                     (hn[a:b] @ w["indexer.weights_proj"].T) * cfg.index_n_heads**-0.5 * cfg.index_head_dim**-0.5
                 )
@@ -207,7 +235,7 @@ class Hy4PrefillReference:
         for a, b in _blocks(S, self.attn_block):
             n = b - a
             q = (q_resid[a:b] @ w["q_b_proj"].T).view(n, H, cfg.qk_head_dim)
-            q_nope, q_pe = q[..., : cfg.qk_nope_head_dim], apply_rope_half_split(
+            q_nope, q_pe = q[..., : cfg.qk_nope_head_dim], self._rope(
                 q[..., cfg.qk_nope_head_dim :], cos[a:b], sin[a:b]
             )
             q_lat = torch.einsum("nhd,hdc->nhc", q_nope, w_uk)
@@ -240,7 +268,7 @@ class Hy4PrefillReference:
         for a, b in _blocks(S, block):
             n = b - a
             q = (q_resid[a:b] @ w["indexer.wq_b"].T).view(n, NH, DI)
-            q = torch.cat([q[..., :nope], apply_rope_half_split(q[..., nope:], cos[a:b], sin[a:b])], dim=-1)
+            q = torch.cat([q[..., :nope], self._rope(q[..., nope:], cos[a:b], sin[a:b])], dim=-1)
             # Causal: queries in [a, b) see keys [0, b); later keys are masked per row below.
             s = torch.relu(torch.einsum("nhd,td->nht", q, index_k[:b]))
             scores = torch.einsum("nh,nht->nt", index_w[a:b], s)

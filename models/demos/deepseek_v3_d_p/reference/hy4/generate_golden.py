@@ -221,18 +221,22 @@ def main(argv=None) -> int:
         "prompt_source": source,
         "bos_prepended": bos is not None,
         "generator": "models.demos.deepseek_v3_d_p.reference.hy4.generate_golden",
-        "reference": "Hy4PrefillReference fp32 (HF hy_v4 semantics; rope angles fp64)",
+        "reference": "Hy4PrefillReference fp32 (HF hy_v4 semantics, RoPE paired interleaved; rope angles fp64)",
         "norm_eps": {"rms_norm_eps": cfg.rms_norm_eps, "low_rank_norm_eps": cfg.low_rank_norm_eps},
         "host": socket.gethostname(),
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "prefix_of_longest": len(lens) > 1,
     }
+    rope_pairing = "interleaved"  # Hy4's checkpoint pairing (reference/hy4/model.py)
     writers = {}
     for n in lens:
         d = out_dir(n)
         prev = None
         if args.resume and (d / "metadata.json").exists():
             prev = json.loads((d / "metadata.json").read_text())
+            prev_rope = prev.get("frames", {}).get("kvpe", {}).get("pe_rope", "half_split")
+            if prev_rope != rope_pairing:
+                raise SystemExit(f"--resume: {d} was written with {prev_rope} RoPE, this reference is {rope_pairing}")
         w = GoldenTraceWriter(
             d,
             cfg.truncated(n_layers) if n_layers < cfg.num_hidden_layers else cfg,
@@ -242,6 +246,7 @@ def main(argv=None) -> int:
             index_k_frame=args.index_k_frame,
             save_topk=not args.no_topk,
             extra_metadata=provenance,
+            rope_pairing=rope_pairing,
         )
         if prev is not None:
             w.meta["layers_written"] = list(prev.get("layers_written", []))
@@ -262,7 +267,9 @@ def main(argv=None) -> int:
             torch.save({"layer": state["layer"], "streams": state["streams"], "topk": state["topk"]}, tmp)
             tmp.replace(state_path)
 
-    ref = Hy4PrefillReference(ckpt, cfg, attn_block=args.attn_block, proj_block=args.proj_block)
+    ref = Hy4PrefillReference(
+        ckpt, cfg, attn_block=args.attn_block, proj_block=args.proj_block, rope_pairing=rope_pairing
+    )
     t0 = time.time()
     ref.run(
         torch.tensor(ids),

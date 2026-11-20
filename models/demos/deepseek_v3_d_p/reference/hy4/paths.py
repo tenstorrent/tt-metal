@@ -32,14 +32,15 @@ HY4_FP8_MODEL_CANDIDATES = (
 # ---- golden traces --------------------------------------------------------------------------------
 HY4_GOLDEN_ROOT_ENV = "HY4_GOLDEN_ROOT"
 HY4_GOLDEN_ROOT_DEFAULT = "/mnt/weka/model-cache/scratch/tencent/Hy4-preview-Cache/golden_traces"
-# One trace per prompt length; names encode checkpoint precision, prompt source and length.
+# One trace per prompt length; names encode checkpoint precision, prompt source and length. "-ropeint": RoPE paired
+# interleaved (the checkpoint's pairing); traces under the names without it were roped half-split and are stale.
 HY4_GOLDEN_TRACE_NAMES = {
-    ("bf16", 4096): "hy4-bf16-longbench-4k",
-    ("bf16", 32768): "hy4-bf16-longbench-32k",
-    ("bf16", 131072): "hy4-bf16-longbench-128k",
-    ("mxfp8", 4096): "hy4-mxfp8-longbench-4k",
-    ("mxfp8", 32768): "hy4-mxfp8-longbench-32k",
-    ("mxfp8", 131072): "hy4-mxfp8-longbench-128k",
+    ("bf16", 4096): "hy4-bf16-longbench-4k-ropeint",
+    ("bf16", 32768): "hy4-bf16-longbench-32k-ropeint",
+    ("bf16", 131072): "hy4-bf16-longbench-128k-ropeint",
+    ("mxfp8", 4096): "hy4-mxfp8-longbench-4k-ropeint",
+    ("mxfp8", 32768): "hy4-mxfp8-longbench-32k-ropeint",
+    ("mxfp8", 131072): "hy4-mxfp8-longbench-128k-ropeint",
 }
 
 

@@ -92,7 +92,8 @@ class Hy4Config(GLM53Config):
     # explicit pattern above is authoritative and test_hy4_config checks the two agree.
     INDEX_TOPK_FREQ = 4
     INDEX_SKIP_TOPK_OFFSET = 2
-    # GLM-5.3's indexer RoPE is interleaved; Hy4's is unconfirmed. #65922 checks it against HF hy_v4.
+    # Hy4's indexer RoPE is interleaved, (2i, 2i+1) pairs, like GLM-5.3's: confirmed on the checkpoint (weight row-norm
+    # pairing, a teacher-forced probe, vLLM hy_v4). HF modeling_hy_v4.py's rotate_half (half-split) is wrong for it.
     INDEX_ROPE_INTERLEAVE = True
 
     # --- Attention deltas ----------------------------------------------------------------------

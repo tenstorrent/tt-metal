@@ -45,7 +45,9 @@ class TtHy4Runtime(TtPrefillRuntime):
 
     _load_trunk_state_dict = staticmethod(load_hy4_trunk_state_dict)
     _load_mtp_state_dict = staticmethod(load_hy4_mtp_state_dict)
-    _mtp_cache_dirname = "hy4_mtp_ttnn_cache"
+    # The MTP layer's attention weights come through hy4_mla_weights too; the format in the name keeps an MTP cache
+    # built under another RoPE frame (format 1: half-split reorder) from loading.
+    _mtp_cache_dirname = f"hy4_mtp_ttnn_cache_mlafmt{hc.HY4_MLA_CACHE_FORMAT}"
 
     def _mtp_config(self, num_levels: int):
         # MTPConfig.from_pretrained checks for DeepSeek's model.layers.{N}.eh_proj, which Hy4 does not have; the
@@ -63,7 +65,7 @@ class TtHy4Runtime(TtPrefillRuntime):
                 if not self._can_build_missing_cache():
                     raise RuntimeError(
                         f"Hy4 MLA/indexer cache at {cache} for layers {stale} predates format "
-                        f"{hc.HY4_MLA_CACHE_FORMAT} (RoPE frame reorder) and there is no checkpoint at "
+                        f"{hc.HY4_MLA_CACHE_FORMAT} (RoPE pairing {hc.HY4_ROPE_PAIRING}) and there is no checkpoint at "
                         f"{self.config.hf_model_path} to rebuild it from"
                     )
                 n = hc.purge_mla_cache(cache, stale)

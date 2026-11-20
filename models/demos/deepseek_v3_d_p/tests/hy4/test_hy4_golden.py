@@ -121,6 +121,8 @@ def test_trace_metadata(tiny_trace, tiny_ckpt, token_ids):
     assert meta["complete"] and meta["token_ids"] == token_ids.tolist()
     assert meta["full_indexer_layers"] == tiny_ckpt.config.full_indexer_layers == [0, 1, 5]
     assert meta["frames"]["index_k"]["frame"] == "device"
+    # Hy4's checkpoint pairs RoPE interleaved; the golden records it so a stale (half-split) trace is recognisable.
+    assert meta["frames"]["kvpe"]["pe_rope"] == "interleaved" and meta["frames"]["index_k"]["rope"] == "interleaved"
 
 
 def test_producer_loaders_read_the_trace(tiny_trace, tiny_ckpt, tiny_capture, token_ids):
@@ -147,17 +149,23 @@ def test_producer_loaders_read_the_trace(tiny_trace, tiny_ckpt, tiny_capture, to
 
 def test_producer_compare_path_scores_a_device_frame_cache_at_one(tiny_trace, tiny_ckpt, tiny_capture):
     """Feed the producer's own comparison a cache laid out the way the device writes it: KVPE with an
-    interleaved pe half; index keys in the device frame, Hadamard-rotated (the producer de-rotates)."""
+    interleaved pe half (the reference's own: Hy4's checkpoint pairing, so no re-base,
+    ``Hy4Adapter.kv_pe_interleave = False``); index keys in the device frame, Hadamard-rotated (the producer
+    de-rotates)."""
     from models.demos.deepseek_v3_d_p.tt.mla.indexer import normalized_hadamard_matrix
+    from models.demos.deepseek_v3_d_p.tt.runners.adapters.hy4_preview import Hy4Adapter
     from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import _load_golden_index_k, _load_golden_kv_post
-    from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs, interleave_pe
+    from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs
     from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
     cfg = tiny_ckpt.config
     L = cfg.kv_lora_rank
+    assert Hy4Adapter.kv_pe_interleave is False
     for layer, c in tiny_capture.layers.items():
-        device_kvpe = torch.cat([c["kvpe"][:, :L], interleave_pe(c["kvpe"][:, L:])], dim=-1)
-        nope, pe = cache_half_pccs(_load_golden_kv_post(tiny_trace, layer, SEQ), device_kvpe, L, pe_interleave=True)
+        device_kvpe = c["kvpe"]
+        nope, pe = cache_half_pccs(
+            _load_golden_kv_post(tiny_trace, layer, SEQ), device_kvpe, L, pe_interleave=Hy4Adapter.kv_pe_interleave
+        )
         assert nope > 0.99999 and pe > 0.99999, (layer, nope, pe)
         if cfg.is_full_indexer(layer):
             had = normalized_hadamard_matrix(cfg.index_head_dim).float()
@@ -178,6 +186,14 @@ def test_frame_permutation_matches_repo_conventions():
     torch.testing.assert_close(x[:, perm], x @ interleaved_perm_matrix(64))
     k = torch.randn(5, 128)
     torch.testing.assert_close(index_k_device_to_hf(index_k_hf_to_device(k, 64), 64), k)
+    # Interleaved (current): the device frame only moves the rope block to the front. half_split: the frame of traces
+    # written before the fix, still readable.
+    assert index_k_device_perm(128, 64).tolist() == list(range(64, 128)) + list(range(64))
+    assert index_k_device_perm(8, 4, "half_split").tolist() == [4, 6, 5, 7, 0, 1, 2, 3]
+    torch.testing.assert_close(index_k_device_to_hf(index_k_hf_to_device(k, 64, "half_split"), 64, "half_split"), k)
+    from models.demos.deepseek_v3_d_p.tt.runners import hy4_checkpoint as hc
+
+    assert torch.equal(index_k_device_perm(128, 64), hc.index_k_device_perm(128, 64))  # the reader's frame
 
 
 def _rope_interleaved(x, cos, sin):
@@ -189,7 +205,8 @@ def _rope_interleaved(x, cos, sin):
 
 def test_device_index_frame_is_a_weight_permutation(tiny_ckpt, tiny_capture, token_ids):
     """A device indexer that ropes the FIRST R dims interleaved, fed wk / k_norm / wq_b permuted by
-    ``index_k_device_perm``, writes exactly ``index_k_hf_to_device(hf_key)`` and scores identically."""
+    ``index_k_device_perm``, writes exactly ``index_k_hf_to_device(key)`` of the checkpoint's math (rope on the LAST
+    R dims, interleaved) and scores identically."""
     cfg = tiny_ckpt.config
     R, DI, NH = cfg.qk_rope_head_dim, cfg.index_head_dim, cfg.index_n_heads
     t = random_checkpoint_tensors(cfg, seed=0)
@@ -200,10 +217,10 @@ def test_device_index_frame_is_a_weight_permutation(tiny_ckpt, tiny_capture, tok
     wk, wq = t[a + "wk.weight"], t[a + "wq_b.weight"]
     nw, nb = t[a + "k_norm.weight"], t[a + "k_norm.bias"]
 
-    from models.demos.deepseek_v3_d_p.reference.hy4.model import apply_rope_half_split
+    from models.demos.deepseek_v3_d_p.reference.hy4.model import apply_rope_interleaved
 
-    def hf(v):  # HF frame: rope the last R dims, half-split
-        return torch.cat([v[..., : DI - R], apply_rope_half_split(v[..., DI - R :], cos, sin)], dim=-1)
+    def hf(v):  # checkpoint frame: rope the last R dims, interleaved
+        return torch.cat([v[..., : DI - R], apply_rope_interleaved(v[..., DI - R :], cos, sin)], dim=-1)
 
     k_hf = hf(F.layer_norm(x @ wk.T, (DI,), nw, nb, cfg.rms_norm_eps))
     q_hf = hf((qr @ wq.T).view(SEQ, NH, DI))
@@ -309,6 +326,32 @@ def test_compare_traces_and_log(tmp_path, tiny_trace, tiny_ckpt, tiny_capture, t
     rep = json.loads((tmp_path / "rep.json").read_text())
     assert rep["summary"]["min_kvpe_nope"] == {"value": 0.985, "layer": 77}
     assert (tmp_path / "rep.csv").read_text().startswith("layer,")
+
+
+def test_compare_dump_follows_the_golden_rope_pairing(
+    tmp_path, tiny_trace, tiny_ckpt, tiny_capture, token_ids, expect_error
+):
+    """A device KV dump (interleaved pe) against a current golden compares directly; against a trace written before the
+    interleaved fix (``pe_rope: half_split``, pe stored half-split) the golden's pe is re-based first."""
+    L = tiny_ckpt.config.kv_lora_rank
+    dump = tmp_path / "dump"
+    dump.mkdir()
+    for layer in (0, 1):
+        torch.save(tiny_capture.layers[layer]["kvpe"].clone(), dump / f"device_kv_layer{layer}_slot0.pt")
+    rows = hy4_compare.compare_dump(tiny_trace, dump)
+    assert all(r["kvpe_pe"] > 0.99999 and r["kvpe_nope"] > 0.99999 for r in rows), rows
+
+    old = tmp_path / "old"
+    w = GoldenTraceWriter(old, tiny_ckpt.config, token_ids, rope_pairing="half_split")
+    to_half = torch.argsort(half_split_to_interleaved_perm(tiny_ckpt.config.qk_rope_head_dim))
+    for layer in (0, 1):
+        kv = tiny_capture.layers[layer]["kvpe"]
+        w.on_layer(layer, kvpe=torch.cat([kv[:, :L], kv[:, L:][:, to_half]], dim=-1))
+    w.finalize()
+    rows = hy4_compare.compare_dump(old, dump)
+    assert all(r["kvpe_pe"] > 0.99999 for r in rows), rows
+    with expect_error(SystemExit, "different pairings"):
+        hy4_compare.compare_traces(tiny_trace, old)
 
 
 # ------------------------------------------------------------------------------------- real config

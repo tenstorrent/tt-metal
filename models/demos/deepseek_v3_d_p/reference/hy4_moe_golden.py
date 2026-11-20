@@ -23,7 +23,7 @@ that lands on this branch, run with ``PYTHONPATH`` = a checkout of ``hy4-preview
 file by path::
 
     PYTHONPATH=<golden-refs checkout> python <this file> --model /mnt/tt-data/Hy4-Preview \\
-        --golden /mnt/tt-data/dwadhwani/hy4-golden/hy4-bf16-longbench-4k-v2 --tokens 4096 --layers 2 --out <dir>
+        --golden /mnt/tt-data/dwadhwani/hy4-golden/hy4-bf16-longbench-4k-ropeint --tokens 4096 --layers 2 --out <dir>
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ def _load_local(name: str):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--model", default="/mnt/tt-data/Hy4-Preview")
-    ap.add_argument("--golden", default="/mnt/tt-data/dwadhwani/hy4-golden/hy4-bf16-longbench-4k-v2")
+    ap.add_argument("--golden", default="/mnt/tt-data/dwadhwani/hy4-golden/hy4-bf16-longbench-4k-ropeint")
     ap.add_argument("--tokens", type=int, default=4096)
     ap.add_argument("--layers", type=int, default=2)
     ap.add_argument("--out", required=True)

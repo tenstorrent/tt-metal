@@ -41,7 +41,7 @@ from models.demos.deepseek_v3_d_p.tests.test_hy4_prefill_ihc_layers import MOE_U
 from models.demos.deepseek_v3_d_p.tt.hy4 import ihc as hy4_ihc
 
 CHECKPOINT = Path(os.environ.get("HY4_HF_MODEL", "/mnt/tt-data/Hy4-Preview"))
-GOLDEN = Path(os.environ.get("PREFILL_TRACE_DIR", "/mnt/tt-data/dwadhwani/hy4-golden/hy4-bf16-longbench-4k-v3-row2"))
+GOLDEN = Path(os.environ.get("PREFILL_TRACE_DIR", "/mnt/tt-data/dwadhwani/hy4-golden/hy4-bf16-longbench-4k-ropeint"))
 # The 2D shards carry their layout in their names (mla2d_<layout>, *_8x4_h4ax1_i8ax0), and on this mesh mapping the
 # norms, router and EP32 routed experts are the dev layout's own files, so the TP32 blocks share the dev cache dir.
 CACHE = Path(

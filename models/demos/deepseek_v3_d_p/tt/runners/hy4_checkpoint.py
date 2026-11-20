@@ -21,12 +21,13 @@ cache writers) is shared with GLM-5.3 unchanged:
   * iHC (#65891): ``hc_attn_layer.hc_pre.*`` / ``hc_mlp_layer.hc_pre.*`` per layer plus ``model.hc_head.*``, read
     fp32 for the ``ihc`` weight category (``ihc_weights`` per layer, ``ihc_head_weights`` for the head; tt/hy4/ihc.py
     caches them as ``layer_{i}.ihc.pt`` / ``ihc_head.pt``).
-  * RoPE frames: Hy4's HF attention ropes its raw projection columns HALF-SPLIT (pairs ``(i, i + d/2)``),
-    with no DeepSeek-style interleave reshuffle of ``q_pe`` / ``k_pe``, and its indexer ropes the LAST 64
-    of the 128 index-key dims. ttMLA ropes INTERLEAVED pairs ``(2i, 2i + 1)`` and TtIndexer ropes the FIRST
-    64 dims, interleaved. ``hy4_mla_weights`` reorders the output rows of the affected projections (and the
-    index-key LayerNorm) so the device computes the same attention: see ``mla_rope_to_device_frame`` and
-    ``indexer_to_device_frame``. Caches built before that reorder are stale (``HY4_MLA_CACHE_FORMAT``).
+  * RoPE frames: the checkpoint pairs RoPE dims INTERLEAVED, ``(2i, 2i + 1)``, for both MLA (q_pe / k_pe) and
+    the indexer, which is what ttMLA and TtIndexer compute, so the MLA projections are used as they are. (HF
+    ``modeling_hy_v4.py``'s ``rotate_half`` pairs ``(i, i + d/2)``; that is wrong for this checkpoint: weight
+    row-norm pairing, a teacher-forced probe and vLLM's hy_v4 all say interleaved.) The indexer ropes the
+    LAST 64 of its 128 index-key dims, TtIndexer the FIRST 64, so ``hy4_mla_weights`` moves that block to the
+    front (``indexer_to_device_frame``) without reordering pairs. Caches built under the earlier half-split
+    reorder are stale (``HY4_MLA_CACHE_FORMAT``).
 
 Import-light (torch + safetensors only); nothing here opens a device.
 """
@@ -150,35 +151,29 @@ class Hy4Checkpoint(wc._Checkpoint):
 
 
 # ---------------------------------------------------------------------------------------------------------------
-# RoPE frames: HF Hy4 (half-split) -> ttMLA / TtIndexer (interleaved)
+# RoPE frames: interleaved pairs in the checkpoint, ttMLA and TtIndexer; only the indexer's rope block moves
 # ---------------------------------------------------------------------------------------------------------------
-# The golden-trace tooling (reference/hy4/golden.py, #65919) defines the same two permutations to read device
-# caches back into the HF frame; once both land it should import these instead of keeping its own copy.
+# reference/hy4/golden.py (#65919) defines the same index-key permutation to read device caches back into the
+# checkpoint frame.
 
 # Bumped whenever the MLA / indexer tensors hy4_mla_weights produces change for the same checkpoint. A layer whose
 # MLA cache carries no stamp for this value was built by an older reader and is rebuilt (tt/hy4/runtime.py).
 #   1: half-split -> interleaved RoPE reorder of q_b_proj / kv_a_proj_with_mqa and the index-key frame change.
-HY4_MLA_CACHE_FORMAT = 1
-
-
-def half_split_to_interleaved_perm(d: int) -> torch.Tensor:
-    """``out = x[..., perm]`` turns a half-split RoPE vector (pairs ``(i, i + d/2)``) into an interleaved one
-    (pairs ``(2i, 2i + 1)``) at the same frequencies: ``perm = [0, h, 1, h + 1, ...]`` with ``h = d / 2``.
-    Same convention as ``utils.test_utils.interleave_pe`` and ``tt.mla.rope.interleaved_perm_matrix``."""
-    if d % 2:
-        raise ValueError(f"RoPE width must be even, got {d}")
-    h = d // 2
-    return torch.stack([torch.arange(h), torch.arange(h) + h], dim=-1).reshape(d)
+#   2: RoPE pairing is interleaved in the checkpoint: no pair reorder anywhere; the indexer's rope block only
+#      moves to the front.
+HY4_MLA_CACHE_FORMAT = 2
+# The RoPE pairing the device weights are built for. Part of every Hy4 attention cache's format / stamp.
+HY4_ROPE_PAIRING = "interleaved"
 
 
 def index_k_device_perm(index_head_dim: int, rope_dim: int) -> torch.Tensor:
-    """Index-key column permutation, HF frame -> TtIndexer frame: ``[nope | rope (half-split)]`` ->
-    ``[rope (interleaved) | nope]``. Applied to the output rows of ``wk``, to ``k_norm`` weight / bias and to
-    each head's rows of ``wq_b``, it makes the device emit (and rope) keys / queries in its own frame."""
+    """Index-key column permutation, checkpoint frame -> TtIndexer frame: ``[nope | rope]`` -> ``[rope | nope]``.
+    The rope block keeps its (interleaved) pair order. Applied to the output rows of ``wk``, to ``k_norm`` weight /
+    bias and to each head's rows of ``wq_b``, it makes the device emit (and rope) keys / queries in its own frame."""
     if not 0 < rope_dim <= index_head_dim:
         raise ValueError(f"index rope width {rope_dim} must be in (0, {index_head_dim}]")
     nope = index_head_dim - rope_dim
-    return torch.cat([nope + half_split_to_interleaved_perm(rope_dim), torch.arange(nope)])
+    return torch.cat([torch.arange(nope, index_head_dim), torch.arange(nope)])
 
 
 def _per_head_rows(w: torch.Tensor, head_dim: int, row_perm: torch.Tensor) -> torch.Tensor:
@@ -190,28 +185,11 @@ def _per_head_rows(w: torch.Tensor, head_dim: int, row_perm: torch.Tensor) -> to
     return w.reshape(heads, head_dim, -1)[:, row_perm].reshape(w.shape).contiguous()
 
 
-def mla_rope_to_device_frame(weights: dict, *, kv_lora_rank: int, qk_nope_head_dim: int, qk_rope_head_dim: int) -> dict:
-    """Reorder the RoPE output rows of ``kv_a_proj_with_mqa`` (``[kv_lora | k_pe]``) and of every head of
-    ``q_b_proj`` (``[q_nope | q_pe]``) from half-split to interleaved. q_pe . k_pe is unchanged (both get the same
-    permutation and the rotation pairs move with it), and the device's interleaved-roped k_pe equals the HF
-    half-split-roped k_pe re-based by ``interleave_pe``, which is how the KVPE cache is compared to the golden."""
-    out = dict(weights)
-    rp = half_split_to_interleaved_perm(qk_rope_head_dim)
-    kv = out["kv_a_proj_with_mqa.weight"]
-    if kv.shape[0] != kv_lora_rank + qk_rope_head_dim:
-        raise ValueError(f"kv_a_proj_with_mqa {tuple(kv.shape)}: expected {kv_lora_rank} + {qk_rope_head_dim} rows")
-    out["kv_a_proj_with_mqa.weight"] = torch.cat([kv[:kv_lora_rank], kv[kv_lora_rank:][rp]]).contiguous()
-    if "q_b_proj.weight" in out:
-        head = qk_nope_head_dim + qk_rope_head_dim
-        row_perm = torch.cat([torch.arange(qk_nope_head_dim), qk_nope_head_dim + rp])
-        out["q_b_proj.weight"] = _per_head_rows(out["q_b_proj.weight"], head, row_perm)
-    return out
-
-
 def indexer_to_device_frame(weights: dict, *, index_head_dim: int, rope_dim: int) -> dict:
     """Put the indexer's keys and queries in TtIndexer's frame (``index_k_device_perm``): rows of ``wk`` and of
     every head of ``wq_b``, and the k LayerNorm's weight / bias (LayerNorm commutes with a permutation of its
-    features when its affine parameters move with them). q . k per head is unchanged."""
+    features when its affine parameters move with them; the Hadamard TtIndexer applies after RoPE rotates q and k
+    alike). q . k per head is unchanged."""
     out = dict(weights)
     perm = index_k_device_perm(index_head_dim, rope_dim)
     wk = out["indexer.wk.weight"]
@@ -294,12 +272,6 @@ def hy4_mla_weights(
     for src, canon in names.items():
         t = ckpt._read(f"{layer_prefix}.self_attn.{src}")
         out[canon] = t.float() if ("norm" in canon or "weights_proj" in canon) else t
-    out = mla_rope_to_device_frame(
-        out,
-        kv_lora_rank=int(config.kv_lora_rank),
-        qk_nope_head_dim=int(config.qk_nope_head_dim),
-        qk_rope_head_dim=int(config.qk_rope_head_dim),
-    )
     if owns_indexer:
         # TtIndexer's rope width (index_rope_dim, default 64); 0 would be a NoPE indexer with nothing to reorder.
         rope_dim = getattr(config, "index_rope_dim", None)

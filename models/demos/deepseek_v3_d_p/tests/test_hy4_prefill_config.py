@@ -647,14 +647,13 @@ def test_checkpoint_reads_fused_experts_and_remaps_attention(tmp_path, mxfp8):
     sd0 = hc.hy4_layer_state_dict(ckpt, Cfg, MCfg, 0, everything)
     mla0 = sd0["mla_weights"]
     assert _close(mla0["g_proj.weight"], ref["model.layers.0.self_attn.linear_gate.weight"], False)
-    # In the device RoPE frames (test_hy4_rope_frames.py covers the reorders themselves).
+    # In the device RoPE frames (test_hy4_rope_frames.py covers them): the indexer's rope block moves to the front; the
+    # MLA projections are the checkpoint's (interleaved pairing, as ttMLA ropes).
     index_perm = hc.index_k_device_perm(INDEX_D, INDEX_ROPE)
     assert _close(
         mla0["indexer.k_norm_bias.weight"], ref["model.layers.0.self_attn.indexer.k_norm.bias"][index_perm], False
     )
-    kv_a = ref["model.layers.0.self_attn.kv_a_proj_with_mqa.weight"]
-    want_kv_a = torch.cat([kv_a[:KV], kv_a[KV:][hc.half_split_to_interleaved_perm(ROPE)]])
-    assert _close(mla0["kv_a_proj_with_mqa.weight"], want_kv_a, mxfp8)
+    assert _close(mla0["kv_a_proj_with_mqa.weight"], ref["model.layers.0.self_attn.kv_a_proj_with_mqa.weight"], mxfp8)
     assert mla0["q_a_layernorm.weight"].dtype == torch.float32
     assert mla0["indexer.weights_proj.weight"].dtype == torch.float32
     assert mla0["q_b_proj.weight"].dtype == torch.bfloat16

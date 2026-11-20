@@ -1,12 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""CPU-only: the Hy4 weight reader's RoPE frame reorders (``tt/runners/hy4_checkpoint.py``).
+"""CPU-only: the Hy4 weight reader's RoPE frames (``tt/runners/hy4_checkpoint.py``).
 
-Hy4's HF attention ropes q_pe / k_pe half-split, straight off the projection, and its indexer ropes the LAST
-``rope`` dims of each index key / query half-split. ttMLA ropes interleaved pairs; TtIndexer ropes the FIRST
-``rope`` dims interleaved. The reader permutes projection rows so the device, with its own rope, computes the
-same attention. These tests run both pipelines on random weights and check that the scores agree and that
-the device caches equal the HF ones mapped by the documented frame change.
+Hy4's checkpoint pairs RoPE dims INTERLEAVED, ``(2i, 2i + 1)``, for MLA q_pe / k_pe and for the indexer (HF
+``modeling_hy_v4.py``'s half-split ``rotate_half`` is wrong for it). ttMLA ropes interleaved pairs, so the MLA
+projections are used as they are. The indexer ropes the LAST ``rope`` dims of each index key / query; TtIndexer ropes
+the FIRST ``rope`` dims, so the reader moves that block to the front (no pair reorder). These tests run the
+checkpoint's math and the device's on random weights and check that the scores agree and that the device caches
+equal the reference ones mapped by the documented frame change.
 """
 
 from __future__ import annotations
@@ -54,62 +55,51 @@ def _layer_norm(x, w, b):
 
 
 def test_permutations_are_the_documented_ones(expect_error):
-    assert hc.half_split_to_interleaved_perm(8).tolist() == [0, 4, 1, 5, 2, 6, 3, 7]
-    # HF [nope 4 | rope 4 (half-split)] -> device [rope 4 (interleaved) | nope 4]
-    assert hc.index_k_device_perm(8, 4).tolist() == [4, 6, 5, 7, 0, 1, 2, 3]
+    # checkpoint [nope 4 | rope 4] -> device [rope 4 | nope 4]; the rope block keeps its interleaved pair order
+    assert hc.index_k_device_perm(8, 4).tolist() == [4, 5, 6, 7, 0, 1, 2, 3]
     p = hc.index_k_device_perm(128, 64)
-    assert sorted(p.tolist()) == list(range(128))
-    assert p[:64].tolist() == (64 + hc.half_split_to_interleaved_perm(64)).tolist() and p[64:].tolist() == list(
-        range(64)
-    )
-    with expect_error(ValueError, "must be even"):
-        hc.half_split_to_interleaved_perm(7)
+    assert p.tolist() == list(range(64, 128)) + list(range(64))
     with expect_error(ValueError, "index rope width"):
         hc.index_k_device_perm(8, 9)
+    assert hc.HY4_ROPE_PAIRING == "interleaved" and hc.HY4_MLA_CACHE_FORMAT >= 2
+    assert not hasattr(hc, "mla_rope_to_device_frame")  # no MLA pair reorder any more
 
 
-@pytest.mark.parametrize("d", [8, 64])
-def test_half_split_perm_maps_the_rope_frame(d):
-    """Roping the permuted vector interleaved == permuting the half-split-roped vector, at every position."""
-    g = torch.Generator().manual_seed(d)
-    x = _randn(33, d, generator=g)
-    p = hc.half_split_to_interleaved_perm(d)
-    torch.testing.assert_close(rope_interleaved(x[:, p]), rope_half_split(x)[:, p])
-    # ... and the un-permuted vector does NOT agree: the frame change is not a no-op.
-    assert not torch.allclose(rope_interleaved(x), rope_half_split(x), atol=1e-3)
-
-
-def test_mla_rope_reorder_preserves_scores_and_maps_the_kv_cache():
+def test_mla_weights_need_no_reorder():
+    """The checkpoint ropes q_pe / k_pe interleaved, as ttMLA does: the raw projections give the same scores and the
+    KVPE pe half is the reference's, unpermuted. The old half-split -> interleaved row reorder changes the scores."""
     S, hidden, q_lora, kv_lora, nope, rope, heads = 17, 48, 24, 16, 12, 8, 3
     g = torch.Generator().manual_seed(1)
     x = _randn(S, hidden, generator=g)
-    cq = _randn(S, q_lora, generator=g)  # q_a latent (q_a_proj + norm are untouched by the reorder)
+    cq = _randn(S, q_lora, generator=g)  # q_a latent
     w = {
         "kv_a_proj_with_mqa.weight": _randn(kv_lora + rope, hidden, generator=g),
         "q_b_proj.weight": _randn(heads * (nope + rope), q_lora, generator=g),
-        "o_proj.weight": _randn(hidden, heads * 4, generator=g),
     }
-    dev = hc.mla_rope_to_device_frame(w, kv_lora_rank=kv_lora, qk_nope_head_dim=nope, qk_rope_head_dim=rope)
-    assert dev["o_proj.weight"] is w["o_proj.weight"]
 
     def attn(weights, rope_fn):
         kv = x @ weights["kv_a_proj_with_mqa.weight"].T
         latent, k_pe = kv[:, :kv_lora], rope_fn(kv[:, kv_lora:])
         q = (cq @ weights["q_b_proj.weight"].T).reshape(S, heads, nope + rope)
-        q_nope, q_pe = q[..., :nope], rope_fn(q[..., nope:])
-        return latent, k_pe, q_nope, torch.einsum("shd,td->hst", q_pe, k_pe)
+        return latent, k_pe, torch.einsum("shd,td->hst", rope_fn(q[..., nope:]), k_pe)
 
-    hf_latent, hf_kpe, hf_qnope, hf_scores = attn(w, rope_half_split)
-    d_latent, d_kpe, d_qnope, d_scores = attn(dev, rope_interleaved)
-    torch.testing.assert_close(d_latent, hf_latent)  # the KVPE nope half is untouched
-    torch.testing.assert_close(d_qnope, hf_qnope)
-    torch.testing.assert_close(d_scores, hf_scores)  # q_pe . k_pe at every (head, query, key)
-    # The device KVPE pe half == the HF one re-based to interleaved (utils.test_utils.interleave_pe): how the
-    # producer / chunked driver compare the cache against the golden.
-    torch.testing.assert_close(d_kpe, hf_kpe[:, hc.half_split_to_interleaved_perm(rope)])
-    # Without the reorder the device would score something else entirely.
-    _, _, _, wrong = attn(w, rope_interleaved)
-    assert not torch.allclose(wrong, hf_scores, atol=1e-3)
+    ref_latent, ref_kpe, ref_scores = attn(w, rope_interleaved)  # the checkpoint's math (reference/hy4)
+    # The old reader's reorder (half-split -> interleaved: perm [0, h, 1, h + 1, ...]) on the rope rows.
+    h = rope // 2
+    rp = torch.stack([torch.arange(h), torch.arange(h) + h], dim=-1).reshape(rope)
+    old = {
+        "kv_a_proj_with_mqa.weight": torch.cat(
+            [w["kv_a_proj_with_mqa.weight"][:kv_lora], w["kv_a_proj_with_mqa.weight"][kv_lora:][rp]]
+        ),
+        "q_b_proj.weight": w["q_b_proj.weight"]
+        .reshape(heads, nope + rope, -1)[:, torch.cat([torch.arange(nope), nope + rp])]
+        .reshape(heads * (nope + rope), -1),
+    }
+    _, _, old_scores = attn(old, rope_interleaved)
+    assert not torch.allclose(old_scores, ref_scores, atol=1e-3)
+    # ... and the half-split pairing HF's code uses scores something else as well.
+    _, _, hf_scores = attn(w, rope_half_split)
+    assert not torch.allclose(hf_scores, ref_scores, atol=1e-3)
 
 
 @pytest.mark.parametrize("dims", [(8, 4), (128, 64)], ids=["tiny", "hy4"])
@@ -130,11 +120,11 @@ def test_indexer_reorder_preserves_scores_and_maps_the_index_keys(dims):
     dev = hc.indexer_to_device_frame(w, index_head_dim=D, rope_dim=rope)
     assert dev["indexer.weights_proj.weight"] is w["indexer.weights_proj.weight"]
 
-    def hf(weights):  # Hy4: [nope | rope], rope on the LAST `rope` dims, half-split
+    def hf(weights):  # Hy4's checkpoint: [nope | rope], rope on the LAST `rope` dims, interleaved
         k = _layer_norm(x @ weights["indexer.wk.weight"].T, w["indexer.k_norm.weight"], w["indexer.k_norm_bias.weight"])
         q = (cq @ weights["indexer.wq_b.weight"].T).reshape(S, heads, D)
-        k = torch.cat([k[:, :nope], rope_half_split(k[:, nope:])], dim=-1)
-        q = torch.cat([q[..., :nope], rope_half_split(q[..., nope:])], dim=-1)
+        k = torch.cat([k[:, :nope], rope_interleaved(k[:, nope:])], dim=-1)
+        q = torch.cat([q[..., :nope], rope_interleaved(q[..., nope:])], dim=-1)
         return k, q
 
     def device(weights):  # TtIndexer: [rope | nope], rope on the FIRST `rope` dims, interleaved
@@ -197,7 +187,7 @@ def _attn_tensors(prefix, owns_indexer, g):
 
 
 @pytest.mark.parametrize("owns_indexer", [True, False], ids=["full", "shared"])
-def test_hy4_mla_weights_applies_both_reorders_unconditionally(owns_indexer):
+def test_hy4_mla_weights_moves_only_the_indexer_rope_block(owns_indexer):
     g = torch.Generator().manual_seed(3)
     prefix = "model.layers.0"
     raw = _attn_tensors(prefix, owns_indexer, g)
@@ -206,15 +196,8 @@ def test_hy4_mla_weights_applies_both_reorders_unconditionally(owns_indexer):
     def src(k):
         return raw[f"{prefix}.self_attn.{k}"].to(torch.bfloat16)
 
-    rp = hc.half_split_to_interleaved_perm(_Cfg.qk_rope_head_dim)
-    kv = src("kv_a_proj_with_mqa.weight")
-    L = _Cfg.kv_lora_rank
-    assert torch.equal(out["kv_a_proj_with_mqa.weight"], torch.cat([kv[:L], kv[L:][rp]]))
-    N = _Cfg.qk_nope_head_dim
-    qb = src("q_b_proj.weight").reshape(2, N + _Cfg.qk_rope_head_dim, -1)
-    want_qb = torch.cat([qb[:, :N], qb[:, N:][:, rp]], dim=1).reshape(-1, qb.shape[-1])
-    assert torch.equal(out["q_b_proj.weight"], want_qb)
-    for k in ("q_a_proj.weight", "kv_b_proj.weight", "o_proj.weight"):
+    # The MLA projections are the checkpoint's, rope rows included (interleaved pairing, as ttMLA ropes).
+    for k in ("q_a_proj.weight", "q_b_proj.weight", "kv_a_proj_with_mqa.weight", "kv_b_proj.weight", "o_proj.weight"):
         assert torch.equal(out[k], src(k)), k
     if not owns_indexer:
         assert not any(k.startswith("indexer.") for k in out)
@@ -229,12 +212,10 @@ def test_hy4_mla_weights_applies_both_reorders_unconditionally(owns_indexer):
     assert out["q_b_proj.weight"].dtype == torch.bfloat16
 
 
-def test_reorder_rejects_mismatched_dims(expect_error):
-    w = {"kv_a_proj_with_mqa.weight": torch.zeros(10, 4), "q_b_proj.weight": torch.zeros(12, 4)}
-    with expect_error(ValueError, "kv_a_proj_with_mqa"):
-        hc.mla_rope_to_device_frame(w, kv_lora_rank=4, qk_nope_head_dim=2, qk_rope_head_dim=4)
-    with expect_error(ValueError, "head width"):
-        hc.mla_rope_to_device_frame(w, kv_lora_rank=6, qk_nope_head_dim=1, qk_rope_head_dim=4)
+def test_indexer_reorder_rejects_mismatched_dims(expect_error):
+    w = {"indexer.wk.weight": torch.zeros(10, 4)}
+    with expect_error(ValueError, "indexer.wk"):
+        hc.indexer_to_device_frame(w, index_head_dim=8, rope_dim=4)
 
 
 def test_mla_cache_format_stamp_marks_old_caches_stale(tmp_path):

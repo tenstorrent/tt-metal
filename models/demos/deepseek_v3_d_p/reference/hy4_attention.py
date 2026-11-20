@@ -14,7 +14,8 @@ sink, the elementwise sigmoid output gate and ``o_proj``. The math is the per-qu
     o              *= sigmoid(hn @ linear_gate^T).view(n, H, v_head_dim)              (elementwise gate)
     out             = o.reshape(n, H * v_head_dim) @ o_proj^T
 
-RoPE is HF's half-split (``rotate_half``) on the raw checkpoint columns. Weights are HF names
+RoPE pairs the raw checkpoint columns INTERLEAVED, ``(2i, 2i + 1)`` at frequency ``i``, the checkpoint's own pairing (and
+ttMLA's). HF ``modeling_hy_v4.py``'s ``rotate_half`` (half-split) is wrong for this checkpoint. Weights are HF names
 (``q_a_proj.weight`` ... ``linear_gate.weight``, ``learnable_sink_param``). Import-light (torch only).
 """
 
@@ -80,8 +81,18 @@ def rope_cos_sin(positions: torch.Tensor, dim: int, theta: float):
     return ang.cos().to(F32), ang.sin().to(F32)
 
 
+def apply_rope_interleaved(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+    """Interleaved RoPE on the last dim of ``x`` ``[N, ..., d]``: pairs ``(2i, 2i + 1)`` rotated by frequency ``i``
+    (Hy4's checkpoint pairing, ttMLA's and TtIndexer's); cos/sin ``[N, d/2]``."""
+    shape = (cos.shape[0],) + (1,) * (x.dim() - 2) + (cos.shape[1],)
+    c, s = cos.view(shape), sin.view(shape)
+    a, b = x[..., 0::2], x[..., 1::2]
+    return torch.stack((a * c - b * s, b * c + a * s), dim=-1).flatten(-2)
+
+
 def apply_rope_half_split(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
-    """HF ``rotate_half`` RoPE on the last dim of ``x`` ``[N, ..., d]``; cos/sin ``[N, d/2]``."""
+    """HF ``rotate_half`` RoPE (pairs ``(i, i + d/2)``) on the last dim of ``x``; cos/sin ``[N, d/2]``. NOT Hy4's
+    pairing: kept for tests that show the wrong pairing is detectable."""
     shape = (cos.shape[0],) + (1,) * (x.dim() - 2) + (cos.shape[1],)
     c, s = cos.view(shape), sin.view(shape)
     h = x.shape[-1] // 2
@@ -101,13 +112,13 @@ def sink_softmax(scores: torch.Tensor, sink: torch.Tensor | None) -> torch.Tenso
 
 def mla_latents(hn: torch.Tensor, w: dict, dims: Hy4AttnDims, cos, sin):
     """Per-token stems: ``q_resid`` (``q_a_layernorm(q_a_proj(hn))``) and the cache line ``kvpe`` =
-    ``kv_a_layernorm(latent) | rope(k_pe)`` (HF frame, half-split)."""
+    ``kv_a_layernorm(latent) | rope(k_pe)`` (interleaved RoPE: the device's frame)."""
     L = dims.kv_lora_rank
     q_resid = rms_norm(hn @ w["q_a_proj.weight"].to(F32).T, w["q_a_layernorm.weight"], dims.low_rank_norm_eps)
     ckv = hn @ w["kv_a_proj_with_mqa.weight"].to(F32).T
     kvpe = torch.empty(hn.shape[0], L + dims.qk_rope_head_dim, dtype=F32)
     kvpe[:, :L] = rms_norm(ckv[:, :L], w["kv_a_layernorm.weight"], dims.low_rank_norm_eps)
-    kvpe[:, L:] = apply_rope_half_split(ckv[:, L:], cos, sin)
+    kvpe[:, L:] = apply_rope_interleaved(ckv[:, L:], cos, sin)
     return q_resid, kvpe
 
 
@@ -146,7 +157,7 @@ def hy4_attention(
         b = min(a + block, S)
         n = b - a
         q = (q_resid[a:b] @ wq_b.T).view(n, H, dims.qk_head_dim)
-        q_nope, q_pe = q[..., :N], apply_rope_half_split(q[..., N:], cos[a:b], sin[a:b])
+        q_nope, q_pe = q[..., :N], apply_rope_interleaved(q[..., N:], cos[a:b], sin[a:b])
         q_lat = torch.einsum("nhd,hdc->nhc", q_nope, w_uk)
         idx = topk[a:b]
         pos = torch.arange(a, b).unsqueeze(1)

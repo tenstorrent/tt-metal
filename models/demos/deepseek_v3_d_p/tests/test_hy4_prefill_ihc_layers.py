@@ -48,7 +48,7 @@ from models.demos.deepseek_v3_d_p.tt.hy4 import ihc as hy4_ihc
 
 chunked = smoke.chunked
 NUM_LAYERS = int(os.environ.get("HY4_IHC_LAYERS", "5"))
-REF_DIR = Path(os.environ.get("HY4_IHC_REF_STREAMS", "/mnt/tt-data/dwadhwani/hy4-golden/hy4-4k-v3-streams"))
+REF_DIR = Path(os.environ.get("HY4_IHC_REF_STREAMS", "/mnt/tt-data/dwadhwani/hy4-golden/hy4-4k-ropeint-streams"))
 PCC_FLOOR = 0.99  # KV / index-K / streams, every scored layer
 # The update of an MoE site is the MoE output as the streams receive it: GLM-5.3's / #65923's MoE bar. Its input already
 # carries the upstream layers' error, which top-8 routing amplifies (the module alone, on the reference input, is 0.9999).

@@ -566,12 +566,14 @@ def _preload_kvpe_prefix_from_trace(
     host_layout,
     tp_shard_kv=False,
     chunk_size=CHUNK,
+    pe_interleave=True,
 ):
     """Preload the first `preload_isl` tokens of each layer's prior KV into the block-cyclic device KVPE
     cache, so a chunk measured at KV depth preload_isl attends to REAL prior KV (representative MoE routing)
     instead of the zero-init prefix. Mirrors test_mla.py's chunked preload: per layer read the natural-order
     prior KV from the trace's kv_post_transform, re-interleave the k_pe slice (the trace stores HF half-split;
-    the device cache is Meta interleaved), lay it out block-cyclic, and copy host->device.
+    the device cache is Meta interleaved; `pe_interleave=False` when the trace's pe is already in the device
+    pairing, the variant's `kv_pe_interleave`), lay it out block-cyclic, and copy host->device.
 
     Rows past `trace_len` (the trace only goes so deep) are filled with RANDOM KV so we can still exercise
     KV depths beyond the trace — random keeps the MoE gate non-degenerate (unlike a zero prefix), which is
@@ -601,7 +603,8 @@ def _preload_kvpe_prefix_from_trace(
         kv_prior = torch.randn(preload_isl, kvpe_dim, generator=gen).to(torch.bfloat16)
         if real_len > 0:
             real = _load_layer_rows(trace_dir, layout, "kv_cache", i, f"kv_post_transform_layer_{i}", 0, real_len)
-            real[:, kv_lora:] = interleave_pe(real[:, kv_lora:])
+            if pe_interleave:
+                real[:, kv_lora:] = interleave_pe(real[:, kv_lora:])
             kv_prior[:real_len] = real.to(torch.bfloat16)
         bc = blockcyclic_cache_host(kv_prior, stripes, chunk_size, seq_len_cache, kvpe_dim)[0, 0]  # [seq, D]
         if tp_shard_kv:
@@ -2148,6 +2151,7 @@ def run_chunked_transformer_updated(
             cache_format.storage_layout,
             tp_shard_kv=tp_shard_kv,
             chunk_size=chunk_size,
+            pe_interleave=getattr(variant, "kv_pe_interleave", True),
         )
         if tt_index_kv_cache is not None:
             _preload_indexer_k_prefix_from_trace(

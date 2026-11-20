@@ -46,16 +46,25 @@ def layout_tag(mesh_shape: Sequence[int], axes: Mapping[str, int]) -> str:
 
 
 def layout_descriptor(
-    module: str, cache_format: int, mesh_shape: Sequence[int], axes: Mapping[str, int], dtypes: Mapping[str, str]
+    module: str,
+    cache_format: int,
+    mesh_shape: Sequence[int],
+    axes: Mapping[str, int],
+    dtypes: Mapping[str, str],
+    extra: Optional[Mapping[str, str]] = None,
 ) -> dict:
-    """The JSON-able record a stamp holds."""
-    return {
+    """The JSON-able record a stamp holds. ``extra``: other properties of the cached values that must match, e.g. the
+    RoPE pairing the weights were read in (``ttMLA2DTP``)."""
+    d = {
         "module": module,
         "format": int(cache_format),
         "mesh": [int(n) for n in mesh_shape],
         "axes": {role: int(axis) for role, axis in axes.items()},
         "dtypes": {name: str(dtype) for name, dtype in sorted(dtypes.items())},
     }
+    if extra:
+        d.update({str(k): str(v) for k, v in sorted(extra.items())})
+    return d
 
 
 class LayoutCacheGuard:

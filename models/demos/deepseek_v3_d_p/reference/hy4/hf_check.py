@@ -126,7 +126,8 @@ def check(model_dir: Path, seq_len: int, num_layers: int | None, seed: int = 0, 
     ids = torch.randint(3, cfg.vocab_size, (seq_len,), generator=g)
     ours = _Capture()
     kw = {} if block is None else dict(attn_block=block, proj_block=block)
-    Hy4PrefillReference(ckpt, cfg_run, prefetch=False, **kw).run(ids, ours, num_layers=n)
+    # HF's code ropes half-split (rotate_half); Hy4's checkpoint is interleaved, but this check is against HF's code.
+    Hy4PrefillReference(ckpt, cfg_run, prefetch=False, rope_pairing="half_split", **kw).run(ids, ours, num_layers=n)
     hf_layers, hf_logits, _ = run_hf(model_dir, ids, n)
     full_stack = n == cfg.num_hidden_layers
     if not full_stack:

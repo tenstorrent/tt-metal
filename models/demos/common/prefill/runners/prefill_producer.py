@@ -865,13 +865,29 @@ def _kvpe_pcc_vs_golden(golden, device_kv, kv_lora: int, golden_pe_layout: str =
     return pcc_nope, pcc_pe
 
 
+def _golden_rope_layouts(trace_dir):
+    """(pe, index-key rope) layouts a trace declares in its metadata ``frames`` (the Hy4 goldens do:
+    ``kvpe.pe_rope``, ``index_k.frame`` / ``index_k.rope``); ``half_split`` for what it does not declare."""
+    from pathlib import Path
+
+    try:
+        frames = json.loads((Path(trace_dir) / "metadata.json").read_text()).get("frames") or {}
+    except (OSError, ValueError):
+        frames = {}
+    pe = (frames.get("kvpe") or {}).get("pe_rope") or "half_split"
+    index_k = frames.get("index_k") or {}
+    index = index_k.get("rope") or ("interleaved" if index_k.get("frame") == "device" else "half_split")
+    return pe, index
+
+
 def _mtp_golden_source(trunk_trace_dir):
     spec = os.environ.get("PREFILL_MTP_TRACE_DIR", "").strip()
     mtp_dir = resolve_trace_dir(spec) if spec else trunk_trace_dir
+    pe_default, index_default = _golden_rope_layouts(mtp_dir)
     return (
         mtp_dir,
-        os.environ.get("PREFILL_MTP_GOLDEN_PE_LAYOUT", "").strip() or "half_split",
-        os.environ.get("PREFILL_MTP_GOLDEN_INDEX_ROPE_LAYOUT", "").strip() or "half_split",
+        os.environ.get("PREFILL_MTP_GOLDEN_PE_LAYOUT", "").strip() or pe_default,
+        os.environ.get("PREFILL_MTP_GOLDEN_INDEX_ROPE_LAYOUT", "").strip() or index_default,
     )
 
 

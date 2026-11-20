@@ -7,13 +7,12 @@ Drives ``TtPrefillTransformer`` over a Hy4 weight cache through the chunked-tran
 ``hy4_golden_v1`` trace, read with the driver's own trace loaders). Then it scores the un-rotated device
 caches against the golden:
 
-  * KVPE cache, both halves: ``nope`` (the 512-wide latent) and ``pe`` (k_pe; the golden's half-split rope
-    re-based to the device's interleaved frame);
+  * KVPE cache, both halves: ``nope`` (the 512-wide latent) and ``pe`` (k_pe; the golden and the device both pair
+    RoPE interleaved, the checkpoint's pairing, so it compares directly: ``Hy4Adapter.kv_pe_interleave = False``);
   * index-key cache (both halves; the golden stores it in the device frame ``[rope 64 interleaved | nope 64]``).
 
 Layer 0 is asserted >= 0.99 on all three. It sees the real embeddings, so it isolates the attention weights
-and their RoPE frames (``hy4_checkpoint.mla_rope_to_device_frame`` / ``indexer_to_device_frame``); before those
-reorders it scored pe -0.04, index-K -0.06. Deeper layers are recorded only: the learnable sink (#65921) and
+and their RoPE frames (``hy4_checkpoint.indexer_to_device_frame``; the MLA rope rows need no reorder). Deeper layers are recorded only: the learnable sink (#65921) and
 iHC residual (#65891) are not implemented, so their inputs already differ from HF.
 
 It runs the DEV / NUMERICS layout (``glm_prefill_sp8_tp4``, the 8x4 mesh): the Hy4 layout is TP32 / DP1 (#65884),
@@ -23,7 +22,7 @@ which the shared prefill stack cannot run yet. ``PREFILL_HY4_LAYOUT`` defaults t
 Needs (each missing one skips): the Hy4 checkpoint, the golden trace (``PREFILL_TRACE_DIR``), a Hy4 weight
 cache built at the current ``HY4_MLA_CACHE_FORMAT`` (build it with the prefill runner, which writes the
 missing / stale categories), an 8x4 Blackhole Galaxy, and ``PREFILL_CHUNK_SIZE=4096``. A cache whose MLA
-layers predate the RoPE reorder FAILS rather than skips: it would load silently and score ~0.
+layers predate the current RoPE frames FAILS rather than skips: it would load silently and score ~0.
 
 Env: ``HY4_HF_MODEL`` / ``PREFILL_HF_MODEL`` (checkpoint), ``TT_HY4_PREFILL_TTNN_CACHE`` / ``PREFILL_TTNN_CACHE``
 (cache root, as the runner takes it), ``HY4_SMOKE_LAYERS`` (layers to run, default 1),
@@ -203,8 +202,8 @@ def test_hy4_prefill_layer0_kv_and_index_k_pcc(
         pytest.skip(f"no Hy4 weight cache at {cache}: build it with the prefill runner (PREFILL_MODEL=hy4_preview)")
     stale = hc.stale_mla_cache_layers(cache, range(NUM_LAYERS))
     assert not stale, (
-        f"Hy4 MLA/indexer cache at {cache} for layers {stale} predates format {hc.HY4_MLA_CACHE_FORMAT} (RoPE frame "
-        "reorder); rebuild it with the prefill runner (it deletes and rewrites stale layers)"
+        f"Hy4 MLA/indexer cache at {cache} for layers {stale} predates format {hc.HY4_MLA_CACHE_FORMAT} (RoPE pairing "
+        f"{hc.HY4_ROPE_PAIRING}); rebuild it with the prefill runner (it deletes and rewrites stale layers)"
     )
     missing = [i for i in range(NUM_LAYERS) if not hc.mla_cache_stamp(cache, i).exists()]
     if missing:

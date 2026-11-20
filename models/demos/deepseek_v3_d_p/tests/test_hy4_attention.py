@@ -14,12 +14,13 @@ identical copies of the embedding, so the iHC pre-mix is a positive per-token mu
 what the TT stack (no iHC yet, #65891) feeds layer 0, so this layer's attention is checked against HF's. Longer
 prompts (32K) use seeded random tokens through the same embedding + norm.
 
-Device weights come from the production Hy4 reader (``hy4_checkpoint.hy4_mla_weights``: RoPE frames reordered
-half-split -> interleaved, gate and sink remapped); the reference reads the raw HF tensors, so the reader is checked
+Device weights come from the production Hy4 reader (``hy4_checkpoint.hy4_mla_weights``: MLA RoPE rows as in the
+checkpoint (interleaved pairing), the indexer's rope block moved to the front, gate and sink remapped); the reference
+reads the raw HF tensors and ropes interleaved, so the reader is checked
 too. Also logged (not asserted): the PCC against the
 reference without the sink / without the gate, and the device top-k's agreement with the golden's.
 
-Env: ``HY4_HF_MODEL`` (default /mnt/tt-data/Hy4-Preview), ``HY4_GOLDEN_DIR`` (default the 4K v2 golden),
+Env: ``HY4_HF_MODEL`` (default /mnt/tt-data/Hy4-Preview), ``HY4_GOLDEN_DIR`` (default the 4K interleaved-RoPE golden),
 ``HY4_ATTN_SEQ_LENS`` (comma list, default 4096).
 """
 
@@ -45,7 +46,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 
 CHECKPOINT = Path(os.environ.get("HY4_HF_MODEL", "/mnt/tt-data/Hy4-Preview"))
-GOLDEN = Path(os.environ.get("HY4_GOLDEN_DIR", "/mnt/tt-data/dwadhwani/hy4-golden/hy4-bf16-longbench-4k-v2"))
+GOLDEN = Path(os.environ.get("HY4_GOLDEN_DIR", "/mnt/tt-data/dwadhwani/hy4-golden/hy4-bf16-longbench-4k-ropeint"))
 SEQ_LENS = [int(s) for s in os.environ.get("HY4_ATTN_SEQ_LENS", "4096").split(",")]
 ATTN_PCC = 0.995  # GLM-5.3's MLA threshold (Hy4Adapter.mla_pcc_threshold)
 FULL_LAYER, SHARED_LAYER = 0, 2
@@ -84,8 +85,8 @@ def hf_attention_weights(ckpt, layer: int, owns_indexer: bool) -> dict:
 
 
 def ttmla_weights(ckpt, layer: int, config, owns_indexer: bool) -> dict:
-    """ttMLA's weight dict from the production Hy4 reader: canonical names, RoPE frames reordered half-split ->
-    interleaved, ``linear_gate`` -> ``g_proj``, ``learnable_sink_param`` -> ``attn_sink`` (fp32)."""
+    """ttMLA's weight dict from the production Hy4 reader: canonical names, the device RoPE frames (indexer rope block
+    first), ``linear_gate`` -> ``g_proj``, ``learnable_sink_param`` -> ``attn_sink`` (fp32)."""
     from models.demos.deepseek_v3_d_p.tt.runners.hy4_checkpoint import hy4_mla_weights
 
     return hy4_mla_weights(
