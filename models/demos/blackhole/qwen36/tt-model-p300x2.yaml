@@ -302,6 +302,36 @@ card:
     | 128K | ~106 | ~66 |
     | 250K | ~160 | ~49 |
 
+  performance: |
+    | profile | ISL | OSL | concurrency | N | TTFT (ms) | prefill tok/s/u | decode tok/s/u | E2EL (s) |
+    | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+    | `single-user` | 128 | 128 | 1 | 8 | 139 | 921 | 142.1 | 1.0 |
+    | `single-user` | 8,192 | 128 | 1 | 2 | 1,015 | 8,070 | 175.2 | 1.7 |
+    | `single-user` | 32,768 | 128 | 1 | 1 | 3,685 | 8,891 | 209.0 | 4.3 |
+    | `single-user` | 131,072 | 128 | 1 | 1 | 21,710 | 6,037 | 93.9 | 23.1 |
+    | `multi-user` | 128 | 128 | 1 | 8 | 198 | 645 | 69.9 | 2.0 |
+    | `multi-user` | 32,768 | 128 | 1 | 1 | 3,649 | 8,979 | 65.4 | 5.6 |
+    | `multi-user` | 128 | 128 | 16 | 128 | 1,128 | 113 | 24.7 | 6.3 |
+    | `multi-user` | 8,192 | 1,024 | 16 | 32 | 12,418 | 660 | 22.8 | 57.3 |
+    | `batch` | 128 | 128 | 1 | 8 | 161 | 796 | 35.2 | 3.8 |
+    | `batch` | 128 | 1,024 | 32 | 128 | 5,008 | 26 | 25.5 | 45.1 |
+    | `batch` | 8,192 | 1,024 | 32 | 64 | 32,719 | 250 | 21.7 | 79.8 |
+
+    Means of `vllm bench serve` runs (random prompts, ignore_eos, the model's default sampling; `single-user`
+    greedy) on a P300x2 with chip clocks logged (median 1343-1350 MHz), 2026-11-20. `single-user` decode speed
+    follows how predictable the text is (DFlash2 acceptance), so it varies by prompt. No accuracy eval was run for
+    this package.
+  limitations: |
+    - `single-user` decodes every request greedily (temperature and sampling parameters are ignored, with one
+      logged warning).
+    - `multi-user`: a request with presence / frequency / repetition penalties or logprobs sends the whole decode
+      step to host sampling for every user in it: a 16-user step goes from 40.5 to about 61 ms (one penalized
+      request) or 67 ms (one logprobs request); one user from 14.3 to 20.9 ms.
+    - No prefix caching: a repeated long prompt is prefilled again (131,072 tokens: about 21 s for one user).
+    - `batch` at 32 users fits 32 x (prompt + output) in a 527,360-token KV pool; longer requests queue.
+    - On an earlier test machine with a failed fan, one card dropped off PCIe under heavy 32-request prefill;
+      `tt-smi -r` or a reboot brings it back.
+
 verify:
   - "from qwen36_resident.generator_vllm import Qwen36ResidentForCausalLM, Qwen36ResidentDFlashForCausalLM; assert Qwen36ResidentDFlashForCausalLM"
   - "from qwen36_resident.dflash import ResidentDFlash, DRAFTER_WEIGHTS; assert DRAFTER_WEIGHTS.endswith('dedf8df68adfb1afeaf7b7480c0a0243108177b4')"
