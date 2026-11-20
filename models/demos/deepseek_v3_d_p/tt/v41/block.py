@@ -402,6 +402,9 @@ class V41PrefillBlock(LightweightModule):
         if owned_pre:
             ttnn.deallocate(pre_row)
         _attn_pre, _post, _comb, h = A.replay()
+        tap = getattr(self, "_tap", None)  # DS41F-0169 diagnostic (prefill STREAM_DIGEST_LAYERS): reads back, blocking
+        if tap is not None:
+            tap("A", [_attn_pre, _post, _comb, h])
         traced = self._attn_islands_for(real_len)
         if traced is not None:
             y = self._attn_traced(h, real_len, *traced)  # A2's persistent output: copied, never freed
@@ -419,6 +422,8 @@ class V41PrefillBlock(LightweightModule):
                 y = y2
             copy_into(y_buf, y)
             ttnn.deallocate(y)
+        if tap is not None:
+            tap("y", [y_buf])
         outs = B.replay()
         return list(outs[:HC]), outs[HC]
 
@@ -581,8 +586,13 @@ class V41PrefillBlock(LightweightModule):
         attn, state = self.attn, self.state
         attn.prepare_chunk(state, real_len)
         outs = A1.replay()
+        tap = getattr(self, "_tap", None)
+        if tap is not None:
+            tap("a1", [t for t in outs if t is not None])
         attn.glue_chunk(state, outs, real_len, None, **(dict(src_state=kw["src_state"]) if "src_state" in kw else {}))
         a2 = A2.replay()
+        if tap is not None:
+            tap("a2", [t for t in a2 if t is not None])
         attn.epilogue_chunk(state, outs, a2, None, real_len)
         return a2[0]
 

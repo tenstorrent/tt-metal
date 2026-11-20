@@ -77,6 +77,9 @@ DEVPROF_STARTS = {int(v) for v in os.environ.get("V41_PREFILL_DEVPROF_STARTS", "
 # one CRC per chip per layer, "[v41 0169] stream start=S <tag>:<crc chip 0>.<crc chip 1>...", tags e<L> (Engram output = block
 # L's input), b<L> (block L's output), k20 (layer 20's KV-only input, = b19 on the island path)
 STREAM_DIGEST = {int(v) for v in os.environ.get("V41_PREFILL_STREAM_DIGEST", "").split(",") if v.strip()}
+# ... and V41_PREFILL_STREAM_DIGEST_LAYERS=<layers>: inside those blocks too, tags <L>A (island A's outputs), <L>a1 / <L>a2 (the
+# attention islands' outputs), <L>y (the attention output, island B's input)
+STREAM_DIGEST_LAYERS = {int(v) for v in os.environ.get("V41_PREFILL_STREAM_DIGEST_LAYERS", "").split(",") if v.strip()}
 
 
 def _stream_crcs(ts) -> str:
@@ -687,9 +690,12 @@ class V41Prefill:
                 blk.kv_only_islands(streams, pre, real_len=real_len, owned=owned, owned_pre=blk is self.blocks[0])
                 mark("kv_only")
                 break
+            if sd is not None and L in STREAM_DIGEST_LAYERS:
+                blk._tap = lambda tag, ts, L=L: sd.append(f"{L}{tag}:" + _stream_crcs(ts))
             streams, pre = blk.forward_islands(
                 streams, pre, real_len=real_len, owned=owned, owned_pre=blk is self.blocks[0]
             )
+            blk._tap = None
             owned = False
             mark(f"block.{type(blk.attn).__name__}")
             if sd is not None:
