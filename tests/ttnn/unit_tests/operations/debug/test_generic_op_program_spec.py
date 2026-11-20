@@ -1047,9 +1047,8 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
     per-device view, is rejected."""
     torch.manual_seed(23)
     torch_input = torch.rand([2, 1, 32, 32]).to(torch.bfloat16)
-    input_tensor = ttnn.from_torch(
-        torch_input, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0)
-    )
+    split = ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0)
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=split)
     output_tensor = ttnn.allocate_tensor_on_device(input_tensor.spec, mesh_device)
     first_input, second_input = ttnn.get_device_tensors(input_tensor)
     first_output, second_output = ttnn.get_device_tensors(output_tensor)
@@ -1061,10 +1060,10 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
         RuntimeError,
         r"tensor_args\['input'\] holds devices MeshCoordinate\(\[0, 1\]\), but its program runs on device "
         r"MeshCoordinate\(\[0, 0\]\), which it does not hold\. On each device, a program reads that device's part of a "
-        r"tensor, so a program that binds a per-device view must run only on the view's devices: list only views of "
-        r"those devices in io_tensors or, in a MeshProgramSpec, bind the view only in the run args of a range "
-        r"on them\. Binding the whole tensor instead reads each device's own part, which is the view's data only if "
-        r"every device holds the same data",
+        r"tensor, so a program that binds a per-device view must run only on the view's devices: with a ProgramSpec, "
+        r"list only views of those devices in io_tensors; with a MeshProgramSpec, bind the view only in the run args "
+        r"of a range on them\. Binding the whole tensor instead reads each device's own part, which is the view's "
+        r"data only if every device holds the same data",
     ):
         E.generic_op([first_input, first_output], spec, run_args)
     with expect_error(RuntimeError, message):
@@ -1183,11 +1182,19 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
         E.generic_op([first_input, first_output], mesh_spec, edited_mesh)
 
     # A view, or the whole tensor, that holds the program's device reads that device's part, whether io_tensors lists
-    # the input's view or the whole input: the output's view keeps the program on the first device.
+    # the input's view or the whole input: the output's view keeps the program on the first device. Each call writes
+    # its own output of zeros, so each result shows that its program ran there.
+    def zeros():
+        return ttnn.from_torch(
+            torch.zeros_like(torch_input), layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=split
+        )
+
     inputs_bound_and_listed = [(first_input, input_tensor), (first_input, first_input), (input_tensor, first_input)]
     for bound_input, listed_input in inputs_bound_and_listed:
-        spec, run_args = exp_program(bound_input, first_output)
-        result = E.generic_op([listed_input, first_output], spec, run_args)
+        output = zeros()
+        output_view = ttnn.get_device_tensors(output)[0]
+        spec, run_args = exp_program(bound_input, output_view)
+        result = E.generic_op([listed_input, output_view], spec, run_args)
         assert_close(torch.exp(torch_input[:1]), ttnn.to_torch(result))
 
     # The check compares devices, not placements: one device's view of a replicated tensor is rejected in the other
@@ -1204,14 +1211,16 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
     assert_close(torch.exp(torch_input[:1]), ttnn.to_torch(result))
 
     # Each device's program may name that device's views while io_tensors lists the whole tensors.
-    first_spec, first_run_args = exp_program(first_input, first_output)
-    second_spec, second_run_args = exp_program(second_input, second_output)
+    output = zeros()
+    first_view, second_view = ttnn.get_device_tensors(output)
+    first_spec, first_run_args = exp_program(first_input, first_view)
+    second_spec, second_run_args = exp_program(second_input, second_view)
     E.generic_op(
-        [input_tensor, output_tensor],
+        [input_tensor, output],
         E.MeshProgramSpec(programs=[(one_device(0), first_spec), (one_device(1), second_spec)]),
         E.MeshProgramRunArgs(programs=[(one_device(0), first_run_args), (one_device(1), second_run_args)]),
     )
-    result = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    result = ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
     assert_close(torch.exp(torch_input), result)
 
 

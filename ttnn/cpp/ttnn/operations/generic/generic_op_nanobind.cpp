@@ -30,7 +30,6 @@ using ttnn::experimental::MeshProgramRunArgs;
 using ttnn::experimental::MeshProgramSpec;
 using ttnn::experimental::ProgramRunArgs;
 using ttnn::experimental::ProgramSpec;
-using TensorViews = std::vector<GenericProgramSpecDeviceOperation::operation_attributes_t::TensorView>;
 
 // A tensor argument that holds only some devices of its tensor, such as a per-device view, for generic_op's check that
 // it holds every device its program runs on (operation_attributes_t::tensor_views). generic_op's other checks, which
@@ -74,41 +73,34 @@ TensorViews tensor_views(const MeshProgramRunArgs& run_args) {
 }
 
 // The Metal 2.0 forms as Python calls them: each reads the views while it holds the GIL, then releases it for the call
-// itself, as bind_function does for other overloads.
+// itself, as bind_function does for other overloads. ttnn::experimental's C++ functions call the same ttnn::prim
+// functions without views.
 Tensor generic_op_from_python(
     const std::vector<Tensor>& io_tensors, const ProgramSpec& spec, const ProgramRunArgs& run_args) {
     auto views = tensor_views(run_args);
     const nb::gil_scoped_release release;
-    auto attributes = ttnn::prim::program_spec_attributes(io_tensors, spec, run_args);
-    attributes.tensor_views = std::move(views);
-    return ttnn::prim::generic_op(io_tensors, attributes);
+    return ttnn::prim::generic_op(io_tensors, spec, run_args, std::move(views));
 }
 
 Tensor generic_op_from_python(
     const std::vector<Tensor>& io_tensors, const MeshProgramSpec& spec, const MeshProgramRunArgs& run_args) {
     auto views = tensor_views(run_args);
     const nb::gil_scoped_release release;
-    auto attributes = ttnn::prim::mesh_program_spec_attributes(spec.programs, run_args.programs);
-    attributes.tensor_views = std::move(views);
-    return ttnn::prim::generic_op(io_tensors, attributes);
+    return ttnn::prim::generic_op(io_tensors, spec.programs, run_args.programs, std::move(views));
 }
 
 void prepare_generic_op_from_python(
     const std::vector<Tensor>& io_tensors, const ProgramSpec& spec, const ProgramRunArgs& run_args) {
     auto views = tensor_views(run_args);
     const nb::gil_scoped_release release;
-    auto attributes = ttnn::prim::program_spec_attributes(io_tensors, spec, run_args);
-    attributes.tensor_views = std::move(views);
-    ttnn::prim::prepare_generic_op(io_tensors, attributes);
+    ttnn::prim::prepare_generic_op(io_tensors, spec, run_args, std::move(views));
 }
 
 void prepare_generic_op_from_python(
     const std::vector<Tensor>& io_tensors, const MeshProgramSpec& spec, const MeshProgramRunArgs& run_args) {
     auto views = tensor_views(run_args);
     const nb::gil_scoped_release release;
-    auto attributes = ttnn::prim::mesh_program_spec_attributes(spec.programs, run_args.programs);
-    attributes.tensor_views = std::move(views);
-    ttnn::prim::prepare_generic_op(io_tensors, attributes);
+    ttnn::prim::prepare_generic_op(io_tensors, spec.programs, run_args.programs, std::move(views));
 }
 
 }  // namespace

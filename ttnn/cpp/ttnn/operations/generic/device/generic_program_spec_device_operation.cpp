@@ -448,10 +448,10 @@ void check_tensor_views(const SpecAttributes& attributes) {
                     std::ranges::find(view.devices, device) != view.devices.end(),
                     "generic_op: tensor_args['{}'] holds devices {}, but its program runs on device {}, which it does "
                     "not hold. On each device, a program reads that device's part of a tensor, so a program that binds "
-                    "a per-device view must run only on the view's devices: list only views of those devices in "
-                    "io_tensors or, in a MeshProgramSpec, bind the view only in the run args of a range on them. "
-                    "Binding the whole tensor instead reads each device's own part, which is the view's data only if "
-                    "every device holds the same data",
+                    "a per-device view must run only on the view's devices: with a ProgramSpec, list only views of "
+                    "those devices in io_tensors; with a MeshProgramSpec, bind the view only in the run args of a "
+                    "range on them. Binding the whole tensor instead reads each device's own part, which is the view's "
+                    "data only if every device holds the same data",
                     printable(view.name),
                     device_list(view.devices),
                     device);
@@ -619,6 +619,7 @@ namespace ttnn::prim {
 namespace {
 
 using GenericProgramSpecOperation = ttnn::operations::generic::GenericProgramSpecDeviceOperation;
+using ttnn::operations::generic::TensorViews;
 
 GenericProgramSpecOperation::tensor_args_t make_program_spec_tensor_args(const std::vector<Tensor>& io_tensors) {
     TT_FATAL(!io_tensors.empty(), "generic_op: io_tensors must hold at least the output tensor");
@@ -674,26 +675,27 @@ GenericProgramSpecOperation::operation_attributes_t with_prefetcher_pipes(
     return attributes;
 }
 
-}  // namespace
-
 // The ProgramSpec form runs its program on the tensors' ranges, as a MeshProgramSpec with those ranges would, so the
 // two forms key, check and run alike. The programs point at the caller's spec and run args instead of copying them.
 GenericProgramSpecOperation::operation_attributes_t program_spec_attributes(
-    const std::vector<Tensor>& io_tensors,
     const tt::tt_metal::ProgramSpec& spec,
-    const tt::tt_metal::ProgramRunArgs& run_args) {
+    const tt::tt_metal::ProgramRunArgs& run_args,
+    const GenericProgramSpecOperation::tensor_args_t& tensor_args,
+    TensorViews tensor_views) {
     GenericProgramSpecOperation::operation_attributes_t attributes;
-    const auto ranges = tensor_ranges(make_program_spec_tensor_args(io_tensors));
+    const auto ranges = tensor_ranges(tensor_args);
     for (const auto& range : ranges.ranges()) {
         attributes.programs.emplace_back(range, spec, run_args);
     }
-    return attributes;
+    attributes.tensor_views = std::move(tensor_views);
+    return with_prefetcher_pipes(std::move(attributes));
 }
 
 // Pairs each range's spec with its run args.
 GenericProgramSpecOperation::operation_attributes_t mesh_program_spec_attributes(
     const std::vector<std::pair<ttnn::MeshCoordinateRange, tt::tt_metal::ProgramSpec>>& programs,
-    const std::vector<std::pair<ttnn::MeshCoordinateRange, tt::tt_metal::ProgramRunArgs>>& run_args) {
+    const std::vector<std::pair<ttnn::MeshCoordinateRange, tt::tt_metal::ProgramRunArgs>>& run_args,
+    TensorViews tensor_views) {
     TT_FATAL(!programs.empty(), "generic_op: the MeshProgramSpec has no programs");
     TT_FATAL(
         run_args.size() == programs.size(),
@@ -711,35 +713,49 @@ GenericProgramSpecOperation::operation_attributes_t mesh_program_spec_attributes
             range);
         attributes.programs.emplace_back(range, spec, range_run_args->second);
     }
-    return attributes;
+    attributes.tensor_views = std::move(tensor_views);
+    return with_prefetcher_pipes(std::move(attributes));
 }
+
+}  // namespace
 
 Tensor generic_op(
     const std::vector<Tensor>& io_tensors,
     const tt::tt_metal::ProgramSpec& spec,
-    const tt::tt_metal::ProgramRunArgs& run_args) {
-    return generic_op(io_tensors, program_spec_attributes(io_tensors, spec, run_args));
-}
-
-void prepare_generic_op(
-    const std::vector<Tensor>& io_tensors,
-    const tt::tt_metal::ProgramSpec& spec,
-    const tt::tt_metal::ProgramRunArgs& run_args) {
-    prepare_generic_op(io_tensors, program_spec_attributes(io_tensors, spec, run_args));
-}
-
-Tensor generic_op(
-    const std::vector<Tensor>& io_tensors,
-    const GenericProgramSpecOperation::operation_attributes_t& operation_attributes) {
+    const tt::tt_metal::ProgramRunArgs& run_args,
+    TensorViews tensor_views) {
+    const auto tensor_args = make_program_spec_tensor_args(io_tensors);
     return ttnn::device_operation::launch<GenericProgramSpecOperation>(
-        with_prefetcher_pipes(operation_attributes), make_program_spec_tensor_args(io_tensors));
+        program_spec_attributes(spec, run_args, tensor_args, std::move(tensor_views)), tensor_args);
 }
 
 void prepare_generic_op(
     const std::vector<Tensor>& io_tensors,
-    const GenericProgramSpecOperation::operation_attributes_t& operation_attributes) {
+    const tt::tt_metal::ProgramSpec& spec,
+    const tt::tt_metal::ProgramRunArgs& run_args,
+    TensorViews tensor_views) {
+    const auto tensor_args = make_program_spec_tensor_args(io_tensors);
     ttnn::device_operation::prepare<GenericProgramSpecOperation>(
-        with_prefetcher_pipes(operation_attributes), make_program_spec_tensor_args(io_tensors));
+        program_spec_attributes(spec, run_args, tensor_args, std::move(tensor_views)), tensor_args);
+}
+
+Tensor generic_op(
+    const std::vector<Tensor>& io_tensors,
+    const std::vector<std::pair<ttnn::MeshCoordinateRange, tt::tt_metal::ProgramSpec>>& programs,
+    const std::vector<std::pair<ttnn::MeshCoordinateRange, tt::tt_metal::ProgramRunArgs>>& run_args,
+    TensorViews tensor_views) {
+    auto attributes = mesh_program_spec_attributes(programs, run_args, std::move(tensor_views));
+    return ttnn::device_operation::launch<GenericProgramSpecOperation>(
+        attributes, make_program_spec_tensor_args(io_tensors));
+}
+
+void prepare_generic_op(
+    const std::vector<Tensor>& io_tensors,
+    const std::vector<std::pair<ttnn::MeshCoordinateRange, tt::tt_metal::ProgramSpec>>& programs,
+    const std::vector<std::pair<ttnn::MeshCoordinateRange, tt::tt_metal::ProgramRunArgs>>& run_args,
+    TensorViews tensor_views) {
+    auto attributes = mesh_program_spec_attributes(programs, run_args, std::move(tensor_views));
+    ttnn::device_operation::prepare<GenericProgramSpecOperation>(attributes, make_program_spec_tensor_args(io_tensors));
 }
 
 }  // namespace ttnn::prim
