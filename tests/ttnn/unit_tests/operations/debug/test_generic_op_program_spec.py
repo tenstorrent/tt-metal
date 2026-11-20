@@ -1060,9 +1060,9 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
     with expect_error(
         RuntimeError,
         r"tensor_args\['input'\] holds devices MeshCoordinate\(\[0, 1\]\), but these run args are for device "
-        r"MeshCoordinate\(\[0, 0\]\), which it does not hold. On each device it runs on, a program reads that "
-        r"device's part of a tensor, so to read the data of a per-device view, run the program only on the view's "
-        r"devices",
+        r"MeshCoordinate\(\[0, 0\]\) \(a device of io_tensors\), which it does not hold\. On each device it runs on, "
+        r"a program reads that device's part of a tensor, so to read a per-device view's data, list only views of the "
+        r"devices it holds in io_tensors",
     ):
         E.generic_op([first_input, first_output], spec, run_args)
     with expect_error(RuntimeError, message):
@@ -1080,7 +1080,12 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
         )
     mesh_spec = E.MeshProgramSpec(programs=[(one_device(0), spec)])
     mesh_run_args = E.MeshProgramRunArgs(programs=[(one_device(0), run_args)])
-    with expect_error(RuntimeError, message):
+    with expect_error(
+        RuntimeError,
+        r"tensor_args\['input'\] holds devices MeshCoordinate\(\[0, 1\]\), but these run args are for device "
+        r"MeshCoordinate\(\[0, 0\]\) \(in mesh range .*\), which it does not hold\..* so to read a per-device view's "
+        r"data, bind it only in the run args of a range on the devices it holds",
+    ):
         E.generic_op([input_tensor, output_tensor], mesh_spec, mesh_run_args)
     with expect_error(RuntimeError, message):
         E.prepare_generic_op([input_tensor, output_tensor], mesh_spec, mesh_run_args)
@@ -1104,13 +1109,13 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
             E.MeshProgramRunArgs(programs=[(one_device(1), other_run_args), (one_device(0), first_run_args)]),
         )
 
-    # Every tensor bound to a parameter its program declares is checked, whatever else is wrong with the call, such as
-    # a view of a tensor that io_tensors does not list. A tensor its program never reads leaves the call to generic_op's
-    # own message: one under a name the program does not declare, even if another range's program declares it, and one
-    # in run args for a range the spec has no program on. So does a tensor that holds its program's devices.
+    # Only a view of a listed tensor, bound to a parameter its program declares, gets this check. Every other call that
+    # generic_op rejects gets its own message: a view of a tensor that io_tensors does not list, or that whole tensor; a
+    # tensor under a name its program does not declare, even if another range's program declares it; and a tensor in
+    # run args for a range the spec has no program on.
     unlisted = ttnn.allocate_tensor_on_device(input_tensor.spec, mesh_device)
     spec, run_args = exp_program(ttnn.get_device_tensors(unlisted)[1], output_tensor)
-    with expect_error(RuntimeError, message):
+    with expect_error(RuntimeError, "tensor of tensor parameter 'input' is not in io_tensors"):
         E.generic_op([input_tensor, output_tensor], spec, run_args)
     spec, run_args = exp_program(unlisted, output_tensor)
     with expect_error(RuntimeError, "tensor of tensor parameter 'input' is not in io_tensors"):
