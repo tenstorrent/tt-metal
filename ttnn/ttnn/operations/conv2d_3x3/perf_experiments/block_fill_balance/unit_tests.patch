@@ -1,0 +1,117 @@
+--- a/tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_block_sharded.py	2026-11-19 23:16:01.630399315 +0000
++++ b/tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_block_sharded.py
+@@ -18,6 +18,8 @@
+   weight rounds forwarded from the column streams.
+ - host-planned fill: each core's slab reads planned on the host (split cores' writer part issued at kernel start, the
+   spare members' upper half on NoC1, a short last slice's padding tiles zeroed), bit-identical to the device plan.
++- balanced, gated fill: slab rows moved between the NoC0 reader and the NoC1 writer either way round the column, the
++  first kernel row's band issued first, where the bands are disjoint; bit-identical to the direction split.
+ """
+ 
+ import importlib
+@@ -629,6 +631,105 @@
+     expected = _reference(torch_input, torch_weight, torch_bias, H, W, p, s, d, True)
+     assert_with_pcc(expected, outputs[True], PCC[ttnn.bfloat8_b])
+ 
++
++FILL_BALANCE_CASES = [
++    # aspp.convs.1: 11 columns x 10 grid rows (two past the shard grid), no spare groups; rows move the long way round.
++    pytest.param(((32, 64, 2048), 256, 6, 1, 6), (256, 192), ttnn.ShardOrientation.ROW_MAJOR, True, True, id="aspp1"),
++    # aspp.convs.3: the short last slice (both RISCs zero its padding tiles), d 18.
++    pytest.param(
++        ((32, 64, 1024), 256, 18, 1, 18), (256, 96), ttnn.ShardOrientation.ROW_MAJOR, True, False, id="aspp3_short_slice"
++    ),
++    # res5.2: spare-column groups (their reads count as the columns' fixed load), d 8.
++    pytest.param(((32, 64, 512), 512, 8, 1, 8), (224, 64), ttnn.ShardOrientation.ROW_MAJOR, True, False, id="res5_2_spare"),
++    # Two slices, C_out 96 (a short N-slice), d 8.
++    pytest.param(((32, 64, 64), 96, 8, 1, 8), (256, 32), ttnn.ShardOrientation.ROW_MAJOR, True, False, id="k2_d8_co96"),
++    # Overlapping kernel-row bands keep the direction split and no gate: stride 2 (the S2_TAPS prelude), d 1 COL_MAJOR.
++    pytest.param(((64, 128, 256), 256, 1, 2, 1), (1024, 32), ttnn.ShardOrientation.ROW_MAJOR, False, False, id="res4_0_s2"),
++    pytest.param(((32, 64, 64), 64, 1, 1, 1), (256, 32), ttnn.ShardOrientation.COL_MAJOR, False, False, id="k2_col_major"),
++]
++
++
++@pytest.mark.parametrize("case_hw,shard,orientation,expect_gate,expect_long_way", FILL_BALANCE_CASES)
++def test_conv2d_3x3_block_sharded_fill_balance(
++    case_hw, shard, orientation, expect_gate, expect_long_way, device, monkeypatch
++):
++    """BLOCK_FILL_BALANCE / BLOCK_FILL_GATE: per column, slab rows of any (core, owner) piece moved between the reader
++    (NoC0) and the writer (NoC1), either way round the column ring, and each RISC issuing the first kernel row's band
++    before the rest, the reader counting the writer's landed batches from NoC1's transaction-id counters; both only
++    where the kernel-row bands are disjoint. Bit-identical to the direction split without the gate, and each mechanism
++    taken where expected."""
++    torch.manual_seed(17)
++    grid = device.compute_with_storage_grid_size()
++    if (grid.x, grid.y) != (11, 10):
++        pytest.skip("pinned to the 11 x 10 grid")
++    (H, W, c_in), c_out, p, s, d = case_hw
++    dtype, layout = ttnn.bfloat8_b, ttnn.TILE_LAYOUT
++    config = _block_config(H * W, c_in, layout, shard, orientation=orientation)
++    torch_weight = torch.randn(c_out, c_in, 3, 3).to(torch.bfloat16)
++    torch_bias = torch.randn(c_out).to(torch.bfloat16)
++    torch_input = torch.randn(1, 1, H * W, c_in).to(torch.bfloat16)
++    real_args, real_balance = _pd._host_fill_args, _pd._balance_fill_nocs
++    gates, long_way = [], []
++
++    def recording_args(*args, **kwargs):
++        reader, writer = real_args(*args, **kwargs)
++        gates.append((reader[0] >> 24) & 0x3F)
++        return reader, writer
++
++    def recording_balance(column, ring, background=None):
++        out = real_balance(column, ring, background)
++        # Writer rows from owners above the reader: NoC1 the long way round the column.
++        long_way.extend(k for (ry, lst), xs in zip(column, out) for (oy, _), k in zip(lst, xs) if oy < ry and k)
++        return out
++
++    monkeypatch.setattr(_pd, "_host_fill_args", recording_args)
++    monkeypatch.setattr(_pd, "_balance_fill_nocs", recording_balance)
++    outputs = {}
++    for on in (True, False):
++        monkeypatch.setattr(_pd, "BLOCK_FILL_BALANCE", on)
++        monkeypatch.setattr(_pd, "BLOCK_FILL_GATE", on)
++        device.disable_and_clear_program_cache()
++        gates.clear()
++        long_way.clear()
++        kwargs = dict(
++            stride=s,
++            padding=p,
++            dilation=d,
++            input_dtype=dtype,
++            input_layout=layout,
++            weight_dtype=ttnn.bfloat8_b,
++            input_memory_config=config,
++            device=device,
++        )
++        tt_weight = prepare_conv2d_weights(torch_weight, **kwargs)
++        tt_bias = prepare_conv2d_bias(torch_bias, **kwargs)
++        tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=layout, device=device, memory_config=config)
++        tt_output = conv2d_3x3(
++            tt_input,
++            tt_weight,
++            input_height=H,
++            input_width=W,
++            bias=tt_bias,
++            padding=p,
++            stride=s,
++            dilation=d,
++            activation="relu",
++            compute_kernel_config=ttnn.ComputeConfigDescriptor(
++                math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, math_approx_mode=False
++            ),
++        )
++        outputs[on] = ttnn.to_torch(tt_output).float()
++        assert gates, "host-planned fill not taken"
++        if on:
++            assert (max(gates) > 0) == expect_gate, f"gate taken: {max(gates) > 0}, expected {expect_gate}"
++            if expect_long_way and device.arch() == ttnn._ttnn.device.Arch.BLACKHOLE:
++                assert long_way, "the balance moved no row onto NoC1 the long way round"
++        else:
++            assert max(gates) == 0 and not long_way
++    assert torch.equal(outputs[True], outputs[False]), "the balanced, gated fill differs from the direction split"
++    expected = _reference(torch_input, torch_weight, torch_bias, H, W, p, s, d, True)
++    assert_with_pcc(expected, outputs[True], PCC[ttnn.bfloat8_b])
++
+ 
+ ROUND0_CASES = [
+     # res5.0: 36-tile rounds: the round-0 readers sit on the rows the NoC1 model picks (Blackhole).

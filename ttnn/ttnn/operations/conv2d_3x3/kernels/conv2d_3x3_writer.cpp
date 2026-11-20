@@ -820,9 +820,13 @@ void kernel_main() {
 #endif
 #ifdef CONV2D_3X3_HOST_FILL
     // Host-planned writer fill (descriptor _host_fill_args, after the server args and any N-slice round-0 args):
-    // [batches], then per batch [pieces] and (owner x << 16 | y, offset, slab row << 16 | rows) per piece. One M-block
-    // per core and the whole slab in the ring (empty at kernel start), so every batch is issued from kernel start (up
-    // to the window in flight) without the reader's hand-over, and counted in slab_fwd_done in order as it lands.
+    // [gate << 16 | batches], then per batch [pieces] and (owner x << 16 | y, offset, slab row << 16 | rows) per piece.
+    // One M-block per core and the whole slab in the ring (empty at kernel start), so every batch is issued from kernel
+    // start (up to the window in flight) without the reader's hand-over; the first `gate` batches (the first kernel
+    // row's band: BLOCK_FILL_GATE) go out alone, the rest once those landed. slab_fwd_done publishes how many batches
+    // were issued; the reader polls each one's transaction id on this NoC for its landing.
+    static_assert(
+        fill_writer_window == HOST_FILL_WRITER_WINDOW, "the reader polls the writer's fill trids mod this window");
 #if defined(NSLICE_SPREAD)
     uint32_t hf_arg = round0_arg + 12;  // after the spread stream's args
 #elif defined(NSLICE_ROUND0)
@@ -830,22 +834,27 @@ void kernel_main() {
 #else
     uint32_t hf_arg = server_arg + 3;
 #endif
-    const uint32_t hf_batches = split_here ? get_arg_val<uint32_t>(hf_arg) : 0;
+    const uint32_t hf_word = split_here ? get_arg_val<uint32_t>(hf_arg) : 0;
+    const uint32_t hf_batches = hf_word & 0xFFFFu;
+    const uint32_t hf_gate = hf_word >> 16;
     ++hf_arg;
     uint32_t hf_issued = 0;
-    uint32_t hf_served = 0;
-    // Batches still to issue or count: the waits that serve the fill stop calling it once it is done (a call in every
-    // poll iteration of the walk's waits measured +1.6% on res4.x even with nothing to read).
+    uint32_t hf_served = 0;  // batches landed (in order), for the window and the gate
+    // Batches still to issue: the waits that serve the fill stop calling it once it is done (a call in every poll
+    // iteration of the walk's waits measured +1.6% on res4.x even with nothing to read).
     bool hf_live = hf_batches > 0;
+    auto hf_issuable = [&]() {
+        return hf_issued < hf_batches && hf_issued - hf_served < fill_writer_window &&
+               (hf_issued < hf_gate || hf_served >= hf_gate);
+    };
     auto hf_serve = [&]() {
         while (hf_served < hf_issued &&
                ncrisc_noc_read_with_transaction_id_flushed(
                    fill_reads.noc.get_noc_id(), TRID_WFILL_BASE + hf_served % fill_writer_window)) {
-            Semaphore<>(slab_fwd_done_sem_id).up(1);
             ++hf_served;
         }
-        hf_live = hf_served < hf_batches;
-        if (hf_issued < hf_batches && hf_issued - hf_served < fill_writer_window) {
+        hf_live = hf_issued < hf_batches;
+        if (hf_issuable()) {
             MaybeDeviceZoneScope("writer_fill");
             do {
                 const uint32_t pieces = get_arg_val<uint32_t>(hf_arg++);
@@ -871,8 +880,14 @@ void kernel_main() {
                     }
                 }
                 ++hf_issued;
-            } while (hf_issued < hf_batches && hf_issued - hf_served < fill_writer_window);
+            } while (hf_issuable());
             dataflow_kernel_lib::set_read_trid(fill_reads.noc, 0);
+            // Publish the issued count once the NIU counts the last batch's requests (the read-back of its counter
+            // orders the publish behind the command-buffer writes).
+            (void)NOC_STATUS_READ_REG(
+                fill_reads.noc.get_noc_id(),
+                NIU_MST_REQS_OUTSTANDING_ID(TRID_WFILL_BASE + (hf_issued - 1) % fill_writer_window));
+            Semaphore<>(slab_fwd_done_sem_id).set(hf_issued);
         }
     };
 #endif
@@ -1363,8 +1378,8 @@ void kernel_main() {
     [[maybe_unused]] uint32_t round0_pushed = 0;
     auto issue_weight_k_block = [&]() {
         if (sd_w0 == 1) {
-            // Slab-direct round 0 (taken early): wait for it, serving the fill.
             MaybeDeviceZoneScope("writer_weight_fetch");
+            // Slab-direct round 0 (taken early): wait for it, serving the fill.
             if (sd_w_issued_early) {
                 MaybeDeviceZoneScope("writer_sd_weight_land");
                 while (!sd_w0_try()) {

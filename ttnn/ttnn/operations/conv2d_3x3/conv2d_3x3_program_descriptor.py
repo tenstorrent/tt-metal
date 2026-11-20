@@ -435,6 +435,32 @@ SPARE_SPLIT_FILL = True
 HOST_FILL_WRITER_WINDOW = 8
 # Host-planned words per core at most (a core's runtime args stay under the device's 341).
 HOST_FILL_MAX_WORDS = 256
+# Balanced, kernel-row-gated host fill (BLOCK_HOST_FILL on Blackhole; _balance_fill_nocs, _host_fill_args). A grid-row
+# core reads its slab from its column's owner shards, and every response of a same-column read runs along that column:
+# on NoC0 (+y) the higher-index shards' rows come the long way round, on NoC1 (-y) the lower ones. The direction split
+# (higher shards on the writer, not on the column sender) left aspp.convs.1's middle NoC0 column links with 268 KB
+# (325 KB in the columns whose sender row read its higher shards on NoC0) against <= 83 KB on NoC1 (a link moves ~62
+# B/cycle). BLOCK_FILL_BALANCE: per column, the host moves single rows of any (core, owner) piece between the NoC0
+# reader and the NoC1 writer, either way round the column ring, while that lowers a smooth max (sum of eighth powers)
+# of the column's link, owner-injection and reader-ejection loads, with spare-column members' reads from the column's
+# owners as fixed load: busiest link 268 -> ~183 KB (an LP optimum: ~182). A core keeps no writer share under
+# SPLIT_FILL_MIN_BYTES. BLOCK_FILL_GATE: the tap build reads the slab kernel row by kernel row, and with every batch in
+# flight at once the first band (the farthest rows) landed with the rest (aspp.convs.1 critical core: first band 5.8
+# us, fill end 6.8); each RISC now issues the first band's batches alone and the rest once they landed. Both only where
+# the kernel-row bands are disjoint (_bands_disjoint): with overlapping bands (small d, stride 2) the slab is one short
+# run, and the moved rows and the gate only add latency (32x64x128 on 4 slices, d 1: +7.3%; stride 2 on 4 slices:
+# +6% / +7%). The reader counts the writer's landed batches itself from NoC1's transaction-id counters (the writer
+# publishes how many it issued), so a writer with weight duties never has to serve the fill in its waits.
+# Measured (Blackhole p150b, unzoned, bit-identical; changelog Perf 14, block_fill_balance): aspp.convs.1 @ LoFi
+# 47.78 -> 45.64 us (medians of 5 pairs over 3 sessions; one session's 3 alternating pairs 47.18 -> 45.64),
+# aspp.convs.2 -5.0%, aspp.convs.3 -4.5%, 2 slices d 8 -2.9%, HiFi4 aspp.convs.1 / .2 / .3 -1.3% / -1.1% / -1.5%, the
+# rest flat. Options measured on aspp.convs.1: the balance alone (all batches at once) -2.5%, the gate alone flat, the
+# direction split with the sender rows split too -1.8%; the reader's zero block issued behind the fill, or its first
+# band's batches one at a time, slower.
+BLOCK_FILL_BALANCE = True
+BLOCK_FILL_GATE = True
+# Column ring rows per NoC on Blackhole (physical y 0..11; worker rows 2..11).
+_BH_RING_ROWS = 12
 
 
 def l1_cb_budget_bytes(resident_shard_bytes=0):
@@ -2260,13 +2286,25 @@ def _spare_split_row(g: Conv3x3Geometry, m_tile_start, actual_m_tiles):
 
 
 def _host_fill_args(
-    g: Conv3x3Geometry, m_tile_start, actual_m_tiles, ub, num_batches, shard_rows, owners, row_bytes, writer_row
+    g: Conv3x3Geometry,
+    m_tile_start,
+    actual_m_tiles,
+    ub,
+    num_batches,
+    shard_rows,
+    owners,
+    row_bytes,
+    writer_row,
+    writer_rows=None,
+    gate_rows=0,
 ):
-    """Host-planned fill of a one-M-block core (BLOCK_HOST_FILL). Input tile-rows at or past writer_row are the
-    writer's (None: no split). Reader args: per batch of ub slab rows, (writer flag << 31 | reader pieces) and 3 words
-    per piece; writer args: (batches with writer pieces), then per such batch (pieces) and 3 words per piece. A piece is
-    (owner x << 16 | y, byte offset in the owner's shard, slab row << 16 | rows); pieces stop at owner-shard edges and
-    at batch ends."""
+    """Host-planned fill of a one-M-block core (BLOCK_HOST_FILL). Input tile-rows in writer_rows, else at or past
+    writer_row, are the writer's (None: no split). Reader args: per batch of ub slab rows, (writer flag << 31 | gate
+    << 24 | reader pieces) and 3 words per piece; writer args: (gate << 16 | batches with writer pieces), then per such
+    batch (pieces) and 3 words per piece. A piece is (owner x << 16 | y, byte offset in the owner's shard, slab row <<
+    16 | rows); pieces stop at owner-shard edges, at batch ends and where the RISC changes. The gate (BLOCK_FILL_GATE):
+    the batches holding the first gate_rows slab rows, which each RISC issues alone (the reader's count in batch 0's
+    word, the writer's among its own batches)."""
     segs = _host_fill_segments(g, m_tile_start, actual_m_tiles)
     # The reader pushes num_batches batches (its slab rows); those past the plan's rows are pushed unread.
     assert sum(n for _, n in segs) <= num_batches * ub, (segs, num_batches, ub)
@@ -2277,25 +2315,130 @@ def _host_fill_args(
         while row < first + count:
             b = slab_row // ub
             end = min(first + count, (row // shard_rows + 1) * shard_rows, row + (b + 1) * ub - slab_row)
-            if writer_row is not None and row < writer_row < end:
-                end = writer_row
+            if writer_rows is not None:
+                on_writer = row in writer_rows
+                end = next((r for r in range(row + 1, end) if (r in writer_rows) != on_writer), end)
+            else:
+                if writer_row is not None and row < writer_row < end:
+                    end = writer_row
+                on_writer = writer_row is not None and row >= writer_row
             shard = row // shard_rows
             piece = [owners[shard], (row - shard * shard_rows) * row_bytes, (slab_row << 16) | (end - row)]
-            batches[b][1 if writer_row is not None and row >= writer_row else 0].append(piece)
+            batches[b][1 if on_writer else 0].append(piece)
             slab_row += end - row
             row = end
+    gate = min(_div_up(gate_rows, ub), num_batches)
     reader, writer = [], []
     writer_batches = 0
-    for rp, wp in batches:
-        reader.append((int(bool(wp)) << 31) | len(rp))
+    writer_gate = 0
+    for bi, (rp, wp) in enumerate(batches):
+        reader.append((int(bool(wp)) << 31) | ((gate << 24) if bi == 0 else 0) | len(rp))
         for p in rp:
             reader += p
         if wp:
             writer_batches += 1
+            writer_gate += int(bi < gate)
             writer.append(len(wp))
             for p in wp:
                 writer += p
-    return reader, [writer_batches] + writer
+    return reader, [(writer_gate << 16) | writer_batches] + writer
+
+
+def _first_band_rows(g: Conv3x3Geometry, m_tile_start, actual_m_tiles):
+    """Slab rows of the first kernel row whose band has rows: the slab prefix the prelude reads first (BLOCK_FILL_GATE)."""
+    o_first = m_tile_start * TILE
+    o_last = min((m_tile_start + actual_m_tiles) * TILE, g.num_out_px) - 1
+    f = _block_first_tap(g, o_first)
+    band_len = _block_band_len(g, o_first, o_last)
+    total = sum(n for _, n in _tile_slab_segments(g, f, band_len))
+    for kh in range(3):
+        lo = max(f + kh * g.dilation * g.input_width, 0)
+        hi = min(f + kh * g.dilation * g.input_width + band_len, g.num_in_px)
+        if lo < hi:
+            return min(_div_up(hi, TILE) - lo // TILE, total)
+    return 0
+
+
+def _bands_disjoint(g: Conv3x3Geometry, m_tile_start, actual_m_tiles):
+    """The first kernel row's band is a slab run of its own: the next band starts past it (a gap of input tile-rows)."""
+    segs = _host_fill_segments(g, m_tile_start, actual_m_tiles)
+    return (
+        g.stride == 1
+        and len(segs) >= 2
+        and segs[0][1] == _first_band_rows(g, m_tile_start, actual_m_tiles)
+        and segs[1][0] > segs[0][0] + segs[0][1]
+    )
+
+
+def _ring_links(src, dst, noc, ring):
+    """Column links (by their source row) a response from row src to row dst crosses: NoC0 runs +y, NoC1 -y."""
+    hops = (dst - src) % ring if noc == 0 else (src - dst) % ring
+    step = 1 if noc == 0 else -1
+    return [(src + step * i) % ring for i in range(hops)]
+
+
+def _balance_fill_nocs(column, ring, background=None):
+    """BLOCK_FILL_BALANCE: one column's grid-row fills, column = [(reader y, [(owner y, rows)])], pieces in slab order;
+    background: fixed rows per ("inj" | "link", noc, y) of reads the column carries for cores outside it (spare-column
+    members). Returns per reader the rows of each piece the writer reads on NoC1 (the first rows of the piece). Greedy
+    from the direction split (owners below on NoC1): move the one row of a piece to the other NoC that most lowers the
+    sum of the eighth powers of the column's loads in rows (a smooth max over every column link per NoC, every owner's
+    injection and every reader's ejection per NoC), until no move does. aspp.convs.1 / .2 / .3: busiest resource within
+    1% / 1.5% / 7% of an LP optimum, ~10-20 ms per column."""
+    pieces = [(ri, oy, n) for ri, (ry, lst) in enumerate(column) for oy, n in lst]
+    ry_of = [ry for ry, _ in column]
+    keys = {}
+
+    def kid(k):
+        return keys.setdefault(k, len(keys))
+
+    res = []  # per piece and NoC: the resources one row of it loads
+    for ri, oy, _ in pieces:
+        res.append(
+            [
+                [kid(("inj", noc, oy)), kid(("ej", noc, ri))]
+                + [kid(("link", noc, y)) for y in _ring_links(oy, ry_of[ri], noc, ring)]
+                for noc in (0, 1)
+            ]
+        )
+    for k in background or {}:
+        kid(k)
+    x1 = [n if oy > ry_of[ri] else 0 for ri, oy, n in pieces]
+    load = [0] * len(keys)
+    for k, v in (background or {}).items():
+        load[keys[k]] += v
+    for i, (_, _, n) in enumerate(pieces):
+        for k in res[i][0]:
+            load[k] += n - x1[i]
+        for k in res[i][1]:
+            load[k] += x1[i]
+    while True:
+        best, best_i, best_d = 0, -1, 0
+        for i, (_, _, n) in enumerate(pieces):
+            for d, frm, to in ((1, 0, 1), (-1, 1, 0)):
+                if not 0 <= x1[i] + d <= n:
+                    continue
+                delta = 0
+                for k in res[i][frm]:
+                    v = load[k]
+                    delta += (v - 1) ** 8 - v**8
+                for k in res[i][to]:
+                    v = load[k]
+                    delta += (v + 1) ** 8 - v**8
+                if delta < best:
+                    best, best_i, best_d = delta, i, d
+        if best_i < 0:
+            break
+        frm, to = (0, 1) if best_d == 1 else (1, 0)
+        for k in res[best_i][frm]:
+            load[k] -= 1
+        for k in res[best_i][to]:
+            load[k] += 1
+        x1[best_i] += best_d
+    out = [[] for _ in column]
+    for i, (ri, _, _) in enumerate(pieces):
+        out[ri].append(x1[i])
+    return out
 
 
 def _host_fill_fits(g: Conv3x3Geometry, b: Conv3x3Blocking, shard_rows):
@@ -3124,14 +3267,82 @@ def create_program_descriptor(
                 v = device.worker_core_from_logical_core(block_core(in_spec, shard, col))
                 owner_xy[col].append((v.x << 16) | v.y)
         owner_row_bytes = (int(in_spec.shape[1]) // TILE) * input_page_bytes
+        # BLOCK_FILL_BALANCE: per column, the grid-row cores' writer rows.
+        writer_rows_of = {}
+        if (
+            BLOCK_FILL_BALANCE
+            and tile_fill_split
+            and g.stride == 1
+            and device.arch() == ttnn._ttnn.device.Arch.BLACKHOLE
+        ):
+            for col in range(g.k_cols):
+                members = [(core, m_index) for core, m_index, c in work if c == col and m_index not in spare_groups]
+                # The column ring model: every member and owner on one NoC column (ROW_MAJOR shards).
+                if (
+                    len(
+                        {device.worker_core_from_logical_core(core).x for core, _ in members}
+                        | {xy >> 16 for xy in owner_xy[col]}
+                    )
+                    != 1
+                ):
+                    continue
+                # Spare-column members of this slice read from this column's owners: their NoC1 half climbs the
+                # column (Y first) before it turns along the member's row; both halves load the owners' injection.
+                background = {}
+                for core, m_index, c in work:
+                    if c != col or m_index not in spare_groups:
+                        continue
+                    sy = device.worker_core_from_logical_core(core).y
+                    split = split_row_of.get((core.x, core.y))
+                    for first, count in _host_fill_segments(g, *m_ranges[m_index]):
+                        for r in range(first, first + count):
+                            oy = owner_xy[col][r // input_shard_rows] & 0xFFFF
+                            noc = 1 if split is not None and r >= split else 0
+                            background[("inj", noc, oy)] = background.get(("inj", noc, oy), 0) + 1
+                            for y in _ring_links(oy, sy, 1, _BH_RING_ROWS) if noc == 1 else ():
+                                background[("link", 1, y)] = background.get(("link", 1, y), 0) + 1
+                # Only where the kernel-row bands are disjoint (_bands_disjoint): with overlapping bands (small d) the
+                # slab is one short run and the moved rows only add writer hand-overs (32x64x128 on 4 slices, d 1:
+                # +7.3%; stride 2 on 4 slices: +6% / +7%).
+                if not any(_bands_disjoint(g, *m_ranges[m_index]) for _, m_index in members):
+                    continue
+                column = []
+                rows_of = []
+                for core, m_index in members:
+                    pieces, rows = [], []
+                    for first, count in _host_fill_segments(g, *m_ranges[m_index]):
+                        for r in range(first, first + count):
+                            shard = r // input_shard_rows
+                            if pieces and pieces[-1][1] == shard and rows[-1] == r - 1:
+                                pieces[-1][2] += 1
+                            else:
+                                pieces.append([owner_xy[col][shard] & 0xFFFF, shard, 1])
+                            rows.append(r)
+                    column.append((device.worker_core_from_logical_core(core).y, [(oy, n) for oy, _, n in pieces]))
+                    rows_of.append((core, pieces, rows))
+                for (core, pieces, rows), xs in zip(rows_of, _balance_fill_nocs(column, _BH_RING_ROWS, background)):
+                    w, at = set(), 0
+                    for (_, _, n), k in zip(pieces, xs):
+                        w.update(rows[at : at + k])
+                        at += n
+                    if len(w) * owner_row_bytes < SPLIT_FILL_MIN_BYTES:
+                        # A small writer share is pure latency (as SPLIT_FILL_MIN_BYTES): 32x64x128 on 4 slices
+                        # (~1 KB rows) measured +6% / +7% with it, stride 2 on 4 slices +7%.
+                        w = set()
+                    writer_rows_of[(core.x, core.y)] = w
+                    if w:
+                        split_cores.add((core.x, core.y))
+                    else:
+                        split_cores.discard((core.x, core.y))
         for core, m_index, col in work:
+            writer_rows = writer_rows_of.get((core.x, core.y)) or None
             if (core.x, core.y) in split_row_of:
                 writer_row = split_row_of[(core.x, core.y)]
             elif split_of(core):
                 writer_row = (m_index + 1) * input_shard_rows
             else:
                 writer_row = None
-            host_fill_words[(core.x, core.y)] = _host_fill_args(
+            fill_args = (
                 g,
                 *m_ranges[m_index],
                 b.untilize_batch_rows,
@@ -3139,9 +3350,20 @@ def create_program_descriptor(
                 input_shard_rows,
                 owner_xy[col],
                 owner_row_bytes,
-                writer_row,
             )
-            assert max(len(w) for w in host_fill_words[(core.x, core.y)]) <= HOST_FILL_MAX_WORDS
+            # The gate only where the first band is a run of its own (_bands_disjoint): else it would hold back only the
+            # next bands' short tails (32x64x128 on 4 slices, d 1: +2.8% with it).
+            gate_rows = (
+                _first_band_rows(g, *m_ranges[m_index])
+                if BLOCK_FILL_GATE and _bands_disjoint(g, *m_ranges[m_index])
+                else 0
+            )
+            words = _host_fill_args(*fill_args, writer_row, writer_rows, gate_rows)
+            if writer_rows and max(len(w) for w in words) > HOST_FILL_MAX_WORDS:
+                # The balanced plan cuts more pieces: past the runtime-arg budget, the direction split (one cut).
+                words = _host_fill_args(*fill_args, (m_index + 1) * input_shard_rows, None, gate_rows)
+            host_fill_words[(core.x, core.y)] = words
+            assert max(len(w) for w in words) <= HOST_FILL_MAX_WORDS
 
     def server_rt_args(core):
         """Weight servers: [complete-flag value (1, or 0x0101 with a partner), server x, server y] on a receiver, else
@@ -3432,7 +3654,9 @@ def create_program_descriptor(
         and list(_wspec.shard_shape)[-2:] == [b.block_k_tiles * b.num_k_blocks * TILE, g.out_n_tiles * TILE]
         else []
     )
-    _host_fill_defines = [("CONV2D_3X3_HOST_FILL", "1")] if host_fill else []
+    _host_fill_defines = (
+        [("CONV2D_3X3_HOST_FILL", "1"), ("HOST_FILL_WRITER_WINDOW", str(HOST_FILL_WRITER_WINDOW))] if host_fill else []
+    )
     readers = [
         ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "conv2d_3x3_reader.cpp"),

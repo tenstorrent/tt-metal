@@ -857,12 +857,17 @@ void kernel_main() {
             }
 #elif defined(CONV2D_3X3_HOST_FILL)
             // Host-planned fill (the descriptor's BLOCK_HOST_FILL, _host_fill_args; one M-block per core, the whole
-            // slab in the ring). Per batch: (writer flag << 31 | this RISC's pieces), then (owner x << 16 | y, offset
-            // in the owner's shard, slab row << 16 | rows) per piece. The reads go out first; the device plan (center
-            // taps, band pages) is computed under them. A split core's writer issued its pieces at kernel start and
-            // counts each batch in slab_fwd_done as it lands. Raw reads instead of a TensorAccessor lookup per run: the
-            // accessor has no precomputed-run form, and the device-side plan cost the writer ~0.4 us before its first
-            // read and ~0.27 us per 4-row batch (res4.0, identical on every core: control-bound).
+            // slab in the ring). Per batch: (writer flag << 31 | gate << 24 on batch 0 | this RISC's pieces), then
+            // (owner x << 16 | y, offset in the owner's shard, slab row << 16 | rows) per piece. The reads go out
+            // first; the device plan (center taps, band pages) is computed under them. The first `gate` batches (the
+            // first kernel row's band, which the prelude reads first: BLOCK_FILL_GATE) go out alone, the rest once
+            // they landed. A split core's writer issues its pieces from kernel start (its gated part once its first
+            // band landed) and publishes how many batches it issued in slab_fwd_done; this reader sees a writer batch
+            // land on NoC1's transaction-id counter, so the writer never serves the fill in its waits. Raw reads
+            // instead of a TensorAccessor lookup per run: the accessor has no precomputed-run form, and the
+            // device-side plan cost the writer ~0.4 us before its first read and ~0.27 us per 4-row batch (res4.0,
+            // identical on every core: control-bound). Raw transaction-id polls of the writer's NoC (capability): no
+            // helper waits for another RISC's reads.
             {
                 constexpr uint32_t batch_pages = untilize_batch_rows * c_in_tiles;
                 constexpr uint32_t max_batches = slab_tile_rows / untilize_batch_rows;
@@ -881,7 +886,13 @@ void kernel_main() {
                     if constexpr (tile_fill_split) {
                         if (hf_writer_of[pushed]) {
                             MaybeDeviceZoneScope("reader_fill_fwd_wait");
-                            Semaphore<>(slab_fwd_done_sem_id).wait_min(++fill_batches_handed);
+                            // Writer batch j: issued (slab_fwd_done > j), then landed (no request outstanding on its
+                            // transaction id, TRID_FILL_BASE + j % window on the writer's NoC).
+                            Semaphore<>(slab_fwd_done_sem_id).wait_min(fill_batches_handed + 1);
+                            while (!ncrisc_noc_read_with_transaction_id_flushed(
+                                1 - noc_index, TRID_FILL_BASE + fill_batches_handed % HOST_FILL_WRITER_WINDOW)) {
+                            }
+                            ++fill_batches_handed;
                         }
                     }
                     cb_push_back(cb_input_tiles, batch_pages);
@@ -895,7 +906,7 @@ void kernel_main() {
                         }
                         const uint32_t word = get_arg_val<uint32_t>(host_fill_arg++);
                         hf_writer_of[batch] = (word >> 31) != 0;
-                        const uint32_t pieces = word & 0x7FFFFFFFu;
+                        const uint32_t pieces = word & 0x00FFFFFFu;
                         reads.begin(TRID_FILL_BASE + batch % fill_window);
                         for (uint32_t i = 0; i < pieces; ++i, host_fill_arg += 3) {
                             const uint32_t xy = get_arg_val<uint32_t>(host_fill_arg);
@@ -916,7 +927,10 @@ void kernel_main() {
                         }
                     }
                 };
-                issue_through(num_batches < fill_window ? num_batches : fill_window);
+                const uint32_t gate_word = (get_arg_val<uint32_t>(host_fill_arg) >> 24) & 0x3Fu;
+                const uint32_t gate = gate_word != 0 && gate_word < num_batches ? gate_word : num_batches;
+                const uint32_t first = num_batches < fill_window ? num_batches : fill_window;
+                issue_through(first < gate ? first : gate);
                 conv2d_3x3::TileSlabPlan plan;
                 conv2d_3x3::tile_slab_plan<input_width, num_in_px, dilation, c_in_tiles>(footprint, slab_x_base, plan);
                 if constexpr (nslice_center) {
@@ -924,6 +938,9 @@ void kernel_main() {
                 }
                 for (int32_t kh = 0; kh < 3; ++kh) {
                     slab_ready_pages[kh] = plan.ready_pages[kh];
+                }
+                while (pushed < gate && gate < num_batches) {
+                    retire();
                 }
                 issue_through(num_batches);
                 dataflow_kernel_lib::set_read_trid(reads.noc, 0);

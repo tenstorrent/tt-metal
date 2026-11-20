@@ -1,0 +1,226 @@
+SAFE_PYTEST: Waiting for device lock...
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: on — collect + parallel compile (x64) inside the pytest session, local
+SAFE_PYTEST: env UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=64 PYTHONPATH=/localdev/pmilojevic/workspaces/opgen:/localdev/pmilojevic/workspaces/opgen pytest -p tests.plugins.up_front_collect /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py --import-mode=prepend -q
+========================================
+2026-11-20 02:44:26.198 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/workspaces/opgen
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, anyio-4.16.0, benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, cov-7.0.0, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-11-20 02:44:26.405 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-20 02:44:26.405 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-20 02:44:26.407 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-20 02:44:26.407 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-20 02:44:26.431 | info     |             UMD | Established firmware bundle version: 19.16.1 (topology_discovery.cpp:700)
+2026-11-20 02:44:26.432 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-20 02:44:26.706 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:174)
+2026-11-20 02:44:26.706 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-20 02:44:26.706 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-20 02:44:26.706 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-20 02:44:26.714 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-20 02:44:27.150 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-20 02:44:27.299 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-20 02:44:27.299 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-20 02:44:27.430 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 02:44:28.122 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:28.277 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:28.418 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:28.603 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:28.793 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:29.148 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:29.496 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:29.532 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:29.561 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:29.581 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:29.601 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:29.622 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:29.642 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:29.671 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:29.699 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:29.726 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:29.755 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:30.173 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:30.583 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:30.983 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:31.512 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:31.922 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:32.412 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:32.450 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:32.708 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:32.741 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:32.892 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:32.930 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:33.090 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:33.127 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:33.162 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:33.185 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:33.207 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:33.238 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:33.270 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:33.459 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:33.649 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:33.720 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:33.788 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:33.976 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:34.167 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:34.223 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:34.284 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:44:34.308 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+collected 44 items
+
+UP_FRONT_INLINE: collect pass over 44 item(s) took 7.9s
+UP_FRONT_INLINE: compile route local (programs=44, farm_min=10)
+
+UP_FRONT_COLLECT: 44 ops stashed across 44 bodies -> 44 unique programs (swallowed 0, skipped-capture 0)
+UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=130 fallback=0
+2026-11-20 02:44:34.506 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 02:44:34.586 | info     |           Metal | Enabling program cache on MeshDevice 3 (mesh_device.cpp:1322)
+UP_FRONT_COLLECT: 44 collected · 44 built · 0 already compiled in 1.2s (workers=64, errors=0) -> on-disk JIT cache warm
+UP_FRONT_COLLECT_RESULT: status=ok reason=ok unique=44 programs=44 errors=0 pytest_exit=0 xpass_strict=0 other_failures=0 built=44 compile_s=1.5 collect_s=7.9 route=local
+UP_FRONT_INLINE: compile step took 1.5s; starting the real pass
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[stem_conv1-baseline] 2026-11-20 02:44:35.985 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 02:44:36.066 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[stem_conv1-grad] 2026-11-20 02:44:36.322 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[stem_conv2-baseline] 2026-11-20 02:44:36.536 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[stem_conv2-grad] 2026-11-20 02:44:36.871 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[stem_conv3-baseline] 2026-11-20 02:44:37.133 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[stem_conv3-grad] 2026-11-20 02:44:37.730 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[res2_{0,1,2}_conv2-baseline] 2026-11-20 02:44:38.309 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[res2_{0,1,2}_conv2-grad] 2026-11-20 02:44:38.359 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[res3_0_conv2-baseline] 2026-11-20 02:44:38.409 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[res3_0_conv2-grad] 2026-11-20 02:44:38.467 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[res3_{1,2,3}_conv2-baseline] 2026-11-20 02:44:38.518 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[res3_{1,2,3}_conv2-grad] 2026-11-20 02:44:38.558 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[res4_0_conv2-baseline] 2026-11-20 02:44:38.600 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[res4_0_conv2-grad] 2026-11-20 02:44:38.645 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[res4_{1__5}_conv2-baseline] 2026-11-20 02:44:38.699 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[res4_{1__5}_conv2-grad] 2026-11-20 02:44:38.737 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[res5_0_conv2-baseline] 2026-11-20 02:44:38.783 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[res5_0_conv2-grad] 2026-11-20 02:44:39.225 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[res5_1_conv2-baseline] 2026-11-20 02:44:39.669 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[res5_1_conv2-grad] 2026-11-20 02:44:40.112 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[res5_2_conv2-baseline] 2026-11-20 02:44:40.673 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[res5_2_conv2-grad] 2026-11-20 02:44:41.109 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[aspp_convs_1-baseline] 2026-11-20 02:44:41.634 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[aspp_convs_1-grad] 2026-11-20 02:44:41.738 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[aspp_convs_2-baseline] 2026-11-20 02:44:42.062 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[aspp_convs_2-grad] 2026-11-20 02:44:42.163 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[aspp_convs_3-baseline] 2026-11-20 02:44:42.379 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[aspp_convs_3-grad] 2026-11-20 02:44:42.436 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[semantic_decoder_res3_fuse_conv_0-baseline] 2026-11-20 02:44:42.636 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[semantic_decoder_res3_fuse_conv_0-grad] 2026-11-20 02:44:42.703 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[instance_decoder_res3_fuse_conv_0-baseline] 2026-11-20 02:44:42.767 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[instance_decoder_res3_fuse_conv_0-grad] 2026-11-20 02:44:42.815 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[semantic_decoder_res3_fuse_conv_1-baseline] 2026-11-20 02:44:42.859 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[semantic_decoder_res3_fuse_conv_1-grad] 2026-11-20 02:44:42.913 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[semantic_decoder_res2_fuse_conv_0-baseline] 2026-11-20 02:44:42.977 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[semantic_decoder_res2_fuse_conv_0-grad] 2026-11-20 02:44:43.287 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[instance_decoder_res2_fuse_conv_0-baseline] 2026-11-20 02:44:43.623 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[instance_decoder_res2_fuse_conv_0-grad] 2026-11-20 02:44:43.772 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[semantic_res2_fuse_conv_1-baseline] 2026-11-20 02:44:43.922 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[semantic_res2_fuse_conv_1-grad] 2026-11-20 02:44:44.286 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[instance_res2_fuse_conv_1-baseline] 2026-11-20 02:44:44.652 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[instance_res2_fuse_conv_1-grad] 2026-11-20 02:44:44.775 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[center_head_1-baseline] 2026-11-20 02:44:44.881 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[center_head_1-grad] 2026-11-20 02:44:44.937 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSEDUP_FRONT_INLINE: real pass took 9.2s
+
+
+- generated xml file: /localdev/pmilojevic/workspaces/opgen/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+0.60s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[stem_conv3-baseline]
+0.57s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[stem_conv3-grad]
+0.56s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[res5_1_conv2-grad]
+0.52s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[res5_2_conv2-grad]
+0.44s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[res5_0_conv2-grad]
+0.44s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[res5_0_conv2-baseline]
+0.44s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[res5_1_conv2-baseline]
+0.43s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[res5_2_conv2-baseline]
+0.36s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[semantic_res2_fuse_conv_1-grad]
+0.36s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[semantic_res2_fuse_conv_1-baseline]
+0.33s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[semantic_decoder_res2_fuse_conv_0-grad]
+0.33s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[stem_conv2-baseline]
+0.32s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[aspp_convs_1-grad]
+0.31s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[semantic_decoder_res2_fuse_conv_0-baseline]
+0.26s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[stem_conv2-grad]
+0.25s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[stem_conv1-baseline]
+0.25s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[stem_conv1-baseline]
+0.22s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[aspp_convs_2-grad]
+0.21s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[stem_conv1-grad]
+0.20s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[aspp_convs_3-grad]
+0.15s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[instance_decoder_res2_fuse_conv_0-grad]
+0.15s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[instance_decoder_res2_fuse_conv_0-baseline]
+0.12s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[instance_res2_fuse_conv_1-baseline]
+0.10s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[instance_res2_fuse_conv_1-grad]
+0.10s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py::test_bfb[aspp_convs_1-baseline]
+============================= 44 passed in 18.71s ==============================
+2026-11-20 02:44:45.945 | info     |    BuildKernels | JIT cache stats: 273/276 hits (98.9%) [273 cached, 208 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-20 02:44:45.945 | info     |    BuildKernels | JIT telemetry: 40 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-20 02:44:45.998 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:605)
+2026-11-20 02:44:45.998 | info     |             UMD | Closing devices in cluster (cluster.cpp:1496)
+2026-11-20 02:44:46.418 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1506)
+2026-11-20 02:44:46.418 | info     |             UMD | Cluster destructor started. (cluster.cpp:1227)
+2026-11-20 02:44:46.418 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1240)
+========================================
+PRECOMPILE: UP_FRONT_INLINE: collect pass over 44 item(s) took 7.9s
+PRECOMPILE: UP_FRONT_INLINE: compile route local (programs=44, farm_min=10)
+PRECOMPILE: UP_FRONT_COLLECT: 44 ops stashed across 44 bodies -> 44 unique programs (swallowed 0, skipped-capture 0)
+PRECOMPILE: UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=130 fallback=0
+PRECOMPILE: UP_FRONT_COLLECT: 44 collected · 44 built · 0 already compiled in 1.2s (workers=64, errors=0) -> on-disk JIT cache warm
+PRECOMPILE: UP_FRONT_INLINE: compile step took 1.5s; starting the real pass
+SAFE_PYTEST_RESULT: PASS
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 0m26s (26s total, device-lock-acquired -> exit)

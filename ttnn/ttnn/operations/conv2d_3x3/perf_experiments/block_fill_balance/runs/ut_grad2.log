@@ -1,0 +1,269 @@
+SAFE_PYTEST: Waiting for device lock...
+[2026-11-20 02:43:20] SAFE_PYTEST: waiting for device (20s) — holder pid=1821739 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/nslice_stream_spread/test_nss.py --import-mode=prepend -" parent pid=1821725 cmd="bash ./run.sh b1 "
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: on — collect + parallel compile (x64) inside the pytest session, local
+SAFE_PYTEST: env UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=64 PYTHONPATH=/localdev/pmilojevic/workspaces/opgen:/localdev/pmilojevic/workspaces/opgen pytest -p tests.plugins.up_front_collect /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py --import-mode=prepend -q
+========================================
+2026-11-20 02:43:35.472 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/workspaces/opgen
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, anyio-4.16.0, benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, cov-7.0.0, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-11-20 02:43:35.839 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-20 02:43:35.839 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-20 02:43:35.841 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-20 02:43:35.841 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-20 02:43:35.865 | info     |             UMD | Established firmware bundle version: 19.16.1 (topology_discovery.cpp:700)
+2026-11-20 02:43:35.866 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-20 02:43:36.136 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:174)
+2026-11-20 02:43:36.136 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-20 02:43:36.136 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-20 02:43:36.136 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-20 02:43:36.143 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-20 02:43:36.543 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-20 02:43:36.683 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-20 02:43:36.683 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-20 02:43:36.817 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 02:43:38.032 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="columns"
+2026-11-20 02:43:38.032 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="columns"
+2026-11-20 02:43:38.970 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:43:38.988 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:43:39.005 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:43:39.150 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:43:39.168 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:43:39.187 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:43:39.198 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:43:39.202 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:43:39.212 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:43:39.358 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:43:39.376 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:43:39.624 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:43:39.652 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:43:39.787 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:43:39.806 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:43:39.905 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:43:39.925 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:43:39.945 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:43:39.957 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:43:39.965 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:43:39.982 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:43:39.986 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:43:39.998 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:43:40.012 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:43:40.022 | info     |           Metal | Enabling program cache on MeshDevice 1 (mesh_device.cpp:1322)
+2026-11-20 02:43:40.032 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:43:40.042 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-20 02:43:40.050 | info     |           Metal | Enabling program cache on MeshDevice 1 (mesh_device.cpp:1322)
+collected 74 items
+
+UP_FRONT_INLINE: collect pass over 74 item(s) took 4.2s
+UP_FRONT_INLINE: compile route local (programs=88, farm_min=10)
+
+UP_FRONT_COLLECT: 111 ops stashed across 74 bodies -> 88 unique programs (swallowed 0, skipped-capture 0)
+UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=290 fallback=0
+2026-11-20 02:43:40.235 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 02:43:40.316 | info     |           Metal | Enabling program cache on MeshDevice 3 (mesh_device.cpp:1322)
+Building ncrisc, compile step:
+/localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/workspaces/opgen/ -I/localdev/pmilojevic/workspaces/opgen/ttnn -I/localdev/pmilojevic/workspaces/opgen/ttnn/cpp -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/workspaces/opgen/tt_metal/api/ -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/grad/kernels -include /localdev/pmilojevic/tt-metal-cache/tt-metal-cache/pch/842cea1ec115824b/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DL1_ECC_HALT -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DCONV2D_3X3_HOST_FILL=1 -DHOST_FILL_WRITER_WINDOW=8 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="conv2d_3x3_reader/16865352498466112024/" -DKERNEL_COMPILE_TIME_ARGS=0,1,7,8,16,16,128,32,32,1,1,1,1,3,3,3,16,1,2048,3,3,6,1,1,8,1,8,8,1,8,5,8,2,3,1,0,2,2,0,0,0,0,1,0,0,0,11,1,10,0,1,0,2,0,0,0,0,0,1,2,0,0,0,0,12,0,1,13,1,3,1,1,0,0,0,0,1,2048,1,32,32,1,33685762,67240706,100795650,167905026,33751299,67306243,100861187,167970563,33816836,67371780,100926724,168036100,33882373,67437317,100992261,168101637 -c -o /localdev/pmilojevic/tt-metal-cache/tt-metal-cache2778076107680524023/kernels/conv2d_3x3_reader/16865352498466112024/ncrisc/ncrisck.6328813976391963684_1838470.o /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/pmilojevic/tt-metal-cache/tt-metal-cache2778076107680524023/kernels/conv2d_3x3_reader/16865352498466112024/ncrisc/ncrisck.6328813976391963684_1838470.d
+In file included from ../kernel_includes.hpp:2,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:23:
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/grad/kernels/conv2d_3x3_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/grad/kernels/conv2d_3x3_reader.cpp:348:10: warning: variable 'r0_try' set but not used [-Wunused-but-set-variable]
+  348 |     auto r0_try = [&]() {};
+      |          ^~~~~~
+Building ncrisc, compile step:
+/localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/workspaces/opgen/ -I/localdev/pmilojevic/workspaces/opgen/ttnn -I/localdev/pmilojevic/workspaces/opgen/ttnn/cpp -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/workspaces/opgen/tt_metal/api/ -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/grad/kernels -include /localdev/pmilojevic/tt-metal-cache/tt-metal-cache/pch/842cea1ec115824b/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DL1_ECC_HALT -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DCONV2D_3X3_HOST_FILL=1 -DHOST_FILL_WRITER_WINDOW=8 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="conv2d_3x3_reader/16624570918270857572/" -DKERNEL_COMPILE_TIME_ARGS=0,1,7,8,16,16,128,32,32,1,1,1,1,3,3,3,16,1,1088,3,3,6,1,1,8,1,8,8,1,8,5,8,2,3,1,0,2,2,0,0,0,0,1,0,0,0,11,1,10,0,1,0,2,0,0,0,0,0,1,2,0,0,0,0,12,0,1,13,1,3,1,1,0,0,0,0,1,1088,1,32,32,1,33685762,67240706,100795650,167905026,33751299,67306243,100861187,167970563,33816836,67371780,100926724,168036100,33882373,67437317,100992261,168101637 -c -o /localdev/pmilojevic/tt-metal-cache/tt-metal-cache2778076107680524023/kernels/conv2d_3x3_reader/16624570918270857572/ncrisc/ncrisck.6328813976391963684_1838470.o /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/pmilojevic/tt-metal-cache/tt-metal-cache2778076107680524023/kernels/conv2d_3x3_reader/16624570918270857572/ncrisc/ncrisck.6328813976391963684_1838470.d
+In file included from ../kernel_includes.hpp:2,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:23:
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/grad/kernels/conv2d_3x3_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/grad/kernels/conv2d_3x3_reader.cpp:348:10: warning: variable 'r0_try' set but not used [-Wunused-but-set-variable]
+  348 |     auto r0_try = [&]() {};
+      |          ^~~~~~
+Building ncrisc, compile step:
+/localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/workspaces/opgen/ -I/localdev/pmilojevic/workspaces/opgen/ttnn -I/localdev/pmilojevic/workspaces/opgen/ttnn/cpp -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/workspaces/opgen/tt_metal/api/ -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/grad/kernels -include /localdev/pmilojevic/tt-metal-cache/tt-metal-cache/pch/842cea1ec115824b/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DL1_ECC_HALT -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DCONV2D_3X3_HOST_FILL=1 -DHOST_FILL_WRITER_WINDOW=8 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="conv2d_3x3_reader/13604360979762680211/" -DKERNEL_COMPILE_TIME_ARGS=0,1,7,8,16,16,128,32,32,1,1,1,1,3,3,3,16,1,1088,3,3,6,1,1,8,1,8,8,1,8,5,8,2,3,1,0,2,2,0,0,0,0,1,0,0,0,11,1,10,0,1,0,2,0,0,0,0,0,1,2,0,0,0,0,12,0,1,13,1,3,1,1,0,0,0,0,1,1088,1,32,32,1,33685762,67240706,100795650,167905026,33751299,67306243,100861187,167970563,33816836,67371780,100926724,168036100,33882373,67437317,100992261,168101637 -c -o /localdev/pmilojevic/tt-metal-cache/tt-metal-cache2778076107680524023/kernels/conv2d_3x3_reader/13604360979762680211/ncrisc/ncrisck.6328813976391963684_1838470.o /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/pmilojevic/tt-metal-cache/tt-metal-cache2778076107680524023/kernels/conv2d_3x3_reader/13604360979762680211/ncrisc/ncrisck.6328813976391963684_1838470.d
+In file included from ../kernel_includes.hpp:2,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:23:
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/grad/kernels/conv2d_3x3_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/grad/kernels/conv2d_3x3_reader.cpp:348:10: warning: variable 'r0_try' set but not used [-Wunused-but-set-variable]
+  348 |     auto r0_try = [&]() {};
+      |          ^~~~~~
+Building ncrisc, compile step:
+/localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/workspaces/opgen/ -I/localdev/pmilojevic/workspaces/opgen/ttnn -I/localdev/pmilojevic/workspaces/opgen/ttnn/cpp -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/workspaces/opgen/tt_metal/api/ -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/grad/kernels -include /localdev/pmilojevic/tt-metal-cache/tt-metal-cache/pch/842cea1ec115824b/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DL1_ECC_HALT -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DCONV2D_3X3_HOST_FILL=1 -DHOST_FILL_WRITER_WINDOW=8 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="conv2d_3x3_reader/9815344055593523928/" -DKERNEL_COMPILE_TIME_ARGS=0,1,7,8,16,16,128,32,32,1,1,1,1,3,3,3,16,1,1088,3,3,6,1,1,8,0,8,8,1,8,5,8,2,3,1,0,2,2,0,0,0,0,1,0,0,0,11,1,10,0,1,0,2,0,0,0,0,0,1,2,0,0,0,0,12,0,1,13,1,3,1,1,0,0,0,0,1,1088,1,32,32,1,33685762,67240706,100795650,167905026,33751299,67306243,100861187,167970563,33816836,67371780,100926724,168036100,33882373,67437317,100992261,168101637 -c -o /localdev/pmilojevic/tt-metal-cache/tt-metal-cache2778076107680524023/kernels/conv2d_3x3_reader/9815344055593523928/ncrisc/ncrisck.6328813976391963684_1838470.o /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/pmilojevic/tt-metal-cache/tt-metal-cache2778076107680524023/kernels/conv2d_3x3_reader/9815344055593523928/ncrisc/ncrisck.6328813976391963684_1838470.d
+In file included from ../kernel_includes.hpp:2,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:23:
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/grad/kernels/conv2d_3x3_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/grad/kernels/conv2d_3x3_reader.cpp:348:10: warning: variable 'r0_try' set but not used [-Wunused-but-set-variable]
+  348 |     auto r0_try = [&]() {};
+      |          ^~~~~~
+Building ncrisc, compile step:
+/localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/workspaces/opgen/ -I/localdev/pmilojevic/workspaces/opgen/ttnn -I/localdev/pmilojevic/workspaces/opgen/ttnn/cpp -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/workspaces/opgen/tt_metal/api/ -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/grad/kernels -include /localdev/pmilojevic/tt-metal-cache/tt-metal-cache/pch/842cea1ec115824b/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DL1_ECC_HALT -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DCONV2D_3X3_HOST_FILL=1 -DHOST_FILL_WRITER_WINDOW=8 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="conv2d_3x3_reader/16006960232168581061/" -DKERNEL_COMPILE_TIME_ARGS=0,1,7,8,16,16,128,32,32,1,1,1,1,3,3,3,16,1,2048,3,3,6,1,1,8,1,8,8,1,8,5,8,2,3,1,0,2,2,0,0,0,0,1,0,0,0,11,1,10,0,1,0,2,0,0,0,0,0,1,2,0,0,0,0,12,0,1,13,1,3,1,1,0,0,0,0,1,2048,1,32,32,1,33685762,67240706,100795650,167905026,33751299,67306243,100861187,167970563,33816836,67371780,100926724,168036100,33882373,67437317,100992261,168101637 -c -o /localdev/pmilojevic/tt-metal-cache/tt-metal-cache2778076107680524023/kernels/conv2d_3x3_reader/16006960232168581061/ncrisc/ncrisck.6328813976391963684_1838470.o /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/pmilojevic/tt-metal-cache/tt-metal-cache2778076107680524023/kernels/conv2d_3x3_reader/16006960232168581061/ncrisc/ncrisck.6328813976391963684_1838470.d
+In file included from ../kernel_includes.hpp:2,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:23:
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/grad/kernels/conv2d_3x3_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/grad/kernels/conv2d_3x3_reader.cpp:348:10: warning: variable 'r0_try' set but not used [-Wunused-but-set-variable]
+  348 |     auto r0_try = [&]() {};
+      |          ^~~~~~
+UP_FRONT_COLLECT: 88 collected · 88 built · 0 already compiled in 1.7s (workers=64, errors=0) -> on-disk JIT cache warm
+UP_FRONT_COLLECT_RESULT: status=ok reason=ok unique=88 programs=88 errors=0 pytest_exit=0 xpass_strict=0 other_failures=0 built=88 compile_s=2.0 collect_s=4.2 route=local
+UP_FRONT_INLINE: compile step took 2.0s; starting the real pass
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H16_W16_Ci64_Co128_p1_s1_d1-rm_bf16-bias_relu] 2026-11-20 02:43:42.249 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H16_W16_Ci64_Co128_p1_s1_d1-rm_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H16_W16_Ci64_Co128_p1_s1_d1-tile_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H16_W16_Ci64_Co128_p1_s1_d1-tile_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H16_W16_Ci64_Co128_p1_s1_d1-tile_bf8b-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H16_W16_Ci64_Co128_p1_s1_d1-tile_bf8b-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H32_W32_Ci8_Co32_p1_s2_d1-rm_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H32_W32_Ci8_Co32_p1_s2_d1-rm_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H32_W32_Ci8_Co32_p1_s2_d1-tile_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H32_W32_Ci8_Co32_p1_s2_d1-tile_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H32_W32_Ci8_Co32_p1_s2_d1-tile_bf8b-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H32_W32_Ci8_Co32_p1_s2_d1-tile_bf8b-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H32_W64_Ci64_Co32_p8_s1_d8-rm_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H32_W64_Ci64_Co32_p8_s1_d8-rm_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H32_W64_Ci64_Co32_p8_s1_d8-tile_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H32_W64_Ci64_Co32_p8_s1_d8-tile_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H32_W64_Ci64_Co32_p8_s1_d8-tile_bf8b-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H32_W64_Ci64_Co32_p8_s1_d8-tile_bf8b-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H16_W34_Ci48_Co96_p0_s1_d1-rm_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H16_W34_Ci48_Co96_p0_s1_d1-rm_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H16_W34_Ci48_Co96_p0_s1_d1-tile_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H16_W34_Ci48_Co96_p0_s1_d1-tile_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H16_W34_Ci48_Co96_p0_s1_d1-tile_bf8b-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H16_W34_Ci48_Co96_p0_s1_d1-tile_bf8b-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H8_W16_Ci256_Co256_p1_s1_d1-rm_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H8_W16_Ci256_Co256_p1_s1_d1-rm_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H8_W16_Ci256_Co256_p1_s1_d1-tile_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H8_W16_Ci256_Co256_p1_s1_d1-tile_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H8_W16_Ci256_Co256_p1_s1_d1-tile_bf8b-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H8_W16_Ci256_Co256_p1_s1_d1-tile_bf8b-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_relu_after_combine[rm_bf16-bias] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_relu_after_combine[rm_bf16-no_bias] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_relu_after_combine[tile_bf16-bias] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_relu_after_combine[tile_bf16-no_bias] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_col_major_offset_grid[rm_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_col_major_offset_grid[tile_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_col_major_offset_grid[tile_bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_multi_m_block[tile_bf8b_bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_multi_m_block[rm_bf16_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[rm_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[tile_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[tile_bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_multi_m_block_extended_rows[tile_bf8b_bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_multi_m_block_extended_rows[rm_bf16_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[rm_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[tile_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[tile_bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_grid_column_mismatch 2026-11-20 02:43:42.776 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="columns"
+2026-11-20 02:43:42.776 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="columns"
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_writer_only_scatter[rm_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_writer_only_scatter[tile_bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[res4_8x8-tile_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[res4_8x8-tile_bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[res5_0_8x10-tile_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[res5_0_8x10-tile_bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[k2_d8_co96-tile_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[k2_d8_co96-tile_bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[k2_col_major-tile_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[k2_col_major-tile_bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_weight_page_runs[res4_8x8] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_weight_page_runs[res5_0_8x10] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_weight_page_runs[k2_d8_co96] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_host_fill[res4_0_s2] 2026-11-20 02:43:43.574 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+2026-11-20 02:43:43.590 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_host_fill[res5_1] 2026-11-20 02:43:43.629 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+2026-11-20 02:43:43.765 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_host_fill[k2_d8_co96] 2026-11-20 02:43:43.792 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+2026-11-20 02:43:43.817 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_host_fill[k2_col_major] 2026-11-20 02:43:43.828 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+2026-11-20 02:43:43.833 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_host_fill[aspp3_short_slice] 2026-11-20 02:43:43.860 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+2026-11-20 02:43:43.999 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_fill_balance[aspp1] 2026-11-20 02:43:44.111 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+2026-11-20 02:43:44.352 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_fill_balance[aspp3_short_slice] 2026-11-20 02:43:44.420 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+2026-11-20 02:43:44.563 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_fill_balance[res5_2_spare] 2026-11-20 02:43:44.607 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+2026-11-20 02:43:44.699 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_fill_balance[k2_d8_co96] 2026-11-20 02:43:44.724 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+2026-11-20 02:43:44.745 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_fill_balance[res4_0_s2] 2026-11-20 02:43:44.772 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+2026-11-20 02:43:44.783 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_fill_balance[k2_col_major] 2026-11-20 02:43:44.802 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+2026-11-20 02:43:44.807 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_round0_reader[res5_0_8x10] 2026-11-20 02:43:44.837 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+2026-11-20 02:43:44.852 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+2026-11-20 02:43:44.865 | info     |           Metal | Enabling program cache on MeshDevice 5 (mesh_device.cpp:1322)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_round0_reader[res4_8x8] 2026-11-20 02:43:44.891 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+2026-11-20 02:43:44.903 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+2026-11-20 02:43:44.912 | info     |           Metal | Enabling program cache on MeshDevice 5 (mesh_device.cpp:1322)
+PASSEDUP_FRONT_INLINE: real pass took 2.9s
+
+
+- generated xml file: /localdev/pmilojevic/workspaces/opgen/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+0.36s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_fill_balance[aspp1]
+0.25s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H16_W16_Ci64_Co128_p1_s1_d1-rm_bf16-bias_relu]
+0.20s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_fill_balance[aspp3_short_slice]
+0.18s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_host_fill[res5_1]
+0.18s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_host_fill[aspp3_short_slice]
+0.14s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_fill_balance[res5_2_spare]
+0.13s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[res5_0_8x10-tile_bf8b]
+0.12s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[res5_0_8x10-tile_bf16]
+0.08s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[res4_8x8-tile_bf16]
+0.07s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[res4_8x8-tile_bf8b]
+0.07s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[k2_d8_co96-tile_bf8b]
+0.07s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[k2_d8_co96-tile_bf16]
+0.06s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_weight_page_runs[res5_0_8x10]
+0.06s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_round0_reader[res5_0_8x10]
+0.05s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_weight_page_runs[k2_d8_co96]
+0.04s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_host_fill[res4_0_s2]
+0.04s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_fill_balance[res4_0_s2]
+0.04s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_round0_reader[res4_8x8]
+0.04s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_weight_page_runs[res4_8x8]
+0.03s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_host_fill[k2_d8_co96]
+0.03s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_fill_balance[k2_d8_co96]
+0.02s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H32_W64_Ci64_Co32_p8_s1_d8-tile_bf16-bias_relu]
+0.02s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H32_W64_Ci64_Co32_p8_s1_d8-tile_bf8b-bias_relu]
+0.02s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H32_W64_Ci64_Co32_p8_s1_d8-tile_bf16-plain]
+0.02s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[H32_W64_Ci64_Co32_p8_s1_d8-tile_bf8b-plain]
+============================== 74 passed in 9.36s ==============================
+2026-11-20 02:43:46.075 | info     |    BuildKernels | JIT cache stats: 344/360 hits (95.6%) [344 cached, 384 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-20 02:43:46.075 | info     |    BuildKernels | JIT telemetry: 42 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-20 02:43:46.124 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:605)
+2026-11-20 02:43:46.124 | info     |             UMD | Closing devices in cluster (cluster.cpp:1496)
+2026-11-20 02:43:46.608 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1506)
+2026-11-20 02:43:46.609 | info     |             UMD | Cluster destructor started. (cluster.cpp:1227)
+2026-11-20 02:43:46.609 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1240)
+========================================
+PRECOMPILE: UP_FRONT_INLINE: collect pass over 74 item(s) took 4.2s
+PRECOMPILE: UP_FRONT_INLINE: compile route local (programs=88, farm_min=10)
+PRECOMPILE: UP_FRONT_COLLECT: 111 ops stashed across 74 bodies -> 88 unique programs (swallowed 0, skipped-capture 0)
+PRECOMPILE: UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=290 fallback=0
+PRECOMPILE: UP_FRONT_COLLECT: 88 collected · 88 built · 0 already compiled in 1.7s (workers=64, errors=0) -> on-disk JIT cache warm
+PRECOMPILE: UP_FRONT_INLINE: compile step took 2.0s; starting the real pass
+SAFE_PYTEST_RESULT: PASS
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 0m17s (17s total, device-lock-acquired -> exit)

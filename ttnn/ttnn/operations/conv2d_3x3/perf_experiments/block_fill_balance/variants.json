@@ -1,0 +1,125 @@
+{
+ "defaults": {
+  "FILL_SPLIT_MODE": "base",
+  "HF_READER_POLLS": false,
+  "KSPLIT_FILL_WINDOW_BATCHES": 8,
+  "BFB_DEFER_ZERO": false,
+  "BFB_TRACE": false,
+  "BFB_GATE": false,
+  "BFB_GATE_STEP": false
+ },
+ "variants": {
+  "rp": {
+   "HF_READER_POLLS": true
+  },
+  "all_rp": {
+   "FILL_SPLIT_MODE": "all",
+   "HF_READER_POLLS": true
+  },
+  "bal_rp": {
+   "FILL_SPLIT_MODE": "bal",
+   "HF_READER_POLLS": true
+  },
+  "w2": {
+   "KSPLIT_FILL_WINDOW_BATCHES": 2
+  },
+  "w3": {
+   "KSPLIT_FILL_WINDOW_BATCHES": 3
+  },
+  "w4": {
+   "KSPLIT_FILL_WINDOW_BATCHES": 4
+  },
+  "bal_rp_w3": {
+   "FILL_SPLIT_MODE": "bal",
+   "HF_READER_POLLS": true,
+   "KSPLIT_FILL_WINDOW_BATCHES": 3
+  },
+  "all_rp_w3": {
+   "FILL_SPLIT_MODE": "all",
+   "HF_READER_POLLS": true,
+   "KSPLIT_FILL_WINDOW_BATCHES": 3
+  },
+  "tr": {
+   "BFB_TRACE": true
+  },
+  "bal_tr": {
+   "FILL_SPLIT_MODE": "bal",
+   "HF_READER_POLLS": true,
+   "BFB_TRACE": true
+  },
+  "dz": {
+   "BFB_DEFER_ZERO": true
+  },
+  "bal_dz": {
+   "FILL_SPLIT_MODE": "bal",
+   "HF_READER_POLLS": true,
+   "BFB_DEFER_ZERO": true
+  },
+  "bal_g": {
+   "FILL_SPLIT_MODE": "bal",
+   "HF_READER_POLLS": true,
+   "BFB_GATE": true
+  },
+  "bal0": {
+   "FILL_SPLIT_MODE": "bal0",
+   "HF_READER_POLLS": true
+  },
+  "bal0_g": {
+   "FILL_SPLIT_MODE": "bal0",
+   "HF_READER_POLLS": true,
+   "BFB_GATE": true
+  },
+  "bal0_g_tr": {
+   "FILL_SPLIT_MODE": "bal0",
+   "HF_READER_POLLS": true,
+   "BFB_GATE": true,
+   "BFB_TRACE": true
+  },
+  "bal_rp_w2": {
+   "FILL_SPLIT_MODE": "bal",
+   "HF_READER_POLLS": true,
+   "KSPLIT_FILL_WINDOW_BATCHES": 2
+  },
+  "g": {
+   "BFB_GATE": true
+  },
+  "all_rp_g": {
+   "FILL_SPLIT_MODE": "all",
+   "HF_READER_POLLS": true,
+   "BFB_GATE": true
+  },
+  "bal_g_dz": {
+   "FILL_SPLIT_MODE": "bal",
+   "HF_READER_POLLS": true,
+   "BFB_GATE": true,
+   "BFB_DEFER_ZERO": true
+  },
+  "bal0_g_dz": {
+   "FILL_SPLIT_MODE": "bal0",
+   "HF_READER_POLLS": true,
+   "BFB_GATE": true,
+   "BFB_DEFER_ZERO": true
+  },
+  "bal_g_step": {
+   "FILL_SPLIT_MODE": "bal",
+   "HF_READER_POLLS": true,
+   "BFB_GATE": true,
+   "BFB_GATE_STEP": true
+  },
+  "bal_g_step_dz": {
+   "FILL_SPLIT_MODE": "bal",
+   "HF_READER_POLLS": true,
+   "BFB_GATE": true,
+   "BFB_GATE_STEP": true,
+   "BFB_DEFER_ZERO": true
+  }
+ },
+ "grad_variants": {
+  "grad_nogate": {
+   "BLOCK_FILL_GATE": false
+  },
+  "grad_nobal": {
+   "BLOCK_FILL_BALANCE": false
+  }
+ }
+}
