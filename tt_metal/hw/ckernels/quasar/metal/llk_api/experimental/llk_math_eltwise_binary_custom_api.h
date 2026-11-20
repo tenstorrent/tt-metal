@@ -36,7 +36,7 @@ inline void llk_math_eltwise_binary_sub_bcast_cols_init_custom(
     const DataFormat srcA_format = static_cast<DataFormat>(get_operand_dst_format(operandA_id));
     const DataFormat srcB_format = static_cast<DataFormat>(get_operand_dst_format(operandB_id));
 
-    _configure_default_alu_data_format_state_<DST_ACCUM_MODE>(srcA_format, srcB_format);
+    _configure_alu_cfg_<AluCfgType::DEFAULT, DST_ACCUM_MODE>(srcA_format, srcB_format);
     _llk_math_eltwise_binary_init_custom_<EltwiseBinaryType::ELWSUB, BroadcastType::COL>(tensor_shape);
 }
 

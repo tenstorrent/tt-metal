@@ -140,7 +140,7 @@ class TtAttnRes(LightweightModule):
         assert {sp_axis, tp_axis} == {0, 1}, f"sp_axis {sp_axis} and tp_axis {tp_axis} must be mesh axes 0 and 1"
         self.tp_factor = mesh_shape[tp_axis]
         self.sp_factor = mesh_shape[sp_axis]
-        self.topology = list(per_axis_topology()) if topology is None else topology
+        self.topology = list(per_axis_topology(mesh_device=mesh_device)) if topology is None else topology
         assert len(self.topology) == len(mesh_shape), (
             f"topology has {len(self.topology)} entries for a {len(mesh_shape)}-axis mesh; "
             "pass one Topology per axis, or none and take the opened fabric's"
