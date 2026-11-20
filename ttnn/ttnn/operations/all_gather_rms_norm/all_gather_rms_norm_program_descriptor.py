@@ -730,7 +730,16 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
         fit_log.append((k, rows, cbytes, port_bytes))
         return False
 
-    fits.report = lambda: f"budget {budget} B, (k, rows, compute B, port B): {fit_log}"
+    def _l1_allocated():
+        try:
+            view = ttnn.get_memory_view(mesh, ttnn.BufferType.L1)
+            return [(int(b["address"]), int(b["size"])) for b in view.block_table if b["allocated"] == "yes"]
+        except Exception:  # noqa: BLE001
+            return "?"
+
+    fits.report = lambda: (
+        f"budget {budget} B, (k, rows, compute B, port B): {fit_log}; L1 allocated (rel addr, size): {_l1_allocated()}"
+    )
 
     try:
         split = select_split(geo, N, fits)

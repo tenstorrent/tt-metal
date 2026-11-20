@@ -10,6 +10,7 @@ Registry model: INPUT_TAGGERS / SUPPORTED / EXCLUSIONS / validate() below, then 
 
 from __future__ import annotations
 
+import gc
 from typing import Optional
 
 import ttnn
@@ -276,6 +277,40 @@ def _relocate_pinning_sems(mesh):
             _SEM_CACHE[key] = (mesh, fresh)  # the old pair is freed with its last reference (device synchronized)
 
 
+_FOREIGN_SEEN = {}  # id(mesh) -> L1 blocks not owned by a call that survived the last garbage collection
+
+
+def _own_l1_blocks(mesh, tensors):
+    """Relative L1 addresses of this call's own L1 tensors and of the op's cached semaphores."""
+    base = _L1_BASE[id(mesh)]
+    own = set()
+    for t in tensors:
+        if t is not None and t.memory_config().buffer_type == ttnn.BufferType.L1:
+            own.add(int(t.buffer_address()) - base)
+    for m, sems in _SEM_CACHE.values():
+        if m is mesh:
+            own.update(int(ttnn.get_global_semaphore_address(s)) - base for s in sems)
+    return own
+
+
+def _collect_dead_l1(mesh, tensors, force=False):
+    """Free L1 held by unreachable tensors. The CB region is the L1 below the lowest allocated buffer
+    (cb_l1_budget), so a dead tensor that is only waiting for Python's cyclic GC (e.g. one referenced from a
+    discarded exception traceback) shrinks every later call's budget and fragments L1. When L1 holds blocks that no
+    call argument / semaphore owns and that were not already seen to survive a collection, run one full collection.
+    Returns True when it freed L1."""
+    if id(mesh) not in _L1_BASE:
+        return False
+    own = _own_l1_blocks(mesh, tensors)
+    foreign = frozenset((a, n) for a, n, used in _l1_blocks(mesh) if used and a not in own)
+    if not foreign or (not force and foreign <= _FOREIGN_SEEN.get(id(mesh), frozenset())):
+        return False
+    gc.collect()
+    left = frozenset((a, n) for a, n, used in _l1_blocks(mesh) if used and a not in own)
+    _FOREIGN_SEEN[id(mesh)] = left
+    return left != foreign
+
+
 def _global_sems(mesh, ports_union):
     key = (id(mesh), tuple(ports_union))
     _relocate_pinning_sems(mesh)
@@ -349,6 +384,15 @@ def all_gather_rms_norm(
 
     fabric = plan_fabric(mesh, cluster_axis=cluster_axis, ring_requested=cfg.ring, num_links=L)
     sems = _global_sems(mesh, fabric[2])
-    mesh_desc, _ = create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg, sems, fabric)
     io = [input_tensor] + ([gamma] if gamma is not None else []) + ([beta] if beta is not None else [])
-    return ttnn.generic_op(io + [output_tensor], mesh_desc)
+    try:
+        mesh_desc, _ = create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg, sems, fabric)
+    except RuntimeError as exc:
+        # no split fits the free L1: retry once if dead (GC-pending) tensors were holding part of it
+        if "OOM" not in str(exc) or not _collect_dead_l1(mesh, io + [output_tensor], force=True):
+            raise
+        mesh_desc, _ = create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg, sems, fabric)
+    out = ttnn.generic_op(io + [output_tensor], mesh_desc)
+    # after the dispatch (this call's CBs are placed): release dead tensors so the NEXT call sees the full L1
+    _collect_dead_l1(mesh, io + [output_tensor])
+    return out
