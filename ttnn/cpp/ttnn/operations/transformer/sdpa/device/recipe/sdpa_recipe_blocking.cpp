@@ -34,7 +34,7 @@ uint32_t div_up(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 // ---------------------------------------------------------------------------------------------------------------
 // Cost model. Every cost is in Tensix cycles of the busiest core: documented hardware rates times the work the recipe
 // kernels do per (Q chunk, K chunk) block. The few quantities not documented in-repo are named assumptions below, each
-// with the measurement that checks it; no coefficient is fitted to SDPA op times.
+// with the measurement that checks it; one of them, the K/V chain's stream rate, is read off SDPA op times.
 //
 //   block    = max(math engine, pack thread, unpacker) + the row groups' serial pack -> unpack round trips
 //   Q chunk  = its blocks + normalization (+ the fused recipes' first K chunk on the reduce path)
@@ -42,9 +42,10 @@ uint32_t div_up(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 //              latency-bound batches, and the NoC (two K/V slots overlap a transfer with compute, one serializes it)
 //   core     = DRAM fill (first Q chunk and K/V block) + its Q chunks + DRAM drain (last output chunk)
 //
-// It reproduces the measured single-core throughput of every recipe at Q256/K512 within 8%, and the measured
-// full-grid op times of 22 P150b blockings (causal, sliding window, masked, noncausal) within 25%, ranking every
-// measured pair of blockings of one shape the same way as the measurement.
+// It reproduces the measured single-core throughput of every recipe at Q256/K512 within 8%, the full-grid op times
+// of 22 P150b blockings (causal, sliding window, masked, noncausal) within 25% and of 20 b04u08 blockings within 20%,
+// ranking every measured pair of blockings of one shape the same way as the measurement but one (Wan 720p FAST
+// Q288/K512 vs Q256/K512, 6% apart).
 // ---------------------------------------------------------------------------------------------------------------
 
 // Tensix quantities, the same on Wormhole and Blackhole (tech_reports/matrix_engine/matrix_engine.md).
@@ -72,13 +73,21 @@ constexpr double kFastPackSetups = 4.0;
 // state steps (saturation check, sum fold, max, rescale) each wait for one; the pipeline cannot overlap them.
 // Consistent with Wormhole STANDARD on one core (Sq1024 Sk4096 D128): Q128/K256 0.865 vs Q128/K512 1.029 TF/s.
 constexpr double kSyncCycles = 256.0;
-// Candidates whose costs are within this fraction of the cheapest are ties (the model is not more accurate than that).
+// Candidates whose costs are within this fraction of the cheapest are ties: the model ranks two blockings of one shape
+// only to about 10% (b04u08 pairs: Wan 720p FAST Q288/K512 vs Q256/K512 predicted 0.96, measured 1.06; bge_m3
+// ACCURATE Q512/K256 vs Q256/K512 1.13 vs 1.19; 4096-row STANDARD Q160/K512 vs Q192/K512 1.36 vs 1.30). Half of that
+// keeps the measured wins (20-28% on causal GQA shapes) while changing the fewest other picks.
 constexpr double kTieTolerance = 0.05;
 
 // Architecture quantities.
 struct ArchQuantities {
     double dram_bytes_per_cycle;  // achievable interleaved DRAM read bandwidth over the Tensix clock
     double noc_bytes_per_cycle;   // NoC word (flit) per cycle into one core
+    // Measured assumption (not derivable from the quantities here): the K/V bytes per cycle a forwarding chain of two
+    // or more cores sustains (receive, forward, then publish each chunk; reader_recipe.cpp). Blackhole b04u08, 10
+    // heads noncausal: FAST BF16 Q128/K896 2.82 ms and Q256/K512 1.39 ms, STANDARD 4096 rows Q160/K512 0.73 ms and
+    // Q192/K512 0.56 ms all stream at ~7 B/cycle; Wormhole is scaled by its NoC word (unmeasured).
+    double chain_stream_bytes_per_cycle;
     // noc_latencies.yaml (tt_metal/impl/experimental/noc_estimator, measured): one core reading n interleaved DRAM
     // pages of 512, 1024, 2048 and 4096 B and then waiting on a barrier (ONE_FROM_ALL, DRAM_INTERLEAVED, NoC 0),
     // for n = 1, 4 and 16, in cycles.
@@ -91,12 +100,14 @@ constexpr double kInterleavedDramFraction = 190.0 / 288.0;
 constexpr ArchQuantities kBlackhole{
     .dram_bytes_per_cycle = 512e9 * kInterleavedDramFraction / 1.35e9,
     .noc_bytes_per_cycle = 64.0,
+    .chain_stream_bytes_per_cycle = 7.0,
     .read_latency = {{{496, 512, 537, 576}, {589, 742, 629, 709}, {915, 921, 1042, 1521}}}};
 // Wormhole: 1 GHz (GEMM_FLOPS.md); 12 GDDR6 channels, 288 GB/s (tech_reports/FlashAttention/FlashAttention.md);
 // 32 B NoC words.
 constexpr ArchQuantities kWormhole{
     .dram_bytes_per_cycle = 288e9 * kInterleavedDramFraction / 1.0e9,
     .noc_bytes_per_cycle = 32.0,
+    .chain_stream_bytes_per_cycle = 3.5,
     .read_latency = {{{405, 429, 470, 557}, {507, 532, 661, 924}, {879, 927, 1457, 2511}}}};
 
 const ArchQuantities& arch_quantities(const RecipeBlockingProblem& p) { return p.wormhole ? kWormhole : kBlackhole; }
@@ -298,7 +309,11 @@ double block_compute(
     unpack_bytes += masked ? scores * p.mask_page_bytes : 0.0;
     const double unpack = unpack_bytes / kUnpackBytesPerCycle;
     const double groups = div_up(rows, group_rows(p, rows));
-    return std::max({math, pack, unpack}) + kSyncCycles * syncs_per_group(policy, fused, vd) * groups;
+    double syncs = kSyncCycles * syncs_per_group(policy, fused, vd) * groups;
+    // BF16 reduce path: each QK subblock's S is packed and unpacked again for the row max (one round trip). Matches
+    // the measured cost of losing the fused chunk: FAST 1.28x (LOW_PRECISION study), STANDARD 1.09x (one core).
+    syncs += !fused && !fp32 ? kSyncCycles * scores / build.qk_width : 0.0;
+    return std::max({math, pack, unpack}) + syncs;
 }
 
 // Per-Q-chunk compute outside the blocks: normalization (unpack O, scale by 1 / l, pack the output) and, with fused
@@ -681,12 +696,15 @@ std::vector<RecipeBlocking> blocking_candidates(const RecipeBlockingProblem& p, 
                     const uint32_t jobs =
                         chain == 0 ? div_up(batch_heads * jobs_per_head, cores) : div_up(jobs_per_head, chain);
                     const double mask_bytes = attn_mask ? static_cast<double>(rows) * kt * p.mask_page_bytes : 0.0;
+                    // A chain of two or more cores streams each K/V chunk at the chain rate.
+                    const double stream = chain >= 2 ? k_blocks * kv.bytes / arch.chain_stream_bytes_per_cycle : 0.0;
                     auto work = [&](bool fused) {
                         const double compute = k_blocks * block(fused) + q_chunk_work(fused);
                         const double dram = std::max(
-                            (readers * k_blocks * kv.bytes + used * (k_blocks * mask_bytes + q_bytes + o_bytes)) /
-                                arch.dram_bytes_per_cycle,
-                            k_blocks * read_cycles(arch, kv.tiles, kv_page, kChainReadBarrier));
+                            {(readers * k_blocks * kv.bytes + used * (k_blocks * mask_bytes + q_bytes + o_bytes)) /
+                                 arch.dram_bytes_per_cycle,
+                             k_blocks * read_cycles(arch, kv.tiles, kv_page, kChainReadBarrier),
+                             stream});
                         const double kv_noc = k_blocks * kv.bytes / arch.noc_bytes_per_cycle;
                         return jobs * q_chunk_time(p.policy, compute, kv_noc, dram);
                     };
