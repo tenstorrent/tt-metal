@@ -129,6 +129,9 @@ def _writer(
                 failed.append(err)
                 stop.set()
             finally:
+                # The shard's host buffers go before its budget does: kept until the next shard replaced them, they let
+                # the host buffers in flight outgrow max_inflight_bytes.
+                shard = row_major = data = view = None
                 budget.release(charged)
         if not stop.is_set():
             for fd in fds:

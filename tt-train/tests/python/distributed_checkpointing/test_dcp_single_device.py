@@ -13,6 +13,7 @@ live one.
 
 import os
 import threading
+import weakref
 
 import numpy as np
 import pytest
@@ -219,6 +220,30 @@ def test_an_interrupted_save_writes_only_into_its_own_files(tmp_path, monkeypatc
     assert os.path.getsize(bystander) == 0, "an interrupted save's writer wrote into a file it did not open"
     assert len(os.listdir("/proc/self/fd")) == open_fds, "every descriptor the save opened is closed"
     assert os.listdir(tmp_path) == ["bystander"], "no checkpoint and no staging directory left"
+
+
+def test_a_shard_is_freed_before_its_budget_is_released(tmp_path, monkeypatch):
+    """The writer lets go of a shard's host buffers before it releases the shard's budget: otherwise the producer is
+    told the bytes are free while they are still held, and the host buffers in flight outgrow max_inflight_bytes."""
+    model, opt = _trained_pair()
+    views, alive_at_release = [], []
+    real_logical_bytes = _save._logical_bytes
+
+    def recorded_logical_bytes(view, sizes, itemsize):
+        out = real_logical_bytes(view, sizes, itemsize)
+        views.append(weakref.ref(out))
+        return out
+
+    class _Checked(_save._ByteBudget):
+        def release(self, nbytes: int) -> None:
+            alive_at_release.append(sum(ref() is not None for ref in views))
+            super().release(nbytes)
+
+    monkeypatch.setattr(_save, "_logical_bytes", recorded_logical_bytes)
+    monkeypatch.setattr(_save, "_ByteBudget", _Checked)
+    dcp.save(str(tmp_path / "step_0000001"), model=model, optimizer=opt, threads=1)  # one writer, one shard at a time
+    assert views and len(alive_at_release) == len(views), "every shard written released its budget"
+    assert not any(alive_at_release), f"shards still held when their budget was released: {alive_at_release}"
 
 
 def test_missing_file_or_bad_spec_is_refused_first(tmp_path, monkeypatch, expect_error):
