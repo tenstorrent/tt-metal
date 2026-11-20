@@ -17,7 +17,7 @@ from models.experimental.mobileNetV3.tests.pcc.common import inverted_residual_s
 from models.tt_cnn.tt.pipeline import get_memory_config_for_persistent_dram_tensor
 from models.experimental.mobileNetV3.tt.custom_preprocessor import create_custom_preprocessor
 from models.experimental.mobileNetV3.tt.ttnn_mobileNetV3 import ttnn_MobileNetV3
-from tests.ttnn.utils_for_testing import check_with_pcc
+from tt_py_test_utils_common.utils_for_testing import check_with_pcc
 
 
 class MobileNetV3PerformanceRunnerInfra:
