@@ -9,6 +9,7 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "ckernel_buf_desc.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
 #include "quasar_test_common.h"
@@ -17,7 +18,6 @@
 
 #ifdef LLK_TRISC_UNPACK
 
-#include "llk_bfd_alloc.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
 #include "params.h"
@@ -36,8 +36,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // CFG persists across variants in a session; the dest-dvalid scheme must stay disarmed.
     set_up_zero_dest_dvalid_handshake_for_unpack();
 
-    const auto bfd_unpack =
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(tensor_shape_A, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(tensor_shape_A, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+    constexpr std::uint8_t bfd_unpack = ckernel::trisc::BFD_ID_UNP0;
 
     if constexpr (is_fp32_dest_acc_en)
     {
@@ -99,7 +99,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_PACK
 
 #include "cpack_common.h"
-#include "llk_bfd_alloc.h"
 #include "llk_pack_common.h"
 #include "llk_pack_untilize.h"
 #include "params.h"
@@ -116,35 +115,31 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     set_up_zero_dest_dvalid_handshake_for_pack();
 
-    std::uint8_t bfd_pack;
-    if (tensor_shape.total_num_faces() != NUM_FACES)
+    constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
+    if (_llk_pack_untilize_is_strided_(tensor_shape))
     {
         // PACR_STRIDE indexes L1 rows as tiles, so every strided pack builds the BD with y_dim = 1, as llk_pack_untilize_init does.
-        bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0, ckernel::trisc::L1AccessMode::Strided>(
+        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0, ckernel::trisc::L1AccessMode::Strided>(
             tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
     }
     else
     {
-        bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0, ckernel::trisc::L1AccessMode::Continuous>(
+        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0, ckernel::trisc::L1AccessMode::Continuous>(
             tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
     }
 
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
     _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
 
-    if (tensor_shape.total_num_faces() == NUM_FACES)
-    {
-        _llk_pack_untilize_init_<FULL_CT_DIM, BLOCK_CT_DIM>(bfd_pack, tensor_shape);
-    }
-    else
+    if (_llk_pack_untilize_is_strided_(tensor_shape))
     {
         // Fault injection, not setup: recreate the Src row counter and row mask a preceding 2x32 strided pack leaves behind,
-        // so every case checks that _llk_pack_untilize_strided_init_ clears them, whichever variant ran before.
+        // so every case checks that _llk_pack_untilize_init_ clears them, whichever variant ran before.
         TTI_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::ROW_SEL, p_pacr::PACK0, 16);
         cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_NO_WRITE_RMW, 1);
         cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_ROW_MASK_RMW, 0xC);
-        _llk_pack_untilize_strided_init_<FULL_CT_DIM, BLOCK_CT_DIM>(bfd_pack, tensor_shape);
     }
+    _llk_pack_untilize_init_<FULL_CT_DIM, BLOCK_CT_DIM>(bfd_pack, tensor_shape);
 
     const std::uint32_t y_stride_external = FULL_CT_DIM * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
 
@@ -155,15 +150,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             const std::uint32_t y        = section * BLOCK_RT_DIM + block_rt;
             const std::uint32_t dest_idx = block_rt * BLOCK_CT_DIM;
-            if (tensor_shape.total_num_faces() == NUM_FACES)
-            {
-                _llk_pack_untilize_set_dst_offset_(tensor_shape, y * y_stride_external /*l1_base_idx*/);
-                _llk_pack_untilize_(dest_idx, 0 /*l1_tile_idx*/);
-            }
-            else
-            {
-                _llk_pack_untilize_strided_<FULL_CT_DIM>(bfd_pack, tensor_shape, y * y_stride_external /*l1_tile_idx*/, dest_idx /*src_tile_idx*/);
-            }
+            _llk_pack_untilize_(dest_idx, y * y_stride_external /*l1_tile_idx*/, tensor_shape);
         }
         _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
     }

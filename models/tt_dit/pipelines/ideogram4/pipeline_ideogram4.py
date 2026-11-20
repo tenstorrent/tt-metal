@@ -134,6 +134,7 @@ from ...reference.ideogram4.dequant import dequant_fp8_state_dict
 from ..cfg import create_submeshes
 from ..events import DenoiseStep, PipelineEventCallback, SectionEnd, SectionStart, null_callback
 from ..pipeline_api import PipelineAPIMixin
+from . import policy
 
 # Opt-out switch for the bf16 dequant cache (default on). Dequantizing the fp8
 # checkpoints (encoder + 2 transformers) dominates pipeline build time; caching the
@@ -192,16 +193,13 @@ def _dq(path):
     return sd
 
 
-# Max prompt length. Mirrors the reference Ideogram4PipelineConfig.max_text_tokens (2048):
-# the reference rejects (does NOT truncate) prompts longer than this, so we do the same.
-MAX_TEXT_TOKENS = 2048
+MAX_TEXT_TOKENS = policy.IDEOGRAM4_MAX_TEXT_TOKENS
 
 # The encoder readback slices the text rows rounded up to a multiple of this, which bounds the
 # number of slice programs to MAX_TEXT_TOKENS / _TEXT_READBACK_BUCKET.
 _TEXT_READBACK_BUCKET = 256
 
-# The four 2K serving sizes, as (width, height): the resolutions a BH Galaxy pipeline warms by default.
-SERVING_SIZES: tuple[tuple[int, int], ...] = ((2048, 2048), (2048, 1152), (1152, 2048), (1360, 2048))
+SERVING_SIZES = policy.IDEOGRAM4_SERVING_SIZES
 
 # SP shards the sequence across the ring; each per-device shard must be tile-aligned, i.e. the
 # padded length is a multiple of tile_size * sp_factor. This is exactly the shared tt_dit helper
@@ -225,10 +223,10 @@ def _resolve_weights_dir(weights: str) -> str:
 _PRESETS: dict[tuple[int, ...], dict] = {
     # BH loudbox 2x4 (mesh-shape convention shared with the other BH pipelines): SP4 (axis 1) x
     # TP2 (axis 0). SP takes the size-4 axis since Ideogram is SP-heavy (full-mesh sequential CFG).
-    # No default resolutions: call warmup(sizes) or run untraced.
+    # The trace region its default resolutions need is unmeasured.
     (2, 4): {"tp": (2, 0), "sp": (4, 1), "num_links": 2, "topology": ttnn.Topology.Linear},
-    # BH Galaxy 4x8, 2D torus Ring: TP4 (axis 0) x SP8 (axis 1). The pipeline warms the four 2K
-    # serving sizes at load. Their four kept step traces allocate 10.9 MB in each of the 8 DRAM banks
+    # BH Galaxy 4x8, 2D torus Ring: TP4 (axis 0) x SP8 (axis 1). The four kept step traces of its
+    # default resolutions (the four 2K serving sizes) allocate 10.9 MB in each of the 8 DRAM banks
     # (87 MB), which filled 87% of a 100 MB region (12.5 MB per bank; jobs 179862, 180015).
     # trace_region_size is what the mesh must be opened with for them: 128 MB (16 MB per bank, 68% used).
     (4, 8): {
@@ -236,7 +234,6 @@ _PRESETS: dict[tuple[int, ...], dict] = {
         "sp": (8, 1),
         "num_links": 2,
         "topology": ttnn.Topology.Ring,
-        "resolutions": SERVING_SIZES,
         "trace_region_size": 128_000_000,
     },
 }
@@ -251,7 +248,7 @@ def _preset(mesh_shape) -> dict:
 
 def required_trace_region_size(mesh_shape) -> int:
     """The ``trace_region_size`` (bytes) to open a mesh of this shape with, so that the step traces of
-    its default resolutions fit; 0 when it has none."""
+    its default resolutions fit; 0 when unmeasured."""
     return _preset(mesh_shape).get("trace_region_size", 0)
 
 
@@ -262,7 +259,7 @@ def _check_trace_region(mesh_device: ttnn.MeshDevice, mesh_shape, sizes: Sequenc
     ``sizes`` includes one of them; other sizes are left to ttnn's own check at capture. A trace
     region of 0 (ttnn's dynamic trace allocation in DRAM) is not checked.
     """
-    defaults = _preset(mesh_shape).get("resolutions", ())
+    defaults = policy.served_resolutions(mesh_shape)
     if not any(tuple(size) in defaults for size in sizes):
         return
     need = required_trace_region_size(mesh_shape)
@@ -307,12 +304,12 @@ class Ideogram4PipelineConfig:
         qwen_repo: str = _DEFAULT_QWEN_REPO,
     ) -> Ideogram4PipelineConfig:
         """The preset for ``mesh_shape``. ``resolutions`` are the (width, height) sizes the pipeline
-        warms at load; by default the preset's (the four 2K ``SERVING_SIZES`` on 4x8, none on 2x4).
+        warms at load; by default ``policy.served_resolutions(mesh_shape)``.
         ``height`` and ``width`` are the size of a call that names none: by default the first
         resolution, as in Wan, or 512x512 when there are no resolutions."""
         preset = _preset(mesh_shape)
         if resolutions is None:
-            resolutions = preset.get("resolutions", ())
+            resolutions = policy.served_resolutions(mesh_shape)
         if height is None and width is None and resolutions:
             width, height = resolutions[0]
         height = 512 if height is None else height
@@ -544,13 +541,13 @@ class Ideogram4Pipeline(PipelineAPIMixin):
     ) -> Ideogram4Pipeline:
         """Build the pipeline and, by default, warm it up to serve.
 
-        ``resolutions`` ((width, height) pairs; default the mesh preset's) are warmed at load with
-        ``warmup``, which compiles every program of each size and captures and keeps its step trace,
-        so no request at those sizes compiles or captures after this returns, and a request at any
-        other size raises. On a BH Galaxy (4x8) the default is the four 2K ``SERVING_SIZES``, which
-        need a mesh opened with ``trace_region_size`` >= ``required_trace_region_size(mesh_shape)``
-        (128 MB); other meshes have none. A call that names no size runs at ``height`` x ``width``,
-        by default the first resolution (512x512 without resolutions). ``run_warmup=False`` skips the warmup: then call ``warmup``
+        ``resolutions`` ((width, height) pairs; default ``policy.served_resolutions(mesh_shape)``) are
+        warmed at load with ``warmup``, which compiles every program of each size and captures and
+        keeps its step trace, so no request at those sizes compiles or captures after this returns, and
+        a request at any other size raises. The default is the four 2K ``SERVING_SIZES``; on a BH
+        Galaxy (4x8) they need a mesh opened with ``trace_region_size`` >=
+        ``required_trace_region_size(mesh_shape)`` (128 MB). A call that names no size runs at
+        ``height`` x ``width``, by default the first resolution (512x512 without resolutions). ``run_warmup=False`` skips the warmup: then call ``warmup``
         yourself before traced requests, or run untraced at any size.
         """
         config = Ideogram4PipelineConfig.default(

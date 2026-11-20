@@ -68,7 +68,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (!unpack_to_dest)
             {
-                // SrcA plus a SrcB zerosrc dvalid every face, including dest_acc=No (tenstorrent/budabackend#1230).
+                // SrcA plus a zeroed SrcB every face, including dest_acc=No, as _llk_unpack_A_ (BroadcastType::NONE) posts them.
                 _perf_unpack_stream_set_valid<true /*set_a*/, true /*set_b*/, PERF_RUN_TYPE>(src_handshake_iters /*iterations*/);
             }
         }
@@ -215,6 +215,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(RESULT_TILE, L1_ADDRESS(buffer_Res[0]));
+                // Wormhole: release the dest section as production's tile_regs_release does, so every section starts with drained packers
+                if constexpr (PERF_PACK_SECTION_RELEASE)
+                {
+                    _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+                }
             }
         }
         else

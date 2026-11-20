@@ -179,6 +179,28 @@ def test_num_links(mesh_device, num_links, cluster_axis, layout):
     _check(out, host, f"num_links {num_links}")
 
 
+@pytest.mark.skipif(ttnn.get_num_devices() < 32, reason="the 4x4 cylinder is a submesh of a Galaxy (8x4)")
+@pytest.mark.parametrize("device_params", [TORUS_6K], indirect=True)
+@MESH
+@pytest.mark.parametrize("num_links", [None, 2], ids=["all_links", "2_links"])
+@INPUT_MEMORY
+@LAYOUTS
+def test_cylinder_4x4(mesh_device, num_links, nd_sharded, layout):
+    """Full-mesh gather on a 4x4 submesh of the Galaxy, a cylinder: axis 1 (four columns) keeps its wrap, axis 0 (four
+    of eight rows) is a line. Three Hamiltonian cycles, a hop shared by two of them giving each its own link. The
+    second call is a program-cache hit."""
+    cylinder = mesh_device.create_submesh(ttnn.MeshShape(4, 4))
+    torch.manual_seed(5)
+    G, mapper = _group(cylinder, None)
+    gathered = [1, 1, 64 * G, 512]
+    for call in range(2):
+        host = _random(gathered, ttnn.bfloat16)
+        inp = _input(cylinder, host, ttnn.bfloat16, layout, mapper(2), nd_sharded)
+        out, _ = _output(cylinder, gathered, ttnn.bfloat16, layout)
+        _gather(cylinder, inp, out, dim=2, cluster_axis=None, num_links=num_links)
+        _check(out, host, f"call {call}, num_links {num_links}")
+
+
 @pytest.mark.parametrize("device_params", [TORUS_6K, TORUS_14K], indirect=True)
 @MESH
 @pytest.mark.parametrize("cluster_axis", [1, None], ids=["axis1", "full_mesh"])

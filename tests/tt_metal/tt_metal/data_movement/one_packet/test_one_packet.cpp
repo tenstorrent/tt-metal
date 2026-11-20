@@ -10,11 +10,11 @@
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 namespace tt::tt_metal {
 
@@ -116,7 +116,7 @@ bool run_dm(distributed::MeshDevice& mesh_device, const OnePacketConfig& test_co
         }},
     };
 
-    Program program = MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs run_params;
     ProgramRunArgs::KernelRunArgs krp{.kernel = kspec.unique_id};
@@ -132,7 +132,7 @@ bool run_dm(distributed::MeshDevice& mesh_device, const OnePacketConfig& test_co
             {"responder_y", (uint32_t)physical_subordinate_core.y},
         });
     run_params.kernel_run_args.push_back(krp);
-    SetProgramRunArgs(program, run_params);
+    program.set_program_run_args(run_params);
 
     // Assign unique id
     log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);

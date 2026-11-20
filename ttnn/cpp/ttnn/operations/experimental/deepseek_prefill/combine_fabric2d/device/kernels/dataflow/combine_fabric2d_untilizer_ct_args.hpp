@@ -87,8 +87,8 @@ struct UntilizerCtArgs {
         // The own destinations in emission order, which is the order the group walks their runs. Taken from
         // the same work list a reader's schedule is built from, so neither side can reorder alone.
         for (const auto& w : work) {
-            if (!w.is_relay) {
-                blocks_.push_back(w.dst_dg_index);
+            if (!w.is_forward) {
+                blocks_.push_back(w.dst_pos);
                 num_destinations++;
             }
         }
