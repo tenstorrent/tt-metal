@@ -2249,7 +2249,7 @@ class PmkSparseKdaPlan:
                       f"        volatile tt_l1_ptr uint32_t* s_ = reinterpret_cast<volatile tt_l1_ptr uint32_t*>({probe[1]}u + {128 * ri}u);",
                       "        for (uint32_t i_ = 0; i_ < 32; ++i_) {", "            s_[i_] = i_ < pmk_pp::g_n ? pmk_pp::g_m[i_] : 0u;", "        }",
                       f"        const uint32_t slot_ = ((my_y[0] & 31u) * 32u + (my_x[0] & 31u)) * 2u + {ri}u;",
-                      f"        const InterleavedAddrGen<true> pg_{{.bank_base_address = {probe[0]}u, .page_size = 128}};",
+                      f"        const auto pg_ = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), {probe[0]}u, 128);",
                       f"        noc_async_write({probe[1]}u + {128 * ri}u, pg_.get_noc_addr(slot_), 128);",
                       "        noc_async_write_barrier();", "    }"]  # fmt: skip
         tail = ["void kernel_main() {", "    PMK_LAYER_BEGIN();"] + pro + main + pp_end + ["    PMK_LAYER_END();", "}"]

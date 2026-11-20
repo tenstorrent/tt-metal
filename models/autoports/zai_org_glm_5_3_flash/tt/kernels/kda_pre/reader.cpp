@@ -254,7 +254,7 @@ void kernel_main() {
             cb_reserve_back(CB_Q, units);
             const uint32_t hb[3] = {get_write_ptr(CB_H0), get_write_ptr(CB_H1), get_write_ptr(CB_H2)};
             const uint32_t qb = get_write_ptr(CB_Q);
-            const InterleavedAddrGen<true> sg = {.bank_base_address = sel_addr, .page_size = 128};
+            const auto sg = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), sel_addr, 128);
             noc_async_read(sg.get_noc_addr(0), s0, 64);
             noc_async_read_barrier();
             uint32_t selw[G];
@@ -379,7 +379,7 @@ void kernel_main() {
             static_assert(G >= 1 && G <= 16, "KDA_VERIFY_GROUPS: 1..16 groups");
             const uint32_t units = pairs;
             const uint32_t gp = units / G;  // row pairs per group (the host asserts units % G == 0)
-            const InterleavedAddrGen<true> sg = {.bank_base_address = sel_addr, .page_size = 128};
+            const auto sg = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), sel_addr, 128);
             noc_async_read(sg.get_noc_addr(0), s0, 64);
             noc_async_read_barrier();
             uint32_t selw[G];
@@ -476,7 +476,7 @@ void kernel_main() {
             // even at units = 1); Stage 17 t = 8 verify: 4 pairs (KDA_PRE_REV 2)
             const uint32_t units = pairs;
             const uint32_t hpages = units < 2 ? 2 : units;
-            const InterleavedAddrGen<true> sg = {.bank_base_address = sel_addr, .page_size = 128};
+            const auto sg = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), sel_addr, 128);
             noc_async_read(sg.get_noc_addr(0), s0, 64);
             noc_async_read_barrier();
             const uint32_t sel = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s0)[0];

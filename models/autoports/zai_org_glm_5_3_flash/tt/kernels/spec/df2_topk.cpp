@@ -33,7 +33,7 @@ constexpr uint32_t PAGE = KR * TOPK * 2 * 4;  // the partial page: KR x TOPK x (
 static_assert(KR >= 1 && KR <= 31 && TOPK >= 1 && TOPK <= 32 && PAGE <= 4096, "KR x TOPK x 8 B <= 4 KB");
 
 FORCE_INLINE uint64_t dram(uint32_t addr, uint32_t page_size, uint32_t page) {
-    const InterleavedAddrGen<true> g = {.bank_base_address = addr, .page_size = page_size};
+    const auto g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), addr, page_size);
     return g.get_noc_addr(page);
 }
 FORCE_INLINE volatile tt_l1_ptr uint32_t* u32(uint32_t l1) {

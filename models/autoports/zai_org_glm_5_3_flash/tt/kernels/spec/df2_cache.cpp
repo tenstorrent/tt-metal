@@ -38,7 +38,7 @@ constexpr uint32_t TBC = TB;
 constexpr uint32_t POS_PAGE = 128;
 
 FORCE_INLINE uint64_t dram(uint32_t addr, uint32_t page_size, uint32_t page) {
-    const InterleavedAddrGen<true> g = {.bank_base_address = addr, .page_size = page_size};
+    const auto g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), addr, page_size);
     return g.get_noc_addr(page);
 }
 }  // namespace

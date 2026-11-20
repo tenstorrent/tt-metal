@@ -45,12 +45,12 @@ void kernel_main() {
             // Stage 14 B2.3: the holder's 32 token rows of x_ext [C + 32, H] bf16 ROW_MAJOR (one row per page) -> CB_XS
             // row t at t H_T 64 (the writer's row-store layout)
             const uint32_t row_b = h_t * 32 * 2;
-            const InterleavedAddrGen<true> xg{.bank_base_address = x_addr, .page_size = row_b};
+            const auto xg = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), x_addr, row_b);
             for (uint32_t t = 0; t < 32; ++t) {
                 noc_async_read(xg.get_noc_addr(h * 32 + t), xs + t * row_b, row_b);
             }
 #else
-            const InterleavedAddrGen<true> xg{.bank_base_address = x_addr, .page_size = 2048};
+            const auto xg = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), x_addr, 2048);
             for (uint32_t k = 0; k < h_t; ++k) {
                 noc_async_read(xg.get_noc_addr(h * h_t + k), xs + k * 2048, 2048);
             }

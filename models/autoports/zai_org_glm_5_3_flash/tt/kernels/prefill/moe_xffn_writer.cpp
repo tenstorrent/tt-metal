@@ -28,7 +28,7 @@ void kernel_main() {
     constexpr uint32_t ROW_BYTES = H_T * 32 * 2;
     constexpr uint32_t SEG = NC * 32 * 2;
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
-    const InterleavedAddrGen<true> out_g{.bank_base_address = out_addr, .page_size = ROW_BYTES};
+    const auto out_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), out_addr, ROW_BYTES);
     XP_BEGIN();
 #ifdef XFFN_X_ON_NOC1
     constexpr uint32_t KC = get_compile_time_arg_val(2);
@@ -37,8 +37,8 @@ void kernel_main() {
     const uint32_t x_addr = get_arg_val<uint32_t>(1);
     const uint32_t disp_addr = get_arg_val<uint32_t>(2);
     const uint32_t cap = get_arg_val<uint32_t>(3);
-    const InterleavedAddrGen<true> x_g{.bank_base_address = x_addr, .page_size = ROW_BYTES};
-    const InterleavedAddrGen<true> disp_g{.bank_base_address = disp_addr, .page_size = cap * 4};
+    const auto x_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), x_addr, ROW_BYTES);
+    const auto disp_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), disp_addr, cap * 4);
     volatile tt_l1_ptr uint32_t* dl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CB_WTAB));
 #endif
 

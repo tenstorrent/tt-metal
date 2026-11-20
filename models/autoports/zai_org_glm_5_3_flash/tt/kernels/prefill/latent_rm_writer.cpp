@@ -25,7 +25,7 @@ void kernel_main() {
     const uint32_t nc = get_arg_val<uint32_t>(4);
 
     const uint32_t ws = get_write_ptr(CB_WS);
-    const InterleavedAddrGen<true> bound_g{.bank_base_address = bound_addr, .page_size = 4};
+    const auto bound_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), bound_addr, 4);
     noc_async_read(bound_g.get_noc_addr(0), ws, 64);
     noc_async_read_barrier();
     uint32_t lim = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ws)[0] * BPU;
@@ -33,7 +33,7 @@ void kernel_main() {
     if (lim <= ci) {
         return;
     }
-    const InterleavedAddrGen<true> dst{.bank_base_address = out_addr, .page_size = ROW_BYTES};
+    const auto dst = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), out_addr, ROW_BYTES);
     for (uint32_t lb = ci; lb < lim; lb += nc) {
         for (uint32_t tr = 0; tr < TROWS; ++tr) {
             cb_wait_front(CB_OUT, TPR);

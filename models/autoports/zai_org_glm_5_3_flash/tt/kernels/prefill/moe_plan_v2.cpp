@@ -43,8 +43,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* fill = start + EP;
     volatile tt_l1_ptr uint32_t* lo_w = fill + EP;  // 32 words
 
-    const InterleavedAddrGen<true> ids_g{.bank_base_address = ids_addr, .page_size = N * 4};
-    const InterleavedAddrGen<true> lo_g{.bank_base_address = lo_addr, .page_size = 32 * 4};
+    const auto ids_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), ids_addr, N * 4);
+    const auto lo_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), lo_addr, 32 * 4);
     noc_async_read(ids_g.get_noc_addr(0), reinterpret_cast<uint32_t>(ids), N * 4);
     noc_async_read(lo_g.get_noc_addr(0), reinterpret_cast<uint32_t>(lo_w), 32 * 4);
     noc_async_read_barrier();
@@ -86,12 +86,13 @@ void kernel_main() {
         t = (t + 1 == C) ? 0 : t + 1;
     }
 
-    const InterleavedAddrGen<true> disp_g{.bank_base_address = disp_addr, .page_size = CAP * 4};
-    const InterleavedAddrGen<true> dest_g{.bank_base_address = dest_addr, .page_size = N * 4};
-    const InterleavedAddrGen<true> cnt_g{.bank_base_address = cnt_addr, .page_size = EP * 4};
-    const InterleavedAddrGen<true> start_g{.bank_base_address = start_addr, .page_size = EP * 4};
+    const auto disp_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), disp_addr, CAP * 4);
+    const auto dest_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), dest_addr, N * 4);
+    const auto cnt_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), cnt_addr, EP * 4);
+    const auto start_g =
+        TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), start_addr, EP * 4);
     // the long-settled words first (cnt / start / meta), the per-pair tables (stored up to the loop's end) last
-    const InterleavedAddrGen<true> meta_g{.bank_base_address = meta_addr, .page_size = 32 * 4};
+    const auto meta_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), meta_addr, 32 * 4);
     noc_async_write(reinterpret_cast<uint32_t>(cnt), cnt_g.get_noc_addr(0), EP * 4);
     noc_async_write(reinterpret_cast<uint32_t>(start), start_g.get_noc_addr(0), EP * 4);
     noc_async_write(reinterpret_cast<uint32_t>(lo_w), meta_g.get_noc_addr(0), 32 * 4);

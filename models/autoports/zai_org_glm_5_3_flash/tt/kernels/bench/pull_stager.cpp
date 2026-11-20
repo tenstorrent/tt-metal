@@ -74,7 +74,7 @@ void kernel_main() {
     row[5] = 0;
     row[6] = 0;
     row[7] = pullb::MAGIC;
-    const InterleavedAddrGen<true> pg{.bank_base_address = probe_addr, .page_size = 32};
+    const auto pg = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), probe_addr, 32);
     noc_async_write(reinterpret_cast<uint32_t>(row), pg.get_noc_addr(probe_row), 32);
     noc_async_write_barrier();
 }

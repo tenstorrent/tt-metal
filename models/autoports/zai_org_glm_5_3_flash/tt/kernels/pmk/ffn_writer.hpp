@@ -41,7 +41,7 @@ FORCE_INLINE void phase_main() {
     constexpr uint32_t ROW_BYTES = H_T * 32 * 2;
     constexpr uint32_t SEG = NC * 32 * 2;
     const uint32_t out_addr = get_arg_val<uint32_t>(RT0 + 0);
-    const InterleavedAddrGen<true> out_g{.bank_base_address = out_addr, .page_size = ROW_BYTES};
+    const auto out_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), out_addr, ROW_BYTES);
     const uint32_t tab_ = get_write_ptr(CB_TAB);  // the push probe words (moe_common.hpp)
     XP_BEGIN();
 #if defined(PMK_XS_ROWS) && (defined(XFFN_X_TILED) || !defined(XFFN_X_ON_NOC1) || defined(XFFN_X_SPLIT) || \
@@ -58,7 +58,8 @@ FORCE_INLINE void phase_main() {
 #endif
     constexpr uint32_t TM_C = PMK_OUT_TM, TM_PART = PMK_TM_PART, TM_K = PMK_TM_K;
     static_assert(TM_PART % (get_compile_time_arg_val(CT0 + 1) * 64) == 0, "an N chunk's segment sits in one part");
-    const InterleavedAddrGen<true> tm_g{.bank_base_address = out_addr, .page_size = TM_K * TM_PART};
+    const auto tm_g =
+        TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), out_addr, TM_K * TM_PART);
 #define TM_TOK(v) ((v) % TM_C)
 #else
 #define TM_TOK(v) (v)
@@ -81,8 +82,8 @@ FORCE_INLINE void phase_main() {
     const uint32_t x_addr = get_arg_val<uint32_t>(RT0 + 1);
     const uint32_t disp_addr = get_arg_val<uint32_t>(RT0 + 2);
     const uint32_t cap = get_arg_val<uint32_t>(RT0 + 3);
-    const InterleavedAddrGen<true> x_g{.bank_base_address = x_addr, .page_size = ROW_BYTES};
-    const InterleavedAddrGen<true> disp_g{.bank_base_address = disp_addr, .page_size = cap * 4};
+    const auto x_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), x_addr, ROW_BYTES);
+    const auto disp_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), disp_addr, cap * 4);
     volatile tt_l1_ptr uint32_t* dl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CB_WTAB));
 #endif
 
@@ -272,7 +273,8 @@ FORCE_INLINE void phase_main() {
             constexpr uint32_t ROWB_BYTES = (H_T / NC) * RB;
             constexpr uint32_t CW = PMK_YW_COAL;
             constexpr uint32_t GRP_B = MG * 32 * CW * RB;
-            const InterleavedAddrGen<true> outb_g{.bank_base_address = out_addr, .page_size = ROWB_BYTES};
+            const auto outb_g =
+                TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), out_addr, ROWB_BYTES);
             const uint32_t scr0 = (get_write_ptr(CB_WTAB) + MG * 32 * 4 + 63) & ~63u;
             volatile tt_l1_ptr uint32_t* desc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scr0 + 2 * GRP_B);
             volatile tt_l1_ptr uint32_t* relayed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tab_ + 96);
@@ -311,7 +313,8 @@ FORCE_INLINE void phase_main() {
             constexpr uint32_t CW = PMK_YW_COAL;
             static_assert((H_T / NC) % CW == 0, "coalesced N chunks divide the chunk count");
             constexpr uint32_t GRP_B = MG * 32 * CW * RB;  // one group scratch
-            const InterleavedAddrGen<true> outb_g{.bank_base_address = out_addr, .page_size = ROWB_BYTES};
+            const auto outb_g =
+                TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), out_addr, ROWB_BYTES);
             const uint32_t scr0 = (get_write_ptr(CB_WTAB) + MG * 32 * 4 + 63) & ~63u;
             for (uint32_t nc = 0; nc < H_T / NC; nc += CW) {
                 XP_TIC();
@@ -372,7 +375,8 @@ FORCE_INLINE void phase_main() {
                 // mantissas] assembled in the WTAB scratch (2 slots: the previous row's write may be in flight)
                 constexpr uint32_t RB = rowb_chunk_bytes(NC);
                 constexpr uint32_t ROWB_BYTES = (H_T / NC) * RB;
-                const InterleavedAddrGen<true> outb_g{.bank_base_address = out_addr, .page_size = ROWB_BYTES};
+                const auto outb_g =
+                    TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), out_addr, ROWB_BYTES);
                 const uint32_t scr0 = (get_write_ptr(CB_WTAB) + MG * 32 * 4 + 63) & ~63u;
                 for (uint32_t t = 0; t < 32; ++t) {
                     const uint32_t row = r * 32 + t;

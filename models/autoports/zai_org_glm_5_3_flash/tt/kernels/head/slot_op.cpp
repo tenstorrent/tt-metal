@@ -32,8 +32,8 @@ void kernel_main() {
         const uint32_t dst = get_arg_val<uint32_t>(base + 3), dst0 = get_arg_val<uint32_t>(base + 4);
         const uint32_t pages = get_arg_val<uint32_t>(base + 5), pb = get_arg_val<uint32_t>(base + 6);
         const uint32_t rows = get_arg_val<uint32_t>(base + 7);
-        const InterleavedAddrGen<true> s{.bank_base_address = src, .page_size = pb};
-        const InterleavedAddrGen<true> d{.bank_base_address = dst, .page_size = pb};
+        const auto s = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), src, pb);
+        const auto d = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), dst, pb);
         if (kind == 0) {
             for (uint32_t off = 0; off < pb; off += MEM_ZEROS_SIZE) {
                 noc_async_read(zeros, a + off, MEM_ZEROS_SIZE < pb - off ? MEM_ZEROS_SIZE : pb - off);

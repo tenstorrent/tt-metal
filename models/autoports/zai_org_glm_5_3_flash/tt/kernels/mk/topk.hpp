@@ -284,7 +284,7 @@ FORCE_INLINE void send() {
     const uint32_t sx = get_arg_val<uint32_t>(MK_TOPK_RT + 3), sy = get_arg_val<uint32_t>(MK_TOPK_RT + 4);
     const uint32_t land = get_arg_val<uint32_t>(MK_TOPK_RT + 5);
     const uint32_t slot = get_arg_val<uint32_t>(MK_TOPK_RT + 6);
-    const InterleavedAddrGen<true> pages{.bank_base_address = land, .page_size = MK_TOPK_PAGE};
+    const auto pages = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), land, MK_TOPK_PAGE);
     volatile tt_l1_ptr uint32_t* b = base();
     for (uint32_t r = 0; r < ROWS; ++r) {  // the heaps -> best-first (key, id) rows (empty slots (0, ~0) behind them)
         finish_row(b + r * K * 2, counts()[r]);

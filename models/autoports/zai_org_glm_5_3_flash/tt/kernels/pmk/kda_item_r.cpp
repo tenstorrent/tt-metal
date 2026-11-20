@@ -111,23 +111,33 @@ void kernel_main() {
 
     const uint32_t head = get_arg_val<uint32_t>(ph_rt0 + 0);
     const uint32_t slot = get_arg_val<uint32_t>(ph_rt0 + 1);
-    const InterleavedAddrGen<true> u_g{.bank_base_address = get_arg_val<uint32_t>(ph_rt0 + 2), .page_size = T16};
-    const InterleavedAddrGen<true> lr_g{.bank_base_address = get_arg_val<uint32_t>(ph_rt0 + 3), .page_size = T16};
-    const InterleavedAddrGen<true> f_g{.bank_base_address = get_arg_val<uint32_t>(ph_rt0 + 4), .page_size = T32};
-    const InterleavedAddrGen<true> cst_g{.bank_base_address = get_arg_val<uint32_t>(ph_rt0 + 5), .page_size = T16};
-    const InterleavedAddrGen<true> valid_g{.bank_base_address = get_arg_val<uint32_t>(ph_rt0 + 6), .page_size = 4};
+    const auto u_g = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(ph_rt0 + 2), T16);
+    const auto lr_g = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(ph_rt0 + 3), T16);
+    const auto f_g = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(ph_rt0 + 4), T32);
+    const auto cst_g = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(ph_rt0 + 5), T16);
+    const auto valid_g = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(ph_rt0 + 6), 4);
     const uint32_t taps_addr[4] = {
         get_arg_val<uint32_t>(ph_rt0 + 7),
         get_arg_val<uint32_t>(ph_rt0 + 8),
         get_arg_val<uint32_t>(ph_rt0 + 9),
         get_arg_val<uint32_t>(ph_rt0 + 10)};
     auto taps_noc = [&](uint32_t j, uint32_t tile, uint32_t off) {
-        return InterleavedAddrGen<true>{.bank_base_address = taps_addr[j], .page_size = T16}.get_noc_addr(tile, off);
+        return TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), taps_addr[j], T16)
+            .get_noc_addr(tile, off);
     };
-    const InterleavedAddrGen<true> dt_g{.bank_base_address = get_arg_val<uint32_t>(ph_rt0 + 11), .page_size = T32};
-    const InterleavedAddrGen<true> rate_g{.bank_base_address = get_arg_val<uint32_t>(ph_rt0 + 12), .page_size = T32};
-    const InterleavedAddrGen<true> probe_g{
-        .bank_base_address = get_arg_val<uint32_t>(ph_rt0 + 13), .page_size = PROBE_ROW_BYTES};
+    const auto dt_g = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(ph_rt0 + 11), T32);
+    const auto rate_g = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(ph_rt0 + 12), T32);
+    const auto probe_g = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(),
+        get_arg_val<uint32_t>(ph_rt0 + 13),
+        PROBE_ROW_BYTES);
     uint32_t pr_items = 0, pr_chk_u = 0, pr_chk_f = 0;
 
     // valid_end (device tensor: the trace is request-agnostic) -> the chunks with valid rows

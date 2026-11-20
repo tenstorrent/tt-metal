@@ -71,17 +71,20 @@ void kernel_main() {
 #endif
     {
         XP_TIC();
-        const InterleavedAddrGen<true> cnt_g{.bank_base_address = cnt_addr, .page_size = EP * 4};
-        const InterleavedAddrGen<true> start_g{.bank_base_address = start_addr, .page_size = EP * 4};
-        const InterleavedAddrGen<true> tbl_g{.bank_base_address = tbl_addr, .page_size = 2 * E * 4};
+        const auto cnt_g =
+            TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), cnt_addr, EP * 4);
+        const auto start_g =
+            TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), start_addr, EP * 4);
+        const auto tbl_g =
+            TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), tbl_addr, 2 * E * 4);
         noc_async_read(cnt_g.get_noc_addr(0), reinterpret_cast<uint32_t>(cnt), EP * 4);
         noc_async_read(start_g.get_noc_addr(0), reinterpret_cast<uint32_t>(start), EP * 4);
         noc_async_read(tbl_g.get_noc_addr(0), reinterpret_cast<uint32_t>(tbl), (2 * E * 4 + 63) / 64 * 64);
         noc_async_read_barrier();
         XP_TOC(R_TABLES);
     }
-    const InterleavedAddrGen<true> x_g{.bank_base_address = x_addr, .page_size = ROW_BYTES};
-    const InterleavedAddrGen<true> disp_g{.bank_base_address = disp_addr, .page_size = cap * 4};
+    const auto x_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), x_addr, ROW_BYTES);
+    const auto disp_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), disp_addr, cap * 4);
 
     // one work unit: expert e's M group gi (tile rows g0 .. g0 + mt - 1 of its region)
     auto unit = [&](uint32_t e, uint32_t gi) {
