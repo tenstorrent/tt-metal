@@ -162,3 +162,34 @@
   Refinement 4 territory.
 - Tests added: `tests/ttnn/unit_tests/operations/all_gather_rms_norm/zones_agrms.py` (zone breakdown probe, not
   collected: no `test_` file prefix).
+
+## Refinement 4 — OVERLAP: shorten the focus case's exposed tail and start
+- Date: 2026-11-20
+- What was done: re-measured the focus case's breakdown after Refinement 3 (zones with 4 traced calls so the
+  profiler's marker buffers do not overflow: launch → first packet ≈ 2 µs, link ≈ 14 µs, last landing → end ≈ 5.3 µs).
+  Then the OVERLAP levers, each a single-source descriptor knob (env-overridable for probes):
+  (1) **per-entry own-loaded masks** (`OWN_LOADED_MASK = 1`, kept): member i of a port's own list adds `1 << i` to the
+  port's `sem_own_loaded` (≤ 31 members, else the old wait-all), and the port reader's own entry waits only for its
+  own members' bits (wait word = flag bit 31 | mask), so the first packets are staged before the fence ends:
+  20.74 → 20.64 µs; (2) `RELAY_LAG_WAVES` env knob, 0 / 2 measured worse, 1 kept; (3) **tail split** (`TAIL_K_STEPS`,
+  parked at 0): the last wave's row-groups at the next wider member count (Split.tail_k / classes(), one
+  reader / writer / compute kernel set per class, merged CB plan, per-group core offsets in build_entries) — correct,
+  +1.2 µs; (4) `TAIL_RELAY_LAG` (send-slot reorder of the last wave, parked at RELAY_LAG_WAVES); (5) `XG_FIRST`
+  (x·γ into `cb_xg` before the combine, one multiply by inv_rms after it; gated on the chosen split still fitting L1;
+  parked at 0, +0.26 µs); (6) `AFFINE_FIRST = 1` (writer finishes gamma / beta before the partial exchange; null, kept).
+  Probe-only: zones_agrms.py takes AGRMS_ZONE_ITERS / AGRMS_ZONE_PATTERNS and prints the group → core map.
+  Reused: the port reader's wait loop, the reader's signal loop, the split / entry builder, the chain helpers.
+  Added: the member-class split, the mask encoding, the cb_xg pass (parked).
+- Measured (eval `ccl_perf` via `perf_agrms.py`, 5 experiments, fastest / slowest chip): case0 20.74 / 21.51 →
+  **20.64 / 21.35 µs** (compare: win); case1 15.68 / 16.46 → 15.64 / 16.39 (null). Losses: relay lag 0 25.72, 2 21.93,
+  INC_EVERY 12 22.58, tail relay lag 0 22.41, tail split 21.94 / 23.24, both 23.11, x·γ first 21.00 / 22.07.
+  Ablations: normalize unchanged with output stores stubbed (2.52 vs 2.51 µs) or with the per-tile srcA format switches
+  removed (2.57 vs 2.62) → compute-bound at HiFi4; two identical kernel sets cost nothing (20.744).
+- Accuracy achieved: unchanged at the defaults (no compute change; own-loaded masks only reorder port reads) — unit dir
+  70/70; the tail split and x·γ variants also passed the golden check of the perf case.
+- Golden test progress: random 500-cell sample 77 passed / 28 xfailed / 0 failed (395 topology-skipped on this mesh);
+  stratified 110-cell slice incl. both loose cases 13 passed / 5 xfailed / 0 failed.
+- Issues encountered: device zones on the late compute cores mis-pair across calls with 20 traced calls (silent marker
+  budget); with 4 calls the data is clean. The tail split's last 8-member group finished its partial exchange ~4 µs after
+  its last moment — not explained; recorded as the next lever.
+- Tests added: none (probe changes only: `zones_agrms.py`).

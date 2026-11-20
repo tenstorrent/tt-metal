@@ -294,6 +294,22 @@ drain_arrivals();                   // reader: wait total incoming, decrement se
 | Per-core runtime args (dispatch) | — | ~3 µs flat per call for per-core args (prompt); harmless while device time ≫ 3 µs, flagged DISPATCH-BOUND otherwise | common args + core index derivation; CoreRangeSet merged into rectangles |
 | Finalize SFPU scope / partial faces-only / signal-after-flush | local | ported from base op Perf 1 (already measured there) | — (port as is) |
 
+**Refinement 4 measurements (focus case, eval `ccl_perf`, fastest / slowest chip; baseline 20.74 / 21.51 µs):**
+own-loaded wait-all → per-entry bit masks (`OWN_LOADED_MASK`, member i of a port adds `1 << i` to `sem_own_loaded`, an
+own entry waits for exactly its members' bits; wait-all beyond 31 members) **20.64 / 21.35 (kept)**; relay lag 0 / 2
+25.72 / 21.93 (1 kept, `AGRMS_RELAY_LAG`); wave 12 row-groups 22.58 (8 kept; 4 / 16 measured in Refinement 3);
+last-wave relay lag 0 (`TAIL_RELAY_LAG`) 22.41; tail chain block size = the last wave's row-groups at the next wider k
+(`TAIL_K_STEPS = 1`: k 4 → 8, 6-tile members, two kernel sets, merged CB plan) 21.94 / 23.24 (parked at 0: the wave-1
+relays land as late as the last wave, so the narrow groups do not hold the end, and the last 8-member group's partial
+exchange measured ~4 µs late — unexplained, zone markers unreliable on those cores); x·γ computed before the
+combine (`XG_FIRST`) 21.00 (parked: on the last-landing member the pass is longer than the exchange it should hide);
+gamma finished before the exchange (`AFFINE_FIRST`) null (kept). Landing notification fused to the member: not built —
+one fused increment per member per entry multiplies the receiving router's write-ack stalls (`INC_EVERY` 4 measured
++2.0 µs in Refinement 3). Breakdown after the refinement: launch → first packet ≈ 2 µs (connection open ≈ 1.1, fence
+≈ 0.6–0.9), fence end → last landing ≈ 14 µs (link), last landing → end ≈ 5.3 µs (moments 1.1, exchange 0.5, combine
+0.2–0.3, normalize 2.5 — compute-bound: two HiFi4 FPU multiplies per tile, unchanged with the stores stubbed or the
+srcA format switches removed — store 0.4).
+
 ## Dataflow Strategy
 
 | Stage | Format | Mechanism | Notes |

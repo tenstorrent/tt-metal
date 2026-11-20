@@ -171,7 +171,7 @@ neighbour's launch skew and the ready fence (≈ 1 µs) before the first packet 
 `relay_lag_waves`, fence), not link bandwidth. The 7.6 µs roofline assumes ≈ 47 GB/s per link, which this fabric's
 worker→router path did not reach in the example either (≈ 37 GB/s at 2 links).
 
-### [ ] Refinement 4 — OVERLAP: shorten the focus case's exposed tail and start
+### [x] Refinement 4 — OVERLAP: shorten the focus case's exposed tail and start
 
 **Type**: perf
 
@@ -189,6 +189,17 @@ the transport rate; re-measure the breakdown first.
 
 **Done when**: measured fastest-chip win on case0 beyond noise, slowest chip not higher, golden green, no regression
 on the guard set of Refinement 3.
+**Outcome**: case0 fastest 20.74 → **20.64 µs**, slowest 21.51 → **21.35 µs** (`eval.ccl_perf compare`: win; small,
+−0.5 %) from per-entry own-loaded bit masks (the start lever); case1 guard 15.68 → 15.64 (null). Measured and parked as
+live knobs at byte-identical defaults: relay lag 0 / 2 (+5.0 / +1.2 µs), wave 12 row-groups (+1.8), last-wave relay lag 0
+(+1.7), last wave at k 8 (6-tile members, +1.2: the wave-1 relays land as late as the last wave and the last 8-member
+group's exchange ran ~4 µs late, cause not found), x·γ before the combine (+0.26); gamma finished before the exchange:
+null (kept). Bottleneck now: the post-landing chain ≈ 5.3 µs of a 21.3 µs kernel, and its biggest piece, the normalize
+(2.5 µs per 12-tile member), is compute-bound at the caller's HiFi4: two FPU multiplies per tile (stores stubbed and srcA
+format switches removed: unchanged). The transport (fence end → last landing ≈ 14 µs) stays ≈ 3.6 µs above the 10.4 µs
+link floor, mostly the router backlog after the sender's last hand-off. Next: find the late 8-member exchange (DPRINT on
+the last group, fewer zones) and narrow every group landing in the last ~2 µs, not only the last wave; not done here
+because the zone markers on those cores were unreliable and the fix needs a dedicated debug pass.
 
 ### [ ] Refinement 5 — Indexer layer_norm case: local LN tail (column-0 SFPU scope) + own-slice moments before the landing
 

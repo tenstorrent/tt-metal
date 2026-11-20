@@ -178,3 +178,13 @@ exchange with k·rows·n_stat row-form writes (2 × 16 datums) plus an n_ret·ro
 
 Net: the m16 path frees `rows · (1 + 2 + 2) · T_acc + rows · pitch · T_acc (cb_cent) + rows · T_bf16` minus 3 · T_acc
 (cb_mu) per compute core. DRAM / fabric crossings: unchanged.
+
+## Refinement 4 deltas (OVERLAP knobs)
+
+| CB | Change | Shares with / why not |
+|---|---|---|
+| `cb_xg` (27, rms ∧ gamma ∧ `XG_FIRST`) | `max(rows · pitch)` pages, T_acc; allocated only when the already-chosen split still fits L1 with it (the split never changes for it). **Default off** (`XG_FIRST = 0`, measured +0.26 µs on the focus case) — not allocated at the default | `cb_x`: cb_x stays resident (ports read it for relays); `cb_moment_a`: rows tiles only, smaller than the block; no alias taken |
+| every compute CB, tail split (`TAIL_K_STEPS > 0`) | one declaration per CB over all compute cores, sized to the larger of the two member classes (`merged_plan`: elementwise max of `cb_plan` per class) — cb_x's mirror address and the lockstep slot addresses need identical layouts. **Default off** (`TAIL_K_STEPS = 0`, +1.2 µs) | — |
+
+Data-movement budget: unchanged (DRAM and fabric crossings identical; the own-loaded bit masks change only the
+port-local semaphore increments).
