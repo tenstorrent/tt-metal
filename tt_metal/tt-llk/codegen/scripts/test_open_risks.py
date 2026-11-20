@@ -162,3 +162,14 @@ def test_pr_body_flags_unwired_gated_compute_api(tmp_path):
         "compute-API wiring" in ln
         for ln in build_report.pr_body(run, str(tmp_path)).splitlines()
     )
+
+
+def test_perf_tuner_log_is_expected_only_when_tuning_ran(tmp_path):
+    (tmp_path / "state.json").write_text(
+        json.dumps({"CYCLE": 1, "PERF_TUNE_STATUS": "skipped"})
+    )
+    assert "agent_perf_tuner.md" not in open_risks.expected_logs(str(tmp_path))
+    (tmp_path / "state.json").write_text(
+        json.dumps({"CYCLE": 1, "PERF_TUNE_STATUS": "run"})
+    )
+    assert "agent_perf_tuner.md" in open_risks.expected_logs(str(tmp_path))

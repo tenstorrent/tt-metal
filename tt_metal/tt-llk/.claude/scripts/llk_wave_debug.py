@@ -11,6 +11,7 @@ from pathlib import Path
 
 DEFAULT_PRIVATE_ROOT = Path("/proj_sw/user_dev/llk_code_gen")
 PRIVATE_ROOT_ENV = "LLK_CODEGEN_PRIVATE_ROOT"
+TT_LLK_ENV = "LLK_CODEGEN_TT_LLK"
 PRIVATE_ENTRYPOINT = Path("tools/llk_wave_debug/codegen/scripts/llk_wave_debug.py")
 
 
@@ -25,6 +26,10 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
+
+    # Tell the private tool which tt-llk checkout launched it (perf-capture runs
+    # this checkout's run_test.sh and profiler-dump plugin), unless the caller set it.
+    os.environ.setdefault(TT_LLK_ENV, str(Path(__file__).resolve().parents[2]))
 
     # Forward arguments as an argv vector, never through a shell or generated code.
     os.execv(

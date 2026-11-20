@@ -167,6 +167,8 @@ The MCP server is pre-configured in `.mcp.json`.
 | **Phase Tester** | `llk-phase-tester.md` | Run per-phase simulator tests | Compiled kernel | Test pass/fail |
 | **Regression Tester** | `llk-regression-tester.md` | Run full test suite after all phases complete | Complete kernel | Final pass/fail |
 | **Optimizer** | `llk-optimizer.md` | Add replay buffers for SFPU kernels | Tested kernel | Optimized kernel |
+| **Perf Headroom** | `skills/llk-perf-headroom/SKILL.md` (skill) | Wave-measured headroom verdict: what limits a Quasar kernel and the ranked causes (used by Step 6b and `llk-perf-tuner.md`) | One perf-test variant | `perf.diagnosis` / `verdict.json` |
+| **Perf Tuner** | `quasar/llk-perf-tuner.md` | Change the kernel aimed at the top wave-measured cause (Step 6c) | Diagnosis, kernel | Tuned kernel |
 | **Prettifier** | `llk-prettifier.md` | Refactor for readability (currently disabled) | Working kernel | Cleaned kernel |
 
 ### Data Flow Between Agents

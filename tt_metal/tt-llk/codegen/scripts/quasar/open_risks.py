@@ -16,7 +16,8 @@ noticed cannot be waved off in prose.
 
 Only the pipeline self-logs of the run's state are read (state.json `CYCLE`,
 `SKIP_WRITER`): analyzer, writer and tester of cycle CYCLE, the refiner version
-that preceded it, optimizer and prettifier. Each one that is absent is MISSING.
+that preceded it, optimizer and prettifier, and the perf tuner when Step 6c ran it
+(PERF_TUNE_STATUS=run). Each one that is absent is MISSING.
 
 Usage:
     open_risks.py check    --log-dir DIR   # exit 0 = clear, 1 = blocked
@@ -63,6 +64,8 @@ def expected_logs(log_dir: str) -> list[str]:
         "agent_optimizer.md",
         "agent_prettifier.md",
     ]
+    if st.get("PERF_TUNE_STATUS") == "run":  # Step 6c ran the perf tuner
+        names.append("agent_perf_tuner.md")
     return names
 
 
