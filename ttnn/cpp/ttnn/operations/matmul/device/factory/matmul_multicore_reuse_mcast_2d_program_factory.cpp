@@ -716,8 +716,18 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     // UnpackToDest, while the bias add keeps reading intermed0 via SrcA. The alias is handed to the
     // compute kernel through the MM_PARTIALS_RELOAD_ALIAS define, which selects the alias reload path
     // there. Without bias the reload reads intermed0 and the flag is set on it.
+    //
+    // An FP32 row-broadcast bias on FP32 partials is added on the SFPU instead (FUSE_BIAS_SFPU): the FPU add
+    // would truncate the bias to TF32 in SrcB. Both buffers then unpack to DEST, so no alias is needed.
+    const bool bias_add_sfpu = bias_tensor.has_value() && fp32_dest_acc_en &&
+                               interm0_data_format == tt::DataFormat::Float32 &&
+                               bias_data_format == tt::DataFormat::Float32 && row_broadcast_bias && !untilize_out &&
+                               bias_tile == tt::tt_metal::Tile() && device.arch() != tt::ARCH::QUASAR;
+    if (bias_add_sfpu) {
+        mm_kernel_defines["FUSE_BIAS_SFPU"] = "1";
+    }
     const bool bias_reload_alias =
-        fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32 && bias_tensor.has_value();
+        fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32 && bias_tensor.has_value() && !bias_add_sfpu;
     if (bias_reload_alias) {
         mm_kernel_defines["MM_PARTIALS_RELOAD_ALIAS"] = "1";
     }
@@ -1496,7 +1506,11 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
             add_if_float32(INTERMED0_RELOAD_ALIAS_DFB, interm0_data_format);
         }
         if (bias_mesh.has_value()) {
-            add_if_float32(BIAS_DFB, bias_data_format);
+            if (bias_add_sfpu) {
+                unpack_modes_table.insert({BIAS_DFB, UnpackMode::UnpackToDest});
+            } else {
+                add_if_float32(BIAS_DFB, bias_data_format);
+            }
         }
     }
     if (!unpack_modes_table.empty()) {

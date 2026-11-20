@@ -17,14 +17,15 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/chronology_receive.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/copy_exact.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/identity_complement.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/matmul_subblock.hpp"
 
 enum class ElementwiseOperation { ADD, SUBTRACT };
 
-template <uint32_t Mt, uint32_t Kt, uint32_t Nt, typename DFBA, typename DFBB, typename DFBOut>
-FORCE_INLINE void matrix_multiply(DFBA& a, DFBB& b, DFBOut& output) {
+template <uint32_t Mt, uint32_t Kt, uint32_t Nt>
+FORCE_INLINE void matrix_multiply(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& output) {
     constexpr uint32_t subblock_columns = kda::MatmulSubblock<Mt, Nt>::columns;
     constexpr uint32_t subblock_rows = kda::MatmulSubblock<Mt, Nt>::rows;
     const uint32_t a_id = a.get_id();
@@ -64,12 +65,9 @@ template <
     uint32_t Kt,
     uint32_t Nt,
     uint32_t OperandTiles,
-    EltwiseBinaryType Op = EltwiseBinaryType::ELWSUB,
-    typename DFBA,
-    typename DFBB,
-    typename DFBOperand,
-    typename DFBOut>
-FORCE_INLINE void combine_matrix_product(DFBA& a, DFBB& b, DFBOperand& operand, DFBOut& output) {
+    EltwiseBinaryType Op = EltwiseBinaryType::ELWSUB>
+FORCE_INLINE void combine_matrix_product(
+    DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& operand, DataflowBuffer& output) {
     constexpr uint32_t dst_tiles =
         ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
     // Whole output rows per destination acquire when they fit, else column groups of one row (the summary's
@@ -136,14 +134,8 @@ FORCE_INLINE void combine_matrix_product(DFBA& a, DFBB& b, DFBOperand& operand, 
 }
 
 // Inputs remain resident; PacketTiles specifies output publication granularity.
-template <
-    ElementwiseOperation Operation,
-    uint32_t Count,
-    uint32_t PacketTiles,
-    typename DFBA,
-    typename DFBB,
-    typename DFBOut>
-FORCE_INLINE void elementwise(DFBA& a, DFBB& b, DFBOut& output) {
+template <ElementwiseOperation Operation, uint32_t Count, uint32_t PacketTiles>
+FORCE_INLINE void elementwise(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& output) {
     static_assert(PacketTiles > 0 && Count % PacketTiles == 0);
     constexpr uint32_t dst_tiles =
         ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
@@ -183,15 +175,9 @@ FORCE_INLINE void elementwise(DFBA& a, DFBB& b, DFBOut& output) {
 // rows per packet, from the FP32 carry (UnpackToDest) with SFPU subtractions, so E is formed in FP32 with no TF32
 // truncation (before its single BF16 rounding, in the packed summary). I is subtracted on the global diagonal tiles,
 // where this value block's column v meets key tile row value_block * Vt + v (summaries require K == V).
-template <
-    bool Difference,
-    uint32_t Kt,
-    uint32_t Vt,
-    uint32_t PacketRows,
-    typename DFBCarry,
-    typename DFBOut,
-    typename DFBIdentity>
-FORCE_INLINE void extract_paths(DFBCarry& carry, DFBOut& output, DFBIdentity& identity, uint32_t value_block) {
+template <bool Difference, uint32_t Kt, uint32_t Vt, uint32_t PacketRows>
+FORCE_INLINE void extract_paths(
+    DataflowBuffer& carry, DataflowBuffer& output, DataflowBuffer& identity, uint32_t value_block) {
     static_assert(Kt % PacketRows == 0);
     const uint32_t carry_id = carry.get_id();
     const uint32_t output_id = output.get_id();
@@ -225,8 +211,8 @@ FORCE_INLINE void extract_paths(DFBCarry& carry, DFBOut& output, DFBIdentity& id
 }
 
 // Replace the one state held by the ring and the carry with an exact copy of seed.
-template <uint32_t Tiles, typename DFBSeed, typename DFBRing, typename DFBCarry>
-FORCE_INLINE void reseed_state(DFBSeed& seed, DFBRing& ring, DFBCarry& carry) {
+template <uint32_t Tiles>
+FORCE_INLINE void reseed_state(DataflowBuffer& seed, DataflowBuffer& ring, DataflowBuffer& carry) {
     ring.wait_front(Tiles);
     carry.wait_front(Tiles);
     ring.pop_front(Tiles);
@@ -242,21 +228,13 @@ FORCE_INLINE void reseed_state(DFBSeed& seed, DFBRing& ring, DFBCarry& carry) {
 // Both buffers hold exactly one state: popping it returns the write pointer to the same tiles, which every earlier
 // read of this chunk's state is done with, and each block reads only its own tiles before they are packed. The caller
 // waits for and releases k_dec_t, final_decay and U.
-template <
-    uint32_t Ct,
-    uint32_t Kt,
-    uint32_t Columns,
-    typename DFBState,
-    typename DFBCarry,
-    typename DFBKDecayT,
-    typename DFBFinalDecay,
-    typename DFBCorrected>
+template <uint32_t Ct, uint32_t Kt, uint32_t Columns>
 FORCE_INLINE void update_state(
-    DFBState& state,
-    DFBCarry& carry,
-    DFBKDecayT& k_decay_transposed,
-    DFBFinalDecay& final_decay,
-    DFBCorrected& corrected_value) {
+    DataflowBuffer& state,
+    DataflowBuffer& carry,
+    DataflowBuffer& k_decay_transposed,
+    DataflowBuffer& final_decay,
+    DataflowBuffer& corrected_value) {
     // A DST block is `rows` key rows of `columns` state columns. Each tile's change reads only that tile of the state,
     // so any block can be accumulated in place. A block narrower than the state is not contiguous in it, so the packer
     // writes each tile at its index.

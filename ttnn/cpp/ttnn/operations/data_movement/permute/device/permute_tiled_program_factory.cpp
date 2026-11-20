@@ -336,7 +336,11 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileRo
     if (output_H % tile_shape[1] != 0) {
         uint32_t num_packed_values = sizeof(uint32_t) / element_size;
         num_writes = face_shape[1] / num_packed_values;
-        padding_val_packed = pack_scalar_into_uint32(input_tensor.dtype(), pad_value);
+        // INT32 pad values arrive as the int32 bit pattern carried in the float (the INT32 max/min
+        // reductions pad with INT32_MIN + 1 and INT32_MAX this way), so keep those bits.
+        padding_val_packed = input_tensor.dtype() == DataType::INT32
+                                 ? std::bit_cast<uint32_t>(pad_value)
+                                 : pack_scalar_into_uint32(input_tensor.dtype(), pad_value);
     }
 
     uint32_t h_in_dest = 0;
@@ -661,7 +665,11 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
         uint32_t num_packed_values = sizeof(uint32_t) / element_size;
         num_writes = face_shape[1] / num_packed_values;
 
-        padding_val_packed = pack_scalar_into_uint32(input_tensor.dtype(), pad_value);
+        // INT32 pad values arrive as the int32 bit pattern carried in the float (the INT32 max/min
+        // reductions pad with INT32_MIN + 1 and INT32_MAX this way), so keep those bits.
+        padding_val_packed = input_tensor.dtype() == DataType::INT32
+                                 ? std::bit_cast<uint32_t>(pad_value)
+                                 : pack_scalar_into_uint32(input_tensor.dtype(), pad_value);
     }
 
     // Faces with real data in the final tile along the width dimension, divided up
