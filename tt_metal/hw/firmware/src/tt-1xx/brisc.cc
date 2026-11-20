@@ -242,9 +242,9 @@ inline __attribute__((always_inline, noreturn)) void halt_on_ecc_error(uint32_t 
     }
 }
 
-// Called from l1_ecc_irq_entry on PIC IRQ 3. A false error from an unpopulated row is cleared and returns;
-// anything else halts the core. PIC handlers do not nest, so nothing can change the ECC_CTRL view between a select
-// and its read.
+// Called from l1_ecc_irq_entry on PIC IRQ 3. A false error from an unpopulated row or an SBE is cleared and
+// returns; anything else halts the core. PIC handlers do not nest, so nothing can change the ECC_CTRL view between a
+// select and its read.
 extern "C" __attribute__((noinline, used)) void l1_ecc_check() {
     // The valid bit and row cover an error in any of the 32 banks.
     uint32_t last_l1_error_banks_0_15 = read_ecc_view(EccView::LAST_L1_ERROR_BANKS_0_15);
@@ -257,12 +257,13 @@ extern "C" __attribute__((noinline, used)) void l1_ecc_check() {
     }
     // Every handled error clears the counts, so a nonzero DBE count is a DBE since the last return.
     const uint32_t counts = read_ecc_view(EccView::L1_COUNTS);
-    if ((counts & ECC_DBE_COUNT_MASK) == 0 && (counts & ECC_SBE_COUNT_MASK) != 0) {
+    const bool l1_dbe = (counts & (ECC_DBE_COUNT_MASK | ECC_DBE_OVERFLOW_MASK)) != 0;
+    if (!l1_dbe && (counts & ECC_SBE_COUNT_MASK) != 0) {
         // Correctable. Clearing the last error makes a later DBE in this word new, so it interrupts.
         clear_l1_ecc_error();
         return;
     }
-    halt_on_ecc_error(last_l1_error_banks_0_15, (counts & ECC_DBE_COUNT_MASK) != 0);
+    halt_on_ecc_error(last_l1_error_banks_0_15, l1_dbe);
 }
 
 // IRQ 3 handler. Saves the caller-saved registers around l1_ecc_check.
@@ -331,7 +332,7 @@ void arm_l1_ecc_halt() {
     asm volatile("fence" ::: "memory");
     RISC_PIC_INT_PCS[pic_num_sw_ints + pic_hw_int_err] = reinterpret_cast<uint32_t>(l1_ecc_irq_entry);
     // Only BRISC takes IRQ 3. NCRISC needs no masking: it is still in soft reset here, which holds its PIC
-    // enables at 0, and nothing sets them later. Of the IRQ 3 sources, only the L1 DBE is armed.
+    // enables at 0, and nothing sets them later. Of the IRQ 3 sources, only the L1 SBE and DBE are armed.
     *RISC_PIC_BRISC_HW_INT_EN |= 1u << pic_hw_int_err;
 #endif
 }

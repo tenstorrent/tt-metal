@@ -163,7 +163,7 @@ TEST_F(L1EccHaltTest, UnpopulatedRowErrorsAreIgnored) {
     ctx.get_cluster().read_reg(&ctrl, test_target_, hal.get_tensix_debug_reg_addr(TensixDebugReg::L1_ECC_CTRL));
     ctx.get_cluster().read_reg(&int_no, test_target_, hal.get_tensix_debug_reg_addr(TensixDebugReg::BRISC_INT_NO));
     ctx.get_cluster().read_reg(&irq3, test_target_, hal.get_tensix_debug_reg_addr(TensixDebugReg::PIC_HW_INT_3));
-    // Firmware arms the L1 DBE interrupt and leaves view 2 selected.
+    // Firmware arms the L1 SBE and DBE interrupts and leaves view 2 selected.
     EXPECT_EQ(ctrl, l1_ecc_ctrl_armed) << "ECC interrupts not armed, ECC_CTRL 0x" << std::hex << ctrl;
     EXPECT_EQ(int_no, 0u) << "BRISC interrupt left latched";
     // The DBEs raised IRQ 3, and only the handler's clear drops it.
