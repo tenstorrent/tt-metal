@@ -110,6 +110,13 @@ if(USE_MPI)
     target_compile_definitions(distributed PRIVATE OPEN_MPI="1")
 endif()
 
+# The job stop (multihost/job_stop.cpp) talks to the launcher through PMIx, the client library the ULFM libmpi itself
+# is built on. Linked only with that install; without it a stop falls back to MPI_Abort.
+if(USE_MPI AND ULFM_LIB AND EXISTS ${ULFM_PREFIX}/lib/libpmix.so AND EXISTS ${ULFM_PREFIX}/include/pmix.h)
+    target_link_libraries(distributed PRIVATE ${ULFM_PREFIX}/lib/libpmix.so)
+    target_compile_definitions(distributed PRIVATE TT_METAL_HAS_PMIX=1)
+endif()
+
 if(TT_UMD_BUILD_SIMULATION)
     target_compile_definitions(distributed PRIVATE TT_UMD_BUILD_SIMULATION)
 endif()
