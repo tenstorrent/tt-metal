@@ -43,9 +43,10 @@ bool on_one_device_mesh(const std::vector<Tensor>& io_tensors) {
     return entry == io_tensors.end() || entry->device()->num_devices() == 1;
 }
 
-// The devices a ProgramSpec-form call runs its program on: those of the tensor in io_tensors on the fewest devices.
-// generic_op rejects a call in which another tensor misses one of them, so for a call it accepts, these are the
-// devices that every tensor in io_tensors is on.
+// The devices that every tensor in io_tensors is on. generic_op runs a program only on devices that every tensor in
+// io_tensors is on, and rejects any other call (check_tensors_on_program_devices), so a view that holds these devices
+// holds every device its program can run on, however generic_op picks them. The ProgramSpec form runs its program on
+// the devices of the tensor on the fewest devices, so for a call generic_op accepts, these are exactly those devices.
 std::vector<MeshCoordinate> devices_of_every(const std::vector<Tensor>& io_tensors) {
     std::vector<MeshCoordinate> devices;
     bool first = true;
@@ -82,9 +83,10 @@ std::string printable(std::string_view name) {
 }
 
 // The devices of a MeshProgramSpec's program that the check covers: those of its range that every tensor in io_tensors
-// is on. A range that reaches past them is generic_op's to report, unless a view also misses one of these devices,
-// which the check reports first. It walks the tensors' devices rather than the range, so a range far past the mesh
-// costs no more than one inside it, and it leaves a range of another dimension to generic_op.
+// is on, which for a call generic_op accepts is the whole range. A range that reaches past them is generic_op's to
+// report, unless a view also misses one of these devices, which the check reports first. It walks the tensors' devices
+// rather than the range, so a range far past the mesh costs no more than one inside it, and it leaves a range of
+// another dimension to generic_op.
 std::vector<MeshCoordinate> devices_in(
     const ttnn::MeshCoordinateRange& range, const std::vector<MeshCoordinate>& io_tensor_devices) {
     std::vector<MeshCoordinate> devices;
@@ -99,7 +101,8 @@ std::vector<MeshCoordinate> devices_in(
 // tensor. A tensor argument that is another view of a tensor io_tensors lists, and misses a device its program runs on,
 // would read data the view does not hold, so it is rejected. A name the spec does not declare, a tensor io_tensors does
 // not hold, and a tensor that is not allocated on a device are left to generic_op's own checks. A view that io_tensors
-// lists itself holds every device the program runs on, so it needs no check. Needs the GIL.
+// lists itself holds every device the program runs on, so it needs no check. Metal plans to take a MeshTensorView as a
+// tensor argument too (tensor_parameter.hpp), which would let it see which devices a view holds. Needs the GIL.
 template <typename ProgramDevices>
 void check_tensor_views(
     const std::vector<Tensor>& io_tensors,
@@ -147,8 +150,9 @@ void check_tensor_views(
         TT_FATAL(
             missing == devices->end(),
             "generic_op: tensor parameter '{}' is bound to a view that holds devices {}, but its program runs on "
-            "device {}, which the view does not hold. Bind a view that holds every device the program runs on, such as "
-            "the tensor itself",
+            "device {}, which the view does not hold. On each device it runs on, a program reads that device's part of "
+            "a tensor. Bind a view that holds every device the program runs on, such as the tensor itself, or run the "
+            "program only on the view's devices",
             printable(parameter),
             fmt::format("{}", fmt::join(view_devices, ", ")),
             *missing);
@@ -425,7 +429,8 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
             run_args (ttnn.experimental.ProgramRunArgs or ttnn.experimental.MeshProgramRunArgs): The values of this
                 call, or of each range's program. A tensor argument that is another view of a tensor io_tensors lists
                 (they share one MeshTensor), such as one device's view from ttnn.get_device_tensors, must hold every
-                device its program runs on: bind a one-device view only in a program that runs on that device alone.
+                device its program runs on, since on each device a program reads that device's part of the tensor:
+                bind a one-device view only in a program that runs on that device alone.
 
         Returns:
             ttnn.Tensor: The output tensor, the last entry of io_tensors. When the tensors are not all on the same
