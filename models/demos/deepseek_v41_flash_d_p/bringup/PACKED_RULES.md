@@ -32,3 +32,7 @@ SERVING NEVER REBUILDS (owner 2026-11-20): after warm-up no program is built on 
 layout- or table-derived value is a runtime arg / device data, never a program-cache key. Walls count only with fresh
 positions / slots / layouts every timed chunk and program_builds_after_warmup == 0; repeated-position walls are a best
 case and are labelled so.
+
+NO HOST TABLES (owner 2026-11-20 19:50): per chunk the host writes only what tt-d-gen sends: token ids + the chunk descriptor
+(per segment slot, start, length, write_start), one upload. Every other per-chunk table is derived on the device by
+prepared programs; no per-descriptor host caches. Measured: host ms a new layout costs <= ~1 ms.

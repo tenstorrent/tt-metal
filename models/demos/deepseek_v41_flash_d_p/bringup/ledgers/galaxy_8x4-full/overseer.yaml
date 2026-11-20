@@ -672,6 +672,40 @@ notes:
     which the walls test writes by design: a framework gap, fixed (F292: a task may write its own results/<task>_* files).
     Your attempt-1 work and its gate run stand (every metric ok: 1M exposed 0.163, 4x2k 75.0k, mixed 65.7k). Do not redo
     anything; exit.'
+- id: OV-65
+  tasks:
+  - PB.7
+  status: open
+  t: '2026-11-20T12:04:07'
+  text: 'OVERSEER 12:05 (DECIDED): DS41-339 is a real bit-exactness bug, not v2 work: a segment''s MoE-head shared-expert
+    reduce-scatter adds in an order that depends on its rows'' destination TP chip, so a glued segment off row 0 differs
+    from alone by 1 bf16 ulp at layer 0 and grows. Fix it in THIS task at the cause: an order-free shared-expert reduce
+    in the moe_head fork (as DS41-128 fixed tp_sum: column blocks / fp32 or int32-snap partials, behind the fork''s option
+    pattern), with an op-level regression test that reproduces it first (rows moved across TP chips give bit-identical rows).
+    It also changes the lane and single-request paths'' numerics: keep them deterministic and bit-identical between packed
+    and alone, the 8192 reference within limits (test_chunk8192_reference); the 5120 accept units run in PB.8''s gate. The
+    glued attention loop''s speed is NOT this task''s: v2 (per-row segment args, one call) is queued as PB.7B; correctness
+    of path (b) is enough here. Never loosen the oracle.'
+- id: OV-66
+  tasks:
+  - PB.7C
+  status: open
+  t: '2026-11-20T16:59:47'
+  text: 'The overseer stopped attempt 1 (perf): Overseer: started before PB.8''s reject was applied (PB.8''s uncommitted
+    mhc_post change was still in the tree). Stopped at once; PB.8 is reverted first. Start clean on the next attempt.'
+- id: OV-67
+  tasks:
+  - PB.7C
+  - PB.9*
+  - PB.T
+  status: open
+  t: '2026-11-20T19:34:05'
+  text: 'OWNER 2026-11-20 19:50 (binding, no shortcuts): NOTHING is built on the host per chunk beyond what tt-d-gen sends:
+    the token ids + the chunk descriptor (per segment: slot, start, length, write_start: a few ints), written in ONE upload.
+    Every other per-chunk table (window index lists, row positions, valid lengths, top-k lengths, MoE pad words, piece tables,
+    lane maps, served-write indices) is derived ON THE DEVICE from the descriptor by prepared programs. No per-descriptor
+    host caches standing in for this. Measure it: glued_new_layout_ms (host ms a new layout costs over a repeated one) <=
+    ~1 ms, reported per path; fresh-layout walls only.'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
@@ -1441,7 +1475,3 @@ classified:
     kind: framework
     why: ''
     t: '2026-11-18T21:54:34'
-  PB.6L:
-    kind: framework
-    why: ''
-    t: '2026-11-20T11:02:24'
