@@ -77,3 +77,18 @@ apart and takes a still one for a hung kernel, and a hold that waits on the host
 N defaults to 16 since these results: it keeps local copies at 194-220 GB/s with the same knee as N = 1. With d2h
 copies it trades the drainer's knee (none up to 1200) for the copies' PCIe share; set
 `TT_METAL_STREAMING_PROFILER_DRAIN_HOLD_TURNS=1` where the profiler must win.
+
+### Copies with the profiler attached but idle
+
+Delay 100000 over 3 s (`TARGET_MS=3000 sweep.sh <out> 100000 2 "1:1 16:1" "local d2h"`), about 12 MB/s of profiler
+data in all, so the drain jobs' sweeps find almost nothing. Copy rate before the profiler attached, then during:
+
+| N, M | Local copies | d2h copies |
+|---|---|---|
+| 16, 1 | 221-225 then 231 GB/s | 12.2 then 12.1, 20.4 then 20.2 GB/s |
+| 1, 1 | 220-222 then 140 GB/s | 20.7 then 20.4, 11.8 then 11.7 GB/s |
+
+At N = 16 an idle profiler costs the copies nothing measurable. At N = 1 it costs local copies 37%, the price of a
+handover (drain the copy pipeline, an empty sweep, re-arm) after every 24 KB turn. d2h copies are bound by PCIe, not
+by the seat, at either N. The 64 B probe's worst case still reaches 8.6-10.4 ms in most idle runs against about
+0.3 ms before the profiler attaches; idle holds do not wait on the host, so that cause is still open.

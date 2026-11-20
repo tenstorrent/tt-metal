@@ -3,13 +3,13 @@
 # hold setting N:M (copy turns between holds : sweeps per hold) and load (none, local, d2h). Prints one row per run
 # (sweep_row.py): drainer stalls, and the copy GB/s and 64 B probe latency before the profiler and during its workload.
 # Run from the tt-metal root.
-# Usage: sweep.sh <outdir> <delay> <reps> "<N:M ...>" "<load ...>"
+# Usage: sweep.sh <outdir> <delay> <reps> "<N:M ...>" "<load ...>"   (TARGET_MS sets the producer time, default 200)
 set -u
 OUT=$1; D=$2; REPS=$3; CFGS=$4; LOADS=$5
 HERE=$(cd "$(dirname "$0")" && pwd)
 ZONES=${ZONES_BIN:-./build_Release/programming_examples/test_streaming_profiler_zones}
 UT=${UT_BIN:-./build_Release/test/tt_metal/unit_tests_drisc_service}
-ITERS=$(awk -v d="$D" 'BEGIN { z = 86.7 + d * 10.0 / 1.35; printf "%d", 200 * 1e6 / (10 * z) }')
+ITERS=$(awk -v d="$D" -v t="${TARGET_MS:-200}" 'BEGIN { z = 86.7 + d * 10.0 / 1.35; printf "%d", t * 1e6 / (10 * z) }')
 mkdir -p "$OUT"
 stamp() { while IFS= read -r l; do printf "%s %s\n" "$(date +%s%N)" "$l"; done; }
 for CFG in $CFGS; do N=${CFG%%:*}; M=${CFG##*:}
