@@ -23,11 +23,15 @@ sys.path.insert(0, str(SUITE_DIR))
 
 import tiers  # noqa: E402
 from diag import resets  # noqa: E402
-from diag.aer import aer_check, load_aer_baseline, read_aer  # noqa: E402
-from diag.galaxy import all_bdfs  # noqa: E402
+from diag.aer import aer_check, read_aer  # noqa: E402
+from diag.galaxy import TRAY_TO_UBB_NIBBLE, expected_bdf  # noqa: E402
 from diag.model import FAIL, PASS, WARN, Phase  # noqa: E402
 from diag.naming import chip  # noqa: E402
 from diag.snapshot_checks import _thermal_and_telemetry  # noqa: E402
+
+
+def all_bdfs():
+    return [expected_bdf(t, a) for t in sorted(TRAY_TO_UBB_NIBBLE) for a in range(1, 9)]
 
 
 def _dev(bdf, **telemetry):
@@ -76,12 +80,6 @@ class TestGalaxyTier(unittest.TestCase):
 
     def test_validator_accepts_shipped_tiers(self):
         tiers._validate()
-
-    def test_aer_diff_needs_triage(self):
-        broken = {**tiers.TIERS, "galaxy": replace(tiers.TIERS["galaxy"], triage=())}
-        with mock.patch.object(tiers, "TIERS", broken):
-            with self.assertRaisesRegex(Exception, "aer_diff needs triage"):
-                tiers._validate()
 
 
 class TestDryRunResets(unittest.TestCase):
@@ -151,7 +149,7 @@ class TestThermalAndTelemetry(unittest.TestCase):
         devs[9] = _dev("0000:42:00.0", asic_temperature="101.0", power="120", current="90", voltage="0.75")
         c = _checks(devs)["asic_thermal_precheck"]
         self.assertEqual(c.status, FAIL)
-        self.assertIn("0000:42:00.0 (tray 2 ASIC 2)", c.details)
+        self.assertIn("0000:42:00.0 (UBB2/U2)", c.details)
         self.assertEqual(c.data["over"], ["0000:42:00.0"])
         self.assertTrue(c.console_visible)
 
@@ -159,6 +157,15 @@ class TestThermalAndTelemetry(unittest.TestCase):
         devs = [_good(b) for b in all_bdfs()]
         devs[0] = _dev(devs[0]["board_info"]["bus_id"], asic_temperature="85.0", power="120", current="90", voltage="0.75")
         self.assertEqual(_checks(devs)["asic_thermal_precheck"].status, WARN)
+
+    def test_warm_lists_every_warm_chip(self):
+        devs = [_good(b) for b in all_bdfs()]
+        for i in (0, 9):
+            devs[i] = _dev(devs[i]["board_info"]["bus_id"], asic_temperature="85.0", power="120", current="90", voltage="0.75")
+        c = _checks(devs)["asic_thermal_precheck"]
+        self.assertEqual(c.data["warm"], [all_bdfs()[0], all_bdfs()[9]])
+        self.assertIn("0000:01:00.0 (UBB1/U1)", c.details)
+        self.assertIn("0000:42:00.0 (UBB2/U2)", c.details)
 
     def test_c8_flags_each_reading_with_tray_and_asic(self):
         devs = [_good(b) for b in all_bdfs()]
@@ -212,17 +219,6 @@ class TestAer(unittest.TestCase):
 
     def test_chip_missing_from_before_is_not_judged(self):
         self.assertEqual(aer_check({}, {"0000:02:00.0": {"nonfatal": 4}}, 1.0).status, PASS)
-
-    def test_baseline_roundtrip(self):
-        after = {"0000:02:00.0": {"corr": 7}}
-        c = aer_check(after, after, 2.0)
-        report = {"phases": {"triage": {"checks": [{"name": "pcie_aer_delta", "data": c.data}]}}}
-        with tempfile.TemporaryDirectory() as t:
-            p = Path(t) / "diag_report.json"
-            import json
-
-            p.write_text(json.dumps(report))
-            self.assertEqual(load_aer_baseline(p), (after, c.data["epoch"]))
 
 
 if __name__ == "__main__":
