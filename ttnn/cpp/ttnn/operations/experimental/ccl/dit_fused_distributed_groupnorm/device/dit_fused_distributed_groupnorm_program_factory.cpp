@@ -57,10 +57,9 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     const auto& beta = tensor_args.beta;
     const auto& input_mask = tensor_args.input_mask;
 
-    Program program = CreateProgram();
-
     MeshDevice* device = input_tensor.device();
     auto* mesh_device = input_tensor.device();
+    Program program = CreateProgram(*device);
 
     const bool is_local = (args.ring_size <= 1);
     const bool use_mux = !is_local;
@@ -604,7 +603,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
         TensorAccessorArgs(stats_dram_buffer).append_to(fwd_ct);
         // 2D fabric multicasts N hops in one physical direction: the cluster axis must be a straight physical line.
         TT_FATAL(
-            !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) ||
+            !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(*mesh_device)) ||
                 ttnn::ccl::is_axis_straight(*mesh_device, args.cluster_axis),
             "Fused distributed norm requires a straight physical cluster axis on 2D fabric");
         const auto [forward_route, backward_route] = ttnn::ccl::get_forward_backward_line_mcast_configuration(

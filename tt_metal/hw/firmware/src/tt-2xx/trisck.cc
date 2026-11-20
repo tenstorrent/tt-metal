@@ -90,6 +90,7 @@ uint32_t _start() {
     // Wait until first thread in the group has set its slot to GO.
     while ((*GET_MAILBOX_ADDRESS_DEV(shared_globals_ready))[MaxDMProcessorsPerCoreType + trisc_id] !=
            SHARED_GLOBALS_READY_GO) {
+        invalidate_l1_cache();
     }
 
     // DM use indices 0-7; compute engines 0-3 use indices 8-11 (one slot per engine, 4 TRISCs share).
