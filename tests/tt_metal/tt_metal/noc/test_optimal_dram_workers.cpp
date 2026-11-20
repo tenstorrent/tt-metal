@@ -51,8 +51,8 @@ bool is_axis_supported(tt::ARCH arch, DispatchCoreAxis axis) {
 
 // Resolved at static-init from the ARCH_NAME env var (set by build/test scripts), so
 // gtest enumeration only lists axes that the platform actually supports — no runtime
-// skips appear in the test output. When ARCH_NAME is unset or wrong (e.g. the Quasar
-// emulator runner), the test body skips unsupported axes at run time instead.
+// skips appear in the test output. When ARCH_NAME is unset or wrong, the test body
+// skips unsupported axes at run time instead.
 std::vector<DispatchCoreAxis> supported_dispatch_axes() {
     const char* arch_env = std::getenv("ARCH_NAME");
     const std::string arch_name = arch_env == nullptr ? "" : arch_env;
@@ -78,7 +78,6 @@ TEST_P(OptimalDramWorkers, ReturnsOneValidWorkerPerDramBank) {
         GTEST_SKIP() << "No user-exposed chips available";
     }
 
-    // Run-time guard for when ARCH_NAME is unset or wrong at registration time (see supported_dispatch_axes()).
     const tt::ARCH arch = MetalContext::instance().get_cluster().arch();
     if (!is_axis_supported(arch, axis)) {
         GTEST_SKIP() << (axis == DispatchCoreAxis::ROW ? "ROW" : "COL") << " dispatch core axis is not supported on "
