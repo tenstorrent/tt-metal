@@ -57,8 +57,10 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.chunk_layout import pack_forward_tokens, rotated_chunk_positions
 from models.demos.common.prefill.prefill_chunk import PrefillChunk, validate_chunks
+from models.demos.common.prefill.runners.runner_utils import stage_sp_axis
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    SKIP_8X4_SP_AXIS_1,
     fabric2d_device_params,
     moe_fabric_payload,
     torus_x_device_params,
@@ -123,11 +125,12 @@ MESH_PARAMS = [
             trace_region_size=K3_TRACE_REGION_SIZE,
         ),
         2,
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+        marks=[pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"), SKIP_8X4_SP_AXIS_1],
         id="fabric2d-8x4",
     ),
 ]
-# Kimi-K3's serving stage, one 4x4 tray half: SP=4 on the axis-1 ring, TP=4 on axis 0, at its 2,560-token chunk (640
+# Kimi-K3's serving stage, one 4x4 tray half: SP=4 on the axis-1 ring, TP=4 on axis 0 (unless the SP-axis knob swaps
+# them), at its 2,560-token chunk (640
 # rows per chip, as 5,120 is on 8x4). Needs the Galaxy narrowed to one tray half (TT_VISIBLE_DEVICES and the 4x4
 # descriptor); unnarrowed, requires_mesh_topology skips it.
 MESH_PARAMS_4X4 = [
@@ -140,7 +143,7 @@ MESH_PARAMS_4X4 = [
         ),
         1,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
-        id="torus-x-4x4-sp1",
+        id=f"torus-x-4x4-sp{stage_sp_axis((4, 4))}",
     ),
 ]
 CHUNK_TOKENS_PER_CHIP = 640
@@ -148,9 +151,11 @@ CHUNK_TOKENS_PER_CHIP = 640
 
 def _placement(mesh_device):
     """``(sp_axis, tp_axis, chunk)`` of this mesh: SP on axis 0 at 5,120 tokens on 8x4, on axis 1 at 2,560 on a 4x4
-    stage."""
-    sp_axis, tp_axis = (1, 0) if tuple(mesh_device.shape) == (4, 4) else (SP_AXIS, TP_AXIS)
-    return sp_axis, tp_axis, CHUNK_TOKENS_PER_CHIP * tuple(mesh_device.shape)[sp_axis]
+    stage; the SP-axis knob (runner_utils.stage_sp_axis) can move a 4x4 stage's SP to axis 0."""
+    shape = tuple(mesh_device.shape)
+    sp_axis = stage_sp_axis(shape)
+    assert shape == (4, 4) or sp_axis == SP_AXIS, "SP on axis 1 of the 8x4 stage is not supported yet"
+    return sp_axis, 1 - sp_axis, CHUNK_TOKENS_PER_CHIP * shape[sp_axis]
 
 
 def _common(fn=None, *, meshes=MESH_PARAMS):

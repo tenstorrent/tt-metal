@@ -29,7 +29,11 @@ from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import random_mla_w
 from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.weights import layer_query_names, output_query_names
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config, kimi_k3_1_hf_config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_kda_config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_x_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    SKIP_8X4_SP_AXIS_1,
+    fabric2d_device_params,
+    torus_x_device_params,
+)
 from models.demos.deepseek_v3_d_p.tests.kda.utils import random_weights as random_kda_weights
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.k31_stage import STAGE_LAYOUTS, StageLayout
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import CHECKPOINT_PREFIX
@@ -42,7 +46,8 @@ from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural
 
 def stage_layout(mesh_device) -> StageLayout:
     """The K3.1 layout of the mesh's shape (`k31_stage.STAGE_LAYOUTS`): one Galaxy as one 8x4 stage (SP=8 on
-    axis 0), or one tray half as one 4x4 stage (SP=4 on the axis-1 ring, TP=4 on the axis-0 line)."""
+    axis 0), or one tray half as one 4x4 stage (SP=4 on the axis-1 ring, TP=4 on the axis-0 line, unless the
+    SP-axis knob swaps them)."""
     return STAGE_LAYOUTS[tuple(mesh_device.shape)]
 
 
@@ -75,7 +80,7 @@ def placements(**device_params) -> list:
                 fabric_payload_size=KimiK31Config.FABRIC_PAYLOAD_SIZE,
                 **{"l1_small_size": KimiK31Config.L1_SMALL_SIZE, **device_params},
             ),
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            marks=[pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"), SKIP_8X4_SP_AXIS_1],
             id="fabric2d-8x4",
         ),
         pytest.param(
@@ -87,7 +92,7 @@ def placements(**device_params) -> list:
                 **{"l1_small_size": KimiK31Config.L1_SMALL_SIZE, **device_params},
             ),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
-            id="4x4-sp1",
+            id=f"4x4-sp{STAGE_LAYOUTS[(4, 4)].sp_axis}",
         ),
     ]
 

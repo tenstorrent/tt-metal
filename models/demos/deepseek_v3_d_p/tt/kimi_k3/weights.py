@@ -21,7 +21,6 @@ root is read off the index rather than guessed, and `language_model.model.` is t
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -34,6 +33,7 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, 
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import load_kda_layer_state_dict, resolve_model_root
 from models.demos.deepseek_v3_d_p.tt.kda.config import KIMI_K3_PROJECTION_DTYPE
 from models.demos.deepseek_v3_d_p.tt.kda.weights import current_cache_globs as kda_current_cache_globs
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.cache_layout import checkpoint_cache_key
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import TtIndexer
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import FastCacheChecker
 
@@ -243,16 +243,6 @@ _CACHE_ENV = "TT_KIMI_K3_PREFILL_TTNN_CACHE"
 _DEFAULT_CACHE = Path("/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill")
 
 
-def _checkpoint_identity(checkpoint_dir: Path) -> str:
-    """A short stable id for a checkpoint, from its index rather than its 5.5 TB of tensors."""
-    index = Path(checkpoint_dir) / "model.safetensors.index.json"
-    digest = hashlib.sha256()
-    digest.update(Path(checkpoint_dir).resolve().name.encode())
-    stat = index.stat()
-    digest.update(str(stat.st_size).encode())
-    return digest.hexdigest()[:16]
-
-
 def cache_root(checkpoint_dir: Path, mesh_shape: tuple[int, int], tp_axis: int) -> Path | None:
     """Where this (checkpoint, mesh, tp_axis) keeps its tensorbins, or None if caching is off.
 
@@ -265,12 +255,7 @@ def cache_root(checkpoint_dir: Path, mesh_shape: tuple[int, int], tp_axis: int) 
         return None  # explicitly empty disables caching, for a run that must build from weights
     root = Path(override) if override else _DEFAULT_CACHE
     rows, columns = mesh_shape
-    path = (
-        root
-        / f"kimi_k3_bh_{rows * columns}dev"
-        / _checkpoint_identity(checkpoint_dir)
-        / f"mesh{rows}x{columns}.tpaxis{tp_axis}"
-    )
+    path = root / f"kimi_k3_bh_{rows * columns}dev" / checkpoint_cache_key(checkpoint_dir, mesh_shape, tp_axis)
     try:
         path.mkdir(parents=True, exist_ok=True)
     except OSError as error:

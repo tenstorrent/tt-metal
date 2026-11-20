@@ -17,9 +17,13 @@ import pytest
 from loguru import logger
 
 from models.demos.common.prefill.adapter import PrefillRunParams, get_adapter
-from models.demos.common.prefill.runners.runner_utils import compute_layer_split
+from models.demos.common.prefill.runners.runner_utils import compute_layer_split, stage_sp_axis
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    SKIP_8X4_SP_AXIS_1,
+    torus_x_device_params,
+    torus_xy_device_params,
+)
 
 ADAPTER = get_adapter("kimi_k3_1")
 MESH = (8, 4)
@@ -44,9 +48,11 @@ PP4_MAX_USERS = 76
 # K3 allocates two slots under its limit (127 of 129); K3.1 allocates its measured maximum, at 4x4 and 8x4.
 STAGE0_4X4_MAX_USERS = 96
 
-# The 4x4 stage of kimi_k3_1.json: SP on the tray half's axis-1 ring, TP on axis 0.
+# The 4x4 stage of kimi_k3_1.json: by default SP on the tray half's axis-1 ring, TP on axis 0; the SP-axis knob
+# ($PREFILL_SP_AXIS, runner_utils.stage_sp_axis) moves SP to axis 0 for the whole process, as it does the runner's.
 MESH_4X4 = (4, 4)
-SP_AXIS_4X4, TP_AXIS_4X4 = 1, 0
+SP_AXIS_4X4 = stage_sp_axis(MESH_4X4)
+TP_AXIS_4X4 = 1 - SP_AXIS_4X4
 CHUNK_4X4 = 2560
 NUM_STAGES_4X4 = 8
 # (first layer, layer count) of each 4x4 stage: twelve layers (one AttnRes block) each, nine on the last.
@@ -79,8 +85,8 @@ STAGE_LAYOUTS = {
 assert STAGE_LAYOUTS[MESH_4X4].tp_axis == TP_AXIS_4X4
 
 # The runner's mesh for each layout, at the adapter's fabric payload and L1_SMALL and the default trace region:
-# 8x4 Ring/Ring; 4x4 Linear/Ring (FABRIC_2D_TORUS_X), which the runner opens for an SP-on-axis-1 rank. The 4x4
-# row needs the Galaxy narrowed to one tray half (TT_VISIBLE_DEVICES and the 4x4 descriptor, set by
+# 8x4 Ring/Ring; 4x4 Linear/Ring (FABRIC_2D_TORUS_X), the wraps of the runner's 4x4 descriptor, on either SP axis.
+# The 4x4 row needs the Galaxy narrowed to one tray half (TT_VISIBLE_DEVICES and the 4x4 descriptor, set by
 # tests/run_4x4_stage_tests.sh); unnarrowed, the system mesh is 8x4 and requires_mesh_topology skips it.
 PLACEMENT = [
     pytest.param(
@@ -90,7 +96,7 @@ PLACEMENT = [
             l1_small_size=ADAPTER.l1_small_size,
             trace_region_size=TRACE_REGION_SIZE,
         ),
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=MESH, topology="mesh-8x4"),
+        marks=[pytest.mark.requires_mesh_topology(mesh_shape=MESH, topology="mesh-8x4"), SKIP_8X4_SP_AXIS_1],
         id="torus-xy-8x4",
     ),
     pytest.param(
@@ -101,7 +107,7 @@ PLACEMENT = [
             trace_region_size=TRACE_REGION_SIZE,
         ),
         marks=pytest.mark.requires_mesh_topology(mesh_shape=MESH_4X4, topology="mesh-4x4"),
-        id="4x4-sp1",
+        id=f"4x4-sp{SP_AXIS_4X4}",
     ),
 ]
 

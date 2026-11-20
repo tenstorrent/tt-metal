@@ -34,6 +34,14 @@ case " ${MODEL_CONFIGS} " in
 esac
 # The galaxy count without the layout suffix: sc4_8x4 and sc4_4x4 run on sc4's descriptor.
 SCALE="${CONFIG%%_*}"
+# The SP-axis knob: a caller's PREFILL_SP_AXIS picks the mesh axis that carries SP on every stage, TP taking the
+# other; unset, each layout keeps its own (a 4x4 stage its manifest's axis 1, an 8x4 stage axis 0). The fabric
+# follows the stage's descriptor and the weight cache is keyed by the axis, so nothing else changes with it.
+SP_AXIS_KNOB="${PREFILL_SP_AXIS:-}"
+case "${SP_AXIS_KNOB}" in
+  ""|0|1) ;;
+  *) echo "PREFILL_SP_AXIS must be 0 or 1, got '${SP_AXIS_KNOB}'" >&2; exit 2 ;;
+esac
 
 : "${TT_METAL_HOME:?TT_METAL_HOME must be set}"
 : "${PREFILL_SUMMARIES:?PREFILL_SUMMARIES must be set by the blaze impl (shared /ci scratch for the KV table)}"
@@ -46,7 +54,7 @@ manifest_env() {
   python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["env"][sys.argv[2]])' "${MANIFEST}" "$1"
 }
 
-# Kimi-K3's and Kimi-K3.1's stage layout for ${CONFIG}: <cache root> <cache model name> <8x4 slots>.
+# Kimi-K3's and Kimi-K3.1's stage layout for ${CONFIG}: <cache root> <cache model name> <8x4 slots> <checkpoint>.
 # The manifests describe a 4x4 stage: SP=4 on mesh axis 1 (the tray half's ring), 2560-token chunks
 # (640 tokens per chip), and the slots that layout fits. Runner and producer both read them.
 kimi_layout() {
@@ -59,9 +67,12 @@ kimi_layout() {
       PP_4X4_HOSTS=1
       [ "${SCALE}" = sc4 ] && PP_4X4_HOSTS=4
       PP_RANKS=$((2 * PP_4X4_HOSTS))
-      # The cache the runner resolves for a [4,4] SP-axis-1 stage on 16 visible chips. Checked
-      # non-empty: weight_cache_path mkdirs it, so a failed run leaves an empty one behind.
-      PP_CACHE_DIR="$1/$2_bh_16dev/4x4_sp1"
+      # The cache the runner resolves for a [4,4] stage on 16 visible chips: the checkpoint's, at the TP axis
+      # (KimiK3Adapter.weight_cache_key). Checked non-empty: weight_cache_path mkdirs it, so a failed run leaves an
+      # empty one behind.
+      local sp_axis="${SP_AXIS_KNOB:-$(manifest_env PREFILL_SP_AXIS)}"
+      PP_CACHE_DIR="$1/$2_bh_16dev/$(python3 -m models.demos.deepseek_v3_d_p.tt.kimi_k3.cache_layout "$4" 4 4 $((1 - sp_axis)))" ||
+        { echo "no ${MODEL} checkpoint index at '$4' to key its weight cache by (set PREFILL_HF_MODEL)" >&2; exit 2; }
       RUNNER_ENV+=" export PREFILL_TTNN_CACHE='$1';"
       ;;
     *_8x4)
@@ -191,10 +202,12 @@ case "${MODEL}" in
         PP_4X4_HOSTS=1
         [ "${SCALE}" = sc4 ] && PP_4X4_HOSTS=4
         PP_RANKS=$((2 * PP_4X4_HOSTS))
-        # The cache the runner resolves for a [4,4] SP-axis-1 stage on 16 visible chips. Checked
-        # non-empty on every host before launch.
+        # The cache the runner resolves for a [4,4] stage on 16 visible chips (mesh_cache_key: 4x4, plus _sp1 for SP on
+        # axis 1). Checked non-empty on every host before launch.
         GLM_CACHE="${PREFILL_TTNN_CACHE:-/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill}"
-        PP_CACHE_DIR="${GLM_CACHE}/glm_5_3_bh_16dev/4x4_sp1"
+        GLM_SP_AXIS="${SP_AXIS_KNOB:-$(MANIFEST="${LAYOUT_MANIFEST}" manifest_env PREFILL_SP_AXIS)}"
+        PP_CACHE_DIR="${GLM_CACHE}/glm_5_3_bh_16dev/4x4"
+        if [ "${GLM_SP_AXIS}" = 1 ]; then PP_CACHE_DIR+="_sp1"; fi
         RUNNER_ENV+=" export PREFILL_TTNN_CACHE='${GLM_CACHE}';"
         ;;
     esac
@@ -209,7 +222,8 @@ case "${MODEL}" in
     # the 5k..250k ones GLM-5.3 reports and sc4's 1M request adds 510k and 1M on top. Not a
     # baseline for sc4 -- 24 layers against 93 -- which is why the summary job reports sc4 alone.
     SC1_NUM_LAYERS=24
-    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized; \
+    K3_CHECKPOINT="${PREFILL_HF_MODEL:-/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized}"
+    RUNNER_ENV="export PREFILL_HF_MODEL=${K3_CHECKPOINT}; \
       export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
     # The sc4 93-layer leg's KV PCC
     # collapsed to ~0 past layer ~24 on run 36717057668 with the Weka trace (it reads 0.900..0.994 on
@@ -229,7 +243,7 @@ case "${MODEL}" in
     fi
     # 8x4 slots as #63502 measured them: 100, 34 with the drafter.
     kimi_layout "${PREFILL_TTNN_CACHE:-/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill}" \
-      kimi_k3 "$([ "${DFLASH}" = 1 ] && echo 34 || echo 100)"
+      kimi_k3 "$([ "${DFLASH}" = 1 ] && echo 34 || echo 100)" "${K3_CHECKPOINT}"
     ;;
   kimi_k3_1)
     # Kimi-K3 with its 24 MLA layers changed to DSA: kimi_k3's depths, gate and layouts. kimi_k3_1.json holds
@@ -238,10 +252,14 @@ case "${MODEL}" in
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/kimi_k3_1_prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/kimi_k3_1.json"
     SC1_NUM_LAYERS=24
-    RUNNER_ENV="export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
-    # The cache root is the adapter's ttnn_cache_default; 76 slots measured for the 8x4 stage.
+    # The checkpoint keys the weight cache, so the runner gets the one the pre-launch check keys (tt-run does not
+    # forward a caller's PREFILL_HF_MODEL to remote ranks).
+    K31_CHECKPOINT="${PREFILL_HF_MODEL:-/mnt/weka/model-weights/llm/moonshotai/Kimi-K3.1-Pro-dequantized}"
+    RUNNER_ENV="export PREFILL_HF_MODEL=${K31_CHECKPOINT}; export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
+    # The cache root is the adapter's ttnn_cache_default and the checkpoint its hf_model_default; 76 slots measured
+    # for the 8x4 stage.
     kimi_layout "${PREFILL_TTNN_CACHE:-/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3.1-Cache/Kimi-K3.1-Cache-prefill}" \
-      kimi_k3_1 76
+      kimi_k3_1 76 "${K31_CHECKPOINT}"
     # The golden is the 8192-token prompt of a vLLM capture, and its span bounds the compare. 10240 tokens is
     # whole chunks in both layouts (4 of 2560 at 4x4, 2 of 5120 at 8x4), so every one of the 8192 golden
     # positions is compared, the gate reads earlier chunks' KV from later ones, and the tail past 8192 is timed.
@@ -286,6 +304,12 @@ if [ -n "${VARIANT}" ]; then
   EXPECTED_TPS=""
 fi
 PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; ${PRODUCER_ENV}"
+
+# Every stage but a 4x4 one runs SP on axis 0 only: SP on axis 1 of an 8x4 stage (SP=4, TP=8) has no chunk, slot count
+# or weight cache yet.
+if [ "${SP_AXIS_KNOB}" = 1 ] && [ "${PP_4X4_HOSTS}" -eq 0 ]; then
+  echo "${MODEL}/${CONFIG} runs SP on mesh axis 0 only; PREFILL_SP_AXIS=1 needs a 4x4 config" >&2; exit 2
+fi
 
 # A PP model carries its descriptor in its rank binding, so only the discovery path needs one.
 if [ "${PP_RANKS}" -eq 0 ]; then
@@ -475,6 +499,11 @@ if [ "${PP_4X4_HOSTS}" -ne 0 ]; then
   # a manifest without it would bring 8x4 settings up on a 4x4 mesh.
   LAYOUT_SOURCE="${LAYOUT_MANIFEST:-${MANIFEST}}"
   [ "$(MANIFEST="${LAYOUT_SOURCE}" manifest_env PREFILL_SP_AXIS)" = 1 ] || { echo "${LAYOUT_SOURCE} does not set the 4x4 stage's PREFILL_SP_AXIS=1" >&2; exit 2; }
+  # The knob, exported after the stage layout so it overrides the manifest's axis on runner and producer alike.
+  if [ -n "${SP_AXIS_KNOB}" ]; then
+    RUNNER_ENV+=" export PREFILL_SP_AXIS=${SP_AXIS_KNOB};"
+    PRODUCER_ENV+=" export PREFILL_SP_AXIS=${SP_AXIS_KNOB};"
+  fi
   "${MPIRUN}" -np "${PP_4X4_HOSTS}" --host "$(printf '%s:1,' "${HOST_LIST[@]}" | sed 's/,$//')" --map-by slot \
     --bind-to none --allow-run-as-root \
     bash -lc "[ -n \"\$(ls -A '${PP_CACHE_DIR}' 2>/dev/null)\" ] || { echo \"\$(hostname): no 4x4 weight cache at ${PP_CACHE_DIR} (or set PREFILL_TTNN_CACHE)\" >&2; exit 1; }"

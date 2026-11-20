@@ -23,6 +23,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.cache_layout import checkpoint_cache_key
 from models.demos.deepseek_v3_d_p.utils.chunk_config import prefill_chunk_tokens
 
 HARNESS = Path(__file__).with_name("run_multirank_pcc.sh")
@@ -256,15 +257,21 @@ class MultirankPccHarnessTests(unittest.TestCase):
         checkpoint = root / "checkpoint"
         checkpoint.mkdir()
         (checkpoint / "config.json").write_text("{}")
+        # The Kimi caches are keyed by this checkpoint's index.
+        (checkpoint / "model.safetensors.index.json").write_text("{}")
+        self.checkpoint = checkpoint
         cache = root / "cache"
         if not missing_cache:
             (cache / "mistral_small_4_bh_8dev/8x1").mkdir(parents=True)
-            (cache / "kimi_k3_bh_16dev/4x4_sp1").mkdir(parents=True)
-            (cache / "kimi_k3_bh_16dev/4x4_sp1/layer_0.tensorbin").touch()
-            (cache / "kimi_k3_1_bh_16dev/4x4_sp1").mkdir(parents=True)
-            (cache / "kimi_k3_1_bh_16dev/4x4_sp1/layer_0.tensorbin").touch()
-            (cache / "glm_5_3_bh_16dev/4x4_sp1").mkdir(parents=True)
-            (cache / "glm_5_3_bh_16dev/4x4_sp1/layer_0.tensorbin").touch()
+            # Both SP axes of each 4x4 cache: the Kimi ones under the checkpoint, at the TP axis; GLM's by mesh key.
+            for tp_axis in (0, 1):
+                for kimi in ("kimi_k3", "kimi_k3_1"):
+                    kimi_cache = cache / f"{kimi}_bh_16dev" / checkpoint_cache_key(checkpoint, (4, 4), tp_axis)
+                    kimi_cache.mkdir(parents=True)
+                    (kimi_cache / "layer_0.tensorbin").touch()
+            for key in ("4x4_sp1", "4x4"):
+                (cache / "glm_5_3_bh_16dev" / key).mkdir(parents=True)
+                (cache / "glm_5_3_bh_16dev" / key / "layer_0.tensorbin").touch()
         golden = root / "golden"
         (golden / "kv_cache").mkdir(parents=True)
         for layer in range(36):
@@ -485,12 +492,16 @@ class MultirankPccHarnessTests(unittest.TestCase):
     KIMI_4X4_USERS = {"kimi_k3": "127", "kimi_k3_1": "96"}
     KIMI_8X4_USERS = {"kimi_k3": "100", "kimi_k3_1": "76"}
 
-    def assert_kimi_4x4_cache_check(self, records, model):
-        """The pre-launch probe checks the model's own [4,4] SP-axis-1 cache under PREFILL_TTNN_CACHE, and the
+    def kimi_4x4_cache(self, model, sp_axis=1):
+        """The [4,4] cache of the checkpoint, at the TP axis (KimiK3Adapter.weight_cache_key), below the cache root."""
+        return f"/cache/{model}_bh_16dev/{checkpoint_cache_key(self.checkpoint, (4, 4), 1 - sp_axis)}"
+
+    def assert_kimi_4x4_cache_check(self, records, model, sp_axis=1):
+        """The pre-launch probe checks the model's own [4,4] cache for the SP axis under PREFILL_TTNN_CACHE, and the
         runner reads that same root."""
         checks = [r for r in records if r["kind"] == "mpi" and "no 4x4 weight cache" in r["args"][-1]]
         self.assertEqual(len(checks), 1, records)
-        self.assertIn(f"/cache/{model}_bh_16dev/4x4_sp1", checks[0]["args"][-1])
+        self.assertIn(self.kimi_4x4_cache(model, sp_axis), checks[0]["args"][-1])
         self.assertTrue(self.one_record(records, "runner")["env"]["PREFILL_TTNN_CACHE"].endswith("/cache"))
 
     def test_kimi_sc4_is_eight_4x4_stages_from_the_manifest(self):
@@ -684,7 +695,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
                 result, records = self.run_harness(model, hosts=self.SC4_HOSTS, missing_cache=True)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("no 4x4 weight cache at", result.stdout + result.stderr)
-                self.assertIn(f"{model}_bh_16dev/4x4_sp1", result.stdout + result.stderr)
+                self.assertIn(self.kimi_4x4_cache(model), result.stdout + result.stderr)
                 self.assertFalse([record for record in records if record["kind"] in ("probe", "runner_launch")])
 
     def test_glm53_sc4_and_sc1_are_8x4_stages_from_the_manifest(self):
@@ -744,6 +755,63 @@ class MultirankPccHarnessTests(unittest.TestCase):
         producer = self.one_record(records, "producer")["env"]
         self.assertEqual(producer["PREFILL_CHUNK_SIZE"], "2560")
         self.assertIn("PCC GATE PASS", result.stdout)
+
+    def test_kimi_sp_axis_knob_moves_sp_on_runner_producer_and_cache(self):
+        """PREFILL_SP_AXIS=0 alone puts a 4x4 stage's SP on axis 0: exported to runner and producer over the manifest,
+        the pre-launch probe checks that axis's cache, and the fabric is left to the stage's descriptor."""
+        for model in ("kimi_k3", "kimi_k3_1"):
+            with self.subTest(model=model):
+                result, records = self.run_harness(
+                    model, config="sc1", hosts=self.SC4_HOSTS[:1], extra_env={"PREFILL_SP_AXIS": "0"}
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                launch = self.one_record(records, "runner_launch")["args"]
+                self.assertTrue(
+                    launch[launch.index("--mesh-graph-descriptor") + 1].endswith(
+                        "topology_configuration/pipeline_prefill_intragalaxy_2x4x4_sp1_mgd.textproto"
+                    )
+                )
+                runner = self.one_record(records, "runner")["env"]
+                launch_line = launch[-1]
+                self.assertIn("export PREFILL_SP_AXIS=0;", launch_line)
+                self.assertNotIn("PREFILL_FABRIC_MODE", launch_line)
+                # The runner keys its cache by the checkpoint the pre-launch check keyed (tt-run forwards no
+                # PREFILL_* to remote ranks).
+                self.assertIn(f"export PREFILL_HF_MODEL={self.checkpoint};", launch_line)
+                self.assertTrue(runner["PREFILL_MANIFEST"].endswith(f"manifests/{model}.json"))
+                self.assert_kimi_4x4_cache_check(records, model, sp_axis=0)
+                producer_mpi = [r for r in records if r["kind"] == "mpi" and "prefill_producer" in r["args"][-1]]
+                self.assertIn("export PREFILL_SP_AXIS=0;", producer_mpi[0]["args"][-1])
+                self.assertIn("PCC GATE PASS", result.stdout)
+
+    def test_sp_axis_knob_missing_flipped_cache_names_its_dir(self):
+        result, records = self.run_harness(
+            "kimi_k3_1", hosts=self.SC4_HOSTS, missing_cache=True, extra_env={"PREFILL_SP_AXIS": "0"}
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(self.kimi_4x4_cache("kimi_k3_1", sp_axis=0), result.stdout + result.stderr)
+        self.assertFalse([record for record in records if record["kind"] in ("probe", "runner_launch")])
+
+    def test_sp_axis_knob_on_glm53_4x4_checks_its_mesh_key(self):
+        result, records = self.run_harness(
+            "glm53", config="sc4_4x4", hosts=self.SC4_HOSTS, missing_cache=True, extra_env={"PREFILL_SP_AXIS": "0"}
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertRegex(result.stdout + result.stderr, r"glm_5_3_bh_16dev/4x4\b(?!_sp1)")
+
+    def test_sp_axis_knob_rejects_axis_1_off_a_4x4_stage_and_bad_values(self):
+        for model, config, value, message in (
+            ("kimi_k3_1", "sc1_8x4", "1", "runs SP on mesh axis 0 only"),
+            ("glm53", "sc1", "1", "runs SP on mesh axis 0 only"),
+            ("kimi_k3_1", "sc1", "2", "PREFILL_SP_AXIS must be 0 or 1"),
+        ):
+            with self.subTest(model=model, config=config, value=value):
+                result, records = self.run_harness(
+                    model, config=config, hosts=self.SC4_HOSTS[:1], extra_env={"PREFILL_SP_AXIS": value}
+                )
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn(message, result.stderr)
+                self.assertFalse([record for record in records if record["kind"] in ("mpi", "probe", "runner_launch")])
 
     def test_glm53_4x4_missing_cache_names_the_glm_dir(self):
         result, records = self.run_harness("glm53", config="sc4_4x4", hosts=self.SC4_HOSTS, missing_cache=True)
