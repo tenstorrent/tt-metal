@@ -98,6 +98,7 @@ void kernel_main() {
     constexpr bool pooled_route = get_named_compile_time_arg_val("pooled_route") == 1;
     constexpr uint32_t resident_slots = get_named_compile_time_arg_val("resident_slots");
     constexpr uint32_t plan_block_words = get_named_compile_time_arg_val("plan_block_words");
+    constexpr uint32_t plan_header_words = get_named_compile_time_arg_val("plan_header_words");
     // Plan layout: one plan page per ring iteration (record base word), or 0 for a page per resident chunk. The
     // reader takes the same arg.
     constexpr uint32_t plan_rec_base = get_named_compile_time_arg_val("plan_rec_base");
@@ -218,6 +219,7 @@ void kernel_main() {
                 pooled_route,
                 resident_slots,
                 plan_block_words,
+                plan_header_words,
                 plan_rec_base,
                 num_q_passes,
                 pair_steps,

@@ -16,12 +16,14 @@ from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
+from ....pipelines.minimax_h3.vsa_geometry import VSA_TILE_TOKENS
 from ....utils.device_constants import BLACKHOLE_COMPUTE_GRID, WORMHOLE_COMPUTE_GRID, compute_grid_key
 from ....utils.mochi import get_rot_transformation_mat
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 from .agmm_config import AgmmMode, agmm_kwargs, agmm_pins
 from .length_classes import LENGTH_CLASSES, length_class
+from .vsa_prepass import MiniMaxH3VSAConfig, VSAPrepass, _timed
 
 # Ring SDPA chunk pair of the dynamic-length path per device compute grid and length class, one program each.
 # Blackhole 4x8, measured per block: (320, 384) is 5 % faster at 4736 rows/device, (256, 512) 5 % faster at 13664.
@@ -31,6 +33,14 @@ DYNAMIC_RING_SDPA_CHUNKS: dict[tuple[int, int], dict[str, tuple[int, int]]] = {
     BLACKHOLE_COMPUTE_GRID: {"short": (320, 384), "long": (256, 512)},
     WORMHOLE_COMPUTE_GRID: {"short": (256, 512), "long": (256, 512)},
 }
+
+# The sparse op's smallest K piece. The piece grows with the rung so a shard never holds more than the 64 pieces the
+# op tracks.
+VSA_K_CHUNK = 256
+
+
+def vsa_k_chunk_size(rows_per_device: int) -> int:
+    return max(VSA_K_CHUNK, math.ceil(math.ceil(rows_per_device / 64) / VSA_TILE_TOKENS) * VSA_TILE_TOKENS)
 
 
 def rope_channel_permutation(head_dim: int, rotary_dim: int) -> torch.Tensor:
@@ -119,6 +129,7 @@ class MiniMaxH3Attention(Module):
         dynamic_length: bool = False,
         norm_row_capacity: int | None = None,
         agmm_mode: AgmmMode | str | None = None,
+        vsa_config: MiniMaxH3VSAConfig | None = None,
     ) -> None:
         """`dynamic_length` freezes every length-keyed choice at construction (one program per op for every
         length); `norm_row_capacity` (per-device rows) sizes the fused QK norms' program on that path, and
@@ -199,6 +210,22 @@ class MiniMaxH3Attention(Module):
         self.norm_k = DistributedRMSNorm(**qk_norm_kwargs)
         self.rope_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
 
+        # VSA (video sparse attention): selected when a config is given and a geometry-bound pre-pass is set
+        # (`set_vsa_prepass`). The sequence must then be in that geometry's tile order.
+        self.vsa_config = vsa_config
+        self.vsa_prepass: VSAPrepass | None = None
+        if vsa_config is not None:
+            # Column fracturing hands device d heads [d*n_local, (d+1)*n_local), the heads of its V shard.
+            self.to_gate_compress = ColParallelLinear(
+                hidden_size,
+                self.inner_dim,
+                bias=False,
+                mesh_device=mesh_device,
+                mesh_axis=self.tp_mesh_axis,
+                fsdp_mesh_axis=fsdp_mesh_axis,
+                ccl_manager=ccl_manager,
+            )
+
         # all_gather_minimal_matmul_async folds the TP all-gather into the matmul. Ring only: on a
         # line topology WanAttention measured the unfused path faster, so match that condition.
         self.use_fused_agmm = ccl_manager.topology == ttnn.Topology.Ring and tp_factor > 1
@@ -275,6 +302,11 @@ class MiniMaxH3Attention(Module):
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "to_out.0", "to_out")
+
+        if self.vsa_config is not None:
+            if "to_gate_compress.weight" not in state:
+                # The base H3 checkpoint carries no gate; a zero gate makes the coarse branch contribute nothing.
+                state["to_gate_compress.weight"] = torch.zeros(self.inner_dim, self.hidden_size)
 
         def _interleave_heads(tensors: list[torch.Tensor]) -> torch.Tensor:
             """Reorder [out, in] weights so TP column-fracturing gives each device matching heads.
@@ -504,6 +536,55 @@ class MiniMaxH3Attention(Module):
             min_blocked_pack_tiles=2,
         )
 
+    # ------------------------------------------------------------------ vsa
+
+    def set_vsa_prepass(self, prepass: VSAPrepass | None) -> None:
+        assert self.vsa_config is not None, "set_vsa_prepass requires the attention to be built with vsa_config"
+        self.vsa_prepass = prepass
+
+    def _vsa_program_config(self, rows_per_device: int) -> ttnn.SDPAProgramConfig:
+        # q_chunk is the op's 64-row block. k_chunk 256 measured fastest at both production rungs: fine attention
+        # 5.21 / 24.59 ms at 5 s / 15 s, against 8.02 / 25.59 ms at 384 and 8.30 / 38.47 ms at 512.
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(*self.sdpa_worker_grid),
+            q_chunk_size=VSA_TILE_TOKENS,
+            k_chunk_size=vsa_k_chunk_size(rows_per_device),
+            exp_approx_mode=False,
+        )
+
+    def _sparse_attention(self, q_BHNE, k_BHNE, v_BHNE, routing: dict) -> ttnn.Tensor:
+        """Block-sparse ring attention over `routing["block_mask"]`, kept blocks only.
+
+        `logical_n` is the rung (it is compiled into the program, so a per-request value would recompile and break
+        the rung's trace); `block_counts` masks the real tail and the pad rows of partial blocks.
+        """
+        rows = q_BHNE.shape[2]
+        return ttnn.transformer.sparse_ring_sdpa(
+            q_BHNE,
+            k_BHNE,
+            v_BHNE,
+            routing["block_mask"],
+            persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
+                k_BHNE.shape, 2, self.sp_mesh_axis, dtype=k_BHNE.dtype, capacity=self.kv_gather_capacity
+            ),
+            persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
+                v_BHNE.shape, 2, self.sp_mesh_axis, dtype=v_BHNE.dtype, capacity=self.kv_gather_capacity
+            ),
+            logical_n=rows * self.parallel_config.sequence_parallel.factor,
+            program_config=self._vsa_program_config(rows),
+            compute_kernel_config=self.sdpa_compute_kernel_config,
+            dim=2,
+            multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.sp_mesh_axis),
+            num_links=self.ccl_manager.num_links,
+            cluster_axis=self.sp_mesh_axis,
+            mesh_device=self.mesh_device,
+            topology=self.ccl_manager.topology,
+            subdevice_id=self.ccl_manager.ccl_sub_device_id,
+            ccl_core_grid_offset=(self.sdpa_worker_grid[0], 0),
+            use_column_major_ccl=True,
+            block_counts=routing["block_counts"],
+        )
+
     # ------------------------------------------------------------------ forward
 
     def forward(
@@ -515,6 +596,7 @@ class MiniMaxH3Attention(Module):
         addcmul_residual: ttnn.Tensor | None = None,
         addcmul_gate: ttnn.Tensor | None = None,
         cu_window_seqlens: ttnn.Tensor | None = None,
+        timings: dict[str, float] | None = None,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured hidden_size on TP; fractured N on SP when `is_sequence_parallel`,
@@ -528,6 +610,7 @@ class MiniMaxH3Attention(Module):
             epilogue instead of running as separate ops. Both must be TP-fractured like the output.
         cu_window_seqlens: cumulative block-diagonal window boundaries `[0, ..., N]` (1-D int device
             tensor), plain-SDPA (non-ring) path only.
+        timings: when given, receives each section's host wall time in ms, the device drained at the end of each.
 
         Returns the attention output with the same distribution as the input.
         """
@@ -595,10 +678,18 @@ class MiniMaxH3Attention(Module):
         k_BHNE = self.norm_k(k_1BNF, **norm_kwargs)
         v_BHNE = create_heads(v_1BNF)
 
+        block_input_1BND = spatial_1BND
+        coarse_1BND = None
         # Sequence is fractured across SP, so attention must gather K/V around the ring.
         # The packed sequence is one attention document and logical_n masks the pad tail, so no mask.
         exp_program_config = self._exp_sdpa_program_config(q_BHNE.shape[2])
-        if exp_program_config is not None:
+        if self.vsa_prepass is not None:
+            routing = self.vsa_prepass(q_BHNE, k_BHNE, v_BHNE, timings=timings)
+            with _timed(timings, "vsa fine", sync=self.mesh_device):
+                spatial_BHNE = self._sparse_attention(q_BHNE, k_BHNE, v_BHNE, routing)
+            coarse_1BND = routing["coarse_out"]
+            ttnn.deallocate(routing["block_mask"])
+        elif exp_program_config is not None:
             spatial_BHNE, _prompt, _lse = ttnn.transformer.exp_ring_joint_scaled_dot_product_attention(
                 q_BHNE,
                 k_BHNE,
@@ -669,6 +760,19 @@ class MiniMaxH3Attention(Module):
             )
         spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE, runtime_rows=self.dynamic_length)
         spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)
+        if coarse_1BND is not None:
+            # Gate and coarse output are both [1, 1, rows, H * D], so the gated add needs no head split.
+            gate_1BND = self.to_gate_compress(
+                block_input_1BND,
+                parallel_config=matmul_parallel_config,
+                force_transpose=False,
+                use_persistent_buffer=self.use_persistent_ccl_buffers,
+                persistent_buffer_rows=self.ag_row_capacity,
+                **self._agmm_kwargs(None, self.hidden_size, self.inner_dim // tp_factor, block_input_1BND),
+            )
+            spatial_1BND = ttnn.addcmul(spatial_1BND, gate_1BND, coarse_1BND)
+            ttnn.deallocate(gate_1BND)
+            ttnn.deallocate(coarse_1BND)
 
         # Each device holds canonical heads [d * n_local, (d+1) * n_local), so gathering on TP
         # rebuilds the full inner_dim in canonical order for to_out -- fused into the matmul when
