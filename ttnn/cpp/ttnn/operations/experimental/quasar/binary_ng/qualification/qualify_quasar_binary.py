@@ -179,7 +179,7 @@ _SAFE_GLOB = re.compile(r"[A-Za-z0-9_.*?\[\]!-]{1,128}")
 
 
 def _arg_op_name(value: str) -> str:
-    # Used as a grep pattern and an inventory key: allow only identifier-like names (no leading '-',
+    # Used as a search needle and an inventory key: allow only identifier-like names (no leading '-',
     # no regex metacharacters, no whitespace).
     if not _SAFE_OP_NAME.fullmatch(value):
         raise argparse.ArgumentTypeError(f"invalid op name {value!r} (expected e.g. 'pow', 'gt', 'add')")
@@ -727,6 +727,21 @@ def cmd_coverage(args) -> int:
     return 0
 
 
+def _files_mentioning(root: Path, needle: str) -> list:
+    """Case-insensitive substring search over files under `root` (pure Python; no grep subprocess)."""
+    needle = needle.lower()
+    hits = []
+    for f in sorted(root.rglob("*")):
+        if not f.is_file():
+            continue
+        try:
+            if needle in f.read_text(errors="ignore").lower():
+                hits.append(str(f))
+        except OSError:
+            continue
+    return hits
+
+
 def cmd_supports(args) -> int:
     query = _canon_op(args.supports)
     inv = llk_inventory(args.timeout)
@@ -742,10 +757,7 @@ def cmd_supports(args) -> int:
     hits_elsewhere = []
     for d in (TT_LLK_TESTS / "python_tests" / "quasar", TT_LLK_DIR / "tt_llk_quasar"):
         if d.is_dir():
-            out = subprocess.run(
-                ["grep", "-rilF", "-e", args.supports, "--", str(d)], capture_output=True, text=True, timeout=60
-            )
-            hits_elsewhere += [ln for ln in out.stdout.splitlines() if ln.strip()]
+            hits_elsewhere += _files_mentioning(d, args.supports)
     if hits_elsewhere:
         print("\nName appears elsewhere in tt-llk (maybe a different / unary family -- inspect):")
         for p in hits_elsewhere[:10]:
