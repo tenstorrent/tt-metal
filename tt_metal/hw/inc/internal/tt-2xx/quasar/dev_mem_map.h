@@ -408,9 +408,13 @@
 // This core's uncached alias of its own SRAM: 8 MiB above the CCE's own base (CCE0 8 MiB, CCE1 12 MiB), so a
 // CCE-relative offset plus this name is the alias address. Every other core uses the worker window.
 // Callers use this name; MEM_WORKER_UNCACHED_BASE is the +4 MiB window only.
+// Device code otherwise takes MEM_L1_UNCACHED_BASE from overlay_addresses.h (the variant's register headers);
+// that header leaves it to this one on idle-eth builds. The worker window is the fallback where it is not included,
+// as in host code.
 #if defined(COMPILE_FOR_IDLE_ERISC)
+#undef MEM_L1_UNCACHED_BASE
 #define MEM_L1_UNCACHED_BASE (ETH_CCE_LOCAL_BASE + MEM_IERISC_UNCACHED_BASE)
-#else
+#elif !defined(MEM_L1_UNCACHED_BASE)
 #define MEM_L1_UNCACHED_BASE MEM_WORKER_UNCACHED_BASE
 #endif
 #define MEM_IERISC_LOCAL_SIZE MEM_DM_LOCAL_SIZE

@@ -162,7 +162,7 @@ Choose between `mimir_1x1.yaml` & `mimir_2x_package.yaml` depending on needs.
 ```
 export TT_METAL_HOME=<dir>
 export TT_METAL_EMU_SERVER=<host>:<port>
-export TT_METAL_EMU_SOC_DESC=$TT_METAL_HOME/tt_metal/third_party/umd/tests/soc_descs/<yaml_file>
+export TT_METAL_EMU_SOC_DESC=$TT_METAL_HOME/tt_metal/third_party/umd/descriptors/soc_descs/<yaml_file>
 ```
 
 Run Mimir tests from `$TT_METAL_HOME`. A Mimir-only package has no Tensix cores. Set `TT_METAL_SLOW_DISPATCH_MODE=1` to run it; with that variable unset the suite skips. E.g.

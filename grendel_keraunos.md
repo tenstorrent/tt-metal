@@ -2,7 +2,7 @@
 
 Keraunos on MMK should reach Metal the way an ERISC core does on Wormhole and Blackhole: the soc descriptor lists the ethernet cores, the firmware initializer loads them, and a test launches a kernel with `EthernetConfig`. The chiplet, the windows, and bring-up follow the Mimir path.
 
-This is a new package. `tt_metal/third_party/umd/tests/soc_descs/mimir_1x1.yaml` and `mimir_2x_package.yaml` stay as they are. They are the one-Mimir and two-Mimir packages. The MMK package, two Mimirs plus Keraunos, is a new file, `tt_metal/third_party/umd/tests/soc_descs/mmk.yaml`.
+This is a new package. `tt_metal/third_party/umd/descriptors/soc_descs/mimir_1x1.yaml` and `mimir_2x_package.yaml` stay as they are. They are the one-Mimir and two-Mimir packages. The MMK package, two Mimirs plus Keraunos, is a new file, `tt_metal/third_party/umd/descriptors/soc_descs/mmk.yaml`.
 
 `bringup_mmk.py` is the chippy bring-up for that package. The Mimir suites keep using `bringup_mimir_1x1.py` and `bringup_two_mimir.py` with their own descriptors.
 
@@ -36,7 +36,7 @@ Run the existing Mimir contract suite on `mimir_1x1.yaml` and on `mimir_2x_packa
 
 ### Step 1. Add `mmk.yaml`
 
-Add `tt_metal/third_party/umd/tests/soc_descs/mmk.yaml`. Start from the two-Mimir contents of `mimir_2x_package.yaml`: `address_space: mimir_local`, both `mimir_channels` entries, the programmable DRAM views, `eth` empty, `functional_workers` empty.
+Add `tt_metal/third_party/umd/descriptors/soc_descs/mmk.yaml`. Start from the two-Mimir contents of `mimir_2x_package.yaml`: `address_space: mimir_local`, both `mimir_channels` entries, the programmable DRAM views, `eth` empty, `functional_workers` empty.
 
 Then add Keraunos without editing the other two files:
 

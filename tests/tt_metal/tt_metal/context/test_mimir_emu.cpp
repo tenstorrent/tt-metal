@@ -50,7 +50,8 @@ void LaunchProgram(distributed::MeshDevice& mesh, Program& program) {
     distributed::EnqueueMeshWorkload(mesh.mesh_command_queue(), workload, /*blocking=*/true);
 }
 
-static_assert(MEM_L1_UNCACHED_BASE == MEM_L1_SIZE);
+// A Mimir CCE's uncached alias is the 4 MiB worker window (its SRAM is 4 MiB).
+static_assert(MEM_L1_UNCACHED_BASE == 4 * 1024 * 1024);
 
 class MimirCceSramRoundTripThroughUnitMesh : public ::testing::TestWithParam<uint32_t> {};
 
