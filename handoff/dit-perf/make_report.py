@@ -130,6 +130,10 @@ td.task b{display:block}td.task span,.sub{color:var(--mut);font-size:.82rem}
 h2{font-size:1.05rem;margin:28px 0 8px}
 .notes{color:var(--mut);max-width:75ch;margin:0;padding-left:1.1em}.notes li{margin-bottom:6px}
 code{font-family:var(--mono);font-size:.85em}
+pre{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:12px 14px;overflow-x:auto;font-family:var(--mono);font-size:.8rem;line-height:1.5;margin:8px 0}
+pre code{font-size:inherit}
+.steps{max-width:80ch;margin:0;padding-left:1.3em}.steps li{margin-bottom:10px}
+.steps .why{display:block;color:var(--mut);font-size:.85rem}
 </style>
 <main>
 <h1>DiT Perf Matrix</h1>
@@ -140,6 +144,32 @@ code{font-family:var(--mono);font-size:.85em}
 <tbody>__BODY__</tbody></table></div>
 <h2>Notes</h2>
 <ul class="notes">__NOTES__</ul>
+<h2>How to produce these timings</h2>
+<p class="sub" style="max-width:80ch">Everything lives in <code>handoff/dit-perf/</code> on branch <code>jameslee/dit-bin6-perf</code>; its README has the full detail. Run this on each machine, then rebuild the page with one <code>--run</code> per machine.</p>
+<ol class="steps">
+<li><b>Check out and build.</b> Use the branch above on a DRAM-harvested chip; on a full-DRAM chip main is enough. <code>./build_metal.sh -c</code>.
+<span class="why">The first run on a build tree compiles kernels for 35 to 50 minutes. Later cases take about 10 to 15 minutes each.</span></li>
+<li><b>Point at the weights.</b> <code>MINIMAX_H3_MODEL_PATH</code>, <code>HF_HOME</code> (with <code>HF_HUB_OFFLINE=1</code>) and <code>TT_DIT_CACHE_DIR</code>.
+<span class="why">Wan loads from the weka Hugging Face dir; the per-user cache holds empty stubs.</span></li>
+<li><b>Install the scoring tools once.</b> <code>run_matrix.py setup-scoring</code>, then symlink <code>imageio_ffmpeg</code> into <code>~/dit-perf-pydeps-run</code>.
+<span class="why">Wan's clip export needs <code>imageio_ffmpeg</code> on the test's own path.</span></li>
+<li><b>Provide a Ref2VA video reference</b> if the usual file is missing: cut 5 s with sound from any H3 clip and set <code>REF2VA_VIDEO_FILE</code>.
+<span class="why">Without it the video_with_sound and mixed cases skip.</span></li>
+<li><b>Check the machine.</b> <code>run_matrix.py probe</code>, <code>plan</code>, and <code>check-tdp --tdp 130</code>.
+<span class="why">check-tdp opens the devices and requires every chip to read 130 W. The run itself repeats this check and stops if it fails.</span></li>
+<li><b>Run detached, then score.</b> Timed runs first, scoring after, so VBench's CPU load cannot skew the timings.</li>
+<li><b>Rebuild this page</b> with <code>make_report.py</code> and publish it.</li>
+</ol>
+<pre><code>cd &lt;checkout&gt; &amp;&amp; source python_env/bin/activate
+export HF_HOME=/mnt/weka/model-weights/video/huggingface HF_HUB_OFFLINE=1 TT_DIT_CACHE_DIR=$HOME/.cache/tt-dit
+export MINIMAX_H3_MODEL_PATH=/mnt/weka/model-weights/video/MiniMaxAI/MiniMax-H3
+export REF2VA_VIDEO_FILE=$HOME/ref5s.mp4
+export REF2VA_PRESET_DEFAULTS=1   # DRAM-harvested chip only; leave unset on a full-DRAM chip
+OUT=~/dit-perf-runs/$(hostname)-$(date +%m%d)
+setsid nohup bash -c "python handoff/dit-perf/run_matrix.py run --out $OUT --keep-going &amp;&amp; python handoff/dit-perf/run_matrix.py score --out $OUT" &gt; $OUT.log 2&gt;&amp;1 &lt; /dev/null &amp;
+
+python handoff/dit-perf/make_report.py --run "Bin6 (7 DRAM banks)=&lt;dir A&gt;" --run "Full DRAM (8 banks)=&lt;dir B&gt;" --out report.html</code></pre>
+<p class="sub" style="max-width:80ch">Each case resets the devices, has its own wall-clock limit, and is checked against the requested TDP from the runtime log. Progress is in <code>$OUT/matrix.log</code>; per-case logs are in <code>$OUT/&lt;case&gt;/pytest.log</code>. <code>--only wan-t2v,h3-fl2va</code> runs a subset. Statuses: PASS, PERF_LIMIT (ran and measured, but a Wan stage time fell outside its full-DRAM limit), INVALID_TDP, SKIPPED, FAIL, HUNG. Match <code>REF2VA_PRESET_DEFAULTS</code> across the two machines you compare, or say which mode each column used.</p>
 </main>
 """
 
