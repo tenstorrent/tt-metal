@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "ttnn/operations/transformer/sdpa/sdpa.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
@@ -210,6 +211,49 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<SDPAPrecision> precision) {
     warn_ignored_prefill_arguments(compute_kernel_config, program_config);
+    if (joint_tensor_q.logical_shape()[2] == 0 && joint_tensor_k.logical_shape()[2] == 0 &&
+        joint_tensor_v.logical_shape()[2] == 0) {
+        // Zero-length joint tensors (FLUX.2 single-stream blocks): a plain dense call; the joint output is empty.
+        auto output = ttnn::prim::sdpa(
+            input_tensor_q,
+            input_tensor_k,
+            input_tensor_v,
+            std::nullopt,  // attn_mask
+            std::nullopt,  // page_table
+            std::nullopt,  // attention_sink
+            /*is_causal=*/false,
+            scale,
+            std::nullopt,  // sliding_window_size
+            std::nullopt,  // chunk_start_idx
+            std::nullopt,  // chunk_start_idx_tensor
+            false,         // use_mla
+            std::nullopt,  // head_dim_v
+            tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            program_config,
+            init_device_compute_kernel_config(
+                input_tensor_q.device()->arch(),
+                compute_kernel_config,
+                tt::tt_metal::MathFidelity::HiFi2,
+                true,
+                false,
+                false),
+            std::nullopt,  // cu_window_seqlens
+            0,             // windowed_q_token_offset
+            std::nullopt,  // windowed_q_token_offset_tensor
+            std::nullopt,  // paged_cache_geometry
+            false,         // output_concat_heads
+            std::nullopt,  // attn_mask_block_map
+            precision);
+        auto joint_output = ttnn::create_device_tensor(
+            tt::tt_metal::TensorSpec(
+                joint_tensor_q.logical_shape(),
+                tt::tt_metal::TensorLayout(
+                    input_tensor_q.dtype(),
+                    tt::tt_metal::PageConfig(Layout::TILE),
+                    tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG)),
+            input_tensor_q.device());
+        return {output, joint_output};
+    }
     auto output_tensors = ttnn::prim::joint_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_k,

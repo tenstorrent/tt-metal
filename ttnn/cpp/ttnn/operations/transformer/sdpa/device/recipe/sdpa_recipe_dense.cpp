@@ -229,6 +229,9 @@ RecipeResolution resolve_dense_recipe_uncached(const SDPAParams& attrs, const SD
 }  // namespace
 
 void resolve_dense_recipe(SDPAParams& attrs, const SDPAInputs& tensors) {
+    TT_FATAL(
+        attrs.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "SDPA recipes require an interleaved (DRAM or L1) output memory config");
     const auto resolution = memoized_recipe_resolution(recipe_resolution_key(tensors.q, attrs, tensors), [&] {
         return resolve_dense_recipe_uncached(attrs, tensors);
     });
