@@ -10,9 +10,9 @@
 // buffer, keeping up to two blocks of reads in flight (one transaction id per staging slot).
 //
 // Bindings:
-//   dfb::staging - PRODUCER: the staging ring, num_staging_blocks slots of max_block_num_tiles entries
-//   dfb::addrs   - PRODUCER + CONSUMER: the address tensor's shard, [layer][tensor] weight base addresses
-//   dfb::sync    - CONSUMER: the writer's one-entry exit signal
+//   dfb::staging    - PRODUCER: the staging ring, num_staging_blocks slots of max_block_num_tiles entries
+//   dfb::sync       - CONSUMER: the writer's one-entry exit signal
+//   tensor::addrs   - this core's shard of the address tensor, [layer][tensor] weight base addresses
 // Common runtime varargs: page_size[num_tensors], then block_num_pages[num_tensors].
 
 #include <stdint.h>
@@ -21,11 +21,24 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
+#include "api/tensor/local_tensor_accessor.h"
 #include "experimental/kernel_args.h"
 
 // DramPrefetcherPipeSpecFactory runs this kernel and the writer on NOC 0 as a dedicated-NOC pair with
 // disjoint traffic (this kernel only reads); the counter re-sync at exit relies on it.
 static_assert(noc_mode == DM_DEDICATED_NOC, "reader_dram_metal2 shares a dedicated NOC with the writer");
+
+// The staging pointers are the uncached L1 alias on Quasar DM, which the NOC cannot take. The Noc class maps
+// them back in Noc::l1_cached_view, but performance mode issues reads through the free function, so this
+// kernel does the same mapping itself.
+FORCE_INLINE uint32_t noc_local_l1_addr(uint32_t addr) {
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    return (addr >= MEM_L1_UNCACHED_BASE && addr < MEM_L1_UNCACHED_BASE + MEM_L1_SIZE) ? addr - MEM_L1_UNCACHED_BASE
+                                                                                       : addr;
+#else
+    return addr;
+#endif
+}
 
 void kernel_main() {
     constexpr uint32_t num_layers = get_arg(args::num_layers);
@@ -41,16 +54,19 @@ void kernel_main() {
     const Noc noc;
     const AllocatorBank<AllocatorBankType::DRAM> dram_bank;
     DataflowBuffer staging(dfb::staging);
-    DataflowBuffer addrs(dfb::addrs);
     DataflowBuffer sync(dfb::sync);
 
     // The staging ring is addressed directly: reads for the next block are issued before the current one is
     // pushed, so the DFB's write pointer lags the address being filled.
     const uint32_t max_block_size = max_block_num_tiles * staging.get_entry_size();
-    const uint32_t l1_buffer_start_addr = staging.get_write_ptr();
+    const uint32_t l1_buffer_start_addr = noc_local_l1_addr(staging.get_write_ptr());
     const uint32_t l1_buffer_end_addr = l1_buffer_start_addr + staging.get_total_size_bytes();
 
-    volatile tt_l1_ptr uint32_t* tensor_addrs_l1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addrs.get_read_ptr());
+    // The host fills the address table before launch and nothing writes it again, so one lock spans the
+    // kernel. The lock is what invalidates the table out of the L2 cache the Quasar DM cores read L1
+    // through; elsewhere it compiles away.
+    const LocalTensorAccessor<uint32_t> addrs(tensor::addrs);
+    const auto addrs_lock = addrs.scoped_lock(0, num_layers * num_tensors);
 
     for (uint32_t layer = 0; layer < num_layers; layer++) {
         for (uint32_t t = 0; t < num_tensors; t++) {
@@ -59,7 +75,7 @@ void kernel_main() {
 
             // Address setup. The read state holds the bank's NoC coordinates, the page size and the VC; each
             // read supplies the low 32 bits of its address.
-            const uint32_t tensor_base_address = tensor_addrs_l1[layer * num_tensors + t];
+            const uint32_t tensor_base_address = addrs[layer * num_tensors + t];
             const uint32_t src_base_addr = static_cast<uint32_t>(
                 dram_bank.get_noc_addr_from_bank_id(bank_id, tensor_base_address, noc.get_noc_id()));
             noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
@@ -73,7 +89,7 @@ void kernel_main() {
 
             staging.reserve_back(max_block_num_tiles);
 
-            uint32_t l1_write_addr_start = staging.get_write_ptr();
+            uint32_t l1_write_addr_start = noc_local_l1_addr(staging.get_write_ptr());
             // Wrap around l1_write_addr if it reaches l1_buffer_end_addr
             if (l1_write_addr_start >= l1_buffer_end_addr) {
                 l1_write_addr_start = l1_buffer_start_addr;

@@ -9,6 +9,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <utility>
 #include <vector>
@@ -18,12 +19,15 @@
 #include <tt-metalium/experimental/forge_backdoor/global_semaphore.hpp>
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include <tt-metalium/experimental/inspector.hpp>
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
 #include "impl/context/metal_context.hpp"
+#include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 namespace tt::tt_metal::distributed {
@@ -103,6 +107,56 @@ TEST_F(ExplicitCqTest, InspectorTraceIdOfGivenQueue) {
     EXPECT_FALSE(experimental::inspector::GetCurrentMeshTraceId(mesh_device->mesh_command_queue(1)).has_value());
 }
 
+experimental::PrefetcherPipeSpaceConfig allocator_pipe_space_config(CoreCoord sender, const CoreRangeSet& receivers) {
+    return experimental::PrefetcherPipeSpaceConfig{
+        .sender_cores = CoreRangeSet(CoreRange(sender)),
+        .receiver_domain = receivers,
+        .ring_size = 1024,
+        .max_receivers_per_pipe = receivers.num_cores(),
+        .l1_source = experimental::PrefetcherPipeL1Source::Allocator,
+    };
+}
+
+TEST_F(ExplicitCqTest, PrefetcherPipeSpaceWritesConfigPagesOnItsQueue) {
+    auto mesh_device = get_mesh_device();
+    auto& cq1 = mesh_device->mesh_command_queue(1);
+    const CoreCoord sender(0, 0);
+    const CoreCoord receiver(1, 0);
+    const CoreRangeSet receivers(CoreRange(receiver, receiver));
+
+    auto space = experimental::CreatePrefetcherPipeSpace(cq1, allocator_pipe_space_config(sender, receivers));
+    EXPECT_EQ(&space.impl().command_queue(), &cq1);
+
+    // Carving writes the pipe's pages through the space's queue, so finishing that queue alone makes them visible.
+    auto pipe = space.create_pipe(sender, receivers);
+    Finish(cq1);
+    const auto device_id = mesh_device->get_device_ids()[0];
+    for (const CoreCoord& core : {sender, receiver}) {
+        const auto page = MetalContext::instance().get_cluster().read_core(
+            device_id,
+            mesh_device->worker_core_from_logical_core(core),
+            pipe.config_address(),
+            pipe.config_page_size());
+        EXPECT_TRUE(std::ranges::any_of(page, [](uint32_t word) { return word != 0; }))
+            << "config page of core " << core.str() << " is still the zeroed template";
+    }
+}
+
+TEST_F(ExplicitCqTest, PrefetcherPipeSpacesCreatedTogetherKeepTheirQueue) {
+    auto mesh_device = get_mesh_device();
+    auto& cq1 = mesh_device->mesh_command_queue(1);
+    const std::vector<experimental::PrefetcherPipeSpaceConfig> configs = {
+        allocator_pipe_space_config(CoreCoord(0, 0), CoreRangeSet(CoreRange(CoreCoord(1, 0)))),
+        allocator_pipe_space_config(CoreCoord(2, 0), CoreRangeSet(CoreRange(CoreCoord(3, 0)))),
+    };
+
+    const auto spaces = experimental::CreatePrefetcherPipeSpaces(cq1, configs);
+    ASSERT_EQ(spaces.size(), 2u);
+    for (const auto& space : spaces) {
+        EXPECT_EQ(&space.impl().command_queue(), &cq1);
+    }
+}
+
 TEST_F(ExplicitCqTest, SemaphoreLivesOnQueueDeviceAndRejectsResetOnAnotherMeshDevice) {
     auto mesh_device = get_mesh_device();
     if (mesh_device->num_devices() < 2) {
@@ -158,6 +212,25 @@ TEST_F(ExplicitCqTest, AddressBackedGlobalSemaphoreByCqId) {
     EXPECT_ANY_THROW(experimental::CreateGlobalSemaphore(
         *mesh_device, cores, /*initial_value=*/6, BufferType::L1, address, kOutOfRangeCqId));
 }
+
+// Compatibility test for the deprecated thread-local queue selection (removed after the deprecation window).
+// Out-of-tree callers that only use Metal keep the old behavior; an explicit id always wins.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+TEST_F(ExplicitCqTest, DeprecatedThreadLocalSelectionStillHonoredWhenIdOmitted) {
+    auto mesh_device = get_mesh_device();
+    ASSERT_EQ(GetCurrentCommandQueueIdForThread(), 0);
+    EXPECT_EQ(mesh_device->mesh_command_queue().id(), 0);
+
+    PushCurrentCommandQueueIdForThread(1);
+    EXPECT_EQ(GetCurrentCommandQueueIdForThread(), 1);
+    EXPECT_EQ(mesh_device->mesh_command_queue().id(), 1);
+    EXPECT_EQ(mesh_device->mesh_command_queue(0).id(), 0);  // explicit id wins
+    EXPECT_EQ(PopCurrentCommandQueueIdForThread(), 1);
+
+    EXPECT_EQ(mesh_device->mesh_command_queue().id(), 0);
+}
+#pragma GCC diagnostic pop
 
 TEST_F(ExplicitCqTest, GlobalCircularBufferByCqId) {
     auto mesh_device = get_mesh_device();

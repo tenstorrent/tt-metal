@@ -1149,7 +1149,13 @@ def test_fused_pool_cache_identity(device):
     assert n1 - n0 == 1, f"per-head -> pool compiled {n1 - n0} programs (expected 1)"
     o_s, fs_s = _run_op(device, tensors, const_tiles, s0, _fused(nv, pool, producer_pool=True, pool_extra_share=0.5))
     n2 = device.num_program_cache_entries()
-    assert n2 - n1 == 1, f"pool_extra_share compiled {n2 - n1} programs (expected 1: the share must be hashed)"
+    # The share only exists when the pool has extras: a pool of home producers only (the 96 cores a 12x10
+    # grid leaves for hv=12, nc=8 are 8 per head) has none, and every share is the same program.
+    nx = pool - hv * _t.chunk_gdn_fused_pool_home_producers(grid.x, grid.y, hv, nv, pool)
+    assert n2 - n1 == (1 if nx else 0), (
+        f"pool_extra_share compiled {n2 - n1} programs with {nx} extras "
+        f"(expected {1 if nx else 0}: the share must be hashed when the pool has extras)"
+    )
     o_f, fs_f = _run_op(device, tensors, const_tiles, s0, _fused(nv, producer_pool=True))  # the model's P == pool
     o_h2, fs_h2 = _run_op(device, tensors, const_tiles, s0, _fused(nv, 3))
     o_p2, fs_p2 = _run_op(device, tensors, const_tiles, s0, _fused(nv, pool, producer_pool=True))
