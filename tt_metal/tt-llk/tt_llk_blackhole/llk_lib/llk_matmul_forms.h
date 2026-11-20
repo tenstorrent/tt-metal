@@ -138,6 +138,13 @@ constexpr bool matmul_format_streams_fast(const DataFormat f, const bool throttl
     return matmul_format_is_16bit(f) || (!throttled && (f == DataFormat::Bfp8_b || f == DataFormat::Bfp4_b));
 }
 
+// Whether a LoFi block of these operands may hold either one (matmul_reuse_dir's directions 1 and 2); any other pair runs direction 0
+constexpr bool matmul_operands_reorder(const DataFormat in0, const DataFormat in1, const bool throttled = false)
+{
+    return (matmul_format_is_32bit(in1) && matmul_format_streams_fast(in0, throttled)) ||
+           (matmul_format_is_32bit(in0) && matmul_format_streams_fast(in1, throttled));
+}
+
 // A Float32 x Float32 LoFi block is bound by the unpack of its 32-bit tiles; with two rows of in0 in the two SrcB banks each in1 tile is
 // unpacked once for two rows (rt_dim + rt_dim * ct_dim / 2 tiles a block instead of the default direction's).
 // pack_bound: half sync with a Float32 output, where the pack is the bound and the cell measured up to 1.7 percent slower

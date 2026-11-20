@@ -533,8 +533,11 @@ constexpr bool matmul_tile_mop =
         ? (!matmul_plain_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en>(matmul_prod_may_pack_32bit) &&
            !(matmul_hifi2_half_wide(MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncHalf, is_fp32_dest_acc_en, matmul_prod_may_pack_32bit) &&
              MATMUL_PK_KT >= 2 && !matmul_prod_dims_unseen) &&
-           !(MATH_FIDELITY == ckernel::MathFidelity::LoFi && dest_sync == ckernel::DstSync::SyncHalf && !matmul_prod_dims_unseen &&
-             !(MATMUL_PK_RT == 1 && MATMUL_PK_CT == 1) && MATMUL_PK_KT != 1 && !ckernel::matmul_kernel_lofi_mix(MATMUL_KERNEL_FORMATS)) &&
+           !(MATH_FIDELITY == ckernel::MathFidelity::LoFi && !matmul_prod_dims_unseen && !(MATMUL_PK_RT == 1 && MATMUL_PK_CT == 1) && MATMUL_PK_KT != 1 &&
+             (dest_sync == ckernel::DstSync::SyncHalf
+                  ? !ckernel::matmul_kernel_lofi_mix(MATMUL_KERNEL_FORMATS)
+                  : !ckernel::matmul_operands_reorder(
+                        static_cast<DataFormat>(MATMUL_KERNEL_FORMATS[0]), static_cast<DataFormat>(MATMUL_KERNEL_FORMATS[1]), THROTTLE_LEVEL != 0))) &&
            !(MATH_FIDELITY == ckernel::MathFidelity::LoFi && dest_sync == ckernel::DstSync::SyncHalf && matmul_prod_dims_unseen && MATMUL_PK_KT >= 3)) ||
               MATMUL_PROD_RUNTIME_DIR
         : !matmul_math_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_FE_FORM_KT, MATMUL_FE_FORM_OUT>();
