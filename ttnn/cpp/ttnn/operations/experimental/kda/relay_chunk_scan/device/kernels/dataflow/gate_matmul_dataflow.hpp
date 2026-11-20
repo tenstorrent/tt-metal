@@ -232,11 +232,36 @@ private:
     uint32_t pushed_ = 0;
 };
 
-// The output gate's operands as a kernel moves them. Compile-time args from `ct`: x's, W's and the progress CBs, the
-// rows and columns (tiles) a core forms, the K block and K (tiles), the K tiles of the local input (0: none), W's
-// tile columns, the heads per batch, the x groups (W's follow, one per head), where the group table and the gate's
-// common args start, then the input's, the local input's and W's accessor args. Common args: the input, the local
-// input, W, the TP rank, and x's and W's block counts.
+// The pair's partial sums of each other's head: once this core's are formed (cb_pair, pushed by compute), tell the
+// pair's core (at NoC x | y << 16 `pair_xy`) its partials may land in this core's cb_partial (the matmul is done
+// with the x blocks that share its storage), send this core's into the pair's once it says the same, and hand the
+// pair's to compute as they land. `ready` and `landed` are program semaphores.
+FORCE_INLINE void swap_partials(
+    uint32_t cb_pair, uint32_t cb_partial, uint32_t tiles, uint32_t pair_xy, uint32_t ready, uint32_t landed) {
+    cb_wait_front(cb_pair, tiles);
+    cb_reserve_back(cb_partial, tiles);
+    noc_semaphore_inc(noc_address(pair_xy, ready), 1);
+    noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready), 1);
+    noc_async_write(
+        get_read_ptr(cb_pair), noc_address(pair_xy, get_write_ptr(cb_partial)), tiles * get_tile_size(cb_pair));
+    noc_async_writes_flushed();
+    noc_semaphore_inc(noc_address(pair_xy, landed), 1);
+    noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(landed), 1);
+    cb_push_back(cb_partial, tiles);
+    cb_pop_front(cb_pair, tiles);
+    noc_async_atomic_barrier();
+    noc_async_write_barrier();
+}
+
+// The output gate's operands as a kernel moves them. The heads of a batch pair up, h with h + heads / 2, and each
+// core forms both heads' columns of its rows over its head's half of K (the first half for a pair's first head), then
+// swaps partial sums with the pair's core (swap_partials). Compile-time args from `ct`: x's, W's and the progress CBs,
+// the rows and a head's columns (tiles) a core forms, the K block and K (tiles), the K tiles of the local input (0:
+// none), W's tile columns, the heads per batch, the x groups (two per place: the pairs' first heads' cores, then their
+// second's; W's follow, one per head), where the group table and the gate's common args start, the CBs of the partial
+// sums of the pair's head and of the pair's of this core's head and their swap's semaphores, then the input's, the
+// local input's and W's accessor args. Common args: the input, the local input, W, the TP rank, and x's and W's block
+// counts.
 template <uint32_t ct>
 struct Operands {
     static constexpr uint32_t cb_x = get_compile_time_arg_val(ct);
@@ -252,21 +277,36 @@ struct Operands {
     static constexpr uint32_t x_groups = get_compile_time_arg_val(ct + 10);
     static constexpr uint32_t table = get_compile_time_arg_val(ct + 11);
     static constexpr uint32_t common = get_compile_time_arg_val(ct + 12);
-    static constexpr auto input_args = TensorAccessorArgs<ct + 13>();
+    static constexpr uint32_t cb_pair = get_compile_time_arg_val(ct + 13);
+    static constexpr uint32_t cb_partial = get_compile_time_arg_val(ct + 14);
+    static constexpr uint32_t ready_id = get_compile_time_arg_val(ct + 15);
+    static constexpr uint32_t partial_id = get_compile_time_arg_val(ct + 16);
+    static constexpr auto input_args = TensorAccessorArgs<ct + 17>();
     static constexpr auto local_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     static constexpr auto weight_args = TensorAccessorArgs<local_args.next_compile_time_args_offset()>();
-    static constexpr uint32_t blocks = k / kb;
+    // Each core's half of K.
+    static constexpr uint32_t blocks = k / kb / 2;
+
+    static uint32_t half(uint32_t head) { return head % heads >= heads / 2; }
+    // A pair's first head.
+    static uint32_t first(uint32_t head) { return head - half(head) * (heads / 2); }
 
     // x of a correction core's chunks, or its head's W: whichever the other kernel leaves it.
-    static void move_x(uint32_t group, uint32_t first_row) { x_share(group).all(blocks, x_read(first_row)); }
+    static void move_x(uint32_t group, uint32_t first_row, uint32_t head) {
+        x_share(2 * group + half(head)).all(blocks, x_read(first_row, half(head)));
+    }
     static void move_w(uint32_t head) { w_share(head).all(blocks, w_read(head)); }
+    // The partial sums with the pair's core, at NoC x | y << 16 `pair_xy`.
+    static void swap(uint32_t pair_xy) {
+        swap_partials(cb_pair, cb_partial, rows * columns, pair_xy, get_semaphore(ready_id), get_semaphore(partial_id));
+    }
 
     // x's tile rows [first_row, first_row + rows), in the x group `group`.
     static Share x_share(uint32_t group) {
         return Share(
             table, group, cb_x, rows * kb, rows * kb * get_tile_size(cb_x), common + 4, get_write_ptr(cb_progress));
     }
-    static auto x_read(uint32_t first_row) {
+    static auto x_read(uint32_t first_row, uint32_t half) {
         const auto input = TensorAccessor(input_args, get_common_arg_val<uint32_t>(common));
         const auto local = TensorAccessor(local_args, get_common_arg_val<uint32_t>(common + 1));
         const uint32_t tile = get_tile_size(cb_x);
@@ -275,7 +315,7 @@ struct Operands {
         return [=](uint32_t b, uint32_t slot) {
             for (uint32_t m = 0; m < rows; ++m) {
                 for (uint32_t i = 0; i < kb; ++i) {
-                    const uint32_t kk = b * kb + i;
+                    const uint32_t kk = (half * blocks + b) * kb + i;
                     const uint32_t destination = slot + (m * kb + i) * tile;
                     if (kk - local_begin < local_k) {
                         noc_async_read_page((first_row + m) * local_k + kk - local_begin, local, destination);
@@ -287,26 +327,31 @@ struct Operands {
         };
     }
 
-    // The head's W columns, in its W group.
+    // The pair's W columns over the head's half of K, in the head's W group.
     static Share w_share(uint32_t head) {
         return Share(
             table,
             x_groups + head,
             cb_w,
-            kb * columns,
-            kb * columns * get_tile_size(cb_w),
+            kb * 2 * columns,
+            kb * 2 * columns * get_tile_size(cb_w),
             common + 5,
             get_write_ptr(cb_progress) + w_progress);
     }
     static auto w_read(uint32_t head) {
         const auto weight = TensorAccessor(weight_args, get_common_arg_val<uint32_t>(common + 2));
         const uint32_t tile = get_tile_size(cb_w);
-        const uint32_t first_column = head % heads * columns;
+        const uint32_t first_column = first(head) % heads * columns;
+        const uint32_t k_begin = half(head) * blocks * kb;
         return [=](uint32_t b, uint32_t slot) {
             for (uint32_t i = 0; i < kb; ++i) {
-                for (uint32_t j = 0; j < columns; ++j) {
-                    noc_async_read_page(
-                        (b * kb + i) * width + first_column + j, weight, slot + (i * columns + j) * tile);
+                for (uint32_t pair = 0; pair < 2; ++pair) {
+                    for (uint32_t j = 0; j < columns; ++j) {
+                        noc_async_read_page(
+                            (k_begin + b * kb + i) * width + first_column + pair * (heads / 2) * columns + j,
+                            weight,
+                            slot + ((2 * i + pair) * columns + j) * tile);
+                    }
                 }
             }
         };

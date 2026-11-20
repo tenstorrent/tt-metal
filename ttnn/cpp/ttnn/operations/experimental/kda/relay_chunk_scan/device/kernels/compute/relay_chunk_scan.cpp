@@ -77,6 +77,11 @@ constexpr uint32_t cb_gin1 = get_compile_time_arg_val(33);
 constexpr uint32_t gate_kb = get_compile_time_arg_val(34);
 constexpr uint32_t gate_blocks = get_compile_time_arg_val(35);
 constexpr auto gate_fidelity = static_cast<ckernel::MathFidelity>(get_compile_time_arg_val(36));
+// The partial sums of the pair's other head, and the pair's core's of this core's head (the output gate's heads pair
+// up, h with h + heads / 2, each core forming both over its head's half of K).
+constexpr uint32_t cb_gate_pair = get_compile_time_arg_val(37);
+constexpr uint32_t cb_gate_partial = get_compile_time_arg_val(38);
+constexpr uint32_t gate_heads = get_compile_time_arg_val(39);
 constexpr uint32_t state_tiles = kt * kt;
 constexpr uint32_t dst_tiles =
     ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
@@ -377,7 +382,19 @@ void kernel_main() {
         }
     } else {
         DeviceZoneScopedN("GATE-MM");
-        kda_gate::matmul<gate_fidelity>(cb_gin0, cb_gin1, cb_gate, core_chunks, kt, gate_kb, gate_blocks);
+        const uint32_t head =
+            (get_absolute_logical_y() * grid_x + get_absolute_logical_x() - first_core) / cores_per_head;
+        kda_gate::matmul<gate_fidelity>(
+            cb_gin0,
+            cb_gin1,
+            cb_gate,
+            cb_gate_pair,
+            head % gate_heads < gate_heads / 2,
+            core_chunks,
+            kt,
+            gate_kb,
+            gate_blocks);
+        kda_gate::add_pair(cb_gate_partial, cb_gate, core_chunks * kt);
     }
     DeviceZoneScopedN("NORM");
     // The norm's weight rows and, in place, every chunk's g.

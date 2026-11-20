@@ -203,13 +203,16 @@ void kernel_main() {
     cb_push_back(cb_ctl, 1);
 
     // The output gate's operand this kernel moves for the core's matmul: x of its chunks (in the group of the head
-    // batch's cores at this place), or the head's W.
+    // batch's cores at this place), or the head's W; then the partial sums with the core at this place of the pair's
+    // other head.
     if (!relay_head) {
         if constexpr (w_north) {
-            Gate::move_x((head / heads) * cores_per_head + place, (head / heads) * num_chunks + first_chunk);
+            Gate::move_x((head / heads) * cores_per_head + place, (head / heads) * num_chunks + first_chunk, head);
         } else {
             Gate::move_w(head);
         }
+        const uint32_t pair = Gate::half(head) ? head - heads / 2 : head + heads / 2;
+        Gate::swap(get_common_arg_val<uint32_t>(14 + pair * cores_per_head + place));
     }
 
     // The head's first core copies each landed tile column of a K x K state (column-major by tile) into a seed buffer

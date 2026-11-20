@@ -62,7 +62,9 @@ void kernel_main() {
             Gate::move_w(head);
         } else {
             Gate::move_x(
-                (head / heads) * cores_per_head + core % cores_per_head, (head / heads) * num_chunks + first_chunk);
+                (head / heads) * cores_per_head + core % cores_per_head,
+                (head / heads) * num_chunks + first_chunk,
+                head);
         }
     }
 
