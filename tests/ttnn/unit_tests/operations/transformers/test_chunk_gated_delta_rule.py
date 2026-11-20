@@ -727,3 +727,38 @@ def test_state_decay_vs_fp64_reference(device):
     assert ok_o, f"o vs fp64 recurrence: {pcc_o}"
     assert ok_s, f"final_state vs fp64 recurrence: {pcc_s}"
     assert rms <= 5.0e-4, f"final-state rms error {rms:.3e} > 5.0e-4 (shipped kernel: 4.5e-4)"
+def test_gated_delta_attn_seq_invalid_inputs(device):
+    """Negative tests for num_chunks=0, batch_heads=0, sharded input, and non-DRAM/sharded output_mem_config."""
+    def dev(t):
+        return ttnn.from_torch(t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    inputs, _ = _gated_delta_attn_seq_inputs(batch_heads=1, num_chunks=1, with_initial_state=False, seed=0)
+    dev_inputs = {name: dev(t) for name, t in inputs.items()}
+
+    # Sharded input tensor must be rejected
+    sharded_mc = ttnn.create_sharded_memory_config(
+        shape=(128, 128),
+        core_grid=ttnn.CoreGrid(y=1, x=1),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sharded_l_unit = ttnn.from_torch(
+        inputs["L_unit"], dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_mc
+    )
+    with pytest.raises(RuntimeError, match="interleaved"):
+        ttnn.transformer.gated_delta_attn_seq(**{**dev_inputs, "L_unit": sharded_l_unit})
+
+    # L1 output_mem_config must be rejected
+    with pytest.raises(RuntimeError, match="output_mem_config"):
+        ttnn.transformer.gated_delta_attn_seq(**dev_inputs, output_mem_config=ttnn.L1_MEMORY_CONFIG)
+
+    # Zero-volume num_chunks=0 and batch_heads=0 must be rejected cleanly without hanging
+    for bh, nc, pattern in [(1, 0, "num_chunks"), (0, 1, "num_heads")]:
+        z_inputs, _ = _gated_delta_attn_seq_inputs(batch_heads=bh, num_chunks=nc, with_initial_state=False, seed=0)
+        try:
+            z_dev = {name: dev(t) for name, t in z_inputs.items()}
+        except RuntimeError:
+            # from_torch rejects zero-volume tiled tensors on device before op launch
+            continue
+        with pytest.raises(RuntimeError, match=pattern):
+            ttnn.transformer.gated_delta_attn_seq(**z_dev)
