@@ -198,13 +198,18 @@ class TtUNet:
         if self.reduced_grid:
             # conv2d runs a 1x1 conv as a matmul with its output in L1, which a reduced grid cannot
             # hold, so the final conv runs as a DRAM matmul of the same weights.
+            # On a mesh the parameters are replicated, one copy per device; any copy serves.
             final = configs.final_conv
-            weight = ttnn.to_torch(final.weight).reshape(final.out_channels, final.in_channels).T.contiguous()
+            replicate = ttnn.ReplicateTensorToMesh(device)
+            weight = ttnn.to_torch(ttnn.get_device_tensors(final.weight)[0])
+            weight = weight.reshape(final.out_channels, final.in_channels).T.contiguous()
             self.final_linear_weight = ttnn.from_torch(
-                weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+                weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=replicate
             )
-            bias = ttnn.to_torch(final.bias).reshape(1, final.out_channels)
-            self.final_linear_bias = ttnn.from_torch(bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            bias = ttnn.to_torch(ttnn.get_device_tensors(final.bias)[0]).reshape(1, final.out_channels)
+            self.final_linear_bias = ttnn.from_torch(
+                bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=replicate
+            )
             self.final_compute_config = ttnn.init_device_compute_kernel_config(
                 device.arch(),
                 math_fidelity=final.math_fidelity,

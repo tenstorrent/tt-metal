@@ -18,7 +18,7 @@ from models.demos.vision.segmentation.vanilla_unet.tt.common import (
     create_unet_preprocessor,
     load_reference_model,
 )
-from models.demos.vision.segmentation.vanilla_unet.tt.config import create_unet_configs_from_parameters
+from models.demos.vision.segmentation.vanilla_unet.tt.config import create_unet_configs_from_parameters, reduced_grid
 from models.demos.vision.segmentation.vanilla_unet.tt.model import create_unet_from_configs
 from models.experimental.functional_unet.tt.model_preprocessing import create_unet_input_tensors
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
@@ -99,6 +99,8 @@ def test_vanilla_unet_perf_e2e(
     reset_seeds,
     model_location_generator,
 ):
+    if reduced_grid(device):
+        pytest.skip("The trace + 2CQ pipeline reshards its input into the L1 plan, which a reduced grid runs without")
     reference_model = load_reference_model(model_location_generator)
     parameters = preprocess_model_parameters(
         initialize_model=lambda: reference_model, custom_preprocessor=create_unet_preprocessor(device), device=None
@@ -205,6 +207,8 @@ def test_vanilla_unet_perf_e2e_multi_device(
     reset_seeds,
     model_location_generator,
 ):
+    if reduced_grid(mesh_device):
+        pytest.skip("The trace + 2CQ pipeline reshards its input into the L1 plan, which a reduced grid runs without")
     reference_model = load_reference_model(model_location_generator)
 
     inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)

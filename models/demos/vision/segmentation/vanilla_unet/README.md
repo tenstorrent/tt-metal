@@ -57,16 +57,18 @@ pytest --disable-warnings models/demos/vision/segmentation/vanilla_unet/tests/te
 
 ### Reduced grid
 
-The model derives its plan from the device's grid. On fewer than 64 worker cores it runs from
-DRAM: the input stays in DRAM, every convolution, pool and transposed convolution slices its DRAM
-input by height, the skip connections are concatenated in DRAM and the final 1x1 convolution runs
-as a DRAM matmul. The end-to-end test passes on two worker cores:
+The model derives its plan from the device's grid. On a grid without an 8x8 block of worker cores
+it runs from DRAM: the input stays in DRAM, every convolution, pool and transposed convolution
+slices its DRAM input by height, the skip connections are concatenated in DRAM and the final 1x1
+convolution runs as a DRAM matmul. The end-to-end test passes on two worker cores:
 
 ```sh
 TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=1,0 pytest models/demos/vision/segmentation/vanilla_unet/tests/test_unet_model.py
 ```
 
 The override is the inclusive end coordinate of the worker grid, so `1,0` is a 2x1 grid.
+
+The trace + 2CQ performance tests reshard their input into the L1 plan, so they skip on such a grid.
 
 ### Reduced layer count
 
