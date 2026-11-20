@@ -68,6 +68,9 @@ CONV_FULL_K_L1_BYTES = 1_350_000
 DECODER_SINGLE_BUFFER_CONVS = frozenset({(130, 258, 256, 128)})
 # Per-device input pixels from which a conv whose full-K weights do not fit runs as output-channel slices that do
 OUT_CHANNEL_SPLIT_MIN_PIXELS = 100_000
+# Encoder conv slices per mesh shape; ttnn picks the rest. These sit at its L1 threshold: 3 slices before the first
+# render, 4 after (job 224624: 1 KB less L1 free), which compiled new programs on the second 2816x1536 encode
+ENCODER_SLICE_PARAMS = {(4, 8): {(353, 1408, 256, 256): 4, (354, 1408, 256, 256): 4}}
 
 
 def _full_k_fits(cin: int, cout: int) -> bool:
@@ -161,8 +164,8 @@ class Flux3KleinVae:
 
         encoder_parallel = Flux2VaeParallelConfig.from_axes(device, tp_axis=tp_axis, h_axis=None, w_axis=None)
         self._encoder = CanvasVaeEncoder(parallel_config=encoder_parallel, **common)
-        # ttnn picks the encoder's conv slicing (the canvas shapes), not the shared table
-        configure_conv2d(self._encoder, slice_params={mesh_shape: {}}, replace=True)
+        encoder_slices = ENCODER_SLICE_PARAMS.get(mesh_shape, {})
+        configure_conv2d(self._encoder, slice_params={mesh_shape: encoder_slices}, replace=True)
         load(self._encoder, encoder_parallel, "vae_encoder_canvas")
 
         state = state_dict()

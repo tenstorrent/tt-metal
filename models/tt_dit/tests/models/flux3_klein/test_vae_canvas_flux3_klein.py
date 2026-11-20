@@ -22,7 +22,15 @@ import ttnn
 
 from ....models.vae import canvas_flux3_klein as cv
 from ....models.vae.canvas_flux3_klein import REFERENCE_CANVASES, canvas_for
-from ....models.vae.vae_flux3_klein import PATCH, SCALE, SUBFOLDER, Flux3KleinVae
+from ....models.vae.vae_flux3_klein import (
+    BLOCK_OUT_CHANNELS,
+    ENCODER_SLICE_PARAMS,
+    PATCH,
+    SCALE,
+    SUBFOLDER,
+    Z_CHANNELS,
+    Flux3KleinVae,
+)
 from ....parallel.manager import CCLManager
 from ....pipelines.flux3_klein.packing import DOWNSAMPLING_RATIO
 from ....pipelines.flux3_klein.pipeline_flux3_klein import MATCH_MAX_PIXELS, MAX_SIDE, MIN_SIDE, prepare_reference
@@ -177,6 +185,61 @@ def test_banded_is_whole(torch_ttnn, monkeypatch):
     )
     x = torch.randn(1, 80, 64, 8)  # bands of 32, 32 and 16 rows
     torch.testing.assert_close(cv.CanvasVaeEncoder._banded(None, conv.forward, x, 8), conv.forward(x))
+
+
+def _encoder_conv_keys(canvas: tuple[int, int]) -> set[tuple[int, int, int, int, int]]:
+    """(h, w, in, out, stride) of every conv forward_canvas runs on a (width, height) canvas, row bands included."""
+    keys = set()
+
+    def conv(cin, cout, stride=1):
+        def forward(x):
+            _, h, w, _ = x.shape
+            keys.add((h, w, cin, cout, stride))
+            return torch.empty(1, h // stride, w // stride, cout, device="meta")
+
+        return types.SimpleNamespace(forward=forward, inner=types.SimpleNamespace(out_channels=cout))
+
+    def resnet(cin, cout):
+        def shortcut(x, **kwargs):
+            return torch.empty(*x.shape[:3], cout, device="meta")
+
+        identity = types.SimpleNamespace(forward=lambda x, mask: x)
+        return types.SimpleNamespace(
+            norm1=identity,
+            conv1=conv(cin, cout),
+            norm2=identity,
+            conv2=conv(cout, cout),
+            conv_shortcut=types.SimpleNamespace(forward=shortcut) if cin != cout else None,
+        )
+
+    blocks, cin = [], BLOCK_OUT_CHANNELS[0]
+    for level, cout in enumerate(BLOCK_OUT_CHANNELS):
+        downsampler = conv(cout, cout, stride=2) if level < len(BLOCK_OUT_CHANNELS) - 1 else None
+        blocks.append(types.SimpleNamespace(resnets=[resnet(cin, cout), resnet(cout, cout)], downsampler=downsampler))
+        cin = cout
+    encoder = types.SimpleNamespace(
+        conv_in=conv(3, BLOCK_OUT_CHANNELS[0]),
+        down_blocks=blocks,
+        mid_block=types.SimpleNamespace(resnets=[resnet(cin, cin), resnet(cin, cin)], attentions=[None]),
+        conv_norm_out=types.SimpleNamespace(forward=lambda x, mask: x),
+        conv_out=conv(cin, Z_CHANNELS),
+        _ctx=types.SimpleNamespace(ccl_manager=None),
+    )
+    encoder._banded = lambda *args: cv.CanvasVaeEncoder._banded(encoder, *args)
+    encoder._resnet = lambda *args: cv.CanvasVaeEncoder._resnet(encoder, *args)
+    encoder._attention = lambda attn, x, masks: x
+    cw, ch = canvas
+    image = torch.empty(1, ch, cw, 3, device="meta")
+    cv.CanvasVaeEncoder.forward_canvas(encoder, image, lambda x: types.SimpleNamespace(apply=lambda t: t))
+    return keys
+
+
+def test_pinned_encoder_slicing_is_on_canvas_convs(torch_ttnn):
+    """Every pinned key is a stride-1 conv of some canvas, so no downsampler sharing the key changes its slicing."""
+    convs = set().union(*(_encoder_conv_keys(canvas) for canvas in REFERENCE_CANVASES))
+    for table in ENCODER_SLICE_PARAMS.values():
+        for key in table:
+            assert {stride for *k, stride in convs if tuple(k) == key} == {1}, key
 
 
 def _pattern(width: int, height: int) -> Image.Image:
