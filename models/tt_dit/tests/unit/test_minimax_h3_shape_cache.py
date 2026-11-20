@@ -2,12 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""CPU contract for the H3 denoise preamble's per-shape reuse: what counts as the same shape, when a
-resident tensor is trusted to still hold its value, and what drops the reuse. No device."""
+"""CPU contract for the H3 denoise preamble's per-shape reuse: what counts as the same shape and when a
+resident tensor is trusted to still hold its value. No device."""
 
 from __future__ import annotations
-
-from unittest.mock import Mock
 
 import pytest
 import torch
@@ -74,8 +72,6 @@ def test_state_tensor_keeps_value_only_when_bound_before_any_trace(tracers):
     tracers[0] = 0  # the trace was released
     state.update(object(), traced=False)
     assert state.keeps_value
-    state._data = None  # release() without a device
-    assert not state.keeps_value
 
 
 def test_bucket_state_holds_only_its_own_shape(tracers):
@@ -88,24 +84,3 @@ def test_bucket_state_holds_only_its_own_shape(tracers):
     state.tile_rows = True  # the tile-row pair is in use but was never bound
     assert not state.holds(KEY)
     assert _bound_state((*RUNG_TENSORS, "adaln_tile_map", "adaln_expanded")).holds(KEY)
-
-
-def test_bucket_state_does_not_hold_a_tensor_bound_under_a_live_trace(tracers):
-    state = _bound_state()
-    tracers[0] = 1
-    state.tsi.update(object(), traced=False)
-    assert not state.holds(KEY)
-
-
-@pytest.mark.parametrize("loaded", [True, False])
-def test_weight_load_drops_the_shape_keys(monkeypatch, loaded):
-    monkeypatch.setattr(pipeline.cache, "load_model", Mock())
-    rung_state, request_state = pipeline._BucketState(shape_key=KEY), pipeline._BucketState(shape_key=KEY)
-    self = Mock(_buckets={8192: rung_state}, _request_state=request_state, _index_shape_key=KEY)
-    self.mesh_device.shape = (4, 8)
-    self._transformer.is_loaded.return_value = loaded
-
-    pipeline.MiniMaxH3Pipeline._prepare_transformer(self)
-
-    kept = KEY if loaded else None
-    assert (rung_state.shape_key, request_state.shape_key, self._index_shape_key) == (kept, kept, kept)

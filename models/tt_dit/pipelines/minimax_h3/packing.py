@@ -101,7 +101,6 @@ class MiniMaxH3PackedSequence:
     num_condition_audio_rows: int
 
     def digest(self) -> bytes:
-        """Content hash over every field: equal digests mean equal layouts."""
         digest = hashlib.sha256()
         for field in fields(self):
             value = getattr(self, field.name)

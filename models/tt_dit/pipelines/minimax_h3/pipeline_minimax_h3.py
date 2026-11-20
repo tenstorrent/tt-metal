@@ -423,7 +423,6 @@ class _BucketState:
     tile_rows: bool = False
 
     def holds(self, shape_key: tuple) -> bool:
-        """Whether every tensor still holds what a request of this shape wrote."""
         tensors = [self.rope_cos, self.rope_sin, self.adaln, self.tsi, self.assembly_idx]
         if self.tile_rows:
             tensors += [self.adaln_tile_map, self.adaln_expanded]
@@ -1681,11 +1680,6 @@ class MiniMaxH3Pipeline:
             )
 
     def _prepare_transformer(self) -> MiniMaxH3Transformer3DModel:
-        if not self._transformer.is_loaded():
-            # Per-shape tensors are reused only for as long as the weights they were bound beside stay loaded.
-            for state in (*self._buckets.values(), self._request_state):
-                state.shape_key = None
-            self._index_shape_key = None
         cache.load_model(
             self._transformer,
             model_name=MODEL_NAME,
