@@ -1175,6 +1175,8 @@ def test_the_output_label_after_a_call_and_its_fix(mesh_device, expect_error):
     with expect_error(RuntimeError, "has a tensor for 'extra', which the ProgramSpec does not declare"):
         E.generic_op([sharded, output], spec, run_args)
     assert output.tensor_topology() == split
+    # tensor_topology() returned a copy, which the call left as it was.
+    assert allocated == same
     output.update_tensor_topology(allocated)
     E.prepare_generic_op([sharded, output], *exp_program(sharded, output))
     assert output.tensor_topology() == split

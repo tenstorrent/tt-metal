@@ -50,12 +50,15 @@ void bind_generic_operation(nb::module_& mod) {
             output sharded along it. Other tensors in io_tensors keep their labels. The label changes before the program
             is compiled and before some of generic_op's checks, so a call that raises can still change it.
 
+            After a call that raises, or a ``ttnn.experimental.prepare_generic_op`` call, the label has changed but the
+            program has not run, so give back the label the output had before the call with
+            ``output.update_tensor_topology(topology)``, which moves no data. Save that label first with
+            ``output.tensor_topology()``, which returns a copy.
+
             If the program places the output's data otherwise, such as the same data on every device from a sharded
-            input, fix the label after each call that runs it, with ``output.update_tensor_topology(topology)``, which
-            moves no data. After a call that raises, or a ``ttnn.experimental.prepare_generic_op`` call, the program has
-            not run, so give back the output's label from before the call: save it first with
-            ``output.tensor_topology()``, which returns a copy. When every tensor in io_tensors is on every device of
-            the mesh, build the label that ttnn gives its own tensors with that layout, from the output's devices::
+            input, fix the label the same way after each call that runs it. When every tensor in io_tensors is on every
+            device of the mesh, build the label that ttnn gives its own tensors with that placement, from the output's
+            devices::
 
                 coords = output.tensor_topology().mesh_coords()
                 shape = output.device().shape
@@ -221,12 +224,15 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
             label changes before the program is compiled and before some of the call's checks, such as those of the
             run args against the spec, so a call that raises can still change it.
 
+            After a call that raises, or a ``ttnn.experimental.prepare_generic_op`` call, the label has changed but the
+            program has not run, so give back the label the output had before the call with
+            ``output.update_tensor_topology(topology)``, which moves no data. Save that label first with
+            ``output.tensor_topology()``, which returns a copy.
+
             If the program places the output's data otherwise, such as the same data on every device from a sharded
-            input, fix the label after each call that runs it, with ``output.update_tensor_topology(topology)``, which
-            moves no data. After a call that raises, or a ``ttnn.experimental.prepare_generic_op`` call, the program has
-            not run, so give back the output's label from before the call: save it first with
-            ``output.tensor_topology()``, which returns a copy. When every tensor in io_tensors is on every device of
-            the mesh, build the label that ttnn gives its own tensors with that layout, from the output's devices::
+            input, fix the label the same way after each call that runs it. When every tensor in io_tensors is on every
+            device of the mesh, build the label that ttnn gives its own tensors with that placement, from the output's
+            devices::
 
                 coords = output.tensor_topology().mesh_coords()
                 shape = output.device().shape
