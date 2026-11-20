@@ -444,8 +444,8 @@ TEST_F(MultiProcLoopbackFixture, UnevenIterDistribution) {
 }
 
 // The launcher drives the kernel's last iterations through its own sockets after a connector stopped mid-ring.
-// The connector moved the counters and FIFO pointers in the shared connector state only, so the launcher's
-// barrier() must reload all of them: with a stale write_ptr its pages land in a slot the device does not read.
+// Its barrier() must leave every counter current: a stale write_ptr puts pages in a slot the device does not read,
+// and a stale acked or sent count lets a write or read go ahead without waiting.
 TEST_F(MultiProcLoopbackFixture, LauncherResumesAfterConnector) {
     if (rank_ == 0) {
         if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {

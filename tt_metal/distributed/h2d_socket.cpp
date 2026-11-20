@@ -908,6 +908,8 @@ void H2DSocketImpl::barrier(std::optional<uint32_t> timeout_ms) {
             }
         }
     }
+    // The next write's free-space check starts from bytes_acked_.
+    bytes_acked_ = bytes_acked_value;
 }
 
 void H2DSocketImpl::write(void* data, uint32_t num_pages) {
