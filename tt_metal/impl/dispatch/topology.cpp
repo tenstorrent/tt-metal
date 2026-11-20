@@ -32,10 +32,6 @@
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt-umd/types/xy_pair.hpp>
 #include "dispatch_mem_map.hpp"
-#include "impl/program/kernel_config_buffer_impl.hpp"
-#include <algorithm>
-#include "impl/context/context_types.hpp"
-#include "impl/allocator/allocator.hpp"
 #include "impl/context/metal_context.hpp"
 #include <llrt/tt_cluster.hpp>
 #include "dispatch_core_manager.hpp"
@@ -733,6 +729,7 @@ void DispatchTopology::populate_cq_static_args(Device* device) {
         "Tried to populate static args on nodes without the nodes populated (need to run populate_fd_kernels()");
     // First pass, add device/program to all kernels for this device and generate static configs.
     auto cq_program_ptr = std::make_unique<Program>(std::make_shared<detail::ProgramImpl>(device->get_context_id()));
+    cq_program_ptr->impl().set_runs_on_dispatch_cores();
     for (auto* node_and_kernel : node_id_to_kernel_) {
         // GetDeviceId() uses Id from topology as IDevice* is not present yet
         if (node_and_kernel->GetDeviceId() == device->id()) {
@@ -803,80 +800,8 @@ void DispatchTopology::compile_cq_programs() {
 
     command_queue_compile_group_->finalize_offsets();
 
-    release_dispatch_l1();
-    reserve_dispatch_l1(command_queue_compile_group_->programs());
-
     // Write runtime args to device
-    command_queue_compile_group_->write_runtime_args(/*force_slow_dispatch=*/true, kernel_config_buffer_.get());
-}
-
-void DispatchTopology::reserve_dispatch_l1(const std::vector<std::pair<IDevice*, Program*>>& programs) {
-    // The dispatch kernels' queues and buffers sit at fixed addresses (DispatchMemMap) the allocator does not place.
-    // Booking them on each dispatch core's per-core allocator for the session keeps every allocation out of them, the
-    // kernel config buffer below included. Tensix dispatch under the HYBRID allocator only, which has per-core
-    // allocators; the manual fast-dispatch preflight leaves the range free.
-    bool dispatch_l1_reserved = this->dispatch_core_manager_.get_dispatch_core_type() == CoreType::WORKER;
-    if (dispatch_l1_reserved) {
-        const auto [begin, end] = descriptor_.metal_context().dispatch_mem_map().l1_footprint();
-        for (const auto& [device, program] : programs) {
-            if (device->allocator_impl()->get_config().allocator_mode != AllocatorMode::HYBRID) {
-                dispatch_l1_reserved = false;
-                continue;
-            }
-            const uint32_t index = MetalContext::instance(extract_context_id(device))
-                                       .hal()
-                                       .get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-            for (const auto& kernel_group : program->impl().get_kernel_groups(index)) {
-                for (const CoreCoord& core : corerange_to_cores(kernel_group->core_ranges)) {
-                    try {
-                        device->allocator_impl()->reserve_per_core_range(core, begin, end - begin);
-                        dispatch_l1_reservations_.push_back({device, core, begin});
-                    } catch (const std::exception& e) {
-                        // Only an allow_destructive session gets here past the preflight: resident L1 overlaps the
-                        // dispatch kernels' own, and they overwrite it as before.
-                        dispatch_l1_reserved = false;
-                        log_warning(
-                            tt::LogMetal,
-                            "Device {} dispatch core {}: the dispatch kernels' L1 [0x{:x}, 0x{:x}) holds an "
-                            "allocation, so it is not reserved and may be overwritten: {}",
-                            device->id(),
-                            core,
-                            begin,
-                            end,
-                            e.what());
-                    }
-                }
-            }
-        }
-    }
-
-    // A worker_l1_size that shrinks the KERNEL_CONFIG window below a dispatch kernel's block moves the blocks into a
-    // kernel config buffer on the dispatch cores, held until the dispatch kernels exit. One address on all of them:
-    // the dispatch kernels signal each other's program semaphores.
-    const bool fits_window = std::all_of(programs.begin(), programs.end(), [](const auto& device_program) {
-        const auto& [device, program] = device_program;
-        return program->impl().kernel_config_fits_window(device, HalProgrammableCoreType::TENSIX);
-    });
-    if (!fits_window) {
-        TT_FATAL(
-            dispatch_l1_reserved,
-            "The fast-dispatch kernels' kernel config blocks do not fit in the KERNEL_CONFIG window. Running them "
-            "from a kernel config buffer requires Tensix dispatch cores, the HYBRID allocator "
-            "(TT_METAL_ALLOCATOR_MODE_HYBRID=1) and free L1 on every dispatch core. Otherwise, open the device with a "
-            "smaller worker_l1_size.");
-        kernel_config_buffer_ = experimental::CreateKernelConfigBuffer(programs, /*lockstep_address=*/true);
-    }
-}
-
-void DispatchTopology::release_dispatch_l1() {
-    if (kernel_config_buffer_ != nullptr) {
-        kernel_config_buffer_->deallocate();
-        kernel_config_buffer_.reset();
-    }
-    for (const auto& reservation : dispatch_l1_reservations_) {
-        reservation.device->allocator_impl()->release_per_core_range(reservation.core, reservation.address);
-    }
-    dispatch_l1_reservations_.clear();
+    command_queue_compile_group_->write_runtime_args(/*force_slow_dispatch=*/true);
 }
 
 std::unique_ptr<Program> DispatchTopology::get_compiled_cq_program(Device* device) {
@@ -982,7 +907,6 @@ void DispatchTopology::reset() {
     }
     node_id_to_kernel_.clear();
     command_queue_compile_group_->clear();
-    release_dispatch_l1();
     dispatch_cores_.clear();
     routing_cores_.clear();
     dispatch_termination_info_.clear();

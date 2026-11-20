@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
-#include <utility>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
@@ -19,8 +18,6 @@
 namespace tt::tt_metal {
 
 class Buffer;
-class IDevice;
-class Program;
 
 namespace experimental {
 
@@ -37,10 +34,10 @@ public:
     };
 
     // `shards` on disjoint cores of each device. `mesh_device` is the MeshDevice the devices belong to, for addressing
-    // by MeshCoordinate; null for a buffer launched per device, outside a MeshWorkload. `lockstep_address`: on each
-    // device, every shard is at one address and one size, checked when allocated.
+    // by MeshCoordinate. `lockstep_address`: on each device, every shard is at one address and one size, checked when
+    // allocated.
     KernelConfigBufferImpl(
-        std::vector<Shards> shards, bool lockstep_address, const distributed::MeshDevice* mesh_device = nullptr);
+        std::vector<Shards> shards, bool lockstep_address, const distributed::MeshDevice* mesh_device);
 
     // The largest shard on any device.
     uint32_t max_size() const { return max_size_; }
@@ -73,12 +70,6 @@ private:
     uint32_t max_size_ = 0;
     bool lockstep_address_ = false;
 };
-
-// CreateKernelConfigBuffer for programs launched per device rather than as a MeshWorkload, such as the fast-dispatch
-// command queue programs, which may run before a MeshDevice exists: one program per device, already laid out. No
-// slow-dispatch check, since fast dispatch may be active.
-std::shared_ptr<KernelConfigBufferImpl> CreateKernelConfigBuffer(
-    const std::vector<std::pair<IDevice*, Program*>>& programs, bool lockstep_address);
 
 }  // namespace experimental
 }  // namespace tt::tt_metal
