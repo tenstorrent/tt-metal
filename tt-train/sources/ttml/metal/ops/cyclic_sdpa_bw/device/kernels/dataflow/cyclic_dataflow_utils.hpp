@@ -223,8 +223,36 @@ inline uint32_t seed_from_lse(uint32_t l_bits, uint32_t shift_bits, uint32_t sca
     return y ^ 0x80000000u;
 }
 
+// COMPACT_STATS: where the per-row statistics L and D come from. Off (the op):
+// each is a Float32 tile tensor with the 32 values of a row tile in column 0,
+// 4 KB in DRAM and in L1 for 128 bytes of values. On: each is a row-major
+// Float32 tensor with one page per row block, the block's 32 * Bt values in
+// row order, so a block's L (or D) is one DRAM read of 128 * Bt bytes and the
+// values of row tile k are the 32 words at byte 128 * k of it. Only the place
+// a value is read from differs; the tiles made of them are the same.
+#ifndef COMPACT_STATS
+#define COMPACT_STATS 0
+#endif
+// Bytes of one row tile's statistic values, stored compactly.
+constexpr uint32_t kStatValuesBytes = 2u * kFaceRows * sizeof(uint32_t);
+// Bytes of one row block's L (or D) as one DRAM page.
+constexpr uint32_t stat_page_bytes(uint32_t Bt, uint32_t interm_bytes) {
+    return COMPACT_STATS ? Bt * kStatValuesBytes : interm_bytes;
+}
+// Distance in L1 between the statistics of consecutive row tiles of a block.
+constexpr uint32_t stat_src_stride(uint32_t interm_bytes) {
+    return COMPACT_STATS ? kStatValuesBytes : interm_bytes;
+}
+// Column 0 of a tile, row r: face 0 for rows 0..15, face 2 for rows 16..31.
+constexpr uint32_t tile_col0_index(uint32_t r) {
+    return ((r < kFaceRows) ? 0u : 2u) * kFaceElems + (r % kFaceRows) * kFaceRows;
+}
+// Word of row r's value within one row tile's statistics as read from DRAM.
+constexpr uint32_t stat_src_index(uint32_t r) { return COMPACT_STATS ? r : tile_col0_index(r); }
+
 // The statistic tiles of one row tile: from column 0 of the Float32 tile at
-// src_l1 (one value per row), transformed by the seed function above with
+// src_l1 (one value per row; or the 32 contiguous values under COMPACT_STATS),
+// transformed by the seed function above with
 // the given shift and scale (0 and 1.0 for a plain negation, as -D takes),
 //
 //   * hi into row 0 of the Float32 tile at row_l1 (value r at column r), for
@@ -242,11 +270,11 @@ inline void gather_statistic(
         // Source and column destination: face 0 for rows 0..15, face 2 for
         // rows 16..31; column 0. Row destination: row 0 of face 0 for
         // columns 0..15, face 1 for 16..31.
-        const uint32_t col_idx = ((r < kFaceRows) ? 0u : 2u) * kFaceElems + (r % kFaceRows) * kFaceRows;
+        const uint32_t col_idx = tile_col0_index(r);
         const uint32_t row_idx = ((r < kFaceRows) ? 0u : 1u) * kFaceElems + (r % kFaceRows);
         uint32_t hi = 0;
         uint32_t lo = 0;
-        split_statistic(seed_from_lse(src[col_idx], shift_bits, scale_bits), hi, lo);
+        split_statistic(seed_from_lse(src[stat_src_index(r)], shift_bits, scale_bits), hi, lo);
         row[row_idx] = hi;
         rem_col[col_idx] = static_cast<uint16_t>(lo >> 16);  // bfloat16: the top half, truncated
     }
@@ -263,9 +291,10 @@ inline void gather_statistic(
 inline void produce_statistic_tiles_at(
     uint32_t l_l1, uint32_t d_l1, uint32_t Bt, uint32_t interm_bytes, uint32_t rem_bytes,
     uint32_t lrow, uint32_t urow, uint32_t lrem, uint32_t urem, uint32_t shift_bits, uint32_t scale_bits) {
+    const uint32_t src_stride = stat_src_stride(interm_bytes);
     for (uint32_t k = 0; k < Bt; ++k) {
-        gather_statistic(l_l1 + k * interm_bytes, lrow + k * interm_bytes, lrem + k * rem_bytes, shift_bits, scale_bits);
-        gather_statistic(d_l1 + k * interm_bytes, urow + k * interm_bytes, urem + k * rem_bytes, 0u, 0x3F800000u);
+        gather_statistic(l_l1 + k * src_stride, lrow + k * interm_bytes, lrem + k * rem_bytes, shift_bits, scale_bits);
+        gather_statistic(d_l1 + k * src_stride, urow + k * interm_bytes, urem + k * rem_bytes, 0u, 0x3F800000u);
     }
 }
 
@@ -310,13 +339,13 @@ inline void gather_statistic_block(
     uint32_t* w = reinterpret_cast<uint32_t*>(block_l1);
     uint16_t* h = reinterpret_cast<uint16_t*>(block_l1);
     for (uint32_t r = 0; r < 2u * kFaceRows; ++r) {
-        const uint32_t col_idx = ((r < kFaceRows) ? 0u : 2u) * kFaceElems + (r % kFaceRows) * kFaceRows;
+        const uint32_t src_idx = stat_src_index(r);
         uint32_t hi = 0;
         uint32_t lo = 0;
-        split_statistic(seed_from_lse(l[col_idx], shift_bits, scale_bits), hi, lo);
+        split_statistic(seed_from_lse(l[src_idx], shift_bits, scale_bits), hi, lo);
         w[r] = hi;
         h[128u + r] = static_cast<uint16_t>(lo >> 16);
-        split_statistic(d[col_idx] ^ 0x80000000u, hi, lo);
+        split_statistic(d[src_idx] ^ 0x80000000u, hi, lo);
         w[32u + r] = hi;
         h[160u + r] = static_cast<uint16_t>(lo >> 16);
     }

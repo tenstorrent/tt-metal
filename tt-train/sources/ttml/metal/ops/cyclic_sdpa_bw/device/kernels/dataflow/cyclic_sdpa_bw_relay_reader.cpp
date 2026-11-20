@@ -191,6 +191,22 @@ FORCE_INLINE void dram_read_tiles_by_row(uint32_t cb, const Accessor& acc, uint3
     dram_read_barrier();
     cb_push_back(cb, n);
 }
+// L and D of row block i (1-based) of the chunk whose first statistic page is
+// `stat_base` (counted in row tiles), into the L / D scratch at ls / ds: Bt
+// 4 KB tile pages of each, or under COMPACT_STATS one page of 128 * Bt bytes
+// of each (see cyclic_dataflow_utils.hpp).
+template <typename LAccessor, typename DAccessor>
+FORCE_INLINE void dram_read_stats(
+    const LAccessor& lse, const DAccessor& u_scalar, uint32_t stat_base, uint32_t i, uint32_t Bt, uint32_t ls,
+    uint32_t ds, uint32_t stat_bytes) {
+#if COMPACT_STATS
+    dram_read_pages(lse, stat_base / Bt + (i - 1u), 1u, ls, stat_bytes);
+    dram_read_pages(u_scalar, stat_base / Bt + (i - 1u), 1u, ds, stat_bytes);
+#else
+    dram_read_pages(lse, stat_base + (i - 1u) * Bt, Bt, ls, stat_bytes);
+    dram_read_pages(u_scalar, stat_base + (i - 1u) * Bt, Bt, ds, stat_bytes);
+#endif
+}
 constexpr bool dram_access(bool reload, uint32_t t) {
     return (DRAM_SKIP == 0) || (DRAM_SKIP == 1 && !reload) || (DRAM_SKIP == 2 && t == 0u);
 }
@@ -341,8 +357,9 @@ void kernel_main() {
     const auto key = TensorAccessor(key_args, key_addr, tile_bytes);
     const auto value = TensorAccessor(value_args, value_addr, tile_bytes);
     const auto grad_output = TensorAccessor(grad_output_args, grad_output_addr, tile_bytes);
-    const auto lse = TensorAccessor(lse_args, lse_addr, interm_bytes);
-    const auto u_scalar = TensorAccessor(u_args, u_scalar_addr, interm_bytes);
+    const uint32_t stat_bytes = cyclic_dataflow::stat_page_bytes(Bt, interm_bytes);
+    const auto lse = TensorAccessor(lse_args, lse_addr, stat_bytes);
+    const auto u_scalar = TensorAccessor(u_args, u_scalar_addr, stat_bytes);
     const auto grad_query = TensorAccessor(grad_query_args, grad_query_addr, grad_bytes);
     const auto grad_key = TensorAccessor(grad_key_args, grad_key_addr, grad_bytes);
     const auto grad_value = TensorAccessor(grad_value_args, grad_value_addr, grad_bytes);
@@ -668,8 +685,7 @@ void kernel_main() {
             if (!prefetched && dram_access(sched.is_later_streak_start(i, t), t)) {
                 dram_read_pages(query, row_base + (i - 1u) * row_tiles, row_tiles, qs, tile_bytes);
                 dram_read_pages(grad_output, val_base + (i - 1u) * val_tiles, val_tiles, os, tile_bytes);
-                dram_read_pages(lse, stat_base + (i - 1u) * Bt, Bt, ls, interm_bytes);
-                dram_read_pages(u_scalar, stat_base + (i - 1u) * Bt, Bt, ds, interm_bytes);
+                dram_read_stats(lse, u_scalar, stat_base, i, Bt, ls, ds, stat_bytes);
             }
             dram_read_barrier();
             // The writer makes the statistic block from L and D, into this
@@ -762,8 +778,7 @@ void kernel_main() {
             if (dram_access(next_reload, t + 1u)) {
             dram_read_pages(query, row_base + (ni - 1u) * row_tiles, row_tiles, nqs, tile_bytes);
             dram_read_pages(grad_output, val_base + (ni - 1u) * val_tiles, val_tiles, nos, tile_bytes);
-            dram_read_pages(lse, stat_base + (ni - 1u) * Bt, Bt, nls, interm_bytes);
-            dram_read_pages(u_scalar, stat_base + (ni - 1u) * Bt, Bt, nds, interm_bytes);
+            dram_read_stats(lse, u_scalar, stat_base, ni, Bt, nls, nds, stat_bytes);
             }
             // Complete the reads now and hand L and D to the writer, which
             // has the rest of this timestep to make the statistic tiles.

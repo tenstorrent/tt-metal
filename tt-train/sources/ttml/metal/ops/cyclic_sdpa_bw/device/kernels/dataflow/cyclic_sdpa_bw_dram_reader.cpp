@@ -15,10 +15,14 @@
 // completed -- dQ, and once the compute kernel has added to it, dQ back to
 // DRAM, after which the write kernel arrives at the barrier.
 //
-// NO_STAT_READS (measurement knob): L and D are not read at all, which is
-// what a DRAM implementation that stored the statistics compactly (as the
-// relay's packet carries them) would save; they are stored as full tiles,
-// so their pages are 4 KB a row tile against 128 bytes of values.
+// COMPACT_STATS (see cyclic_dataflow_utils.hpp): L and D are row-major
+// Float32 tensors with one page per row block, 128 * Bt bytes, so a block
+// pair reads one page of each instead of Bt 4 KB tiles of each.
+//
+// NO_STAT_READS (measurement knob, tiled statistics only): L and D are not
+// read at all, which bounded what storing them compactly would save before
+// COMPACT_STATS existed; it has no meaning under COMPACT_STATS and is
+// ignored there.
 
 #include <cstdint>
 
@@ -36,6 +40,10 @@
 #define DENSE_MODE 0
 #endif
 #ifndef NO_STAT_READS
+#define NO_STAT_READS 0
+#endif
+#if COMPACT_STATS && NO_STAT_READS
+#undef NO_STAT_READS
 #define NO_STAT_READS 0
 #endif
 
@@ -108,8 +116,9 @@ void kernel_main() {
     const auto key = TensorAccessor(key_args, key_addr, tile_bytes);
     const auto value = TensorAccessor(value_args, value_addr, tile_bytes);
     const auto grad_output = TensorAccessor(grad_output_args, grad_output_addr, tile_bytes);
-    const auto lse = TensorAccessor(lse_args, lse_addr, interm_bytes);
-    const auto u_scalar = TensorAccessor(u_args, u_scalar_addr, interm_bytes);
+    const uint32_t stat_bytes = cyclic_dataflow::stat_page_bytes(Bt, interm_bytes);
+    const auto lse = TensorAccessor(lse_args, lse_addr, stat_bytes);
+    const auto u_scalar = TensorAccessor(u_args, u_scalar_addr, stat_bytes);
     const auto grad_query = TensorAccessor(grad_query_args, grad_query_addr, grad_bytes);
     const auto grad_key = TensorAccessor(grad_key_args, grad_key_addr, grad_bytes);
     const auto grad_value = TensorAccessor(grad_value_args, grad_value_addr, grad_bytes);
@@ -133,7 +142,9 @@ void kernel_main() {
         const uint32_t sl = first_slice + s * slice_stride;
         const uint32_t row_base = sl * 2u * kCores * row_tiles;
         const uint32_t val_base = sl * 2u * kCores * val_tiles;
-        const uint32_t stat_base = sl * 2u * kCores * Bt;
+        // First statistic page of the slice: a page is a row tile, or a
+        // whole row block under COMPACT_STATS.
+        const uint32_t stat_base = sl * 2u * kCores * (COMPACT_STATS ? 1u : Bt);
         visited[0] = false;
         visited[1] = false;
         for (uint32_t t = 0; t < kTimesteps; ++t) {
@@ -184,10 +195,15 @@ void kernel_main() {
 #if !NO_STAT_READS
                 const uint32_t ls = base_lse + slot * stride_interm;
                 const uint32_t ds = base_u_scalar + slot * stride_interm;
+#if COMPACT_STATS
+                noc_async_read_page(stat_base + (i - 1u), lse, ls);
+                noc_async_read_page(stat_base + (i - 1u), u_scalar, ds);
+#else
                 for (uint32_t k = 0; k < Bt; ++k) {
                     noc_async_read_page(stat_base + (i - 1u) * Bt + k, lse, ls + k * interm_bytes);
                     noc_async_read_page(stat_base + (i - 1u) * Bt + k, u_scalar, ds + k * interm_bytes);
                 }
+#endif
 #endif
                 noc_async_read_barrier();
                 // L and D are in L1: the write kernel makes the statistic tiles.

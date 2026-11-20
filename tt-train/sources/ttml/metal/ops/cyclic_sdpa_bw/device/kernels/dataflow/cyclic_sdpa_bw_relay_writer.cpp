@@ -251,8 +251,8 @@ void kernel_main() {
 #if !NO_STAT_WORK
                 for (uint32_t k = 0; k < Bt; ++k) {
                     cyclic_dataflow::gather_statistic_block(
-                        base_lse + slot * stride_interm + k * interm_bytes,
-                        base_u_scalar + slot * stride_interm + k * interm_bytes,
+                        base_lse + slot * stride_interm + k * cyclic_dataflow::stat_src_stride(interm_bytes),
+                        base_u_scalar + slot * stride_interm + k * cyclic_dataflow::stat_src_stride(interm_bytes),
                         block + k * cyclic_dataflow::kStatBlockBytes,
                         L_SEED_SHIFT_BITS,
                         L_SEED_SCALE_BITS);
