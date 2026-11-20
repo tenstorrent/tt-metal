@@ -115,11 +115,23 @@ constexpr bool split_rows_first(bool early_halves, uint32_t search_len) {
     return early_halves && search_len < split_first_below;
 }
 
-// Row ownership, like the single-level op's split: the first num_rows - split_rows rows are whole rows, row r on core
-// r % num_cores as its local row r / num_cores (a whole number of rounds when there are split rows; without, the
-// last round may be partial). The last split_rows rows are halved across core pairs (as the single-level assignment
-// pairs them): split row whole_rows + u belongs to core 2u, which runs its stage 2 and the first half of its stage 3
-// and merges in the second half that core 2u + 1 sorts.
+// Row ownership: the first num_rows - split_rows rows are whole rows, row r the local row r / num_cores of the core at
+// position r % num_cores (a whole number of rounds when there are split rows; without, the last round may be
+// partial). The last split_rows rows are halved across core pairs (as the single-level assignment pairs them): split
+// row whole_rows + u belongs to core 2u, which runs its stage 2 and the first half of its stage 3 and merges in the
+// second half that core 2u + 1 sorts. A round's first split_rows positions are the cores 2u, then come the cores
+// 2u + 1, then the cores without a split row: the phase-1 units run in row order, so the cores 2u get their whole
+// rows early and are free when their split rows' maxima complete, while a row's DRAM bank still follows its index.
+constexpr uint32_t whole_row_core(uint32_t position, uint32_t split_rows) {
+    if (position < split_rows) {
+        return 2 * position;
+    }
+    const uint32_t j = position - split_rows;
+    return j < split_rows ? 2 * j + 1 : split_rows + j;
+}
+constexpr uint32_t whole_row_position(uint32_t core, uint32_t split_rows) {
+    return core >= 2 * split_rows ? core : (core % 2 == 0 ? core / 2 : split_rows + core / 2);
+}
 //
 // A row is ready when each of its units has a nonzero done word in its owner's ready-flags CB: a word per unit, at
 // local_row * max_row_units + part. A unit done twice only makes its word 2, so the readiness does not rest on each
@@ -137,7 +149,7 @@ struct RowOwner {
 constexpr RowOwner row_owner(uint32_t row, uint32_t num_rows, uint32_t split_rows, uint32_t num_cores) {
     const uint32_t whole_rows = num_rows - split_rows;
     if (row < whole_rows) {
-        return {row % num_cores, row / num_cores};
+        return {whole_row_core(row % num_cores, split_rows), row / num_cores};
     }
     return {2 * (row - whole_rows), whole_rows / num_cores};
 }

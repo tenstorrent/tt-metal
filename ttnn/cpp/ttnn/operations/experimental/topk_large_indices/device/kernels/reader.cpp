@@ -434,7 +434,9 @@ FORCE_INLINE void two_level_run(
         return part == units.per_row;
     };
     const auto local_row_index = [&](uint32_t local_row) {
-        return split_owner && local_row == local_whole_rows ? split_row : core_index + local_row * num_cores;
+        return split_owner && local_row == local_whole_rows
+                   ? split_row
+                   : whole_row_position(core_index, split_rows) + local_row * num_cores;
     };
     // The coordinator's counter, read over the NoC: the number of units claimed so far, or more.
     const auto read_counter = [&]() {
