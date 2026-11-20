@@ -923,3 +923,16 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   in PACKED_RULES.md; MHC_POST_V2 dropped from the later gates. Orchestrator --until PB.T.
 - 17:08 UTC PB.7C had started before PB.8's reject was applied (no dep between them; PB.8's uncommitted change still in the tree): paused, aborted PB.7C at once (OV-66), ran resume --only PB.8: REJECTED, 22 files reverted -> 5755ba25d8e; rebuilt ttnn to HEAD (34 s; the .so held PB.8's C++). Resumed --until PB.T. Lesson for the overseer: process a reject (resume --only) before relaunching a run whose next task is independent of it.
 - 18:25 UTC OWNER: rejecting PB.8 was wrong (a clear, bit-identical, device-profile win); remove the '>= 1 ms' keep line and re-apply it. Done: the line removed from HANDOFF.md / BATCHING_PLAN.md (owner's handoff files), the skill's standing decisions now say: no minimum gain, a verified device win that passes its gate is accepted. PB.8R (re-apply the saved PB.8 diff unchanged, MHC_POST_V2 into batch_call_settings, 5120 accept gate) + PB.8RP (packed 8192 half) queued after PB.7C, before PB.9C (patch applied at PB.7C's stop: no tasks.yaml edit while an agent runs).
+- 18:40 UTC PB.8's code also saved in git: local branch dnijemcevic/pb8_mhc_post_v2_saved = 0ef6b7107f5 (22 files on 561fc994f0f, ledger excluded; made with a temporary index, the working tree untouched; not pushed). Its code part applies cleanly to the current tree (git apply --check). PB.8R's brief points at it.
+- 19:05 UTC OWNER: "I absolutely need an honest measurement" (the 4x2k / single-request / ladder walls timed REPEATED
+  positions after a warm-up at the same positions, program-cache misses refused; PB.7C showed fresh layouts rebuild
+  programs on the lane path: 21 builds, 28.5k) and "I need this to be optimized if possible". Queued (patches
+  add_pb9f.py / add_pb9x.py, dry-run valid, applied at PB.7C's stop with add_pb8r.py): PB.9F (agent, tests only: a
+  WALLS_FRESH mode, new positions / slots / layouts every timed chunk, builds counted per op, never refused; single
+  request 8192, fixed 4x2k lanes, lanes and glued on AgentX mixes, glued 5 x 1.6k; table vs the warm-repeated numbers)
+  -> PB.9F5 (scripted: the same at 5120, today's shipped path) -> PB.9X (agent: no program build per position on the
+  single-request and lane paths, POS_DYNAMIC, bit-identical; gate 8192 with builds after warm-up == 0) -> PB.9X5
+  (scripted: the 5120 accept units + fresh walls, 0 builds) -> PB.8R / PB.8RP (mhc re-apply) -> PB.9C (every number
+  fresh, warm beside it) -> PB.T. tasks.yaml would be 489 KB: old PASS PB briefs get trimmed (git keeps them) if a commit
+  nears the 500 KB hook.
+- 19:10 UTC OWNER principle: serving never rebuilds (after warm-up no program build on the request path). Written into the skill's standing decisions and PACKED_RULES.md; PB.T's fast tier gets packed_fast_program_builds_after_warmup == 0 (patch add_pb9t_rule.py, applied at PB.7C's stop).

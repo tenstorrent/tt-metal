@@ -27,3 +27,8 @@ Judge by the device profile and the exposed-host breakdown; report exposed vs hi
 TT-D-GEN SHAPES (owner 2026-11-20 16:00, from the tt-d-gen source, /scratch/dnijemcevic/tt-d-gen = origin/main Nov 6): one fixed chunk_size (a multiple of 32), every chunk padded to it, only a request's last chunk partial; every start 32-aligned (prefix resumes at 64-token blocks; DSv4 recurrent: requests start at 0, chunk starts are multiples of chunk_size, except a last chunk clamped to max_seq_len - chunk_size); lengths 1..chunk_size (1-token segments ARE reachable and supported).
 Glued packing: segment starts 32-aligned, splits only at 32-aligned positions (the continuation starts 32-aligned; <= 31 pad rows a split).
 Do not build or test unaligned starts (31, 33, ...).
+
+SERVING NEVER REBUILDS (owner 2026-11-20): after warm-up no program is built on the request path; every position-, slot-,
+layout- or table-derived value is a runtime arg / device data, never a program-cache key. Walls count only with fresh
+positions / slots / layouts every timed chunk and program_builds_after_warmup == 0; repeated-position walls are a best
+case and are labelled so.

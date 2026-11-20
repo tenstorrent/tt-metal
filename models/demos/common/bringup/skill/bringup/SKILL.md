@@ -423,6 +423,11 @@ session's private memory (owner, said many times; 2026-10-30): memory stays on o
 next overseer never sees it.
 
 Standing owner decisions (moved here from private memory, 2026-10-30):
+- Serving never rebuilds (owner, 2026-11-20): every program a server can need is built once at startup from a finite
+  set (chunk size, segment counts, the accepted switches, layer kinds); after warm-up nothing builds on the request
+  path: positions, history lengths, slots, segment boundaries and table contents are runtime args / device data, never
+  part of a program-cache key. A perf number counts only if measured with fresh positions / slots / layouts every timed
+  chunk and 0 program builds after warm-up (repeated-position walls are a best case and must be labelled so).
 - No minimum-gain line (owner, 2026-11-20): a perf pick that passes its gate, keeps every accuracy limit (or is
   bit-identical) and wins on the device profile is accepted whatever its size; never reject a verified device win
   against a "keep only at >= N ms" bar (DeepSeek-V4.1 PB.8: a bit-identical -0.6 ms mhc_post win was rejected against
