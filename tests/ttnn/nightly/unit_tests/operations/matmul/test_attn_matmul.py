@@ -1044,3 +1044,52 @@ def test_group_attn_matmul_rejects_offset_in1_shard_grid(in1_origin, device, exp
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
         )
+
+
+# The shard grid is checked as an ordered core list, so the same 32 cores split into one range per row are accepted.
+@pytest.mark.use_module_device
+def test_group_attn_matmul_accepts_row_split_in1_shard_grid(device):
+    compute_grid_size = ttnn.CoreCoord(8, 8)
+    device_grid = device.compute_with_storage_grid_size()
+    if device_grid.x < compute_grid_size.x or device_grid.y < compute_grid_size.y:
+        pytest.skip("needs an 8x8 compute grid")
+
+    batch, K, seq_len, q_heads, kv_heads = 32, 64, 128, 16, 1
+    torch.manual_seed(0)
+    input_tensor_a = torch.randn([1, q_heads, batch, K]).bfloat16()
+    input_tensor_b = torch.randn([batch, kv_heads, K, seq_len]).bfloat16()
+    tt_input_tensor_a = ttnn.from_torch(
+        input_tensor_a,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    def run(shard_grid):
+        in1_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(shard_grid, [kv_heads * K, seq_len], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        tt_input_tensor_b = ttnn.from_torch(
+            input_tensor_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in1_mem_config
+        )
+        return ttnn.to_torch(
+            ttnn_group_attn_matmul(
+                tt_input_tensor_a,
+                tt_input_tensor_b,
+                compute_with_storage_grid_size=compute_grid_size,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+            )
+        )
+
+    one_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))})
+    row_ranges = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, y), ttnn.CoreCoord(7, y)) for y in range(4)})
+    expected = run(one_range)
+    actual = run(row_ranges)
+
+    golden = (input_tensor_a.float().transpose(0, 2) @ input_tensor_b.float()).transpose(0, 2)
+    assert_numeric_metrics(golden, actual, pcc_threshold=0.99, check_allclose=False, check_frobenius=False)
+    assert torch.equal(actual, expected)
