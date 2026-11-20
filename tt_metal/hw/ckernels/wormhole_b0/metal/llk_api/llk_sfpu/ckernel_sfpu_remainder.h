@@ -70,9 +70,9 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_small_b(
 }
 
 // Unary uint32 remainder mirrors the tensor-tensor kernel in ckernel_sfpu_binary_remainder.h.
-// One kernel per divisor class, each taking the divisor as a RISC-side scalar. The compute API
-// (remainder_tile_uint32) selects the class at its always-inline call site, where ttnn bakes the
-// divisor in as a literal, so a kernel ELF only links the one path it uses. They are noinline because
+// One kernel per divisor class, each taking the divisor as a RISC-side scalar.
+// llk_math_eltwise_unary_sfpu_remainder_uint32 selects the class at its always-inline call site, where
+// ttnn bakes the divisor in as a literal, so a kernel ELF only links the one path it uses. They are noinline because
 // the SFPU call wrapper takes the kernel's address: an inlined copy would be linked next to the
 // address-taken body, and the two large paths inlined into the face loop run out of LREGs.
 
@@ -173,7 +173,7 @@ __attribute__((noinline)) void calculate_remainder_uint32_scalar_general(uint sc
 //   power-of-two -> bitmask
 //   scalar < 2^11 -> range-reduce + small-b helper (b0 + 1/b hoisted, skips high chunks)
 //   else (< 2^31) -> range-reduce + full helper (1/b hoisted)
-// Callers with a literal divisor should dispatch on it themselves (see remainder_tile_uint32):
+// Callers with a literal divisor should dispatch on it themselves (see llk_math_eltwise_unary_sfpu_remainder_uint32):
 // through an SFPU call wrapper this function's address is taken, so all four paths get linked.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_remainder_uint32_scalar(uint scalar) {

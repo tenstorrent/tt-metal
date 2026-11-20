@@ -8,6 +8,7 @@
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_remainder.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
+#include "llk_math_eltwise_unary_sfpu_remainder.h"
 #endif
 
 namespace ckernel {
@@ -54,57 +55,7 @@ ALWI void remainder_tile_init(uint32_t param0, uint32_t param1) {
  */
 // clang-format on
 ALWI void remainder_tile_uint32(uint32_t idst, uint32_t param0) {
-#ifdef ARCH_WORMHOLE
-    // ttnn passes the divisor as a literal, so selecting the divisor-class kernel here (always
-    // inline) folds the checks and links only the one path; dispatching inside the kernel on its
-    // runtime argument linked all four (~3.4 KB).
-    if (param0 >= 0x80000000u) {
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_remainder_uint32_scalar_big_b,
-            (APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/),
-            idst,
-            VectorMode::RC,
-            param0 /*divisor*/));
-    } else if ((param0 & (param0 - 1u)) == 0u) {
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_remainder_uint32_scalar_pow2,
-            (APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/),
-            idst,
-            VectorMode::RC,
-            param0 /*divisor*/));
-    } else if (param0 < (1u << 11)) {
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_remainder_uint32_scalar_small_b,
-            (APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/),
-            idst,
-            VectorMode::RC,
-            param0 /*divisor*/));
-    } else {
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_remainder_uint32_scalar_general,
-            (APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/),
-            idst,
-            VectorMode::RC,
-            param0 /*divisor*/));
-    }
-#else
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_remainder_uint32_scalar,
-        (APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC,
-        param0 /*divisor*/));
-#endif
+    MATH((llk_math_eltwise_unary_sfpu_remainder_uint32<APPROX, DST_SYNC_MODE, DST_ACCUM_MODE>(idst, param0)));
 }
 
 /**
