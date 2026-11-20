@@ -109,12 +109,15 @@ constexpr uint32_t feed_kind = get_compile_time_arg_val(18);
 constexpr uint32_t peer_rope_off = get_compile_time_arg_val(19);
 constexpr uint32_t row_bytes = get_compile_time_arg_val(20);
 constexpr uint32_t kBatch = vector_bytes / row_bytes;  // rows of the launch (row_bytes: one embedding row)
-constexpr uint32_t rows = feed_kind > 0 ? 2 : (rows_mode ? kBatch : 1);  // tokens per launch
+constexpr uint32_t rows = feed_kind > 0 ? 2 : (rows_mode ? kBatch : 1);  // tokens per launch (per row group)
+// row groups (rows mode): the feed draws the rows of every group (global row g * rows + u); its records, candidates and
+// outputs cover them all, its staging takes one group at a time
+constexpr uint32_t kFeedRows = rows_mode ? rows * groups : rows;
 constexpr bool sample = get_compile_time_arg_val(21) != 0;
 static_assert(!sample || (feed && feed_kind == 0), "sampling feeds batch 1 or the rows of a rows-mode batch");
 constexpr uint32_t kListWords = 2 * sampling::kTopK;
 // a chip's candidate slot: per row a list (sampling) or (key, index) (at least 16 B)
-constexpr uint32_t kCandWords = sample ? rows * kListWords : (2 * rows > 4 ? 2 * rows : 4);
+constexpr uint32_t kCandWords = sample ? kFeedRows * kListWords : (2 * kFeedRows > 4 ? 2 * kFeedRows : 4);
 constexpr uint32_t cand_bytes = 4 * kCandWords;
 constexpr uint32_t n_taps = get_compile_time_arg_val(22);
 static_assert(n_taps <= 5 && (n_taps == 0 || published), "taps are written from the summed x");
@@ -514,19 +517,19 @@ void kernel_main() {
         auto better = [](uint32_t k, uint32_t i, uint32_t bk, uint32_t bi) { return k > bk || (k == bk && i < bi); };
         // per row u: record of streamer s at rec[4 (s rows + u)]; candidate words 2u, 2u + 1 (sampling: the row's
         // lists, [row][streamer], merged into the chip's list of the row)
-        uint32_t best_ks[rows] = {}, best_is[rows] = {};
+        uint32_t best_ks[kFeedRows] = {}, best_is[kFeedRows] = {};
         if constexpr (sample) {
-            for (uint32_t u = 0; u < rows; u++) {
+            for (uint32_t u = 0; u < kFeedRows; u++) {
                 sampling::merge(
                     rec + u * num_streamers * kListWords, num_streamers, cand + chip * kCandWords + u * kListWords);
             }
         }
-        for (uint32_t u = 0; !sample && u < rows; u++) {
+        for (uint32_t u = 0; !sample && u < kFeedRows; u++) {
             uint32_t bk = rec[4 * u], bi = rec[4 * u + 1];
             for (uint32_t s = 1; s < num_streamers; s++) {
-                if (better(rec[4 * (s * rows + u)], rec[4 * (s * rows + u) + 1], bk, bi)) {
-                    bk = rec[4 * (s * rows + u)];
-                    bi = rec[4 * (s * rows + u) + 1];
+                if (better(rec[4 * (s * kFeedRows + u)], rec[4 * (s * kFeedRows + u) + 1], bk, bi)) {
+                    bk = rec[4 * (s * kFeedRows + u)];
+                    bi = rec[4 * (s * kFeedRows + u) + 1];
                 }
             }
             best_ks[u] = bk;
@@ -547,7 +550,7 @@ void kernel_main() {
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cand_sem_addr), (launch + 1) * (num_chips - 1));
             invalidate_l1_cache();
         }
-        for (uint32_t u = 0; !sample && u < rows; u++) {
+        for (uint32_t u = 0; !sample && u < kFeedRows; u++) {
             for (uint32_t c = 0; c < num_chips; c++) {
                 if (better(cand[kCandWords * c + 2 * u], cand[kCandWords * c + 2 * u + 1], best_ks[u], best_is[u])) {
                     best_ks[u] = cand[kCandWords * c + 2 * u];
@@ -593,6 +596,83 @@ void kernel_main() {
         }
         if constexpr (feed_kind > 0) {
             feed_verify(h, best_is, stage, embed_addr, rope_addr, peer_tok_addr, out_addr, cb_base(2), rope_c);
+        } else if constexpr (rows_mode && groups > 1) {
+            // row groups: the same staging, one group at a time (x0 / rope / params / outputs of group gr at its offset
+            // in the token state / params / out buffers); the rows' positions are words of the token state's
+            // positions region (tok_pos_off), read once and written back after the last group
+            constexpr uint32_t kRopeOff = 64 + vector_bytes, kEmbOff = kRopeOff + rows * rope_bytes;
+            constexpr uint32_t kEntryOff = kEmbOff + row_bytes, kOutOff = kEntryOff + kRopeEntry;
+            constexpr uint32_t kParOff = kOutOff + rows * 16, kListsOff = kParOff + rows * 64;
+            constexpr uint32_t kGlobalOff = kListsOff + num_chips * sampling::kListBytes;
+            constexpr uint32_t kWeightsOff = kGlobalOff + sampling::kListBytes;
+            constexpr uint32_t kPosOff = (kWeightsOff + sampling::kListBytes + 63) & ~63u;
+            constexpr uint32_t kPosBytes = (4 * kFeedRows + 31) & ~31u;
+            static_assert(kPosOff + kPosBytes + 64 <= num_chips * vector_bytes, "rows feed staging (groups)");
+            const uint32_t xr = stage + 64, roper = stage + kRopeOff, emb_l1 = stage + kEmbOff;
+            const uint32_t entry = stage + kEntryOff, outr = stage + kOutOff, par = stage + kParOff;
+            volatile tt_l1_ptr uint32_t* posw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + kPosOff);
+            noc_async_read(tok.get_noc_addr(0, tok_pos_off), stage + kPosOff, kPosBytes);
+            noc_async_read_barrier();
+            const InterleavedAddrGen<true> emb{.bank_base_address = embed_addr, .page_size = row_bytes};
+            const InterleavedAddrGen<true> rtab{.bank_base_address = rope_addr, .page_size = kRopeEntry};
+            const InterleavedAddrGen<true> out{.bank_base_address = out_addr, .page_size = kFeedRows * 16};
+            volatile tt_l1_ptr uint32_t* o = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(outr);
+            const uint32_t mask = h[kTokActive];
+            for (uint32_t gr = 0; gr < groups; gr++) {
+                noc_async_read(tok.get_noc_addr(0, 64 + gr * vector_bytes), xr, vector_bytes);
+                noc_async_read(tok.get_noc_addr(0, rope_off + gr * rows * rope_bytes), roper, rows * rope_bytes);
+                if constexpr (sample) {
+                    const InterleavedAddrGen<true> pg{.bank_base_address = params_addr, .page_size = kFeedRows * 64};
+                    noc_async_read(pg.get_noc_addr(0, gr * rows * 64), par, rows * 64);
+                }
+                noc_async_read_barrier();
+                for (uint32_t u = 0; u < rows; u++) {
+                    const uint32_t r = gr * rows + u;
+                    if (!((mask >> r) & 1)) {
+                        o[4 * u] = 0;
+                        o[4 * u + 1] = posw[r];
+                        o[4 * u + 2] = 0;
+                        o[4 * u + 3] = 0;
+                        continue;
+                    }
+                    uint32_t token = best_is[r];
+                    if constexpr (sample) {
+                        volatile tt_l1_ptr uint32_t* lists =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + kListsOff);
+                        for (uint32_t c = 0; c < num_chips; c++) {
+                            for (uint32_t w = 0; w < kListWords; w++) {
+                                lists[c * kListWords + w] = cand[c * kCandWords + r * kListWords + w];
+                            }
+                        }
+                        volatile tt_l1_ptr uint32_t* gl =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + kGlobalOff);
+                        sampling::merge(lists, num_chips, gl);
+                        token = sampling::draw(
+                            gl,
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(par + u * 64),
+                            posw[r],
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + kWeightsOff));
+                    }
+                    const uint32_t pos = posw[r] + 1 < max_pos ? posw[r] + 1 : max_pos - 1;
+                    noc_async_read(emb.get_noc_addr(token), emb_l1, row_bytes);
+                    noc_async_read(rtab.get_noc_addr(pos), entry, kRopeEntry);
+                    noc_async_read_barrier();
+                    scatter_row<rows>(emb_l1, xr, u);
+                    expand_rope(entry, roper + u * rope_bytes);
+                    posw[r] = pos;
+                    o[4 * u] = token;
+                    o[4 * u + 1] = pos;
+                    o[4 * u + 2] = 1;
+                    o[4 * u + 3] = 0;
+                }
+                noc_async_write(xr, tok.get_noc_addr(0, 64 + gr * vector_bytes), vector_bytes);
+                noc_async_write(roper, tok.get_noc_addr(0, rope_off + gr * rows * rope_bytes), rows * rope_bytes);
+                noc_async_write(outr, out.get_noc_addr(0, gr * rows * 16), rows * 16);
+                noc_async_write_barrier();
+            }
+            noc_async_write(head, tok.get_noc_addr(0), 64);
+            noc_async_write(stage + kPosOff, tok.get_noc_addr(0, tok_pos_off), kPosBytes);
+            noc_async_write_barrier();
         } else if constexpr (rows_mode) {
             // stage: head | x0 | rope (rows x rope_bytes) | embedding row | rope entry | out (rows x 16 B) |
             // (sampling) params (rows x 64 B) | the chips' lists of a row | its global list | the draw's weights

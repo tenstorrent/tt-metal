@@ -582,6 +582,9 @@ class ResidentModel:
                 f"row groups per launch: groups={groups} (rows={rows}) is not implemented yet; only groups=1 runs"
             )
         self.groups = groups
+        # with row groups the rows' positions live past the token state's x0 / rope (active_rows.hpp tok_pos_off);
+        # one group keeps them in the head's words 1 .. batch
+        self.tok_pos_off = 0
         self.fc = fc is not None
         self.sample = embed is not None and not verify  # the hub draws the fed token (sampling.hpp)
         if verify:
@@ -1260,6 +1263,7 @@ class ResidentModel:
                 ("groups", self.groups),
                 ("row_tiles", row_w // TILE),
                 ("o_tiles", d.gv // TILE),  # the streamers' o_in tiles per row group (gdn_head_writer.cpp)
+                ("tok_pos_off", self.tok_pos_off),  # the rows' positions with row groups (active_rows.hpp)
             ]
 
             def kernel(src, core_ranges, ct, rt, config, named=()):

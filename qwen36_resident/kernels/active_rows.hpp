@@ -24,6 +24,9 @@ static_assert(groups == 1 || rows_mode, "row groups are a rows-mode feature");
 constexpr uint32_t kTokActive = 9;      // token state word: bit u = row u runs this step (rows mode)
 constexpr uint32_t kTokPreserve = 10;   // token state word: 1 = inactive rows hold live state (rows mode)
 constexpr uint32_t kTokHeadBytes = 48;  // token state words 0 .. 11, read at once
+// the rows' positions: with one row group words 1 .. batch of the head; with more (whose rows outnumber the head's
+// free words) one word per global row g * batch + u at byte tok_pos_off of the token state (past its x0 / rope)
+constexpr uint32_t tok_pos_off = get_named_compile_time_arg_val("tok_pos_off");
 
 // the rows that run this step, in order (rows mode: the set bits of mask; otherwise all of them)
 template <uint32_t B>
