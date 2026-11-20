@@ -1,0 +1,43 @@
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+@@ -2396,27 +2396,36 @@
+         if constexpr (remote_output) {
+             // ---- store_block (remote output shard): compute pushes the owner's [bm, out_n] block (per bias row
+             // group, or whole); each valid tile-row goes to the output shard that holds it, as soon as it is packed.
++            // A tile-row's NoC addresses are resolved before its wait (the writer idles there), so a landed tile-row
++            // costs only its write issue; the last M-block's writes are left to the kernel-end barrier (no flush
++            // before its pop: nothing reuses the CB).
+             if (out_valid_tiles > 0) {
+                 MaybeDeviceZoneScope("writer_store");
+                 const uint32_t out_tile_bytes = get_tile_size(cb_output_tiles);
+                 const auto output = TensorAccessor(output_args, output_addr, out_tile_bytes);
+                 const uint32_t block_tile0 = m_block_idx * block_m_tiles;
+                 const uint32_t l1_base = get_read_ptr(cb_output_tiles);
++                uint64_t dst[out_n_tiles];
+                 for (uint32_t r = 0; r < block_m_tiles; ++r) {
+                     const uint32_t local_tile_row = block_tile0 + r;
+                     if (local_tile_row >= actual_m_tiles) {
+                         break;
+                     }
+-                    wait_front_serving(cb_output_tiles, (r + 1) * out_n_tiles);
+                     const uint32_t row_page = (m_tile_start + local_tile_row) * tensor_n_tiles + out_n_tile_start;
++                    for (uint32_t n = 0; n < out_valid_tiles; ++n) {
++                        dst[n] = output.get_noc_addr(row_page + n);
++                    }
++                    wait_front_serving(cb_output_tiles, (r + 1) * out_n_tiles);
+                     const uint32_t l1 = l1_base + r * out_n_tiles * out_tile_bytes;
+                     for (uint32_t n = 0; n < out_valid_tiles; ++n) {
+-                        noc_async_write_page(row_page + n, output, l1 + n * out_tile_bytes);
++                        noc_async_write(l1 + n * out_tile_bytes, dst[n], out_tile_bytes);
+                     }
+                 }
+                 // The ragged tail's rows are packed too (nominal counts); the CB is popped whole.
+                 wait_front_serving(cb_output_tiles, block_m_tiles * out_n_tiles);
+-                noc_async_writes_flushed();
++                if (m_block_idx + 1 < num_m_blocks_this_core) {
++                    noc_async_writes_flushed();
++                }
+                 cb_pop_front(cb_output_tiles, block_m_tiles * out_n_tiles);
+             }
+         }

@@ -1,0 +1,12 @@
+res4_{1__5}_conv2      baseline       10691 ns  1.000x  pcc 0.999763 (>= 0.996) mae 0.37220 max_err 5.0000  maxdiff 0 (0.000% differ)  {"shard_shape":[1, 1, 288, 32],"grid":[{
+res4_{1__5}_conv2      fstore         10541 ns  0.986x  pcc 0.999763 (>= 0.996) mae 0.37220 max_err 5.0000  -  {"shard_shape":[1, 1, 288, 32],"grid":[{
+res4_{1__5}_conv2      early          10557 ns  0.987x  pcc 0.999763 (>= 0.996) mae 0.37220 max_err 5.0000  -  {"shard_shape":[1, 1, 288, 32],"grid":[{
+res4_{1__5}_conv2      lean           10719 ns  1.003x  pcc 0.999763 (>= 0.996) mae 0.37220 max_err 5.0000  -  {"shard_shape":[1, 1, 288, 32],"grid":[{
+res4_{1__5}_conv2      lean           10538 ns  0.986x  pcc 0.999763 (>= 0.996) mae 0.37220 max_err 5.0000  -  {"shard_shape":[1, 1, 288, 32],"grid":[{
+res4_{1__5}_conv2      early          10773 ns  1.008x  pcc 0.999763 (>= 0.996) mae 0.37220 max_err 5.0000  -  {"shard_shape":[1, 1, 288, 32],"grid":[{
+res4_{1__5}_conv2      fstore         10448 ns  0.977x  pcc 0.999763 (>= 0.996) mae 0.37220 max_err 5.0000  -  {"shard_shape":[1, 1, 288, 32],"grid":[{
+res4_{1__5}_conv2      baseline       10576 ns  0.989x  pcc 0.999763 (>= 0.996) mae 0.37220 max_err 5.0000  maxdiff 0 (0.000% differ)  {"shard_shape":[1, 1, 288, 32],"grid":[{
+res4_{1__5}_conv2      baseline       10420 ns  0.975x  pcc 0.999763 (>= 0.996) mae 0.37220 max_err 5.0000  maxdiff 0 (0.000% differ)  {"shard_shape":[1, 1, 288, 32],"grid":[{
+res4_{1__5}_conv2      fstore         10382 ns  0.971x  pcc 0.999763 (>= 0.996) mae 0.37220 max_err 5.0000  -  {"shard_shape":[1, 1, 288, 32],"grid":[{
+res4_{1__5}_conv2      early          10630 ns  0.994x  pcc 0.999763 (>= 0.996) mae 0.37220 max_err 5.0000  -  {"shard_shape":[1, 1, 288, 32],"grid":[{
+res4_{1__5}_conv2      lean           10768 ns  1.007x  pcc 0.999763 (>= 0.996) mae 0.37220 max_err 5.0000  -  {"shard_shape":[1, 1, 288, 32],"grid":[{

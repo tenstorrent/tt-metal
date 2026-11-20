@@ -2168,3 +2168,153 @@ All 3x3 layers of one Panoptic inference: 1120 -> 1109 us (-1.0%). At or above 7
 | `TensorAccessor` (sharded page -> NoC address) in the BLOCK fill | capability | No precomputed-run form (as in Perf 12's kw-fold fill): the device plan resolved owner and page runs per call, ~0.4 us before the first read and ~0.27 us of RISC time per 4-row batch on a fill-critical writer. The host passes (owner x / y, offset, slab row, rows) runs instead. | 12459 (res4.0, device-planned split) | 11266 | conv2d_3x3_reader.cpp:858 (`CONV2D_3X3_HOST_FILL`), conv2d_3x3_writer.cpp:822 (`hf_serve`) |
 
 The kw-fold round-0 wait reuses the existing raw polling receive (Perf 9 bypass: `ReceiverPipe::receive` has no polling form) and the server protocol's raw semaphore flags (Perf 6); no new helper gap. The partials change uses the helper (`caller_owns_pack_target`).
+
+## Perf 14
+- Date: 2026-11-20
+- Scope: perf tournament (run round 3 of 4) on the 22 `[perf]` LOOSE cases (LoFi, fp32 DEST, bf8_b activation and weights except stem.conv1, bias + ReLU except aspp.convs.3, pinned shard grids). Goal: >= 70% compute utilization against an ideal on 110 cores. No SUPPORTED change. Base `1a04504f992` (end of Perf 13). Board: Blackhole p150b, 11x10 = 110 cores, AICLK 1350 MHz. DEVICE KERNEL DURATION.
+- Outcome: 6 ideas floated (cap 6), 5 graduated, 1 NULL.
+  - All 3x3 layers of one inference: 1109 -> 1080 us (-2.6%; whole perf file, 3 alternating pairs).
+  - res4.0 -10.6% (11.13 -> 9.94 us), res4.x -10.3% (10.61 -> 9.51), aspp.convs.1 -7.5% (47.85 -> 44.24), res2 / res3.x -5.7%, center_head.1 -3.3%, aspp.convs.3 -3.3%, res5.1 -2.8%.
+  - **aspp.convs.1 crosses 70%** (66% -> 72%). aspp.convs.3 is now at 83%.
+  - All 22 focus cases are bit-identical to the base.
+- Instrumentation: the Perf 1-13 zones are kept; no zone was added or removed. The new paths run inside existing zones: the ring k-steps in `compute_matmul_walk`, the spread rounds in `writer_weight_fetch`, the partner server in the `server_*` zones, the balanced fill in `reader_fill` / `writer_fill`. One zone location was moved: after clang-format re-wrapped a writer line, `writer_weight_fetch`'s source location hashed onto the firmware's `PROFILER-NOC-FLUSH` (`22f444dd244`).
+- Ablation hooks, scripts, raw results: `perf_experiments/ablation_r14/`.
+  - `ablation_hooks.patch` is the round-13 patch re-cut for `1a04504f992`. It adds stubs that patch lacked: the host-planned BLOCK fill on both RISCs (`fill`), the N-slice round 0 and spare relay, and the kw-fold round-0 wait (`weights`).
+  - Not covered: the slab-direct NoC0 round 0 (stem.conv1's `weights` stub leaves it running). For the next round, the `matmul` stub must also skip the new `ring_ksteps` branch.
+  - `startup.py` and `start_spread.py` measure the kernel-start spread (below). The bit-exact gate (final vs base, all 22) is `merge_gates/test_focus_exact.py`.
+
+### Measured breakdown (before, zoned, us)
+DM-first cumulative peel on `1a04504f992`: full > gather > fill > weights > scatter > untilize > tilize > matmul (everything stubbed). "mm only", "fill only" and "weights only" stub that one stage. All 22 cases are in `ablation_r14/peel_results.txt`; zones are in `zones_full.txt` (base), `zones_dm.txt` (all DM stubbed) and `zones_all.txt` (everything stubbed).
+
+| case | full | -gather | -fill | -weights | -scatter | -untilize | -tilize | -matmul | mm only | fill only | weights only |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| stem.conv2 | 27.6 | 27.6 | 27.4 | 26.4 | 26.3 | 26.3 | 26.3 | 19.5 | 19.6 | 27.5 | 27.0 |
+| stem.conv3 | 48.1 | 48.0 | 48.1 | 45.8 | 45.8 | 45.8 | 45.8 | 36.6 | 39.2 | 48.0 | 47.2 |
+| res2 | 10.2 | 10.5 | 10.3 | 9.4 | 9.4 | 9.5 | 9.4 | 7.1 | 7.6 | 10.2 | 9.9 |
+| res3.0 | 13.2 | 13.3 | 12.1 | 11.8 | 11.9 | 11.8 | 9.1 | 3.8 | 9.6 | 12.0 | 13.1 |
+| res3.x | 10.4 | 10.5 | 10.2 | 8.7 | 8.7 | 8.8 | 8.8 | 5.7 | 8.6 | 10.1 | 8.9 |
+| res4.0 | 11.5 | 11.4 | 10.9 | 10.5 | 10.4 | 10.5 | 9.2 | 5.6 | 10.0 | 10.9 | 11.2 |
+| res4.x | 11.0 | 10.9 | 10.8 | 9.8 | 9.8 | 9.8 | 9.5 | 6.2 | 9.8 | 10.7 | 10.3 |
+| res5.0 | 26.0 | 26.1 | 25.7 | 25.0 | 24.9 | 25.0 | 23.9 | 8.0 | 18.4 | 25.7 | 26.2 |
+| aspp.convs.1 | 48.0 | 48.2 | 45.3 | 45.0 | 44.9 | 44.9 | 40.5 | 8.6 | 31.4 | 45.4 | 48.1 |
+| aspp.convs.2 | 42.2 | 42.3 | 39.8 | 39.0 | 38.8 | 38.8 | 35.9 | 9.0 | 30.9 | 39.8 | 42.4 |
+| sem dec res3 fc0 | 35.1 | 34.8 | 34.6 | 32.4 | 32.4 | 32.4 | 32.6 | 12.6 | 19.3 | 34.8 | 33.4 |
+| inst res2 fc1 | 24.2 | 24.1 | 24.2 | 22.8 | 22.8 | 22.8 | 22.8 | 10.9 | 10.8 | 24.2 | 23.6 |
+| center_head.1 | 9.7 | 9.7 | 9.3 | 8.8 | 8.8 | 8.8 | 8.8 | 5.1 | 6.8 | 9.3 | 9.8 |
+
+Ranked by gap to target x calls (Perf 13 final, us per inference): res4.x 24.3, res3.x 16.4, decoder res3 layers 16.0 (three layers), res2 12.4, stem.conv1 8.7, res5.x 8.3, res3.0 7.3, center_head.1 7.0, res4.0 5.5, aspp.convs.1 4.7.
+1. **Weight delivery on the server-fed HEIGHT layers.** The fill + weights to weights-stubbed step removes 0.5-2.3 us from every kw-fold layer (res3.x -1.5, sem dec res3 fc0 -2.2, inst dec res3 fc0 -2.1, stem.conv3 -2.3, sem res2 fc1 -1.7, inst res2 fc1 -1.4, res2 -0.9). That is ~31 us per inference, the largest single lever.
+   - On res3.x, compute waited ~1.4 us for round 0's three kernel-row chunks (`compute_kwf_chunk_wait` p50 1.41).
+   - Server timeline: DRAM read of the 52 KB round 0.40-1.81 us, sends 1.18-2.21, flush to 2.72; receivers saw the chunks at ~2.2, 2.7 and 3.3 us.
+2. **res4.x: walk co-paced by the column stream, then a ~1.1 us tail.** Critical core: prelude to 2.4-2.7, 8 steps at ~0.9 us to 9.9 (round fetches 0.8-1.2 us each), combine 9.9-10.4, store to 10.8, end 11.0. Weights stub -1.0 us, mm-only stub -1.2, everything stubbed 6.2 (ring + store skeleton). Every N-slice layer ends the same way: ~1 us from walk end to kernel end.
+3. **kw-fold walk at narrow n-groups.** With all DM stubbed, the walk ran 7.0 us for 360 tile-MACs (~26 cycles each) on center_head.1 (gw 1) and res2 (gw 2), against ~18.5 on the wide layers (inst res2 fc1, sem dec res3 fc0). The packer alone takes 3.5 us on center_head.1 (not the bound) and 5.2 us on res2 (60 fp32 L1-acc packs at ~117 cycles: co-bound).
+4. **BLOCK fill.** The fill-only stub saves aspp.convs.1 2.7 us, aspp.convs.2 2.4, res5.1 1.4, res5.2 1.3, aspp.convs.3 1.0. On aspp.convs.1's critical core the reader fill runs 1.2-6.6 us and the tap build (gated by it) to 11.1, before a 36 us walk at the 16-cycle FPU floor.
+5. **Kernel-start spread (not op-controlled).** DEVICE KERNEL DURATION counts each critical core's start offset. It is 0.13-0.46 us per case, 7.2 us over the 22 cases (`start_spread.py`).
+   - The pattern is fixed by core position, identical in every run: x = 1-2 cores start ~0.4 us after x = 11, and the launch-message arrival (FW start) shows the same gradient.
+   - It is a clock offset or go-signal latency, not kernel work. Late launch messages for the last kernel groups add ~0.5-0.75 us of prep on a few cores (res4.x's spare rows), off the critical path.
+   - No idea spent.
+
+Roofline gate, as in Perf 8-13: aspp.convs.1/2's walk and the decoder walks are at the floor. Far from it: the start-up items above, res4.x's step, the narrow kw-fold walk.
+
+### Portfolio and verdicts
+Each idea was built and measured in isolation by its own optimizer (`perf_experiments/<slug>/`). Numbers are unzoned medians of 3 alternating runs unless noted.
+
+| idea | verdict | focus result (us, isolated) | domain / notes |
+|---|---|---|---|
+| `server_dual_mcast`: each kw-fold server rectangle fed by two servers on both NoCs | WIN | res3.x 9.753 -> 8.986 | Attribution (zoned): multicast stubbed -0.97 us, server DRAM reads stubbed -0.25. One source pushed round 0 at ~34 GB/s beside the fill. Change: a partner spare core per rectangle reads and multicasts half of every chunk (whole slot rows) on NoC0 while the first server sends the other half on NoC1. Each server writes its own byte lane of the flag word (0x0101 = both halves landed). Receivers ack the first server, which forwards the clearance to the partner. Both servers issue a round's chunks up front. Partners and servers are placed by NoC hops, with paths that cross no receiver rectangle. Rejected: nearest-core placement (11.9 us zoned vs 10.15: the 9-core rectangle's partner routed NoC0 through the 77-core rectangle); partner on the big rectangle only (the small one became critical). Domain: res2 -3.4%, decoder res3 layers -1.4% to -1.6%; center_head.1, sem / inst res2 fc1, decoder res2 layers flat (+0.9% to -0.2%). **Measured regression: res3.0** (non-kw-fold K-blocked walk) +2.0% to +2.7% over 3 options x 3 runs: the first matmul waits for the tilize there, round 0 is hidden, and the partner's NoC0 multicast only slows the reader's NoC0 fill (3.62 -> 3.93 us). No new semaphore (13 of 16 at most). |
+| `nslice_stream_spread`: every BLOCK column weight round in its own slot, read and multicast by its own column member | WIN | res4.x 10.521 -> 10.101 | Attribution: the round period was a serial chain on one sender. A receiver acked round r + 1 only after r landed (~0.2 us); the sender waited for every ack (0.05 -> 0.42 us by round 7); the multicast landed ~0.35 us after its 0.12 us issue; each read's ND `TensorAccessor` arithmetic took ~0.15-0.2 us of RISC time. Change: round 0 from the round-0 reader, round 1 from the column sender, rounds 2+ from the other rows in turn; lookahead 2 (round 1 waits until round 0 landed on its sender); no handshake; one flag semaphore per round; the round's DRAM address from the shard index. Rejected: all 8 rounds read at kernel start (+21% zoned: 64 reads share the DRAM columns' NoC1 links); every round from one reader (+10%; +3.2% with lookahead 2); lookahead 1 (+14% to +18%); 8 slots with the handshake kept (-1.5%: the gain is mostly the handshake). Domain: res4.0 -2.1%, LoFi res4 -3.3%, HiFi4 BLOCK within +-0.3%, res5.1 / 5.2 / aspp.convs.3 flat. res5.0 +1.9% (+0.8% to +2.7% over every run of the variant), inside the band. Inexpressible (handshake stream stays): aspp.convs.1/.2 (8 rounds of 59 KB do not fit L1), one-round streams, ragged rows, the 16-semaphore budget. |
+| `nslice_tail`: cut the N-slice tail (combine + output store) | NULL | best bit-identical option res4.x 10.576 -> 10.448 (-1.2%, flat) | Attribution: the combine (0.51 us on all 104 cores) is pack-bound: fp32 DEST -> bf8_b ~0.075 us per tile, plus 0.10-0.17 us of pack reconfig waiting for the walk's last fp32 pack. Pack-only, 4-tile batches, srcA copy and UnpackToDestFp32 copy measured 0.45-0.54 us. The store issue and flush after the last tile take 0.22-0.39 us, and the write ack at kernel end 0.16 us on spare-column cores. Ceilings (wrong output): no combine -2.4% to -3.0%, no store -3.2%, neither -6.2%. Options, all flat: early-resolved store addresses (-1.2%), combining the first row group under the last group's pack (+0.5%), 4-tile DEST batches (+1.4%), the reader storing on NoC0 (flat). Folding bias / ReLU / format into the owner's last step (reload the incoming partial into DEST) was modelled from these costs at <= 0.05 us net, not bit-identical; not built. Nothing graduated. |
+| `kwf_narrow_walk`: the kw-fold walk at gw <= 2 | WIN (small) | center_head.1 9.096 -> 8.866 | Attribution (DM stubbed): with every pack removed the walk did not move (7.08 vs 7.10 us). The costs were matmul_block's runtime subblock dims (LLK loops and the ct >= rt operand choice resolved per call) and a `matmul_block_init` at every height change (4 -> 2 -> 4), although the BH MOPs depend on the dims only through ct >= rt. Change: compile-time dims per subblock, re-init only where ct >= rt flips, a pass's rows never split 4 + 1 (3 + 2 instead). Walk 7.10 -> 6.50 us. Side finding: here 4 x 1 (in0 streamed via srcB) runs ~20.9 cycles per tile-MAC and 1 x 3 / 1 x 4 ~18.4, against the Perf 3 lesson that orientation does not matter. Rejected: one 1 x 3 pass [Q_1 Q_0 Q_2] per row (+9.5% on the op: it waits for all three rounds, round 2 lands ~2 us after round 0's first chunk; -8% to -10% with the weights stubbed); 1 x 3 for the short rows only (flat to +4%); fused 1 x 2 side rounds at gw 1 (+24%). Domain: res2 -1.9%, stem.conv2 -2.1%, the other kw-fold focus cases -0.9% to +0.5%, HiFi4 HEIGHT kw-fold shapes flat. |
+| `block_fill_balance`: shorten the slowest cores' BLOCK fill | WIN | aspp.convs.1 47.78 -> 45.64 (median over 5 pairs) | Attribution: every response in a column runs along it. The busiest NoC0 column link carried 268 KB (325 KB in columns whose weight-sender row read its higher shards the long way round), against at most 83 KB on NoC1. All batches were in flight at once, so the tap build's first kernel row (5.8 us on the critical core) landed with the rest. Change: (1) per column, the host moves single slab rows between the reader (NoC0) and the writer (NoC1), either way round the column, until link, owner-injection and reader-ejection loads stop improving (busiest link 268 -> ~183 KB against an LP optimum of ~182); spare members' reads count as fixed load and the weight-sender row now splits too; (2) each RISC issues the first kernel row's band alone, the rest once it landed; (3) the reader counts the writer's landings from NoC1's transaction-id counters, so a writer busy with weights never serves the fill. Balance alone -0.7 to -1.6 us, gate alone flat. Rejected: deferred zero block, one-at-a-time first-band batches, reader windows 2-4. Domain: aspp.convs.2 -5.0%, aspp.convs.3 -4.5%, HiFi4 aspp -1.1% to -1.5%; res5.1/5.2, res4.x flat. **Measured regression, excluded:** overlapping kernel-row bands (32x64x128 on 4 slices +7.3%, stride 2 on 4 slices +6.6%, median of 3): the moved rows only add writer hand-over latency. Host balancing costs ~0.2 s per aspp program build (cache miss only). |
+| `nslice_short_row`: the ring step's 1 x 1 short group and per-step re-init | WIN | res4.x 10.426 -> 10.126 (weights stubbed 10.107 -> 8.889) | Attribution (per-group zones, weights stubbed): 4-row group 0.42 us (at the FPU floor), 1-row group 0.275 us (~41 cycles per k-step, unpack-issue-bound), one ~52 ns re-init per step (the 1 x 1 group runs in the other ct >= rt MOP mode). Odd-owner steps ended on the 4-row group, whose pack then waited for its partial. Change (raw LLK): 1-row groups run in the 4 x 1 group's stream-in0 MOP mode with no re-init, and their single in0 tile is unpacked directly. The short group goes last for every owner. Addresses step from one CB lookup per group, with the throttle checked once per group. res5.x's 1 x 2 short group keeps its reuse-in1 order without the MOP or re-init. The recommended option is within ~0.1 us of the no-short-row ceiling (8.855 stubbed). Domain (LoFi): res4.0 -3.8%, res5.0 -4.8%, res5.1 -4.6%, res5.2 -0.9%, aspp.convs.1 -3.2%, .2 -1.3%, .3 -4.6%; HiFi4 BLOCK -2.3% to +0.3%; non-Panoptic ring shapes -3.6% to +0.4%. |
+
+Not floated (cap 6, reason each):
+- **Kernel-start spread**: not op work (above).
+- **kw-fold final pass**: Perf 11 NULL (pack-bound at ~47 cycles per output tile).
+- **stem.conv1 matmul** (~27 cycles per tile-MAC after its weights land, priority 15) and **stride 2** (res3.0 / res4.0, priorities 21-22): lowest priority.
+- **decoder res3 / res3.x on 110 cores**: Perf 12 `kwf_n_planes` NULL; at tile-row granularity 110 cores do not lower rows per core.
+
+### Graduated (one path each, in commit order)
+1. **kw-fold compile-time subblock dims** (`c6203497d5d`). Clean apply; the "not taken" list moved from the kernel comment to this entry.
+2. **Ring step short row** (`f41a671fe6a`). Clean apply.
+3. **Dual-source servers** (`cbdb1086108`). Clean apply. The descriptor comment's placement history was reworded as the reason for the hop metric.
+4. **Spread column stream** (`d2d6573d562`). Applied directly onto (3); the optimizer's 4 bit-exact unit tests went into `test_conv2d_3x3_block_sharded.py`.
+5. **Balanced, gated BLOCK fill** (`2f28f4d31ff`). Merged with `git merge-file` onto (3) and (4); `grad/` == base + patch was checked first.
+   - One writer conflict: the host-fill words now follow the spread stream's 12 round-0 words (`round0_arg + 12` under `NSLICE_SPREAD`), with the patch's gate word and window `static_assert`.
+   - Transaction ids are disjoint: spread reads 2-5, async bias 7, writer fill 8-15 on NoC1, which the reader polls.
+   - 6 unit tests added (one doc-line conflict).
+6. **Zone hash fix** (`22f444dd244`).
+- Experiment files: run logs and profiler CSVs over 500 KB stay on disk, uncommitted (large-file hook). The hooks reformatted the experiment copies (black, clang-format, trailing whitespace) at commit.
+
+Carve-outs, each with the measured reason that earned it:
+- **Dual servers only under kw-fold**: res3.0 (non-kw-fold server walk) measured +2.0% to +2.7% (median of 3, 3 options). The shape is `partners = WEIGHT_SERVER_PARTNERS and kwf and chunk >= 2`; the non-kw-fold server path is the measured exception.
+- **Fill balance + gate only where kernel-row bands are disjoint**: overlapping bands measured +6.6% / +7.3% (medians of 3). The landing-count protocol runs everywhere.
+- **Inexpressible, not guards**: spread stream where its slots or per-round flags do not fit (aspp.convs.1/.2, one-round streams, ragged rows, the semaphore budget); a rectangle without a spare core keeps one server; the balance model skips COL_MAJOR columns (the gate still applies) and assumes the Blackhole NoC grid.
+- **Not carved out** (inside the noise band, no measurement earns a guard):
+  - res5.0's spread stream (+1.9% isolated; -2.0% end to end with the short row);
+  - inst dec res2 fc0 +0.6% (ranges 28.84-28.89 vs 28.99-29.07; its optimizer read +0.5%);
+  - stem.conv1 +1.2% (ranges overlap; none of this round's code runs on slab-direct);
+  - HiFi4 inst_res2_fuse_conv0 +0.5%, stem_conv2 +0.4%, inst_res2_fuse_conv1 +0.3%.
+
+### Precision
+- **All 22 focus cases are bit-identical to `1a04504f992`** (`ablation_r14/merge_gates/test_focus_exact.py`, one process, 0 differing elements on every case).
+- No change touches the precision contract.
+  - The short-row k-steps issue the same tiles and MVMULs in the same order into the same DEST tiles; only the SrcA / SrcB clear order differs.
+  - The kw-fold change keeps the same MACs and pack order.
+  - The rest is data movement and scheduling.
+
+### Whole-op result (unzoned, us; whole perf file, base `1a04504f992` and final `22f444dd244`, mean of 3 alternating; target = t_ideal / 0.7; utilization = t_ideal / measured)
+
+| prio | case | before | after | speedup | target | util before -> after |
+|---|---|---|---|---|---|---|
+| 1 | aspp.convs.3 | 19.83 | 19.18 | 1.03x | 22.7 | 80% -> 83% |
+| 2 | sem res2.fuse_conv.1 + head.{0,1} | 83.64 | 83.09 | 1.01x | 90.8 | 76% -> 76% |
+| 3 | res4.{1..5}.conv2 | 10.61 | 9.51 | 1.12x | 5.7 | 37% -> 42% |
+| 4 | res3.{1,2,3}.conv2 | 9.82 | 9.26 | 1.06x | 5.7 | 40% -> 43% |
+| 5 | stem.conv2 | 27.15 | 26.64 | 1.02x | 22.7 | 59% -> 60% |
+| 6 | aspp.convs.2 | 41.98 | 40.91 | 1.03x | 45.4 | 76% -> 78% |
+| 7 | aspp.convs.1 | 47.85 | 44.24 | 1.08x | 45.4 | 66% -> **72%** |
+| 8 | res2.{0,1,2}.conv2 | 9.76 | 9.20 | 1.06x | 5.7 | 41% -> 43% |
+| 9 | center_head.1 + offset_head.1 | 9.20 | 8.89 | 1.03x | 5.7 | 43% -> 45% |
+| 10 | inst res2.fuse_conv.1 + heads.0 | 23.90 | 23.55 | 1.02x | 22.7 | 66% -> 67% |
+| 11 | stem.conv3 | 47.74 | 47.80 | 1.00x | 45.4 | 67% -> 66% |
+| 12 | sem dec res2.fuse_conv.0 | 92.73 | 92.77 | 1.00x | 102.1 | 77% -> 77% |
+| 13 | sem dec res3.fuse_conv.0 | 34.05 | 33.43 | 1.02x | 28.4 | 58% -> 59% |
+| 14 | sem dec res3.fuse_conv.1 | 28.17 | 27.67 | 1.02x | 22.7 | 56% -> 57% |
+| 15 | stem.conv1 | 9.73 | 9.85 | 0.99x | 1.1 | 8% -> 8% |
+| 16 | inst dec res3.fuse_conv.0 | 18.89 | 18.40 | 1.03x | 14.2 | 53% -> 54% |
+| 17 | inst dec res2.fuse_conv.0 | 28.87 | 29.03 | 0.99x | 28.4 | 69% -> 68% |
+| 18 | res5.2.conv2 | 24.27 | 24.03 | 1.01x | 22.7 | 65% -> 66% |
+| 19 | res5.1.conv2 | 26.04 | 25.32 | 1.03x | 22.7 | 61% -> 63% |
+| 20 | res5.0.conv2 | 26.03 | 25.50 | 1.02x | 22.7 | 61% -> 62% |
+| 21 | res3.0.conv2 | 13.06 | 13.08 | 1.00x | 5.7 | 30% -> 30% |
+| 22 | res4.0.conv2 | 11.13 | 9.94 | 1.12x | 5.7 | 36% -> 40% |
+
+All 3x3 layers of one Panoptic inference: 1109 -> 1080 us (-2.6%). At or above 70%: aspp.convs.3, sem res2 fc1, sem dec res2 fc0, aspp.convs.2, aspp.convs.1 (new). Per-case ranges: `ablation_r14/ab_results.txt`.
+
+### Guard set (whole perf file: 41 shapes plus the 22 focus cases, unzoned, 3 alternating pairs; `ablation_r14/ab_results.txt`)
+- **BLOCK (HiFi4 unless noted).** res4 LoFi -10.3%, res4 -1.9%, res4_0 -1.8%, aspp_convs1 -1.8%, aspp_convs2 -1.2%; flat: res5_2 -0.3%, res5_1 -0.1%, res5_0 +0.1%, aspp_convs3 +0.2%.
+- **HEIGHT (HiFi4).** res3 -0.7%, res2 / inst_res3_fuse_conv0 -0.6%, sem_res3_fuse_conv0 / conv1 -0.3%, center_head1 -0.2%, stem_conv1 -0.1%; flat-positive: stem_conv3 0.0%, sem_res2_fuse_conv0 0.0%, sem_res2_fuse_conv1 +0.1%, res3_0 +0.2%, inst_res2_fuse_conv1 +0.3%, stem_conv2 +0.4%, inst_res2_fuse_conv0 +0.5%.
+- **Interleaved (18 shapes).** -0.9% to +0.5%. No change of this round runs on the interleaved path.
+- **Golden.** `eval/golden_tests/conv2d_3x3/`: 1518 passed, 480 skipped (INVALID), 0 failed, on the final tree.
+- **Unit dir.** 333 / 333 (10 new: 4 spread stream, 6 fill balance). Each graduation was gated on its own files first: kw-fold + HEIGHT 72/72 (1), BLOCK + stride-2 76/76 (2), kw-fold + HEIGHT + stride-2 80/80 (3), BLOCK 72/72 (4), BLOCK 78/78 (5).
+- **`--dev`.** BLOCK, kw-fold, HEIGHT, stride-2 and layouts files 227 / 227 on the final tree.
+
+### Bottleneck now (zoned final, `ablation_r14/zones_final.txt`, `focus.txt`)
+- **res4.x (42%).** Prelude to 2.6-2.9 us; walk 2.6-9.1 still ~0.8 us per step on the critical spare member: the lookahead-2 spread rounds land in pairs, with waits of 1.0-1.6 us on every second round. Then combine 0.5 and store to 9.9; the tail is pack-bound (NULL this round).
+- **Small kw-fold layers (res2 43%, res3.x 43%, center_head.1 45%).** Round 0 is now complete at ~2.2-2.4 us (was 2.6-3.2). res2's side rounds take 4.2 us (pack-bound: fp32 L1-acc Q packs). The final pass takes 0.8-1.3 us.
+- **aspp.convs.1 (72%).** Fill ends at 4.2 us (was 6.6) and the tap build at 8.6-9.3 (was 11.1), before a 35 us walk at the FPU floor.
+- **stem.conv1 (8%), res3.0 (30%), decoder res3 layers (54-59%):** unchanged this round.
+- **Carried flag (upstream):** the kw-fold fill still self-reads the core's own shard rows into its slab (Perf 12-13 notes; skipping them measured no change). This is a completeness note for the sharding refinement, not a perf lever.
+
+### Helper bypasses
+
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `ckernel::matmul_block` / `compute_kernel_lib::matmul_block` | capability | Both pick the MOP mode from ct >= rt, so a 1 x 1 (or 1 x N) group after a 4 x 1 group needs a full `matmul_block_init` every ring step (~52 ns: both threads drain and re-record). Neither can run a k-step in the other mode, keep the CB lookups out of the per-k-step call, or run a 1 x N reuse-in1 group without its MOP. The raw path uses `_llk_unpack_AB_matmul_` / `_llk_math_matmul_` with `reuse_a` fixed false, direct UNPACRs for the 1-row in0 tile, and replayed MVMULs for the wide group. | 10467 (res4.x; weights stubbed 10107) | 10105 (8889) | conv2d_3x3_compute.cpp:433 (justification), :454, :1584 |
+| `dataflow_kernel_lib` `SenderPipe` / `ReceiverPipe` (multicast channel) | capability | One receiver set cannot be fed by two senders on two NoCs with a completion lane per sender, and slot-reuse acks cannot be forwarded to a second sender. The partner's byte-lane flag multicasts and the forwarded acks are plain NoC calls inside the existing raw server protocol (Perf 6 bypass). | 9753 (res3.x, one raw server per rectangle; no helper variant exists for the server protocol) | 8986 | conv2d_3x3_weight_server_writer.cpp:21 |
+| `dataflow_kernel_lib` multicast channel (`SenderPipe::send`) | capability | The channel has one fixed sender and a per-round CONSUMER_READY handshake. The spread stream needs a different sender per round, no handshake, and a flag semaphore per round. | 10521 (res4.x, handshake stream through the channel) | 10101 | conv2d_3x3_writer.cpp:106 (justification), :1685 |
+| `TensorAccessor` (ND-sharded page -> NoC address) for a weight round | capability | No precomputed shard -> bank form: each round's address arithmetic took ~0.15-0.2 us of RISC time on a sender whose rounds are serial. The writer computes bank and offset from the shard index (`get_noc_addr_from_bank_id`) where the descriptor confirms round-robin placement. | (included in the row above) | (included) | conv2d_3x3_writer.cpp:1701 |
+| no helper (cross-RISC NoC read completion) | capability | No helper or API waits for another RISC's NoC reads. The reader polls the writer's NoC1 transaction-id counters (`ncrisc_noc_read_with_transaction_id_flushed(1 - noc_index, ...)`) after the writer publishes its issued count, so a writer busy with weights never has to serve the fill. | not separated (the whole balance + gate change: aspp.convs.1 47780) | 45640 | conv2d_3x3_reader.cpp:870 (justification), :893 |
+
+The kw-fold compile-time dims change still calls `matmul_block` and `matmul_block_init`: no helper is bypassed. Its re-init skip depends on an undocumented property of the BH LLK: the matmul MOPs depend on the subblock dims only through ct >= rt. No API exposes "does this dims change need a re-init", so the skip is written against the LLK (`llk_math_matmul.h`, `llk_unpack_AB_matmul.h`) and noted in conv2d_3x3_kw_fold.hpp's file comment.

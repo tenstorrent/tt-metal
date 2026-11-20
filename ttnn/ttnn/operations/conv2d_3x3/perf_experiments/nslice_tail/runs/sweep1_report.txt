@@ -1,0 +1,47 @@
+# sweep1: grad (HEAD + graduation.patch) vs baseline (HEAD 1a04504f992), unzoned twins, one run each, alternating order.
+# DEVICE KERNEL DURATION [ns] from the run's cpp_device_perf_report.csv (the ops_perf CSV was not produced: the session
+# was stopped during the host-log import; the 18 GB tracy host log was deleted). Outputs: sha equal to baseline on all.
+res4_{1__5}_conv2          baseline      10463 ns    -     pcc 0.999763  bit-identical
+res4_{1__5}_conv2          grad          10621 ns  +1.51%  pcc 0.999763  bit-identical
+res4_0_conv2               grad          11253 ns  +0.73%  pcc 0.999762  bit-identical
+res4_0_conv2               baseline      11171 ns    -     pcc 0.999762  bit-identical
+res5_0_conv2               baseline      26063 ns    -     pcc 0.999760  bit-identical
+res5_0_conv2               grad          25935 ns  -0.49%  pcc 0.999760  bit-identical
+res5_1_conv2               grad          25993 ns  -0.01%  pcc 0.999762  bit-identical
+res5_1_conv2               baseline      25996 ns    -     pcc 0.999762  bit-identical
+res5_2_conv2               baseline      24245 ns    -     pcc 0.999762  bit-identical
+res5_2_conv2               grad          24414 ns  +0.70%  pcc 0.999762  bit-identical
+aspp_convs_1               grad          47825 ns  +1.22%  pcc 0.999763  bit-identical
+aspp_convs_1               baseline      47249 ns    -     pcc 0.999763  bit-identical
+aspp_convs_2               baseline      41814 ns    -     pcc 0.999762  bit-identical
+aspp_convs_2               grad          42064 ns  +0.60%  pcc 0.999762  bit-identical
+aspp_convs_3               grad          19911 ns  +0.72%  pcc 0.999829  bit-identical
+aspp_convs_3               baseline      19769 ns    -     pcc 0.999829  bit-identical
+block:res4_0_conv2         baseline      23047 ns    -     pcc 0.999882  bit-identical
+block:res4_0_conv2         grad          23045 ns  -0.01%  pcc 0.999882  bit-identical
+block:res4_conv2           grad          22171 ns  +0.05%  pcc 0.999883  bit-identical
+block:res4_conv2           baseline      22160 ns    -     pcc 0.999883  bit-identical
+block:res4_conv2_lofi      baseline      10496 ns    -     pcc 0.999765  bit-identical
+block:res4_conv2_lofi      grad          10626 ns  +1.24%  pcc 0.999765  bit-identical
+block:res5_0_conv2         grad          77519 ns  +0.17%  pcc 0.999881  bit-identical
+block:res5_0_conv2         baseline      77389 ns    -     pcc 0.999881  bit-identical
+block:res5_1_conv2         baseline      77458 ns    -     pcc 0.999881  bit-identical
+block:res5_1_conv2         grad          77543 ns  +0.11%  pcc 0.999881  bit-identical
+block:res5_2_conv2         grad          73013 ns  +0.07%  pcc 0.999882  bit-identical
+block:res5_2_conv2         baseline      72963 ns    -     pcc 0.999882  bit-identical
+block:aspp_convs1          baseline     140999 ns    -     pcc 0.999882  bit-identical
+block:aspp_convs1          grad         140995 ns  -0.00%  pcc 0.999882  bit-identical
+block:aspp_convs2          grad         125384 ns  +0.18%  pcc 0.999882  bit-identical
+block:aspp_convs2          baseline     125156 ns    -     pcc 0.999882  bit-identical
+block:aspp_convs3          baseline      50227 ns    -     pcc 0.999912  bit-identical
+block:aspp_convs3          grad          50016 ns  -0.42%  pcc 0.999912  bit-identical
+block:plain_k7             grad           9961 ns  -0.42%  pcc 0.999763  bit-identical
+block:plain_k7             baseline      10003 ns    -     pcc 0.999763  bit-identical
+block:plain_k11_o5         baseline      10884 ns    -     pcc 0.999832  bit-identical
+block:plain_k11_o5         grad          10865 ns  -0.17%  pcc 0.999832  bit-identical
+block:plain_k2_d8          grad           5045 ns  -0.86%  pcc 0.999761  bit-identical
+block:plain_k2_d8          baseline       5089 ns    -     pcc 0.999761  bit-identical
+block:plain_k4             baseline       6721 ns    -     pcc 0.999763  bit-identical
+block:plain_k4             grad           6796 ns  +1.12%  pcc 0.999763  bit-identical
+block:plain_k8_co96        grad           8147 ns  -0.04%  pcc 0.999764  bit-identical
+block:plain_k8_co96        baseline       8150 ns    -     pcc 0.999764  bit-identical
