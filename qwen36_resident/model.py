@@ -538,6 +538,7 @@ class ResidentModel:
         block_tables=None,
         kv_block_size=64,
         rows=False,
+        groups=1,
     ):
         """st: the decode state (State), or one State per user for a batch of len(st) users. More than 8 users
         run as sub-batches of 8, one launch each (the launches share the weights and buffers, each has its
@@ -563,7 +564,10 @@ class ResidentModel:
         rows (multi-user rows mode, kernels/active_rows.hpp): the rows of a launch are independent users, each run
         only when its active bit is set (token_state active=), with the conv history in canonical order; a user's
         arithmetic does not depend on its neighbours. Batch > 1, no verify. With embed, the hub of each launch feeds
-        each active row its own token (mlp_hub.cpp rows mode; per-row sampling parameters, set_sampling rows=)."""
+        each active row its own token (mlp_hub.cpp rows mode; per-row sampling parameters, set_sampling rows=).
+        groups (rows mode, kernels/active_rows.hpp): row groups of `batch` rows that one launch carries, the weights
+        streamed once for all of them (custom_mm takes at most 8 rows, so more users per launch come as groups).
+        Only 1 is implemented so far; anything else raises rather than running as more launches."""
         self.mesh, self.d, self.layers, self.interval, self.lm_head = mesh, d, layers, interval, lm_head
         R = 0 if not verify else (2 if verify is True else int(verify))
         assert R in (0, 2, 4, 8), "verify runs 2, 4 or 8 rows"
@@ -573,6 +577,11 @@ class ResidentModel:
         assert len(self.taps) <= 5
         self.rows = rows
         assert not rows or not verify, "rows mode: independent users"
+        if groups != 1:
+            raise NotImplementedError(
+                f"row groups per launch: groups={groups} (rows={rows}) is not implemented yet; only groups=1 runs"
+            )
+        self.groups = groups
         self.fc = fc is not None
         self.sample = embed is not None and not verify  # the hub draws the fed token (sampling.hpp)
         if verify:
@@ -1244,7 +1253,7 @@ class ResidentModel:
             sems.append(ttnn.SemaphoreDescriptor(id=SEM_GROUP, core_ranges=head_grid, initial_value=0))
 
             # every kernel: multi-user rows mode (active_rows.hpp)
-            common_named = [("rows_mode", int(self.rows)), ("gdn_layers", self.n_gdn)]
+            common_named = [("rows_mode", int(self.rows)), ("gdn_layers", self.n_gdn), ("groups", self.groups)]
 
             def kernel(src, core_ranges, ct, rt, config, named=()):
                 return ttnn.KernelDescriptor(

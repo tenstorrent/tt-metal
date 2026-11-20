@@ -17,6 +17,10 @@
 #include <stdint.h>
 
 constexpr bool rows_mode = get_named_compile_time_arg_val("rows_mode") != 0;
+// row groups of the launch (ResidentModel groups=): groups x batch rows share one weight stream. 1 = one group.
+constexpr uint32_t groups = get_named_compile_time_arg_val("groups");
+static_assert(groups >= 1 && groups <= 4, "a launch carries 1 to 4 row groups");
+static_assert(groups == 1 || rows_mode, "row groups are a rows-mode feature");
 constexpr uint32_t kTokActive = 9;      // token state word: bit u = row u runs this step (rows mode)
 constexpr uint32_t kTokPreserve = 10;   // token state word: 1 = inactive rows hold live state (rows mode)
 constexpr uint32_t kTokHeadBytes = 48;  // token state words 0 .. 11, read at once
