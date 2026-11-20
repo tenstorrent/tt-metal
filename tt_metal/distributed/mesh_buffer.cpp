@@ -495,13 +495,11 @@ void MeshBuffer::deallocate() {
         auto& owned_state = std::get<OwnedBufferState>(state_);
         owned_state.backing_buffer->impl().mark_as_deallocated();
     }
-    // A MeshBuffer that is already deallocated owns nothing: it was freed while its MeshDevice was open, or moved from,
-    // which leaves no MeshDevice and buffers_ in a moved-from state that must not be read.
-    if (!std::holds_alternative<DeallocatedState>(state_)) {
-        for (auto& [coord, device_buffer] : buffers_) {
-            if (device_buffer.is_local() && device_buffer.value() != nullptr) {
-                device_buffer.value()->impl().mark_as_deallocated();
-            }
+    // Also the Buffers that an explicit deallocate() keeps, such as a create_on_single_device() allocation. After a
+    // move, the values are empty, so a moved-from MeshBuffer has none.
+    for (auto& device_buffer : buffers_.values()) {
+        if (device_buffer.is_local() && device_buffer.value() != nullptr) {
+            device_buffer.value()->impl().mark_as_deallocated();
         }
     }
     set_deallocated_state();

@@ -632,6 +632,29 @@ TEST_F(PerCoreAllocationTest, DeviceBuffersShareMeshBufferUniqueId) {
     EXPECT_EQ(single_device->get_device_buffer(coord)->unique_id(), *single_device->unique_id());
 }
 
+// Frees a per-core MeshBuffer of a submesh after the submesh closed while its parent keeps the devices open. The free
+// must still release the allocation on the devices, so that the parent can allocate the same address again.
+TEST_F(PerCoreAllocationTest, ClosedSubmeshFreesPerCoreAllocationOnOpenParent) {
+    auto parent = this->devices_[0];
+    const CoreCoord core(0, 0);
+    ShardSpecBuffer shard_spec(CoreRangeSet(CoreRange(core)), {32, 32}, ShardOrientation::ROW_MAJOR, {32, 32}, {1, 1});
+    auto sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
+    per_core::set_per_core_allocation(sharding_args, true);
+    const distributed::DeviceLocalBufferConfig local_config{
+        .page_size = PAGE_SIZE, .buffer_type = BufferType::L1, .sharding_args = sharding_args};
+    const distributed::ReplicatedBufferConfig buffer_config{.size = PAGE_SIZE};
+    const distributed::MeshCoordinate coord(0, 0);
+
+    auto submesh = parent->create_submesh(distributed::MeshShape(1, 1));
+    auto stale = distributed::MeshBuffer::create(buffer_config, local_config, submesh.get());
+    const DeviceAddr address = per_core::get_per_core_address(*stale, coord, core);
+    submesh->close();
+    stale.reset();
+
+    auto reallocated = distributed::MeshBuffer::create(buffer_config, local_config, parent.get());
+    EXPECT_EQ(per_core::get_per_core_address(*reallocated, coord, core), address);
+}
+
 using OccupiedRangesLockstepModeTest = MeshDeviceSingleCardBufferFixture;
 
 TEST_F(OccupiedRangesLockstepModeTest, OccupiedRangesRequireHybrid) {

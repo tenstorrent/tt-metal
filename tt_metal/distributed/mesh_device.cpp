@@ -384,6 +384,7 @@ MeshDeviceImpl::MeshDeviceImpl(
     metal_context_(&metal_context),
     metal_env_(&MetalEnvAccessor(metal_context_->get_env()).impl()),
     scoped_devices_(std::move(mesh_handle)),
+    scoped_devices_weak_(scoped_devices_),
     mesh_id_(generate_unique_mesh_id()),
     view_(std::move(mesh_device_view)),
     parent_mesh_(std::move(parent_mesh)),
