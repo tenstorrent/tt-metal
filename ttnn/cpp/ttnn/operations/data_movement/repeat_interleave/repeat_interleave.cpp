@@ -6,7 +6,7 @@
 
 #include <tt-metalium/constants.hpp>
 
-#include "ttnn/operations/data_movement/concat/concat.hpp"
+#include "ttnn/operations/data_movement/repeat/repeat.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/repeat_interleave/codegen/repeat_interleave_codegen_device_operation.hpp"
 #include "ttnn/operations/data_movement/repeat_interleave/codegen/repeat_interleave_codegen_supported.hpp"
@@ -23,8 +23,7 @@ namespace ttnn::operations::data_movement::detail {
 namespace {
 
 // repeat interleave supports repeats as 1 to inf, and any dim in [-rank, rank) for a tensor of
-// arbitrary rank >= 2. `dim` is resolved via get_normalized_index (so negative dims are supported),
-// and the last dim is handled by transposing it to the second-to-last position and recursing.
+// arbitrary rank >= 2. `dim` is resolved via get_normalized_index (so negative dims are supported).
 //
 // Named (not anonymous-call-site) so the recursive branches below can recurse into it directly:
 // recursing through the public ttnn::repeat_interleave() would re-enter the routing gate and let a
@@ -117,8 +116,6 @@ Tensor repeat_interleave_native(
         return ttnn::to_memory_config(interleaved_result, requested);
     }
 
-    std::vector<Tensor> combined_tensors;
-    combined_tensors.reserve(repeat);
     MemoryConfig mem_config = output_mem_config.value_or(input_a.memory_config());
     if (repeat == 1) {
         return ttnn::to_memory_config(input_a, mem_config);
@@ -126,6 +123,21 @@ Tensor repeat_interleave_native(
     const auto& input_a_shape = input_a.logical_shape();
     uint32_t input_rank = input_a_shape.rank();
     uint32_t normalized_dim = input_a_shape.get_normalized_index(dim);
+
+    if (input_a_shape[normalized_dim] == 1) {
+        ttsl::SmallVector<uint32_t> repetition_vector(input_rank, 1);
+        repetition_vector[normalized_dim] = repeat;
+        bool typecast = input_a.layout() == Layout::TILE &&
+                        (input_a.dtype() == DataType::UINT8 || input_a.dtype() == DataType::BFLOAT4_B ||
+                         input_a.dtype() == DataType::BFLOAT8_B);
+        if (typecast) {
+            auto casted = ttnn::typecast(input_a, DataType::BFLOAT16, mem_config);
+            auto repeated = ttnn::repeat(casted, repetition_vector, mem_config);
+            return ttnn::typecast(repeated, input_a.dtype(), mem_config);
+        }
+        return ttnn::repeat(input_a, repetition_vector, mem_config);
+    }
+
     if (normalized_dim == input_rank - 1) {
         ttnn::Tensor transpose_input = input_a;
         bool typecast = input_a.dtype() == DataType::UINT8;
@@ -140,8 +152,8 @@ Tensor repeat_interleave_native(
         return typecast ? ttnn::typecast(result, input_a.dtype(), mem_config) : result;
     }
 
-    // This op is composed of unsqueeze -> concat -> reshape, which are run in ROW_MAJOR layout below so that
-    // the concat dimension is not subject to tile (32x32) padding. BFLOAT8_B/BFLOAT4_B/UINT8 cannot be laid out
+    // This op is composed of unsqueeze -> repeat -> reshape, which are run in ROW_MAJOR layout below so that
+    // the replicated dimension is not subject to tile (32x32) padding. BFLOAT8_B/BFLOAT4_B/UINT8 cannot be laid out
     // in ROW_MAJOR (block-float formats are TILE-only; UINT8 reshape is unsupported), so they are typecast up to
     // BFLOAT16 for the duration of the op and cast back to the original dtype at the end. The bf16 round-trip is
     // numerically lossless for these formats. A pure TILE-preserving path works for BFLOAT16/BFLOAT8_B but fails
@@ -166,22 +178,10 @@ Tensor repeat_interleave_native(
     final_shape[normalized_dim] *= repeat;
 
     auto unsqueezed_tensor = ttnn::unsqueeze(rm_input, normalized_dim + 1);
-    std::vector<Tensor> combined_tensors_batch;
-    constexpr uint32_t repeats_batched = 32;
-    combined_tensors_batch.reserve(std::min(repeat, repeats_batched));
-    for (uint32_t i = 0; i < repeat; i++) {
-        combined_tensors_batch.push_back(unsqueezed_tensor);
-
-        // Concatenate every 32 tensors or at the end of the loop
-        if (combined_tensors_batch.size() == repeats_batched || i == repeat - 1) {
-            auto batch_concat = ttnn::concat(combined_tensors_batch, normalized_dim + 1);
-            combined_tensors.push_back(batch_concat);
-            combined_tensors_batch.clear();
-        }
-    }
-
-    auto concatenated_tensor = ttnn::concat(combined_tensors, normalized_dim + 1);
-    auto reshaped_tensor = ttnn::reshape(concatenated_tensor, ttnn::Shape(final_shape));
+    ttsl::SmallVector<uint32_t> repetition_vector(input_rank + 1, 1);
+    repetition_vector[normalized_dim + 1] = repeat;
+    auto repeated_tensor = ttnn::repeat(unsqueezed_tensor, repetition_vector);
+    auto reshaped_tensor = ttnn::reshape(repeated_tensor, ttnn::Shape(final_shape));
     auto original_layout = ttnn::to_layout(reshaped_tensor, input_a.layout());
     return typecast ? ttnn::typecast(original_layout, input_a.dtype(), mem_config)
                     : ttnn::to_memory_config(original_layout, mem_config);
