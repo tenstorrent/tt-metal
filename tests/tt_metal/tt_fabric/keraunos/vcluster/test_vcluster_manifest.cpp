@@ -240,12 +240,38 @@ TEST(VclusterManifest, IdleSlot) {
 
 // --- Stage A: row 1, reported alone ------------------------------------------------------------------------------
 
-// Row 1: `cce` 1. (0, 1) is no core either (row 2), and its worker has no router on hart 0 (row 6): stage A ends the
-// check, so only row 1 is reported.
+// Row 1: a worker on `cce` 1. (0, 1) is no core either (row 2), and its worker has no router on hart 0 (row 6): stage A
+// ends the check, so only row 1 is reported.
 TEST(VclusterManifest, Row1Cce1) {
     EXPECT_EQ(
         rows(edit({{"{tile: 0, cce: 0, hart: 1, role: worker}", "{tile: 0, cce: 1, hart: 1, role: worker}"}})),
         Rows{1});
+}
+
+// Row 1: a router on `cce` 1.
+TEST(VclusterManifest, Row1RouterOnCce1) {
+    EXPECT_EQ(
+        rows(edit(
+            {{"{tile: 0, cce: 0, hart: 0, role: router, port: 0}",
+              "{tile: 0, cce: 1, hart: 0, role: router, port: 0}"}})),
+        Rows{1});
+}
+
+// `cce` 1 takes an idle slot: CCE1 of A's router tile, with its region, on a package that has that core.
+TEST(VclusterManifest, IdleSlotOnCce1) {
+    PackageFacts facts = mmk();
+    facts.cores.push_back({0, 1});
+    EXPECT_EQ(
+        rows(
+            edit(
+                {{"      - {tile: 0, cce: 0, hart: 1, role: worker}\n",
+                  "      - {tile: 0, cce: 0, hart: 1, role: worker}\n"
+                  "      - {tile: 0, cce: 1, hart: 0, role: idle, port: 1}\n"},
+                 {"      - {tile: 0, cce: 0, base: 0x0, size: 0x400000}\n",
+                  "      - {tile: 0, cce: 0, base: 0x0, size: 0x400000}\n"
+                  "      - {tile: 0, cce: 1, base: 0x0, size: 0x400000}\n"}}),
+            facts),
+        Rows{});
 }
 
 // Row 1: a router on a hart other than 0. A's worker then has no router on hart 0 (row 6); stage A ends the check.

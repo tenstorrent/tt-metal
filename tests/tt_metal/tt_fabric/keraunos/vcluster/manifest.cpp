@@ -27,9 +27,10 @@ ManifestLoadError::ManifestLoadError(std::vector<std::string> errors) :
 namespace {
 
 constexpr uint32_t kManifestVersion = 1;
-// Phase 2 values (SPEC-0011 § Manifest): routers on hart 0 of CCE0; CCE1 is reserved for Phase 3.
+// Supported values: routers on hart 0 of CCE0. CCE1 takes idle slots only: a router is built for
+// CCE0, and a worker slot is a hart of a router's CCE.
 constexpr uint32_t kRouterHart = 0;
-constexpr uint32_t kReservedCce = 1;
+constexpr uint32_t kIdleOnlyCce = 1;
 
 // Load errors, collected so that one ManifestLoadError lists them all.
 using Errors = std::vector<std::string>;
@@ -306,10 +307,10 @@ void check_reserved_values(const Manifest& manifest, const PackageFacts& facts, 
     for (const Device& device : manifest.devices) {
         for (std::size_t i = 0; i < device.slots.size(); i++) {
             const Slot& slot = device.slots[i];
-            if (slot.cce == kReservedCce) {
+            if (slot.cce == kIdleOnlyCce && slot.role != SlotRole::Idle) {
                 findings.push_back(
                     {ManifestCheck::ReservedValue,
-                     fmt::format("{}: cce {} is reserved for Phase 3", slot_label(device, i), slot.cce)});
+                     fmt::format("{}: cce {} takes idle slots only", slot_label(device, i), slot.cce)});
             }
             if (slot.role != SlotRole::Worker && slot.hart != kRouterHart) {
                 findings.push_back(
@@ -322,11 +323,6 @@ void check_reserved_values(const Manifest& manifest, const PackageFacts& facts, 
         }
         for (std::size_t i = 0; i < device.regions.size(); i++) {
             const Region& region = device.regions[i];
-            if (region.cce == kReservedCce) {
-                findings.push_back(
-                    {ManifestCheck::ReservedValue,
-                     fmt::format("{}: cce {} is reserved for Phase 3", region_label(device, i), region.cce)});
-            }
             const bool whole = region.base == 0 && region.size == facts.sram_bytes_per_cce;
             if (!whole && !beyond_sram(region, facts.sram_bytes_per_cce)) {
                 findings.push_back(
