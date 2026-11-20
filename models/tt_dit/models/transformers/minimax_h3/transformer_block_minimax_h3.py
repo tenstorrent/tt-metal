@@ -144,6 +144,10 @@ class MiniMaxH3TransformerBlock(Module):
             dynamic_length=dynamic_length,
             norm_row_capacity=norm_row_capacity,
             agmm_mode=agmm_mode,
+            # Pruned (10Eros) checkpoints run the ring QK^T / softmax @ V matmuls at LoFi unless
+            # MINIMAX_H3_SDPA_MM_FIDELITY says otherwise: theirs is the only output checked at LoFi (slightly
+            # softer fine detail for ~16% less denoise time per step). The other checkpoints keep HiFi2.
+            sdpa_matmul_fidelity=ttnn.MathFidelity.LoFi if adaln_curve else None,
         )
         self.norm2 = DistributedRMSNorm(
             embedding_dim=hidden_size,

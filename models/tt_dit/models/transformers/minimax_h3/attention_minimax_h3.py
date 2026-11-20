@@ -119,6 +119,7 @@ class MiniMaxH3Attention(Module):
         dynamic_length: bool = False,
         norm_row_capacity: int | None = None,
         agmm_mode: AgmmMode | str | None = None,
+        sdpa_matmul_fidelity: ttnn.MathFidelity | None = None,
     ) -> None:
         """`dynamic_length` freezes every length-keyed choice at construction (one program per op for every
         length); `norm_row_capacity` (per-device rows) sizes the fused QK norms' program on that path, and
@@ -210,9 +211,9 @@ class MiniMaxH3Attention(Module):
         self.full_grid = full_grid
         self.sdpa_worker_grid = (full_grid.x - 1, full_grid.y)  # reserve last column for CCL
         self._sdpa_program_configs: dict[tuple[int, bool, bool], ttnn.SDPAProgramConfig] = {}
-        # QK^T and softmax @ V fidelity; unset keeps the op's HiFi2. Only the ring joint SDPA path honours it:
-        # the exp ring path does not pass it.
-        self.sdpa_matmul_fidelity = math_fidelity_from_env("MINIMAX_H3_SDPA_MM_FIDELITY")
+        # QK^T and softmax @ V fidelity: the env flag, else the caller's `sdpa_matmul_fidelity` (None keeps the
+        # op's HiFi2). Only the ring joint SDPA path honours it: the exp ring path does not pass it.
+        self.sdpa_matmul_fidelity = math_fidelity_from_env("MINIMAX_H3_SDPA_MM_FIDELITY", sdpa_matmul_fidelity)
 
         # Dynamic-length pins per length class, resolved once: no table scan and no orientation flip per call.
         self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(

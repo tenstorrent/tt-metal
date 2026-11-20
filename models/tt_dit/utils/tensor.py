@@ -1144,10 +1144,10 @@ def prepare_weight_for_concatenated_input(
     return torch.cat(padded_segments, dim=2).flatten(1, 2)
 
 
-def math_fidelity_from_env(var: str) -> ttnn.MathFidelity | None:
-    """Env variable `var` as a ttnn.MathFidelity (LoFi, HiFi2, HiFi3 or HiFi4, any case); None when unset."""
+def math_fidelity_from_env(var: str, default: ttnn.MathFidelity | None = None) -> ttnn.MathFidelity | None:
+    """Env variable `var` as a ttnn.MathFidelity (LoFi, HiFi2, HiFi3 or HiFi4, any case); `default` when unset."""
     name = os.environ.get(var, "").lower()
     names = {"lofi": "LoFi", "hifi2": "HiFi2", "hifi3": "HiFi3", "hifi4": "HiFi4"}
     if name and name not in names:
         raise ValueError(f"{var} must be LoFi, HiFi2, HiFi3 or HiFi4 (got {name!r})")
-    return getattr(ttnn.MathFidelity, names[name]) if name else None
+    return getattr(ttnn.MathFidelity, names[name]) if name else default
