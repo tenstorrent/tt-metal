@@ -267,3 +267,6 @@ def error_out_if_test_report_has_failures(test_report):
 
 
 # Device helpers to be shared with top-level conftest.py and other conftest.py files that will handle open/close of devices.
+# ltx-rt: ltx-server opens its mesh with tests.scripts.common.get_updated_device_params; tt-metal main moved it to
+# tt_py_test_utils_common (#64223). Keep the old path so every deployed ltx-server release still opens the device.
+from tt_py_test_utils_common.device_params import get_updated_device_params  # noqa: F401,E402
