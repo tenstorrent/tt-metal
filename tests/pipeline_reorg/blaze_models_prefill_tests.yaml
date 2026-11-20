@@ -870,8 +870,8 @@
         export OMP_NUM_THREADS=$(nproc)
         models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 600 models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py
         models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 300 tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py -k "not perf"
-        # CCL perf gates of the carve: the whole-mesh high_bw_all_gather bandwidth floors, and the sparse KV push's plan,
-        # table gather and push ceilings at a stage's 1M cache.
+        # CCL perf gates of the carve: the whole-mesh high_bw_all_gather bandwidth floors, and the sparse KV push plan,
+        # table gather and push ceilings at the 1M cache of a stage.
         models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 600 --expect 1 tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py -k perf
         models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 900 --expect 3 tests/ttnn/unit_tests/operations/experimental/test_sparse_kv_push.py -k perf
       '
