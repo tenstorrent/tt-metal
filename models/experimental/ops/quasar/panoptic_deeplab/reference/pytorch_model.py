@@ -29,6 +29,28 @@ PANOPTIC_DEEPLAB = "panoptic_deeplab"
 DEEPLAB_V3_PLUS = "deeplab_v3_plus"
 
 
+# The Detectron2 checkpoint is a third-party .pkl (dict of NumPy arrays), so it cannot be swapped for JSON.
+# Unrestricted pickle.load can execute arbitrary code, so deserialize with an allowlist of the globals that
+# plain NumPy arrays need and reject everything else.
+_ALLOWED_PICKLE_GLOBALS = {
+    ("numpy", "ndarray"),
+    ("numpy", "dtype"),
+    ("numpy.core.multiarray", "_reconstruct"),
+    ("numpy.core.multiarray", "scalar"),
+    ("numpy._core.multiarray", "_reconstruct"),
+    ("numpy._core.multiarray", "scalar"),
+    ("collections", "OrderedDict"),
+    ("_codecs", "encode"),  # bytes round-trip emitted by protocol<=2 pickles of ndarray data
+}
+
+
+class _RestrictedUnpickler(pickle.Unpickler):
+    def find_class(self, module, name):
+        if (module, name) in _ALLOWED_PICKLE_GLOBALS:
+            return super().find_class(module, name)
+        raise pickle.UnpicklingError(f"Forbidden global in weights file: {module}.{name}")
+
+
 class PytorchPanopticDeepLab(nn.Module):
     """
     Complete PyTorch implementation of Panoptic-DeepLab model for PCC comparison.
@@ -144,7 +166,7 @@ class PytorchPanopticDeepLab(nn.Module):
         logger.info(f"Loading complete model weights from {weights_path}")
         try:
             with open(weights_path, "rb") as f:
-                state_dict = pickle.load(f)
+                state_dict = _RestrictedUnpickler(f, encoding="latin1").load()
             # Check if the state_dict is under the "model" key
             if "model" in state_dict:
                 state_dict = state_dict["model"]
