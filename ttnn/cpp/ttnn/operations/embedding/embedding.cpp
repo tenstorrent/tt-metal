@@ -6,6 +6,7 @@
 
 #include <utility>
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "device/embedding_device_operation.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
@@ -27,11 +28,10 @@ ttnn::Tensor embedding(
     if (pad_token.has_value()) {
         embeddings_type = ttnn::prim::EmbeddingsType::PADDED;
     }
-    // A TILE weight is untilized before the lookup and a BFLOAT8_B one comes out as BFLOAT16, which is
-    // the dtype a ROW_MAJOR output will actually have.
-    const auto row_major_output_dtype = weight_arg.layout() == ttnn::TILE_LAYOUT &&
-                                                weight_arg.dtype() == DataType::BFLOAT8_B
-                                            ? DataType::BFLOAT16
+    // A TILE weight is untilized before the lookup, which turns BFLOAT8_B into BFLOAT16: that is the dtype a
+    // ROW_MAJOR output will actually have.
+    const auto row_major_output_dtype = weight_arg.layout() == ttnn::TILE_LAYOUT
+                                            ? operations::data_movement::untilize_output_dtype(weight_arg.dtype())
                                             : weight_arg.dtype();
     TT_FATAL(
         layout.value_or(weight_arg.layout()) == ttnn::TILE_LAYOUT || !dtype.has_value() ||
