@@ -5,8 +5,10 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <unordered_set>
 #include <vector>
 
@@ -35,6 +37,10 @@ public:
     void teardown(std::unordered_set<InitializerKey>& init_done) override;
     void post_teardown() override;
     bool is_initialized() const override;
+
+    // Signal fabric tensix muxes and master routers to terminate and wait until all active routers
+    // report EDMStatus::TERMINATED (bounded by `deadline` when engaged). Returns false on timeout.
+    bool quiesce_fabric(std::optional<std::chrono::steady_clock::time_point> deadline);
 
 private:
     // Compile fabric on all devices, parallelized via async.

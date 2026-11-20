@@ -99,6 +99,11 @@ public:
     // Sets the HAL to be used for this Cluster
     void set_hal(const tt_metal::Hal* hal);
 
+    // Suppresses UMD close_device() (clock state change, RISC reset MMIO, and sysmem unmap) during ~Cluster() on
+    // silicon after quiesce_for_soft_reset(), preserving zero post-quiesce NOC2AXI activity and keeping DMA pages
+    // pinned until process exit if quiesce timed out.
+    void set_skip_driver_close_on_destroy(bool skip) noexcept { skip_driver_close_on_destroy_ = skip; }
+
     // TODO: UMD will eventually consolidate ethernet coordinates and unique ids, we can remove the ethernet coord
     // getter after that change is in
     const std::unordered_map<ChipId, uint64_t>& get_unique_chip_ids() const {
@@ -461,6 +466,7 @@ private:
     // Cached device-read-only pinning support. Reading the KMD version parses sysfs, and this is queried once per
     // tensor shard on the transfer path, so it must not be recomputed per call.
     bool read_only_page_pinning_supported_ = false;
+    bool skip_driver_close_on_destroy_ = false;
 
     // There is an entry for every device that can be targeted (MMIO and remote)
     std::unordered_map<ChipId, metal_SocDescriptor> sdesc_per_chip_;

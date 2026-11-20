@@ -233,6 +233,17 @@ public:
     bool l1_ecc_halt_detected() const { return l1_ecc_halt_detected_.load(std::memory_order_acquire); }
     void set_l1_ecc_halt_detected(bool detected) { l1_ecc_halt_detected_.store(detected, std::memory_order_release); }
 
+    enum class QuiesceContextState : uint8_t {
+        None,
+        QuiescedForSoftReset,
+        QuiesceTimedOut,
+    };
+
+    QuiesceContextState quiesce_context_state() const { return quiesce_context_state_.load(std::memory_order_acquire); }
+    void set_quiesce_context_state(QuiesceContextState state);
+    bool skip_hw_teardown_after_quiesce() const { return quiesce_context_state() != QuiesceContextState::None; }
+    void detach_debug_servers_for_quiesce();
+
 private:
     friend class ttsl::Indestructible<MetalContext>;
 
@@ -275,6 +286,7 @@ private:
     bool dispatch_timeout_detection_processed_ = false;
 
     std::atomic<bool> l1_ecc_halt_detected_{false};
+    std::atomic<QuiesceContextState> quiesce_context_state_{QuiesceContextState::None};
 
     // The MetalEnv is normally owned by the user
     // For the legacy code, we will initialize it in the MetalContext constructor and own the env

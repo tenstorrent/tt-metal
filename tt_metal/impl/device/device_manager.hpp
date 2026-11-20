@@ -5,9 +5,11 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -60,6 +62,7 @@ public:
     void reset_dispatch_topology();
     const std::unordered_set<CoreCoord>& get_virtual_dispatch_cores(ChipId dev_id) const;
     const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(ChipId dev_id) const;
+    bool quiesce_fabric(std::optional<std::chrono::steady_clock::time_point> deadline);
 
     // Per-chip: mesh RT-profiler init pass finished for this chip (ineligible skip, socket skip, or kernels launched).
     // Cleared when the device is closed via DeviceManager. Used so low-level code can query without MeshDevice.

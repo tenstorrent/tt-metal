@@ -239,6 +239,11 @@ public:
     virtual void finish_and_reset_in_use() {}
     // Rethrows an exception stored by the completion-queue reader thread, if any.
     virtual void throw_if_reader_failed() {}
+
+    // Quiesce support: stop background completion-queue reader thread (preventing further rd_ptr MMIO writes)
+    // and query cumulative program command sequences enqueued to a physical device on this CQ.
+    virtual void stop_completion_queue_reader_for_quiesce() {}
+    virtual uint32_t enqueued_program_seq_count_for_device(ChipId /*device_id*/) const { return 0; }
 };
 
 }  // namespace tt::tt_metal::distributed

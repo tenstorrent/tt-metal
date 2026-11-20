@@ -243,6 +243,10 @@ private:
     // When the open transfer's start event completed. Set and read only by the completion queue reader.
     std::chrono::steady_clock::time_point transfer_stats_start_;
 
+    // Per-device count of program command sequences committed to fetch_q / replayed via exec_buf on this CQ.
+    // Guarded by lock_api_function_().
+    std::unordered_map<ChipId, uint32_t> enqueued_program_seq_count_per_device_;
+
 protected:
     void begin_transfer_stats(
         HostTransferCategory category,
@@ -366,6 +370,8 @@ public:
     void finish_and_reset_in_use() override;
     void throw_if_reader_failed() override;
     bool in_use() override { return in_use_.load(); }
+    void stop_completion_queue_reader_for_quiesce() override;
+    uint32_t enqueued_program_seq_count_for_device(ChipId device_id) const override;
 };
 
 }  // namespace tt::tt_metal::distributed

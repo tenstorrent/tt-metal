@@ -84,7 +84,8 @@ void ProfilerInitializer::teardown(std::unordered_set<InitializerKey>& init_done
     TT_FATAL(
         !init_done.contains(InitializerKey::Fabric),
         "ProfilerInitializer must be torn down after FabricFirmwareInitializer");
-    if (getDeviceProfilerState(descriptor_->env_impl())) {
+    if (getDeviceProfilerState(descriptor_->env_impl()) &&
+        !descriptor_->metal_context().skip_hw_teardown_after_quiesce()) {
         // Read profiler results from dispatch cores
         for (auto* dev : devices_) {
             TT_ASSERT(dev != nullptr, "Device is nullptr");

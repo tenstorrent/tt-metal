@@ -629,7 +629,9 @@ bool Device::close() {
         TT_THROW("Cannot close device {} that has not been initialized!", this->id_);
     }
 
-    this->invalidate_smc_dispatch_telemetry_control();
+    if (!context_->skip_hw_teardown_after_quiesce()) {
+        this->invalidate_smc_dispatch_telemetry_control();
+    }
 
     tt::tt_metal::MetalContext::instance(this->get_context_id())
         .get_service_core_manager()

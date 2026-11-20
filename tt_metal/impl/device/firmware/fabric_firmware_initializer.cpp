@@ -390,7 +390,8 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
         init_done.erase(key);
         return;
     }
-    if (!has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::TERMINATE_FABRIC)) {
+    if (!has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::TERMINATE_FABRIC) ||
+        descriptor_->metal_context().skip_hw_teardown_after_quiesce()) {
         reset_state(init_done);
         return;
     }
@@ -446,6 +447,77 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
     }
 
     reset_state(init_done);
+}
+
+bool FabricFirmwareInitializer::quiesce_fabric(std::optional<std::chrono::steady_clock::time_point> deadline) {
+    if (!is_initialized() || descriptor_->is_mock_device() || skip_fabric_fw_for_emule(cluster_) || devices_.empty()) {
+        return true;
+    }
+    if (!tt_fabric::is_tt_fabric_config(descriptor_->fabric_config())) {
+        return true;
+    }
+
+    const auto& fabric_context = control_plane_.get_fabric_context();
+    const auto& builder_ctx = fabric_context.get_builder_context();
+    auto [termination_signal_address, signal] = builder_ctx.get_fabric_router_termination_address_and_signal();
+    std::vector<uint32_t> termination_signal(1, signal);
+
+    if (descriptor_->fabric_tensix_config() != tt::tt_fabric::FabricTensixConfig::DISABLED) {
+        const auto& tensix_config = builder_ctx.get_tensix_config();
+        for (auto* dev : devices_) {
+            if (builder_ctx.get_num_fabric_initialized_routers(dev->id()) == 0) {
+                continue;
+            }
+            const auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
+            const auto& active_fabric_eth_channels = control_plane_.get_active_fabric_eth_channels(fabric_node_id);
+            for (const auto& [eth_chan_id, _direction] : active_fabric_eth_channels) {
+                auto core_id = tensix_config.get_core_id_for_channel(dev->id(), eth_chan_id);
+                auto [tensix_termination_address, tensix_signal] =
+                    tensix_config.get_termination_address_and_signal(core_id);
+                std::vector<uint32_t> tensix_termination_signal(1, tensix_signal);
+                auto mux_core = tensix_config.get_core_for_channel(dev->id(), eth_chan_id);
+                detail::WriteToDeviceL1(
+                    dev, mux_core, tensix_termination_address, tensix_termination_signal, CoreType::WORKER);
+            }
+        }
+    }
+
+    for (auto* dev : devices_) {
+        if (builder_ctx.get_num_fabric_initialized_routers(dev->id()) == 0) {
+            continue;
+        }
+        auto master_router_logical_core = cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(
+            builder_ctx.get_fabric_master_router_chan(dev->id()), CoordSystem::LOGICAL);
+        detail::WriteToDeviceL1(
+            dev, master_router_logical_core, termination_signal_address, termination_signal, CoreType::ETH);
+    }
+
+    const auto [router_sync_address, _expected_ready_status] = builder_ctx.get_fabric_router_sync_address_and_status();
+    constexpr uint32_t kTerminatedStatus = static_cast<uint32_t>(EDMStatus::TERMINATED);
+
+    for (auto* dev : devices_) {
+        if (builder_ctx.get_num_fabric_initialized_routers(dev->id()) == 0) {
+            continue;
+        }
+        const auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
+        const auto& active_channels = control_plane_.get_active_fabric_eth_channels(fabric_node_id);
+        const auto& soc_desc = cluster_.get_soc_desc(dev->id());
+        for (const auto& [chan, _direction] : active_channels) {
+            const auto eth_core = soc_desc.get_eth_core_for_channel(chan, CoordSystem::LOGICAL);
+            std::vector<uint32_t> status_buf{0};
+            while (true) {
+                detail::ReadFromDeviceL1(
+                    dev, eth_core, router_sync_address, sizeof(uint32_t), status_buf, CoreType::ETH);
+                if (status_buf[0] == kTerminatedStatus) {
+                    break;
+                }
+                if (deadline.has_value() && std::chrono::steady_clock::now() >= *deadline) {
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
 }
 
 void FabricFirmwareInitializer::reset_state(std::unordered_set<InitializerKey>& init_done) {

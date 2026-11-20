@@ -43,6 +43,8 @@ public:
     // Trace data per logical Device in a Mesh.
     std::vector<MeshTraceData> ordered_trace_data;
     uint32_t total_trace_size = 0;
+    // Exact count of program command sequences (CQ_DISPATCH_CMD_SET_WRITE_OFFSET) recorded per local device.
+    std::unordered_map<ChipId, uint32_t> num_programs_per_device;
 };
 
 // Ties a MeshTraceDescriptor (host side state) to a MeshBuffer (device side state)

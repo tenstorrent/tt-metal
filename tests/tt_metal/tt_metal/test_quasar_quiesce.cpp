@@ -13,6 +13,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/device_quiesce.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
@@ -68,9 +69,11 @@ protected:
         }
         id_to_device_.clear();
         devices_.clear();
-        if (parked || HasFailure()) {
-            // Parked harts spin on nop until RISC reset; tear down MetalContext so the next test
-            // runs reset_cores() and relaunches firmware cleanly.
+        if (parked || HasFailure() ||
+            MetalContext::instance().quiesce_context_state() != MetalContext::QuiesceContextState::None) {
+            // Simulate external AI-IP soft-reset between GTest cases in the same simulator process:
+            // clear QuiesceContextState so teardown() runs reset_cores() and leaves a clean slate.
+            MetalContext::instance().set_quiesce_context_state(MetalContext::QuiesceContextState::None);
             MetalContext::instance().teardown();
         }
         cores_parked_ = false;
@@ -479,6 +482,208 @@ TEST_F(QuasarDeviceQuiesceFixture, FastDispatchMidTraceExecBufQuiesce) {
     EXPECT_EQ(results[8], 0U);
 
     this->device().release_mesh_trace(trace_id);
+}
+
+TEST_F(QuasarDeviceQuiesceFixture, HostApiQuiescesMidKernelClosesAndReopensCleanly) {
+    const NodeCoord src_worker{0, 0};
+    const NodeCoord dst_worker{1, 0};
+    const ChipId cid = chip_id();
+    const CoreCoord src_virtual = this->device().worker_core_from_logical_core(src_worker);
+    const CoreCoord dst_virtual = this->device().worker_core_from_logical_core(dst_worker);
+    const CoreCoord dst_noc = this->device().virtual_noc0_coordinate(NOC::NOC_0, dst_virtual);
+
+    const uint32_t base_l1 = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    const uint32_t handshake_addr = base_l1;
+    const uint32_t src_stage_addr = base_l1 + 64U;
+    const uint32_t dst_output_addr = base_l1 + 256U;
+
+    std::vector<uint32_t> zero_handshake(2, 0U);
+    std::vector<uint32_t> zero_dst(7 * 4, 0U);
+    slow_dispatch::WriteToL1(this->device(), src_worker, handshake_addr, zero_handshake);
+    slow_dispatch::WriteToL1(this->device(), dst_worker, dst_output_addr, zero_dst);
+
+    distributed::MeshWorkload wl;
+    distributed::MeshCoordinateRange device_range(this->device().shape());
+    const KernelSpecName kName{"host_api_tagged_noc_quiesce"};
+    KernelSpec spec_k{
+        .unique_id = kName,
+        .source = kTaggedNocQuiesceKernel,
+        .num_threads = 2,
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"handshake_addr", "src_stage_addr", "dst_noc_x", "dst_noc_y", "dst_l1_addr"}},
+        .hw_config = DataMovementHardwareConfig{},
+    };
+    WorkUnitSpec wu{.name = "main", .kernels = {kName}, .target_nodes = src_worker};
+    ProgramSpec pspec{.name = "host_api_mid_kernel_quiesce", .kernels = {spec_k}, .work_units = {wu}};
+    Program prog = experimental::MakeProgramFromSpec(this->device(), pspec);
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
+        .kernel = kName,
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+            src_worker,
+            {{"handshake_addr", handshake_addr},
+             {"src_stage_addr", src_stage_addr},
+             {"dst_noc_x", dst_noc.x},
+             {"dst_noc_y", dst_noc.y},
+             {"dst_l1_addr", dst_output_addr}}),
+    }};
+    experimental::SetProgramRunArgs(prog, run_args);
+    wl.add_program(device_range, std::move(prog));
+
+    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), wl, /*blocking=*/false);
+
+    auto& cluster = MetalContext::instance().get_cluster();
+    const auto start_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    uint32_t started_word = 0U;
+    while (std::chrono::steady_clock::now() < start_deadline) {
+        cluster.read_core(&started_word, sizeof(started_word), tt_cxy_pair(cid, src_virtual), handshake_addr);
+        cluster.advance_device_execution(cid);
+        if (started_word == 0xB007ED01U) {
+            break;
+        }
+    }
+    ASSERT_EQ(started_word, 0xB007ED01U) << "Worker kernel did not signal KERNEL_STARTED_MAGIC";
+
+    // Release the spin gate without advancing simulator cycles or calling Finish() so the kernel is still
+    // in-flight when quiesce_for_soft_reset() writes QUIESCE_CTRL_NEXT_OP and begins polling.
+    const uint32_t open_gate = 0x6A7E0001U;
+    cluster.write_core(&open_gate, sizeof(open_gate), tt_cxy_pair(cid, src_virtual), handshake_addr + sizeof(uint32_t));
+
+    auto res = experimental::quiesce_for_soft_reset(
+        this->device(), experimental::QuiesceOptions{.timeout = std::chrono::seconds{15}});
+    EXPECT_TRUE(res.ok());
+    EXPECT_EQ(res.status, experimental::QuiesceStatus::Quiesced);
+    EXPECT_TRUE(res.unquiesced_cores.empty());
+
+    // MeshDevice must be closed inline by quiesce_for_soft_reset(), and subsequent close() is an idempotent no-op
+    // while calling quiesce_for_soft_reset() again on an already-closed MeshDevice fails fast.
+    EXPECT_FALSE(this->device().is_initialized());
+    EXPECT_TRUE(this->device().close());
+    EXPECT_ANY_THROW((void)experimental::quiesce_for_soft_reset(this->device()));
+
+    // Verify all 7 tagged NOC writes (TRIDs 1..7) landed intact before the worker parked.
+    std::vector<uint32_t> dst_words(7 * 4, 0U);
+    cluster.read_core(
+        dst_words.data(), dst_words.size() * sizeof(uint32_t), tt_cxy_pair(cid, dst_virtual), dst_output_addr);
+    EXPECT_EQ(dst_words[0 * 4], 0x721D0001U);
+    EXPECT_EQ(dst_words[1 * 4], 0x721D0002U);
+    EXPECT_EQ(dst_words[2 * 4], 0x721D0003U);
+    EXPECT_EQ(dst_words[3 * 4], 0x721D0004U);
+    EXPECT_EQ(dst_words[4 * 4], 0x721D0005U);
+    EXPECT_EQ(dst_words[5 * 4], 0x721D0006U);
+    EXPECT_EQ(dst_words[6 * 4], 0x721D0007U);
+
+    // Reopen a fresh MeshDevice in the same process WITHOUT manually calling MetalContext::teardown():
+    // QuiescedForSoftReset + force_reinit_ must silently tear down host state, reset cores, relaunch FW,
+    // and execute Workload 2 cleanly.
+    id_to_device_.clear();
+    devices_.clear();
+    this->create_devices();
+    init_max_dfbs();
+
+    const uint32_t reopen_addr = base_l1 + 512U;
+    std::vector<uint32_t> zero_word{0U};
+    slow_dispatch::WriteToL1(this->device(), src_worker, reopen_addr, zero_word);
+    auto wl2 = make_simple_write_workload(src_worker, reopen_addr, 0xCAFEBEEFU, "post_reopen_workload");
+    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), wl2, /*blocking=*/true);
+
+    std::vector<uint32_t> reopen_out{0U};
+    slow_dispatch::ReadFromL1(this->device(), src_worker, reopen_addr, sizeof(uint32_t), reopen_out);
+    EXPECT_EQ(reopen_out[0], 0xCAFEBEEFU);
+}
+
+TEST_F(QuasarDeviceQuiesceFixture, HostApiTimesOutOnStuckKernelAndFailsSafely) {
+    // Non-positive timeout must fail fast as caller misuse.
+    EXPECT_ANY_THROW((void)experimental::quiesce_for_soft_reset(
+        this->device(), experimental::QuiesceOptions{.timeout = std::chrono::milliseconds{0}}));
+
+    const NodeCoord src_worker{0, 0};
+    const NodeCoord dst_worker{1, 0};
+    const ChipId cid = chip_id();
+    const CoreCoord src_virtual = this->device().worker_core_from_logical_core(src_worker);
+    const CoreCoord dst_virtual = this->device().worker_core_from_logical_core(dst_worker);
+    const CoreCoord dst_noc = this->device().virtual_noc0_coordinate(NOC::NOC_0, dst_virtual);
+
+    const uint32_t base_l1 = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    const uint32_t handshake_addr = base_l1;
+    const uint32_t src_stage_addr = base_l1 + 64U;
+    const uint32_t dst_output_addr = base_l1 + 256U;
+
+    std::vector<uint32_t> zero_handshake(2, 0U);
+    slow_dispatch::WriteToL1(this->device(), src_worker, handshake_addr, zero_handshake);
+
+    distributed::MeshWorkload wl;
+    distributed::MeshCoordinateRange device_range(this->device().shape());
+    const KernelSpecName kName{"stuck_kernel_timeout_quiesce"};
+    KernelSpec spec_k{
+        .unique_id = kName,
+        .source = kTaggedNocQuiesceKernel,
+        .num_threads = 2,
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"handshake_addr", "src_stage_addr", "dst_noc_x", "dst_noc_y", "dst_l1_addr"}},
+        .hw_config = DataMovementHardwareConfig{},
+    };
+    WorkUnitSpec wu{.name = "main", .kernels = {kName}, .target_nodes = src_worker};
+    ProgramSpec pspec{.name = "stuck_kernel_quiesce", .kernels = {spec_k}, .work_units = {wu}};
+    Program prog = experimental::MakeProgramFromSpec(this->device(), pspec);
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
+        .kernel = kName,
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+            src_worker,
+            {{"handshake_addr", handshake_addr},
+             {"src_stage_addr", src_stage_addr},
+             {"dst_noc_x", dst_noc.x},
+             {"dst_noc_y", dst_noc.y},
+             {"dst_l1_addr", dst_output_addr}}),
+    }};
+    experimental::SetProgramRunArgs(prog, run_args);
+    wl.add_program(device_range, std::move(prog));
+
+    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), wl, /*blocking=*/false);
+
+    auto& cluster = MetalContext::instance().get_cluster();
+    const auto start_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    uint32_t started_word = 0U;
+    while (std::chrono::steady_clock::now() < start_deadline) {
+        cluster.read_core(&started_word, sizeof(started_word), tt_cxy_pair(cid, src_virtual), handshake_addr);
+        cluster.advance_device_execution(cid);
+        if (started_word == 0xB007ED01U) {
+            break;
+        }
+    }
+    ASSERT_EQ(started_word, 0xB007ED01U) << "Worker kernel did not signal KERNEL_STARTED_MAGIC";
+
+    // Intentionally DO NOT open the gate — src_worker spins indefinitely inside kernel_main(), simulating a
+    // deadlocked / infinite-loop workload.
+    constexpr auto kShortTimeout = std::chrono::milliseconds{250};
+    auto res =
+        experimental::quiesce_for_soft_reset(this->device(), experimental::QuiesceOptions{.timeout = kShortTimeout});
+    EXPECT_FALSE(res.ok());
+    EXPECT_FALSE(static_cast<bool>(res));
+    EXPECT_EQ(res.status, experimental::QuiesceStatus::TimedOutInWorkers);
+    EXPECT_GE(res.elapsed, kShortTimeout);
+    ASSERT_FALSE(res.unquiesced_cores.empty());
+
+    bool found_stuck_worker = false;
+    for (const auto& diag : res.unquiesced_cores) {
+        if (diag.chip_id == cid && diag.virtual_core == src_virtual) {
+            found_stuck_worker = true;
+            EXPECT_EQ(diag.core_type, HalProgrammableCoreType::TENSIX);
+            EXPECT_EQ(diag.raw_status, dev_msgs::QUIESCE_STATUS_RUNNING);
+            EXPECT_EQ(diag.control, dev_msgs::QUIESCE_CTRL_NEXT_OP);
+        }
+    }
+    EXPECT_TRUE(found_stuck_worker) << "Expected stuck worker core " << src_virtual.str() << " in unquiesced_cores";
+
+    // On timeout, MeshDevice was not closed inline, yet closing it must not hang, and attempting to re-initialize
+    // without an external SoC reset must fail fast.
+    EXPECT_TRUE(this->device().is_initialized());
+    EXPECT_TRUE(this->device().close());
+    EXPECT_ANY_THROW(this->create_devices());
+    cores_parked_ = true;
 }
 
 }  // namespace

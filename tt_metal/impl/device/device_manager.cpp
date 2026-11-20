@@ -626,6 +626,16 @@ bool DeviceManager::is_dispatch_firmware_active() const {
     return it != initializers_.end() && it->second->is_initialized();
 }
 
+bool DeviceManager::quiesce_fabric(std::optional<std::chrono::steady_clock::time_point> deadline) {
+    auto it = initializers_.find(FabricFirmwareInitializer::key);
+    if (it == initializers_.end() || !init_done_.contains(FabricFirmwareInitializer::key)) {
+        return true;
+    }
+    auto* fabric_init = dynamic_cast<FabricFirmwareInitializer*>(it->second.get());
+    TT_ASSERT(fabric_init != nullptr, "Expected FabricFirmwareInitializer");
+    return fabric_init->quiesce_fabric(deadline);
+}
+
 bool DeviceManager::is_rt_profiler_device_init_complete(ChipId chip_id) const {
     std::lock_guard<std::mutex> lock(lock_);
     return rt_profiler_device_init_complete_.contains(chip_id);

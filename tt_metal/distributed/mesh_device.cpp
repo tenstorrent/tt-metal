@@ -552,6 +552,33 @@ void MeshDeviceImpl::enqueue_to_thread_pool(ttsl::move_only_function<void()>&& f
 
 void MeshDeviceImpl::wait_for_thread_pool() { dispatch_thread_pool_->wait(); }
 
+bool MeshDeviceImpl::has_active_tensor_prefetcher() const {
+    return tensor_prefetcher_ != nullptr && tensor_prefetcher_->is_active();
+}
+
+void MeshDeviceImpl::stop_command_queue_readers_for_quiesce() {
+    for (auto& cq : mesh_command_queues_) {
+        if (cq) {
+            cq->stop_completion_queue_reader_for_quiesce();
+        }
+    }
+}
+
+uint32_t MeshDeviceImpl::enqueued_program_seq_count_for_device(uint8_t cq_id, ChipId device_id) const {
+    if (cq_id >= mesh_command_queues_.size() || !mesh_command_queues_[cq_id]) {
+        return 0U;
+    }
+    return mesh_command_queues_[cq_id]->enqueued_program_seq_count_for_device(device_id);
+}
+
+void MeshDeviceImpl::shutdown_profilers_for_quiesce() {
+    if (realtime_profiler_) {
+        realtime_profiler_->shutdown();
+        realtime_profiler_.reset();
+    }
+    streaming_profiler_.reset();
+}
+
 std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     const std::vector<int>& device_ids,
     size_t l1_small_size,
@@ -1149,8 +1176,12 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
 
     // Shut down the CQ first so dispatch_s sends TERMINATE to the profiler core with the
     // final buffer; the push kernel, receiver thread, and callbacks must still be alive.
+    const auto quiesce_state = metal_context().quiesce_context_state();
+    const bool skip_quiesce_hw = metal_context().skip_hw_teardown_after_quiesce();
+    const bool keep_dma_pinned_on_timeout = (quiesce_state == MetalContext::QuiesceContextState::QuiesceTimedOut);
+
     if (is_initialized()) {
-        if (metal_env().get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
+        if (metal_env().get_cluster().get_target_device_type() != tt::TargetDevice::Mock && !skip_quiesce_hw) {
             ReadMeshDeviceProfilerResults(*pimpl_wrapper, ProfilerReadState::LAST_FD_READ);
         }
 
@@ -1195,9 +1226,11 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
             }
         }
 
-        for (auto* device : local_devices_) {
-            // Ensure slow dispatch is disabled regardless of current state
-            device->set_smc_dispatch_telemetry_slow_dispatch_enabled(false);
+        if (!skip_quiesce_hw) {
+            for (auto* device : local_devices_) {
+                // Ensure slow dispatch is disabled regardless of current state
+                device->set_smc_dispatch_telemetry_slow_dispatch_enabled(false);
+            }
         }
 
         mesh_command_queues_.clear();
@@ -1210,14 +1243,18 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     // mesh never hold two different regions. It dies with its last holder -- this mesh or a
     // RingAlias -- and clear_aliases() on a released region is safe. release() is idempotent,
     // so the second close_impl() from ~MeshDevice is harmless.
-    if (host_region_) {
+    // On quiesce timeout, intentionally keep host DMA pages pinned until process exit so an
+    // unquiesced kernel cannot UAF released physical pages.
+    if (host_region_ && !keep_dma_pinned_on_timeout) {
         host_region_->release();
     }
 
     // Tear down RT profiler after the CQ has shut down (so dispatch_s has already issued
     // the final TERMINATE) but before the rest of the device teardown.
     if (realtime_profiler_) {
-        realtime_profiler_->shutdown();
+        if (!skip_quiesce_hw) {
+            realtime_profiler_->shutdown();
+        }
         realtime_profiler_.reset();
     }
     streaming_profiler_.reset();
@@ -1227,7 +1264,7 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     // we still wait for the kernel's natural num_layers exit so the pipes / receivers it
     // touches remain valid until it returns.
     if (tensor_prefetcher_) {
-        if (tensor_prefetcher_->is_active()) {
+        if (tensor_prefetcher_->is_active() && !skip_quiesce_hw) {
             log_warning(
                 tt::LogMetal,
                 "Tensor prefetcher was active at MeshDevice close; auto-stopping. Call "
@@ -1259,7 +1296,9 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         // (needs the cluster to map chip -> MMIO IDs). Must run before
         // destroy_instance below, and only on the first close_impl call.
         // Skip for mock devices — they never create pinned DMA regions.
-        if (metal_env().get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
+        // Also skip on quiesce timeout so pinned DMA regions remain mapped until process exit.
+        if (metal_env().get_cluster().get_target_device_type() != tt::TargetDevice::Mock &&
+            !keep_dma_pinned_on_timeout) {
             experimental::PinnedMemoryCache::instance().release_for_device(*pimpl_wrapper);
         }
     }
@@ -1268,7 +1307,10 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     // To support multiple MeshDevice from the same system mesh this cleanup needs to be
     // uplifted to the MetalEnv level.
     // https://github.com/tenstorrent/tt-metal/issues/21500
-    if (destroy_metal_context_instance_on_close_) {
+    // After quiesce_for_soft_reset(), keep MetalContext alive instead of destroying it inline so
+    // Cluster::~Cluster() does not run during close_impl() (preserving QuiesceTimedOut state and
+    // avoiding premature UMD close_device() calls before/during soft-reset).
+    if (destroy_metal_context_instance_on_close_ && !skip_quiesce_hw) {
         // The devices must be closed while their context still exists. An uninitialized mesh (the parent built by
         // create_unit_meshes) skips the reset above.
         scoped_devices_.reset();

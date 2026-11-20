@@ -232,9 +232,10 @@ FDMeshCommandQueue::~FDMeshCommandQueue() {
     auto target_type = this->get_target_device_type();
     bool is_mock = target_type == tt::TargetDevice::Mock || target_type == tt::TargetDevice::Emule;
 
-    // After an L1 ECC halt the dispatcher waits forever on the halted worker, so this would never complete.
+    // After an L1 ECC halt or soft-reset quiesce, dispatch is parked (or halted) so this would never complete.
+    const bool skip_quiesce_teardown = mesh_device_->impl().metal_context().skip_hw_teardown_after_quiesce();
     if (in_use_ && !thread_exception_state_.load(std::memory_order_acquire) &&
-        !mesh_device_->impl().metal_context().l1_ecc_halt_detected()) {
+        !mesh_device_->impl().metal_context().l1_ecc_halt_detected() && !skip_quiesce_teardown) {
         // If the FDMeshCommandQueue is being used, have it clear worker state
         // before going out of scope. This is a blocking operation - it waits
         // for all queued up work to complete.
@@ -247,7 +248,7 @@ FDMeshCommandQueue::~FDMeshCommandQueue() {
     // Log warnings instead of aborting - destructors should never throw or abort.
     // Only observe reader-owned state here: the completion reader thread may still
     // pop completion_queue_reads_ and update num_outstanding_reads_ until join().
-    if (!is_mock) {
+    if (!is_mock && !skip_quiesce_teardown) {
         if (!completion_queue_reads_.empty()) {
             log_warning(
                 LogMetal,
@@ -280,12 +281,36 @@ FDMeshCommandQueue::~FDMeshCommandQueue() {
         exit_condition_ = true;
         reader_thread_cv_.notify_one();
     }
-    completion_queue_reader_thread_.join();
+    if (completion_queue_reader_thread_.joinable()) {
+        completion_queue_reader_thread_.join();
+    }
 
     // After join(), this destructor has exclusive ownership of reader state and
     // can safely perform destructive cleanup.
     completion_queue_reads_.clear();
     num_outstanding_reads_.store(0);
+}
+
+void FDMeshCommandQueue::stop_completion_queue_reader_for_quiesce() {
+    {
+        std::lock_guard lock(reader_thread_cv_mutex_);
+        exit_condition_ = true;
+        reader_thread_cv_.notify_one();
+    }
+    if (completion_queue_reader_thread_.joinable()) {
+        completion_queue_reader_thread_.join();
+    }
+    completion_queue_reads_.clear();
+    for (auto& [_dev_id, queue] : read_descriptors_) {
+        queue->clear();
+    }
+    num_outstanding_reads_.store(0);
+    in_use_ = false;
+}
+
+uint32_t FDMeshCommandQueue::enqueued_program_seq_count_for_device(ChipId device_id) const {
+    const auto it = enqueued_program_seq_count_per_device_.find(device_id);
+    return it != enqueued_program_seq_count_per_device_.end() ? it->second : 0U;
 }
 
 void FDMeshCommandQueue::populate_read_descriptor_queue() {
@@ -1397,6 +1422,11 @@ void FDMeshCommandQueue::write_program_commands_to_devices(
     ProgramCommandSequence& program_cmd_seq,
     bool stall_first,
     bool stall_before_program) {
+    for (auto* device : devices) {
+        if (!device->sysmem_manager().get_bypass_mode()) {
+            enqueued_program_seq_count_per_device_[device->id()]++;
+        }
+    }
     if (host_transfer_stats_->enabled() && !devices.empty()) {
         const auto target = this->get_target_device_type();
         if (target != tt::TargetDevice::Mock && target != tt::TargetDevice::Emule) {
@@ -1568,6 +1598,11 @@ void FDMeshCommandQueue::write_program_commands_to_devices(
     if (local_devices.empty()) {
         return;
     }
+    for (const auto& [_coord_index, device] : local_devices) {
+        if (!device->sysmem_manager().get_bypass_mode()) {
+            enqueued_program_seq_count_per_device_[device->id()]++;
+        }
+    }
     const auto size = program_cmd_seq.get_one_shot_fetch_size(stall_first, stall_before_program, true);
     if (host_transfer_stats_->enabled()) {
         const auto target = this->get_target_device_type();
@@ -1657,6 +1692,9 @@ void FDMeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blockin
     auto lock = lock_api_function_();
     in_use_ = true;
     auto trace_inst = mesh_device_->get_mesh_trace(trace_id);
+    for (const auto& [chip_id, count] : trace_inst->desc->num_programs_per_device) {
+        enqueued_program_seq_count_per_device_[chip_id] += count;
+    }
     submit_replay_buffer(trace_inst->desc->descriptors, trace_inst->desc->sub_device_ids, *trace_inst->mesh_buffer);
     if (blocking) {
         this->finish_nolock();
@@ -1679,6 +1717,14 @@ void FDMeshCommandQueue::enqueue_command_list(
         before_submit();
     }
     in_use_ = true;
+    uint32_t list_program_count = 0;
+    for (const auto& [_sub_dev, desc] : worker_descriptors) {
+        list_program_count +=
+            desc.num_traced_programs_needing_go_signal_multicast + desc.num_traced_programs_needing_go_signal_unicast;
+    }
+    for (auto* device : mesh_device_->impl().get_devices()) {
+        enqueued_program_seq_count_per_device_[device->id()] += list_program_count;
+    }
     submit_replay_buffer(worker_descriptors, sub_device_ids, buffer);
     if (blocking) {
         this->finish_nolock();
@@ -1895,11 +1941,15 @@ void FDMeshCommandQueue::record_end() {
     // Restrict to the local mesh partition so that multi-host traces only process locally-owned devices.
     auto local_mesh_range = mesh_device_->get_view().get_local_mesh_coord_range();
     std::vector<MeshCoordinateRange> device_ranges{local_mesh_range};
+    trace_ctx_->num_programs_per_device.clear();
     for (auto& trace_node : trace_nodes_) {
         for (auto& [device_range, program] : trace_node.trace_nodes) {
             auto local_device_range = local_mesh_range.intersection(device_range);
             if (!local_device_range.has_value()) {
                 continue;
+            }
+            for (auto* dev : mesh_device_->impl().get_local_devices(*local_device_range)) {
+                trace_ctx_->num_programs_per_device[dev->id()]++;
             }
             partition_mesh_coordinate_ranges(device_ranges, *local_device_range);
         }

@@ -161,6 +161,11 @@ void MetalContext::initialize(
         dispatch_core_config.get_dispatch_core_type(),
         resolve_dispatch_core_axis(dispatch_core_config, get_cluster().arch(), get_fabric_tensix_config()));
 
+    TT_FATAL(
+        quiesce_context_state() != QuiesceContextState::QuiesceTimedOut,
+        "Cannot re-initialize MetalContext after quiesce_for_soft_reset() timed out; "
+        "unquiesced cores may still be active and require SoC-level recovery.");
+
     if (initialized_) {
         if (dispatch_core_config_ != resolved_config or num_hw_cqs != num_hw_cqs_ or
             worker_l1_size_ != worker_l1_size or l1_bank_remap != l1_bank_remap_ or
@@ -193,6 +198,8 @@ void MetalContext::initialize(
     }
     // run_launch_phase below releases any BRISC still halted and zeroes every halt record.
     set_l1_ecc_halt_detected(false);
+    quiesce_context_state_.store(QuiesceContextState::None, std::memory_order_release);
+    get_cluster().set_skip_driver_close_on_destroy(false);
 
     initialized_ = true;
 
@@ -338,6 +345,36 @@ void MetalContext::set_fast_dispatch_mode(bool enable) {
     reinitialize_dispatch_managers();
 }
 
+void MetalContext::set_quiesce_context_state(QuiesceContextState state) {
+    quiesce_context_state_.store(state, std::memory_order_release);
+    get_cluster().set_skip_driver_close_on_destroy(state != QuiesceContextState::None);
+    if (state == QuiesceContextState::QuiescedForSoftReset) {
+        // Parked harts spin on nop until RISC reset; force a full teardown + FW relaunch if
+        // a new MeshDevice is opened in this same process after soft-reset.
+        force_reinit_ = true;
+    }
+}
+
+void MetalContext::detach_debug_servers_for_quiesce() {
+    if (dprint_server_) {
+        if (!get_cluster().is_mock_or_emulated()) {
+            dprint_server_->detach_devices();
+        }
+        dprint_server_.reset();
+    }
+    if (watcher_server_) {
+        if (!get_cluster().is_mock_or_emulated()) {
+            watcher_server_->detach_devices();
+        }
+        watcher_server_.reset();
+    }
+    if (profiler_state_manager_ && profiler_state_manager_->debug_dump_thread.joinable()) {
+        profiler_state_manager_->stop_debug_dump_thread = true;
+        profiler_state_manager_->stop_debug_dump_thread_cv.notify_all();
+        profiler_state_manager_->debug_dump_thread.join();
+    }
+}
+
 void MetalContext::teardown() {
     ZoneScoped;
 
@@ -362,13 +399,17 @@ void MetalContext::teardown() {
         dprint_server_.reset();
     }
 
-    if (!get_cluster().is_mock_or_emulated()) {
-        watcher_server_->detach_devices();
+    if (watcher_server_) {
+        if (!get_cluster().is_mock_or_emulated()) {
+            watcher_server_->detach_devices();
+        }
+        watcher_server_.reset();
     }
-    watcher_server_.reset();
 
     if (risc_firmware_initializer_) {
-        risc_firmware_initializer_->teardown(risc_fw_init_done_);
+        if (!skip_hw_teardown_after_quiesce()) {
+            risc_firmware_initializer_->teardown(risc_fw_init_done_);
+        }
         risc_firmware_initializer_.reset();
     }
     risc_fw_context_descriptor_.reset();

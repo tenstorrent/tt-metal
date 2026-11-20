@@ -106,7 +106,8 @@ SDMeshCommandQueue::~SDMeshCommandQueue() {
     // destructor. Otherwise a program still running at device close is killed mid-flight by the core
     // reset on the next open, and the Tensix state it leaves behind can hang or corrupt the next
     // program on the same cores.
-    if (this->get_target_device_type() == tt::TargetDevice::Mock) {
+    if (this->get_target_device_type() == tt::TargetDevice::Mock ||
+        mesh_device_->impl().metal_context().skip_hw_teardown_after_quiesce()) {
         return;
     }
     try {

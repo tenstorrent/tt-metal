@@ -552,6 +552,13 @@ public:
     // Currently expose users to the dispatch thread pool through the MeshDevice
     void enqueue_to_thread_pool(ttsl::move_only_function<void()>&& f);
     void wait_for_thread_pool();
+
+    // Internal hooks used by experimental::quiesce_for_soft_reset().
+    std::unique_lock<std::mutex> acquire_api_unique_lock() { return std::unique_lock<std::mutex>(api_mutex_); }
+    bool has_active_tensor_prefetcher() const;
+    void stop_command_queue_readers_for_quiesce();
+    uint32_t enqueued_program_seq_count_for_device(uint8_t cq_id, ChipId device_id) const;
+    void shutdown_profilers_for_quiesce();
     static std::shared_ptr<MeshDevice> create(
         const MeshDeviceConfig& config,
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,

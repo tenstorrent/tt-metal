@@ -603,7 +603,15 @@ void Cluster::start_driver(umd::DeviceParams& device_params) const {
 
 Cluster::~Cluster() {
     log_info(tt::LogDevice, "Closing user mode device drivers");
-    this->driver_->close_device();
+    if (this->skip_driver_close_on_destroy_ && this->target_type_ == TargetDevice::Silicon) {
+        // After quiesce_for_soft_reset() (either parked awaiting/under AI-IP soft-reset, or timed out with
+        // potentially active DMA), UMD's LocalChip::close_device() must not touch get_clock(), set_clock_state(),
+        // assert_risc_reset(), or unpin_or_unmap_sysmem() before process exit. The OS reclaims /dev/tenstorrent
+        // descriptors and KMD mappings when the process terminates.
+        (void)this->driver_.release();
+    } else if (this->driver_) {
+        this->driver_->close_device();
+    }
 
     this->sdesc_per_chip_.clear();
     this->device_to_host_mem_channel_.clear();
