@@ -38,7 +38,6 @@ if _SUITE_DIR not in sys.path:
     sys.path.insert(0, _SUITE_DIR)
 
 from diag.common import default_tt_metal_path, log, print_phase_line, print_phase_summary  # noqa: E402
-from diag.aer import aer_check, read_aer  # noqa: E402
 from diag.device_tests import run_tests  # noqa: E402
 from diag.eth_status import run_eth_status  # noqa: E402
 from diag.eth_summary import SUMMARY_FILE, render_eth_summary  # noqa: E402
@@ -370,12 +369,6 @@ def run_diag(
     _finish(report, reset_phase, t0, summary=False)
     fold_post_reset_snapshots(report, post_reset_phases)
 
-    # The AER counters the triage phase's pcie_aer_delta is judged against: read after the resets, which
-    # re-enumerate the chips and so restart the kernel's counts, and before the tests.
-    aer_before = aer_t0 = None
-    if plan.aer_diff and not dry_run:
-        aer_before, aer_t0 = read_aer(), time.time()
-
     # Phase 3: gtest
     test_phase = Phase(name="tests")
     t0 = time.time()
@@ -426,8 +419,6 @@ def run_diag(
             WARN,
             lambda: run_triage(triage_dir, plan.triage, triage_phase, dry_run, logs_dir, triage_gating, tt_metal_path),
         )
-    if aer_before is not None and not skip_triage:
-        triage_phase.add(aer_check(aer_before, read_aer(), (time.time() - aer_t0) / 3600))
     _finish(report, triage_phase, t0, summary=True)
 
     # Phase 6: the ETH status read. After the post-test reset and the triage

@@ -24,7 +24,7 @@
 #                   everything, for the logs on a DIIM ticket
 #   galaxy          the unit's health for a caller that runs its own load: snapshot validate
 #                   (chips by BDF, tray and ASIC, thermal, telemetry) + one -glx_reset (never -r)
-#                   + host_side triage with the AER before/after diff. No tests
+#                   + host_side triage. No tests
 #   pre_bmc_reboot  data collection before a BMC reboot, no resets: snapshot
 #                   + triage (host_side + device_side)
 #                   + QSFP tests (ETH link, cabling and module state), if the host has the package
@@ -53,8 +53,8 @@ Tiers:
                   + didt matmul stress + fabric all-gather under matmul (pytest)
                   + HSC and chip recount around the tests + post-test reset + triage + QSFP tests
   full            weekly + sys-triage: everything, for the logs on a DIIM ticket
-  galaxy          Snapshot validate + one -glx_reset (never -r) + host_side triage with the AER
-                  before/after diff. No tests; pass --skip-reset to read the unit as found.
+  galaxy          Snapshot validate + one -glx_reset (never -r) + host_side triage.
+                  No tests; pass --skip-reset to read the unit as found.
   pre_bmc_reboot  Data collection before a BMC reboot: snapshot + triage + QSFP tests
                   + sys-triage. No resets, no tests.
   post_bmc_reboot The same as pre_bmc_reboot for now, run after the BMC reboot.

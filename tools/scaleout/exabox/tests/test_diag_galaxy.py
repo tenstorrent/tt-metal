@@ -5,13 +5,11 @@
 
 """The galaxy tier without hardware: its reset is -glx_reset and never -r, the
 chip recount names missing chips by BDF/tray/ASIC, the thermal and telemetry
-checks ignore garbage readings, and the AER before/after diff judges a fake
-sysfs."""
+checks ignore garbage readings."""
 
 from __future__ import annotations
 
 import sys
-import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -23,7 +21,6 @@ sys.path.insert(0, str(SUITE_DIR))
 
 import tiers  # noqa: E402
 from diag import resets  # noqa: E402
-from diag.aer import aer_check, read_aer  # noqa: E402
 from diag.galaxy import TRAY_TO_UBB_NIBBLE, expected_bdf  # noqa: E402
 from diag.model import FAIL, PASS, WARN, Phase  # noqa: E402
 from diag.naming import chip  # noqa: E402
@@ -64,7 +61,7 @@ class TestGalaxyTier(unittest.TestCase):
         t = tiers.TIERS["galaxy"]
         self.assertEqual(t.resets, ("-glx_reset",))
         self.assertNotIn("-r", t.post_test_resets)
-        self.assertTrue(t.glx_reset_only and t.aer_diff)
+        self.assertTrue(t.glx_reset_only)
         self.assertEqual(t.tests, ())
 
     def test_only_galaxy_is_glx_reset_only(self):
@@ -176,49 +173,6 @@ class TestThermalAndTelemetry(unittest.TestCase):
             [(f["bdf"], f["tray"], f["asic"], f["why"]) for f in c.data["flagged"]],
             [("0000:01:00.0", 1, 1, w) for w in ("temperature", "power", "current", "vcore")],
         )
-
-
-class TestAer(unittest.TestCase):
-    def _sysfs(self, root: Path, bdf: str, vendor="0x1e52", **counts):
-        d = root / bdf
-        d.mkdir()
-        (d / "vendor").write_text(vendor + "\n")
-        for kind, fname in (("corr", "aer_dev_correctable"), ("nonfatal", "aer_dev_nonfatal"), ("fatal", "aer_dev_fatal")):
-            if kind in counts:
-                (d / fname).write_text(f"RxErr 0\nTOTAL_ERR_{kind.upper()} {counts[kind]}\n")
-
-    def test_read_aer_only_tenstorrent_chips(self):
-        with tempfile.TemporaryDirectory() as t:
-            root = Path(t)
-            self._sysfs(root, "0000:02:00.0", corr=3, nonfatal=0, fatal=1)
-            self._sysfs(root, "0000:05:00.0", vendor="0x8086", corr=9)
-            self.assertEqual(read_aer(root), {"0000:02:00.0": {"corr": 3, "nonfatal": 0, "fatal": 1}})
-
-    def test_unreadable_counter_is_left_out(self):
-        with tempfile.TemporaryDirectory() as t:
-            self._sysfs(Path(t), "0000:02:00.0", corr=3)
-            self.assertEqual(read_aer(Path(t)), {"0000:02:00.0": {"corr": 3}})
-
-    def test_no_change_passes(self):
-        a = {"0000:02:00.0": {"corr": 5, "nonfatal": 0, "fatal": 0}}
-        self.assertEqual(aer_check(a, a, 1.0).status, PASS)
-
-    def test_uncorrectable_fails_with_tray_and_asic(self):
-        before = {"0000:c2:00.0": {"corr": 0, "nonfatal": 0, "fatal": 0}}
-        after = {"0000:c2:00.0": {"corr": 0, "nonfatal": 1, "fatal": 0}}
-        c = aer_check(before, after, 0.01)
-        self.assertEqual(c.status, FAIL)
-        self.assertEqual(c.data["flagged"], [{"bdf": "0000:c2:00.0", "tray": 3, "asic": 2, "nonfatal": 1}])
-
-    def test_correctable_needs_both_thresholds(self):
-        before = {"0000:02:00.0": {"corr": 0}}
-        self.assertEqual(aer_check(before, {"0000:02:00.0": {"corr": 1}}, 0.1).status, PASS)  # under the minimum
-        self.assertEqual(aer_check(before, {"0000:02:00.0": {"corr": 5}}, 1.0).status, PASS)  # under 6 per hour
-        self.assertEqual(aer_check(before, {"0000:02:00.0": {"corr": 6}}, 1.0).status, WARN)
-        self.assertEqual(aer_check(before, {"0000:02:00.0": {"corr": 2}}, 0.1).status, WARN)
-
-    def test_chip_missing_from_before_is_not_judged(self):
-        self.assertEqual(aer_check({}, {"0000:02:00.0": {"nonfatal": 4}}, 1.0).status, PASS)
 
 
 if __name__ == "__main__":
