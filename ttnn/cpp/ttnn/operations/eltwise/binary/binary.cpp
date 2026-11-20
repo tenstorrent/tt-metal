@@ -774,9 +774,7 @@ inline auto invoke_binary_ng_impl(
     // multiply_(int32_tensor, 1.5), or an explicit integer dtype / output_tensor) would truncate it
     // silently; torch refuses the same call ("result type Float can't be cast to the desired output type").
     if (scalar_needs_promotion) {
-        const auto is_integer_dtype = [](DataType dt) {
-            return dt == DataType::INT32 || dt == DataType::UINT32 || dt == DataType::UINT16 || dt == DataType::UINT8;
-        };
+        const auto is_integer_dtype = [](DataType dt) { return !tt::tt_metal::is_floating_point(dt); };
         std::optional<DataType> requested_output_dtype;
         if (output_preallocated) {
             requested_output_dtype = output->dtype();
