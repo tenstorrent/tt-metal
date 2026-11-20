@@ -41,16 +41,12 @@ bool fabric_has_intermesh_z_edge(const MeshGraph& mesh_graph) {
 
 }  // namespace
 
-StreamAssignment FabricBuilderContext::compute_stream_assignment(MeshId mesh_id) const {
-    const auto& control_plane = fabric_context_.get_control_plane();
-    const bool express_enabled = control_plane.express_routing_enabled(mesh_id);
-    // The credit plan follows express enablement (per mesh), multi-TXQ (device-wide, from the
-    // shared router config) and the HAL's stream registers -- the same facts the per-router
-    // derivation used, lifted to the scope they actually vary at.
-    const bool multi_txq_enabled = get_fabric_router_config().multi_txq_enabled();
+StreamAssignment FabricBuilderContext::compute_stream_assignment([[maybe_unused]] MeshId mesh_id) const {
+    // The router takes the credits of every VC through L1 counters, on two TX queues or on a single-ERISC router's one
+    // (it zeroes the counter blocks itself there), so the credit plan is the same for every mesh.
     const CreditTransportPlan plan{
-        .vc0_uses_counters = multi_txq_enabled,
-        .vc1_uses_counters = multi_txq_enabled || express_enabled,
+        .vc0_uses_counters = true,
+        .vc1_uses_counters = true,
         // VC2 has no completion register to fall back on -- the completed table stops at flat
         // position 8 and VC2's sender is position 9 -- so it rides counters wherever it exists.
         .vc2_uses_counters = intermesh_vc_config_.requires_vc2,
@@ -200,19 +196,20 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
     // Compute max channel counts for this fabric instance
     compute_max_channel_counts();
 
-    // Create configs using computed max
-    router_config_ = create_edm_config();
-    for (size_t direction = 0; direction < eth_chan_directions::COUNT; direction++) {
-        router_with_mux_config_[direction] =
-            create_edm_config(FabricTensixConfig::MUX, static_cast<eth_chan_directions>(direction));
-    }
-
     tensix_config_ = nullptr;
 
-    // Populate immutable per-mesh assignments before concurrent per-device kernel creation reads them.
-    const auto& control_plane = fabric_context.get_control_plane();
-    for (const auto mesh_id : control_plane.get_local_mesh_id_bindings()) {
-        stream_assignments_.emplace(mesh_id, compute_stream_assignment(mesh_id));
+    if (!fabric_context.get_control_plane().fabric_uses_flat_addressing()) {
+        router_config_ = create_edm_config();
+        for (size_t direction = 0; direction < eth_chan_directions::COUNT; direction++) {
+            router_with_mux_config_[direction] =
+                create_edm_config(FabricTensixConfig::MUX, static_cast<eth_chan_directions>(direction));
+        }
+
+        // Populate immutable per-mesh assignments before concurrent per-device kernel creation reads them.
+        const auto& control_plane = fabric_context.get_control_plane();
+        for (const auto mesh_id : control_plane.get_local_mesh_id_bindings()) {
+            stream_assignments_.emplace(mesh_id, compute_stream_assignment(mesh_id));
+        }
     }
 
     // Initialize per-device build state
@@ -411,6 +408,13 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
         bool is_mux_extension = (tensix_config == FabricTensixConfig::MUX);
         config.requires_vc2 = is_blackhole && !is_udm_mode && !is_mux_extension;
     }
+
+    // The fabric router runs neither Tensix extension (mux, UDM) with an inter-mesh VC.
+    const auto tensix_config = fabric_context_.get_fabric_tensix_config();
+    TT_FATAL(
+        !config.requires_vc1 || tensix_config == FabricTensixConfig::DISABLED,
+        "The fabric router does not support the Tensix {} extension on a multi-mesh fabric with an inter-mesh VC (VC1)",
+        tensix_config == FabricTensixConfig::UDM ? "UDM" : "mux");
 
     return config;
 }

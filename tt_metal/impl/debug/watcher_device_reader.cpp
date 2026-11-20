@@ -17,7 +17,7 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
-#include <core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <fmt/base.h>
 #include <fmt/ranges.h>
 #include "internal/tt-2xx/quasar/tensix_neo_reg.h"
@@ -32,7 +32,7 @@
 #include "llrt.hpp"
 #include "llrt/hal.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "hostdev/debug_ring_buffer_common.h"
 #include "watcher_device_reader.hpp"
 #include <impl/debug/watcher_server.hpp>
@@ -70,6 +70,19 @@ const char* get_riscv_name(const Hal& hal, HalProgrammableCoreType core_type, ui
             return names[processor_index];
         }
         case HalProgrammableCoreType::IDLE_ETH: {
+            if (hal.get_arch() == tt::ARCH::QUASAR) {
+                // A Keraunos CCE runs eight harts.
+                static const char* const names[] = {
+                    "ierisc0", "ierisc1", "ierisc2", "ierisc3", "ierisc4", "ierisc5", "ierisc6", "ierisc7"};
+                const auto num_processors = hal.get_num_risc_processors(core_type);
+                TT_FATAL(
+                    processor_index < num_processors && processor_index < std::size(names),
+                    "Watcher data corrupted, unexpected processor index {} on core {} (max {})",
+                    processor_index,
+                    core_type,
+                    num_processors - 1);
+                return names[processor_index];
+            }
             static const char* const names[] = {"ierisc", "subordinate_ierisc"};
             TT_FATAL(
                 processor_index < 2,
@@ -301,7 +314,7 @@ string get_l1_target_str(
     return out;
 }
 
-// Quasar's MPSC head (api/debug/ring_buffer.h). A read at +4*(inc+8) posts `inc` and returns the
+// Quasar Tensix MPSC head (api/debug/ring_buffer.h). A read at +4*(inc+8) posts `inc` and returns the
 // pre-increment value, so inc == 0 reads the head without changing it.
 constexpr uint64_t watcher_ring_buf_sem_peek_addr =
     TENSIX_GLOBAL_REGS_SEMAPHORE_REGS_SEMAPHORE_31__REG_ADDR + 4 * (0 + 8);
@@ -356,7 +369,7 @@ private:
     std::string core_str_;
     std::vector<std::byte> l1_read_buf_;
     // Quasar MPSC head, read at snapshot time
-    uint32_t sem_head_ = 0;
+    uint32_t ring_buf_head_ = 0;
     dev_msgs::mailboxes_t::ConstView mbox_data_;
     dev_msgs::launch_msg_t::ConstView launch_msg_;
     const WatcherDeviceReader& reader_;
@@ -390,7 +403,7 @@ private:
         HalProgrammableCoreType programmable_core_type,
         std::string core_str,
         std::vector<std::byte> l1_read_buf,
-        uint32_t sem_head,
+        uint32_t ring_buf_head,
         dev_msgs::Factory dev_msgs_factory,
         const WatcherDeviceReader& reader,
         DumpData& dump_data) :
@@ -398,7 +411,7 @@ private:
         programmable_core_type_(programmable_core_type),
         core_str_(std::move(core_str)),
         l1_read_buf_(std::move(l1_read_buf)),
-        sem_head_(sem_head),
+        ring_buf_head_(ring_buf_head),
         mbox_data_(dev_msgs_factory.create_view<dev_msgs::mailboxes_t>(l1_read_buf_.data())),
         launch_msg_(get_valid_launch_message(mbox_data_)),
         reader_(reader),
@@ -680,16 +693,20 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
     reader.env.get_cluster().read_core(
         l1_read_buf.data(), l1_read_buf.size(), {static_cast<size_t>(reader.device_id), virtual_coord}, mailbox_addr);
 
-    // Quasar Tensix/dispatch MPSC heads live in a semaphore register rather than the mailbox. CCE
-    // harts share a coherent data cache and atomically update the head in their mailbox instead.
-    uint32_t sem_head = 0;
+    // Quasar's MPSC head lives outside the mailbox: in a semaphore register on Tensix, in its own L1 line on
+    // dispatch engines. Read it here with the rest of the snapshot. Gated on the same condition as
+    // DumpMpscRingBuffer(), the only consumer: on Tensix, with the ring buffer disabled the firmware never
+    // initializes semaphore 31, so touching it would fault. CCE cores (Mimir DRISC, Keraunos idle-eth) have no
+    // such register and keep the head in the mailbox.
+    uint32_t ring_buf_head = 0;
     if (hal.get_arch() == tt::ARCH::QUASAR && !rtoptions.watcher_ring_buffer_disabled() &&
-        programmable_core_type != HalProgrammableCoreType::DRAM) {
+        programmable_core_type != HalProgrammableCoreType::DRAM &&
+        programmable_core_type != HalProgrammableCoreType::IDLE_ETH) {
+        uint64_t head_addr = (programmable_core_type == HalProgrammableCoreType::DISPATCH)
+                                 ? hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::RING_BUF_HEAD)
+                                 : watcher_ring_buf_sem_peek_addr;
         reader.env.get_cluster().read_core(
-            &sem_head,
-            sizeof(sem_head),
-            {static_cast<size_t>(reader.device_id), virtual_coord},
-            watcher_ring_buf_sem_peek_addr);
+            &ring_buf_head, sizeof(ring_buf_head), {static_cast<size_t>(reader.device_id), virtual_coord}, head_addr);
     }
 
     return Core(
@@ -697,7 +714,7 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
         programmable_core_type,
         std::move(core_str),
         std::move(l1_read_buf),
-        sem_head,
+        ring_buf_head,
         dev_msgs_factory,
         reader,
         dump_data);
@@ -761,8 +778,9 @@ void WatcherDeviceReader::Core::Dump() const {
     if (is_eth_core) {
         DumpEthFwStage();
     }
-    // Ethernet and DRAM cores don't use the sync reg
-    if (!is_eth_core && !is_dram_core && rtoptions.get_watcher_dump_all()) {
+    // Ethernet, DRAM and dispatch cores don't use the sync reg. Dispatch engines have no NEOs, so their NEO tile
+    // counter and remapper registers don't exist, and on Trinity a host read of them never returns.
+    if (!is_eth_core && !is_dram_core && !is_dispatch_core && rtoptions.get_watcher_dump_all()) {
         // Reading registers while running can cause hangs, only read if
         // requested explicitly
         DumpSyncRegs();
@@ -1139,10 +1157,11 @@ void WatcherDeviceReader::Core::DumpMpscRingBuffer(bool to_stdout) const {
 
     uint32_t capacity = hal.get_ring_buffer_capacity();
     uint32_t mask = capacity - 1;  // capacity is a power of two
-    // Quasar Tensix/dispatch keep the head in a semaphore register. CCE and Blackhole keep it in
-    // the mailbox.
-    uint32_t head = (hal.get_arch() == tt::ARCH::QUASAR && programmable_core_type_ != HalProgrammableCoreType::DRAM)
-                        ? sem_head_
+    // Quasar keeps head outside the mailbox, snapshotted alongside it, except on CCE cores (Mimir DRISC,
+    // Keraunos idle-eth), which keep it in the mailbox as Blackhole does.
+    uint32_t head = (hal.get_arch() == tt::ARCH::QUASAR && programmable_core_type_ != HalProgrammableCoreType::DRAM &&
+                     programmable_core_type_ != HalProgrammableCoreType::IDLE_ETH)
+                        ? ring_buf_head_
                         : rb->head;
 
     // Check every slot: head restarts at 0 after a rewind, so a small head doesn't mean few entries.
@@ -1182,12 +1201,14 @@ void WatcherDeviceReader::Core::DumpRunState(uint32_t state) const {
         code = 'W';
     } else if (state == dev_msgs::RUN_SYNC_MSG_INIT_SYNC_REGISTERS) {
         code = 'S';
+    } else if (state == dev_msgs::RUN_SYNC_MSG_DFB_DRAINING) {
+        code = 'E';
     }
     if (code == 'U') {
         LogRunningKernels();
         TT_THROW(
-            "Watcher data corruption, unexpected run state on core{}: {} (expected {}, {}, {}, {}, {}, {}, {}, {}, or "
-            "{})",
+            "Watcher data corruption, unexpected run state on core{}: {} (expected {}, {}, {}, {}, {}, {}, {}, {}, {}, "
+            "or {})",
             virtual_coord_.str(),
             state,
             dev_msgs::RUN_MSG_INIT,
@@ -1198,7 +1219,8 @@ void WatcherDeviceReader::Core::DumpRunState(uint32_t state) const {
             dev_msgs::RUN_MSG_REPLAY_TRACE,
             dev_msgs::RUN_SYNC_MSG_LOAD,
             dev_msgs::RUN_SYNC_MSG_WAITING_FOR_RESET,
-            dev_msgs::RUN_SYNC_MSG_INIT_SYNC_REGISTERS);
+            dev_msgs::RUN_SYNC_MSG_INIT_SYNC_REGISTERS,
+            dev_msgs::RUN_SYNC_MSG_DFB_DRAINING);
     } else {
         fprintf(reader_.f, "%c", code);
     }

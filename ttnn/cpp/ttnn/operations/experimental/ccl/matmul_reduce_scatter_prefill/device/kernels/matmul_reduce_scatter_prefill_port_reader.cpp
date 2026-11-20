@@ -34,8 +34,8 @@ void kernel_main() {
     constexpr uint32_t num_chunks = get_compile_time_arg_val(ct::NUM_CHUNKS);  // the unit walk repeats per chunk
     constexpr uint32_t entries_per_chunk = get_compile_time_arg_val(ct::ENTRIES_PER_CHUNK);
 
-    // staging address (cb_finished slot 0) on every core
-    const uint32_t finished_base = get_common_arg_val<uint32_t>(mrs::port_reader_common::FINISHED_BASE);
+    // cb_finished slot 0, at the same address on every core
+    const uint32_t finished_base = get_write_ptr(get_compile_time_arg_val(ct::CB_FINISHED));
     const uint32_t mailbox_base = get_common_arg_val<uint32_t>(mrs::port_reader_common::MAILBOX_BASE);
     const uint32_t consumed_id = get_arg_val<uint32_t>(mrs::port_reader_rt::CONSUMED_ID);
     const uint32_t num_cores = get_arg_val<uint32_t>(mrs::port_reader_rt::NUM_CORES);

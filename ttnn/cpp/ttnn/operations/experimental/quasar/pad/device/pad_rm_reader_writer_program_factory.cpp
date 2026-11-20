@@ -3,13 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pad_rm_reader_writer_program_factory.hpp"
+#include "ttnn/core.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/tensor/tensor_apis.hpp>
 
 #include <algorithm>
@@ -21,7 +22,6 @@
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim::qsr {
 using ttnn::operations::data_movement::float_to_uint16;
@@ -45,7 +45,7 @@ MeshTensor build_pad_value_const_mesh_tensor(const PadInputs& tensor_args, float
         ttnn::Shape({1, 1, 1, pad_value_const_buffer_size}),
         DataType::BFLOAT16,
         Layout::ROW_MAJOR);
-    auto& cq = device->mesh_command_queue();
+    auto& cq = ttnn::core::current_mesh_command_queue(*device);
     // NOTE: The const buffer is always in L1 (mirrors the legacy factory).
     const MemoryConfig mem_cfg{TensorMemoryLayout::INTERLEAVED, BufferType::L1};
     return cq.enqueue_write_tensor(host_pad.host_tensor(), mem_cfg);
@@ -101,8 +101,8 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterProgramFactory::create
     // DataflowBuffer (legacy CB c_0): one input-row stream, multibuffered.
     // ------------------------------------------------------------------------
     const uint32_t cb_npages = 16;  // multibuffering
-    const uint32_t cb_pagesize =
-        tt::round_up(padded_row_size_nbytes, std::max<uint32_t>(a.buffer()->alignment(), tt::constants::TILE_WIDTH));
+    const uint32_t cb_pagesize = tt::round_up(
+        padded_row_size_nbytes, std::max<uint32_t>(a.mesh_buffer().alignment(), tt::constants::TILE_WIDTH));
     const tt::DataFormat in_df = datatype_to_dataformat_converter(a.dtype());
     DataflowBufferSpec cb_in0_spec{
         .unique_id = CB_IN0,

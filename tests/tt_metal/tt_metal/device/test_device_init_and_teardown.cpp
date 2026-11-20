@@ -9,7 +9,6 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <map>
 #include <optional>
 #include <string>
 #include <variant>
@@ -158,9 +157,6 @@ TEST(DeviceInitFabric, RejectsSingleHost1ChipMesh) {
     }
     if (*MetalContext::instance().global_distributed_context().size() > 1) {
         GTEST_SKIP() << "Multi-host 1-local-chip meshes are allowed to launch fabric";
-    }
-    if (cluster.is_galaxy_cluster()) {
-        GTEST_SKIP() << "Galaxy opens the full cluster when fabric is enabled, so a 1x1 mesh never hits this guard";
     }
     if (cluster.mmio_chip_ids().size() != cluster.all_chip_ids().size()) {
         GTEST_SKIP() << "Clusters with remote chips fatal earlier when fabric is launched on a subset of devices";
