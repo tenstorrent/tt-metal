@@ -81,15 +81,15 @@ inline void _llk_unpack_tilize_init_(
     const std::uint32_t ct_dim              = 0,
     const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+    LLK_ASSERT(
+        tensor_shape.total_num_faces() == 1 || tensor_shape.total_num_faces() == 2 || tensor_shape.total_num_faces() == 4, "num_faces must be 1, 2, or 4");
+    // A short face cannot have a face below it.
+    LLK_ASSERT(
+        tensor_shape.face_r_dim == FACE_R_DIM || (tensor_shape.num_faces_r_dim == 1 && tensor_shape.num_faces_c_dim == 2),
+        "tilize supports face_r_dim < 16 only on 1/2/4/8x32 tiles");
     LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_tilize_init_", tensor_shape);
     const std::uint32_t face_r_dim = tensor_shape.face_r_dim;
-    const std::uint32_t num_faces  = tensor_shape.total_num_faces();
     const bool narrow_tile         = (tensor_shape.num_faces_c_dim == 1);
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    // Short faces were never run as one-face-wide (Nx16) tiles, and a short face cannot have a face below it.
-    LLK_ASSERT(
-        face_r_dim == FACE_R_DIM || (tensor_shape.num_faces_r_dim == 1 && tensor_shape.num_faces_c_dim == 2),
-        "tilize supports face_r_dim < 16 only on 1/2/4/8x32 tiles");
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
 
     // In case of 32-bit numbers, we have to unpack into dest register
@@ -323,7 +323,8 @@ inline void _llk_unpack_tilize_(
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void _llk_unpack_tilizeA_B_mop_config_(const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_tilizeA_B_mop_config_", tensor_shape);
+    // No LLK_VALIDATE_TENSOR_SHAPE_UNPACK on the tilizeA_B path: ttnn pool runs production shapes
+    // (operand A min(kh*kw,16)x32, operand B a 1x32 scalar CB) that no tt-llk test exercises.
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
     const bool narrow_tile        = (tensor_shape.num_faces_c_dim == 1);
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
@@ -408,14 +409,13 @@ inline void _llk_unpack_tilizeA_B_init_(
     const ckernel::TensorShape tensor_shape_a = ckernel::DEFAULT_TENSOR_SHAPE,
     const ckernel::TensorShape tensor_shape_b = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_tilizeA_B_init_", tensor_shape_a);
-    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_tilizeA_B_init_", tensor_shape_b);
     const std::uint32_t num_faces       = tensor_shape_a.total_num_faces();
     const bool narrow_tile              = (tensor_shape_a.num_faces_c_dim == 1);
     const std::uint32_t unpA_face_r_dim = tensor_shape_a.face_r_dim;
     const std::uint32_t unpB_face_r_dim = tensor_shape_b.face_r_dim;
+    // Operand B only supplies face_r_dim (SETADCXX below), so it keeps no further checks.
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    // Short faces were never run as one-face-wide (Nx16) tiles, and a short face cannot have a face below it.
+    // A short face cannot have a face below it.
     LLK_ASSERT(
         unpA_face_r_dim == FACE_R_DIM || (tensor_shape_a.num_faces_r_dim == 1 && tensor_shape_a.num_faces_c_dim == 2),
         "tilizeA_B supports operand A face_r_dim < 16 only on 1/2/4/8x32 tiles");
@@ -475,7 +475,6 @@ inline void _llk_unpack_tilizeA_B_(
     std::uint32_t block_ct_dim,
     const ckernel::TensorShape tensor_shape_a = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_tilizeA_B_", tensor_shape_a);
     const std::uint32_t face_r_dim = tensor_shape_a.face_r_dim;
     const std::uint32_t num_faces  = tensor_shape_a.total_num_faces();
     const bool narrow_tile         = (tensor_shape_a.num_faces_c_dim == 1);
@@ -610,7 +609,6 @@ inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, co
  */
 inline void _llk_unpack_tilizeA_B_uninit_(const std::uint32_t unpack_dst_format, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_tilizeA_B_uninit_", tensor_shape);
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
 
     // reset z/w counters
