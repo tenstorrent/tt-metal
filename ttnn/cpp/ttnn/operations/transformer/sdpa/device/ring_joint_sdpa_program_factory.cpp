@@ -214,6 +214,7 @@ constexpr uint32_t kNeighborHaloWriterKernelIndex = 4;
 // Program creation and the per-dispatch patch both go through plan_halo_exchanges, since the exchange
 // list fixes the kernel count and order. Only a 1D fabric's line multicast takes a start distance.
 std::vector<ring_joint::ChunkedSlidingHaloExchange> plan_halo_exchanges(
+    const ttnn::MeshDevice& mesh_device,
     const ttnn::prim::RingJointSDPAParams& args,
     const ring_joint::ChunkedSlidingHaloLayout& layout,
     uint32_t transport_rank) {
@@ -221,7 +222,7 @@ std::vector<ring_joint::ChunkedSlidingHaloExchange> plan_halo_exchanges(
         layout,
         transport_rank,
         args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Linear,
-        tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig()));
+        tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig(mesh_device)));
 }
 
 // A one-hop or multicast halo spreads each exchange over every link; a unicast multi-hop halo gives each
@@ -664,7 +665,8 @@ ag_dyn::SemaphoreArgPatch record_ring_joint_semaphore_arg_patch(
         const RingWritePlan ring_write_plan = build_ring_write_plan(args, tensor_args, coord);
         const RingJointRuntimePlan runtime_plan = build_runtime_plan(args, tensor_args, ring_write_plan);
         const auto halo_layout = build_runtime_halo_layout(args, tensor_args, runtime_plan.logical_nt);
-        const auto halo_exchanges = plan_halo_exchanges(args, *halo_layout, ring_write_plan.transport_rank);
+        const auto halo_exchanges =
+            plan_halo_exchanges(*tensor_args.input_k.device(), args, *halo_layout, ring_write_plan.transport_rank);
         for (uint32_t exchange = 0; exchange < halo_exchanges.size(); ++exchange) {
             ag_dyn::record_semaphore_arg_slot(
                 patch,
@@ -718,8 +720,10 @@ void apply_ring_joint_scalar_runtime_args(
     const std::optional<ring_joint::ChunkedSlidingHaloLayout> runtime_halo_layout =
         build_runtime_halo_layout(args, tensor_args, runtime_plan.logical_nt);
     const std::vector<ring_joint::ChunkedSlidingHaloExchange> halo_exchanges =
-        runtime_halo_layout ? plan_halo_exchanges(args, *runtime_halo_layout, ring_write_plan.transport_rank)
-                            : std::vector<ring_joint::ChunkedSlidingHaloExchange>{};
+        runtime_halo_layout
+            ? plan_halo_exchanges(
+                  *tensor_args.input_k.device(), args, *runtime_halo_layout, ring_write_plan.transport_rank)
+            : std::vector<ring_joint::ChunkedSlidingHaloExchange>{};
     const uint32_t tensor_descriptor_field_count =
         tensor_args.has_metadata() ? ag_rt::kMetadataTensorDescriptorFieldCount : ag_rt::kTensorDescriptorFieldCount;
     const uint32_t neighbor_reader_tensor_descriptor_field_count =
@@ -2482,6 +2486,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         defines["SDPA_MATMUL_FIDELITY"] =
             std::to_string(static_cast<uint32_t>(*args.program_config->matmul_math_fidelity));
     }
+    if (args.program_config.has_value() && args.program_config->min_blocked_pack_tiles.has_value()) {
+        defines["SDPA_MIN_BLOCKED_PACK_TILES"] = std::to_string(*args.program_config->min_blocked_pack_tiles);
+    }
     // MATH_FIDELITY is not defined on the unpack TRISC, and all three must agree on how P.V is set up.
     if (math_fidelity == MathFidelity::LoFi) {
         defines["SDPA_COMPUTE_LOFI"] = "1";
@@ -2815,7 +2822,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     bool gqa_mcast_enabled = false;
     std::string gqa_mcast_fallback_reason;
     std::vector<uint32_t> gqa_chain_max_q(gqa_chain_configs.size(), 0);  // per-core loop-padding count
-    if (gqa_grouped_kv && build_kv_chains) {
+    // The grouped chains follow the per-length Q split, so dynamic_local_n builds none: every core reads its K/V
+    // from DRAM, as for B > 1.
+    if (gqa_grouped_kv && build_kv_chains && !dynamic_local_n) {
         std::vector<std::vector<ChainSegment>> kv_group_segments(NHK);
 
         for (uint32_t ci = 0; ci < num_cores; ++ci) {
@@ -3396,11 +3405,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
         .math_approx_mode = math_approx_mode,
     };
-    if (ksplit_count > 1) {
-        // Code size, not correctness: at O3 the merge epilogue grows the q128 compute binaries past the 70,656 B
-        // kernel config buffer ("Program size too large"). O2 cuts the three TRISC binaries by ~30%.
+    if (ksplit_count > 1 || (dynamic_local_n && !use_streaming_compute)) {
+        // Code size, not correctness: at O3 the K-split merge epilogue and the fp32 path under dynamic_local_n push
+        // the compute binaries past the kernel config buffer ("Program size too large"). O2 fits.
         compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
     }
 
@@ -3642,7 +3652,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // plan_chunked_sliding_halo_exchanges groups the hops into exchanges.
         const uint32_t halo_remote_hops = chunked_sliding_halo_layout.remote_hop_count();
         const auto& ag_attrs = args.all_gather_operation_attributes;
-        const auto halo_exchanges = plan_halo_exchanges(args, chunked_sliding_halo_layout, transport_rank);
+        const auto halo_exchanges =
+            plan_halo_exchanges(*mesh_device, args, chunked_sliding_halo_layout, transport_rank);
         // The first exchange's workers collect every arrival (RingAttentionNeighborHaloConfig::collects_arrivals).
         TT_FATAL(halo_exchanges.front().hop == 1, "The first sliding halo exchange must cover hop 1");
         const bool halo_multicast = halo_exchanges.front().multicast;
@@ -4073,7 +4084,7 @@ std::optional<FullMeshRoute> prove_full_mesh_route(const RingJointSDPAParams& ar
     if (ag.route_plan_hash.has_value()) {
         return FullMeshRoute{ag.topology, ag.snake_orientation, *ag.route_plan_hash};
     }
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig(*q.device());
     const std::array<tt::tt_fabric::Topology, 2> axis_topology{
         ttnn::ccl::get_axis_topology(q, fabric_config, 0), ttnn::ccl::get_axis_topology(q, fabric_config, 1)};
     const auto route = ttnn::operations::ccl::common::resolve_mesh_ring_plan(
