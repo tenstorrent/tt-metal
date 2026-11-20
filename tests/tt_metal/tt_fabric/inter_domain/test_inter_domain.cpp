@@ -202,18 +202,22 @@ TEST(InterDomain, Sanity) {
         InterDomainPort port;
         PortInfo peer;
         uint32_t rank = 0;
+        std::pair<uint64_t, uint64_t> chips;  // (our asic, their asic)
     };
-    std::map<std::pair<uint64_t, uint64_t>, Cable> cables;  // (our asic, their asic)
+    // (lower domain's asic, higher's): both sides connect in the same order, as each connect waits on the peer
+    std::map<std::pair<uint64_t, uint64_t>, Cable> cables;
     for (size_t i = 0; i < ports.size(); ++i) {
         const auto& p = me.ports[i];
         for (const auto& q : peer.ports) {
             if (q.asic != p.peer_asic || q.chan != p.peer_chan || q.peer_asic != p.asic || q.peer_chan != p.chan) {
                 continue;
             }
-            const uint32_t rank = *domain < *peer_domain ? p.chan : q.chan;
-            auto it = cables.find({p.asic, q.asic});
+            const bool lower = *domain < *peer_domain;
+            const uint32_t rank = lower ? p.chan : q.chan;
+            const auto key = lower ? std::pair{p.asic, q.asic} : std::pair{q.asic, p.asic};
+            auto it = cables.find(key);
             if (it == cables.end() || rank < it->second.rank) {
-                cables[{p.asic, q.asic}] = Cable{ports[i], q, rank};
+                cables[key] = Cable{ports[i], q, rank, {p.asic, q.asic}};
             }
         }
     }
@@ -233,7 +237,7 @@ TEST(InterDomain, Sanity) {
         }
         step("ready");
 
-        for (const auto& [chips, cable] : cables) {
+        for (const auto& [_, cable] : cables) {
             const auto& port = cable.port;
             const auto& q = cable.peer;
             log_info(
@@ -269,7 +273,8 @@ TEST(InterDomain, Sanity) {
         // by pass, then sending chip: a router's worker channel takes one worker at a time, so the sends through the
         // chip across (pass 1) go after the ones straight across it
         std::map<std::pair<uint32_t, uint64_t>, std::vector<Send>> sends;
-        for (const auto& [chips, cable] : cables) {
+        for (const auto& [_, cable] : cables) {
+            const auto& chips = cable.chips;
             const auto port = cable.port;
             sends[{0, chips.first}].push_back(
                 Send{kCore, chips.second, 0, {}, [port](Program& program, std::vector<uint32_t>& args) {
@@ -366,7 +371,8 @@ TEST(InterDomain, Sanity) {
         // what the peer sent each of our chips with a cable: slot 0 from across it, slots 1 and 2 from the chip behind
         // that. The peer's "sent" only means its workers returned, so poll until it all lands.
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-        for (const auto& [chips, cable] : cables) {
+        for (const auto& [_, cable] : cables) {
+            const auto& chips = cable.chips;
             IDevice* dev = device_of.at(chips.first);
             std::vector<std::pair<uint32_t, uint64_t>> expected = {{0, chips.second}};
             for (const auto& [asic, rx] : peer.rx) {
@@ -399,7 +405,7 @@ TEST(InterDomain, Sanity) {
         // both sides have everything before either disconnects
         step("received");
 
-        for (const auto& [chips, cable] : cables) {
+        for (const auto& [_, cable] : cables) {
             disconnect_inter_domain(cable.port);
             EXPECT_EQ(get_inter_domain_state(cable.port), InterDomainState::DRAIN);
         }
