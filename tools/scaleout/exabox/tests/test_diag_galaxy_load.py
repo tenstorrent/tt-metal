@@ -179,22 +179,27 @@ class TestLinks(unittest.TestCase):
         sweep = [c for c in phase.checks if c.name == "galaxy_sweep"]
         self.assertEqual([(c.status, c.details) for c in sweep], [(SKIP, "no reset (--skip-reset)")])
 
-    def _sweep_reset(self, **kw):
-        """run_diag's reset callback for the sweep, with a glx_reset that fails or not."""
+    def _sweep_reset(self, reset_fails=False, skip_reset=False):
+        """run_diag's reset callback for the sweep, after a failed pair test, with the real run_post_test_reset
+        over a glx_reset that fails or not."""
         import diag_runner
+        from diag import resets
 
         got = {}
 
-        def fake_reset(tt_smi_path, plan, phase, dry_run):
-            phase.add(Check(name="post_test_reset_ok", status=FAIL if kw.pop("fail", False) else PASS, details=""))
+        def fake_loop(tt_smi, plan, phase, dry_run):
+            phase.add(Check(name="reset_glx", status=FAIL if reset_fails else PASS, details=""))
 
         def fake_links(phase, out, fault, reset, dry_run):
+            phase.add(Check(name="galaxy_pair", status=FAIL, details="pair 00-01 failed", ip="eth"))
             got["why"] = reset()
 
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
             diag_runner, "run_links", fake_links
         ), mock.patch.object(diag_runner, "run_busbar", return_value=True), mock.patch.object(
-            diag_runner, "run_post_test_reset", fake_reset
+            resets, "resolve_tt_smi", return_value="tt-smi"
+        ), mock.patch.object(
+            resets, "reset_loop", fake_loop
         ), contextlib.redirect_stdout(
             io.StringIO()
         ):
@@ -210,14 +215,14 @@ class TestLinks(unittest.TestCase):
                 skip_sys_triage=True,
                 output=d / "report.json",
                 snapshot_out=d / "snapshot.json",
-                skip_reset=kw.get("skip_reset", False),
+                skip_reset=skip_reset,
             )
         return got["why"]
 
     def test_sweep_reset_says_why_it_skips(self):
         self.assertEqual(self._sweep_reset(), "")
         self.assertEqual(self._sweep_reset(skip_reset=True), "no reset (--skip-reset)")
-        self.assertEqual(self._sweep_reset(fail=True), "reset failed")
+        self.assertEqual(self._sweep_reset(reset_fails=True), "reset failed")
 
 
 class TestTierAndAer(unittest.TestCase):
