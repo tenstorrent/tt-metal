@@ -24,7 +24,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from gwdt_checks import Result, Status
+from gwdt_checks import Result, Status, dur
 from gwdt_quad_verdict import load_hashes, load_ranks, overall, stage_verdicts
 from gwdt_steps import Ctx, State, Step, base_env, step_dir, would_run
 
@@ -76,6 +76,10 @@ _FATAL = re.compile(
 # An uncaught Python exception ends a rank the same way; its last traceback line, unindented, names it.
 _TAGGED = re.compile(r"^\[\d+,(\d+)\]<std(?:out|err)>: ?(.*)$")
 _TRACEBACK = "Traceback (most recent call last):"
+# A loguru line's "module:function:line - " prefix, and a tt-metal line's "(file.cpp:123)" suffix.
+_LOGURU_SRC = re.compile(r"^[\w.<>]+:[\w.<>]+:\d+ - ")
+_CPP_SRC = re.compile(r"\s*\([\w./]+:\d+\)$")
+LAST_LINE_CHARS = 90
 FATAL_GRACE_S = 20
 FATAL_MAX_CHARS = 400
 # A run that never reached the hardware question; its fallback would meet the same wall.
@@ -284,6 +288,57 @@ def bringup_blocker(log_text: str) -> str | None:
             "Stop the leftover process on that host, then rerun"
         )
     return None
+
+
+def last_log_message(text: str) -> str:
+    """The runner log's last message, without the rank tag, colors, timestamp, level and source location."""
+    for line in reversed(text.splitlines()):
+        m = _TAGGED.match(_ANSI.sub("", line).strip())
+        rank, line = (m.group(1), m.group(2).strip()) if m else (None, _ANSI.sub("", line).strip())
+        msg = _CPP_SRC.sub("", _LOGURU_SRC.sub("", line.split(" | ")[-1].strip()))
+        if msg:
+            msg = f"rank {rank}: {msg}" if rank is not None else msg
+            return msg if len(msg) <= LAST_LINE_CHARS else msg[: LAST_LINE_CHARS - 3] + "..."
+    return ""
+
+
+def bringup_now(n_ready: int, n_ranks: int, fabric: str, elapsed: float, prev: float | None, quiet: float, last: str):
+    """What bring-up is doing: how far, how long against the last bring-up and the limit, and the log's last word."""
+    took = f", last bring-up took {dur(prev)}" if prev is not None else ""
+    log = f"; log {dur(quiet)} ago: {last}" if last else ""
+    return (
+        f"bring-up {n_ready}/{n_ranks} ranks ready ({fabric}), {dur(elapsed)}{took}, "
+        f"gives up at {dur(SETUP_TIMEOUT_S)}{log}"
+    )
+
+
+def serving_now(mode: str, fabric: str, iters: int, elapsed: float, duration_s, max_requests, quiet: float) -> str:
+    """How far serving is against its budget, and how long since any stage last moved (a hang at STALL_S)."""
+    budget = f"{iters}/{max_requests} requests" if duration_s is None else f"{iters} iterations"
+    of = f" of {dur(duration_s)}" if duration_s is not None else ""
+    return f"{mode} {fabric}: {budget}, {dur(elapsed)}{of}; " f"last progress {dur(quiet)} ago, hang at {dur(STALL_S)}"
+
+
+def live_rows(by_rank: list[str], ready: set[int], ranks: dict | None, now: float) -> list[tuple[str, Result]]:
+    """Per-stage rows while the run is going: bring-up readiness, then each stage's iterations and last progress."""
+    rows = []
+    for k, host in enumerate(by_rank):
+        r = (ranks or {}).get(k)
+        if ranks is None:
+            reason = "bring-up done" if k in ready else "bringing up"
+        elif r is None:
+            reason = "no progress file yet"
+        else:
+            reason = (
+                f"{r['iterations']} iters, {r['chunks_done']} chunks, last progress {dur(now - r['last_progress'])} ago"
+            )
+        rows.append((f"stage {k} {host}", Result(Status.RUN, reason)))
+    return rows
+
+
+def _show(state: State, rows: list[tuple[str, Result]]) -> None:
+    state.result = Result(Status.RUN, "", [f"{label}: {r.reason}" for label, r in rows])
+    state.rows = [r for _, r in rows]
 
 
 def rank_hosts(ttrun_cwd: Path, hosts: list[str]) -> list[str]:
@@ -509,6 +564,16 @@ def _attempt_dir(ctx: Ctx, mode: str, duration_s, max_requests, attempt: int) ->
 def run_once(
     ctx: Ctx, state: State, mode: str, fabric: str, hosts: list[str], duration_s: int | None, max_requests: int | None
 ) -> Result:
+    try:
+        return _run_once(ctx, state, mode, fabric, hosts, duration_s, max_requests)
+    finally:
+        # The caller sets the verdict; drop the live rows so a fallback does not show this attempt as running.
+        state.result = Result(Status.RUN)
+
+
+def _run_once(
+    ctx: Ctx, state: State, mode: str, fabric: str, hosts: list[str], duration_s: int | None, max_requests: int | None
+) -> Result:
     d = _attempt_dir(ctx, mode, duration_s, max_requests, state.attempt)
     results, ttrun_cwd = d / "results", d / "ttrun-cwd"
     for p in (results, ttrun_cwd):
@@ -527,12 +592,18 @@ def run_once(
         follow, start = _Follower(runner_log), time.time()
         watch = BringupWatch(len(hosts), start)
         ready = watch.ready
+        logged = start
         while len(ready) < len(hosts):
-            watch.feed(follow.read(), time.time())
-            blocker = watch.blocker(time.time())
+            now = time.time()
+            if new := follow.read():
+                watch.feed(new, now)
+                logged = now
+            blocker = watch.blocker(now)
             if blocker is not None:
                 return Result(Status.FAIL, f"{blocker}; log {runner_log}")
-            state.now = f"bring-up {len(ready)}/{len(hosts)} ranks ready ({fabric})"
+            last = last_log_message(follow.text[-(1 << 14) :])
+            state.now = bringup_now(len(ready), len(hosts), fabric, now - start, ctx.quad_bringup_s, now - logged, last)
+            _show(state, live_rows(rank_hosts(ttrun_cwd, hosts), ready, None, now))
             ctx.tick()
             if runner.poll() is not None:
                 notes.append(f"runner exited rc={runner.returncode} during bring-up, log {runner_log}")
@@ -546,15 +617,19 @@ def run_once(
                 break
             time.sleep(POLL_S)
         if len(ready) == len(hosts):
+            ctx.quad_bringup_s = time.time() - start
             script = producer_cmd(ctx.repo, mode, len(hosts), tokens, duration_s, max_requests)
             cmd = shlex.join(_host_cmd(rank0_host(ttrun_cwd, hosts), script))
             producer = _spawn(cmd, producer_log, ttrun_cwd, ctx.repo)
             fed = time.time()
+            by_rank = rank_hosts(ttrun_cwd, hosts)
             while producer.poll() is None:
                 ranks = load_ranks(results, len(hosts), retries=1, delay=0)
                 last = max([fed] + [r["last_progress"] for r in ranks.values() if r])
                 iters = min((r["iterations"] for r in ranks.values() if r), default=0)
-                state.now = f"{mode} {fabric}: {iters} iterations, {time.time() - fed:.0f}s"
+                now = time.time()
+                state.now = serving_now(mode, fabric, iters, now - fed, duration_s, max_requests, now - last)
+                _show(state, live_rows(by_rank, ready, ranks, now))
                 ctx.tick()
                 if runner.poll() is not None:
                     notes.append(f"runner exited rc={runner.returncode} while serving, log {runner_log}")

@@ -5,6 +5,7 @@
 import json
 import re
 import shlex
+import time
 from pathlib import Path
 
 import gwdt_quad
@@ -20,7 +21,7 @@ from gwdt_quad import (
     setup_ranks,
     write_tokens,
 )
-from gwdt_steps import Ctx
+from gwdt_steps import Ctx, State
 
 REPO = Path("/data/u/tt-metal")
 HOSTS = ["h0", "h1", "h2", "h3"]
@@ -590,3 +591,95 @@ def test_quad_checkout_skip_env_rejects_bad_value(tmp_path, monkeypatch, capsys)
     assert gwdt.main(["--quad", "--hosts", ",".join(HOSTS)]) == 2
     assert "use 0 (full check), 1 (commit only) or 2 (no check)" in capsys.readouterr().out
     assert not list(tmp_path.rglob("LOG_*"))
+
+
+def test_last_log_message_strips_tags_colors_and_sources():
+    log = (
+        "[1,0]<stdout>: \x1b[90m2026-11-20 08:54:53.665\x1b[0m | \x1b[32minfo    \x1b[m | \x1b[35m  Fabric\x1b[0m | "
+        "\x1b[37mGenerating rank bindings...\x1b[0m \x1b[90m(generate_rank_bindings.cpp:588)\x1b[0m\n"
+        "[1,3]<stderr>: 2026-11-20 08:59:30.295 | INFO     | __main__:_serve_request:1443 - [pp rank 3] setup complete\n"
+        "\n"
+    )
+    assert gwdt_quad.last_log_message(log) == "rank 3: [pp rank 3] setup complete"
+    assert gwdt_quad.last_log_message(log.splitlines()[0]) == "rank 0: Generating rank bindings..."
+    assert gwdt_quad.last_log_message("2026-11-20 | INFO | m:f:1 - [tt-run] Phase 1") == "[tt-run] Phase 1"
+    long = gwdt_quad.last_log_message("x" * 500)
+    assert len(long) == gwdt_quad.LAST_LINE_CHARS and long.endswith("...")
+    assert gwdt_quad.last_log_message("") == ""
+
+
+class _FakeProc:
+    def __init__(self, polls_until_exit: int | None):
+        self.left, self.returncode, self.pid = polls_until_exit, None, 0
+
+    def poll(self):
+        if self.left is not None:
+            self.left -= 1
+            if self.left < 0:
+                self.returncode = 0
+        return self.returncode
+
+    def wait(self, timeout=None):
+        self.returncode = 0
+        return 0
+
+
+def test_run_once_shows_live_progress(tmp_path, monkeypatch):
+    """Bring-up shows ranks ready, time against the limit and the log's last word; serving shows iterations per stage
+    against the budget and the time since progress. The live rows are gone once run_once returns."""
+    monkeypatch.setattr(gwdt_quad, "reset_hosts", lambda repo, hosts, d: Result(Status.PASS))
+    monkeypatch.setattr(gwdt_quad, "vocab_size", lambda repo: 100)
+    monkeypatch.setattr(gwdt_quad, "_kill", lambda p: None)
+    monkeypatch.setattr(gwdt_quad, "rank0_host", lambda cwd, hosts: hosts[0])
+    procs = {"runner.log": _FakeProc(None), "producer.log": _FakeProc(2)}
+    logs = {}
+
+    def spawn(cmd, log, cwd, repo):
+        logs[log.name] = log
+        log.write_text("[1,2]<stderr>: 2026 | INFO | m:f:1 - loading weights\n")
+        return procs[log.name]
+
+    def sleep(_):
+        if "producer.log" not in logs:
+            with open(logs["runner.log"], "a") as f:
+                f.writelines(
+                    f"[1,{k}]<stderr>: [pp rank {k}] setup complete, entering request loop\n" for k in range(4)
+                )
+            return
+        for k in range(4):
+            doc = {"iterations": 10 + k, "chunks_done": 20, "last_progress": time.time(), "done": False, "error": None}
+            (tmp_path / "run/quad/block_random_300s/attempt_01/results" / f"rank{k}.json").write_text(json.dumps(doc))
+
+    monkeypatch.setattr(gwdt_quad, "_spawn", spawn)
+    monkeypatch.setattr(gwdt_quad.time, "sleep", sleep)
+    seen = []
+    state = State(Result(Status.RUN))
+    ctx = Ctx(tmp_path, tmp_path / "run", False, tick=lambda: seen.append((state.now, list(state.result.details))))
+    gwdt_quad.run_once(ctx, state, "block_random", "2d_torus_xy", HOSTS, 300, None)
+
+    bringup_now, bringup_rows = seen[0]
+    assert bringup_now.startswith("bring-up 0/4 ranks ready (2d_torus_xy), 0s, gives up at 45m00s; log 0s ago:")
+    assert bringup_now.endswith("rank 2: loading weights")
+    assert bringup_rows == [f"stage {k} {h}: bringing up" for k, h in enumerate(HOSTS)]
+    serving_now, serving_rows = seen[-1]
+    assert serving_now.startswith("block_random 2d_torus_xy: 10 iterations, 0s of 5m00s; last progress 0s ago")
+    assert serving_rows[3].startswith(f"stage 3 {HOSTS[3]}: 13 iters, 20 chunks, last progress")
+    assert ctx.quad_bringup_s is not None
+    assert state.result == Result(Status.RUN)
+    assert "last bring-up took" in gwdt_quad.bringup_now(0, 4, "f", 1, ctx.quad_bringup_s, 0, "")
+
+
+def test_passthrough_progress_counts_requests():
+    assert gwdt_quad.serving_now("passthrough", "f", 2, 40, None, 3, 1).startswith("passthrough f: 2/3 requests, 40s;")
+
+
+def test_now_follows_a_running_fallback(tmp_path):
+    from galaxy_workload_deployment_test import Screen, now_text
+
+    step = build_quad_steps(HOSTS, 900)[1]
+    step.state = State(Result(Status.RUN), start=time.time(), now="attempt 1")
+    assert now_text(step.state) == "attempt 1"
+    step.state.fallbacks.append(State(Result(Status.RUN), start=time.time(), now="fallback bring-up"))
+    assert now_text(step.state) == "fallback bring-up"
+    Screen([step], ["hdr"], tmp_path / "status.json", {}).write_status()
+    assert json.loads((tmp_path / "status.json").read_text())["now"] == "fallback bring-up"

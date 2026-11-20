@@ -59,6 +59,13 @@ def quad_rows(state) -> list[tuple[str, Result]]:
     return [(label, r) for label, r in zip(labels, state.rows)]
 
 
+def now_text(state) -> str:
+    """What a running step is doing; a running fallback's own progress when it is the one going."""
+    f = state.fallbacks[-1] if state.fallbacks and state.fallbacks[-1].result.status == Status.RUN else None
+    live = f or state
+    return live.now or dur(time.time() - (live.start or time.time()))
+
+
 # Where the status column of a model / quad row starts; wider when a label (e.g. a stage's hostname) needs it.
 LABEL_COL = 23
 
@@ -121,7 +128,7 @@ class Screen:
                 out += [self.model_row(5, label, r) for label, r in self.sub_rows(s)]
         running = next((s for s in self.steps if s.state.result.status == Status.RUN), None)
         if running:
-            out += ["", f"NOW   {running.title}  {running.state.now or dur(time.time() - running.state.start)}"]
+            out += ["", f"NOW   {running.title}  {now_text(running.state)}"]
         errors = [s for s in self.steps if s.state.result.status in (Status.FAIL, Status.HANG)]
         if errors:
             out += ["", "ERRORS"]
@@ -174,11 +181,12 @@ class Screen:
             print(f"{datetime.now():%H:%M:%S} {step.title:<20} {r.status.value:<5} {r.reason}", flush=True)
 
     def write_status(self) -> None:
-        running = next((s.key for s in self.steps if s.state.result.status == Status.RUN), None)
+        running = next((s for s in self.steps if s.state.result.status == Status.RUN), None)
         doc = {
             **self.meta,
             "header": self.header,
-            "current": running,
+            "current": running and running.key,
+            "now": now_text(running.state) if running else None,
             "steps": [
                 {
                     "key": s.key,

@@ -78,6 +78,7 @@ class Ctx:
     blocked_models: dict[str, str] = field(default_factory=dict)
     missing_paths: dict[str, list[str]] = field(default_factory=dict)
     collected: list[str] | None = None
+    quad_bringup_s: float | None = None  # the last --quad bring-up's length, to set the next one against
 
 
 @dataclass
