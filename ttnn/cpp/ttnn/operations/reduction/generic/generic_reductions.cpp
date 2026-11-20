@@ -64,10 +64,16 @@ static Tensor convert_output_layout(const Tensor& tensor, const std::optional<La
     return ttnn::to_layout(tensor, *output_layout);
 }
 
-static Tensor write_to_output(const Tensor& result, const std::optional<Tensor>& output, const char* op_name) {
+static Tensor write_to_output(
+    const Tensor& result,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const char* op_name) {
     if (!output.has_value()) {
         return result;
     }
+    // The copy into output runs on the full grid.
+    TT_FATAL(!sub_core_grids.has_value(), "{} does not support output together with sub_core_grids", op_name);
     TT_FATAL(
         output->logical_shape() == result.logical_shape(),
         "{} output shape {} does not match the reduced shape {}",
@@ -779,13 +785,57 @@ Tensor reduce(
                 fast_nc_final_dtype = height_width_dims.empty() ? chain_final_dtype : DataType::FLOAT32;
                 fast_nc_intermediate_fp32 = non_height_width_dims.size() > 1;
             }
-            // The scale is applied once: by fast_reduce_nc when no H/W stage follows, else by the H/W stage,
-            // which divides a mean by its own H/W volume, so it takes only the N/C share of 1/N.
+            // The scale is applied once, by the last stage. An H/W stage divides a mean by its own H/W volume, so the
+            // scale takes only the N/C share of 1/N.
             float nc_volume = 1.0f;
             for (int d : non_height_width_dims) {
                 nc_volume *= static_cast<float>(input_tensor.logical_shape()[d]);
             }
             const float nc_scalar = reduce_type == reduction_common::ReduceType::Mean ? scalar / nc_volume : scalar;
+
+            // With H and W both reduced, the second stage reads what the first leaves: the non-H/W volume in tiles
+            // after H/W, or the kept non-H/W dims times Ht * Wt after N/C. Go H/W first when it leaves fewer.
+            const auto& shape = input_tensor.logical_shape();
+            uint64_t hw_first_tiles = 1;
+            uint64_t nc_first_tiles = static_cast<uint64_t>(tt::div_up(shape[-2], tt::constants::TILE_HEIGHT)) *
+                                      tt::div_up(shape[-1], tt::constants::TILE_WIDTH);
+            for (int axis = 0; axis < rank - 2; ++axis) {
+                hw_first_tiles *= shape[axis];
+                if (std::find(non_height_width_dims.begin(), non_height_width_dims.end(), axis) ==
+                    non_height_width_dims.end()) {
+                    nc_first_tiles *= shape[axis];
+                }
+            }
+            if (height_width_dims.size() == 2 && !ttnn::prim::is_int_reduce_dtype(input_tensor.dtype()) &&
+                hw_first_tiles < nc_first_tiles) {
+                const Tensor hw_reduced = reduce_impl<reduce_type>(
+                    input_tensor,
+                    height_width_dims,
+                    /*keepdim=*/true,
+                    memory_config_arg,
+                    compute_kernel_config,
+                    /*scalar=*/1.0f,
+                    /*non_height_width_dims=*/{},
+                    sub_core_grids,
+                    chain_active,
+                    /*is_last_in_chain=*/false,
+                    fast_and_approximate_mode,
+                    /*output_layout=*/std::nullopt,
+                    chain_final_dtype);
+                const Tensor output_tensor = non_height_width_reduce(
+                    hw_reduced,
+                    non_height_width_dims,
+                    memory_config_arg,
+                    compute_kernel_config,
+                    sub_core_grids,
+                    chain_active ? std::optional<DataType>(chain_final_dtype) : std::nullopt,
+                    fast_nc_intermediate_fp32,
+                    fast_and_approximate_mode,
+                    nc_scalar);
+                return adjust_shape(
+                    output_tensor, input_tensor_arg.logical_shape(), keepdim, height_width_dims, non_height_width_dims);
+            }
+
             input_tensor = non_height_width_reduce(
                 input_tensor,
                 non_height_width_dims,
@@ -876,7 +926,7 @@ Tensor sum(
             fast_and_approximate_mode,
             output_layout),
         output_layout);
-    return operations::reduction::write_to_output(result, output, "ttnn.sum");
+    return operations::reduction::write_to_output(result, output, sub_core_grids, "ttnn.sum");
 }
 
 Tensor mean(
@@ -904,7 +954,7 @@ Tensor mean(
             fast_and_approximate_mode,
             output_layout),
         output_layout);
-    return operations::reduction::write_to_output(result, output, "ttnn.mean");
+    return operations::reduction::write_to_output(result, output, sub_core_grids, "ttnn.mean");
 }
 
 Tensor max(
