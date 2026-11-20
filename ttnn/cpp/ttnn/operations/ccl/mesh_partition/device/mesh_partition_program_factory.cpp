@@ -4,7 +4,8 @@
 
 #include "mesh_partition_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tuple>
 #include <vector>
 #include "ttnn/distributed/types.hpp"
@@ -134,9 +135,8 @@ MeshPartitionDeviceOperation::MeshPartition::create_at(
         [&](auto&& factory) -> Program {
             using Factory = std::decay_t<decltype(factory)>;
             auto artifacts = Factory::create_program_artifacts(slice_attrs, slice_tensor_args, tensor_return_value);
-            Program p =
-                tt::tt_metal::experimental::MakeProgramFromSpec(*tensor_args.input_tensor.device(), artifacts.spec);
-            tt::tt_metal::experimental::SetProgramRunArgs(p, artifacts.run_params);
+            Program p(*tensor_args.input_tensor.device(), artifacts.spec);
+            p.set_program_run_args(artifacts.run_params);
             return p;
         },
         program_factory);
@@ -153,14 +153,13 @@ void MeshPartitionDeviceOperation::MeshPartition::override_runtime_arguments(
     // Partition attributes, tensor specs and coordinates are in the cache key. Each coordinate
     // owns its program, so its slice geometry and work split stay fixed across calls. Metal 2.0
     // updates both tensor accessor bindings and any borrowed sharded DFBs through this API.
-    const tt::tt_metal::experimental::
-        Table<tt::tt_metal::experimental::TensorParamName, tt::tt_metal::experimental::TensorArgument>
-            bindings{{INPUT, tensor_args.input_tensor.mesh_tensor()}, {OUTPUT, tensor_return_value.mesh_tensor()}};
+    const tt::tt_metal::Table<tt::tt_metal::TensorParamName, tt::tt_metal::TensorArgument> bindings{
+        {INPUT, tensor_args.input_tensor.mesh_tensor()}, {OUTPUT, tensor_return_value.mesh_tensor()}};
     // All coordinate programs declare the same tensor specs. Validate fresh buffers once per call.
-    bool validated = false;
+    tt::tt_metal::ValidationMode validation = tt::tt_metal::ValidationMode::FULL;
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
-        tt::tt_metal::experimental::UpdateTensorArgs(program, bindings, /*skip_validation=*/validated);
-        validated = true;
+        program.update_tensor_args(bindings, validation);
+        validation = tt::tt_metal::ValidationMode::SKIP;
     }
 }
 

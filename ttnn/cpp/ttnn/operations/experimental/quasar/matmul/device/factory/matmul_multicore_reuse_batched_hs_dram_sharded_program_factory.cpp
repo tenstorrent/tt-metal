@@ -161,9 +161,8 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
     uint32_t num_blocks = K / in0_block_w;
     bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
-    tt::DataFormat interm0_data_format = packer_l1_acc_en
-                                             ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
-                                             : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
+    tt::DataFormat interm0_data_format = operations::experimental::quasar::matmul::utilities::get_interm_data_format(
+        packer_l1_acc_en, fp32_dest_acc_en, output_data_format);
 
     // Tile sizes
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
@@ -689,6 +688,13 @@ ProgramDescriptor MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::create
     TT_FATAL(per_core_M == M, "For batch sharding, per_core_M ({}) must equal M ({})", per_core_M, M);
     TT_FATAL(per_core_N == N, "For batch sharding, per_core_N ({}) must equal N ({})", per_core_N, N);
     TT_FATAL(K % in0_block_w == 0, "K ({}) must be divisible by in0_block_w ({})", K, in0_block_w);
+    // The in0 reader takes each K block as one contiguous run of the row-major shard.
+    TT_FATAL(
+        per_core_M == 1 || in0_block_w == K,
+        "For batch sharding with per_core_M ({}) > 1, in0_block_w ({}) must equal K ({})",
+        per_core_M,
+        in0_block_w,
+        K);
 
     return reuse_batched_hs_dram_sharded_optimized_helpers::create_program_batch_sharded_descriptor(
         device,

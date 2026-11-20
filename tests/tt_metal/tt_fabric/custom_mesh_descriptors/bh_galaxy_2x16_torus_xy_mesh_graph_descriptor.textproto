@@ -1,0 +1,10 @@
+# A 2x16 RING/RING mesh on one Blackhole Galaxy (32 chips). The 2-long axis is not a genuine
+# torus axis (has_genuine_torus_axis), so it lowers as a 2-row line by a 16-chip ring.
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 2, 16 ], dim_types: [ RING, RING ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }

@@ -10,7 +10,6 @@
 #include <enchantum/enchantum.hpp>
 #include <enchantum/iostream.hpp>
 
-#include "hal_types.hpp"
 #include <tt-umd/types/arch.hpp>
 
 namespace tt::tt_metal {

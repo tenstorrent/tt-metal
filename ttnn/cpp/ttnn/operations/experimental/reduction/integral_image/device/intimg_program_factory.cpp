@@ -24,21 +24,21 @@
 
 #include "ttnn/tensor/types.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
-#include <tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp>
-#include <tt-metalium/experimental/metal2_host_api/data_movement_hardware_config.hpp>
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
+#include <tt-metalium/workload/specification/compute_hardware_config.hpp>
+#include <tt-metalium/workload/specification/data_movement_hardware_config.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace {
 
 using namespace tt::tt_metal;
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 using ttnn::device_operation::ProgramArtifacts;
 
 constexpr std::array<const char*, 3> KERNEL_PATHS{
@@ -52,11 +52,6 @@ constexpr std::array<const char*, 3> KERNEL_PATHS{
 
 namespace ttnn::experimental::prim {
 
-// it is expected that this operator is used primarily on BOS' custom chips, which are 4 rows and 5 columns, however the
-// expected parallelisation of the maximal input shape is calculated to be 4 rows and 2 columns
-constexpr uint32_t CORES_X = 2;
-constexpr uint32_t CORES_Y = 4;
-
 ttnn::device_operation::ProgramArtifacts IntImgDeviceOperation::ProgramFactory::create_program_artifacts(
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
@@ -69,6 +64,8 @@ ttnn::device_operation::ProgramArtifacts IntImgDeviceOperation::ProgramFactory::
     const auto& input_shape{input_tensor.padded_shape()};
 
     constexpr uint32_t BLOCK_DEPTH = 48;
+
+    const auto core_grid = get_intimg_core_grid(input_tensor.device()->compute_with_storage_grid_size());
 
     const auto cb_data_format{datatype_to_dataformat_converter(input_tensor.dtype())};
     const uint32_t single_tile_size{tt::tile_size(cb_data_format)};
@@ -133,8 +130,8 @@ ttnn::device_operation::ProgramArtifacts IntImgDeviceOperation::ProgramFactory::
         {"input_height", static_cast<uint32_t>(input_shape[2])},
         {"input_depth", static_cast<uint32_t>(input_shape[1])},
         {"num_batches", static_cast<uint32_t>(input_shape[0])},
-        {"cores_x", CORES_X},
-        {"cores_y", CORES_Y},
+        {"cores_x", static_cast<uint32_t>(core_grid.x)},
+        {"cores_y", static_cast<uint32_t>(core_grid.y)},
     };
 
     // ---- Reader (DM). Produces START (zero-fill) and INPUT (DRAM load). Reads the input tensor via binding. ----
@@ -247,11 +244,11 @@ ttnn::device_operation::ProgramArtifacts IntImgDeviceOperation::ProgramFactory::
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
-    // ---- WorkUnit: all three kernels on the fixed 2x4 grid (placement derives DFB residency). ----
+    // ---- WorkUnit: all three kernels on the device-clipped (<= 2x4) grid (placement derives DFB residency). ----
     m2::WorkUnitSpec wu{
         .name = "intimg",
         .kernels = {READER, COMPUTE, WRITER},
-        .target_nodes = m2::NodeRange{{0, 0}, {CORES_X - 1, CORES_Y - 1}},
+        .target_nodes = m2::NodeRange{{0, 0}, {core_grid.x - 1, core_grid.y - 1}},
     };
 
     m2::ProgramSpec spec{

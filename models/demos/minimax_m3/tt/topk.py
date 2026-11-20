@@ -192,7 +192,7 @@ class TopKRouter:
 
         SP chip c holds each chunk's rows at rotated_chunk_positions(chunk.actual_start)[c], back to back in
         chunk order. Positions increase with the local row, so each chunk is right-padded on every chip; a chip
-        whose pad rows precede a later chunk's real rows routes all its rows (packed_real_rows).
+        whose pad rows precede a later chunk's real rows routes every row up to its last real one (packed_real_rows).
 
         NOTE this ends in a ttnn.from_torch, i.e. a host->device write. Fine untraced — it is memoized,
         so it costs one tiny [sp, 2] write per distinct count — but a traced runtime must derive the
