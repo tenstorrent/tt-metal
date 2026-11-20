@@ -67,6 +67,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/kernel_hash/tensor_spec_relaxations.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/compute_config_lowering.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/fabric_connections_1d.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/fabric_connections_2d.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/graph_tracking.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/kernel_args_layout.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/kernel_config.cpp
