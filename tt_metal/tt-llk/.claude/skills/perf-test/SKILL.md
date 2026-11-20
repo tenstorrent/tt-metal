@@ -133,7 +133,9 @@ Rules:
 - Sweep the tile shape the way the architecture's existing tests do, and
   derive faces and face rows from it rather than sweeping them separately.
   When an axis change renames pytest ids, find and update every place that
-  hard-codes those ids.
+  hard-codes those ids (checklist in "Renames" below).
+- Spell an axis the way the other architecture does; see "Canonical axis
+  names" below.
 - Build `templates` and `runtimes` in a form `perf/perf_schema_derive.py`
   can read statically: list literals, `+`, conditional expressions, and local
   helpers that return a list. It does not follow `.extend()` or `.append()`;
@@ -318,7 +320,7 @@ still compile. Every name it uses must exist in every build.
 ## 5. No dead paths
 
 A kernel branch that no sweep value reaches is untested, and untested code
-hides bugs. In the pack dest-bank test, tilize was never swept, and its read
+hides bugs. In the pack L1-accumulate test, tilize was never swept, and its read
 offset stepped by `BLOCK_RT_DIM` instead of `BLOCK_CT_DIM`. Either sweep the
 option in functional (and so in perf), with the matching golden
 (`TilizeGolden`), or delete the branch.
@@ -345,6 +347,13 @@ parameter: `write_runtimes_to_L1` serializes every runtime field, so the
 kernel's struct layout changes. A column takes its name from the dataclass
 field, so name the field after the quantity it holds.
 
+Column names are unique across all parameter classes;
+`schema.assert_unique_columns` and the header gate fail on a duplicate. Before
+adding a template class, check whether an existing one already has the field
+and extend that one. `MATH_OP` carries `mathop`, `unary_extra` and `pool_type`,
+and emits `POOL_TYPE` and the ternary operation constant, so reductions and
+ternary tests use it instead of their own class.
+
 After a rebase, check `wide_schema.py` and `wide_schema_quasar.py` for a
 column added twice, once by each side.
 
@@ -358,6 +367,41 @@ schema for the target architecture:
   the shared warehouse;
 - keep configuration, timing and provenance columns in their existing
   sections.
+
+### Renames
+
+- Record a renamed column in the entry's `aliases` (old -> new) and a renamed
+  module in `test_name_aliases` (old -> current). A column rename changes the
+  column set, so bump `version` as above. The perf gate matches older baselines
+  through these maps (`perf-regression-check`, "Interpreting results").
+- Check each place that names the old spelling: `tests/perf_split_costs.json`
+  and `tests/perf_split_costs_sol.json`, the ids hard-coded in
+  `hardware_free/kernels/test_gathering_config.py`, `test_schemas.py`,
+  `wide_schema.py` and `wide_schema_quasar.py`, the kernel source filename, and
+  the gate's sparse checkout in `.github/workflows/llk-perf-gate-impl.yaml`
+  when a new reader of the catalog is added.
+- Prove the rename changed nothing else: collected pytest ids per architecture
+  before and after are identical except for the renamed token.
+
+### Canonical axis names
+
+One spelling per quantity on every architecture, in the axis, the test
+function argument and the CSV column. The comparer and the dashboard join on
+these names, so a second spelling shows up as two one-sided axes.
+
+| Quantity | Name | Notes |
+|---|---|---|
+| Dest sync mode | `dest_sync` | not `dest_sync_mode` |
+| Math operation | `mathop` | not `math_op`, `ternary_mathop`; `op` only for kernel-variant strings that are not a `MathOperation` |
+| Pool or reduce kind | `pool_type` | not `reduce_pool`, `reduce_pool_type` |
+| Tile count | `tile_cnt` | check the module's meaning first ([perf-facts](references/perf-facts.md), "Accounting and comparability") |
+| Dest accumulation | `dest_acc` | |
+| Data formats | `formats` | |
+
+Reuse the name the other architecture already uses; never rename one side
+only. Give the Wormhole/Blackhole and Quasar modules of one op the same stem
+(`perf_pack_l1_acc` and `perf_pack_l1_acc_quasar`); pairing is in
+`perf-coverage`, "How the comparer works".
 
 ## 7. Repair a run type
 
@@ -423,6 +467,7 @@ Derive the description from the final diff, not the issue title. State:
 - the isolate model (the table above, as implemented);
 - any intentionally unmatched functional tests;
 - the schema version change;
+- after an axis or module rename, the dashboard aliases that can go (`axis_maps.json`, `report_data.py` in the dashboard repository, not held here);
 - split-cost changes and why their build-count estimate changed;
 - when rows no longer match the old catalog, that the baseline needs a re-pin;
 - the validation actually run, per architecture, and what was not measured

@@ -11,6 +11,7 @@
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "test_utils/program_cache.hpp"
 #include "test_utils/random_data.hpp"
 
 class KSplitGramMatmulTest : public ::testing::Test {
@@ -205,8 +206,8 @@ TEST_F(KSplitGramMatmulTest, PreallocatedOutput) {
         tt::tt_metal::TensorLayout(ttnn::DataType::BFLOAT16, tt::tt_metal::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG));
     auto preallocated = ttnn::create_device_tensor(output_spec, device);
 
-    auto output =
-        ttml::metal::gram_matmul(input, ttml::metal::OutputMode::UpperTriangle, tt::tt_metal::MathFidelity::HiFi4, preallocated);
+    auto output = ttml::metal::gram_matmul(
+        input, ttml::metal::OutputMode::UpperTriangle, tt::tt_metal::MathFidelity::HiFi4, preallocated);
 
     EXPECT_EQ(output.mesh_buffer().address(), preallocated.mesh_buffer().address());
 
@@ -281,4 +282,54 @@ TEST_F(KSplitGramMatmulTest, NIGHTLY_StressTest8192x8192) {
         out.deallocate();
     }
     SUCCEED();
+}
+
+// A program-cache hit on a fresh input and output: the senders must read the new input, and the upper-triangle writers
+// and the diagonal helpers must write the new output, while the first launch's output stays as it was.
+namespace {
+void run_cache_hit_case(ttml::metal::OutputMode output_mode, bool preallocated, const char* label) {
+    using ttml::test_utils::CacheExpectation;
+    constexpr uint32_t M = 640U, K = 512U;
+    auto& device = ttml::test_utils::device_with_empty_program_cache();
+    const auto first_input = make_random_tensor(M, K, /*seed=*/71U);
+    const auto second_input = make_random_tensor(M, K, /*seed=*/72U);
+    std::optional<ttnn::Tensor> first_preallocated;
+    std::optional<ttnn::Tensor> second_preallocated;
+    if (preallocated) {
+        first_preallocated = ttml::test_utils::zeros_on_device({1U, 1U, M, M});
+        second_preallocated = ttml::test_utils::zeros_on_device({1U, 1U, M, M});
+    }
+
+    auto entries = device.num_program_cache_entries();
+    const auto first_output =
+        ttml::metal::gram_matmul(first_input, output_mode, tt::tt_metal::MathFidelity::HiFi4, first_preallocated);
+    ttml::test_utils::expect_cache(entries, CacheExpectation::Miss, std::string(label) + ": first launch");
+    const auto first_snapshot = ttml::core::to_xtensor(first_output);
+
+    entries = device.num_program_cache_entries();
+    const auto second_output =
+        ttml::metal::gram_matmul(second_input, output_mode, tt::tt_metal::MathFidelity::HiFi4, second_preallocated);
+    ttml::test_utils::expect_cache(entries, CacheExpectation::Hit, std::string(label) + ": second launch");
+
+    ttml::test_utils::expect_new_buffers(
+        {first_input, first_output}, {second_input, second_output}, std::string(label) + ": second launch");
+    ttml::test_utils::expect_unchanged(first_output, first_snapshot, std::string(label) + ": first launch's output");
+    check_full_gram(
+        second_input.to_vector<float>(),
+        second_output.to_vector<float>(),
+        M,
+        K,
+        /*full_output=*/output_mode == ttml::metal::OutputMode::Full,
+        label);
+}
+}  // namespace
+
+TEST_F(KSplitGramMatmulTest, CacheHit_FreshInputAndOutput) {
+    run_cache_hit_case(ttml::metal::OutputMode::UpperTriangle, /*preallocated=*/false, "UpperTriangle");
+    run_cache_hit_case(ttml::metal::OutputMode::Full, /*preallocated=*/false, "Full");
+}
+
+TEST_F(KSplitGramMatmulTest, CacheHit_FreshInputAndPreallocatedOutput) {
+    run_cache_hit_case(ttml::metal::OutputMode::UpperTriangle, /*preallocated=*/true, "UpperTriangle, preallocated");
+    run_cache_hit_case(ttml::metal::OutputMode::Full, /*preallocated=*/true, "Full, preallocated");
 }

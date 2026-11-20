@@ -66,7 +66,7 @@ def test_to_layout_tile(ttnn_mesh_device, reset_seeds, shape, dt, in_mem, out_me
     mesh = ttnn_mesh_device
     x_torch = U.torch_rand(shape, dtype=torch.float32 if dt == "fp32" else torch.bfloat16)
     x = U.to_tt_mem(x_torch, mesh, in_mem, dtype=U.DTYPES[dt], layout=ttnn.ROW_MAJOR_LAYOUT)
-    out = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=U.resolve_memcfg(out_mem, mesh))
+    out = U.op("to_layout")(x, ttnn.TILE_LAYOUT, memory_config=U.resolve_memcfg(out_mem, mesh))
     assert out.layout == ttnn.TILE_LAYOUT
     U.assert_lossless(x_torch, out, mesh_device=mesh)
 
@@ -82,7 +82,7 @@ def test_to_layout_row_major(ttnn_mesh_device, reset_seeds, shape, dt, in_mem, o
     ref = U.seen(x, x_torch, mesh)  # bfp8 sources: the quantized values are what must survive
     # bfloat8_b can't be ROW_MAJOR: the model untilized those into bf16.
     kwargs = {"dtype": ttnn.bfloat16} if dt == "bfp8" else {}
-    out = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, memory_config=U.resolve_memcfg(out_mem, mesh), **kwargs)
+    out = U.op("to_layout")(x, ttnn.ROW_MAJOR_LAYOUT, memory_config=U.resolve_memcfg(out_mem, mesh), **kwargs)
     assert out.layout == ttnn.ROW_MAJOR_LAYOUT
     U.assert_lossless(ref, out, mesh_device=mesh)
 
@@ -94,5 +94,5 @@ def test_untilize(ttnn_mesh_device, reset_seeds, shape):
     mesh = ttnn_mesh_device
     x_torch = U.torch_rand(shape)
     x = U.to_tt_mem(x_torch, mesh, "l1")
-    out = ttnn.untilize(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+    out = U.op("untilize")(x, memory_config=ttnn.L1_MEMORY_CONFIG)
     U.assert_lossless(x_torch, out, mesh_device=mesh)
