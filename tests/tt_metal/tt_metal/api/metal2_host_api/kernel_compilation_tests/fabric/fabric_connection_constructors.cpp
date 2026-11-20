@@ -50,7 +50,10 @@ void kernel_main() {
 )";
 
 constexpr const char* kRoutingPlaneKernel = R"(
+#include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/api_common.h"
+
+using namespace tt::tt_fabric::common::experimental;
 void kernel_main() {
     tt::tt_fabric::RoutingPlaneConnectionManager connections;
     open_connections(connections, fabric::conn);

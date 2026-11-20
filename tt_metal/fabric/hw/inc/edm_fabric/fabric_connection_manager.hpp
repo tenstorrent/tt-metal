@@ -91,6 +91,22 @@ public:
         return connection_manager;
     }
 
+    // Builds a manager from a Metal 2.0 fabric connection binding with two targets, {forward, backward}: one
+    // connection for each target.
+    // precondition: the binding has exactly two targets.
+    template <BuildFromArgsMode build_mode = BuildFromArgsMode::BUILD_ONLY>
+    static FabricConnectionManager build_from_binding(FabricConnectionBindingToken token) {
+        ASSERT(token.num_targets() == 2);
+        FabricConnectionManager connection_manager;
+        connection_manager.connection_flags = FORWARD_CONNECTION_FLAG_MASK | BACKWARD_CONNECTION_FLAG_MASK;
+        connection_manager.forward_fabric_sender = build_sender_of_target(token, 0);
+        start_open<build_mode>(connection_manager.forward_fabric_sender);
+        connection_manager.backward_fabric_sender = build_sender_of_target(token, 1);
+        start_open<build_mode>(connection_manager.backward_fabric_sender);
+        connection_manager.finish_open<build_mode>();
+        return connection_manager;
+    }
+
     inline void open_finish() {
         if (has_forward_connection()) {
             forward_fabric_sender.open_finish();
@@ -110,6 +126,13 @@ public:
     }
 
 private:
+    // The sender of target `target_index` of a binding.
+    static tt::tt_fabric::WorkerToFabricEdmSender build_sender_of_target(
+        FabricConnectionBindingToken token, uint32_t target_index) {
+        std::size_t arg_idx = tt::tt_fabric::fabric_connection_binding::target_rta_word(token, target_index);
+        return tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+    }
+
     // Sends the open request of a just-built connection if `build_mode` opens connections.
     template <BuildFromArgsMode build_mode>
     static void start_open(tt::tt_fabric::WorkerToFabricEdmSender& sender) {
