@@ -241,6 +241,7 @@ class BgeM3Attention(LightweightModule):
             scale=self.config.attention_scale,
             program_config=sdpa_program_config,
             compute_kernel_config=self.config.score_compute_kernel_cfg,
+            precision=ttnn.SDPAPrecision.ACCURATE if self.config.score_compute_kernel_cfg.fp32_dest_acc_en else None,
             memory_config=self.config.score_memcfg,
         )
         ttnn.deallocate(q)
