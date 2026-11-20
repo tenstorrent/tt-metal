@@ -1881,10 +1881,14 @@ class TtDS41Model:
         dealloc(t)
         return out
 
-    def embed(self, tokens: torch.Tensor, start: int = 0) -> DevH:
+    def embed(self, tokens: torch.Tensor, start: int = 0, dev_ids=None) -> DevH:
         """Natural-order ids of one chunk (PAD_ID past actual_end clamped into the vocabulary, K-72: those rows are pad
-        and never reach a cache) -> layer 0's input: the embedding on all 4 streams, the pending pre one-hot."""
-        if self._emb_ids is not None:  # P.87 (ENGRAM_DEVICE=on): the lookup's natural-order device ids (pinned)
+        and never reach a cache) -> layer 0's input: the embedding on all 4 streams, the pending pre one-hot.
+        ``dev_ids`` (POS_DYNAMIC=on, MB.2): those ids already on the device ([1, W] uint32 a chip, ``reorder_ids``;
+        consumed): no upload."""
+        if dev_ids is not None:
+            pass
+        elif self._emb_ids is not None:  # P.87 (ENGRAM_DEVICE=on): the lookup's natural-order device ids (pinned)
             dev_ids = self._emb_ids
         else:
             dev_ids = self._host_emb_ids(tokens)
@@ -1893,6 +1897,16 @@ class TtDS41Model:
         )
         dealloc(dev_ids)
         return self._embed_rest(e)
+
+    def reorder_ids(self, inp, start: int, valid: int):
+        """POS_DYNAMIC=on (MB.2): the engine's device input (uint32 [SP, 1, W], the server's order) -> each chip's
+        natural-order embedding ids [1, W] on the device (tt/page_copy.IdsReorder; positions >= ``valid`` and ids past
+        the vocabulary -> vocab - 1, as ``_host_emb_ids``). A new tensor (``embed(dev_ids=)`` consumes it)."""
+        if getattr(self, "_ids_reorder", None) is None:
+            from .page_copy import IdsReorder
+
+            self._ids_reorder = IdsReorder(self.mesh, self.chunk, self.vocab)
+        return self._ids_reorder(inp, start, valid)
 
     def _host_emb_ids(self, tokens: torch.Tensor):
         ids = tokens.reshape(-1).long().clamp(0, self.vocab - 1).to(torch.int32)

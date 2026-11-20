@@ -1397,7 +1397,10 @@ def batch_call_settings(env=None) -> tuple:
     env = os.environ if env is None else env
     skip = env.get(_settings.env_name("DECODER_SKIP"), str(_settings.table["DECODER_SKIP"].default))
     # ENGRAM_DEVICE (P.87) and ENGRAM_HOST_IMPL (C++ host path) are read per chunk: one load serves both values
-    return ("PREFILL_END", "ENGRAM_DEVICE", "ENGRAM_HOST_IMPL") + (() if skip == "replay128" else ("DECODER_SKIP",))
+    # POS_DYNAMIC (MB.2) is read per call too: both paths exist in one load (page copies vs slices)
+    return ("PREFILL_END", "ENGRAM_DEVICE", "ENGRAM_HOST_IMPL", "POS_DYNAMIC") + (
+        () if skip == "replay128" else ("DECODER_SKIP",)
+    )
 
 
 def batch_call_apply(model) -> None:
@@ -1406,6 +1409,8 @@ def batch_call_apply(model) -> None:
     A test that switches it itself (use_decoder_skip) still does, from the value it finds."""
     from models.demos.deepseek_v41_flash_d_p.tt.settings import settings as _settings
 
+    if _settings.snap is not None:  # MB.2: a call-time switch the load's snapshot froze (DS41-314: only this one)
+        _settings.snap["POS_DYNAMIC"] = _settings._read("POS_DYNAMIC")
     want = _settings.get("DECODER_SKIP")
     have = getattr(model, "skip_mode", None)
     if have is None or want == have or "replay128" in (want, have) or getattr(model, "tail_of", None) is not None:

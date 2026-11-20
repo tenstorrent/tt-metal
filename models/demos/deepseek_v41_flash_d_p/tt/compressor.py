@@ -142,6 +142,19 @@ class CompressRope:
     def _rows(self, g0: int, n: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         sp = self.mesh.shape[SP_AXIS]
         assert n % (32 * sp) == 0 and g0 + n <= self.rows_max, (g0, n, sp, self.rows_max)
+        from .page_copy import on as pos_dynamic
+        from .page_copy import pages_of
+
+        if pos_dynamic():  # MB.2: each mesh row its natural block's rows (one prepared copy, g0 a value), tiled there
+            m = n // sp
+            out = []
+            for t in (self.cos, self.sin):
+                rm = pages_of(t, g0, m, [1, 1, m, self.width], sp_stride=m)
+                tl = ttnn.to_layout(rm, ttnn.TILE_LAYOUT, memory_config=DRAM, sub_core_grids=sub_cores(rm))
+                if tl is not rm:
+                    dealloc(rm)
+                out.append(tl)
+            return out[0], out[1]
         out = []
         for t in (self.cos, self.sin):
             sl = ttnn.slice(
@@ -1153,11 +1166,19 @@ class TtCompressor:
         if src is not g and rm is not src:
             dealloc(src)
         n, w, off = rm.shape[-2], rm.shape[-1], (lo - start) // r
-        head = ttnn.slice(rm, [0, 0, off, 0], [1, 1, n, w], memory_config=DRAM, sub_core_grids=sub_cores(rm))
-        tail = ttnn.slice(rm, [0, 0, 0, 0], [1, 1, off, w], memory_config=DRAM, sub_core_grids=sub_cores(rm))
-        rot = ttnn.concat([head, tail], dim=2, memory_config=DRAM, sub_core_grids=sub_cores(head))
-        for x in (head, tail):
-            dealloc(x)
+        from .page_copy import on as pos_dynamic
+        from .page_copy import page_copy
+
+        if pos_dynamic():  # MB.2: the rotation as two page copies (the replay offset a runtime value)
+            rot = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, n, w]), rm.dtype, rm.layout, rm.device(), DRAM)
+            page_copy(rm, rot, off, 0, n - off)
+            page_copy(rm, rot, 0, n - off, off)
+        else:
+            head = ttnn.slice(rm, [0, 0, off, 0], [1, 1, n, w], memory_config=DRAM, sub_core_grids=sub_cores(rm))
+            tail = ttnn.slice(rm, [0, 0, 0, 0], [1, 1, off, w], memory_config=DRAM, sub_core_grids=sub_cores(rm))
+            rot = ttnn.concat([head, tail], dim=2, memory_config=DRAM, sub_core_grids=sub_cores(head))
+            for x in (head, tail):
+                dealloc(x)
         if rm is not g:
             dealloc(rm)
         if g is not t:

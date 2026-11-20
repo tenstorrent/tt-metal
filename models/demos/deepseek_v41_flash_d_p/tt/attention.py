@@ -470,9 +470,19 @@ class WindowTables:
         hit = self._srv_row
         if hit is not None and hit[0] == k:
             return hit[1]
-        idx = ttnn.slice(
-            self.srv, [0, 0, k, 0], [1, 1, k + 1, self.geo.w], memory_config=DRAM, sub_core_grids=sub_cores(self.srv)
-        )
+        from .page_copy import on as pos_dynamic
+        from .page_copy import pages_of
+
+        if pos_dynamic():  # MB.2: row k's page copied (k a runtime value)
+            idx = pages_of(self.srv, k, 1, [1, 1, 1, self.geo.w])
+        else:
+            idx = ttnn.slice(
+                self.srv,
+                [0, 0, k, 0],
+                [1, 1, k + 1, self.geo.w],
+                memory_config=DRAM,
+                sub_core_grids=sub_cores(self.srv),
+            )
         if self.fold:
             if hit is not None:
                 dealloc(hit[1])

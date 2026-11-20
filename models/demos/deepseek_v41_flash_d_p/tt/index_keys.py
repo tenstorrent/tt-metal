@@ -101,7 +101,12 @@ def _span(cache, start: int) -> tuple[int, int]:
 
 def _decode(cache, buf: KeyBuffer, lo: int, hi: int) -> None:
     s = cache.served
-    ttnn.bringup.unpack_fp8_rows(s.tensor, buf.tensor, row_lo=lo, row_hi=hi, batch=s.batch, max_grid=max_grid())
+    from .page_copy import on as pos_dynamic
+
+    # (MB.2, POS_DYNAMIC=on: the whole grid for every range: one program, not one a band count)
+    ttnn.bringup.unpack_fp8_rows(
+        s.tensor, buf.tensor, row_lo=lo, row_hi=hi, batch=s.batch, max_grid=max_grid(), whole_grid=pos_dynamic()
+    )
 
 
 def prefetch(cache, start: int) -> bool:

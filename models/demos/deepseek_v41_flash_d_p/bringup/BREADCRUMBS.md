@@ -1318,3 +1318,72 @@
   case: the gate's env + WALLS_FRESH_WARM / _RUNS / _PROBE / _PROF / _SLOTS / _CASES through `resident submit`;
   8192: the same command with BRINGUP_CHUNK=8192 and `--task MB.1.c8192 --results <dir>`.
 - Final `orchestrator measure --task MB.1`: not run (no switch: tests only; nothing in tt/ or a fork changed).
+
+## MB.2 perf (attempt 1): no program build in serving on the single-request path (POS_DYNAMIC off | on)
+
+- Read first: OV-3, OV-57, rule 20, perf_guide, MB.1's results (DS41-321). Expected saving per chunk, written before
+  any code change (perf_guide section 2): FRESH chunks (new starts / slots / ends, serving's real traffic): host -10 to
+  -21 ms a chunk (MB.1 fresh vs repeated: steady 95.5 / 80.8, resumed 91.4 / 81.1, partial 123.5 / 102.6 ms; the gap is
+  the ~11 program builds a fresh chunk), so fresh ~= warm; WARM-REPEATED chunks: host ~0 (a prepared page copy costs
+  about what a cached slice costs; the ids re-upload removed: -0.3 to -1 ms host), device +0.05 to +0.2 ms (the ids
+  reorder: one SP all_gather of 20 KB + a 4-core copy kernel; page copies instead of slices: same bytes, fewer cores).
+- Load reason: "test_no_rebuild needs the gate's perf load (layers 0-20, decode, position tables to 1,044,480) because
+  the fresh chunks are serving's at AgentX positions up to ~1M; the iteration ran it alone on the held model (143 s)".
+- What (POS_DYNAMIC=on, call-time switch: hooks.batch_call_settings + batch_call_apply refreshes only this switch in a
+  held model's snapshot, DS41-314's rule): tt/page_copy.py (ported from the batching branch's PB.7C page_copy:
+  prepared, value slots s0 / d0 / n / nb / ss / ds, 4 data-movement cores a chip; new: a frozen per-mesh-row source
+  offset ``sp_stride`` and ``IdsReorder``). Sites (MB.1 probe, OV-57): rope.RopeTable._rows (each mesh row its natural
+  block's tile pages, no mesh_partition), compressor.CompressRope._rows (rows by mesh row, tiled there),
+  served.DeviceScalars._pick (k = start // 32, ceil(end / 32), slot), served.CacheSlab.slice_rows (page = b R + row:
+  every caller, history_gather _pack / _tail included), attention.WindowTables.srv_row, compressor._write_from (replay
+  rotation = 2 page copies), history_gather._pack_fixed (whole history in PACK_BUCKET pieces, the last moved down to
+  end at R; a tail in one piece of ceil32(2 hs) + 32 rows), _tail (always 2 hs rows: h moved down, rows the prefetch
+  already gathered, same bytes), snapshot_send._call_dyn (the batching branch's pattern-as-values program, gated by
+  POS_DYNAMIC), index_keys._decode (fork option unpack_fp8_rows(whole_grid=True)). adapter._run: the embedding ids from
+  model.reorder_ids(inp, start, run_end - start) (SP all_gather of the engine input into a load-time buffer + one
+  core a chip: server order -> natural, pad / vocab clamp to vocab - 1), embed(dev_ids=): no _host_emb_ids upload; the
+  readback stays for note_tokens / the engram hash (engrams on the host, owner). adapter.compile under POS_DYNAMIC=on
+  warms the finite set: [0, c), [c, 2c), the pulled-back partial last chunk [c + 1632, 2c + 1620) with ws 2c (decode).
+- Cores (rule 18): page copies 4 cores a chip, IdsReorder 1 core a chip, snapshot send home + port cores (as before),
+  unpack_fp8_rows whole_grid = max_grid's 110 cores (as its large calls before); no matmul changed.
+- Rule 20, every per-chunk value touched and how it reaches the device: start (RoPE / compressed-RoPE first page,
+  DeviceScalars index, srv_row index, IdsReorder (start mod W) / 32 and (start / W) mod SP) = prepared value slots;
+  end (ceil(end / 32) index, IdsReorder valid = run_end - start, the snapshot's cap -> block codes / ring rows packed in
+  2 value slots) = value slots; slot (DeviceScalars index, slab batch page b R) = value slots; history length (pack
+  pieces' first rows, tail h, unpack rows / bands) = value slots on fixed shapes; replay offset (lo - start) / r = page
+  copy counts. Shapes depend only on the chunk, the mesh and the slab geometry. Host per chunk: the engine's ids
+  readback (engram hash) only; nothing uploaded but the engram rows.
+- Gotcha: test_no_rebuild's first on / off check reused a draw's slot: 13.2 apart from stale history rows (DS41-322);
+  the scratch diagnostic then showed every component (rope, crope, srv_row, scalars, ids) and every layer of both
+  chunks 0.0 on vs off.
+- test_no_rebuild (gate unit, 143 s): 8 fresh kinds (aligned, steady, resumed, partial, pulled-back with replay,
+  acks-only, steady, partial) after runtime.compile only: builds 0, prepares 0, ids uploads 0, probe 0 entries; on vs
+  off on the pulled-back chunk 0.0.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate MB.2 --spec $BRINGUP_SPEC --check --unit
+  MB.2#test_no_rebuild` (devjob); fork test: ttnn/ttnn/bringup/fp8_rows_ttnn/tests/unit/test_unpack_fp8_rows.py.
+- Fresh walls, POS_DYNAMIC=on (measure --part test, ab/MB.2/new/test_skip_positions; copied to
+  results/MB.2_fresh_walls.md), 5120, 8 timed chunks a case, fresh vs warm-repeated (MB.1 fresh / repeated before):
+  | case | fresh tok/s | warm tok/s | builds + prepared | host ms fresh (rep) | device ms |
+  | single5120_steady | 61391 (53.6k) | 61240 (63.4k) | 0 + 0 | 14.6 (14.4) | 67.8 |
+  | single5120_resumed | 59873 (54.6k) | 59865 (61.6k) | 0 + 0 | 16.9 (17.1) | 64.2 |
+  | single5120_partial | 18634 (14.4k) | 18614 (17.3k) | 0 + 0 | 15.4 (13.4) | 86.3 |
+  Fresh == warm (the target). Warm-repeated steady / resumed ~2-3 ms a chunk slower than MB.1's repeated (the history
+  pack in PACK_BUCKET pieces, the 2 hs tail; same seeds): the owner's A/B table decides.
+- Gate grouping (F283): the gate refused 2 executed-layer loads, test_skip_positions' command sets BRINGUP_CHUNK=5120
+  (the spec's own chunk) and test_no_rebuild's does not; tasks.yaml and core/batch.py are not this step's: the test
+  declares BATCH_ITEM_VARS = ("BRINGUP_CHUNK",) (its chunk is the spec's, F271's override when set; a run at another
+  chunk still gets its own model: shared_model compares the load's chunk). Framework fix to consider: normalize
+  BRINGUP_CHUNK equal to target.chunk as unset (core/batch.normalized).
+- Gate check (`gate MB.2 --check`, after the last code edit, hooks clean; 604 s, 2 loads: executed + full): every unit
+  rc 0 and every metric ok (ladder err_layer L00-L39 / err_state within their noise floors, determinism 0.0,
+  contract_checks_failed 0, outside_history 0, program_builds_after_warmup_* 0, ids_uploads_per_chunk 0.0, every
+  <case>_fresh_tok_s > 0) BUT one: `prefix_hit_limit_exceed_fresh = 0 (need > 0)`: the threshold glob `*_fresh*`
+  catches test_decoder_skip_decode's limit-exceedance count (0 = good; 0 in FIX.39 / X.5): DS41-323, a tasks.yaml
+  threshold to narrow (`*_fresh_tok_s*`); thresholds and frozen tests are not this step's to change.
+- Final `orchestrator measure --task MB.2` (switch on): test_skip_positions rc 0, test_no_rebuild rc 0. Fork
+  fp8_rows_ttnn: full suite (safe runner directly: its test module opens its own mesh, which the resident runner's
+  held mesh cannot serve) 10 passed with the option off + whole_grid passed after its program count was keyed to the
+  current mesh (the precompile pass's mesh held one too).
+- Not done (follow-ups): 8192 fresh walls not re-measured (the same code paths; MB.1's 8192 sites are the 5120 ones);
+  the tail's 2 hs / overlapping pack pieces could become runtime row counts (slice_write / ckv_bfp4) to drop the few
+  re-moved rows (OV-3 answer); the A/B profile was not run (the orchestrator's table decides).

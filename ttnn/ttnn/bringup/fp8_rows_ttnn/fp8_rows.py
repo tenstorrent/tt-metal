@@ -305,6 +305,7 @@ def unpack_fp8_rows(
     batch: int = 0,
     out_row0: int | None = None,
     max_grid=None,
+    whole_grid: bool = False,
 ) -> ttnn.Tensor:
     """The inverse of pack_fp8_rows, onto the bfloat8_b grid: rows [row_lo, row_hi) of batch ``batch`` of ``rows``
     ([B, .., R, 192] UINT8 ROW_MAJOR in DRAM, interleaved or ND-sharded: one 192-byte row a page; [e4m3 x 128 | fp32
@@ -315,7 +316,9 @@ def unpack_fp8_rows(
     prepared program (OV-23): built once per (shapes, memory configs, grid), the addresses patched and the rows a
     value slot, so every range of at least the grid's bands runs one program (a smaller range: one program per band
     count, a core a band: the per-core value slots cost host time a core). ``max_grid``: as pack_fp8_rows' (the cores
-    inside it; each core its share of the 32-row bands). Returns ``out``."""
+    inside it; each core its share of the 32-row bands). ``whole_grid`` (default False: the behaviour before): every
+    call on the whole grid, cores past the band count idle, so ONE program serves every row count (no prepare a band
+    count; deepseek_v41_flash_d_p MB.2, POS_DYNAMIC: serving never builds a program after warm-up). Returns ``out``."""
     assert (
         rows.dtype == ttnn.uint8 and rows.layout == ttnn.ROW_MAJOR_LAYOUT and rows.shape[-1] == ROW_BYTES
     ), f"unpack_fp8_rows: rows must be uint8 ROW_MAJOR [.., {ROW_BYTES}], got {rows.dtype} {rows.layout} {rows.shape}"
@@ -341,6 +344,8 @@ def unpack_fp8_rows(
     if n == 0:
         return out
     nb = n // 32
-    pp = _prepared_unpack(rows, out, _unpack_cores(rows.device(), nb, max_grid), max_grid)
+    gx, gy = _grid(rows.device(), max_grid)
+    ncores = gx * gy if whole_grid else _unpack_cores(rows.device(), nb, max_grid)
+    pp = _prepared_unpack(rows, out, ncores, max_grid)
     ttnn.bringup.run_prepared(pp, [rows, out], [batch * r + row_lo, nb, out_row0 // 32 * (VALUES // 32), nb, nb])
     return out

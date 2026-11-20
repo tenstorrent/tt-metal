@@ -1,0 +1,285 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""MB.2 (OWNER 2026-11-20, rule 20: serving never rebuilds): PERMANENT check that the single-request serving path
+builds no program after its warm-up and uploads the chunk's ids only once (the engine's own H2D).
+
+The serving runtime exactly as prefill_runner builds it (adapter.build_runtime over the gate's executed layers 0-20,
+DECODER_SKIP=decode; through the model's one load path, adapter.load_model: in a batch the held model), the engine's
+KV cache (adapter.allocate_kv_cache, NO_REBUILD_SLOTS slots at the deployment context), ``runtime.compile`` (the
+engine's warm-up at startup) and NOTHING else before the count. Then fresh chunks, every one at positions, slots and
+ends never seen before (AgentX history draws, seeds fixed), each request's real previous chunk first:
+
+    aligned    a chunk at a chunk-aligned start
+    steady     a chunk at a 64-aligned start (two chunk periods)
+    resumed    a resumed request: global_write_start = start + 128 (the encoder replay)
+    partial    a request's last chunk, end = start + m (m from AgentX new tokens), its cap below end
+    pulled     a pulled-back last chunk: start = ceil32(end - chunk) below the previous chunk's end, global_write_start
+               = that end (the replay offset a per-request value)
+    acks_only  a last chunk with no position below its cap (only the snapshots at the cap and the acks)
+
+each through ``runtime.prefill_chunk`` with the engine's payload made before the count (C.payload_tensor). Metrics
+(gated): program_builds_after_warmup_serving (program-cache entries added + ttnn.bringup.prepare_program calls in the
+fresh chunks; == 0) and ids_uploads_per_chunk (host -> device writes of a chunk's worth of integer ids inside
+prefill_chunk, a chunk; == 0 under POS_DYNAMIC=on: the ids are reordered on the device). On a build, the BuildProbe
+(tests/fresh_common.py) names the op, its call site and the argument that changed. Also (recorded, asserted): the
+pulled-back chunk run again in two fresh slots with POS_DYNAMIC off and on gives bit-identical final streams
+(no_rebuild_on_off_max_abs_diff == 0).
+
+    PYTHONPATH=$PWD DS41_ENGRAM_TABLE=resident DS41_POS_DYNAMIC=on DS41_DECODER_SKIP=decode \\
+        scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py
+"""
+
+from __future__ import annotations
+
+import functools
+import time
+
+import pytest
+import torch
+
+from models.demos.common.bringup.core import metrics
+from models.demos.common.bringup.testing import batch
+from models.demos.common.bringup.testing.harness import mesh_parametrize, spec
+from models.demos.common.bringup.testing.profile import cache_entries
+from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
+
+S = spec()
+BATCH_SHARED = True  # FIX.29: takes the model of a bring-up batch process (core/batch.shareable)
+BATCH_LAYERS = "executed"  # F285: the layers a decode chunk executes (0-20), as test_skip_positions
+# F279 / F283: the chunk this run measures at (spec target.chunk, F271's BRINGUP_CHUNK when set). Declared per-run so
+# the gate's unit (no BRINGUP_CHUNK: the spec's 5120) and test_skip_positions' (BRINGUP_CHUNK=5120) share the one
+# executed-layers load; a run at another chunk still gets its own model (testing/batch.shared_model compares the
+# load's chunk: a fresh process, or a failure under one_load), never another chunk's model.
+BATCH_ITEM_VARS = ("BRINGUP_CHUNK",)
+REPLAY = 128
+SLOTS = 11  # (slot 0: compile's; 1-8: the fresh draws; 9, 10: the on / off comparison, never written before it)
+KINDS = ("aligned", "steady", "resumed", "partial", "pulled", "acks_only", "steady", "partial")
+
+
+class Uploads:
+    """Host -> device writes of a chunk's worth of integer ids (ttnn.from_torch of an int torch tensor of ``chunk``
+    values; copy_host_to_device_tensor of an int32 / uint32 host tensor of that volume) while installed."""
+
+    def __init__(self, chunk: int):
+        self.chunk, self.n, self.undo = int(chunk), 0, []
+
+    def _ids(self, t) -> bool:
+        if isinstance(t, torch.Tensor):
+            return not t.is_floating_point() and t.numel() == self.chunk
+        import ttnn
+
+        try:
+            return t.dtype in (ttnn.uint32, ttnn.int32) and int(t.logical_volume()) == self.chunk
+        except Exception:  # noqa: BLE001
+            return False
+
+    def __enter__(self):
+        import ttnn
+
+        me = self
+        for name in ("from_torch", "copy_host_to_device_tensor"):
+            f = getattr(ttnn, name)
+
+            def g(*a, _f=f, **k):
+                if a and me._ids(a[0]):
+                    me.n += 1
+                return _f(*a, **k)
+
+            functools.update_wrapper(g, f)
+            setattr(ttnn, name, g)
+            self.undo.append((name, f))
+        return self
+
+    def __exit__(self, *exc):
+        import ttnn
+
+        for name, f in reversed(self.undo):
+            setattr(ttnn, name, f)
+        self.undo.clear()
+        return False
+
+
+def _draws(chunk: int, hi: int) -> list:
+    """The fresh chunks (module docstring): [(kind, slot, [(start, end, write_start), ...] the request's chunks)]."""
+    from models.demos.deepseek_v41_flash_d_p.tests import fresh_common as F
+
+    out = []
+    for n, kind in enumerate(KINDS):
+        d = F.Draw(424200 + n)
+        p = d.history(lo=chunk, hi=hi)
+        slot = 1 + n % (SLOTS - 3)  # (slot 0: compile's; every slot new to this test until it wraps)
+        if kind == "aligned":
+            p = max(chunk, p // chunk * chunk)
+        if kind in ("aligned", "steady"):
+            chunks = [(p - chunk, p, None), (p, p + chunk, None)]
+        elif kind == "resumed":
+            chunks = [(p - chunk, p, None), (p, p + chunk, p + REPLAY)]
+        elif kind == "partial":
+            m = max(64, (d.new_tokens() - 1) % chunk + 1)
+            chunks = [(p - chunk, p, None), (p, p + m, None)]
+        elif kind == "pulled":
+            m = max(64, (d.new_tokens() - 1) % chunk + 1)
+            if m % 32 == 0:
+                m += 7  # (an end off the 32 grid: a start strictly inside the previous chunk)
+            e = p + m
+            s = -(-(e - chunk) // 32) * 32
+            chunks = [(p - chunk, p, None), (s, e, p)]
+        else:  # acks_only: no position below the cap (cap = end // 64 x 64 = start)
+            p = p // 64 * 64
+            chunks = [(p - chunk, p, None), (p, p + 20, None)]
+        out.append((kind, slot, chunks))
+    return out
+
+
+def _payload(mesh, text, s: int, e: int, chunk: int, sp: int):
+    from models.demos.deepseek_v41_flash_d_p.tests.bringup.contract import caches as C
+    from models.demos.deepseek_v41_flash_d_p.tests.bringup.contract import server_rules as R
+
+    return C.payload_tensor(mesh, R.server_payload(text[s:e].tolist(), s, e, chunk=chunk, sp=sp))
+
+
+def _final_streams(runtime, inp, kv, slot: int, s: int, e: int, ws) -> torch.Tensor:
+    """prefill_chunk with the last executed layer's output streams kept (a device clone a layer, the previous freed)
+    -> host, every chip's rows stacked."""
+    import ttnn
+
+    model = runtime.model
+    keep = {}
+    layer = model.layer
+
+    def wrapped(i, h, *a, **k):
+        out = layer(i, h, *a, **k)
+        if getattr(out, "streams", None) is not None:
+            old = keep.pop("t", None)
+            if old is not None:
+                ttnn.deallocate(old)
+            keep["t"] = ttnn.clone(out.streams, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return out
+
+    model.layer = wrapped
+    try:
+        runtime.prefill_chunk(inp, kv, slot_id=slot, actual_start=s, actual_end=e, global_write_start=ws)
+    finally:
+        del model.layer
+    t = keep["t"]
+    host = torch.stack([ttnn.to_torch(x).float() for x in ttnn.get_device_tensors(t)])
+    ttnn.deallocate(t)
+    return host
+
+
+@mesh_parametrize(timeout_s=3600)
+def test_no_rebuild(mesh_device, monkeypatch):
+    if mesh_device is None:
+        pytest.skip("device test")
+    import ttnn
+    from models.demos.deepseek_v41_flash_d_p.tests import fresh_common as F
+    from models.demos.deepseek_v41_flash_d_p.tests.test_skip_positions import _runtime
+
+    assert settings.get("DECODER_SKIP") == "decode", "run with DS41_DECODER_SKIP=decode (the gate's serving mode)"
+    pos = settings.get("POS_DYNAMIC")
+    print(f"POS_DYNAMIC={pos}")
+    chunk = int(S.get("target.chunk"))
+    full = list(S.layers())
+    layers = batch.run_layers(S, full, last_chunk=False)
+    deploy = int(S.get("deploy.seq") or S.get("target.seq"))
+    cap = max(-(-deploy // chunk) * chunk, int(S.data["target"]["seq"]))  # (test_skip_positions' fresh load)
+    monkeypatch.setitem(S.data["target"], "seq", cap)
+    monkeypatch.setenv("WALLS_FRESH_SLOTS", str(SLOTS))
+    t0 = time.time()
+    runtime, adapter, hf, params = _runtime(mesh_device, layers, chunk, cap)
+    model = runtime.model
+    loaded = model.skip_mode
+    if loaded != "decode":
+        model.use_decoder_skip("decode")
+    print(f"model ready in {time.time() - t0:.1f} s")
+    sp = int(tuple(mesh_device.shape)[0])
+    hi = min(cap, model.max_seq) - chunk
+    text = torch.randint(0, int(model.vocab), (hi + chunk,), generator=torch.Generator().manual_seed(7))
+    kv = adapter.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf, params=params)
+    try:
+        t0 = time.time()
+        runtime.compile(kv)  # (the engine's warm-up at startup: the only warm-up before the count)
+        model.sync()
+        print(f"runtime.compile in {time.time() - t0:.1f} s")
+        draws = _draws(chunk, hi)
+        for _, slot, _ in draws:  # (a serving process holds every slot's state after its first request: untimed)
+            runtime.state(kv, slot)
+        uploads = Uploads(chunk)
+        pc = F.PrepCount()
+        n_chunks, rows = 0, []
+        e0 = cache_entries(mesh_device)
+        with F.BuildProbe(mesh_device) as pb:
+            for kind, slot, chunks in draws:
+                b0, p0, u0 = cache_entries(mesh_device), pc.n, uploads.n
+                for s, e, ws in chunks:
+                    inp = _payload(mesh_device, text, s, e, chunk, sp)  # (the engine's H2D: before the count)
+                    with pc, uploads:
+                        runtime.prefill_chunk(
+                            inp, kv, slot_id=slot, actual_start=s, actual_end=e, global_write_start=ws
+                        )
+                    model.sync()
+                    ttnn.deallocate(inp)
+                    n_chunks += 1
+                row = {
+                    "kind": kind,
+                    "slot": slot,
+                    "chunks": chunks,
+                    "builds": cache_entries(mesh_device) - b0,
+                    "prepared": pc.n - p0,
+                    "ids_uploads": uploads.n - u0,
+                }
+                rows.append(row)
+                print(f"NO_REBUILD {row}", flush=True)
+        built = cache_entries(mesh_device) - e0
+        pb.print("no_rebuild")
+        builds = built + pc.n
+        F._record_gate_name("program_builds_after_warmup_serving", int(builds))
+        F._record_gate_name("ids_uploads_per_chunk", round(uploads.n / max(1, n_chunks), 3))
+        metrics.record("no_rebuild_cache_entries", int(built))
+        metrics.record("no_rebuild_prepares", int(pc.n))
+        metrics.record("no_rebuild_chunks", int(n_chunks))
+        metrics.record("no_rebuild_rows", rows)
+        metrics.record("no_rebuild_probe", pb.summary(20))
+
+        # bit-identity of the two paths on the pulled-back chunk: two slots nothing wrote before (the same zero history
+        # below the request's chunks), its previous chunk first
+        kind, _, chunks = next(d for d in draws if d[0] == "pulled")
+        got = {}
+        snap = settings.snap
+        for side, slot in (("off", SLOTS - 1), ("on", SLOTS - 2)):
+            if snap is not None:
+                snap["POS_DYNAMIC"] = side
+            else:
+                monkeypatch.setenv(settings.env_name("POS_DYNAMIC"), side)
+            try:
+                for j, (s, e, ws) in enumerate(chunks):
+                    inp = _payload(mesh_device, text, s, e, chunk, sp)
+                    if j + 1 < len(chunks):
+                        runtime.prefill_chunk(
+                            inp, kv, slot_id=slot, actual_start=s, actual_end=e, global_write_start=ws
+                        )
+                    else:
+                        got[side] = _final_streams(runtime, inp, kv, slot, s, e, ws)
+                    ttnn.deallocate(inp)
+            finally:
+                if snap is not None:
+                    snap["POS_DYNAMIC"] = pos
+        diff = float((got["on"] - got["off"]).abs().max())
+        metrics.record("no_rebuild_on_off_max_abs_diff", diff)
+        print(f"NO_REBUILD on vs off (pulled-back chunk {chunks[-1]}): max |diff| {diff}", flush=True)
+    finally:
+        for key in [k for k in runtime._states if k[0] == id(kv)]:
+            try:
+                runtime._states.pop(key).free()
+            except Exception as e:  # noqa: BLE001
+                print(f"state free: {e}")
+        for t in kv.contract.by_config.values():
+            if t.is_allocated():
+                ttnn.deallocate(t)
+        if loaded != "decode":
+            model.use_decoder_skip(loaded)
+    assert builds == 0, f"{builds} programs built after warm-up on fresh serving chunks: {pb.summary(8)}"
+    if pos == "on":
+        assert uploads.n == 0, f"{uploads.n} ids uploads in {n_chunks} chunks (POS_DYNAMIC=on reorders on the device)"
+    assert diff == 0, f"POS_DYNAMIC on vs off differ: max |diff| {diff}"

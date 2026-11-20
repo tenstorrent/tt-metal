@@ -1,0 +1,106 @@
+{
+ "used": [
+  {
+   "id": "DS41-321",
+   "how": "MB.1's list of rebuilding sites (served.slice_rows, compressor/rope _rows, DeviceScalars.at, history_gather _tail, srv_row, snapshot patterns) is exactly the set converted to prepared page copies / value slots under POS_DYNAMIC",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-277",
+   "how": "page_copy._geo keys a program on the TensorAccessor compile-time args AND the shape of a sharded tensor, so a program built for one slab geometry is never reused for another (served slabs of other batch counts)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-185",
+   "how": "HOST_GLUE's load-time snapshot would freeze POS_DYNAMIC: hooks.batch_call_apply refreshes that one switch in a held model's snapshot (call-time switch)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-314",
+   "how": "only POS_DYNAMIC is written into settings.snap (batch_call_apply, test_no_rebuild's on/off check), never a full refresh()",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-206",
+   "how": "decode truncates a fresh slot's window at its first chunk, so test_no_rebuild draws every request at a new AgentX position in a new slot and compile can warm a pulled-back chunk",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-145",
+   "how": "page copies / IdsReorder keep per-core runtime args to a few cores (4 / 1) so a dispatch's per-chip args stay small",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-281",
+   "evidence": "out of date: the ops that build at a new chunk position are named (DS41-321) and, with POS_DYNAMIC=on (MB.2), no longer build: test_no_rebuild 0 builds after runtime.compile on 8 fresh kinds up to 539k; fresh walls 0 + 0 builds in 24 timed chunks (results/MB.2_fresh_walls.md)",
+   "cited": false
+  }
+ ],
+ "missing": [
+  "how a call-time switch (hooks.batch_call_settings) reaches a model whose settings HOST_GLUE froze at load (batch_call_apply must write it into settings.snap)",
+  "a serving on/off bit-identity check must compare slots with identical histories (DS41-322)",
+  "a gate threshold glob (*_fresh*) can catch an unrelated test's metric (prefix_hit_limit_exceed_fresh, 0 = good): DS41-323",
+  "BRINGUP_CHUNK set to the spec's own chunk splits a gate's executed-layer group (core/batch.normalized skips BRINGUP_ vars): test_no_rebuild declares it per-run"
+ ],
+ "overseer": [
+  {
+   "id": "OV-57",
+   "answer": "done",
+   "evidence": "every listed site is a runtime value under POS_DYNAMIC=on: rope.py/compressor.py row slices -> page_copy with sp_stride; served.DeviceScalars._pick and CacheSlab.slice_rows -> page copies (slot x layers + row a value); history_gather _pack/_tail fixed row counts + page copies; attention.srv_row page copy; compressor._write_from replay rotation = 2 page copies; snapshot_send pattern as values (batching PB.7C); unpack_fp8_rows whole_grid; partial masks were already runtime (ttnn.lt scalar: no build in the partial / acks-only draws); ids reordered on the device (IdsReorder, no _host_emb_ids upload); adapter.compile warms the finite set. test_no_rebuild: builds 0, prepares 0, ids uploads 0, on vs off 0.0; fresh walls 0 builds, fresh ~= warm"
+  },
+  {
+   "id": "OV-3",
+   "answer": "disagree",
+   "evidence": "no weight or tensor is padded for a kernel limit; but to keep ONE shape (rule 20) the history tail always gathers 2 hs rows (on a chunk-aligned start hs rows of it were already prefetched: re-sent, same bytes) and the whole-history pack runs in PACK_BUCKET pieces whose last piece may overlap the previous one. Measured: fresh walls steady 61.4k tok/s vs MB.1's repeated 63.4k (warm repeated 61.2k): within ~3 ms a chunk. Removing it needs slice_write / the tail gather to take the row count as a runtime value (a fork change); proposed as a follow-up, not done in this step"
+  }
+ ],
+ "cited_only": [
+  "DS41-322",
+  "DS41-323"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "MB.2",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-20T23:04:14",
+  "head": "24d93f2590f",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.2.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.2_fresh_walls.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/MB.2.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_mb2_diag.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/history_gather.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/index_keys.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/page_copy.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/rope.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/runners/adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/served.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/snapshot_send.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/README.md",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/fp8_rows.py",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/tests/unit/test_unpack_fp8_rows.py"
+  ]
+ }
+}

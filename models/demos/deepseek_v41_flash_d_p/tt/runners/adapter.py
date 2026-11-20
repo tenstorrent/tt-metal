@@ -276,6 +276,7 @@ class DS41PrefillRuntime:
             # decoder (20-39); the in-process read-backs judge only what decode is served (host bookkeeping)
             WINDOW_UNWRITTEN[int(slot)] = frozenset(model.decoder) if model.skip_mode == "decode" else frozenset()
         from ..attention import prefill_end
+        from ..page_copy import on as pos_dynamic
 
         # PREFILL_END=cap (P.49): compute only [start, cap), cap = decode's cap of the engine's actual_end
         # (snapshot_cap); positions >= cap are pad (the model's ``end``). The acks still name the engine's range.
@@ -293,12 +294,21 @@ class DS41PrefillRuntime:
             st.note_tokens(ids, start, run_end)
             # (P.30 / P.31: False skips the decoder; None = not told, every layer. P.51: write_start = global_write_start)
             model.begin_chunk(ids, start, last=last, write_start=write_start)
+        # POS_DYNAMIC=on (MB.2): the embedding's natural-order ids made on the device from the engine's input (no second
+        # upload; the readback above stays for the engram hash and the slot's id history)
+        dev_ids = None
+        if ids is not None and pos_dynamic() and self.layer_ids and self.layer_ids[0] == 0:
+            dev_ids = model.reorder_ids(inp, start, run_end - start)
         h = None
         for k, i in enumerate(self.layer_ids):
             if k == 0 or (self.gap_feed is not None and i in self.gap_feed.starts):
                 if h is not None:
                     model.free(h)
-                h = model.embed(ids, start) if i == 0 else model.from_host(self.gap_feed.rows(i, start), start)
+                if i == 0:
+                    h = model.embed(ids, start, dev_ids=dev_ids)
+                    dev_ids = None
+                else:
+                    h = model.from_host(self.gap_feed.rows(i, start), start)
             h2 = model.layer(i, h, start, st, end=run_end)  # writes the layer's records, the last one's pad rows zero
             model.free(h)
             h = h2
@@ -335,13 +345,29 @@ class DS41PrefillRuntime:
 
     def compile(self, kv_cache: DS41KvCaches) -> None:
         """Warm the programs once in slot 0 (junk KV there; a request reads only rows it wrote itself): one cold full
-        chunk. Other starts compile on first use."""
+        chunk. POS_DYNAMIC=off: other starts compile on first use. POS_DYNAMIC=on (MB.2, rule 20: no program is built
+        on the request path after warm-up): every per-chunk value is a runtime value, so the programs depend only on
+        the finite set of chunk kinds, all warmed here: a request's continued chunk [c, 2c) (the history prefetched,
+        its tail gathered) and its pulled-back partial last chunk (start c + m, not chunk-aligned: two chunk periods,
+        the window region path; end 2c + m', its cap below it: the partial masks and the snapshot at a cap; under
+        DECODER_SKIP=decode global_write_start 2c: the encoder replay). Kinds that do not fit max_seq are skipped."""
+        from ..page_copy import on as pos_dynamic
+
         ttnn = self._ttnn
         assert kv_cache.layer_ids == self.layer_ids, (kv_cache.layer_ids, self.layer_ids)
-        c = self.config.chunk_size
-        ids = self.make_chunk_input([0] * c, 0)
-        self._run(ids, kv_cache, 0, 0, c, acks=False)
-        ttnn.deallocate(ids)
+        c, m = self.config.chunk_size, self.config.max_seq_len
+        chunks = [(0, c, None)]
+        if pos_dynamic():
+            if 2 * c <= m:
+                chunks.append((c, 2 * c, None))
+            tail = c * 5 // 16 // 32 * 32  # (a pulled-back last chunk's new rows: 1600 of 5120)
+            if 2 * c + tail + 32 <= m and tail >= 64:
+                ws = 2 * c if self.model.skip_mode == "decode" else None
+                chunks.append((c + tail + 32, 2 * c + tail + 20, ws))  # (end 20 past a block: cap < end)
+        for start, end, ws in chunks:
+            ids = self.make_chunk_input([0] * (end - start), start)
+            self._run(ids, kv_cache, 0, start, end, acks=False, write_start=ws)
+            ttnn.deallocate(ids)
         ttnn.synchronize_device(self.mesh_device)
 
     def prefill_chunk(

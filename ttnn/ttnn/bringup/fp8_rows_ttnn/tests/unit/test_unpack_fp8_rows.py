@@ -163,6 +163,29 @@ def test_unpack_fp8_rows(mesh, sharded):
     assert torch.all(got2[:, 7] == 0)
 
 
+def test_unpack_fp8_rows_whole_grid(mesh):
+    """whole_grid=True (deepseek_v41_flash_d_p MB.2): every range on the whole grid (idle cores past the band count),
+    one prepared program for every row count; bytes equal to the default's (a core a band) at 1, 3 and 37 bands."""
+    chips = mesh.get_num_devices()
+    B, R, M = 2, 2048, 2048
+    rows = _encode(_keys(chips, B, R, seed=13))
+    dev = _rows_dev(mesh, rows, _nd(mesh))
+    grid = _grid(mesh)
+    for lo, n in ((0, 32), (96, 96), (512, 37 * 32)):
+        a = _out_dev(mesh, chips, M, torch.full((chips, M, 128), 3.0))
+        b = _out_dev(mesh, chips, M, torch.full((chips, M, 128), 3.0))
+        ttnn.bringup.unpack_fp8_rows(dev, a, row_lo=lo, row_hi=lo + n, batch=1, max_grid=grid)
+        ttnn.bringup.unpack_fp8_rows(dev, b, row_lo=lo, row_hi=lo + n, batch=1, max_grid=grid, whole_grid=True)
+        assert torch.equal(_host(a, chips, M), _host(b, chips, M)), (lo, n)
+    from ttnn.bringup.fp8_rows_ttnn import fp8_rows as F
+
+    gx, gy = grid.x, grid.y
+    shape = tuple(int(x) for x in dev.shape)
+    mid = dev.device().id()  # (a process may hold programs of an earlier mesh: the precompile pass's)
+    progs = [k for k in F._PREPARED if k[:4] == ("unpack", mid, shape, (1, 1, M, 128))]
+    assert sum(1 for k in progs if k[6] == gx * gy) == 1, ("one whole-grid program", progs)
+
+
 def test_unpack_fp8_rows_refusals(mesh, expect_error):
     chips = mesh.get_num_devices()
     rows = _rows_dev(mesh, torch.zeros(chips, 1, 64, ROW, dtype=torch.uint8), ttnn.DRAM_MEMORY_CONFIG)

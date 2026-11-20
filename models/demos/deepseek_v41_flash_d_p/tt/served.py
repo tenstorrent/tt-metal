@@ -144,6 +144,14 @@ class CacheSlab:
         ``out``: written into that tensor and returned, HOST_ALLOC=on, P.15)."""
         b = self.batch
         sc = sub_cores(self.tensor)
+        from .page_copy import on as pos_dynamic
+        from .page_copy import page_copy, pages_of
+
+        if pos_dynamic():  # MB.2: the (slot, layer) batch's rows as pages (batch and rows runtime values)
+            if out is not None:
+                page_copy(self.tensor, out, b * self.rows + lo, 0, hi - lo)
+                return out
+            return pages_of(self.tensor, b * self.rows + lo, hi - lo, [1, 1, hi - lo, self.width])
         if out is not None and sc is None:
             ttnn.slice(self.tensor, [b, 0, lo, 0], [b + 1, 1, hi, self.width], memory_config=DRAM, output_tensor=out)
             return out
@@ -203,16 +211,24 @@ class DeviceScalars:
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
         )
 
+    def _pick(self, k: int) -> ttnn.Tensor:
+        from .page_copy import on as pos_dynamic
+        from .page_copy import pages_of
+
+        if pos_dynamic():  # MB.2: the value's page copied (k a runtime value: no program a position)
+            return pages_of(self.t, k, 1, [1, 1])
+        return ttnn.slice(self.t, [k, 0], [k + 1, 1], memory_config=DRAM, sub_core_grids=sub_cores(self.t))
+
     def at(self, k: int) -> ttnn.Tensor:
         """The k-th value; release it with ``release`` (memo: kept while it is among the latest MEMO)."""
         assert 0 <= k < self.n, (k, self.n)
         if self._memo is None:
-            return ttnn.slice(self.t, [k, 0], [k + 1, 1], memory_config=DRAM, sub_core_grids=sub_cores(self.t))
+            return self._pick(k)
         t = self._memo.get(k)
         if t is not None:
             self._memo.move_to_end(k)
             return t
-        t = self._memo[k] = ttnn.slice(self.t, [k, 0], [k + 1, 1], memory_config=DRAM, sub_core_grids=sub_cores(self.t))
+        t = self._memo[k] = self._pick(k)
         while len(self._memo) > self.MEMO:
             dealloc(self._memo.popitem(last=False)[1])
         return t
