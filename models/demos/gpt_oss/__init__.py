@@ -7,11 +7,16 @@
 The model code reads its accuracy and speed switches from GPT_OSS_* environment variables, most of them when a module
 is imported, and each switch is off when its variable is unset. This package's __init__ runs before any of those
 modules is imported, so it fills in every variable that is not set already with the value that passes the GPQA eval
-on QuietBox 2 (the tt-inference-server P300X2 entry), for gpt-oss-20b only.
+on QuietBox 2 (the tt-inference-server P300X2 entry), for gpt-oss-20b on a QuietBox 2 only.
 
+- QuietBox 2 only: the settings were measured there, nowhere else. The check runs before any device is opened, so it
+  reads the device nodes: exactly 4 Blackhole chips visible (/dev/tenstorrent, filtered by TT_VISIBLE_DEVICES), the
+  same test as the DFlash demo's. P150, P300, LoudBox, Galaxy and the Wormhole machines (LLMBox, N150, N300) keep
+  every switch off unless set.
 - A variable that is already set is never changed. To turn one switch off, set it yourself (for example
   GPT_OSS_DECODE_SPLIT_NATIVE_FOLD=0, GPT_OSS_BOUNDARY_FIDELITY=HiFi2, or GPT_OSS_DENSE_ROUNDED_DECODE= ).
-- GPT_OSS_RELEASE_DEFAULTS=0 turns all of them off (the old behavior: every switch off unless set).
+- GPT_OSS_RELEASE_DEFAULTS=0 turns all of them off (the old behavior: every switch off unless set);
+  GPT_OSS_RELEASE_DEFAULTS=1 turns them on whatever the machine (the gpt-oss-20b checkpoint rules below still apply).
 - gpt-oss-120b gets none of them: the per-layer ranks and the rounded weights below are gpt-oss-20b's.
 - Nor does a config-only gpt-oss-20b directory (the unit tests' models/demos/gpt_oss/configs/gpt-oss-20b, random
   weights): the rounded weights replace the checkpoint's values, so they only fit the real checkpoint.
@@ -78,10 +83,46 @@ def has_checkpoint(path):
     return any(f.endswith(".safetensors") or f.endswith(".safetensors.index.json") for f in os.listdir(path))
 
 
+_BLACKHOLE_PCI_ID = 0xB140
+_QUIETBOX_2_CHIPS = 4
+
+
+def visible_blackhole_chips(dev_dir="/dev/tenstorrent", sys_dir="/sys/class/tenstorrent"):
+    """How many Blackhole chips this process can use, read from the device nodes and sysfs without opening a device
+    (ttnn.get_num_devices would bring up the cluster, here at import time and in processes that never use it).
+    TT_VISIBLE_DEVICES, a comma-separated list of /dev/tenstorrent numbers, narrows the set as it does for UMD."""
+    try:
+        ids = [int(n) for n in os.listdir(dev_dir) if n.isdigit()]
+    except OSError:
+        return 0
+    visible = os.environ.get("TT_VISIBLE_DEVICES", "").strip()
+    if visible:
+        keep = {int(x) for x in visible.split(",") if x.strip().isdigit()}
+        ids = [i for i in ids if i in keep]
+
+    def is_blackhole(i):
+        try:
+            with open(os.path.join(sys_dir, f"tenstorrent!{i}", "device", "device")) as f:
+                return int(f.read().strip(), 16) == _BLACKHOLE_PCI_ID
+        except (OSError, ValueError):
+            return False
+
+    return sum(is_blackhole(i) for i in ids)
+
+
+def is_quietbox_2():
+    """A QuietBox 2 (2 x P300): exactly 4 Blackhole chips visible."""
+    return visible_blackhole_chips() == _QUIETBOX_2_CHIPS
+
+
 def apply_release_defaults():
-    """Set each unset GPT_OSS_* release variable (gpt-oss-20b with its real weights only); returns the names it set."""
+    """Set each unset GPT_OSS_* release variable (gpt-oss-20b with its real weights, on a QuietBox 2 unless
+    GPT_OSS_RELEASE_DEFAULTS=1); returns the names it set."""
     path = _model_path()
-    if os.environ.get("GPT_OSS_RELEASE_DEFAULTS", "1") == "0" or not is_gpt_oss_20b(path) or not has_checkpoint(path):
+    mode = os.environ.get("GPT_OSS_RELEASE_DEFAULTS", "")
+    if mode == "0" or not is_gpt_oss_20b(path) or not has_checkpoint(path):
+        return []
+    if mode != "1" and not is_quietbox_2():
         return []
     applied = [k for k in RELEASE_DEFAULTS_20B if k not in os.environ]
     for k in applied:
@@ -94,6 +135,6 @@ if RELEASE_DEFAULTS_APPLIED:
     from loguru import logger
 
     logger.info(
-        f"gpt-oss-20b release settings on by default ({len(RELEASE_DEFAULTS_APPLIED)} GPT_OSS_* variables not set "
-        "already; GPT_OSS_RELEASE_DEFAULTS=0 turns them off)"
+        f"gpt-oss-20b release settings on ({len(RELEASE_DEFAULTS_APPLIED)} GPT_OSS_* variables not set already; "
+        "QuietBox 2 default, GPT_OSS_RELEASE_DEFAULTS=0 turns them off)"
     )
