@@ -13,6 +13,9 @@ code   code readback: each core's firmware and kernel code in L1, voted across c
 
 --mode smoke keeps every part and cuts each length to min(SMOKE_S, plain's). A part that fails does not end the
 phase: the next parts still run and are judged on the chips that are left.
+
+--steps runs only the parts named (still in the order above). OVERRIDES set one value of the parts that have it,
+whatever the mode says. A caller that resets between parts runs the phase once per part.
 """
 from __future__ import annotations
 
@@ -30,17 +33,89 @@ from .model import FAIL, PASS, SKIP, Check, Phase
 
 GALAXY_DIR = Path(__file__).resolve().parent.parent / "galaxy"
 MODES = ("plain", "full", "smoke")
+STEPS = ("qb", "mix", "step", "heavy", "code")
+# plan() keyword -> (diag_runner flag, type, what it sets). Unset by default: the plan is then unchanged.
+OVERRIDES = {
+    "heavy_s": ("--heavy-s", int, "heavy: seconds of DIDT ops"),
+    "ops": ("--heavy-ops", str, "heavy: the DIDT ops, comma-separated"),
+    "x_s": ("--heavy-x-s", int, "heavy: seconds at the end that also run the extra DIDT ops (0: none)"),
+    "x_ops": ("--heavy-x-ops", str, "heavy: the extra DIDT ops, comma-separated"),
+    "heavy_n": ("--heavy-n", int, "mix, heavy: heavy ops per launch"),
+    "gap_ms": ("--burst-gap-ms", int, "qb, mix, step, heavy: pause after each burst of heavy ops, ms"),
+    "trays": ("--trays", str, "mix, heavy: load only these trays, 1-4 comma-separated"),
+    "mm_throttle": ("--mm-throttle", int, "qb, mix, step, heavy: matmul di/dt throttle, TT_MM_THROTTLE_PERF 1-5"),
+}
 SMOKE_S = 2
 SETUP_S = 300  # mesh open, upload and close on top of a part's planned length; past both it counts as hung
 FAIL_LINE = re.compile(r"\b[A-Z][A-Z0-9]* FAIL\b")  # NUMERIC FAIL, QUIET FAIL, G3 FAIL, ...
 
-BURST = ("--heavy", "lofi_all", "--burst-gap-ms", "50", "--burst-steps", "8", "--sfpu-par", "1", "--sfpu-act", "gelu:1")
+GAP_MS, HEAVY_N = 50, 16  # the burst's pause after each 8 heavy ops; heavy ops per launch
 DIDT_OPS = "16k_hifi2,16k_bf8_lofi"
 DIDT_X_OPS = "16k_hifi4,16k_bfp4_lofi,16k_bf8_hifi2,16k_bfp4_hifi3,8k_fp32_hifi4,8k_int32_eltwise"
 
 
-def _load(parts: str = "heavy,h3,mm,sfpu,dram,pcie") -> tuple[str, ...]:
-    return ("--parts", parts, "--cqs", "2", "--heavy-n", "16", "--heavy-pcie-mb", "16", "--pcie-every", "1", *BURST)
+def _burst(gap_ms: int) -> tuple[str, ...]:
+    return (
+        "--heavy",
+        "lofi_all",
+        "--burst-gap-ms",
+        str(gap_ms),
+        "--burst-steps",
+        "8",
+        "--sfpu-par",
+        "1",
+        "--sfpu-act",
+        "gelu:1",
+    )
+
+
+def _load(parts: str, n: int, gap_ms: int) -> tuple[str, ...]:
+    return (
+        "--parts",
+        parts,
+        "--cqs",
+        "2",
+        "--heavy-n",
+        str(n),
+        "--heavy-pcie-mb",
+        "16",
+        "--pcie-every",
+        "1",
+        *_burst(gap_ms),
+    )
+
+
+def _csv(name: str, v: str, empty_ok: bool = False) -> str:
+    v = v.replace(" ", "").strip(",")
+    if not v and not empty_ok:
+        raise ValueError(f"{name}: empty")
+    return v
+
+
+def _overrides(over: dict) -> dict:
+    """The set overrides, checked."""
+    if unknown := set(over) - set(OVERRIDES):
+        raise ValueError(f"unknown override {', '.join(sorted(unknown))}; expected: {', '.join(OVERRIDES)}")
+    ov = {k: v for k, v in over.items() if v is not None}
+    for k, lo in (("heavy_s", 1), ("heavy_n", 1), ("x_s", 0), ("gap_ms", 0)):
+        if k in ov and ov[k] < lo:
+            raise ValueError(f"{OVERRIDES[k][0]}: at least {lo} (got {ov[k]})")
+    if "mm_throttle" in ov and ov["mm_throttle"] not in range(1, 6):
+        raise ValueError(f"--mm-throttle: 1-5 (got {ov['mm_throttle']})")
+    for k in ("ops", "x_ops", "trays"):
+        if k in ov:
+            ov[k] = _csv(OVERRIDES[k][0], ov[k], empty_ok=k == "x_ops")
+    if "trays" in ov and not all(t in ("1", "2", "3", "4") for t in ov["trays"].split(",")):
+        raise ValueError(f"--trays: tray numbers 1-4, comma-separated (got {ov['trays']!r})")
+    return ov
+
+
+def parse_steps(steps: str) -> tuple[str, ...]:
+    """The parts named in the comma-separated *steps*, in plan order."""
+    names = steps.replace(" ", "").split(",")
+    if bad := [n for n in names if n not in STEPS]:
+        raise ValueError(f"--steps: unknown {', '.join(map(repr, bad))}; expected one or more of: {', '.join(STEPS)}")
+    return tuple(n for n in STEPS if n in names)
 
 
 @dataclass(frozen=True)
@@ -49,15 +124,18 @@ class Step:
     what: str
     argv: tuple[str, ...]  # a galaxy/ program and its args; {out} is the step's own output directory
     seconds: int  # planned length
+    env: tuple[tuple[str, str], ...] = ()  # set in the program's environment
 
     def line(self) -> str:
         return f"{self.name:<7} {self.seconds:>5} s  {self.what}"
 
 
-def plan(mode: str = "plain") -> list[Step]:
-    """The bus-bar steps for *mode*."""
+def plan(mode: str = "plain", steps: str | None = None, **over: int | str | None) -> list[Step]:
+    """The bus-bar steps for *mode*; only those in the comma-separated *steps* when given; *over* is OVERRIDES."""
     if mode not in MODES:
         raise ValueError(f"unknown mode {mode!r}; expected one of: {', '.join(MODES)}")
+    want = parse_steps(steps) if steps is not None else STEPS
+    ov = _overrides(over)
     full = mode == "full"
 
     def s(plain: int, full_s: int | None = None) -> int:
@@ -66,8 +144,13 @@ def plan(mode: str = "plain") -> list[Step]:
     qq, qb, gap = s(60), s(30), s(10)
     chunks = (s(60), s(120), s(180), s(240, 1500))
     dbi, l1, noc, rf, rw = s(10, 120), s(12, 60), s(5, 100), s(3, 15), s(35)
-    sq, sb, hv = s(10), s(90), s(90, 750)
-    xs, code = min(s(10, 750), hv), {"smoke": 1, "plain": 5, "full": 60}[mode]
+    sq, sb, hv = s(10), s(90), ov.get("heavy_s", s(90, 750))
+    xs, code = min(ov.get("x_s", s(10, 750)), hv), {"smoke": 1, "plain": 5, "full": 60}[mode]
+    ops, x_ops = ov.get("ops", DIDT_OPS), ov.get("x_ops", DIDT_X_OPS)
+    n, gap_ms, trays = ov.get("heavy_n", HEAVY_N), ov.get("gap_ms", GAP_MS), ov.get("trays")
+    burst = _burst(gap_ms)
+    env = (("TT_MM_THROTTLE_PERF", str(ov["mm_throttle"])),) if "mm_throttle" in ov else ()
+    on_trays = ("--trays", trays) if trays else ()
     rows = ("--gap-s", str(gap), "--rows", "{out}/rows.jsonl", "--beat", "{out}/beat")
 
     def ub0(q: int, b: int, *extra: str) -> tuple[str, ...]:
@@ -75,7 +158,7 @@ def plan(mode: str = "plain") -> list[Step]:
             "ub0_repro.py",
             "--load",
             "ub0",
-            *BURST,
+            *burst,
             *extra,
             "--wait-quiet-min",
             "0",
@@ -90,12 +173,13 @@ def plan(mode: str = "plain") -> list[Step]:
         )
 
     mins = ",".join(f"{c / 60:g}" for c in chunks)
-    return [
+    parts = [
         Step(
             "qb",
             f"2 x ({qq} s clock-checked quiet + {qb} s lofi_all burst)",
             ub0(qq, qb, "--numeric-every", "-1", "--cycles", "2"),
             2 * (qq + qb),
+            env,
         ),
         Step(
             "mix",
@@ -105,7 +189,8 @@ def plan(mode: str = "plain") -> list[Step]:
                 "chunk_load.py",
                 "--chunk-min",
                 mins,
-                *_load(),
+                *_load("heavy,h3,mm,sfpu,dram,pcie", n, gap_ms),
+                *on_trays,
                 "--heavy-check-each",
                 "1",
                 "--heavy-cols-rotate",
@@ -128,23 +213,26 @@ def plan(mode: str = "plain") -> list[Step]:
                 *rows,
             ),
             sum(chunks) + gap * len(chunks) + rw + dbi + l1 + noc + rf,
+            env,
         ),
         Step(
             "step",
             f"{sq} s quiet + {sb} s lofi_all burst, numeric after it",
             ub0(sq, sb, "--numeric-every", "500"),
             sq + sb,
+            env,
         ),
         Step(
             "heavy",
-            f"{hv} s of {DIDT_OPS} (last {xs} s also {DIDT_X_OPS}), each output checked",
+            f"{hv} s of {ops} (last {xs} s also {x_ops}), each output checked",
             (
                 "chunk_load.py",
                 "--chunk-min",
                 f"{hv / 60:g}",
-                *_load("heavy"),
+                *_load("heavy", n, gap_ms),
+                *on_trays,
                 "--heavy",
-                DIDT_OPS,
+                ops,
                 "--sfpu-par",
                 "0",
                 "--heavy-check-each",
@@ -152,12 +240,13 @@ def plan(mode: str = "plain") -> list[Step]:
                 "--sfpu-vote",
                 "1",
                 "--heavy-x",
-                DIDT_X_OPS,
+                x_ops,
                 "--heavy-x-s",
                 str(xs),
                 *rows,
             ),
             hv + gap,
+            env,
         ),
         Step(
             "code",
@@ -177,6 +266,7 @@ def plan(mode: str = "plain") -> list[Step]:
             code + 25,
         ),
     ]
+    return [st for st in parts if st.name in want]
 
 
 def run_step(step: Step, out: Path, dry_run: bool = False) -> Check:
@@ -185,11 +275,23 @@ def run_step(step: Step, out: Path, dry_run: bool = False) -> Check:
     argv = [sys.executable, str(GALAXY_DIR / step.argv[0]), *(a.format(out=d) for a in step.argv[1:])]
     if dry_run:
         log(f"[dry-run] {' '.join(argv)}")
-        return Check(name=f"galaxy_{step.name}", status=SKIP, details="dry run", data={"argv": argv})
+        return Check(
+            name=f"galaxy_{step.name}",
+            status=SKIP,
+            details="dry run",
+            data={"argv": argv, **({"env": dict(step.env)} if step.env else {})},
+        )
     d.mkdir(parents=True, exist_ok=True)
     t0, rc, limit = time.time(), None, step.seconds + SETUP_S
     with open(d / "run.log", "w") as f:
-        p = subprocess.Popen(argv, cwd=GALAXY_DIR, stdout=f, stderr=subprocess.STDOUT, start_new_session=True)
+        p = subprocess.Popen(
+            argv,
+            cwd=GALAXY_DIR,
+            env={**os.environ, **dict(step.env)},
+            stdout=f,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
         try:
             rc = p.wait(timeout=limit)
         except subprocess.TimeoutExpired:
@@ -220,10 +322,10 @@ def run_step(step: Step, out: Path, dry_run: bool = False) -> Check:
     )
 
 
-def run_busbar(phase: Phase, out: Path, mode: str, dry_run: bool = False) -> bool:
-    """Every bus-bar step, in order, into *phase*. True when one hung or failed (the links phase then sweeps)."""
+def run_busbar(phase: Phase, out: Path, mode: str, dry_run: bool = False, steps: str | None = None, **over) -> bool:
+    """The bus-bar steps (see plan), in order, into *phase*. True when one hung or failed (the links phase then sweeps)."""
     fault = False
-    for step in plan(mode):
+    for step in plan(mode, steps, **over):
         log(f"busbar {step.line()}")
         c = run_step(step, out / "busbar", dry_run)
         phase.add(c)

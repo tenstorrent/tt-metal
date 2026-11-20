@@ -87,6 +87,14 @@ Forwarded options (see diag_runner.py --help for details):
   --tt-metal-path PATH   Override tt-metal repo root (for unit_tests_deployment binary)
   --output PATH          Write JSON report to PATH (default: ./diag_report.json)
   --triage-dir PATH      Triage scripts dir (default: \$HC_TRIAGE_DIR, else tools/scaleout/kmd_triage)
+  --mode MODE            galaxy tier: run the bus-bar and links phases at this length (plain, full, smoke)
+  --steps LIST           With --mode: run only these bus-bar steps (qb, mix, step, heavy, code; comma-separated,
+                         plan order). Not given: all of them
+  --heavy-s N, --heavy-ops OPS, --heavy-x-s N, --heavy-x-ops OPS
+                         With --mode: the heavy step's seconds, DIDT ops, seconds of extra ops and extra ops
+  --heavy-n N, --burst-gap-ms N, --trays LIST, --mm-throttle 1-5
+                         With --mode: heavy ops per launch, pause after each burst, load only these trays,
+                         matmul di/dt throttle. Not given: the plan's own values (--plan lists them)
   --skip-triage          Skip the post-test reset and the triage phase
   --triage-gating        Let triage FAILs gate the run (default: held at WARN)
   --skip-eth-status      Skip the ETH status read

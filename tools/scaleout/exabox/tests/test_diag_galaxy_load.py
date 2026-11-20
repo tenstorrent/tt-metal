@@ -71,6 +71,125 @@ class TestPlan(unittest.TestCase):
                 for flag in (a for a in step.argv[1:] if a.startswith("--")):
                     self.assertIn(f'"{flag}"', src, f"{step.name}: {step.argv[0]} has no {flag}")
 
+    def test_steps_subset_keeps_plan_order(self):
+        for mode in busbar.MODES:
+            self.assertEqual([s.name for s in busbar.plan(mode, "heavy, qb")], ["qb", "heavy"])
+            self.assertEqual([s.name for s in busbar.plan(mode, "code")], ["code"])
+            self.assertEqual(busbar.plan(mode, "qb,mix,step,heavy,code"), busbar.plan(mode))
+
+    def test_steps_keep_their_own_argv(self):
+        for mode in busbar.MODES:
+            for s in busbar.plan(mode, "step,mix"):
+                self.assertEqual(s, _steps(mode)[s.name])
+
+    def test_unknown_step_is_loud(self):
+        for bad in ("qb,nope", "", "heavy,"):
+            with self.assertRaisesRegex(ValueError, "--steps: unknown"):
+                busbar.plan("plain", bad)
+
+    def test_no_override_changes_nothing(self):
+        for mode in busbar.MODES:
+            self.assertEqual(busbar.plan(mode, **{k: None for k in busbar.OVERRIDES}), busbar.plan(mode))
+            self.assertTrue(all(not s.env for s in busbar.plan(mode)))
+
+    def test_heavy_overrides(self):
+        h = _steps("plain", heavy_s=40, ops="16k_hifi4", x_s=15, x_ops="8k_fp32_hifi4")["heavy"]
+        argv = h.argv
+        self.assertEqual(argv[argv.index("--chunk-min") + 1], f"{40 / 60:g}")
+        self.assertEqual(argv[-argv[::-1].index("--heavy") :][0], "16k_hifi4")
+        self.assertEqual(argv[argv.index("--heavy-x") + 1], "8k_fp32_hifi4")
+        self.assertEqual(argv[argv.index("--heavy-x-s") + 1], "15")
+        self.assertEqual(h.seconds, 50)
+
+    def test_x_seconds_are_capped_at_the_heavy_seconds(self):
+        argv = _steps("full", heavy_s=20, x_s=300)["heavy"].argv
+        self.assertEqual(argv[argv.index("--heavy-x-s") + 1], "20")
+
+    def test_x_ops_may_be_none(self):
+        argv = _steps("plain", x_ops=",")["heavy"].argv
+        self.assertEqual(argv[argv.index("--heavy-x") + 1], "")
+
+    def test_heavy_seconds_override_wins_over_smoke(self):
+        self.assertEqual(_steps("smoke", heavy_s=30)["heavy"].seconds, 32)  # 30 s plus smoke's 2 s gap
+
+    def test_heavy_n_gap_and_trays(self):
+        s = _steps("plain", heavy_n=4, gap_ms=0, trays="3, 1")
+        for name in ("mix", "heavy"):
+            argv = s[name].argv
+            self.assertEqual(argv[argv.index("--heavy-n") + 1], "4", name)
+            self.assertEqual(argv[argv.index("--burst-gap-ms") + 1], "0", name)
+            self.assertEqual(argv[argv.index("--trays") + 1], "3,1", name)
+        for name in ("qb", "step"):
+            argv = s[name].argv
+            self.assertEqual(argv[argv.index("--burst-gap-ms") + 1], "0", name)
+            self.assertNotIn("--heavy-n", argv)
+            self.assertNotIn("--trays", argv)
+        self.assertEqual(s["code"], _steps("plain")["code"])
+
+    def test_matmul_throttle_is_an_environment_setting_of_the_load_steps(self):
+        s = _steps("plain", mm_throttle=3)
+        for name in ("qb", "mix", "step", "heavy"):
+            self.assertEqual(s[name].env, (("TT_MM_THROTTLE_PERF", "3"),), name)
+        self.assertEqual(s["code"].env, ())
+
+    def test_bad_overrides_are_loud(self):
+        for kw in (
+            {"mm_throttle": 0},
+            {"mm_throttle": 6},
+            {"trays": "5"},
+            {"trays": "1,x"},
+            {"trays": ","},
+            {"ops": ""},
+            {"heavy_s": 0},
+            {"heavy_n": 0},
+            {"gap_ms": -1},
+            {"x_s": -1},
+            {"nope": 1},
+        ):
+            with self.assertRaises(ValueError, msg=str(kw)):
+                busbar.plan("plain", **kw)
+
+    def test_every_override_flag_exists_in_its_program(self):
+        s = busbar.plan(
+            "plain",
+            **{
+                "heavy_s": 9,
+                "ops": "16k_hifi4",
+                "x_s": 1,
+                "x_ops": "16k_hifi4",
+                "heavy_n": 2,
+                "gap_ms": 1,
+                "trays": "1",
+            },
+        )
+        for step in s:
+            src = (busbar.GALAXY_DIR / step.argv[0]).read_text()
+            for flag in (a for a in step.argv[1:] if a.startswith("--")):
+                self.assertIn(f'"{flag}"', src, f"{step.name}: {step.argv[0]} has no {flag}")
+
+    def _plan_cli(self, *args):
+        return subprocess.run(
+            [sys.executable, str(SUITE_DIR / "diag_runner.py"), "--tier", "galaxy", *args],
+            capture_output=True,
+            text=True,
+        )
+
+    def test_plan_cli_steps_and_overrides(self):
+        r = self._plan_cli("--mode", "plain", "--plan", "--steps", "heavy", "--heavy-s", "40")
+        self.assertEqual((r.returncode, [ln.split()[0] for ln in r.stdout.splitlines()]), (0, ["heavy"]))
+        self.assertIn(" 50 s ", r.stdout)
+
+    def test_cli_unknown_step_and_bad_override_exit_2(self):
+        for args in (("--steps", "qb,nope"), ("--mm-throttle", "9"), ("--trays", "7"), ("--heavy-n", "x")):
+            r = self._plan_cli("--mode", "plain", "--plan", *args)
+            self.assertEqual(r.returncode, 2, args)
+            self.assertTrue(r.stderr.strip(), args)
+
+    def test_cli_steps_without_mode_is_an_error(self):
+        r = self._plan_cli("--steps", "qb")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("need --mode", r.stderr)
+
     def test_plan_cli(self):
         out = subprocess.run(
             [sys.executable, str(SUITE_DIR / "diag_runner.py"), "--tier", "galaxy", "--mode", "smoke", "--plan"],
@@ -105,6 +224,30 @@ class TestRunStep(unittest.TestCase):
         c = self._run("import time; time.sleep(30)", seconds=1)
         self.assertEqual(c.status, FAIL)
         self.assertTrue(c.data["hung"])
+
+    def test_step_env_reaches_the_program(self):
+        with tempfile.TemporaryDirectory() as d:
+            prog = Path(d) / "prog.py"
+            prog.write_text("import os; print(os.environ['TT_MM_THROTTLE_PERF'])")
+            step = busbar.Step("x", "test", ("prog.py",), 5, (("TT_MM_THROTTLE_PERF", "4"),))
+            with mock.patch.object(busbar, "GALAXY_DIR", Path(d)):
+                self.assertEqual(busbar.run_step(step, Path(d)).status, PASS)
+            self.assertEqual((Path(d) / "x" / "run.log").read_text().strip(), "4")
+
+    def test_dry_run_shows_the_env(self):
+        c = busbar.run_step(busbar.plan("smoke", mm_throttle=2)[0], Path("/nonexistent"), dry_run=True)
+        self.assertEqual(c.data["env"], {"TT_MM_THROTTLE_PERF": "2"})
+
+    def test_run_busbar_runs_only_the_chosen_steps(self):
+        calls = []
+
+        def fake(step, out, dry_run):
+            calls.append(step.name)
+            return busbar.Check(name=step.name, status=PASS)
+
+        with mock.patch.object(busbar, "run_step", fake):
+            self.assertFalse(busbar.run_busbar(Phase(name="busbar"), Path("/tmp"), "smoke", steps="code,qb", gap_ms=1))
+        self.assertEqual(calls, ["qb", "code"])
 
     def test_dry_run(self):
         c = busbar.run_step(busbar.plan("smoke")[0], Path("/nonexistent"), dry_run=True)
