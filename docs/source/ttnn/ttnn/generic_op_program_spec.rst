@@ -187,7 +187,9 @@ Quasar the circular-buffer calls do not work, so the data-movement loops use the
 data-movement kernel that makes many transfers smaller than a tile, such as row-major sticks, also passes
 ``disable_dfb_implicit_sync_for_all=True`` to ``create_reader_datamovement_config`` or
 ``create_writer_datamovement_config``: such transfers stall Quasar's implicit counting of buffer entries, and the flag
-leaves the counting to the kernel's own calls.
+leaves the counting to the kernel's own calls. TT-NN's factories pass it in other cases too, such as matmul's multicast
+kernels, where the implicit counting would acknowledge one entry more than the kernel's own pops; when you port a TT-NN
+kernel, keep the flag if its factory sets it.
 
 .. The kernel links pin one tt-metal commit, since the page describes their code line by line; move the pin when the
    page changes with them. The header and test links follow main, since they document the code as it is now.
