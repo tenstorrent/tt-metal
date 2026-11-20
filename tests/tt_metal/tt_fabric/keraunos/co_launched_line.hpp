@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Fabric unicast on a Keraunos test line, with the sender and receiver on hart 1 (DM1) of the end chips' router CCEs,
-// co-launched with the routers through the fabric program extension. Run with TT_METAL_SLOW_DISPATCH_MODE=1. On Mock
-// the run checks the launch messages and skips: UMD MockChip reads and writes are no-ops.
+// Fabric unicast on a Keraunos test line, with the sender and receiver on CCE1 of the end routers' HSIO tiles, launched
+// as ordinary programs once fabric is up. Run with TT_METAL_SLOW_DISPATCH_MODE=1. On Mock
+// the run compiles the kernels and skips: UMD MockChip reads and writes are no-ops.
 
 #pragma once
 
@@ -17,13 +17,13 @@
 
 namespace tt::tt_fabric::fabric_router_tests {
 
-// A worker beside a router: the router's Ethernet channel and core, on DM1.
+// A worker beside a router: the router's Ethernet channel, and the worker's core, CCE1 of the router's tile
+// (BaseFabricFixture::get_worker_beside_router).
 struct Worker {
     FabricNodeId node;
     ChipId chip;
     chan_id_t router_chan;
-    CoreCoord logical;
-    CoreCoord virtual_core;
+    FabricTestWorker core;
 };
 
 // The line's two ends: the sender on fabric chip 0, the receiver on the last fabric chip, each beside its router that
@@ -34,13 +34,15 @@ struct Line {
     uint32_t num_hops;
 };
 
+// The line's ends of the open cluster, from the control plane. Fatal when a chip has no router toward the other end, or
+// its SoC descriptor lists no idle CCE1 on that router's tile.
 Line line_ends();
 
 class KeraunosCoLaunchedWorkers : public BaseFabricFixture {
 protected:
-    // Opens the devices with 1D fabric, the line's workers co-launched beside its end routers, sends kNumPackets from
-    // the line's first chip to its last, then checks both workers' results and that every router terminates. Skips off
-    // Quasar, and on Mock after checking the launch messages.
+    // Opens the devices with 1D fabric, sends kNumPackets from the line's first chip to its last, then checks both
+    // workers' results and that every router terminates. Skips off Quasar, and on Mock after compiling the workers'
+    // kernels.
     void run_line_unicast();
 
     static void SetUpTestSuite() {}
