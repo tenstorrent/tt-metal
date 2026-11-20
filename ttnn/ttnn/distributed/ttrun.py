@@ -325,6 +325,17 @@ def remove_stale_launcher_leftovers() -> int:
     return removed
 
 
+def _still_running(pid: int) -> bool:
+    """Whether a process that is not tt-run's child is still running. A process that has died is either gone from /proc
+    or a zombie (state Z) waiting for its parent to reap it; in a container whose PID 1 never reaps orphans, a zombie's
+    /proc entry stays for good, so its mere existence is not a sign of life (and a SIGKILL to it does nothing)."""
+    try:
+        with open(f"/proc/{pid}/stat") as fh:
+            return fh.read().rsplit(")", 1)[1].split()[0] != "Z"
+    except (OSError, IndexError):
+        return False
+
+
 class LaunchedJob:
     """Owns one MPI launcher for the life of a job and cleans up after it (teardown plan P6, P7, P19, P11, P25).
 
@@ -675,9 +686,9 @@ class LaunchedJob:
                 except ProcessLookupError:
                     pass
             end = time.time() + grace_s
-            while time.time() < end and any(os.path.exists(f"/proc/{pid}") for pid in survivors):
+            while time.time() < end and any(_still_running(pid) for pid in survivors):
                 time.sleep(0.1)
-            survivors = [pid for pid in survivors if os.path.exists(f"/proc/{pid}")]
+            survivors = [pid for pid in survivors if _still_running(pid)]
             if not survivors:
                 return
 

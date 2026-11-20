@@ -60,6 +60,25 @@ def _no_rank_wrapper(monkeypatch):
 
 
 @pytest.fixture
+def unreaped_orphans():
+    """The CI container's shape: its PID 1 (tail -f /dev/null) never reaps orphans, so a job's leftover that dies stays
+    a zombie with its /proc entry. Making this process a child subreaper that never waits does the same on any host; on
+    teardown the subreaper is turned off and the zombies are reaped."""
+    import ctypes
+
+    PR_SET_CHILD_SUBREAPER = 36
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0)
+    yield
+    libc.prctl(PR_SET_CHILD_SUBREAPER, 0, 0, 0, 0)
+    try:
+        while os.waitpid(-1, os.WNOHANG)[0] > 0:
+            pass
+    except ChildProcessError:
+        pass
+
+
+@pytest.fixture
 def runner():
     """Create a Click test runner."""
     return CliRunner()
@@ -1633,7 +1652,7 @@ class TestJobOwnership:
         if case == "launcher_ignores_force":
             assert "did not exit" in text and "SIGKILL" in text, text
 
-    def test_run_launcher_ends_leftovers_and_fails_the_job(self, monkeypatch):
+    def test_run_launcher_ends_leftovers_and_fails_the_job(self, monkeypatch, unreaped_orphans):
         import time
 
         from ttnn.distributed.ttrun import run_launcher
@@ -1649,6 +1668,9 @@ class TestJobOwnership:
         assert time.time() - t0 < 20
         assert "still running" in text and "waiting up to 2 s (TT_RUN_STOP_GRACE_S)" in text, text
         assert "a leak" in text and "job end: outcome=failed" in text, text
+        # the leftover dies on the SIGTERM; as an unreaped zombie it must count as ended at once, not after the SIGTERM
+        # grace and a SIGKILL to a corpse (2 s stop grace + well under the 10 s SIGTERM grace)
+        assert time.time() - t0 < 2 + 8, f"waited {time.time() - t0:.0f} s on a dead leftover\n{text}"
 
     @pytest.mark.parametrize("exits_after", [1, 12])
     def test_run_launcher_waits_for_a_rank_still_exiting_after_the_launcher(self, exits_after):
@@ -1667,7 +1689,7 @@ class TestJobOwnership:
         assert exits_after <= time.time() - t0 < exits_after + 8
         assert "job end: outcome=clean exit=0" in text and "a leak" not in text, text
 
-    def test_run_launcher_ends_a_forced_jobs_leftovers_without_another_grace(self, monkeypatch):
+    def test_run_launcher_ends_a_forced_jobs_leftovers_without_another_grace(self, monkeypatch, unreaped_orphans):
         import signal
         import threading
         import time
@@ -1701,7 +1723,7 @@ class TestJobOwnership:
         assert time.time() - t0 < 30, f"took {time.time() - t0:.0f} s\n{text}"
         assert "job forced down" in text and "straggler" in text, text
 
-    def test_run_launcher_does_not_wait_for_a_zombie(self):
+    def test_run_launcher_does_not_wait_for_a_zombie(self, unreaped_orphans):
         import time
 
         from ttnn.distributed.ttrun import run_launcher
