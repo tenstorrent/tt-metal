@@ -288,19 +288,17 @@ void kernel_main() {
                         // DEBUG: matmul mcast hang — reached iff all in1 acks received (first block).
 
                         // Now we have the block in the CB address, we can mcast to dests!
-                        MulticastEndpoint mcast_dst;
                         // num_dests must not include source, since we are NOT really doing a local copy!
                         noc.async_write_multicast(
                             CoreLocalMem<uint32_t>(static_cast<uint32_t>(in1_start_address)),
-                            mcast_dst,
+                            cb_in1,
                             in1_block_size_bytes,
                             in1_mcast_num_cores,
                             {},
                             {.noc_x_start = in1_mcast_dest_noc_start_x,
                              .noc_y_start = in1_mcast_dest_noc_start_y,
                              .noc_x_end = in1_mcast_dest_noc_end_x,
-                             .noc_y_end = in1_mcast_dest_noc_end_y,
-                             .addr = static_cast<uint32_t>(in1_start_address)},
+                             .noc_y_end = in1_mcast_dest_noc_end_y},
                             true);
 
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR)
@@ -363,18 +361,16 @@ void kernel_main() {
                         // If "SEND in1 acked" prints but this does not, the bias mcast handshake is the
                         // stuck point (receivers never reached the bias up() because in1 VALID didn't reach them).
 
-                        MulticastEndpoint mcast_dst;
                         noc.async_write_multicast(
                             CoreLocalMem<uint32_t>(static_cast<uint32_t>(in3_start_address)),
-                            mcast_dst,
+                            cb_in3,
                             in3_block_size_bytes,
                             in1_mcast_num_cores,
                             {},
                             {.noc_x_start = in1_mcast_dest_noc_start_x,
                              .noc_y_start = in1_mcast_dest_noc_start_y,
                              .noc_x_end = in1_mcast_dest_noc_end_x,
-                             .noc_y_end = in1_mcast_dest_noc_end_y,
-                             .addr = static_cast<uint32_t>(in3_start_address)},
+                             .noc_y_end = in1_mcast_dest_noc_end_y},
                             true);
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR)
                         // Flush the DATA multicast before the VALID-semaphore multicast. On Quasar, without this

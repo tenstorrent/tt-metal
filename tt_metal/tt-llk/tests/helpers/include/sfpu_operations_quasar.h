@@ -163,7 +163,8 @@ template <sfpi::DataLayout L>
 using layout_c = std::integral_constant<sfpi::DataLayout, L>;
 
 // Calls fn(layout_c<L>{}) with the explicit SFPLOAD/SFPSTORE layout of a float Dest. A 32-bit Dest is F32 whatever
-// the family; a 16-bit Dest follows the family (F16a / F16b). Other families (MX) have no explicit layout: HW-implied.
+// the family; a 16-bit Dest follows the family's exponent width: F16a for Float16 and MxFp4_2x_A (5-bit), F16b for
+// Float16_b and MxFp4_2x_B (8-bit). Any other family has no explicit layout: HW-implied.
 template <bool EN_32BIT_DEST, typename Fn>
 inline void dispatch_dest_float_layout(const DataFormat family, Fn&& fn)
 {
@@ -176,9 +177,11 @@ inline void dispatch_dest_float_layout(const DataFormat family, Fn&& fn)
         switch (family)
         {
             case DataFormat::Float16:
+            case DataFormat::MxFp4_2x_A:
                 fn(layout_c<sfpi::DataLayout::F16a> {});
                 break;
             case DataFormat::Float16_b:
+            case DataFormat::MxFp4_2x_B:
                 fn(layout_c<sfpi::DataLayout::F16b> {});
                 break;
             default:
@@ -187,6 +190,15 @@ inline void dispatch_dest_float_layout(const DataFormat family, Fn&& fn)
         }
     }
 }
+
+// SFPU_COMPUTE_API_KERNELS (set by the test) sends exp and float ADD through calculate_exponential /
+// calculate_sfpu_binary, the kernels exp_tile / add_binary_tile call, which take the HW-implied (Default) Dest
+// format. Without it they go through the op types with an explicit layout.
+#ifdef SFPU_COMPUTE_API_KERNELS
+inline constexpr bool kComputeApiKernels = true;
+#else
+inline constexpr bool kComputeApiKernels = false;
+#endif
 
 // Mirrored by EMA_ALPHA_BITS / EMA_BETA_BITS in helpers/sfpu_dispatch_constants.py.
 inline constexpr std::uint32_t kEmaAlphaBits = 0x3F19999Au; // 0.6f
@@ -367,7 +379,8 @@ void init_unary_sfpu_operation_quasar()
     }
     else if constexpr (OPERATION == SfpuType::hardmish)
     {
-        hardmish_init();
+        // The Compute API's hardmish_tile_init expression, so the bare init's dispatch to hardmish_init is what runs.
+        SFPU_UNARY_INIT(hardmish);
     }
     else if constexpr (OPERATION == SfpuType::mish)
     {
@@ -404,6 +417,11 @@ void init_unary_sfpu_operation_quasar()
     else if constexpr (OPERATION == SfpuType::sigmoid_appx)
     {
         sigmoid_appx_init();
+    }
+    else if constexpr (OPERATION == SfpuType::tanh)
+    {
+        // calculate_tanh stores through the ADDR_MOD_6 tanh_init programs, as tanh_tile_init does.
+        tanh_init<APPROX, is_fp32_dest_acc_en>();
     }
     else if constexpr (OPERATION == SfpuType::tanhshrink)
     {
@@ -463,7 +481,8 @@ void init_unary_sfpu_operation_quasar()
     }
     else if constexpr (OPERATION == SfpuType::i0)
     {
-        i0_init();
+        // The Compute API's i0_tile_init expression, so the bare init's dispatch to i0_init is what runs.
+        SFPU_UNARY_INIT(i0);
     }
     else if constexpr (OPERATION == SfpuType::i1)
     {
@@ -797,12 +816,27 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::exponential)
     {
-        ::ckernel::_sfpu_check_<DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE>(dst_index, vector_mode);
-        // sfpu_format is the Dest family; pick the explicit SFPLOAD/SFPSTORE layout for it.
-        dispatch_dest_float_layout<is_fp32_dest_acc_en>(
-            sfpu_format,
-            [&](auto l)
-            { ckernel::sfpu::ExpDest<APPROX, is_fp32_dest_acc_en, decltype(l)::value, ITERATIONS>::template run<TILE_SHAPE>(dst_index, vector_mode); });
+        if constexpr (kComputeApiKernels)
+        {
+            SFPU_UNARY_CALL_TINY_TILE(
+                DST_SYNC,
+                is_fp32_dest_acc_en,
+                TILE_SHAPE,
+                calculate_exponential,
+                (APPROX, is_fp32_dest_acc_en, false /*SCALE_EN*/, ITERATIONS),
+                dst_index,
+                vector_mode,
+                p_sfpu::kCONST_1_FP16B);
+        }
+        else
+        {
+            ::ckernel::_sfpu_check_<DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE>(dst_index, vector_mode);
+            // sfpu_format is the Dest family; pick the explicit SFPLOAD/SFPSTORE layout for it.
+            dispatch_dest_float_layout<is_fp32_dest_acc_en>(
+                sfpu_format,
+                [&](auto l)
+                { ckernel::sfpu::ExpDest<APPROX, is_fp32_dest_acc_en, decltype(l)::value, ITERATIONS>::template run<TILE_SHAPE>(dst_index, vector_mode); });
+        }
     }
     else if constexpr (OPERATION == SfpuType::gelu)
     {
@@ -1104,7 +1138,16 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::hardmish)
     {
-        SFPU_UNARY_CALL_TINY_TILE(DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, hardmish, (APPROX, ITERATIONS), dst_index, vector_mode);
+        if (sfpu_format == DataFormat::Float16)
+        {
+            SFPU_UNARY_CALL_TINY_TILE(
+                DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, hardmish, (APPROX, is_fp32_dest_acc_en, DataFormat::Float16, ITERATIONS), dst_index, vector_mode);
+        }
+        else
+        {
+            SFPU_UNARY_CALL_TINY_TILE(
+                DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, hardmish, (APPROX, is_fp32_dest_acc_en, DataFormat::Float16_b, ITERATIONS), dst_index, vector_mode);
+        }
     }
     else if constexpr (OPERATION == SfpuType::mish)
     {
@@ -1314,7 +1357,7 @@ void call_unary_sfpu_operation_quasar(
                 is_fp32_dest_acc_en,
                 TILE_SHAPE,
                 calculate_logical_not,
-                (APPROX, ckernel::InstrModLoadStore::LO16, ITERATIONS),
+                (APPROX, ckernel::InstrModLoadStore::UINT16, ITERATIONS),
                 dst_index,
                 vector_mode);
         }
@@ -1686,7 +1729,12 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
         calculate_gcd_init();
     }
     // RSHFT / LSHFT / LOGICAL_RSHFT need no init beyond the shared SFPU one.
-    // ADD / SUB / GT / LT / LE / GE / COPY_DEST / LOGSIGMOID / RESHUFFLE_ROWS are stateless — no init.
+    else if constexpr (OP == BinaryOp::LOGSIGMOID)
+    {
+        // logsigmoid_tile_init: loads the polynomial tail d6..d8 into vConstFloatPrgm0..2.
+        logsigmoid_init<APPROXIMATION_MODE>();
+    }
+    // ADD / SUB / GT / LT / LE / GE / COPY_DEST / RESHUFFLE_ROWS are stateless — no init.
 }
 
 /**
@@ -1750,6 +1798,19 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
         {
             ::ckernel::_sfpu_binary_check_<DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE>(src0_tile, src1_tile, dst_tile, vector_mode);
             ckernel::sfpu::AddIntDest<SIGN_MAGNITUDE_FORMAT, ITERATIONS, TILE_SHAPE>::template run<TILE_SHAPE>(src0_tile, src1_tile, dst_tile, vector_mode);
+        }
+        else if constexpr (kComputeApiKernels)
+        {
+            SFPU_BINARY_CALL_TINY_TILE(
+                DST_SYNC,
+                is_fp32_dest_acc_en,
+                TILE_SHAPE,
+                calculate_sfpu_binary,
+                (APPROXIMATION_MODE, BinaryOp::ADD, is_fp32_dest_acc_en, dst_rounding_mode, ITERATIONS),
+                src0_tile,
+                src1_tile,
+                dst_tile,
+                vector_mode);
         }
         else
         {

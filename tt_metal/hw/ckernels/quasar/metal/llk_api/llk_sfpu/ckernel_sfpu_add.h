@@ -20,6 +20,7 @@ namespace sfpu {
 /** @brief Float ADD math policy, shared by Dest and SrcS. */
 struct AddFloatMath {
     using value_type = sfpi::vFloat;
+    static constexpr bool single_instruction = true;  // one SFPADD
     sfpi_inline static sfpi::vFloat apply(sfpi::vFloat a, sfpi::vFloat b) { return a + b; }
 };
 

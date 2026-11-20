@@ -31,9 +31,9 @@ namespace llk_tdma_guard
 //
 // The compute TRISCs run as separate threads in the host-threaded emulation. A single shared mask
 // races the arm/disarm read-modify-writes (|= / &=) and lets one TRISC's WAIT/POP see another's bits
-// -- the same shared-mutable-global-across-Neos bug tt-llk#1678 fixed for bfd_state. Give the mask
+// -- the shared-global-across-Neos race of tt-llk#1678. Give the mask
 // per-TRISC thread_local storage. It is zero-initialized, so it stays in .tbss (no load image) and
-// adds no .tdata/LMA firmware footprint. Mirrors trisc::bfd_state / dest_register_offset: ENV_LLK_INFRA
+// adds no .tdata/LMA firmware footprint. Mirrors trisc::dest_register_offset: ENV_LLK_INFRA
 // (standalone LLK infra, no firmware TU) uses a plain static; the metal build declares it extern
 // thread_local and defines it in firmware (tt_metal/hw/firmware/src/tt-2xx/trisc.cc).
 #ifdef ENV_LLK_INFRA

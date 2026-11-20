@@ -113,13 +113,35 @@ struct DestBinary : SfpuDestBinaryOp<DestBinary<MATH, LAYOUT, OUT, ITERATIONS, T
         // sfpi dst_reg indexes in SFP_ROWS (2) units, so the tile stride is dest-rows / 2
         // (32 for Tile32x32; same as BH/WH 64/SFP_DESTREG_STRIDE).
         constexpr std::uint32_t dst_tile_size_sfpi = 1U << (trisc::get_dest_tile_size_log2(TILE_SHAPE) - 1);
+        // Two rows per iteration when the op and the store are one instruction each and the row count is even
+        // (see calculate_binary_operands_two_rows); any other op keeps one row per iteration.
+        constexpr bool two_rows = ITERATIONS % 2 == 0 && detail::is_single_instruction_math<MATH> && OUT::plain_store;
+        if constexpr (two_rows) {
+            // The second row's offset is formed before the cast to int: with an unsigned offset GCC reuses the
+            // first row's address computation, with a signed one it redoes it for every runtime Dest index.
+            const std::uint32_t off_in0 = dst_index_in0 * dst_tile_size_sfpi;
+            const std::uint32_t off_in1 = dst_index_in1 * dst_tile_size_sfpi;
+            const std::uint32_t off_out = dst_index_out * dst_tile_size_sfpi;
 #pragma GCC unroll 8
-        for (int d = 0; d < ITERATIONS; d++) {
-            calculate_binary_operands<MATH, 1 /*ITERATIONS*/>(
-                Input{static_cast<int>(dst_index_in0 * dst_tile_size_sfpi)},
-                Input{static_cast<int>(dst_index_in1 * dst_tile_size_sfpi)},
-                Output{static_cast<int>(dst_index_out * dst_tile_size_sfpi)});
-            sfpi::dst_reg++;
+            for (int d = 0; d < ITERATIONS; d += 2) {
+                calculate_binary_operands_two_rows<MATH>(
+                    Input{static_cast<int>(off_in0)},
+                    Input{static_cast<int>(off_in1)},
+                    Output{static_cast<int>(off_out)},
+                    Input{static_cast<int>(off_in0 + 1)},
+                    Input{static_cast<int>(off_in1 + 1)},
+                    Output{static_cast<int>(off_out + 1)});
+                sfpi::dst_reg += 2;
+            }
+        } else {
+#pragma GCC unroll 8
+            for (int d = 0; d < ITERATIONS; d++) {
+                calculate_binary_operands<MATH, 1 /*ITERATIONS*/>(
+                    Input{static_cast<int>(dst_index_in0 * dst_tile_size_sfpi)},
+                    Input{static_cast<int>(dst_index_in1 * dst_tile_size_sfpi)},
+                    Output{static_cast<int>(dst_index_out * dst_tile_size_sfpi)});
+                sfpi::dst_reg++;
+            }
         }
     }
 };

@@ -500,4 +500,16 @@ void append_fabric_mux_connection_rt_args(
     worker_rt_args.push_back(static_cast<uint32_t>(termination_master_virtual_core.y));
 }
 
+bool reduce_scatter_line_runtime_rows(
+    ttnn::ccl::Topology topology,
+    uint32_t normalized_dim,
+    uint32_t input_tensor_B,
+    uint32_t slice_C,
+    bool tiled_interleaved,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_link) {
+    return topology == ttnn::ccl::Topology::Linear && normalized_dim == 3 && input_tensor_B == 1 && slice_C == 1 &&
+           tiled_interleaved && chunks_per_sync.has_value() && num_workers_per_link.has_value();
+}
+
 }  // namespace ttnn::experimental::ccl

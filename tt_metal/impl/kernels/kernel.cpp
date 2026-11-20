@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <device.hpp>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
@@ -20,7 +20,7 @@
 
 #include <tt_stl/assert.hpp>
 #include "base_types.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "jit_build/build.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include "llrt.hpp"
@@ -364,11 +364,10 @@ void Kernel::process_semaphore_binding_handles(
 }
 
 void Kernel::process_watcher_node_ranges(
-    const std::function<
-        void(const std::string& accessor_name, const std::vector<experimental::NodeRange>& node_ranges)>& dfb_callback,
-    const std::function<void(
-        const std::string& accessor_name, const std::vector<experimental::NodeRange>& node_ranges)>& semaphore_callback)
-    const {
+    const std::function<void(const std::string& accessor_name, const std::vector<NodeRange>& node_ranges)>&
+        dfb_callback,
+    const std::function<void(const std::string& accessor_name, const std::vector<NodeRange>& node_ranges)>&
+        semaphore_callback) const {
     for (const auto& [accessor_name, handle] : this->dataflow_buffer_binding_handles_) {
         dfb_callback(accessor_name, handle.watcher_node_ranges);
     }
@@ -402,6 +401,13 @@ void Kernel::process_scratchpad_binding_handles(const std::function<void(
                                                     const std::optional<LLKMetadata>&)>& callback) const {
     for (const auto& handle : this->scratchpad_binding_handles_) {
         callback(handle.accessor_name, handle.size_bytes, handle.addr_crta_word, handle.llk_metadata);
+    }
+}
+
+void Kernel::process_global_semaphore_binding_handles(
+    std::function<void(const std::string& accessor_name, uint32_t addr_crta_word)> callback) const {
+    for (const auto& handle : this->global_semaphore_binding_handles_) {
+        callback(handle.accessor_name, handle.addr_crta_word);
     }
 }
 
@@ -738,12 +744,12 @@ uint64_t Kernel::compute_hash() const {
     };
     // Baked into the generated header with Watcher NoC sanitizing. Empty otherwise, and then not hashed, so kernel
     // hashes without Watcher are unchanged.
-    auto hash_watcher_node_ranges = [&](const std::vector<experimental::NodeRange>& node_ranges) {
+    auto hash_watcher_node_ranges = [&](const std::vector<NodeRange>& node_ranges) {
         if (node_ranges.empty()) {
             return;
         }
         hasher.update(static_cast<uint64_t>(node_ranges.size()));
-        for (const experimental::NodeRange& range : node_ranges) {
+        for (const NodeRange& range : node_ranges) {
             hasher.update(static_cast<uint64_t>(range.start_coord.x));
             hasher.update(static_cast<uint64_t>(range.start_coord.y));
             hasher.update(static_cast<uint64_t>(range.end_coord.x));
@@ -796,6 +802,13 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(static_cast<uint64_t>(handle.size_bytes));
         hasher.update(static_cast<uint64_t>(handle.addr_crta_word));
         hash_llk_metadata(handle.llk_metadata);
+    }
+    // GlobalSemaphore binding handles: the address word index is baked into the generated `global_sem::`
+    // token. The parameter name is omitted, as it does not appear in the generated headers.
+    hasher.update(static_cast<uint64_t>(this->global_semaphore_binding_handles_.size()));
+    for (const auto& handle : this->global_semaphore_binding_handles_) {
+        hasher.update(handle.accessor_name);
+        hasher.update(static_cast<uint64_t>(handle.addr_crta_word));
     }
     // PrefetcherPipe binding handles: the slot id is baked into the generated `pipe::` token.
     hasher.update(static_cast<uint64_t>(this->prefetcher_pipe_binding_handles_.size()));
@@ -963,7 +976,7 @@ void SetScratchpadBindingAddress(Kernel& kernel, ScratchpadBindingHandle& bindin
     // Patch the allocated address into the kernel's CRTA buffer if it exists.
     // On the Metal 2.0 factory path, reserve_runtime_arg_buffers pre-sizes the CRTA
     // buffer before this runs, so the address is updated here. If CRTA is not yet allocated
-    // (legacy order: SetProgramRunArgs first), SetProgramRunArgs copies
+    // (legacy order: Program::set_program_run_args first), Program::set_program_run_args copies
     // handle.allocated_address into the scratchpad section when it builds the buffer.
     // This allows for allocation of scratchpad and the CRTA buffer to be order agnostic.
     //
@@ -1124,6 +1137,44 @@ void Kernel::set_runtime_args_count(CoreRangeSet& core_ranges, uint32_t count) {
                 TT_ASSERT(count >= rta.size());
                 rta = RuntimeArgsData{rta.data(), count - watcher_count_word_offset_};
             }
+        }
+    }
+}
+
+void Kernel::reclaim_runtime_args_from_command_sequence() {
+    for (size_t x = 0; x < this->core_to_runtime_args_.size(); x++) {
+        for (size_t y = 0; y < this->core_to_runtime_args_[x].size(); y++) {
+            auto& stored = this->core_to_runtime_args_[x][y];
+            auto& view = this->core_to_runtime_args_data_[x][y];
+            if (stored.empty()) {
+                // No args here, but assembly may have pointed the (empty) view into the sequence.
+                view = RuntimeArgsData{};
+                continue;
+            }
+            uint32_t* own = stored.data() + this->watcher_count_word_offset_;
+            if (view.data() != own) {
+                // A core can hold only the watcher count word (no args) and still have a view into the sequence.
+                const size_t num_args = stored.size() > this->watcher_count_word_offset_
+                                            ? stored.size() - this->watcher_count_word_offset_
+                                            : 0;
+                if (num_args > 0) {
+                    std::memcpy(own, view.data(), num_args * sizeof(uint32_t));
+                }
+                view = RuntimeArgsData{own, view.size()};
+            }
+        }
+    }
+    if (!this->common_runtime_args_.empty()) {
+        uint32_t* own = this->common_runtime_args_.data() + this->watcher_count_word_offset_;
+        auto& view = this->common_runtime_args_data_;
+        if (view.data() != own) {
+            const size_t num_args = this->common_runtime_args_.size() > this->watcher_count_word_offset_
+                                        ? this->common_runtime_args_.size() - this->watcher_count_word_offset_
+                                        : 0;
+            if (num_args > 0) {
+                std::memcpy(own, view.data(), num_args * sizeof(uint32_t));
+            }
+            view = RuntimeArgsData{own, view.size()};
         }
     }
 }
