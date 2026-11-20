@@ -2075,7 +2075,8 @@ void kernel_main() {
             noc_async_write_set_trid(0);
         } else if constexpr (combine_send) {
             constexpr uint32_t num_owning_cols = (tensor_n_tiles + out_n_tiles - 1) / out_n_tiles;
-            static_assert(num_owning_cols <= k_cols);
+            static_assert(
+                !combine_send || num_owning_cols <= k_cols);  // checked only where it runs (N split: no combine)
             Semaphore<> send_go(combine_send_go_sem_id);
             Semaphore<> send_done(combine_send_done_sem_id);
             {

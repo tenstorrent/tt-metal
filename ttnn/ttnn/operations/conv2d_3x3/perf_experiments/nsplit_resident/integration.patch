@@ -1,0 +1,232 @@
+diff -ru '--exclude=__pycache__' op_base/conv2d_3x3_program_descriptor.py op_copy/conv2d_3x3_program_descriptor.py
+--- op_base/conv2d_3x3_program_descriptor.py	2026-11-20 18:45:23.370938031 +0000
++++ op_copy/conv2d_3x3_program_descriptor.py	2026-11-20 19:40:36.228901985 +0000
+@@ -355,6 +355,24 @@
+ # the whole [K, N] weight matrix: the writer streams the num_k_blocks rounds once at kernel start (one per K-block, into
+ # fresh slots) and compute re-reads them for every M-block (matmul_block in1 NoWaitNoPop + In1BaseOffsetFn). The solve
+ # counts the resident weights (bm shrinks for them); where no block fits with them, the weights stream per M-block.
++# N split for resident weights (op_design Blocking Model "M x N" split): on the interleaved K-blocked walk where the whole
++# [K, N] matrix does not fit resident next to any block (C_in 128 -> C_out 512: K_p 1152 rows x 512 = 1.18 MB bf16), the
++# work grid splits into NSPLIT groups of cores, group j multiplying output columns [j N / g, (j + 1) N / g) over all of M
++# against its own resident [K, N / g] slice (one weight multicast group per N group, its own sender). Each core covers g x
++# the output tile-rows for N / g columns: the fill, gather and tilize of its M range run in every N group (g x the input
++# reads and tilize), the per-M-block weight stream is gone. Same dot products, same order: bit-identical.
++# Measured (Blackhole p150b, 110 cores, bf16 HiFi4 fp32 DEST, device kernel ns, perf_experiments/nsplit_resident):
++# ROW_MAJOR 258x512 128->512 1682 -> 1557 us, 514x1024 128->512 6393 -> 5310, 130x256 128->512 446 -> 438 (median of
++# 3), 258x1024 128->512 3360 -> 2758, 130x512 128->512 889 -> 833; TILE 258x512 128->512 1759 -> 1567, 130x256
++# 128->512 457 -> 414, 512x512 256->256 3870 -> 3690. The cost is the duplicated fill (stubbing it saves 207 / 457 us
++# on the first two under the split, 39 / 56 us without it). Four groups measured slower on 5 of 6 shapes (258x512
++# 128->512 +20%, 514x1024 128->512 +32%, 258x512 256->512 +22%, TILE 512x512 256->512 +11%, 130x256 128->512 +6%; TILE
++# 256x256 256->512 -17%), and stride 2 slower with two (TILE 512x512 s2 256->256 1439 -> 1529 us, median of 3): neither
++# is taken. NSPLIT_GROUPS: the group counts tried in order (the first whose resident blocking fits); NSPLIT_FORCE:
++# experiment knob (None: the solve's choice, 0: off, g: force g groups).
++NSPLIT_RESIDENT = True
++NSPLIT_GROUPS = (2,)
++NSPLIT_FORCE = None
+ # Weight servers (HEIGHT-sharded K-blocked walk): when the device has a spare core per rectangle of the weight channel,
+ # each rectangle's rounds come from one spare core outside the work grid (its reader reads DRAM on NoC0, its writer
+ # multicasts on NoC1) instead of from work core 0, which read on NoC1 (the unfavourable read NoC, ~23 GB/s) and then
+@@ -663,6 +681,9 @@
+     ring: bool = False
+     # Weights resident (weights_resident_capable): cb_weights holds all num_k_blocks rounds (weight_depth = num_k_blocks).
+     weights_resident: bool = False
++    # N split (NSPLIT_RESIDENT): work index j * num_m_groups + i multiplies M range i against output columns
++    # [j * block_n_tiles, (j + 1) * block_n_tiles).
++    n_groups: int = 1
+ 
+     @property
+     def slab_px(self):
+@@ -1127,6 +1148,7 @@
+     im2col_depth=None,
+     shared=False,
+     resident=False,
++    n_groups=1,
+ ):
+     num_k_blocks = g.tensor_k_tiles // bk
+     im2col_rm_depth_rows = (
+@@ -1144,7 +1166,8 @@
+     band_len, raw_slab_rows = _block_extents(g, core_m_tiles, bm)
+     band_stride = min(g.dilation * g.input_width, band_len)
+     sb_h, sb_w = _out_subblock(bm, bn)
+-    ns = g.out_n_tiles
++    # N split: the core's bias and output columns are its N group's block_n_tiles.
++    ns = g.out_n_tiles if n_groups == 1 else bn
+     combine_sb_h, combine_sb_w = _out_subblock(bm, ns)
+     # R4: every row peer's slice of this core's output columns, plus (K-blocked walk) their sum before the bias add.
+     # The N-slice ring leaves the sum in slot 0 and adds the bias from there.
+@@ -1328,15 +1351,19 @@
+     search = [(bm, bk) for bm in bm_candidates for bk in bk_above_floor]
+     search += [(bm_candidates[-1], bk) for bk in bk_below_floor]
+ 
+-    def solve(candidates, nslice, shared=False, wr_solve=False):
++    def solve(candidates, nslice, shared=False, wr_solve=False, split=None):
++        # split: (core_m_tiles, num_m_groups, block_n_tiles, n_groups) of an N split (only resident blockings).
++        cm, nmg, bn_, ng = split or (core_m_tiles, num_m_groups, bn, 1)
+         for bm, bk in candidates:
+-            resident = wr_solve and weights_resident_capable(g, core_m_tiles, bm, bk, nslice)
++            resident = wr_solve and weights_resident_capable(g, cm, bm, bk, nslice)
++            if split is not None and not resident:
++                continue
+             # The untilize batch shrinks first: a smaller batch costs one more read fence per tile-row,
+             # a smaller bk costs a whole K-block (tilize, matmul init, L1-acc pass).
+-            band_len, raw_slab_rows = _block_extents(g, core_m_tiles, bm)
++            band_len, raw_slab_rows = _block_extents(g, cm, bm)
+             ub_default = _default_untilize_batch_rows(g, band_len, raw_slab_rows)
+             for ub_cap in range(ub_default, 0, -1):
+-                fit = _footprint(g, core_m_tiles, bm, bk, bn, ub_cap, nslice, shared=shared, resident=resident)
++                fit = _footprint(g, cm, bm, bk, bn_, ub_cap, nslice, shared=shared, resident=resident, n_groups=ng)
+                 if resident:
+                     fit["weights_resident"] = True
+                 if fit["footprint_bytes"] <= l1_budget:
+@@ -1344,15 +1371,16 @@
+                     for depth in range(_im2col_ring_target(g, bm, bk, nslice), IM2COL_RM_DEPTH_ROWS, -1):
+                         deep = _footprint(
+                             g,
+-                            core_m_tiles,
++                            cm,
+                             bm,
+                             bk,
+-                            bn,
++                            bn_,
+                             ub_cap,
+                             nslice,
+                             im2col_depth=depth,
+                             shared=shared,
+                             resident=resident,
++                            n_groups=ng,
+                         )
+                         if deep["footprint_bytes"] <= l1_budget:
+                             fit = dict(deep, weights_resident=True) if resident else deep
+@@ -1369,8 +1397,8 @@
+                         )
+                     # Ring slab: the ring replaces the compacted slab, only from the L1 left after everything else
+                     # (counting it in the solve shrinks blocks for it: measured +34% on a DRAM C_in 512 shape).
+-                    if not nslice and ring_capable(g, bm, bk) and ring_plan(g, core_m_tiles, bm) is not None:
+-                        ring = ring_rows(g, core_m_tiles, bm)
++                    if not nslice and ring_capable(g, bm, bk) and ring_plan(g, cm, bm) is not None:
++                        ring = ring_rows(g, cm, bm)
+                         delta = (ring - fit["slab_tile_rows"]) * g.c_in_tiles * TILE_BYTES_BF16
+                         if fit["footprint_bytes"] + delta <= l1_budget:
+                             fit = dict(
+@@ -1378,17 +1406,44 @@
+                             )
+                     return Conv3x3Blocking(
+                         grid_x=grid_x,
+-                        core_m_tiles=core_m_tiles,
+-                        num_m_groups=num_m_groups,
++                        core_m_tiles=cm,
++                        num_m_groups=nmg,
+                         block_m_tiles=bm,
+                         block_k_tiles=bk,
+-                        block_n_tiles=bn,
++                        block_n_tiles=bn_,
+                         out_depth_row_groups=OUT_DEPTH_ROW_GROUPS,
++                        n_groups=ng,
+                         **fit,
+                     )
+         return None
+ 
+     blocking = solve(search, nslice=False, wr_solve=True) or solve(search, nslice=False)
++    # N split for resident weights (NSPLIT_RESIDENT): where the weights would stream once per M-block only because they do
++    # not fit (the solved walk is one the resident weights run on, more than one M-block per core, not resident), the
++    # first group count whose [K, N / g] slice fits resident next to a block.
++    force = NSPLIT_FORCE
++    if (
++        blocking is not None
++        and not g.sharded_output
++        and not g.k_split
++        and force != 0
++        and weights_resident_capable(g, blocking.core_m_tiles, blocking.block_m_tiles, blocking.block_k_tiles)
++        and (force or (NSPLIT_RESIDENT and not blocking.weights_resident and g.stride == 1))
++    ):
++        for ng in (force,) if force else NSPLIT_GROUPS:
++            if g.tensor_n_tiles % ng or grid_x * grid_y < 2 * ng:
++                continue
++            cm, nmg = m_split(g, (grid_x * grid_y) // ng)
++            cm_bms = sorted({_div_up(cm, n) for n in range(1, cm + 1)}, reverse=True)
++            split = solve(
++                [(bm, bk) for bm in cm_bms for bk in bk_above_floor],
++                nslice=False,
++                wr_solve=True,
++                split=(cm, nmg, g.tensor_n_tiles // ng, ng),
++            )
++            if split is not None:
++                blocking = split
++                break
+     if blocking is not None and g.k_split:
+         # N-slice-outer at the K-blocked solve's bm, unless its resident [bm, K] in0 does not fit. There bk only sets
+         # the gather / tilize granularity and costs almost no L1, so the coarsest that fits wins.
+@@ -2009,7 +2064,10 @@
+     """(core, m_work_index, channel_slice) per working core. M work index i owns output tile-rows
+     [i * core_m_tiles, ...); under a K split all k_cols cores of grid row i share it."""
+     if not g.k_split:
+-        return [(core, i, 0) for i, core in enumerate(_work_cores(input_tensor, b.num_m_groups, b.grid_x))]
++        # N split: work index j * num_m_groups + i (N group j, M range i), row-major over the grid, so each N group's
++        # cores are one row-major run (at most three rectangles: its weight multicast group).
++        cores = _work_cores(input_tensor, b.num_m_groups * b.n_groups, b.grid_x)
++        return [(core, w % b.num_m_groups, 0) for w, core in enumerate(cores)]
+     spec = input_tensor.memory_config().shard_spec
+     spare = spare_m_indices(g, b.core_m_tiles, b.num_m_groups)
+     grid_row = {i: r for r, i in enumerate(i for i in range(b.num_m_groups) if i not in spare)}
+@@ -2598,7 +2656,12 @@
+     core_list = [core for core, _, _ in work]
+     cores = _core_range_set(core_list)
+     bm, bk, bn = b.block_m_tiles, b.block_k_tiles, b.block_n_tiles
+-    ns = g.out_n_tiles
++    # N split (NSPLIT_RESIDENT): a core's output columns (bias, store) are its N group's bn; work core w is N group
++    # w // num_m_groups.
++    ns = g.out_n_tiles if b.n_groups == 1 else bn
++    n_group_of = {(c.x, c.y): w // b.num_m_groups for w, c in enumerate(core_list)} if b.n_groups > 1 else {}
++    if b.n_groups > 1:
++        assert b.weights_resident and not (g.k_split or g.sharded_output) and g.tensor_n_tiles == b.n_groups * bn
+ 
+     if g.tile_input:
+         # Untilized footprint tile-rows: one bf16 tile page holds 32 slab pixels of 32 channels.
+@@ -3519,6 +3582,7 @@
+         # The core's output columns: all of C_out, or N-slice `col` under the K split (possibly short or
+         # empty past the last C_out tile); with spread ring owners, the owner's rank among them, or none.
+         out_slice = col if ring_owners is None else (ring_owners.index(col) if col in ring_owners else g.k_cols)
++        out_slice = n_group_of.get((core.x, core.y), out_slice)
+         out_n_tile_start = out_slice * ns
+         out_valid_tiles = max(0, min(ns, g.tensor_n_tiles - out_n_tile_start))
+         # The split is a runtime flag: a per-core kernel split fragments the core ranges (a staggered sender per
+@@ -3601,7 +3665,8 @@
+                 m_tile_start,
+                 actual_m_tiles,
+                 num_m_blocks_this_core,
+-                0,  # first N tile of the matmul block: the core multiplies against all of C_out
++                # First N tile of the matmul block: the core multiplies against all of C_out, or its N group's columns.
++                out_n_tile_start if b.n_groups > 1 else 0,
+                 col * g.tensor_k_tiles,  # the column's weight K-slice (rows ordered (col, kh, kw, c))
+                 out_n_tile_start,
+                 out_valid_tiles,
+@@ -4060,6 +4125,17 @@
+                 ttnn.McastExplicitFixedSenderConfig(senders),
+                 order,
+             )
++    elif b.n_groups > 1:
++        # N split: one multicast group per N group (its row-major run of num_m_groups cores, global row-major order of
++        # the receivers), each with its first core as the sender of its own [K, N / g] slice.
++        if mcast_receivers is not None:
++            weight_mcast = ttnn.Mcast(
++                device,
++                weight_mcast_config,
++                mcast_receivers,
++                b.num_m_groups,
++                ttnn.McastExplicitFixedSenderConfig([core_list[j * b.num_m_groups] for j in range(b.n_groups)]),
++            )
+     else:
+         if mcast_receivers is not None and weight_servers is None:
+             weight_mcast = ttnn.Mcast(
+diff -ru '--exclude=__pycache__' op_base/kernels/conv2d_3x3_reader.cpp op_copy/kernels/conv2d_3x3_reader.cpp
+--- op_base/kernels/conv2d_3x3_reader.cpp	2026-11-20 18:45:23.374938088 +0000
++++ op_copy/kernels/conv2d_3x3_reader.cpp	2026-11-20 18:53:25.280769087 +0000
+@@ -1968,7 +1968,7 @@
+             noc_async_write_set_trid(0);
+         } else if constexpr (combine_send) {
+             constexpr uint32_t num_owning_cols = (tensor_n_tiles + out_n_tiles - 1) / out_n_tiles;
+-            static_assert(num_owning_cols <= k_cols);
++            static_assert(!combine_send || num_owning_cols <= k_cols);  // checked only where it runs (N split: no combine)
+             Semaphore<> send_go(combine_send_go_sem_id);
+             Semaphore<> send_done(combine_send_done_sem_id);
+             {
