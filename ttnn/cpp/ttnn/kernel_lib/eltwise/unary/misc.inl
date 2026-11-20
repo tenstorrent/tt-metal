@@ -8,11 +8,12 @@
 
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/eltwise_unary/typecast.h"
-#include "api/compute/compute_kernel_api.h"  // square_tile; abs_tile/sign_tile are BH/WH-only (see below)
+#include "api/compute/compute_kernel_api.h"  // square_tile, abs_tile, sign_tile
+// The mask LLK (ckernel_sfpu_mask.h) is ported to Quasar (#58209), so Mask / MaskPosInf are offered
+// on every arch. identity / copy_dest_values are still only offered on BH/WH here: their headers
+// hard-#include the LLK under TRISC_MATH and the ops they back (Identity, CopyDest) have not been
+// validated on Quasar.
 #include "api/compute/mask.h"
-// identity / copy_dest_values LLKs (ckernel_sfpu_{identity,copy_dest_values}.h) are BH/WH-only and not
-// ported to Quasar; these headers hard-#include the missing LLK under TRISC_MATH, so exclude them — and
-// the ops they back (Identity, CopyDest) — on Quasar.
 #ifndef ARCH_QUASAR
 #include "api/compute/eltwise_unary/identity.h"
 // CopyDest (DST -> DST) only calls the copy_dest_values<DataFormat> overload. The header's legacy
@@ -47,9 +48,6 @@ struct Negative : UnaryOp<Negative<Slot>, Slot> {
     static ALWI void exec_impl(uint32_t slot_offset) { negative_tile(to_u32(Slot) + slot_offset); }
 };
 
-// abs_tile / sign_tile are guarded #ifndef ARCH_QUASAR in compute_kernel_api.h (Blackhole/Wormhole
-// only — no Quasar SFPU implementation), so these ops cannot be offered on Quasar.
-#ifndef ARCH_QUASAR
 template <Dst Slot>
 struct Abs : UnaryOp<Abs<Slot>, Slot> {
     static ALWI void init() { abs_tile_init(); }
@@ -61,7 +59,6 @@ struct Sign : UnaryOp<Sign<Slot>, Slot> {
     static ALWI void init() { sign_tile_init(); }
     static ALWI void exec_impl(uint32_t slot_offset) { sign_tile(to_u32(Slot) + slot_offset); }
 };
-#endif
 
 template <Dst Slot>
 struct Square : UnaryOp<Square<Slot>, Slot> {

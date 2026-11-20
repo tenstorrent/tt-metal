@@ -12,9 +12,10 @@
 
 namespace ttnn::experimental::prim {
 
-// Per-core DFBs: initial, product, state and out each hold one FP32 [K, V] state block, and the BF16 A and B rows
-// are double-buffered so the next step's rows stream while compute applies this one.
-inline constexpr uint32_t chain_affine_transforms_state_blocks = 4;
+// Per-core DFBs: initial_exact, product, state and out each hold one FP32 [K, V] state block and state_exact two (it is
+// read and rewritten in one step), and the E and B rows are double-buffered so the next step's rows stream while
+// compute applies this one.
+inline constexpr uint32_t chain_affine_transforms_state_blocks = 6;
 inline constexpr uint32_t chain_affine_transforms_transform_buffers = 2;
 
 inline uint64_t chain_affine_transforms_l1_bytes(uint64_t key_tiles, uint64_t value_tiles) {
@@ -24,6 +25,10 @@ inline uint64_t chain_affine_transforms_l1_bytes(uint64_t key_tiles, uint64_t va
 }
 
 struct ChainAffineTransformsProgramFactory {
+    // One program per tensor range; each device's sp_rank is a per-device run arg, set once at the cache miss.
+    static constexpr bool uses_per_device_run_args = true;
+    static constexpr bool fixed_per_device_run_args = true;  // sp_rank depends only on the device
+
     static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
         const ChainAffineTransformsParams&,
         const ChainAffineTransformsInputs&,
