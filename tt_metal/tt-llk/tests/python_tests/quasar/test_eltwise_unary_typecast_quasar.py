@@ -96,8 +96,10 @@ _INT32_TYPECAST_PAIRS = [
     InputOutputFormat(DataFormat.Int16, DataFormat.Int32),
 ]
 
-# Planted first: -1 is 0xFFFFFFFF in two's complement and -(2**31 - 1) read as sign-magnitude.
+# Planted last, after the shared helper's leading Float16_b RNE ties: -1 is 0xFFFFFFFF in two's complement
+# and -(2**31 - 1) read as sign-magnitude. An Int32 source also gets INT32_MIN, which sign-magnitude cannot hold.
 _INT32_SIGN_SEEDS = (-1, 1, -2, 0)
+_INT32_MIN = -(2**31)
 
 
 def _prepare_int32_typecast_input(src_A, src_B, formats: InputOutputFormat):
@@ -107,9 +109,11 @@ def _prepare_int32_typecast_input(src_A, src_B, formats: InputOutputFormat):
     endpoints = (formats.input_format, formats.output_format)
     if DataFormat.Int16 in endpoints or DataFormat.UInt16 in endpoints:
         return values.abs()
+    seeds = _INT32_SIGN_SEEDS
+    if formats.input_format == DataFormat.Int32:
+        seeds += (_INT32_MIN,)
     flat = values.flatten()
-    for i, seed in enumerate(_INT32_SIGN_SEEDS):
-        flat[i] = seed
+    flat[-len(seeds) :] = torch.tensor(seeds, dtype=flat.dtype)
     return flat.reshape(values.shape)
 
 

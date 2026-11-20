@@ -583,8 +583,8 @@ const map<std::string, std::map<std::string, std::string>> sfpu_binary_op_to_op_
      {{"SFPU_OP_BINARY_GT_INT_INCLUDE", "1"},
       {"SFPU_OP_INIT_0", "ne_int_tile_init<DataFormat::Int32>();"},
       {"SFPU_OP_CHAIN_0", "ne_int_tile<DataFormat::Int32>(0, 1, 0);"}}},
-    // Float compares and rsub on a 32-bit Dest (is_fp32_dest_float_binary_op): bf16 whole-number operands, the
-    // compares with planted +-0, NaN and inf lanes; results are exact.
+    // Float compares and rsub (is_exact_float_binary_op), on a 16-bit and a 32-bit Dest: bf16 whole-number operands,
+    // the compares with planted +-0, NaN and inf lanes; results are exact.
     {"eq_binary",
      {{"SFPU_OP_BINARY_DIV_INCLUDE", "1"},
       {"SFPU_OP_INIT_0", "eq_binary_tile_init();"},
@@ -1383,8 +1383,8 @@ bool is_float_compare_binary_op(const std::string& op_name) {
            op_name == "le_binary" || op_name == "ge_binary";
 }
 
-// bf16 ops run on a 32-bit Dest with whole-number operands, so their goldens are exact.
-bool is_fp32_dest_float_binary_op(const std::string& op_name) {
+// bf16 ops with whole-number operands: their goldens are exact on a 16-bit and a 32-bit Dest.
+bool is_exact_float_binary_op(const std::string& op_name) {
     return is_float_compare_binary_op(op_name) || op_name == "rsub_binary";
 }
 
@@ -2211,7 +2211,7 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_packed_sfpu_binary_inputs
     if (is_int32_binary_sfpu_op(op_name)) {
         return generate_int32_binary_inputs(numel, seed);
     }
-    if (is_fp32_dest_float_binary_op(op_name)) {
+    if (is_exact_float_binary_op(op_name)) {
         return generate_fp32_dest_float_binary_inputs(numel, op_name, seed);
     }
     const auto uniform = [&](float lo, float hi, int s) {
@@ -2373,10 +2373,9 @@ bool is_close_packed_sfpu_output(
     if (op_name == "div_int32") {
         return is_close_packed_sfpu_output_f32(vec_a, vec_b, op_name);
     }
-    if (is_int8_binary_sfpu_op(op_name) || is_int32_binary_sfpu_op(op_name) || is_fp32_dest_float_binary_op(op_name) ||
+    if (is_int8_binary_sfpu_op(op_name) || is_int32_binary_sfpu_op(op_name) || is_exact_float_binary_op(op_name) ||
         op_name == "binary_max" || op_name == "binary_min" || op_name == "reshuffle_rows" || op_name == "copy_dest" ||
-        op_name == "mask" || op_name == "mask_posinf" || op_name == "isclose" ||
-        op_name.starts_with("fill_rows_")) {
+        op_name == "mask" || op_name == "mask_posinf" || op_name == "isclose" || op_name.starts_with("fill_rows_")) {
         return vec_a == vec_b;
     }
     if (is_exact_unary_sfpu_op(op_name)) {
@@ -3646,8 +3645,7 @@ bool run_sfpu_binary_two_input_buffer(distributed::MeshDevice& mesh_device, cons
         .sfpu_precision_mode =
             test_config.approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
         .enable_32_bit_dest = is_int8_op || is_int32_op || test_config.sfpu_op == "add_top_row" ||
-                              sfpu_util::is_sfpu_bcast_op(test_config.sfpu_op) ||
-                              sfpu_util::is_fp32_dest_float_binary_op(test_config.sfpu_op),
+                              sfpu_util::is_sfpu_bcast_op(test_config.sfpu_op) || test_config.en_32bit_dest,
         .unpack_modes = unpack_modes,
     };
 
@@ -4925,10 +4923,12 @@ class SingleCoreSingleMeshDeviceSfpuBinaryParameterizedFixture
     : public LLKMeshDeviceFixture,
       public testing::WithParamInterface<std::tuple<size_t, std::string>> {};
 
-TEST_P(SingleCoreSingleMeshDeviceSfpuBinaryParameterizedFixture, TensixSfpuBinaryCompute) {
-    size_t num_tiles = std::get<0>(GetParam());
-    std::string sfpu_op = std::get<1>(GetParam());
-
+namespace {
+void run_binary_sfpu_case(
+    const std::vector<std::shared_ptr<distributed::MeshDevice>>& devices,
+    size_t num_tiles,
+    const std::string& sfpu_op,
+    bool en_32bit_dest) {
     if (MetalContext::instance().get_cluster().arch() == ARCH::WORMHOLE_B0 ||
         MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE) {
         GTEST_SKIP() << "Binary SFPU op test not fixed for WH/BH";
@@ -4956,12 +4956,38 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuBinaryParameterizedFixture, TensixSfpuBinar
         .l1_output_data_format = data_format_output,
         .cores = core_range_set,
         .sfpu_op = sfpu_op,
-        .approx_mode = false};
-    log_info(tt::LogTest, "Testing binary SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
-    for (auto& device : this->devices_) {
+        .approx_mode = false,
+        .en_32bit_dest = en_32bit_dest};
+    log_info(tt::LogTest, "Testing binary SFPU_OP={} num_tiles={} 32bit_dest={}", sfpu_op, num_tiles, en_32bit_dest);
+    for (const auto& device : devices) {
         EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_binary_two_input_buffer(*device, test_config));
     }
 }
+}  // namespace
+
+TEST_P(SingleCoreSingleMeshDeviceSfpuBinaryParameterizedFixture, TensixSfpuBinaryCompute) {
+    run_binary_sfpu_case(this->devices_, std::get<0>(GetParam()), std::get<1>(GetParam()), false);
+}
+
+// The exact float binary ops again on a 32-bit Dest (the fixture above runs them on a 16-bit one).
+class SingleCoreSingleMeshDeviceSfpuBinary32BitDestFixture
+    : public SingleCoreSingleMeshDeviceSfpuBinaryParameterizedFixture {};
+
+TEST_P(SingleCoreSingleMeshDeviceSfpuBinary32BitDestFixture, TensixSfpuBinaryCompute) {
+    run_binary_sfpu_case(this->devices_, std::get<0>(GetParam()), std::get<1>(GetParam()), true);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    SingleCoreSfpuBinaryCompute32BitDest,
+    SingleCoreSingleMeshDeviceSfpuBinary32BitDestFixture,
+    ::testing::Values(
+        std::make_tuple(1, "eq_binary"),
+        std::make_tuple(1, "ne_binary"),
+        std::make_tuple(1, "lt_binary"),
+        std::make_tuple(1, "gt_binary"),
+        std::make_tuple(1, "le_binary"),
+        std::make_tuple(1, "ge_binary"),
+        std::make_tuple(1, "rsub_binary")));
 
 // TODO: the binary chains hard-code DST indices (0, 1, 2), so each acquire holds a single tile pair;
 // multi-tile cases loop one pair per acquire rather than packing several tiles into one DEST section.
