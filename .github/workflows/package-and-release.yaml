@@ -211,6 +211,8 @@ jobs:
     # Runs on main only. The tokens and the relay serve only runs on main. On
     # stable, v* tags and other branches the gate is skipped, so
     # publish-to-pypi and trigger-prod-after-rc-success go on as without it.
+    # On main they need a passed gate: when the profiler build fails, the gate
+    # is skipped and they do not run (fail closed).
     if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.build-artifact-profiler.result == 'success' }}
     permissions:
       contents: read
@@ -229,7 +231,7 @@ jobs:
       ${{ !cancelled()
           && needs.build-test-publish.result == 'success'
           && needs.create-tag.result == 'success'
-          && (needs.blaze-merge-gate.result == 'success' || needs.blaze-merge-gate.result == 'skipped')
+          && (needs.blaze-merge-gate.result == 'success' || (github.ref != 'refs/heads/main' && needs.blaze-merge-gate.result == 'skipped'))
           && (github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run) }}
     environment:
       name: pypi
@@ -769,7 +771,7 @@ jobs:
           && needs.release-precheck.result == 'success'
           && needs.build-test-publish.result == 'success'
           && needs.create-tag.result == 'success'
-          && (needs.blaze-merge-gate.result == 'success' || needs.blaze-merge-gate.result == 'skipped') }}
+          && (needs.blaze-merge-gate.result == 'success' || (github.ref != 'refs/heads/main' && needs.blaze-merge-gate.result == 'skipped')) }}
     steps:
       - name: Wait for RC workflow completion
         run: |
