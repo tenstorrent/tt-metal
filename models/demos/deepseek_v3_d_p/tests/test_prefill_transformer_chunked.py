@@ -106,9 +106,9 @@ SEQ_CACHE = 55 * 1024  # 56320 KV cache length (1 user)
 SEQ_CACHE_NOPCC = 100 * 1024  # 102400 KV cache length (1 user)
 
 # GLM rows only; the Kimi/Mistral rows keep their own device params. 1216 overflowed on the traced path
-# once #58681 added a second all_gather semaphore; 1536 verified on HW for both traced CI legs. Keep in
-# sync with the glm_5_3 runner adapter.
-GLM_L1_SMALL_SIZE = 1536
+# once #58681 added a second all_gather semaphore; 1536 verified on HW for both traced CI legs; 1664 for the
+# dense FFN's fused TP collectives (#66628). Keep in sync with the glm_5_3 runner adapter.
+GLM_L1_SMALL_SIZE = 1664
 GLM_TRACE_REGION_SIZE = 512 * 1024 * 1024
 
 
@@ -1344,7 +1344,7 @@ def test_kimi_prefill_transformer_chunked_padded(
         pytest.param(
             (8, 4),
             # L1_SMALL holds the routing semaphores plus the sparse-MLA high-bandwidth-gather
-            # semaphores; GLM needs 1536, not Kimi's 768 (see GLM_L1_SMALL_SIZE).
+            # semaphores; GLM needs 1664, not Kimi's 768 (see GLM_L1_SMALL_SIZE).
             torus_xy_device_params(
                 fabric_payload_size=moe_fabric_payload(GLM53Config),
                 l1_small_size=GLM_L1_SMALL_SIZE,
