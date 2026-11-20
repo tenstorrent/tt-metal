@@ -403,9 +403,9 @@ inline __attribute__((always_inline)) void set_l1_data_cache() {
 inline void risc_init() {
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
 #ifdef KERAUNOS_CCE
-        // A CCE has no NOC node id: its coordinate is the one its NOC routes name.
-        my_x[n] = internal_::cce_noc::routes().self_x;
-        my_y[n] = internal_::cce_noc::routes().self_y;
+        // A CCE has no NOC node id: its coordinate is its core's (hostdev/keraunos_noc_channels.h).
+        my_x[n] = KERAUNOS_NOC_CCE0_X + experimental::keraunos::my_eth_cce();
+        my_y[n] = experimental::keraunos::my_hsio();
 #else
         uint32_t noc_id_reg = MY_NOC_ENCODING(n);
         my_x[n] = noc_id_reg & NOC_NODE_ID_MASK;

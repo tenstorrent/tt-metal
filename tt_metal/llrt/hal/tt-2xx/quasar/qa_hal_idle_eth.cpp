@@ -6,7 +6,7 @@
 #define COMPILE_FOR_ERISC
 
 #include <tt-metalium/math.hpp>
-#include "hostdev/cce_noc_routes.h"
+#include "hostdev/keraunos_noc_channels.h"
 #include "hostdev/dev_msgs.h"
 #include "hostdevcommon/fabric_telemetry_msgs.h"
 #include "hostdev/realtime_profiler_msgs.h"
@@ -45,7 +45,7 @@ HalCoreInfoType create_eth_mem_map(HalProgrammableCoreType core_type, bool progr
     static_assert(PROCESSOR_COUNT == MEM_IERISC_LOCAL_HARTS);
     static_assert(decltype(DevicePrintMemoryLayout::buffer)::processor_count == PROCESSOR_COUNT);
     static_assert(sizeof(mailboxes_t) <= MEM_IERISC_MAILBOX_SIZE);
-    static_assert(sizeof(CceNocRoutes) <= MEM_IERISC_NOC_ROUTES_SIZE);
+    static_assert(sizeof(KeraunosNocChannels) <= MEM_IERISC_NOC_CHANNELS_SIZE);
     static_assert(MEM_IERISC_PACKET_HEADER_POOL_SIZE == MEM_PACKET_HEADER_POOL_SIZE);
     static_assert(MEM_IERISC_KERNEL_BASE + MEM_IERISC_KERNEL_SIZE * MEM_IERISC_LOCAL_HARTS <= MEM_IERISC_L1_SIZE);
 
@@ -74,7 +74,7 @@ HalCoreInfoType create_eth_mem_map(HalProgrammableCoreType core_type, bool progr
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] =
         GET_IERISC_MAILBOX_ADDRESS_HOST(launch_msg_rd_ptr);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = MEM_IERISC_BANK_TO_NOC_SCRATCH;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CCE_NOC_ROUTES)] = MEM_IERISC_NOC_ROUTES_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::KERAUNOS_NOC_CHANNELS)] = MEM_IERISC_NOC_CHANNELS_BASE;
     // The control plane writes routing info to every Ethernet core, linked or not, as on Blackhole, and the worker
     // connection table to the idle ones a Keraunos chip runs workers on.
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_IERISC_ROUTING_TABLE_BASE;
@@ -104,7 +104,7 @@ HalCoreInfoType create_eth_mem_map(HalProgrammableCoreType core_type, bool progr
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG_INDEX)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = MEM_IERISC_BANK_TO_NOC_SIZE;
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::CCE_NOC_ROUTES)] = MEM_IERISC_NOC_ROUTES_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::KERAUNOS_NOC_CHANNELS)] = MEM_IERISC_NOC_CHANNELS_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_IERISC_ROUTING_TABLE_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS)] =
         MEM_IERISC_FABRIC_CONNECTIONS_SIZE;

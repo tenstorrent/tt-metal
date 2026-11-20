@@ -475,12 +475,13 @@
 // KeraunosSpaRoutes (hostdev/keraunos_spa_routes.h), host-written per core, read by experimental/keraunos_cce.h.
 #define MEM_IERISC_SPA_ROUTES_BASE (MEM_IERISC_BANK_TO_NOC_SCRATCH + MEM_IERISC_BANK_TO_NOC_SIZE)
 #define MEM_IERISC_SPA_ROUTES_SIZE 128
-// The CCE's NOC routes (CceNocRoutes, hostdev/cce_noc_routes.h), written by the host before launch.
-#define MEM_IERISC_NOC_ROUTES_SIZE 320
-#define MEM_IERISC_NOC_ROUTES_BASE (MEM_IERISC_SPA_ROUTES_BASE + MEM_IERISC_SPA_ROUTES_SIZE)
+// KeraunosNocChannels (hostdev/keraunos_noc_channels.h), written by the host before launch. One 64-byte line, so the
+// regions behind it keep their alignment.
+#define MEM_IERISC_NOC_CHANNELS_SIZE 64
+#define MEM_IERISC_NOC_CHANNELS_BASE (MEM_IERISC_SPA_ROUTES_BASE + MEM_IERISC_SPA_ROUTES_SIZE)
 // A fabric worker on a CCE: the connection table the control plane writes, and the packet header pool, as the
 // Tensix map has them.
-#define MEM_IERISC_FABRIC_CONNECTIONS_BASE (MEM_IERISC_NOC_ROUTES_BASE + MEM_IERISC_NOC_ROUTES_SIZE)
+#define MEM_IERISC_FABRIC_CONNECTIONS_BASE (MEM_IERISC_NOC_CHANNELS_BASE + MEM_IERISC_NOC_CHANNELS_SIZE)
 #define MEM_IERISC_FABRIC_CONNECTIONS_SIZE MEM_TENSIX_FABRIC_CONNECTIONS_SIZE
 #define MEM_IERISC_PACKET_HEADER_POOL_BASE (MEM_IERISC_FABRIC_CONNECTIONS_BASE + MEM_IERISC_FABRIC_CONNECTIONS_SIZE)
 #if (MEM_IERISC_PACKET_HEADER_POOL_BASE % 16 != 0)
