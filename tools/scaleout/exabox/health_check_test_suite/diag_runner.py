@@ -42,7 +42,7 @@ from diag.aer import AerWindow  # noqa: E402
 from diag.device_tests import run_tests  # noqa: E402
 from diag.busbar import MODES, OVERRIDES, STEPS, plan as busbar_plan, run_busbar  # noqa: E402
 from diag.eth_status import run_eth_status  # noqa: E402
-from diag.links import run_links  # noqa: E402
+from diag.links import name_chips, run_links  # noqa: E402
 from diag.eth_summary import SUMMARY_FILE, render_eth_summary  # noqa: E402
 from diag.hsc import judge_hsc, read_hsc_status  # noqa: E402
 from diag.model import FAIL, PASS, SKIP, WARN, Check, Phase  # noqa: E402
@@ -170,6 +170,11 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
     )
     for key, (flag, typ, what) in OVERRIDES.items():
         ap.add_argument(flag, dest=key, type=typ, default=None, help=f"With --mode: {what}. Not given: the plan's own.")
+    ap.add_argument(
+        "--no-reset",
+        action="store_true",
+        help="With --mode: the links sweep does not reset first (the caller just did); it still runs after a fault.",
+    )
     ap.add_argument("--output", type=Path, default=Path("diag_report.json"))
     ap.add_argument("--snapshot-out", type=Path, default=Path("/tmp/diag_snapshot.json"))
     return ap
@@ -304,6 +309,7 @@ def run_diag(
     mode: str | None = None,
     steps: str | None = None,
     overrides: dict | None = None,
+    no_reset: bool = False,
 ) -> tuple[int, dict]:
     """Run the full pipeline (snapshot → resets → gtests → triage → ETH status → QSFP tests → sys-triage).
 
@@ -441,7 +447,9 @@ def run_diag(
         t0 = time.time()
 
         def sweep_reset() -> str:
-            """ "" when the reset ran clean, else why the sweep is skipped."""
+            """ "" when the reset ran clean (or was not asked for), else why the sweep is skipped."""
+            if no_reset:
+                return ""
             if skip_reset:
                 return "no reset (--skip-reset)"
             aer_mark()
@@ -593,6 +601,7 @@ def run_diag(
     # Only the phases that write logs create this directory, and any of them can
     # be skipped — don't lose a completed run's report to a missing parent dir.
     output.parent.mkdir(parents=True, exist_ok=True)
+    name_chips(report)
     output.write_text(json.dumps(report, indent=2))
     log(f"wrote report: {output} (overall={report['overall_status']})")
 
@@ -643,6 +652,7 @@ def main() -> int:
         mode=args.mode,
         steps=args.steps,
         overrides=overrides,
+        no_reset=args.no_reset,
     )
     return rc
 

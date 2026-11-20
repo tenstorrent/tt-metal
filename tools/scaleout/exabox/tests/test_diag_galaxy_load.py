@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import subprocess
 import sys
 import tempfile
@@ -322,7 +323,7 @@ class TestLinks(unittest.TestCase):
         sweep = [c for c in phase.checks if c.name == "galaxy_sweep"]
         self.assertEqual([(c.status, c.details) for c in sweep], [(SKIP, "no reset (--skip-reset)")])
 
-    def _sweep_reset(self, reset_fails=False, skip_reset=False):
+    def _sweep_reset(self, reset_fails=False, skip_reset=False, no_reset=False):
         """run_diag's reset callback for the sweep, after a failed pair test, with the real run_post_test_reset
         over a glx_reset that fails or not."""
         import diag_runner
@@ -359,8 +360,70 @@ class TestLinks(unittest.TestCase):
                 output=d / "report.json",
                 snapshot_out=d / "snapshot.json",
                 skip_reset=skip_reset,
+                no_reset=no_reset,
             )
         return got["why"]
+
+    def test_no_reset_sweeps_without_resetting(self):
+        import diag_runner
+
+        self.assertEqual(self._sweep_reset(no_reset=True, reset_fails=True), "")
+        self.assertEqual(self._sweep_reset(no_reset=True, skip_reset=True), "")
+        args = diag_runner.build_diag_arg_parser().parse_args(["--tier", "galaxy", "--mode", "smoke"])
+        self.assertFalse(args.no_reset)
+        self.assertTrue(diag_runner.build_diag_arg_parser().parse_args(["--tier", "galaxy", "--no-reset"]).no_reset)
+
+    def _disc(self):
+        bdfs = {0: "0000:01:00.0", 1: "0000:02:00.0", 2: "0000:c1:00.0"}  # tray 1 U1, tray 1 U2, tray 3 U1
+        return {"bdfs": bdfs, "links": {0: {0: [1, 4], 1: [1, 5]}, 1: {4: [0, 0], 5: [0, 1]}}}
+
+    def test_link_ends_are_named_by_tray_port_asic_and_bdf(self):
+        got = links.link_ends(self._disc(), 0, 1, [1])
+        self.assertEqual(
+            got,
+            [
+                {
+                    "a": {"bdf": "0000:01:00.0", "tray": 1, "asic": 1, "channel": 1, "port": got[0]["a"]["port"]},
+                    "b": {"bdf": "0000:02:00.0", "tray": 1, "asic": 2, "channel": 5, "port": got[0]["b"]["port"]},
+                }
+            ],
+        )
+
+    def test_report_checks_name_their_chips_and_link_ends(self):
+        ends = links.link_ends(self._disc(), 0, 1, [0])
+        report = {
+            "phases": {
+                "links": {
+                    "checks": [
+                        {
+                            "name": "galaxy_pair",
+                            "status": "FAIL",
+                            "details": "01:00.0-02:00.0 (channels 0): hung",
+                            "data": {"failed": [{"pair": "01:00.0-02:00.0", "ends": ends}], "link_ends": ends},
+                        },
+                        {"name": "x", "status": "PASS", "details": "at 12:00.0 on 0000:c1:00.0", "data": {}},
+                        {"name": "none", "status": "PASS", "details": "", "data": {}},
+                    ]
+                }
+            }
+        }
+        before = json.loads(json.dumps(report))
+        links.name_chips(report)
+        a, x, none = report["phases"]["links"]["checks"]
+        self.assertEqual((a["bdf"], a["tray"], a["asic"]), (["0000:01:00.0", "0000:02:00.0"], [1, 1], [1, 2]))
+        self.assertEqual(a["link_ends"], ends)
+        self.assertEqual((x["bdf"], x["tray"], x["asic"]), (["0000:c1:00.0"], [3], [1]))
+        self.assertEqual((none["bdf"], none["tray"], none["asic"], none["link_ends"]), ([], [], [], []))
+        for old, new in zip(before["phases"]["links"]["checks"], report["phases"]["links"]["checks"]):
+            self.assertEqual(old, {k: new[k] for k in old})  # only keys were added
+
+    def test_failed_pair_check_carries_the_link_ends(self):
+        phase = Phase(name="links")
+        with tempfile.TemporaryDirectory() as d:  # no tt-kmd nodes under d: every pair fails to open
+            self.assertTrue(links.pair_test(phase, Path(d), "pair", 1, self._disc(), sys_root=d))
+        data = phase.checks[0].data
+        self.assertEqual([e["a"]["tray"] for e in data["link_ends"]], [1, 1])
+        self.assertEqual(data["link_ends"], [e for f in data["failed"] for e in f["ends"]])
 
     def test_sweep_reset_says_why_it_skips(self):
         self.assertEqual(self._sweep_reset(), "")
