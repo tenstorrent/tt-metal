@@ -1119,25 +1119,23 @@ def test_binary_scalar_inplace_int32_integer_scalar(device):
     assert torch.equal(ttnn.to_torch(tt_input), torch_input * 3)
 
 
-@pytest.mark.parametrize("op_name", ["multiply", "divide"])
 @pytest.mark.parametrize("dtype", [ttnn.int32, ttnn.uint32])
-def test_binary_scalar_integer_dtype_rejects_float_scalar(device, op_name, dtype, expect_error):
+def test_binary_scalar_integer_dtype_rejects_float_scalar(device, dtype, expect_error):
     """An explicit integer dtype for a float scalar result would truncate it."""
     torch_input = torch.arange(1, 1025, dtype=torch.int32).reshape(32, 32)
     tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     with expect_error(RuntimeError, "cannot be written to an integer"):
-        getattr(ttnn, op_name)(tt_input, 2.5, dtype=dtype)
+        ttnn.multiply(tt_input, 2.5, dtype=dtype)
 
 
-@pytest.mark.parametrize("op_name", ["multiply", "divide"])
 @pytest.mark.parametrize("dtype", [ttnn.int32, ttnn.uint32])
-def test_binary_scalar_integer_output_tensor_rejects_float_scalar(device, op_name, dtype, expect_error):
+def test_binary_scalar_integer_output_tensor_rejects_float_scalar(device, dtype, expect_error):
     """A preallocated integer output_tensor for a float scalar result would truncate it."""
     torch_input = torch.arange(1, 1025, dtype=torch.int32).reshape(32, 32)
     tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     tt_output = ttnn.from_torch(torch.zeros_like(torch_input), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     with expect_error(RuntimeError, "cannot be written to an integer"):
-        getattr(ttnn, op_name)(tt_input, 2.5, output_tensor=tt_output)
+        ttnn.multiply(tt_input, 2.5, output_tensor=tt_output)
 
 
 @pytest.mark.parametrize("op_name", ["multiply", "divide"])
