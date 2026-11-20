@@ -23,6 +23,9 @@ every local expert in one op on its own token count, x packed to bfloat8_b insid
 silu * up / down -> insert per local expert, each over the most tokens an expert can get (all 5120 of its group).
 """
 
+import os
+from pathlib import Path
+
 import torch
 
 import ttnn
@@ -52,6 +55,18 @@ def _unified_compute_config(mesh):
     )
 
 
+def cache_complete(cache_dir) -> bool:
+    """Whether a layer's routed-expert weight cache was written whole (TtExperts writes ``done`` last)."""
+    return cache_dir is not None and (Path(cache_dir) / "done").is_file()
+
+
+def _dump(host: ttnn.Tensor, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{os.getpid()}.{path.name}")  # renamed into place, so a reader never sees a partial file
+    ttnn.dump_tensor(tmp, host)
+    os.replace(tmp, path)
+
+
 class TtExperts:
     # read at call time, not build time: settings may change between runs of one loaded model
     @property
@@ -76,9 +91,11 @@ class TtExperts:
     def partial_dtype(self):
         return getattr(ttnn, settings.get("EXPERTS_PARTIAL_DTYPE"))
 
-    def __init__(self, mesh, expert_weight, n_experts: int, top_k: int, rows_per_chip: int):
+    def __init__(self, mesh, expert_weight, n_experts: int, top_k: int, rows_per_chip: int, cache_dir=None):
         """expert_weight(e, m) -> [out, in] host tensor (any float dtype) of routed expert e, m in w1 / w3 ([I, H])
-        and w2 ([H, I]). rows_per_chip: the chunk's tokens per SP row (chunk / 8)."""
+        and w2 ([H, I]). rows_per_chip: the chunk's tokens per SP row (chunk / 8). cache_dir: this layer's weight
+        cache; a complete one (cache_complete) is read instead of expert_weight, which may then be None, otherwise
+        the converted weights are written there."""
         self.mesh = mesh
         self.groups = mesh.shape[TP_AXIS]  # dispatch groups, one per TP column
         self.group_size = mesh.shape[SP_AXIS]  # chips per group, along SP
@@ -117,26 +134,36 @@ class TtExperts:
 
         # each local slot's weights, chip (r, c) holding expert 32c + 4r + slot, stored [K, N] (the checkpoint's
         # transpose), the layout unified_routed_expert_moe reads; the per-expert loop reads the same tensors
+        cached = cache_complete(cache_dir)
         self.w = []
         for slot in range(self.per_chip):
             mats = {}
             for m in ("w1", "w3", "w2"):
-                stack = torch.stack(
-                    [
-                        expert_weight(int(ids[c, r, slot]), m).to(torch.bfloat16).t().contiguous()
-                        for r in range(self.group_size)
-                        for c in range(self.groups)
-                    ]
-                )
-                host = ttnn.from_torch(
-                    stack.reshape(self.group_size, self.groups, *stack.shape[1:]),
-                    dtype=self.weight_dtype,
-                    layout=ttnn.TILE_LAYOUT,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=(0, 1)),
-                )
-                del stack
-                mats[m] = ttnn.to_device(ttnn.squeeze(ttnn.squeeze(host, 0), 0), mesh, ttnn.DRAM_MEMORY_CONFIG)
+                path = Path(cache_dir) / f"slot{slot}_{m}.tensorbin" if cache_dir is not None else None
+                if cached:
+                    host = ttnn.load_tensor(path)
+                else:
+                    stack = torch.stack(
+                        [
+                            expert_weight(int(ids[c, r, slot]), m).to(torch.bfloat16).t().contiguous()
+                            for r in range(self.group_size)
+                            for c in range(self.groups)
+                        ]
+                    )
+                    host = ttnn.from_torch(
+                        stack.reshape(self.group_size, self.groups, *stack.shape[1:]),
+                        dtype=self.weight_dtype,
+                        layout=ttnn.TILE_LAYOUT,
+                        mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=(0, 1)),
+                    )
+                    del stack
+                    host = ttnn.squeeze(ttnn.squeeze(host, 0), 0)
+                    if path is not None:
+                        _dump(host, path)
+                mats[m] = ttnn.to_device(host, mesh, ttnn.DRAM_MEMORY_CONFIG)
             self.w.append(mats)
+        if cache_dir is not None and not cached:
+            (Path(cache_dir) / "done").touch()
         self.gates = [w["w1"] for w in self.w]
         self.ups = [w["w3"] for w in self.w]
         self.downs = [w["w2"] for w in self.w]

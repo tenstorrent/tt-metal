@@ -44,7 +44,10 @@ ttnn = pytest.importorskip("ttnn")
 from models.demos.deepseek_v3_d_p.reference.mistral_large_4 import _bringup_interface as iface  # noqa: E402
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4 import sub_device  # noqa: E402
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4.hooks import device_model  # noqa: E402
-from models.demos.deepseek_v3_d_p.tt.runners.adapters.mistral_large_4 import CHECKPOINT_DIR  # noqa: E402
+from models.demos.deepseek_v3_d_p.tt.runners.adapters.mistral_large_4 import (  # noqa: E402
+    CHECKPOINT_DIR,
+    weight_cache_dir,
+)
 
 CKPT = os.environ.get("ML4_CKPT") or os.environ.get("PREFILL_HF_MODEL") or CHECKPOINT_DIR
 OUT = Path(os.environ.get("ML4_PERF_OUT", "generated/ml4_perf/result.json"))
@@ -57,7 +60,14 @@ class _Spec:
 
     def __init__(self, hf_dir: str, seq: int, chunk: int):
         self.hf_dir = Path(hf_dir)
-        self._v = {"target.chunk": chunk, "target.seq": seq, "reference.weight_dtype": "bfloat16"}
+        # PREFILL_TTNN_CACHE: the routed experts' weight cache, as the runner resolves it for the 8x4 mesh
+        cache = weight_cache_dir(os.environ.get("PREFILL_TTNN_CACHE", ""), (8, 4))
+        self._v = {
+            "target.chunk": chunk,
+            "target.seq": seq,
+            "reference.weight_dtype": "bfloat16",
+            "weights.cache": cache,
+        }
 
     def get(self, key, default=None):
         return self._v.get(key, default)

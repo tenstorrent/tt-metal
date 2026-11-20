@@ -353,19 +353,37 @@ def _new_module(mesh, spec, layer: int, step: str, **cache):
         import torch
 
         from models.demos.deepseek_v3_d_p.reference.mistral_large_4.weights import checkpoint, dequant, expert_store
-        from models.demos.deepseek_v3_d_p.tt.mistral_large_4.experts import TtExperts
+        from models.demos.deepseek_v3_d_p.tt.mistral_large_4.experts import TtExperts, cache_complete
         from models.demos.deepseek_v3_d_p.tt.mistral_large_4.layout import SP_AXIS
 
         cfg = Config(spec.hf_dir)
-        le = expert_store(checkpoint(spec.hf_dir), cfg.n_experts).get(layer)
+        cache_dir = experts_cache_dir(spec, layer)
+        weight = None
+        if not cache_complete(cache_dir):
+            le = expert_store(checkpoint(spec.hf_dir), cfg.n_experts).get(layer)
+            weight = lambda e, m: dequant(le.w[(e, m)], le.s[(e, m)], torch.bfloat16)  # noqa: E731  (exact in bf16)
         return TtExperts(
             mesh,
-            lambda e, m: dequant(le.w[(e, m)], le.s[(e, m)], torch.bfloat16),  # FP8 x block scale: exact in bf16
+            weight,
             n_experts=cfg.n_experts,
             top_k=cfg.top_k,
             rows_per_chip=_seq(spec)[1] // mesh.shape[SP_AXIS],
+            cache_dir=cache_dir,
         )
     raise NotImplementedError(f"no device module for {step}")
+
+
+def experts_cache_dir(spec, layer: int):
+    """Layer ``layer``'s routed-expert weight cache under the spec's ``weights.cache`` (the runner's weight_cache_path,
+    already per mesh), one per expert weight dtype; None without one."""
+    from pathlib import Path
+
+    from models.demos.deepseek_v3_d_p.tt.mistral_large_4.settings import settings
+
+    root = spec.get("weights.cache")
+    if not root:
+        return None
+    return Path(root) / f"experts_{settings.get('EXPERTS_WEIGHT_DTYPE')}" / f"layer_{layer:02d}"
 
 
 def device_model(mesh, spec, layers, lm_head=True, num_users=None, caches=None):

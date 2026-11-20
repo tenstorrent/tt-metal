@@ -26,6 +26,18 @@ def hf_model_dir(adapter: PrefillModelAdapter) -> str:
     return os.environ.get("PREFILL_HF_MODEL") or adapter.hf_model_default
 
 
+def weight_cache_dir(root: str, mesh_shape: tuple, sp_axis: int = 0):
+    """The weight cache of one mesh shape under ``root``; None when root is empty."""
+    from pathlib import Path
+
+    if not root:
+        return None
+    if sp_axis != 0:
+        raise ValueError(f"mistral_large_4 runs SP on mesh axis 0, got {sp_axis}")
+    rows, cols = (int(d) for d in mesh_shape)
+    return Path(root) / f"mistral_large_4_bh_{rows * cols}dev" / f"{rows}x{cols}"
+
+
 class MistralLarge4Config:
     """Static model constants the runner reads off ``model_config``."""
 
@@ -52,11 +64,16 @@ class MistralLarge4KvCaches(KvCaches):
 class _ServeSpec:
     """The spec fields the device model's builder (mistral_large_4/hooks.py) reads, from the runner's params."""
 
-    def __init__(self, hf_dir: str, max_seq: int, chunk: int):
+    def __init__(self, hf_dir: str, max_seq: int, chunk: int, weight_cache=None):
         from pathlib import Path
 
         self.hf_dir = Path(hf_dir)
-        self._v = {"target.seq": max_seq, "target.chunk": chunk, "reference.weight_dtype": "bfloat16"}
+        self._v = {
+            "target.seq": max_seq,
+            "target.chunk": chunk,
+            "reference.weight_dtype": "bfloat16",
+            "weights.cache": weight_cache,
+        }
 
     def get(self, key: str, default=None):
         return self._v.get(key, default)
@@ -66,7 +83,9 @@ class MistralLarge4PrefillAdapter(PrefillModelAdapter):
     name = "mistral_large_4"
     model_config = MistralLarge4Config
     hf_model_default = CHECKPOINT_DIR
-    ttnn_cache_default = ""  # weights load from the checkpoint each run (no TTNN weight cache)
+    # the routed experts' TTNN weight cache (mistral_large_4/hooks.py experts_cache_dir); the other weights are read
+    # from the checkpoint on every run. Empty: no cache.
+    ttnn_cache_default = ""
     prefill_trace_default = ""
     default_gate_mode = "DEVICE_FP32"
     # the model's residual stream [1, 1, S / 8, H / 4] per chip is TP-sharded on the hidden dim
@@ -85,8 +104,9 @@ class MistralLarge4PrefillAdapter(PrefillModelAdapter):
             hf_dir=hf_dir, cfg=cfg, hidden_size=cfg.hidden, num_hidden_layers=cfg.n_layers, vocab_size=cfg.vocab
         )
 
-    def weight_cache_path(self, mesh_shape: tuple):
-        return None
+    def weight_cache_path(self, mesh_shape: tuple, sp_axis: int = 0):
+        """$PREFILL_TTNN_CACHE (else ttnn_cache_default) / mistral_large_4_bh_{N}dev / {rows}x{cols}; None when empty."""
+        return weight_cache_dir(os.environ.get("PREFILL_TTNN_CACHE", self.ttnn_cache_default), mesh_shape, sp_axis)
 
     def layer_split_boundaries(self, num_layers: int):
         """A rank must start on a full-indexer layer (the shared-index layers reuse the previous full layer's top-k)."""
@@ -126,7 +146,7 @@ class MistralLarge4PrefillAdapter(PrefillModelAdapter):
         from models.demos.deepseek_v3_d_p.tt.mistral_large_4.runtime import MistralLarge4PrefillRuntime
 
         geo = self._geometry(hf_config, params)
-        spec = _ServeSpec(hf_config.hf_dir, geo.max_seq, geo.chunk)
+        spec = _ServeSpec(hf_config.hf_dir, geo.max_seq, geo.chunk, params.weight_cache_path)
         model = device_model(
             mesh_device,
             spec,
