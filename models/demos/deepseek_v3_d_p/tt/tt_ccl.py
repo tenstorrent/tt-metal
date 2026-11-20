@@ -865,7 +865,7 @@ def _live_links_on_axis(mesh_device: ttnn.MeshDevice, cluster_axis: int) -> int 
     shape = tuple(mesh_device.shape)
     if len(shape) != 2 or shape[cluster_axis] < 2:
         return None
-    wrapped = shape[cluster_axis] > 2 and _fabric_wraps_axis(ttnn.get_fabric_config(), cluster_axis)
+    wrapped = shape[cluster_axis] > 2 and _fabric_wraps_axis(ttnn.get_fabric_config(mesh_device), cluster_axis)
     try:
         fewest = None
         for row in range(shape[0]):
