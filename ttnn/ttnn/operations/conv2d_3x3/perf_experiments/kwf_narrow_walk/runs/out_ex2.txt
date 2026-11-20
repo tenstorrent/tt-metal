@@ -1,0 +1,9 @@
+238 locations, 0 collisions
+============================== 6 passed in 6.10s ===============================
+SAFE_PYTEST_RESULT: PASS
+ex2 ch1 base 0 9.559
+ex2 ch1 ct_nori 0 9.365
+ex2 ch1 mid 0 9.467
+ex2 ch1 mid 0 9.519
+ex2 ch1 ct_nori 0 9.233
+ex2 ch1 base 0 9.662

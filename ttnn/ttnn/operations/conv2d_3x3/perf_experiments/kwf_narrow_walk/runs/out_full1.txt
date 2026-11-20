@@ -1,0 +1,6 @@
+377 locations, 0 collisions
+============================== 3 passed in 6.07s ===============================
+SAFE_PYTEST_RESULT: PASS
+full1 ch1 base 0 9.538
+full1 ch1 ct_nori 0 9.336
+full1 ch1 fuse3_ct 0 10.445

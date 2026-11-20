@@ -1,0 +1,6 @@
+ch1 base 0
+ch1 ct_nori 0
+ch1 mid 0
+ch1 mid 0
+ch1 ct_nori 0
+ch1 base 0

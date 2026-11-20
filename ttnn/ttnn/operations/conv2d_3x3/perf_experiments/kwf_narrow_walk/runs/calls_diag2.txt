@@ -1,0 +1,12 @@
+ch1 base 0
+ch1 noreinit 0
+ch1 ct_nori 0
+ch1 fuse3_ct 0
+ch1 nomm 0
+ch1 nomm_nopack 0
+res2 base 0
+res2 noreinit 0
+res2 ct_nori 0
+res2 fuse3_ct 0
+res2 nomm 0
+res2 nomm_nopack 0

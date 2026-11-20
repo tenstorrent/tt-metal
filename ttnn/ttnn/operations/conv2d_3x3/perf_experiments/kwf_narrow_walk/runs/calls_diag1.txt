@@ -1,0 +1,8 @@
+ch1 base 0
+ch1 copy 0
+ch1 ctdim 0
+ch1 nopack 0
+ch1 ctdim_nopack 0
+ch1 fuse3 0
+ch1 fuse3_ct 0
+ch1 fuse3_nopack 0

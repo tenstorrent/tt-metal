@@ -1,0 +1,181 @@
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_kw_fold.hpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_kw_fold.hpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_kw_fold.hpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_kw_fold.hpp
+@@ -96,6 +96,23 @@
+ // ~18.8 cycles per tile-MAC instead of ~23.4), res2 11.28 -> 10.55 us. A 1-tile n-group keeps the three rounds: its
+ // pair is a 1 x 2 subblock, two tile-MACs per matmul call (~40 cycles of per-call unpack cost each) instead of four:
+ // center_head.1 10.68 -> 12.14 us (zoned).
++//
++// Subblock dims: matmul_block given its subblock dims at run time keeps the LLK's loops over them and its ct >= rt
++// operand choice at run time, and each change of a column run's height (a pass's short last group, an image edge)
++// re-inited the matmul, whose unpack and math MOPs depend on the dims only through ct >= rt. The walk now runs every
++// subblock's K steps at compile-time dims (matmul_k / matmul_k_rows), re-inits only where ct >= rt flips (a 1-row group,
++// at an image edge), and splits a pass's rows so a full group is never followed by a single row (4 + 1 -> 3 + 2).
++// Measured (Blackhole p150b, LoFi bf8_b, unzoned, medians of 3 alternating, bit-identical): center_head.1 9.10 -> 8.87,
++// res2 9.76 -> 9.58, stem.conv2 27.23 -> 26.65 us; the other kw-fold focus cases and the HiFi4 HEIGHT layers flat. With
++// all data movement stubbed, center_head.1's walk (1-tile n-group, 4 + 4 + 2 rows per pass) 7.10 -> 6.50 us (re-inits
++// alone 6.89, dims alone 6.80). Not taken, measured on center_head.1 (all bit-identical where correct):
++// - one pass of 1 x 3 subblocks [Q_1 | Q_0 | Q_2] per row (in1 streamed: ~18.4 cycles per tile-MAC, against ~20.9 for
++//   the 4 x 1 runs, which stream in0) needs all three weight rounds before its first matmul: +9.5% on the real op
++//   (round 2 lands ~2 us after round 0's first chunk), -6% to -10% with the weights stubbed (rate test only);
++// - 1 x 3 only for the short group's rows (4 + 2 fused + 4, between the Q_0 and Q_2 passes, onto zeroed ACC rows):
++//   flat to +1.5%; the shorter passes ate the halo exchange's slack, exposed the round-1 wait, and the walk ended on a
++//   4-tile pack;
++// - the fused side rounds at a 1-tile n-group (1 x 2 [Q_0 | Q_2] per row) at compile-time dims: +24% (8.85 -> 11.03 us).
+ 
+ #pragma once
+ 
+@@ -227,6 +244,49 @@
+ }
+ #endif
+ 
++// One subblock's K steps with compile-time subblock dims: matmul_block given a runtime ct / rt keeps the unpack and math
++// loops over them (and the ct >= rt operand choice) at run time (see the file comment, "Subblock dims").
++template <uint32_t ct, uint32_t rt, uint32_t kt>
++ALWI void matmul_k(uint32_t cb0, uint32_t cb1, uint32_t in0, uint32_t in1, uint32_t in1_step, uint32_t dst) {
++    for (uint32_t c = 0; c < kt; ++c) {
++        matmul_block(cb0, cb1, in0 + c, in1 + c * in1_step, dst, false, ct, rt, kt);
++    }
++}
++// A subblock of `rows` tile-rows (at most sbh; sbh == 1: one row of sbw columns), dispatched to compile-time dims.
++template <uint32_t sbw, uint32_t sbh, uint32_t kt>
++ALWI void matmul_k_rows(
++    uint32_t cb0, uint32_t cb1, uint32_t in0, uint32_t in1, uint32_t in1_step, uint32_t dst, uint32_t rows) {
++    if constexpr (sbh == 1) {
++        matmul_k<sbw, 1, kt>(cb0, cb1, in0, in1, in1_step, dst);
++    } else if (rows == sbh) {
++        matmul_k<sbw, sbh, kt>(cb0, cb1, in0, in1, in1_step, dst);
++    } else if (rows == 3) {
++        matmul_k<sbw, 3, kt>(cb0, cb1, in0, in1, in1_step, dst);
++    } else if (rows == 2) {
++        matmul_k<sbw, 2, kt>(cb0, cb1, in0, in1, in1_step, dst);
++    } else {
++        matmul_k<sbw, 1, kt>(cb0, cb1, in0, in1, in1_step, dst);
++    }
++}
++
++// Subblock k of a pass's row range [lo, lo + n): groups of sbh rows; a full group followed by a single row runs as
++// (sbh - 1) + 2 rows instead, so no 1-row subblock flips the matmul operand choice (two re-inits) mid-pass.
++template <uint32_t sbh>
++inline uint32_t row_groups(uint32_t n) {
++    return (n + sbh - 1) / sbh;
++}
++template <uint32_t sbh>
++inline void row_group(uint32_t lo, uint32_t n, uint32_t k, uint32_t& i0, uint32_t& h) {
++    const uint32_t m = row_groups<sbh>(n);
++    if (sbh > 2 && m >= 2 && n % sbh == 1 && k + 2 >= m) {
++        i0 = lo + (m - 2) * sbh + (k + 1 == m ? sbh - 1 : 0);
++        h = k + 1 == m ? 2 : sbh - 1;
++    } else {
++        i0 = lo + k * sbh;
++        h = n - k * sbh < sbh ? n - k * sbh : sbh;
++    }
++}
++
+ // Slab row of input tile-row r read for kernel row kh is r + base[kh]: the placement of the host-planned fill
+ // (descriptor _kwf_live_segments: tile_slab_plan's placement; the fill writes only the rows this walk reads) for
+ // output pixels [o_first, o_end), stride 1, padding == dilation, band_last_tap 2. Bands that overlap or touch share
+@@ -382,7 +442,11 @@
+                             continue;
+                         }
+                         if (b - a != init_rows) {
+-                            matmul_block_init(cb_in, cb_w, false, sbw, b - a, Ct);
++                            // The matmul MOPs depend on the subblock dims only through ct >= rt (which operand the
++                            // unpacker reuses): re-init only where that flips (a 1-row group at an image edge).
++                            if ((sbw >= b - a) != (sbw >= init_rows)) {
++                                matmul_block_init(cb_in, cb_w, false, sbw, b - a, Ct);
++                            }
+                             init_rows = b - a;
+                         }
+                         const uint32_t in0 =
+@@ -394,9 +458,7 @@
+                             w_landed = (kh + 1) * KH_TILES;
+                             w.wait_front(w_landed);
+                         }
+-                        for (uint32_t c = 0; c < Ct; ++c) {
+-                            matmul_block(cb_in, cb_w, in0 + c, in1 + c * RW, a * sbw, false, sbw, b - a, Ct);
+-                        }
++                        matmul_k_rows<sbw, sbh, Ct>(cb_in, cb_w, in0, in1, RW, a * sbw, b - a);
+                     }
+                     tile_regs_commit();
+                     tile_regs_wait();
+@@ -456,8 +518,10 @@
+                         const uint32_t in0 =
+                             static_cast<uint32_t>(static_cast<int32_t>(t + kh * R - R) + base[kh]) * Ct;
+                         const uint32_t in1 = wf + kh * Ct * FROW + j0;
+-                        for (uint32_t c = 0; c < Ct; ++c) {
+-                            matmul_block(cb_in, cb_w, in0 + c, in1 + c * FROW, 0, false, ct, 1, Ct);
++                        if (ct == FW) {
++                            matmul_k<FW, 1, Ct>(cb_in, cb_w, in0, in1, FROW, 0);
++                        } else {
++                            matmul_k<gw, 1, Ct>(cb_in, cb_w, in0, in1, FROW, 0);
+                         }
+                     }
+                     tile_regs_commit();
+@@ -564,25 +628,24 @@
+                         w.wait_front(kblocked ? ROUND_TILES : (step + 1) * ROUND_TILES);
+                     }
+                     const uint32_t w0 = kblocked ? 0 : step * ROUND_TILES + g * gw;
+-                    // Exchange (file comment): the group a handshake sits on runs as part 0, gate before it, token
+-                    // after it: Q_1's first group (A out), Q_0's last group (A in, B out; first, so B leaves a round
+-                    // before the lower core's Q_2 needs it), Q_2's first group (B in, C out). The rest run as part 1,
+-                    // through the same single subblock call site.
+-                    uint32_t a0 = i_lo, a1 = i_lo, b0 = i_lo, b1 = i_end;  // part 0 = [a0, a1), part 1 = [b0, b1)
+-                    bool push = false;
++                    // The pass's subblocks: groups of rows [i_lo, i_end) (row_group). Exchange (file comment): the
++                    // group a handshake sits on runs first, gate before it, token after it: Q_1's first group (A out),
++                    // Q_0's last group (A in, B out; first, so B leaves a round before the lower core's Q_2 needs
++                    // it), Q_2's first group (B in, C out). The rest follow in order, through the same subblock call
++                    // site.
++                    const uint32_t n = i_end - i_lo;
++                    const uint32_t ng = row_groups<sbh>(n);
++                    uint32_t first = ng;  // the handshake's group (none: ng)
+                     if constexpr (xchg) {
+                         bool gate = false;
+                         if (kw != 0 && xt) {
+                             // Q_1: A out; Q_2: B in, C out (the first group).
+-                            a1 = b0 = i_lo + sbh < i_end ? i_lo + sbh : i_end;
++                            first = 0;
+                             gate = kw == 2;
+-                            push = true;
+                         } else if (kw == 0 && xb) {
+                             // Q_0, its last group first: A in, B out.
+-                            a0 = b1 = i_lo + ((i_end - 1 - i_lo) / sbh) * sbh;
+-                            a1 = i_end;
++                            first = ng - 1;
+                             gate = true;
+-                            push = true;
+                         }
+                         if (gate) {
+                             // Tokens stay fronted (popped once after the final pass: no unpacker drain per gate).
+@@ -590,19 +653,20 @@
+                             halo_in.wait_front(++halo_seen);
+                         }
+                     }
+-                    for (uint32_t part = 0; part < 2; ++part) {
+-                        const uint32_t lo = part ? b0 : a0;
+-                        const uint32_t end = part ? b1 : a1;
+-                        for (uint32_t i0 = lo; i0 < end; i0 += sbh) {
+-                            const uint32_t h = i_end - i0 < sbh ? i_end - i0 : sbh;
+-                            for (uint32_t p0 = 0; p0 < gw; p0 += sbw) {
+-                                subblock(i0, h, kw, w0 + p0, p0);
+-                            }
++                    for (uint32_t q = first < ng ? 0 : 1; q <= ng; ++q) {
++                        // q == 0: the handshake's group; q >= 1: group q - 1 (skipping the handshake's).
++                        const uint32_t k = q == 0 ? first : q - 1;
++                        if (q > 0 && k == first) {
++                            continue;
++                        }
++                        uint32_t i0 = 0, h = 0;
++                        row_group<sbh>(i_lo, n, k, i0, h);
++                        for (uint32_t p0 = 0; p0 < gw; p0 += sbw) {
++                            subblock(i0, h, kw, w0 + p0, p0);
+                         }
+-                        if (push) {
++                        if (q == 0) {
+                             halo_out.reserve_back(1);
+                             halo_out.push_back(1);
+-                            push = false;
+                         }
+                     }
+                     if (w_landed < 3 * KH_TILES) {

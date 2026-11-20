@@ -1,0 +1,3 @@
+ch1 base 0
+ch1 ct_nori 0
+ch1 fuse3_ct 0

@@ -1,0 +1,45 @@
+453 locations, 0 collisions
+============================= 42 passed in 42.50s ==============================
+SAFE_PYTEST_RESULT: PASS
+ab_unz ch1 head_unz 0 9.007
+ab_unz ch1 grad_unz 0 8.866
+ab_unz res2 head_unz 0 9.764
+ab_unz res2 grad_unz 0 9.578
+ab_unz stem2 head_unz 0 27.196
+ab_unz stem2 grad_unz 0 26.624
+ab_unz ch1 grad_unz 1 8.98
+ab_unz ch1 head_unz 1 9.168
+ab_unz res2 grad_unz 1 9.663
+ab_unz res2 head_unz 1 9.619
+ab_unz stem2 grad_unz 1 26.664
+ab_unz stem2 head_unz 1 27.234
+ab_unz ch1 head_unz 2 9.096
+ab_unz ch1 grad_unz 2 8.718
+ab_unz res2 head_unz 2 9.84
+ab_unz res2 grad_unz 2 9.511
+ab_unz stem2 head_unz 2 27.227
+ab_unz stem2 grad_unz 2 26.649
+ab_unz hifi4_stem_conv3 head_unz 0 150.502
+ab_unz hifi4_stem_conv3 grad_unz 0 150.467
+ab_unz hifi4_res2_conv2 grad_unz 0 21.34
+ab_unz hifi4_res2_conv2 head_unz 0 21.252
+ab_unz hifi4_res3_conv2 head_unz 0 24.679
+ab_unz hifi4_res3_conv2 grad_unz 0 24.493
+ab_unz hifi4_sem_res2_fuse_conv0 grad_unz 0 327.06
+ab_unz hifi4_sem_res2_fuse_conv0 head_unz 0 327.33
+ab_unz hifi4_stem_conv2 head_unz 0 74.539
+ab_unz hifi4_stem_conv2 grad_unz 0 74.544
+ab_unz hifi4_sem_res3_fuse_conv0 grad_unz 0 111.5
+ab_unz hifi4_sem_res3_fuse_conv0 head_unz 0 111.656
+ab_unz hifi4_inst_res3_fuse_conv0 head_unz 0 57.337
+ab_unz hifi4_inst_res3_fuse_conv0 grad_unz 0 57.319
+ab_unz hifi4_sem_res3_fuse_conv1 grad_unz 0 90.244
+ab_unz hifi4_sem_res3_fuse_conv1 head_unz 0 90.064
+ab_unz hifi4_inst_res2_fuse_conv0 head_unz 0 93.488
+ab_unz hifi4_inst_res2_fuse_conv0 grad_unz 0 93.477
+ab_unz hifi4_sem_res2_fuse_conv1 grad_unz 0 291.576
+ab_unz hifi4_sem_res2_fuse_conv1 head_unz 0 291.703
+ab_unz hifi4_inst_res2_fuse_conv1 head_unz 0 75.504
+ab_unz hifi4_inst_res2_fuse_conv1 grad_unz 0 75.578
+ab_unz hifi4_center_head1 grad_unz 0 20.96
+ab_unz hifi4_center_head1 head_unz 0 21.03

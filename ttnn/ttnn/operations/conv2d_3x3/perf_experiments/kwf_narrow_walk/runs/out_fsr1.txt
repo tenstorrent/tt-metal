@@ -1,0 +1,11 @@
+COLLIDE ['writer_fill_early,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_narrow_walk/op_head/kernels/conv2d_3x3_writer.cpp,1006,KERNEL_PROFILER', 'compute_tilize,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_narrow_walk/op_fsr1/kernels/conv2d_3x3_compute.cpp,1286,KERNEL_PROFILER']
+COLLIDE ['compute_kwf_weight_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_narrow_walk/op_grad/kernels/conv2d_3x3_kw_fold.hpp,624,KERNEL_PROFILER', 'compute_combine_bias_wait,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_narrow_walk/op_head/kernels/conv2d_3x3_compute.cpp,1086,KERNEL_PROFILER']
+562 locations, 2 collisions
+============================== 6 passed in 4.79s ===============================
+SAFE_PYTEST_RESULT: PASS
+fsr1 ch1 grad_unz 0 8.725
+fsr1 ch1 fsr1_unz 0 11.121
+fsr1 ch1 fsr1_unz 1 11.028
+fsr1 ch1 grad_unz 1 8.853
+fsr1 ch1 grad_unz 2 8.976
+fsr1 ch1 fsr1_unz 2 10.971

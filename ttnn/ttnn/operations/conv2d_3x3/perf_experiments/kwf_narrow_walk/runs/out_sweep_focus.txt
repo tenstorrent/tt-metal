@@ -1,0 +1,27 @@
+453 locations, 0 collisions
+============================= 24 passed in 35.76s ==============================
+SAFE_PYTEST_RESULT: PASS
+sweep_focus ch1 head 0 9.53
+sweep_focus ch1 grad 0 9.275
+sweep_focus res2 head 0 10.184
+sweep_focus res2 grad 0 10.168
+sweep_focus stem2 head 0 27.756
+sweep_focus stem2 grad 0 27.071
+sweep_focus stem3 head 0 48.014
+sweep_focus stem3 grad 0 48.272
+sweep_focus res3x head 0 10.376
+sweep_focus res3x grad 0 10.357
+sweep_focus sdr3f0 head 0 34.804
+sweep_focus sdr3f0 grad 0 34.493
+sweep_focus idr3f0 head 0 19.26
+sweep_focus idr3f0 grad 0 19.288
+sweep_focus sdr3f1 head 0 28.945
+sweep_focus sdr3f1 grad 0 28.815
+sweep_focus sdr2f0 head 0 93.231
+sweep_focus sdr2f0 grad 0 93.049
+sweep_focus idr2f0 head 0 29.184
+sweep_focus idr2f0 grad 0 29.21
+sweep_focus sr2f1 head 0 84.041
+sweep_focus sr2f1 grad 0 83.921
+sweep_focus ir2f1 head 0 24.201
+sweep_focus ir2f1 grad 0 24.169
