@@ -1851,3 +1851,68 @@
   scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_lane_balance_probe.py"`.
 - Device opens this task: 2 runner restarts (a python reload whose memory did not come back, DS41-316; the C++ build)
   plus the gate's own processes.
+
+## PPB.5C (PB.5C perf, attempt 1): the missing walls cases (4 x p50 padded lanes at 139k; 4 x 2k near 1M) and the walls table
+
+- Expected (perf_guide s2, before any run): test-only change, no model code: 0 ms device and 0 ms host a chunk on every
+  existing case (the walls of 4x2k_p139264 / mixed / 1x2k_p139264 as PB.5: 109.4 / 126.4 / 88.4 ms). New cases,
+  projected from PB.5 + the indexer fit (packed8k_projection.md): 4xp50_p139264 ~100-108 ms (6400 new tokens: ~60-64k
+  new tok/s; the pad rows leave the MoE dispatch, the attention / indexer lanes stay 2048 rows); 4x2k_p1m ~150-175 ms
+  (the one-ring indexer at 4 x ~1M histories, ~17.5 ms a chunk per lane at 5120 x 1.6). DRAM at 1M, 4 slots, 40
+  layers: ~22-26 GiB a chip (P.77: 40-layer load 15.9 GiB; PB.5: 4 slots of capacity 1M on 21 layers 13.0 vs 9.0
+  loaded).
+- Load reason: "needs the walls' one performance load (layers 0-20, 8192, slots at the deployment capacity), the
+  same one the gate's PB.5C unit uses: the new cases' cost and DRAM only exist with real slots at 139k / 1M".
+- Built (test only, no model code): tests/packed/test_packed_walls.py. New cases: `4xp50_p139264` (4 x 1600 at
+  139264, every lane padded to 2048; the previous turn chunk is 1600 tokens too) and `4x2k_p1m` (4 x 2048 at
+  1,040,384 - k x 4096; lane k reads the text from k x 8192 (TEXT_SHIFT): with the usual k x 4096 the four lanes'
+  new tokens would be the same text, since offset + position would be equal). DRAM: `packed_dram_gib_<case>` is now
+  the allocator's PEAK on the worst chip during one extra run of the case's chunk, sampled before every DRAM free and
+  after every layer (test_dram.Sampler, as P.27), plus the layers this load does not hold (`_Unloaded`: the serving
+  model holds all 40; each missing layer is charged as a held layer of the same kind, else the same source role, else
+  the largest one). Layers 21-39 → L3 (0.354 GiB weights, 0.6 MiB state a slot); 24/28/32/36 (index-only sources, no
+  held twin) → L20 (0.873 GiB, 56.6 MiB a slot: an upper bound, since L20 also holds the KV/candidate head's RoPE and
+  1M buffers). Cross-check: 19 x 0.354 = 6.7 GiB, about P.77's 40-layer load (15.9) minus PB.2's 21-layer load (9.0).
+  Also `packed_dram_measured_gib_*`, `_unloaded_gib_*`, `packed_dram_headroom_gb_4x2k_p1m` (32 GiB minus) and
+  `_alloc_gib` (the allocator's 31.83 GiB minus). With 1x2k_p139264 in the cases, the test also times today's
+  single-request chunk (PACKED=off, 8192 rows at 139264, timed the same way): `packed_single8k_*_p139264`,
+  `packed_segment_overhead_ms_p139264`. The table: `<results>/<task>_packed_walls.md` and the metric packed_walls_table.
+- Gate `gate PB.5C --check` (once, after the last code edit, pre-commit clean): determinism 0.0 ok; walls FAIL on
+  one threshold only, mixed 63.7k (128.6 ms, runs 125.5-143.7; limit 64k = 128.0 ms). Every other check passed:
+  | case | wall ms | device | host exp. | new tok/s | gathers ref / exposed ms | DRAM peak / 40-layer GiB |
+  | 4xp50_p139264 | 108.0 | 97.2 | 10.8 | 59.3k | 2.25 / 0.24 | 13.28 / 23.01 |
+  | 4x2k_p1m | 202.5 | 193.1 | 9.4 | 40.5k | 12.70 / 12.69 (not hidden, DS41-334) | 13.28 / 23.01 (headroom 8.99 of 32) |
+  | 4x2k_p139264 | 111.2 | 100.3 | 10.9 | 73.7k | 2.24 / 0.28 | 13.28 / 23.01 |
+  | mixed | 128.6 | 117.1 | 11.5 | 63.7k | 3.66 / 0.53 | 13.28 / 23.01 |
+  | 1x2k_p139264 | 88.2 | 79.0 | 9.2 | 23.2k | 0.52 / 0.27 | 12.83 / 21.87 |
+  | single 8192 (PACKED=off) | 101.8 | 89.5 | 12.3 | 80.5k | - | - |
+  Per-segment overhead at 139264: 4 x 2k vs the single 8192 request +9.4 ms wall / +10.8 device (+3.1 / +3.6 ms a
+  segment beyond the first); 1 x 2k costs 87 % of the single request's wall for a quarter of the tokens.
+  DRAM is the same at 139k and 1M (13.28 GiB): the history buffers are sized to slot capacity (1,048,576) when
+  they are allocated, not to the chunk's positions, so 4 slots at 1M cost what 4 slots at 139k do.
+- Mixed miss = process spread, not this change (DS41-335). Order probe (one process, the walls' load): mixed 126.5
+  ms -> 4x2k_p1m 203.7 -> mixed 125.5 ms (65.3k). So the 1M case running first does not slow mixed. The timed
+  region did not change (the sampler and the DRAM walk run outside it). Past gates on mixed: PB.3K 127.5 / 129.4,
+  PB.3M / PB.5 126.4.
+- DECIDED (OV-58): no model change for the mixed miss: test-only per the brief, and the miss is noise at the limit.
+  The 1M gather exposure (DS41-334) is a perf pick of its own.
+- Device opens: the gate's own (determinism fresh process + the walls' load) and 2 runner reloads for the probes
+  (another model config after the gate's 40-layer process). Re-run: gate
+  `PYTHONPATH=$PWD python -m models.demos.common.bringup gate PB.5C --spec $BRINGUP_SPEC --check`; one case:
+  `python -m models.demos.common.bringup.resident submit --spec $BRINGUP_SPEC --cmd "BRINGUP_CHUNK=8192
+  PACKED_WALL_CASES=4x2k_p1m DS41_ENGRAM_TABLE=resident DS41_PACKED=on DS41_PACKED_GATHER_HIDE=on
+  DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on DS41_PACKED_LANE_BALANCE=on DS41_PACKED_MOE=on
+  BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py"`.
+- Final check `orchestrator measure --task PB.5C` (quick, single-request path): rc 0, chunk_wall_ms 216.7 (PB.3M
+  225.6), min layer PCC 0.732 (L39, as before), host_transfers_per_layer 0.
+
+## PPB.5C (PB.5C perf, attempt 3): gate re-run on attempt 1's tree
+
+- No code change (OV-63: attempt 1's work stands). Checked: the DS41-335 test_dram AttributeError is already avoided:
+  test_packed_walls._Unloaded walks each block with test_dram._dram_tensors and does not call `_routed`. Pre-commit clean.
+- No new load reason: the gate ran the walls on its usual 21-layer, 8192 performance load. Determinism was reused from the same code (F150).
+- Gate `gate PB.5C --check`: PASS. Walls: 4xp50_p139264 109.2 ms (58.6k new tok/s), 4x2k_p1m 203.6 ms (40.2k;
+  gathers 11.94 of 12.67 ms exposed, DS41-334), 4x2k_p139264 109.8 ms (74.6k >= 67k), mixed 126.3 ms (64.9k >= 64k;
+  attempt 1 measured 128.6, process spread as in DS41-335), 1x2k_p139264 88.5 ms. DRAM at 1M with all 4 histories held:
+  40-layer 23.00 GiB a chip, headroom 9.00 GB of 32. determinism_max_abs_diff 0.0. Table: results/PB.5C_packed_walls.md.

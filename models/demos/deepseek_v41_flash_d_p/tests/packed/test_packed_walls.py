@@ -13,6 +13,13 @@ Cases (metric suffix):
     4x2k_p139264    four 2048-token segments, each at 139264
     mixed           2048 tokens each at 61440 / 139264 / 307200 / 546816 (61k / 139k / 308k / 547k)
     1x2k_p139264    one 2048-token segment and three empty lanes (the per-segment overhead)
+    4xp50_p139264   (PB.5C) four 1600-token segments (the AgentX p50 turn), each at 139264: every lane padded 1600 ->
+                    2048 (pad rows out of the MoE dispatch under PACKED_MOE=on)
+    4x2k_p1m        (PB.5C) four 2048-token segments at 1,040,384 - k x 4096 (histories near 1M; lane k's text from
+                    k x 8192, so the lanes' new tokens are four different stretches), every slot's history gathered
+                    and resident at once: the DRAM budget at 1M
+With 1x2k_p139264 also today's single-request chunk (PACKED=off, 8192 rows at 139264, as timed here): the per-segment
+overhead's reference (packed_single8k_*_p139264, packed_segment_overhead_ms_p139264 = (4 x 2k - single) / 3).
 Every iteration (warm-up, timed, profiled) first runs the REAL previous packed chunk (each segment at p - 2048,
 untimed, synced), then the timed chunk; the slots change lanes every chunk (rotated by one lane each iteration: no
 lane keeps a slot's device state; every segment's history is gathered from its own slot's caches every chunk).
@@ -44,7 +51,12 @@ packed_gather_prep_ms_<case> (the packs / slices / slice_writes, local ops), pac
 
 Metrics: packed_wall_ms_<case> (gated > 0), packed_serving_tok_s_<case> (new tokens / wall), packed_device_ms_<case>,
 packed_host_exposed_ms_<case> (wall - device), packed_device_ms_<phase>_<case>, packed_spread_ms_<case> and packed_runs_ms_<case> (the timed walls),
-packed_dram_gib_<case> (the allocator's DRAM a chip with every segment's state and buffers held), packed_walls_table.
+packed_dram_gib_<case> (PB.5C: the allocator's PEAK DRAM a chip while the chunk runs, every live slot's state and
+history buffers held, sampled before every free (test_dram.Sampler), plus the layers the performance load does not hold
+(weights and each live slot's state, charged per layer kind from a held layer: the serving model holds all 40);
+packed_dram_measured_gib_<case> / packed_dram_unloaded_gib_<case> the two parts), packed_dram_headroom_gb_4x2k_p1m
+(32 GiB minus packed_dram_gib_4x2k_p1m; _alloc_gib: the allocator's capacity minus it), packed_walls_table (also
+<results>/<task>_packed_walls.md).
 
     BRINGUP_CHUNK=8192 DS41_PACKED=on BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode \\
         scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py
@@ -88,7 +100,18 @@ CASES = {
     "4x2k_p139264": [139264, 139264, 139264, 139264],
     "mixed": [61440, 139264, 307200, 546816],
     "1x2k_p139264": [139264, None, None, None],
+    # PB.5C: the AgentX p50 turn (1600 new tokens) in every lane: each lane padded 1600 -> 2048 (pad rows out of the
+    # MoE dispatch under PACKED_MOE=on)
+    "4xp50_p139264": [139264, 139264, 139264, 139264],
+    # PB.5C: four histories near 1M (1,040,384 - k x SHIFT), all four slots' histories gathered and resident at once
+    "4x2k_p1m": [1040384 - k * SHIFT for k in range(4)],
 }
+LENS = {"4xp50_p139264": 1600}  # new tokens a segment (default LANE_ROWS)
+# lane k reads the text from k x TEXT_SHIFT (default SHIFT). 4x2k_p1m: 2 x SHIFT, since its positions step down by
+# SHIFT: with SHIFT the four lanes' new tokens would be the same text (offset + position equal); with 2 x SHIFT lane k's
+# new tokens start at text position 1,040,384 + k x SHIFT, four different stretches of the session
+TEXT_SHIFT = {"4x2k_p1m": 2 * SHIFT}
+SINGLE_POS = 139264  # PB.5C: the single-request 8192-row chunk at the 1x2k case's history (the per-segment overhead)
 GIB = float(1 << 30)
 GATHER_RUNS = 3  # PB.3H: profiled chunks a side for the gather metrics (per segment the median)
 
@@ -144,16 +167,48 @@ def test_packed_walls(mesh_device, monkeypatch):
     if loaded != "decode":
         model.use_decoder_skip("decode")
     assert model.chunk == CHUNK and model.max_seq >= top + CHUNK, (model.chunk, model.max_seq, top)
-    g = PositionGolden(S, top + 3 * SHIFT, CHUNK)
+    need = max(_text_need(c) for c in cases)
+    if "1x2k_p139264" in cases:
+        need = max(need, SINGLE_POS + CHUNK)
+    g = PositionGolden(S, need, CHUNK)
     text = g.tokens()
     dram = _dram(mesh_device)
+    proj = _Unloaded(model, full) if dram is not None else None
     rows = []
+    single = None
     try:
         for case in cases:
-            rows.append((case, _case(model, mesh_device, layers, case, text, dram, cap)))
+            rows.append((case, _case(model, mesh_device, layers, case, text, dram, cap, proj)))
+        if "1x2k_p139264" in cases:  # PB.5C: the per-segment overhead's reference (today's single-request chunk)
+            single = _single(model, mesh_device, layers, text, cap)
     finally:
         if loaded != "decode":
             model.use_decoder_skip(loaded)
+    table = _table(rows, single, dram, proj, cap)
+    metrics.record("packed_walls_table", table)
+    out = metrics.results_dir() / f"{metrics.record_task()}_packed_walls.md"
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(table + "\n")
+        print(f"walls table -> {out}")
+    except OSError as e:
+        print(f"walls table not written ({out}): {e}")
+    print("\n" + table)
+
+
+def _lens(case: str) -> int:
+    return LENS.get(case, LANE_ROWS)
+
+
+def _text_need(case: str) -> int:
+    """Tokens of the text the case reads: lane k from k x TEXT_SHIFT to its segment's end."""
+    sh, n = TEXT_SHIFT.get(case, SHIFT), _lens(case)
+    return max(k * sh + p + n for k, p in enumerate(CASES[case]) if p is not None)
+
+
+def _table(rows: list, single, dram, proj, cap: int) -> str:
+    """The walls table (markdown): per case the chunk's wall, device, host exposed, serving new tok/s, the history
+    gathers per segment (reference / exposed / hidden ms), DRAM; then the per-segment overhead."""
     head = [
         "case",
         "positions",
@@ -161,18 +216,292 @@ def test_packed_walls(mesh_device, monkeypatch):
         "wall ms (spread)",
         "device ms",
         "host exposed ms",
-        "new tok/s",
-        "history gather ms (hidden)",
+        "serving new tok/s",
+        "gather ms: reference / exposed / hidden",
+        "per segment: exposed / hidden ms",
+        "DRAM GiB a chip: loaded layers peak / 40-layer model",
     ]
-    lines = ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
+    lines = [
+        "# Packed prefill walls (test_packed_walls.py)",
+        "",
+        f"8192-row chunk, 4 lanes of {LANE_ROWS}; slots at one capacity {cap}; layers 0-20 run (DECODER_SKIP=decode). "
+        "Wall = engine device input -> ids readback -> sync after the last layer (median of the warm runs). "
+        "Gathers: each at its least chip (the reference = the same chunk's gathers serial). DRAM: the allocator's peak "
+        "on the worst chip while the chunk runs, every live slot's state and history buffers held; the 40-layer column "
+        "adds the layers the performance load does not hold (weights + each live slot's state, per layer kind, from a "
+        "loaded layer of the same kind).",
+        "",
+        "| " + " | ".join(head) + " |",
+        "|" + "---|" * len(head),
+    ]
     for case, r in rows:
+        g = r["gs"]
+        per = "; ".join(f"seg{seg} {e:.2f} / {ms - e:.2f}" for seg, (ms, e) in r["segs"])
+        dr = "-" if r["dram"] is None else f"{r['dram'][0]:.2f} / {r['dram'][1]:.2f}"
         lines.append(
             f"| {case} | {r['pos']} | {r['new']} | {r['wall']} ({r['spread']}) | {r['device']:.1f} | "
-            f"{r['wall'] - r['device']:.1f} | {r['tok_s']:.0f} | {r['gather'][0]:.2f} ({r['gather'][1]:.2f}) |"
+            f"{r['wall'] - r['device']:.1f} | {r['tok_s']:.0f} | {g[0]:.2f} / {g[1]:.2f} / {g[0] - g[1]:.2f} | {per} | {dr} |"
         )
-    table = "\n".join(lines)
-    metrics.record("packed_walls_table", table)
-    print("\n" + table)
+    if dram is not None:
+        capg = dram.capacity / GIB
+        lines += ["", f"DRAM capacity a chip (allocator): {capg:.2f} GiB."]
+        for case, r in rows:
+            if r["dram"] is not None:
+                lines.append(
+                    f"- {case}: peak {r['dram'][0]:.2f} GiB measured ({r['dram'][2]}), 40-layer {r['dram'][1]:.2f} GiB, "
+                    f"headroom {capg - r['dram'][1]:.2f} GiB (of the allocator's {capg:.2f}), "
+                    f"{32.0 - r['dram'][1]:.2f} GiB of 32"
+                )
+        if proj is not None:
+            lines.append(f"- not loaded here (projected per layer kind): {proj.describe()}")
+    by = dict(rows)
+    if single is not None:
+        lines += [
+            "",
+            "## Per-segment overhead (history 139264)",
+            "",
+            "| chunk | new tokens | wall ms (spread) | device ms | host exposed ms | new tok/s |",
+            "|---|---|---|---|---|---|",
+            f"| single request, 8192 rows (PACKED=off) | {CHUNK} | {single['wall']} ({single['spread']}) | "
+            f"{single['device']:.1f} | {single['wall'] - single['device']:.1f} | {single['tok_s']:.0f} |",
+        ]
+        for c in ("1x2k_p139264", "4x2k_p139264", "4xp50_p139264"):
+            if c in by:
+                r = by[c]
+                lines.append(
+                    f"| {c} | {r['new']} | {r['wall']} ({r['spread']}) | {r['device']:.1f} | "
+                    f"{r['wall'] - r['device']:.1f} | {r['tok_s']:.0f} |"
+                )
+        lines.append("")
+        if "1x2k_p139264" in by:
+            r = by["1x2k_p139264"]
+            lines.append(
+                f"- 1 x 2k vs the single 8192 request: {r['wall']:.1f} vs {single['wall']:.1f} ms wall "
+                f"({r['wall'] - single['wall']:+.1f}), device {r['device']:.1f} vs {single['device']:.1f} "
+                f"({r['device'] - single['device']:+.1f}): a quarter of the tokens costs {r['wall'] / single['wall']:.0%} of the wall"
+            )
+        if "4x2k_p139264" in by:
+            r = by["4x2k_p139264"]
+            lines.append(
+                f"- 4 x 2k vs the single 8192 request (the same 8192 new tokens): {r['wall'] - single['wall']:+.1f} ms "
+                f"wall, {r['device'] - single['device']:+.1f} ms device; per extra segment "
+                f"{(r['wall'] - single['wall']) / 3:+.1f} ms wall, {(r['device'] - single['device']) / 3:+.1f} ms device"
+            )
+            metrics.record("packed_segment_overhead_ms_p139264", round((r["wall"] - single["wall"]) / 3, 2))
+    return "\n".join(lines)
+
+
+class _Unloaded:
+    """PB.5C (owner 2026-11-19: the DRAM budget honest at 1M): the performance load holds layers 0-20 only, but the
+    serving model holds all of them (tt/runners/adapter.load_model: every layer; DECODER_SKIP=decode only skips running
+    20-39). Each layer it does not hold is charged with a held layer of the same kind (ratio, KV / index / candidate
+    source, engram, decoder), else of the same role (_role: its own source roles; the decoder layers 21-39 are plain
+    layers, layer 20's KV / index / candidate head buffers are not theirs): its weights (every DRAM tensor its block
+    reaches that no other block shares, its routed experts included) and, per live slot, its slot state (window cache,
+    compressed caches). Neither: the largest held layer (an upper bound)."""
+
+    def __init__(self, model, full: list):
+        self.cfg, self.model = model.cfg, model
+        self.held = list(model.layers)
+        self.missing = [i for i in full if i not in set(self.held)]
+        self.w, self.st, self.how = None, None, {}
+
+    def _kind(self, i: int) -> tuple:
+        c = self.cfg
+        return (
+            c.ratio(i),
+            c.is_kv_source(i),
+            c.is_index_source(i),
+            c.is_cand_source(i),
+            c.uses_candidates(i),
+            c.is_engram(i),
+            i in set(getattr(self.model, "decoder", ()) or ()),
+        )
+
+    def _role(self, i: int) -> tuple:
+        """The kind without the ratio's value, the candidate use and the decoder flag: the layer's own sources (a KV /
+        index / candidate source holds the history buffers and tables of its role; DECODER_SKIP=decode's decoder layers
+        21-39 hold no source role: their weights and slot state are a plain layer's)."""
+        c = self.cfg
+        return (bool(c.ratio(i)), c.is_kv_source(i), c.is_index_source(i), c.is_cand_source(i), c.is_engram(i))
+
+    def _weights(self) -> dict:
+        from models.demos.deepseek_v41_flash_d_p.tests.bringup.test_dram import _dram_tensors
+
+        m = self.model
+        skip = {id(m), id(m.mesh), id(getattr(m, "tables", None)), id(getattr(m, "state", None))}
+        found, owners = {}, defaultdict(set)
+        for i in self.held:
+            blk = m.blocks.get(i)
+            if blk is None:
+                continue
+            f = _dram_tensors({f"L{i}": blk}, skip=set(skip))
+            found[i] = f
+            for a in f:
+                owners[a].add(i)
+        # (the routed experts are the MoE layer's own tensors, w_gu / w_d: tt/moe_block_v2_adapter, found by the walk)
+        w = {i: sum(b for a, (b, _p) in f.items() if len(owners[a]) == 1) for i, f in found.items()}
+        for i, f in found.items():  # (the evidence: each held layer's total and its largest own buffers)
+            top = sorted(((b, p) for a, (b, p) in f.items() if len(owners[a]) == 1), reverse=True)[:6]
+            print(
+                f"[dram] L{i} kind {self._kind(i)} own {w[i] / GIB:.3f} GiB: "
+                + "; ".join(f"{p} {b / 2**20:.1f} MiB" for b, p in top),
+                flush=True,
+            )
+        return w
+
+    def _state(self, st) -> dict:
+        from models.demos.deepseek_v41_flash_d_p.tests.bringup.test_dram import _dram_tensors
+
+        m = self.model
+        skip = {id(m), id(m.mesh), id(getattr(m, "tables", None))}
+        out = {}
+        for i in self.held:
+            roots = {"window": st.window.get(i)}
+            if i in st.compress and i not in st.shared_compress:
+                roots["compress"] = st.compress[i]
+            out[i] = sum(b for b, _p in _dram_tensors(roots, skip=set(skip)).values())
+        print(
+            "[dram] slot state a layer (MiB): " + ", ".join(f"L{i} {v / 2**20:.1f}" for i, v in out.items()), flush=True
+        )
+        return out
+
+    def bytes(self, st, slots: int) -> tuple:
+        """(bytes a chip the missing layers add with ``slots`` live slots, how each was charged)."""
+        if not self.missing:
+            return 0, {}
+        if self.w is None:
+            self.w = self._weights()
+        if self.st is None and st is not None:
+            self.st = self._state(st)
+        sts = self.st or {}
+        by_kind, by_role = {}, {}
+        for i in self.held:
+            if i in self.w:
+                by_kind.setdefault(self._kind(i), i)
+                by_role.setdefault(self._role(i), i)
+        big = max(self.w, key=lambda i: self.w[i] + slots * sts.get(i, 0))
+        total, how = 0, {}
+        for i in self.missing:
+            j = by_kind.get(self._kind(i), by_role.get(self._role(i), big))
+            how[i] = j
+            total += self.w[j] + slots * sts.get(j, 0)
+        self.how = how
+        return total, how
+
+    def describe(self) -> str:
+        if not self.missing or self.w is None:
+            return "none"
+        sts, by = self.st or {}, defaultdict(list)
+        for i, j in self.how.items():
+            by[j].append(i)
+        held = f"held layers' own weights {sum(self.w.values()) / GIB:.3f} GiB; "
+        return held + "; ".join(
+            f"layers {v[0]}-{v[-1]} ({len(v)}) as L{j}: weights {self.w.get(j, 0) / GIB:.3f} GiB, slot state "
+            f"{sts.get(j, 0) / GIB:.3f} GiB a layer and slot"
+            for j, v in sorted(by.items())
+        )
+
+
+def _peak_run(dram, fn) -> tuple:
+    """(the allocator's peak DRAM a chip while fn(on_layer) runs, where): sampled before every DRAM free
+    (ttnn.deallocate and tt/ccl's binding; allocation only grows between frees) and after every layer
+    (tests/bringup/test_dram.Sampler, as P.27)."""
+    import ttnn
+    from models.demos.deepseek_v41_flash_d_p.tests.bringup.test_dram import Sampler
+    from models.demos.deepseek_v41_flash_d_p.tt import ccl
+
+    sampler = Sampler(dram)
+    sampler.mark("start")
+    d0, td = ccl._DEALLOC[0], ttnn.deallocate
+    ccl._DEALLOC[0] = sampler.wrap(d0)
+    ttnn.deallocate = sampler.wrap(td)
+
+    def on_layer(i, h):
+        sampler.layer = i
+        sampler.mark("layer_end")
+
+    try:
+        fn(on_layer)
+    finally:
+        ccl._DEALLOC[0], ttnn.deallocate = d0, td
+    sampler.mark("done")
+    peak = max(sampler.samples, key=lambda x: x[2])
+    return peak[2], f"layer {peak[0]} {peak[1]}, {len(sampler.samples)} samples"
+
+
+def _single(model, mesh, layers, text, cap: int) -> dict:
+    """PB.5C: today's single-request chunk (PACKED=off, one 8192-row segment) at SINGLE_POS, as the walls measure
+    a packed chunk (the real previous chunk first, untimed; wall from the engine's device input to the sync; median
+    of WALL_RUNS warm runs; one real-time profiled run for the device time): the per-segment overhead's reference."""
+    import ttnn
+    from models.demos.deepseek_v41_flash_d_p.tt.packed_device import ids_from_input, make_input, run_chunk
+
+    st = model.new_state(cap)
+    toks = text[: SINGLE_POS + CHUNK].long()
+
+    def run(prev: bool, prof: bool = False):
+        s = SINGLE_POS - (CHUNK if prev else 0)
+        desc = ChunkDescriptor.single(CHUNK, 10, s, s + CHUNK)
+        inp = make_input(mesh, desc, [toks[s : s + CHUNK]])
+        model.sync()
+        if prof:
+            profiler.enable(mesh, rt=True)
+            profiler.set_layer(None)
+        t0 = time.time()
+        try:
+            nat = ids_from_input(mesh, inp, desc)
+            run_chunk(model, desc, nat, [st], layers, last=False)
+            model.sync()
+            wall = (time.time() - t0) * 1e3
+            res = None
+            if prof:
+                profiler.signpost("end")
+                profiler.finish_rt()
+                res = profiler.result()
+        finally:
+            if prof:
+                profiler.disable()
+            ttnn.deallocate(inp)
+        return wall, res
+
+    def one_run():
+        run(True)
+        return round(run(False)[0], 1)
+
+    try:
+        with packed("off"):
+            w = warm_up(mesh, one_run)
+            assert w["warm"], f"single 8192: not warm after {len(w['walls'])} runs"
+            walls = []
+            misses_allowed(mesh, False)
+            try:
+                for _ in range(WALL_RUNS):
+                    walls.append(one_run())
+            finally:
+                misses_allowed(mesh, True)
+            kept = sorted(walls)
+            wall = kept[len(kept) // 2]
+            run(True)
+            dev = _device_split(run(False, prof=True)[1])
+    finally:
+        st.free()
+    sfx = f"_p{SINGLE_POS}"
+    metrics.record("packed_single8k_wall_ms" + sfx, wall)
+    metrics.record("packed_single8k_runs_ms" + sfx, walls)
+    metrics.record("packed_single8k_device_ms" + sfx, round(dev["slowest"], 2))
+    metrics.record("packed_single8k_tok_s" + sfx, round(CHUNK / (wall / 1e3), 1))
+    print(
+        f"SINGLE 8192 at {SINGLE_POS} (PACKED=off): wall {wall} ms (runs {walls}), device {dev['slowest']:.2f} ms, "
+        f"{CHUNK / (wall / 1e3):.0f} new tok/s",
+        flush=True,
+    )
+    return {
+        "wall": wall,
+        "spread": round(kept[-1] - kept[0], 1),
+        "device": dev["slowest"],
+        "tok_s": CHUNK / (wall / 1e3),
+    }
 
 
 def _cap(deploy: int) -> int:
@@ -308,14 +637,15 @@ def _record_gate_name(name: str, value) -> None:
             os.environ["BRINGUP_POS_TOKENS"] = tok
 
 
-def _case(model, mesh, layers, case: str, text, dram, cap: int) -> dict:
+def _case(model, mesh, layers, case: str, text, dram, cap: int, proj=None) -> dict:
     from models.demos.deepseek_v41_flash_d_p.tt import gather_hide, history_gather
     from models.demos.deepseek_v41_flash_d_p.tt.packed_device import ids_from_input, make_input, run_chunk
 
     pos = CASES[case]
     live = [k for k, p in enumerate(pos) if p is not None]
+    n_new, sh = _lens(case), TEXT_SHIFT.get(case, SHIFT)  # (PB.5C: a segment's new tokens; lane k's text offset)
     states = {k: model.new_state(cap) for k in live}  # (OV-62: one capacity, serving's slots)
-    toks = {k: text[k * SHIFT : k * SHIFT + pos[k] + LANE_ROWS].long() for k in live}
+    toks = {k: text[k * sh : k * sh + pos[k] + n_new].long() for k in live}
     it = [0]
 
     def chunk(prev: bool):
@@ -329,19 +659,19 @@ def _case(model, mesh, layers, case: str, text, dram, cap: int) -> dict:
                 segs.append(None)
                 ids.append(None)
                 continue
-            s = pos[k] - (LANE_ROWS if prev else 0)
-            segs.append(Segment(10 + k, s, s + LANE_ROWS))
-            ids.append(toks[k][s : s + LANE_ROWS])
+            s = pos[k] - (n_new if prev else 0)  # (the real previous turn chunk: the same length before it)
+            segs.append(Segment(10 + k, s, s + n_new))
+            ids.append(toks[k][s : s + n_new])
         desc = ChunkDescriptor.packed(CHUNK, segs)
         return desc, [None if k is None else states[k] for k in lanes], ids
 
-    def run(prev: bool, timed: bool = False):
+    def run(prev: bool, timed: bool = False, on_layer=None):
         desc, sts, ids = chunk(prev)
         inp = make_input(mesh, desc, ids)  # (the engine's H2D: not timed)
         model.sync()
         t0 = time.time()
         nat = ids_from_input(mesh, inp, desc)
-        run_chunk(model, desc, nat, sts, layers, last=False)
+        run_chunk(model, desc, nat, sts, layers, last=False, on_layer=on_layer)
         model.sync()
         wall = (time.time() - t0) * 1e3
         import ttnn
@@ -414,7 +744,12 @@ def _case(model, mesh, layers, case: str, text, dram, cap: int) -> dict:
             gs = _gather_metrics_runs(runs_on, runs_ref, ghz)
             seg_of = {(k + it[0]) % 4: k for k in live}  # (the profiled chunk's lanes: segment k in lane (k + it) % 4)
             it[0] += 1
-        new = LANE_ROWS * len(live)
+            peak = None
+            if dram is not None:  # PB.5C: the allocator's peak a chip while the chunk runs, every slot held
+                run(True)
+                peak = _peak_run(dram, lambda on_layer: run(False, on_layer=on_layer))
+                it[0] += 1
+        new = n_new * len(live)
         sfx = f"_{case}"
         metrics.record("packed_wall_ms" + sfx, wall)
         metrics.record("packed_runs_ms" + sfx, walls)
@@ -426,8 +761,24 @@ def _case(model, mesh, layers, case: str, text, dram, cap: int) -> dict:
         metrics.record("packed_profiled_new_programs" + sfx, -1 if n0 is None or n1 is None else n1 - n0)
         for ph, ms in dev["phases"].items():
             metrics.record(f"packed_device_ms_{ph}" + sfx, round(ms, 2))
-        if dram is not None:
-            metrics.record("packed_dram_gib" + sfx, round(dram.max() / GIB, 3))
+        dr = None
+        if peak is not None:
+            extra, _how = proj.bytes(states[live[0]], len(live)) if proj is not None else (0, {})
+            meas, dep, capg = peak[0] / GIB, (peak[0] + extra) / GIB, dram.capacity / GIB
+            dr = (meas, dep, peak[1])
+            metrics.record("packed_dram_gib" + sfx, round(dep, 3))  # (the serving model's: 40 layers, PB.5C)
+            metrics.record("packed_dram_measured_gib" + sfx, round(meas, 3))  # (the layers this load holds)
+            metrics.record("packed_dram_unloaded_gib" + sfx, round(extra / GIB, 3))
+            metrics.record("packed_dram_capacity_gib" + sfx, round(capg, 3))
+            if case == "4x2k_p1m":
+                _record_gate_name("packed_dram_headroom_gb" + sfx, round(32.0 - dep, 3))
+                metrics.record("packed_dram_headroom_alloc_gib" + sfx, round(capg - dep, 3))
+            print(
+                f"CASE {case} DRAM a chip: peak {meas:.3f} GiB measured ({peak[1]}; {len(live)} slots of capacity "
+                f"{cap} held), + {extra / GIB:.3f} GiB for the layers not loaded ({proj.describe() if proj else '-'}) "
+                f"= {dep:.3f} GiB; allocator capacity {capg:.3f} GiB, headroom {capg - dep:.3f} (of 32: {32.0 - dep:.3f})",
+                flush=True,
+            )
         exp = gs["exposed"]
         frac = exp / gs["ms"] if gs["ms"] > 0 else 0.0
         metrics.record("packed_gather_ms" + sfx, round(gs["ms"], 3))
@@ -463,7 +814,9 @@ def _case(model, mesh, layers, case: str, text, dram, cap: int) -> dict:
             "spread": round(kept[-1] - kept[0], 1),
             "device": dev["slowest"],
             "tok_s": new / (wall / 1e3),
-            "gather": (gs["ms"], gs["ms"] - gs["exposed"]),
+            "gs": (gs["ms"], gs["exposed"]),
+            "segs": [(names[k], v) for k, v in gs["lanes"].items()],
+            "dram": dr,
         }
     finally:
         for st in states.values():

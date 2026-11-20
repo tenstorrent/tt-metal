@@ -514,5 +514,17 @@
   "top5_overlap_seg2_limit": 0.994286,
   "top5_overlap_seg3": 1.0,
   "top5_overlap_seg3_limit": 0.994286
+ },
+ "PB.5C": {
+  "packed_dram_headroom_gb_4x2k_p1m": 9.002,
+  "packed_dram_headroom_gb_4x2k_p1m_tagentic_cc": 9.002,
+  "packed_serving_tok_s_4x2k_p139264_tagentic_cc": 74608.4,
+  "packed_serving_tok_s_4xp50_p139264_tagentic_cc": 58608.1,
+  "packed_serving_tok_s_mixed_tagentic_cc": 64861.4,
+  "packed_wall_ms_1x2k_p139264_tagentic_cc": 88.5,
+  "packed_wall_ms_4x2k_p139264_tagentic_cc": 109.8,
+  "packed_wall_ms_4x2k_p1m_tagentic_cc": 203.6,
+  "packed_wall_ms_4xp50_p139264_tagentic_cc": 109.2,
+  "packed_wall_ms_mixed_tagentic_cc": 126.3
  }
 }

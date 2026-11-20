@@ -817,3 +817,10 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   blocking pinned write, not host work); tt-d-gen ask draft bringup/drafts/tt_d_gen_packed_ask.md (multi-segment chunk
   header, per-segment acks); RAM leaked ~50 GiB by repeated device opens (reboot clears it); /scratch 97 % full.
 - 08:05 UTC PB.5C attempt 1 failed on the path check only: the walls test wrote results/PB.5C_packed_walls.md as MY brief asked, but my paths list lacked it (my error). Paused, aborted attempt 2, added the file to PB.5C's paths, resumed (--attempts 20).
+- 08:08 UTC PB.5C (attempt 3 running) agent's walls table (results/PB.5C_packed_walls.md, serving-equivalent):
+  4xp50@139k (4 x 1600, padded) 109.2 ms = 58.6k; 4x2k@~1M (1,028,096-1,040,384) 203.6 ms = 40.2k (device 192.0;
+  gathers 12.67 ms reference, 11.94 EXPOSED: the hiding does not hold at 1M); 4x2k@139k 109.8 = 74.6k; mixed 126.3 =
+  64.9k; 1x2k 88.5. DRAM: 4 x 1M resident, peak 13.27 GiB with layers 0-20 loaded, projected 23.0 GiB for 40 layers
+  of 31.83 (headroom 8.8): fits. Per extra segment +2.4 ms wall / +3.3 ms device (4x2k vs one 8192 request 102.5 ms).
+  OPEN for the owner: 4 x ~1M histories run at 40k tok/s with the gathers exposed (not a stated target; AgentX p90
+  history is 547k).

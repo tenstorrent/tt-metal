@@ -1,0 +1,73 @@
+{
+ "used": [
+  {
+   "id": "DS41-279",
+   "how": "kept the walls' target.seq raise to the slot capacity (monkeypatch S.data target.seq) so the 1M case fits the one performance load",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-316",
+   "how": "all probes went to the runner holding the walls' 21-layer load (1x2k / 1M cases), so they cost no device open",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-295",
+   "how": "named 4-bit history at 1M as a fix candidate for the exposed 1M gathers (DS41-334)",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-333",
+   "how": "read the mixed case's indexer (19.7 ms) as the longest lane's bound when comparing the mixed walls; no change",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "how many DRAM bytes a decoder layer (21-39) holds when the performance load does not load it (needed to project the 40-layer budget from the 21-layer load)",
+  "the packed history buffers are sized to slot capacity when allocated, so the DRAM peak does not depend on the chunk's history positions (13.28 GiB at 139k and at 1M)",
+  "how much the mixed walls vary from process to process (125.5-129.4 ms) against the 128.0 ms target"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "test-only change; nothing padded to fit an op. The 4xp50 lanes are padded because that is the serving geometry the case measures (owner's case), not a kernel workaround"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "BREADCRUMBS PPB.5C DECIDED line: no model change for the mixed miss (noise at the limit, order probe 126.5 -> 125.5 ms); kept going without stopping"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "no load-time env in the test; the 1M case uses the same max_seq raise (slot capacity 1,048,576, OV-62) as every packed walls case, so the gate's one 21-layer performance load serves all five cases plus the single-request reference"
+  }
+ ],
+ "cited_only": [
+  "DS41-334",
+  "DS41-335"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.5C",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-20T07:59:48",
+  "head": "1f43e8b5c74",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.5C.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.5C_packed_walls.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.5C.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py"
+  ]
+ }
+}
