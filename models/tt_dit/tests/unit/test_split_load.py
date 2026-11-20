@@ -121,3 +121,18 @@ def test_host_slices_of_a_column_split_tensor(tmp_path):
     for c in range(MESH[1]):
         stacked = torch.cat([pieces[r * MESH[1] + c] for r in range(MESH[0])], dim=dim)
         assert torch.equal(stacked, columns[c]), f"column {c}"
+
+
+def test_ltx_pipeline_loads_pass_a_ccl_manager():
+    """Every load_model call in the LTX pipelines hands over a ccl_manager, so split load can run there."""
+    import ast
+    import pathlib
+
+    ltx = pathlib.Path(__file__).resolve().parents[2] / "pipelines" / "ltx"
+    missing = []
+    for path in sorted(ltx.glob("pipeline_ltx*.py")):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "load_model":
+                if "ccl_manager" not in {kw.arg for kw in node.keywords}:
+                    missing.append(f"{path.name}:{node.lineno}")
+    assert not missing, missing

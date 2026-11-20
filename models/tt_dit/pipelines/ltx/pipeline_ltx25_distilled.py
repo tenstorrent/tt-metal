@@ -211,6 +211,7 @@ class LTX25DistilledPipeline(LTXDistilledPipeline):
             mesh_shape=tuple(self.mesh_device.shape),
             mesh_device=self.mesh_device,
             get_torch_state_dict=lambda: decoder.torch_state_from_checkpoint(path),
+            ccl_manager=self.vae_ccl_manager,
         )
         logger.info("Loaded TTNN DiffVAE decoder")
 
