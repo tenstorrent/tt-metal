@@ -709,3 +709,17 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   at 524288 (device 98.3, host 10.9; indexer 17.0) = 75.0k. Projection (a) 102-112 / 110-123: confirmed (low end).
   Serving risk noted by the agent: at 8192 the deployment's tables are one chunk longer (1,052,672). DECIDED: accept.
   PB.2 device: 2 runner process starts with loads 21 / 40 / 21 / 40 / 40 layers (5 loads), RAM leaked 7.4 GiB.
+- 23:04 UTC PB.2 gate PASS -> 8ef46676e6e (units reused, nothing re-run). PB.3 (packed v1: PACKED=on, looped attention, oracle tests) attempt 1 started.
+- 00:08 UTC PB.3 done (attempt 1), WAITING. Packed v1 (tt/packed_device.py: token-wise once over 8192 rows; per
+  segment its rows moved to lane 0's chips and today's attention run; per-lane history / key buffers resident at
+  once): oracle on 40 layers all 0 (lane equivalence incl. MoE on these compositions, alone vs today, slot digests,
+  packed determinism), every segment within the reference limits. Walls (layers 0-20, decode, agentic_cc, shipped
+  resident engram table): 4x2k@139264 294.5 ms = 27.8k new tok/s (device 255.5, host 39.0); mixed 342.9 = 23.9k;
+  1x2k + 3 empty 154.9. Device: the attention loop + lane moves 202 / 221 ms; 1x2k experts 71 ms (6144 pad rows of
+  one id routed to the same experts). The gate's own walls ran 398 / 445 ms (host 142 / 169: another engram table mode
+  in its process) - to fix in PB.3A. Reviewed the diff: one ids readback a chunk as today, no host math in the
+  forward. DECIDED: accept (correct v1 = the reference for v2).
+- 00:10 UTC DECIDED (owner delegated): PB.3A (one attention call, v2) runs BEFORE PB.3H (gather hiding), against the
+  plan's order: v1's loop + moves are 202 of 256 ms device, v2 removes them, and the gather hiding is designed for v2's
+  lane-targeted schedule; hiding gathers on v1 first would be redone. PB.3A also: pad rows out of MoE dispatch, and
+  the gate's walls on the shipped engram configuration. PB.3H then runs with ONECALL=on.
