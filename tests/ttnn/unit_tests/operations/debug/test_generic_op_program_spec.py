@@ -685,7 +685,9 @@ def test_a_global_semaphore_on_another_mesh_device_is_rejected(device, expect_er
     spec, run_args = counter_program(output, global_semaphore(device, 0))
     try:
         with expect_error(
-            RuntimeError, "the GlobalSemaphore for 'counter' is on another MeshDevice than the one the program runs on"
+            RuntimeError,
+            "the GlobalSemaphore for 'counter' is on another MeshDevice than the one the program runs on, "
+            f"MeshDevice {submesh.id()}",
         ):
             E.generic_op([output], spec, run_args)
     finally:
@@ -1424,6 +1426,31 @@ def test_a_mesh_run_args_subclass_setattr_cannot_drop_the_owners(device):
     mesh_run_args = MeshRunArgsIgnoringPrivateWrites()
     mesh_run_args.programs = [(mesh_range(device), run_args)]
     assert mesh_run_args.programs[0][1].tensor_args["a"] is a
+    assert mesh_run_args.programs[0][1].global_semaphore_args["counter"] is semaphore
+
+
+class MeshRunArgsWithOwnerProperties(E.MeshProgramRunArgs):
+    _tensor_args = property(lambda self: [], lambda self, value: None)
+    _global_semaphore_args = property(lambda self: [], lambda self, value: None)
+
+
+class MeshRunArgsHidingOwners(E.MeshProgramRunArgs):
+    def __getattribute__(self, name):
+        return [] if name in ("_tensor_args", "_global_semaphore_args") else super().__getattribute__(name)
+
+
+@pytest.mark.parametrize(
+    "mesh_run_args_type", [MeshRunArgsWithOwnerProperties, MeshRunArgsHidingOwners], ids=lambda cls: cls.__name__
+)
+def test_a_mesh_run_args_subclass_cannot_drop_or_hide_its_owners(device, mesh_run_args_type):
+    # The mesh run args keep their own owners in the instance dict too.
+    output = counter_output(device)
+    semaphore = global_semaphore(device, 0)
+    run_args = E.ProgramRunArgs(tensor_args={"out": output}, global_semaphore_args={"counter": semaphore})
+    references = sys.getrefcount(semaphore)
+    mesh_run_args = mesh_run_args_type(programs=[(mesh_range(device), run_args)])
+    assert sys.getrefcount(semaphore) == references + 1
+    assert mesh_run_args.programs[0][1].tensor_args["out"] is output
     assert mesh_run_args.programs[0][1].global_semaphore_args["counter"] is semaphore
 
 

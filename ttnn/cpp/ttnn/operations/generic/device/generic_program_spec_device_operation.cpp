@@ -299,12 +299,12 @@ void check_global_semaphore_args(
             "generic_op: run_args.global_semaphore_args has a GlobalSemaphore for '{}', which the ProgramSpec does not "
             "declare",
             name);
+        // The semaphore's MeshDevice may since have been closed, so the message names only the program's.
         TT_FATAL(
             semaphore.get().device() == program_device,
-            "generic_op: the GlobalSemaphore for '{}' is on another MeshDevice than the one the program runs on "
-            "(MeshDevice {} instead of {})",
+            "generic_op: the GlobalSemaphore for '{}' is on another MeshDevice than the one the program runs on, "
+            "MeshDevice {}",
             name,
-            semaphore.get().device()->id(),
             program_device->id());
     }
 }

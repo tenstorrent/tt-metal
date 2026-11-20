@@ -1269,8 +1269,10 @@ TEST_F(MeshDevice1x2Fixture, TestGenericOpProgramSpecRejectsAGlobalSemaphoreOnAn
     const auto expect_rejected = [&] {
         EXPECT_THAT(
             [&] { ttnn::experimental::generic_op({output}, other_program.spec, other_program.run_args); },
-            ThrowsMessage<std::exception>(
-                HasSubstr("the GlobalSemaphore for 'sem' is on another MeshDevice than the one the program runs on")));
+            ThrowsMessage<std::exception>(HasSubstr(
+                "the GlobalSemaphore for 'sem' is on another MeshDevice than the one the program runs on, "
+                "MeshDevice " +
+                std::to_string(program_mesh->id()))));
     };
     expect_rejected();
 
