@@ -34,6 +34,7 @@ from ttml.common.utils import (
     resolve_pad_token_id,
     round_up_to_tile,
     validate_clip_grad_norm,
+    validate_precision,
 )
 from ttml.modules import RunMode
 
@@ -1111,6 +1112,7 @@ class GRPOTrainer:
                 "would apply its training_config.precision a second time, after the weights load; pass that block as "
                 "precision=."
             )
+        validate_precision(precision)  # a typo stops here, before the device opens and the model is built
         if not callable(dataset_func):
             raise TypeError("GRPOTrainer: 'dataset_func' must be a zero-argument callable returning the dataset.")
         _validate_remote_inputs(config, transformer_config, device_config, model_source)

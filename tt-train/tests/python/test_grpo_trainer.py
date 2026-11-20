@@ -561,6 +561,29 @@ def test_grpo_trainer_rejects_a_whole_config_as_optimizer_dict(expect_error):
         )
 
 
+@pytest.mark.parametrize(
+    "precision, error, message",
+    [
+        ({"master_dtpye": "float32"}, RuntimeError, "Unknown key precision.master_dtpye"),
+        ({"reduce_dtype": "float16"}, RuntimeError, 'precision.reduce_dtype must be "bfloat16" or "float32"'),
+        ("float32", TypeError, "precision must be a dict"),
+    ],
+)
+def test_grpo_trainer_checks_the_precision_block_in_its_constructor(expect_error, precision, error, message):
+    """A typo in ``precision=`` stops the constructor before it opens the device and builds the model. No device
+    needed: the other arguments are never read."""
+    with expect_error(error, message):
+        GRPOTrainer(
+            transformer_config=None,
+            device_config=None,
+            model_source="unused",
+            dataset_func=lambda: None,
+            config=None,
+            optimizer_dict={"type": "AdamW", "lr": 1.0e-3},
+            precision=precision,
+        )
+
+
 @pytest.mark.requires_device
 def test_policy_forward_is_causal(patch_llama_weight_loading):
     """A change to the last token changes no earlier -log pi; full attention would change them."""

@@ -617,7 +617,7 @@ Qwen3 is sharded before that, in the lazy and the eager build alike, so the bloc
 holds the whole model in fp32. `None` (default) means no block: the parameters keep their dtype and no reduce dtype is
 stored. fp32 master weights (`master_dtype: float32`) need `"type": "AdamW"`, because `MorehAdamW` takes bf16
 parameters only. `reduce_dtype: float32` works with either optimizer and also adds up the micro-batches' gradients in
-fp32.
+fp32. The constructor checks the block before it opens the device, so a typo in a dict built by hand stops there too.
 
 ---
 
