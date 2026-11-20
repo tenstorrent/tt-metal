@@ -20,7 +20,7 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include "dispatch_s.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "impl/context/context_descriptor.hpp"
 #include "impl/debug/inspector/inspector.hpp"
 #include <tt-umd/types/core_coordinates.hpp>

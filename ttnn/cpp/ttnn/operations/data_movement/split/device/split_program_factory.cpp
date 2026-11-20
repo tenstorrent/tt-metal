@@ -16,7 +16,6 @@
 namespace ttnn::prim {
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 ttnn::device_operation::ProgramArtifacts SplitProgramFactory::create_program_artifacts(
     const SplitParams& operation_attributes, const SplitInputs& tensor_args, std::vector<Tensor>& tensor_return_value) {
