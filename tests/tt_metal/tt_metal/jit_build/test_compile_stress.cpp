@@ -306,8 +306,6 @@ protected:
     }
 
     void SetUp() override {
-        // Repeated in case this gtest still runs the test after a SetUpTestSuite failure.
-        reject_compile_stress_mock_quasar();
         if (use_mock_mode()) {
             experimental::configure_mock_mode(
                 get_mock_arch_from_env(), tt::parse_env<std::uint32_t>("TT_METAL_COMPILE_STRESS_NUM_CHIPS", 1));
