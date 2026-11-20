@@ -919,12 +919,19 @@ class StackPrefixCache:
                 vLLM cuts long prompts there, ``prefill_chunk_alignment``) also writes the slot's state into a reserved
                 pool entry inside its prefill trace (``snapshot_after``), registered under the chained hash of tokens
                 [0, end) once the call returned; a prefix registered already is not snapshotted again; the store
-                reuses its least recently used unpinned entry when the pool is full; above ``PREFIX_HEAD`` tokens a
+                reuses its least recently used unread entry when the pool is full; above ``PREFIX_HEAD`` tokens a
                 request keeps only its latest snapshot (the next turn of a conversation extends its whole prompt):
-                its previous one is evicted when the next commits, unless a slot reads or a hit pins it;
+                its previous one is evicted when the next commits, unless a slot reads it or a prefill call holds it;
       confirm   (the plugin's scheduler, before it commits vLLM's hit) the longest registered position <= vLLM's
-                proposal whose pages are still resident, else 0; that entry is pinned (never reused) until the
-                request's prefill attaches it;
+                proposal whose pages are still resident, else 0. Pure: the scheduler asks at every attempt to admit a
+                waiting request, with no request identity and no abort notice, so an answer holds nothing -- a request
+                deferred or aborted after it leaves the store as it was;
+      hold      the prefill call that serves a hit holds its entry from the call's start to its return (``holding``):
+                vLLM admits a request and runs its first chunk in one engine step, every eviction is a prefill call's
+                (its reservations, restores, commits), and the engine thread (the uniproc executor, the only one the
+                plugin admits a confirmer with) runs no other prefill call between the confirmation that admits the
+                request and this one; inside the call, no other row's snapshot, host restore or exact-split call
+                evicts the held entry;
       attach    a NEW request admitted at start > 0 (vLLM's num_computed_tokens = the confirmed position) starts from
                 the entry (``prefix_attach``) on vLLM's cached blocks; without an entry at exactly that position or with
                 a block of [0, start) evicted meanwhile it is prefilled from position 0 instead (the plugin passes the
@@ -978,8 +985,8 @@ class StackPrefixCache:
             sig=signature(model="GLM-5.3-Flash", adapter="stack", max_batch=max_batch),
         )
         self.lock = threading.Lock()
-        self.pins: OrderedDict = OrderedDict()  # prompt fingerprint -> the key of the entry its confirmed hit reads
-        self.pin_cap = 4 * int(max_batch)  # hits confirmed but never scheduled (aborted while waiting) expire
+        # the current prefill call's holds (``holding``): plugin slot -> (start, key, running key, entry or None)
+        self._held: dict = {}
         self._pending: list = []  # the current prefill call's reserved snapshots: (key, n_tokens, pages, entry, slot)
         self.head = PREFIX_HEAD  # snapshots at or below it are kept; above it one (the latest) per request
         self.tail: dict = {}  # generator slot -> the key of its request's latest snapshot above the head
@@ -1000,7 +1007,7 @@ class StackPrefixCache:
         self.stats.update(spill_s=0.0, restore_s=0.0, export_wait_s=0.0)
         self.base: dict = {}  # generator slot -> the key of the entry its request attached (dominated past it)
         # F46: generator slot -> its request's running key (prefix_cache.KeyChain, plan's keys); the scheduler's
-        # confirmations memoized per prompt list: id -> (key scheme, a copy of the list, fingerprint, block hashes)
+        # confirmations memoized per prompt list: id -> (key scheme, a copy of the list, block hashes)
         self.chains: dict = {}
         self._memo: OrderedDict = OrderedDict()
         self._memo_lock = threading.Lock()
@@ -1219,36 +1226,46 @@ class StackPrefixCache:
         finally:
             e.readers -= 1
 
-    # ---- pins: a confirmed hit's entry is never reused before its request's prefill attaches it
-    def _pin(self, fp: int, e) -> None:
-        e.readers += 1
-        self.pins[fp] = e.key
-        while len(self.pins) > self.pin_cap:
-            _, k = self.pins.popitem(last=False)
-            self._unpin(k)
-
-    def _unpin(self, key: str) -> None:
-        e = self.store.entries.get(key)
-        if e is not None and e.readers > 0:
-            e.readers -= 1
-
-    def _take_pin(self, key: str) -> None:
-        fp = next((f for f, k in self.pins.items() if k == key), None)
-        if fp is not None:
-            del self.pins[fp]
-            self._unpin(key)
+    # ---- holds: the prefill call that serves a hit keeps its entry until the call returns
+    @contextlib.contextmanager
+    def holding(self, rows: dict):
+        """an outer prefill call (worker thread) holds the entry of every row it admits at a hit -- ``rows``: plugin
+        slot -> (start, the row's ids from position 0), the NEW requests at start > 0 -- from before its first
+        reservation (an exact-split call, a host restore, any row's chunk-end snapshot) until it returns, so no row of
+        the call evicts another's hit. Nothing else holds a hit between its confirmation and this call: confirm is pure,
+        and every eviction is a prefill call's. Each hold's key and running key serve ``plan`` (the prefix is hashed
+        once). An entry that is gone by now is not held: ``plan`` prefills its request from 0."""
+        held = {}
+        with self.lock:
+            for pslot, (s0, ids) in rows.items():
+                if s0 <= 0 or s0 % self.store.boundary:
+                    continue
+                key, chain = self.store.chain_key(None, ids, s0)
+                held[int(pslot)] = (int(s0), key, chain, self.store.entries.get(key))
+            for _s0, _key, _chain, e in held.values():  # (after every key: a refused one leaves no reader behind)
+                if e is not None:
+                    e.readers += 1
+            self._held = held
+        try:
+            yield
+        finally:
+            with self.lock:
+                for _s0, _key, _chain, e in held.values():
+                    if e is not None and e.readers > 0:  # (the Entry itself: a re-registered key is another one)
+                        e.readers -= 1
+                self._held = {}
 
     # ---- the plugin's hit confirmation (scheduler thread)
     def confirm(self, prompt_token_ids, mm_items, num_computed_tokens: int) -> int:
-        """the cached tokens the device serves for vLLM's proposed hit of ``num_computed_tokens`` (0: none)"""
+        """the cached tokens the device serves for vLLM's proposed hit of ``num_computed_tokens`` (0: none). Pure
+        (vllm-tt-plugin MODEL_CAPABILITIES.md ``confirms_prefix_cache_hits``): it reads the store and holds nothing,
+        so a request confirmed and then deferred or aborted owes no release; the prefill call that admits it holds
+        its entry (``holding``)"""
         if int(num_computed_tokens) <= 0 or mm_items:
             return 0
-        n_ids, fp, hs = self._prompt_keys(prompt_token_ids)
+        n_ids, hs = self._prompt_keys(prompt_token_ids)
         obm = self.gen.dsa_shard_map(self.kv)
         with self.lock:
-            old = self.pins.pop(fp, None)
-            if old is not None:  # the same prompt confirmed again (the scheduler retries a waiting request)
-                self._unpin(old)
             cap = int(num_computed_tokens)
             rmax = self.resume_max
             if rmax is not None and cap > rmax:  # F27: a hit past it leaves a continuation no bucket can plan
@@ -1259,7 +1276,7 @@ class StackPrefixCache:
                 if e is None:
                     break
                 if e.tier in ("device", "host") and resident_blocks(obm, e.pages[: -(-pos // BLOCK_SIZE)]):
-                    self._pin(fp, e)  # (a host entry is imported into the device pool by plan, before its attach)
+                    # (a host entry is imported into the device pool by plan, before its attach)
                     self.stats["confirmed"] += 1
                     self.stats["confirmed_tokens"] += pos
                     self.stats["confirmed_host"] += int(e.tier == "host")
@@ -1269,9 +1286,8 @@ class StackPrefixCache:
         return 0
 
     def _prompt_keys(self, prompt_token_ids) -> tuple:
-        """(length, fingerprint, block hashes) of a prompt the scheduler confirms: the store key of every complete
-        boundary block (store.hashes) and the pins' fingerprint (the last block's key + the tail ids: another prompt
-        shares it only through a sha256 collision). Memoized per token list: vLLM confirms a waiting request again at
+        """(length, block hashes) of a prompt the scheduler confirms: the store key of every complete boundary block
+        (store.hashes). Memoized per token list: vLLM confirms a waiting request again at
         every step it retries it, with the same list (Request.all_token_ids, a read-only view) -- a repeat costs a
         list == list pass over a copy taken with the hashes (0.6 ms at 1 M ids: the same int objects) instead of the
         conversion + chain (48 ms at 1 M under the fast scheme, 165 ms under the text one; F46 l2-34 CPU). Exact: the
@@ -1286,16 +1302,15 @@ class StackPrefixCache:
             if m is not None and m[0] == scheme and len(m[1]) == len(raw) and m[1] == raw:
                 self._memo.move_to_end(mk)
                 self.stats["confirm_memo_hits"] += 1
-                return len(raw), m[2], m[3]
+                return len(raw), m[2]
         hs = self.store.hashes(raw)
-        fp = hash((len(raw), hs[-1] if hs else "", tuple(raw[len(hs) * self.store.boundary :])))
         with self._memo_lock:
-            self._memo[mk] = (scheme, list(raw), fp, hs)
+            self._memo[mk] = (scheme, list(raw), hs)
             self._memo.move_to_end(mk)
             while len(self._memo) > self.memo_cap:
                 self._memo.popitem(last=False)
             self.stats["confirm_memo_misses"] += 1
-        return len(raw), fp, hs
+        return len(raw), hs
 
     def _ids(self, row: torch.Tensor):
         """a token row for a store key: the tensor itself under GLM53_PREFIX_FAST_HASH (its int32 bytes are hashed),
@@ -1309,13 +1324,14 @@ class StackPrefixCache:
         return key
 
     # ---- one prefill call (worker thread)
-    def plan(self, tokens: torch.Tensor, rows: torch.Tensor, gslots: list, starts: list, ends: list, skip=()):
+    def plan(self, tokens: torch.Tensor, rows: torch.Tensor, gslots: list, starts: list, ends: list, skip=(),
+             pslots=None):  # fmt: skip
         """-> (the rows' starts: 0 for a hit that cannot attach; the generator keywords ``prefix_attach`` /
         ``snapshot_after``). A row at start > 0 in a generator slot that holds no live request is a NEW request vLLM
         admitted with its first ``start`` tokens cached (a continuation's slot is live). ``tokens`` = every row's
         history from position 0, ``rows`` = the trimmed page-table rows. Rows in ``skip`` (image requests) neither
         attach (one admitted at start > 0 is prefilled from 0; the multimodal plan already re-runs those) nor
-        snapshot."""
+        snapshot. ``pslots``: the rows' plugin slots, under which the call's holds are found (``holding``)."""
         starts = [int(v) for v in starts]
         attach, snap = {}, {}
         obm = self.gen.dsa_shard_map(self.kv)
@@ -1336,14 +1352,16 @@ class StackPrefixCache:
                         f"GLM53 stack prefix: generator slot {g}'s hit at {s0}: an image request, prefilled from 0"
                     )
                     continue
-                key = self._key(tokens, i, g, s0) if s0 % self.store.boundary == 0 else None
+                held = self._held.get(int(pslots[i])) if pslots is not None else None
+                if held is not None and held[0] == s0:  # (holding: the key and running key at s0, hashed once)
+                    key, self.chains[int(g)] = held[1], held[2]
+                else:
+                    key = self._key(tokens, i, g, s0) if s0 % self.store.boundary == 0 else None
                 e = self.store.entries.get(key) if key is not None else None
                 blocks = rows[i, : -(-s0 // BLOCK_SIZE)].tolist()
                 host = e is not None and e.tier == "host"
                 if host and e.n_tokens == s0 and resident_blocks(obm, blocks):
-                    self._restore(key, e)  # (still pinned by its confirmation: the host tier keeps it meanwhile)
-                if key is not None:
-                    self._take_pin(key)
+                    self._restore(key, e)  # (held by this call: the host tier keeps it meanwhile)
                 if e is not None and e.tier == "device" and e.n_tokens == s0 and resident_blocks(obm, blocks):
                     self.store.attach(key, g)
                     attach[i] = int(e.device_entry)
@@ -1394,7 +1412,7 @@ class StackPrefixCache:
                 if key in self.store.entries or key in planned:
                     self.stats["snapshots_skipped"] += 1
                     continue
-                ent = self.store.reserve_device()  # the least recently used unpinned entry when the pool is full
+                ent = self.store.reserve_device()  # the least recently used unread entry when the pool is full
                 if ent is None:
                     self.stats["snapshots_skipped"] += 1
                     continue
@@ -1466,7 +1484,7 @@ class StackPrefixCache:
                         elif self.store.dominate(base):
                             self.stats["dominated"] += 1
                     self.base.pop(g, None)
-                if n > self.head:  # the request's previous tail snapshot is superseded (free unless read / pinned)
+                if n > self.head:  # the request's previous tail snapshot is superseded (free unless read / held)
                     prev = self.tail.get(g)
                     old = self.store.entries.get(prev) if prev is not None and prev != key else None
                     if old is not None and old.readers == 0 and old.n_tokens > self.head:
@@ -1498,7 +1516,7 @@ class StackPrefixCache:
 
     def report(self) -> dict:
         with self.lock:
-            return {**self.store.report(), "pins": len(self.pins), "exports_pending": len(self._exports), **self.stats}
+            return {**self.store.report(), "exports_pending": len(self._exports), **self.stats}
 
 
 class GLM53StackForCausalLM:
@@ -1789,6 +1807,42 @@ class GLM53StackForCausalLM:
         sampling_params=None,
         **kwargs,
     ):
+        """the plugin's prefill (``_prefill_forward``). GLM53_STACK_PREFIX: the call holds the snapshot entry of every
+        new request it admits at a hit until it returns (``StackPrefixCache.holding``; the exact split's inner call is
+        part of its outer call)"""
+        hold = contextlib.nullcontext()
+        if self.prefix is not None and start_pos is not None and not kwargs.get("_exact_inner", False):
+            hold = self.prefix.holding(self._hit_rows(tokens, start_pos, empty_slots, kv_cache))
+        with hold:
+            return self._prefill_forward(tokens, page_table, kv_cache, enable_trace, prompt_lens, start_pos, empty_slots,
+                                         sampling_params, **kwargs)  # fmt: skip
+
+    def _hit_rows(self, tokens, start_pos, empty_slots, kv_cache) -> dict:
+        """a prefill call's NEW requests admitted at start > 0 (``_admit``'s rule: a plugin slot whose generator slot
+        holds no live request; a continuation's is live) -> {plugin slot: (start, the row's ids from position 0)}"""
+        tokens = torch.as_tensor(tokens)
+        tokens = tokens[None] if tokens.dim() == 1 else tokens
+        starts = [int(v) for v in torch.as_tensor(start_pos).reshape(-1).tolist()]
+        slots = list(range(len(starts))) if empty_slots is None else [int(s) for s in empty_slots]
+        live = set(self.gen.live_slots(self._kv(kv_cache)))
+        return {
+            s: (st, tokens[i])
+            for i, (s, st) in enumerate(zip(slots, starts))
+            if st > 0 and i < tokens.shape[0] and 0 <= s < len(self._alias) and self._alias[s] not in live
+        }
+
+    def _prefill_forward(
+        self,
+        tokens: torch.Tensor,
+        page_table=None,
+        kv_cache=None,
+        enable_trace: bool = True,
+        prompt_lens=None,
+        start_pos=None,
+        empty_slots=None,
+        sampling_params=None,
+        **kwargs,
+    ):
         """model_runner.py:4009-4063 / MODEL_EXECUTION.md:37-61: row ``i`` of ``tokens [B, T]`` (history from position
         0) is the chunk ``tokens[i, start_pos[i]:prompt_lens[i]]`` of the request in plugin slot ``empty_slots[i]``
         (allocated by the plugin: model_runner.py:1299-1364; a first chunk takes the lowest free generator slot, a
@@ -1867,7 +1921,7 @@ class GLM53StackForCausalLM:
         extra = {"mm_rows": plan["rows"]} if plan is not None and plan["rows"] else {}
         if self.prefix is not None:  # GLM53_STACK_PREFIX: attach confirmed hits, snapshot the on-grid chunk ends
             skip = plan["vision"] if plan is not None else ()  # image requests neither attach nor snapshot
-            gen_starts, pfx = self.prefix.plan(tokens, rows, gslots, gen_starts, ends, skip=skip)
+            gen_starts, pfx = self.prefix.plan(tokens, rows, gslots, gen_starts, ends, skip=skip, pslots=slots)
             extra.update(pfx)
             lens = [e - s for s, e in zip(gen_starts, ends)]
             chunk = torch.zeros(B, max(lens), dtype=torch.int64)
