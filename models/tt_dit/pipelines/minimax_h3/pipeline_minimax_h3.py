@@ -1629,7 +1629,16 @@ class MiniMaxH3Pipeline:
 
     def _dit_weight_mode(self) -> str:
         mode = "resident_adaln_fsdp" if self.dit_fsdp else "resident_adaln"
-        return mode + to_out_weight_tag() + lofi_weight_cache_tag()
+        weights = self._weights_fingerprint(self.transformer_subfolder)
+        return f"{mode}{to_out_weight_tag()}{lofi_weight_cache_tag()}_{weights}"
+
+    def _weights_fingerprint(self, subfolder: str) -> str:
+        """Names, sizes and mtimes of a partition's safetensors, so changed weights never load a stale cache."""
+        digest = hashlib.sha256()
+        for path in sorted((self.weights_dir / subfolder).glob("*.safetensors")):
+            stat = path.stat()
+            digest.update(f"{path.name}:{stat.st_size}:{stat.st_mtime_ns}\n".encode())
+        return digest.hexdigest()[:12]
 
     def _build_transformer(self) -> MiniMaxH3Transformer3DModel:
         config = {k: v for k, v in self.transformer_config.items() if k not in ("rope_freq_dim", "rope_theta")}
