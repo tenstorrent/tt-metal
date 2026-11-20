@@ -2386,5 +2386,119 @@ TEST_F(DriscService, PerfBench) {
     expect_all_stopped(all_banks());
 }
 
+// Steady copy load on every seat for DRISC_SERVICE_LOAD_SECONDS (skipped when unset), to measure what other work on the
+// seats costs the copies: each of the 16 seats keeps its queue full of DRISC_SERVICE_LOAD_OP commands (local: CMD_LOCAL
+// in the seat's bank; d2h: the seat's bank to host memory), 1 MiB each, in batches of 8. A second client on bank 0
+// times one 64 B CMD_LOCAL at a time on the NoC1 seat, the latency a small command sees. Every 50 ms it appends
+// "<unix ns> <GB/s> <probe median us> <probe max us> <probes>" to DRISC_SERVICE_LOAD_REPORT, so the samples can be
+// lined up with another process's timeline.
+TEST_F(DriscService, SteadyLoad) {
+    const char* seconds_env = std::getenv("DRISC_SERVICE_LOAD_SECONDS");
+    if (seconds_env == nullptr) {
+        GTEST_SKIP() << "Set DRISC_SERVICE_LOAD_SECONDS to run";
+    }
+    using clock = std::chrono::steady_clock;
+    const double seconds = std::strtod(seconds_env, nullptr);
+    const char* op_env = std::getenv("DRISC_SERVICE_LOAD_OP");
+    const bool d2h = op_env != nullptr && std::string_view(op_env) == "d2h";
+    const char* report_env = std::getenv("DRISC_SERVICE_LOAD_REPORT");
+    std::ofstream report(report_env != nullptr ? report_env : "/dev/null");
+
+    constexpr uint64_t dram_base = 0xA0000000ull;  // 2.5 GiB: past every test region and the profiler's spool
+    constexpr uint64_t dram_span = 64ull << 20;
+    constexpr uint64_t host_size = 64ull << 20;
+    constexpr uint32_t size = 1u << 20;
+    constexpr uint32_t batch = 8;
+    const uint32_t banks = device().num_banks();
+    HostMemory host(device(), host_size);
+
+    std::optional<Client> client;
+    attach(client, all_banks());
+    std::vector<BenchLane> lanes;
+    for (uint32_t bank = 0; bank < banks; bank++) {
+        for (uint32_t noc = 0; noc < 2; noc++) {
+            SeatClient& seat = client->seat(bank, noc);
+            BenchLane& lane = lanes.emplace_back(BenchLane{&seat, {}});
+            const uint64_t host_slice = host_size / (2 * banks);
+            for (uint32_t i = 0; i < batch; i++) {
+                const uint64_t a = dram_base + noc * dram_span + uint64_t{i} * size;
+                if (d2h) {
+                    const uint64_t h = (2 * bank + noc) * host_slice + (uint64_t{i} * size) % host_slice;
+                    lane.batch.push_back(abi::make_single_command(
+                        device().dram_endpoint(bank, a, noc), seat.host_endpoint(host.device_addr(h)), size));
+                } else {
+                    lane.batch.push_back(abi::make_local_command(
+                        device().bank_offset(bank) + a, device().bank_offset(bank) + a + 2 * dram_span, size));
+                }
+            }
+        }
+    }
+    std::optional<Client> probe_client;
+    attach(probe_client, {0});
+    SeatClient& probe = probe_client->seat(0, 1);
+    const uint64_t probe_addr = device().bank_offset(0) + dram_base + 4 * dram_span;
+    const abi::KernelCommand probe_cmd = abi::make_local_command(probe_addr, probe_addr + 4096, 64);
+
+    std::optional<uint64_t> probe_ticket;
+    clock::time_point probe_start;
+    std::vector<double> probe_us;
+    const auto completed = [&] {
+        uint64_t entries = 0;
+        for (const BenchLane& lane : lanes) {
+            entries += lane.issued - lane.seat->in_flight();
+        }
+        return entries;
+    };
+    const auto end = clock::now() + std::chrono::duration_cast<clock::duration>(std::chrono::duration<double>(seconds));
+    auto window_start = clock::now();
+    uint64_t window_entries = completed();
+    uint64_t total_entries = 0;
+    while (clock::now() < end) {
+        for (BenchLane& lane : lanes) {
+            for (uint32_t k = 0; k < abi::CLIENT_QUEUE_CAPACITY; k++) {
+                if (!lane.seat->issue_batch(lane.batch).has_value()) {
+                    break;
+                }
+                lane.issued++;
+            }
+        }
+        if (probe_ticket.has_value() && probe.done(*probe_ticket)) {
+            probe_us.push_back(std::chrono::duration<double, std::micro>(clock::now() - probe_start).count());
+            probe_ticket.reset();
+        }
+        if (!probe_ticket.has_value()) {
+            probe_start = clock::now();
+            probe_ticket = probe.issue(probe_cmd);
+        }
+        const auto now = clock::now();
+        if (now - window_start >= std::chrono::milliseconds(50)) {
+            const uint64_t entries = completed();
+            const double gbps = double(entries - window_entries) * batch * size /
+                                std::chrono::duration<double>(now - window_start).count() / 1e9;
+            total_entries += entries - window_entries;
+            std::sort(probe_us.begin(), probe_us.end());
+            const double median = probe_us.empty() ? 0.0 : probe_us[probe_us.size() / 2];
+            const double max = probe_us.empty() ? 0.0 : probe_us.back();
+            const auto unix_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                     std::chrono::system_clock::now().time_since_epoch())
+                                     .count();
+            report << unix_ns << ' ' << gbps << ' ' << median << ' ' << max << ' ' << probe_us.size() << '\n';
+            report.flush();
+            probe_us.clear();
+            window_start = now;
+            window_entries = entries;
+        }
+    }
+    for (BenchLane& lane : lanes) {
+        lane.seat->drain(drain_timeout);
+    }
+    probe.drain(drain_timeout);
+    fmt::print(
+        "LOAD {} {:.3f} GB/s over {:.1f} s\n",
+        d2h ? "d2h" : "local",
+        total_entries * double(batch) * size / seconds / 1e9,
+        seconds);
+}
+
 }  // namespace
 }  // namespace tt::tt_metal
