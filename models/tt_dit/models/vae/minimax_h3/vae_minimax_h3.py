@@ -512,6 +512,10 @@ class MiniMaxH3Vae:
         else:
             module.load_torch_state_dict(state)
 
+    def load_decoder(self) -> None:
+        """Load the decoder weights onto the device now (cache hit: one tensorbin read), not on the first decode."""
+        self._ensure_loaded(self.decoder, self._decoder_subfolder())
+
     def load_state(self, state: dict[str, torch.Tensor]) -> None:
         """Prepare and retain both halves of the checkpoint for cache-miss reloads."""
         self._encoder_state = prepare_encoder_state(state)

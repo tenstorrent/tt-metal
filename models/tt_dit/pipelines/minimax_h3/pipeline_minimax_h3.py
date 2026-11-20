@@ -1053,6 +1053,9 @@ class MiniMaxH3Pipeline:
             self._prepare_transformer()
         self._prepare_text_encoder()
         self._prepare_audio_decoder()
+        if self.coresident:
+            # Upload the converted decoder weights at model load, so the first gen never does.
+            self._vae.load_decoder()
         dram_probe.register(self)
 
         if warmup:
@@ -1155,21 +1158,24 @@ class MiniMaxH3Pipeline:
             raise FileNotFoundError(f"no {subfolder}/config.json under {self.weights_dir}")
         return {k: v for k, v in json.loads(path.read_text()).items() if not k.startswith("_")}
 
+    def _safetensors_files(self, subfolder: str) -> list[Path]:
+        """The safetensors files of a partition: the index's shards, else the single file."""
+        directory = self.weights_dir / subfolder
+        index = directory / "diffusion_pytorch_model.safetensors.index.json"
+        if index.is_file():
+            return [directory / shard for shard in sorted(set(json.loads(index.read_text())["weight_map"].values()))]
+        single = directory / "diffusion_pytorch_model.safetensors"
+        if not single.is_file():
+            raise FileNotFoundError(f"no safetensors (sharded or single) under {directory}")
+        return [single]
+
     def _read_safetensors(self, subfolder: str) -> dict[str, torch.Tensor]:
         """A partition's weights, sharded or single-file. `transformer` and `vae` are sharded here."""
         from safetensors.torch import load_file
 
-        directory = self.weights_dir / subfolder
-        index = directory / "diffusion_pytorch_model.safetensors.index.json"
         state: dict[str, torch.Tensor] = {}
-        if index.is_file():
-            for shard in sorted(set(json.loads(index.read_text())["weight_map"].values())):
-                state.update(load_file(str(directory / shard)))
-        else:
-            single = directory / "diffusion_pytorch_model.safetensors"
-            if not single.is_file():
-                raise FileNotFoundError(f"no safetensors (sharded or single) under {directory}")
-            state.update(load_file(str(single)))
+        for path in self._safetensors_files(subfolder):
+            state.update(load_file(str(path)))
         return state
 
     def _transformer_cache_name(self) -> str:
@@ -2007,6 +2013,9 @@ class MiniMaxH3Pipeline:
             dtype="fp32",  # the whole VAE checkpoint is fp32 and the port keeps it there
             get_torch_state_dict=lambda: state,
             ccl_manager=self.vae_ccl_manager,
+            # Keyed by the checkpoint's content, so a changed VAE checkpoint or module layout rebuilds the leaf
+            # instead of serving stale converted weights.
+            sources=self._safetensors_files("vae"),
         )
         if self.vae_residency_mode == "shard_decoder" and module is self._vae.decoder:
             # Shard and gather once at each host load, so the shard and gather programs compile with the load (the
