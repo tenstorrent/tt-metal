@@ -854,3 +854,7 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   index-key decodes, DS41-336). It failed only the path check on results/PB.6L_packed_walls.md (same as PB.5C):
   FRAMEWORK. Paused, aborted attempt 2 (OV-64), F292: core.gate.outputs_in includes results/<task>_*.md (selftest),
   classified PB.6L as framework so the resume runs only the gate's unpassed units and commits, no new agent.
+- 11:08 UTC the resume still started PB.6L attempt 3 (classify --as framework covers a gate failure, not an attempt that failed the path check before its gate: framework follow-up). Left it running: its brief carries OV-64 (nothing to redo, exit); then the gate reuses the passed units.
+- 11:10 UTC PB.6L attempt 3 exited (nothing to redo), WAITING. DECIDED: accept (gathers hidden at ~1M: 4x2k@1M 52.3k
+  serving tok/s, was 40.2k; targets kept). Applied the queued patches: PB.7 (glued packing, owner 09:00), PB.8 (mhc_post,
+  5120 accept gate + A/B on MHC_POST_V2) and PB.8P (its packed 8192 half). Orchestrator --until PB.8P --attempts 20.
