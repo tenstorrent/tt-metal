@@ -283,16 +283,18 @@ inline void _llk_packer_set_math_semaphore_()
 }
 
 /**
- * @brief Finishes a dest section: waits for pack, clears the dest section, and signals math it is ready to reuse.
+ * @brief Zero the DEST bank(s) Packer 0 has just read, once it has drained, so the next section of that bank starts
+ * from zero (the FPU accumulates into DEST: matmul, reduce, ...).
  *
- * Uses the semaphore math <-> pack synchronization scheme (the alternative to @ref _llk_pack_dest_dvalid_section_done_).
+ * SyncHalf clears the bank at the packer's current dest offset, SyncFull clears all of DEST. Shared by the
+ * semaphore section done and the unpack-to-dest section done (metal llk_pack_dest_section_done), which must both
+ * clear the bank before handing it back.
  *
- * @tparam PACK_SEL: Packer to configure, values = <p_pacr::PACK0/PACK1>
  * @tparam DST: Destination register buffering mode, values = <DstSync::SyncHalf/DstSync::SyncFull>
  * @tparam EN_32BIT_DEST: True if the math destination register is set to 32-bit mode, values = <true/false>
  */
-template <std::uint32_t PACK_SEL, DstSync DST, bool EN_32BIT_DEST>
-inline void _llk_pack_dest_semaphore_section_done_()
+template <DstSync DST, bool EN_32BIT_DEST>
+inline void _llk_pack_zero_dest_section_()
 {
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::NOTHING, p_stall::PACK); // wait for pack to finish
 
@@ -314,6 +316,21 @@ inline void _llk_pack_dest_semaphore_section_done_()
         static_assert(DST == DstSync::SyncHalf);
         TT_ZEROACC(p_zeroacc::CLR_HALF, EN_32BIT_DEST, 0, ADDR_MOD_7, dest_register_offset != 0);
     }
+}
+
+/**
+ * @brief Finishes a dest section: waits for pack, clears the dest section, and signals math it is ready to reuse.
+ *
+ * Uses the semaphore math <-> pack synchronization scheme (the alternative to @ref _llk_pack_dest_dvalid_section_done_).
+ *
+ * @tparam PACK_SEL: Packer to configure, values = <p_pacr::PACK0/PACK1>
+ * @tparam DST: Destination register buffering mode, values = <DstSync::SyncHalf/DstSync::SyncFull>
+ * @tparam EN_32BIT_DEST: True if the math destination register is set to 32-bit mode, values = <true/false>
+ */
+template <std::uint32_t PACK_SEL, DstSync DST, bool EN_32BIT_DEST>
+inline void _llk_pack_dest_semaphore_section_done_()
+{
+    _llk_pack_zero_dest_section_<DST, EN_32BIT_DEST>();
 
     // Tell math that it can write again
     _llk_packer_set_math_semaphore_();
