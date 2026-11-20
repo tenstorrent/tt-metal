@@ -27,7 +27,7 @@ constexpr std::uint8_t EPILOGUE_DONE_SEM = ckernel::trisc::semaphore::UNPACK_MAT
 
 #ifdef LLK_TRISC_UNPACK
 
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_unpack_matmul.h"
 #include "params.h"
 
@@ -56,10 +56,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         set_ttsync_enables<TRACK_ALL>(ckernel::TRISC_ID);
         // Matmul flips the unpacker roles: operand A drives UNPACR1/SrcB, operand B drives UNPACR0/SrcA.
-        const auto bfd_a =
-            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(tensor_shape_A, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
-        const auto bfd_b =
-            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(tensor_shape_B, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
+        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP1>(tensor_shape_A, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+        constexpr std::uint8_t bfd_a = ckernel::trisc::BFD_ID_UNP1;
+        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(tensor_shape_B, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
+        constexpr std::uint8_t bfd_b = ckernel::trisc::BFD_ID_UNP0;
         _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_B>(static_cast<DataFormat>(formats.unpack_A_dst));
         _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_A>(static_cast<DataFormat>(formats.unpack_B_dst));
         _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(bfd_a, bfd_b, CT_DIM, RT_DIM, KT_DIM, tensor_shape_A, tensor_shape_B);
@@ -175,8 +175,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_ISOLATE_SFPU
 
 #include "cfg_defines.h"
+#include "ckernel_buf_desc.h"
 #include "cmath_common.h"
-#include "llk_bfd_alloc.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_pack_common.h"
@@ -264,7 +264,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr bool active = PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE;
     constexpr bool full   = PERF_RUN_TYPE == PerfRunType::L1_TO_L1;
 
-    std::uint8_t bfd_w_scale_lo = 0, bfd_w_scale_hi = 0, bfd_acc = 0, bfd_a_scale = 0, bfd_pack = 0, bfd_scratch = 0;
+    // One fixed BFD per engine slice, so the two phases of a loop re-program them: the group phase
+    // uses w_scale_lo/hi + scratch, the epilogue uses acc/a_scale + pack.
+    constexpr std::uint8_t bfd_w_scale_lo = ckernel::trisc::BFD_ID_UNP2_SLICE0;
+    constexpr std::uint8_t bfd_w_scale_hi = ckernel::trisc::BFD_ID_UNP2_SLICE1;
+    constexpr std::uint8_t bfd_acc        = ckernel::trisc::BFD_ID_UNP2_SLICE0;
+    constexpr std::uint8_t bfd_a_scale    = ckernel::trisc::BFD_ID_UNP2_SLICE1;
+    constexpr std::uint8_t bfd_pack       = ckernel::trisc::BFD_ID_PACK1;
+    constexpr std::uint8_t bfd_scratch    = ckernel::trisc::BFD_ID_PACK1;
+    const ckernel::TensorShape srcs_shape = ckernel::make_tensor_shape(static_cast<std::uint8_t>(srcs_ydim), srcs_dims::XDIM, srcs_dims::ZDIM, srcs_dims::ZDIM);
+    // s_w: one slice per (group, tile column, 16-column half). The halves get BFDs one slice apart because
+    // moving the L1 index between the two UNPACR2s made both read the second half.
+    constexpr std::uint32_t slice_bytes_16B = 4 /*rows*/ * 16 /*cols*/ * 4 /*bytes*/ / 16;
+    auto program_group_bfds                 = [=]()
+    {
+        ckernel::trisc::program_bfd<bfd_w_scale_lo>(srcs_shape, L1_ADDRESS(buffer_C[0]), ckernel::to_underlying(fp32));
+        ckernel::trisc::program_bfd<bfd_w_scale_hi>(srcs_shape, L1_ADDRESS(buffer_C[0]) + slice_bytes_16B, ckernel::to_underlying(fp32));
+        ckernel::trisc::program_bfd<bfd_scratch>(srcs_shape, L1_ADDRESS(buffer_S[0]), ckernel::to_underlying(fp32));
+    };
     {
         START_PERF_MEASURE("INIT")
         if constexpr (full)
@@ -281,30 +298,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if constexpr (active)
         {
-            const ckernel::TensorShape srcs_shape =
-                ckernel::make_tensor_shape(static_cast<std::uint8_t>(srcs_ydim), srcs_dims::XDIM, srcs_dims::ZDIM, srcs_dims::ZDIM);
-
-            // s_w: one slice per (group, tile column, 16-column half). The halves get BFDs one slice apart because
-            // moving the L1 index between the two UNPACR2s made both read the second half.
-            constexpr std::uint32_t slice_bytes_16B = 4 /*rows*/ * 16 /*cols*/ * 4 /*bytes*/ / 16;
-            bfd_w_scale_lo                          = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp2_Slice0>(
-                srcs_shape, L1_ADDRESS(buffer_C[0]), ckernel::to_underlying(fp32));
-            bfd_w_scale_hi = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp2_Slice1>(
-                srcs_shape, L1_ADDRESS(buffer_C[0]) + slice_bytes_16B, ckernel::to_underlying(fp32));
-            // Epilogue inputs: the accumulated result read back, and s_a[m] expanded to one tile per
-            // output tile.
-            bfd_acc = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp2_Slice0>(
-                srcs_shape, L1_ADDRESS(buffer_Res[0]), ckernel::to_underlying(fp32));
-            bfd_a_scale = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp2_Slice1>(
-                srcs_shape, L1_ADDRESS(buffer_T[0]), ckernel::to_underlying(fp32));
             _llk_unpack_configure_unary_<p_unpacr::UNP_S>(fp32);
 
-            // SrcS slice 2 -> L1: the epilogue result, or a scratch slice that only closes the SrcS
+            // SrcS slice 2 -> L1 (PACK1): the epilogue result, or a scratch slice that only closes the SrcS
             // bank cycle (unpack -> SFPU -> PACK1) after the scale loads.
-            bfd_pack =
-                ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack1>(srcs_shape, L1_ADDRESS(buffer_Res[0]), ckernel::to_underlying(fp32));
-            bfd_scratch =
-                ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack1>(srcs_shape, L1_ADDRESS(buffer_S[0]), ckernel::to_underlying(fp32));
             _llk_pack_hw_configure_<p_pacr::PACK1, false /*EN_32BIT_DEST*/>(fp32, ckernel::ReluConfig::none());
 
             cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + TRISC_ID] = true;
@@ -317,6 +314,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // LREG4/5: columns 0-15 even/odd, LREG6/7: columns 16-31 even/odd.
             record_face_seq<FACE_SEQ_SLOT[0], p_sfpu::LREG4, p_sfpu::LREG5>();
             record_face_seq<FACE_SEQ_SLOT[1], p_sfpu::LREG6, p_sfpu::LREG7>();
+
+            if constexpr (!full)
+            {
+                program_group_bfds(); // nothing re-programs them: once is enough
+            }
         }
         PROFILER_SYNC();
     }
@@ -326,6 +328,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
+                if constexpr (full)
+                {
+                    program_group_bfds(); // the epilogue re-programs these ids every loop
+                }
                 // ---- Per group: Dest partial -> float(partial) * s_w[g, n], in place ----
                 for (std::uint32_t group = 0; group < num_groups; ++group)
                 {
@@ -369,6 +375,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 if constexpr (full)
                 {
                     // ---- Epilogue: out = acc * s_a[m], written over the accumulated tiles ----
+                    ckernel::trisc::program_bfd<bfd_acc>(srcs_shape, L1_ADDRESS(buffer_Res[0]), ckernel::to_underlying(fp32));
+                    ckernel::trisc::program_bfd<bfd_a_scale>(srcs_shape, L1_ADDRESS(buffer_T[0]), ckernel::to_underlying(fp32));
+                    ckernel::trisc::program_bfd<bfd_pack>(srcs_shape, L1_ADDRESS(buffer_Res[0]), ckernel::to_underlying(fp32));
                     // PACK0 posts once it has written the last group of this loop. STALL_SYNC holds
                     // the SEMGET (it runs on the sync unit), STALL_UNPACK holds the epilogue reads.
                     _llk_sync_wait_<p_stall::STALL_SYNC | p_stall::STALL_UNPACK, p_stall::STALL_ON_ZERO>(ACC_READY_SEM);
@@ -415,7 +424,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "llk_pack_matmul.h"
@@ -455,8 +464,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (active)
         {
             // The SFPU leaves fp32 in Dest; the Int32 format inferred from the matmul does not apply.
-            const auto bfd_pack =
-                ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(output_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+            ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(output_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+            constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
             _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(DataFormat::Float32, ckernel::ReluConfig::none());
             _llk_pack_matmul_init_(bfd_pack, RT_DIM, CT_DIM, 1 /*num_subblocks_c_dim*/, output_shape);
         }

@@ -2,9 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <map>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "combine_fabric2d_device_operation.hpp"
 #include "kernels/dataflow/combine_fabric2d_kernel_interface.hpp"
@@ -57,6 +59,49 @@ void validate_control_tensor(
         tensor_name,
         shape[-2],
         rows);
+}
+
+// The caller's forwarding buffer. It must be its own allocation: on a cache hit the framework finds the cached
+// program's buffers again by matching them among the tensor args, so a buffer that is also an input leaves it
+// unable to tell them apart.
+void validate_forwarding_buffer(const CombineFabric2dParams& args, const CombineFabric2dInputs& t) {
+    if (!t.forwarding_buffer.has_value()) {
+        return;
+    }
+    const auto& fwd = *t.forwarding_buffer;
+    validate_dram_interleaved(fwd, "forwarding_buffer");
+    // The kernels use its address on this mesh, so a buffer of the same size on another mesh would pass the checks
+    // below and be written as if it were here.
+    TT_FATAL(fwd.device() == args.device, "combine_fabric2d: forwarding_buffer is on another mesh device");
+    std::vector<const tt::tt_metal::Buffer*> inputs = {
+        t.dispatched_buffer.buffer(),
+        t.dispatched_metadata.buffer(),
+        t.expert_token_counts.buffer(),
+        t.expert_region_offsets.buffer(),
+        t.expert_offsets.buffer()};
+    if (t.global_expert_idx_table.has_value()) {
+        inputs.push_back(t.global_expert_idx_table->buffer());
+    }
+    const tt::tt_metal::Buffer* buffer = fwd.buffer();
+    TT_FATAL(
+        std::find(inputs.begin(), inputs.end(), buffer) == inputs.end(),
+        "combine_fabric2d: forwarding_buffer shares its buffer with another argument; pass a separate allocation");
+    const auto spec = forwarding_buffer_spec(args, token_size_bytes(t));
+    const uint32_t page_bytes = static_cast<uint32_t>(spec.compute_page_size_bytes());
+    TT_FATAL(
+        buffer->aligned_page_size() == page_bytes,
+        "combine_fabric2d: forwarding_buffer pages at {} B but the op addresses it in {} B pages; allocate it with "
+        "combine_fabric2d_forwarding_buffer for this emb_dim",
+        buffer->aligned_page_size(),
+        page_bytes);
+    // Only the first pages are used, so one buffer sized for the most links and deepest channels serves every
+    // smaller call.
+    const uint32_t num_pages = static_cast<uint32_t>(spec.logical_shape()[0]);
+    TT_FATAL(
+        buffer->num_pages() >= num_pages,
+        "combine_fabric2d: forwarding_buffer has {} pages but this call needs {}",
+        buffer->num_pages(),
+        num_pages);
 }
 
 }  // namespace
@@ -227,6 +272,7 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
     validate_control_tensor(tensor_args.expert_token_counts, 1, num_routed_experts, "expert_token_counts");
     validate_control_tensor(tensor_args.expert_region_offsets, 1, num_routed_experts, "expert_region_offsets");
     validate_control_tensor(tensor_args.expert_offsets, extent, num_routed_experts, "expert_offsets");
+    validate_forwarding_buffer(args, tensor_args);
     if (!has_expert_table) {
         return;
     }
@@ -250,7 +296,10 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
 }
 
 void CombineFabric2dDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t&, const tensor_args_t&) {}
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // Launches that share a cached program can pass different allocations, so check which one it is every time.
+    validate_forwarding_buffer(args, tensor_args);
+}
 
 CombineFabric2dDeviceOperation::spec_return_value_t CombineFabric2dDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -285,7 +334,8 @@ ttnn::Tensor combine_fabric2d(
     uint32_t num_links,
     uint32_t fwd_vc_pages,
     tt::tt_fabric::Topology topology,
-    const tt::tt_metal::MemoryConfig& memory_config) {
+    const tt::tt_metal::MemoryConfig& memory_config,
+    const std::optional<ttnn::Tensor>& forwarding_buffer) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::combine_fabric2d::CombineFabric2dDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
@@ -304,6 +354,7 @@ ttnn::Tensor combine_fabric2d(
             .dispatched_metadata = dispatched_metadata,
             .expert_token_counts = expert_token_counts,
             .expert_region_offsets = expert_region_offsets,
-            .expert_offsets = expert_offsets});
+            .expert_offsets = expert_offsets,
+            .forwarding_buffer = forwarding_buffer});
 }
 }  // namespace ttnn::prim
