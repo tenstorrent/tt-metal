@@ -127,6 +127,7 @@ class DecodeAttention:
                 sliding_window_size=cfg.sliding_window,
                 program_config=prefill_sdpa_program_config(cfg.head_dim, q_attention.shape[-2], cfg.sliding_window),
                 compute_kernel_config=self.compute,
+                precision=ttnn.SDPAPrecision.ACCURATE,
             )
             if history:
                 attention = attention[:, :, history : history + q.shape[-2], :]
@@ -154,5 +155,6 @@ class DecodeAttention:
                 scale=1.0,
                 program_config=prefill_sdpa_program_config(cfg.head_dim, q.shape[-2]),
                 compute_kernel_config=self.compute,
+                precision=ttnn.SDPAPrecision.ACCURATE,
             )
         return self.project(attention, False)
