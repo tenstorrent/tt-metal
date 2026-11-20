@@ -8,6 +8,8 @@ rejected arguments. The sweeps (all shapes, long K, rising maxima, every recipe 
 are in tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_recipes.py.
 """
 
+import math
+
 import pytest
 import torch
 import ttnn
@@ -42,6 +44,7 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
     program_config,
     randn,
     reference,
+    sdpa,
     to_device,
 )
 
@@ -64,6 +67,46 @@ def test_sdpa_recipe_large_logits(device, variant, scale):
 @pytest.mark.parametrize("variant", ["balanced", "accurate"])
 def test_sdpa_recipe_offset_rows(device, variant):
     check_offset_rows(device, variant)
+
+
+def exp_edge_inputs(offsets, gain=1.0, exact=None, sq=256, d=128, seed=60):
+    """Scale-1 logits q.k = gain * offsets[key] + a standard normal term: channel 0 carries the per-key offset (q =
+    gain, k = offset; both exact at FAST's LoFi operand widths), the other channels a random term, which the keys in
+    `exact` drop (their logits are exactly gain * offset). K chunks of 256 keys."""
+    sk = offsets.numel()
+    q = randn(1, 1, sq, d, seed=seed) * (1 / math.sqrt(d - 1))
+    k, v = randn(1, 1, sk, d, seed=seed + 1), randn(1, 1, sk, d, seed=seed + 2)
+    if exact is not None:
+        k[0, 0, exact] = 0
+    q[..., 0], k[0, 0, :, 0] = gain, offsets
+    return q.bfloat16(), k.bfloat16(), v
+
+
+# STANDARD's and FAST's score exp (recipe_sfpu.hpp, init_sdpa_score_exp) flushes P to zero below its range at any
+# distance: keys 96 to 768 below the row maximum (natural-log units of the scaled scores), in the first K chunk (the
+# reduce path) and in later ones (the fused chunks, against the reference max). A wrapping or leaking exp gives such
+# keys garbage or negative weights.
+@pytest.mark.parametrize("variant", ["standard", "fast_bf16"])
+def test_sdpa_recipe_exp_far_below(device, variant):
+    key = torch.arange(2048)
+    offsets = torch.tensor([-96.0, -160.0, -256.0, -512.0, -768.0])[key % 5]
+    offsets[key % 7 == 0] = 0
+    q, k, v = exp_edge_inputs(offsets)
+    actual = ttnn.to_torch(sdpa(device, variant, q, k, v, 128, 256, scale=1.0))
+    assert l2_pct(actual, reference(q, k, v, scale=1.0)) < L2_PCT_BOUND[variant]
+
+
+# A row maximum that rises far above the reference max (the first K chunk's): the fused chunks' P overflows the exp's
+# range (from about 20 above the reference max) and the group must be redone, up to the range's end (about 199). Two
+# groups of keys at exactly `rise` and 7/8 of it: their weight ratio must survive.
+@pytest.mark.parametrize("rise", [24.0, 48.0, 96.0, 192.0])
+@pytest.mark.parametrize("variant", ["standard", "fast_bf16"])
+def test_sdpa_recipe_exp_rising_far_above(device, variant, rise):
+    offsets = torch.zeros(2048)
+    offsets[1280:1284], offsets[1284:1288] = 1.0, 0.875
+    q, k, v = exp_edge_inputs(offsets, gain=rise, exact=slice(1280, 1288))
+    actual = ttnn.to_torch(sdpa(device, variant, q, k, v, 128, 256, scale=1.0))
+    assert l2_pct(actual, reference(q, k, v, scale=1.0)) < L2_PCT_BOUND[variant]
 
 
 @pytest.mark.parametrize("variant, mask_kind", [("standard", "key_padding"), ("fast_bfp8", "random")])
