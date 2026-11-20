@@ -74,6 +74,8 @@ jobs:
           HEAD_OWNER: ${{ github.event.workflow_run.head_repository.owner.login }}
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           REQUESTER: ${{ github.event.workflow_run.actor.login }}
+          RUN_CREATED_AT: ${{ github.event.workflow_run.created_at }}
+          MAX_TICK_AGE_SECONDS: 900
         run: |
           if [ "$RUN_PATH" != ".github/workflows/codeowners-group-analysis.yaml" ]; then
             echo "::notice::Ignoring a run of $RUN_PATH"
@@ -162,6 +164,64 @@ jobs:
           }
           if ! markdown_text "$PR_BODY" | grep -qE "$TICKED_LINE"; then
             echo "::notice::The box on PR #$REQUESTED_PR is no longer ticked; nothing to do"
+            exit 0
+          fi
+
+          # The launchpad's transition check is forgeable; confirm from GitHub's edit history.
+          QUERY='query($owner: String!, $name: String!, $number: Int!) {
+            repository(owner: $owner, name: $name) {
+              pullRequest(number: $number) {
+                createdAt
+                author { login }
+                body
+                userContentEdits(first: 100) { pageInfo { hasNextPage } nodes { editedAt editor { login } diff } }
+              }
+            }
+          }'
+          GQL_BODY=$(jq -n --arg q "$QUERY" --arg owner "${GITHUB_REPOSITORY%/*}" --arg name "${GITHUB_REPOSITORY#*/}" \
+                       --argjson number "$REQUESTED_PR" '{query: $q, variables: {owner: $owner, name: $name, number: $number}}')
+          HISTORY=$(curl -sS --fail --max-time 30 -X POST \
+                      -H "Authorization: Bearer $GH_TOKEN" \
+                      --data-binary "$GQL_BODY" https://api.github.com/graphql) || HISTORY=""
+          PR_HISTORY=$(echo "$HISTORY" | jq -c '.data.repository.pullRequest // empty' 2>/dev/null || true)
+          if [ -z "$PR_HISTORY" ]; then
+            post_error "$REQUESTED_PR" "could not read the description's edit history to confirm the tick."
+            exit 0
+          fi
+
+          RUN_EPOCH=$(date -d "$RUN_CREATED_AT" +%s)
+          recent() {
+            local age=$(( RUN_EPOCH - $(date -d "$1" +%s) ))
+            [ "$age" -ge -60 ] && [ "$age" -le "$MAX_TICK_AGE_SECONDS" ]
+          }
+          ticked() { markdown_text "$1" | grep -qE "$TICKED_LINE"; }
+
+          # Newest first, oldest = opening body; use the requester's newest edit before this run.
+          CONFIRMED=false
+          AUTHOR=$(echo "$PR_HISTORY" | jq -r '.author.login // ""')
+          EDIT_COUNT=$(echo "$PR_HISTORY" | jq '.userContentEdits.nodes | length')
+          HAS_MORE=$(echo "$PR_HISTORY" | jq -r '.userContentEdits.pageInfo.hasNextPage // false')
+          for ((i = 0; i < EDIT_COUNT; i++)); do
+            EDIT=$(echo "$PR_HISTORY" | jq -c --argjson i "$i" '.userContentEdits.nodes[$i]')
+            [ "$(echo "$EDIT" | jq -r '.editor.login // ""')" = "$REQUESTER" ] || continue
+            EDITED_AT=$(echo "$EDIT" | jq -r '.editedAt')
+            [ $(( $(date -d "$EDITED_AT" +%s) - RUN_EPOCH )) -le 10 ] || continue
+            if recent "$EDITED_AT" && ticked "$(echo "$EDIT" | jq -r '.diff // ""')"; then
+              if [ $((i + 1)) -lt "$EDIT_COUNT" ]; then
+                ticked "$(echo "$PR_HISTORY" | jq -r --argjson i "$((i + 1))" '.userContentEdits.nodes[$i].diff // ""')" || CONFIRMED=true
+              elif [ "$HAS_MORE" != "true" ] && [ "$AUTHOR" = "$REQUESTER" ]; then
+                CONFIRMED=true
+              fi
+            fi
+            break
+          done
+          if [ "$CONFIRMED" != "true" ] && [ "$EDIT_COUNT" -eq 0 ] && [ "$AUTHOR" = "$REQUESTER" ] && \
+             recent "$(echo "$PR_HISTORY" | jq -r '.createdAt')" && \
+             ticked "$(echo "$PR_HISTORY" | jq -r '.body // ""')"; then
+            CONFIRMED=true
+          fi
+          if [ "$CONFIRMED" != "true" ]; then
+            post_error "$REQUESTED_PR" "could not confirm that @$REQUESTER just ticked the box."
             exit 0
           fi
 
