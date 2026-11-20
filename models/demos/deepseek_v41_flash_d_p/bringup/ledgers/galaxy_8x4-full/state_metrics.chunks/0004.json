@@ -2470,5 +2470,19 @@
   "single8192_resumed_fresh_tok_s_tagentic_cc": 72492.6,
   "single8192_steady_fresh_tok_s": 72624.4,
   "single8192_steady_fresh_tok_s_tagentic_cc": 72624.4
+ },
+ "PB.9F5": {
+  "program_builds_after_warmup_single5120_partial": 156,
+  "program_builds_after_warmup_single5120_partial_tagentic_cc": 156,
+  "program_builds_after_warmup_single5120_resumed": 179,
+  "program_builds_after_warmup_single5120_resumed_tagentic_cc": 179,
+  "program_builds_after_warmup_single5120_steady": 177,
+  "program_builds_after_warmup_single5120_steady_tagentic_cc": 177,
+  "single5120_partial_fresh_tok_s": 14662.0,
+  "single5120_partial_fresh_tok_s_tagentic_cc": 14662.0,
+  "single5120_resumed_fresh_tok_s": 50603.8,
+  "single5120_resumed_fresh_tok_s_tagentic_cc": 50603.8,
+  "single5120_steady_fresh_tok_s": 37155.8,
+  "single5120_steady_fresh_tok_s_tagentic_cc": 37155.8
  }
 }

@@ -7642,6 +7642,39 @@
   },
   "waiting": null
  },
+ "PB.9F5": {
+  "attempts": 0,
+  "duration_s": 213.5,
+  "history": [
+   {
+    "reused": [
+     "PB.9F5#test_determinism"
+    ],
+    "s": 213.5,
+    "status": "PASS",
+    "t": "2026-11-20T21:43:12"
+   }
+  ],
+  "last_run": "2026-11-20T21:43:08",
+  "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/PB.9F5.log",
+  "rc": 0,
+  "reason": [],
+  "stamp": {
+   "reused": [
+    "PB.9F5#test_determinism"
+   ],
+   "units": {
+    "PB.9F5": "ce41e0e91c652def",
+    "PB.9F5#test_determinism": "ca28117652850ae3"
+   }
+  },
+  "started": "2026-11-20T21:39:35",
+  "status": "PASS",
+  "units": {
+   "PB.9F5": "PASS",
+   "PB.9F5#test_determinism": "PASS"
+  }
+ },
  "W.1": {
   "agent": {
    "defs": {
