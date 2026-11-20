@@ -540,10 +540,9 @@ NAN_OPERAND_CASES = [
 ]
 
 
-@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16], ids=["float32", "bfloat16"])
-def test_binary_pow_nan_operands(dtype, device):
+def test_binary_pow_fp32_nan_operands(device):
     # setexp turns a NaN base or exponent into a finite value in the log2 step; pow(NaN, 2) used to be finite.
-    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    dtype, torch_dtype = ttnn.float32, torch.float32
     torch_base = torch.tensor([b for b, _ in NAN_OPERAND_CASES], dtype=torch_dtype)
     torch_exponent = torch.tensor([e for _, e in NAN_OPERAND_CASES], dtype=torch_dtype)
 

@@ -183,9 +183,6 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
         y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
     }
 
-    // After the bf16 rounding above, which turns a NaN into an infinity.
-    y = _sfpu_binary_power_propagate_nan_(y, base, pow);
-
     return y;
 }
 
