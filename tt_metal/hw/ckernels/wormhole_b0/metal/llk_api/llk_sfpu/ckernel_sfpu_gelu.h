@@ -346,6 +346,53 @@ inline void calculate_gelu() {
 //   0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
 // =============================================================================
 
+// 1 + tanh(u) for u < 0 without the cancellation: 1 + tanh(u) = 1 - tanh(|u|) = 1 / (t + 1) with
+// t = 0.5 * expm1(2 * |u|), the same t _sfpu_tanh_fp32_accurate_ builds. Summing 1 and tanh(u) loses every bit once
+// tanh(u) rounds to -1. Needs the tanh_init program constants. Valid while i = round(2 * |u| * log2(e)) stays
+// below 61 (|u| < 21), so t + 1 and its reciprocal are normal floats.
+sfpi_inline sfpi::vFloat _sfpu_one_plus_tanh_negative_fp32_(sfpi::vFloat u) {
+    sfpi::vFloat a, r, s, f, w, scale, bias0, j, t, rcp, x0, x1;
+    sfpi::vInt i, e, magic_seed;
+    sfpi::vMag m;
+
+    j = u * sfpi::vConstFloatPrgm0;  // j = u * 2 * log2(e)
+    a = u + u;
+    m = sfpi::convert<sfpi::vUInt8>(j, sfpi::RoundMode::Nearest);
+    i = m;
+    j = sfpi::convert<sfpi::vFloat>(m, sfpi::RoundMode::Nearest);
+
+    a = sfpi::setsgn(a, 0);
+    f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)
+
+    // expm1(f)
+    r = 1.974105835e-04f;
+    r = r * f + 1.393318176e-3f;
+    r = r * f + 8.331298828e-3f;
+    r = r * f + 4.166680202e-2f;
+    s = f * f;
+    r = r * f + sfpi::vConstFloatPrgm2;
+    w = 0.5f;
+    r = __builtin_rvtt_sfpmad(r.get(), f.get(), w.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+
+    e = i + 126;
+    r = r * s + f;
+    scale = sfpi::setexp(0.0f, e);
+    bias0 = scale - w;
+    x0 = r * scale + bias0;
+    x1 = x0 + 1.0f;
+
+    // 1 / x1 from a seed and Newton steps. The seed is negative (its sign bit is set in the magic constant), so
+    // x1 * rcp + 1 is the small residual and the result is -1 / x1.
+    magic_seed = 0xfef30000;
+    rcp = sfpi::as<sfpi::vFloat>(magic_seed - sfpi::as<sfpi::vInt>(x1));
+    t = x1 * rcp + 1.0f;
+    t = t * t + t;
+    rcp = rcp * t + rcp;
+    t = x1 * rcp + 1.0f;
+    rcp = rcp * t + rcp;
+    return -rcp;
+}
+
 template <bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu_tanh() {
     constexpr float SQRT_2_OVER_PI = 0.7978845608028654f;
@@ -367,6 +414,17 @@ inline void calculate_gelu_tanh() {
 
         sfpi::vFloat half_x = 0.5f * x;
         result = half_x * t + half_x;
+
+        // For x < 0, 1 + tanh(u) cancels as tanh(u) -> -1, so the sum above loses all its bits (exactly 0 for
+        // x < -6). Down to -6 use 1 / (t + 1); below that 1 + tanh(u) = 2 * exp(2u) / (1 + exp(2u)) is exp(2u) to
+        // fp32, and x * exp(2u) comes from the fused tail helper that the derivative uses. The result is 0 once
+        // it falls under the smallest normal float.
+        v_if(x < 0.0f) {
+            v_if(x > -6.0f) { result = half_x * _sfpu_one_plus_tanh_negative_fp32_(u); }
+            v_elseif(x > -13.375f) { result = x_times_exp_negative_tail(x, u + u); }
+            v_endif;
+        }
+        v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);

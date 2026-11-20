@@ -381,3 +381,35 @@ def test_gelu_tanh_fast_param_inf_nan_and_saturation(device):
         assert val == x, f"gelu({x!r}) -> {val!r}, expected identity"
     for x, val in [(-1e30, neg_big), (-3.0e38, neg_huge)]:
         assert val == 0.0, f"gelu({x!r}) -> {val!r}, expected 0"
+
+
+@pytest.mark.parametrize(
+    "torch_dtype,tt_dtype",
+    [(torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16)],
+    ids=["fp32", "bf16"],
+)
+def test_gelu_tanh_negative_tail(device, torch_dtype, tt_dtype):
+    """GELU tanh on x in [-9.5, -1], where 0.5 * x * (1 + tanh(u)) cancels as tanh(u) rounds to -1.
+
+    The kernel used to return exactly 0 below x = -6 and up to 200% off in [-6, -4]. The reference is the
+    cancellation-free x / (1 + exp(-2u)) in float64 (a float64 1 + tanh(u) cancels too below x = -6.5).
+    The float32 bound is the rounding of u, which the exponent amplifies by 2 * |u| (up to ~76 here).
+
+    | dtype | check                                    |
+    |-------|------------------------------------------|
+    | fp32  | relative error <= 2e-5                   |
+    | bf16  | <= 1 ULP from the correctly rounded value |
+    """
+    x = torch.linspace(-9.5, -1.0, 1024).to(torch_dtype).reshape(1, 1, 32, 32)
+    x64 = x.double()
+    u = math.sqrt(2.0 / math.pi) * (x64 + 0.044715 * x64**3)
+    expected = (x64 / (1.0 + torch.exp(-2.0 * u))).to(torch_dtype)
+
+    tt_input = ttnn.from_torch(x, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.gelu(tt_input, variant=ttnn.GeluVariant.Tanh))
+
+    if torch_dtype == torch.float32:
+        relative_error = (actual.double() - expected.double()).abs() / expected.double().abs()
+        assert relative_error.max() <= 2e-5, f"max relative error {relative_error.max()}"
+    else:
+        assert int(ulp_distance(expected, actual).max()) <= 1
