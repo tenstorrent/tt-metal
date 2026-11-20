@@ -51,7 +51,7 @@ inline void llk_unpack_tilize_impl(
         StateVal<Operand<Exu::Unpack>::NumFacesA>(num_faces),
         StateDiscard<std::uint32_t>(tile_index)));
 
-    _llk_unpack_tilize_<!DST_ACCUM_MODE>(base_address, tile_index, src_format, dst_format, face_r_dim, num_faces, narrow_tile);
+    _llk_unpack_tilize_<true>(base_address, tile_index, src_format, dst_format, face_r_dim, num_faces, narrow_tile);
     WAYPOINT("UPTD");
 }
 

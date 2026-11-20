@@ -31,7 +31,7 @@ inline void llk_math_eltwise_unary_datacopy_impl(
         src_b_bcast_type,
         unpack_to_dest,
         unroll_zero_flag_clears,
-        !DST_ACCUM_MODE>(dst_index, src_format, dst_format);
+        true>(dst_index, src_format, dst_format);
 }
 
 template <
@@ -128,7 +128,7 @@ inline void llk_math_eltwise_unary_datacopy_block(
 
         // No shape passed: execute clears Dest zero flags for all 4 faces on 32-bit unpack to dest,
         // regardless of operand shape.
-        _llk_math_eltwise_unary_datacopy_<type, DST_SYNC_MODE, is_fp32_dest_acc_en, src_b_bcast_type, unpack_to_dest, false, !DST_ACCUM_MODE>(
+        _llk_math_eltwise_unary_datacopy_<type, DST_SYNC_MODE, is_fp32_dest_acc_en, src_b_bcast_type, unpack_to_dest, false, true>(
             dst_index, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
     }
 }
