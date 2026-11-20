@@ -87,6 +87,58 @@ def test_permute_on_4D_tensor_with_smaller_tuple_size(device, h, w, dtype, expec
 
 
 @pytest.mark.parametrize(
+    "perm",
+    [(0, 0, 2, 3), (0, 1, 1, 3), (3, 2, 1, 3), (0, 0, 0, 0), (1, 1, 1, 1), (0, 1, 3, 3), (2, 2, 3, 3)],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+def test_permute_rejects_a_repeated_dim(device, perm, dtype, expect_error):
+    torch.manual_seed(2005)
+    # Two distinct leading dims, so the output can only be built by dropping a dimension rather than
+    # by a shape that a single dim could have covered.
+    shape = (1, 2, 32, 64)
+    torch_input_tensor = random_torch_tensor(dtype, shape)
+    input_tensor = ttnn.from_torch(torch_input_tensor)
+    input_tensor = ttnn.to_device(input_tensor, device)
+    with expect_error(RuntimeError, "must be a permutation of the tensor's"):
+        ttnn.permute(input_tensor, perm)
+
+
+@pytest.mark.parametrize(
+    "perm",
+    [(0, 0, 2), (1, 1, 0), (2, 0, 0)],
+)
+def test_permute_rejects_a_repeated_dim_below_4d(device, perm, expect_error):
+    torch.manual_seed(2005)
+    shape = (1, 2, 32, 64)
+    torch_input_tensor = random_torch_tensor(ttnn.bfloat16, shape)
+    input_tensor = ttnn.from_torch(torch_input_tensor)[0]
+    input_tensor = ttnn.to_device(input_tensor, device)
+    with expect_error(RuntimeError, "must be a permutation of the tensor's"):
+        ttnn.permute(input_tensor, perm)
+
+
+@pytest.mark.parametrize(
+    "perm",
+    [(0, 1, 3, 2), (0, 2, 1, 3), (3, 1, 2, 0), (0, 1, 2, 3)],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+def test_permute_still_accepts_a_real_permutation(device, perm, dtype):
+    torch.manual_seed(2005)
+    shape = (1, 2, 32, 64)
+    torch_input_tensor = random_torch_tensor(dtype, shape)
+    torch_output_tensor = torch.permute(torch_input_tensor, perm)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor)
+    input_tensor = ttnn.to_device(input_tensor, device)
+    output_tensor = ttnn.permute(input_tensor, perm)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-1, rtol=1e-2)
+
+
+@pytest.mark.parametrize(
     "perm", [(0,), (0, 1), (1, 0), (0, 1, 2), (0, 2, 1), (1, 2, 0), (1, 0, 2), (2, 0, 1), (2, 1, 0)]
 )
 @pytest.mark.parametrize(
