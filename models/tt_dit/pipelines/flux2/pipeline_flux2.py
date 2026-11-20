@@ -29,7 +29,7 @@ from ...parallel.config import DiTGParallelConfigNoCFG, EncoderParallelConfig, F
 from ...parallel.manager import CCLManager
 from ...utils import cache
 from ...utils.padding import PaddingConfig
-from ...utils.tensor import fast_device_to_host, float_to_uint8, from_torch, to_torch
+from ...utils.tensor import fast_device_to_host, float_to_uint8, from_torch
 from ...utils.tracing import StateTensor, Tracer
 from .prompt_encoder import PromptEncoder
 
@@ -805,8 +805,15 @@ class Flux2Pipeline:
         pixels = torch.from_numpy(np.asarray(image)).float()[None] / 127.5 - 1.0
         h_axis = self._vae_parallel.h_parallel.mesh_axis if self._vae_parallel.h_parallel is not None else None
         w_axis = self._vae_parallel.w_parallel.mesh_axis if self._vae_parallel.w_parallel is not None else None
+        # Workaround: converted to bfloat16 in torch, so from_torch converts nothing on the device. With
+        # float32 it would tilize, typecast and untilize there, and those programs take their per-core
+        # block count at compile time, so they would compile at every new reference size. Converting
+        # in ttnn on the host instead is slower (about 45 ms against 20 ms at 1024²).
         tt_pixels = from_torch(
-            pixels, device=self._mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[None, h_axis, w_axis, None]
+            pixels.to(torch.bfloat16),
+            device=self._mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_axes=[None, h_axis, w_axis, None],
         )
 
         if self._keeps_size_state(traced):
@@ -818,7 +825,14 @@ class Flux2Pipeline:
         else:
             tt_latents = self._vae_encoder.forward(tt_pixels)
 
-        latents = to_torch(tt_latents).float()
+        # The encoder leaves its output split over the H and W axes; the host assembles it, as for the
+        # decoded image, so on a single host no gather program is built per reference size.
+        latents = fast_device_to_host(
+            tt_latents,
+            self._mesh_device,
+            self._vae_encoder.output_concat_dims(),
+            ccl_manager=self._vae_ccl_manager,
+        ).float()
         tokens = (self._patchify(latents) - self._latents_bn_mean) / self._latents_bn_std
         # As diffusers, the first reference image is at time 10.
         ids = _prepare_ids(
