@@ -66,7 +66,11 @@ runs:
     - name: Checkout repo
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
       with:
+        # find-changed-files.sh runs `git merge-base origin/main HEAD`, so the commit
+        # graph has to be real. The blobs do not: fetch them on demand instead of
+        # pulling 2.4 GB up front on every caller.
         fetch-depth: 0
+        filter: blob:none
         submodules: false
     - name: Find changed files
       id: find-changed-files

@@ -6,7 +6,7 @@
 #define COMPILE_FOR_ERISC
 
 #include <tt-metalium/math.hpp>
-#include "hostdev/cce_spa_routes.h"
+#include "hostdev/cce_noc_routes.h"
 #include "hostdev/dev_msgs.h"
 #include "hostdevcommon/fabric_telemetry_msgs.h"
 #include "hostdev/realtime_profiler_msgs.h"
@@ -19,7 +19,7 @@ using namespace tt::tt_metal::quasar::idle_eth;
 #include "quasar/qa_hal.hpp"
 #include "quasar/qa_hal_eth_asserts.hpp"
 #include "dev_mem_map.h"
-#include "hal_types.hpp"
+#include "llrt/hal_types.hpp"
 #include "llrt/hal.hpp"
 
 #define GET_IERISC_MAILBOX_ADDRESS_HOST(x) ((std::uint64_t)&(((mailboxes_t*)MEM_IERISC_MAILBOX_BASE)->x))
@@ -74,6 +74,7 @@ HalCoreInfoType create_eth_mem_map(HalProgrammableCoreType core_type, bool progr
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] =
         GET_IERISC_MAILBOX_ADDRESS_HOST(launch_msg_rd_ptr);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = MEM_IERISC_BANK_TO_NOC_SCRATCH;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CCE_NOC_ROUTES)] = MEM_IERISC_NOC_ROUTES_BASE;
     // The control plane writes routing info to every Ethernet core, linked or not, as on Blackhole, and the worker
     // connection table to the idle ones a Keraunos chip runs workers on.
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_IERISC_ROUTING_TABLE_BASE;
@@ -105,6 +106,7 @@ HalCoreInfoType create_eth_mem_map(HalProgrammableCoreType core_type, bool progr
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG_INDEX)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = MEM_IERISC_BANK_TO_NOC_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::CCE_NOC_ROUTES)] = MEM_IERISC_NOC_ROUTES_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_IERISC_ROUTING_TABLE_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS)] =
         MEM_IERISC_FABRIC_CONNECTIONS_SIZE;
@@ -145,7 +147,8 @@ HalCoreInfoType create_eth_mem_map(HalProgrammableCoreType core_type, bool progr
         }
         processor_classes.push_back(std::move(processors));
         processor_classes_names.push_back(std::move(names));
-        processor_classes_num_fw_binaries.push_back(/*DM*/ 1);
+        // One image per CCE; a linked core has the CCE0 image only.
+        processor_classes_num_fw_binaries.push_back(linked ? 1 : MEM_IERISC_ETH_CCES);
     }
 
     return {

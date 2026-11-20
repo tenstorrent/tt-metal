@@ -111,7 +111,7 @@ void set_runtime_args(
             program,
             shared.reader_kernel_id,
             core,
-            {input.buffer()->address(),                  // src_addr
+            {input.mesh_buffer().address(),              // src_addr
              ntiles_this_core,                           // ntiles
              first_tile_of_block(split, start_block)});  // start_id
 
@@ -122,7 +122,7 @@ void set_runtime_args(
             program,
             shared.writer_kernel_id,
             core,
-            {output.buffer()->address(),  // dst_addr
+            {output.mesh_buffer().address(),  // dst_addr
              nblocks_this_core,
              start_block,
              split.nblocks_per_row,
@@ -143,7 +143,7 @@ TopkRoutePrepProgramFactory::cached_program_t TopkRoutePrepProgramFactory::creat
     const auto& input = tensor_args.input_tensor;
     const Tensor& output = tensor_return_value;
 
-    auto program = tt::tt_metal::CreateProgram();
+    auto program = tt::tt_metal::CreateProgram(*input.device());
 
     const auto split = compute_work_split(input);
     const auto grid = input.device()->compute_with_storage_grid_size();

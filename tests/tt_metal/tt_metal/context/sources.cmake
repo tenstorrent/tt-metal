@@ -6,6 +6,7 @@ set(UNIT_TESTS_CONTEXT_SMOKE_SOURCES
     test_metal_context_api.cpp
     test_integration.cpp
     test_mesh_device_properties.cpp
+    test_simulator_termination.cpp
 )
 
 if(TT_UMD_BUILD_GRENDEL_JTAG)
@@ -13,6 +14,14 @@ if(TT_UMD_BUILD_GRENDEL_JTAG)
         APPEND
         UNIT_TESTS_CONTEXT_SMOKE_SOURCES
         test_mimir_emu.cpp
+        test_keraunos_emu.cpp
+        test_keraunos_watcher.cpp
+        test_keraunos_atomics.cpp
+        test_keraunos_cce1.cpp
+        test_keraunos_overlay.cpp
+        test_keraunos_paths.cpp
+        test_keraunos_api.cpp
+        test_keraunos_fabric.cpp
         test_mimir_backend.cpp
     )
 endif()

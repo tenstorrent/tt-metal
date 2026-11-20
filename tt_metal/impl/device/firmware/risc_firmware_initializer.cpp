@@ -21,14 +21,16 @@
 #include "context/metal_context.hpp"
 #include "debug/l1_ecc_halt.hpp"
 #include "impl/context/context_descriptor.hpp"
-#include "core_coord.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include "allocator/l1_banking_allocator.hpp"
 #include "debug/noc_logging.hpp"
 #include "dispatch/dispatch_core_manager.hpp"
 #include "dispatch/topology.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "impl/buffers/dram_sender_topology.hpp"
+#include "impl/dispatch/kernel_config/tensor_prefetcher.hpp"
+#include "impl/dispatch/host_transfer_stats.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "jit_build/jit_device_config.hpp"
@@ -37,7 +39,8 @@
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
 #include "fabric/fabric_context.hpp"
-#include "hostdev/cce_spa_routes.h"
+#include "hostdev/keraunos_spa_routes.h"
+#include "hostdev/mimir_cce_spa_routes.h"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/math.hpp>
 #include "tt_align.hpp"
@@ -71,7 +74,7 @@ tt::umd::RiscType dram_core_teardown_reset_riscs(ARCH arch) {
 // Port this core uses to reach SPA instance `dest`. Local GDDR stays on D2D0: that is the window
 // the remapper claims. A recorded peer route selects the port. With no topology, Mimir 0 reaches
 // any other instance through D2D1 and every other sender uses D2D0.
-uint8_t cce_gddr_port(const tt::umd::SocDescriptor& soc, uint32_t channel, uint32_t sender, uint32_t dest) {
+uint8_t gddr_cce_port(const tt::umd::SocDescriptor& soc, uint32_t channel, uint32_t sender, uint32_t dest) {
     if (dest == sender) {
         return 0;
     }
@@ -89,7 +92,11 @@ uint8_t cce_gddr_port(const tt::umd::SocDescriptor& soc, uint32_t channel, uint3
     return 0;
 }
 
-CceSpaRoutes cce_spa_routes_for_channel(const metal_SocDescriptor& soc, uint32_t channel) {
+// Package SPA of HSIO 0's CCE0 SRAM: identity DMRISC windows over HSIO SPA 0x12_0400_0000 + n * tile_stride, with the
+// CCE SRAM 0x280_0000 into each tile (bringup_mmk.py programs them).
+constexpr uint64_t kKeraunosHsioSramSpaBase = 0x12'0680'0000ULL;
+
+MimirCceSpaRoutes mimir_cce_spa_routes_for_channel(const metal_SocDescriptor& soc, uint32_t channel) {
     const auto& channels = soc.get_arch_descriptor().get_mimir_channels();
     uint32_t sender = channel;
     if (!channels.empty()) {
@@ -97,14 +104,47 @@ CceSpaRoutes cce_spa_routes_for_channel(const metal_SocDescriptor& soc, uint32_t
         sender = channels[channel].instance;
     }
     const tt::umd::GrendelAddressWindows windows{};
-    CceSpaRoutes routes{};
+    MimirCceSpaRoutes routes{};
     routes.gddr_d2d_base[0] = windows.dram_base;
-    routes.gddr_d2d_base[1] = windows.dram_base + CCE_GDDR_D2D_LANE_INSTANCES * windows.dram_stride;
+    routes.gddr_d2d_base[1] = windows.dram_base + MIMIR_CCE_GDDR_D2D_LANE_INSTANCES * windows.dram_stride;
     routes.gddr_instance_stride = windows.dram_stride;
     routes.sram_spa_base = windows.dram_l1_base;
     routes.sram_tile_stride = windows.dram_l1_stride;
-    for (uint32_t dest = 0; dest < CCE_SPA_ROUTES_MAX_INSTANCES; ++dest) {
-        routes.gddr_d2d[dest] = cce_gddr_port(soc, channel, sender, dest);
+    for (uint32_t dest = 0; dest < MIMIR_CCE_SPA_ROUTES_MAX_INSTANCES; ++dest) {
+        routes.gddr_d2d[dest] = gddr_cce_port(soc, channel, sender, dest);
+    }
+    // A Mimir CCE reaches Keraunos HSIO SRAM through the package address the Keraunos CCEs use for it.
+    const auto& arch = soc.get_arch_descriptor();
+    if (!arch.get_keraunos().cores.empty()) {
+        routes.keraunos_sram_base = kKeraunosHsioSramSpaBase;
+        routes.keraunos_tile_stride = arch.get_keraunos().tile_stride.value_or(0);
+        routes.keraunos_cce_sram_size = arch.get_eth_l1_size();
+    }
+    return routes;
+}
+
+// The routes a kernel on one Keraunos HSIO CCE uses, filled from the descriptor's keraunos and mimir_channels
+// blocks. Keraunos sits on the D2D1 lane of the package ATT, so its Mimir GDDR windows are the D2D1 ones.
+KeraunosSpaRoutes keraunos_spa_routes_for_core(const metal_SocDescriptor& soc, const tt::umd::KeraunosCore& core) {
+    const auto& arch = soc.get_arch_descriptor();
+    const auto& keraunos = arch.get_keraunos();
+    const tt::umd::GrendelAddressWindows windows{};
+    KeraunosSpaRoutes routes{};
+    routes.hsio_sram_base = kKeraunosHsioSramSpaBase;
+    routes.hsio_tile_stride = keraunos.tile_stride.value_or(0);
+    routes.eth_cce_sram_size = arch.get_eth_l1_size();
+    routes.mimir_cce_sram_base = windows.dram_l1_base;
+    routes.mimir_cce_sram_stride = windows.dram_l1_stride;
+    const size_t channels = arch.get_mimir_channels().size();
+    const uint32_t num_mimirs = static_cast<uint32_t>(std::min<size_t>(channels == 0 ? 2 : channels, KERAUNOS_SPA_ROUTES_MAX_MIMIRS));
+    routes.num_mimirs = num_mimirs;
+    for (uint32_t mimir = 0; mimir < num_mimirs; ++mimir) {
+        routes.mimir_gddr_base[mimir] =
+            windows.dram_base + (MIMIR_CCE_GDDR_D2D_LANE_INSTANCES + mimir) * windows.dram_stride;
+    }
+    routes.hsio = core.hsio;
+    for (const auto& c : keraunos.cores) {
+        routes.num_hsio += c.eth_cce == 0 ? 1 : 0;
     }
     return routes;
 }
@@ -151,9 +191,7 @@ std::array<uint32_t, 4> quasar_eth_link_slot(const Cluster& cluster, ChipId chip
 
 // System address of HSIO tile 0's CCE SRAM: the tile's global window (0x12_0400_0000) plus the SRAM offset
 // (0x280_0000), Keraunos-E100 Table 14 (docs arch/KERAUNOS-HW-FINDINGS.md Q1). Tiles are keraunos.tile_stride apart.
-constexpr uint64_t k_keraunos_system_sram_base = 0x1206800000ULL;
-
-// The NOC routes (CceNocRoutes, hostdev/cce_spa_routes.h) of Keraunos core `logical_eth` on `chip`, from the chip's
+// The NOC routes (CceNocRoutes, hostdev/cce_noc_routes.h) of Keraunos core `logical_eth` on `chip`, from the chip's
 // SoC descriptor. Each keraunos.cores entry gets a route at its virtual coordinate and one at its Ethernet channel's
 // coordinate in the device's eth_chan_to_noc_xy, (20 + channel, 25). Fatal when the descriptor has no Keraunos window,
 // when `logical_eth` has no keraunos.cores entry, or when the routes do not fit.
@@ -179,10 +217,10 @@ CceNocRoutes quasar_cce_noc_routes(const Cluster& cluster, ChipId chip, const Co
             .sram_base = sram_base, .x = static_cast<uint8_t>(x), .y = static_cast<uint8_t>(y), .kind = kind};
     };
     for (const auto& core : keraunos.cores) {
-        const uint64_t region = core.hsio * *keraunos.tile_stride + core.cce * cce_stride;
+        const uint64_t region = core.hsio * *keraunos.tile_stride + core.eth_cce * cce_stride;
         const bool is_self = &core == &self;
         CceNocRouteKind kind = CceNocRouteKind::OTHER_TILE;
-        uint64_t sram_base = k_keraunos_system_sram_base + region;
+        uint64_t sram_base = kKeraunosHsioSramSpaBase + region;
         if (is_self) {
             kind = CceNocRouteKind::THIS_CCE;
             sram_base = *keraunos.local_window + region;
@@ -342,11 +380,14 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
                 *refs.l1_bank_offset_map,
                 *refs.dram_bank_to_noc_xy,
                 *refs.l1_bank_to_noc_xy);
-            // Quasar FW never loads the logical→virtual scratch table or the Tensor prefetcher signal table
-            // (WH/BH brisc/ncrisc only).
+            // Quasar FW never loads the logical→virtual scratch table (WH/BH brisc/ncrisc only).
             if (cluster_.arch() != ARCH::QUASAR) {
                 generate_worker_logical_to_virtual_map(
                     device_id, *refs.worker_logical_col_to_virtual_col, *refs.worker_logical_row_to_virtual_row);
+            }
+            // Only BH brisc/ncrisc and Quasar DM FW load the Tensor prefetcher signal table; elsewhere it stays
+            // empty and nothing is written.
+            if (cluster_.arch() == ARCH::BLACKHOLE || cluster_.arch() == ARCH::QUASAR) {
                 generate_tensor_prefetcher_signal_table(
                     device_id, refs.dram_bank_offset_map->size(), *refs.tensor_prefetcher_signal_noc_xy);
             }
@@ -873,7 +914,15 @@ void RiscFirmwareInitializer::generate_worker_logical_to_virtual_map(
 void RiscFirmwareInitializer::generate_tensor_prefetcher_signal_table(
     tt::ChipId device_id, size_t num_dram_banks, std::vector<uint32_t>& tensor_prefetcher_signal_noc_xy) const {
     tensor_prefetcher_signal_noc_xy.assign(num_dram_banks, 0);
-    if (!hal_.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+    const auto placement = dram_sender_placement(descriptor_->metal_context(), num_hw_cqs_);
+    if (!placement.has_value()) {
+        return;
+    }
+    if (*placement == DramSenderPlacement::DispatchEngine) {
+        // The engine keeps one table of counters for every bank, so every bank names it.
+        const CoreCoord xy = cluster_.get_virtual_coordinate_from_logical_coordinates(
+            device_id, tensor_prefetcher_dispatch_engine(dispatch_core_manager_, device_id), CoreType::DISPATCH);
+        tensor_prefetcher_signal_noc_xy.assign(num_dram_banks, pack_bank_noc_xy(xy.x, xy.y));
         return;
     }
     const auto& soc_desc = cluster_.get_soc_desc(device_id);
@@ -926,8 +975,8 @@ void RiscFirmwareInitializer::initialize_device_bank_to_noc_tables(
     const uint64_t mem_bank_to_noc_addr = hal_.get_dev_noc_addr(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
     const uint32_t mem_bank_to_noc_size = hal_.get_dev_size(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
 
-    // Only Tensix firmware loads the Tensor prefetcher signal table (none on Quasar, which leaves it empty), and
-    // Tensix always takes the multicast path below.
+    // Only Tensix firmware loads the Tensor prefetcher signal table (Blackhole only; empty elsewhere), and Tensix
+    // always takes the multicast path below.
     const uint32_t tensor_prefetcher_sz_in_bytes =
         core_type == HalProgrammableCoreType::TENSIX
             ? tensor_prefetcher_signal_noc_xy_[device_id].size() * sizeof(uint32_t)
@@ -1329,6 +1378,7 @@ void RiscFirmwareInitializer::initialize_firmware(
     ZoneScoped;
 
     BuildEnvManager& build_env_manager = descriptor_->metal_context().build_env_manager();
+    auto* transfer_stats = &descriptor_->metal_context().host_transfer_stats();
 
     TT_FATAL(
         core_type != HalProgrammableCoreType::TENSIX or end_core.has_value(),
@@ -1423,6 +1473,8 @@ void RiscFirmwareInitializer::initialize_firmware(
                         launch_msg, core_type, static_cast<HalProcessorClassType>(processor_class), riscv_id, fw_size);
 
                     if (not rtoptions_.get_skip_loading_fw()) {
+                        ScopedHostTransfer firmware_upload(
+                            transfer_stats, HostTransferCategory::Firmware, binary_mem.get_packed_size());
                         llrt::test_load_multicast_write_risc_binary(
                             descriptor_->env_impl(),
                             binary_mem,
@@ -1491,9 +1543,15 @@ void RiscFirmwareInitializer::initialize_firmware(
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                     auto num_build_states = hal_.get_processor_class_num_fw_binaries(core_type_idx, processor_class);
                     for (uint32_t eriscv_id = 0; eriscv_id < num_build_states; eriscv_id++) {
+                        if (is_idle_eth && quasar_ethernet &&
+                            eriscv_id != cluster_.get_keraunos_eth_cce(device_id, virtual_core)) {
+                            continue;  // One image per CCE; load only this core's.
+                        }
                         auto fw_path = build_env_manager.get_firmware_binary_path(
                             device_id, core_type_idx, processor_class, eriscv_id);
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
+                        ScopedHostTransfer firmware_upload(
+                            transfer_stats, HostTransferCategory::Firmware, binary_mem.get_packed_size());
                         llrt::test_load_write_read_risc_binary(
                             descriptor_->env_impl(),
                             binary_mem,
@@ -1524,6 +1582,23 @@ void RiscFirmwareInitializer::initialize_firmware(
                         sizeof(unknown_stage),
                         tt_cxy_pair(device_id, virtual_core),
                         fw_stage_addr + (slot * sizeof(uint32_t)));
+                }
+            }
+            if (quasar_ethernet && is_idle_eth) {
+                const auto& soc_k = cluster_.get_soc_desc(device_id);
+                const auto& keraunos = soc_k.get_arch_descriptor().get_keraunos();
+                const tt_xy_pair noc0 = soc_k.translate_coord_to(
+                    tt_xy_pair(virtual_core.x, virtual_core.y), CoordSystem::TRANSLATED, CoordSystem::NOC0);
+                for (const auto& keraunos_core : keraunos.cores) {
+                    if (keraunos_core.coord == noc0) {
+                        // After the bank-to-NOC scratch, the same place the Mimir routes use. CCE-relative address.
+                        const KeraunosSpaRoutes routes = keraunos_spa_routes_for_core(soc_k, keraunos_core);
+                        const uint64_t routes_addr =
+                            hal_.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::BANK_TO_NOC_SCRATCH) +
+                            hal_.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
+                        cluster_.write_core(&routes, sizeof(routes), tt_cxy_pair(device_id, virtual_core), routes_addr);
+                        break;
+                    }
                 }
             }
             if (quasar_ethernet) {
@@ -1558,10 +1633,14 @@ void RiscFirmwareInitializer::initialize_firmware(
                     // we switch to runtime FW. Must happen before we write PC and deassert.
                     disable_eth_interrupts(device_id, virtual_core);
                 }
+                uint32_t fw_launch_addr_value = jit_build_config.fw_launch_addr_value;
+                if (is_idle_eth && quasar_ethernet) {
+                    // The CCE's image is linked at its native SRAM base.
+                    fw_launch_addr_value += cluster_.get_keraunos_eth_cce(device_id, virtual_core) *
+                                            hal_.get_dev_size(core_type, HalL1MemAddrType::BASE);
+                }
                 cluster_.write_reg(
-                    &jit_build_config.fw_launch_addr_value,
-                    tt_cxy_pair(device_id, virtual_core),
-                    jit_build_config.fw_launch_addr);
+                    &fw_launch_addr_value, tt_cxy_pair(device_id, virtual_core), jit_build_config.fw_launch_addr);
             } else {
                 constexpr uint32_t mailbox_index = 0;
                 tt::llrt::internal_::send_msg_to_eth_mailbox(
@@ -1586,6 +1665,8 @@ void RiscFirmwareInitializer::initialize_firmware(
                         auto fw_path = build_env_manager.get_firmware_binary_path(
                             device_id, core_type_idx, processor_class, drisc_id);
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
+                        ScopedHostTransfer firmware_upload(
+                            transfer_stats, HostTransferCategory::Firmware, binary_mem.get_packed_size());
                         llrt::test_load_write_read_risc_binary(
                             descriptor_->env_impl(),
                             binary_mem,
@@ -1659,6 +1740,8 @@ void RiscFirmwareInitializer::initialize_firmware(
                             static_cast<HalProcessorClassType>(processor_class),
                             dm_id,
                             fw_size);
+                        ScopedHostTransfer firmware_upload(
+                            transfer_stats, HostTransferCategory::Firmware, binary_mem.get_packed_size());
                         llrt::test_load_write_read_risc_binary(
                             descriptor_->env_impl(),
                             binary_mem,
@@ -1780,7 +1863,6 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         }
     }
 
-    // CceNocRoutes sits after the bank-to-NOC staging table, as CceSpaRoutes does on a DRAM core.
     const auto write_cce_noc_routes =
         [&](const CoreCoord& logical_eth, const CoreCoord& virtual_core, HalProgrammableCoreType core_type) {
             const CceNocRoutes routes = quasar_cce_noc_routes(cluster_, device_id, logical_eth);
@@ -1788,8 +1870,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
                 &routes,
                 sizeof(routes),
                 {static_cast<size_t>(device_id), virtual_core},
-                hal_.get_dev_addr(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH) +
-                    hal_.get_dev_size(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH));
+                hal_.get_dev_addr(core_type, HalL1MemAddrType::CCE_NOC_ROUTES));
         };
 
     log_debug(tt::LogMetal, "Initializing active ethernet cores");
@@ -1891,7 +1972,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
             if (cluster_.arch() == ARCH::QUASAR) {
                 const auto dram_channel = dram_channel_for_translated_core(soc_d, virtual_dram_core);
                 TT_FATAL(dram_channel.has_value(), "DRAM core {} has no programmable view", virtual_dram_core.str());
-                const CceSpaRoutes routes = cce_spa_routes_for_channel(soc_d, *dram_channel);
+                const MimirCceSpaRoutes routes = mimir_cce_spa_routes_for_channel(soc_d, *dram_channel);
                 const uint64_t routes_addr =
                     hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::BANK_TO_NOC_SCRATCH) +
                     hal_.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);

@@ -99,6 +99,7 @@ enum class EnvVarID {
     TT_METAL_WATCHER_TEST_MODE,         // Enable watcher test mode
     TT_METAL_KERNEL_MAP,                // Enable kernel build mapping
     TT_METAL_DISPATCH_DATA_COLLECTION,  // Enable dispatch debug data collection
+    TT_METAL_HOST_TRANSFER_STATS,       // Report host <-> device transfer time and volume at teardown
     TT_METAL_GTEST_ETH_DISPATCH,        // Use Ethernet cores for dispatch in tests
     TT_METAL_TENSIX_DISPATCH_CORES,     // Quasar: force interim Tensix dispatch cores from core descriptor YAML
     TT_METAL_NOC_ATT,                   // Quasar: NoC address-translation-table map for device traffic
@@ -118,6 +119,7 @@ enum class EnvVarID {
     TT_METAL_FABRIC_TRIMMING_OVERRIDE,                  // Path to channel trimming global override YAML
     TT_METAL_ENABLE_FABRIC_VC2,                         // Enable fabric VC2 (neighbour exchange)
     TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH,           // Enable experimental VC1 inter-mesh pass-through
+    TT_METAL_FABRIC_GRAPH_BUILDER,                      // Build fabric routers from the fabric graph
     TT_METAL_FORCE_REINIT,                              // Force context reinitialization
     TT_METAL_DISABLE_FABRIC_TWO_ERISC,                  // Disable fabric 2-ERISC mode
     TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,              // Log kernel compilation commands
@@ -778,6 +780,13 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_DISPATCH_DATA_COLLECTION=1
         case EnvVarID::TT_METAL_DISPATCH_DATA_COLLECTION: this->enable_dispatch_data_collection = true; break;
 
+        // TT_METAL_HOST_TRANSFER_STATS
+        // Record the bytes and time of host <-> device transfers and log a summary when the context tears down.
+        // Under fast dispatch, each recorded transfer adds two events to the command queue.
+        // Default: false (not recorded). Set to '0' to disable, any other value enables it.
+        // Usage: export TT_METAL_HOST_TRANSFER_STATS=1
+        case EnvVarID::TT_METAL_HOST_TRANSFER_STATS: this->enable_host_transfer_stats = strcmp(value, "0") != 0; break;
+
         // TT_METAL_GTEST_ETH_DISPATCH
         // Use Ethernet cores for dispatch in tests.
         // Default: Worker cores (default dispatch type)
@@ -908,6 +917,13 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false
         // Usage: export TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH=1
         case EnvVarID::TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH: this->enable_fabric_mesh_pass_through = true; break;
+
+        // TT_METAL_FABRIC_GRAPH_BUILDER
+        // EXPERIMENTAL: Builds fabric routers from the fabric graph (tt_metal/fabric/graph) instead of the
+        // stock builder. Tensix mux/UDM fabrics still use the stock builder.
+        // Default: false
+        // Usage: export TT_METAL_FABRIC_GRAPH_BUILDER=1
+        case EnvVarID::TT_METAL_FABRIC_GRAPH_BUILDER: this->fabric_graph_builder = true; break;
 
         // RELIABILITY_MODE
         // Sets the fabric reliability mode (STRICT, RELAXED, or DYNAMIC).

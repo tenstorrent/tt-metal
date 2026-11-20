@@ -73,8 +73,8 @@ private:
         std::vector<uint8_t>& worker_logical_col_to_virtual_col,
         std::vector<uint8_t>& worker_logical_row_to_virtual_row);
     // tensor_prefetcher_signal_noc_xy for `device_id` (firmware_common.h): for each of the `num_dram_banks` banks
-    // of the bank tables, the coords of the DRISC that holds the bank's Tensor prefetcher op signal counters, or
-    // zeros where the device has no programmable DRAM cores.
+    // of the bank tables, the coords of the core that holds the bank's Tensor prefetcher op signal counters (its
+    // DRISC, or the dispatch engine that runs the prefetcher), or zeros where the device runs no prefetcher.
     void generate_tensor_prefetcher_signal_table(
         tt::ChipId device_id, size_t num_dram_banks, std::vector<uint32_t>& tensor_prefetcher_signal_noc_xy) const;
     void initialize_device_bank_to_noc_tables(
