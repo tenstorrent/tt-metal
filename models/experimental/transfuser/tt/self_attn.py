@@ -24,6 +24,9 @@ class TTSelfAttention(LightweightModule):
         self.dtype = dtype
         self.memory_config = memory_config
         self.compute_kernel_config = compute_kernel_config
+        # Prefill SDPA ignores compute_kernel_config: FP32 accumulation is the ACCURATE recipe.
+        fp32_acc = compute_kernel_config is not None and compute_kernel_config.fp32_dest_acc_en
+        self.sdpa_precision = ttnn.SDPAPrecision.ACCURATE if fp32_acc else None
         self.use_optimized = parameters["use_optimized"]
 
     def forward(self, x):
@@ -57,6 +60,7 @@ class TTSelfAttention(LightweightModule):
                 scale=None,
                 program_config=None,
                 compute_kernel_config=self.compute_kernel_config,
+                precision=self.sdpa_precision,
                 memory_config=self.memory_config,
             )
 
