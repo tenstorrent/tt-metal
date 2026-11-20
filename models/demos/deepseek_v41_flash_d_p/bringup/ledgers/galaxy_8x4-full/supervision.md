@@ -1025,3 +1025,22 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   5120 accept units (ladder last, determinism, decoder skip, contract, outside history) + fresh walls with
   program_builds_after_warmup == 0; owner question: POS_DYNAMIC default on (I proposed yes).
   (4) validate, commit, tell the owner the tasks are ready (do not push).
+
+### HAND-OFF: CONTINUING ON THIS BRANCH (dnijemcevic/model_bringup_batching), state at 2026-11-20 22:10 UTC
+- Orchestrator stopped (ran --until PB.9F5). Ledger committed; the queue in tasks.yaml: PB.9X (TODO) -> PB.9X5 ->
+  PB.8R -> PB.8RP -> PB.9C -> PB.T. Accepted today: PB.7 437e310b596, PB.7B 561fc994f0f, PB.7C ce4e3bc674f (glued:
+  device-derived tables, 0 builds), PB.9F a72c8c6918d / PB.9F5 83c7ee814cf (fresh walls, tests only). PB.8 REJECTED
+  then re-queued as PB.8R (local branch dnijemcevic/pb8_mhc_post_v2_saved = 0ef6b7107f5).
+- Honest numbers (fresh traffic): single request 8192 72.6k (0 builds; WHY it does not build while 5120 builds ~22 a
+  chunk is OPEN), 5120 shipped path 37.2 / 50.6k fresh vs 63.2 / 61.2k warm (~22 builds a chunk), fixed lanes 4x2k
+  59.0k fresh vs 67.8k warm (346 builds), fixed lanes AgentX 23-29k, glued AgentX 45.1 / 51.5 / 52.0k (~0 builds),
+  glued 5 x 1.6k 48.1k.
+- OWNER PRIORITY: fix model_bringup first (hand-off update above, MB.1 / MB.2), then bring that fix into THIS branch
+  (a merge task), then here: the lane path's rebuilds (PB.9X's lane part, or route lane-shaped chunks through the
+  clean glued path: overseer leaning that way, owner to choose), the per-segment overhead of misaligned glued
+  segments (target: the n4 level ~70k for any segment count; proposed, not queued), then PB.8R / PB.9C / PB.T as
+  queued. PB.9X as written covers both single-request and lanes: re-scope it once MB.2's fix is merged here.
+- PB.7's order-free reduces (DS41-339/341) cost ~1.5 ms on lane-shaped chunks that do not need them (lane equivalence
+  was 0 without them): candidate to scope them to glued chunks (not queued).
+- Launch: tmux orch_pb, SKIP=check-models-do-not-import-tests, `orchestrator resume --spec <spec> --until <task>
+  --attempts 20`; before accepting check `gate <task> --status` and the deliverable (skill rules of 2026-11-20).
