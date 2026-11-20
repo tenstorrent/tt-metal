@@ -81,7 +81,7 @@ TEST_P(OptimalDramWorkers, ReturnsOneValidWorkerPerDramBank) {
     const tt::ARCH arch = MetalContext::instance().get_cluster().arch();
     if (!is_axis_supported(arch, axis)) {
         GTEST_SKIP() << (axis == DispatchCoreAxis::ROW ? "ROW" : "COL") << " dispatch core axis is not supported on "
-                     << tt::arch_to_str(arch);
+                     << arch;
     }
     std::vector<int> ids(ids_set.begin(), ids_set.end());
 
