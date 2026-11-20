@@ -1,0 +1,110 @@
+name: "[internal] DiT review impl"
+
+# For PRs touching models/tt_dit/ (logic and criteria in .github/scripts/dit_review.py):
+#   - requests 1-2 DiT team members chosen by recent commit history in the touched
+#     directories (always at least one), then withdraws the metalium-dit team-wide
+#     CODEOWNERS request so the PR leaves the other members' review queues. It cannot
+#     undo the notification CODEOWNERS already sent; the team's auto-assignment
+#     setting is what prevents that.
+#   - approves and enables auto-merge for small DiT PRs whose author added the
+#     dit-auto-merge label and that have a passing All Model Tests run covering DiT on
+#     the latest commit, and dismisses the approval / turns auto-merge off when a PR
+#     stops qualifying. A "DiT auto-merge" status (never blocking) says why.
+#
+# Runs from main after the dit-review.yaml launchpad (PR and review events) or an All
+# Model Tests run. Neither run is trusted: the PR is looked up from the run's head
+# repository and branch, and only PR metadata is read from the API. PR code is never
+# checked out or run.
+#
+# Tokens: the workflow token for PR reads, review requests and statuses; an OSPO Vault
+# token for the team membership (org read); CODEOWNERS_GROUP_ANALYSIS_PAT to approve and
+# enable auto-merge. That account must be a code owner of models/tt_dit/ for its
+# approval to count, which an app token cannot be.
+
+on:
+  workflow_run:
+    workflows: ["DiT review", "All Model Tests"]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  dit-review:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
+    # One run per branch at a time, so a dismissal never races an approval.
+    concurrency:
+      group: dit-review-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
+      cancel-in-progress: false
+    permissions:
+      actions: read # All Model Tests runs
+      contents: read
+      issues: read # label and review-request events
+      pull-requests: write # review requests
+      statuses: write
+      id-token: write # OSPO Vault login
+    steps:
+      - name: Check the triggering workflow
+        id: source
+        env:
+          RUN_PATH: ${{ github.event.workflow_run.path }}
+        run: |
+          case "$RUN_PATH" in
+            .github/workflows/dit-review.yaml|.github/workflows/all-model-tests.yaml) echo "ok=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::notice::Ignoring a run of $RUN_PATH" ;;
+          esac
+
+      - name: Checkout script and test lists from main
+        if: steps.source.outputs.ok == 'true'
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: |
+            .github/scripts/dit_review.py
+            tests/pipeline_reorg/models_unit_tests.yaml
+            tests/pipeline_reorg/models_e2e_tests.yaml
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Find the PRs to handle
+        id: find
+        if: steps.source.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPROVE_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
+          REPO: ${{ github.repository }}
+          HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: python3 .github/scripts/dit_review.py find
+
+      - name: Get org token
+        id: vault
+        if: steps.find.outputs.prs != ''
+        uses: tenstorrent/.github/actions/vault-secrets@fe8df371bc63659c93009dfbde88e570ab501465 # main
+        with:
+          role: tenstorrent--tt-metal--codeowners
+          github-token: github/token/org-bot-token
+
+      - name: Request reviewers, approve and enable auto-merge, or undo
+        if: steps.find.outputs.prs != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ORG_TOKEN: ${{ steps.vault.outputs.token }}
+          APPROVE_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
+          REPO: ${{ github.repository }}
+          PR_NUMBERS: ${{ steps.find.outputs.prs }}
+        run: |
+          pip3 install PyYAML
+          python3 .github/scripts/dit_review.py run
+
+      - name: Revoke org token
+        if: always() && steps.vault.outputs.token != ''
+        env:
+          VAULT_GH_TOKEN: ${{ steps.vault.outputs.token }}
+        run: |
+          if ! curl -sS --fail --connect-timeout 10 --max-time 20 -X DELETE \
+            https://api.github.com/installation/token \
+            -H "Authorization: Bearer ${VAULT_GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json"; then
+            echo "::warning::Could not revoke the Vault token; it expires on its own"
+          fi
