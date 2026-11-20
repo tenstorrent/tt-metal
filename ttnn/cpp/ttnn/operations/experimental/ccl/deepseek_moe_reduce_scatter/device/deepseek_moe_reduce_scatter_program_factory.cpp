@@ -150,8 +150,8 @@ ProgramDescriptor build_program_descriptor(
     const NdShardSpec& input_nd_shard_spec = input_tensors.at(0).nd_shard_spec().value();
     const uint32_t num_pages_per_shard = input_nd_shard_spec.shard_shape.volume() / num_tile_elements;
     const uint32_t num_shards = input_tensors.at(0).physical_volume() / (num_tile_elements * num_pages_per_shard);
-    const uint32_t num_pages_per_slice = static_cast<uint32_t>(input_tensors.at(0).buffer()->num_pages());
-    const uint32_t page_size = static_cast<uint32_t>(input_tensors.at(0).buffer()->page_size());
+    const uint32_t num_pages_per_slice = static_cast<uint32_t>(input_tensors.at(0).mesh_buffer().num_pages());
+    const uint32_t page_size = static_cast<uint32_t>(input_tensors.at(0).mesh_buffer().page_size());
 
     const auto [clamped_num_links, worker_core_range_set, worker_cores] =
         get_cores(mesh_device, input_nd_shard_spec, num_shards, kNumDirectionsPerLink);
@@ -517,11 +517,11 @@ void DeepseekMoEReduceScatterMeshWorkloadFactory::override_runtime_arguments(
                     "deepseek_moe_reduce_scatter intermediate slice {} must have a buffer",
                     slice);
                 args[kWriterIntermediateArg0 + slice] =
-                    static_cast<uint32_t>(tensor_return_value.at(slice).buffer()->address());
+                    static_cast<uint32_t>(tensor_return_value.at(slice).mesh_buffer().address());
             }
             TT_FATAL(
                 tensor_return_value.back().is_allocated(), "deepseek_moe_reduce_scatter output must have a buffer");
-            args[kWriterOutputArg] = static_cast<uint32_t>(tensor_return_value.back().buffer()->address());
+            args[kWriterOutputArg] = static_cast<uint32_t>(tensor_return_value.back().mesh_buffer().address());
         }
     }
 }

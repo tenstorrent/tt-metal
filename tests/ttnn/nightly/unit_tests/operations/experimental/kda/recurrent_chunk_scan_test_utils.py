@@ -73,7 +73,7 @@ def recurrent_oracle(protocol: Sequence[torch.Tensor], state: torch.Tensor) -> t
         output = torch.matmul(q_decay[:, chunk], state) + torch.matmul(intra[:, chunk], value_new)
         chunks.append(output)
         state = state + (state * final_decay[:, chunk] + torch.matmul(k_dec_t[:, chunk], value_new))
-    return torch.stack(chunks, dim=1).to(torch.bfloat16), state.float()
+    return torch.cat(chunks, dim=1).to(torch.bfloat16), state.float()
 
 
 def summary_oracle(protocol: Sequence[torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
@@ -89,13 +89,20 @@ def summary_oracle(protocol: Sequence[torch.Tensor]) -> tuple[torch.Tensor, torc
 
 
 def pack_summary(affine_a: torch.Tensor, affine_b: torch.Tensor) -> torch.Tensor:
-    """Rows of [A | B], the layout of one summary slot."""
-    return torch.cat([affine_a, affine_b], dim=-1)
+    """Rows of the complement form [E | B], E = A - I, the layout of one summary slot."""
+    return torch.cat([affine_a - torch.eye(affine_a.shape[-1]), affine_b], dim=-1)
+
+
+def pack_summary_slots(affine_a: torch.Tensor, affine_b: torch.Tensor, *, slots: int = 1) -> torch.Tensor:
+    """Packed [slots, N, K, K+V] summaries whose head slot holds ``pack_summary``. A rank's unread tail slot is NaN."""
+    head = pack_summary(affine_a, affine_b)
+    return torch.stack([head, torch.full_like(head, float("nan"))][:slots])
 
 
 def unpack_summary(packed: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """The transform (A, B) of complement-form [E | B] rows; A = E + I is exact in FP32 for BF16 E."""
     key_dim = packed.shape[-2]
-    return packed[..., :key_dim], packed[..., key_dim:]
+    return packed[..., :key_dim].float() + torch.eye(key_dim), packed[..., key_dim:]
 
 
 def segmented_summary_oracle(

@@ -35,7 +35,7 @@ std::vector<Tensor> fused_recurrent_gated_delta_rule(
     const Tensor& q,
     const Tensor& k,
     const Tensor& v,
-    const Tensor& decay,
+    const Tensor& g,
     const Tensor& beta,
     const std::optional<Tensor>& initial_state,
     const std::optional<Tensor>& initial_state_block_idx,

@@ -412,7 +412,8 @@
   additional-server-args: "--data_parallel_size 4 --max_num_seqs 32 --async-scheduling"
   structured-output: true
   sampling-tests: true
-  sampling-test-timeout: 40
+  # The full unfiltered tests/tt suite takes about 42 minutes on this leg.
+  sampling-test-timeout: 50
   additional-structured-output-args: "--backend openai-chat --endpoint /v1/chat/completions --dataset json"
   skus:
     wh_galaxy_perf:
