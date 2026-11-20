@@ -73,6 +73,10 @@ jobs:
       RELAY_REPO: tenstorrent/tt-blaze-relay
       RELAY_WORKFLOW: relay.yaml
       RELAY_REF: main
+      # REST API version for the dispatch call only: with it GitHub answers
+      # 200 with workflow_run_id (the exact relay run); the default
+      # (2022-11-28) answers 204 with no body.
+      DISPATCH_API_VERSION: "2026-03-10"
       GATE_WAIT_MINUTES: "190"
       SEGMENT_MINUTES: "12"
       POLL_SECONDS: "60"
@@ -300,12 +304,15 @@ jobs:
 
           # The body is built by jq; its values are this run's id and, for
           # uplift only, the target (ci is the relay's default). Same
-          # request form as the relay's own dispatch: when GitHub answers 200
-          # with workflow_run_id, that id is used; on a 204 (no body) the run is
-          # found by its run name below.
+          # request form as the relay's own dispatch. With DISPATCH_API_VERSION
+          # GitHub answers 200 with workflow_run_id, the exact run (so an
+          # earlier attempt's relay run is never taken for this one). On a 204
+          # (no body, the default API version) the run is found by its run
+          # name below.
           body=$(jq -n --arg ref "$RELAY_REF" --arg rid "$METAL_RUN_ID" --arg target "$RELAY_TARGET" \
             '{ref: $ref, inputs: ({"metal-run-id": $rid} + (if $target == "uplift" then {target: $target} else {} end))}')
-          resp=$(gh api -X POST "repos/${RELAY_REPO}/actions/workflows/${RELAY_WORKFLOW}/dispatches" --input - <<<"$body") || {
+          resp=$(gh api -X POST -H "X-GitHub-Api-Version: ${DISPATCH_API_VERSION}" \
+            "repos/${RELAY_REPO}/actions/workflows/${RELAY_WORKFLOW}/dispatches" --input - <<<"$body") || {
             echo "::error::the dispatch of ${RELAY_WORKFLOW} on ${RELAY_REPO}@${RELAY_REF} was refused. Ask OSPO by ticket."
             echo "- tt-blaze relay: dispatch refused" >>"$GITHUB_STEP_SUMMARY"
             exit 1
@@ -316,7 +323,10 @@ jobs:
           # The run id: from the 200 answer, else by the relay's run name,
           # only among runs created after DISPATCH_AT.
           run_id=$(printf '%s' "${resp:-}" | jq -r '.workflow_run_id // empty' 2>/dev/null || true)
-          if ! [[ "$run_id" =~ ^[0-9]+$ ]]; then
+          if [[ "$run_id" =~ ^[0-9]+$ ]]; then
+            echo "relay run id from the dispatch answer"
+          else
+            echo "::warning::no run id in the dispatch answer; finding the relay run by its run name"
             run_id=""
             for _ in $(seq 1 24); do
               sleep 5 &
