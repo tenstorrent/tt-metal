@@ -42,7 +42,8 @@ struct ManifestFinding {
     std::string detail;  // names the device, slot, region or link; for people, not parsed
 };
 
-enum class SlotRole { Router, Worker };
+// Idle: an Ethernet core of the device with no link, on which Metal launches no router.
+enum class SlotRole { Router, Worker, Idle };
 
 enum class LinkBackend { Ethernet, Noc, Local };
 
@@ -58,7 +59,7 @@ struct Slot {
     uint32_t cce = 0;
     uint32_t hart = 0;
     SlotRole role = SlotRole::Worker;
-    std::optional<uint32_t> port;  // set exactly when role is Router: its Ethernet channel in the capture
+    std::optional<uint32_t> port;  // set exactly when role is Router or Idle: the core's Ethernet channel
 };
 
 // SRAM of one CCE a device owns, [base, base + size) in the CCE's SRAM offsets.
@@ -124,10 +125,10 @@ struct PackageFacts {
 // since the rest of the text cannot be judged. Otherwise throws ManifestLoadError listing every load error found: a
 // required key missing; a key unknown (`port` on a worker included) or repeated in one map; a value of the wrong type
 // or negative; an integer that is not a plain untagged scalar in decimal without a leading 0 (other than "0") or in
-// hexadecimal after "0x"; a `role` or `backend` that is not a known name; a router with no `port`; an empty `capture`;
-// an empty `devices`. Required keys: version, devices, links; a device's name, fabric_chip, slots, regions; every
-// field of a slot (port for a router only), a region, a link and a link end. `links`, `slots` and `regions` may be
-// empty sequences.
+// hexadecimal after "0x"; a `role` or `backend` that is not a known name; a router or idle slot with no `port`; an
+// empty `capture`; an empty `devices`. Required keys: version, devices, links; a device's name, fabric_chip, slots,
+// regions; every field of a slot (port for a router only), a region, a link and a link end. `links`, `slots` and
+// `regions` may be empty sequences.
 Manifest parse_manifest(std::string_view yaml_text);
 
 // parse_manifest() on the file at `path`, then a relative `capture` resolved against the file's directory. Throws

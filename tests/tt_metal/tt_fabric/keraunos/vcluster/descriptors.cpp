@@ -91,17 +91,18 @@ const Device* device_named(const Manifest& manifest, const std::string& name) {
     return it == manifest.devices.end() ? nullptr : &*it;
 }
 
-// A device's router slots in port order. Fatal when a router slot has no port, which parse_manifest() refuses.
-std::vector<Slot> routers_by_port(const Device& device) {
-    std::vector<Slot> routers;
+// A device's Ethernet cores, its router and idle slots, in port order. Fatal when one has no port, which
+// parse_manifest() refuses.
+std::vector<Slot> eth_slots_by_port(const Device& device) {
+    std::vector<Slot> slots;
     for (const Slot& slot : device.slots) {
-        if (slot.role == SlotRole::Router) {
-            TT_FATAL(slot.port.has_value(), "Device {} has a router slot without a port", device.name);
-            routers.push_back(slot);
+        if (slot.role != SlotRole::Worker) {
+            TT_FATAL(slot.port.has_value(), "Device {} has a router or idle slot without a port", device.name);
+            slots.push_back(slot);
         }
     }
-    std::sort(routers.begin(), routers.end(), [](const Slot& x, const Slot& y) { return *x.port < *y.port; });
-    return routers;
+    std::sort(slots.begin(), slots.end(), [](const Slot& x, const Slot& y) { return *x.port < *y.port; });
+    return slots;
 }
 
 bool is_programmable(const YAML::Node& view) { return view["programmable"] && view["programmable"].as<bool>(); }
@@ -152,7 +153,7 @@ std::vector<GenerationFinding> refusals(
 
     for (const Device& device : manifest.devices) {
         std::vector<uint32_t> ports;
-        for (const Slot& slot : routers_by_port(device)) {
+        for (const Slot& slot : eth_slots_by_port(device)) {
             ports.push_back(*slot.port);
         }
         for (std::size_t port = 0; port < ports.size(); port++) {
@@ -160,7 +161,7 @@ std::vector<GenerationFinding> refusals(
                 findings.push_back(
                     {GenerationRefusal::RouterPortsNotDense,
                      fmt::format(
-                         "device {} router ports {} are not 0 to {}",
+                         "device {} Ethernet ports {} are not 0 to {}",
                          device.name,
                          fmt::join(ports, ", "),
                          ports.size() - 1)});
@@ -176,13 +177,13 @@ std::vector<GenerationFinding> refusals(
     }
 
     for (const Device& device : manifest.devices) {
-        for (const Slot& slot : routers_by_port(device)) {
+        for (const Slot& slot : eth_slots_by_port(device)) {
             const YAML::Node entry = keraunos_core_entry(cores, CceId{slot.tile, slot.cce});
             if (!entry) {
                 findings.push_back(
                     {GenerationRefusal::RouterNotAnEthCore,
                      fmt::format(
-                         "device {} router on (tile {}, cce {}) has no keraunos.cores entry in the package",
+                         "device {} Ethernet core (tile {}, cce {}) has no keraunos.cores entry in the package",
                          device.name,
                          slot.tile,
                          slot.cce)});
@@ -190,7 +191,7 @@ std::vector<GenerationFinding> refusals(
                 findings.push_back(
                     {GenerationRefusal::RouterNotAnEthCore,
                      fmt::format(
-                         "device {} router core {} is not in the package's eth list",
+                         "device {} Ethernet core {} is not in the package's eth list",
                          device.name,
                          entry["core"].as<std::string>())});
             }
@@ -237,7 +238,7 @@ std::string soc_desc(
     YAML::Node desc = YAML::Clone(package);
     YAML::Node eth(YAML::NodeType::Sequence);
     YAML::Node device_cores(YAML::NodeType::Sequence);
-    for (const Slot& slot : routers_by_port(device)) {
+    for (const Slot& slot : eth_slots_by_port(device)) {
         const YAML::Node entry = keraunos_core_entry(cores, CceId{slot.tile, slot.cce});
         eth.push_back(entry["core"].as<std::string>());
         device_cores.push_back(YAML::Clone(entry));

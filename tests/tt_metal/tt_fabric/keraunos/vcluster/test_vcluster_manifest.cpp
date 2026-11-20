@@ -226,6 +226,26 @@ TEST(VclusterManifest, RegionWithoutSlotPasses) {
     EXPECT_EQ(rows(yaml, mmk_with_tile_4()), Rows{});
 }
 
+// An idle slot is an Ethernet core with a port and no link: row 7 asks no link of it, and a link cannot end on it.
+TEST(VclusterManifest, IdleSlot) {
+    const std::string idle_on_tile_4 = edit(
+        {{"      - {tile: 0, cce: 0, hart: 1, role: worker}\n",
+          "      - {tile: 0, cce: 0, hart: 1, role: worker}\n      - {tile: 4, cce: 0, hart: 0, role: idle, port: "
+          "1}\n"},
+         {"      - {tile: 0, cce: 0, base: 0x0, size: 0x400000}\n",
+          "      - {tile: 0, cce: 0, base: 0x0, size: 0x400000}\n      - {tile: 4, cce: 0, base: 0x0, size: "
+          "0x400000}\n"}});
+    EXPECT_EQ(rows(idle_on_tile_4, mmk_with_tile_4()), Rows{});
+    EXPECT_EQ(
+        rows(edit(
+            {{"{tile: 2, cce: 0, hart: 0, role: router, port: 1}",
+              "{tile: 2, cce: 0, hart: 0, role: idle, port: 1}"}})),
+        Rows{7});
+    expect_load_error(
+        edit({{"{tile: 2, cce: 0, hart: 0, role: router, port: 1}", "{tile: 2, cce: 0, hart: 0, role: idle}"}}),
+        "port");
+}
+
 // --- Stage A: row 1, reported alone ------------------------------------------------------------------------------
 
 // Row 1: `cce` 1. (0, 1) is no core either (row 2), and its worker has no router on hart 0 (row 6): stage A ends the
