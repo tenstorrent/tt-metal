@@ -314,6 +314,7 @@ class V41PrefillRuntime:
                 f"[v41 runtime] chunk [{actual_start}, {actual_end}) slot {slot_id}: host embedding (the resume replayed the "
                 f"islands while this chunk's H2D ids tensor waited unread)"
             )
+        self.pf._cone_last = bool(last) and not warmup  # WS9 DEC_CONE: the burst's last chunk ends the export (S')
         try:
             self.pf._chunk([int(v) for v in ids[:real]], int(actual_start), self.engram, None, decoder=decoder)
         except BaseException:
@@ -322,6 +323,7 @@ class V41PrefillRuntime:
             raise
         finally:
             self.pf._ids_dev = None
+            self.pf._cone_last = False
         t1 = time.time()
         export_chunk(kv_caches, self.pf, slot_id, int(actual_start), int(actual_end), decoder=decoder)
         if DECODER_MARKED and last and not warmup:
