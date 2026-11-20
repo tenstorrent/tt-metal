@@ -19,6 +19,7 @@ namespace {
 using test_helpers::MakeFabricConnectionForTest;
 using test_helpers::MakeSpecWithFabricConnectionForTest;
 using test_helpers::ProgramSpecFabric1DTest;
+using test_helpers::ProgramSpecFabric2DTest;
 
 constexpr const char* kTwoTargetTokenKernel = R"(
 #include "api/dataflow/fabric_connection_binding_token.h"
@@ -61,6 +62,36 @@ TEST_F(ProgramSpecFabric1DTest, CPU_FabricConnectionTokenIfPresentIsNullWithoutB
     spec.advanced_options.fabric_connections.clear();
     spec.kernels[0].advanced_options.fabric_connection_bindings.clear();
     spec.kernels[0].source = KernelSpec::SourceCode{kTokenIfAbsentKernel};
+    EXPECT_NO_THROW(distributed::MeshWorkload(fixture_device(), spec));
+}
+
+constexpr const char* kRequiresFabric2DDefineKernel = R"(
+#ifndef FABRIC_2D
+#error "a kernel that binds a fabric connection on a 2D fabric gets FABRIC_2D"
+#endif
+void kernel_main() {}
+)";
+
+constexpr const char* kRejectsFabric2DDefineKernel = R"(
+#ifdef FABRIC_2D
+#error "a kernel that binds a fabric connection on a 1D fabric does not get FABRIC_2D"
+#endif
+void kernel_main() {}
+)";
+
+TEST_F(ProgramSpecFabric2DTest, CPU_FabricConnectionKernelGetsFabric2DDefineJITSmoke) {
+    // On a 2D fabric, the runtime defines FABRIC_2D for a kernel that binds a fabric connection.
+    ProgramSpec spec = MakeSpecWithFabricConnectionForTest(
+        MakeFabricConnectionForTest(experimental::Fabric2DTargets{fixture_neighbour_fabric_node_id()}));
+    spec.kernels[0].source = KernelSpec::SourceCode{kRequiresFabric2DDefineKernel};
+    EXPECT_NO_THROW(distributed::MeshWorkload(fixture_device(), spec));
+}
+
+TEST_F(ProgramSpecFabric1DTest, CPU_FabricConnectionKernelHasNoFabric2DDefineJITSmoke) {
+    // On a 1D fabric, a kernel that binds a fabric connection does not get FABRIC_2D.
+    ProgramSpec spec = MakeSpecWithFabricConnectionForTest(
+        MakeFabricConnectionForTest(experimental::Fabric1DTargets{fixture_neighbour_direction()}));
+    spec.kernels[0].source = KernelSpec::SourceCode{kRejectsFabric2DDefineKernel};
     EXPECT_NO_THROW(distributed::MeshWorkload(fixture_device(), spec));
 }
 
