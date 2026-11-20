@@ -44,7 +44,7 @@ def main() -> int:
     options = tt_umd.SimulationConnectorOptions()
     options.simulator_directory = Path(sys.argv[1])
     options.serve_over_sockets = True
-    connection, devices = tt_umd.SimulationConnector.discover(options)
+    connection, devices, *_ = tt_umd.SimulationConnector.discover(options)
     try:
         if connection.role != tt_umd.SimulationConnector.Role.HOST:
             print(

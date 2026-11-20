@@ -13,6 +13,7 @@
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "api/debug/kernel_profiler.hpp"  // TEMP perf experiment (PR 63365), do not commit
 
 namespace ckl = compute_kernel_lib;
 
@@ -169,6 +170,7 @@ void kernel_main() {
     dfb_sum_scaler_obj.wait_front(onetile);
 
     for (std::uint32_t n = 0; n < N; ++n) {
+        DeviceZoneScopedN("SOFTMAX-COL");  // TEMP perf experiment (PR 63365), do not commit
         // SOFTMIN shift: use min(x) instead of max(x). A max-based shift is +inf for a row
         // holding +inf, and exp(max(x) - x) then saturates the whole row (inf / inf = NaN, and the
         // +inf lane itself is inf - inf = NaN) -- see #56371. Shifted by min(x) instead, a row that

@@ -150,6 +150,33 @@ inline void _configure_alu_cfg_(const DataFormat srca, const DataFormat srcb)
     static_assert(TYPE != AluCfgType::UNCONFIGURED, "UNCONFIGURED is the empty-tracker marker, not a config to program");
 
     const AluCfgState wanted {TYPE, srca, srcb};
+
+// TEMP perf experiment (PR 63365), do not commit. LLK_ALU_CFG_EXPERIMENT selects:
+//   0 = tracked (PR default), 1 = tracked, store all words on a miss (no per-word diff), 2 = unconditional
+#ifndef LLK_ALU_CFG_EXPERIMENT
+#define LLK_ALU_CFG_EXPERIMENT 0
+#endif
+#if LLK_ALU_CFG_EXPERIMENT != 0
+#if LLK_ALU_CFG_EXPERIMENT == 1
+    if (alu_cfg.programmed == wanted)
+    {
+        return;
+    }
+#endif
+    {
+        alu_config_u all_words;
+        _build_alu_words_<TYPE, EN_32BIT_DEST>(srca, srcb, all_words);
+        for (std::uint32_t i = 0; i < NUM_WORDS_ALU_FORMAT; i++)
+        {
+            cfg[ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32 + i] = all_words.val[i];
+        }
+        // Keep the cache coherent so a mixed build (some call sites on another mode) stays correct.
+        alu_cfg.words      = all_words;
+        alu_cfg.programmed = wanted;
+        return;
+    }
+#endif
+
     if (alu_cfg.programmed == wanted)
     {
         return;

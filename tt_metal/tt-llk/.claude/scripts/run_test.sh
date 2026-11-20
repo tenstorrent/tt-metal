@@ -369,7 +369,7 @@ _perf_env_prefix() {
 #     tt-smi -r afterwards.
 
 HANG_POLL_SECS=5
-HANG_STALL_QUASAR=120       # absorbs Zebu model-load quiet phases (~30s max)
+HANG_STALL_QUASAR=${HANG_STALL_QUASAR:-120}  # absorbs Zebu model-load quiet phases (~30s max); env-overridable
 HANG_STALL_SILICON=300      # loose: absorbs compile-consumer's quiet phases
 LLK_TRIAGE_SCRIPT_REL=".claude/scripts/llk_triage.py"
 

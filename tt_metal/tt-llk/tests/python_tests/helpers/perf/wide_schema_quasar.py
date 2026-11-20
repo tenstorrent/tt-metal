@@ -66,6 +66,9 @@ DB_SCHEMA = [
     Column("tile_cnt", "int64", True, "key"),
     # configuration — Quasar test parameters + pipeline-injected dims
     Column("acc_to_dest", "bool", True, "configuration"),
+    Column("alu_cfg_alt_format", "string", True, "configuration"),
+    Column("alu_cfg_mode", "string", True, "configuration"),
+    Column("alu_cfg_pattern", "string", True, "configuration"),
     Column("approx_mode", "string", True, "configuration"),
     Column("block_ct_dim", "int64", True, "configuration"),
     Column("block_rt_dim", "int64", True, "configuration"),
