@@ -430,6 +430,171 @@ inline void set_matmul_in0_row_stride(uint32_t kt_dim) {
 }
 #endif
 
+// N-slice ring walk k-steps (raw LLK, capability). ckernel::matmul_block (and compute_kernel_lib::matmul_block) picks
+// the MOP mode from ct >= rt: a 1 x 1 or 1 x out_n group runs in the reuse-in1 mode, a 4 x 1 group in the stream-in0
+// mode, and every switch between the two needs matmul_block_init (both threads drain, re-record their replay buffer and
+// re-program the MOP: ~52 ns, one per ring step on a 4 + 1-row walk, two on a 4 + 1 x out_n one). No compute API runs a
+// matmul_block in a mode other than the one its ct / rt imply, nor keeps the CB lookups out of the per-k-step call.
+// So a 1-wide walk programs the stream-in0 MOP once (rt >= 2) and never re-inits:
+//   - an r x 1 group (r = 1..4) runs in the stream-in0 mode: SrcA = the in1 tile, SrcB = r in0 tiles at the MOP's row
+//     stride (KT_DIM). A 1-row group's single in0 tile is unpacked directly: the MOP's per-tile base bump (RDCFG,
+//     ADDDMAREG, STALLWAIT on the unpacker, WRCFG) only prepares a next tile that group never reads.
+//   - the wide short group (1 x out_n, out_n 2..4, RING_WIDE_SHORT_GROUP) keeps the reuse-in1 order without its MOP:
+//   in0
+//     once into SrcB, then the out_n in1 tiles (adjacent in L1) into SrcA with the reuse-in1 replay's base bump issued
+//     directly; math replays the stream-in0 MOP's recorded MVMULs per output tile and clears SrcA / SrcB itself.
+//   - the k-steps step their L1 addresses from one CB lookup per group, and math checks the dynamic throttle once per
+//     group (throttled: the throttled stream-in0 MOP, and a math-only re-init around a wide group).
+// Same tiles, same MVMULs in the same order into the same DEST tiles (only the SrcA / SrcB clear order differs):
+// bit-identical. Measured (Blackhole p150b, LoFi, unzoned, with the short-group-last order of
+// conv2d_3x3_nslice_order.hpp): res4.x 10467 -> 10105 ns (median of 3; weights stubbed 10107 -> 8889), res5.0 26083 ->
+// 24832, res5.1 25898 -> 24703, res4.0 11119 -> 10696, aspp.convs.3 19752 -> 18844 (perf_experiments/nslice_short_row).
+#ifdef TRISC_UNPACK
+// One k-step of an r x 1 group at L1 addresses (16 B units, CB base - 1 as the LLK computes them).
+ALWI void ring_unpack_stream_in0_at(
+    uint32_t addr_in0, uint32_t addr_in1, uint32_t rows, volatile uint32_t tt_reg_ptr* cfg) {
+    wait_for_next_context(2);
+    // SrcA (SEC0) <- in1, SrcB (SEC1) <- in0.
+    _llk_unpack_configure_addresses_(addr_in1, addr_in0, cfg);
+    semaphore_post(semaphore::UNPACK_SYNC);
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+    TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*OvrdThreadId*/, 1 /*Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    if (rows == 1) {
+        TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*OvrdThreadId*/, 1 /*Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    } else {
+        TT_MOP(0, rows - 1, unp_cfg_context == 0 ? 0 : 0xff);
+    }
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
+    switch_config_context(unp_cfg_context);
+}
+
+// One k-step of the 1 x w wide short group (reuse-in1 order, no MOP).
+template <uint32_t w>
+ALWI void ring_unpack_wide_at(uint32_t addr_in0, uint32_t addr_in1, volatile uint32_t tt_reg_ptr* cfg) {
+    wait_for_next_context(2);
+    _llk_unpack_configure_addresses_(addr_in1, addr_in0, cfg);
+    semaphore_post(semaphore::UNPACK_SYNC);
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+    TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*OvrdThreadId*/, 1 /*Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    for (uint32_t c = 0; c < w; ++c) {
+        TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*OvrdThreadId*/, 1 /*Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        if (c + 1 < w) {
+            if (unp_cfg_context == 0) {
+                TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC0_REG3_Base_address_ADDR32);
+                TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TILE_SIZE_A);
+                TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+                TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
+            } else {
+                TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
+                TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TILE_SIZE_A);
+                TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+                TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
+            }
+            // As in the reuse-in1 replay: WRCFG takes 2 cycles.
+            TTI_NOP;
+        }
+    }
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
+    switch_config_context(unp_cfg_context);
+}
+
+// The in0 row stride (KT_DIM) and the MOP's in0 step TMP_LO (= in0 tile size x KT_DIM), set once per source switch.
+ALWI void ring_set_in0_row_stride(uint32_t kt_dim) {
+    TT_SETDMAREG(0, LOWER_HALFWORD(kt_dim), 0, LO_16(p_gpr_unpack::KT_DIM));
+    TTI_MULDMAREG(0, p_gpr_unpack::TMP_LO, p_gpr_unpack::TILE_SIZE_B, p_gpr_unpack::KT_DIM);
+}
+
+template <uint32_t cb>
+ALWI uint32_t ring_cb_base() {
+    return get_local_cb_interface(get_operand_id(cb)).fifo_rd_ptr - 1;
+}
+
+template <uint32_t cb>
+ALWI uint32_t ring_cb_tile() {
+    return get_local_cb_interface(get_operand_id(cb)).fifo_page_size;
+}
+#endif
+#ifdef TRISC_MATH
+// One k-step of an r x 1 group: _llk_math_matmul_ with reuse_a fixed false.
+template <int throttle>
+ALWI void ring_math_stream_in0_run(uint32_t rows) {
+    for (uint32_t r = 0; r < rows; ++r) {
+        math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(r);
+        if constexpr (matmul_throttle_drives_phases<MATH_FIDELITY, throttle>()) {
+            for (uint32_t phase = 0; phase < to_underlying(MATH_FIDELITY); phase++) {
+                ckernel_template::run();
+            }
+            TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
+        } else {
+            ckernel_template::run();
+        }
+    }
+    TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
+}
+
+// The dynamic-throttle check (an L1 read) once per group, re-initializing the stream-in0 MOP at the selected throttle
+// level as matmul_block_math_dynamic_throttle does; true when the throttled MOP is live.
+ALWI bool ring_math_select(uint32_t in0_cb, uint32_t in1_cb) {
+#ifndef ARCH_BLACKHOLE
+    return false;
+#else
+    volatile uint32_t throttle_en = *(ckernel::throttle_ptr) % 2;
+    if (throttle_en) {
+        if (ckernel::throttled_mop_status != 1) {
+            llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE_MAX>(in0_cb, in1_cb, 0, 1, 2);
+            ckernel::throttled_mop_status = 1;
+        }
+        return true;
+    }
+    if (ckernel::throttled_mop_status != 0) {
+        llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb, in1_cb, 0, 1, 2);
+        ckernel::throttled_mop_status = 0;
+    }
+    return false;
+#endif
+}
+
+ALWI void ring_math_run_sel(bool throttled, uint32_t rows) {
+#ifdef ARCH_BLACKHOLE
+    if (throttled) {
+        ring_math_stream_in0_run<MM_THROTTLE_MAX>(rows);
+        return;
+    }
+#endif
+    ring_math_stream_in0_run<MM_THROTTLE>(rows);
+}
+
+// One k-step of the 1 x w wide short group on the stream-in0 MOP's replay buffer (recorded for full 32 x 32 tiles; it
+// differs from the reuse-in1 one only in which source the LoFi last MVMUL clears). Per output tile: LoFi replays the
+// first 15 MVMULs and issues the 16th clearing SrcA; HiFi replays all 16 per fidelity phase, then clears SrcA (the
+// MOP's end op). SrcB (in0) is cleared after the last tile. Throttled: the standard reuse-in1 path with a math-only
+// re-init there and back (the unpack side runs no MOP for this group).
+template <uint32_t w>
+ALWI void ring_math_wide_run(bool throttled, uint32_t in0_cb, uint32_t in1_cb) {
+#ifdef ARCH_BLACKHOLE
+    if (throttled) {
+        llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE_MAX>(in0_cb, in1_cb, 0, w, 1);
+        llk_math_matmul<MATH_FIDELITY, MM_THROTTLE_MAX>(0, w, 1);
+        llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE_MAX>(in0_cb, in1_cb, 0, 1, 2);
+        return;
+    }
+#endif
+    for (uint32_t c = 0; c < w; ++c) {
+        math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(c);
+        if constexpr (is_high_fidelity(MATH_FIDELITY)) {
+            for (uint32_t phase = 0; phase < to_underlying(MATH_FIDELITY); phase++) {
+                lltt::replay(ckernel::math::replay_buf_offset, 16);
+            }
+            TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
+        } else {
+            lltt::replay(ckernel::math::replay_buf_offset, 15);
+            TTI_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_5, 0);
+        }
+    }
+    TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
+}
+#endif
+
 // Center-tap direct modes (the descriptor's center_tap_mode).
 constexpr uint32_t CENTER_K_BLOCK = 1;
 constexpr uint32_t CENTER_SLOTS = 2;
@@ -1414,8 +1579,17 @@ void kernel_main() {
                 const uint32_t first = conv2d_3x3::ring_next_real<k_cols, num_owning_cols>(my_col, 0);
                 reconfig_data_format(cb_weights, cb_im2col_tiles);
                 pack_reconfig_data_format(cb_combine_slots);
-                ckernel::matmul_block_init(cb_im2col_tiles, cb_weights, false, slice_sb_w, slice_sb_h, k_tiles);
-                uint32_t init_rows = slice_sb_h;
+                // A 1-wide walk runs on the ring k-steps (see ring_unpack_stream_in0_at): the stream-in0 MOP (rt >= 2),
+                // programmed once.
+                constexpr bool ring_ksteps = slice_sb_w == 1;
+                ckernel::matmul_block_init(
+                    cb_im2col_tiles,
+                    cb_weights,
+                    false,
+                    slice_sb_w,
+                    (ring_ksteps && slice_sb_h < 2) ? 2 : slice_sb_h,
+                    k_tiles);
+                [[maybe_unused]] uint32_t init_rows = slice_sb_h;
                 // Wide short group (RING_WIDE_SHORT_GROUP, CT group heights only): a 1-row group of a slice 2..4 tiles
                 // wide runs one 1 x out_n subblock (1 + out_n unpacks per k-step) instead of out_n 1 x 1 ones (2 each).
                 // The spare-column groups' 5-row slices (4 + 1) need it: res5.0 / res5.1 on 13 groups 33.7 -> 29.3 /
@@ -1427,7 +1601,7 @@ void kernel_main() {
 #else
                 constexpr bool wide_short = false;
 #endif
-                uint32_t init_w = slice_sb_w;
+                [[maybe_unused]] uint32_t init_w = slice_sb_w;
                 // rt_valid: the ring row groups over the block's valid tile-rows (the reader forwards the same ones).
                 const uint32_t walk_groups = (valid_rows + slice_sb_h - 1) / slice_sb_h;
                 im2col_tiles.wait_front(prelude_rows * in0_k_tiles);
@@ -1447,7 +1621,7 @@ void kernel_main() {
                         const uint32_t lo = kh_lo[r0 / slice_sb_h];
                         const uint32_t hi = kh_hi[r0 / slice_sb_h];
                         const uint32_t group_w = (wide_short && rows == 1) ? out_n_tiles : slice_sb_w;
-                        if (rows != init_rows || group_w != init_w) {
+                        if (!ring_ksteps && (rows != init_rows || group_w != init_w)) {
                             ckernel::matmul_block_init(cb_im2col_tiles, cb_weights, false, group_w, rows, k_tiles);
                             init_rows = rows;
                             init_w = group_w;
@@ -1474,7 +1648,77 @@ void kernel_main() {
                             for (uint32_t c0 = 0; c0 < out_n_tiles; c0 += sb_w) {
                                 tile_regs_acquire();
                                 uint32_t in1_index = c0;
-                                if constexpr (nslice_center) {
+                                if constexpr (ring_ksteps) {
+                                    // The ring k-steps: the same k-steps, sources and order as the branches below, one
+                                    // CB lookup per group (sb_w > 1: the wide short group).
+                                    constexpr uint32_t ct = c_in_tiles;
+                                    [[maybe_unused]] const uint32_t k_lo =
+                                        nslice_center ? lo * 3 * ct : lo * (k_tiles / 3);
+                                    [[maybe_unused]] const uint32_t k_hi =
+                                        nslice_center ? hi * 3 * ct : hi * (k_tiles / 3);
+#ifdef TRISC_UNPACK
+                                    volatile uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
+                                    auto unpack_k = [&](uint32_t a0, uint32_t a1) {
+                                        if constexpr (sb_w > 1) {
+                                            ring_unpack_wide_at<sb_w>(a0, a1, cfg);
+                                        } else {
+                                            ring_unpack_stream_in0_at(a0, a1, group_rows, cfg);
+                                        }
+                                    };
+                                    const uint32_t w_tile = ring_cb_tile<cb_weights>();
+                                    const uint32_t w_step = w_tile * out_n_tiles;
+                                    uint32_t a_w =
+                                        ring_cb_base<cb_weights>() + w_tile * (in1_index + k_lo * out_n_tiles);
+                                    const uint32_t i_tile = ring_cb_tile<cb_im2col_tiles>();
+                                    if constexpr (nslice_center) {
+                                        const uint32_t c_tile = ring_cb_tile<cb_center_tiles>();
+                                        uint32_t a_in0 =
+                                            ring_cb_base<cb_im2col_tiles>() + i_tile * (r0 * in0_k_tiles + lo * 2 * ct);
+                                        uint32_t a_ctr = ring_cb_base<cb_center_tiles>() +
+                                                         c_tile * (r0 * ct + lo * block_m_tiles * ct);
+                                        ring_set_in0_row_stride(in0_k_tiles);
+                                        for (uint32_t kh = lo; kh < hi; ++kh) {
+                                            for (uint32_t c = 0; c < ct; ++c) {
+                                                unpack_k(a_in0, a_w);
+                                                a_in0 += i_tile;
+                                                a_w += w_step;
+                                            }
+                                            ring_set_in0_row_stride(ct);
+                                            for (uint32_t c = 0; c < ct; ++c) {
+                                                unpack_k(a_ctr, a_w);
+                                                a_ctr += c_tile;
+                                                a_w += w_step;
+                                            }
+                                            a_ctr += (block_m_tiles - 1) * ct * c_tile;
+                                            ring_set_in0_row_stride(in0_k_tiles);
+                                            for (uint32_t c = 0; c < ct; ++c) {
+                                                unpack_k(a_in0, a_w);
+                                                a_in0 += i_tile;
+                                                a_w += w_step;
+                                            }
+                                        }
+                                    } else {
+                                        uint32_t a_in0 =
+                                            ring_cb_base<cb_im2col_tiles>() + i_tile * (r0 * k_tiles + k_lo);
+                                        ring_set_in0_row_stride(k_tiles);
+                                        for (uint32_t k = k_lo; k < k_hi; ++k) {
+                                            unpack_k(a_in0, a_w);
+                                            a_in0 += i_tile;
+                                            a_w += w_step;
+                                        }
+                                    }
+#endif
+#ifdef TRISC_MATH
+                                    const bool throttled = ring_math_select(cb_im2col_tiles, cb_weights);
+                                    for (uint32_t k = k_lo; k < k_hi; ++k) {
+                                        if constexpr (sb_w > 1) {
+                                            ring_math_wide_run<sb_w>(throttled, cb_im2col_tiles, cb_weights);
+                                        } else {
+                                            ring_math_run_sel(throttled, group_rows);
+                                        }
+                                    }
+#endif
+                                } else if constexpr (nslice_center) {
                                     // K order unchanged (kh, kw, c). One loop per source, each with constant CB ids (a
                                     // single loop choosing the CB per k measured res5.1 +5.6%).
                                     constexpr uint32_t ct = c_in_tiles;

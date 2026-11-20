@@ -62,26 +62,22 @@ inline uint32_t ring_next_real(uint32_t my_col, uint32_t j) {
 }
 
 // Row groups of an owner slice [bm, out_n] (one ring hop and one token each): R rows, the last group shorter when R
-// does not divide bm. Odd owners take the short group first: a core's consecutive steps alternate owner parity (except
-// at the wrap when k_cols is odd), so each step starts at the matmul subblock height the previous one ended on. The
-// order is a function of the owner only, so the two columns a partial moves between walk its groups alike.
+// does not divide bm, last for every owner. The ring k-steps never re-init the matmul between group heights (see
+// ring_unpack_stream_in0_at in the compute kernel), so the order no longer follows owner parity (which kept each step
+// at the height the previous one ended on); with the big group first, each step's largest partial goes out first.
+// Measured (Blackhole p150b, LoFi, unzoned, bit-identical): res4.x 10445 -> 10301 ns with the k-steps (weights stubbed
+// 9656 -> 9575), res5.0 26050 -> 25657 even with its wide short group's two re-inits per step
+// (perf_experiments/nslice_short_row). The order is a function of g only, so the two columns a partial moves between
+// walk its groups alike.
 template <uint32_t bm, uint32_t R>
-inline uint32_t ring_group_row0(uint32_t owner, uint32_t g) {
-    if constexpr (bm % R != 0) {
-        if (owner & 1) {
-            return g == 0 ? (bm / R) * R : (g - 1) * R;
-        }
-    }
+inline uint32_t ring_group_row0([[maybe_unused]] uint32_t owner, uint32_t g) {
     return g * R;
 }
 
 // ring_group_row0 over a slice of `rows` valid tile-rows known only at runtime (the work-balanced M split gives grid
-// rows different tile-row counts under one CT block height): the same order, with the short group of `rows`.
+// rows different tile-row counts under one CT block height): the same order.
 template <uint32_t R>
-inline uint32_t ring_group_row0_rt(uint32_t rows, uint32_t owner, uint32_t g) {
-    if (rows % R != 0 && (owner & 1)) {
-        return g == 0 ? (rows / R) * R : (g - 1) * R;
-    }
+inline uint32_t ring_group_row0_rt([[maybe_unused]] uint32_t rows, [[maybe_unused]] uint32_t owner, uint32_t g) {
     return g * R;
 }
 
