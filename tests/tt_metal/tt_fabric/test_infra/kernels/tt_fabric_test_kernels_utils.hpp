@@ -470,11 +470,21 @@ struct ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, true> {
     }
 };
 
+// Test-only guard: a neighbour packet carries no route, so zero the route buffer once at setup. If a router ever
+// ignored the flag, the packet would decode to "no action" and the test would fail, rather than be delivered by
+// whatever route bytes an earlier test left in this L1 header.
+inline void test_clear_route_buffer(volatile tt_l1_ptr HybridMeshPacketHeader* h) {
+    for (uint32_t i = 0; i < sizeof(h->route_buffer); i++) {
+        h->route_buffer[i] = 0;
+    }
+}
+
 // Neighbour send (#65575): the 2D unicast args, routed with the neighbour_send route instead of a decoded map.
 struct NeighbourSendHandler {
     static void parse_and_setup(
         size_t& arg_idx, uint32_t packet_header_address, volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header) {
         const auto unicast_fields = ChipUnicastFields2D::build_from_args(arg_idx);
+        test_clear_route_buffer((HybridMeshPacketHeader*)packet_header_address);
         fabric_set_neighbour_route(
             (HybridMeshPacketHeader*)packet_header_address, unicast_fields.dst_device_id, unicast_fields.dst_mesh_id);
     }
@@ -1184,6 +1194,7 @@ struct SenderKernelTrafficConfig {
             packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
                 get_noc_addr_helper(f.atomic_inc_fields.dst_noc_encoding, f.atomic_inc_fields.dst_address),
                 f.atomic_inc_fields.atomic_inc_val});
+            mark_neighbour();  // encoding 2: the setter above rewrote noc_send_type
             connection_manager_->template wait_for_empty_write_slot<BENCHMARK_MODE>(connection_ptr_, connection_idx_);
             connection_manager_->template send_header_non_blocking<BENCHMARK_MODE>(
                 connection_ptr_, connection_idx_, (uint32_t)packet_header);
@@ -1284,11 +1295,9 @@ private:
     }
     // ftype: neighbour under flag encoding 2: the NoC command setters rewrite noc_send_type, so re-mark after each.
     void mark_neighbour() {
-#if defined(FABRIC_2D)
-        if (neighbour_) {
+        if (neighbour_) {  // only ever set on a 2D fabric (TEST_CHIP_SEND_TYPE_NEIGHBOUR)
             fabric_mark_neighbour_send((HybridMeshPacketHeader*)packet_header);
         }
-#endif
     }
     bool neighbour_ = false;
 

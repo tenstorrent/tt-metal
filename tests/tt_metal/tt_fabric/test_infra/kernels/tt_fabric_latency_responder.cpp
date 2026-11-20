@@ -67,11 +67,17 @@ void kernel_main() {
     } else {
         // 2D routing: use Hybrid Mesh header with device/mesh IDs (static routing)
         if (neighbour) {
+            for (uint32_t i = 0; i < sizeof(HybridMeshPacketHeader::route_buffer); i++) {  // test guard: no stale route
+                ((volatile HybridMeshPacketHeader*)payload_packet_header)->route_buffer[i] = 0;
+            }
             fabric_set_neighbour_route((HybridMeshPacketHeader*)payload_packet_header, dst_device_id, dst_mesh_id);
         } else {
             fabric_set_unicast_route((HybridMeshPacketHeader*)payload_packet_header, dst_device_id, dst_mesh_id);
         }
         if (neighbour) {
+            for (uint32_t i = 0; i < sizeof(HybridMeshPacketHeader::route_buffer); i++) {  // test guard: no stale route
+                ((volatile HybridMeshPacketHeader*)sem_inc_packet_header)->route_buffer[i] = 0;
+            }
             fabric_set_neighbour_route((HybridMeshPacketHeader*)sem_inc_packet_header, dst_device_id, dst_mesh_id);
         } else {
             fabric_set_unicast_route((HybridMeshPacketHeader*)sem_inc_packet_header, dst_device_id, dst_mesh_id);
