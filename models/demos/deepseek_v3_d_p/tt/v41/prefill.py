@@ -43,6 +43,10 @@ from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistribute
 from models.demos.deepseek_v3_d_p.tt.v4.trace_island import TraceIsland, copy_into
 
 from . import hostprof as HP
+
+# V41_PREFILL_HOST_IDS (WS13): when the runtime's next-chunk prefetch hook runs -- "first" (after the first Engram layer, default)
+# or "last" (after the last one: the early gathers then do not overlap this chunk's own layer-14 gather)
+HOST_IDS_AT = os.environ.get("V41_PREFILL_HOST_IDS_AT", "first")
 from .attention import V41CSA, v41_hf_config
 from .block import HC, V41HyperConnection, V41PrefillBlock, identity_pre_row
 from .engram import V41PrefillEngram
@@ -1027,7 +1031,8 @@ class V41Prefill:
                 mark("engram.dev")
                 if HP.ON:
                     HP.mark("engram.forward")
-                self._run_after_engram_hook()
+                if HOST_IDS_AT != "last" or L == max(self.engrams):
+                    self._run_after_engram_hook()
             if kv_only20 and L >= self.cfg.first_decoder_layer:
                 if HP.ON:
                     HP.mark("other")
