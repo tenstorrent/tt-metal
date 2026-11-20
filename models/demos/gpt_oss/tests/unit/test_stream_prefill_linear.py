@@ -300,16 +300,14 @@ class _FakeMesh:
     def __init__(self, low):
         self.low = low
 
-    def l1_allocator_base(self):
-        return 100_000
-
     def lowest_occupied_compute_l1_address(self):
         return self.low
 
 
-def test_l1_budget_is_stepped():
+def test_l1_budget_is_stepped(monkeypatch):
     """Small changes in L1 occupancy give the same budget (the program cache key): rounded down to whole steps, at
     most L1_CAP, the whole cap when nothing is allocated."""
+    monkeypatch.setattr(sp, "_l1_base", lambda mesh: 100_000)
     step, base, margin = sp.L1_BUDGET_STEP, 100_000, sp.L1_MARGIN
     lows = [base + margin + 5 * step + d for d in (0, 1, 1000, step - 1)]
     assert {sp._l1_budget(_FakeMesh(low)) for low in lows} == {5 * step}

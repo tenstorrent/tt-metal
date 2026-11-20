@@ -413,10 +413,17 @@ def _ones_tensor(mesh_device, dtype):
     return cached[1]
 
 
+def _l1_base(mesh_device):
+    """The L1 allocator base on the compute cores (where a program's circular buffers can start)."""
+    import ttnn
+
+    return ttnn.get_allocator_base_address(mesh_device, ttnn.BufferType.L1)
+
+
 def _l1_budget(mesh_device):
     """Circular-buffer bytes per core: below the lowest L1 buffer now allocated (a program's circular buffers must end
     below it), rounded down to L1_BUDGET_STEP, at most L1_CAP."""
-    base = mesh_device.l1_allocator_base()
+    base = _l1_base(mesh_device)
     low = mesh_device.lowest_occupied_compute_l1_address()
     if not low:
         return L1_CAP
