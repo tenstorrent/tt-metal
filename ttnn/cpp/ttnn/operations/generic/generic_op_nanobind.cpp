@@ -97,9 +97,9 @@ std::vector<MeshCoordinate> devices_in(
 // Per-device views of one tensor, such as those ttnn.get_device_tensors returns, share its MeshTensor, and Metal's
 // tensor arguments keep only the MeshTensor: on each device a program runs on, it reads that device's part of the
 // tensor. A tensor argument that is another view of a tensor io_tensors lists, and misses a device its program runs on,
-// would read data the view does not hold, so it is rejected. A name the spec does not declare, a view that io_tensors
-// lists itself, a tensor io_tensors does not hold, and a tensor that is not allocated on a device are left to
-// generic_op's own checks. Needs the GIL.
+// would read data the view does not hold, so it is rejected. A name the spec does not declare, a tensor io_tensors does
+// not hold, and a tensor that is not allocated on a device are left to generic_op's own checks. A view that io_tensors
+// lists itself holds every device the program runs on, so it needs no check. Needs the GIL.
 template <typename ProgramDevices>
 void check_tensor_views(
     const std::vector<Tensor>& io_tensors,
@@ -131,6 +131,8 @@ void check_tensor_views(
         const auto same_view = [&](const Tensor& entry) {
             return same_tensor(entry) && std::ranges::equal(entry.device_storage().get_coords(), view_devices);
         };
+        // A tensor io_tensors does not hold is generic_op's to report. A listed view would pass the check anyway, so
+        // skipping it only saves the work.
         const bool views_no_io_tensor = std::ranges::none_of(io_tensors, same_tensor);
         const bool listed_in_io_tensors = std::ranges::any_of(io_tensors, same_view);
         if (views_no_io_tensor || listed_in_io_tensors) {

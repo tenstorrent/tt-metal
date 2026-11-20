@@ -1057,7 +1057,11 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
     # The program runs on the first device, and the run args name the second device's view of the input.
     message = "tensor parameter 'input' is bound to a view that holds devices"
     spec, run_args = exp_program(second_input, first_output)
-    with expect_error(RuntimeError, message):
+    with expect_error(
+        RuntimeError,
+        r"tensor parameter 'input' is bound to a view that holds devices MeshCoordinate\(\[0, 1\]\), but its program "
+        r"runs on device MeshCoordinate\(\[0, 0\]\), which the view does not hold",
+    ):
         E.generic_op([first_input, first_output], spec, run_args)
     with expect_error(RuntimeError, message):
         E.prepare_generic_op([first_input, first_output], spec, run_args)
@@ -1065,6 +1069,13 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
     whole_spec, whole_run_args = exp_program(first_input, output_tensor)
     with expect_error(RuntimeError, message):
         E.generic_op([input_tensor, output_tensor], whole_spec, whole_run_args)
+    # The same through a mesh range over both devices.
+    with expect_error(RuntimeError, message):
+        E.generic_op(
+            [input_tensor, output_tensor],
+            E.MeshProgramSpec(programs=[(mesh_range(mesh_device), whole_spec)]),
+            E.MeshProgramRunArgs(programs=[(mesh_range(mesh_device), whole_run_args)]),
+        )
     mesh_spec = E.MeshProgramSpec(programs=[(one_device(0), spec)])
     mesh_run_args = E.MeshProgramRunArgs(programs=[(one_device(0), run_args)])
     with expect_error(RuntimeError, message):
