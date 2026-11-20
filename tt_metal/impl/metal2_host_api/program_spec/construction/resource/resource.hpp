@@ -228,8 +228,8 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
 // One FabricConnectionSpec resolved on the Program's device.
 struct ResolvedFabricConnection {
     uint32_t num_targets = 0;
-    // For each node in the spec's links: FabricConnectionBindingHandle::kWordsPerTarget words per target,
-    // in target order.
+    uint32_t words_per_target = 0;
+    // For each node in the spec's links: words_per_target words per target, in target order.
     std::unordered_map<NodeCoord, std::vector<uint32_t>> words_by_node;
 };
 using FabricConnectionsBySpec = std::unordered_map<FabricConnectionSpecName, ResolvedFabricConnection>;

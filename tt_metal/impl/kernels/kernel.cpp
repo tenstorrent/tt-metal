@@ -420,7 +420,7 @@ void Kernel::process_fabric_connection_binding_handles(
 
 void Kernel::write_fabric_connection_runtime_args() {
     for (const auto& handle : this->fabric_connection_binding_handles_) {
-        const uint32_t num_words = handle.num_targets * FabricConnectionBindingHandle::kWordsPerTarget;
+        const uint32_t num_words = handle.num_targets * handle.words_per_target;
         for (const CoreCoord& node : this->logical_cores()) {
             uint32_t* section = this->runtime_args_data(node).data() + handle.rta_word;
             const auto words = handle.words_by_node.find(node);

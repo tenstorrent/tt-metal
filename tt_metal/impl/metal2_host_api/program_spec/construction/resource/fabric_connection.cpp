@@ -121,11 +121,12 @@ FabricConnectionsBySpec RegisterFabricConnections(
         const auto targets = ResolveTargets(control_plane, is_2d_fabric, src, connection);
         ResolvedFabricConnection& resolved = connections[connection.unique_id];
         resolved.num_targets = static_cast<uint32_t>(targets.size());
+        resolved.words_per_target = FabricConnectionBindingHandle::kWordsPerTarget1D;
         for (const auto& [node, link] : connection.links) {
             std::vector<uint32_t>& words = resolved.words_by_node[node];
             for (const auto& target : targets) {
                 if (!target.has_value()) {
-                    words.insert(words.end(), FabricConnectionBindingHandle::kWordsPerTarget, 0u);
+                    words.insert(words.end(), resolved.words_per_target, 0u);
                     continue;
                 }
                 const size_t num_links =
@@ -185,9 +186,10 @@ FabricConnectionBindingsForKernel ResolveFabricConnectionBindingsForKernel(
             .accessor_name = binding.accessor_name,
             .rta_word = rta_word,
             .num_targets = resolved.num_targets,
+            .words_per_target = resolved.words_per_target,
             .words_by_node = resolved.words_by_node,
         });
-        rta_word += resolved.num_targets * FabricConnectionBindingHandle::kWordsPerTarget;
+        rta_word += resolved.num_targets * resolved.words_per_target;
     }
     out.section_words = rta_word - fabric_connection_base_rta_word;
     return out;

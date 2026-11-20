@@ -218,16 +218,17 @@ struct GlobalSemaphoreBindingHandle {
 
 // Metal 2.0: per-kernel resolved fabric connection binding (KernelSpec::FabricConnectionBinding).
 // Emitted as a constexpr token in the `fabric::` namespace. On every node of the kernel, the binding owns
-// num_targets * kWordsPerTarget RTA words from rta_word, one block per target in target order:
+// num_targets * words_per_target RTA words from rta_word, one block per target in target order:
 //   [connected (0 or 1), router ethernet channel, teardown semaphore id, buffer index semaphore id]
 // The words are immutable: the runtime writes them on every node when it creates the node's RTA buffer, zeros
 // where a node has no connection.
 struct FabricConnectionBindingHandle {
-    static constexpr uint32_t kWordsPerTarget = 4;
+    static constexpr uint32_t kWordsPerTarget1D = 4;
 
     std::string accessor_name;  // user-facing identifier (kernel symbol in `fabric::`)
     uint32_t rta_word = 0;      // word index of the binding's first RTA word, on every node
     uint32_t num_targets = 0;
+    uint32_t words_per_target = 0;
     // The words of each node in the spec's links. Other nodes of the kernel get zeros.
     std::unordered_map<CoreCoord, std::vector<uint32_t>> words_by_node;
 };
