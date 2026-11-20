@@ -726,6 +726,11 @@ if "TT_METAL_RUNTIME_ROOT" not in os.environ:
 
     SetRootDir(str(root_dir))
 
+# The matmul config model's default path, and its download when ttnn.CONFIG.matmul_model_config is on
+from ttnn import matmul_model as _matmul_model
+
+_matmul_model.on_import(os.environ.get("TT_METAL_RUNTIME_ROOT") or root_dir)
+
 import atexit as _atexit
 
 

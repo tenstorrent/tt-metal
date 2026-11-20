@@ -60,6 +60,7 @@ tests/pipeline_reorg/galaxy_multi_user_isolation_tests.yaml @sott0n @changh95
 .github/workflows/ttnn-run-sweeps*.yaml @stevendae @cmaryanTT @sjameelTT @bbradelTT @ntarafdar
 .github/workflows/vllm-model-tests-impl.yaml @viktorpusTT @tchedaTT @ppetrovicTT @tenstorrent/metalium-developers-infra
 .github/workflows/vllm-model-tests.yaml @viktorpusTT @tchedaTT @ppetrovicTT @tenstorrent/metalium-developers-infra
+.torrentci/ @tenstorrent/metalium-developers-infra
 tests/pipeline_reorg/llk_sfpu_report_tests.yaml @nstamatovicTT @fvranicTT
 
 /infra/ @tenstorrent/metalium-developers-infra
@@ -168,7 +169,6 @@ tt_metal/hw/inc/internal/profiler/event_metadata.hpp @sohaibnadeemTT
 tt_metal/hw/inc/internal/profiler/fabric_event_profiler.hpp @sohaibnadeemTT
 tt_metal/hw/inc/internal/profiler/noc_event_profiler.hpp @sohaibnadeemTT
 tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @nnyamagoudar-TT
-tt_metal/hw/inc/hostdev/fabric_direction_table_interface.h @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @nnyamagoudar-TT
 tt_metal/hw/inc/hostdev/fabric_routing_path_interface.h @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @nnyamagoudar-TT
 tt_metal/hw/inc/hostdev/realtime_profiler_msgs.h @mo-tenstorrent @yusufbashiTT @abhullar-tt @jbaumanTT @kstevensTT @nathan-TT @vvukomanovicTT @atatuzunerTT @ruizhangTT @arikTT
 tt_metal/hw/inc/hostdev/streaming_profiler_common.h @mo-tenstorrent @yusufbashiTT
@@ -357,6 +357,7 @@ ttnn/ttnn/operations/ @tenstorrent/metalium-developers-ops-leads
 ttnn/ttnn/operations/activations.py @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-convolutions
 ttnn/ttnn/operations/conv2d.py @tenstorrent/metalium-developers-convolutions
 ttnn/ttnn/operations/matmul.py @tenstorrent/metalium-developers-mmfusedreduce
+ttnn/ttnn/matmul_model/ @tenstorrent/metalium-developers-mmfusedreduce
 ttnn/ttnn/operations/moreh.py @razorback3 @dongjin-na @ayerofieiev-tt @tenstorrent/metalium-developers-mmfusedreduce
 ttnn/ttnn/operations/normalization.py @tenstorrent/metalium-developers-mmfusedreduce
 ttnn/ttnn/operations/pool.py @tenstorrent/metalium-developers-convolutions
@@ -492,7 +493,6 @@ ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_q
 ttnn/cpp/ttnn/operations/normalization/ @tenstorrent/metalium-developers-mmfusedreduce
 ttnn/cpp/ttnn/operations/normalization/**/CMakeLists.txt @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/reduction/ @tenstorrent/metalium-developers-mmfusedreduce
-ttnn/cpp/ttnn/operations/reduction/accumulation/ @aczajkowskiTT @sjameelTT @bbradelTT @mgajewskiTT @nmauriceTT @nsorabaTT
 ttnn/cpp/ttnn/operations/reduction/**/CMakeLists.txt @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/ @tenstorrent/cse-developer-ttnn @iwroszTT
 ttnn/cpp/ttnn/operations/transformer/sdpa/ @tenstorrent/metalium-developers-sdpa
