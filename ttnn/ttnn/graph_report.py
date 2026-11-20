@@ -295,7 +295,11 @@ def _report_rank(report, path: Path) -> int:
     r = meta.get("rank")
     if r is None:
         raise ValueError(f"Graph report metadata missing required field rank: {path}")
-    return int(r)
+    rank = int(r)
+    if rank < 0:
+        # It would sort ahead of rank 0 everywhere ranks are ordered, e.g. as the rank report_metadata is taken from.
+        raise ValueError(f"Graph report metadata has negative rank {rank}: {path}")
+    return rank
 
 
 class _ReportFile(NamedTuple):
@@ -2813,7 +2817,6 @@ def _import_report(report_path: Path, output_dir: Path, db_path: Path, generate_
         cursor = conn.cursor()
 
         create_database_schema(cursor)
-        save_database_schema_version(cursor)
 
         total_stats = {
             "files": 0,
