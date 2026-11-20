@@ -89,9 +89,103 @@ inline bool bf16_dest_acosh() {
     return false;
 #endif
 }
+// The kernel's instructions in a stall-filling order, constants held in LRegs.
+inline void calculate_acosh_bf16_scheduled() {
+    TTI_SFPLOADI(7, 2, 0xa26c);
+    TTI_SFPLOADI(7, 8, 0xbb5e);
+// A loop, not unrolled: the body stays in the instruction cache.
+#pragma GCC unroll 1
+    for (int pass = 0; pass < 32; ++pass) {
+        TTI_SFPLOAD(3, 0, 3, 0);
+        TTI_SFPLOADI(0, 0, 0x42c8);
+        TTI_SFPMAD(11, 3, 0, 0, 0);
+        TTI_SFPMOV(0, 3, 2, 2);
+        TTI_SFPSETCC(0, 0, 0, 0);
+        TTI_SFPSETEXP(0x84, 3, 2, 1);
+        TTI_SFPENCC(3, 0, 0, 0xa);
+        TTI_SFPLOADI(0, 0, 0x3f82);
+        TTI_SFPLOADI(4, 2, 0xbfbf);
+        TTI_SFPSWAP(0, 2, 0, 1);
+        TTI_SFPLOADI(4, 8, 0xbe67);
+        TTI_SFPLOADI(0, 2, 0x3b7a);
+        TTI_SFPMAD(7, 2, 4, 1, 0);
+        TTI_SFPLOADI(0, 8, 0xbebe);
+        TTI_SFPMAD(1, 2, 0, 0, 0);
+        TTI_SFPLOADI(4, 2, 0xf746);
+        TTI_SFPMAD(0, 2, 10, 0, 0);
+        TTI_SFPLOADI(4, 8, 0xbed1);
+        TTI_SFPMAD(0, 2, 4, 0, 0);
+        TTI_SFPLOADI(1, 2, 0x3e80);
+        TTI_SFPMOV(0, 0, 4, 2);
+        TTI_SFPSETMAN(0, 11, 4, 0);
+        TTI_SFPMAD(12, 4, 13, 5, 0);
+        TTI_SFPLOADI(6, 2, 0xb898);
+        TTI_SFPMAD(5, 4, 14, 5, 0);
+        TTI_SFPLOADI(1, 8, 0xbcbb);
+        TTI_SFPLOADI(6, 8, 0xbf3c);
+        TTI_SFPMAD(1, 2, 6, 1, 0);
+        TTI_SFPMAD(4, 5, 10, 6, 0);
+        TTI_SFPNOP;
+        TTI_SFPMAD(5, 6, 5, 5, 0);
+        TTI_SFPLOADI(6, 2, 0x9ed0);
+        TTI_SFPLOADI(6, 8, 0x3f83);
+        TTI_SFPMAD(4, 5, 10, 4, 0);
+        TTI_SFPMAD(1, 2, 6, 1, 0);
+        TTI_SFPNOT(0, 0, 6, 0);
+        TTI_SFPSETMAN(0, 6, 6, 1);
+        TTI_SFPMULI(0x3f00, 6, 0);
+        TTI_SFPMAD(5, 4, 5, 4, 0);
+        TTI_SFPLOADI(5, 2, 0x2bae);
+        TTI_SFPLOADI(5, 8, 0x3dd0);
+        TTI_SFPMAD(1, 2, 5, 1, 0);
+        TTI_SFPLOADI(5, 2, 0xb74e);
+        TTI_SFPLOADI(5, 8, 0xbebd);
+        TTI_SFPMUL(4, 6, 9, 4, 0);
+        TTI_SFPMAD(1, 2, 5, 1, 0);
+        TTI_SFPSETSGN(0, 4, 0, 0);
+        TTI_SFPMAD(11, 10, 3, 2, 0);
+        TTI_SFPMUL(1, 0, 9, 0, 0);
+        TTI_SFPSETCC(0, 2, 0, 0);
+        TTI_SFPLOADI(0, 0, 0x7fc0);
+        TTI_SFPCOMPC(0, 0, 0, 0);
+        TTI_SFPPUSHC(0, 0, 0, 0);
+        TTI_SFPLOADI(2, 0, 0x3f82);
+        TTI_SFPMAD(11, 2, 3, 2, 0);
+        TTI_SFPNOP;
+        TTI_SFPSETCC(0, 2, 0, 0);
+        TTI_SFPADD(10, 3, 11, 2, 0);
+        TTI_SFPNOP;
+        TTI_SFPMOV(0, 2, 0, 0);
+        TTI_SFPMULI(0x4180, 0, 0);
+        TTI_SFPCOMPC(0, 0, 0, 0);
+        TTI_SFPLOADI(2, 0, 0x42c8);
+        TTI_SFPMAD(11, 3, 2, 2, 0);
+        TTI_SFPNOP;
+        TTI_SFPSETCC(0, 2, 0, 0);
+        TTI_SFPEXEXP(0, 3, 1, 1);
+        TTI_SFPIADD(0xf7c, 1, 2, 5);
+        TTI_SFPLOADI(4, 2, 0x7218);
+        TTI_SFPCAST(2, 2, 0);
+        TTI_SFPLOADI(4, 8, 0x3f31);
+        TTI_SFPMAD(2, 4, 0, 2, 0);
+        TTI_SFPPUSHC(0, 0, 0, 0);
+        TTI_SFPIADD(0xf01, 1, 1, 5);
+        TTI_SFPSETCC(0, 1, 0, 6);
+        TTI_SFPMUL(2, 3, 9, 2, 0);
+        TTI_SFPPOPC(0, 0, 0, 0);
+        TTI_SFPMOV(0, 2, 0, 0);
+        TTI_SFPPOPC(0, 0, 0, 0);
+        TTI_SFPENCC(3, 0, 0, 0xa);
+        TTI_SFP_STOCH_RND(0, 0, 0, 0, 0, 1);
+        TTI_SFPSTORE(0, 0, 3, 0);
+        TTI_INCRWC(0, 2, 0, 0);
+    }
+}
+
 template <int ITERATIONS = 32>
 inline void calculate_acosh_bf16_body() {
-    ckernel::sfpu::bf16::acosh::calculate_core_bridge_rational<ckernel::sfpu::AcoshBf16Config, ITERATIONS>();
+    static_assert(ITERATIONS == 32, "the BF16 kernel runs as one whole-tile call");
+    calculate_acosh_bf16_scheduled();
 }
 // The constants stock's init also sets hold the kernel's own values for its call only.
 template <int ITERATIONS = 32>
