@@ -36,7 +36,6 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
     check_routing,
     check_sink,
     check_windowed,
-    fp32_dest_config,
     MLA_SHAPES,
     inputs_for,
     l2_pct,
@@ -277,7 +276,7 @@ def test_sdpa_recipe_mixed_kv_dtypes(device, variant, k_dtype, v_dtype):
     check_mixed_kv(device, variant, k_dtype, v_dtype)
 
 
-# Routed calls with L1 outputs back to back in one trace capture: the program hash sees the L1 the layout may use,
+# Calls with L1 outputs back to back in one trace capture: the program hash sees the L1 the layout may use,
 # not the raw free L1, so the second call (with the first output still live) reuses the warm-up's program.
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 4194304}], indirect=True)
 def test_sdpa_recipe_trace_l1_outputs(device):
@@ -288,7 +287,7 @@ def test_sdpa_recipe_trace_l1_outputs(device):
         *tensors,
         is_causal=False,
         program_config=program_config(device, 128, 256),
-        compute_kernel_config=fp32_dest_config(device),
+        precision=ttnn.SDPAPrecision.ACCURATE,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     warm = run()

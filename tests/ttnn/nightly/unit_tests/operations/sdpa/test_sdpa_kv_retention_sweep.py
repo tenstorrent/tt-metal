@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """Full K/V retention sweep: every schedule regime, head-major and heads-concat output, masks, sinks, causal,
-sliding-window and windowed calls. Each batched call must be bit-identical row by row to the same rows run alone (a
+sliding-window and windowed calls. Each batched call must match row by row the same rows run alone (to rounding) (a
 different chain and retention layout). Grids larger than the device are skipped, so Wormhole runs everything but
 12x10."""
 

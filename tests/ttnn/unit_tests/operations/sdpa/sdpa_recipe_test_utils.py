@@ -672,9 +672,10 @@ def fp32_dest_config(device):
 
 
 def check_routing(device, case):
-    """Precision routing: a call the BF16-DEST streaming kernels do not serve runs a recipe (FP32 dest ->
-    ACCURATE; non-ring joint -> STANDARD, or ACCURATE with FP32 dest), bitwise the explicit recipe at op-chosen
-    blocking (the caller's chunk sizes were tuned for the legacy kernels). The output meets the recipe's FP64 bound."""
+    """One-path routing: a call without `precision` runs STANDARD whatever compute_kernel_config it passes (FP32 dest
+    included: those callers pass precision=ACCURATE explicitly), bitwise the explicit STANDARD call with the caller's
+    chunks; chunks the recipe kernels cannot run (Q > 1024) or that fit no recipe layout in L1 are left to the op. The
+    output meets STANDARD's FP64 bound."""
     chosen = lambda: program_config(device, 0, 0)
     fp32 = fp32_dest_config(device)
     accurate, standard = ttnn.SDPAPrecision.ACCURATE, ttnn.SDPAPrecision.STANDARD
@@ -689,9 +690,10 @@ def check_routing(device, case):
         run = lambda config, **extra: ttnn.transformer.scaled_dot_product_attention(
             *tensors, program_config=config, **kwargs, **extra
         )
-        routed, recipe = run(cfg, compute_kernel_config=fp32), accurate
+        routed, recipe = run(cfg, compute_kernel_config=fp32), standard
         expected = reference(q, k, v, key_mask(1000, 1000, causal=True) if causal else mask, 0.1)
-        explicit = run(chosen(), precision=recipe)
+        # Q2048 is beyond the recipe kernels' Q chunk (1024): the op chooses the blocking.
+        explicit = run(cfg if causal else chosen(), precision=recipe)
         tolerance = 1.5 * l2_pct(stored(expected.bfloat16(), dtype), expected)  # BFP8 output, as legacy
     elif case == "chunked_tensor_start":
         chunked = ChunkedCase(device, "accurate", sq=256, blocks_per_seq=4, block=128)
@@ -702,8 +704,9 @@ def check_routing(device, case):
             chunk_start_idx_tensor=start,
             **extra,
         )
-        routed, recipe = run(program_config=program_config(device, 128, 256), compute_kernel_config=fp32), accurate
-        explicit, expected, tolerance = run(program_config=chosen(), precision=recipe), chunked.expected(256), 0.0
+        cfg = program_config(device, 128, 256)
+        routed, recipe = run(program_config=cfg, compute_kernel_config=fp32), standard
+        explicit, expected, tolerance = run(program_config=cfg, precision=recipe), chunked.expected(256), 0.0
     elif case == "dense_d512":
         # Gemma-4 global layers / SD VAEs: head dim 512 fits L1 only below the chooser's fitted range (Q128+ x K256+).
         q, k, v = randn(1, 2, 640, 512, seed=86), randn(1, 1, 640, 512, seed=87), randn(1, 1, 640, 512, seed=88)
@@ -711,7 +714,8 @@ def check_routing(device, case):
         run = lambda config, **extra: ttnn.transformer.scaled_dot_product_attention(
             *tensors, is_causal=True, program_config=config, **extra
         )
-        routed, recipe = run(program_config(device, 256, 512), compute_kernel_config=fp32), accurate
+        # Q256/K512 at D512 fits no recipe layout in L1: the op chooses the blocking on the caller's grid.
+        routed, recipe = run(program_config(device, 256, 512), compute_kernel_config=fp32), standard
         explicit, tolerance = run(chosen(), precision=recipe), 0.0
         expected = reference(q, k, v, key_mask(640, 640, causal=True))
     elif case == "dense_mixed_kv":
@@ -721,8 +725,8 @@ def check_routing(device, case):
         run = lambda config, **extra: ttnn.transformer.scaled_dot_product_attention(
             *tensors, is_causal=False, program_config=config, **extra
         )
-        routed, recipe = run(program_config(device, 256, 256), compute_kernel_config=fp32), accurate
-        explicit, tolerance = run(chosen(), precision=recipe), 0.0
+        routed, recipe = run(program_config(device, 256, 256), compute_kernel_config=fp32), standard
+        explicit, tolerance = run(program_config(device, 256, 256), precision=recipe), 0.0
         expected = reference(q, k, stored(v, ttnn.bfloat8_b))
     elif case == "joint_empty":
         # FLUX.2 single-stream blocks: zero-width joint tensors run as a plain dense call; the joint output is empty.
@@ -735,11 +739,11 @@ def check_routing(device, case):
         assert list(joint_out.shape) == [1, 2, 0, 128] and joint_out.dtype == ttnn.bfloat16
         recipe, tolerance = standard, 0.0
         explicit = ttnn.transformer.scaled_dot_product_attention(
-            *tensors, is_causal=False, program_config=chosen(), precision=recipe
+            *tensors, is_causal=False, program_config=program_config(device, 128, 512), precision=recipe
         )
         expected = reference(q, k, v)
     else:  # joint_bf16_dest / joint_fp32_dest
-        recipe = accurate if case == "joint_fp32_dest" else standard
+        recipe = standard
         q, k, v = randn(1, 2, 600, 128, seed=90), randn(1, 2, 600, 128, seed=91), randn(1, 2, 600, 128, seed=92)
         jq, jk, jv = randn(1, 2, 77, 128, seed=93), randn(1, 2, 77, 128, seed=94), randn(1, 2, 77, 128, seed=95)
         tensors = [to_device(device, x) for x in (q, k, v, jq, jk, jv)]
@@ -751,9 +755,9 @@ def check_routing(device, case):
             2,
         )
         hint = program_config(device, 128, 256)
-        extra = dict(compute_kernel_config=fp32) if recipe == accurate else {}
+        extra = dict(compute_kernel_config=fp32) if case == "joint_fp32_dest" else {}
         routed = run(program_config=hint, **extra)
-        explicit, tolerance = run(program_config=chosen(), precision=recipe), 0.0
+        explicit, tolerance = run(program_config=hint, precision=recipe), 0.0
         expected = reference(torch.cat([q, jq], 2), torch.cat([k, jk], 2), torch.cat([v, jv], 2))
     routed = routed if isinstance(routed, torch.Tensor) else ttnn.to_torch(routed)
     explicit = explicit if isinstance(explicit, torch.Tensor) else ttnn.to_torch(explicit)

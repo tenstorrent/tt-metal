@@ -574,7 +574,7 @@ def test_chunked_sdpa_geometry_override_rejects_elems_per_block_mismatch(device,
     )
     page_table = ttnn.Tensor(torch.arange(num_pages, dtype=torch.int32).reshape(b, num_pages), ttnn.int32).to(device)
 
-    with expect_error(RuntimeError, "geometry mismatch|elems/block"):
+    with expect_error(RuntimeError, "must hold as many elements per block"):
         ttnn.transformer.chunked_scaled_dot_product_attention(
             tt_q,
             tt_k,

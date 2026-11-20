@@ -2150,6 +2150,8 @@ def test_sdpa_large_score_precision(
         is_causal=is_causal,
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
+        # FP32 accumulation is the ACCURATE recipe (prefill SDPA ignores compute_kernel_config).
+        precision=ttnn.SDPAPrecision.ACCURATE if fp32_dest_acc_en else None,
     )
     tt_back = ttnn.to_torch(tt_back)
 
@@ -2170,15 +2172,19 @@ def _zero_div_tensors(device, count, heads=1):
     ]
 
 
-# Chunk sizes and the K head count are used as host-side divisors, so zero must raise a RuntimeError.
-@pytest.mark.parametrize("q_chunk_size, k_chunk_size, name", [(0, 32, "q_chunk_size"), (32, 0, "k_chunk_size")])
-def test_sdpa_zero_chunk_size(device, expect_error, q_chunk_size, k_chunk_size, name):
+# A zero chunk size leaves that chunk to the op (op-chosen blocking); the K head count must still be positive.
+@pytest.mark.parametrize("q_chunk_size, k_chunk_size", [(0, 32), (32, 0)])
+def test_sdpa_zero_chunk_size(device, q_chunk_size, k_chunk_size):
     q, k, v = _zero_div_tensors(device, 3)
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=(1, 1), q_chunk_size=q_chunk_size, k_chunk_size=k_chunk_size
     )
-    with expect_error(RuntimeError, f"{name} must be a positive multiple of TILE_SIZE"):
-        ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=True, program_config=program_config)
+    out = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=True, program_config=program_config)
+    expected = torch.nn.functional.scaled_dot_product_attention(
+        *(ttnn.to_torch(t).float() for t in (q, k, v)), is_causal=True
+    )
+    passing, pcc = comp_pcc(expected, ttnn.to_torch(out).float(), 0.999)
+    assert passing, pcc
 
 
 def test_sdpa_zero_k_heads(device, expect_error):
