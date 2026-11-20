@@ -54,7 +54,13 @@ Add one entry to `.github/deprecations.json`, the tracked-deprecations manifest 
 
 ### Deprecated C++ functions behind a binding
 
-- A binding that exposes a `[[deprecated]]` C++ function calls it directly. Flag `#pragma GCC diagnostic` blocks added to silence `-Wdeprecated-declarations` in binding code: the `TT_METAL_DEPRECATION_WARNINGS` build option decides whether such calls are reported, and it never turns them into errors.
+- A binding that exposes a `[[deprecated]]` C++ function calls it with no warning suppression. Flag a `#pragma GCC diagnostic` block that the PR adds or changes to silence `-Wdeprecated-declarations` in binding code. The build already controls this warning:
+  - By default, the top-level `-Wno-deprecated-declarations` turns it off for all targets.
+  - With `TT_METAL_DEPRECATION_WARNINGS=ON`, the build reports each call as a warning and never as an error, also when `CMAKE_COMPILE_WARNING_AS_ERROR` is on.
+
+  A pragma does not change the build result. It only hides the call from the deprecation report.
+- A binding is not a compatibility shim. The exception for warning suppressions in `scripts/validate_api/README.md` covers the Metal host API only, not binding code.
+- Do not flag a pragma that is already on `main` in lines the PR does not change. A PR that edits such a binding can remove the pragma.
 - Deprecating a Python function or argument also deprecates the C++ interface it binds to, when one exists. The same PR marks that C++ function, or the overload that takes the argument, `[[deprecated]]` under [`metal-api.instructions.md`](metal-api.instructions.md); the binding then becomes a forwarding binding. Flag a PR that deprecates a Python function or argument while the corresponding C++ interface stays undeprecated, and warn the author. This doesn't apply when the Python function or argument exists only in the binding and has no C++ counterpart.
 
 ### Moving an existing deprecation to the helper
@@ -111,7 +117,7 @@ The C++ wrapper has no dedicated test. Its logic is a GIL acquire and one call; 
 - [ ] The message follows `<what> is deprecated and will be removed; use <instead> instead.` and contains no date
 - [ ] `what` is the fully qualified public Python name, per operation
 - [ ] The C++ interface behind a deprecated Python function or argument, if any, is `[[deprecated]]` in the same PR
-- [ ] A binding of a `[[deprecated]]` C++ function calls it without `#pragma` suppression
+- [ ] No `#pragma` that the PR adds or changes silences `-Wdeprecated-declarations` in binding code
 - [ ] The helper runs before any work for the deprecated function or argument, and its exception isn't swallowed
 - [ ] Only binding code calls the C++ wrapper; no code in `TTNN::CPP` emits a Python warning
 - [ ] Every in-repo caller is migrated; the remaining callers are compatibility tests using `pytest.warns(FutureWarning)`
