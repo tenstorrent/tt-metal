@@ -53,8 +53,10 @@ Tiers:
                   + didt matmul stress + fabric all-gather under matmul (pytest)
                   + HSC and chip recount around the tests + post-test reset + triage + QSFP tests
   full            weekly + sys-triage: everything, for the logs on a DIIM ticket
-  galaxy          Snapshot validate + one -glx_reset (never -r) + host_side triage.
-                  No tests; pass --skip-reset to read the unit as found.
+  galaxy          Snapshot validate + one -glx_reset (never -r) + host_side triage
+                  + ETH status + run-long AER window. --mode {plain,full,smoke} adds
+                  the bus-bar and links load phases (--plan lists the steps);
+                  without --mode no load runs. --skip-reset reads the unit as found.
   pre_bmc_reboot  Data collection before a BMC reboot: snapshot + triage + QSFP tests
                   + sys-triage. No resets, no tests.
   post_bmc_reboot The same as pre_bmc_reboot for now, run after the BMC reboot.

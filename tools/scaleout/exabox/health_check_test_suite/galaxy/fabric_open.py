@@ -8,8 +8,8 @@ The open is the one HyperFlow and H3 run: set_fabric_config(FABRIC_1D, STRICT_IN
 open_mesh_device(MeshShape(4, 8), l1_small_size=16384), no mesh graph descriptor (auto discovery). 32 chips open as 4x8 (8 chips
 per row, the Galaxy's 8x4 device_topology), any other count (--known-dropped-tray) as 1xN and the CCL runs on its one axis.
 The CCL is all_gather_async (global semaphores, Linear, cluster_axis, 2 links) on axis 1 (rows of 8) then axis 0 (columns of 4);
-every chip holds one tile of its own index and must read back every index of its row / column. hc/lib/fleet.sh fl_open_after
-runs it after its delay (FLEET_OPEN_DELAY_S) and reads the PCIe tree after it; the HSC under-voltage after-read follows it.
+every chip holds one tile of its own index and must read back every index of its row / column. The links phase (diag/links.py)
+runs it after its delay and reads the PCIe tree after it.
 --beat holds 'open', 'launch 0' (the open), 'done 0', 'launch 1'/'done 1' (axis 1), 'launch 2'/'done 2' (axis 0), 'close'
 for fl_watch (this process never returns while a chip hangs).
 Exit 0 opened, gathered and closed, 1 anything failed: the row's error reads 'MESH 4x8 <stage>: <first error line>'."""

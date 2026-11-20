@@ -82,6 +82,15 @@ class Tier:
     # its resets or post-test resets.
     glx_reset_only: bool = False
 
+    # Judge the new PCIe AER errors per chip over the whole run (diag/aer.py
+    # AerWindow): marked before the first load and before each reset.
+    aer_diff: bool = False
+
+    # With --mode: the galaxy load phases after the tests (diag/busbar.py, then
+    # diag/links.py), inside the AER window. Needs glx_reset_only: the links
+    # phase's sweep resets with -glx_reset.
+    busbar: bool = False
+
     # Collect the syseng sys-triage bundle. It is the record of a unit's state
     # taken before the BMC power cycles it, and its vuart and scratch reads are
     # worth most on a unit that has not been reset since it misbehaved.
@@ -128,11 +137,16 @@ TIERS: dict[str, Tier] = {
     # What a caller that runs its own load wants of the unit's health: the
     # snapshot checks (chips by BDF, tray and ASIC, thermal, telemetry), a
     # -glx_reset (callers pass --skip-reset to read the unit as found), and the
-    # host-side triage. No tests, no ETH reads.
+    # host-side triage with its AER diff and the ETH status read. With --mode
+    # it also runs the bus-bar and links phases (the galaxy load); its AER diff
+    # then spans them.
     "galaxy": Tier(
         resets=("-glx_reset",),
         triage=("host_side",),
+        eth_status=True,
+        aer_diff=True,
         glx_reset_only=True,
+        busbar=True,
     ),
     # Data collection before a BMC reboot. No resets and no tests: a reset
     # would wipe the state the triage, QSFP and sys-triage phases are there to
@@ -174,6 +188,8 @@ def _validate() -> None:
             problems += [f"{name}: -r is not allowed" for f in (*tier.resets, *tier.post_test_resets) if f == "-r"]
         problems += [f"{name}: unknown test {t!r}" for t in tier.tests if t not in TESTS and t not in PYTESTS]
         problems += [f"{name}: unknown triage tool {t!r}" for t in tier.triage if t not in TRIAGE_TOOLS]
+        if tier.busbar and not tier.glx_reset_only:
+            problems.append(f"{name}: busbar needs glx_reset_only")
         if tier.eth_summary and not tier.eth_status:
             problems.append(f"{name}: eth_summary needs eth_status")
     problems += [

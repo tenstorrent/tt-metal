@@ -42,7 +42,6 @@ ap.add_argument("--iters", type=int, default=10**9)
 ap.add_argument("--verify-every", type=int, default=100)
 ap.add_argument("--rows", required=True)
 ap.add_argument("--beat", required=True)
-ap.add_argument("--label", default="")
 a = ap.parse_args()
 rows = open(a.rows, "a")
 

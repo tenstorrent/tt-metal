@@ -64,8 +64,8 @@ import sys
 sys.path.append(os.path.dirname(os.path.realpath(__file__)))  # the sibling programs, also when run or imported through a link
 
 import numeric_capture as nc  # standard library only too
+from chunk_sched import tray_of  # noqa: E402  the one tray_of, bus & 0xF0 -> tray 1-4
 
-BUS_TO_TRAY = {0x00: 1, 0x40: 2, 0xC0: 3, 0x80: 4}  # PCI bus & 0xF0 -> tray (ub0_repro.py)
 BDF = r"(?:[0-9a-f]{4}:)?([0-9a-f]{2}:[0-9a-f]{2}\.[0-7])"
 FAIL_RE = re.compile(r"^NUMERIC FAIL " + BDF + r" \((?:tray (\d|\?)|UBB(\d))\)(?: chip \S+?)?(?: \[([^\]]*)\])?:", re.I)
 CONC = 0.8  # one bank or core holding this share of the bad words: the fault is there (banks: see Banks above)
@@ -86,13 +86,6 @@ PHASE_WHAT = dict(
     rw="DRAM to DRAM copy",
 )
 CCL_PARTS = {"h3"}  # chunk_sched.py: the only sustained part with CCL (ETH) traffic
-
-
-def tray_of(bdf):
-    try:
-        return BUS_TO_TRAY.get(int(bdf.split(":")[-2], 16) & 0xF0)
-    except (IndexError, ValueError, AttributeError):
-        return None
 
 
 def read_lines(path):

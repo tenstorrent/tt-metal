@@ -223,7 +223,6 @@ ap.add_argument(
 )
 ap.add_argument("--rows", required=True)
 ap.add_argument("--beat", required=True)
-ap.add_argument("--label", default="")
 ap.add_argument(
     "--pre-ramp-s",
     type=float,
