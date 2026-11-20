@@ -25,6 +25,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtCSACompressor, rope_table_tokens
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import get_indexer_key_chunk, get_matmul_config
 from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_perm_matrix
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import FastCacheChecker
 from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_dump_mode
 
 # DSA indexer weight names are owned by TtIndexer.WEIGHT_NAMES (single source of truth). A
@@ -160,24 +161,29 @@ class TtIndexerBase:
         return "wq_b_repl" if weight_name == "indexer.wq_b" else weight_name.split(".")[-1]
 
     @classmethod
+    def cache_globs(cls, cache_name_prefix: str) -> tuple[str, ...]:
+        """One glob per indexer tensorbin under cache_name_prefix (e.g. 'layer_0.mla'), AT ITS EXPECTED DTYPE.
+        The glob pins ``_dtype_{name}_`` (WEIGHT_DTYPES) because as_tensor encodes dtype in the filename: a
+        dtype-blind glob would accept a stale bf16-only cache for a now-bf8 weight, report complete, and let
+        cache-only construction load the empty placeholder as garbage. Indexer files are `{prefix}.indexer_{short}`
+        — a disjoint prefix space from the dense MLA names, so dense and indexer checks never alias."""
+        return tuple(
+            f"{cache_name_prefix}.indexer_{cls._cache_short_name(name)}_dtype_{cls.WEIGHT_DTYPES[name].name}_*.tensorbin"
+            for name in cls.WEIGHT_NAMES
+        )
+
+    @classmethod
     def check_cache_complete(cls, cache_path, cache_name_prefix: str) -> bool:
-        """True iff every indexer tensorbin exists under cache_name_prefix (e.g. 'layer_0.mla') AT ITS
-        EXPECTED DTYPE. The glob pins ``_dtype_{name}_`` (WEIGHT_DTYPES) because as_tensor encodes dtype in
-        the filename: a dtype-blind glob would accept a stale bf16-only cache for a now-bf8 weight, report
-        complete, and let cache-only construction load the empty placeholder as garbage.
-        Uses a direct ``Path.glob`` (no `init_checker`/global-state dependency) because this also runs
-        at ttMLA construction time — the resolver / __init__ gate — where the global fast-cache checker
-        is not necessarily initialized. It's a one-off per-layer check (5 files), so the batch
-        fast-checker optimization isn't needed here. Indexer files are `{prefix}.indexer_{short}` — a
-        disjoint prefix space from the dense MLA names, so dense and indexer checks never alias."""
-        if cache_path is None:
+        """True iff every indexer tensorbin of ``cache_globs`` exists. Lists the directory once with its own
+        FastCacheChecker (no `init_checker`/global-state dependency) because this also runs at ttMLA
+        construction time — the resolver / __init__ gate — where the global fast-cache checker is not
+        necessarily initialized."""
+        if cache_path is None or not Path(cache_path).is_dir():
             return False
-        cache_path = Path(cache_path)
-        for name in cls.WEIGHT_NAMES:
-            short = cls._cache_short_name(name)
-            dtype_name = cls.WEIGHT_DTYPES[name].name
-            if not any(cache_path.glob(f"{cache_name_prefix}.indexer_{short}_dtype_{dtype_name}_*.tensorbin")):
-                logger.debug(f"TTNN indexer cache missing: {cache_name_prefix}.indexer_{short} ({dtype_name})")
+        checker = FastCacheChecker(Path(cache_path))
+        for pattern in cls.cache_globs(cache_name_prefix):
+            if not checker.pattern_exists(pattern, "Indexer"):
+                logger.debug(f"TTNN indexer cache missing: {pattern}")
                 return False
         return True
 
