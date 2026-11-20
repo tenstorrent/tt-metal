@@ -121,6 +121,8 @@ constexpr uint32_t kCandWords = sample ? kFeedRows * kListWords : (2 * kFeedRows
 constexpr uint32_t cand_bytes = 4 * kCandWords;
 // the candidates go to the other hubs as one fabric packet (32 sampled rows' lists would need two: row groups of 4)
 static_assert(cand_bytes <= packet_bytes, "a chip's candidates exceed one fabric packet");
+static_assert(
+    groups == 1 || (feed && cand_bytes >= 64), "row groups run with the feed (their active groups, CCL bases)");
 constexpr uint32_t n_taps = get_compile_time_arg_val(22);
 static_assert(n_taps <= 5 && (n_taps == 0 || published), "taps are written from the summed x");
 constexpr uint32_t tap_rounds[5] = {
@@ -301,13 +303,19 @@ void kernel_main() {
     const uint32_t rects = get_arg_val<uint32_t>(arg_idx++);
     const size_t rect_args = arg_idx;
     arg_idx += 5 * rects;
-    uint32_t argmax_addr = 0, cand_addr = 0, cand_sem_addr = 0, launch_addr = 0;
+    uint32_t argmax_addr = 0, cand_addr = 0, cand_sem_addr = 0, launch_addr = 0, ccl_base_addr[2] = {0, 0};
     uint32_t tok_addr = 0, embed_addr = 0, rope_addr = 0, out_addr = 0, params_addr = 0, peer_tok_addr = 0;
     if constexpr (feed) {
         argmax_addr = get_arg_val<uint32_t>(arg_idx++);
         cand_addr = get_arg_val<uint32_t>(arg_idx++);
         cand_sem_addr = get_arg_val<uint32_t>(arg_idx++);
         launch_addr = get_arg_val<uint32_t>(arg_idx++);
+        if constexpr (groups > 1) {
+            // row groups: the launch's sub-rounds vary with its active groups, so each parity's expected CCL count
+            // carries over from the previous launch in a word of its own (zeroed with the launch counter)
+            ccl_base_addr[0] = get_arg_val<uint32_t>(arg_idx++);
+            ccl_base_addr[1] = get_arg_val<uint32_t>(arg_idx++);
+        }
         tok_addr = get_arg_val<uint32_t>(arg_idx++);
         embed_addr = get_arg_val<uint32_t>(arg_idx++);
         rope_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -426,14 +434,35 @@ void kernel_main() {
         invalidate_l1_cache();
         launch = *launch_word;
         // (an odd round count puts the extra round on parity 0)
-        // (row groups: every round is `groups` sub-rounds through the same slots, parity = sub-round & 1)
-        expected[0] = launch * ((layers * groups + 1) / 2) * (num_chips - 1) * packets_per_vector;
-        expected[1] = launch * (layers * groups / 2) * (num_chips - 1) * packets_per_vector;
+        if constexpr (groups == 1) {
+            expected[0] = launch * ((layers + 1) / 2) * (num_chips - 1) * packets_per_vector;
+            expected[1] = launch * (layers / 2) * (num_chips - 1) * packets_per_vector;
+        } else {
+            expected[0] = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ccl_base_addr[0]);
+            expected[1] = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ccl_base_addr[1]);
+        }
     }
-    // sub-round s = round l, row group g (groups == 1: s == l): group g's partials all-reduced through slot[s & 1],
-    // its x multicast to the streamers' x at group offset g
-    for (uint32_t s = 0; s < layers * groups; s++) {
-        const uint32_t l = s / groups, g = s % groups;
+    // row groups: the groups with an active row (active_rows.hpp ActiveGroups), from the token state's active word,
+    // read into this chip's own candidate slot (nothing else touches it before the records)
+    uint32_t active_word = 0;
+    if constexpr (groups > 1) {
+        const uint32_t scratch = cand_addr + chip * cand_bytes;
+        const InterleavedAddrGen<true> tok0{.bank_base_address = tok_addr, .page_size = tok_bytes};
+        noc_async_read(tok0.get_noc_addr(0), scratch, 64);
+        noc_async_read_barrier();
+        active_word = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch)[kTokActive];
+    }
+    const ActiveGroups ag(active_word, kBatch);
+    if constexpr (groups > 1) {
+        // the hub compute's sub-round count
+        cb_reserve_back(3, 1);
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(3)) = ag.n;
+        cb_push_back(3, 1);
+    }
+    // sub-round s = round l, k-th active row group g (groups == 1: s == l): group g's partials all-reduced through
+    // slot[s & 1], its x multicast to the streamers' x at group offset g
+    for (uint32_t s = 0; s < layers * ag.n; s++) {
+        const uint32_t l = s / ag.n, g = ag.g[s % ag.n];
         const uint32_t par = s & 1;
         const uint32_t base = slots + par * num_chips * vector_bytes;
         if constexpr (groups == 1) {
@@ -530,7 +559,7 @@ void kernel_main() {
         if constexpr (groups == 1) {
             noc_semaphore_wait_min(gather, num_streamers * (layers * groups + 1));
         } else {
-            wait_half(gather, 0, num_streamers * ((layers * groups + 1) / 2 + 1));  // (the records: the low half)
+            wait_half(gather, 0, num_streamers * ((layers * ag.n + 1) / 2 + 1));  // (the records: the low half)
         }
         invalidate_l1_cache();
         volatile tt_l1_ptr uint32_t* rec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(argmax_addr);
@@ -640,8 +669,12 @@ void kernel_main() {
             volatile tt_l1_ptr uint32_t* o = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(outr);
             const uint32_t mask = h[kTokActive];
             for (uint32_t gr = 0; gr < groups; gr++) {
-                noc_async_read(tok.get_noc_addr(0, 64 + gr * vector_bytes), xr, vector_bytes);
-                noc_async_read(tok.get_noc_addr(0, rope_off + gr * rows * rope_bytes), roper, rows * rope_bytes);
+                // (an inactive group: only its out words, every row inactive)
+                const bool on = ag.has(gr);
+                if (on) {
+                    noc_async_read(tok.get_noc_addr(0, 64 + gr * vector_bytes), xr, vector_bytes);
+                    noc_async_read(tok.get_noc_addr(0, rope_off + gr * rows * rope_bytes), roper, rows * rope_bytes);
+                }
                 if constexpr (sample) {
                     const InterleavedAddrGen<true> pg{.bank_base_address = params_addr, .page_size = kFeedRows * 64};
                     noc_async_read(pg.get_noc_addr(0, gr * rows * 64), par, rows * 64);
@@ -686,8 +719,10 @@ void kernel_main() {
                     o[4 * u + 2] = 1;
                     o[4 * u + 3] = 0;
                 }
-                noc_async_write(xr, tok.get_noc_addr(0, 64 + gr * vector_bytes), vector_bytes);
-                noc_async_write(roper, tok.get_noc_addr(0, rope_off + gr * rows * rope_bytes), rows * rope_bytes);
+                if (on) {
+                    noc_async_write(xr, tok.get_noc_addr(0, 64 + gr * vector_bytes), vector_bytes);
+                    noc_async_write(roper, tok.get_noc_addr(0, rope_off + gr * rows * rope_bytes), rows * rope_bytes);
+                }
                 noc_async_write(outr, out.get_noc_addr(0, gr * rows * 16), rows * 16);
                 noc_async_write_barrier();
             }
@@ -783,6 +818,10 @@ void kernel_main() {
             noc_async_write_barrier();
         }
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(launch_addr) = launch + 1;
+        if constexpr (groups > 1) {
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ccl_base_addr[0]) = expected[0];
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ccl_base_addr[1]) = expected[1];
+        }
     } else {
         noc_semaphore_set(ccl_sem[0], 0);
         noc_semaphore_set(ccl_sem[1], 0);

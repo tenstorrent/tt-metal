@@ -91,6 +91,7 @@ void kernel_main() {
     uint32_t busy = cores - 1;
     // this core's users that run this step (see the reader)
     uint32_t act[kUsers], n = 0;
+    uint32_t step_mask = 0;
     {
         uint32_t mask = ~0u;
         if constexpr (rows_mode) {
@@ -98,6 +99,7 @@ void kernel_main() {
             noc_async_read(get_noc_addr_from_bank_id<true>(0, tok_addr), stage, kTokHeadBytes);
             noc_async_read_barrier();
             mask = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage)[kTokActive];
+            step_mask = mask;
             // this core's rows only: another core of the head may already be writing its rows into ours
             zero_rows(u0);
             if (collector) {
@@ -123,13 +125,15 @@ void kernel_main() {
             }
         }
     }
+    // row groups: only the groups with an active row go out (the streamers skip the others' out-projection)
+    const ActiveGroups ag(step_mask, batch);
     // after the core's last user of layer l: its rows to the head's collector, or (collector) the head's output
     // into every streamer
     auto layer_out = [&](uint32_t l) {
         if (!collector) {
             // users u0 .. u0 + nu are contiguous face rows of every tile (of every group's block)
             for (uint32_t t = 0; t < groups * Vt; t++) {
-                for (uint32_t f = 0; f < 2; f++) {
+                for (uint32_t f = 0; ag.has(t / Vt) && f < 2; f++) {
                     const uint32_t off = t * kRowTile + (f * batch + u0) * kFaceRow;
                     noc_async_write(stage + off, get_noc_addr(cx, cy, stage + off), nu * kFaceRow);
                 }
@@ -142,6 +146,9 @@ void kernel_main() {
                 const uint32_t px = get_arg_val<uint32_t>(peers_base + 2 * s);
                 const uint32_t py = get_arg_val<uint32_t>(peers_base + 2 * s + 1);
                 for (uint32_t gr = 0; gr < groups; gr++) {
+                    if (!ag.has(gr)) {
+                        continue;
+                    }
                     noc_async_write(
                         stage + gr * Vt * kRowTile,
                         get_noc_addr(px, py, o_in + (gr * o_tiles + head * Vt) * kRowTile),

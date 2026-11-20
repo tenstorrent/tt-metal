@@ -44,6 +44,16 @@ constexpr uint32_t kDst = 8;  // tiles per DST chunk for the eltwise phases
 RingCursor cursor;
 uint32_t ring_base;
 uint32_t consumed_addr_word;
+// row groups: the step's active-group mask (the reader's cb_groups word); an inactive group's math is skipped, its
+// CB pages still pushed and popped (the writer sends nothing of it)
+// CB pages still pushed and popped (the writer sends nothing of it). The loops run over the list of active groups
+// (one copy of each inlined body, not one per group: the streamer core's kernels must fit the kernel config buffer)
+uint32_t gmask = 1;
+uint32_t n_on = 1;
+uint32_t g_on[groups] = {0};
+FORCE_INLINE bool group_on(uint32_t g) { return groups == 1 || ((gmask >> g) & 1); }
+FORCE_INLINE uint32_t groups_on() { return groups == 1 ? 1 : n_on; }
+FORCE_INLINE uint32_t group_at(uint32_t k) { return groups == 1 ? 0 : g_on[k]; }
 
 template <uint32_t E, typename F>
 FORCE_INLINE void with_block(F fn) {
@@ -123,13 +133,15 @@ FORCE_INLINE void matmul_groups(
         tile_regs_acquire();
         for (uint32_t kb = 0; kb + 1 < En::nkb; kb++) {
             with_block<E>([&] {
-                for (uint32_t g = 0; g < groups; g++) {
+                for (uint32_t k = 0; k < groups_on(); k++) {
+                    const uint32_t g = group_at(k);
                     custom_mm_block<false>(in0_cb, En::cb, g * En::Kt + kb * En::sb, 0, g, En::sb);
                 }
             });
         }
         with_block<E>([&] {
-            for (uint32_t g = 0; g < groups; g++) {
+            for (uint32_t k = 0; k < groups_on(); k++) {
+                const uint32_t g = group_at(k);
                 custom_mm_block<true>(in0_cb, En::cb, g * En::Kt + (En::nkb - 1) * En::sb, 0, g, En::sb);
             }
         });
@@ -137,7 +149,8 @@ FORCE_INLINE void matmul_groups(
         tile_regs_wait();
         const bool to_b = two && n >= split;
         const uint32_t ocb = to_b ? out_b : out_cb, col = to_b ? n - split : n;
-        for (uint32_t g = 0; g < groups; g++) {
+        for (uint32_t k = 0; k < groups_on(); k++) {
+            const uint32_t g = group_at(k);
             pack_tile<true>(g, ocb, g * block_tiles + col);
         }
         tile_regs_release();
@@ -237,8 +250,8 @@ FORCE_INLINE void rmsnorm_rows() {
     constexpr uint32_t V = Hf * batch;  // 32x32 views of x (per group)
     cb_wait_front(cb_x, groups * Ht);
     cb_reserve_back(cb_h, groups * Ht);
-    for (uint32_t g = 0; g < groups; g++) {
-        rmsnorm_rows_body(g * V);
+    for (uint32_t k = 0; k < groups_on(); k++) {
+        rmsnorm_rows_body(group_at(k) * V);
     }
     cb_push_back(cb_h_full, groups * V);  // only wraps the view's write pointer back to the base
     cb_push_back(cb_h, groups * Ht);
@@ -285,8 +298,8 @@ FORCE_INLINE void silu_mul(uint32_t ng) {
     pack_init(cb_aslice_full);
     // up to 4 views per DST pass (g in slots 0..3, u in 4..7), one init per op; row group gr at view offset o
     const uint32_t views = views_of(ng);
-    for (uint32_t gr = 0; gr < groups; gr++) {
-        const uint32_t o = gr * kBlkViews;
+    for (uint32_t k = 0; k < groups_on(); k++) {
+        const uint32_t o = group_at(k) * kBlkViews;
         for (uint32_t v0 = 0; v0 < views; v0 += 4) {
             const uint32_t W = views - v0 < 4 ? views - v0 : 4;
             tile_regs_acquire();
@@ -326,7 +339,7 @@ FORCE_INLINE void add_residual(uint32_t nd, uint32_t pout_off) {
     for (uint32_t gr = 0; gr < groups; gr++) {
         cb_reserve_back(cb_pout, nd_max);
         const uint32_t din = gr * nd_max, xin = gr * Ht + pout_off;
-        for (uint32_t t0 = 0; t0 < nd; t0 += kDst) {
+        for (uint32_t t0 = 0; group_on(gr) && t0 < nd; t0 += kDst) {
             const uint32_t n = t0 + kDst <= nd ? kDst : nd - t0;
             tile_regs_acquire();
             for (uint32_t d = 0; d < n; d++) {
@@ -368,7 +381,8 @@ FORCE_INLINE void conv_pass(uint32_t nq, uint32_t n_conv, bool gdn) {
         pack_init(cb_qkvz_out_full);
         // view v of the block: taps and history slots j hold their own view v at j * kBlkViews + v; all eight
         // operands of a view go to DST first (slot 0 keeps y for the history), one init per op
-        for (uint32_t gr = 0; gr < groups; gr++) {
+        for (uint32_t k = 0; k < groups_on(); k++) {
+            const uint32_t gr = group_at(k);
             const uint32_t oq = gr * kBlkViews, oh = gr * 3 * kBlkViews, oo = gr * hist_slots * kBlkViews;
             for (uint32_t v = 0; v < views_of(n_conv); v++) {
                 tile_regs_acquire();
@@ -451,7 +465,8 @@ FORCE_INLINE void conv_pass(uint32_t nq, uint32_t n_conv, bool gdn) {
         pack_reconfig_data_format<true>(cb_qkvz_out);
         pack_init(cb_qkvz_out);
         copy_init(cb_qkvz);
-        for (uint32_t gr = 0; gr < groups; gr++) {
+        for (uint32_t k = 0; k < groups_on(); k++) {
+            const uint32_t gr = group_at(k);
             for (uint32_t i = n_conv; i < nq; i++) {
                 tile_regs_acquire();
                 copy_tile(cb_qkvz, gr * kBlk + i, 0);
@@ -516,6 +531,17 @@ void kernel_main() {
 #endif
     custom_mm_block_init<false, true, false>(cb_h, Entry<0>::cb, cb_qkvz);
     custom_mm_block_uninit<false>();
+    if constexpr (groups > 1) {
+        cb_wait_front(cb_groups, 1);
+        gmask = read_tile_value(cb_groups, 0, 0);
+        cb_pop_front(cb_groups, 1);
+        n_on = 0;
+        for (uint32_t g = 0; g < groups; g++) {
+            if ((gmask >> g) & 1) {
+                g_on[n_on++] = g;
+            }
+        }
+    }
     if constexpr (batch > 1) {
         cb_wait_front(cb_ones_full, 1);
         cb_wait_front(cb_fold, 1);

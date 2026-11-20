@@ -108,6 +108,7 @@ constexpr uint32_t cb_fold = 33;
 constexpr uint32_t cb_sumsq = 34;  // fp32 scratch, 2 tiles
 constexpr uint32_t cb_rinv = 35;   // fp32, per-row 1 / rms on the view rows
 constexpr uint32_t cb_eye = 38;    // rmsnorm of a batch > 1: the identity (bf16 32x32)
+constexpr uint32_t cb_groups = 37;  // row groups: the step's active-group mask (one word, reader -> compute)
 constexpr uint32_t cb_shift = 36;  // verify: even-row identity, row R - 1 -> odd R, row R + 1 -> even R
                                    // (R > 2 rows: S_0..2, then H_j,0 | H_j,1 per tap j, see above)
 

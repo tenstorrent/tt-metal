@@ -84,6 +84,8 @@ void kernel_main() {
     // (row groups: global rows; the stage holds one heads x Dt block per group, written to o_in block g)
     const ActiveRows<kUsers> act(mask);
     const uint32_t n_act = act.n;
+    // row groups: only the groups with an active row go out (the streamers skip the others' out-projection)
+    const ActiveGroups ag(rows_mode ? mask : 0, batch);
 
     // the staged output rows into every streamer's attention-output buffer, and their head semaphore bumped
     auto layer_out = [&](uint32_t l) {
@@ -91,6 +93,9 @@ void kernel_main() {
             const uint32_t px = get_arg_val<uint32_t>(peers_base + 2 * s);
             const uint32_t py = get_arg_val<uint32_t>(peers_base + 2 * s + 1);
             for (uint32_t gr = 0; gr < groups; gr++) {
+                if (!ag.has(gr)) {
+                    continue;
+                }
                 noc_async_write(
                     stage + gr * heads * Dt * kRowTile,
                     get_noc_addr(px, py, o_in + gr * o_tiles * kRowTile),

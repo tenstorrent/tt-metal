@@ -133,6 +133,13 @@ void kernel_main() {
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_ring)) =
         rows_mode ? 0x80000000u | ((head[kTokPreserve] & 1) << 16) | (head[kTokActive] & 0xffff) : ring + 1;
     cb_push_back(cb_x, groups * Ht);
+    // row groups: the groups with an active row (active_rows.hpp), for compute (cb_groups) and the history reads
+    const ActiveGroups ag(rows_mode ? head[kTokActive] : 0, batch);
+    if constexpr (groups > 1) {
+        cb_reserve_back(cb_groups, 1);
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_groups)) = ag.mask;
+        cb_push_back(cb_groups, 1);
+    }
     if constexpr (batch > 1) {
         // rmsnorm constants: ones, the fold matrix (1 where row = column mod batch), the identity, bf16 32x32
         cb_reserve_back(cb_ones_full, 1);
@@ -228,6 +235,9 @@ void kernel_main() {
                         conv_bytes);
                 }
                 for (uint32_t gr = 0; !verify_rows && gr < groups; gr++) {
+                    if (!ag.has(gr)) {
+                        continue;  // (an inactive group's history is neither read nor used)
+                    }
                     for (uint32_t j = 0; j < 3; j++) {
                         noc_async_read(
                             hist.get_noc_addr(

@@ -96,6 +96,10 @@ GDN_CHUNK = os.environ.get("RESIDENT_GDN_CHUNK", "1") == "1"
 # (attention of a verify of R > 2 rows in packed passes of several rows, attn_common.hpp; 0: a pass per row)
 ATTN_PACKED = os.environ.get("RESIDENT_ATTN_PACKED", "1") == "1"
 HUB_LINKS = int(os.environ.get("RESIDENT_HUB_LINKS", "2"))  # fabric links per neighbour the hubs' all-reduce uses
+# row groups: size the weight ring from the L1 actually left on the streamers (up to the one-group ring) instead of
+# the per-group reservation estimate (act_bytes), which overstates what a second group takes
+RING_AUTO = os.environ.get("RESIDENT_RING_AUTO", "1") == "1"
+RING_MARGIN = 64 * 1024  # L1 left free below the lowest L1 buffer (later small allocations, e.g. global semaphores)
 HUB_MC_NOCS = int(os.environ.get("RESIDENT_HUB_MC_NOCS", "2"))  # NOCs the hub multicasts x over (mlp_hub.cpp mc_nocs)
 TOK_PREV = 14  # token state word: the previous verify step's accepted drafts (chunked GDN; none: 0xFFFFFFFF)
 TOK_X0 = 64
@@ -130,6 +134,22 @@ def l1_low_water(mesh):
         int(b["address"]) for b in ttnn.get_memory_view(mesh, ttnn.BufferType.L1).block_table if b["allocated"] == "yes"
     ]
     return min(lows) if lows else None
+
+
+def cb_bytes_on(cbs, cores):
+    """the CB bytes (no backing tensor, 64 B rounded) the descriptors take on the busiest of `cores` ((x, y) pairs)"""
+    want = set(cores)
+    per_core = dict.fromkeys(want, 0)
+    for cb in cbs:
+        if cb.has_buffer():
+            continue
+        size = -(-cb.total_size // 64) * 64
+        for r in cb.core_ranges.ranges():
+            for x in range(r.start.x, r.end.x + 1):
+                for y in range(r.start.y, r.end.y + 1):
+                    if (x, y) in want:
+                        per_core[(x, y)] += size
+    return max(per_core.values(), default=0)
 
 
 def cb_extent(cbs):
@@ -583,8 +603,10 @@ class ResidentModel:
                 f"row groups per launch: groups={groups} is not implemented (1 or 2; 4 needs the hub's slot-free "
                 "handshake, PLAN.md E4)"
             )
-        if groups > 1 and not (rows and kv_pool_blocks is not None and fc is None and not verify and not taps):
-            raise ValueError("row groups: rows mode with paged KV, no fc / verify / taps")
+        if groups > 1 and not (
+            rows and kv_pool_blocks is not None and embed is not None and fc is None and not verify and not taps
+        ):
+            raise ValueError("row groups: rows mode with paged KV and the hub feed (embed), no fc / verify / taps")
         self.groups = groups
         # with row groups the rows' positions live past the token state's x0 / rope (active_rows.hpp tok_pos_off);
         # one group keeps them in the head's words 1 .. batch
@@ -796,6 +818,8 @@ class ResidentModel:
         # verify: two more conv history outputs and the row selections (R > 2 rows: 9 row selections)
         extra += (2 * blk_tiles * 64 * B + 3 * 2048) if R == 2 else (9 * 2048 if verify else 0)
         ring_bytes = ((L1_WEIGHT_BUDGET - act_bytes(B, groups) + act_bytes(1) - extra) // lcm) * lcm
+        # (row groups: the one-group ring, the most the L1 measurement below may grow the ring to)
+        ring_one = ((L1_WEIGHT_BUDGET - act_bytes(B) + act_bytes(1) - extra) // lcm) * lcm
         self.ring_bytes = ring_bytes
 
         # ---- streamer tensors
@@ -980,7 +1004,8 @@ class ResidentModel:
                 ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
-            self.feed_sems = [ttnn.create_global_semaphore(mesh, hub_grid, 0) for _ in range(2)]  # candidates, launches
+            # candidates, launches (row groups: then each parity's CCL count at the last launch's end, mlp_hub.cpp)
+            self.feed_sems = [ttnn.create_global_semaphore(mesh, hub_grid, 0) for _ in range(2 if groups == 1 else 4)]
             rope = rope_compact(sts[0].max_pos).view(np.int32)
             self.rope_t = dram_t(torch.from_numpy(rope.copy()), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, rep)
             # (rows mode: per launch, 16 B of out and 16 parameter words per row)
@@ -1070,6 +1095,7 @@ class ResidentModel:
 
         def build(sub):
             """the CBs and the per-chip programs of one launch over sub-batch `sub`'s decode state"""
+            nonlocal ring_bytes  # (row groups: sized from the L1 left, below)
             # ---- CBs
             full_page = TILE * TILE * 2
             f32 = (ttnn.float32, 4096)
@@ -1102,15 +1128,19 @@ class ResidentModel:
                 )
 
             T = ttnn.cb_descriptor_from_sharded_tensor
-            cbs = [
-                ttnn.CBDescriptor(
-                    total_size=ring_bytes,
+
+            def ring_cb(size):
+                return ttnn.CBDescriptor(
+                    total_size=size,
                     core_ranges=grid,
                     format_descriptors=[
                         ttnn.CBFormatDescriptor(buffer_index=1 + e, data_format=dt, page_size=TILE_BYTES[dt])
                         for e, (_, dt, _) in enumerate(entries)
                     ],
-                ),
+                )
+
+            cbs = [
+                ring_cb(ring_bytes),
                 cb(7, grid, 1, ttnn.uint32, 16),
                 cb(8, grid, groups * d.It, page=64 * B, tiny_tile=True),
                 tiny_cb(9, groups * nd_max),
@@ -1136,6 +1166,9 @@ class ResidentModel:
             cbs.append(cb(0, hub_grid, 2 * n * x_views))
             cbs.append(cb(2, hub_grid, x_views))
             cbs.append(cb(1, hub_grid, 1, page=(hub_headers + 2 * self.feed) * 160 + 16))
+            if groups > 1:
+                # the hub compute's sub-round count; the streamers' active-group mask (reader -> compute)
+                cbs += [cb(3, hub_grid, 1, ttnn.uint32, 16), cb(37, grid, 1, ttnn.uint32, 16)]
             if B > 1:
                 cbs += [cb(32, grid, 1), cb(33, grid, 1), cb(34, grid, 2, *f32), cb(35, grid, 1, *f32), cb(38, grid, 1)]
             if lm_head:
@@ -1265,6 +1298,15 @@ class ResidentModel:
             if self.kv_paged:
                 # page lists of the workers' tiles, then a page-table window (attn_paged.hpp cb_pages)
                 cbs.append(cb(30, work_grid, 1, ttnn.uint32, -(-(4 * LR * self.kv_max_n + 2048 + 64) // 64) * 64))
+            if groups > 1 and RING_AUTO:
+                # row groups: the ring takes the streamers' L1 left between their other CBs and the lowest L1 buffer
+                # (every L1 buffer takes the same offset on every core), less a margin; never more than the one-group
+                # ring, never less than the estimate
+                room = (l1_low_water(mesh) or 0) - cb_bytes_on(cbs[1:], [(c.x, c.y) for c in cores]) - RING_MARGIN
+                ring_bytes = max(ring_bytes, min(ring_one, (room // lcm) * lcm))
+                cbs[0] = ring_cb(ring_bytes)
+                self.ring_bytes = ring_bytes
+                logger.info(f"row groups: weight ring {ring_bytes} B (L1 room {room} B, one-group ring {ring_one} B)")
             # the hub needs free semaphore ids for its fabric connections (2 per connection, 2 or 4 connections): the
             # head-group one only on the heads, and on the hub only the ones mlp_hub.cpp owns
             hub_sems = (SEM_GATHER, SEM_FLAG, SEM_ADDR)
@@ -1573,7 +1615,7 @@ class ResidentModel:
                     kernel(
                         "hub_compute.cpp",
                         hub_grid,
-                        [n, x_views, rounds * self.groups],
+                        [n, x_views, rounds],  # (row groups: rounds x the active groups, from the hub)
                         ttnn.RuntimeArgs(),
                         streamer_compute,
                     ),

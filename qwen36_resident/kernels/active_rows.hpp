@@ -45,3 +45,27 @@ struct ActiveRows {
         }
     }
 };
+
+// row groups: the groups with an active row this step (rows mode; bit g of the mask has rows g * batch_rows ..). A step
+// runs only those groups' streamer work, hub sub-rounds and transfers; with no active row at all group 0 runs (an idle
+// launch, e.g. the trace warm-up). Every kernel derives the same list from the token state's active word.
+struct ActiveGroups {
+    uint32_t n = 0;
+    uint32_t g[groups];
+    uint32_t mask = 0;
+
+    FORCE_INLINE ActiveGroups(uint32_t active, uint32_t batch_rows) {
+        for (uint32_t gr = 0; gr < groups; gr++) {
+            const uint32_t rows = batch_rows >= 32 ? ~0u : ((1u << batch_rows) - 1);
+            if (groups == 1 || ((active >> (gr * batch_rows)) & rows) != 0) {
+                g[n++] = gr;
+                mask |= 1u << gr;
+            }
+        }
+        if (n == 0) {
+            g[n++] = 0;
+            mask = 1;
+        }
+    }
+    FORCE_INLINE bool has(uint32_t gr) const { return (mask >> gr) & 1; }
+};

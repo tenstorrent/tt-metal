@@ -28,6 +28,7 @@ from qwen36_resident.tests.e0_bringup import close_mesh, open_mesh, shuffled_tab
 USERS, VOCAB = 16, 4096
 EMPTY = (3, 11, 13, 14)  # nobody in these rows: one in group 0, three in group 1
 PROBE = (0, 9)  # slots whose state is read back
+PATTERNS = ["all", "g0", "g1", "all", "g1", "g1", "g0", "all", "g0", "g0"]  # who runs, step by step
 
 
 def run(a):
@@ -121,6 +122,43 @@ def run(a):
         rec["fed_matches_host"] = sum(f == r for f, r in zip(fed, ref))
         m.set_sampling(rows=[(0.8, 20, 0.9, 1000 + u) for u in range(USERS)])
         rec["fed_sampled"] = fed_run()
+
+        # the active groups change from step to step (row groups run only the groups with an active row): per step
+        # who runs (all, group 0's users, group 1's users), preserve set (the others hold live state); host-driven
+        # greedy. A G=1 build runs only the launches with an active row.
+        m.set_sampling(0.0, 1, 1.0, 0)
+        restart()
+        toks, pos, plg = list(first), list(start), []
+
+        def runs(pat):
+            return [active[u] and (pat == "all" or (u < 8) == (pat == "g0")) for u in range(USERS)]
+
+        def launches_of(run):
+            return None if m.n_sub == 1 else [k for k in range(m.n_sub) if any(run[k * 8 : (k + 1) * 8])]
+
+        for pat in PATTERNS:
+            run = runs(pat)
+            x0 = torch.stack([emb_host[t].float() for t in toks])
+            m.step(m.token_state(x0, pos, active=run, preserve=True), launches=launches_of(run))
+            ttnn.synchronize_device(mesh)
+            lg = logits_rows()
+            plg.append(lg[torch.tensor(run)].bfloat16())
+            toks = [int(lg[u].argmax()) if run[u] else toks[u] for u in range(USERS)]
+            pos = [p + 1 if run[u] else p for u, p in enumerate(pos)]
+        rec["pattern_logits"] = plg
+        # step time with group 0's users only (group 1 empty), fed back to back
+        restart()
+        run = runs("g0")
+        x0 = torch.stack([emb_host[t].float() for t in first])
+        m.step(m.token_state(x0, start, active=run, preserve=True), launches=launches_of(run))
+        for _ in range(4):
+            m.step(None, launches=launches_of(run))
+        ttnn.synchronize_device(mesh)
+        t0 = time.time()
+        for _ in range(a.time_steps):
+            m.step(None, launches=launches_of(run))
+        ttnn.synchronize_device(mesh)
+        rec["step_ms_g0"] = (time.time() - t0) / a.time_steps * 1e3
         # step time, fed back to back (all users active but the empty rows)
         restart()
         m.step(tok_host(first, start))
@@ -134,7 +172,7 @@ def run(a):
         rec["step_ms"] = (time.time() - t0) / a.time_steps * 1e3
         print(
             f"groups={a.groups}: fed greedy matches host-driven {rec['fed_matches_host']}/{a.steps}; "
-            f"step {rec['step_ms']:.3f} ms",
+            f"step {rec['step_ms']:.3f} ms, group 0 only {rec['step_ms_g0']:.3f} ms",
             flush=True,
         )
     finally:
@@ -155,9 +193,14 @@ def compare(got, ref):
     for s in PROBE:
         slots[s] = {k: bool(torch.equal(got["slots"][s][k], ref["slots"][s][k])) for k in ref["slots"][s]}
     res["slots_identical"] = slots
+    res["pattern_logits_identical"] = all(
+        torch.equal(x, y) for x, y in zip(got["pattern_logits"], ref["pattern_logits"])
+    ) and len(got["pattern_logits"]) == len(ref["pattern_logits"])
     res["step_ms"] = dict(got=got["step_ms"], ref=ref["step_ms"])
+    res["step_ms_group0_only"] = dict(got=got["step_ms_g0"], ref=ref["step_ms_g0"])
     res["pass"] = (
-        res["host_logits_identical"]
+        res["pattern_logits_identical"]
+        and res["host_logits_identical"]
         and res["host_tokens_identical"]
         and res["x_identical"]
         and res["fed_greedy_identical"]

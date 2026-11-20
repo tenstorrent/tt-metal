@@ -111,6 +111,9 @@ void kernel_main() {
                                      : reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_base(cb_dout))[kTokActive];
     // (row groups: group gr's conv history rows follow the num_streamers x gdn_copies rows of the groups before it)
     const uint32_t hist_group_rows = num_streamers * gdn_copies;
+    // row groups: only the groups with an active row run (active_rows.hpp): their sub-rounds, rows, histories,
+    // activation slices and records; an inactive group's CB pages are popped unsent
+    const ActiveGroups ag(rows_mode ? active_mask : 0, batch);
     const bool preserve = rows_mode && ((*ring_sem >> 16) & 1);
 
     // x of round 0 (x0) is seeded and released by the reader; the hub multicasts x of the later rounds
@@ -118,7 +121,7 @@ void kernel_main() {
     // every group is in before the round's compute starts, group g at tile offset g * Ht)
     auto take_slots = [&](uint32_t round) {
         if (round > 0) {
-            noc_semaphore_wait_min(slots_sem, round * groups);
+            noc_semaphore_wait_min(slots_sem, round * ag.n);
             cb_reserve_back(cb_x, groups * Ht);
             cb_push_back(cb_x, groups * Ht);
         }
@@ -129,13 +132,17 @@ void kernel_main() {
     static_assert(groups <= 2, "row groups > 2 reuse a hub slot within a round: needs a slot-free handshake");
     static_assert(groups == 1 || o_tiles == Ot, "the mixers' o block per group is the out projection's K");
     auto send_partial = [&](uint32_t round) {
-        for (uint32_t g = 0; g < groups; g++) {
+        for (uint32_t g = 0, k = 0; g < groups; g++) {
             cb_wait_front(cb_pout, nd_max);
+            if (!ag.has(g)) {
+                cb_pop_front(cb_pout, nd_max);
+                continue;
+            }
             while (hub_slots == 0) {
                 invalidate_l1_cache();
                 hub_slots = *hub_addr_sem;
             }
-            const uint32_t sr = round * groups + g;
+            const uint32_t sr = round * ag.n + k++;  // the hub's sub-round: the k-th active group of the round
             const uint32_t dst = hub_slots + (((sr & 1) * num_chips + chip) * Ht + pout_off) * kTileBytes;
             noc_async_write(get_read_ptr(cb_pout), get_noc_addr(hub_x, hub_y, dst), nd * kTileBytes);
             noc_async_write_barrier();
@@ -148,6 +155,9 @@ void kernel_main() {
     // buffer, row_tiles tiles per group; one rows semaphore increment per layer once every group is written)
     auto send_row = [&](uint32_t first, uint32_t count, uint32_t nq, uint32_t q_off) {
         for (uint32_t gr = 0; gr < groups; gr++) {
+            if (!ag.has(gr)) {
+                continue;
+            }
             const uint32_t row = get_read_ptr(cb_qkvz_out) + gr * kBlk * kTileBytes;
             for (uint32_t i = 0; i < count; i++) {
                 const uint32_t hx = get_arg_val<uint32_t>(first + 2 * i);
@@ -168,6 +178,9 @@ void kernel_main() {
     const uint32_t n_runs = get_arg_val<uint32_t>(runs_base);
     auto send_runs = [&](uint32_t q_off) {
         for (uint32_t gr = 0; gr < groups; gr++) {
+            if (!ag.has(gr)) {
+                continue;
+            }
             const uint32_t row = get_read_ptr(cb_qkvz_out) + gr * kBlk * kTileBytes;
             for (uint32_t r = 0; r < n_runs; r++) {
                 const uint32_t start = get_arg_val<uint32_t>(runs_base + 1 + 4 * r);
@@ -263,7 +276,7 @@ void kernel_main() {
                 // the 32x32 views holding the q|k|v tiles
                 const uint32_t step = conv_step(ring, g, gdn_copies);
                 for (uint32_t gr = 0; gr < groups; gr++) {
-                    for (uint32_t j = 0; j < outs; j++) {
+                    for (uint32_t j = 0; ag.has(gr) && j < outs; j++) {
                         noc_async_write(
                             get_read_ptr(cb_hist_out) + (gr * outs + j) * kBlkViews * 2048,
                             hist.get_noc_addr(
@@ -294,6 +307,9 @@ void kernel_main() {
         mark(l, 5);
         // (row groups: group gr's slice at gr * kBlk tiles, to block gr of every streamer's act, It tiles per group)
         for (uint32_t gr = 0; gr < groups; gr++) {
+            if (!ag.has(gr)) {
+                continue;
+            }
             const uint32_t slice = get_read_ptr(cb_aslice) + gr * kBlk * kTileBytes;
             for (uint32_t s = 0; s < num_streamers; s++) {
                 const uint32_t px = get_arg_val<uint32_t>(peers_base + 2 * s);
@@ -337,9 +353,10 @@ void kernel_main() {
                 // row r's lists of every streamer back to back on the hub: [row][streamer]
                 static_assert(nd_max * kTileBytes >= batch * sampling::kListBytes, "the lists are staged in cb_pout");
                 for (uint32_t gr = 0; gr < groups; gr++) {
-                    if (gr > 0) {
-                        noc_async_write_barrier();  // the previous group's lists have left cb_pout
+                    if (!ag.has(gr)) {
+                        continue;  // (an inactive group's rows: the hub feeds none of them)
                     }
+                    noc_async_write_barrier();  // the previous group's lists have left cb_pout
                     for (uint32_t u = 0; u < batch; u++) {
                         volatile tt_l1_ptr uint32_t* list = rec + u * 2 * sampling::kTopK;
                         sampling::clear(list);
@@ -367,7 +384,7 @@ void kernel_main() {
                 for (uint32_t r = 0; r < kRecRows; r++) {
                     const uint32_t gr = r / batch, u = r % batch;
                     uint32_t best = 0, best_i = 0;
-                    for (uint32_t i = 0; i < valid_cols; i += 2) {
+                    for (uint32_t i = 0; ag.has(gr) && i < valid_cols; i += 2) {
                         const uint32_t w = word(gr, u, i);
                         const uint32_t k0 = key(w & 0xffff);
                         if (k0 > best) {
