@@ -208,6 +208,7 @@ class TtMistralImageAttention(LightweightModule):
             scale=self.scale,
             program_config=sdpa_cfg,
             compute_kernel_config=self.compute_kernel_config_sdpa,
+            precision=ttnn.SDPAPrecision.ACCURATE,
         )
         # deallocate keys and values
         ttnn.deallocate(q_heads_1QSD)
