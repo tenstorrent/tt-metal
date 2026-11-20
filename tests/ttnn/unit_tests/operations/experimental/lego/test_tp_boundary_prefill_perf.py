@@ -3,10 +3,10 @@
 # Perf harness: prefill boundary A / B at S rows on a QB2 1x4 ring (4x p300c).
 # (1) the composed chain from the llama31_8b_qb2 decoder's own prefill ops and configs, (2) the lego TPBoundary
 # fused op; each captured in a metal trace and replayed REPLAYS times. Run with TT_METAL_DEVICE_PROFILER=1 and read
-# the times with tp_boundary_trace_span.py. prefill_config assumes a 12-wide grid; mm_grid and rs_workers are
-# narrowed below for p300c's 11 columns.
+# the times with tp_boundary_trace_span.py. LEGO_CFG='{"field": value}' overrides BoundaryConfig fields and
+# TPB_CHAIN=0 skips the chain.
 
-from dataclasses import replace
+import os
 
 import pytest
 import torch
@@ -18,7 +18,7 @@ from models.demos.llama31_8b_qb2.tt.precision import load_precision_config
 
 from ttnn.lego.tp_boundary import TPBoundary, prefill_config
 
-from .test_tp_boundary_decode_perf import qb2_mesh, shards, run_traced  # noqa: F401
+from .test_tp_boundary_decode_perf import RUN_CHAIN, cfg_overrides, qb2_mesh, shards, run_traced  # noqa: F401
 
 TP, HIDDEN, INTER = 4, 4096, 14336
 EPS = 1e-5
@@ -112,18 +112,11 @@ def test_tp_boundary_prefill_perf(qb2_mesh, boundary, S):
     x_chain = shards(mesh, [t[None, None] for t in xs], ttnn.bfloat16, dim=-1)
     inp_t = shards(mesh, [inp[None, None]], ttnn.bfloat16, dim=-1, mem=ttnn.L1_MEMORY_CONFIG)
     fn = (lambda: chain_a(d, x_chain, inp_t)) if boundary == "A" else (lambda: chain_b(d, x_chain, inp_t))
-    h_c, out_c = run_traced(mesh, fn, f"chain_{boundary}")
+    h_c, out_c = run_traced(mesh, fn, f"chain_{boundary}") if RUN_CHAIN else (None, None)
 
     x_t = shards(mesh, [x[None, None]], ttnn.bfloat16, dim=-1)
-    gx = mesh.compute_with_storage_grid_size().x  # p300c fast dispatch: 11 (prefill_config assumes 12)
-    cfg = prefill_config(boundary, S)
-    cfg = replace(
-        cfg,
-        mm_grid=(gx, cfg.mm_grid[1]),
-        mm1_grid=(gx, cfg.mm1_grid[1]) if cfg.mm1_grid else None,
-        rs_workers=4 if gx < 12 else cfg.rs_workers,
-    )
-    op = TPBoundary(mesh, EPS, boundary, S, n_out, cfg=cfg)
+    cfg = prefill_config(boundary, S, mesh.compute_with_storage_grid_size().x)  # p300c fast dispatch: 11 wide
+    op = TPBoundary(mesh, EPS, boundary, S, n_out, cfg=cfg_overrides(cfg))
     h_f, out_f = run_traced(
         mesh, lambda: op(x_t, inp_t, d.prefill_weights[role1], d.prefill_weights[role2]), f"fused_{boundary}"
     )
@@ -143,8 +136,12 @@ def test_tp_boundary_prefill_perf(qb2_mesh, boundary, S):
         outs.append(y)
     out_ref = torch.cat(outs, -1)
     for name, h_t, o_t in (("chain", h_c, out_c), ("fused", h_f, out_f)):
+        if h_t is None:
+            continue
         got_h = torch.cat(dev(h_t), -1)
         got_o = torch.cat(dev(o_t), -1)
         ph = torch.corrcoef(torch.stack([h_ref.flatten(), got_h.flatten()]))[0, 1].item()
         po = torch.corrcoef(torch.stack([out_ref.flatten(), got_o.flatten()]))[0, 1].item()
         print(f"TPB_PCC {name}_{boundary}{S} resid={ph:.6f} out={po:.6f}")
+        if os.environ.get("TPB_DUMP"):  # the output, to compare variants against each other
+            torch.save(got_o, f"{os.environ['TPB_DUMP']}_{name}.pt")

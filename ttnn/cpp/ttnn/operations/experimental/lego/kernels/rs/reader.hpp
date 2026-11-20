@@ -23,6 +23,10 @@
 // reduce-scatter of batch b overlaps the producer's batch b+1. With batch_wait the first step of a batch waits until
 // L1 counter word 16 * b at batch_counters reaches `expected` (the producer's per-batch signal, in place of the
 // original's ReduceScatterOpReceiver).
+//
+// slice_wait (traversals == 1): the producer writes the input slice by slice and signals each (e.g. a matmul's N
+// groups, mm/n_blocks.hpp). Before a ring step reads input slice s, wait until counter word 16 * k at batch_counters
+// reaches `expected`, k = (slice_block >> 4s) & 15 (the producer's block that writes slice s).
 
 #pragma once
 
@@ -172,11 +176,11 @@ struct Reader {
         unit_start = rt<A>(arg_idx++);
         unit_end = rt<A>(arg_idx++);
         resid_address = A::fuse_residual ? crt<A>(8) : 0;
-        if constexpr (A::batch_wait) {
+        if constexpr (A::batch_wait || A::slice_wait) {
             batch_counters = rt<A>(arg_idx++);
             batch_expected = rt<A>(arg_idx++);
             // The producer's first batch signal comes long after kernel start.
-            for (uint32_t b = 0; b < A::traversals; b++) {
+            for (uint32_t b = 0; b < (A::slice_wait ? ring_size : A::traversals); b++) {
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_counters + 16 * b)[0] = 0;
             }
         }
@@ -254,6 +258,11 @@ struct Reader {
                     slice_idx = (uint32_t)slice_idx - ring_size;
                 }
                 const uint32_t slice_base = slice_base_tile_id(slice_idx);
+                if constexpr (A::slice_wait) {
+                    const uint32_t k = (A::slice_block >> (4 * slice_idx)) & 0xF;
+                    noc_semaphore_wait_min(
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_counters + 16 * k), batch_expected);
+                }
 
                 uint32_t input_tile_id_start = 0;
                 uint32_t input_pages_read_in_row = start_pages_read_in_row;

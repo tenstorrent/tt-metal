@@ -83,6 +83,32 @@ class BoundaryConfig:
     # instead of from the local slice plus an all-gather of the partial sums: one collective less, but they start
     # after the all-gather (decode, where collective latency dominates)
     stats_from_gathered: bool = False
+    # MM2 transposed (mm2_split 1 only): M split over the grid's columns and N over its rows, in0 forwarded down the
+    # columns and the weights along the rows. Pads less when the rows split N more evenly (A's gate_up on an 11 x 8
+    # grid: 3 x 28 tiles a core instead of 4 x 22)
+    mm2_transpose: bool = False
+    # the AG readers also signal MM2's injectors while they wait to forward a slice
+    # (place_all_gather(signal_while_forwarding=...)): MM2 hears of a neighbour's rows as they land
+    ag_early_signal: bool = False
+    # MM1 computes its output quarter by quarter in the order the reduce-scatter's ring steps read them (the slice of
+    # the device across the ring, both neighbours', its own) and signals each, so the RS starts during MM1
+    # (place_matmul(n_groups=...)); mm1_split 1, batches 1. mm1_transpose: MM1 with M over the columns, N over the rows
+    mm1_groups: bool = False
+    # MM1 split by N (mm1_split a multiple of the ring size): the splits cover whole RS input quarters, and the bottom
+    # ones (whose DRAM reads finish first) the quarters the RS reads first; each signals its quarter, so the RS starts
+    # during MM1
+    mm1_quarter_splits: bool = False
+    # the matmuls' weight injectors read the next K block while forwarding the current one (place_matmul)
+    mm1_read_ahead: bool = False
+    # SwiGLU MM2: read the weights in same-bank page pairs (place_matmul(in1_bank_pairs=...): small bfp4 pages)
+    mm2_bank_pairs: bool = False
+    # MM2's weight readers start once every MM1 core has written its output (MM1 reads DRAM alone first: it is on the
+    # critical path, MM2's weights stream in during the collectives)
+    mm2_after_mm1: bool = False
+    mm2_read_ahead: bool = False
+    # MM1's in0 held for all of K and reused by its quarters (with mm1_groups) instead of streamed once per quarter
+    mm1_resident: bool = False
+    mm1_transpose: bool = False
 
 
 def _split_cfg(cfg: MatmulConfig, n_tiles: int, split: int, gx: int, swiglu: bool) -> MatmulConfig:
@@ -95,18 +121,31 @@ def _split_cfg(cfg: MatmulConfig, n_tiles: int, split: int, gx: int, swiglu: boo
     return MatmulConfig(cfg.M_block, cfg.K_block, per, cfg.subblock_h, sw)
 
 
-def decode_config(boundary: str) -> BoundaryConfig:
-    """Decode (one tile of rows): every matmul core reads its own weight columns (12x1 grids split by N; MM1 on all
-    eight, MM2 on the first five (A) or four (B)), MM2's weights prefetched into their own L1, one CCL worker per link
-    and direction (direct fabric connections), statistics from the gathered H."""
-    if boundary == "A":  # o_proj (N 128 tiles) -> gate_up SwiGLU (224)
-        mm1, mm2, s2 = MatmulConfig(1, 16, 2, 1, 2), MatmulConfig(1, 16, 4, 1, 4), 5
+def _fit_n_block(cfg: MatmulConfig, n_tiles: int, gx: int, swiglu: bool) -> MatmulConfig:
+    """cfg with N_block = one core's N tiles when cfg.N_block does not divide them (place_matmul splits n_tiles over
+    gx columns). A remainder block costs a second pass over K, with in0 streamed again: on an 11-wide grid A's gate_up
+    gives 22 tiles a core (blocks of 20 + 2) and B's qkv 5 (4 + 1). The subblock is then 1 x the widest divisor of
+    the N block that fits DST (even with SwiGLU); one row high measured fastest for these blocks."""
+    per = 2 * -(-(n_tiles // 2) // gx) if swiglu else -(-n_tiles // gx)
+    if cfg.N_block and per % cfg.N_block == 0:
+        return cfg
+    sw = max(w for w in range(1, 9) if per % w == 0 and (not swiglu or w % 2 == 0))
+    return MatmulConfig(cfg.M_block, cfg.K_block, per, 1, sw)
+
+
+def decode_config(boundary: str, grid_x: int = 12) -> BoundaryConfig:
+    """Decode (one tile of rows): every matmul core reads its own weight columns (grid_x x 1 grids split by N; MM1 on
+    all eight, MM2 on the first six (A) or four (B)), MM2's weights prefetched into their own L1, one CCL worker per
+    link and direction (direct fabric connections), statistics from the gathered H. A's bfp4 gate_up weights are read
+    in same-bank page pairs, and only once every MM1 core is done (MM1, on the critical path, gets DRAM first)."""
+    if boundary == "A":  # o_proj (N 128 tiles) -> gate_up SwiGLU (224): 4 columns (one bank-paired quad) a core
+        mm1, mm2, s2 = MatmulConfig(1, 16, 2, 1, 2), MatmulConfig(1, 16, 4, 1, 4), 6
     else:  # down (N 128) -> qkv (48)
         mm1, mm2, s2 = MatmulConfig(1, 16, 2, 1, 2), MatmulConfig(1, 16, 1, 1, 1), 4
     return BoundaryConfig(
         mm1=mm1,
         mm2=mm2,
-        mm_grid=(12, 1),
+        mm_grid=(grid_x, 1),
         mm1_split=8,
         mm2_split=s2,
         rs_workers=1,
@@ -115,17 +154,28 @@ def decode_config(boundary: str) -> BoundaryConfig:
         out_mem=L1,
         mm2_overlap=False,
         stats_from_gathered=True,
+        mm2_bank_pairs=boundary == "A",
+        mm2_after_mm1=boundary == "A",
     )
 
 
-def prefill_config(boundary: str, S: int) -> BoundaryConfig:
-    """Prefill. S >= 512: both matmuls on the 12x8 grid, MM2's weights stream through MM1's arena bytes two K blocks
-    deep. Shorter S (the weights dominate): MM1 split by N over four 12x2 grids, A's MM2 (7168 weight columns) over two
-    12x4 grids, MM2's weights prefetched as deep as the arena allows."""
+def prefill_config(boundary: str, S: int, grid_x: int = 12) -> BoundaryConfig:
+    """Prefill. S >= 512: both matmuls on the grid_x x 8 grid, MM2's weights stream through MM1's arena bytes two K
+    blocks deep. Shorter S (the weights dominate): MM1 split by N over four grid_x x 2 grids, A's MM2 (7168 weight
+    columns) over two grid_x x 4 grids, MM2's weights prefetched as deep as the arena allows.
+    Narrower grids (p300c gives fast dispatch 11 columns): the two aux rows hold 4 RS workers per link and direction
+    instead of 5 (1, without a mux, at S < 512), and at S >= 512 the AG takes 3 workers (measured faster on 11 columns; 12 columns keep 2) and A's
+    MM2 is transposed with its weights four K blocks deep (3 x 28 tiles a core instead of 4 x 22), and hears of the
+    AG's rows as they land (ag_early_signal; measured ~2 us slower for B). A's MM1 there (K = 1024: its in0 fits in
+    L1) computes its output quarter by quarter in the RS's order with in0 resident, transposed, so the RS overlaps it
+    (mm1_groups; B's in0 does not fit, and streaming it once per quarter costs more than the overlap gains)."""
+    narrow = grid_x < 12
+    rs_workers = min(5, (2 * grid_x) // 4 - 1) if S >= 512 or not narrow else 1
+    ccl = dict(rs_workers=rs_workers, ag_workers=3 if narrow and S >= 512 else 2)
     if S >= 512:
-        grid, M, depth, s1, s2, g1 = (12, 8), 4, 2, 1, 1, None
+        grid, M, depth, s1, s2, g1 = (grid_x, 8), 4, 2, 1, 1, None
     else:
-        grid, M, depth, s1, g1 = (12, 4), max(1, S // 32 // 4), 64, 4, (12, 2)
+        grid, M, depth, s1, g1 = (grid_x, 4), max(1, S // 32 // 4), 64, 4, (grid_x, 2)
         s2 = 2 if boundary == "A" else 1
     if boundary == "A":  # o_proj -> gate_up (SwiGLU)
         return BoundaryConfig(
@@ -134,10 +184,18 @@ def prefill_config(boundary: str, S: int) -> BoundaryConfig:
             mm_grid=grid,
             swiglu=True,
             out_mem=DRAM if S >= 512 else L1,
-            mm2_in1_depth=depth,
+            mm2_in1_depth=4 if narrow and S >= 512 else depth,
             mm1_split=s1,
             mm2_split=s2,
             mm1_grid=g1,
+            mm2_transpose=narrow and S >= 512,
+            ag_early_signal=narrow and S >= 512,
+            mm1_groups=narrow and S >= 512,
+            mm1_resident=narrow and S >= 512,
+            mm1_transpose=narrow and S >= 512,
+            mm2_read_ahead=S < 512,  # gate_up's bf4 weights stream during the collectives
+            mm2_bank_pairs=S < 512,
+            **ccl,
         )
     return BoundaryConfig(
         mm1=MatmulConfig(M, 8, 12, min(2, M), 4),
@@ -147,12 +205,15 @@ def prefill_config(boundary: str, S: int) -> BoundaryConfig:
         mm1_split=s1,
         mm2_split=s2,
         mm1_grid=g1,
+        mm1_quarter_splits=S < 512,  # each split one RS input quarter, the first-read ones on the bottom rows
+        **ccl,
     )
 
 
-def default_config(boundary: str, S: int) -> BoundaryConfig:
-    """The tuned configuration for boundary "A" (o_proj -> gate_up) or "B" (down -> qkv) at S rows (S == 32: decode)."""
-    return decode_config(boundary) if S <= 32 else prefill_config(boundary, S)
+def default_config(boundary: str, S: int, grid_x: int = 12) -> BoundaryConfig:
+    """The tuned configuration for boundary "A" (o_proj -> gate_up) or "B" (down -> qkv) at S rows (S == 32: decode)
+    on a grid grid_x columns wide."""
+    return decode_config(boundary, grid_x) if S <= 32 else prefill_config(boundary, S, grid_x)
 
 
 class TPBoundary:
@@ -160,21 +221,30 @@ class TPBoundary:
 
     def __init__(self, mesh, eps: float, boundary: str, S: int, n_out: int, cfg: BoundaryConfig | None = None):
         self.mesh, self.eps, self.boundary, self.S = mesh, eps, boundary, S
-        self.cfg = replace(cfg or default_config(boundary, S))  # a copy: the split adjusts its matmul configs
-        self.ring = tuple(mesh.shape)[1]
         g = mesh.compute_with_storage_grid_size()
+        # a copy: the split adjusts its matmul configs
+        self.cfg = replace(cfg or default_config(boundary, S, g.x))
+        self.ring = tuple(mesh.shape)[1]
         self.grid = (g.x, g.y)
+        self.dram_banks = mesh.dram_grid_size().x * mesh.dram_grid_size().y
         c = self.cfg
         self.aux = [(x, y) for y in c.aux_rows for x in range(g.x)]
         ox, oy = c.mm_origin
         gx_, gy_ = c.mm_grid
         self.mm1_grid = c.mm1_grid or c.mm_grid
         gy1 = self.mm1_grid[1]
-        assert self.mm1_grid[0] == gx_
+        if c.mm1_quarter_splits:  # a split's share of a quarter, on a grid as wide as divides it
+            assert c.mm1_split % self.ring == 0 and c.batches == 1 and not c.mm1_groups
+            share = 4096 // 32 // self.ring // (c.mm1_split // self.ring)
+            self.mm1_grid = (max(d for d in range(1, gx_ + 1) if share % d == 0), gy1)
+        assert self.mm1_grid[0] == gx_ or c.mm1_quarter_splits
         assert max(c.mm1_split, c.mm2_split) == 1 or c.batches == 1
         assert c.mm2_row == 0 or not c.mm2_overlap
         self.mm_origins = [(ox, oy + c.mm2_row + s * gy_) for s in range(c.mm2_split)]
         self.mm1_origins = [(ox, oy + s * gy1) for s in range(c.mm1_split)]
+        self.mm1_cores = [
+            (o[0] + i, o[1] + j) for o in self.mm1_origins for j in range(gy1) for i in range(self.mm1_grid[0])
+        ]
         rows = max(c.mm2_row + gy_ * c.mm2_split, gy1 * c.mm1_split)
         self.mm_cores = [(ox + i, oy + j) for j in range(rows) for i in range(gx_)]
         if c.mm1_grid is not None and gy1 != gy_:  # one core's rows on MM1's grid
@@ -189,6 +259,26 @@ class TPBoundary:
         if c.mm1.subblock_h * c.mm1.subblock_w > 8:
             c.mm1 = MatmulConfig(c.mm1.M_block, c.mm1.K_block, c.mm1.N_block, 1, c.mm1.subblock_w)
         c.mm2 = _split_cfg(c.mm2, n_w2 // 32, c.mm2_split, gx_, c.swiglu)
+        if c.mm1_groups:  # one N block per quarter: a core's share of it
+            assert c.mm1_split == 1 and c.batches == 1
+            n_axis, m_axis = (gy1, gx_) if c.mm1_transpose else (gx_, gy1)
+            nb, mb = -(-(H // 32 // self.ring) // n_axis), -(-(S // 32) // m_axis)
+            sw = max(w for w in range(1, 9) if nb % w == 0)
+            sh = max(h for h in range(1, mb + 1) if mb % h == 0 and h * sw <= 8)
+            c.mm1 = MatmulConfig(mb, c.mm1.K_block, nb, sh, sw)
+        elif c.mm1_quarter_splits:
+            nb = 4096 // 32 // self.ring // (c.mm1_split // self.ring) // self.mm1_grid[0]
+            sw = max(w for w in range(1, 9) if nb % w == 0)
+            sh = max(h for h in range(1, c.mm1.M_block + 1) if c.mm1.M_block % h == 0 and h * sw <= 8)
+            c.mm1 = MatmulConfig(c.mm1.M_block, c.mm1.K_block, nb, sh, sw)
+        elif c.mm1_split == 1:
+            c.mm1 = _fit_n_block(c.mm1, H // 32, gx_, False)
+        if c.mm2_transpose:
+            assert c.mm2_split == 1
+            mb = -(-(S // 32) // gx_)
+            c.mm2 = _fit_n_block(MatmulConfig(mb, c.mm2.K_block, 0, 1, 1), n_w2 // 32, gy_, c.swiglu)  # 0: refit
+        elif c.mm2_split == 1:
+            c.mm2 = _fit_n_block(c.mm2, n_w2 // 32, gx_, c.swiglu)
         self.P = 1  # one partial-sum tile per row tile and device: the stats all-gather stays small
 
         def alloc(shape, mem, dtype=ttnn.bfloat16):
@@ -238,7 +328,8 @@ class TPBoundary:
     def _arena_plan(self, inp, w1, w2):
         """MM1's CB offsets in the arena, and MM2's weight CB depth (it starts at offset 0 once MM1 is done)."""
         c = self.cfg
-        b1 = matmul_cb_bytes(inp.dtype, w1.dtype, ttnn.bfloat16, c.mm1)
+        k1 = (inp.padded_shape[-1] // 32) // c.mm1.K_block
+        b1 = matmul_cb_bytes(inp.dtype, w1.dtype, ttnn.bfloat16, c.mm1, in0_cb_blocks=k1 if c.mm1_resident else 2)
         offs, o = {}, 0
         for k in ("in1", "in0", "out", "interm"):
             offs[k] = o
@@ -289,9 +380,22 @@ class TPBoundary:
         offs, in1_depth, _ = self._arena_plan(inp, w1, w2)
         mm2_in1_off = offs.pop("mm2_in1", 0)
         rs_cores_ = [w for ws in rs_workers.values() for w in ws]
+        # the RS reads the input quarters in this order: the device across the ring, the two neighbours, its own
+        r = ring.index
+        q_order = [(r + 2) % self.ring, (r + 1) % self.ring, (r - 1) % self.ring, r] if self.ring == 4 else None
+        assert q_order is not None or not (c.mm1_groups or c.mm1_quarter_splits)
         s1 = c.mm1_split
         n1 = c.mm_grid[0] * c.mm1.N_block  # a split's columns: whole per-core chunks
+        q_tiles = 4096 // 32 // self.ring
+        per_q = s1 // self.ring  # quarter splits: splits per quarter, ranked bottom first
         for s_, org in enumerate(self.mm1_origins):
+            if c.mm1_quarter_splits:
+                rank, part = divmod(s1 - 1 - s_, per_q)
+                nr = (q_order[rank] * q_tiles + part * (q_tiles // per_q), q_tiles // per_q)
+                sig = (self.rs_counters, rs_cores_, rank)
+            else:
+                nr = (s_ * n1, n1) if s1 > 1 else None
+                sig = (self.rs_counters, rs_cores_) if c.mm1_groups else None
             p1 = place_matmul(
                 prog,
                 mesh,
@@ -305,21 +409,44 @@ class TPBoundary:
                 arena={k: (self.arena, v) for k, v in offs.items()},
                 m_batches=c.batches,
                 signal_m_batches=(self.rs_counters, rs_cores_) if c.batches > 1 else None,
-                n_range=(s_ * n1, n1) if s1 > 1 else None,
+                n_range=nr,
+                transpose=True if c.mm1_transpose else None,
+                n_groups=(q_tiles, q_order) if c.mm1_groups else None,
+                signal_n_blocks=sig,
+                in0_resident=c.mm1_resident,
+                in1_read_ahead=c.mm1_read_ahead,
             )
         # MM1 done on a core (its output written) -> that core's MM2 weight reader may reuse MM1's arena bytes
         if c.mm2_overlap:
-            place_local_handoff(
-                prog, mesh, self.mm_cores, p1.writer_risc, "dm1" if p1.writer_risc == "dm0" else "dm0", label="l_mm1"
-            )
+            # the waiting RISC runs MM2's weight reader; a transposed MM2 reads its weights on MM1's writer RISC, which
+            # then waits for MM1's weight reader instead
+            other = "dm1" if p1.writer_risc == "dm0" else "dm0"
+            prod, cons = (other, p1.writer_risc) if c.mm2_transpose else (p1.writer_risc, other)
+            place_local_handoff(prog, mesh, self.mm_cores, prod, cons, label="l_mm1")
         # P complete -> RS readers (batched: per batch, inside the RS reader)
-        if c.batches == 1:
-            place_handoff_multi(prog, mesh, [(self.mm_cores, p1.writer_risc)], rs_cores, "dm0", label="h_mm1")
-        # MM2's in0 injectors, per row group r: the first core of row r in each N split
-        inj_groups = [[(o[0], o[1] + r) for o in self.mm_origins] for r in range(c.mm_grid[1])]
+        if c.batches == 1 and not (c.mm1_groups or c.mm1_quarter_splits):
+            place_handoff_multi(prog, mesh, [(self.mm1_cores, p1.writer_risc)], rs_cores, "dm0", label="h_mm1")
+        if c.mm2_after_mm1:
+            mm2_cores = [
+                (o[0] + i, o[1] + r) for o in self.mm_origins for r in range(c.mm_grid[1]) for i in range(c.mm_grid[0])
+            ]
+            place_handoff_multi(
+                prog,
+                mesh,
+                [(self.mm1_cores, p1.writer_risc)],
+                mm2_cores,
+                "dm1" if c.mm2_transpose else "dm0",
+                label="h_m12",
+            )
+        # MM2's in0 injectors, per row group r: the first core of row r in each N split (transposed: the first core of
+        # column r)
+        if c.mm2_transpose:
+            inj_groups = [[(o[0] + r, o[1]) for o in self.mm_origins] for r in range(c.mm_grid[0])]
+        else:
+            inj_groups = [[(o[0], o[1] + r) for o in self.mm_origins] for r in range(c.mm_grid[1])]
         injectors = [i for g in inj_groups for i in g]
         group_of = {i: r for r, g in enumerate(inj_groups) for i in g}
-        m_per_inj = -(-(self.S // 32) // c.mm_grid[1])
+        m_per_inj = -(-(self.S // 32) // len(inj_groups))
         batch_rows = (self.S // 32) // c.batches
         own_targets = (
             injectors
@@ -351,6 +478,13 @@ class TPBoundary:
             signal_own=(self.counters, own_targets, j),
             batches=c.batches,
             batch_wait=(self.rs_counters, len(self.mm_cores)) if c.batches > 1 else None,
+            slice_wait=(
+                self.rs_counters,
+                len(self.mm1_cores) // (self.ring if c.mm1_quarter_splits else 1),
+                [q_order.index(q) for q in range(self.ring)],
+            )
+            if c.mm1_groups or c.mm1_quarter_splits
+            else None,
         )
         # h complete (every RS writer done) -> every aux core: AG readers and writers (peers may only write into H
         # once this device's RS is done) and the statistics readers
@@ -362,8 +496,7 @@ class TPBoundary:
         # AG streams H into MM2: each MM2 in0 injector is signalled as its rows of a slice land, MM2 reads K in arrival
         # order. Injector r owns M rows [r * m_per, (r + 1) * m_per): row group r.
         Hl = 4096 // self.ring
-        m_per = -(-(self.S // 32) // c.mm_grid[1])
-        group = m_per * (Hl // 32)
+        group = m_per_inj * (Hl // 32)
         # The AG muxes also carry the statistics all-gather (link 0, one worker per direction) as extra clients, so
         # it runs alongside instead of waiting for the AG to release the fabric.
         ag_mux_objs = None
@@ -389,6 +522,7 @@ class TPBoundary:
             signal=(self.counters, inj_groups),
             write_local=False,
             row_group_tiles=group,
+            signal_while_forwarding=c.ag_early_signal,
         )
         near, far = ag_row_group_waits(self.S, Hl, c.num_links, c.ag_workers, group, self.ring)
         k_order = dict(
@@ -454,6 +588,9 @@ class TPBoundary:
                 fuse_swiglu=c.swiglu,
                 row_scale=(self.scale, scale_sem, scale_cnt),
                 label="mm2",
+                transpose=True if c.mm2_transpose else None,
+                in1_read_ahead=c.mm2_read_ahead,
+                in1_bank_pairs=self.dram_banks if c.mm2_bank_pairs else 0,
                 k_order=k_order,
                 arena={"in1": (self.arena, mm2_in1_off)},
                 in1_cb_blocks=in1_depth,

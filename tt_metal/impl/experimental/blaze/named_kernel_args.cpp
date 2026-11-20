@@ -229,6 +229,70 @@ void process_named_args(Program& program, const KernelDescriptor& kernel_descrip
     kernel->set_named_ct_arg_namespaces(ct_ns_map);
 }
 
+namespace {
+
+// Cache-hit fast path. Blaze emits every named per-core scalar and array over the same cores in the same order, so
+// the merged layout of a core is: its positional args, then one word per named scalar, then each named array, in
+// declaration order. When that holds (and every positional core is one of those cores) the merged per-core vectors
+// need not be rebuilt through a map on every hit: the values can be checked and written in place. FastLayout holds
+// that core order (pointers into the descriptor) and each core's positional count; empty `cores` = use the general
+// path.
+struct FastLayout {
+    std::vector<const CoreCoord*> cores;
+    std::vector<std::size_t> positional;
+};
+
+FastLayout fast_layout(const KernelDescriptor& kd) {
+    const auto& na = kd.blaze_named_args;
+    FastLayout out;
+    if (!na.named_per_core_runtime_args.empty()) {
+        for (const auto& cv : na.named_per_core_runtime_args.front().core_values) {
+            out.cores.push_back(&cv.first);
+        }
+    } else if (!na.named_per_core_runtime_arg_arrays.empty()) {
+        for (const auto& cv : na.named_per_core_runtime_arg_arrays.front().core_values) {
+            out.cores.push_back(&cv.first);
+        }
+    } else {
+        return out;
+    }
+    const std::size_t n = out.cores.size();
+    for (const auto& arg : na.named_per_core_runtime_args) {
+        if (arg.core_values.size() != n) {
+            return {};
+        }
+        for (std::size_t i = 0; i < n; ++i) {
+            if (!(arg.core_values[i].first == *out.cores[i])) {
+                return {};
+            }
+        }
+    }
+    for (const auto& arg : na.named_per_core_runtime_arg_arrays) {
+        if (arg.core_values.size() != n) {
+            return {};
+        }
+        for (std::size_t i = 0; i < n; ++i) {
+            if (!(arg.core_values[i].first == *out.cores[i])) {
+                return {};
+            }
+        }
+    }
+    out.positional.assign(n, 0);
+    for (const auto& [core, args] : kd.runtime_args) {  // few entries for blaze kernels
+        std::size_t i = 0;
+        while (i < n && !(*out.cores[i] == core)) {
+            ++i;
+        }
+        if (i == n) {
+            return {};  // a positional core outside the named cores
+        }
+        out.positional[i] = args.size();  // the merged layout keeps the last positional entry per core
+    }
+    return out;
+}
+
+}  // namespace
+
 void validate_cached_runtime_arg_counts(
     Program& program, const KernelDescriptor& kernel_descriptor, uint32_t kernel_index) {
     auto kernel = program.impl().get_kernel(kernel_index);
@@ -236,6 +300,30 @@ void validate_cached_runtime_arg_counts(
     for (const auto& [core, args] : kernel_descriptor.runtime_args) {
         const std::size_t cached = kernel->logical_runtime_arg_count(core);
         TT_FATAL(args.size() <= cached, "Runtime args size mismatch: cached {} vs new {}", cached, args.size());
+    }
+    // Fast path (see fast_layout): check each named core's merged count in place, without building the merged map.
+    if (const auto fl = fast_layout(kernel_descriptor); !fl.cores.empty()) {
+        const auto& na = kernel_descriptor.blaze_named_args;
+        for (std::size_t i = 0; i < fl.cores.size(); ++i) {
+            std::size_t expected = fl.positional[i] + na.named_per_core_runtime_args.size();
+            for (const auto& arg : na.named_per_core_runtime_arg_arrays) {
+                expected += arg.core_values[i].second.size();
+            }
+            const std::size_t cached = kernel->logical_runtime_arg_count(*fl.cores[i]);
+            TT_FATAL(cached == expected, "Runtime args size mismatch: cached {} vs new {}", cached, expected);
+        }
+        // Every named core has a nonzero count and is therefore in the cached set; equal sizes leave no cached core
+        // outside the descriptor (which would have to be empty).
+        if (kernel->cores_with_runtime_args().size() == fl.cores.size()) {
+            const std::size_t expected_common = merged_common_runtime_arg_count(kernel_descriptor);
+            const std::size_t cached_common = kernel->logical_common_runtime_arg_count();
+            TT_FATAL(
+                cached_common == expected_common,
+                "Common runtime args size mismatch: cached {} vs new {}",
+                cached_common,
+                expected_common);
+            return;
+        }
     }
     const auto expected_per_core = merged_per_core_runtime_arg_counts(kernel_descriptor);
     for (const auto& [core, expected] : expected_per_core) {
@@ -268,7 +356,23 @@ void apply_named_runtime_args(Program& program, const KernelDescriptor& kernel_d
     // writes via GetRuntimeArgs/GetCommonRuntimeArgs, re-fetched on every call so the
     // post-first-enqueue retargeting of RuntimeArgsData is observed — the same
     // constraint apply_descriptor_runtime_args works under for the positional args.
-    if (!named_args.named_per_core_runtime_args.empty() || !named_args.named_per_core_runtime_arg_arrays.empty()) {
+    if (const auto fl = fast_layout(kernel_descriptor); !fl.cores.empty()) {
+        // Fast path (see fast_layout): write the named values after each core's positional args, in place. The
+        // positional args themselves were written by apply_descriptor_runtime_args just before.
+        for (std::size_t i = 0; i < fl.cores.size(); ++i) {
+            auto& prog_args = GetRuntimeArgs(program, kernel_index, *fl.cores[i]);
+            uint32_t off = static_cast<uint32_t>(fl.positional[i]);
+            for (const auto& arg : named_args.named_per_core_runtime_args) {
+                prog_args[off++] = arg.core_values[i].second;
+            }
+            for (const auto& arg : named_args.named_per_core_runtime_arg_arrays) {
+                for (const uint32_t v : arg.core_values[i].second) {
+                    prog_args[off++] = v;
+                }
+            }
+        }
+    } else if (!named_args.named_per_core_runtime_args.empty() ||
+               !named_args.named_per_core_runtime_arg_arrays.empty()) {
         for (const auto& [core, merged] : merge_per_core_runtime_args(kernel_descriptor)) {
             auto& prog_args = GetRuntimeArgs(program, kernel_index, core);
             for (uint32_t i = 0; i < static_cast<uint32_t>(merged.size()); ++i) {

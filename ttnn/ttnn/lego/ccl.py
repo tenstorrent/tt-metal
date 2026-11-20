@@ -223,6 +223,7 @@ def place_reduce_scatter(
     math_fidelity=ttnn.MathFidelity.HiFi4,
     batches: int = 1,
     batch_wait: tuple | None = None,
+    slice_wait: tuple | None = None,
 ):
     """Ring reduce-scatter along dim 3 of [1,1,S,W] (W split ring_size ways), optionally adding `residual`
     ([1,1,S,W/ring_size]) in the last step. workers[(link, dir)]: dir 1 sends to index+1, dir 0 to index-1.
@@ -232,7 +233,9 @@ def place_reduce_scatter(
     counter word 16*slot on every target (batched: targets is a list per batch).
     batches > 1: the rows are that many batches, reduced one ring traversal each (so a producer's next batch overlaps
     this one); batch_wait = (counters on the worker cores, expected): a traversal starts once counter word 16*b
-    reaches expected."""
+    reaches expected. slice_wait = (counters on the reader cores,
+    expected, block_of_slice) (batches == 1): the producer signals counter word 16*block_of_slice[s] once input slice s
+    is written, and the ring step that reads slice s waits for `expected` signals."""
     links = sorted({l for l, _ in workers})
     nw = len(workers[(links[0], 0)])
     slots = _slots(workers)
@@ -320,9 +323,12 @@ def place_reduce_scatter(
                 fuse_residual=fuse_residual,
                 cb_resid=cb_resid,
                 batch_wait=batch_wait is not None,
+                slice_wait=slice_wait is not None,
+                slice_block=sum(k << (4 * s) for s, k in enumerate(slice_wait[2])) if slice_wait else 0,
             ),
             rt=lambda c: (lambda s: [info[c][1], s[4], s[0], s[1], s[2], s[3], 0, batches])(split(c))
-            + ([batch_wait[0].buffer_address(), batch_wait[1]] if batch_wait else []),
+            + ([batch_wait[0].buffer_address(), batch_wait[1]] if batch_wait else [])
+            + ([slice_wait[0].buffer_address(), slice_wait[1]] if slice_wait else []),
             crt=common + ([residual.buffer_address()] if fuse_residual else []),
             tensors={
                 "input": input,
@@ -431,6 +437,7 @@ def place_all_gather(
     signal: tuple | None = None,
     write_local: bool = True,
     row_group_tiles: int = 0,
+    signal_while_forwarding: bool = False,
 ):
     """Ring all-gather along dim 3: [1,1,S,W] per device -> [1,1,S,ring_size*W]. workers[(link, dir)]: dir 0
     sends to index+1, dir 1 to index-1. `sems` = 3 global semaphores (sem0, sem1, barrier). Returns the workers.
@@ -438,7 +445,9 @@ def place_all_gather(
     part of a slice lands (the dir-1 workers also for the local slice they write). Counts per slice: local
     links*nw, each ring neighbour links*nw, the others 2*links*nw. With row_group_tiles, target i is signalled per
     slice once this worker's tiles in [i*row_group_tiles, (i+1)*row_group_tiles) have landed; ag_row_group_waits()
-    gives the resulting counts."""
+    gives the resulting counts. signal_while_forwarding: the readers also signal the row groups that land while they
+    wait for CB space to forward a slice (the writer sends its own slice first), so the targets hear of a neighbour's
+    rows as they land instead of once the writer starts forwarding."""
     links = sorted({l for l, _ in workers})
     nw = len(workers[(links[0], 0)])
     slots = _slots(workers)
@@ -493,6 +502,7 @@ def place_all_gather(
     ct["signal_slices"] = signal is not None
     ct["write_local"] = write_local
     ct["row_group_tiles"] = row_group_tiles
+    ct["signal_while_forwarding"] = signal_while_forwarding
     prog.set_noc(cores, reader_risc, nocs[0])
     prog.set_noc(cores, writer_risc, nocs[1])
     prog.place(

@@ -34,6 +34,7 @@
 #include "ttnn/operations/experimental/minimal_matmul/device/kernels/swiglu_sfpu.hpp"
 #include "ttnn/operations/experimental/lego/kernels/mm/swiglu_scaled_sfpu.hpp"
 #include "ttnn/operations/experimental/lego/kernels/lego.hpp"
+#include "ttnn/operations/experimental/lego/kernels/mm/n_blocks.hpp"
 
 namespace lego::mm {
 
@@ -186,8 +187,9 @@ struct Compute {
         uint32_t full_N_block_tiles,
         uint32_t K_block_tiles,
         uint32_t subblock_h,
-        uint32_t subblock_w) {
-        uint32_t in0_index_offset = 0;
+        uint32_t subblock_w,
+        uint32_t in0_base = 0) {
+        uint32_t in0_index_offset = in0_base;
         for (uint32_t M_start = 0; M_start < M_block_tiles; M_start += subblock_h) {
             uint32_t in1_index_offset = 0;
             for (uint32_t N_start = 0; N_start < N_block_tiles; N_start += subblock_w) {
@@ -219,6 +221,10 @@ struct Compute {
             in0_index_offset += subblock_h * K_block_tiles;
         }
     }
+
+    // DST slot of the gate tile of output pair w / 2 in a subblock: w, or with bank-paired weights (mm/bank_pairs.hpp,
+    // quads gate g, gate g', up g, up g') slot (w & ~3) + (w / 2) % 2, its up tile two slots later.
+    static constexpr uint32_t gate_slot(uint32_t w) { return A::in1_bank_pairs > 0 ? (w & ~3u) + ((w >> 1) & 1u) : w; }
 
     // compute_metal2.cpp matmul_blocks_swiglu: the last K block of a SwiGLU output block. Accumulate the last K
     // block in DST, add the packer-accumulated partials of blocks 0..K-2 with one dest-reuse add, then run
@@ -282,12 +288,13 @@ struct Compute {
                 PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
                 for (uint32_t h = 0; h < subblock_h; h++) {
                     for (uint32_t w = 0; w < subblock_w; w += 2) {
-                        const uint32_t gate = h * subblock_w + w;
+                        const uint32_t gate = h * subblock_w + gate_slot(w);
+                        constexpr uint32_t up_off = A::in1_bank_pairs > 0 ? 2 : 1;
                         if constexpr (scaled) {
                             PACK((lego_swiglu_scaled_tile<block_float_output>(
-                                gate, gate + 1, subblock_h * subblock_w + h)));
+                                gate, gate + up_off, subblock_h * subblock_w + h)));
                         } else {
-                            PACK((minimal_matmul_swiglu_tile<block_float_output>(gate, gate + 1, gate)));
+                            PACK((minimal_matmul_swiglu_tile<block_float_output>(gate, gate + up_off, gate)));
                         }
                     }
                 }
@@ -295,7 +302,9 @@ struct Compute {
                 for (uint32_t h = 0; h < subblock_h; h++) {
                     for (uint32_t w = 0; w < subblock_w; w += 2) {
                         pack_tile<true>(
-                            h * subblock_w + w, out_cb, (M_start + h) * out_full_N_block_tiles + ((N_start + w) >> 1));
+                            h * subblock_w + gate_slot(w),
+                            out_cb,
+                            (M_start + h) * out_full_N_block_tiles + ((N_start + w) >> 1));
                     }
                 }
                 tile_regs_release();
@@ -306,6 +315,10 @@ struct Compute {
     }
 
     void run() {
+        static_assert(!(A::in0_resident && A::fuse_swiglu), "resident in0 with SwiGLU is not supported");
+        static_assert(
+            A::in1_bank_pairs == 0 || (A::swiglu_in_k_loop && A::subblock_w % 4 == 0 && A::N_block_tiles % 4 == 0),
+            "bank-paired weights need the in-K-loop SwiGLU on subblocks of whole quads");
         constexpr uint32_t in0_cb = A::cb_in0, in1_cb = A::cb_in1, out_cb = A::cb_out, intermediate_cb = A::cb_interm;
         CircularBuffer cb_in0(in0_cb);
         CircularBuffer cb_in1(in1_cb);
@@ -338,8 +351,8 @@ struct Compute {
             uint32_t current_subblock_h = std::min(current_M_block_tiles, A::subblock_h);
 
             for (uint32_t n_block_iter = 0; n_block_iter < A::N_blocks_per_core; n_block_iter++) {
-                uint32_t n_tile = N_start_tile + n_block_iter * A::N_block_tiles;
-                uint32_t n_tile_end = std::min(n_tile + A::N_block_tiles, N_end_tile);
+                uint32_t n_tile, n_tile_end;
+                n_block_range<A>(N_start_tile, N_end_tile, n_block_iter, n_tile, n_tile_end);
                 uint32_t current_N_block_tiles = n_tile_end - n_tile;
                 uint32_t current_subblock_w = std::min(current_N_block_tiles, A::subblock_w);
 
@@ -348,8 +361,14 @@ struct Compute {
                 matmul_block_init(in0_cb, in1_cb, false, current_subblock_w, current_subblock_h, A::K_block_tiles);
                 cb_intermediate.reserve_back(out_block_num_tiles);
                 for (uint32_t k_block = 0; k_block < A::K_num_blocks; k_block++) {
-                    cb_in0.wait_front(in0_block_num_tiles);
-                    cb_in1.wait_front(in1_block_num_tiles);
+                    if (!A::in0_resident || n_block_iter == 0) {
+                        LEGO_ZONE("mm_w0");  // resident: in0 accumulates, K block k at tile k * in0_block_num_tiles
+                        cb_in0.wait_front(A::in0_resident ? (k_block + 1) * in0_block_num_tiles : in0_block_num_tiles);
+                    }
+                    {
+                        LEGO_ZONE("mm_w1");
+                        cb_in1.wait_front(in1_block_num_tiles);
+                    }
                     if (A::swiglu_in_k_loop && k_block == A::K_num_blocks - 1) {
                         if (A::K_num_blocks > 1) {  // publish the partials of K blocks 0..K-2 for the add
                             cb_intermediate.push_back(out_block_num_tiles);
@@ -363,6 +382,7 @@ struct Compute {
                                 CircularBuffer(A::cb_scale).wait_front(A::M_block_tiles);
                             }
                         }
+                        LEGO_ZONE("mm_swg");
                         matmul_blocks_swiglu<A::swiglu_block_float_output, A::row_scale>(
                             in0_cb,
                             in1_cb,
@@ -386,6 +406,7 @@ struct Compute {
                             cb_intermediate.pop_front(out_block_num_tiles);
                         }
                     } else {
+                        LEGO_ZONE("mm_blk");
                         matmul_blocks(
                             in0_cb,
                             in1_cb,
@@ -395,9 +416,15 @@ struct Compute {
                             A::N_block_tiles,
                             A::K_block_tiles,
                             current_subblock_h,
-                            current_subblock_w);
+                            current_subblock_w,
+                            A::in0_resident ? k_block * in0_block_num_tiles : 0);
                     }
-                    if (k_block == A::K_num_blocks - 1 && n_block_iter < A::N_blocks_per_core - 1) {
+                    if (A::in0_resident) {
+                        if (k_block == A::K_num_blocks - 1 && n_block_iter == A::N_blocks_per_core - 1) {
+                            cb_in0.pop_front(A::K_num_blocks * in0_block_num_tiles);
+                        }
+                        reuse_in0_block = true;
+                    } else if (k_block == A::K_num_blocks - 1 && n_block_iter < A::N_blocks_per_core - 1) {
                         reuse_in0_block = true;  // striding N next: keep in0
                     }
                     if (!reuse_in0_block) {

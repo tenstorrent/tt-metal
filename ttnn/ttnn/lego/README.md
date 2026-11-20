@@ -77,14 +77,36 @@ The RMSNorm weight is folded into `w2`, as the model does. The norm is applied a
 epilogue (`(r x) W = r (x W)`). MM2 therefore consumes the gathered, unnormalized `H` slice by slice as the
 all-gather delivers it, while the statistics run beside it.
 
-Core map on a 12x10 Blackhole grid:
+Core map on a 12x10 Blackhole grid (the configs take the grid's width, `W` columns; p300c gives fast dispatch an
+11x10 grid):
 
 | Rows | Prefill, S >= 512 | Prefill, S < 512 | Decode (S = 32) |
 |---|---|---|---|
-| 0-1 (aux: HiFi4, fp32 accumulation) | RS with mux (5 workers per link and direction), AG with mux (2), statistics + statistics all-gather | same | RS and AG with 1 direct worker per link and direction; statistics from the gathered `H` |
-| 2-9 (matmul: LoFi) | MM1, then MM2 on 12x8; MM2's weights reuse MM1's arena bytes, 2 K blocks deep | MM1 split by N over four 12x2 grids; MM2 on 12x4 (two 12x4 grids split by N for A); MM2's weights prefetched as deep as the arena allows | MM1 split by N over eight 12x1 grids; MM2 over the first five (A) or four (B) 12x1 grids with all its weights in their own L1 |
+| 0-1 (aux: HiFi4, fp32 accumulation) | RS with mux (5 workers per link and direction; 4 when `W` < 12), AG with mux (2; 3 when `W` < 12), statistics + statistics all-gather | same, AG with 2 workers; RS with 1 direct worker per link and direction when `W` < 12 | RS and AG with 1 direct worker per link and direction; statistics from the gathered `H` |
+| 2-9 (matmul: LoFi) | MM1, then MM2 on 12x8; MM2's weights reuse MM1's arena bytes, 2 K blocks deep. When `W` < 12: A's MM1 computes its output quarter by quarter in the RS's order (in0 resident, transposed); A's MM2 is transposed, 4 K blocks deep, and the AG signals its rows while it waits to forward | MM1 split by N over four 12x2 grids (B: each split one RS input quarter, 8 columns wide); MM2 on 12x4 (two 12x4 grids split by N for A, bank-paired weight reads with read-ahead); MM2's weights prefetched as deep as the arena allows | MM1 split by N over eight 12x1 grids; MM2 over the first six (A) or four (B) 12x1 grids with all its weights in their own L1 (A: bank-paired reads, started once MM1 is done) |
 
-`prefill_config` and `decode_config` hold these settings; `BoundaryConfig` documents every field.
+`prefill_config` and `decode_config` hold these settings for a grid `grid_x` columns wide (`TPBoundary` passes the
+device's width); `BoundaryConfig` documents every field. When a matmul's `N_block` does not divide a core's share
+of the weight columns, `TPBoundary` widens it to that share (one row high subblocks): on 11 columns A's gate_up gives
+22 tiles a core and B's qkv 5, and a remainder block would cost a second pass over K. A transposed MM2
+(`mm2_transpose`) splits M over the columns and N over the rows; on 11 columns A's gate_up then takes 3 x 28 tiles a
+core instead of 4 x 22, with 1 x 4 subblocks instead of 1 x 2.
+
+### Overlap and DRAM
+
+- **MM1 → RS by quarters.** The RS reads its input quarter by quarter: the slice of the device across the ring,
+  both neighbours', then its own (`rs/reader.hpp`, `slice_wait`). `mm1_groups` makes every MM1 core compute its share
+  of each quarter as one N block in that order (`mm/n_blocks.hpp`) and signal it, so the RS overlaps MM1; it needs
+  MM1's in0 held for all of K (`mm1_resident`, `in0_resident` in `place_matmul`), which fits for A (K = 1024) but not
+  for B. `mm1_quarter_splits` gets the same order from an N-split MM1: each split computes one quarter, and the
+  bottom rows, whose DRAM reads the NoC serves first, compute the quarters the RS reads first.
+- **Bank-paired weight reads.** Small DRAM pages read slowly (bfp4 tiles, 576 B: about 275 GB/s on a p300c
+  against about 375 GB/s for 2-page reads). An interleaved tensor keeps pages p and p + B (B DRAM banks) side by
+  side, so `mm2_bank_pairs` reads A's gate/up weight in quads of two such pairs and maps the output columns back
+  (`mm/bank_pairs.hpp`).
+- **DRAM order.** `mm2_after_mm1` starts MM2's weight stream once every MM1 core is done, so MM1 (on the critical
+  path) gets DRAM first; `mm1_read_ahead` / `mm2_read_ahead` let the weight injectors issue the next K block's reads
+  before forwarding the current one.
 
 Stage order on each device: MM1 writes `P` → the RS reduces `P` over the ring, adds `x`, writes `h` and this
 device's slot of `H`, and signals MM2's injectors → the AG fills `H` and signals each injector as its rows of a slice
@@ -106,4 +128,6 @@ close before the AG muxes connect, and the statistics all-gather starts after th
 - `tests/ttnn/unit_tests/operations/experimental/lego/test_tp_boundary.py` runs both boundaries at S = 32 (decode),
   128 and 1024 on a 1x4 ring (`FABRIC_1D_RING`) against fp32 torch on the same quantized weights.
 - `LEGO_ZONES=1` in the host environment compiles a device-profiler zone around each block's `run()` (the
-  `LEGO_ZONE` macro in `kernels/lego.hpp`), for per-block timelines with the device profiler.
+  `LEGO_ZONE` macro in `kernels/lego.hpp`), for per-block timelines with the device profiler. The matmul blocks add
+  zones inside their loops: `mm_w0` / `mm_w1` (compute waiting for in0 / in1), `mm_blk` / `mm_swg` (a K block's
+  matmul; the last one with the SwiGLU epilogue), `in1_rd` / `in1_fw` / `in1_rx` (weight reads, forwards, receives).

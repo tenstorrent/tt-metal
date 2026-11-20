@@ -34,4 +34,24 @@ tt::tt_metal::ProgramDescriptor GenericMeshDescriptorFactory::create_descriptor(
         mesh_programs.size());
     return mesh_programs.front().second;
 }
+
+void GenericMeshDescriptorFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& /*tensor_args*/,
+    tensor_return_value_t& /*tensor_return_value*/,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    const auto& mesh_programs = operation_attributes.mesh_programs;
+    if (mesh_dispatch_coordinate.has_value()) {
+        for (const auto& [range, desc] : mesh_programs) {
+            if (range.contains(mesh_dispatch_coordinate.value())) {
+                apply_descriptor_runtime_args(program, desc);
+                return;
+            }
+        }
+        return;  // create_descriptor gave this coordinate an empty descriptor: nothing to apply
+    }
+    TT_FATAL(mesh_programs.size() == 1, "generic_op: multiple mesh_program entries require mesh dispatch");
+    apply_descriptor_runtime_args(program, mesh_programs.front().second);
+}
 }  // namespace ttnn::operations::generic::program

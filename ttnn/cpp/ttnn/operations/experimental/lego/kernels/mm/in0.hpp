@@ -32,7 +32,10 @@
 //   k_order (+ k_slices k_slice_blocks k_first)
 // Runtime args: in0_addr is_sink dest_noc_x dest_noc_y sender_noc_x sender_noc_y M_start M_end N_start N_end
 //   defer_write_k_block max_defer_write_k_block out_addr [scale_addr] [slice_counters wait_own wait_near wait_far]
-//   [signal_m_batches: batch_counters num_targets x0 y0 ...]
+//   [signal_m_batches / signal_n_blocks: counters num_targets x0 y0 ...]
+// n_stride n_perm signal_n_blocks: N groups and per-block signals (mm/n_blocks.hpp).
+// in0_resident: cb_in0 holds all K blocks; they are read and forwarded once (in K order) and every N block of the
+// M block reuses them (compute indexes them by K block). For several N blocks per core without re-streaming in0.
 
 #pragma once
 
@@ -46,6 +49,8 @@
 #include "api/tensor/noc_traits.h"
 #include "ttnn/operations/experimental/minimal_matmul/device/kernels/matmul_dataflow_common.hpp"
 #include "ttnn/operations/experimental/lego/kernels/lego.hpp"
+#include "ttnn/operations/experimental/lego/kernels/mm/n_blocks.hpp"
+#include "ttnn/operations/experimental/lego/kernels/mm/bank_pairs.hpp"
 
 namespace lego::mm {
 
@@ -168,7 +173,7 @@ struct In0 {
         uint32_t n0,
         uint32_t n1) {
         cb_out.wait_front(out_written_block_tiles);
-        write_block_sync<A::M_block_tiles, out_N_block_tiles>(
+        write_block_bp<A::in1_bank_pairs, out_N_block_tiles>(
             out, out_shape, cb_out.get_read_ptr(), A::out_tile_size, m0, m1, n0, n1);
         cb_out.pop_front(out_written_block_tiles);
     }
@@ -218,8 +223,8 @@ struct In0 {
             reuse_block = false;
             k_forward = true;
             for (uint32_t n_block_iter = 0; n_block_iter < A::N_blocks_per_core; n_block_iter++) {
-                uint32_t n_tile = N_start_tile + n_block_iter * A::N_block_tiles;
-                uint32_t n_tile_end = std::min(n_tile + A::N_block_tiles, N_end_tile);
+                uint32_t n_tile, n_tile_end;
+                n_block_range<A>(N_start_tile, N_end_tile, n_block_iter, n_tile, n_tile_end);
                 bool is_last_block =
                     (m_block_iter == A::M_blocks_per_core - 1) && (n_block_iter == (A::N_blocks_per_core - 1));
 
@@ -236,6 +241,9 @@ struct In0 {
                                 defer_write_n_tile_end / n_div);
                             after_write(defer_write_mb, defer_write_last_n);
                         }
+                    }
+                    if (A::in0_resident && n_block_iter > 0) {
+                        continue;  // compute still holds every K block of the first N block
                     }
                     if (reuse_block && k_block_iter == 0) {
                         // Strided an N block: the last in0 block is reused, nothing to read.
@@ -284,8 +292,8 @@ struct In0 {
                 if (n_block_iter == 0) {
                     read_row_scale(noc, m_tile, m_tile_end);
                 }
-                k_forward = !k_forward;
-                reuse_block = true;  // in0 is reused when striding N
+                k_forward = A::in0_resident || !k_forward;
+                reuse_block = !A::in0_resident;  // in0 is reused when striding N
 
                 defer_write_m_tile = m_tile;
                 defer_write_m_tile_end = m_tile_end;
@@ -295,12 +303,12 @@ struct In0 {
                 defer_write_last_n = n_block_iter == A::N_blocks_per_core - 1;
                 // Defer this block's write into the next block's K loop, except for the last block (and, when batches
                 // are signalled, a batch's last block: its consumer is waiting for it).
-                defer_write = !is_last_block && !A::is_injector_core &&
+                defer_write = !is_last_block && !A::is_injector_core && !A::signal_n_blocks &&
                               !(A::signal_m_batches && n_block_iter == A::N_blocks_per_core - 1);
 
                 if (!defer_write) {
                     if constexpr (A::is_output_writer) {
-                        write_block_sync_granular<A::M_block_tiles, out_N_block_tiles>(
+                        write_block_granular_bp<A::in1_bank_pairs, A::M_block_tiles, out_N_block_tiles>(
                             out_writer,
                             out_shape,
                             A::cb_out,
@@ -310,6 +318,9 @@ struct In0 {
                             n_tile / n_div,
                             n_tile_end / n_div);
                         after_write(m_block_iter, n_block_iter == A::N_blocks_per_core - 1);
+                        if constexpr (A::signal_n_blocks) {
+                            signal_n_block<A>(mb_sig_arg, n_block_iter);
+                        }
                     }
                 }
             }

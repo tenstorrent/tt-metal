@@ -16,7 +16,8 @@
 //
 // With row_group_tiles > 0 the signal is per row group instead: target i owns slice tiles
 // [i * row_group_tiles, (i + 1) * row_group_tiles) (e.g. one matmul injector's rows), and it is signalled as soon as
-// this worker's tiles in that range have landed (checked after every out_ready wait), not at the end of the slice.
+// this worker's tiles in that range have landed (checked after every out_ready wait, and with signal_while_forwarding
+// also while the reader waits for CB space to forward a slice), not at the end of the slice.
 //
 // Common RT: the 6 AllGatherCommonArgs words (input output barrier sem0 sem1 input_Ht)
 // RT: direction global_worker_id global_worker_count chunks_per_sync_or_zero
@@ -82,6 +83,7 @@ struct Reader {
     }
     void begin_portion(uint32_t slice, uint32_t start, uint32_t end) {
         if constexpr (A::signal_slices && A::row_group_tiles > 0) {
+            sem_base = sem_target;
             cur_slice = slice;
             p0 = start;
             p1 = end;
@@ -107,6 +109,20 @@ struct Reader {
                 next_group++;
             }
         }
+    }
+
+    // Reserve CB space for a slice this worker forwards. The writer frees it only once it has sent its own slice, and
+    // the out_ready waits (which signal the row groups) sit behind this reservation, so while it waits it signals the
+    // groups that have landed: the out_ready count since the portion began says how far the slice is.
+    uint32_t sem_base = 0, chunks_per_sync = 1;
+    void reserve_forward(CircularBuffer& cb) {
+        if constexpr (A::signal_slices && A::row_group_tiles > 0 && A::signal_while_forwarding) {
+            while (!cb.pages_reservable_at_back(num_tiles_to_write_per_packet)) {
+                const uint32_t synced = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem) - sem_base;
+                progress(p0 + synced * chunks_per_sync * num_tiles_to_write_per_packet);
+            }
+        }
+        cb.reserve_back(num_tiles_to_write_per_packet);
     }
 
     void signal_slice(uint32_t slice) {
@@ -150,7 +166,7 @@ struct Reader {
         const uint32_t input_tile_id_end = split.input_tile_id_end;
         const uint32_t start_pages_read_in_row = split.start_pages_read_in_row;
         const uint32_t start_row_offset = split.start_row_offset;
-        const uint32_t chunks_per_sync = split.chunks_per_sync;
+        chunks_per_sync = split.chunks_per_sync;
 
         constexpr auto input_tensor_args = TensorAccessorArgs<A::cta_input>();
         const auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address);
@@ -301,7 +317,7 @@ struct Reader {
                             uint32_t cb_tiles_remaining = cb_tile_end - cb_tiles_pushed;
                             uint32_t num_tiles_to_read = std::min(cb_tiles_remaining, num_tiles_to_write_per_packet);
                             if (cb_tiles_pushed + num_tiles_to_read <= sem_iter_pos) {
-                                cb_output.reserve_back(num_tiles_to_write_per_packet);
+                                reserve_forward(cb_output);
                                 size_t l1_write_addr = cb_output.get_write_ptr();
                                 for (uint32_t j = 0; j < num_tiles_to_read; ++j) {
                                     uint32_t tile_id = out_tile_id_start + cb_row_offset + cb_pages_read_in_row;

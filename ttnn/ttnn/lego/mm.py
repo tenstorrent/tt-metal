@@ -84,6 +84,11 @@ def place_matmul(
     m_batches: int = 1,
     signal_m_batches: tuple | None = None,
     n_range: tuple | None = None,
+    n_groups: tuple | None = None,
+    signal_n_blocks: tuple | None = None,
+    in0_resident: bool = False,
+    in1_read_ahead: bool = False,
+    in1_bank_pairs: int = 0,
 ) -> MatmulPlan:
     """Place one matmul out[M,N] = in0[M,K] @ weight[K,N] (out N halved with SwiGLU) on the rectangle of
     `grid` cores at `origin`. Mirrors minimal_matmul_factory_helper_common (no bias / ternary / split / fusion).
@@ -100,7 +105,16 @@ def place_matmul(
     n_range = (n0, n_tiles): compute only weight columns [n0, n0 + n_tiles) (output columns halved with SwiGLU), so
     several placements on different cores can split one matmul by N (more cores reading weights in parallel). Every
     core gets a full range of ceil(n_tiles / cores) columns; columns past the tensor's width are padding the readers
-    skip, but ranges past n0 + n_tiles inside the tensor overlap the next placement, so split at multiples of that."""
+    skip, but ranges past n0 + n_tiles inside the tensor overlap the next placement, so split at multiples of that.
+    n_groups = (stride, order): the weight columns are groups of `stride` tiles; every core takes its share of each
+    group (cfg.N_block = ceil(stride / cores along N)) as one N block, visiting the groups in `order`
+    (kernels/mm/n_blocks.hpp). signal_n_blocks = (counters, targets): the output writers increment counter word 16*b
+    on each target once their block b has landed (with n_groups: group order[b]).
+    in1_read_ahead: the weight injectors issue the next K block's reads before forwarding the current one.
+    in1_bank_pairs = B (the DRAM bank count; SwiGLU only): read the weight in quads of same-bank page pairs, 2 pages a
+    read, and write the output through the matching column map (kernels/mm/bank_pairs.hpp).
+    in0_resident: in0's CB holds all K blocks, streamed once and reused by every N block (several N blocks, e.g.
+    n_groups, without re-streaming in0)."""
     ox, oy = origin
     gx, gy = grid
     cores = [(ox + i, oy + j) for j in range(gy) for i in range(gx)]
@@ -132,10 +146,19 @@ def place_matmul(
         assert N_tiles % 2 == 0 and N_tiles_per_core % 2 == 0 and cfg.N_block % 2 == 0
     else:
         N_tiles_per_core = round_up(n_span, in1_axis) // in1_axis
+    if n_groups is not None:
+        stride, order = n_groups
+        assert not fuse_swiglu and n_range is None and N_tiles == stride * len(order) and len(order) <= 8
+        assert cfg.N_block == div_up(stride, in1_axis) and cfg.N_block * (in1_axis - 1) < stride, (cfg, stride)
+        N_tiles_per_core = cfg.N_block * len(order)
     # The kernels address tiles by the full tensor width; padding only matters past the tensor's last column.
-    padded_N_tiles = max(N_tiles, n0 + N_tiles_per_core * in1_axis)
+    padded_N_tiles = max(N_tiles, n0 + N_tiles_per_core * in1_axis) if n_groups is None else N_tiles
     if fuse_swiglu:
         padded_N_tiles += padded_N_tiles % 2
+    if in1_bank_pairs:
+        bp = in1_bank_pairs
+        assert fuse_swiglu and N_tiles % (2 * bp) == 0 and n0 % 4 == 0 and N_tiles_per_core % 4 == 0, (N_tiles, n0)
+        assert cfg.N_block % 4 == 0 and cfg.subblock_w % 4 == 0 and tile_bytes(weight.dtype) % 64 == 0, cfg
     M_tiles_per_core = padded_M_tiles // in0_axis
     if m_batches > 1:
         assert M_tiles % (m_batches * in0_axis) == 0, (M_tiles, m_batches, in0_axis)
@@ -154,7 +177,7 @@ def place_matmul(
     out_written = out_blk // 2 if fuse_swiglu else out_blk
 
     arena = arena or {}
-    cb_in0 = prog.cb(cores, 2 * in0_blk, in0_tb, in0.dtype, arena=arena.get("in0"))
+    cb_in0 = prog.cb(cores, (K_blocks if in0_resident else 2) * in0_blk, in0_tb, in0.dtype, arena=arena.get("in0"))
     cb_in1 = prog.cb(cores, in1_cb_blocks * in1_blk, in1_tb, weight.dtype, arena=arena.get("in1"))
     cb_out = prog.cb(cores, 2 * out_written, out_tb, out.dtype, arena=arena.get("out"))
     cb_interm = prog.cb(cores, out_blk, tile_bytes(interm_fmt), interm_fmt, arena=arena.get("interm"))
@@ -214,6 +237,11 @@ def place_matmul(
         cb_out=cb_out,
         **mb_ct,
         signal_m_batches=signal_m_batches is not None,
+        signal_n_blocks=signal_n_blocks is not None,
+        in0_resident=in0_resident,
+        in1_bank_pairs=in1_bank_pairs,
+        n_stride=n_groups[0] if n_groups else 0,
+        n_perm=sum(q << (4 * b) for b, q in enumerate(n_groups[1])) if n_groups else 0,
     )
 
     def phys(core):
@@ -242,6 +270,8 @@ def place_matmul(
     def ranges(core):
         in0_idx, in1_idx = indices(core)
         mpc = M_tiles_per_core if m_batches == 1 else cfg.M_block  # with batches: the rows of batch 0
+        if n_groups is not None:  # the core's offset inside every group
+            return (mpc * in0_idx, mpc * (in0_idx + 1), cfg.N_block * in1_idx, cfg.N_block * (in1_idx + 1))
         return (
             mpc * in0_idx,
             mpc * (in0_idx + 1),
@@ -270,11 +300,14 @@ def place_matmul(
 
     def in0_rt(c):
         extra = [scale_t.buffer_address()] if scale_t is not None else []
-        sig = []
-        if signal_m_batches is not None:
-            counters, targets = signal_m_batches
-            sig = [counters.buffer_address(), len(targets)] + [v for t in targets for v in phys(t)]
-        return dm_rt(c, in0_along_x, in0_noc0, in0) + extra + ko_rt(c) + sig
+        return dm_rt(c, in0_along_x, in0_noc0, in0) + extra + ko_rt(c) + sig_rt(signal_m_batches or signal_n_blocks)
+
+    def sig_rt(sig):
+        if sig is None:
+            return []
+        counters, targets, *first = sig  # optional third element: the counter word of block 0
+        addr = counters.buffer_address() + 16 * (first[0] if first else 0)
+        return [addr, len(targets)] + [v for t in targets for v in phys(t)]
 
     # in0 travels along x when not transposed (rows of the grid share M), along y when transposed.
     in0_along_x = not transpose
@@ -323,9 +356,11 @@ def place_matmul(
                         is_output_writer=transpose,
                         is_injector_core=injector,
                         cb_in1=cb_in1,
+                        in1_read_ahead=in1_read_ahead,
                         **ko_ct,
                     ),
-                    rt=lambda c: dm_rt(c, not in0_along_x, in1_noc0, weight),
+                    rt=lambda c: dm_rt(c, not in0_along_x, in1_noc0, weight)
+                    + sig_rt(signal_n_blocks if transpose else None),
                     tensors={"in1": weight, "out": out},
                     label=f"{label}_in1",
                 ),
@@ -343,6 +378,10 @@ def place_matmul(
                 N_block_tiles=cfg.N_block,
                 M_blocks_per_core=M_blocks_per_core,
                 N_blocks_per_core=N_blocks_per_core,
+                in0_resident=in0_resident,
+                in1_bank_pairs=in1_bank_pairs,
+                n_stride=common_ct["n_stride"],
+                n_perm=common_ct["n_perm"],
                 subblock_h=cfg.subblock_h,
                 subblock_w=cfg.subblock_w,
                 fuse_swiglu=fuse_swiglu,
@@ -377,14 +416,21 @@ def place_matmul(
 
 
 def matmul_cb_bytes(
-    in0_dtype, w_dtype, out_dtype, cfg: MatmulConfig, fuse_swiglu=False, fp32_dest_acc_en=False, in1_cb_blocks=2
+    in0_dtype,
+    w_dtype,
+    out_dtype,
+    cfg: MatmulConfig,
+    fuse_swiglu=False,
+    fp32_dest_acc_en=False,
+    in1_cb_blocks=2,
+    in0_cb_blocks=2,
 ) -> dict:
     """Bytes of each CB place_matmul creates (for laying them out in an Arena)."""
     in0_blk, in1_blk, out_blk = cfg.M_block * cfg.K_block, cfg.K_block * cfg.N_block, cfg.M_block * cfg.N_block
     out_written = out_blk // 2 if fuse_swiglu else out_blk
     interm = ttnn.float32 if fp32_dest_acc_en else ttnn.bfloat16
     return {
-        "in0": 2 * in0_blk * tile_bytes(in0_dtype),
+        "in0": in0_cb_blocks * in0_blk * tile_bytes(in0_dtype),
         "in1": in1_cb_blocks * in1_blk * tile_bytes(w_dtype),
         "out": 2 * out_written * tile_bytes(out_dtype),
         "interm": out_blk * tile_bytes(interm),

@@ -6,7 +6,10 @@
 # Run with TT_METAL_DEVICE_PROFILER=1 (tracy capture segfaults on TPBoundary) and read the per-replay device time
 # (slowest chip, first kernel start to last kernel end) with
 #   python tp_boundary_trace_span.py generated/profiler/.logs/profile_log_device.csv
-# p300c gives fast dispatch an 11-wide worker grid; decode_config assumes 12, so mm_grid is narrowed below.
+# LEGO_CFG='{"field": value}' overrides BoundaryConfig fields and TPB_CHAIN=0 skips the chain.
+
+import json
+import os
 
 import pytest
 import torch
@@ -17,6 +20,7 @@ from models.demos.llama31_8b_qb2.tt.decoder import PROJECTION_GEOMETRY, LlamaDec
 from models.demos.llama31_8b_qb2.tt.precision import load_precision_config
 from dataclasses import replace
 
+from ttnn.lego.mm import MatmulConfig
 from ttnn.lego.tp_boundary import TPBoundary, decode_config
 
 TP, HIDDEN, INTER, B = 4, 4096, 14336, 32
@@ -141,11 +145,35 @@ def torch_ref(boundary, x, inp, W1, W2, n_out):
     return h, torch.cat(outs, -1)
 
 
+def cfg_overrides(cfg):
+    """LEGO_CFG='{"field": value}' overrides BoundaryConfig fields (lists become tuples, or MatmulConfig for mm1/mm2;
+    "L1" / "DRAM" for the *_mem fields)."""
+    over = json.loads(os.environ.get("LEGO_CFG", "{}"))
+    mems = {"L1": ttnn.L1_MEMORY_CONFIG, "DRAM": ttnn.DRAM_MEMORY_CONFIG}  # for the *_mem fields
+    conv = {
+        k: MatmulConfig(*v)
+        if k in ("mm1", "mm2")
+        else tuple(v)
+        if isinstance(v, list)
+        else mems[v]
+        if k.endswith("_mem")
+        else v
+        for k, v in over.items()
+    }
+    cfg = replace(cfg, **conv)
+    print(f"TPB_CFG {cfg}")
+    return cfg
+
+
+RUN_CHAIN = os.environ.get("TPB_CHAIN", "1") == "1"
+
+
 def run_traced(mesh, fn, label):
     fn()  # compile
     ttnn.synchronize_device(mesh)
     tid = ttnn.begin_trace_capture(mesh, cq_id=0)
-    out = fn()
+    for _ in range(int(os.environ.get("TPB_TRACE_N", "1"))):  # EXPERIMENT (dispatch study): N calls per trace
+        out = fn()
     ttnn.end_trace_capture(mesh, tid, cq_id=0)
     ttnn.synchronize_device(mesh)
     for _ in range(REPLAYS):
@@ -184,16 +212,24 @@ def test_tp_boundary_decode_perf(qb2_mesh, boundary):
     residual = shards(mesh, [t[None, None] for t in xs], ttnn.bfloat16, dim=-1, mem=d.local_residual_memcfg)
     inp_chain = shards(mesh, [inp[None, None]], ttnn.bfloat16, dim=-1, mem=ttnn.L1_MEMORY_CONFIG)
     fn = (lambda: chain_a(d, residual, inp_chain)) if boundary == "A" else (lambda: chain_b(d, residual, inp_chain))
-    h_c, out_c = run_traced(mesh, fn, f"chain_{boundary}")
+    h_c, out_c = run_traced(mesh, fn, f"chain_{boundary}") if RUN_CHAIN else (None, None)
 
     # --- lego fused op ---
     x_t = shards(mesh, [x[None, None]], ttnn.bfloat16, dim=-1)
     inp_t = shards(mesh, [inp[None, None]], ttnn.bfloat16, dim=-1, mem=ttnn.L1_MEMORY_CONFIG)
     w1_t = shards(mesh, w1, ttnn.bfloat8_b)
     w2_t = shards(mesh, w2_paired, ttnn.bfloat4_b if boundary == "A" else ttnn.bfloat8_b)
-    gx = mesh.compute_with_storage_grid_size().x  # p300c: 11 (decode_config assumes 12)
-    op = TPBoundary(mesh, EPS, boundary, B, n_out, cfg=replace(decode_config(boundary), mm_grid=(gx, 1)))
+    cfg = decode_config(boundary, mesh.compute_with_storage_grid_size().x)  # p300c fast dispatch: 11 wide
+    op = TPBoundary(mesh, EPS, boundary, B, n_out, cfg=cfg_overrides(cfg))
     h_f, out_f = run_traced(mesh, lambda: op(x_t, inp_t, w1_t, w2_t), f"fused_{boundary}")
+    if os.environ.get("TPB_DISPATCH"):  # EXPERIMENT (dispatch study): host timing + program size
+        import sys
+
+        sys.path.insert(0, os.path.expanduser("~/localdev/tpb_runs/dispatch"))
+        from dispatch_timing import describe, time_dispatch
+
+        describe(op._desc, f"lego_{boundary}")
+        time_dispatch(mesh, lambda: op(x_t, inp_t, w1_t, w2_t), f"lego_{boundary}")
 
     # precision against fp32 torch on the dequantized weights the chain holds
     def dev(t):
@@ -205,6 +241,8 @@ def test_tp_boundary_decode_perf(qb2_mesh, boundary):
         boundary, xs, [inp[:, j * (k_in // TP) : (j + 1) * (k_in // TP)] for j in range(TP)], W1, W2, n_out
     )
     for name, h_t, o_t in (("chain", h_c, out_c), ("fused", h_f, out_f)):
+        if h_t is None:
+            continue
         got_h = torch.cat(dev(h_t), -1)[:B]
         got_o = torch.cat([t[:B, :n_out] for t in dev(o_t)], -1)
         ph = torch.corrcoef(torch.stack([h_ref.flatten(), got_h.flatten()]))[0, 1].item()

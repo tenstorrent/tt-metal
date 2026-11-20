@@ -18,6 +18,8 @@ namespace ckernel::sfpu {
 template <bool is_fp32_dest_acc_en, bool block_float_output, int ITERATIONS = 8>
 inline void calculate_swiglu_scaled(const uint gate_tile_idx, const uint up_tile_idx, const uint scale_tile_idx) {
     constexpr uint dst_tile_size = 32;
+    // the bf16 arm's exp constants, loaded once (1/ln2 is vConstFloatPrgm1, programmed by minimal_matmul_swiglu_init)
+    HoistedIf<!is_fp32_dest_acc_en && !block_float_output> c0 = EXP_21F_C0, c1 = EXP_21F_C1, c2 = EXP_21F_C2;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat s = sfpi::dst_reg[scale_tile_idx * dst_tile_size];
@@ -31,8 +33,9 @@ inline void calculate_swiglu_scaled(const uint gate_tile_idx, const uint up_tile
             sfpi::vFloat exp_neg_gate = sfpi::as<sfpi::vFloat>(_float_to_int32_for_exp_21f_(xlog2));
             result = up * (gate * swiglu_recip(1.0f + exp_neg_gate));
         } else {
-            sfpi::vFloat silu =
-                sfpi::convert<sfpi::vFloat16b>(gate * _sfpu_sigmoid_<false>(gate), sfpi::RoundMode::Nearest);
+            sfpi::vFloat silu = sfpi::convert<sfpi::vFloat16b>(
+                gate * _sfpu_sigmoid_prgm_<false>(gate, c0, c1, c2, EXP_FP32_NEG_LN2_HI, EXP_FP32_P0, EXP_FP32_P1),
+                sfpi::RoundMode::Nearest);
             result = sfpi::convert<sfpi::vFloat16b>(silu * up, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[gate_tile_idx * dst_tile_size] = result;
