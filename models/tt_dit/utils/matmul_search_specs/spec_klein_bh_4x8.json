@@ -1,0 +1,129 @@
+{
+ "arch": "blackhole",
+ "grid": [
+  11,
+  10
+ ],
+ "variables": {
+  "M": {
+   "start": 1024,
+   "stop": 8192,
+   "step": 32
+  }
+ },
+ "constants": {
+  "T": 128
+ },
+ "matmuls": [
+  {
+   "name": "transformer_blocks.*.attn.to_add_out + transformer_blocks.*.attn.to_out",
+   "K": 3072,
+   "N": 384,
+   "op": "addcmul",
+   "calls": [
+    [
+     "M",
+     5
+    ],
+    [
+     "T",
+     5
+    ]
+   ]
+  },
+  {
+   "name": "transformer_blocks.*.ff.ff2",
+   "K": 1152,
+   "N": 3072,
+   "calls": [
+    [
+     "M",
+     5
+    ]
+   ]
+  },
+  {
+   "name": "x_embedder",
+   "K": 128,
+   "N": 384,
+   "calls": [
+    [
+     "M",
+     1
+    ]
+   ]
+  },
+  {
+   "name": "single_transformer_blocks.*.proj_out",
+   "K": 1536,
+   "N": 3072,
+   "concat": [
+    384,
+    1152
+   ],
+   "calls": [
+    [
+     "M",
+     1
+    ],
+    [
+     "M + T",
+     19
+    ]
+   ]
+  },
+  {
+   "name": "proj_out",
+   "K": 3072,
+   "N": 128,
+   "calls": [
+    [
+     "M",
+     1
+    ]
+   ]
+  },
+  {
+   "name": "single_transformer_blocks.*.proj_mlp + transformer_blocks.*.ff.ff1 + transformer_blocks.*.ff_context.ff1",
+   "K": 3072,
+   "N": 2304,
+   "fuse_swiglu": true,
+   "calls": [
+    [
+     "M",
+     6
+    ],
+    [
+     "M + T",
+     19
+    ],
+    [
+     "T",
+     5
+    ]
+   ]
+  },
+  {
+   "name": "single_transformer_blocks.*.attn.to_qkv + transformer_blocks.*.attn.add_qkv_proj + transformer_blocks.*.attn.to_qkv",
+   "K": 3072,
+   "N": 1152,
+   "op": "split",
+   "math_approx_mode": true,
+   "calls": [
+    [
+     "M",
+     5
+    ],
+    [
+     "M + T",
+     20
+    ],
+    [
+     "T",
+     5
+    ]
+   ]
+  }
+ ],
+ "l1_limit": 1497344
+}

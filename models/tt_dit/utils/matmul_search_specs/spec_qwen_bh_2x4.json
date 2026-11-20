@@ -1,0 +1,123 @@
+{
+ "arch": "blackhole",
+ "grid": [
+  11,
+  10
+ ],
+ "variables": {
+  "S": [
+   8320,
+   12544,
+   16640
+  ],
+  "P": [
+   256,
+   512,
+   1024
+  ]
+ },
+ "matmuls": [
+  {
+   "name": "transformer_blocks.*.attn.add_qkv_proj + transformer_blocks.*.attn.to_qkv",
+   "K": 3072,
+   "N": 2304,
+   "bias": true,
+   "calls": [
+    [
+     "P",
+     60
+    ],
+    [
+     "S",
+     60
+    ]
+   ]
+  },
+  {
+   "name": "transformer_blocks.*.ff.ff2 + transformer_blocks.*.ff_context.ff2",
+   "K": 3072,
+   "N": 3072,
+   "bias": true,
+   "calls": [
+    [
+     "P",
+     60
+    ],
+    [
+     "S",
+     60
+    ]
+   ]
+  },
+  {
+   "name": "transformer_blocks.*.ff.ff1 + transformer_blocks.*.ff_context.ff1",
+   "K": 3072,
+   "N": 3072,
+   "bias": true,
+   "activation": "gelu_tanh",
+   "calls": [
+    [
+     "P",
+     60
+    ],
+    [
+     "S",
+     60
+    ]
+   ]
+  },
+  {
+   "name": "proj_out",
+   "K": 3072,
+   "N": 64,
+   "bias": true,
+   "calls": [
+    [
+     "S",
+     1
+    ]
+   ]
+  },
+  {
+   "name": "transformer_blocks.*.attn.to_add_out + transformer_blocks.*.attn.to_out",
+   "K": 3072,
+   "N": 768,
+   "bias": true,
+   "calls": [
+    [
+     "P",
+     60
+    ],
+    [
+     "S",
+     60
+    ]
+   ]
+  },
+  {
+   "name": "txt_in",
+   "K": 3584,
+   "N": 768,
+   "bias": true,
+   "calls": [
+    [
+     "P",
+     1
+    ]
+   ]
+  },
+  {
+   "name": "img_in",
+   "K": 64,
+   "N": 768,
+   "bias": true,
+   "calls": [
+    [
+     "S",
+     1
+    ]
+   ]
+  }
+ ],
+ "l1_limit": 1568384
+}

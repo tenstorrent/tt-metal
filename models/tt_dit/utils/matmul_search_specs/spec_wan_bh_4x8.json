@@ -1,0 +1,44 @@
+{
+ "arch": "blackhole",
+ "grid": [
+  11,
+  10
+ ],
+ "variables": {
+  "M": [
+   4096,
+   9472
+  ]
+ },
+ "matmuls": [
+  {
+   "name": "patch_embedding.proj_weight",
+   "K": 144,
+   "N": 1280,
+   "bias": true,
+   "math_fidelity": "HiFi4",
+   "calls": [
+    [
+     "M",
+     2
+    ]
+   ]
+  },
+  {
+   "name": "proj_out",
+   "K": 5120,
+   "N": 64,
+   "bias": true,
+   "math_fidelity": "HiFi4",
+   "input_dtype": "float32",
+   "output_dtype": "float32",
+   "calls": [
+    [
+     "M",
+     2
+    ]
+   ]
+  }
+ ],
+ "l1_limit": 1563648
+}

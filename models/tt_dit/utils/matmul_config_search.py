@@ -12,6 +12,9 @@ to what the fastest measured config of every call at its rows would give.
 
     python -m models.tt_dit.utils.matmul_config_search SPEC DB.tsv
 
+The specs of the tt_dit models' presets are in `matmul_search_specs/` next to this file, for example
+`models/tt_dit/utils/matmul_search_specs/spec_wan_bh_2x4.json`.
+
 DB.tsv holds every measurement ever taken, of any spec, machine or model. A search uses the points
 that match its spec and measures only the ones it is missing, so running it again with a narrower
 spec, for example a smaller range of input sizes, costs only the points that are new for it.
