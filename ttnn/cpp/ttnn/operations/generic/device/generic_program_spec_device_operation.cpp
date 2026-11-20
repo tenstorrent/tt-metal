@@ -453,7 +453,7 @@ ttsl::hash::hash_t compute_program_spec_hash(const m2::ProgramSpec& spec) {
     // Tripwires: these three types are hashed field by field below. Every other type goes through ttsl's reflection
     // hash, which picks up a new field by itself.
     static_assert(
-        reflect::size<m2::ProgramSpec>() == 9,
+        reflect::size<m2::ProgramSpec>() == 10,
         "ProgramSpec gained or lost a field: hash it in compute_program_spec_hash, then update this count.");
     static_assert(
         reflect::size<m2::WorkUnitSpec>() == 3,
@@ -470,6 +470,7 @@ ttsl::hash::hash_t compute_program_spec_hash(const m2::ProgramSpec& spec) {
         spec.dataflow_buffers,
         spec.semaphores,
         spec.scratchpads,
+        spec.fabric_connections,
         spec.global_semaphore_parameters,
         spec.advanced_options);
     // A tensor parameter's spec is hashed under its relaxations, so a relaxed field such as a dynamic shape does not

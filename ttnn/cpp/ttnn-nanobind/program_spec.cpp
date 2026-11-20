@@ -171,9 +171,13 @@ static_assert(reflect::size<m2::DFBBinding>() == 5);
 static_assert(reflect::size<m2::SemaphoreBinding>() == 2);
 static_assert(reflect::size<m2::ScratchpadBinding>() == 2);
 static_assert(reflect::size<m2::TensorBinding>() == 2);
-static_assert(reflect::size<m2::KernelSpec>() == 14, "advanced_options and global_semaphore_bindings are C++ only");
+static_assert(
+    reflect::size<m2::KernelSpec>() == 15,
+    "advanced_options, global_semaphore_bindings and fabric_connection_bindings are C++ only");
 static_assert(reflect::size<m2::WorkUnitSpec>() == 3);
-static_assert(reflect::size<m2::ProgramSpec>() == 9, "advanced_options and global_semaphore_parameters are C++ only");
+static_assert(
+    reflect::size<m2::ProgramSpec>() == 10,
+    "advanced_options, global_semaphore_parameters and fabric_connections are C++ only");
 static_assert(reflect::size<m2::KernelRunArgs>() == 6, "advanced_options is C++ only");
 static_assert(reflect::size<m2::DFBRunOverrides>() == 3);
 static_assert(reflect::size<m2::ProgramRunArgs>() == 5, "advanced_options and global_semaphore_args are C++ only");

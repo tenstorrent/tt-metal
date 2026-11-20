@@ -8,6 +8,7 @@
 
 #include <tt-metalium/workload/specification/kernel_spec.hpp>
 #include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/fabric_connection_spec.hpp>
 #include <tt-metalium/workload/specification/global_semaphore_parameter.hpp>
 #include <tt-metalium/workload/specification/semaphore_spec.hpp>
 #include <tt-metalium/workload/specification/scratchpad_spec.hpp>
@@ -29,6 +30,7 @@ namespace tt::tt_metal {
 //      o dataflow buffers
 //      o semaphores
 //      o scratchpads
+//      o fabric connections
 //  - user-managed resources (parameters)
 //      o tensor parameters
 //      o GlobalSemaphore parameters
@@ -95,6 +97,10 @@ struct ProgramSpec {
     // Scratchpads provide temporary local read/write storage for kernels.
     // (with no inter-kernel synchronization capabilities)
     Group<ScratchpadSpec> scratchpads;
+
+    // Fabric connections let data-movement kernels send packets into the fabric routers of their device.
+    // A ProgramSpec with fabric connections is accepted only by the MeshWorkload constructors.
+    Group<FabricConnectionSpec> fabric_connections;
 
     //----------------------------------------------------------------------------
     // User-managed resources (lifetime is explicitly user-managed)
