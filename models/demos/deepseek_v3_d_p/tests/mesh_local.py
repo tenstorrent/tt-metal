@@ -4,8 +4,6 @@
 
 """Reading back the shards a process owns, for tests that also run on a mesh two hosts share."""
 
-import ttnn
-
 
 def local_device_tensors(tensor, mesh_device):
     """`{row-major mesh index: single-device tensor}` for the shards this process holds.
