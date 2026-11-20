@@ -385,8 +385,7 @@ void check_mesh_ranges(const SpecAttributes& attributes, const tensor_args_t& te
     }
 }
 
-// Every call needs this: the cache key holds the devices of only one tensor. The Python bindings' check of tensor
-// views (generic_op_nanobind.cpp) relies on it: a program runs only on devices that every io tensor holds.
+// Every call needs this: the cache key holds the devices of only one tensor.
 void check_tensors_on_program_devices(const SpecAttributes& attributes, const tensor_args_t& tensor_args) {
     namespace utils = ttnn::device_operation::mesh_device_operation_utils;
     if (utils::all_tensors_have_uniform_storage(tensor_args)) {
@@ -638,6 +637,10 @@ GenericProgramSpecOperation::operation_attributes_t with_prefetcher_pipes(
 }
 
 }  // namespace
+
+ttnn::MeshCoordinateRangeSet program_spec_ranges(const std::vector<Tensor>& io_tensors) {
+    return tensor_ranges(make_program_spec_tensor_args(io_tensors));
+}
 
 Tensor generic_op(
     const std::vector<Tensor>& io_tensors,

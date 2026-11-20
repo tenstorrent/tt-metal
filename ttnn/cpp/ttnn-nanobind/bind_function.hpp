@@ -36,10 +36,23 @@ struct overload_t {
 template <typename Func, typename... Args>
 overload_t(Func, Args...) -> overload_t<Func, Args...>;
 
+// An overload whose function is called with the GIL held, for a function that reads Python objects before its work: it
+// releases the GIL itself (nb::gil_scoped_release) before anything that can block or take long, as the other
+// overloads have it released for them.
+template <typename Func, typename... Args>
+struct gil_held_overload_t : overload_t<Func, Args...> {
+    using overload_t<Func, Args...>::overload_t;
+};
+
+template <typename Func, typename... Args>
+gil_held_overload_t(Func, Args...) -> gil_held_overload_t<Func, Args...>;
+
 template <typename T>
 struct is_overload_t : std::false_type {};
 template <typename F, typename... A>
 struct is_overload_t<overload_t<F, A...>> : std::true_type {};
+template <typename F, typename... A>
+struct is_overload_t<gil_held_overload_t<F, A...>> : std::true_type {};
 template <typename T>
 inline constexpr bool is_overload_t_v = is_overload_t<std::remove_cvref_t<T>>::value;
 
@@ -66,6 +79,13 @@ void add_call_overload(Class& cls, const overload_t<Func, Args...>& spec) {
             cls.def("__call__", method, args..., nb::call_guard<nb::gil_scoped_release>());
         },
         spec.args);
+}
+
+// The same for an overload whose function releases the GIL itself.
+template <typename Wrapper, typename Class, typename Func, typename... Args>
+void add_call_overload(Class& cls, const gil_held_overload_t<Func, Args...>& spec) {
+    auto method = make_method_wrapper<Wrapper>(spec.func);
+    std::apply([&cls, &method](const Args&... args) { cls.def("__call__", method, args...); }, spec.args);
 }
 
 }  // namespace detail
