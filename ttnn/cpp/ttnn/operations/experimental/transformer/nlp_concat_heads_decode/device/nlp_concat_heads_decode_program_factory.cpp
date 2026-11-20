@@ -4,8 +4,8 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include "nlp_concat_heads_decode_program_factory.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -14,7 +14,6 @@ namespace ttnn::experimental::prim {
 using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 ttnn::device_operation::ProgramArtifacts NLPConcatHeadsDecodeProgramFactory::create_program_artifacts(
     const NlpConcatHeadsDecodeParams& /*operation_attributes*/,
@@ -27,8 +26,6 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsDecodeProgramFactory::cre
     const auto& input_shape = input_tensor.padded_shape();
     const uint32_t head_dim = input_shape[-1];
     const uint32_t batch = input_shape[1];
-
-    tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
     tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
@@ -73,17 +70,6 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsDecodeProgramFactory::cre
     auto in_core_grid = in_cores.bounding_box();
     uint32_t in_num_cores_x = in_core_grid.end_coord.x + 1, in_num_cores_y = in_core_grid.end_coord.y + 1;
 
-    // NoC coordinate tables for the input shard grid, x block then y block; these ride the
-    // kernels' runtime varargs (the kernel indexes them with a data-driven cursor).
-    std::vector<uint32_t> noc_coords;
-    noc_coords.reserve(in_num_cores_x + in_num_cores_y);
-    for (uint32_t x = 0; x < in_num_cores_x; ++x) {
-        noc_coords.push_back(device->worker_core_from_logical_core({x, 0}).x);
-    }
-    for (uint32_t y = 0; y < in_num_cores_y; ++y) {
-        noc_coords.push_back(device->worker_core_from_logical_core({0, y}).y);
-    }
-
     // We parallelize the reader on risc0 and risc1, where each risc reads a sub-tile of the input (phase1 and phase2 of
     // a tile respectively)
     KernelSpec::CompileTimeArgs reader_compile_time_args{
@@ -119,7 +105,6 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsDecodeProgramFactory::cre
         .compile_time_args = std::move(reader_compile_time_args),
         .runtime_arg_schema = {.runtime_arg_names = {"in_tile_offset_by_head"}},
         .hw_config = create_reader_datamovement_config(),
-        .advanced_options = {.num_runtime_varargs = in_num_cores_x + in_num_cores_y},
     };
 
     KernelSpec writer{
@@ -139,7 +124,6 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsDecodeProgramFactory::cre
         .compile_time_args = std::move(writer_compile_time_args),
         .runtime_arg_schema = {.runtime_arg_names = {"in_tile_offset_by_head"}},
         .hw_config = create_writer_datamovement_config(),
-        .advanced_options = {.num_runtime_varargs = in_num_cores_x + in_num_cores_y},
     };
 
     KernelRunArgs reader_run_args{.kernel = READER};
@@ -163,8 +147,6 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsDecodeProgramFactory::cre
             reader_run_args.runtime_arg_values, core, {{"in_tile_offset_by_head", in_tile_offset_by_batch}});
         AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values, core, {{"in_tile_offset_by_head", in_tile_offset_by_batch}});
-        reader_run_args.advanced_options.runtime_varargs[core] = noc_coords;
-        writer_run_args.advanced_options.runtime_varargs[core] = noc_coords;
     }
 
     ProgramSpec spec{

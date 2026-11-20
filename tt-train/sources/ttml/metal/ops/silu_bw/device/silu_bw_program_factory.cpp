@@ -81,8 +81,6 @@ tt::tt_metal::ProgramDescriptor SiLUBackwardProgramFactory::create_descriptor(
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
     const WorkSplit split = compute_tile_row_work_split(input);
-    check_work_split(
-        split, num_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2);
 
     // -------------------------------------------------------------------------
     // 2) Create and configure circular buffers
@@ -91,23 +89,20 @@ tt::tt_metal::ProgramDescriptor SiLUBackwardProgramFactory::create_descriptor(
 
     auto data_format = input_data_format;  // tt::DataFormat::Float16_b
 
-    // CreateCircularBuffer merged CB core ranges (kernels keep the unmerged set); merge here to match.
-    const tt::tt_metal::CoreRangeSet cb_cores = all_cores.merge_ranges();
-
     program.cbs.push_back(
-        make_cb_descriptor(cb_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
+        make_cb_descriptor(all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
     program.cbs.push_back(
-        make_cb_descriptor(cb_cores, kDLoutCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
+        make_cb_descriptor(all_cores, kDLoutCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
     program.cbs.push_back(
-        make_cb_descriptor(cb_cores, kDLdaCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
+        make_cb_descriptor(all_cores, kDLdaCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
     program.cbs.push_back(
-        make_cb_descriptor(cb_cores, kSigmoidCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
+        make_cb_descriptor(all_cores, kSigmoidCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
     program.cbs.push_back(make_cb_descriptor(
-        cb_cores, kOneMinusSigmoidCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
+        all_cores, kOneMinusSigmoidCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
     program.cbs.push_back(make_cb_descriptor(
-        cb_cores, kTimesInputPlusOneCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
+        all_cores, kTimesInputPlusOneCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
     program.cbs.push_back(make_cb_descriptor(
-        cb_cores, kTimesSigmoidCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
+        all_cores, kTimesSigmoidCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels

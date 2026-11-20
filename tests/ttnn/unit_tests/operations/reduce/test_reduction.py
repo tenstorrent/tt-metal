@@ -1206,3 +1206,39 @@ def test_reduce_int32_identity_scalar_is_not_lossy(device):
     tt_out = ttnn.to_torch(ttnn.sum(tt_a, dim=-1, keepdim=True, scalar=1.0))
 
     assert torch.all(tt_out == 2**25 + 1)
+
+
+# A BFLOAT8_B tile shares one exponent per 16-lane block of a row. The -inf / +inf Max / Min padding must not zero the
+# real lanes that share a block with it: at widths that are not a multiple of 16, and (for Min over W) in a partial tile
+# row. N / C reductions carry the same padding into their output. [32, 48] and [32, 64] have no tile padding and are
+# the controls.
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (2, 37, 1),
+        (2, 37, 31),
+        (2, 37, 33),
+        (2, 37, 40),
+        (2, 37, 50),
+        (2, 37, 63),
+        (2, 37, 48),
+        (2, 37, 64),
+        (2, 32, 48),
+        (2, 32, 64),
+    ],
+    ids=lambda s: "x".join(map(str, s)),
+)
+@pytest.mark.parametrize("dim", [-1, -2, 0])
+@pytest.mark.parametrize("op", ["max", "min"])
+def test_reduce_max_min_bfloat8_b_tile_padding(device, op, dim, shape):
+    torch.manual_seed(0)
+    magnitude = torch.empty(shape).uniform_(1.0, 4.0)
+    torch_input = -magnitude if op == "max" else magnitude
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    result = ttnn.to_torch(getattr(ttnn, op)(input_tensor, dim=dim)).float()
+    expected = getattr(torch, op)(ttnn.to_torch(input_tensor).float(), dim=dim).values
+
+    assert result.shape == expected.shape
+    assert (result != 0).all(), f"{(result == 0).sum()} of {result.numel()} reduced values came back as 0"
+    torch.testing.assert_close(result, expected, atol=0.039, rtol=0.032)

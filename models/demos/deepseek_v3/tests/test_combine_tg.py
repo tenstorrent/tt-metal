@@ -26,7 +26,7 @@ from loguru import logger
 import ttnn
 
 # Import helper functions from the reference test
-from tests.nightly.tg.ccl.moe.test_selective_combine_6U import (
+from tt_py_test_utils_common.selective_combine import (
     _get_tt_dense_metadata,
     _get_tt_dense_token_maps,
     _get_tt_sharded_dense_input,
