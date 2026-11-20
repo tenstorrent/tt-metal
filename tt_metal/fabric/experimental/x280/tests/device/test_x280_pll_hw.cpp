@@ -33,7 +33,7 @@
 
 #include <gtest/gtest.h>
 
-#include <tt-umd/arc/firmware_telemetry_reader.hpp>
+#include <tt-umd/firmware_telemetry/firmware_telemetry_reader.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt-umd/types/noc_id.hpp>
 #include <tt-umd/types/telemetry.hpp>

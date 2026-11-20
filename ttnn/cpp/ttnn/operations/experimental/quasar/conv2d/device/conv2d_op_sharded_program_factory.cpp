@@ -44,13 +44,13 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/semaphore_spec.hpp>
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 #include <tt-metalium/math.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -58,7 +58,7 @@
 namespace ttnn::prim::qsr {
 
 using namespace tt::tt_metal;
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 namespace unary = ttnn::operations::unary;
 using ttnn::operations::conv::conv_skip_mcast;
 using ttnn::operations::conv::is_1d_depthwise_conv;
@@ -245,7 +245,7 @@ const m2::KernelSpecName KERNEL_OUT_DRAIN{"out_drain"};  // Program A: credit-on
 // [#48552] Per-kernel runtime-arg population helpers, extracted from create_program_artifacts to keep its
 // clang-tidy cognitive complexity under threshold. Pure code motion: each fills the per-kernel run-args map
 // that the orchestration function then moves into ProgramRunArgs; no logic changes. Namespace scope here
-// (ttnn::prim::qsr, with `using namespace tt::tt_metal` and `namespace m2 = ...experimental` active) so all
+// (ttnn::prim::qsr, with `using namespace tt::tt_metal` and `namespace m2 = tt::tt_metal` active) so all
 // types resolve.
 // Multicast destination rectangle. Mirrors the fix already applied to the Quasar
 // matmul factories (matmul_multicore_reuse_mcast_2d_program_factory.cpp):
@@ -351,7 +351,8 @@ static void populate_reader_runtime_args(
                         {"is_sender_core", (uint32_t)is_sender_core},
                         {"dram_config_reader_index", transpose_mcast ? core.x : core.y},
                     });
-                m2::AdvancedKernelRunArgs::Varargs varargs(act_mcast_noc_y.begin(), act_mcast_noc_y.end());
+                m2::experimental::AdvancedKernelRunArgs::Varargs varargs(
+                    act_mcast_noc_y.begin(), act_mcast_noc_y.end());
                 reader_run_args.advanced_options.runtime_varargs.insert({core, std::move(varargs)});
             }
         }
