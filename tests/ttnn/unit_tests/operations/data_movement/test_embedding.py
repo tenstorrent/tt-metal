@@ -1180,7 +1180,9 @@ def _repeated_token_indices(pattern, batch_size, sentence_size, vocabulary_size)
     return indices.reshape(batch_size, sentence_size)
 
 
-def _run_repeated_token_embedding(device, pattern, batch_size, sentence_size, hidden, vocabulary_size, layout, memory_config):
+def _run_repeated_token_embedding(
+    device, pattern, batch_size, sentence_size, hidden, vocabulary_size, layout, memory_config
+):
     torch.manual_seed(0)
     torch_indices = _repeated_token_indices(pattern, batch_size, sentence_size, vocabulary_size)
     torch_weights = torch_random((vocabulary_size, hidden), -0.1, 0.1, dtype=torch.bfloat16)
