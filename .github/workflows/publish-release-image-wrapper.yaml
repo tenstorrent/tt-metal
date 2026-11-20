@@ -50,6 +50,10 @@ jobs:
     permissions:
       packages: write
       contents: read
+      # publish-release-image signs each image's SBOM (actions/attest).
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     needs:
       - check-harbor
       - build-artifact

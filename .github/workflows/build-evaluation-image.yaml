@@ -182,7 +182,7 @@ jobs:
 
       - name: Login to Harbor Container Registry
         if: ${{ inputs.push-to-harbor }}
-        uses: docker/login-action@v3
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: harbor.ci.tenstorrent.net
           username: ${{ secrets.HARBOR_PUSH_USER }}
@@ -190,7 +190,7 @@ jobs:
 
       - name: Login to GitHub Container Registry
         if: ${{ inputs.push-to-ghcr }}
-        uses: docker/login-action@v3
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}

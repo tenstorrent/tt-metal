@@ -334,6 +334,7 @@ jobs:
       base-image: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
       dockerfile: dockerfile/Dockerfile.prebuilt-tests-packages
       build-args: PRODUCT=tt-metalium
+      gate: true
 
   runtime-basic-tests:
     # Not !failure(): a failed image build must still let basic use the artifact.
@@ -436,6 +437,7 @@ jobs:
       base-image: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
       dockerfile: dockerfile/Dockerfile.prebuilt-tests-packages
       build-args: PRODUCT=tt-nn
+      gate: true
 
   ttnn-basic-tests:
     needs: [build-asan, resolve-docker-pull-refs-asan, find-changes, check-harbor, docker-images, build-ttnn-basic-image]

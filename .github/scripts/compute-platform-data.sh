@@ -1,12 +1,18 @@
 #!/bin/bash
 # Compute platform-specific Docker image tags and check existence
 #
-# Usage: compute-platform-data.sh <version> <repo> [--force-rebuild] [--check-exists]
+# Usage: compute-platform-data.sh <version> <repo> [--force-rebuild-ubuntu]
+#          [--force-rebuild-venv] [--force-rebuild-manylinux] [--force-rebuild]
+#          [--check-exists]
 #
 # Arguments:
 #   version       Ubuntu version (e.g., "22.04" or "24.04")
 #   repo          GitHub repository (e.g., "owner/repo")
-#   --force-rebuild  Treat all images as missing (optional)
+#   --force-rebuild-ubuntu     Treat the Ubuntu images (ci-build*, ci-test*,
+#                              dev*, basic-*) as missing (optional)
+#   --force-rebuild-venv       Treat the Python venv images as missing (optional)
+#   --force-rebuild-manylinux  Treat the manylinux image as missing (optional)
+#   --force-rebuild            All three of the above (optional)
 #   --check-exists   Check if images exist in registry (optional, default: true)
 #
 # Output: JSON object with tags, existence flags, and metadata
@@ -17,7 +23,7 @@
 set -euo pipefail
 
 usage() {
-    echo "Usage: $0 <version> <repo> [--force-rebuild] [--check-exists]" >&2
+    echo "Usage: $0 <version> <repo> [--force-rebuild-ubuntu] [--force-rebuild-venv] [--force-rebuild-manylinux] [--force-rebuild] [--check-exists]" >&2
     exit 1
 }
 
@@ -29,13 +35,29 @@ VERSION="$1"
 REPO="$2"
 shift 2
 
-FORCE_REBUILD=false
+FORCE_UBUNTU=false
+FORCE_VENV=false
+FORCE_MANYLINUX=false
 CHECK_EXISTS=true
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --force-rebuild-ubuntu)
+            FORCE_UBUNTU=true
+            shift
+            ;;
+        --force-rebuild-venv)
+            FORCE_VENV=true
+            shift
+            ;;
+        --force-rebuild-manylinux)
+            FORCE_MANYLINUX=true
+            shift
+            ;;
         --force-rebuild)
-            FORCE_REBUILD=true
+            FORCE_UBUNTU=true
+            FORCE_VENV=true
+            FORCE_MANYLINUX=true
             shift
             ;;
         --check-exists)
@@ -296,20 +318,8 @@ BASE_VENV="ghcr.io/${REPO}/tt-metalium/python-venv"
 CI_BUILD_VENV_TAG="${BASE_VENV}/ci-build:${VERSION_NODOT}-${CI_BUILD_VENV_HASH}"
 CI_TEST_VENV_TAG="${BASE_VENV}/ci-test:${VERSION_NODOT}-${CI_TEST_VENV_HASH}"
 
-# Check existence (or set all to false if force-rebuild)
-if [ "$FORCE_REBUILD" = "true" ]; then
-    CI_BUILD_LIGHT_EXISTS=false
-    CI_BUILD_EXISTS=false
-    CI_TEST_LIGHT_EXISTS=false
-    CI_TEST_EXISTS=false
-    DEV_LIGHT_EXISTS=false
-    DEV_EXISTS=false
-    BASIC_DEV_EXISTS=false
-    BASIC_TTNN_EXISTS=false
-    MANYLINUX_EXISTS=false
-    CI_BUILD_VENV_EXISTS=false
-    CI_TEST_VENV_EXISTS=false
-elif [ "$CHECK_EXISTS" = "true" ]; then
+# Check existence; the per-group force flags are applied afterwards
+if [ "$CHECK_EXISTS" = "true" ]; then
     # Check dev first. Its tag includes the main image, tool, and venv hash
     # chain, so a hit lets us avoid the most expensive fan-out on the common
     # path where the platform has already been built.
@@ -397,6 +407,21 @@ else
     CI_TEST_VENV_EXISTS=unknown
 fi
 
+# Per-group force rebuilds: treat the group's images as missing.
+if [ "$FORCE_UBUNTU" = "true" ]; then
+    CI_BUILD_LIGHT_EXISTS=false
+    CI_BUILD_EXISTS=false
+    CI_TEST_LIGHT_EXISTS=false
+    CI_TEST_EXISTS=false
+    DEV_LIGHT_EXISTS=false
+    DEV_EXISTS=false
+    BASIC_DEV_EXISTS=false
+    BASIC_TTNN_EXISTS=false
+fi
+if [ "$FORCE_MANYLINUX" = "true" ]; then
+    MANYLINUX_EXISTS=false
+fi
+
 CI_BUILD_VENV_REQUIRED=false
 CI_TEST_VENV_REQUIRED=false
 if [ "$CI_BUILD_EXISTS" != "true" ]; then
@@ -404,6 +429,23 @@ if [ "$CI_BUILD_EXISTS" != "true" ]; then
 fi
 if [ "$CI_TEST_EXISTS" != "true" ] || [ "$DEV_EXISTS" != "true" ]; then
     CI_TEST_VENV_REQUIRED=true
+fi
+
+if [ "$FORCE_VENV" = "true" ]; then
+    # Rebuild the venvs even when every Ubuntu image that uses them exists.
+    CI_BUILD_VENV_EXISTS=false
+    CI_TEST_VENV_EXISTS=false
+    CI_BUILD_VENV_REQUIRED=true
+    CI_TEST_VENV_REQUIRED=true
+elif [ "$CHECK_EXISTS" = "true" ]; then
+    # Forcing the Ubuntu images makes venvs required that the check above left
+    # unprobed; reuse the ones already in the registry.
+    if [ "$CI_BUILD_VENV_REQUIRED" = "true" ] && [ "$CI_BUILD_VENV_EXISTS" = "unknown" ]; then
+        CI_BUILD_VENV_EXISTS=$(manifest_exists "$CI_BUILD_VENV_TAG" && echo true || echo false)
+    fi
+    if [ "$CI_TEST_VENV_REQUIRED" = "true" ] && [ "$CI_TEST_VENV_EXISTS" = "unknown" ]; then
+        CI_TEST_VENV_EXISTS=$(manifest_exists "$CI_TEST_VENV_TAG" && echo true || echo false)
+    fi
 fi
 
 FINAL_IMAGES_MISSING=false
