@@ -14,9 +14,9 @@
 
 #include "api/debug/assert.h"
 #include "dev_mem_map.h"
-#include "hostdev/cce_noc_routes.h"
 #include "hostdev/eth_link.h"
 #include "internal/risc_attribs.h"
+#include "internal/tt-2xx/quasar/cce_noc.h"
 #include "internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp"
 
 namespace internal_::cce_eth {
@@ -179,10 +179,10 @@ FORCE_INLINE uint64_t sram_local_addr(uint32_t tile, uint32_t flat) {
     return kHsioLocalBase + tile * kHsioTileStride + kHsioCceSramOffset + sram_offset(flat);
 }
 
-// System address of the flat address @p flat (cached or uncached alias) in HSIO tile @p tile's CCE SRAM
-// (Keraunos-E100 v1.0.9 Table 14; docs arch/KERAUNOS-HW-FINDINGS.md Q1). The system tile stride equals the local one.
+// System address of the flat address @p flat (cached or uncached alias) in HSIO tile @p tile's CCE0 SRAM, from this
+// core's KeraunosSpaRoutes (cce_noc.h).
 FORCE_INLINE uint64_t sram_system_addr(uint32_t tile, uint32_t flat) {
-    return KERAUNOS_HSIO0_SYSTEM_BASE + tile * kHsioTileStride + kHsioCceSramOffset + sram_offset(flat);
+    return internal_::cce_noc::dma_addr(internal_::cce_noc::Target{tile, 0, flat});
 }
 
 // On an Ethernet link, true while the command buffer has no space on TX queue @p q_num's request VC. On a NOC link,
