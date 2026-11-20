@@ -72,26 +72,6 @@ FORCE_INLINE uint32_t input_page_index(
     return cache_slot_first_page + outer_slice * geometry.pages_per_outer_slice + page_in_slice;
 }
 
-// Conversion blocks of local copy core c of n: blocks c, c + n, ... of conversion_block_pages flat pages each, over the
-// valid pages of the shard (the last one can be short). visit(first_flat_page, end_flat_page).
-template <typename Visit>
-FORCE_INLINE void for_each_conversion_block(
-    const ChipShardGeometry& geometry,
-    uint32_t conversion_block_pages,
-    uint32_t local_copy_core_index,
-    uint32_t num_local_copy_cores,
-    const Visit& visit) {
-    const uint32_t valid_pages_in_shard = geometry.num_outer_slices * geometry.valid_pages_per_outer_slice;
-    for (uint32_t conversion_block = local_copy_core_index;
-         conversion_block * conversion_block_pages < valid_pages_in_shard;
-         conversion_block += num_local_copy_cores) {
-        const uint32_t block_end_page = (conversion_block + 1) * conversion_block_pages < valid_pages_in_shard
-                                            ? (conversion_block + 1) * conversion_block_pages
-                                            : valid_pages_in_shard;
-        visit(conversion_block * conversion_block_pages, block_end_page);
-    }
-}
-
 // First input page of the selected cache slot, from the reader's common args [3..7]: the host value, or (trace-safe
 // path) cache slot = user * layers + layer with the user read from the cache slot tensor (input_batch_index_tensor).
 template <bool kCacheSlotFromMetadata, typename CacheSlotArgs>
@@ -109,65 +89,4 @@ read_cache_slot_first_page(const Noc& noc, uint32_t landing_l1, const CacheSlotA
         (void)cache_slot_args;
         return get_common_arg_val<uint32_t>(6);
     }
-}
-
-// Non-interleaved input (e.g. the ND-sharded KV cache): its fabric chunks are not physically contiguous, so the local
-// copy cores convert the own shard into this chip's (interleaved) output, and the link workers read it from there.
-// The valid pages of the shard, numbered flat (flat_page = outer_slice * valid pages per slice + page_in_slice), are
-// cut into conversion blocks of conversion_block_pages; local copy core c of n converts its blocks
-// (for_each_conversion_block) in order, in contiguous input runs of up to pages_per_fabric_chunk pages (logically and
-// physically consecutive: one read each), and signals each finished block. visit(outer_slice, page_in_slice,
-// num_pages, last_run_of_block).
-template <typename Accessor, typename Visit>
-FORCE_INLINE void for_each_contiguous_input_run(
-    const ChipShardGeometry& geometry,
-    const Accessor& input,
-    uint32_t cache_slot_first_page,
-    uint32_t page_bytes,
-    uint32_t pages_per_fabric_chunk,
-    uint32_t conversion_block_pages,
-    uint32_t local_copy_core_index,
-    uint32_t num_local_copy_cores,
-    const Visit& visit) {
-    const uint32_t valid_pages = geometry.valid_pages_per_outer_slice;
-    for_each_conversion_block(
-        geometry,
-        conversion_block_pages,
-        local_copy_core_index,
-        num_local_copy_cores,
-        [&](uint32_t block_first_page, uint32_t block_end_page) {
-            for (uint32_t flat_page = block_first_page; flat_page < block_end_page;) {
-                const uint32_t outer_slice = flat_page / valid_pages, page_in_slice = flat_page % valid_pages;
-                const uint32_t first_input_page =
-                    input_page_index(geometry, cache_slot_first_page, outer_slice, page_in_slice);
-                // a run stops at the end of the outer slice or of the block
-                const uint32_t run_limit_page =
-                    (outer_slice + 1) * valid_pages < block_end_page ? (outer_slice + 1) * valid_pages : block_end_page;
-                const uint64_t first_page_addr = input.get_noc_addr(first_input_page);
-                uint32_t num_pages = 1;
-                while (num_pages < pages_per_fabric_chunk && flat_page + num_pages < run_limit_page &&
-                       input.get_noc_addr(first_input_page + num_pages) == first_page_addr + num_pages * page_bytes) {
-                    ++num_pages;
-                }
-                flat_page += num_pages;
-                visit(outer_slice, page_in_slice, num_pages, flat_page == block_end_page);
-            }
-        });
-}
-
-// CB batches per conversion block: the local copy writer's full write barrier and its signals come once per block
-// (QuietBox, 32k-row KV cache: 1 -> 2 batches 995 -> 964 us at 6 KiB; larger blocks delay the first chunk more than
-// they save).
-constexpr uint32_t kCbBatchesPerConversionBlock = 2;
-
-// Conversion blocks local copy core c must have finished before the own shard's flat_page is in the output.
-FORCE_INLINE uint32_t conversion_blocks_needed(
-    uint32_t flat_page,
-    uint32_t conversion_block_pages,
-    uint32_t local_copy_core_index,
-    uint32_t num_local_copy_cores) {
-    const uint32_t conversion_block = flat_page / conversion_block_pages;
-    return conversion_block >= local_copy_core_index
-               ? (conversion_block - local_copy_core_index) / num_local_copy_cores + 1
-               : 0;
 }

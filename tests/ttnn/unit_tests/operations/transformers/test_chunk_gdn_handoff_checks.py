@@ -12,7 +12,7 @@ functional gate; a program-cache delta of 1 pins that the fused program ran."""
 import pytest
 import torch
 
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 from tests.ttnn.unit_tests.operations.transformers.test_chunk_gdn_fused import (
     _const_tiles,
     _fused,
