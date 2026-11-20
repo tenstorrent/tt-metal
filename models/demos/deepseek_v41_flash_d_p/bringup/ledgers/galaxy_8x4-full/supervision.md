@@ -1002,3 +1002,26 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   slice @ served.py:155 x45 ...); fixed lanes AgentX 33.6 / 37.1 / 36.0 -> 23.3 / 26.5 / 28.9k (-20..-31 %); glued
   AgentX 47.9 / 52.4 / 52.5 -> 45.1 / 51.5 / 52.0k (-1..-6 %, ~0 builds); glued 5 x 1.6k 52.5 -> 48.1k. DECIDED:
   accept; PB.9F5 (5120) next, alone; the batching queue stops after it.
+- 21:55 UTC PB.9F5 gate PASS -> 83c7ee814cf (results/PB.9F5_fresh_walls.md). FRESH 5120 (today's shipped single-request
+  path): steady 63.2k warm -> 37.2k fresh (137.8 ms; one 407.7 ms chunk, the rest 92-116), resumed 61.2k -> 50.6k
+  (-17 %), partial last chunks 19.2k -> 14.7k; ~20-23 program builds A CHUNK; host 33-35 ms fresh vs 12-16 warm.
+  Builders (probe): ttnn.slice @ served.py:155 slice_rows (history pack, slot x position), compressor.py:181 +
+  rope.py:451 (RoPE rows by position), served.py:211 DeviceScalars._pick (position / end), history_gather.py:376 (tail),
+  attention.py:488 srv_row. OPEN: 8192 single request measured 0 builds (PB.9F) vs ~22 at 5120 - explain in MB work.
+  Batching queue STOPPED here (PB.9X onward queued, not run).
+
+### HAND-OFF UPDATE 2026-11-20 ~22:00 UTC: NEXT = model_bringup fix (owner priority)
+- Owner: fix the shipped branch dnijemcevic/model_bringup now; set up its ledger tasks for the owner to kick off.
+  Steps for the next overseer: (1) batching tree is clean except ledger files: commit them on
+  dnijemcevic/model_bringup_batching (never push); (2) git checkout dnijemcevic/model_bringup (one folder, one branch;
+  stop the resident runner first: it holds the batching branch's model); (3) add to its galaxy_8x4-full tasks.yaml:
+  MB.1 (tests only): bring PB.9F's fresh-traffic walls (tests/test_skip_positions.py WALLS_FRESH mode +
+  tests/packed/fresh_common.py from a72c8c6918d, single-request parts only) and measure 5120 fresh vs warm, builds per op;
+  MB.2 (agent): no program build in serving on the single-request path: every builder above (and the audit OV-68 list:
+  RoPE / compressed RoPE slices by start, DeviceScalars k and ceil(end/32), history slice_rows by slot x layer x start,
+  tail slices, srv_row, replay offsets, snapshot patterns) becomes a runtime value (prepared-program values / page
+  copies / runtime-arg slices; PB.7C's glued_derive / page_copy pieces on the batching branch are the model), plus the
+  ids reorder on device (no re-upload, OV-69; engrams stay on the HOST); switch POS_DYNAMIC; bit-identical; gate = the
+  5120 accept units (ladder last, determinism, decoder skip, contract, outside history) + fresh walls with
+  program_builds_after_warmup == 0; owner question: POS_DYNAMIC default on (I proposed yes).
+  (4) validate, commit, tell the owner the tasks are ready (do not push).
