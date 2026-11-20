@@ -53,6 +53,10 @@ DECODER_CONE = int(os.environ.get("V41_PREFILL_DECODER_CONE", str(CONE)))
 
 
 class V41PrefillRuntime:
+    # V41_PREFILL_HOST_IDS (WS13), set in __init__ when on; class defaults keep runtimes built without __init__ (host tests) off
+    _hostids = None
+    _eprefetch = None
+
     def __init__(
         self,
         mesh_device,

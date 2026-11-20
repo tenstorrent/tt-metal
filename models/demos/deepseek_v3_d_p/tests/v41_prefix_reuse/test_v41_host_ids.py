@@ -219,3 +219,47 @@ def test_wrong_guess_is_rejected_and_changes_nothing(eg_module):
             assert torch.equal(rows[lid], want)
         assert torch.equal(eh._hash[0].cache[:, :128], ref._hash[0].cache[:, :128])
     assert pf.stats["hits"] == 0 and pf.stats["misses"] == 3
+
+
+# ---- the runtime's wiring (fake ttnn: fake_v41.py) -------------------------------------------------------------------
+def test_runtime_matches_the_chunk_and_prefetches_the_next():
+    import sys
+
+    sys.path.insert(0, HERE)
+    sys.path.insert(0, ROOT)
+    import fake_v41  # noqa: F401 -- installs the fake ttnn before runtime.py imports it
+
+    from models.demos.common.prefill.prefix_reuse import split_slot_word
+    from models.demos.deepseek_v3_d_p.tt.v41.runtime import V41PrefillRuntime
+
+    path, w, r = _ring(n=8, chunk=16)
+    marked, last, dec = 1 << 29, 1 << 30, 1 << 28
+    a = list(range(100, 116))
+    b = list(range(200, 210))
+    w.write(marked | 3, 0, 16, a)
+    w.write(marked | last | dec | 5, 32, 42, b + [1] * 6)  # another slot, a ragged decoder chunk
+
+    class Rec:
+        stats = {"hits": 0, "misses": 0}
+
+        def __init__(self):
+            self.calls = []
+
+        def prefetch(self, slot, ids, start):
+            self.calls.append((slot, list(ids), start))
+
+    rt = V41PrefillRuntime.__new__(V41PrefillRuntime)
+    rt._hostids, rt._eprefetch, rt.num_users, rt.chunk_size = r, Rec(), 8, 16
+    rt._hi = {"matched": 0, "unmatched": 0, "ids_differ": 0, "next_missing": 0}
+    cur = rt._host_ids_match(marked | 3, 0, 16, a)
+    assert cur == 0 and rt._hi["matched"] == 1 and rt._hi["ids_differ"] == 0
+    rt._prefetch_next(cur)
+    assert rt._eprefetch.calls == [(split_slot_word(marked | last | dec | 5)[0], b, 32)]
+    assert rt._eprefetch.calls[0][0] == 5
+    assert rt._host_ids_match(marked | 3, 0, 16, a) is None and rt._hi["unmatched"] == 1  # consumed: not matched twice
+    rt._prefetch_next(1)  # nothing pushed after it yet
+    assert rt._hi["next_missing"] == 1 and len(rt._eprefetch.calls) == 1
+    cur2 = rt._host_ids_match(
+        marked | last | dec | 5, 32, 42, [9] * 10
+    )  # the device read other ids: counted, never trusted
+    assert cur2 == 1 and rt._hi["ids_differ"] == 1
