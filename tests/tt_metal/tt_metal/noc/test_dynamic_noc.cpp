@@ -17,7 +17,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
-#include "env_lib.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
@@ -48,11 +47,6 @@ void build_and_run_program(
         GTEST_SKIP() << "Dynamic NOC mode needs 2 NOCs, but " << tt::arch_to_str(device->arch()) << " has only "
                      << num_nocs;
     }
-    // Make random
-    auto random_seed = 0; // (unsigned int)time(NULL);
-    uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
-    log_info(tt::LogTest, "Using Test Seed: {}", seed);
-    srand(seed);
 
     CoreCoord worker_grid_size = {1,1};
     CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
@@ -203,11 +197,6 @@ void build_and_run_program_ethernet(
         GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
         return;
     }
-    // Make random
-    auto random_seed = 0;  // (unsigned int)time(NULL);
-    uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
-    log_info(tt::LogTest, "Using Test Seed: {}", seed);
-    srand(seed);
 
     // Pick the first active ethernet core
     CoreCoord eth_core = *active_eth_cores.begin();
