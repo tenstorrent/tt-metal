@@ -17,6 +17,13 @@ name: Blaze Merge Gate
 # image of tt-blaze's DEV_IMAGE variable: these are fixed in the relay. Other
 # tt-blaze workflows, refs, buckets or images cannot be asked for from here.
 #
+# Input `target` picks one of the two things the relay serves:
+#   ci      (default) the merge gate above; this job waits for it.
+#   uplift  tt-blaze's nightly-metal-uplift.yaml for this run's commit. The
+#           relay serves it only for a scheduled package-and-release run whose
+#           ci gate passed, once per run, and does not wait for the uplift, so
+#           this job ends a few minutes after the relay starts it.
+#
 # tt-blaze cannot build tt-metal itself: its CI consumes the prebuilt tarball and
 # wheel that `build-artifact-profiler` published in this run. The relay passes
 # this run's id and commit to tt-blaze, so tt-blaze downloads exactly those
@@ -34,6 +41,12 @@ name: Blaze Merge Gate
 
 on:
   workflow_call:
+    inputs:
+      target:
+        description: "ci (tt-blaze merge gate, waited for) or uplift (tt-blaze nightly-metal-uplift.yaml, after a passed gate)."
+        required: false
+        type: string
+        default: ci
     outputs:
       relay-run-url:
         description: "URL of the relay run this gate waited on (empty if none was found)."
@@ -44,7 +57,7 @@ permissions:
 
 jobs:
   blaze-ci:
-    name: tt-blaze CI (full merge gate)
+    name: ${{ inputs.target == 'uplift' && 'tt-blaze uplift (through the relay)' || 'tt-blaze CI (full merge gate)' }}
     runs-on: ubuntu-latest
     # The wait (GATE_WAIT_MINUTES), a few minutes for the dispatch and the
     # cancel path, and slack. The relay's own deadline (175 minutes) comes
@@ -66,6 +79,7 @@ jobs:
       # The id of this run. In a reusable workflow it is the caller's run id,
       # the run that holds the profiler build.
       METAL_RUN_ID: ${{ github.run_id }}
+      RELAY_TARGET: ${{ inputs.target }}
     steps:
       # The tokens are given only to runs on main. Stop here, with one clear
       # message, instead of failing later at the sign-in.
@@ -91,6 +105,20 @@ jobs:
             echo "::error::unexpected run id"
             exit 1
           fi
+          case "$RELAY_TARGET" in
+            ci) ;;
+            uplift)
+              # The relay serves the uplift only for a scheduled run (a re-run keeps its event).
+              if [ "$EVENT" != schedule ]; then
+                echo "::error::the tt-blaze uplift runs only for schedule (got ${EVENT})"
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::unknown target '${RELAY_TARGET}' (ci or uplift)"
+              exit 1
+              ;;
+          esac
 
       # The helpers of the steps below, from this file. No checkout: this job
       # runs no code of the repository and no code chosen by an input.
@@ -125,9 +153,13 @@ jobs:
               return 0
             }
 
-            # The relay's run name for this tt-metal run (relay.yaml run-name).
+            # The relay's run name for this tt-metal run and target (relay.yaml run-name).
             relay_title() {
-              printf 'tt-blaze relay for tt-metal run %s' "$METAL_RUN_ID"
+              if [ "$RELAY_TARGET" = uplift ]; then
+                printf 'tt-blaze uplift relay for tt-metal run %s' "$METAL_RUN_ID"
+              else
+                printf 'tt-blaze relay for tt-metal run %s' "$METAL_RUN_ID"
+              fi
             }
 
             # relay_run_state ID: prints "path<TAB>branch<TAB>event<TAB>status<TAB>conclusion<TAB>url<TAB>title".
@@ -266,18 +298,20 @@ jobs:
             echo "DISPATCHED=1"
           } >>"$GITHUB_ENV"
 
-          # The body is built by jq; its only value is this run's id. Same
+          # The body is built by jq; its values are this run's id and, for
+          # uplift only, the target (ci is the relay's default). Same
           # request form as the relay's own dispatch: when GitHub answers 200
           # with workflow_run_id, that id is used; on a 204 (no body) the run is
           # found by its run name below.
-          body=$(jq -n --arg ref "$RELAY_REF" --arg rid "$METAL_RUN_ID" '{ref: $ref, inputs: {"metal-run-id": $rid}}')
+          body=$(jq -n --arg ref "$RELAY_REF" --arg rid "$METAL_RUN_ID" --arg target "$RELAY_TARGET" \
+            '{ref: $ref, inputs: ({"metal-run-id": $rid} + (if $target == "uplift" then {target: $target} else {} end))}')
           resp=$(gh api -X POST "repos/${RELAY_REPO}/actions/workflows/${RELAY_WORKFLOW}/dispatches" --input - <<<"$body") || {
             echo "::error::the dispatch of ${RELAY_WORKFLOW} on ${RELAY_REPO}@${RELAY_REF} was refused. Ask OSPO by ticket."
             echo "- tt-blaze relay: dispatch refused" >>"$GITHUB_STEP_SUMMARY"
             exit 1
           }
           echo "DISPATCH_ACCEPTED=1" >>"$GITHUB_ENV"
-          echo "started ${RELAY_WORKFLOW} on ${RELAY_REPO}@${RELAY_REF} for tt-metal run ${METAL_RUN_ID}"
+          echo "started ${RELAY_WORKFLOW} (target ${RELAY_TARGET}) on ${RELAY_REPO}@${RELAY_REF} for tt-metal run ${METAL_RUN_ID}"
 
           # The run id: from the 200 answer, else by the relay's run name,
           # only among runs created after DISPATCH_AT.
@@ -640,6 +674,14 @@ jobs:
         run: |
           if [ "$DONE" != 1 ]; then
             echo "::error::no relay result within ${GATE_WAIT_MINUTES} minutes"
+            exit 1
+          fi
+          if [ "$RELAY_TARGET" = uplift ]; then
+            if [ "$CONCLUSION" = success ]; then
+              echo "tt-blaze nightly-metal-uplift.yaml started (through the relay); it reports in its own run"
+              exit 0
+            fi
+            echo "::error::the relay run ended '${CONCLUSION}': the tt-blaze uplift was refused or not started. See the relay run."
             exit 1
           fi
           if [ "$CONCLUSION" = success ]; then

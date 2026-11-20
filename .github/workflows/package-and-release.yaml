@@ -224,6 +224,29 @@ jobs:
     # tt-blaze's full merge gate (ci.yaml on main).
     uses: ./.github/workflows/blaze-merge-gate.yaml
 
+  # Hands a build that passed tt-blaze's merge gate to tt-blaze's nightly tt-metal uplift,
+  # which pins it on a trial branch and validates it there. Only a scheduled run on main,
+  # or a re-run of one (a re-run keeps its event), launches it. It goes through the
+  # tt-blaze relay (target uplift), which checks again that this run is scheduled, on
+  # main, and that its tt-blaze gate passed, then starts nightly-metal-uplift.yaml with
+  # this run's commit as metal-sha, so the uplift adopts the profiler build the gate just
+  # passed instead of building it again. The relay starts it once per run and does not
+  # wait: the uplift reports in its own run and draft PR.
+  launch-blaze-uplift:
+    needs: [blaze-merge-gate]
+    if: >-
+      ${{ !cancelled()
+          && needs.blaze-merge-gate.result == 'success'
+          && github.event_name == 'schedule'
+          && github.ref == 'refs/heads/main' }}
+    permissions:
+      contents: read
+      # Short-lived tokens on tenstorrent/tt-blaze-relay, as for the gate.
+      id-token: write
+    uses: ./.github/workflows/blaze-merge-gate.yaml
+    with:
+      target: uplift
+
   publish-to-pypi:
     needs: [build-test-publish, create-tag, blaze-merge-gate]
     runs-on: ubuntu-latest
