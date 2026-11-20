@@ -560,6 +560,8 @@ class VisionAttention(Module):
             logical_n=local_seq_len * self._p.sp_factor,
             program_config=self._ring_program_config(local_seq_len),
             compute_kernel_config=self._sdpa_compute_kernel_config,
+            # Ring joint SDPA ignores compute_kernel_config: FP32 accumulation is the ACCURATE recipe.
+            precision=ttnn.SDPAPrecision.ACCURATE,
             dim=2,
             scale=self.scale,
             multi_device_global_semaphore=ccl.get_ag_ping_pong_semaphore(sp_axis),

@@ -831,6 +831,8 @@ class Qwen3VlAttention(Module):
             logical_n=logical_n if self._dynamic_length else local_seq_len * self._sp_factor,
             program_config=pc,
             compute_kernel_config=compute_kernel_config,
+            # Ring joint SDPA ignores compute_kernel_config: FP32 accumulation is the ACCURATE recipe.
+            precision=ttnn.SDPAPrecision.ACCURATE if compute_kernel_config.fp32_dest_acc_en else None,
             dim=2,
             scale=self._head_dim**-0.5,
             multi_device_global_semaphore=ccl.get_ag_ping_pong_semaphore(sp_axis),
