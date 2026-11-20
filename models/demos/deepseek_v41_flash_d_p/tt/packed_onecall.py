@@ -830,6 +830,7 @@ def _buffer(store: dict, mesh, like: ttnn.Tensor, zeros: bool) -> ttnn.Tensor:
 
 # ---------------------------------------------------------------------------------------------- the chunk
 STATS = {"chunks": 0}  # packed chunks run through OneCall since load (diagnostic)
+_REFUSED: set = set()  # (layer, reason) of the per-segment served-write fallbacks logged (PB.3K, diagnostic)
 
 
 class OneCall:
@@ -845,6 +846,8 @@ class OneCall:
             for k in range(self.lanes.lanes)
         )
         self.memo: dict = {}  # ("table", kv source) -> (T, stride); ("index", idx src, kv src, classes) -> index
+        # PB.3K (PACKED_HOST_FAST=on, read per chunk): per-segment host work batched (``_lanes_write``)
+        self.fast = settings.get("PACKED_HOST_FAST") == "on"
         # PB.3H (PACKED_GATHER_HIDE=on, read per chunk): the history gathers beside the attention (tt/gather_hide.py;
         # None: off, or no free grid column on this box)
         self.hide = None
@@ -869,7 +872,7 @@ class OneCall:
 
     def _drop(self, key) -> None:
         v = self.memo.pop(key, None)
-        if key[0] in ("index", "top", "cands") and v is not None and v.is_allocated():
+        if key[0] in ("index", "top", "cands", "srv_all") and v is not None and v.is_allocated():
             dealloc(v)
 
     def _gather_sp(self, t: ttnn.Tensor) -> ttnn.Tensor:
@@ -979,12 +982,15 @@ class OneCall:
                 if rm is not m:
                     dealloc(m)
                 rms.append(rm)
-            for r, _ in plain:
-                idx = lanes.srv_lane(geo, r.lane, (r.start % geo.chunk) // 32)
-                caches = r.state.compress[i]
-                for rm, cache in zip(rms, (caches.ckv, caches.index_k)):
-                    assert cache.table is None, "PACKED_ATTN_ONECALL=on: STATIC_TABLES=off (no attention table)"
-                    cache.write(rm, r.start, r.run_end, idx=idx)
+            if self.fast and len(plain) > 1 and self._lanes_write(i, rms, plain, geo):
+                pass  # PB.3K (PACKED_HOST_FAST=on): every segment's served writes of a cache in one row gather
+            else:
+                for r, _ in plain:
+                    idx = lanes.srv_lane(geo, r.lane, (r.start % geo.chunk) // 32)
+                    caches = r.state.compress[i]
+                    for rm, cache in zip(rms, (caches.ckv, caches.index_k)):
+                        assert cache.table is None, "PACKED_ATTN_ONECALL=on: STATIC_TABLES=off (no attention table)"
+                        cache.write(rm, r.start, r.run_end, idx=idx)
             for rm in rms:
                 dealloc(rm)
             need = [(r, lo) for r, lo in need if lo > r.start]
@@ -1002,6 +1008,43 @@ class OneCall:
                 dealloc(g)
         dealloc(ckv)
         dealloc(k)
+
+    def _lanes_write(self, i: int, rms: list, plain: list, geo) -> bool:
+        """PB.3K (PACKED_HOST_FAST=on): the served writes of every plain segment (``plain`` [(SegRun, lo)]) of layer i,
+        each of ``rms`` (ckv, index keys: the chunk's masked natural-order rows) through ONE row gather over the
+        segments' lane index rows concatenated (made once a chunk) and one fp8 encode (TtServedRows.write_lanes).
+        False (the per-segment writes then run): the caches differ in geometry or the encode would exceed the core
+        cap."""
+        from . import cores
+        from .compressor import TtServedRows
+
+        caches = [r.state.compress[i] for r, _ in plain]
+        kinds = [[c.ckv for c in caches], [c.index_k for c in caches]]
+        groups = []
+        for cs in kinds:
+            why = None
+            blocks = -(-(geo.w // cs[0].ratio) // 32)  # (the fp8 cast's cores a cache: one a 32-row block)
+            groups.append(cores.max_worker_cores(self.model.mesh) // blocks)
+            if not all(c.table is None and cs[0].lanes_ok(c) for c in cs):
+                why = "caches of different geometry"
+            elif cs[0].fp8 and groups[-1] < 1:
+                why = "one cache's fp8 encode would exceed the core cap"
+            if why is not None:
+                if (i, why) not in _REFUSED:  # (diagnostic, once a layer and reason)
+                    _REFUSED.add((i, why))
+                    from loguru import logger
+
+                    logger.info(f"PACKED_HOST_FAST: layer {i}'s served writes per segment: {why}")
+                return False
+        classes = tuple((r.lane, (r.start % geo.chunk) // 32) for r, _ in plain)
+        key = ("srv_all", id(geo), classes)
+        idx_all = self.memo.get(key)
+        if idx_all is None:  # (once a chunk: the lanes' load-time-like index rows, concatenated on the device)
+            parts = [self.lanes.srv_lane(geo, lane, k) for lane, k in classes]
+            idx_all = self.memo[key] = ttnn.concat(parts, dim=-1, memory_config=DRAM, sub_core_grids=sub_cores())
+        for rm, cs, grp in zip(rms, kinds, groups):
+            TtServedRows.write_lanes([(c, r.start, r.run_end) for c, (r, _) in zip(cs, plain)], rm, idx_all, grp)
+        return True
 
     # ------------------------------------------------------------------ indexer
     def _query(self, ix, qr: ttnn.Tensor, w):

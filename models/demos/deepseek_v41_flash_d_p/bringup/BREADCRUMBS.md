@@ -1710,3 +1710,91 @@
 - Device opens this task: the runner's restarts for my runs (1 mesh-only test, the 40-layer accuracy model twice
   after python reloads whose memory did not come back, the 21-layer performance model per walls iteration after a
   python change), plus the gate's own processes.
+
+## PPB.3K (PB.3K perf, attempt 1): packed chunk host enqueue off the critical path (PACKED_HOST_FAST off | on)
+
+- Expected (written before any code or device run, perf_guide s2): 4 x 2k @ 139264 is host-bound (PB.3A/3H: enqueue
+  ~108-111 ms vs device ~95 ms; wall ~123 ms). Target: exposed host <= ~15 ms. Estimate before the census: per-segment
+  work a layer (snapshot sends ~80 a chunk, served writes, key decodes, region switches) ~20-30 ms of enqueue a chunk,
+  Python-built ops not prepared ~5-10 ms. Expected saving: host enqueue -25..-35 ms a chunk, device 0 (bit-identical),
+  wall 123 -> ~105-110 ms at 4 x 2k (if the enqueue drops below the device), mixed 138 -> ~120-125 ms.
+- Load (1): the walls' performance config (21 layers, 8192, resident engram table) for tests/packed/test_onecall_host.py:
+  "needs the walls' one performance load; the census is of the 4 x 2k @ 139264 chunk's enqueue, which only the real
+  layers 0-20 have".
+- Census (tests/packed/test_onecall_host.py, extended: PB3A_PROBE_OPNAMES per op and call site, slowest calls,
+  engram worker spans, PB3A_PROBE_NSEG=1 the same chunk with one segment, PB3A_PROBE_DELAY host-sleep injection,
+  PB3A_PROBE_LAYERS_T host ms a layer, PB3A_PROBE_CHECK switch on / off bytes, PB3A_PROBE_COPY the engram upload
+  alone), 4 x 2k @ 139264, switch off (PB.3H): enqueue 112-119 ms, wall ~121, 1284 launches, ~30 ms of Python
+  between calls. One segment in lane 0 (today's path, same 8192 rows): 1110 launches, enqueue 88, wall 95.5.
+  Exposed-host breakdown (what is on the critical path): (1) the engram worker's upload of a layer's rows (53.5 MB,
+  TP-sharded bfp8) takes tt-metal's PINNED write path (> 32 MiB a call, tt_metal/impl/tensor/pinned_upload.hpp),
+  enqueue_write_shards(blocking=True): finish() under the command queue's lock: it waits for the device's whole
+  backlog while the main thread cannot dispatch (6.3-6.9 ms a chunk at layer ~6-8 for layer 14's rows, and layer
+  1's job 14.7 ms -> a 7 ms engram wait at layer 1); the same upload on an idle device: 0.7 ms; (2) per-segment
+  launches: the compressor's served writes (~13 launches a segment a compressor layer: 3 reshapes, a row gather,
+  the fp8 encode chain, update_padded_kv_cache), the index-key decodes (unpack_fp8_rows 250-340 us a call: 5
+  value slots x 110 cores x 3 kernels), the per-lane rope slices (4 slices + concat + partition a table), the
+  history packs and tails; (3) layers: the KV source layers 2 / 8 / 14 carry the packed extra (+3-3.7 ms host
+  each over one segment), regular layers are cheaper packed (2.3 vs 2.5 ms). Delay injection (10 ms sleep after
+  layer L, PB.3H): wall +7 ms after layers 0-11, +5 after 14, ~0 after 20: host-bound from the start to ~layer 12.
+- Built (PACKED_HOST_FAST=on, call-time, batch_call_settings): (a) tt/engram.py upload_pieces / allocate_tp(pieces) /
+  _staging_tp(q, pieces): the TP-sharded engram rows go up in 2 uploads of 26.7 MB (below the pinned threshold:
+  non-blocking writes), the C++ / numba fill jobs fill them unchanged (each chip's share as 2 outputs of q / 2
+  rows, in order), take_engram_rows concatenates them on the device (one concat) before the TP gather; (b)
+  tt/compressor.TtServedRows.write_lanes + OneCall._lanes_write: every segment's served writes of a cache in ONE
+  row gather (the lanes' index rows concatenated once a chunk) and ONE fp8 encode, then a slice + the cache writes
+  per segment; (c) index_keys._decode on a 4 x 2 core rectangle (8 cores: 100 us a call instead of 250-340);
+  (d) packed_device.ids_from_input: column 0's 8 reads enqueued back to back, one wait; (e) tt/lane_rows.py
+  LaneRows: each chip's rope rows of every lane in one prepared program (a per-chip piece table made once a
+  geometry, the 4 lane starts value slots; 4 cores a chip, data movement) instead of 4 slices + concat +
+  mesh_partition a table (RopeTable._rows, CompressRope._rows). All data moves / row-local: the same bytes.
+- Load reasons: (2) runner reloads of the 21-layer walls config for each probe iteration ("needs the walls'
+  performance load: the census / checks are of the real 4 x 2k chunk"); (3) tests/packed/test_lane_rows.py:
+  "needs only the mesh: LaneRows vs lane_slices + mesh_partition, bit-exact, 32 / 32 chips, 6 cases x 2 reps".
+- Checks so far: probe PB3A_PROBE_CHECK (switch on / off / on, the same chunk): engram rows of layers 1 / 14 equal,
+  200 / 200 slot served-cache digests equal (4 slots x 21 layers); test_lane_rows: 12 / 12 bit-exact.
+- Measured so far (probe, 3 synced runs, resident table): (a)+(b)+(c) + engram split: walls 109.7-110.2 ms,
+  enqueue ~99.8 (switch off: ~121 / ~112); layer 1's engram wait 7 -> 0.01 ms, the 6 ms block gone.
+- (f) layer 20 (the KV head, compress_only): one fp8 encode of 4 segments' rows would exceed the 110-core cap (the
+  cast runs a core a 32-row block): write_lanes encodes in groups that fit (OneCall._lanes_write ``groups``).
+  Check after (f): 0 / 200 slot digests differ, engram rows equal (on / off / on).
+- Walls (test_packed_walls, the gate's walls cmd + DS41_PACKED_HOST_FAST=on, one 21-layer load at the one slot
+  capacity, resident table; median of the timed runs):
+  | case | PB.3H (gate) | PB.3K on | device (profiled) | host exposed | new tok/s |
+  | 4 x 2k @ 139264 | 123.3 ms | 110.2 ms | 99.6 | 10.6 | 74.3k (target >= 67k: met) |
+  | mixed 61k / 139k / 308k / 547k | 137.7 ms | 127.5 ms | 121.0 | 6.5 | 64.3k (target >= 64k: met, barely) |
+  | 1 x 2k + 3 empty lanes | 94.7 ms | 88.5 ms | 78.6 | 9.9 | 23.1k |
+  Device phase engram_rows 4 x 2k: 6.66 ms (PB.4: 3.81): the non-pinned uploads' data now passes the dispatcher
+  (the pinned path let the chips read host memory), and the decodes on 8 cores; repaid ~4x in the wall.
+- vs expected: host -25..-35 ms expected, enqueue 112-119 -> ~97-100 ms (-15..-19) + the two engram stalls (-13 ms of
+  critical path that the enqueue time did not show: the stall sat inside an op call); wall -13 / -10 ms. The first
+  estimate missed the cause: most of the exposed host was not launches but the pinned upload's device drain.
+- Mixed is now device-bound (121 ms device, 6.5 ms exposed). What it would take below ~120 ms: the 547k lane's
+  indexer (indexer 22.4 ms a chunk: the one ring's score is bounded by the longest lane's keys, ~5.8 ms an index
+  layer x 3, and the top-k over 547k / 4 candidates) - a ring that splits the longest lane's key range over the
+  idle lanes' chips (the other lanes finish their keys ~4x earlier) or a per-lane top-k core split; and the
+  experts (44.2 ms: 4 lanes of different texts route unevenly). Not built here (host task).
+- Left on the host (4 x 2k, per chunk, switch on): the KV source layers 2 / 8 / 14 still ~12-14 ms host each (single
+  segment ~8-11): per segment the compressor's slices + update_padded_kv_cache (8 a layer), the tails (pack =
+  served slice + to_tile + ckv_bfp4, a slice, slice_write), the decodes (4), the snapshot sends (4 a layer, 80 a
+  chunk, ~73 us each: per-chip programs); sdpa_lanes 150 us a call (per-device programs for kv_lanes). Each needs a
+  multi-segment fork op (one program over the 4 slots' tensors) to go further; ~31 ms of Python between calls a
+  chunk (single segment 24).
+- Gate (`gate PB.3K --check`, after the last code edit, pre-commit clean): PASS PB.3K. Oracle on 40 layers: lane
+  equivalence 0, alone vs today 0, slot digests 0 mismatches, packed determinism 0; reference: every segment's
+  every layer within its limit, final hidden 0.131 / 0.131 / 0.131 / 0.132 (PB.3A's: the same bytes), top-5 1.0 x 4;
+  determinism 0.0. Gate walls: 4 x 2k 111.3 ms (73.6k new tok/s), mixed 129.4 ms (63.3k; my run 127.5 = 64.3k: at
+  the 64k bar within the run spread), 1 x 2k 88.9 ms. The oracle / reference run the mmap engram table (pytest
+  value), so the engram upload split is checked by the probe's on / off byte check (walls config), not by them.
+- Re-run: gate `PYTHONPATH=$PWD python -m models.demos.common.bringup gate PB.3K --spec $BRINGUP_SPEC --check`;
+  probe (walls config, held 21-layer model): `python -m models.demos.common.bringup.resident submit --spec
+  $BRINGUP_SPEC --cmd "BRINGUP_CHUNK=8192 DS41_ENGRAM_TABLE=resident DS41_PACKED=on DS41_PACKED_MOE=on
+  DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on BRINGUP_POS_TOKENS=agentic_cc
+  DS41_DECODER_SKIP=decode PB3A_PROBE_OPS=0 PB3A_PROBE_CHECK=1 PB3A_PROBE_LAYERS_T=1 PB3A_PROBE_OPNAMES=1
+  scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_onecall_host.py"`
+  (PB3A_PROBE_DELAY=10 the delay injection, PB3A_PROBE_NSEG=1 one segment, PB3A_PROBE_COPY=1 the upload alone,
+  PB3A_PROBE_LAYER_SITES=2,8 per-layer call sites); LaneRows: the same env, tests/packed/test_lane_rows.py.
+- Device opens this task: ~9 runner (re)starts (python reloads of the held model whose memory did not come back,
+  DS41-316; the walls' raised max_seq; the gate's fresh determinism process).
+- Final check `orchestrator measure --task PB.3K` (quick, single-request path, switch on): rc 0, chunk_wall_ms 224.9
+  (PB.3H 229.9), min layer PCC 0.732 (L39, as PB.3H), host_transfers_per_layer 0.

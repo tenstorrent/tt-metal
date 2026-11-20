@@ -150,8 +150,13 @@ class CompressRope:
         else:
             assert n % (32 * sp) == 0 and g0 + n <= self.rows_max, (g0, n, sp, self.rows_max)
         out = []
+        fast = packed and settings.get("PACKED_HOST_FAST") == "on"  # PB.3K: each chip its rows (tt/lane_rows.py)
         for t in (self.cos, self.sin):
-            if packed:
+            if fast:
+                from .lane_rows import lane_rows
+
+                sl = lane_rows(t, g0, n)
+            elif packed:
                 sl = lane_slices(t, g0, lr, self.width)
             else:
                 sl = ttnn.slice(
@@ -159,7 +164,7 @@ class CompressRope:
                 )
             tl = ttnn.to_layout(sl, ttnn.TILE_LAYOUT, memory_config=DRAM, sub_core_grids=sub_cores(sl))
             dealloc(sl)
-            if sp > 1:
+            if sp > 1 and not fast:
                 part = ttnn.mesh_partition(tl, dim=2, cluster_axis=SP_AXIS, memory_config=DRAM)
                 dealloc(tl)
                 tl = part
@@ -744,6 +749,83 @@ class TtServedRows:
         dealloc(rows)
         if not view:
             dealloc(slab)
+
+    def lanes_ok(self, other: "TtServedRows") -> bool:
+        """``write_lanes`` may write ``other`` in the same call as this cache (one geometry and one write path)."""
+        g, h = self.geo, other.geo
+        return (
+            (h.chunk, h.w, h.sp, h.tp) == (g.chunk, g.w, g.sp, g.tp)
+            and (other.width, other.ratio, other.fp8, other.k_served)
+            == (self.width, self.ratio, self.fp8, self.k_served)
+            and other.k8 is None
+            and other.table is None
+            and other.mesh is self.mesh
+        )
+
+    @staticmethod
+    def write_lanes(items: list, rows_rm: ttnn.Tensor, idx_all: ttnn.Tensor, group: int | None = None) -> None:
+        """PACKED_HOST_FAST=on (PB.3K): ``write(rows_rm, start, end, idx=lane index row)`` for several caches at once
+        (a packed chunk's segments: each its own slot's cache of one layer, ``items`` [(cache, start, end)], every
+        pair ``lanes_ok``). ONE row gather through ``idx_all`` ([1, 1, 1, n W] per chip: the caches' lane index rows
+        concatenated in ``items`` order), ONE fp8 encode of every cache's rows (index keys), then per cache a slice of
+        its rows and its update_padded_kv_cache writes. The same bytes as n ``write`` calls: the gather picks rows,
+        the encode is per row (per_token_cast_to_fp8, pack_fp8_rows). ``group``: at most that many caches' rows an
+        encode (the cast's one-core-per-32-row-block path stays within MAX_WORKER_CORES; None: all at once)."""
+        c0 = items[0][0]
+        g, n = c0.geo, len(items)
+        cr = g.w // c0.ratio
+        for c, start, end in items:
+            assert c0.lanes_ok(c) and c.k8 is None and c.table is None, "write_lanes: one geometry, no k8 / table"
+            assert start % 32 == 0 and start < end <= start + g.chunk and end <= c.max_seq, (start, end, c.max_seq)
+        rows = ttnn.bringup.embedding(
+            ttnn.reshape(idx_all, [1, n * g.w], sub_core_grids=sub_cores(idx_all)),
+            ttnn.reshape(rows_rm, [g.chunk, c0.tok_width], sub_core_grids=sub_cores(rows_rm)),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=DRAM,
+            max_grid=max_grid(),
+        )  # [n W, tok_width]: cache j's server-order rows at [j W, (j + 1) W)
+        slab = ttnn.reshape(rows, [n, 1, cr, c0.width], sub_core_grids=sub_cores(rows))
+        if slab.buffer_address() != rows.buffer_address():
+            dealloc(rows)
+
+        def part(t: ttnn.Tensor, j: int, m: int = 1) -> ttnn.Tensor:
+            w = int(t.shape[-1])
+            return ttnn.slice(t, [j, 0, 0, 0], [j + m, 1, cr, w], memory_config=DRAM, sub_core_grids=sub_cores(t))
+
+        r8 = []  # (first cache, [m, 1, cr, 192] the encoded rows of caches [first, first + m))
+        if c0.fp8:  # the caches' 192-byte rows, ``group`` caches an encode ([1, 1, m W / r, 192])
+            g = n if group is None else max(1, int(group))
+            for j0 in range(0, n, g):
+                m = min(g, n - j0)
+                src = slab if m == n else part(slab, j0, m)
+                flat = ttnn.reshape(src, [1, 1, m * cr, c0.width], sub_core_grids=sub_cores(src))
+                rows8 = fp8_rows(c0.mesh, flat)
+                if flat.buffer_address() != src.buffer_address():
+                    dealloc(flat)
+                if src is not slab:
+                    dealloc(src)
+                t8 = ttnn.reshape(rows8, [m, 1, cr, FP8_ROW_BYTES], sub_core_grids=sub_cores(rows8))
+                if t8.buffer_address() != rows8.buffer_address():
+                    dealloc(rows8)
+                r8.append((j0, m, t8))
+
+        for j, (c, start, end) in enumerate(items):
+            c.version += 1  # (as ``_put``)
+            if not c.k_served:
+                s = part(slab, j)
+                c._put_into(c.slab, s, start, end)
+                dealloc(s)
+            if c.fp8:
+                j0, m, t8 = next(x for x in r8 if x[0] <= j < x[0] + x[1])
+                s8 = t8 if m == 1 else part(t8, j - j0)
+                for target in (c.served, *c.mirrors):
+                    c._put_into(target, s8, start, end)
+                if s8 is not t8:
+                    dealloc(s8)
+        dealloc(slab)
+        for _, _, t8 in r8:
+            dealloc(t8)
 
     def write_local(self, rows_rm: ttnn.Tensor, start: int, end: int) -> None:
         """CKV_PACK_BEFORE_GATHER=on (P.11): rows_rm [1, 1, W / r, width] bf16 ROW_MAJOR = the SP row's own block of the

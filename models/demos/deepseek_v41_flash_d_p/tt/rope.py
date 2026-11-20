@@ -382,7 +382,13 @@ class RopeTable:
             assert start % 32 == 0 and length % (32 * sp) == 0, (start, length, sp)
             assert start + length <= self.max_seq, f"positions up to {start + length} > the table's {self.max_seq}"
         out = []
+        fast = packed and settings.get("PACKED_HOST_FAST") == "on"
         for t in (self.cos, self.sin):
+            if fast:  # PB.3K: each chip its rows of every lane in one program (tt/lane_rows.py)
+                from .lane_rows import lane_rows
+
+                out.append(lane_rows(t, start, length))
+                continue
             if packed:
                 sl = lane_slices(t, start, lr, self.width)
             else:

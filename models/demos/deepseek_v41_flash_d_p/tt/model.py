@@ -1964,7 +1964,7 @@ class TtDS41Model:
                 r.state.tail[i] = new_tail
                 lanes.append((c0, nc, lid, tail, v, new_tail.long().contiguous()))
             _free(self._engram_dev.pop(i, None))
-            dev = rows.allocate_tp(ids.numel())
+            dev = rows.allocate_tp(ids.numel(), rows.upload_pieces(ids.numel()))  # (PB.3K: pieces, non-blocking)
             self._engram_dev[i] = dev
             job = (rows.fill_tp_lanes, dev, lanes, self._hide_threads)
             if first is None:
@@ -2076,6 +2076,11 @@ class TtDS41Model:
         self._wait_job(layer)  # ENGRAM_ASYNC=on: layer 1 waits for its own job only, layer 14 for its own
         t = self._engram_dev.pop(layer, None)
         assert t is not None, f"layer {layer}: no engram rows for this chunk (begin_chunk(tokens, start) first)"
+        if isinstance(t, list):  # PB.3K (PACKED_HOST_FAST=on): the share uploaded in row blocks (upload_pieces)
+            parts = t
+            t = ttnn.concat(parts, dim=2, memory_config=DRAM, sub_core_grids=sub_cores())
+            for x in parts:
+                dealloc(x)
         full = self._engram_full.get(layer)
         if full is None or t.shape[-2] == full.shape[-2]:
             return t

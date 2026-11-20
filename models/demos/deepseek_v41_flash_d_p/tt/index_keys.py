@@ -34,6 +34,7 @@ import ttnn
 
 from .common import DRAM
 from .cores import max_grid
+from .settings import settings
 
 _SERIAL = itertools.count(1)
 _EPOCH = [0]
@@ -99,9 +100,19 @@ def _span(cache, start: int) -> tuple[int, int]:
     return c * wr, min((c + 1 + (q > 0)) * wr, cache.crows)
 
 
+# PACKED_HOST_FAST=on (PB.3K): the decodes on this core rectangle. unpack_fp8_rows' host cost is its per-core value
+# slots (5 a core, 3 kernels: ~250-340 us a call on 110 cores of 32 chips, PB.3K census); its device time is small
+# (a 192 B -> 128 B row map, ~4352 rows a chip at 139k). Each row decodes on its own: the same bytes on any cores.
+DECODE_GRID = (4, 2)
+
+
 def _decode(cache, buf: KeyBuffer, lo: int, hi: int) -> None:
     s = cache.served
-    ttnn.bringup.unpack_fp8_rows(s.tensor, buf.tensor, row_lo=lo, row_hi=hi, batch=s.batch, max_grid=max_grid())
+    grid = max_grid()
+    if settings.get("PACKED_HOST_FAST") == "on":  # (every box's grid holds 4 x 4; None: the uncapped whole grid)
+        gx, gy = (grid.x, grid.y) if grid is not None else DECODE_GRID
+        grid = ttnn.CoreCoord(min(gx, DECODE_GRID[0]), min(gy, DECODE_GRID[1]))
+    ttnn.bringup.unpack_fp8_rows(s.tensor, buf.tensor, row_lo=lo, row_hi=hi, batch=s.batch, max_grid=grid)
 
 
 def prefetch(cache, start: int) -> bool:

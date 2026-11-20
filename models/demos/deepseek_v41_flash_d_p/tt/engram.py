@@ -50,6 +50,10 @@ _BUILDER_LOCK = threading.Lock()  # (not _RESIDENT_LOCK: a build holds that for 
 # transfers by wrapping the ttnn module attributes for the whole process (any thread), so the worker calls the
 # functions bound here at import, and the counter keeps counting what the layer calls do themselves.
 _COPY_TO_DEVICE = ttnn.copy_host_to_device_tensor
+# tt-metal's pinned-write threshold (tt_metal/impl/tensor/pinned_upload.hpp k_pin_write_threshold_bytes): a host -> device
+# tensor write of more bytes takes the pinned path, whose enqueue_write_shards(blocking=True) waits for the device to
+# finish all queued work while holding the command queue (PB.3K, TtEngramRows.upload_pieces)
+PIN_WRITE_BYTES = 32 * 1024 * 1024
 _FROM_TORCH = ttnn.from_torch
 
 
@@ -533,38 +537,73 @@ class TtEngramRows:
         return times
 
     # ------------------------------------------------------------------ HOST_HIDE=on (P.78): rows sharded over TP
-    def allocate_tp(self, s: int) -> ttnn.Tensor:
+    def allocate_tp(self, s: int, pieces: int = 1):
         """Main thread, in begin_chunk: the chunk's device rows, each chip its own share [1, 1, S/(SP TP), width]
         bfloat8_b (chip (r, c): rows [(r TP + c) q, (r TP + c + 1) q) of the chunk, q = S / (SP TP)); ``fill_tp``
-        writes them, the model gathers them over TP into the replicated layout ``allocate`` gives (a data move)."""
+        writes them, the model gathers them over TP into the replicated layout ``allocate`` gives (a data move).
+        ``pieces`` > 1 (PACKED_HOST_FAST=on, ``upload_pieces``): a list of that many [1, 1, q / pieces, width] tensors,
+        the share's row blocks in order (TtDS41Model.take_engram_rows concatenates them on the device)."""
         rows_ax, cols_ax = tuple(self.mesh.shape)
         assert self.format == "bfp8", "HOST_HIDE's sharded upload sends bfloat8_b rows (ENGRAM_ROWS=bfp8)"
-        assert s % (32 * rows_ax * cols_ax) == 0, f"{s} rows do not split into tiles over {rows_ax} x {cols_ax} chips"
-        return ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, s // (rows_ax * cols_ax), self.width]),
-            ttnn.bfloat8_b,
-            ttnn.TILE_LAYOUT,
-            self.mesh,
-            ttnn.DRAM_MEMORY_CONFIG,
-        )
+        assert s % (32 * rows_ax * cols_ax * pieces) == 0, f"{s} rows do not split into tiles over the chips / pieces"
 
-    def _staging_tp(self, q: int):
+        def one(rows: int) -> ttnn.Tensor:
+            return ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, rows, self.width]),
+                ttnn.bfloat8_b,
+                ttnn.TILE_LAYOUT,
+                self.mesh,
+                ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        q = s // (rows_ax * cols_ax)
+        return one(q) if pieces == 1 else [one(q // pieces) for _ in range(pieces)]
+
+    def upload_pieces(self, s: int) -> int:
+        """PACKED_HOST_FAST=on (PB.3K, main thread, read per chunk): the number of uploads the TP-sharded rows of an
+        S-row chunk go up in, each below tt-metal's pinned-write threshold (PIN_WRITE_BYTES). One upload above it takes
+        the pinned path, a BLOCKING write: enqueue_write_shards(blocking=True) waits for the device to finish
+        everything queued before it while holding the command queue's lock, so the main thread's dispatch stalls for
+        the device's whole backlog (PB.3K: 6.3-6.9 ms a 53.5 MB upload inside a packed chunk, 0.7 ms on an idle
+        device) and the device then idles until the host refills it. Below it the write is non-blocking. 1: off, an
+        upload that fits already, the mmap table (no resident staging) or rows that do not split into whole tiles."""
+        if settings.get("PACKED_HOST_FAST") != "on" or self._packed is None:
+            return 1
+        n = int(self.mesh.get_num_devices())
+        q = s // n
+        total = q * self.width * 17 // 16 * n
+        p = 1
+        while total > p * PIN_WRITE_BYTES:
+            p *= 2
+        return p if p > 1 and q % (32 * p) == 0 else 1
+
+    def _staging_tp(self, q: int, pieces: int = 1):
         """HOST_HIDE=on: (the mesh host tensor of [1, 1, q, width] bfloat8_b per chip, every chip its own bytes; per chip
         in row-major mesh order a writable uint8 view, and the same views as a tuple of numpy arrays), made once a
-        layer (as ``_staging``: no copy a chunk)."""
-        if self._staged_tp is None or self._staged_tp[0] != q:
+        layer (as ``_staging``: no copy a chunk). ``pieces`` > 1 (``upload_pieces``): a list of that many mesh host
+        tensors of [1, 1, q / pieces, width] (the share's row blocks in order), and the views / arrays chip-major
+        (chip k's block j at k pieces + j: the host jobs fill out k pieces + j with rows [k q + j q', ..), q' =
+        q / pieces, i.e. chip k's rows in order)."""
+        if self._staged_tp is None or self._staged_tp[0] != (q, pieces):
             n_chips = int(self.mesh.get_num_devices())
-            nbytes = q * self.width * 17 // 16
+            qp = q // pieces
+            nbytes = qp * self.width * 17 // 16
             wrap = ttnn.experimental.disaggregation.tensor_from_bfp8_bytes
-            shards = [wrap(bytes(nbytes), [1, 1, q, self.width]) for _ in range(n_chips)]
-            host = ttnn.from_host_shards(shards, self.mesh.shape)
-            dist = host.host_buffer()
             rows_ax, cols_ax = tuple(self.mesh.shape)
-            bufs = [dist.get_shard(ttnn.MeshCoordinate(r, c)) for r in range(rows_ax) for c in range(cols_ax)]
-            views = [torch.from_dlpack(b) for b in bufs]  # (the shard's own bytes, no copy)
+            hosts, keep, per = [], [], []
+            for _ in range(pieces):
+                shards = [wrap(bytes(nbytes), [1, 1, qp, self.width]) for _ in range(n_chips)]
+                host = ttnn.from_host_shards(shards, self.mesh.shape)
+                dist = host.host_buffer()
+                bufs = [dist.get_shard(ttnn.MeshCoordinate(r, c)) for r in range(rows_ax) for c in range(cols_ax)]
+                hosts.append(host)
+                keep.append((shards, bufs))
+                per.append([torch.from_dlpack(b) for b in bufs])  # (the shard's own bytes, no copy)
+            views = [per[j][k] for k in range(n_chips) for j in range(pieces)]
             assert all(v.numel() == nbytes and v.dtype == torch.uint8 for v in views), [v.shape for v in views]
-            assert len({v.data_ptr() for v in views}) == n_chips, "a chip's staging bytes are shared"
-            self._staged_tp = (q, host, views, tuple(v.numpy() for v in views), (shards, bufs))
+            assert len({v.data_ptr() for v in views}) == n_chips * pieces, "a chip's staging bytes are shared"
+            host = hosts[0] if pieces == 1 else hosts
+            self._staged_tp = ((q, pieces), host, views, tuple(v.numpy() for v in views), keep)
         return self._staged_tp[1:4]
 
     def fill_tp(self, dev: ttnn.Tensor, tokens, tail, valid=None, want_tail=None, threads=None) -> dict:
@@ -640,7 +679,12 @@ class TtEngramRows:
         n_chips = int(self.mesh.get_num_devices())
         assert sum(nc for _, nc, *_ in lanes) == n_chips, [(c0, nc) for c0, nc, *_ in lanes]
         q = lanes[0][2].numel() // lanes[0][1]
-        host, views, outs = self._staging_tp(q)
+        p = len(dev) if isinstance(dev, list) else 1  # (PB.3K: the upload in pieces, ``upload_pieces``)
+        assert p == 1 or self._packed is not None, "upload pieces: the resident table's paths only"
+        host, views, outs = self._staging_tp(q, p)
+        if p > 1:  # (each chip's share as p outputs of q / p rows, in order: the jobs fill output k p + j)
+            lanes = [(c0 * p, nc * p, *rest) for c0, nc, *rest in lanes]
+            q //= p
         packed = self.packed if self._packed is not None else None
         t0b = time.perf_counter()
         agg = {}
@@ -670,7 +714,11 @@ class TtEngramRows:
             assert want is None or torch.equal(new_tail.long(), want.long()), (self.layer, new_tail, want)
         times.update(build_wait=(t0b - t0) * 1e3, **agg)
         t0 = time.perf_counter()
-        _COPY_TO_DEVICE(host, dev)  # (GIL released for the copy)
+        if p == 1:
+            _COPY_TO_DEVICE(host, dev)  # (GIL released for the copy)
+        else:  # (each below the pinned-write threshold: non-blocking writes, ``upload_pieces``)
+            for h, d in zip(host, dev):
+                _COPY_TO_DEVICE(h, d)
         times["upload"] = (time.perf_counter() - t0) * 1e3
         return times
 

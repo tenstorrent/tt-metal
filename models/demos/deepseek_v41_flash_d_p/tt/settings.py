@@ -1394,6 +1394,19 @@ TABLE = {
         "query; off = PB.3A (the prefetches serial at the first engram wait, the tails serial at the source layer). Same "
         "bytes at the same rows (a data move). Default off (the task's: on = the change; the gate sets it)",
     ),
+    "PACKED_HOST_FAST": Setting(
+        "off",
+        ("off", "on"),
+        "PB.3K (OWNER 2026-11-19 21:00), read per chunk (CALL-TIME, listed in bringup/hooks.py batch_call_settings). "
+        "The packed chunk's host costs off the critical path: on = the engram rows go up in uploads below tt-metal's "
+        "32 MiB pinned-write threshold (non-blocking; one larger upload waits for the device's whole backlog under "
+        "the command queue's lock, DS41-332), a packed chunk's per-segment served writes of the compressor run once "
+        "over every lane (one row gather and one fp8 encode a cache a layer, then a slice and the cache write per "
+        "segment), the index-key decodes run on a small core rectangle (their per-core value slots are their host "
+        "cost), the chunk's id reads are enqueued back to back with one wait, every lane's rope rows come from one "
+        "prepared copy program (tt/lane_rows.py); off = PB.3H. The same bytes at the same rows (data moves, row-local "
+        "ops). Default off (the task's: on = the change; the gate sets it)",
+    ),
     "PREFILL_END": Setting(
         "cap",
         ("cap", "end"),

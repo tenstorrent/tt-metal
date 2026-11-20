@@ -485,7 +485,12 @@ def ids_from_input(mesh, inp, desc):
 
     sp, tp = int(mesh.shape[SP_AXIS]), int(mesh.shape[TP_AXIS])
     dev = ttnn.get_device_tensors(inp)
-    got = torch.cat([ttnn.to_torch(dev[r * tp]).reshape(-1).to(torch.int64) & 0xFFFFFFFF for r in range(sp)])
+    if settings.get("PACKED_HOST_FAST") == "on":  # PB.3K: column 0's reads enqueued back to back, ONE wait (the last
+        # read blocks; the queue completes them in order, so every earlier one has landed when it returns)
+        hs = [ttnn.from_device(dev[r * tp], blocking=r == sp - 1) for r in range(sp)]
+        got = torch.cat([ttnn.to_torch(h).reshape(-1).to(torch.int64) & 0xFFFFFFFF for h in hs])
+    else:
+        got = torch.cat([ttnn.to_torch(dev[r * tp]).reshape(-1).to(torch.int64) & 0xFFFFFFFF for r in range(sp)])
     nat = torch.full((desc.chunk,), PAD, dtype=torch.int64)
     lr = desc.lane_rows
     for lane, s in desc.live():

@@ -1402,7 +1402,7 @@ def batch_call_settings(env=None) -> tuple:
     # ENGRAM_DEVICE (P.87) and ENGRAM_HOST_IMPL (C++ host path) are read per chunk: one load serves both values;
     # PACKED (PB.1, owner 2026-11-19: packed prefill, tt/packed.py) likewise, per chunk; PACKED_ATTN_ONECALL (PB.3A,
     # tt/packed_onecall.py) likewise; PACKED_MOE (PB.4, tt/packed_device.MoEPadSpan) likewise; PACKED_GATHER_HIDE
-    # (PB.3H, tt/gather_hide.py) likewise
+    # (PB.3H, tt/gather_hide.py) likewise; PACKED_HOST_FAST (PB.3K) likewise
     return (
         "PREFILL_END",
         "ENGRAM_DEVICE",
@@ -1411,6 +1411,7 @@ def batch_call_settings(env=None) -> tuple:
         "PACKED_ATTN_ONECALL",
         "PACKED_MOE",
         "PACKED_GATHER_HIDE",
+        "PACKED_HOST_FAST",
     ) + (() if skip == "replay128" else ("DECODER_SKIP",))
 
 
