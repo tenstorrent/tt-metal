@@ -41,9 +41,7 @@ namespace {
 constexpr const char* kBlankComputeKernel = "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp";
 constexpr const char* kNoReplayFlag = "-mno-tt-tensix-optimize-replay";
 constexpr const char* kNoReplayDefine = internal::DISABLE_SFPU_REPLAY_OPTIMIZATION_DEFINE;
-constexpr const char* kQuasarNotImplemented =
-    "SFPU replay opt-out is not implemented for Quasar: QuasarComputeKernel does not override "
-    "get_sfpu_replay_optimization_disabled, so DISABLE_SFPU_REPLAY_OPTIMIZATION_DEFINE has no effect";
+constexpr const char* kQuasarNotImplemented = "SFPU replay opt-out is not implemented for Quasar";
 
 // Removes every occurrence of the opt-out flag, so the rest of a recipe can be compared.
 std::string without_flag(std::string cflags) {
