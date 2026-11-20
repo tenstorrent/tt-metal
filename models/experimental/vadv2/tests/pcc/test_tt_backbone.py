@@ -8,7 +8,7 @@ import ttnn
 from models.experimental.vadv2.reference import resnet as backbone
 from models.experimental.vadv2.reference.resnet import ResNet
 from models.experimental.vadv2.tt import tt_backbone
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 from ttnn.model_preprocessing import (
     infer_ttnn_module_args,
     preprocess_model_parameters,

@@ -41,7 +41,7 @@ from models.demos.gemma4.tt.attention.prefill import (
     _ring_fill_page_table,
     flush_deferred_bounded_fills,
 )
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tt_py_test_utils_common.comparison_funcs import comp_pcc
 
 
 def _sharded_kv_input(device, x_padded):
