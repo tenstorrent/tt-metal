@@ -781,6 +781,14 @@ def _k31_rung(rung, trace, mesh_device, hf_config, stages) -> list[str]:
     topk_failures = []
     for layer, per_row in sorted(recall.items()):
         full, gated = per_row[:topk_k], per_row[topk_k:]
+        # Recall along the prompt: the gated rows' mean on each window (the hidden-state PCC's windows).
+        window_recall = [
+            per_row[max(lo, topk_k) : lo + grid].nanmean().item() for lo in range(0, per_row.shape[0], grid)
+        ]
+        logger.info(
+            f"K31 {rung} layer {layer} top-k recall on {grid}-row windows: "
+            + " ".join(f"{v:.4f}" for v in window_recall)
+        )
         logger.info(
             f"K31 {rung} layer {layer} top-k recall: {gated.mean():.6f} (rows < {topk_k}: min {full.min():.4f})"
         )
