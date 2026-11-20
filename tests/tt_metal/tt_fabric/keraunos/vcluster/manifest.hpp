@@ -22,8 +22,8 @@ namespace tt::tt_fabric::vcluster {
 // The row of SPEC-0011's check table a finding belongs to; the value is the row number. Rows 9 to 11 compare
 // against the capture (stage D) and are not checked here.
 enum class ManifestCheck : uint32_t {
-    ReservedValue = 1,          // `cce` 1, a router on a hart other than 0, a region inside its CCE's SRAM that is
-                                // not the whole of it (size 0 included), backend `local`
+    ReservedValue = 1,          // a router or worker on `cce` 1, a router on a hart other than 0, a region inside its
+                                // CCE's SRAM that is not the whole of it (size 0 included), backend `local`
     CceNotInPackage = 2,        // a slot's or region's (tile, cce) is not in PackageFacts::cores
     Slot = 3,                   // two slots on one (tile, cce, hart), or a hart not below the CCE's hart count
     Region = 4,                 // two regions overlap, or a region's base + size is beyond its CCE's SRAM

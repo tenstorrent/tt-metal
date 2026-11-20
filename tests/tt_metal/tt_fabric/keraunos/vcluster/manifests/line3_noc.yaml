@@ -1,14 +1,15 @@
 # The three-device line of PLAN-0006 on one mmk package, both links on the NOC (SPEC-0011 § Verification).
-# A on HSIO tile 0, M on tiles 1 and 2, B on tile 3; the sender and receiver on hart 1 of the line's end routers.
+# A on HSIO tile 0, M on tiles 1 and 2, B on tile 3; the sender and receiver on CCE1 of the end routers' tiles.
 version: 1
 devices:
   - name: A
     fabric_chip: 0
     slots:
       - {tile: 0, cce: 0, hart: 0, role: router, port: 0}
-      - {tile: 0, cce: 0, hart: 1, role: worker}
+      - {tile: 0, cce: 1, hart: 0, role: idle, port: 1}
     regions:
       - {tile: 0, cce: 0, base: 0x0, size: 0x400000}
+      - {tile: 0, cce: 1, base: 0x0, size: 0x400000}
   - name: M
     fabric_chip: 1
     slots:
@@ -21,9 +22,10 @@ devices:
     fabric_chip: 2
     slots:
       - {tile: 3, cce: 0, hart: 0, role: router, port: 0}
-      - {tile: 3, cce: 0, hart: 1, role: worker}
+      - {tile: 3, cce: 1, hart: 0, role: idle, port: 1}
     regions:
       - {tile: 3, cce: 0, base: 0x0, size: 0x400000}
+      - {tile: 3, cce: 1, base: 0x0, size: 0x400000}
 links:
   - {a: {device: A, port: 0}, b: {device: M, port: 0}, backend: noc}
   - {a: {device: M, port: 1}, b: {device: B, port: 0}, backend: noc}
