@@ -54,6 +54,10 @@ UNPACK_TILIZE_TILE_SIZES = [
     (32, 32),
     (1, 32),
     (2, 32),
+    (4, 32),
+    (8, 32),
+    (16, 32),
+    (32, 16),
 ]
 
 # Rows the SrcA/SrcB tilize takes in more than one MOP run: full_ct_dim -> block_ct_dim, a
