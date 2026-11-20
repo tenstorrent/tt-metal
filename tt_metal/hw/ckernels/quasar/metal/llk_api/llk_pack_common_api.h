@@ -5,7 +5,7 @@
 #pragma once
 #include <cstdint>
 #include "ckernel.h"
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_outputs.h"
 #include "llk_pack_common.h"
 #include "llk_sync.h"
@@ -17,34 +17,26 @@ template <auto...>
 inline constexpr bool always_false_v = false;
 }  // namespace llk_pack_detail
 
-// The pack engine this TRISC owns: TRISC2 -> Pack0, TRISC3 -> Pack1. These pack headers are only
-// compiled under TRISC_PACK (COMPILE_FOR_TRISC=2) today, so the Pack1 arm is forward-compat. The
-// owning-TRISC guard itself lives in bfd_alloc<E>/bfd_current<E> (static_assert), so it need not be
-// repeated at each use site.
-inline constexpr ckernel::trisc::BfdResource pack_bfd_resource =
-    (ckernel::TRISC_ID == 2) ? ckernel::trisc::BfdResource::Pack0 : ckernel::trisc::BfdResource::Pack1;
-
 /*************************************************************************
  * LLK PACK COMMON
  *************************************************************************/
 
 /**
- * @brief Allocate a BFD id from the pack partition, program its table entry from the output's
- * DFB info (shape, L1 base, formats), and record the id in the pack engine's current slot. The DFB
+ * @brief Program the Pack0 BFD table entry from the output's
+ * DFB info (shape, L1 base, formats). The DFB
  * id is used only to fetch buffer info — it never doubles as the BFD id.
  *
  * @tparam MODE: L1 access mode for the descriptor; Strided collapses y/z dims to 1 for the
  * PACR_STRIDE untilize sequences.
  * @param output_id: Output DFB used to look up the descriptor parameters
- * @return Allocated BFD id for the pack init
  */
 template <ckernel::trisc::L1AccessMode MODE = ckernel::trisc::L1AccessMode::Continuous>
-inline std::uint8_t llk_pack_program_bfd(const std::uint32_t output_id) {
-    LLK_REINIT_GUARD_NOTE_PROGRAMMED(pack_bfd_resource, output_id);
+inline void llk_pack_program_bfd(const std::uint32_t output_id) {
+    LLK_REINIT_GUARD_NOTE_PROGRAMMED(ckernel::trisc::BFD_ID_PACK0, output_id);
     // TODO: multi-TC not handled — only tc_slots[0]'s L1 base is programmed. When a DFB is mapped
     // across multiple TCs this must program one descriptor per active tc_slot (same gap in
     // llk_unpack_program_bfd). Tied to the DFB<->buffer-descriptor decouple work.
-    return ckernel::trisc::bfd_alloc_and_program<pack_bfd_resource, MODE>(
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0, MODE>(
         get_output_tensor_shape(output_id),
         get_local_dfb_interface(output_id).tc_slots[0].base_addr,
         static_cast<std::uint32_t>(pack_dst_format[output_id]));
@@ -54,7 +46,7 @@ inline std::uint8_t llk_pack_program_bfd(const std::uint32_t output_id) {
  * @brief Programs packer0 math destination register format
  *
  * Buffer descriptors are no longer programmed here: BFD ids are an LLK-internal resource
- * allocated from the per-TRISC partition (see llk_bfd_alloc.h) and each op's llk_pack_*_init
+ * fixed per engine (see ckernel_buf_desc.h) and each op's llk_pack_*_init
  * programs its own table entry. DFB ids never double as BFD ids.
  *
  * @tparam EN_32BIT_DEST: Set to true to use 32bit Destination register mode

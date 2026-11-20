@@ -4,7 +4,11 @@
 import pytest
 from helpers.param_config import parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES
-from test_reduce_block_max import FORMATS, _run_reduce_block_max, block_max_num_faces
+from test_reduce_block_max import (
+    FORMATS,
+    _run_reduce_block_max,
+    block_max_tile_dimensions,
+)
 
 PERF_LOOP_FACTOR = 32
 
@@ -13,7 +17,7 @@ PERF_LOOP_FACTOR = 32
 @parametrize(
     formats=FORMATS,
     block_ct_dim=[1, 2, 3, 4, 8],
-    num_faces=block_max_num_faces,
+    tile_dimensions=block_max_tile_dimensions,
     run_types=[ALL_PERF_RUN_TYPES],
     loop_factor=[PERF_LOOP_FACTOR],
     is_perf=[True],
@@ -22,7 +26,7 @@ def test_perf_reduce_block_max(
     perf_report,
     formats,
     block_ct_dim,
-    num_faces,
+    tile_dimensions,
     run_types,
     loop_factor,
     is_perf,
@@ -30,7 +34,7 @@ def test_perf_reduce_block_max(
     _run_reduce_block_max(
         formats,
         block_ct_dim,
-        num_faces=num_faces,
+        tile_dimensions=tile_dimensions,
         is_perf=is_perf,
         perf_report=perf_report,
         run_types=run_types,
@@ -42,7 +46,7 @@ def test_perf_reduce_block_max(
 @parametrize(
     formats=FORMATS,
     block_ct_dim=[1, 2, 4, 8],
-    num_faces=block_max_num_faces,
+    tile_dimensions=block_max_tile_dimensions,
     run_types=[ALL_PERF_RUN_TYPES],
     loop_factor=[PERF_LOOP_FACTOR],
     is_perf=[True],
@@ -51,7 +55,7 @@ def test_perf_reduce_block_max_runtime(
     perf_report,
     formats,
     block_ct_dim,
-    num_faces,
+    tile_dimensions,
     run_types,
     loop_factor,
     is_perf,
@@ -60,7 +64,7 @@ def test_perf_reduce_block_max_runtime(
         formats,
         block_ct_dim,
         use_runtime=True,
-        num_faces=num_faces,
+        tile_dimensions=tile_dimensions,
         is_perf=is_perf,
         perf_report=perf_report,
         run_types=run_types,
