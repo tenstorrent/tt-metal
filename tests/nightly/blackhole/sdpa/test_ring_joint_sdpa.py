@@ -9564,6 +9564,62 @@ def test_ring_joint_attention_dynamic_local_n_flat_cache(length_class):
         close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
 
 
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize(
+    "precision",
+    [ttnn.SDPAPrecision.FAST, ttnn.SDPAPrecision.BALANCED, ttnn.SDPAPrecision.ACCURATE],
+    ids=["fast", "balanced", "accurate"],
+)
+def test_ring_joint_attention_dynamic_local_n_recipes(precision):
+    """dynamic_local_n on every precision recipe besides the default STANDARD: one cached program per recipe serves
+    the short class's lengths (logical_n at and below the padded total, NaN in every fully padded row)."""
+    from tests.ttnn.utils_for_testing import assert_program_cache_flat
+
+    mesh_config = _h3_dynamic_mesh_config()
+    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    try:
+        mesh = runtime.mesh_device
+        sp, tp = mesh_config.sp_size, mesh_config.tp_size
+        heads = H3_DYNAMIC_HEADS_PER_CHIP * tp
+        capacity = H3_DYNAMIC_CAPACITY_TILES * 32 * sp
+        torch.manual_seed(1234)
+        q_cap, k_cap, v_cap = (
+            torch.randn(1, heads, capacity, H3_DYNAMIC_HEAD_DIM, dtype=torch.bfloat16) for _ in range(3)
+        )
+        gather_k, gather_v = _h3_dynamic_gather_buffers(runtime, mesh_config, H3_DYNAMIC_HEAD_DIM)
+        checked_heads = [0, H3_DYNAMIC_HEADS_PER_CHIP * tp - 1]
+        # BALANCED's and ACCURATE's FP32 state does not fit L1 at the short class's Q320/K384.
+        qk_chunks = H3_DYNAMIC_QK_CHUNKS["short"] if precision == ttnn.SDPAPrecision.FAST else (128, 384)
+
+        def run(variant):
+            tile_rows, pad_rows, _ = variant
+            sq = tile_rows * 32 * sp
+            logical_n = sq - pad_rows
+            poison_from = -(-logical_n // 32) * 32
+            q, k, v = (t[:, :, :sq].clone() for t in (q_cap, k_cap, v_cap))
+            for t in (q, k, v):
+                t[:, :, poison_from:] = float("nan")
+            tt_q, tt_k, tt_v, logical_n_tensor = _h3_dynamic_device_inputs(runtime, q, k, v, logical_n)
+            out = _h3_dynamic_op(
+                runtime,
+                tt_q,
+                tt_k,
+                tt_v,
+                logical_n_tensor,
+                gather_k,
+                gather_v,
+                runtime.ccl_semaphore_handles,
+                qk_chunks=qk_chunks,
+                precision=precision,
+            )
+            _h3_dynamic_check(q, k, v, _h3_dynamic_to_torch(runtime, out), logical_n, checked_heads, f"{variant}")
+
+        assert_program_cache_flat(mesh, run, H3_DYNAMIC_VARIANTS["short"])
+        assert mesh.num_program_cache_entries() == 1
+    finally:
+        close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
+
+
 @pytest.mark.timeout(1800)
 def test_ring_joint_attention_dynamic_local_n_rehashes_on_width_change():
     """The row-free hash still keys everything else: a head-dim change adds a program, a length change does not."""
