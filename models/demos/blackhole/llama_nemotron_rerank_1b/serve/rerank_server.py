@@ -65,7 +65,7 @@ DEFAULT_CONFIG = {
     "chips": ["0"],
     "max_length": 512,
     "chunk": 32,
-    "max_batch_pairs": 32,
+    "max_batch_pairs": 64,
     "batch_wait_ms": 0.0,
     "hang_timeout_s": 60.0,
     "tokenizer_threads": 4,
