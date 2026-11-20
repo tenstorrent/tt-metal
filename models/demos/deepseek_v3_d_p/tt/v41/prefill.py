@@ -608,7 +608,9 @@ class V41Prefill:
             b.attn.prepare_chunk(b.state, C)
 
         def head_ops(b, s, pre):
-            attn_pre, attn_post, attn_comb, h = b._ops_a(s, pre)
+            attn_pre, attn_post, attn_comb, h, Xa = b._ops_a(s, pre)
+            # WS7: the X5 stack would have to cross a segment boundary; super2 does not carry it
+            assert Xa is None, "V41_MHC_REUSE_X5 is not supported with V41_PREFILL_SUPER_ISLANDS=2"
             outs = b.attn.forward_pre(h, b.state, C)
             return [attn_pre, attn_post, attn_comb, h] + list(outs)
 
