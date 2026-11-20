@@ -28,4 +28,5 @@ ra=$?
 wait $pb
 rb=$?
 echo "domain 1 ($A) rc=$ra, domain 2 ($B) rc=$rb, logs in $DIR"
+[[ $ra -eq 0 && $rb -eq 0 ]] || tail -n 40 "$DIR"/d1.log "$DIR"/d2.log
 [[ $ra -eq 0 && $rb -eq 0 ]]
