@@ -296,12 +296,17 @@ tt::tt_metal::ProgramDescriptor build_program(
             }
             const auto runs = core_runs(members);
             std::vector<CoreCoord> leaders;
-            for (const auto& run : runs) {
+            for (size_t r = 0; r < runs.size(); ++r) {
+                const auto& run = runs[r];
                 const auto head_of = [&](const CoreCoord& core) {
                     return static_cast<uint32_t>(std::ranges::find(correction_cores, core) - correction_cores.begin()) /
                            cores_per_head;
                 };
-                leaders.push_back(place == 0 || !north(head_of(run.front())) ? run.back() : run.front());
+                // Alternate runs flow on NoC 0 from their first core (its head's x on the reader) and on NoC 1 from
+                // their last (its head's x on the writer), so the two NoCs carry x evenly.
+                const bool from_front =
+                    place != 0 && north(head_of(run.front())) && (r % 2 == 0 || north(head_of(run.back())));
+                leaders.push_back(from_front ? run.front() : run.back());
             }
             auto& sets = gate_groups.emplace_back();
             for (size_t r = 0; r < runs.size(); ++r) {
